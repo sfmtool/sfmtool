@@ -171,6 +171,7 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         },
         width: 128,
         height: 128,
+        rolling_shutter: None,
     };
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let pyramid = ImageU8Pyramid::build(&ImageU8::new(128, 128, 1, vec![90; 128 * 128]), 2);

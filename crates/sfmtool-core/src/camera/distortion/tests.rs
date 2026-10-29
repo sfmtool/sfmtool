@@ -19,6 +19,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -31,6 +32,7 @@ fn simple_pinhole() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -44,6 +46,7 @@ fn simple_radial() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -58,6 +61,7 @@ fn radial() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -75,6 +79,7 @@ fn opencv() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -92,6 +97,7 @@ fn opencv_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -113,6 +119,7 @@ fn full_opencv() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -126,6 +133,7 @@ fn simple_radial_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -140,6 +148,7 @@ fn radial_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -161,6 +170,7 @@ fn thin_prism_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -186,6 +196,7 @@ fn rad_tan_thin_prism_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -199,6 +210,7 @@ fn equirectangular() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -211,6 +223,7 @@ fn equidistant_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -596,6 +609,7 @@ fn undistort_to_ray_fisheye_beyond_90_degrees() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     // At exactly 90°: theta = π/2, r_d = π/2 in normalized coords
@@ -798,6 +812,7 @@ fn recover_theta_equidistant_out_of_range() {
         },
         width: 3840,
         height: 3840,
+        rolling_shutter: None,
     };
     // Corner pixel — beyond valid distortion range
     let ray = cam.pixel_to_ray(3840.0, 3840.0);
@@ -832,6 +847,7 @@ fn kerry_park_pixel_to_ray_smooth_across_blend_region() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
 
     // Walk in 1-pixel steps along +x from the principal point to the image
@@ -992,6 +1008,7 @@ fn pixel_to_ray_simple_radial_fisheye_corners() {
             },
             width: 640,
             height: 480,
+            rolling_shutter: None,
         };
         let corners = [
             [0.0, 0.0],
@@ -1035,6 +1052,7 @@ fn pixel_to_ray_simple_radial_fisheye_wide_angle() {
         },
         width: 1000,
         height: 1000,
+        rolling_shutter: None,
     };
 
     // Principal point → straight ahead (canonical −Z)
@@ -1089,6 +1107,7 @@ fn pixel_to_ray_simple_radial_fisheye_wide_angle_with_distortion() {
         },
         width: 1000,
         height: 1000,
+        rolling_shutter: None,
     };
 
     // Test round-trip at various angles including beyond 90°
@@ -1269,6 +1288,7 @@ fn ray_to_pixel_rejects_folded_simple_radial() {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     };
 
     // A ray at lon ≈ 53° (rx/(−rz) ≈ 1.35) is well outside the camera's
@@ -1319,6 +1339,7 @@ fn ray_to_pixel_rejects_folded_radial() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     // For k1 = -0.7, det(J) = (1 - 0.7 r²)(1 - 2.1 r²) goes negative
     // for r² in (1/2.1, 1/0.7) ≈ (0.476, 1.429). Pick a ray squarely
@@ -1929,6 +1950,7 @@ fn equidistant_seed(f: f64, w: u32, h: u32) -> CameraIntrinsics {
         },
         width: w,
         height: h,
+        rolling_shutter: None,
     }
 }
 
@@ -2148,6 +2170,7 @@ fn equidistant_native(f: f64, w: u32, h: u32) -> CameraIntrinsics {
         },
         width: w,
         height: h,
+        rolling_shutter: None,
     }
 }
 
@@ -2388,6 +2411,7 @@ fn simple_radial_fisheye_at(f: f64, k1: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -2622,6 +2646,7 @@ fn sfmtool_fisheye_at(f: f64, coeffs: Vec<f64>) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -2719,6 +2744,7 @@ fn sfmtool_fisheye_degenerate_theta_max_is_bitwise_the_equidistant_model() {
             },
             width: 480,
             height: 480,
+            rolling_shutter: None,
         };
         // Live coefficients that cannot reach the map are not distortion.
         assert!(
@@ -2931,6 +2957,7 @@ fn sfmtool_pinhole_at(f: f64, coeffs: Vec<f64>) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -2944,6 +2971,7 @@ fn simple_pinhole_at(f: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -3050,6 +3078,7 @@ fn sfmtool_pinhole_degenerate_rho_max_is_bitwise_the_simple_pinhole_model() {
             },
             width: 480,
             height: 480,
+            rolling_shutter: None,
         };
         assert!(
             !cam.has_distortion(),
@@ -3727,6 +3756,7 @@ fn pixel_radius_closed_forms_are_bit_identical_to_the_depth_and_range_forms() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let perspective = [simple_pinhole(), pinhole_iso];
     let fisheye = equidistant_fisheye();
@@ -3768,6 +3798,7 @@ fn anisotropic_pinhole_sizes_by_the_smaller_focal_not_fx() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let p = point_at(0.0, 6.0);
     let old = 4.0 * p[2].abs() / 500.0;
@@ -3901,6 +3932,7 @@ fn pinhole_angular_radius_falls_off_as_cos_theta() {
             },
             width: 640,
             height: 480,
+            rolling_shutter: None,
         },
     ];
     for cam in &cams {

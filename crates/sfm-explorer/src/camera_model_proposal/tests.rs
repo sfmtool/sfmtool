@@ -104,6 +104,7 @@ fn the_model_list_orders_the_targets_by_the_source() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let targets = targets_for(&fisheye);
     assert_eq!(targets[0], "SFMTOOL_FISHEYE");
@@ -762,6 +763,7 @@ pub(crate) fn kerry_camera() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -1076,7 +1078,7 @@ fn an_adjusted_images_observations_are_reprojected_with_its_adjustment() {
     let recon = state.scene[0].recon();
     let refit = proposal.fit.as_ref().expect("a fitted camera");
     let current = recon.image_set.image_intrinsics(2);
-    let proposed = refit.camera.with_adjustment(&ADJUSTMENT);
+    let proposed = refit.camera.with_adjustment(&ADJUSTMENT, None);
     let pose = crate::scene::cam_from_world(&recon.image_set.images[2]);
     let rows: Vec<usize> = (0..recon.point_set.tracks.len())
         .filter(|&r| recon.point_set.tracks[r].image_index == 2)

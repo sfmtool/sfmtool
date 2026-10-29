@@ -100,6 +100,7 @@ mod projection;
 // adjustment linearizes through the same basis evaluation the kernels use.
 pub(crate) mod bspline;
 mod ray_grid;
+mod rolling_shutter;
 use kernels::*;
 
 // Named directly by the sibling test module through its `use super::*`;

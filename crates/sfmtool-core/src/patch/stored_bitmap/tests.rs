@@ -189,6 +189,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: 128,
         height: 128,
+        rolling_shutter: None,
     }
 }
 

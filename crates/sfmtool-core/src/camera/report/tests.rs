@@ -45,6 +45,7 @@ fn cam(model: CameraModel) -> CameraIntrinsics {
         model,
         width: W,
         height: H,
+        rolling_shutter: None,
     }
 }
 
@@ -728,6 +729,7 @@ fn equiv_focal_length_35mm_matches_the_closed_form() {
         },
         width: 2 * W,
         height: 2 * H,
+        rolling_shutter: None,
     };
     assert_relative_eq!(
         equiv_focal_length_35mm(&doubled).unwrap(),
@@ -957,6 +959,7 @@ fn the_kerry_park_fisheye_is_bounded_well_inside_its_corners() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let limit = trustworthy_max_theta_deg(&cam).unwrap();
     let fov = field_of_view(&cam).unwrap();
@@ -1005,6 +1008,7 @@ fn kerry_park_camera() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -1020,6 +1024,7 @@ fn seoul_bull_camera() -> CameraIntrinsics {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     }
 }
 

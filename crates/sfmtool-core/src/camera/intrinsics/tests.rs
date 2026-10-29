@@ -22,6 +22,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -34,6 +35,7 @@ fn simple_pinhole() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -47,6 +49,7 @@ fn simple_radial() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -61,6 +64,7 @@ fn radial() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -78,6 +82,7 @@ fn opencv() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -95,6 +100,7 @@ fn opencv_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -116,6 +122,7 @@ fn full_opencv() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -129,6 +136,7 @@ fn simple_radial_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -143,6 +151,7 @@ fn radial_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -164,6 +173,7 @@ fn thin_prism_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -189,6 +199,7 @@ fn rad_tan_thin_prism_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -203,6 +214,7 @@ fn equirectangular() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -215,6 +227,7 @@ fn equidistant_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -229,6 +242,7 @@ fn sfmtool_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -245,6 +259,7 @@ fn sfmtool_pinhole() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -429,6 +444,7 @@ fn has_distortion_false_for_zero_coefficient_models() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(!sr.has_distortion());
 
@@ -442,6 +458,7 @@ fn has_distortion_false_for_zero_coefficient_models() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(!r.has_distortion());
 
@@ -458,6 +475,7 @@ fn has_distortion_false_for_zero_coefficient_models() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(!cv.has_distortion());
 
@@ -474,6 +492,7 @@ fn has_distortion_false_for_zero_coefficient_models() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(!fe.has_distortion());
 
@@ -494,6 +513,7 @@ fn has_distortion_false_for_zero_coefficient_models() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(!full.has_distortion());
 }
@@ -1018,6 +1038,7 @@ fn has_distortion_false_for_zero_coefficient_fisheye() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(!fe.has_distortion());
 }
@@ -1160,6 +1181,7 @@ fn sfmtool_fisheye_empty_bspline_round_trips() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let stored = SfmrCamera::from(&cam);
     // The declared length carries the empty spline; no coefficient keys.
@@ -1450,6 +1472,7 @@ fn sfmtool_pinhole_empty_bspline_round_trips() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let stored = SfmrCamera::from(&cam);
     assert_eq!(stored.parameters["bspline_coeff_count"], 0.0);
@@ -1719,6 +1742,7 @@ fn spline_parameter_names_are_ordered_by_coefficient_index() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let names = cam.model.parameter_names();
     assert_eq!(
@@ -1752,6 +1776,7 @@ fn spline_parameter_names_are_ordered_by_coefficient_index() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert_eq!(pinhole.model.parameter_names()[3], "bspline_rho_max");
 }
@@ -1770,6 +1795,7 @@ fn parameter_names_of_an_inactive_spline_stop_at_the_count() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     assert_eq!(
         cam.model.parameter_names(),
@@ -1874,4 +1900,205 @@ fn with_focal_moves_only_a_single_focal() {
             assert_eq!(moved, cam, "{name}");
         }
     }
+}
+
+// -----------------------------------------------------------------------
+// Per-image radial correction and rolling-shutter rates
+// -----------------------------------------------------------------------
+
+/// `Δδ(ρ) = e_0·B0 + e_1·B1` written out from its closed form: `B0 = 3τ²(1 − τ)`
+/// and `B1 = τ³` with `τ = ρ/ρ_max` on the domain, and the end tangent
+/// `e_1 + 3(e_1 − e_0)·(ρ − ρ_max)/ρ_max` past it.
+fn two_coefficient_correction(e: [f64; 2], rho_max: f64, rho: f64) -> f64 {
+    if rho <= rho_max {
+        let t = rho / rho_max;
+        e[0] * 3.0 * t * t * (1.0 - t) + e[1] * t * t * t
+    } else {
+        e[1] + 3.0 * (e[1] - e[0]) * (rho - rho_max) / rho_max
+    }
+}
+
+fn sfmtool_pinhole_with(bspline: Vec<f64>) -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 800.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 0.7,
+            bspline,
+        },
+        width: 640,
+        height: 480,
+        rolling_shutter: None,
+    }
+}
+
+fn spline_of(camera: &CameraIntrinsics) -> (&[f64], f64) {
+    let CameraModel::SfmtoolPinhole {
+        bspline,
+        bspline_rho_max,
+        ..
+    } = &camera.model
+    else {
+        panic!("not SFMTOOL_PINHOLE")
+    };
+    (bspline, *bspline_rho_max)
+}
+
+#[test]
+fn knot_insertion_writes_the_correction_in_the_cameras_basis() {
+    use crate::camera::distortion::bspline::{delta, radial_bspline_insertion};
+    let e = [0.013, -0.021];
+    for n in [2usize, 3, 4, 5, 8, 13] {
+        let k = radial_bspline_insertion(n);
+        if n == 2 {
+            assert_eq!(k, vec![[1.0, 0.0], [0.0, 1.0]]);
+        }
+        let c: Vec<f64> = (0..n).map(|i| -0.004 * (i as f64 + 1.0)).collect();
+        let camera = sfmtool_pinhole_with(c.clone());
+        let image = camera.with_adjustment(
+            &IntrinsicAdjustment {
+                radial_bspline: e,
+                ..Default::default()
+            },
+            None,
+        );
+        let (corrected, rho_max) = spline_of(&image);
+        assert_eq!(corrected.len(), n);
+        for s in 0..=300 {
+            // On the domain and well past its end, on the linear tail.
+            let rho = 1.6 * rho_max * s as f64 / 300.0;
+            let expected = delta(&c, rho_max, rho) + two_coefficient_correction(e, rho_max, rho);
+            let got = delta(corrected, rho_max, rho);
+            assert!(
+                (got - expected).abs() < 1e-15,
+                "N = {n}, rho = {rho}: {got} against {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_radial_correction_on_an_empty_spline_is_the_two_coefficient_spline() {
+    let e = [0.01, 0.02];
+    let image = sfmtool_pinhole_with(Vec::new()).with_adjustment(
+        &IntrinsicAdjustment {
+            radial_bspline: e,
+            ..Default::default()
+        },
+        None,
+    );
+    assert_eq!(spline_of(&image).0, &e[..]);
+}
+
+#[test]
+fn an_adjustment_is_zero_only_when_all_four_parts_are() {
+    assert!(IntrinsicAdjustment::default().is_zero());
+    for adjustment in [
+        IntrinsicAdjustment {
+            focal: 1e-9,
+            ..Default::default()
+        },
+        IntrinsicAdjustment {
+            principal_point: [0.0, 1e-9],
+            ..Default::default()
+        },
+        IntrinsicAdjustment {
+            radial_bspline: [1e-9, 0.0],
+            ..Default::default()
+        },
+        IntrinsicAdjustment {
+            rolling_shutter: [0.0, 0.0, 1e-9],
+            ..Default::default()
+        },
+    ] {
+        assert!(!adjustment.is_zero(), "{adjustment:?}");
+    }
+}
+
+#[test]
+fn rates_are_set_on_the_scanlines_and_a_camera_that_cannot_take_them_is_refused() {
+    let rates = IntrinsicAdjustment {
+        rolling_shutter: [1e-3, -2e-3, 5e-4],
+        ..Default::default()
+    };
+    let image = sfmtool_pinhole_with(vec![0.0; 4])
+        .with_adjustment(&rates, Some(RollingShutterScanlines::Columns));
+    assert_eq!(
+        image.rolling_shutter,
+        Some(RollingShutter {
+            scanlines: RollingShutterScanlines::Columns,
+            rates: [1e-3, -2e-3, 5e-4],
+        })
+    );
+    // An image with rates is not its camera.
+    assert_ne!(image, sfmtool_pinhole_with(vec![0.0; 4]));
+
+    let refusals = [
+        (
+            simple_pinhole(),
+            rates,
+            Some(RollingShutterScanlines::Rows),
+            "SFMTOOL_PINHOLE",
+        ),
+        (sfmtool_pinhole_with(vec![0.0; 4]), rates, None, "scanlines"),
+        (
+            simple_pinhole(),
+            IntrinsicAdjustment {
+                radial_bspline: [0.01, 0.0],
+                ..Default::default()
+            },
+            None,
+            "SFMTOOL_PINHOLE",
+        ),
+        (
+            sfmtool_pinhole_with(vec![0.01]),
+            IntrinsicAdjustment {
+                radial_bspline: [0.01, 0.0],
+                ..Default::default()
+            },
+            None,
+            "two coefficients",
+        ),
+    ];
+    for (camera, adjustment, scanlines, needle) in refusals {
+        let err = camera
+            .check_adjustment(&adjustment, scanlines)
+            .expect_err("refused");
+        assert!(err.contains(needle), "{err}");
+        let panic = std::panic::catch_unwind(|| camera.with_adjustment(&adjustment, scanlines));
+        assert!(panic.is_err());
+    }
+    let mut degenerate = sfmtool_pinhole_with(vec![0.0; 4]);
+    if let CameraModel::SfmtoolPinhole {
+        bspline_rho_max, ..
+    } = &mut degenerate.model
+    {
+        *bspline_rho_max = 0.0;
+    }
+    let err = degenerate
+        .check_adjustment(
+            &IntrinsicAdjustment {
+                radial_bspline: [0.01, 0.0],
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err();
+    assert!(err.contains("bspline_rho_max"), "{err}");
+}
+
+#[test]
+fn a_camera_entry_carries_no_rolling_shutter() {
+    let image = sfmtool_pinhole_with(vec![0.0; 4]).with_adjustment(
+        &IntrinsicAdjustment {
+            rolling_shutter: [1e-3, 0.0, 0.0],
+            ..Default::default()
+        },
+        Some(RollingShutterScanlines::Rows),
+    );
+    let entry = SfmrCamera::from(&image);
+    assert_eq!(entry.rolling_shutter_scanlines, None);
+    let back = CameraIntrinsics::try_from(&entry).unwrap();
+    assert_eq!(back.rolling_shutter, None);
 }

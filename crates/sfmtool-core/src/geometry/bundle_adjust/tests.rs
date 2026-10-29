@@ -40,6 +40,7 @@ fn simple_pinhole(f: f64) -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -480,6 +481,7 @@ fn fisheye_solve_via_numeric_jacobian() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let mut s = make_scene_cam(cam, 5, 40);
     let t_true = s.trans.clone();
@@ -1895,6 +1897,7 @@ fn equidistant_seed(f: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -1922,6 +1925,7 @@ fn equidistant_legacy(f: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -1936,6 +1940,7 @@ fn equidistant_native(f: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -2077,6 +2082,7 @@ fn an_unbounded_trim_still_trims_an_observation_whose_projection_fails() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let quats = vec![UnitQuaternion::identity(); 2];
     let trans = vec![Vector3::zeros(), Vector3::new(0.2, 0.0, 0.0)];
@@ -2432,6 +2438,7 @@ fn radial_fisheye(f: f64, k1: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -2880,6 +2887,7 @@ fn sfmtool_fisheye(f: f64, bspline: &[f64]) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -3517,6 +3525,7 @@ fn sfmtool_pinhole(f: f64, bspline: &[f64]) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -3529,6 +3538,7 @@ fn simple_pinhole_at(f: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -4681,6 +4691,7 @@ fn the_storage_decision_measures_its_noise_and_decides_on_the_test() {
             image_camera: image_camera.as_slice().into(),
             releases: None,
             image_adjustments: None,
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -5262,7 +5273,9 @@ fn an_inverse_depth_stops_at_zero() {
         }
         let cons = Constraints::all_free(p + 1);
         let anchors = free_point_anchors(&s.quats, &s.trans, &s.obs_img, &s.obs_pt, &cons, p + 1);
-        let mut lenses = vec![Lens::new(&cam, false, false, false, false, false, false)];
+        let mut lenses = vec![Lens::new(
+            &cam, None, false, false, false, false, false, false,
+        )];
         let kept: Vec<usize> = (0..s.uv.len()).collect();
         solve_lm::<BASE_CAM_COLS>(
             &mut lenses,
@@ -5623,6 +5636,7 @@ fn pinhole_xy(fx: f64, fy: f64) -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -5636,6 +5650,7 @@ fn simple_pinhole_pp(f: f64, cx: f64, cy: f64) -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -5655,6 +5670,7 @@ fn opencv_fisheye(f: f64) -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -5731,6 +5747,7 @@ fn run_cameras(
             image_camera: image_camera.into(),
             releases: None,
             image_adjustments: None,
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -7124,6 +7141,7 @@ fn run_at_the_guard(
             image_camera: image_camera.into(),
             releases: None,
             image_adjustments: None,
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -7305,6 +7323,7 @@ fn tail_pinhole(f: f64, bspline: &[f64]) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -7554,6 +7573,7 @@ fn pinhole_with_field(field_deg: f64, cx: f64, cy: f64) -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -7806,6 +7826,7 @@ fn releasing_the_principal_point_needs_no_focal_and_narrows_per_camera() {
             image_camera: image_camera.as_slice().into(),
             releases: Some(&releases),
             image_adjustments: None,
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -8055,12 +8076,14 @@ fn nudged(cam: &CameraIntrinsics, p: LensParam, d: f64) -> CameraIntrinsics {
 fn check_released_lens_columns<const CAM_COLS: usize>(
     cams: &[CameraIntrinsics],
     adjustments: &[IntrinsicAdjustment],
+    scanlines: &[Option<RollingShutterScanlines>],
     thetas_deg: &[&[f64]],
 ) {
     let images: Vec<CameraIntrinsics> = cams
         .iter()
         .zip(adjustments)
-        .map(|(cam, a)| cam.with_adjustment(a))
+        .zip(scanlines)
+        .map(|((cam, a), &s)| cam.with_adjustment(a, s))
         .collect();
     let lin: Vec<LinLens> = {
         let mut slot0 = 0;
@@ -8178,11 +8201,11 @@ fn check_released_lens_columns<const CAM_COLS: usize>(
                     let r = [xp[k].x, xp[k].y, xp[k].z];
                     let a = &adjustments[j];
                     let (up, vp) = nudged(cam, p, h)
-                        .with_adjustment(a)
+                        .with_adjustment(a, scanlines[j])
                         .ray_to_pixel(r)
                         .expect("in domain");
                     let (um, vm) = nudged(cam, p, -h)
-                        .with_adjustment(a)
+                        .with_adjustment(a, scanlines[j])
                         .ray_to_pixel(r)
                         .expect("in domain");
                     [(up - um) / (2.0 * h), (vp - vm) / (2.0 * h)]
@@ -8226,14 +8249,20 @@ fn released_lens_columns_under_image_adjustments_match_a_central_difference() {
         IntrinsicAdjustment {
             focal: 0.013,
             principal_point: [0.008, -0.011],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         },
         IntrinsicAdjustment {
             focal: -0.017,
             principal_point: [-0.006, 0.004],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         },
         IntrinsicAdjustment {
             focal: 0.021,
             principal_point: [0.012, 0.009],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         },
     ]);
 }
@@ -8249,6 +8278,7 @@ fn check_released_lens_columns_on_three_cameras(adjustments: &[IntrinsicAdjustme
     check_released_lens_columns::<BASE_PP_CAM_COLS>(
         std::slice::from_ref(&radial),
         &adjustments[..1],
+        &[None],
         &[fisheye_thetas],
     );
     // Then in the spline-width block, which the second and third cameras'
@@ -8265,8 +8295,42 @@ fn check_released_lens_columns_on_three_cameras(adjustments: &[IntrinsicAdjustme
     check_released_lens_columns::<BSPLINE_PP_CAM_COLS>(
         &[radial, pinhole, fisheye],
         adjustments,
+        &[None; 3],
         &[fisheye_thetas, &pinhole_thetas, fisheye_thetas],
     );
+}
+
+#[test]
+fn released_lens_columns_under_held_lens_corrections_match_a_central_difference() {
+    // An `SFMTOOL_PINHOLE` image with a held radial correction and held
+    // rolling-shutter rates of ten times the measured size, on rows and on
+    // columns. The shared spline's column is unchanged by the correction
+    // (`c + K·e` moves with `c` one for one) and becomes `(I + ṗ·∇tᵀ)·∂x_d`
+    // under the rates; the focal's gains `t·ṗ`, since the readout position
+    // is read in pixels; the principal point's stays the identity.
+    let pinhole = sfmtool_pinhole(250.0, &PLANTED_PINHOLE_BSPLINE)
+        .with_principal_point(PLANTED_PP.0, PLANTED_PP.1);
+    let thetas: Vec<f64> = [0.05f64, 0.2, 0.37, 0.52, 0.66, 0.81]
+        .iter()
+        .map(|rho| rho.atan().to_degrees())
+        .collect();
+    let adjustment = IntrinsicAdjustment {
+        focal: 0.013,
+        principal_point: [0.008, -0.011],
+        radial_bspline: [0.02, -0.03],
+        rolling_shutter: [2e-2, -1.5e-2, 1e-2],
+    };
+    for scanlines in [
+        RollingShutterScanlines::Rows,
+        RollingShutterScanlines::Columns,
+    ] {
+        check_released_lens_columns::<BSPLINE_PP_CAM_COLS>(
+            std::slice::from_ref(&pinhole),
+            &[adjustment],
+            &[Some(scanlines)],
+            &[&thetas],
+        );
+    }
 }
 
 #[test]
@@ -8287,11 +8351,13 @@ fn held_image_adjustments_are_read_by_every_observation() {
         .map(|i| IntrinsicAdjustment {
             focal: 0.012 * jitter(i, 41),
             principal_point: [0.008 * jitter(i, 42), 0.008 * jitter(i, 43)],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         })
         .collect();
     let images: Vec<CameraIntrinsics> = adjustments
         .iter()
-        .map(|a| truth.with_adjustment(a))
+        .map(|a| truth.with_adjustment(a, None))
         .collect();
     reproject(&mut s, |i| &images[i]);
     let run = |mut s: Scene, adjustments: Option<&[IntrinsicAdjustment]>| {
@@ -8301,6 +8367,7 @@ fn held_image_adjustments_are_read_by_every_observation() {
                 image_camera: Cow::Owned(vec![0; n_img]),
                 releases: None,
                 image_adjustments: adjustments.map(Cow::Borrowed),
+                rolling_shutter_scanlines: None,
             },
             &mut s.quats,
             &mut s.trans,
@@ -8384,11 +8451,13 @@ fn a_spline_is_recovered_under_held_image_adjustments() {
         .map(|i| IntrinsicAdjustment {
             focal: 0.012 * jitter(i, 51),
             principal_point: [0.006 * jitter(i, 52), 0.006 * jitter(i, 53)],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         })
         .collect();
     let images: Vec<CameraIntrinsics> = adjustments
         .iter()
-        .map(|a| truth.with_adjustment(a))
+        .map(|a| truth.with_adjustment(a, None))
         .collect();
     reproject(&mut s, |i| &images[i]);
     let start = sfmtool_pinhole(f, &[0.0; 6]);
@@ -8398,6 +8467,7 @@ fn a_spline_is_recovered_under_held_image_adjustments() {
             image_camera: Cow::Owned(vec![0; n_img]),
             releases: None,
             image_adjustments: Some(Cow::Borrowed(&adjustments)),
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -8438,6 +8508,123 @@ fn a_spline_is_recovered_under_held_image_adjustments() {
     assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
 }
 
+/// The pinhole spline's scene, its observations made through each image's own
+/// intrinsics: a focal scale, a principal-point offset, a radial correction of
+/// up to `0.01` and rolling-shutter rates of up to `2·10⁻²` per image, the
+/// rates read on `scanlines`. The solve releases the shared focal and spline
+/// from a wrong start and holds the corrections. Returns the solve, the
+/// planted adjustments, and the same solve with the corrections left out.
+fn solve_under_held_lens_corrections(
+    scanlines: RollingShutterScanlines,
+) -> (BundleAdjustment, Vec<IntrinsicAdjustment>, BundleAdjustment) {
+    let f = 250.0;
+    let truth = sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE);
+    let (mut s, _) = make_pinhole_scene_for(truth.clone(), 10, 500);
+    let n_img = s.quats.len();
+    let adjustments: Vec<IntrinsicAdjustment> = (0..n_img)
+        .map(|i| IntrinsicAdjustment {
+            focal: 0.01 * jitter(i, 61),
+            principal_point: [0.005 * jitter(i, 62), 0.005 * jitter(i, 63)],
+            radial_bspline: [0.01 * jitter(i, 64), 0.01 * jitter(i, 65)],
+            rolling_shutter: [
+                2e-2 * jitter(i, 66),
+                2e-2 * jitter(i, 67),
+                2e-2 * jitter(i, 68),
+            ],
+        })
+        .collect();
+    let images: Vec<CameraIntrinsics> = adjustments
+        .iter()
+        .map(|a| truth.with_adjustment(a, Some(scanlines)))
+        .collect();
+    reproject(&mut s, |i| &images[i]);
+    let start = sfmtool_pinhole(f * 1.02, &[0.0; 6]);
+    let scanlines = [Some(scanlines)];
+    let run = |mut s: Scene, adjustments: &[IntrinsicAdjustment]| {
+        bundle_adjust(
+            &BaCameras {
+                cameras: std::slice::from_ref(&start),
+                image_camera: Cow::Owned(vec![0; n_img]),
+                releases: None,
+                image_adjustments: Some(Cow::Borrowed(adjustments)),
+                rolling_shutter_scanlines: Some(&scanlines),
+            },
+            &mut s.quats,
+            &mut s.trans,
+            &mut s.points,
+            &s.uv,
+            &s.obs_img,
+            &s.obs_pt,
+            None,
+            None,
+            FreePointPolicy::default(),
+            None,
+            DEFAULT_PROTECTED_LOSS_SCALE,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            None,
+            &DEFAULT_SCHEDULE,
+            60,
+            2,
+            12,
+            &Progress::none(),
+        )
+    };
+    let out = run(s.clone(), &adjustments);
+    // The same images with their focal scale and principal-point offset alone.
+    let without: Vec<IntrinsicAdjustment> = adjustments
+        .iter()
+        .map(|a| IntrinsicAdjustment {
+            focal: a.focal,
+            principal_point: a.principal_point,
+            ..Default::default()
+        })
+        .collect();
+    let uncorrected = run(s, &without);
+    (out, adjustments, uncorrected)
+}
+
+#[test]
+fn a_focal_and_spline_are_recovered_under_held_lens_corrections() {
+    for scanlines in [
+        RollingShutterScanlines::Rows,
+        RollingShutterScanlines::Columns,
+    ] {
+        let (out, planted, uncorrected) = solve_under_held_lens_corrections(scanlines);
+        let focal = out.cameras[0].focal_lengths().0;
+        assert!((focal - 250.0).abs() < 0.05, "{scanlines:?}: focal {focal}");
+        for (i, (c, t)) in ba_bspline(&out)
+            .iter()
+            .zip(&PLANTED_PINHOLE_BSPLINE)
+            .enumerate()
+        {
+            assert!(
+                (c - t).abs() < 1e-3,
+                "{scanlines:?}: coefficient {i}: {c} (want {t})"
+            );
+        }
+        let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
+        assert!(worst < 1e-2, "{scanlines:?}: worst reprojection {worst} px");
+        // The held corrections come back as they went in.
+        assert_eq!(out.image_adjustments, planted, "{scanlines:?}");
+        // Read without them, the same pixels leave pixels of residual.
+        let worst_uncorrected = uncorrected
+            .residual_norms
+            .iter()
+            .copied()
+            .filter(|r| r.is_finite())
+            .fold(0.0f64, f64::max);
+        assert!(
+            worst_uncorrected > 0.5,
+            "{scanlines:?}: worst reprojection {worst_uncorrected} px without the corrections"
+        );
+    }
+}
+
 #[test]
 fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
     // Two cameras of different models, alternate images each: a
@@ -8465,6 +8652,8 @@ fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
                 IntrinsicAdjustment {
                     focal: 0.012 * jitter(i, 61),
                     principal_point: [0.006 * jitter(i, 62), 0.006 * jitter(i, 63)],
+                    radial_bspline: [0.0; 2],
+                    rolling_shutter: [0.0; 3],
                 }
             } else {
                 IntrinsicAdjustment::default()
@@ -8473,7 +8662,7 @@ fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
         .collect();
     assert!(adjusted.iter().all(|&i| !adjustments[i].is_zero()));
     let images: Vec<CameraIntrinsics> = (0..n_img)
-        .map(|i| truth[image_camera[i] as usize].with_adjustment(&adjustments[i]))
+        .map(|i| truth[image_camera[i] as usize].with_adjustment(&adjustments[i], None))
         .collect();
     reproject(&mut s, |i| &images[i]);
     let started = [
@@ -8494,6 +8683,7 @@ fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
             image_camera: image_camera.as_slice().into(),
             releases: Some(&releases),
             image_adjustments: Some(Cow::Borrowed(&adjustments)),
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,

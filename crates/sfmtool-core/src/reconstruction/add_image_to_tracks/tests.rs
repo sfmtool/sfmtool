@@ -49,6 +49,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: IMG,
         height: IMG,
+        rolling_shutter: None,
     }
 }
 

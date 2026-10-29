@@ -249,6 +249,17 @@ every image ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.
 § "The principal-point release"), so the report states how far it moved,
 `principal_point_before` and `principal_point_after`, for a person to judge.
 
+**Each image's radial correction and rolling-shutter rates are held.** An
+image of an `SFMTOOL_PINHOLE` camera may carry both
+([../camera/sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)). The
+adjustment passes them to the kernel with each posed image's adjustment, and
+each camera's scanlines setting in `BaCameras::rolling_shutter_scanlines`, so
+every observation is read through them while the shared lens is released; no
+release moves them, and they are written back as they were. Releasing them is
+specified in
+[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#core-the-bundle-adjustment).
+
 **Each image's focal and principal point are released per image, and the
 camera's value moves to their mean.** `image_focal` and `image_principal_point`
 solve each posed image's intrinsic adjustment, held toward the mean of the

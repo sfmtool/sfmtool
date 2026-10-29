@@ -321,9 +321,68 @@ impl PySfmrReconstruction {
         })
     }
 
-    /// Per camera, the parameters its images vary: a list of `"focal"` and
-    /// `"principal_point"`, in that order, empty for a camera that varies
-    /// nothing.
+    /// Each image's radial correction `(e_0, e_1)`, shape `(N, 2)` float64:
+    /// the coefficients of the two-coefficient basis on its camera's spline
+    /// domain, added to the camera's spline. `None` when no camera varies it
+    /// per image and every image's correction is zero, as `read_sfmr` gives
+    /// the column.
+    #[getter]
+    fn radial_bspline_adjustments<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Option<Bound<'py, PyArray2<f64>>> {
+        let image_set = &self.inner.image_set;
+        let listed = image_set
+            .per_image_adjustments
+            .iter()
+            .any(|f| f.radial_bspline);
+        let rows: Vec<[f64; 2]> = image_set
+            .images
+            .iter()
+            .map(|im| im.intrinsic_adjustment.radial_bspline)
+            .collect();
+        (listed || rows.iter().any(|r| *r != [0.0, 0.0])).then(|| {
+            ndarray::Array2::from_shape_fn((rows.len(), 2), |(i, k)| rows[i][k]).into_pyarray(py)
+        })
+    }
+
+    /// Each image's rolling-shutter rates `(wx, wy, wz)`, shape `(N, 3)`
+    /// float64, in radians per short side of readout, read on its camera's
+    /// :attr:`rolling_shutter_scanlines`. `None` when no camera varies them
+    /// per image and every image's rates are zero, as `read_sfmr` gives the
+    /// column.
+    #[getter]
+    fn rolling_shutter_rates_xyz<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray2<f64>>> {
+        let image_set = &self.inner.image_set;
+        let listed = image_set
+            .per_image_adjustments
+            .iter()
+            .any(|f| f.rolling_shutter);
+        let rows: Vec<[f64; 3]> = image_set
+            .images
+            .iter()
+            .map(|im| im.intrinsic_adjustment.rolling_shutter)
+            .collect();
+        (listed || rows.iter().any(|r| *r != [0.0; 3])).then(|| {
+            ndarray::Array2::from_shape_fn((rows.len(), 3), |(i, k)| rows[i][k]).into_pyarray(py)
+        })
+    }
+
+    /// Per camera, its rolling-shutter scanlines setting, `"ROWS"`,
+    /// `"COLUMNS"` or `None` where it is not known.
+    #[getter]
+    fn rolling_shutter_scanlines(&self) -> Vec<Option<&'static str>> {
+        self.inner
+            .image_set
+            .rolling_shutter_scanlines()
+            .into_iter()
+            .map(|s| s.map(|s| s.as_str()))
+            .collect()
+    }
+
+    /// Per camera, the parameters its images vary: a list of `"focal"`,
+    /// `"principal_point"`, `"radial_bspline"` and `"rolling_shutter"`, in
+    /// that order, empty for a camera that varies nothing.
     #[getter]
     fn per_image_adjustments(&self) -> Vec<Vec<String>> {
         let image_set = &self.inner.image_set;

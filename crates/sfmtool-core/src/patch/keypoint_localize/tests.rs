@@ -46,6 +46,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -2142,6 +2143,7 @@ fn project_unclipped_reaches_past_ninety_degrees_on_a_ray_path_model() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     let pin = pinhole();
     // Identity rotation → the canonical camera looks down world −z from z = 1;
@@ -2196,6 +2198,7 @@ fn seed_offset_refuses_a_bearing_past_a_right_angle_on_a_ray_path_model() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     // Camera at the origin looking down world −z; the patch plane is at
     // z = +PLANE_Z, i.e. *behind* the camera, with its normal along −z.

@@ -41,6 +41,7 @@ fn test_cam(f: f64) -> CameraIntrinsics {
         },
         width: W,
         height: H,
+        rolling_shutter: None,
     }
 }
 

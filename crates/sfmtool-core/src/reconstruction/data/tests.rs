@@ -98,6 +98,7 @@ fn test_observation_affine_shape_frontoparallel() {
         },
         width: 4096,
         height: 4096,
+        rolling_shutter: None,
     };
     // Image 0 at the origin looking down −Z (identity world->camera, the
     // canonical convention).
@@ -168,6 +169,7 @@ fn test_observation_affine_shape_rotated_camera() {
         },
         width: 4096,
         height: 4096,
+        rolling_shutter: None,
     };
     // World->camera rotation = +90° about Z; camera at the origin. The
     // rotated canonical camera still sees a point at world −Z in front.
@@ -1839,6 +1841,7 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     recon.image_set.cameras = vec![cam.clone()];
     for im in recon.image_set.images.iter_mut() {
@@ -1919,6 +1922,7 @@ fn test_observation_reprojection_error_is_bit_identical_to_the_gnomonic_expressi
             },
             width: 2040,
             height: 1536,
+            rolling_shutter: None,
         },
         CameraIntrinsics {
             model: CameraModel::SimpleRadial {
@@ -1929,6 +1933,7 @@ fn test_observation_reprojection_error_is_bit_identical_to_the_gnomonic_expressi
             },
             width: 2040,
             height: 1536,
+            rolling_shutter: None,
         },
     ];
     let rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3);
@@ -1985,6 +1990,7 @@ fn test_observation_reprojection_error_rejects_ghost_projections() {
         },
         width: 240,
         height: 240,
+        rolling_shutter: None,
     };
     // In front (z < 0) at normalized radius 2 — far beyond the branch bound
     // r² = 1/(3·0.3): the radial scalar g = 1 − 0.3·4 = −0.2 has folded sign,

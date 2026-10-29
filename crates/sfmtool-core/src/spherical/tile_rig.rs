@@ -488,6 +488,7 @@ impl SphericalTileRig {
             },
             width: self.patch_size,
             height: self.patch_size,
+            rolling_shutter: None,
         }
     }
 

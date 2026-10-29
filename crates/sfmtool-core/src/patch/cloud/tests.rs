@@ -19,6 +19,7 @@ fn pinhole(f: f64, cx: f64, cy: f64, w: u32, h: u32) -> CameraIntrinsics {
         },
         width: w,
         height: h,
+        rolling_shutter: None,
     }
 }
 
@@ -770,6 +771,7 @@ fn a_fisheye_keypoint_past_a_right_angle_from_the_line_of_sight_is_not_slid() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let pose = RigidTransform::identity();
     let patch = OrientedPatch::from_center_normal(
@@ -1262,6 +1264,7 @@ fn from_tracks_pixel_radius_reads_the_view_camera_model() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let ray = build(fisheye);
     assert!(
@@ -1335,6 +1338,7 @@ fn from_tracks_feature_size_reads_the_view_camera_model() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let ray = build(fisheye);
     assert!(
@@ -1443,6 +1447,7 @@ fn from_affine_shape_at_depth_round_trips_the_shape() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     for (name, camera) in [
         ("pinhole", pinhole(520.0, 320.0, 240.0, 640, 480)),

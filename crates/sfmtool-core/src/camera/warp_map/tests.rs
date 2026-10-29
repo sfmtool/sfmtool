@@ -15,6 +15,7 @@ fn pinhole(width: u32, height: u32, focal: f64) -> CameraIntrinsics {
         },
         width,
         height,
+        rolling_shutter: None,
     }
 }
 
@@ -29,6 +30,7 @@ fn simple_radial(width: u32, height: u32, focal: f64, k1: f64) -> CameraIntrinsi
         },
         width,
         height,
+        rolling_shutter: None,
     }
 }
 
@@ -43,6 +45,7 @@ fn simple_radial_fisheye(width: u32, height: u32, focal: f64, k1: f64) -> Camera
         },
         width,
         height,
+        rolling_shutter: None,
     }
 }
 
@@ -59,6 +62,7 @@ fn equirectangular(width: u32, height: u32) -> CameraIntrinsics {
         },
         width,
         height,
+        rolling_shutter: None,
     }
 }
 
@@ -977,6 +981,7 @@ fn the_grid_jacobian_is_the_warps_at_the_tile_centre() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let square = OrientedPatch::from_center_normal(
@@ -1040,6 +1045,7 @@ fn the_grid_jacobian_wraps_across_the_equirectangular_seam() {
         },
         width: 2000,
         height: 1000,
+        rolling_shutter: None,
     };
     let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
     let front = OrientedPatch::from_center_normal(

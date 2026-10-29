@@ -17,6 +17,8 @@ fn tagged(i: usize) -> IntrinsicAdjustment {
     IntrinsicAdjustment {
         focal: 0.001 * t,
         principal_point: [0.002 * t, -0.003 * t],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     }
 }
 
@@ -30,6 +32,9 @@ fn adjusted_demo() -> SfmrReconstruction {
     recon.image_set.per_image_adjustments = vec![PerImageAdjustments {
         focal: true,
         principal_point: true,
+        radial_bspline: false,
+        rolling_shutter: false,
+        rolling_shutter_scanlines: None,
     }];
     recon
 }
@@ -89,12 +94,15 @@ fn a_non_zero_adjustment_is_applied_exactly_on_a_single_focal_model() {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     };
     let adjustment = IntrinsicAdjustment {
         focal: -0.0125,
         principal_point: [0.011, -0.014],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     };
-    let adjusted = camera.with_adjustment(&adjustment);
+    let adjusted = camera.with_adjustment(&adjustment, None);
     assert_eq!(
         adjusted.model,
         CameraModel::SimpleRadial {
@@ -106,7 +114,7 @@ fn a_non_zero_adjustment_is_applied_exactly_on_a_single_focal_model() {
     );
     // Zero gives the camera back exactly.
     assert_eq!(
-        camera.with_adjustment(&IntrinsicAdjustment::default()),
+        camera.with_adjustment(&IntrinsicAdjustment::default(), None),
         camera
     );
 }
@@ -176,6 +184,9 @@ fn a_flag_without_a_value_writes_a_zero_column() {
     recon.image_set.per_image_adjustments = vec![PerImageAdjustments {
         focal: false,
         principal_point: true,
+        radial_bspline: false,
+        rolling_shutter: false,
+        rolling_shutter_scanlines: None,
     }];
     let data = recon.to_sfmr_data();
     assert!(data.focal_adjustments.is_none());
@@ -237,6 +248,9 @@ fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
     flagged.image_set.per_image_adjustments = vec![PerImageAdjustments {
         focal: true,
         principal_point: false,
+        radial_bspline: false,
+        rolling_shutter: false,
+        rolling_shutter_scanlines: None,
     }];
     let zero = dir.join("zero.sfmr");
     flagged.save(&zero).unwrap();
@@ -259,6 +273,9 @@ fn the_flags_name_their_parameters_in_the_formats_order() {
     let both = PerImageAdjustments {
         focal: true,
         principal_point: true,
+        radial_bspline: false,
+        rolling_shutter: false,
+        rolling_shutter_scanlines: None,
     };
     assert_eq!(both.names(), vec!["focal", "principal_point"]);
     assert_eq!(PerImageAdjustments::from_names(&both.names()), Ok(both));
@@ -297,39 +314,183 @@ fn the_intrinsics_list_holds_one_entry_per_adjusted_image() {
     }
 }
 
-/// A reconstruction does not hold the radial B-spline correction, the
-/// rolling-shutter rates or a scanlines setting, so data that carries any of
-/// them is refused, naming what it carries, rather than read without it.
-#[test]
-fn data_with_a_lens_correction_or_a_scanlines_setting_is_refused() {
-    use sfmtool_sfmr_format::{RollingShutterScanlines, SfmrError};
-
-    let plain = SfmrReconstruction::demo(16).to_sfmr_data();
-    let image_count = plain.image_names.len();
-
-    let mut scanlines = SfmrReconstruction::demo(16).to_sfmr_data();
-    scanlines.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Rows);
-    match SfmrReconstruction::from_sfmr_data(scanlines) {
-        Err(SfmrError::Unsupported(e)) => assert!(e.contains("rolling_shutter_scanlines"), "{e}"),
-        Err(e) => panic!("refused for another reason: {e}"),
-        Ok(_) => panic!("a scanlines setting was accepted"),
+/// The demo with its camera an `SFMTOOL_PINHOLE` of the same size and focal,
+/// every image carrying a tagged adjustment with a radial correction and
+/// rolling-shutter rates, and the camera varying all four parts per image on
+/// rows.
+fn corrected_demo() -> SfmrReconstruction {
+    use sfmtool_sfmr_format::RollingShutterScanlines;
+    let mut recon = SfmrReconstruction::demo(16);
+    recon.image_set.cameras[0].model = CameraModel::SfmtoolPinhole {
+        focal_length: 1000.0,
+        principal_point_x: 960.0,
+        principal_point_y: 540.0,
+        bspline_rho_max: 1.2,
+        bspline: vec![-0.002, -0.008, -0.018, -0.03],
+    };
+    for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+        let t = i as f64 + 1.0;
+        image.intrinsic_adjustment = IntrinsicAdjustment {
+            radial_bspline: [0.001 * t, -0.0005 * t],
+            rolling_shutter: [1e-4 * t, -2e-4 * t, 5e-5 * t],
+            ..tagged(i)
+        };
     }
+    recon.image_set.per_image_adjustments = vec![PerImageAdjustments {
+        focal: true,
+        principal_point: true,
+        radial_bspline: true,
+        rolling_shutter: true,
+        rolling_shutter_scanlines: Some(RollingShutterScanlines::Rows),
+    }];
+    recon
+}
 
-    let mut rates = SfmrReconstruction::demo(16).to_sfmr_data();
-    rates.cameras[0].per_image_adjustments = vec!["rolling_shutter".into()];
-    rates.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Columns);
-    rates.rolling_shutter_rates_xyz = Some(ndarray::Array2::zeros((image_count, 3)));
-    match SfmrReconstruction::from_sfmr_data(rates) {
+#[test]
+fn lens_corrections_cross_the_sfmr_data_boundary_bit_for_bit() {
+    use sfmtool_sfmr_format::RollingShutterScanlines;
+    let recon = corrected_demo();
+    let data = recon.to_sfmr_data();
+    assert_eq!(
+        data.cameras[0].per_image_adjustments,
+        [
+            "focal",
+            "principal_point",
+            "radial_bspline",
+            "rolling_shutter"
+        ]
+    );
+    assert_eq!(
+        data.cameras[0].rolling_shutter_scanlines,
+        Some(RollingShutterScanlines::Rows)
+    );
+    let radial = data.radial_bspline_adjustments.as_ref().unwrap();
+    let rates = data.rolling_shutter_rates_xyz.as_ref().unwrap();
+    for (i, image) in recon.image_set.images.iter().enumerate() {
+        let a = image.intrinsic_adjustment;
+        assert_eq!([radial[[i, 0]], radial[[i, 1]]], a.radial_bspline);
+        assert_eq!(
+            [rates[[i, 0]], rates[[i, 1]], rates[[i, 2]]],
+            a.rolling_shutter
+        );
+    }
+    let hash = recon.content_xxh128().unwrap().content_xxh128;
+    let back = SfmrReconstruction::from_sfmr_data(data).unwrap();
+    assert_eq!(
+        back.image_set.per_image_adjustments,
+        recon.image_set.per_image_adjustments
+    );
+    for (a, b) in back.image_set.images.iter().zip(&recon.image_set.images) {
+        let bits = |x: &IntrinsicAdjustment| {
+            let mut v = vec![x.focal.to_bits()];
+            v.extend(x.principal_point.map(f64::to_bits));
+            v.extend(x.radial_bspline.map(f64::to_bits));
+            v.extend(x.rolling_shutter.map(f64::to_bits));
+            v
+        };
+        assert_eq!(bits(&a.intrinsic_adjustment), bits(&b.intrinsic_adjustment));
+    }
+    assert_eq!(back.content_xxh128().unwrap().content_xxh128, hash);
+}
+
+#[test]
+fn each_image_is_read_through_its_radial_correction_and_rates() {
+    use crate::camera::distortion::bspline::radial_bspline_insertion;
+    use crate::camera::RollingShutter;
+    use sfmtool_sfmr_format::RollingShutterScanlines;
+    let recon = corrected_demo();
+    let camera = &recon.image_set.cameras[0];
+    let CameraModel::SfmtoolPinhole { bspline: c, .. } = &camera.model else {
+        unreachable!()
+    };
+    let list = recon.image_set.image_intrinsics_list();
+    for (i, image) in recon.image_set.images.iter().enumerate() {
+        let a = image.intrinsic_adjustment;
+        let intrinsics = recon.image_intrinsics(i);
+        assert_eq!(
+            intrinsics.rolling_shutter,
+            Some(RollingShutter {
+                scanlines: RollingShutterScanlines::Rows,
+                rates: a.rolling_shutter,
+            })
+        );
+        let CameraModel::SfmtoolPinhole { bspline, .. } = &intrinsics.model else {
+            unreachable!()
+        };
+        let k = radial_bspline_insertion(c.len());
+        for j in 0..c.len() {
+            let want = c[j] + (k[j][0] * a.radial_bspline[0] + k[j][1] * a.radial_bspline[1]);
+            assert_eq!(bspline[j].to_bits(), want.to_bits());
+        }
+        assert_eq!(list.of(i), intrinsics.as_ref());
+        // A ray cast from a pixel lands back on it through the same image.
+        let ray = recon.image_set.world_ray(i, [700.0, 400.0]).unwrap();
+        let cam = image.quaternion_wxyz * ray;
+        let (u, v) = intrinsics.ray_to_pixel([cam.x, cam.y, cam.z]).unwrap();
+        assert!((u - 700.0).abs() < 1e-9 && (v - 400.0).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn a_scanlines_setting_alone_is_kept() {
+    use sfmtool_sfmr_format::RollingShutterScanlines;
+    let mut data = SfmrReconstruction::demo(16).to_sfmr_data();
+    data.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Columns);
+    let recon = SfmrReconstruction::from_sfmr_data(data).unwrap();
+    let flags = recon.image_set.camera_per_image_adjustments(0);
+    assert!(!flags.any());
+    assert_eq!(
+        flags.rolling_shutter_scanlines,
+        Some(RollingShutterScanlines::Columns)
+    );
+    // It projects nothing on its own, and a save writes it back.
+    assert!(matches!(recon.image_intrinsics(0), Cow::Borrowed(_)));
+    let data = recon.to_sfmr_data();
+    assert_eq!(
+        data.cameras[0].rolling_shutter_scanlines,
+        Some(RollingShutterScanlines::Columns)
+    );
+    assert!(data.cameras[0].per_image_adjustments.is_empty());
+}
+
+#[test]
+fn rates_on_another_model_are_refused_and_the_file_boundary_still_refuses_both() {
+    use sfmtool_sfmr_format::{RollingShutterScanlines, SfmrError};
+    // Rolling-shutter rates on the demo's PINHOLE camera: the format allows
+    // them, and this build applies them on SFMTOOL_PINHOLE alone.
+    let mut data = SfmrReconstruction::demo(16).to_sfmr_data();
+    let image_count = data.image_names.len();
+    data.cameras[0].per_image_adjustments = vec!["rolling_shutter".into()];
+    data.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Rows);
+    let mut rates = ndarray::Array2::zeros((image_count, 3));
+    rates[[2, 1]] = 1e-3;
+    data.rolling_shutter_rates_xyz = Some(rates);
+    match SfmrReconstruction::from_sfmr_data(data) {
         Err(SfmrError::Unsupported(e)) => {
-            assert!(e.contains("images/rolling_shutter_rates_xyz"), "{e}")
+            assert!(
+                e.contains("image 2") && e.contains("SFMTOOL_PINHOLE"),
+                "{e}"
+            )
         }
         Err(e) => panic!("refused for another reason: {e}"),
-        Ok(_) => panic!("rolling-shutter rates were accepted"),
+        Ok(_) => panic!("rates on a PINHOLE camera were accepted"),
     }
 
-    assert!(SfmrReconstruction::from_sfmr_data(plain).is_ok());
-    for name in ["radial_bspline", "rolling_shutter"] {
-        let err = PerImageAdjustments::from_names(&["focal", name]).unwrap_err();
-        assert!(err.contains(name), "{err}");
+    // The two names read as flags.
+    let flags = PerImageAdjustments::from_names(&["radial_bspline", "rolling_shutter"]).unwrap();
+    assert!(flags.radial_bspline && flags.rolling_shutter && flags.any());
+
+    // The viewer and the Python package do not read the corrections yet, so a
+    // save is still refused, and nothing is written.
+    let dir = std::env::temp_dir().join("sfmr_core_lens_corrections_save");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.join("corrected.sfmr");
+    match corrected_demo().save(&path) {
+        Err(SfmrError::Unsupported(e)) => assert!(e.contains("radial_bspline"), "{e}"),
+        other => panic!("the save was not refused: {:?}", other.map(|_| ())),
     }
+    assert!(!path.exists());
+    let _ = std::fs::remove_dir_all(&dir);
 }

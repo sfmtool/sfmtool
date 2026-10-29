@@ -559,6 +559,7 @@ impl std::error::Error for RefitError {}
 ///     },
 ///     width: 480,
 ///     height: 480,
+///     rolling_shutter: None,
 /// };
 /// let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
 /// let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
@@ -635,6 +636,7 @@ pub(crate) fn refit_camera_intrinsics_over(
                 },
                 width: source.width,
                 height: source.height,
+                rolling_shutter: None,
             };
             (camera, None, MonotoneConstraint::default())
         }
@@ -700,6 +702,7 @@ pub(crate) fn refit_camera_intrinsics_over(
 ///     },
 ///     width: 480,
 ///     height: 480,
+///     rolling_shutter: None,
 /// };
 /// let refit = refit_spline(&source, 12, None).unwrap();
 /// assert!(refit.max_px < 0.05, "{}", refit.max_px);
@@ -931,6 +934,7 @@ fn unit_base(radial: SplineRadial) -> CameraIntrinsics {
         model,
         width: 1,
         height: 1,
+        rolling_shutter: None,
     }
 }
 
@@ -1042,6 +1046,7 @@ fn fit_spline_camera_on(
             model,
             width: source.width,
             height: source.height,
+            rolling_shutter: None,
         },
         domain_deg,
         constraint,

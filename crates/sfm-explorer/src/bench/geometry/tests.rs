@@ -447,6 +447,7 @@ fn a_pixels_ray_leaves_the_camera_centre_and_projects_back_onto_the_pixel() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     // Turned and moved, so neither the rotation nor the centre is the
     // identity's.

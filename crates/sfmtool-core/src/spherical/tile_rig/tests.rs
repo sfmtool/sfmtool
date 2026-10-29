@@ -39,6 +39,7 @@ fn equirect_camera(w: u32, h: u32) -> CameraIntrinsics {
         },
         width: w,
         height: h,
+        rolling_shutter: None,
     }
 }
 
@@ -748,6 +749,7 @@ fn closest_tile_warp_lands_inside_patch() {
         },
         width: dst_w,
         height: dst_h,
+        rolling_shutter: None,
     };
 
     let map = rig.warp_from_atlas_with_rotation(&dst, &RotQuaternion::identity());

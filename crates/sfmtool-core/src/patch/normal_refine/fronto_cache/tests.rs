@@ -178,6 +178,7 @@ fn ray_path_corners_are_model_pixels_and_survive_past_ninety_degrees() {
         },
         width: w,
         height: h,
+        rolling_shutter: None,
     };
     let pin = CameraIntrinsics {
         model: CameraModel::Pinhole {
@@ -188,6 +189,7 @@ fn ray_path_corners_are_model_pixels_and_survive_past_ninety_degrees() {
         },
         width: w,
         height: h,
+        rolling_shutter: None,
     };
     // Identity rotation: the canonical camera looks down world −z from z = 1.
     let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);

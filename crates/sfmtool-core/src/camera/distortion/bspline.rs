@@ -213,6 +213,43 @@ pub(crate) fn delta_and_deriv(bspline: &[f64], d_max: f64, d: f64) -> (f64, f64)
     (delta, deriv)
 }
 
+/// The knot-insertion matrix `K` (`n_coeffs × 2`) that writes a spline of the
+/// **two-coefficient** basis on `[0, d_max]` in the `n_coeffs`-coefficient
+/// basis on the same domain: `e_0·B0 + e_1·B1 = Σⱼ (K·e)ⱼ·Bⱼ`, exactly, on the
+/// domain and on the linear continuation past it.
+///
+/// With two coefficients the clamped basis has four functions and no interior
+/// knot, so it is the cubic Bernstein basis in `τ = d/d_max`, and the
+/// centre-anchored pair is `B0 = 3τ²(1 − τ)` and `B1 = τ³`: a cubic
+/// polynomial. Every clamped knot vector on the same domain refines that one,
+/// so the polynomial is a spline of the finer basis, and its coefficient on the
+/// full-basis function `i` (support `[t_i, t_{i+4}]`) is the polynomial's
+/// blossom at the three knots `(t_{i+1}, t_{i+2}, t_{i+3})` (de Boor–Fix).
+/// The blossom of `τ³` at `(a, b, c)` is `a·b·c` and that of `τ²` is
+/// `(a·b + a·c + b·c)/3`, so row `j` (full index `i = j + 2`) is
+/// `[ab + ac + bc − 3abc, abc]` with the knots in units of `d_max`. The two
+/// anchored functions (`i < 2`) get `0` from these formulas, as the gauge
+/// requires. `n_coeffs = 2` gives the identity. Both splines then have the same
+/// value and slope at `d_max`, so their linear continuations agree too.
+///
+/// The matrix does not depend on `d_max`, since the knots scale with it.
+pub(crate) fn radial_bspline_insertion(n_coeffs: usize) -> Vec<[f64; 2]> {
+    debug_assert!(n_coeffs >= MIN_BSPLINE_COEFFS);
+    let m = n_coeffs + 2;
+    (0..n_coeffs)
+        .map(|j| {
+            let i = j + 2;
+            let (a, b, c) = (
+                knot(i + 1, m, 1.0),
+                knot(i + 2, m, 1.0),
+                knot(i + 3, m, 1.0),
+            );
+            let abc = a * b * c;
+            [a * b + a * c + b * c - 3.0 * abc, abc]
+        })
+        .collect()
+}
+
 /// `δ(d)` alone — [`delta_and_deriv`] without the derivative.
 pub(crate) fn delta(bspline: &[f64], d_max: f64, d: f64) -> f64 {
     delta_and_deriv(bspline, d_max, d).0

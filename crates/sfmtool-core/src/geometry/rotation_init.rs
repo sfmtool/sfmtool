@@ -666,6 +666,7 @@ pub fn rotation_init(
         },
         width,
         height,
+        rolling_shutter: None,
     };
     let mut in_comp = vec![false; n_img];
     for &i in &comp {

@@ -57,6 +57,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -863,6 +864,7 @@ fn fisheye() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 

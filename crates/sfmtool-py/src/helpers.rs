@@ -111,6 +111,14 @@ pub(crate) fn extract_cameras_as_sfmr(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Sf
                 "cameras list must contain CameraIntrinsics objects",
             )
         })?;
+        // A camera entry is a lens several images share, and has no place for
+        // one image's rolling-shutter rates.
+        if py_cam.inner.rolling_shutter.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "a camera of the cameras list carries a rolling shutter, which belongs to one \
+                 image's intrinsics and has no place in a camera entry",
+            ));
+        }
         cameras.push(SfmrCamera::from(&py_cam.inner));
     }
     Ok(cameras)

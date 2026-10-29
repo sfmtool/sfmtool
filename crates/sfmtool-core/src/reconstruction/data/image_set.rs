@@ -12,65 +12,83 @@ use sfmtool_sfmr_format::{
     parse_per_image_adjustment_names, DepthStatistics, RigFrameData, PER_IMAGE_ADJUSTMENT_NAMES,
 };
 
-use crate::camera::{CameraIntrinsics, ImageIntrinsicsList, IntrinsicAdjustment};
+use crate::camera::{
+    CameraIntrinsics, ImageIntrinsicsList, IntrinsicAdjustment, RollingShutterScanlines,
+};
 use crate::reconstruction::bundle_adjust::is_posed;
 
 use super::SfmrImage;
 
-/// Which parts of one camera's intrinsics vary per image: the in-memory form
-/// of the camera's `per_image_adjustments` key in an `.sfmr` file.
+/// Which parts of one camera's intrinsics vary per image, and the camera's
+/// rolling-shutter scanlines setting: the in-memory form of the camera's
+/// `per_image_adjustments` and `rolling_shutter_scanlines` keys in an `.sfmr`
+/// file.
 ///
 /// A flag that is set says the camera's images carry their own adjustment of
 /// that parameter, so a zero there was solved for rather than never enabled.
-/// The default varies nothing.
+/// The default varies nothing and has no scanlines setting.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PerImageAdjustments {
     /// Each image of the camera has its own focal scale.
     pub focal: bool,
     /// Each image of the camera has its own principal-point offset.
     pub principal_point: bool,
+    /// Each image of the camera has its own radial correction, added to the
+    /// camera's spline. Only an `SFMTOOL_PINHOLE` camera sets it.
+    pub radial_bspline: bool,
+    /// Each image of the camera has its own rolling-shutter rates, read on
+    /// [`Self::rolling_shutter_scanlines`], which a camera that sets this
+    /// has.
+    pub rolling_shutter: bool,
+    /// Whether the camera's sensor reads one row or one column at a time, or
+    /// `None` where that is not known. Allowed without
+    /// [`Self::rolling_shutter`], so a known setting is kept before any rates
+    /// are solved.
+    pub rolling_shutter_scanlines: Option<RollingShutterScanlines>,
 }
 
 impl PerImageAdjustments {
-    /// Whether the camera varies anything per image.
+    /// Whether the camera varies anything per image. The scanlines setting
+    /// alone varies nothing.
     pub fn any(&self) -> bool {
-        self.focal || self.principal_point
+        self.focal || self.principal_point || self.radial_bspline || self.rolling_shutter
     }
 
-    /// The flags a camera's stored `per_image_adjustments` list names, or a
-    /// message saying why the list is not one the format allows or one this
-    /// build holds: a reconstruction does not yet vary the radial B-spline
-    /// correction or the rolling shutter per image.
+    /// Whether this entry says anything a save writes: a flag, or a
+    /// scanlines setting.
+    pub fn is_set(&self) -> bool {
+        self.any() || self.rolling_shutter_scanlines.is_some()
+    }
+
+    /// The flags a camera's stored `per_image_adjustments` list names, with
+    /// no scanlines setting, or a message saying why the list is not one the
+    /// format allows.
     pub fn from_names<S: AsRef<str>>(names: &[S]) -> Result<Self, String> {
         let [focal, principal_point, radial_bspline, rolling_shutter] =
             parse_per_image_adjustment_names(names)?;
-        if let Some(name) = [
-            (radial_bspline, "radial_bspline"),
-            (rolling_shutter, "rolling_shutter"),
-        ]
-        .into_iter()
-        .find_map(|(set, name)| set.then_some(name))
-        {
-            return Err(format!(
-                "per_image_adjustments names {name:?}, which a reconstruction in this build \
-                 does not yet vary per image"
-            ));
-        }
         Ok(Self {
             focal,
             principal_point,
+            radial_bspline,
+            rolling_shutter,
+            rolling_shutter_scanlines: None,
         })
     }
 
     /// The camera's stored `per_image_adjustments` list: the set flags'
     /// names, in the format's order, and empty when none is set.
     pub fn names(&self) -> Vec<String> {
-        [self.focal, self.principal_point]
-            .into_iter()
-            .zip(PER_IMAGE_ADJUSTMENT_NAMES)
-            .filter(|&(set, _)| set)
-            .map(|(_, name)| name.to_string())
-            .collect()
+        [
+            self.focal,
+            self.principal_point,
+            self.radial_bspline,
+            self.rolling_shutter,
+        ]
+        .into_iter()
+        .zip(PER_IMAGE_ADJUSTMENT_NAMES)
+        .filter(|&(set, _)| set)
+        .map(|(_, name)| name.to_string())
+        .collect()
     }
 }
 
@@ -87,8 +105,9 @@ impl PerImageAdjustments {
 pub struct ImageSet {
     /// Camera intrinsic parameters, indexed by `SfmrImage::camera_index`.
     pub cameras: Vec<CameraIntrinsics>,
-    /// Per camera, which parts of its intrinsics vary per image, parallel to
-    /// `cameras`; or empty when no camera varies anything, the way an empty
+    /// Per camera, which parts of its intrinsics vary per image and its
+    /// rolling-shutter scanlines setting, parallel to `cameras`; or empty when
+    /// no camera varies anything or has a setting, the way an empty
     /// `BundleAdjustOptions::releases` means every camera held. An edit that
     /// adds or removes cameras keeps it in step with `cameras`.
     ///
@@ -129,21 +148,45 @@ impl ImageSet {
     }
 
     /// The intrinsics image `image_index` was taken with: its camera's, with
-    /// the image's intrinsic adjustment applied. Borrowed when the adjustment
-    /// is all zero, which is every image of a file without adjustments.
+    /// the image's intrinsic adjustment applied, its radial correction added to
+    /// the camera's spline and its rolling-shutter rates read on the camera's
+    /// scanlines setting ([`CameraIntrinsics::with_adjustment`]). Borrowed
+    /// when the adjustment is all zero, which is every image of a file without
+    /// adjustments.
     ///
     /// # Panics
     ///
-    /// Panics when `image_index` is past the images, or the image's camera
-    /// index past the cameras.
+    /// Panics when `image_index` is past the images, the image's camera index
+    /// past the cameras, or the adjustment is one
+    /// [`CameraIntrinsics::with_adjustment`] cannot apply to the camera
+    /// (`SfmrReconstruction::from_sfmr_data` refuses those).
     pub fn image_intrinsics(&self, image_index: usize) -> Cow<'_, CameraIntrinsics> {
         let image = &self.images[image_index];
-        let camera = &self.cameras[image.camera_index as usize];
+        let c = image.camera_index as usize;
+        let camera = &self.cameras[c];
         if image.intrinsic_adjustment.is_zero() {
             Cow::Borrowed(camera)
         } else {
-            Cow::Owned(camera.with_adjustment(&image.intrinsic_adjustment))
+            Cow::Owned(
+                camera.with_adjustment(
+                    &image.intrinsic_adjustment,
+                    self.camera_per_image_adjustments(c)
+                        .rolling_shutter_scanlines,
+                ),
+            )
         }
+    }
+
+    /// Every camera's rolling-shutter scanlines setting, one per camera: the
+    /// list [`ImageIntrinsicsList::new`] and the bundle adjustment read the
+    /// images' rates on.
+    pub fn rolling_shutter_scanlines(&self) -> Vec<Option<RollingShutterScanlines>> {
+        (0..self.cameras.len())
+            .map(|c| {
+                self.camera_per_image_adjustments(c)
+                    .rolling_shutter_scanlines
+            })
+            .collect()
     }
 
     /// [`Self::image_intrinsics`] of every image, in image order: what a loop
@@ -167,12 +210,17 @@ impl ImageSet {
         let image_camera: Vec<u32> = self.images.iter().map(|i| i.camera_index).collect();
         let adjustments: Vec<IntrinsicAdjustment> =
             self.images.iter().map(|i| i.intrinsic_adjustment).collect();
-        ImageIntrinsicsList::new(&self.cameras, image_camera, &adjustments)
+        ImageIntrinsicsList::new(
+            &self.cameras,
+            image_camera,
+            &adjustments,
+            &self.rolling_shutter_scanlines(),
+        )
     }
 
-    /// Which parts of camera `camera_index`'s intrinsics vary per image:
-    /// nothing when [`Self::per_image_adjustments`] is empty or does not reach
-    /// that camera.
+    /// Which parts of camera `camera_index`'s intrinsics vary per image, and
+    /// its scanlines setting: nothing when [`Self::per_image_adjustments`] is
+    /// empty or does not reach that camera.
     pub fn camera_per_image_adjustments(&self, camera_index: usize) -> PerImageAdjustments {
         self.per_image_adjustments
             .get(camera_index)
@@ -191,12 +239,8 @@ impl ImageSet {
     /// chain out again.
     pub fn world_ray(&self, image_index: usize, pixel: [f64; 2]) -> Option<nalgebra::Vector3<f64>> {
         let image = self.images.get(image_index)?;
-        let camera = self.cameras.get(image.camera_index as usize)?;
-        let camera = if image.intrinsic_adjustment.is_zero() {
-            Cow::Borrowed(camera)
-        } else {
-            Cow::Owned(camera.with_adjustment(&image.intrinsic_adjustment))
-        };
+        self.cameras.get(image.camera_index as usize)?;
+        let camera = self.image_intrinsics(image_index);
         let ray = camera.pixel_to_ray(pixel[0], pixel[1]);
         let cam = nalgebra::Vector3::new(ray[0], ray[1], ray[2]);
         if !cam.iter().all(|c| c.is_finite()) || cam.norm() <= 0.0 {

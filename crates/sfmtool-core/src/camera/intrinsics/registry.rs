@@ -505,6 +505,7 @@ impl TryFrom<&SfmrCamera> for CameraIntrinsics {
             model,
             width: cam.width,
             height: cam.height,
+            rolling_shutter: None,
         })
     }
 }

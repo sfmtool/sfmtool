@@ -346,6 +346,7 @@ impl DistortionExtent {
 ///         principal_point_y: 240.0,
 ///         radial_distortion_k1: -0.1,
 ///     },
+///     rolling_shutter: None,
 /// };
 /// let extent = report::distortion_extent(&cam, 16);
 /// assert_eq!(extent.grid, (16, 12));

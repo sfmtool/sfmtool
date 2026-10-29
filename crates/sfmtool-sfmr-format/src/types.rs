@@ -786,11 +786,12 @@ pub fn validate_per_image_adjustments(
 /// `images/radial_bspline_adjustments` or `images/rolling_shutter_rates_xyz`,
 /// and so the only way it holds a non-zero value of either.
 ///
-/// This build does not yet apply either correction where an image is read
-/// through its camera, so a reconstruction that holds one would be projected
-/// without it. [`crate::read_sfmr`] calls this once every rule of the format
-/// has passed, and [`crate::write_sfmr_with_options`] before it writes
-/// anything. A camera's
+/// The core library applies both corrections where it reads an image
+/// through its camera, but the viewer and the Python package in this build do
+/// not yet, so a file that holds one would be drawn and exported without it.
+/// [`crate::read_sfmr`] calls this once every rule of the format has passed,
+/// and [`crate::write_sfmr_with_options`] before it writes anything. A
+/// camera's
 /// `rolling_shutter_scanlines` setting is not refused here: on its own it
 /// changes no projection.
 pub fn refuse_per_image_lens_corrections(cameras: &[SfmrCamera]) -> Result<(), SfmrError> {
@@ -805,8 +806,9 @@ pub fn refuse_per_image_lens_corrections(cameras: &[SfmrCamera]) -> Result<(), S
             continue;
         };
         return Err(SfmrError::Unsupported(format!(
-            "camera {c} lists {parameter:?} in per_image_adjustments, and this build does not \
-             yet apply {column} where it reads an image through its camera"
+            "camera {c} lists {parameter:?} in per_image_adjustments, and the viewer and the \
+             Python package in this build do not yet apply {column} where they read an image \
+             through its camera"
         )));
     }
     Ok(())

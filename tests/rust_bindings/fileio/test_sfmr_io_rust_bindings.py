@@ -961,9 +961,11 @@ class TestPerImageLensCorrections:
     """Format version 14 stores per image a radial B-spline correction and
     rolling-shutter rates, and per camera a rolling-shutter scanlines setting.
 
-    This build refuses the two corrections at the file boundary, since it does
-    not yet apply them where an image is read through its camera; a scanlines
-    setting on its own reads and writes through the dicts."""
+    This build refuses the two corrections at the file boundary, since the
+    viewer and the Python package do not yet apply them where they read an image
+    through its camera; a reconstruction built from a dict holds them, and a
+    scanlines setting on its own reads and writes through the dicts and a
+    reconstruction."""
 
     def test_a_file_without_them_reads_none(self, seoul_bull_sfmr_only):
         data = read_sfmr(seoul_bull_sfmr_only)
@@ -1016,6 +1018,8 @@ class TestPerImageLensCorrections:
         self, seoul_bull_sfmr_only, tmp_path, name, key, width
     ):
         data = read_sfmr(seoul_bull_sfmr_only)
+        # Both corrections are defined on an SFMTOOL_PINHOLE camera.
+        data["cameras"] = [c.refit("SFMTOOL_PINHOLE")[0] for c in data["cameras"]]
         n_img = len(data["image_names"])
         data["per_image_adjustments"] = [[name] for _ in data["cameras"]]
         data["rolling_shutter_scanlines"] = ["ROWS" for _ in data["cameras"]]
@@ -1024,20 +1028,30 @@ class TestPerImageLensCorrections:
         with pytest.raises(OSError, match=f"images/{key}"):
             write_sfmr(out, data)
         assert not out.exists()
-        with pytest.raises(ValueError, match=f'"{name}"'):
-            SfmrReconstruction.from_data(Path(seoul_bull_sfmr_only).parent, data)
+        # A reconstruction holds them, and refuses them on save.
+        recon = SfmrReconstruction.from_data(Path(seoul_bull_sfmr_only).parent, data)
+        assert recon.per_image_adjustments == [[name] for _ in data["cameras"]]
+        np.testing.assert_array_equal(getattr(recon, key), data[key])
+        with pytest.raises(OSError, match=f"images/{key}"):
+            recon.save(out)
+        assert not out.exists()
 
-    def test_a_reconstruction_refuses_a_scanlines_setting(
+    def test_a_reconstruction_keeps_a_scanlines_setting(
         self, seoul_bull_sfmr_only, tmp_path
     ):
         data = read_sfmr(seoul_bull_sfmr_only)
-        data["rolling_shutter_scanlines"] = ["ROWS" for _ in data["cameras"]]
-        with pytest.raises(ValueError, match="rolling_shutter_scanlines"):
-            SfmrReconstruction.from_data(Path(seoul_bull_sfmr_only).parent, data)
+        settings = ["ROWS" for _ in data["cameras"]]
+        data["rolling_shutter_scanlines"] = settings
+        built = SfmrReconstruction.from_data(Path(seoul_bull_sfmr_only).parent, data)
+        assert built.rolling_shutter_scanlines == settings
+        assert built.per_image_adjustments == [[] for _ in data["cameras"]]
         out = Path(seoul_bull_sfmr_only).parent / "scanlines.sfmr"
         write_sfmr(out, data)
-        with pytest.raises(OSError, match="rolling_shutter_scanlines"):
-            SfmrReconstruction.load(out)
+        loaded = SfmrReconstruction.load(out)
+        assert loaded.rolling_shutter_scanlines == settings
+        again = tmp_path / "again.sfmr"
+        loaded.save(again)
+        assert read_sfmr(again)["rolling_shutter_scanlines"] == settings
 
     def test_clone_with_changes_refuses_the_new_names(self, seoul_bull_sfmr_only):
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)

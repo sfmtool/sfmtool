@@ -38,6 +38,7 @@ fn camera() -> CameraIntrinsics {
         },
         width: 320,
         height: 240,
+        rolling_shutter: None,
     }
 }
 

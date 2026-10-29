@@ -389,6 +389,7 @@ fn verdict_camera(
         model,
         width,
         height,
+        rolling_shutter: None,
     })
 }
 

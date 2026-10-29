@@ -13,6 +13,7 @@ fn simple_pinhole() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -26,6 +27,7 @@ fn simple_radial_fisheye() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -205,6 +207,7 @@ fn equidistant_fisheye() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 

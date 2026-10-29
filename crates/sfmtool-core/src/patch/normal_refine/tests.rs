@@ -28,6 +28,7 @@ fn pinhole(width: u32, height: u32, focal: f64) -> CameraIntrinsics {
         },
         width,
         height,
+        rolling_shutter: None,
     }
 }
 

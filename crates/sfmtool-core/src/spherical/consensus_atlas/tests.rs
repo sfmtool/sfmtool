@@ -51,6 +51,7 @@ fn pinhole_camera(w: u32, fov_deg: f64) -> CameraIntrinsics {
         },
         width: w,
         height: w,
+        rolling_shutter: None,
     }
 }
 

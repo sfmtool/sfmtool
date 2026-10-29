@@ -230,6 +230,7 @@ fn distorted_grid_pinhole_matches_corners() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     let grid = compute_distorted_frustum_grid(&center, &r, &camera, far_z, 4);
@@ -285,6 +286,7 @@ fn distorted_grid_has_correct_size() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     for subdivisions in [1, 4, 8, 16] {
@@ -311,6 +313,7 @@ fn distorted_grid_all_at_far_z() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     let grid = compute_distorted_frustum_grid(&center, &r, &camera, far_z, 4);
@@ -340,6 +343,7 @@ fn distorted_grid_with_radial_distortion_differs() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     let distorted = CameraIntrinsics {
@@ -351,6 +355,7 @@ fn distorted_grid_with_radial_distortion_differs() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     let grid_pin = compute_distorted_frustum_grid(&center, &r, &pinhole, far_z, 4);
@@ -397,6 +402,7 @@ fn distorted_grid_fisheye_spherical_placement() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     let grid = compute_distorted_frustum_grid(&center, &r, &camera, far_z, 8);
@@ -432,6 +438,7 @@ fn distorted_grid_pinhole_not_spherical() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
 
     let grid = compute_distorted_frustum_grid(&center, &r, &camera, far_z, 4);

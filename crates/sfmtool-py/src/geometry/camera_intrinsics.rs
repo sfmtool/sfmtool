@@ -11,8 +11,35 @@ use pyo3::types::{PyDict, PyType};
 use sfmtool_core::camera::refit_intrinsics::{
     refit_camera_intrinsics, CameraIntrinsicsRefit, MonotoneConstraint, RefitOptions, RefitTarget,
 };
+use sfmtool_core::camera::{RollingShutter, RollingShutterScanlines};
 use sfmtool_core::CameraIntrinsics;
 use sfmtool_sfmr_format::SfmrCamera;
+
+/// A rolling shutter as Python carries it: `(scanlines, (ωx, ωy, ωz))`, the
+/// scanlines spelled as stored, `"ROWS"` or `"COLUMNS"`.
+type PyRollingShutter = (String, (f64, f64, f64));
+
+fn rolling_shutter_to_py(rolling_shutter: &Option<RollingShutter>) -> Option<PyRollingShutter> {
+    rolling_shutter.map(|r| {
+        let [x, y, z] = r.rates;
+        (r.scanlines.as_str().to_string(), (x, y, z))
+    })
+}
+
+fn rolling_shutter_from_py(value: Option<PyRollingShutter>) -> PyResult<Option<RollingShutter>> {
+    value
+        .map(|(scanlines, (x, y, z))| {
+            Ok(RollingShutter {
+                scanlines: parse_scanlines(&scanlines)?,
+                rates: [x, y, z],
+            })
+        })
+        .transpose()
+}
+
+pub(crate) fn parse_scanlines(name: &str) -> PyResult<RollingShutterScanlines> {
+    RollingShutterScanlines::parse(name).map_err(pyo3::exceptions::PyValueError::new_err)
+}
 
 /// Camera intrinsic parameters with image dimensions.
 ///
@@ -107,20 +134,36 @@ impl PyCameraIntrinsics {
         Ok(params_dict)
     }
 
-    /// Convert to a dictionary with keys "model", "width", "height", "parameters".
+    /// The image's rolling shutter, ``(scanlines, (wx, wy, wz))`` with
+    /// ``scanlines`` ``"ROWS"`` or ``"COLUMNS"`` and the rates in radians per
+    /// short side of readout, or ``None``. Only an image's intrinsics carry
+    /// one (:meth:`with_adjustment`, ``SfmrReconstruction.image_intrinsics``),
+    /// and only on ``SFMTOOL_PINHOLE``.
+    #[getter]
+    fn rolling_shutter(&self) -> Option<PyRollingShutter> {
+        rolling_shutter_to_py(&self.inner.rolling_shutter)
+    }
+
+    /// Convert to a dictionary with keys "model", "width", "height",
+    /// "parameters", and "rolling_shutter" when the camera carries one (as
+    /// :attr:`rolling_shutter` gives it).
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         dict.set_item("model", self.inner.model_name())?;
         dict.set_item("width", self.inner.width)?;
         dict.set_item("height", self.inner.height)?;
         dict.set_item("parameters", self.parameters(py)?)?;
+        if let Some(rolling_shutter) = rolling_shutter_to_py(&self.inner.rolling_shutter) {
+            dict.set_item("rolling_shutter", rolling_shutter)?;
+        }
         Ok(dict)
     }
 
     /// Create a CameraIntrinsics from a dictionary.
     ///
     /// Args:
-    ///     d: Dict with keys "model", "width", "height", "parameters"
+    ///     d: Dict with keys "model", "width", "height", "parameters", and
+    ///         optionally "rolling_shutter" (as :meth:`to_dict` writes it)
     #[classmethod]
     fn from_dict(_cls: &Bound<'_, PyType>, d: &Bound<'_, PyDict>) -> PyResult<Self> {
         let model: String = d
@@ -160,8 +203,24 @@ impl PyCameraIntrinsics {
             rolling_shutter_scanlines: None,
             parameters,
         };
-        let inner = CameraIntrinsics::try_from(&sfmr_camera)
+        let mut inner = CameraIntrinsics::try_from(&sfmr_camera)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        let rolling_shutter: Option<PyRollingShutter> = match d.get_item("rolling_shutter")? {
+            Some(v) if !v.is_none() => Some(v.extract()?),
+            _ => None,
+        };
+        inner.rolling_shutter = rolling_shutter_from_py(rolling_shutter)?;
+        if inner.rolling_shutter.is_some_and(|r| !r.is_zero())
+            && !matches!(
+                inner.model,
+                sfmtool_core::CameraModel::SfmtoolPinhole { .. }
+            )
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "rolling-shutter rates apply only to an SFMTOOL_PINHOLE camera, not {}",
+                inner.model_name()
+            )));
+        }
         Ok(Self { inner })
     }
 
@@ -469,24 +528,57 @@ impl PyCameraIntrinsics {
     }
 
     /// This camera with an intrinsic adjustment applied: the focal (both
-    /// focals on a two-focal model) times ``1 + focal``, and the principal
-    /// point moved by ``principal_point`` times the short side,
-    /// ``min(width, height)``. The model, the size and the distortion are
-    /// kept. An image's intrinsics are its camera's with its adjustment
-    /// applied (``SfmrReconstruction.image_intrinsics``).
+    /// focals on a two-focal model) times ``1 + focal``, the principal point
+    /// moved by ``principal_point`` times the short side,
+    /// ``min(width, height)``, the radial correction added to the spline, and
+    /// the rolling-shutter rates set on ``rolling_shutter_scanlines``. The
+    /// model and the size are kept. An image's intrinsics are its camera's
+    /// with its adjustment applied (``SfmrReconstruction.image_intrinsics``).
     ///
     /// Args:
     ///     focal: The focal scale ``s``.
     ///     principal_point: The offset ``(a_x, a_y)`` in the short-side unit.
-    #[pyo3(signature = (focal=0.0, principal_point=(0.0, 0.0)))]
-    fn with_adjustment(&self, focal: f64, principal_point: (f64, f64)) -> PyCameraIntrinsics {
+    ///     radial_bspline: The radial correction ``(e_0, e_1)``: coefficients
+    ///         of the two-coefficient basis on the camera's spline domain,
+    ///         ``3t^2(1 - t)`` and ``t^3`` with ``t = rho/bspline_rho_max``,
+    ///         added to the camera's spline. ``SFMTOOL_PINHOLE`` only.
+    ///     rolling_shutter: The rates ``(wx, wy, wz)`` in radians per short
+    ///         side of readout. ``SFMTOOL_PINHOLE`` only.
+    ///     rolling_shutter_scanlines: ``"ROWS"`` or ``"COLUMNS"``, which
+    ///         non-zero rates need.
+    ///
+    /// Raises:
+    ///     ValueError: When the camera cannot take the adjustment (a radial
+    ///         correction or rates on another model, a degenerate spline
+    ///         domain, or rates without a scanlines setting).
+    #[pyo3(signature = (
+        focal=0.0,
+        principal_point=(0.0, 0.0),
+        radial_bspline=(0.0, 0.0),
+        rolling_shutter=(0.0, 0.0, 0.0),
+        rolling_shutter_scanlines=None,
+    ))]
+    fn with_adjustment(
+        &self,
+        focal: f64,
+        principal_point: (f64, f64),
+        radial_bspline: (f64, f64),
+        rolling_shutter: (f64, f64, f64),
+        rolling_shutter_scanlines: Option<&str>,
+    ) -> PyResult<PyCameraIntrinsics> {
         let adjustment = sfmtool_core::IntrinsicAdjustment {
             focal,
             principal_point: [principal_point.0, principal_point.1],
+            radial_bspline: [radial_bspline.0, radial_bspline.1],
+            rolling_shutter: [rolling_shutter.0, rolling_shutter.1, rolling_shutter.2],
         };
-        PyCameraIntrinsics {
-            inner: self.inner.with_adjustment(&adjustment),
-        }
+        let scanlines = rolling_shutter_scanlines.map(parse_scanlines).transpose()?;
+        self.inner
+            .check_adjustment(&adjustment, scanlines)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(PyCameraIntrinsics {
+            inner: self.inner.with_adjustment(&adjustment, scanlines),
+        })
     }
 
     /// Build a pinhole camera whose FoV is the smallest that covers every
@@ -572,8 +664,16 @@ impl PyCameraIntrinsics {
     }
 
     fn __repr__(&self) -> String {
+        let rolling_shutter = match &self.inner.rolling_shutter {
+            Some(r) => format!(
+                ", rolling_shutter=({}, {:?})",
+                r.scanlines.as_str(),
+                r.rates
+            ),
+            None => String::new(),
+        };
         format!(
-            "CameraIntrinsics(model={}, width={}, height={})",
+            "CameraIntrinsics(model={}, width={}, height={}{rolling_shutter})",
             self.inner.model_name(),
             self.inner.width,
             self.inner.height,
@@ -592,6 +692,9 @@ impl PyCameraIntrinsics {
         self.clone()
     }
 
+    /// Pickles as the constructor's arguments and, as the state, the
+    /// rolling shutter (``None`` for a camera without one), which
+    /// :meth:`__setstate__` restores.
     #[allow(clippy::type_complexity)]
     fn __reduce__<'py>(
         &self,
@@ -599,6 +702,7 @@ impl PyCameraIntrinsics {
     ) -> PyResult<(
         Bound<'py, PyType>,
         (String, u32, u32, BTreeMap<String, f64>),
+        Option<PyRollingShutter>,
     )> {
         let sfmr_camera = SfmrCamera::from(&self.inner);
         let cls = PyType::new::<PyCameraIntrinsics>(py);
@@ -610,7 +714,14 @@ impl PyCameraIntrinsics {
                 sfmr_camera.height,
                 sfmr_camera.parameters,
             ),
+            rolling_shutter_to_py(&self.inner.rolling_shutter),
         ))
+    }
+
+    /// Restore the rolling shutter :meth:`__reduce__` pickled.
+    fn __setstate__(&mut self, state: Option<PyRollingShutter>) -> PyResult<()> {
+        self.inner.rolling_shutter = rolling_shutter_from_py(state)?;
+        Ok(())
     }
 }
 

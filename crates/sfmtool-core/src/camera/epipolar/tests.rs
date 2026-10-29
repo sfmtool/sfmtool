@@ -15,6 +15,7 @@ fn pinhole_cam() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -32,6 +33,7 @@ fn fisheye_cam() -> CameraIntrinsics {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     }
 }
 

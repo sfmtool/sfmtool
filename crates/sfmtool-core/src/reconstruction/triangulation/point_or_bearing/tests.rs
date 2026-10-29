@@ -703,6 +703,7 @@ fn observed_ray_weight_is_the_pixel_derivative() {
             },
             width: 640,
             height: 480,
+            rolling_shutter: None,
         },
         CameraIntrinsics {
             model: CameraModel::SimpleRadialFisheye {
@@ -713,6 +714,7 @@ fn observed_ray_weight_is_the_pixel_derivative() {
             },
             width: 480,
             height: 480,
+            rolling_shutter: None,
         },
         CameraIntrinsics {
             model: CameraModel::OpenCVFisheye {
@@ -727,6 +729,7 @@ fn observed_ray_weight_is_the_pixel_derivative() {
             },
             width: 480,
             height: 480,
+            rolling_shutter: None,
         },
     ];
     let rot = UnitQuaternion::from_euler_angles(0.3, -0.5, 1.1);
@@ -1025,6 +1028,7 @@ fn observed_ray_declines_what_it_cannot_weight() {
         },
         width: 600,
         height: 600,
+        rolling_shutter: None,
     };
     assert!(!cam.model.supports_pixel_jacobian());
     let rot = UnitQuaternion::identity();

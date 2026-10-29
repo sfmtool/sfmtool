@@ -347,6 +347,8 @@ pub(crate) const ADJUSTMENT: sfmtool_core::IntrinsicAdjustment =
     sfmtool_core::IntrinsicAdjustment {
         focal: 0.01,
         principal_point: [0.02, -0.01],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     };
 
 /// `recon` with `adjustment` on image `image`, and the image's camera listing
@@ -365,6 +367,9 @@ pub(crate) fn with_adjustment(
     image_set.per_image_adjustments[camera] = sfmtool_core::reconstruction::PerImageAdjustments {
         focal: true,
         principal_point: true,
+        radial_bspline: false,
+        rolling_shutter: false,
+        rolling_shutter_scanlines: None,
     };
     recon
 }

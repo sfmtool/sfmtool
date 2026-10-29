@@ -45,6 +45,10 @@ struct GridProj {
     cy: f64,
     w: f64,
     h: f64,
+    /// Whether the camera carries a rolling shutter with non-zero rates, which
+    /// the inlined projection does not apply, so each node goes through
+    /// [`CameraIntrinsics::ray_to_pixel`] instead.
+    rolling_shutter: bool,
 }
 
 /// Bilinear interpolation of the four cell corners (`p00` at `(0,0)`, `p10` at
@@ -80,6 +84,7 @@ impl CameraIntrinsics {
             cy,
             w: self.width as f64,
             h: self.height as f64,
+            rolling_shutter: self.rolling_shutter_step().is_some(),
         }
     }
 
@@ -91,10 +96,15 @@ impl CameraIntrinsics {
     /// (loop-invariant) intrinsics once per grid instead of once per node.
     #[inline]
     fn project_ray_node(&self, ray: [f64; 3], p: GridProj) -> [f32; 2] {
-        match self.model.distort_ray(ray) {
-            Some((x_d, y_d)) => {
-                let px = p.fx * x_d + p.cx;
-                let py = p.fy * y_d + p.cy;
+        let pixel = if p.rolling_shutter {
+            self.ray_to_pixel(ray)
+        } else {
+            self.model
+                .distort_ray(ray)
+                .map(|(x_d, y_d)| (p.fx * x_d + p.cx, p.fy * y_d + p.cy))
+        };
+        match pixel {
+            Some((px, py)) => {
                 if px >= 0.0 && py >= 0.0 && px < p.w && py < p.h {
                     [px as f32, py as f32]
                 } else {

@@ -75,6 +75,9 @@ pub struct BaCameras<'a> {
     pub image_camera: Cow<'a, [u32]>,    // n_img, an index into `cameras`
     pub releases: Option<&'a [CameraRelease]>, // n_cam; None = the flags alone
     pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>, // n_img; None = none
+    // n_cam: the scanlines each camera's images' rolling-shutter rates are
+    // read on; None = no camera has a setting
+    pub rolling_shutter_scanlines: Option<&'a [Option<RollingShutterScanlines>]>,
 }
 
 /// What one camera may release; `Default` and `HELD` release nothing.
@@ -781,6 +784,12 @@ unit `m = min(width, height)`, so that image `i` reads its camera at
 `f_i = f·(1 + s_i)` (both focals on a two-focal model) and
 `(cx_i, cy_i) = (cx, cy) + a_i·m`
 ([`IntrinsicAdjustment`](../../../crates/sfmtool-core/src/camera/intrinsics.rs)).
+On an `SFMTOOL_PINHOLE` camera an image may also carry a radial correction
+`e_i`, read as the spline `c + K·e_i`, and rolling-shutter rates `ω_i`, read on
+the camera's entry of `BaCameras::rolling_shutter_scanlines`
+([sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)). This
+kernel holds both: no flag releases them.
 Unless a camera releases them per image ("The per-image release", below), the
 solve holds them: they are inputs, read wherever a camera is read (above). The released parameters are still the
 camera's shared ones, with each image's adjustment applied on top of them, so a
@@ -796,7 +805,29 @@ camera's lens block is unchanged and its columns from an adjusted image are:
 the unadjusted columns with the image's focal in place of `f` and the focal
 column read about the image's principal point. The focal column keeps `f` in
 its denominator because the parameter is the shared focal, which the image's
-focal is `1 + s_i` times. The `k1` step guard's imaged field reads each
+focal is `1 + s_i` times.
+
+A held radial correction changes no column: the image's spline `c + K·e_i`
+moves one for one with the shared `c`, so `∂(u, v)/∂cⱼ` is the basis column
+above. Held rolling-shutter rates add the step `(x_r, y_r) = (x_d, y_d) + t·ṗ`
+after the radial map, with the readout position `t` and the velocity `ṗ` of
+[sfmtool-pinhole-kernels.md § The rolling-shutter
+step](../camera/sfmtool-pinhole-kernels.md#the-rolling-shutter-step). The pose
+and point columns come from the ray Jacobian, which differentiates the whole
+map. `t` is read in pixels, so it is proportional to the image's focal
+(`∂t/∂f_i = t/f_i`), and with `F = f_i·diag(1, −1)` the pixel step of the
+`.sfmr` frame and `∇t = ∂t/∂(x_d, y_d)`:
+
+```
+∂(u, v)/∂f       = (u − cx_i, v − cy_i)/f + (1 + s_i)·diag(1, −1)·t·ṗ
+∂(u, v)/∂cⱼ      = F·(I + ṗ·∇tᵀ)·(Bⱼ(d) + B'ⱼ(d)·(d − d_max)₊)·û
+∂(u, v)/∂(cx,cy) = I
+```
+
+and the per-image log focal scale's column gains `F·t·ṗ` the same way (below).
+Without rates each added term is zero and the columns are the ones above. The
+spline step guard checks each image's spline `c + K·e_i` under its held
+correction as well as the shared one. The `k1` step guard's imaged field reads each
 observation's pixel radius about its image's principal point divided by
 `1 + s_i`, since the image's map folds at `1 + s_i` times the shared map's
 radius. Where the camera releases its principal point, the step guard checks
@@ -872,7 +903,8 @@ image's adjusted camera:
 exact on every model the release admits, as the shared focal's and principal
 point's are: the model projects `u = f_i·x_d + cx_i` with `x_d` independent of
 the focal, and `∂f_i/∂t_i = f_i`, so the focal column is the pixel's offset from
-the image's own principal point. An image of a camera that releases a
+the image's own principal point. Under held rolling-shutter rates the focal
+column is `(u − cx_i, v − cy_i) + F·t·ṗ` ("Held image adjustments", above). An image of a camera that releases a
 per-image parameter is read through a lens entry of its own whatever its
 adjustment, since the adjustment moves within a round.
 
@@ -1112,7 +1144,10 @@ past `cameras` raise `ValueError` as well. `opt_image_f` raises for a camera
 whose focal `opt_f` would refuse. `image_adjustments` is the kernel's
 `BaCameras::image_adjustments`, one `[focal, a_x, a_y]` row per image, held
 unless a per-image release moves it, and `image_adjustments` in the result is
-`BundleAdjustment::image_adjustments` in the same layout. `image_prior` is
+`BundleAdjustment::image_adjustments` in the same layout. The binding has no
+argument for a radial correction or rolling-shutter rates, so every image it
+solves has both at zero; the reconstruction-level adjustment passes them
+([bundle-adjust.md](../reconstruction/bundle-adjust.md)). `image_prior` is
 `ImagePriorOptions` as a dict of `loose`, `floor` and `fixed`, each a dict of
 `focal` and `principal_point` (`fixed` also `None`), a missing key at its
 default; an unknown key, or a width that is not positive and finite, raises.

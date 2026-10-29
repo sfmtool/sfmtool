@@ -123,6 +123,17 @@ written, and before any `.sift` file is read for the observations' pixels, and
 the first refusal refuses the whole switch with the camera's index and the
 fit's own reason.
 
+**A camera whose images carry lens corrections is refused.** An image's radial
+correction is a spline in its camera's own basis on its camera's domain, and
+its rolling-shutter rates are defined on `SFMTOOL_PINHOLE` alone
+([../camera/sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)), so
+a refitted camera would read either as something else. `fit_camera_switch`
+therefore refuses, with `SwitchCameraModelError::LensCorrections` naming the
+camera, a camera any of whose images carries a non-zero radial correction or
+non-zero rates, or which lists `radial_bspline` or `rolling_shutter` as varying
+per image, before it fits anything.
+
 **A spline camera switched to its own model is a refit, in the same call.** A
 new coefficient count or domain end is a change of how the lens curve is
 parameterized, and is a choice about one camera, like a change of model. One
@@ -220,8 +231,9 @@ models, and is fitted like any other source too.
 
 Each switched camera is replaced by its fitted camera. Nothing else in the image
 set, the point set or the observation columns changes: in particular each
-image keeps its intrinsic adjustment as it is, since the adjustment is relative
-to whatever its camera is, and the fit refits the shared camera alone. Every
+image keeps its focal scale and principal-point offset as they are, since they
+are relative to whatever its camera is, and the fit refits the shared camera
+alone. Every
 reprojection error below, before and after, is read through each image's
 intrinsics, its camera with its adjustment applied. The stored error of
 every point observed in an image that uses a switched camera is recomputed as

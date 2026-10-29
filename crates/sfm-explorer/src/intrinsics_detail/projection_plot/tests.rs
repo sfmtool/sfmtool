@@ -28,6 +28,7 @@ fn fisheye() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -43,6 +44,7 @@ fn simple_radial() -> CameraIntrinsics {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -118,6 +120,7 @@ fn a_spline_model_marks_its_domain_end() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let derived = Derived::compute(&fisheye);
     let drawn = markers(&fisheye, &derived, 180.0);
@@ -137,6 +140,7 @@ fn a_spline_model_marks_its_domain_end() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let derived = Derived::compute(&pinhole);
     let drawn = markers(&pinhole, &derived, 90.0);
@@ -212,6 +216,7 @@ fn a_zero_residual_still_gets_a_range() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let derived = Derived::compute(&camera);
     let scale = residual_scale(&derived.profile.samples, &plot_rect());
@@ -293,6 +298,7 @@ fn an_exact_fits_change_is_zero_inside_the_fit() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let refit = spline_refit(&camera);
     let change = ChangeProfile::compute(&camera, &refit.camera);

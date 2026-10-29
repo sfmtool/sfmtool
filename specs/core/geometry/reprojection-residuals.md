@@ -81,6 +81,7 @@ let cam = CameraIntrinsics {
     },
     width: 640,
     height: 480,
+    rolling_shutter: None,
 };
 let quats_wxyz = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]; // two images
 let translations = [0.0, 0.0, 0.0, 0.1, 0.0, 0.0];

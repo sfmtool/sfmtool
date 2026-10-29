@@ -43,6 +43,7 @@ pub(super) fn camera() -> CameraIntrinsics {
         },
         width: 128,
         height: 128,
+        rolling_shutter: None,
     }
 }
 

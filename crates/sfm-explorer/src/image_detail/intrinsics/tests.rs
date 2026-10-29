@@ -36,6 +36,7 @@ fn kerry_park_camera() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn simple_radial_camera() -> CameraIntrinsics {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -65,6 +67,7 @@ fn pinhole_camera() -> CameraIntrinsics {
         },
         width: 1280,
         height: 720,
+        rolling_shutter: None,
     }
 }
 
@@ -443,6 +446,7 @@ fn the_correction_points_the_way_the_sign_of_k1_says_it_should() {
             },
             width: 270,
             height: 480,
+            rolling_shutter: None,
         };
         let (cx, cy) = camera.principal_point();
         let layer = CameraLayer::compute(&camera, 16);
@@ -1379,6 +1383,9 @@ fn the_legend_states_only_the_parameters_the_camera_varies_per_image() {
             PerImageAdjustments {
                 focal,
                 principal_point,
+                radial_bspline: false,
+                rolling_shutter: false,
+                rolling_shutter_scanlines: None,
             },
             &ADJUSTMENT,
             &camera,

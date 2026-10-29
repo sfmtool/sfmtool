@@ -50,6 +50,7 @@ fn camera(model: &str) -> CameraIntrinsics {
         model,
         width: 128,
         height: 128,
+        rolling_shutter: None,
     }
 }
 

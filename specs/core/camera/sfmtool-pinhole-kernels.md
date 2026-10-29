@@ -10,7 +10,9 @@ serialization — is defined in
 [sfmtool-camera-models.md](../../formats/sfmtool-camera-models.md); this spec is
 the computation behind it, and covers forward projection, the inverse recovery of the image-plane
 radius, the analytic ray Jacobian, enforcement of the monotonicity invariant,
-and the model's classification flags. Basis evaluation is the shared machinery
+the model's classification flags, and the two corrections one image of the
+camera may carry, a radial correction added to the spline and a rolling shutter
+applied after it ([Per-image corrections](#per-image-corrections)). Basis evaluation is the shared machinery
 described in
 [sfmtool-fisheye-kernels.md](sfmtool-fisheye-kernels.md) § "Basis evaluation",
 read at the radial coordinate `ρ` on the domain `[0, ρ_max]` instead of `θ` on
@@ -152,6 +154,146 @@ The limits:
 - **Past the fold**: `None`, from the same `forward_projection_invertible` call
   the projection makes.
 
+## Per-image corrections
+
+An image of an `SFMTOOL_PINHOLE` camera may carry a radial correction and
+rolling-shutter rates of its own, beside its focal scale and principal-point
+offset: the four parts of its
+[`IntrinsicAdjustment`](../../../crates/sfmtool-core/src/camera/intrinsics.rs)
+(`focal`, `principal_point`, `radial_bspline: [f64; 2]`,
+`rolling_shutter: [f64; 3]`, all zero by default; `is_zero` tests all four).
+`CameraIntrinsics::with_adjustment(adjustment, scanlines)` builds the image's
+intrinsics from its camera and the camera's scanlines setting, and
+`ImageSet::image_intrinsics(i)` and `ImageIntrinsicsList::new` call it for every
+image, so every routine that reads an image through its intrinsics gets both
+corrections with no change of its own. `check_adjustment` says why a camera
+cannot take an adjustment (a correction on another model, a degenerate spline
+domain, or rates without a scanlines setting), and `with_adjustment` panics on
+those; `SfmrReconstruction::from_sfmr_data` refuses them with an error first.
+
+```rust
+let image = camera.with_adjustment(
+    &IntrinsicAdjustment {
+        radial_bspline: [0.004, -0.006],
+        rolling_shutter: [2e-3, -1e-3, 5e-4],
+        ..Default::default()
+    },
+    Some(RollingShutterScanlines::Rows),
+);
+let ray = image.pixel_to_ray(u, v); // inverts the radial map and the readout
+```
+
+Each correction is shaped to leave the existing kernels as they are.
+
+**The radial correction** replaces the camera's coefficients `c` with `c + K·e`
+(`K` from `radial_bspline_insertion` in
+[bspline.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs); the
+closed form, the matrix and the empty-spline case are in
+[sfmtool-camera-models.md § Per-image radial
+correction](../../formats/sfmtool-camera-models.md#per-image-radial-correction)).
+The image's intrinsics stay an ordinary `SFMTOOL_PINHOLE` camera, so the forward
+map, the inverse, the Jacobian and `bspline_is_monotone` read it unchanged.
+
+**The rolling shutter** is not a radial map, so no `CameraModel` variant carries
+it. It is `CameraIntrinsics::rolling_shutter: Option<RollingShutter>`, with
+`RollingShutter { scanlines: RollingShutterScanlines, rates: [f64; 3] }`
+(`RollingShutterScanlines` is the format crate's enum, re-exported by
+`sfmtool_core::camera`). Only an image's intrinsics carry one, never a camera
+entry, and `SfmrCamera::from` leaves it out. A field on the intrinsics reaches
+every projection method at once; the cost is that every comparison of
+`CameraIntrinsics` and every place that builds one names it, and that
+`has_distortion` reports `true` for a camera with non-zero rates.
+
+### The rolling-shutter step
+
+The step is applied by `project`, `ray_to_pixel`, `ray_to_pixel_with_jacobian`,
+`pixel_to_ray`, `unproject`, their batch forms and the ray grid's per-node
+projection, all in
+[projection.rs](../../../crates/sfmtool-core/src/camera/distortion/projection.rs)
+and [rolling_shutter.rs](../../../crates/sfmtool-core/src/camera/distortion/rolling_shutter.rs).
+Each method tests `rolling_shutter_step()` first: with no rolling shutter, or
+rates of exactly zero, it runs its own arithmetic, so such a camera projects,
+unprojects and differentiates bit for bit as one without the field. The step
+is defined on this model's image plane only; a camera of another model with
+non-zero rates panics in the projection methods.
+
+In the `.sfmr` camera frame (+X right, +Y up, looking down −Z), the undistorted
+point is `(x, y) = (Px, Py)/(−Pz)` and the radial map gives `(x_d, y_d)`. The
+readout position is the pixel distance of the point's scanline from the
+principal point's, in the short-side unit `m = min(width, height)`, read at the
+pixel the point reaches before the step, `u = cx + f·x_d`, `v = cy − f·y_d`:
+
+```
+t = (v − cy)/m = −f·y_d/m        Rows
+t = (u − cx)/m =  f·x_d/m        Columns
+```
+
+The step adds the image-plane velocity of a fixed point under the camera
+rotation `ω = (ωx, ωy, ωz)`, evaluated at the undistorted point, times `t`:
+
+```
+x_r = x_d + t·ẋ,        ẋ =  ωy·(1 + x²) − ωx·x·y + ωz·y
+y_r = y_d + t·ẏ,        ẏ = −ωx·(1 + y²) + ωy·x·y − ωz·x
+u = cx + f·x_r,         v = cy − f·y_r
+```
+
+`(ẋ, ẏ)` is the derivative of `(Px, Py)/(−Pz)` under `Ṗ = −ω × P`. The rates
+are in radians per short side of readout, whose meaning
+[sfmr-file-format.md § Per-image intrinsic
+adjustments](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)
+gives.
+
+The code runs the step in the kernels' optical frame, where the radial
+kernels return `(x_o, y_o) = (x_d, −y_d)` and the pixel is
+`(f·x_o + cx, f·y_o + cy)`: there `t` is `f·y_o/m` for rows and `f·x_o/m` for
+columns, and the velocity is `(ẋ, −ẏ)` at `(x_o, −y_o)`. The two `−y` flips are
+the existing pixel mapping's; the step adds none.
+
+### Unprojection with a rolling shutter
+
+`pixel_to_ray` and `unproject` take the pixel to `(x_r, y_r)` by the affine
+pixel step, then remove the displacement by a fixed-point iteration around the
+exact radial inverse (`undistort_sfmtool_pinhole`, run on the image's spline):
+
+```
+(x_d)₀ = (x_r)
+repeat:
+    (x)ₖ   = radial_inverse((x_d)ₖ)
+    (x_d)ₖ₊₁ = (x_r) − t((x_d)ₖ) · ṗ((x)ₖ)
+until a pass moves (x_d) by less than 1e-12, or after 50 passes
+```
+
+and finish with the radial inverse of the last `(x_d)`. The iteration contracts
+by about `|ω|·(f/m)·(1 + ρ²)`, about `10⁻³` on a measured phone capture, so it
+reaches rounding in three or four passes. A pass that does not converge returns
+its last iterate, as the radial inverse returns its base model's inverse rather
+than failing, and a non-finite iterate stops the loop and is returned as it is.
+
+### The ray Jacobian with a rolling shutter
+
+`ray_to_pixel_with_jacobian` returns the derivative of the whole map. With `D`
+the radial 2×2 at `(x, y)` (the same expression in either frame),
+`∇t = ∂t/∂(x_d, y_d)`, which is `(0, −f/m)` for rows and `(f/m, 0)` for columns
+in the `.sfmr` frame, and `ṗ = (ẋ, ẏ)`:
+
+```
+∂(x_r, y_r)/∂(x, y) = (I + ṗ·∇tᵀ)·D + t·∂ṗ/∂(x, y)
+∂ṗ/∂(x, y)          = [[ 2ωy·x − ωx·y,   −ωx·x + ωz     ],
+                       [ ωy·y − ωz,      −2ωx·y + ωy·x  ]]
+```
+
+followed by the pixel step's `f·diag(1, −1)` and the divide's `∂(x, y)/∂ray`.
+It is the derivative of the map as stated, with the velocity read at the
+undistorted point and `t` at the distorted one, not of a simplified map,
+because the bundle adjustment's damping ladder compares costs of the map
+itself. The domain is the model's: `None` behind the camera and past the fold,
+from the same `forward_projection_invertible` call.
+
+The bundle adjustment holds an image's corrections and differentiates its own
+columns through them
+([bundle-adjustment.md § Held image
+adjustments](../geometry/bundle-adjustment.md#the-per-image-release)).
+
 ## Monotonicity enforcement
 
 `bspline_is_monotone` decides the model's invariant, `1 + δ'(ρ) > 0` over
@@ -166,8 +308,10 @@ Enforcement sites:
 
 - **At solve time**: the bundle adjustment's `bspline_step_admissible` rejects,
   inside the damping ladder, any step whose candidate spline is non-finite or
-  fails the check over `[0, ρ_max]`. A released solve therefore cannot persist
-  a folded spline.
+  fails the check over `[0, ρ_max]`, and any step after which an image's
+  spline `c + K·e` under its held radial correction would fail it. A released
+  solve therefore cannot persist a folded spline for the camera or for any of
+  its images.
 - **At read time**: the Newton inverse's bracket `[0, ρ_max]` contains exactly
   one root because of it. The iteration is bisection-safeguarded anyway, so a
   spline that violates the invariant still converges to *a* root of the folded
@@ -238,3 +382,15 @@ holds on the derivative as well as the projection.
 - **Python surface** (`tests/rust_bindings/`): batch projection round trip
   across the seam, the exact pinhole identity, copy/dict round trip, and
   `best_fit_inside_pinhole` behavior.
+- **Per-image corrections**
+  ([rolling_shutter/tests.rs](../../../crates/sfmtool-core/src/camera/distortion/rolling_shutter/tests.rs),
+  [intrinsics/tests.rs](../../../crates/sfmtool-core/src/camera/intrinsics/tests.rs)):
+  zero rates project, unproject and differentiate bit for bit as no rolling
+  shutter; `c + K·e` evaluates to `δ + Δδ` to rounding on and past `[0, ρ_max]`
+  for several `N` including 2; the forward map equals the `.sfmr`-frame formulas
+  above written out independently; the velocity equals the image motion of a
+  small camera rotation; `pixel_to_ray` inverts `ray_to_pixel` to `1e-9` px over
+  the image with a radial correction and rates ten times the measured size, on
+  rows and on columns; the analytic Jacobian agrees with central differences;
+  the batch forms and the ray grid agree with the scalar forms; a point at
+  infinity projects as its direction; and rates on another model panic.

@@ -647,8 +647,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// the frame there. A missing `per_image_adjustments` means no camera varies
 /// anything per image, and a missing `rolling_shutter_scanlines` that no
 /// camera has a scanlines setting. A dict in which some camera names
-/// `"radial_bspline"` or `"rolling_shutter"` is refused, since this build does
-/// not yet apply either correction where an image is read through its camera.
+/// `"radial_bspline"` or `"rolling_shutter"` is refused, since the viewer and
+/// the Python package in this build do not yet apply either correction where
+/// they read an image through its camera.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`

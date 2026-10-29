@@ -197,6 +197,7 @@ fn pinhole(width: u32, height: u32) -> CameraIntrinsics {
         },
         width,
         height,
+        rolling_shutter: None,
     }
 }
 
@@ -317,6 +318,7 @@ fn the_clipped_share_of_a_fisheye_tile_is_read_inside_its_distorted_outline() {
         },
         width: 160,
         height: 160,
+        rolling_shutter: None,
     };
     let pyramid = grey(160, 160, |x, _| if x < 110 { 255 } else { 100 });
     let (pose, patch) = facing_patch(0.0, 3.0);
@@ -356,6 +358,7 @@ fn the_clipped_share_of_a_fisheye_tile_is_read_inside_its_distorted_outline() {
         },
         width: 160,
         height: 160,
+        rolling_shutter: None,
     };
     let undistorted =
         clipped_share_by_pixel(&pyramid, &projected_outline(&patch, &pinhole, &pose, r));

@@ -136,6 +136,7 @@ fn with_camera_model(mut recon: SfmrReconstruction, model: CameraModel) -> SfmrR
         model,
         width: 1920,
         height: 1080,
+        rolling_shutter: None,
     }];
     recon
 }
@@ -1630,6 +1631,8 @@ fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_ph
     recon.image_set.images[0].intrinsic_adjustment = sfmtool_core::IntrinsicAdjustment {
         focal: 0.02,
         principal_point: [0.01, -0.01],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     };
     r.upload_bg_image(&device, &queue, &recon, image(0));
     let adjusted = recon.image_set.image_intrinsics(0).into_owned();
@@ -1637,10 +1640,15 @@ fn a_change_of_the_image_s_intrinsics_or_pose_rebuilds_the_mesh_and_keeps_the_ph
     assert_eq!(key(&r).intrinsics, adjusted);
 
     let camera = &mut recon.image_set.cameras[0];
-    *camera = camera.with_adjustment(&sfmtool_core::IntrinsicAdjustment {
-        focal: 0.1,
-        principal_point: [0.0, 0.0],
-    });
+    *camera = camera.with_adjustment(
+        &sfmtool_core::IntrinsicAdjustment {
+            focal: 0.1,
+            principal_point: [0.0, 0.0],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
+        },
+        None,
+    );
     r.upload_bg_image(&device, &queue, &recon, image(0));
     assert_eq!(
         key(&r).intrinsics,

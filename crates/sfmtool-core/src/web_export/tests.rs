@@ -126,6 +126,7 @@ fn a_pinhole_lens_grid_is_the_flat_far_plane() {
         },
         width: 100,
         height: 80,
+        rolling_shutter: None,
     };
     let grid = lens_grid(
         &image_looking_down_minus_z(),
@@ -153,6 +154,7 @@ fn a_fisheye_lens_grid_bends_onto_the_frustum_sphere() {
         },
         width: 100,
         height: 100,
+        rolling_shutter: None,
     };
     let centre = Point3::new(1.0, 2.0, 3.0);
     let grid = lens_grid(&image_looking_down_minus_z(), &camera, &centre, 2.0);

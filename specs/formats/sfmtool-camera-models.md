@@ -219,6 +219,76 @@ the tangent the spline ends on, monotone to the edge of the domain.
 
 The zero-spline base is `SIMPLE_PINHOLE`, the one-focal pinhole.
 
+## Per-image radial correction
+
+An image of an `SFMTOOL_PINHOLE` camera may carry its own small change to the
+camera's radial distortion, for a lens whose distortion changes from one
+photograph to the next, as it does when the focus moves. The change is two
+coefficients `e = (e_0, e_1)`, in units of `ρ`, stored per image in a `.sfmr`
+file ([sfmr-file-format.md § Per-image intrinsic
+adjustments](sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+Only an `SFMTOOL_PINHOLE` camera carries one.
+
+The correction is a spline of the same centre-anchored cubic basis as the
+camera's, on the camera's own domain `[0, ρ_max]` (`ρ_max` being
+`bspline_rho_max`), with the minimum two coefficients. The clamped basis of two
+coefficients has four functions and no interior knot, so it is the cubic
+Bernstein basis in `τ = ρ/ρ_max`; omitting the anchored pair leaves
+
+```
+B0(ρ) = 3τ²(1 − τ),        B1(ρ) = τ³                         (0 ≤ ρ ≤ ρ_max)
+Δδ(ρ) = e_0·B0(ρ) + e_1·B1(ρ)
+```
+
+Past `ρ_max` the correction continues along its end tangent, as the camera's
+spline does:
+
+```
+Δδ(ρ) = e_1 + 3·(e_1 − e_0)·(ρ − ρ_max)/ρ_max                  (ρ > ρ_max)
+```
+
+`Δδ(0) = Δδ'(0) = 0`, so the correction has no constant and no linear part: it
+does not overlap the image's focal scale, which is the linear part. Its value at
+the domain end is `e_1`.
+
+The correction is **added to the camera's `δ`** for that image, so the image
+projects as
+
+```
+(u, v) = (cx_i, cy_i) + f_i·(ρ + δ(ρ) + Δδ(ρ))·û
+```
+
+with `f_i` and `(cx_i, cy_i)` the image's focal and principal point after its
+focal scale and principal-point offset. Every clamped knot vector on `[0, ρ_max]`
+refines the two-coefficient one, so `Δδ` is exactly a spline of the camera's
+`N`-coefficient basis: the image's spline is the camera's with coefficients
+`c + K·e`, where `K` is a fixed `N × 2` matrix that depends on `N` alone, and
+`K` is the identity when `N = 2`. Row `j` of `K` (full-basis function `j + 2`,
+whose knots are `t_{j+2} … t_{j+6}`) is the polynomial's blossom at the three
+inner knots `(a, b, c) = (t_{j+3}, t_{j+4}, t_{j+5})/ρ_max`:
+
+```
+K_j = [ a·b + a·c + b·c − 3·a·b·c,   a·b·c ]
+```
+
+The two splines agree on the domain and have the same value and slope at its
+end, so their linear tails agree too. A camera whose spline is empty reads the
+correction as the two-coefficient spline `e` itself. An image with the
+correction is therefore an ordinary `SFMTOOL_PINHOLE` camera, and every rule of
+this spec applies to it unchanged.
+
+**Monotonicity applies to the sum.** The invariant of
+[The monotonicity invariant](#the-monotonicity-invariant) holds for each image's
+whole correction:
+
+```
+1 + δ'(ρ) + Δδ'(ρ) > 0        for every ρ ∈ [0, ρ_max], and on the tail
+```
+
+which is the invariant of the image's spline `c + K·e`. A writer must not store
+a correction that breaks it for its image, and a reader does not check it, as
+for the camera's own spline.
+
 ## Serialization
 
 A camera stores the parameters in its `parameters` map under the names listed
@@ -324,6 +394,13 @@ list has variable length, both models are registered as `custom` in the camera
 model registry, so their conversion is written by hand instead of generated
 from the fixed-arity table; see
 [../core/camera/camera-model-registry.md](../core/camera/camera-model-registry.md).
+
+An image's radial correction is applied by `CameraIntrinsics::with_adjustment`
+in [intrinsics.rs](../../crates/sfmtool-core/src/camera/intrinsics.rs), which
+writes the image's coefficients `c + K·e`; `K` is `radial_bspline_insertion` in
+[bspline.rs](../../crates/sfmtool-core/src/camera/distortion/bspline.rs). The
+kernels and the per-image computation are in
+[../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections).
 
 `CameraModel::has_distortion`, which reports whether a camera distorts at all,
 treats a coefficient whose magnitude is at most `1e-12` as zero, as it does for

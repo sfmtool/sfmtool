@@ -652,12 +652,26 @@ pub fn bundle_adjust(
     let releases_image = releases
         .iter()
         .any(|r| r.image_focal || r.image_principal_point);
+    // Each solved camera's scanlines setting, which its images' held
+    // rolling-shutter rates are read on.
+    let scanlines: Vec<_> = used
+        .iter()
+        .map(|&c| {
+            image_set
+                .camera_per_image_adjustments(c as usize)
+                .rolling_shutter_scanlines
+        })
+        .collect();
     let ba_cameras = BaCameras {
         cameras: &source_cameras,
         image_camera: image_camera.as_slice().into(),
         releases: Some(&releases),
         image_adjustments: (releases_image || image_adjustments.iter().any(|a| !a.is_zero()))
             .then(|| image_adjustments.as_slice().into()),
+        rolling_shutter_scanlines: scanlines
+            .iter()
+            .any(Option::is_some)
+            .then_some(scanlines.as_slice()),
     };
 
     // The solve is all of the time; the other three walk arrays the size of the

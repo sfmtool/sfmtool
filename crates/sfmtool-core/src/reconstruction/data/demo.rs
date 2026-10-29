@@ -49,6 +49,7 @@ impl SfmrReconstruction {
             },
             width: 1920,
             height: 1080,
+            rolling_shutter: None,
         }];
 
         // Images: cameras in an arc

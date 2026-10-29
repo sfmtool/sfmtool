@@ -15,6 +15,7 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 
 use super::bspline::bspline_is_inactive;
 use super::kernels::*;
+use super::rolling_shutter::RollingShutterStep;
 use super::PixelJacobian;
 
 impl CameraIntrinsics {
@@ -26,6 +27,9 @@ impl CameraIntrinsics {
     /// kernel frame, distortion is applied, and the result is converted to
     /// pixels: `(x, y)` → distort(x, −y) → `(u, v)` where `u = fx * x_d + cx`.
     pub fn project(&self, x: f64, y: f64) -> (f64, f64) {
+        if let Some(step) = self.rolling_shutter_step() {
+            return self.project_rolling_shutter(step, x, y);
+        }
         let (x_d, y_d) = self.model.distort(x, -y);
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
@@ -40,6 +44,11 @@ impl CameraIntrinsics {
     ///
     /// The returned `(x, y)` can be used as a ray direction `(x, y, −1)`.
     pub fn unproject(&self, u: f64, v: f64) -> (f64, f64) {
+        if let Some(step) = self.rolling_shutter_step() {
+            let (x_d, y_d) = self.invert_rolling_shutter(step, u, v);
+            let (x, y) = self.model.undistort(x_d, y_d);
+            return (x, -y);
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         let x_d = (u - cx) / fx;
@@ -51,6 +60,15 @@ impl CameraIntrinsics {
     /// Project a batch of undistorted canonical image-plane points to pixel
     /// coordinates. See [`project`](Self::project).
     pub fn project_batch(&self, points: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        if let Some(step) = self.rolling_shutter_step() {
+            return points
+                .par_iter()
+                .map(|&[x, y]| {
+                    let (u, v) = self.project_rolling_shutter(step, x, y);
+                    [u, v]
+                })
+                .collect();
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         points
@@ -65,6 +83,15 @@ impl CameraIntrinsics {
     /// Unproject a batch of pixel coordinates to undistorted canonical
     /// image-plane coordinates. See [`Self::unproject`].
     pub fn unproject_batch(&self, pixels: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        if self.rolling_shutter_step().is_some() {
+            return pixels
+                .par_iter()
+                .map(|&[u, v]| {
+                    let (x, y) = self.unproject(u, v);
+                    [x, y]
+                })
+                .collect();
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         pixels
@@ -87,6 +114,10 @@ impl CameraIntrinsics {
     /// down at and beyond 90° from the optical axis. This makes it suitable for
     /// wide-angle fisheye lenses with field of view approaching or exceeding 180°.
     pub fn pixel_to_ray(&self, u: f64, v: f64) -> [f64; 3] {
+        if let Some(step) = self.rolling_shutter_step() {
+            let (x_d, y_d) = self.invert_rolling_shutter(step, u, v);
+            return self.model.undistort_to_ray(x_d, y_d);
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         let x_d = (u - cx) / fx;
@@ -105,6 +136,9 @@ impl CameraIntrinsics {
     ///
     /// Returns `None` if the ray falls outside the model's valid domain.
     pub fn ray_to_pixel(&self, ray: [f64; 3]) -> Option<(f64, f64)> {
+        if let Some(step) = self.rolling_shutter_step() {
+            return self.ray_to_pixel_rolling_shutter(step, ray);
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         let (x_d, y_d) = self.model.distort_ray(ray)?;
@@ -169,6 +203,9 @@ impl CameraIntrinsics {
     /// with respect to the supplied (possibly non-unit) ray components — i.e.
     /// with respect to a camera-frame point when one is passed directly.
     pub fn ray_to_pixel_with_jacobian(&self, ray: [f64; 3]) -> Option<PixelJacobian> {
+        if let Some(step) = self.rolling_shutter_step() {
+            return self.rolling_shutter_ray_jacobian(step, ray);
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         // Canonical → optical frame: (rx, ry, rz) = S·ray, S = diag(1, −1, −1).
@@ -438,6 +475,15 @@ impl CameraIntrinsics {
 
     /// Batch version of [`Self::ray_to_pixel`].
     pub fn ray_to_pixel_batch(&self, rays: &[[f64; 3]]) -> Vec<Option<[f64; 2]>> {
+        if let Some(step) = self.rolling_shutter_step() {
+            return rays
+                .par_iter()
+                .map(|&ray| {
+                    let (u, v) = self.ray_to_pixel_rolling_shutter(step, ray)?;
+                    Some([u, v])
+                })
+                .collect();
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         rays.par_iter()
@@ -450,6 +496,12 @@ impl CameraIntrinsics {
 
     /// Convert a batch of pixel coordinates to unit ray directions.
     pub fn pixel_to_ray_batch(&self, pixels: &[[f64; 2]]) -> Vec<[f64; 3]> {
+        if self.rolling_shutter_step().is_some() {
+            return pixels
+                .par_iter()
+                .map(|&[u, v]| self.pixel_to_ray(u, v))
+                .collect();
+        }
         let (fx, fy) = self.focal_lengths();
         let (cx, cy) = self.principal_point();
         pixels
@@ -460,6 +512,42 @@ impl CameraIntrinsics {
                 self.model.undistort_to_ray(x_d, y_d)
             })
             .collect()
+    }
+
+    /// [`Self::project`] through the rolling-shutter `step`: the model's
+    /// distortion, then the step, then the focal and principal point.
+    fn project_rolling_shutter(&self, step: RollingShutterStep, x: f64, y: f64) -> (f64, f64) {
+        let (x_o, y_o) = (x, -y);
+        let (x_d, y_d) = self.model.distort(x_o, y_o);
+        let (x_r, y_r) = step.forward(x_o, y_o, x_d, y_d);
+        let f = self.focal_lengths().0;
+        let (cx, cy) = self.principal_point();
+        (f * x_r + cx, f * y_r + cy)
+    }
+
+    /// [`Self::ray_to_pixel`] through the rolling-shutter `step`. The step is
+    /// on `SFMTOOL_PINHOLE` only, whose `distort_ray` is the perspective divide
+    /// and the radial map, so the undistorted point is the divide alone.
+    fn ray_to_pixel_rolling_shutter(
+        &self,
+        step: RollingShutterStep,
+        ray: [f64; 3],
+    ) -> Option<(f64, f64)> {
+        let (x_d, y_d) = self.model.distort_ray(ray)?;
+        let (rz, x_o, y_o) = (-ray[2], ray[0], -ray[1]);
+        let (x_r, y_r) = step.forward(x_o / rz, y_o / rz, x_d, y_d);
+        let f = self.focal_lengths().0;
+        let (cx, cy) = self.principal_point();
+        Some((f * x_r + cx, f * y_r + cy))
+    }
+
+    /// The optical-frame distorted point the pixel `(u, v)` came from, the
+    /// rolling-shutter `step` removed: the inverse of the step and the pixel
+    /// mapping, before the radial inverse.
+    fn invert_rolling_shutter(&self, step: RollingShutterStep, u: f64, v: f64) -> (f64, f64) {
+        let f = self.focal_lengths().0;
+        let (cx, cy) = self.principal_point();
+        step.invert(&self.model, (u - cx) / f, (v - cy) / f)
     }
 }
 

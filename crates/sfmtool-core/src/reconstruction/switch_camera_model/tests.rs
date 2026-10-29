@@ -42,6 +42,7 @@ fn kerry_cam0() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -54,6 +55,7 @@ fn equidistant() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -663,4 +665,55 @@ fn every_image_keeps_its_adjustment_through_a_switch() {
             b.rms_reprojection_error
         );
     }
+}
+
+#[test]
+fn a_camera_whose_images_carry_lens_corrections_is_refused() {
+    // The refusal is decided on the image set alone, before any fit, so the
+    // camera's model does not matter here.
+    let corrected = |adjustment: crate::camera::IntrinsicAdjustment| {
+        let mut recon = scene(vec![kerry_cam0()], |_| 0);
+        recon.image_set.images[1].intrinsic_adjustment = adjustment;
+        recon
+    };
+    for adjustment in [
+        crate::camera::IntrinsicAdjustment {
+            radial_bspline: [0.001, 0.0],
+            ..Default::default()
+        },
+        crate::camera::IntrinsicAdjustment {
+            rolling_shutter: [0.0, 1e-3, 0.0],
+            ..Default::default()
+        },
+    ] {
+        let recon = corrected(adjustment);
+        let err = switch_camera_model(
+            &recon,
+            &[0],
+            &target("SFMTOOL_FISHEYE"),
+            &SwitchCameraModelOptions::default(),
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            matches!(err, SwitchCameraModelError::LensCorrections { camera: 0 }),
+            "{err}"
+        );
+        assert!(err.to_string().contains("does not carry over"), "{err}");
+    }
+    // A camera that lists either correction is refused even at zero.
+    let mut recon = scene(vec![kerry_cam0()], |_| 0);
+    recon.image_set.per_image_adjustments = vec![crate::reconstruction::PerImageAdjustments {
+        rolling_shutter: true,
+        ..Default::default()
+    }];
+    assert!(matches!(
+        fit_camera_switch(
+            &recon,
+            0,
+            &target("SFMTOOL_FISHEYE"),
+            &RefitOptions::default()
+        ),
+        Err(SwitchCameraModelError::LensCorrections { camera: 0 })
+    ));
 }

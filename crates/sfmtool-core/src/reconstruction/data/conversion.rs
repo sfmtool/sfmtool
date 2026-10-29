@@ -260,30 +260,22 @@ impl SfmrReconstruction {
             data.rolling_shutter_rates_xyz.as_ref(),
         )
         .map_err(SfmrError::InvalidFormat)?;
-        // A reconstruction does not yet hold the per-image radial B-spline
-        // correction, the rolling-shutter rates or a camera's scanlines
-        // setting, so a value that carries any of them is refused rather than
-        // projected without the corrections, or saved without the setting.
-        sfmtool_sfmr_format::refuse_per_image_lens_corrections(&data.cameras)?;
-        if let Some(c) = data
-            .cameras
-            .iter()
-            .position(|c| c.rolling_shutter_scanlines.is_some())
-        {
-            return Err(SfmrError::Unsupported(format!(
-                "camera {c} has a rolling_shutter_scanlines setting, which a reconstruction \
-                 in this build does not yet keep"
-            )));
-        }
         let per_image_adjustments: Vec<PerImageAdjustments> = data
             .cameras
             .iter()
-            .map(|c| PerImageAdjustments::from_names(&c.per_image_adjustments))
+            .map(|c| {
+                PerImageAdjustments::from_names(&c.per_image_adjustments).map(|p| {
+                    PerImageAdjustments {
+                        rolling_shutter_scanlines: c.rolling_shutter_scanlines,
+                        ..p
+                    }
+                })
+            })
             .collect::<Result<_, _>>()
             .map_err(SfmrError::InvalidFormat)?;
-        // Empty when no camera varies anything, which is every file below
-        // version 13.
-        let per_image_adjustments = if per_image_adjustments.iter().any(|p| p.any()) {
+        // Empty when no camera varies anything or has a scanlines setting,
+        // which is every file below version 13.
+        let per_image_adjustments = if per_image_adjustments.iter().any(|p| p.is_set()) {
             per_image_adjustments
         } else {
             Vec::new()
@@ -314,6 +306,14 @@ impl SfmrReconstruction {
                         .principal_point_adjustments_xy
                         .as_ref()
                         .map_or([0.0, 0.0], |a| [a[[i, 0]], a[[i, 1]]]),
+                    radial_bspline: data
+                        .radial_bspline_adjustments
+                        .as_ref()
+                        .map_or([0.0, 0.0], |a| [a[[i, 0]], a[[i, 1]]]),
+                    rolling_shutter: data
+                        .rolling_shutter_rates_xyz
+                        .as_ref()
+                        .map_or([0.0; 3], |a| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]),
                 },
             });
         }
@@ -419,6 +419,24 @@ impl SfmrReconstruction {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // Every image's adjustment has to be one its camera can be read
+        // through. The format allows rolling-shutter rates on any camera model,
+        // and this build applies them on `SFMTOOL_PINHOLE` alone, the one model
+        // whose image plane the rolling-shutter step is defined on, so non-zero
+        // rates on another model are refused rather than projected without
+        // them.
+        for (i, image) in images.iter().enumerate() {
+            let c = image.camera_index as usize;
+            let (Some(camera), Some(sfmr_camera)) = (cameras.get(c), data.cameras.get(c)) else {
+                continue;
+            };
+            camera
+                .check_adjustment(
+                    &image.intrinsic_adjustment,
+                    sfmr_camera.rolling_shutter_scanlines,
+                )
+                .map_err(|e| SfmrError::Unsupported(format!("image {i} ({}): {e}", image.name)))?;
+        }
 
         let infinity_point_count = count_points_at_infinity(&points);
         let has_patch_frame = data.patch_u_halfvec_xyz.is_some();
@@ -638,9 +656,13 @@ impl SfmrReconstruction {
             .cameras
             .iter()
             .enumerate()
-            .map(|(c, camera)| SfmrCamera {
-                per_image_adjustments: self.image_set.camera_per_image_adjustments(c).names(),
-                ..SfmrCamera::from(camera)
+            .map(|(c, camera)| {
+                let flags = self.image_set.camera_per_image_adjustments(c);
+                SfmrCamera {
+                    per_image_adjustments: flags.names(),
+                    rolling_shutter_scanlines: flags.rolling_shutter_scanlines,
+                    ..SfmrCamera::from(camera)
+                }
             })
             .collect();
 
@@ -674,6 +696,20 @@ impl SfmrReconstruction {
                 adjustments[i].principal_point[k] + 0.0
             })
         });
+        let radial_bspline_adjustments = (flags.iter().any(|f| f.radial_bspline)
+            || adjustments.iter().any(|a| a.radial_bspline != [0.0, 0.0]))
+        .then(|| {
+            Array2::from_shape_fn((image_count, 2), |(i, k)| {
+                adjustments[i].radial_bspline[k] + 0.0
+            })
+        });
+        let rolling_shutter_rates_xyz = (flags.iter().any(|f| f.rolling_shutter)
+            || adjustments.iter().any(|a| a.rolling_shutter != [0.0; 3]))
+        .then(|| {
+            Array2::from_shape_fn((image_count, 3), |(i, k)| {
+                adjustments[i].rolling_shutter[k] + 0.0
+            })
+        });
 
         SfmrData {
             workspace_dir: Some(self.workspace_dir.clone()),
@@ -702,9 +738,8 @@ impl SfmrReconstruction {
             thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.as_deref().cloned(),
             focal_adjustments,
             principal_point_adjustments_xy,
-            // A reconstruction holds neither (`from_sfmr_data` refuses them).
-            radial_bspline_adjustments: None,
-            rolling_shutter_rates_xyz: None,
+            radial_bspline_adjustments,
+            rolling_shutter_rates_xyz,
             positions_xyzw,
             colors_rgb,
             reprojection_errors,

@@ -98,21 +98,21 @@ pub(crate) enum LayerModel {
 pub(crate) struct ImageIntrinsicsKey {
     /// The image's camera.
     pub(crate) camera: crate::scene::CameraRef,
-    /// The bits of the adjustment's focal scale and principal-point offset.
-    adjustment: [u64; 3],
+    /// The bits of the adjustment's focal scale, principal-point offset,
+    /// radial correction and rolling-shutter rates, in that order.
+    adjustment: [u64; 8],
 }
 
 impl ImageIntrinsicsKey {
     /// The key of `camera` under `adjustment`.
     pub(crate) fn new(camera: crate::scene::CameraRef, adjustment: &IntrinsicAdjustment) -> Self {
         let adjustment = if adjustment.is_zero() {
-            [0; 3]
+            [0; 8]
         } else {
-            [
-                adjustment.focal.to_bits(),
-                adjustment.principal_point[0].to_bits(),
-                adjustment.principal_point[1].to_bits(),
-            ]
+            let [a_x, a_y] = adjustment.principal_point;
+            let [e_0, e_1] = adjustment.radial_bspline;
+            let [w_x, w_y, w_z] = adjustment.rolling_shutter;
+            [adjustment.focal, a_x, a_y, e_0, e_1, w_x, w_y, w_z].map(f64::to_bits)
         };
         Self { camera, adjustment }
     }
@@ -135,12 +135,12 @@ impl ImageIntrinsicsKey {
 
     /// The image's intrinsic adjustment.
     fn adjustment(&self) -> IntrinsicAdjustment {
+        let [f, a_x, a_y, e_0, e_1, w_x, w_y, w_z] = self.adjustment.map(f64::from_bits);
         IntrinsicAdjustment {
-            focal: f64::from_bits(self.adjustment[0]),
-            principal_point: [
-                f64::from_bits(self.adjustment[1]),
-                f64::from_bits(self.adjustment[2]),
-            ],
+            focal: f,
+            principal_point: [a_x, a_y],
+            radial_bspline: [e_0, e_1],
+            rolling_shutter: [w_x, w_y, w_z],
         }
     }
 

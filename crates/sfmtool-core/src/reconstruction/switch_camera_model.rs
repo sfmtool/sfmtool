@@ -49,6 +49,15 @@ pub enum SwitchCameraModelError {
     /// The observation pixels could not be read: a `sift_files`
     /// reconstruction without inline keypoints whose `.sift` files are missing.
     Observations(String),
+    /// The camera's images carry a per-image radial correction or
+    /// rolling-shutter rates, or the camera lists either as varying per image.
+    /// The radial correction is written in the camera's own spline basis and
+    /// the rates are defined on `SFMTOOL_PINHOLE` alone, so a refitted camera
+    /// would read them as something else.
+    LensCorrections {
+        /// The camera's index among the reconstruction's cameras.
+        camera: usize,
+    },
 }
 
 impl fmt::Display for SwitchCameraModelError {
@@ -65,6 +74,11 @@ impl fmt::Display for SwitchCameraModelError {
             SwitchCameraModelError::Observations(e) => write!(
                 f,
                 "the observations' pixels could not be read to compare the models: {e}"
+            ),
+            SwitchCameraModelError::LensCorrections { camera } => write!(
+                f,
+                "camera {camera}'s images carry a per-image radial correction or \
+                 rolling-shutter rates, which a model switch does not carry over"
             ),
         }
     }
@@ -408,6 +422,18 @@ pub fn fit_camera_switch(
     let Some(source) = image_set.cameras.get(camera) else {
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
+    // The radial correction is a spline in the camera's own basis on its own
+    // domain and the rates are defined on its model, so neither rides on a
+    // refitted camera unchanged.
+    let flags = image_set.camera_per_image_adjustments(camera);
+    let corrected = image_set.images.iter().any(|im| {
+        im.camera_index as usize == camera
+            && (im.intrinsic_adjustment.radial_bspline != [0.0, 0.0]
+                || im.intrinsic_adjustment.rolling_shutter != [0.0; 3])
+    });
+    if corrected || flags.radial_bspline || flags.rolling_shutter {
+        return Err(SwitchCameraModelError::LensCorrections { camera });
+    }
     let tracks = &recon.point_set.tracks;
     let widest = widest_ray(recon, camera);
     let max_theta_deg = widest.map_or(f64::NAN, |(_, t)| t);

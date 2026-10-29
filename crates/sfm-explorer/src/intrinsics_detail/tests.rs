@@ -55,6 +55,7 @@ fn kerry_park_camera() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -79,6 +80,7 @@ fn two_camera_node() -> SceneNode {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     });
     for image in node.recon_mut().image_set.images.iter_mut().skip(4) {
         image.camera_index = 1;
@@ -210,6 +212,7 @@ fn a_beta_model_marks_the_header() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let painted = show(&node, Some(0), None);
     assert!(says(&painted, "(beta)"));
@@ -231,6 +234,7 @@ fn the_spline_count_is_an_integer_and_its_domain_end_is_in_degrees() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let painted = show(&node, Some(0), None);
     let count = format!("{:>14}", 8);
@@ -615,6 +619,7 @@ fn equidistant_node() -> SceneNode {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     node
 }
@@ -632,6 +637,7 @@ fn equirectangular_node() -> SceneNode {
         },
         width: 2048,
         height: 1024,
+        rolling_shutter: None,
     };
     node
 }

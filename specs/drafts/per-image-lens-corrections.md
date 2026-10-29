@@ -304,25 +304,25 @@ reader, a writer and a verifier hold them to, their hash slots, the migration
 from version 13 and the table of
 [Units of the per-image adjustments](#units-of-the-per-image-adjustments). In
 memory the scanlines setting is `SfmrCamera::rolling_shutter_scanlines`, a
-`RollingShutterScanlines`, in the format crate. Until the corrections are
-applied where an image is read through its camera, `read_sfmr` and
-`write_sfmr_with_options` refuse a file in which a camera lists
+`RollingShutterScanlines`, in the format crate. Until the viewer and the Python
+package apply the corrections where they read an image through its camera,
+`read_sfmr` and `write_sfmr_with_options` refuse a file in which a camera lists
 `"radial_bspline"` or `"rolling_shutter"` (`refuse_per_image_lens_corrections`
-in [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs)), and
-`SfmrReconstruction::from_sfmr_data` calls the same refusal and also refuses a
-scanlines setting, which `PerImageAdjustments` does not hold yet
-([conversion.rs](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs));
-`PerImageAdjustments::from_names` refuses the two names. The core step below
-lifts all three. The section of
-[sfmtool-camera-models.md](../formats/sfmtool-camera-models.md) is not written
-yet.
+in [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs)). The core step
+lifted the other two refusals: `SfmrReconstruction::from_sfmr_data` reads the
+corrections and the scanlines setting
+([conversion.rs](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs)),
+refusing only an image whose adjustment its camera cannot take, and
+`PerImageAdjustments::from_names` reads the two names. The file-boundary
+refusal is lifted with the Python step
+([Bindings, viewer, CLI](#bindings-viewer-cli)).
 
-[sfmtool-camera-models.md](../formats/sfmtool-camera-models.md) gains a section
-defining the per-image radial correction in the model's own terms: the closed
+**Built:** [sfmtool-camera-models.md § Per-image radial
+correction](../formats/sfmtool-camera-models.md#per-image-radial-correction)
+defines the per-image radial correction in the model's own terms: the closed
 form of `B0` and `B1` above, its linear tail, the rule that it is added to the
-camera's `δ` for that image, and the monotonicity rule on the sum. A format spec
-stands alone, so the closed form is written out there rather than referred to
-the kernels.
+camera's `δ` for that image, the knot-insertion matrix that writes it in the
+camera's basis, and the monotonicity rule on the sum.
 
 [sfmr-file-format.md](../formats/sfmr-file-format.md) moves to version 14 and
 gains, under
@@ -392,6 +392,44 @@ COLMAP export is unaffected: an `SFMTOOL_PINHOLE` camera cannot be exported to
 COLMAP at all.
 
 ### Core: the adjustment and the kernels
+
+**Built** as below, and filed in
+[sfmtool-pinhole-kernels.md § Per-image
+corrections](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)
+(the radial correction, the rolling-shutter step, its unprojection and its ray
+Jacobian) and in the per-image specs that read an image's intrinsics
+([edited-reconstruction.md](../core/reconstruction/edited-reconstruction.md),
+[bundle-adjustment.md § Held image
+adjustments](../core/geometry/bundle-adjustment.md#the-per-image-release),
+[bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
+[switch-camera-model.md](../core/reconstruction/switch-camera-model.md)). What
+the build settled beyond the bullets below:
+
+- `CameraIntrinsics::with_adjustment(adjustment, scanlines)` takes the camera's
+  scanlines setting as a second argument, and `ImageIntrinsicsList::new` and
+  `BaCameras::rolling_shutter_scanlines` take one per camera, since the setting
+  belongs to the camera and the rates to the image. `check_adjustment` names
+  what a camera cannot take, `with_adjustment` panics on it, and
+  `SfmrReconstruction::from_sfmr_data` refuses it as an error first.
+- The rolling shutter is applied on `SFMTOOL_PINHOLE` only: a reconstruction
+  with non-zero rates on another model is refused, and a camera of another
+  model that carries non-zero rates panics in the projection methods. The
+  format stays permissive and allows `"rolling_shutter"` on any model.
+- The unprojection's fixed point stops when a pass moves the distorted point by
+  less than `1e-12` or after 50 passes, and a pass that has not converged
+  returns its last iterate.
+- `CameraIntrinsics::has_distortion` is `true` for non-zero rates, and
+  `SfmrCamera::from` leaves the rolling shutter out, since a camera entry has
+  no place for one image's rates; the binding's `CameraIntrinsics` carries it
+  in `rolling_shutter`, `to_dict`, `from_dict` and pickling, and a camera list
+  handed to a reconstruction refuses one.
+- The bundle-adjustment kernel holds both corrections, and differentiates the
+  shared focal, the shared spline and the per-image log focal scale through
+  held rates (the focal columns' `t·ṗ` term of
+  [Core: the bundle adjustment](#core-the-bundle-adjustment) and the spline
+  column's `(I + ṗ·∇tᵀ)`); its spline step guard checks each image's
+  `c + K·e_i`. Releasing the corrections is the next step.
+- A model switch refuses a camera whose images carry either correction.
 
 - [`IntrinsicAdjustment`](../../crates/sfmtool-core/src/camera/intrinsics.rs)
   gains `radial_bspline: [f64; 2]` and `rolling_shutter: [f64; 3]` (proposed names),
@@ -869,14 +907,19 @@ When built, the tests cover at least:
   different things.
 - **How the mean is held.** An exact constraint in a bordered system (proposed)
   or a stiff prior on the mean.
-- **Where the rolling shutter sits in memory.** A field on `CameraIntrinsics`,
-  read by every projection routine, or something narrower. A field reaches
-  every consumer at once; it also means every `CameraIntrinsics` comparison and
-  serialisation path has to know about it.
+- **Where the rolling shutter sits in memory.** Settled and built:
+  `rolling_shutter: Option<RollingShutter>` on `CameraIntrinsics`, read by every
+  projection routine, with every comparison and every place that builds a
+  `CameraIntrinsics` naming it
+  ([Core: the adjustment and the kernels](#core-the-adjustment-and-the-kernels)).
 - **`SFMTOOL_FISHEYE`.** Whether it gets the same two corrections. The radial
   correction carries over unchanged in `θ`; the rolling-shutter velocity above
   is the tangent-plane form and would need a ray-space form for a fisheye whose
-  field reaches 90°.
+  field reaches 90°. Once the pinhole steps are done, both corrections are to be
+  tried on the fisheye with the checked-in `kerry_park` dataset (two fisheyes at
+  480×480, and its ground truth `kerry_park_ground_truth_v01.sfmr`). The format
+  stays permissive meanwhile: a camera of any model may list
+  `"rolling_shutter"`.
 - **The shear fallback.** Whether to offer the shear, which needs no scanlines
   setting, as a release, for a camera whose scanlines are unknown and a caller
   that will not pay for two solves.

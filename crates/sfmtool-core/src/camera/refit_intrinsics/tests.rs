@@ -19,6 +19,7 @@ fn kerry_cam0() -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -31,6 +32,7 @@ fn equidistant(f: f64) -> CameraIntrinsics {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -45,6 +47,7 @@ fn sfmtool_fisheye(f: f64, theta_max: f64, bspline: Vec<f64>) -> CameraIntrinsic
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     }
 }
 
@@ -101,6 +104,7 @@ fn simple_radial_to_radial_reproduces_the_copy() {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     };
     let target = RefitTarget::from_name("radial", None).unwrap();
     let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
@@ -233,6 +237,7 @@ fn a_perspective_target_past_90_degrees_is_refused() {
         },
         width: 270,
         height: 480,
+        rolling_shutter: None,
     };
     let refit = refit_camera_intrinsics(&source, &target, &RefitOptions::default()).unwrap();
     assert_eq!(refit.camera.model_name(), "SFMTOOL_PINHOLE");
@@ -431,6 +436,7 @@ fn a_folding_simple_radial_fisheye_source_is_fitted_to_its_fold() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let fold_deg = (1.0 / 0.3_f64.sqrt()).to_degrees();
     let target = RefitTarget::from_name("SFMTOOL_FISHEYE", Some(8)).unwrap();
@@ -473,6 +479,7 @@ fn a_simple_radial_fisheye_target_that_folds_inside_the_fit_is_refused() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let theta_fit_deg = 88.0;
     assert!(trustworthy_max_theta_deg(&source).unwrap() > theta_fit_deg);
@@ -573,6 +580,7 @@ fn a_pinhole_spline_keeps_its_domain_exactly() {
         },
         width: 640,
         height: 480,
+        rolling_shutter: None,
     };
     let refit = refit_spline(&source, 9, None).expect("a monotone refit");
     let CameraModel::SfmtoolPinhole {

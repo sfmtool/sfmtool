@@ -26,6 +26,7 @@ pub mod warp_map;
 pub use distortion::PixelJacobian;
 pub use intrinsics::{
     CameraIntrinsics, CameraIntrinsicsError, CameraModel, ImageIntrinsicsList, IntrinsicAdjustment,
+    RollingShutter, RollingShutterScanlines,
 };
 pub use photograph_cache::{GetManyTally, PeekedPhotograph, PhotographCache, PhotographCacheStats};
 pub use viewport::Camera;

@@ -89,6 +89,7 @@ impl CameraIntrinsics {
             },
             width,
             height,
+            rolling_shutter: None,
         })
     }
 
@@ -166,6 +167,7 @@ impl CameraIntrinsics {
             },
             width,
             height,
+            rolling_shutter: None,
         })
     }
 

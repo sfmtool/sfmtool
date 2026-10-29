@@ -29,10 +29,12 @@ use crate::analysis::reprojection_noise::{
     ReprojectionNoise, OUTLIER_GATE,
 };
 use crate::camera::distortion::bspline::{
-    basis_at, bspline_is_monotone, delta_and_deriv as bspline_delta_and_deriv, smoothing_weight,
-    BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
+    basis_at, bspline_is_monotone, delta_and_deriv as bspline_delta_and_deriv,
+    radial_bspline_insertion, smoothing_weight, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
 };
-use crate::camera::intrinsics::{ImageIntrinsicsList, IntrinsicAdjustment, SplineRadial};
+use crate::camera::intrinsics::{
+    ImageIntrinsicsList, IntrinsicAdjustment, RollingShutterScanlines, SplineRadial,
+};
 use crate::camera::CameraModel;
 use crate::geometry::pose_refine::project_with_jac;
 use crate::progress::Progress;
@@ -455,6 +457,12 @@ pub struct BaCameras<'a> {
     /// count is a caller error, checked with the others. All-zero adjustments
     /// with no per-image release are the same solve as `None`, to the bit.
     pub image_adjustments: Option<Cow<'a, [IntrinsicAdjustment]>>,
+    /// Each camera's rolling-shutter scanlines setting, one per camera, or
+    /// `None` for no camera with one: what an image's rolling-shutter rates in
+    /// [`Self::image_adjustments`] are read on. A camera whose images carry
+    /// non-zero rates needs its setting here. A length other than the camera
+    /// count is a caller error, checked with the others.
+    pub rolling_shutter_scanlines: Option<&'a [Option<RollingShutterScanlines>]>,
 }
 
 /// What the solve may move of one camera's lens, besides the poses and points
@@ -595,6 +603,7 @@ impl<'a> BaCameras<'a> {
             image_camera: Cow::Owned(vec![0; n_img]),
             releases: None,
             image_adjustments: None,
+            rolling_shutter_scanlines: None,
         }
     }
 
@@ -628,6 +637,13 @@ impl<'a> BaCameras<'a> {
                 adjustments.len(),
                 n_img,
                 "image_adjustments and quats length mismatch"
+            );
+        }
+        if let Some(scanlines) = self.rolling_shutter_scanlines {
+            assert_eq!(
+                scanlines.len(),
+                self.cameras.len(),
+                "rolling_shutter_scanlines and cameras length mismatch"
             );
         }
     }
@@ -1007,6 +1023,17 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
     bspline.iter().all(|c| c.is_finite()) && bspline_is_monotone(bspline, d_max, d_max)
 }
 
+/// The spline an image with radial correction `e` reads at its camera's
+/// coefficients `c`: `c + K·e`, as `CameraIntrinsics::with_adjustment` builds
+/// it. `c` has at least two coefficients (the spline release requires it).
+fn image_spline(c: &[f64], e: [f64; 2]) -> Vec<f64> {
+    radial_bspline_insertion(c.len())
+        .iter()
+        .zip(c)
+        .map(|(k, c)| c + k[0] * e[0] + k[1] * e[1])
+        .collect()
+}
+
 /// Staged bundle adjustment over images taken through one or more cameras.
 ///
 /// `cameras` holds the camera list and, per image, the index of the camera
@@ -1178,6 +1205,7 @@ pub fn bundle_adjust(
         cameras.cameras,
         &cameras.image_camera,
         cameras.image_adjustments.as_deref(),
+        cameras.rolling_shutter_scanlines.unwrap_or_default(),
         cameras.releases,
         quats,
         trans,
@@ -1931,6 +1959,14 @@ fn observation_blocks<const CAM_COLS: usize>(
             SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
             SMatrix::<f64, 1, 3>::from_row_slice(&jp[1]),
         ]);
+        // An image's rolling shutter, held: its readout position `t`, its
+        // image-plane velocity `ṗ` and the readout gradient `∇t`, all in the
+        // kernels' optical frame. The step `x_r = x_d + t·ṗ` reads `t` off the
+        // pixel, which is proportional to the image's focal, so the focal
+        // columns gain `t·ṗ`, and a distortion column `∂x_d` becomes
+        // `(I + ṗ·∇tᵀ)·∂x_d`. `None` for every image without rates, whose
+        // columns are the ones below as they are.
+        let motion = cam.rolling_shutter_motion([p_cam.x, p_cam.y, p_cam.z]);
         if lens.opt_f {
             // ∂(u, v)/∂f. Exact for every model the `opt_f` gate
             // admits: the focal is a pure multiplier of an
@@ -1941,6 +1977,12 @@ fn observation_blocks<const CAM_COLS: usize>(
             // the image's own principal point.
             cam_j[(0, F_SLOT)] = (u - lens.cx) / f;
             cam_j[(1, F_SLOT)] = (v - lens.cy) / f;
+            if let Some((t, [px, py], _)) = motion {
+                // `∂(u, v)/∂f_i = x_r + t·ṗ`, read through `f_i = f·(1 + s)`.
+                let k = f_image / f * t;
+                cam_j[(0, F_SLOT)] += k * px;
+                cam_j[(1, F_SLOT)] += k * py;
+            }
         }
         if lens.opt_k1 {
             // ∂(u, v)/∂k1 = f_i·θ³·û at the image's focal — direction
@@ -1964,6 +2006,13 @@ fn observation_blocks<const CAM_COLS: usize>(
                     continue;
                 }
                 idx[2 + j] = lens.slot0 + BSPLINE_SLOT0 + (full - 2);
+                let mut col = *col;
+                if let Some((_, [px, py], [gx, gy])) = motion {
+                    // `(I + ṗ·∇tᵀ)` on the column `f_i·∂x_d/∂cᵢ`.
+                    let g = (gx * col[0] + gy * col[1]) / f_image;
+                    col[0] += f_image * px * g;
+                    col[1] += f_image * py * g;
+                }
                 cam_j[(0, 2 + j)] = col[0];
                 cam_j[(1, 2 + j)] = col[1];
             }
@@ -1987,6 +2036,11 @@ fn observation_blocks<const CAM_COLS: usize>(
                 // principal point.
                 cam_j[(0, adj_c)] = u - lens.cx;
                 cam_j[(1, adj_c)] = v - lens.cy;
+                if let Some((t, [px, py], _)) = motion {
+                    // `f_i·∂(u, v)/∂f_i = (u − cx_i, v − cy_i) + f_i·t·ṗ`.
+                    cam_j[(0, adj_c)] += f_image * t * px;
+                    cam_j[(1, adj_c)] += f_image * t * py;
+                }
             }
             if lens.opt_image_pp {
                 // ∂(u, v)/∂(a_x, a_y) = m·I: the offset is in the short-side
@@ -2151,6 +2205,9 @@ struct Lens<'a> {
     /// The input camera. A fixed spline, and every parameter no release
     /// touches, ride along inside it.
     base: &'a CameraIntrinsics,
+    /// The camera's rolling-shutter scanlines setting, which its images'
+    /// rates are read on.
+    scanlines: Option<RollingShutterScanlines>,
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
@@ -2178,8 +2235,10 @@ impl<'a> Lens<'a> {
     /// parameter fixed, whatever the other cameras of the solve do. The
     /// principal point is released on every model, shared or per image. A
     /// per-image release holds the shared value of its kind.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         base: &'a CameraIntrinsics,
+        scanlines: Option<RollingShutterScanlines>,
         opt_f: bool,
         opt_k1: bool,
         opt_bspline: bool,
@@ -2231,6 +2290,7 @@ impl<'a> Lens<'a> {
         let (cx, cy) = base.principal_point();
         Self {
             base,
+            scanlines,
             opt_f,
             opt_k1,
             opt_bspline,
@@ -2480,11 +2540,13 @@ fn image_prior_cost(
 
 /// The cameras a round's observations are read through at the shared cameras
 /// `cams`: `cams` themselves, then entry `cams.len() + r` as camera
-/// `view_camera[cams.len() + r]` with `view_adjustment[r]` applied. Borrowed
+/// `view_camera[cams.len() + r]` with `view_adjustment[r]` applied, its
+/// rolling-shutter rates read on that camera's entry of `scanlines`. Borrowed
 /// when no entry is adjusted, so a solve with no adjustment reads the cameras
 /// it always did.
 fn entries_at<'c>(
     cams: &'c [CameraIntrinsics],
+    scanlines: &[Option<RollingShutterScanlines>],
     view_camera: &[usize],
     view_adjustment: &[IntrinsicAdjustment],
 ) -> Cow<'c, [CameraIntrinsics]> {
@@ -2496,7 +2558,7 @@ fn entries_at<'c>(
         view_adjustment
             .iter()
             .zip(&view_camera[cams.len()..])
-            .map(|(a, &j)| cams[j].with_adjustment(a)),
+            .map(|(a, &j)| cams[j].with_adjustment(a, scanlines[j])),
     );
     Cow::Owned(out)
 }
@@ -2641,6 +2703,10 @@ fn solve_lm<const CAM_COLS: usize>(
         "a per-image release needs its prior and every image's adjustment"
     );
     let n_cam = lenses.len();
+    // Each camera's scanlines setting, which its images' rolling-shutter rates
+    // are read on.
+    let scanlines: Vec<Option<RollingShutterScanlines>> =
+        lenses.iter().map(|l| l.scanlines).collect();
     // Each camera's spline shape where its spline is released, and where its
     // lens block starts in the reduced system.
     let shapes: Vec<(usize, f64, SplineRadial)> = lenses
@@ -2968,7 +3034,7 @@ fn solve_lm<const CAM_COLS: usize>(
             x
         };
         robust_cost(
-            &entries_at(cams, &view_camera, view_adjustment),
+            &entries_at(cams, &scanlines, &view_camera, view_adjustment),
             &obs_view,
             q,
             t,
@@ -3051,7 +3117,7 @@ fn solve_lm<const CAM_COLS: usize>(
             &x
         };
         let blocks: Vec<ObsBlocks<CAM_COLS>> = {
-            let entries = entries_at(&cams, &view_camera, &view_adjustment);
+            let entries = entries_at(&cams, &scanlines, &view_camera, &view_adjustment);
             let lin: Vec<LinLens<'_>> = (0..entries.len())
                 .map(|v| {
                     let j = view_camera[v];
@@ -3523,7 +3589,19 @@ fn solve_lm<const CAM_COLS: usize>(
                         if !pc.iter().all(|c| c.is_finite()) {
                             return LensStep::Rejected;
                         }
-                        if bspline_step_admissible(&pc, shapes[j].1) {
+                        // Each image with a radial correction reads its own
+                        // spline `c + K·e`, which has to stay monotone too.
+                        let images_admissible = view_adjustment
+                            .iter()
+                            .zip(&view_camera[n_cam..])
+                            .filter(|&(a, &vj)| vj == j && a.radial_bspline != [0.0, 0.0])
+                            .all(|(a, _)| {
+                                bspline_step_admissible(
+                                    &image_spline(&pc, a.radial_bspline),
+                                    shapes[j].1,
+                                )
+                            });
+                        if bspline_step_admissible(&pc, shapes[j].1) && images_admissible {
                             bspline_cand[j] = Some(pc);
                         } else {
                             inadmissible.push(j);
@@ -4049,6 +4127,7 @@ fn bundle_adjust_staged(
     cameras: &[CameraIntrinsics],
     image_camera: &[u32],
     adjustments: Option<&[IntrinsicAdjustment]>,
+    scanlines: &[Option<RollingShutterScanlines>],
     releases: Option<&[CameraRelease]>,
     quats: &mut [UnitQuaternion<f64>],
     trans: &mut [Vector3<f64>],
@@ -4096,6 +4175,7 @@ fn bundle_adjust_staged(
             let r = releases.map_or(CameraRelease::ALL, |r| r[j]);
             Lens::new(
                 c,
+                scanlines.get(j).copied().flatten(),
                 opt_f && r.focal,
                 opt_k1 && r.distortion,
                 opt_bspline && r.distortion,
@@ -4190,7 +4270,8 @@ fn bundle_adjust_staged(
         let cams_now: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
         // Every image's intrinsics at the round's cameras: what the
         // re-estimation casts rays through and the trim measures with.
-        let intrinsics_now = ImageIntrinsicsList::new(&cams_now, image_camera, &adj_state);
+        let intrinsics_now =
+            ImageIntrinsicsList::new(&cams_now, image_camera, &adj_state, scanlines);
         if rnd > 0 {
             retriangulate_round(
                 &intrinsics_now.intrinsics,
@@ -4342,7 +4423,8 @@ fn bundle_adjust_staged(
                 // than the level it started from, which the prior's weight
                 // was stated at and which still holds the start's error.
                 let cams_end: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
-                let intrinsics_end = ImageIntrinsicsList::new(&cams_end, image_camera, &adj_state);
+                let intrinsics_end =
+                    ImageIntrinsicsList::new(&cams_end, image_camera, &adj_state, scanlines);
                 let sigma_end = round_noise(
                     &cams_end,
                     image_camera,
@@ -4395,7 +4477,8 @@ fn bundle_adjust_staged(
     }
 
     let cams_final: Vec<CameraIntrinsics> = lenses.iter().map(Lens::camera).collect();
-    let intrinsics_final = ImageIntrinsicsList::new(&cams_final, image_camera, &adj_state);
+    let intrinsics_final =
+        ImageIntrinsicsList::new(&cams_final, image_camera, &adj_state, scanlines);
     // The storage decision: every free point is scored at the state the solve
     // ended at and the noise level its final round measures, over the
     // observations that round kept, and stored as the test says. A final round

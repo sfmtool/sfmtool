@@ -26,6 +26,7 @@ fn a_camera_row_names_one_focal_length_or_two() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     assert_eq!(
         camera_row_text(0, &square, 26),
@@ -41,6 +42,7 @@ fn a_camera_row_names_one_focal_length_or_two() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     assert_eq!(
         camera_row_text(1, &anamorphic, 1),
@@ -63,6 +65,7 @@ fn a_beta_model_row_carries_the_beta_marker() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     assert_eq!(
         camera_row_text(0, &beta, 0),
@@ -78,6 +81,7 @@ fn a_beta_model_row_carries_the_beta_marker() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     assert!(
         !camera_row_text(0, &settled, 3).contains('β'),

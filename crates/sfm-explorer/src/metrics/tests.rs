@@ -17,6 +17,7 @@ fn simple_camera() -> CameraIntrinsics {
         },
         width: 100,
         height: 100,
+        rolling_shutter: None,
     }
 }
 
@@ -81,6 +82,7 @@ fn observation_metrics_are_defined_past_90_degrees_in_a_fisheye() {
         },
         width: 480,
         height: 480,
+        rolling_shutter: None,
     };
     let theta = 100f64.to_radians();
     let direction = [theta.sin(), 0.0, -theta.cos()];

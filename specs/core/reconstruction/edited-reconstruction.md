@@ -137,20 +137,37 @@ The binding exposes the stored values as `focal_adjustments`,
 and every value is zero), and `clone_with_changes` takes the same three keys.
 A Python routine that rebuilds the image set from parts, such as a merge,
 passes them, since an image otherwise keeps the adjustment at its index.
-`CameraIntrinsics.with_adjustment(focal, principal_point)` applies one to a
-camera.
+`CameraIntrinsics.with_adjustment(focal, principal_point, radial_bspline,
+rolling_shutter, rolling_shutter_scanlines)` applies one to a camera.
 
 `per_image_adjustments` is addressed by camera index, like `cameras`, and an
 edit that adds or removes cameras keeps the two in step. An image's intrinsic
 adjustment travels on its `SfmrImage`, so every edit that reorders, filters or
 copies images carries it without a step of its own; see
 [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13).
-A reconstruction holds neither the per-image radial B-spline correction nor the
-rolling-shutter rates of format version 14, nor a camera's
-`rolling_shutter_scanlines` setting, so `from_sfmr_data` refuses data that
-carries any of them, and `PerImageAdjustments::from_names` refuses the names
-`"radial_bspline"` and `"rolling_shutter"`; the in-memory form is specified in
-[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#core-the-adjustment-and-the-kernels).
+An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
+rolling-shutter rates (format version 14), held on its `IntrinsicAdjustment` as
+`radial_bspline` and `rolling_shutter`, and `image_intrinsics(i)` reads it
+through both
+([../camera/sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)).
+`PerImageAdjustments` holds the camera's flags for them, `radial_bspline` and
+`rolling_shutter`, and its `rolling_shutter_scanlines` setting, which
+`ImageSet::rolling_shutter_scanlines()` lists per camera; a camera with only a
+scanlines setting keeps an entry. `from_sfmr_data` reads all of them and
+refuses an image whose adjustment its camera cannot take (non-zero rates on a
+model other than `SFMTOOL_PINHOLE`, for example), and `to_sfmr_data` writes
+them. The viewer and the Python package do not read the two corrections yet,
+so `load` and `save` still refuse a file that varies either, at the file
+boundary
+([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+The binding's `SfmrReconstruction` exposes them as
+`radial_bspline_adjustments`, `rolling_shutter_rates_xyz` and
+`rolling_shutter_scanlines`, and `CameraIntrinsics.with_adjustment` takes
+`radial_bspline`, `rolling_shutter` and `rolling_shutter_scanlines`;
+`clone_with_changes` has no keys for them yet and refuses the two names in
+`per_image_adjustments`. The rest is specified in
+[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller
 makes most often, so `recon.point_count()`, `recon.image_count()`,

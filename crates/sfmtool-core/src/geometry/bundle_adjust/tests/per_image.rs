@@ -81,7 +81,7 @@ fn per_image_scene(
             if seen[i] >= per_image(i) {
                 continue;
             }
-            let cam = truth.with_adjustment(&planted[i]);
+            let cam = truth.with_adjustment(&planted[i], None);
             let c = quats[i] * Vector3::new(x[0], x[1], x[2]) + trans[i];
             let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) else {
                 continue;
@@ -145,6 +145,7 @@ fn run_image(
             image_camera: Cow::Owned(vec![0; n_img]),
             releases: Some(&releases),
             image_adjustments: Some(Cow::Owned(adjustments)),
+            rolling_shutter_scanlines: None,
         },
         &mut s.quats,
         &mut s.trans,
@@ -201,11 +202,33 @@ fn image_adjustment_columns_match_a_central_difference() {
     let adjustment = IntrinsicAdjustment {
         focal: 0.012,
         principal_point: [0.008, -0.006],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     };
     let h = 1e-6;
-    for cam in crate::camera::intrinsics::tests::all_cameras() {
+    // Every model with the adjustment above, and an `SFMTOOL_PINHOLE` image
+    // that also holds a radial correction and rolling-shutter rates, on rows
+    // and on columns, under which the log focal scale's column gains
+    // `f_i·t·ṗ`.
+    let corrected = IntrinsicAdjustment {
+        radial_bspline: [0.02, -0.03],
+        rolling_shutter: [2e-2, -1.5e-2, 1e-2],
+        ..adjustment
+    };
+    let spline_pinhole = sfmtool_pinhole(250.0, &[0.002, 0.007, 0.014, 0.024, 0.036, 0.05]);
+    let cases = crate::camera::intrinsics::tests::all_cameras()
+        .into_iter()
+        .map(|cam| (cam, adjustment, None))
+        .chain(
+            [
+                RollingShutterScanlines::Rows,
+                RollingShutterScanlines::Columns,
+            ]
+            .map(|s| (spline_pinhole.clone(), corrected, Some(s))),
+        );
+    for (cam, adjustment, scanlines) in cases {
         let name = cam.model_name();
-        let image = cam.with_adjustment(&adjustment);
+        let image = cam.with_adjustment(&adjustment, scanlines);
         let Some((u0, v0)) = image.ray_to_pixel([point.x, point.y, point.z]) else {
             continue;
         };
@@ -273,7 +296,7 @@ fn image_adjustment_columns_match_a_central_difference() {
                     1 => a.principal_point[0] += d,
                     _ => a.principal_point[1] += d,
                 }
-                cam.with_adjustment(&a)
+                cam.with_adjustment(&a, scanlines)
                     .ray_to_pixel([point.x, point.y, point.z])
                     .expect("in domain")
             };
@@ -298,6 +321,8 @@ fn principal_point_draws(count: usize, tau: f64) -> Vec<IntrinsicAdjustment> {
         .map(|i| IntrinsicAdjustment {
             focal: 0.0,
             principal_point: [tau * gaussian(i, 41), tau * gaussian(i, 42)],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         })
         .collect()
 }
@@ -340,6 +365,8 @@ fn planted_per_image_adjustments_are_recovered_about_their_mean() {
         .map(|i| IntrinsicAdjustment {
             focal: 0.01 + 0.006 * gaussian(i, 43),
             principal_point: [0.005 * gaussian(i, 41), 0.005 * gaussian(i, 42)],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         })
         .collect();
     let mut s = per_image_scene(&truth, n_img, 400, &planted, 0.0, 21, |_| 100);
@@ -516,6 +543,8 @@ fn an_image_with_few_observations_does_not_inflate_the_width() {
     planted.push(IntrinsicAdjustment {
         focal: 0.0,
         principal_point: [0.05, -0.05],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     });
     let mut s = per_image_scene(&truth, 41, 400, &planted, 0.5, 101, |i| {
         if i == 40 {
@@ -631,6 +660,8 @@ fn a_narrow_focal_prior_leaves_the_images_mean_free() {
         IntrinsicAdjustment {
             focal: 0.03,
             principal_point: [0.0, 0.0],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         };
         20
     ];
@@ -673,6 +704,8 @@ fn the_derived_focal_width_recovers_a_planted_spread() {
         .map(|i| IntrinsicAdjustment {
             focal: (0.01 * gaussian(i, 43)).exp_m1(),
             principal_point: [0.0, 0.0],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         })
         .collect();
     let n = planted.len() as f64;
@@ -737,6 +770,8 @@ fn an_image_outside_the_solve_keeps_its_intrinsics_through_the_recentring() {
         .map(|i| IntrinsicAdjustment {
             focal: 0.01 + 0.004 * gaussian(i, 43),
             principal_point: [0.01 + 0.004 * gaussian(i, 41), 0.004 * gaussian(i, 42)],
+            radial_bspline: [0.0; 2],
+            rolling_shutter: [0.0; 3],
         })
         .collect();
     planted.push(IntrinsicAdjustment::default());
@@ -752,10 +787,12 @@ fn an_image_outside_the_solve_keeps_its_intrinsics_through_the_recentring() {
     let outside = IntrinsicAdjustment {
         focal: -0.02,
         principal_point: [0.03, -0.01],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     };
     let mut start_adj = vec![IntrinsicAdjustment::default(); 13];
     start_adj[12] = outside;
-    let before = start.with_adjustment(&outside);
+    let before = start.with_adjustment(&outside, None);
     let out = run_image(
         &mut s,
         &start,
@@ -766,7 +803,7 @@ fn an_image_outside_the_solve_keeps_its_intrinsics_through_the_recentring() {
     );
     assert_ne!(out.cameras[0].principal_point(), start.principal_point());
     assert_ne!(out.cameras[0].focal_lengths(), start.focal_lengths());
-    let after = out.cameras[0].with_adjustment(&out.image_adjustments[12]);
+    let after = out.cameras[0].with_adjustment(&out.image_adjustments[12], None);
     let (fb, fa) = (before.focal_lengths().0, after.focal_lengths().0);
     assert!((fa / fb - 1.0).abs() < 1e-12, "focal {fb} → {fa}");
     let (pb, pa) = (before.principal_point(), after.principal_point());
@@ -877,14 +914,14 @@ fn an_image_principal_point_pulled_off_the_image_stays_on_it() {
         }],
     );
     for (i, a) in out.image_adjustments.iter().enumerate() {
-        let (cx, cy) = out.cameras[0].with_adjustment(a).principal_point();
+        let (cx, cy) = out.cameras[0].with_adjustment(a, None).principal_point();
         assert!(
             (0.0..=640.0).contains(&cx) && (0.0..=480.0).contains(&cy),
             "image {i}'s principal point ({cx}, {cy}) is off the image"
         );
     }
     let (cx0, _) = out.cameras[0]
-        .with_adjustment(&out.image_adjustments[0])
+        .with_adjustment(&out.image_adjustments[0], None)
         .principal_point();
     assert!(
         cx0 < 20.0,
@@ -919,6 +956,8 @@ fn the_derivation_undoes_the_prior_and_subtracts_the_noise() {
                 IntrinsicAdjustment {
                     focal: 0.0,
                     principal_point: [estimate(0) * pull, estimate(1) * pull],
+                    radial_bspline: [0.0; 2],
+                    rolling_shutter: [0.0; 3],
                 },
                 Some(inv),
             )
@@ -986,11 +1025,15 @@ fn the_focal_width_is_derived_from_the_log_focal_scale() {
                     IntrinsicAdjustment {
                         focal: x.exp_m1(),
                         principal_point: [0.0, 0.0],
+                        radial_bspline: [0.0; 2],
+                        rolling_shutter: [0.0; 3],
                     }
                 } else {
                     IntrinsicAdjustment {
                         focal: 0.0,
                         principal_point: [x, x],
+                        radial_bspline: [0.0; 2],
+                        rolling_shutter: [0.0; 3],
                     }
                 };
                 (a, Some(inv))

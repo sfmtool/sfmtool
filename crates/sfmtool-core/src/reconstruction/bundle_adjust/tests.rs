@@ -47,6 +47,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -62,6 +63,7 @@ fn second_pinhole() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -667,6 +669,7 @@ fn a_focal_release_names_the_camera_that_cannot_take_one() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     let options = BundleAdjustOptions::uniform(2, CameraRelease::FOCAL);
 
@@ -698,6 +701,7 @@ fn a_camera_no_posed_image_uses_comes_back_untouched() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     source.image_set.cameras.push(unused.clone());
     source.image_set.cameras.push(second_pinhole());
@@ -726,6 +730,7 @@ fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     let options = BundleAdjustOptions::uniform(1, CameraRelease::FOCAL);
 
@@ -1336,6 +1341,7 @@ fn spline_fisheye(bspline: Vec<f64>) -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -1351,6 +1357,7 @@ fn radial_fisheye(k1: f64) -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -1550,6 +1557,7 @@ fn opencv_fisheye() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -1878,6 +1886,8 @@ fn per_image_source() -> SfmrReconstruction {
     source.image_set.images[5].intrinsic_adjustment = IntrinsicAdjustment {
         focal: 0.02,
         principal_point: [-0.01, 0.005],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     };
     source
 }
@@ -1894,6 +1904,9 @@ fn a_per_image_release_writes_each_image_back_and_reports_the_spread() {
         PerImageAdjustments {
             focal: true,
             principal_point: true,
+            radial_bspline: false,
+            rolling_shutter: false,
+            rolling_shutter_scanlines: None,
         }
     );
     // Each posed image took a solved adjustment, and they average zero: the
@@ -2039,6 +2052,9 @@ fn a_per_image_principal_point_alone_keeps_the_focal_and_its_flags() {
         PerImageAdjustments {
             focal: false,
             principal_point: true,
+            radial_bspline: false,
+            rolling_shutter: false,
+            rolling_shutter_scanlines: None,
         }
     );
     assert_eq!(

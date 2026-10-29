@@ -66,5 +66,7 @@ pub(crate) fn varied_adjustment(i: usize) -> IntrinsicAdjustment {
     IntrinsicAdjustment {
         focal: 0.015 * (0.9 * t + 0.3).sin(),
         principal_point: [0.01 * (1.3 * t + 0.5).cos(), 0.01 * (0.7 * t + 1.1).sin()],
+        radial_bspline: [0.0; 2],
+        rolling_shutter: [0.0; 3],
     }
 }

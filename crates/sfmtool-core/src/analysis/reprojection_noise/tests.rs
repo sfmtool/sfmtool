@@ -323,6 +323,7 @@ fn an_observation_the_ray_construction_declines_is_left_out() {
         },
         width: 1920,
         height: 1080,
+        rolling_shutter: None,
     };
     observe(&mut recon, [0.5, 0.5], 10);
     let before = recon.reprojection_noise().unwrap();

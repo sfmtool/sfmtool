@@ -30,6 +30,7 @@ fn pinhole() -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -693,6 +694,7 @@ fn ray_path_camera_sees_past_ninety_degrees() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     let pin = pinhole();
     // Identity rotation: the canonical camera looks down world −z, from world
@@ -740,6 +742,7 @@ fn radial_cam(k1: f64) -> CameraIntrinsics {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     }
 }
 
@@ -1300,6 +1303,7 @@ fn affine_aniso_sampling_matches_exact_render_on_an_oblique_view() {
         },
         width: IMG_W,
         height: IMG_H,
+        rolling_shutter: None,
     };
     // Looking down world +z from 192 units in front of the plane.
     let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, -192.0]);

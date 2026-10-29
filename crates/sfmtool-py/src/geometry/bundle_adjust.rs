@@ -412,6 +412,7 @@ pub fn bundle_adjust<'py>(
                     .map(|r| IntrinsicAdjustment {
                         focal: r[0],
                         principal_point: [r[1], r[2]],
+                        ..Default::default()
                     })
                     .collect(),
             )
@@ -526,6 +527,7 @@ pub fn bundle_adjust<'py>(
                 image_camera: image_camera.as_slice().into(),
                 releases: None,
                 image_adjustments: adjustments.map(Into::into),
+                rolling_shutter_scanlines: None,
             },
             &mut quats,
             &mut trans,

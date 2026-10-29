@@ -17,7 +17,9 @@ use std::fmt;
 
 use nalgebra::Matrix3;
 
-use super::distortion::bspline::bspline_is_inactive;
+use super::distortion::bspline::{bspline_is_inactive, radial_bspline_insertion};
+
+pub use sfmtool_sfmr_format::RollingShutterScanlines;
 
 mod registry;
 
@@ -507,12 +509,56 @@ impl CameraModel {
 /// Camera intrinsic parameters with image dimensions.
 ///
 /// Combines a [`CameraModel`] (which holds the optical parameters) with the
-/// image width and height.
+/// image width and height, and, for the intrinsics of one image of a
+/// rolling-shutter camera, that image's [`RollingShutter`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraIntrinsics {
     pub model: CameraModel,
     pub width: u32,
     pub height: u32,
+    /// The image's rolling shutter: how far its pixels moved while the sensor
+    /// read it out, applied by every projection method after the model's
+    /// distortion and before the focal and principal point. `None`, or rates
+    /// of exactly zero, projects as the model alone, bit for bit.
+    ///
+    /// Only an image's intrinsics carry one
+    /// ([`CameraIntrinsics::with_adjustment`] sets it from the image's rates
+    /// and its camera's scanlines setting), never a camera shared by several
+    /// images, and only on [`CameraModel::SfmtoolPinhole`]: a projection
+    /// method of a camera of another model that carries non-zero rates
+    /// panics. The rates belong to one photograph, so a camera entry has no
+    /// place for them, and `SfmrCamera::from` leaves the whole field out.
+    pub rolling_shutter: Option<RollingShutter>,
+}
+
+/// An image's **rolling shutter**: whether its sensor reads rows or columns,
+/// and the rates at which the camera turned while the scanlines were read.
+///
+/// A pixel's readout position is its distance from the principal point's
+/// scanline in the short-side unit `m = min(width, height)`, measured before
+/// this step: `t = (v − cy)/m` for [`RollingShutterScanlines::Rows`] and
+/// `t = (u − cx)/m` for [`RollingShutterScanlines::Columns`]. A point whose
+/// distorted normalized image-plane position is `(x_d, y_d)`, in the y-up
+/// camera frame, moves to `(x_d, y_d) + t·(ẋ, ẏ)`, where
+/// `ẋ = ωy·(1 + x²) − ωx·x·y + ωz·y` and `ẏ = −ωx·(1 + y²) + ωy·x·y − ωz·x`
+/// are the image-plane velocity of the undistorted point `(x, y)` under the
+/// camera rotation `ω`. See `specs/core/camera/sfmtool-pinhole-kernels.md`
+/// § "The rolling-shutter step".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RollingShutter {
+    /// Whether the sensor reads one row or one column at a time.
+    pub scanlines: RollingShutterScanlines,
+    /// `[ωx, ωy, ωz]`: the camera's angular velocity in the camera frame (+X
+    /// right, +Y up, looking down −Z) times the time to read one short side
+    /// of scanlines, in radians per short side of readout.
+    pub rates: [f64; 3],
+}
+
+impl RollingShutter {
+    /// Whether every rate is exactly zero, so that the step moves nothing.
+    pub fn is_zero(&self) -> bool {
+        self.rates == [0.0; 3]
+    }
 }
 
 /// Error type for camera intrinsics conversion failures.
@@ -719,9 +765,11 @@ impl CameraIntrinsics {
     ///
     /// Returns `false` for Pinhole/SimplePinhole models, and also `false` for
     /// distortion-capable models where all distortion coefficients are zero
-    /// (below `1e-12`). Delegates to [`CameraModel::has_distortion`].
+    /// (below `1e-12`). Delegates to [`CameraModel::has_distortion`], and is
+    /// also `true` when the camera carries a rolling shutter with a non-zero
+    /// rate, which moves pixels off the model's own map.
     pub fn has_distortion(&self) -> bool {
-        self.model.has_distortion()
+        self.model.has_distortion() || self.rolling_shutter.is_some_and(|r| !r.is_zero())
     }
 
     /// This camera at focal `f`. Every model with a single `focal_length`
@@ -879,12 +927,39 @@ impl CameraIntrinsics {
     }
 
     /// This camera with `adjustment` applied: every focal times
-    /// `1 + adjustment.focal`, and the principal point moved on each axis by
-    /// its fraction of the camera's short side, `min(width, height)`.
+    /// `1 + adjustment.focal`, the principal point moved on each axis by its
+    /// fraction of the camera's short side, `min(width, height)`, the radial
+    /// correction added to the spline, and the rolling-shutter rates set on
+    /// `scanlines`, the camera's scanlines setting.
     ///
-    /// Nothing else changes: the model, the size and the distortion are the
-    /// camera's. A zero adjustment gives the camera back exactly.
-    pub fn with_adjustment(&self, adjustment: &IntrinsicAdjustment) -> CameraIntrinsics {
+    /// The radial correction `e = adjustment.radial_bspline` is a spline in the
+    /// two-coefficient basis on the camera's own domain `[0, bspline_rho_max]`,
+    /// which the camera's basis contains exactly, so the image's coefficients
+    /// are `c + K·e` (`K` from `radial_bspline_insertion`), or `e` itself on a
+    /// camera whose spline is empty: the image's intrinsics stay an ordinary
+    /// [`CameraModel::SfmtoolPinhole`], read by the radial kernels, their
+    /// inverse and the monotonicity test unchanged. Non-zero rates set
+    /// [`Self::rolling_shutter`] to them on `scanlines`, replacing any the
+    /// camera carried; zero rates leave it as it is. Nothing else changes: the
+    /// model, the size and the rest of the distortion are the camera's. A zero
+    /// adjustment gives the camera back exactly.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the adjustment carries a non-zero radial correction or
+    /// non-zero rates on a model other than `SFMTOOL_PINHOLE`, a radial
+    /// correction on a camera whose spline domain end is not positive and
+    /// finite or whose spline has a single coefficient, or non-zero rates with
+    /// `scanlines` `None`. A reconstruction checked by
+    /// `SfmrReconstruction::from_sfmr_data` holds none of these.
+    pub fn with_adjustment(
+        &self,
+        adjustment: &IntrinsicAdjustment,
+        scanlines: Option<RollingShutterScanlines>,
+    ) -> CameraIntrinsics {
+        if let Err(e) = self.check_adjustment(adjustment, scanlines) {
+            panic!("{e}");
+        }
         let scale = 1.0 + adjustment.focal;
         let short_side = f64::from(self.width.min(self.height));
         let [a_x, a_y] = adjustment.principal_point;
@@ -993,7 +1068,80 @@ impl CameraIntrinsics {
         let [cx, cy] = principal_point;
         *cx += a_x * short_side;
         *cy += a_y * short_side;
+        let e = adjustment.radial_bspline;
+        if e != [0.0, 0.0] {
+            if let CameraModel::SfmtoolPinhole { bspline, .. } = &mut out.model {
+                if bspline.is_empty() {
+                    bspline.extend_from_slice(&e);
+                } else {
+                    let k = radial_bspline_insertion(bspline.len());
+                    for (c, row) in bspline.iter_mut().zip(k) {
+                        *c += row[0] * e[0] + row[1] * e[1];
+                    }
+                }
+            }
+        }
+        if let (Some(scanlines), true) = (scanlines, adjustment.rolling_shutter != [0.0; 3]) {
+            out.rolling_shutter = Some(RollingShutter {
+                scanlines,
+                rates: adjustment.rolling_shutter,
+            });
+        }
         out
+    }
+
+    /// Whether [`Self::with_adjustment`] can apply `adjustment` to this camera
+    /// with the scanlines setting `scanlines`, or a message saying why not: a
+    /// non-zero radial correction needs an `SFMTOOL_PINHOLE` camera whose
+    /// spline domain end is positive and finite and whose spline is empty or
+    /// has at least two coefficients, and non-zero rolling-shutter rates need
+    /// an `SFMTOOL_PINHOLE` camera and a scanlines setting.
+    pub fn check_adjustment(
+        &self,
+        adjustment: &IntrinsicAdjustment,
+        scanlines: Option<RollingShutterScanlines>,
+    ) -> Result<(), String> {
+        if adjustment.radial_bspline != [0.0, 0.0] {
+            let CameraModel::SfmtoolPinhole {
+                bspline,
+                bspline_rho_max,
+                ..
+            } = &self.model
+            else {
+                return Err(format!(
+                    "a radial correction applies only to an SFMTOOL_PINHOLE camera, not {}",
+                    self.model_name()
+                ));
+            };
+            if !(*bspline_rho_max > 0.0 && bspline_rho_max.is_finite()) {
+                return Err(format!(
+                    "a radial correction needs a positive, finite bspline_rho_max, not {}",
+                    bspline_rho_max
+                ));
+            }
+            if bspline.len() == 1 {
+                return Err(
+                    "a radial correction needs a camera spline that is empty or has \
+                            at least two coefficients, not one"
+                        .to_string(),
+                );
+            }
+        }
+        if adjustment.rolling_shutter != [0.0; 3] {
+            if !matches!(self.model, CameraModel::SfmtoolPinhole { .. }) {
+                return Err(format!(
+                    "rolling-shutter rates apply only to an SFMTOOL_PINHOLE camera, not {}",
+                    self.model_name()
+                ));
+            }
+            if scanlines.is_none() {
+                return Err(
+                    "rolling-shutter rates need the camera's rolling_shutter_scanlines setting"
+                        .to_string(),
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1003,9 +1151,12 @@ impl CameraIntrinsics {
 /// The image's focal (both focals on a two-focal model) is its camera's times
 /// `1 + focal`, and its principal point is its camera's plus
 /// `principal_point[0]·m` in x and `principal_point[1]·m` in y, where `m` is
-/// the camera's short side, `min(width, height)`. Both are relative, so an
-/// adjustment means the same after the camera is resized. The default is
-/// zero, which reads the image through its camera exactly.
+/// the camera's short side, `min(width, height)`. On an `SFMTOOL_PINHOLE`
+/// camera an image may also carry a radial correction, added to the camera's
+/// spline, and rolling-shutter rates, read on its camera's scanlines setting.
+/// Every part is relative or in a unit that does not change with the
+/// resolution, so an adjustment means the same after the camera is resized.
+/// The default is zero, which reads the image through its camera exactly.
 /// [`CameraIntrinsics::with_adjustment`] applies one.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct IntrinsicAdjustment {
@@ -1013,13 +1164,24 @@ pub struct IntrinsicAdjustment {
     pub focal: f64,
     /// The principal-point offset `[a_x, a_y]`, in the short-side unit.
     pub principal_point: [f64; 2],
+    /// The radial correction `[e_0, e_1]`: the coefficients of the
+    /// two-coefficient centre-anchored cubic basis on the camera's spline
+    /// domain, `B0 = 3τ²(1 − τ)` and `B1 = τ³` with `τ = ρ/bspline_rho_max`, in
+    /// units of the normalized radius `ρ`, added to the camera's `δ(ρ)`.
+    pub radial_bspline: [f64; 2],
+    /// The rolling-shutter rates `[ωx, ωy, ωz]`, in radians per short side of
+    /// readout ([`RollingShutter::rates`]).
+    pub rolling_shutter: [f64; 3],
 }
 
 impl IntrinsicAdjustment {
     /// Whether this adjustment is zero, so that the image is read through its
     /// camera exactly.
     pub fn is_zero(&self) -> bool {
-        self.focal == 0.0 && self.principal_point == [0.0, 0.0]
+        self.focal == 0.0
+            && self.principal_point == [0.0, 0.0]
+            && self.radial_bspline == [0.0, 0.0]
+            && self.rolling_shutter == [0.0; 3]
     }
 }
 
@@ -1045,19 +1207,23 @@ pub struct ImageIntrinsicsList<'a> {
 
 impl<'a> ImageIntrinsicsList<'a> {
     /// The list for images taken through `cameras[image_camera[i]]` with
-    /// `adjustments[i]` applied. `adjustments` is one per image, or empty for
-    /// every image unadjusted. `image_camera` is borrowed or owned as the
-    /// caller holds it, and is `image_entry` itself when no adjustment is
-    /// non-zero.
+    /// `adjustments[i]` applied, each image's rolling-shutter rates read on
+    /// its camera's entry of `scanlines`. `adjustments` is one per image, or
+    /// empty for every image unadjusted; `scanlines` is one per camera, or
+    /// empty for no camera with a setting. `image_camera` is borrowed or owned
+    /// as the caller holds it, and is `image_entry` itself when no adjustment
+    /// is non-zero.
     ///
     /// # Panics
     ///
-    /// Panics when `adjustments` is neither empty nor one per image, or an
-    /// adjusted image's camera index is past `cameras`.
+    /// Panics when `adjustments` is neither empty nor one per image, an
+    /// adjusted image's camera index is past `cameras`, or
+    /// [`CameraIntrinsics::with_adjustment`] panics on an image's adjustment.
     pub fn new(
         cameras: &'a [CameraIntrinsics],
         image_camera: impl Into<Cow<'a, [u32]>>,
         adjustments: &[IntrinsicAdjustment],
+        scanlines: &[Option<RollingShutterScanlines>],
     ) -> Self {
         let image_camera = image_camera.into();
         assert!(
@@ -1078,7 +1244,8 @@ impl<'a> ImageIntrinsicsList<'a> {
             }
             let c = *entry as usize;
             *entry = intrinsics.len() as u32;
-            intrinsics.push(cameras[c].with_adjustment(adjustment));
+            let camera_scanlines = scanlines.get(c).copied().flatten();
+            intrinsics.push(cameras[c].with_adjustment(adjustment, camera_scanlines));
         }
         Self {
             intrinsics: Cow::Owned(intrinsics),
