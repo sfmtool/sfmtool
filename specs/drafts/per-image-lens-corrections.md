@@ -405,11 +405,19 @@ camera index order, each by its own race of two solves. While one camera's race
 runs, the `UNKNOWN` cameras already decided use the setting their race chose,
 and those not yet decided keep their rates held at zero, where the scanlines
 setting has no effect, so no setting is assumed for them. A camera whose setting
-is `ROWS` or `COLUMNS` releases its rates at that setting in every race. In the
-last race no released rates are held at zero, and its winner is the solve's
-answer. `k` such cameras cost
-`k` races; the cases with more than one are rare enough not to justify a
-combinatorial search over all `2ᵏ` combinations.
+is `ROWS` or `COLUMNS` releases its rates at that setting in every race.
+
+The first race starts from the caller's reconstruction. Each race after it
+starts from the state the previous race's winner reached: its poses, its points,
+every intrinsic it released, and the earlier `UNKNOWN` cameras' rates at the
+settings their races chose. The earlier races' work is carried forward rather
+than thrown away. Both solves of a race start from that same state, with the
+raced camera's rates at zero, so the two are compared from one start as in a
+single race. In the last race no released rates are held at zero, and the
+winner of the last race is the adjustment's result. Starting near convergence
+also makes the later races cheaper than the first, though by how much is not
+measured. `k` such cameras cost `k` races; the cases with more than one are rare
+enough not to justify a combinatorial search over all `2ᵏ` combinations.
 
 A weight between rows and columns is not solved for, because the wrong choice is
 a local minimum: a continuous blend `t = λ·y + (1 − λ)·x`, which is rows at
@@ -478,7 +486,9 @@ observer argument is part of the work.
   `image_rolling_shutter_rates` `(n_img, 3)`, with a `rolling_shutter_scanlines`
   sequence per camera (`"ROWS"` or `"COLUMNS"`, since the kernel runs one
   solve with a known setting and the race is the reconstruction-level
-  adjustment's), so existing callers are not broken by a wider array.
+  adjustment's; for a camera that releases no rates and whose images' rates are
+  zero the value is ignored), so existing callers are not broken by a wider
+  array.
 - `read_sfmr` / `write_sfmr` dicts carry `radial_adjustments`,
   `rolling_shutter_rates_xyz` and each camera's `rolling_shutter_scanlines`.
 - The viewer's Bundle Adjust dialog
@@ -672,11 +682,12 @@ When built, the tests cover at least:
   part of the same measurement.
 - **Several `UNKNOWN` cameras.** The races in
   [Choosing rows or columns](#choosing-rows-or-columns) run one camera at a time,
-  with the undecided cameras' rates held at zero. An earlier race is then
-  decided without the later cameras' rolling shutter, which those cameras'
-  poses absorb in part. Whether that can change an earlier choice, and whether a
-  second pass over the cameras is worth its cost, is untested: every measured
-  capture has one camera.
+  each starting from the previous race's winner, with the undecided cameras'
+  rates held at zero. An earlier race is then decided without the later
+  cameras' rolling shutter, which those cameras' poses absorb in part, and its
+  choice is kept once the later cameras' rates are released. Whether releasing
+  them could have changed an earlier choice, and whether a second pass over the
+  cameras is worth its cost, is untested: every measured capture has one camera.
 - **Prior widths.** Whether the new widths are derived per camera by the
   existing empirical Bayes scheme (`ImagePriorOptions` `loose` and `floor`)
   or fixed. Derived, the loose widths cannot be the existing 0.1 (a radial
