@@ -196,9 +196,10 @@ which is the `.sfmr` reading of the kernels' `distort(x, −y)` followed by
 Two simplifications are made, and both are deliberate:
 
 - **The velocity is evaluated at the undistorted point** `(x, y)` and scaled
-  by the readout position `t` of the distorted point; the effect of the distortion on the velocity, and
-  of the rolling-shutter displacement on `t`, are second order (a few pixels of
-  displacement times a percent of distortion).
+  by the readout position `t` of the distorted point; the effect of the
+  distortion on the velocity, and of the rolling-shutter displacement on `t`,
+  are second order (a few pixels of displacement times a percent of
+  distortion).
 - **Translation during readout is not modelled.** The image motion a camera
   translation causes depends on each point's depth, so it is not a per-image
   2D field and cannot be a per-image intrinsic. The measured scene was at 0.15
@@ -346,7 +347,7 @@ not the same, on purpose:
 | rolling-shutter rates `ω` (new) | radians of rotation per short side of readout: the camera's angular velocity in the `.sfmr` camera frame times the time to read `min(width, height)` scanlines; the readout position `t` is the pixel distance from the principal point's scanline in short-side units | a sensor reads its scanlines, which are pixel rows or columns, at a fixed time per scanline, so the time a pixel is read follows its pixel distance, and the readout position is measured across the image like the principal-point offset; the focal then drops out of the rates, and a uniform resize scales the scanline count and the time per scanline inversely; with `t` in focal units the stored rate would be the angular velocity times `f_i` times the time per scanline, so each image's own focal scale (focus breathing) would change what its stored rates mean. The rates are not radians per second: the images cannot tell the readout time apart from the rotation |
 
 The units also mean that prior widths of different terms cannot be compared as
-numbers. On the measured capture an `ωx` of one rate width, 2·10⁻³, moves the
+numbers. On the measured capture an `ωx` of 2·10⁻³, about one rate width, moves the
 centre of the bottom edge by about 1.9 px (`t ≈ 0.5`, `y ≈ −0.53` focal units,
 so `t·ωx·(1 + y²)·f ≈ 0.5 × 2·10⁻³ × 1.28 × 1447.8`), while the principal
 point's derived width of 0.0131 of the short side is about 20 px.
