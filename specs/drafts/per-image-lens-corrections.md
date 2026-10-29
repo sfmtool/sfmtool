@@ -284,10 +284,35 @@ gains, under
 The rules are those of the existing columns: a column is present exactly when
 some camera lists its name; a row of an image whose camera does not list it holds
 exactly `+0.0`; every value is finite. The two columns fold into
-`images_xxh128` in their lexicographic slots, after `quaternions_wxyz`. Both
-fields are resolution-independent: `e` is in units of `ρ` and the rates are per
-normalized unit, so a camera resize leaves them unchanged, as it leaves the
-focal scale and the short-side offsets.
+`images_xxh128` in their lexicographic slots, after `quaternions_wxyz`. Their
+units are in
+[Units of the per-image adjustments](#units-of-the-per-image-adjustments).
+
+#### Units of the per-image adjustments
+
+Each per-image adjustment is stored in a unit that means the same at any
+resolution, so a camera resize (which scales the camera's focal and principal
+point with the image) leaves every stored value unchanged. The four units are
+not the same, on purpose:
+
+| Term | Unit | Why |
+|---|---|---|
+| focal scale `s` (existing) | dimensionless: the image's focal is its camera's times `1 + s`; the bundle adjustment solves it as `ln(1 + s)` | a scale of the focal is a ratio, so it is the same at any resolution and reads directly as "this image's focal is 1.3% longer"; the log makes a focal `k` times longer and one `k` times shorter equally far from the camera's |
+| principal-point offset `a` (existing) | a fraction of the image's short side, `min(width, height)`, the same unit on both axes: the image's principal point is its camera's plus `a·min(width, height)` | it moves the pixel grid after the focal is applied, so it is measured across the image; the short side is one length in x and y, so one offset means the same number of pixels whichever way the lens shifts; it is not a fraction of the focal, which the solve can release, so that an offset does not change in pixels when the focal moves |
+| radial correction `e` (new) | units of `ρ`, the normalized radius on the spline's domain `[0, bspline_rho_max]` | it is added to the camera's `δ`, which is in units of `ρ`, before the focal is applied; `e_1` is the correction's value at `ρ_max` |
+| rolling-shutter rates `ω` (new) | radians per normalized image unit of `t`, where `t` is `y_d` or `x_d`, in the units of `(Px, Py)/(−Pz)`, the tangent of the angle off the axis | the correction acts in normalized image coordinates, before the focal and principal point; in those units `ω` is the camera's angular velocity times the readout time per unit of `t`, and the velocity formulas are exact; with `t` in short-side units the rates would mean something different for each focal, the image's own focal scale included, so changing an image's focal would change what its stored rates mean |
+
+The units also mean that prior widths of different terms cannot be compared as
+numbers. On the measured capture a rate width of 2·10⁻³ is about 2 px of
+displacement at the centre of the bottom edge, while the principal point's
+derived width of 0.0131 of the short side is about 20 px.
+
+When this draft is filed, this table goes into the `.sfmr` format spec,
+[sfmr-file-format.md § Per-image intrinsic adjustments](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13),
+beside its "Why a relative focal scale" and "Why a fraction of the short side,
+on both axes" paragraphs, which explain the two existing units in prose today.
+No standing spec has a table of these units yet; the format spec is the one
+that defines the per-image adjustments.
 
 A file of version 13 or older reads with every radial coefficient and every rate
 zero and no camera carrying `rolling_shutter_scanlines`, which is the image read through its
