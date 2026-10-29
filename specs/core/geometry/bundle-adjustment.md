@@ -2176,7 +2176,10 @@ validation, and outputs are unchanged.
   spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`; `opt_k1`/`opt_bspline`
   cover those two radial releases only. Each image's focal and principal point
   are adjusted per image ("The per-image release"); its distortion is always
-  its camera's.
+  its camera's, and the kernel models no rolling shutter. A per-image radial
+  correction and per-image rolling-shutter rates for `SFMTOOL_PINHOLE` are
+  proposed in
+  [per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md).
 - Gauge fixing and covariance estimation. The kernel holds no pose fixed to
   set the gauge and reports no uncertainty. A caller that wants a gauge states
   it through the point constraints (held points, or ranged points, which fix
