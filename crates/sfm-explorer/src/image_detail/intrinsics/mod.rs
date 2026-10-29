@@ -553,7 +553,7 @@ fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) -> Option
 /// comes to at the spline's domain end in pixels of `camera`'s focal, its
 /// second coefficient times the focal. The rolling-shutter rates are in
 /// milliradians per short side of readout, with the camera's scanlines
-/// setting, `scanlines`.
+/// setting, read off `varies`.
 fn adjustment_lines(
     varies: PerImageAdjustments,
     adjustment: &IntrinsicAdjustment,

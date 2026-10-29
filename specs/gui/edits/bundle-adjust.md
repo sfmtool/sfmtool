@@ -103,6 +103,11 @@ observations the solve keeps.
     image of that camera, a small offset of the camera's that a stabilised lens
     changes from one photograph to the next, on every model.
 
+  Two more per-image releases for an `SFMTOOL_PINHOLE` camera, its radial
+  correction and its rolling shutter with a **Scanlines** choice, are proposed
+  in
+  [`per-image-lens-corrections.md`](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
+
   Each image is held toward the mean of its camera's images by a prior whose
   widths the solve derives, and the camera's own value moves to that mean
   ([`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)
