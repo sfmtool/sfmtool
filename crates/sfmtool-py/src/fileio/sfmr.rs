@@ -97,7 +97,7 @@ where
 /// camera names its parameter.
 ///
 /// Version 14 adds `radial_bspline_adjustments`, the `(N, 2)` float64
-/// per-image radial B-spline correction in units of the radius in focal units,
+/// per-image radial B-spline correction in units of the normalised radius,
 /// `rolling_shutter_rates_xyz`, the `(N, 3)` float64 per-image rolling-shutter
 /// rates in radians per short side of readout, and `rolling_shutter_scanlines`,
 /// each camera's `"ROWS"`, `"COLUMNS"` or `None`. This build refuses a file in

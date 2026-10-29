@@ -1218,7 +1218,7 @@ pub struct SfmrData {
     /// image's camera does not list it is `[0, 0]`; every value is finite.
     pub principal_point_adjustments_xy: Option<Array2<f64>>,
     /// `(N, 2)` per image, its radial B-spline correction `[e_0, e_1]`: the
-    /// coefficients, in units of the radius `ρ` in focal units, of the camera's
+    /// coefficients, in units of `ρ`, the normalised radius, of the camera's
     /// centre-anchored two-coefficient cubic B-spline basis on
     /// `[0, bspline_rho_max]`, added to the camera's radial spline for that
     /// image. `None` when no camera lists `"radial_bspline"` in
