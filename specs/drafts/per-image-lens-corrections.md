@@ -57,22 +57,30 @@ two corrections together lower the held-out reprojection error from 0.386 px to
 
 ### Coordinates and conventions
 
-Every quantity below is in the kernel's optical frame, the frame the
-`SFMTOOL_PINHOLE` kernels project in
-([sfmtool-camera-models.md](../formats/sfmtool-camera-models.md#sfmtool_pinhole)):
-a camera-frame ray `(x, y, z)` of the `.sfmr` convention (+X right, +Y up,
-looking down −Z) becomes `(rx, ry, rz) = (x, −y, −z)`, which looks down +Z with
-+Y pointing down the image, the way pixel `v` grows (the COLMAP image
-convention). The normalized undistorted coordinates of a ray in front of the
-camera are
+Every quantity of the proposal is in the `.sfmr` camera frame: +X right, +Y up,
+the camera looking down −Z. A camera-frame point `P = (Px, Py, Pz)` in front of
+the camera (`Pz < 0`) has normalized undistorted coordinates
 
 ```
-(xn, yn) = (rx, ry) / rz,        ρ = hypot(xn, yn)
+(x, y) = (Px, Py) / (−Pz),        ρ = hypot(x, y)
 ```
 
-This is the `(x, −y)` that `CameraIntrinsics::project` passes to the model's
-`distort` in
-[projection.rs](../../crates/sfmtool-core/src/camera/distortion/projection.rs).
+These are the `(x, y)` that `CameraIntrinsics::project` in
+[projection.rs](../../crates/sfmtool-core/src/camera/distortion/projection.rs)
+takes. The rates `ω` are the camera's angular velocity in this frame.
+
+**The one place y-up meets pixel-down** is the existing pixel mapping, and the
+proposal does not change it. `CameraIntrinsics::project` calls the model's
+`distort(x, −y)`, because the radial kernels run in the optical frame
+`(x, −y, −z)` of
+[sfmtool-camera-models.md](../formats/sfmtool-camera-models.md#sfmtool_pinhole),
+which looks down +Z with +Y pointing down the image, the way pixel `v` grows.
+With the kernel's output written `(x_o, y_o)`, the pixel is then
+`u = f·x_o + cx` and `v = f·y_o + cy`. A radial map commutes with the flip, so
+`(x_o, y_o) = (x_d, −y_d)` for the `.sfmr` distorted point `(x_d, y_d)`, and in
+`.sfmr` coordinates that step reads `u = cx + f·x_d`, `v = cy − f·y_d`. The
+new terms are applied in `.sfmr` coordinates before that step, so they add no
+sign change of their own.
 
 ### The map for image `i`
 
@@ -90,8 +98,11 @@ A ray is projected in three steps.
 
 ```
 Δδ_i(ρ) = e_i0·B0(ρ) + e_i1·B1(ρ)
-(xd, yd) = (xn, yn) · (ρ + δ(ρ) + Δδ_i(ρ)) / ρ
+(x_d, y_d) = (x, y) · (ρ + δ(ρ) + Δδ_i(ρ)) / ρ
 ```
+
+This is rotationally symmetric, so it has the same form in the `.sfmr` frame and
+in the kernels' optical frame.
 
 `B0` and `B1` are the camera's centre-anchored cubic basis built with the
 minimum coefficient count, two (`MIN_BSPLINE_COEFFS` in
@@ -113,38 +124,47 @@ along its end tangent like the camera's spline,
 **2. Rolling shutter.** The readout time `t` is
 
 ```
-t = yd    for ROWS      (one row at a time, rows read one after another down the image)
-t = xd    for COLUMNS   (one column at a time, across the image)
+t = y_d    for ROWS      (one row at a time)
+t = x_d    for COLUMNS   (one column at a time)
 ```
 
-measured from the scanline through the image's principal point, where `t = 0`,
-so the image's stored pose is the camera's pose when that scanline was read. The
+the position across the scanlines, in normalized `.sfmr` coordinates, measured
+from the scanline through the image's principal point, where `t = 0`, so the
+image's stored pose is the camera's pose when that scanline was read. The
 readout duration is folded into the rates, so `t` is in normalized image units
 and the rates are in radians per normalized image unit of `t`. Then
 
 ```
-xr = xd + t·( xn·yn·ωx − (1 + xn²)·ωy + yn·ωz )
-yr = yd + t·( (1 + yn²)·ωx − xn·yn·ωy − xn·ωz )
+x_r = x_d + t·ẋ,        ẋ =  ωy·(1 + x²) − ωx·x·y + ωz·y
+y_r = y_d + t·ẏ,        ẏ = −ωx·(1 + y²) + ωy·x·y − ωz·x
 ```
 
-The bracketed pair is the image-plane velocity of a point under a small rotation
-of the camera with angular velocity `ω` in the optical frame: a fixed world
-point's camera coordinates change as `Ṗ = −ω × P`, and differentiating
-`(Px/Pz, Py/Pz)` gives exactly these two terms. In the `.sfmr` camera frame the
-same rotation has angular velocity `S·ω = (ωx, −ωy, −ωz)`, since
-`S = diag(1, −1, −1)` is a rotation. Only whether the scanlines are rows or
-columns is part of the model, not the direction the scan advances in: a sensor
-that reads its rows bottom to top gives the same fit with every rate negated.
+`ṗ = (ẋ, ẏ)` is the image-plane velocity of a fixed point under a small rotation
+of the camera with angular velocity `ω`. The point's camera coordinates change as
+`Ṗ = −ω × P`; with `w = −Pz`, `Ṗx = ωy·w + ωz·Py`, `Ṗy = −ωx·w − ωz·Px` and
+`ẇ = ωx·Py − ωy·Px`, and differentiating `x = Px/w`, `y = Py/w` gives
+`ẋ = Ṗx/w − x·ẇ/w` and `ẏ = Ṗy/w − y·ẇ/w`, which are the two terms above.
 
-**3. Pixels.** As for the existing adjustments:
+Only whether the scanlines are rows or columns is part of the model, not the
+direction the scan advances in. A scan that advances the other way gives the
+same fit with every rate negated, and the rates are zero-mean and free, so they
+take either sign. For `ROWS`, `t` grows up the image (`+y` is up), while a usual
+sensor reads its rows down the image; the fitted rates are then the negative of
+the angular velocity times the readout duration per unit, and nothing else in
+the model changes.
+
+**3. Pixels.** The existing step, as for the existing adjustments:
 
 ```
-(u, v) = f_i·(xr, yr) + (cx_i, cy_i)
+u = cx_i + f_i·x_r,        v = cy_i − f_i·y_r
 ```
+
+which is the `.sfmr` reading of the kernels' `distort(x, −y)` followed by
+`f·(·) + c` described in [Coordinates and conventions](#coordinates-and-conventions).
 
 Two simplifications are made, and both are deliberate:
 
-- **The velocity is evaluated at the undistorted point** `(xn, yn)` and scaled
+- **The velocity is evaluated at the undistorted point** `(x, y)` and scaled
   by the distorted time `t`; the effect of the distortion on the velocity, and
   of the rolling-shutter displacement on `t`, are second order (a few pixels of
   displacement times a percent of distortion).
@@ -177,7 +197,9 @@ that mean. Holding the mean is required:
   common vertical stretch of every image is close to stretching the scene
   vertically, for an orbit capture. With the mean free, the measured mean `ωx`
   grew from −7·10⁻⁴ to −1.7·10⁻³ as the rate prior widened, with no change in
-  held-out error.
+  held-out error (signs in the scratch solver's convention, see
+  [Measured results](#measured-results); in this draft's frame that `ωx` is
+  positive).
 
 This is the same structure the per-image focal and principal point already have
 ("Per-image values only" and "Re-centring after every round" in
@@ -201,28 +223,31 @@ applies to the image's whole radial correction `δ + Δδ_i`:
 Because `δ + Δδ_i` is the camera-basis spline with coefficients `c + K·e_i`,
 this is `bspline_is_monotone(c + K·e_i, ρ_max, ρ_max)` unchanged, per image.
 
-The rolling-shutter step `(xd, yd) → (xr, yr)` is invertible where its Jacobian
-`I + ∂(t·v)/∂(xd, yd)` is close to the identity, which it is for rates of the
+The rolling-shutter step `(x_d, y_d) → (x_r, y_r)` is invertible where its
+Jacobian `I + ∂(t·ṗ)/∂(x_d, y_d)` is close to the identity, which it is for rates of the
 measured size (the rates are about 10⁻³ and the image's normalized half-height
 about 0.5). A writer keeps it injective over the image's field.
 
 ### Unprojection
 
-A pixel is turned into a ray by inverting the three steps. Step 3 is affine.
-For steps 1 and 2 together, a fixed-point iteration over the rolling-shutter
-displacement wraps the existing radial inverse (`recover_radial_bspline` in
+A pixel is turned into a ray by inverting the three steps. Step 3 is affine:
+`(x_r, y_r) = ((u − cx_i)/f_i, (cy_i − v)/f_i)`. For steps 1 and 2 together, a
+fixed-point iteration over the rolling-shutter displacement, in `.sfmr`
+coordinates, wraps the existing radial inverse (`recover_radial_bspline` in
 [kernels/sfmtool_fisheye.rs](../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs),
-called by `undistort_sfmtool_pinhole`), run on the image's spline `c + K·e_i`:
+called by `undistort_sfmtool_pinhole`), run on the image's spline `c + K·e_i`.
+The radial inverse is rotationally symmetric, so it reads `.sfmr` coordinates
+as they are:
 
 ```
-(xd, yd)₀ = (xr, yr)
+(x_d, y_d)₀ = (x_r, y_r)
 repeat:
-    (xn, yn)ₖ   = radial_inverse((xd, yd)ₖ)              # existing, exact
-    (xd, yd)ₖ₊₁ = (xr, yr) − t((xd, yd)ₖ) · v((xn, yn)ₖ)
+    (x, y)ₖ       = radial_inverse((x_d, y_d)ₖ)              # existing, exact
+    (x_d, y_d)ₖ₊₁ = (x_r, y_r) − t((x_d, y_d)ₖ) · ṗ((x, y)ₖ)
 until the step is under 1e-12 in normalized units, or a cap of iterations
 ```
 
-The iteration contracts by about the size of `∂(t·v)/∂(xd, yd)`, of order
+The iteration contracts by about the size of `∂(t·ṗ)/∂(x_d, y_d)`, of order
 `|ω|·(1 + ρ²)`, about 10⁻³ on the measured capture, so each pass gains about
 three digits and three or four passes reach rounding. A non-converged
 iteration is reported the way the radial inverse reports one, and the
@@ -252,9 +277,9 @@ gains, under
 | Entry | Proposed content |
 |---|---|
 | `images/radial_adjustments.{N}.2.float64.zst` | Optional. Per image, `[e_0, e_1]`, its radial correction coefficients, dimensionless. Present exactly when some camera lists `"radial"`. |
-| `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | Optional. Per image, `[ωx, ωy, ωz]`, in radians per normalized image unit of readout time, defined by the formulas in [The map for image `i`](#the-map-for-image-i). Present exactly when some camera lists `"rolling_shutter"`. |
+| `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | Optional. Per image, `[ωx, ωy, ωz]`, the angular velocity in the `.sfmr` camera frame (+X right, +Y up, looking down −Z), in radians per normalized image unit of readout time, defined by the formulas in [The map for image `i`](#the-map-for-image-i). Present exactly when some camera lists `"rolling_shutter"`. |
 | `cameras/metadata.json` `per_image_adjustments` | May also name `"radial"` (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"`, in the order `"focal"`, `"principal_point"`, `"radial"`, `"rolling_shutter"`. |
-| `cameras/metadata.json` `rolling_shutter_scanlines` | Optional string, `"ROWS"` or `"COLUMNS"`: whether the sensor reads one row at a time (`t = yd`) or one column at a time (`t = xd`). Required on a camera that lists `"rolling_shutter"`; allowed on any other camera, so a known setting can be recorded before any rates are solved. Part of `cameras_xxh128`. |
+| `cameras/metadata.json` `rolling_shutter_scanlines` | Optional string, `"ROWS"` or `"COLUMNS"`: whether the sensor reads one row at a time (`t = y_d`) or one column at a time (`t = x_d`). Required on a camera that lists `"rolling_shutter"`; allowed on any other camera, so a known setting can be recorded before any rates are solved. Part of `cameras_xxh128`. |
 
 The rules are those of the existing columns: a column is present exactly when
 some camera lists its name; a row of an image whose camera does not list it holds
@@ -308,17 +333,30 @@ COLMAP at all.
   `RollingShutterScanlines { Rows, Columns }` (proposed).
 - The ray Jacobian
   ([sfmtool-pinhole-kernels.md § Ray Jacobian](../core/camera/sfmtool-pinhole-kernels.md#ray-jacobian))
-  becomes the derivative of the whole map. With `D` the existing radial 2×2
-  read with the image's spline, `∇t` equal to `(0, 1)` for `ROWS` and `(1, 0)`
-  for `COLUMNS`, and `J_rs = I + v·∇tᵀ`,
+  becomes the derivative of the whole map. In `.sfmr` coordinates, with `D` the
+  existing radial 2×2 read with the image's spline, `∇t` equal to `(0, 1)` for
+  `ROWS` and `(1, 0)` for `COLUMNS` (`∂t/∂(x_d, y_d)`), and
+  `J_rs = I + ṗ·∇tᵀ`,
 
   ```
-  ∂(xr, yr)/∂(xn, yn) = J_rs · D + t · ∂v/∂(xn, yn)
+  ∂(x_r, y_r)/∂(x, y) = J_rs · D + t · ∂ṗ/∂(x, y)
+  ∂ṗ/∂(x, y) = [[ 2ωy·x − ωx·y,   −ωx·x + ωz       ],
+                [ ωy·y − ωz,      −2ωx·y + ωy·x    ]]
   ```
 
-  a closed form of a few terms, written out exactly. It is the derivative of the
-  map as stated, not of a simplified one, because the bundle adjustment's
-  damping ladder and pose refinement compare costs of the map itself.
+  followed by the existing pixel step's `f_i·diag(1, −1)`. It is the derivative
+  of the map as stated, not of a simplified one, because the bundle
+  adjustment's damping ladder and pose refinement compare costs of the map
+  itself.
+- **How the new terms compose with the existing kernels.** The radial kernels
+  keep their optical frame. An implementation calls them as today, with
+  `distort(x, −y)`, reads their output back into `.sfmr` coordinates as
+  `(x_d, y_d) = (first, −second)`, applies the rolling-shutter step there, and
+  forms the pixel as `u = cx_i + f_i·x_r`, `v = cy_i − f_i·y_r`. The radial 2×2
+  `D` is the same expression in either frame, since the map is rotationally
+  symmetric, so `D` at `(x, y)` is the kernel's radial 2×2 evaluated at
+  `(x, y)`. The two `−y` flips are the existing pixel mapping's; the new terms
+  add none.
 
 ### Core: the bundle adjustment
 
@@ -337,17 +375,19 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
 - **Columns.** Each image's block of the reduced system grows from
   `[δθ×3, δt×3, t_i, a_x, a_y]` to fourteen wide, `… , e_i0, e_i1, ωx, ωy, ωz`,
   in a solve where some camera releases a new per-image field, with the image's
-  unreleased slots pinned. At the image's intrinsics:
+  unreleased slots pinned. At the image's intrinsics, in `.sfmr` coordinates
+  and then through the existing pixel step `F = f_i·diag(1, −1)`:
 
   ```
-  ∂(u, v)/∂e_ij = f_i · J_rs · (Bj(ρ) + Bj'(ρ_max)·(ρ − ρ_max)₊) · û
-  ∂(u, v)/∂ω    = f_i · t · [[ xn·yn, −(1 + xn²),  yn ],
-                             [ 1 + yn², −xn·yn,   −xn ]]
+  ∂(x_r, y_r)/∂e_ij = J_rs · (Bj(ρ) + Bj'(ρ_max)·(ρ − ρ_max)₊) · û
+  ∂(x_r, y_r)/∂ω    = t · [[ −x·y,       1 + x²,  y ],
+                           [ −(1 + y²),  x·y,    −x ]]
+  ∂(u, v)/∂(·)      = F · ∂(x_r, y_r)/∂(·)
   ```
 
-  with `Bj` read at `min(ρ, ρ_max)`, as the shared spline's column reads it, and
-  `J_rs = I + v·∇tᵀ` as in the ray Jacobian above (the identity without
-  rates).
+  with `û = (x, y)/ρ`, `Bj` read at `min(ρ, ρ_max)`, as the shared spline's
+  column reads it, and `J_rs = I + ṗ·∇tᵀ` as in the ray Jacobian above (the
+  identity without rates).
   The per-observation camera block gains the five columns in further
   instantiations rather than widening the existing ones, for the reason the
   spec already gives for the principal point's columns: the Schur elimination's
@@ -532,7 +572,11 @@ derived widths for v012 (0.0134 and 0.0131). 5-fold cross-validation by point:
 each fold's held-out points are re-triangulated through the trained cameras,
 the new terms included, and their reprojection RMS over all observations is the
 score. Solves were capped at 150 to 400 evaluations; 100 against 400 changed the
-held-out RMS by under 0.0003 px.
+held-out RMS by under 0.0003 px. The scratch solver wrote the rolling-shutter
+term in the kernels' optical frame (y down, `t` growing down the image for
+rows). That is the same family of maps as the one above, with
+`ω = (−ωx, ωy, ωz)` of its rates for rows, so every fit and score here holds
+unchanged; only a quoted rate's sign depends on the convention.
 
 **Held-out RMS, px:**
 
