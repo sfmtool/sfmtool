@@ -82,16 +82,27 @@ where
 ///   `"options"`, or `None`), point_indexes, observation_counts, reference_observations,
 ///   observed_depth_histogram_counts, thumbnails_y_x_rgb (numpy arrays;
 ///   `thumbnails_y_x_rgb` is `None` for a file without thumbnails),
-///   focal_adjustments, principal_point_adjustments_xy (numpy arrays or
-///   `None`), per_image_adjustments (`list[list[str]]`, one per camera).
+///   focal_adjustments, principal_point_adjustments_xy,
+///   radial_bspline_adjustments, rolling_shutter_rates_xyz (numpy arrays or
+///   `None`), per_image_adjustments (`list[list[str]]`, one per camera),
+///   rolling_shutter_scanlines (`list[str | None]`, one per camera).
 ///
 /// The per-image intrinsic adjustments (version 13+): `focal_adjustments` is
 /// the `(N,)` float64 focal scale `s` of each image (its focal is its camera's
 /// times `1 + s`), `principal_point_adjustments_xy` the `(N, 2)` float64
 /// principal-point offset of each image in its camera's short side,
 /// `min(width, height)`, and `per_image_adjustments` names, per camera, which
-/// of `"focal"` and `"principal_point"` vary per image. A column is `None`
-/// exactly when no camera names its parameter.
+/// of `"focal"`, `"principal_point"`, `"radial_bspline"` and
+/// `"rolling_shutter"` vary per image. A column is `None` exactly when no
+/// camera names its parameter.
+///
+/// Version 14 adds `radial_bspline_adjustments`, the `(N, 2)` float64
+/// per-image radial B-spline correction in units of the radius in focal units,
+/// `rolling_shutter_rates_xyz`, the `(N, 3)` float64 per-image rolling-shutter
+/// rates in radians per short side of readout, and `rolling_shutter_scanlines`,
+/// each camera's `"ROWS"`, `"COLUMNS"` or `None`. This build refuses a file in
+/// which some camera names `"radial_bspline"` or `"rolling_shutter"`, so both
+/// columns read as `None`; a scanlines setting reads as stored.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -151,6 +162,13 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         .map(|c| c.per_image_adjustments.clone())
         .collect();
     dict.set_item("per_image_adjustments", per_image_adjustments)?;
+    // Per camera, its `rolling_shutter_scanlines` setting or `None`.
+    let rolling_shutter_scanlines: Vec<Option<&str>> = data
+        .cameras
+        .iter()
+        .map(|c| c.rolling_shutter_scanlines.map(|s| s.as_str()))
+        .collect();
+    dict.set_item("rolling_shutter_scanlines", rolling_shutter_scanlines)?;
     dict.set_item("depth_statistics", serde_to_py(py, &data.depth_statistics)?)?;
 
     // String list
@@ -271,6 +289,14 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         data.principal_point_adjustments_xy
             .map(|a| a.into_pyarray(py)),
     )?;
+    dict.set_item(
+        "radial_bspline_adjustments",
+        data.radial_bspline_adjustments.map(|a| a.into_pyarray(py)),
+    )?;
+    dict.set_item(
+        "rolling_shutter_rates_xyz",
+        data.rolling_shutter_rates_xyz.map(|a| a.into_pyarray(py)),
+    )?;
 
     // Rig/frame data (optional)
     match &data.rig_frame_data {
@@ -325,6 +351,25 @@ pub(crate) fn parse_sfmr_data_from_dict(
         }
         for (camera, names) in cameras.iter_mut().zip(lists) {
             camera.per_image_adjustments = names;
+        }
+    }
+    // The cameras' `rolling_shutter_scanlines` key, one `"ROWS"`,
+    // `"COLUMNS"` or `None` per camera; a dict without it records none.
+    if let Some(value) = get_optional_item(data, "rolling_shutter_scanlines")? {
+        let settings: Vec<Option<String>> = value.extract()?;
+        if settings.len() != cameras.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "'rolling_shutter_scanlines' has {} entries, one per camera is {}",
+                settings.len(),
+                cameras.len()
+            )));
+        }
+        for (c, (camera, setting)) in cameras.iter_mut().zip(settings).enumerate() {
+            camera.rolling_shutter_scanlines = setting
+                .as_deref()
+                .map(sfmtool_sfmr_format::RollingShutterScanlines::parse)
+                .transpose()
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("camera {c}: {e}")))?;
         }
     }
     let image_names: Vec<String> = get_item(data, "image_names")?.extract()?;
@@ -505,6 +550,16 @@ pub(crate) fn parse_sfmr_data_from_dict(
         "principal_point_adjustments_xy",
         "a 2D float64 array",
     )?;
+    let radial_bspline_adjustments = optional_array::<f64, ndarray::Ix2>(
+        data,
+        "radial_bspline_adjustments",
+        "a 2D float64 array",
+    )?;
+    let rolling_shutter_rates_xyz = optional_array::<f64, ndarray::Ix2>(
+        data,
+        "rolling_shutter_rates_xyz",
+        "a 2D float64 array",
+    )?;
 
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
@@ -541,6 +596,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
         thumbnails_y_x_rgb,
         focal_adjustments,
         principal_point_adjustments_xy,
+        radial_bspline_adjustments,
+        rolling_shutter_rates_xyz,
         positions_xyzw: positions_xyzw.as_array().as_standard_layout().into_owned(),
         colors_rgb: colors_rgb.as_array().as_standard_layout().into_owned(),
         reprojection_errors: reprojection_errors
@@ -588,7 +645,10 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
-/// anything per image.
+/// anything per image, and a missing `rolling_shutter_scanlines` that no
+/// camera has a scanlines setting. A dict in which some camera names
+/// `"radial_bspline"` or `"rolling_shutter"` is refused, since this build does
+/// not yet apply either correction where an image is read through its camera.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`

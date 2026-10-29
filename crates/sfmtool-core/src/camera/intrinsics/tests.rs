@@ -816,6 +816,7 @@ fn try_from_unknown_model() {
         width: 640,
         height: 480,
         per_image_adjustments: Vec::new(),
+        rolling_shutter_scanlines: None,
         parameters: BTreeMap::new(),
     };
     let err = CameraIntrinsics::try_from(&sfmr).unwrap_err();
@@ -834,6 +835,7 @@ fn try_from_missing_parameter() {
         width: 640,
         height: 480,
         per_image_adjustments: Vec::new(),
+        rolling_shutter_scanlines: None,
         parameters: params,
     };
     let err = CameraIntrinsics::try_from(&sfmr).unwrap_err();

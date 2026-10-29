@@ -5,7 +5,8 @@
 [formats/sfmr-file-format.md](../formats/sfmr-file-format.md),
 [core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md),
 [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md),
-[core/reconstruction/bundle-adjust.md](../core/reconstruction/bundle-adjust.md)
+[core/reconstruction/bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
+[core/reconstruction/edited-reconstruction.md](../core/reconstruction/edited-reconstruction.md)
 and [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md).
 
 Decided by the maintainer: the per-image radial correction is a two-coefficient
@@ -295,6 +296,27 @@ each. Names marked as proposed are open to the glossary
 
 ### Format: `SFMTOOL_PINHOLE` and `.sfmr`
 
+**The `.sfmr` part is built.** The standing
+[sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)
+describes version 14 as below: the two columns, the two names in
+`per_image_adjustments`, the `rolling_shutter_scanlines` key, the rules a
+reader, a writer and a verifier hold them to, their hash slots, the migration
+from version 13 and the table of
+[Units of the per-image adjustments](#units-of-the-per-image-adjustments). In
+memory the scanlines setting is `SfmrCamera::rolling_shutter_scanlines`, a
+`RollingShutterScanlines`, in the format crate. Until the corrections are
+applied where an image is read through its camera, `read_sfmr` and
+`write_sfmr_with_options` refuse a file in which a camera lists
+`"radial_bspline"` or `"rolling_shutter"` (`refuse_per_image_lens_corrections`
+in [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs)), and
+`SfmrReconstruction::from_sfmr_data` calls the same refusal and also refuses a
+scanlines setting, which `PerImageAdjustments` does not hold yet
+([conversion.rs](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs));
+`PerImageAdjustments::from_names` refuses the two names. The core step below
+lifts all three. The section of
+[sfmtool-camera-models.md](../formats/sfmtool-camera-models.md) is not written
+yet.
+
 [sfmtool-camera-models.md](../formats/sfmtool-camera-models.md) gains a section
 defining the per-image radial correction in the model's own terms: the closed
 form of `B0` and `B1` above, its linear tail, the rule that it is added to the
@@ -352,12 +374,11 @@ centre of the bottom edge by about 1.9 px (`t ≈ 0.5`, `y ≈ −0.53` focal un
 so `t·ωx·(1 + y²)·f ≈ 0.5 × 2·10⁻³ × 1.28 × 1447.8`), while the principal
 point's derived width of 0.0131 of the short side is about 20 px.
 
-When this draft is filed, this table goes into the `.sfmr` format spec,
+This table is filed in the `.sfmr` format spec,
 [sfmr-file-format.md § Per-image intrinsic adjustments](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13),
-beside its "Why a relative focal scale" and "Why a fraction of the short side,
-on both axes" paragraphs, which explain the two existing units in prose today.
-No standing spec has a table of these units yet; the format spec is the one
-that defines the per-image adjustments.
+after its "Why a relative focal scale" and "Why a fraction of the short side,
+on both axes" paragraphs; the format spec is the one that defines the
+per-image adjustments.
 
 A file of version 13 or older reads with every radial coefficient and every rate
 zero and no camera carrying `rolling_shutter_scanlines`, which is the image read through its
@@ -870,9 +891,9 @@ When built, the tests cover at least:
   ([intrinsics/mod.rs](../../crates/sfm-explorer/src/image_detail/intrinsics/mod.rs),
   [gui/camera-intrinsics.md](../gui/camera-intrinsics.md)); and whether its
   distortion overlay draws the image's own field.
-- **The format version.** Version 14 as above, with older files reading as zero
-  corrections; and whether `rolling_shutter_scanlines` without rates is worth
-  allowing, or should come only with the rates.
+- **The format version.** Settled and built: version 14 as above, with older
+  files reading as zero corrections, and a `rolling_shutter_scanlines` setting
+  allowed without rates.
 - **Images whose pixel axes are not the sensor's.** The scanlines setting is per
   camera, in terms of the stored image's rows and columns. A camera whose images
   are stored in both orientations (portrait photographs rotated by their EXIF

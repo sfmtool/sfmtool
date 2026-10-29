@@ -40,6 +40,7 @@ impl PyCameraIntrinsics {
             width,
             height,
             per_image_adjustments: Vec::new(),
+            rolling_shutter_scanlines: None,
             parameters: params,
         };
         let inner = CameraIntrinsics::try_from(&sfmr_camera)
@@ -156,6 +157,7 @@ impl PyCameraIntrinsics {
             width,
             height,
             per_image_adjustments: Vec::new(),
+            rolling_shutter_scanlines: None,
             parameters,
         };
         let inner = CameraIntrinsics::try_from(&sfmr_camera)

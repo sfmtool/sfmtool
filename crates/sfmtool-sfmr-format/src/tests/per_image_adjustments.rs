@@ -78,7 +78,7 @@ fn both_columns_and_the_camera_key_round_trip_bit_for_bit() {
         let focal = data.focal_adjustments.clone().unwrap();
         let principal_point = data.principal_point_adjustments_xy.clone().unwrap();
         write_sfmr_with_options(&path, &mut data, &WriteOptions::default()).unwrap();
-        assert_eq!(data.metadata.version, 13);
+        assert_eq!(data.metadata.version, 14);
 
         let names = archive_names(&path);
         assert!(names.contains(&FOCAL_ENTRY.to_string()), "{names:?}");
@@ -180,7 +180,7 @@ fn the_images_and_cameras_hashes_change_with_the_columns_and_the_key() {
 }
 
 #[test]
-fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_version_13_without_them() {
+fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_the_current_version_without_them() {
     let dir = temp_dir("sfmr_test_per_image_adjustments_v12");
     let current = dir.join("current.sfmr");
     write_sfmr(&current, &mut make_test_data()).unwrap();
@@ -202,7 +202,7 @@ fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_version_13_without
 
     let saved = dir.join("saved.sfmr");
     write_sfmr(&saved, &mut loaded).unwrap();
-    assert_eq!(read_sfmr_metadata(&saved).unwrap().version, 13);
+    assert_eq!(read_sfmr_metadata(&saved).unwrap().version, 14);
     assert!(!archive_names(&saved)
         .iter()
         .any(|n| n.contains("adjustments")));
@@ -433,19 +433,19 @@ fn a_negative_zero_counts_as_zero() {
 fn the_key_names_parse_in_order() {
     assert_eq!(
         parse_per_image_adjustment_names::<&str>(&[]).unwrap(),
-        [false, false]
+        [false, false, false, false]
     );
     assert_eq!(
         parse_per_image_adjustment_names(&["focal"]).unwrap(),
-        [true, false]
+        [true, false, false, false]
     );
     assert_eq!(
         parse_per_image_adjustment_names(&["principal_point"]).unwrap(),
-        [false, true]
+        [false, true, false, false]
     );
     assert_eq!(
         parse_per_image_adjustment_names(&["focal", "principal_point"]).unwrap(),
-        [true, true]
+        [true, true, false, false]
     );
     assert!(parse_per_image_adjustment_names(&["principal_point", "focal"]).is_err());
     assert!(parse_per_image_adjustment_names(&["Focal"]).is_err());

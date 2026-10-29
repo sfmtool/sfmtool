@@ -296,3 +296,40 @@ fn the_intrinsics_list_holds_one_entry_per_adjusted_image() {
         assert_eq!(intrinsics.as_ref(), recon.image_intrinsics(i).as_ref());
     }
 }
+
+/// A reconstruction does not hold the radial B-spline correction, the
+/// rolling-shutter rates or a scanlines setting, so data that carries any of
+/// them is refused, naming what it carries, rather than read without it.
+#[test]
+fn data_with_a_lens_correction_or_a_scanlines_setting_is_refused() {
+    use sfmtool_sfmr_format::{RollingShutterScanlines, SfmrError};
+
+    let plain = SfmrReconstruction::demo(16).to_sfmr_data();
+    let image_count = plain.image_names.len();
+
+    let mut scanlines = SfmrReconstruction::demo(16).to_sfmr_data();
+    scanlines.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Rows);
+    match SfmrReconstruction::from_sfmr_data(scanlines) {
+        Err(SfmrError::Unsupported(e)) => assert!(e.contains("rolling_shutter_scanlines"), "{e}"),
+        Err(e) => panic!("refused for another reason: {e}"),
+        Ok(_) => panic!("a scanlines setting was accepted"),
+    }
+
+    let mut rates = SfmrReconstruction::demo(16).to_sfmr_data();
+    rates.cameras[0].per_image_adjustments = vec!["rolling_shutter".into()];
+    rates.cameras[0].rolling_shutter_scanlines = Some(RollingShutterScanlines::Columns);
+    rates.rolling_shutter_rates_xyz = Some(ndarray::Array2::zeros((image_count, 3)));
+    match SfmrReconstruction::from_sfmr_data(rates) {
+        Err(SfmrError::Unsupported(e)) => {
+            assert!(e.contains("images/rolling_shutter_rates_xyz"), "{e}")
+        }
+        Err(e) => panic!("refused for another reason: {e}"),
+        Ok(_) => panic!("rolling-shutter rates were accepted"),
+    }
+
+    assert!(SfmrReconstruction::from_sfmr_data(plain).is_ok());
+    for name in ["radial_bspline", "rolling_shutter"] {
+        let err = PerImageAdjustments::from_names(&["focal", name]).unwrap_err();
+        assert!(err.contains(name), "{err}");
+    }
+}

@@ -145,6 +145,12 @@ edit that adds or removes cameras keeps the two in step. An image's intrinsic
 adjustment travels on its `SfmrImage`, so every edit that reorders, filters or
 copies images carries it without a step of its own; see
 [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13).
+A reconstruction holds neither the per-image radial B-spline correction nor the
+rolling-shutter rates of format version 14, nor a camera's
+`rolling_shutter_scanlines` setting, so `from_sfmr_data` refuses data that
+carries any of them, and `PerImageAdjustments::from_names` refuses the names
+`"radial_bspline"` and `"rolling_shutter"`; the in-memory form is specified in
+[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#core-the-adjustment-and-the-kernels).
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller
 makes most often, so `recon.point_count()`, `recon.image_count()`,

@@ -555,6 +555,7 @@ impl From<&CameraIntrinsics> for SfmrCamera {
             height: cam.height,
             parameters,
             per_image_adjustments: Vec::new(),
+            rolling_shutter_scanlines: None,
         }
     }
 }

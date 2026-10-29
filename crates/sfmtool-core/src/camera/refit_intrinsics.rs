@@ -1284,6 +1284,7 @@ fn build_camera(
         width: source.width,
         height: source.height,
         per_image_adjustments: Vec::new(),
+        rolling_shutter_scanlines: None,
         parameters,
     })
     .ok()

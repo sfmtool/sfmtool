@@ -57,6 +57,12 @@ pub enum SfmrError {
 
     #[error("Hash verification failed: {0}")]
     HashMismatch(String),
+
+    /// The file holds something the format allows but this build does not
+    /// yet read everywhere it would have to (see
+    /// [`refuse_per_image_lens_corrections`]).
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
 }
 
 impl From<ArchiveIoError> for SfmrError {
@@ -94,6 +100,58 @@ pub struct SfmrCamera {
     /// tells a zero adjustment that was solved for from one never enabled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_image_adjustments: Vec<String>,
+    /// Whether this camera's sensor reads its image one row at a time or one
+    /// column at a time (version 14+): the axis the readout position of its
+    /// images' rolling-shutter rates is measured along.
+    ///
+    /// Required on a camera that lists `"rolling_shutter"` in
+    /// [`Self::per_image_adjustments`] and allowed on any other, so that a
+    /// known setting can be recorded before any rates are solved. `None` is
+    /// left out of the JSON, so the cameras entry of a file without it is byte
+    /// for byte what version 13 writes. An absent setting means the scanlines
+    /// are not known, not [`RollingShutterScanlines::Rows`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rolling_shutter_scanlines: Option<RollingShutterScanlines>,
+}
+
+/// Whether a rolling-shutter sensor reads its image one row at a time
+/// (`ROWS`) or one column at a time (`COLUMNS`): a camera's
+/// `rolling_shutter_scanlines` key.
+///
+/// Only rows against columns is stored, not the direction the scan advances
+/// in: a scan that advances the other way fits with every rate negated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RollingShutterScanlines {
+    /// One row at a time. The readout position is `(v − cy)/min(width,
+    /// height)`, which grows down the image.
+    #[serde(rename = "ROWS")]
+    Rows,
+    /// One column at a time. The readout position is `(u − cx)/min(width,
+    /// height)`, which grows to the right.
+    #[serde(rename = "COLUMNS")]
+    Columns,
+}
+
+impl RollingShutterScanlines {
+    /// The stored spelling, `"ROWS"` or `"COLUMNS"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rows => "ROWS",
+            Self::Columns => "COLUMNS",
+        }
+    }
+
+    /// The setting a stored spelling names, or a message saying that it
+    /// names none.
+    pub fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "ROWS" => Ok(Self::Rows),
+            "COLUMNS" => Ok(Self::Columns),
+            other => Err(format!(
+                "rolling_shutter_scanlines is {other:?}, not \"ROWS\" or \"COLUMNS\""
+            )),
+        }
+    }
 }
 
 impl SfmrCamera {
@@ -560,16 +618,23 @@ pub(crate) fn validate_reference_observations(
 }
 
 /// The names a camera's `per_image_adjustments` may list, in the order it
-/// lists them: index `0` is the focal, index `1` the principal point.
-pub const PER_IMAGE_ADJUSTMENT_NAMES: [&str; 2] = ["focal", "principal_point"];
+/// lists them: index `0` is the focal, `1` the principal point, `2` the radial
+/// B-spline correction and `3` the rolling shutter.
+pub const PER_IMAGE_ADJUSTMENT_NAMES: [&str; 4] = [
+    "focal",
+    "principal_point",
+    "radial_bspline",
+    "rolling_shutter",
+];
 
 /// Which parameters a camera's `per_image_adjustments` lists, as one flag per
-/// entry of [`PER_IMAGE_ADJUSTMENT_NAMES`]: `[focal, principal_point]`.
+/// entry of [`PER_IMAGE_ADJUSTMENT_NAMES`]:
+/// `[focal, principal_point, radial_bspline, rolling_shutter]`.
 ///
-/// A list names only those two, each at most once, in that order, so every
+/// A list names only those four, each at most once, in that order, so every
 /// list has one spelling and two files that say the same thing hash the same.
-pub fn parse_per_image_adjustment_names<S: AsRef<str>>(names: &[S]) -> Result<[bool; 2], String> {
-    let mut flags = [false; 2];
+pub fn parse_per_image_adjustment_names<S: AsRef<str>>(names: &[S]) -> Result<[bool; 4], String> {
+    let mut flags = [false; 4];
     let mut last: Option<usize> = None;
     for name in names {
         let name = name.as_ref();
@@ -593,12 +658,19 @@ pub fn parse_per_image_adjustment_names<S: AsRef<str>>(names: &[S]) -> Result<[b
     Ok(flags)
 }
 
+/// The only camera model whose `per_image_adjustments` may list
+/// `"radial_bspline"`, the change to its radial spline.
+const RADIAL_BSPLINE_MODEL: &str = "SFMTOOL_PINHOLE";
+
 /// Check the per-image intrinsic adjustment columns against the cameras that
-/// list them: each camera's `per_image_adjustments` well formed; a column
-/// present exactly when some camera lists its parameter, one row per image
-/// (two values per row for the principal point); every value finite and every
-/// focal adjustment above `-1`; and every row of an image whose camera does not
-/// list the parameter exactly `0`.
+/// list them: each camera's `per_image_adjustments` well formed, with
+/// `"radial_bspline"` only on an `SFMTOOL_PINHOLE` camera and
+/// `"rolling_shutter"` only on a camera with a `rolling_shutter_scanlines`
+/// setting; a column present exactly when some camera lists its parameter,
+/// one row per image (two values per row for the principal point and the
+/// radial B-spline correction, three for the rolling-shutter rates); every
+/// value finite and every focal adjustment above `-1`; and every row of an
+/// image whose camera does not list the parameter exactly `0`.
 ///
 /// Read, write and verify all route through this, so a file the writer
 /// accepts is one the reader and the verifier accept.
@@ -607,33 +679,60 @@ pub fn validate_per_image_adjustments(
     camera_indexes: &[u32],
     focal_adjustments: Option<&Array1<f64>>,
     principal_point_adjustments_xy: Option<&Array2<f64>>,
+    radial_bspline_adjustments: Option<&Array2<f64>>,
+    rolling_shutter_rates_xyz: Option<&Array2<f64>>,
 ) -> Result<(), String> {
     let mut flags = Vec::with_capacity(cameras.len());
     for (c, camera) in cameras.iter().enumerate() {
-        flags.push(
-            parse_per_image_adjustment_names(&camera.per_image_adjustments)
-                .map_err(|e| format!("camera {c}: {e}"))?,
-        );
+        let camera_flags = parse_per_image_adjustment_names(&camera.per_image_adjustments)
+            .map_err(|e| format!("camera {c}: {e}"))?;
+        if camera_flags[2] && camera.model != RADIAL_BSPLINE_MODEL {
+            return Err(format!(
+                "camera {c}: per_image_adjustments lists \"radial_bspline\" on a {} camera, \
+                 and only an {RADIAL_BSPLINE_MODEL} camera may list it",
+                camera.model
+            ));
+        }
+        if camera_flags[3] && camera.rolling_shutter_scanlines.is_none() {
+            return Err(format!(
+                "camera {c}: per_image_adjustments lists \"rolling_shutter\" but the camera \
+                 has no rolling_shutter_scanlines"
+            ));
+        }
+        flags.push(camera_flags);
     }
     let image_count = camera_indexes.len();
-    // Each column as rows of its values, `None` where it is absent.
-    let focal_rows: Option<Vec<Vec<f64>>> =
-        focal_adjustments.map(|a| a.iter().map(|&v| vec![v]).collect());
-    let principal_point_rows: Option<Vec<Vec<f64>>> =
-        principal_point_adjustments_xy.map(|a| a.rows().into_iter().map(|r| r.to_vec()).collect());
-    let shapes = [
-        focal_adjustments.map(|a| a.shape().to_vec()),
-        principal_point_adjustments_xy.map(|a| a.shape().to_vec()),
-    ];
+    // Each column as its name, its rows of values (`None` where it is
+    // absent), its shape and the shape it must have.
+    let rows_of =
+        |a: &Array2<f64>| -> Vec<Vec<f64>> { a.rows().into_iter().map(|r| r.to_vec()).collect() };
     let columns = [
-        ("images/focal_adjustments", focal_rows, vec![image_count]),
+        (
+            "images/focal_adjustments",
+            focal_adjustments.map(|a| a.iter().map(|&v| vec![v]).collect::<Vec<_>>()),
+            focal_adjustments.map(|a| a.shape().to_vec()),
+            vec![image_count],
+        ),
         (
             "images/principal_point_adjustments_xy",
-            principal_point_rows,
+            principal_point_adjustments_xy.map(rows_of),
+            principal_point_adjustments_xy.map(|a| a.shape().to_vec()),
             vec![image_count, 2],
         ),
+        (
+            "images/radial_bspline_adjustments",
+            radial_bspline_adjustments.map(rows_of),
+            radial_bspline_adjustments.map(|a| a.shape().to_vec()),
+            vec![image_count, 2],
+        ),
+        (
+            "images/rolling_shutter_rates_xyz",
+            rolling_shutter_rates_xyz.map(rows_of),
+            rolling_shutter_rates_xyz.map(|a| a.shape().to_vec()),
+            vec![image_count, 3],
+        ),
     ];
-    for (k, (name, column, expected_shape)) in columns.into_iter().enumerate() {
+    for (k, (name, column, shape, expected_shape)) in columns.into_iter().enumerate() {
         let listed = flags.iter().any(|f| f[k]);
         let parameter = PER_IMAGE_ADJUSTMENT_NAMES[k];
         let Some(rows) = column else {
@@ -649,8 +748,8 @@ pub fn validate_per_image_adjustments(
                 "{name} is present but no camera lists {parameter:?} in per_image_adjustments"
             ));
         }
-        let shape = shapes[k].as_deref().unwrap_or_default();
-        if shape != expected_shape.as_slice() {
+        let shape = shape.unwrap_or_default();
+        if shape != expected_shape {
             return Err(format!(
                 "{name} has shape {shape:?}, not {expected_shape:?} for {image_count} images"
             ));
@@ -676,6 +775,39 @@ pub fn validate_per_image_adjustments(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Refuse a reconstruction that varies the radial B-spline correction or the
+/// rolling shutter per image: one in which some camera lists
+/// `"radial_bspline"` or `"rolling_shutter"` in `per_image_adjustments`.
+/// That is also the only way a valid file holds
+/// `images/radial_bspline_adjustments` or `images/rolling_shutter_rates_xyz`,
+/// and so the only way it holds a non-zero value of either.
+///
+/// This build does not yet apply either correction where an image is read
+/// through its camera, so a reconstruction that holds one would be projected
+/// without it. [`crate::read_sfmr`] calls this once every rule of the format
+/// has passed, and [`crate::write_sfmr_with_options`] before it writes
+/// anything. A camera's
+/// `rolling_shutter_scanlines` setting is not refused here: on its own it
+/// changes no projection.
+pub fn refuse_per_image_lens_corrections(cameras: &[SfmrCamera]) -> Result<(), SfmrError> {
+    for (c, camera) in cameras.iter().enumerate() {
+        let flags = parse_per_image_adjustment_names(&camera.per_image_adjustments)
+            .map_err(|e| SfmrError::InvalidFormat(format!("camera {c}: {e}")))?;
+        let (parameter, column) = if flags[2] {
+            ("radial_bspline", "images/radial_bspline_adjustments")
+        } else if flags[3] {
+            ("rolling_shutter", "images/rolling_shutter_rates_xyz")
+        } else {
+            continue;
+        };
+        return Err(SfmrError::Unsupported(format!(
+            "camera {c} lists {parameter:?} in per_image_adjustments, and this build does not \
+             yet apply {column} where it reads an image through its camera"
+        )));
     }
     Ok(())
 }
@@ -745,6 +877,18 @@ impl OptionalPresence {
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 14 added two more per-image corrections and a per-camera setting:
+/// the optional columns `images/radial_bspline_adjustments` and
+/// `images/rolling_shutter_rates_xyz` (see
+/// [`SfmrData::radial_bspline_adjustments`] and
+/// [`SfmrData::rolling_shutter_rates_xyz`]), the names `"radial_bspline"` and
+/// `"rolling_shutter"` in a camera's `per_image_adjustments`, and each
+/// camera's optional `rolling_shutter_scanlines` key (see
+/// [`SfmrCamera::rolling_shutter_scanlines`]). A file below version 14 has
+/// none of them and reads with every radial correction and every rate zero and
+/// no scanlines setting; a version 14 file with none of them differs from
+/// version 13 only in its version number.
+///
 /// Version 13 added the per-image intrinsic adjustments: the optional columns
 /// `images/focal_adjustments` and `images/principal_point_adjustments_xy` (see
 /// [`SfmrData::focal_adjustments`]) and each camera's optional
@@ -809,7 +953,16 @@ impl OptionalPresence {
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 13;
+pub const SFMR_FORMAT_VERSION: u32 = 14;
+
+/// The first `.sfmr` version that stores the per-image radial B-spline
+/// correction and rolling-shutter rates: `images/radial_bspline_adjustments`,
+/// `images/rolling_shutter_rates_xyz`, the names `"radial_bspline"` and
+/// `"rolling_shutter"` in the cameras' `per_image_adjustments` key, and the
+/// cameras' `rolling_shutter_scanlines` key.
+///
+/// A file below it carries none of them; the reader refuses one that does.
+pub const SFMR_PER_IMAGE_LENS_CORRECTIONS_VERSION: u32 = 14;
 
 /// The first `.sfmr` version that stores per-image intrinsic adjustments:
 /// `images/focal_adjustments`, `images/principal_point_adjustments_xy` and the
@@ -1064,6 +1217,29 @@ pub struct SfmrData {
     /// present exactly when some camera lists `"principal_point"`. A row whose
     /// image's camera does not list it is `[0, 0]`; every value is finite.
     pub principal_point_adjustments_xy: Option<Array2<f64>>,
+    /// `(N, 2)` per image, its radial B-spline correction `[e_0, e_1]`: the
+    /// coefficients, in units of the radius `ρ` in focal units, of the camera's
+    /// centre-anchored two-coefficient cubic B-spline basis on
+    /// `[0, bspline_rho_max]`, added to the camera's radial spline for that
+    /// image. `None` when no camera lists `"radial_bspline"` in
+    /// [`SfmrCamera::per_image_adjustments`], which only an `SFMTOOL_PINHOLE`
+    /// camera may.
+    ///
+    /// On disk this is `images/radial_bspline_adjustments` (version 14+),
+    /// present exactly when some camera lists `"radial_bspline"`. A row whose
+    /// image's camera does not list it is `[0, 0]`; every value is finite.
+    pub radial_bspline_adjustments: Option<Array2<f64>>,
+    /// `(N, 3)` per image, its rolling-shutter rates `[ωx, ωy, ωz]`: the
+    /// camera's angular velocity in the `.sfmr` camera frame times the time to
+    /// read `min(width, height)` scanlines, in radians of rotation per short
+    /// side of readout, along the axis its camera's
+    /// [`SfmrCamera::rolling_shutter_scanlines`] names. `None` when no camera
+    /// lists `"rolling_shutter"` in [`SfmrCamera::per_image_adjustments`].
+    ///
+    /// On disk this is `images/rolling_shutter_rates_xyz` (version 14+),
+    /// present exactly when some camera lists `"rolling_shutter"`. A row whose
+    /// image's camera does not list it is `[0, 0, 0]`; every value is finite.
+    pub rolling_shutter_rates_xyz: Option<Array2<f64>>,
 
     // Points3D
     /// `(P, 4)` homogeneous 3D point positions in world coordinates.

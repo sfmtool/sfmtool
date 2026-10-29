@@ -177,6 +177,18 @@ pub(crate) fn images_principal_point_adjustments_xy(image_count: impl std::fmt::
     format!("images/principal_point_adjustments_xy.{image_count}.2.float64.zst")
 }
 
+/// `images/radial_bspline_adjustments` — radial B-spline correction per
+/// image, two coefficients in units of `ρ` (v14+, optional).
+pub(crate) fn images_radial_bspline_adjustments(image_count: impl std::fmt::Display) -> String {
+    format!("images/radial_bspline_adjustments.{image_count}.2.float64.zst")
+}
+
+/// `images/rolling_shutter_rates_xyz` — rolling-shutter rates per image, in
+/// radians per short side of readout (v14+, optional).
+pub(crate) fn images_rolling_shutter_rates_xyz(image_count: impl std::fmt::Display) -> String {
+    format!("images/rolling_shutter_rates_xyz.{image_count}.3.float64.zst")
+}
+
 /// `images/thumbnails_y_x_rgb` — fixed square RGB thumbnail per image, with
 /// [`THUMBNAIL_SIZE`](crate::THUMBNAIL_SIZE) as its edge.
 pub(crate) fn images_thumbnails_y_x_rgb(image_count: impl std::fmt::Display) -> String {

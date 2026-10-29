@@ -261,6 +261,7 @@ fn tile_params_from_camera(cam: &CamRigCamera) -> Result<(u32, f64), CamRigConve
         width: cam.width,
         height: cam.height,
         per_image_adjustments: Vec::new(),
+        rolling_shutter_scanlines: None,
         parameters: cam.parameters.clone(),
     };
     let intrinsics = CameraIntrinsics::try_from(&sfmr)

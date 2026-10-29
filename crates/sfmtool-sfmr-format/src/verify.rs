@@ -147,8 +147,17 @@ fn verify_cameras_section<R: Read + Seek>(
 ) -> Result<(u128, Vec<SfmrCamera>), SfmrError> {
     // === Cameras hash ===
     let cameras_raw = read_zst_entry(archive, entries::cameras_metadata())?;
-    // Parsed lazily for the embedded-patches keypoint bounds check below.
-    let cameras: Vec<SfmrCamera> = serde_json::from_slice(&cameras_raw).unwrap_or_default();
+    // Parsed for the embedded-patches keypoint bounds check and the per-image
+    // adjustment rules below. A cameras entry that does not parse, such as one
+    // with a `rolling_shutter_scanlines` value that is neither `ROWS` nor
+    // `COLUMNS`, is reported and then checked as no cameras.
+    let cameras: Vec<SfmrCamera> = match serde_json::from_slice(&cameras_raw) {
+        Ok(cameras) => cameras,
+        Err(e) => {
+            errors.push(format!("cameras/metadata.json does not parse: {e}"));
+            Vec::new()
+        }
+    };
     let cameras_hash = xxhash_rust::xxh3::xxh3_128(&cameras_raw);
     if format_hash(cameras_hash) != stored.cameras_xxh128 {
         errors.push(format!(
@@ -308,18 +317,21 @@ fn verify_images_section<R: Read + Seek>(
     let is_pre_v10 = metadata.version < 10;
     let mut images_hasher = Xxh3::new();
 
-    // The per-image intrinsic adjustment columns (version 13+) are hashed
+    // The per-image adjustment columns (version 13+ and 14+) are hashed
     // wherever the archive holds them, so a column that no camera's key
     // accounts for still reaches the digest and the rules below name it.
     let focal_name = entries::images_focal_adjustments(image_count);
     let principal_point_name = entries::images_principal_point_adjustments_xy(image_count);
-    let mut listed = [false; 2];
+    let radial_bspline_name = entries::images_radial_bspline_adjustments(image_count);
+    let rolling_shutter_name = entries::images_rolling_shutter_rates_xyz(image_count);
+    let mut listed = [false; 4];
     let mut names_ok = true;
     for (c, camera) in cameras.iter().enumerate() {
         match parse_per_image_adjustment_names(&camera.per_image_adjustments) {
             Ok(flags) => {
-                listed[0] |= flags[0];
-                listed[1] |= flags[1];
+                for (l, f) in listed.iter_mut().zip(flags) {
+                    *l |= f;
+                }
             }
             Err(e) => {
                 names_ok = false;
@@ -387,6 +399,16 @@ fn verify_images_section<R: Read + Seek>(
         archive,
         &entries::images_quaternions_wxyz(image_count),
     )?);
+    // images/radial_bspline_adjustments and images/rolling_shutter_rates_xyz
+    // (version 14+; after quaternions_wxyz, before sift_content_hashes)
+    let radial_bspline_raw = read_optional(archive, &radial_bspline_name, listed[2])?;
+    if let Some(raw) = &radial_bspline_raw {
+        images_hasher.update(raw);
+    }
+    let rolling_shutter_raw = read_optional(archive, &rolling_shutter_name, listed[3])?;
+    if let Some(raw) = &rolling_shutter_raw {
+        images_hasher.update(raw);
+    }
     // images/sift_content_hashes (sift_files only)
     if !is_embedded {
         images_hasher.update(&read_zst_entry(
@@ -416,18 +438,21 @@ fn verify_images_section<R: Read + Seek>(
         ));
     }
 
-    // === Validate the per-image intrinsic adjustments (version 13+) ===
-    // Below version 13 a file carries neither the cameras' key nor the
-    // columns; from it on, the rules are the reader's and the writer's.
-    let keyed = cameras.iter().any(|c| !c.per_image_adjustments.is_empty());
-    if metadata.version < SFMR_PER_IMAGE_ADJUSTMENTS_VERSION {
-        if keyed || focal_raw.is_some() || principal_point_raw.is_some() {
-            errors.push(format!(
-                "a version {} file carries per-image intrinsic adjustments, which version \
-                 {SFMR_PER_IMAGE_ADJUSTMENTS_VERSION} introduced",
-                metadata.version
-            ));
-        }
+    // === Validate the per-image adjustments (version 13+ and 14+) ===
+    // Below the version that introduced a column or a key a file carries
+    // neither; from it on, the rules are the reader's and the writer's.
+    let raws = [
+        &focal_raw,
+        &principal_point_raw,
+        &radial_bspline_raw,
+        &rolling_shutter_raw,
+    ];
+    if let Some(e) = crate::read::per_image_adjustments_too_new(
+        metadata.version,
+        cameras,
+        raws.map(Option::is_some),
+    ) {
+        errors.push(e);
     } else if names_ok {
         // A malformed key has been reported above, once.
         let to_f64 = |raw: &[u8]| -> Vec<f64> {
@@ -448,18 +473,27 @@ fn verify_images_section<R: Read + Seek>(
                 }
                 Ok(ndarray::Array1::from_vec(to_f64(raw)))
             });
-            let principal_point = principal_point_raw.as_deref().map(|raw| {
-                if raw.len() != image_count * 16 {
-                    return Err(format!(
-                        "images/principal_point_adjustments_xy holds {} bytes, not {}",
-                        raw.len(),
-                        image_count * 16
-                    ));
-                }
-                Ok(ndarray::Array2::from_shape_vec((image_count, 2), to_f64(raw)).unwrap())
-            });
+            let rows = |raw: &Option<Vec<u8>>, name: &str, width: usize| {
+                raw.as_deref()
+                    .map(|raw| {
+                        if raw.len() != image_count * width * 8 {
+                            return Err(format!(
+                                "images/{name} holds {} bytes, not {}",
+                                raw.len(),
+                                image_count * width * 8
+                            ));
+                        }
+                        Ok(
+                            ndarray::Array2::from_shape_vec((image_count, width), to_f64(raw))
+                                .unwrap(),
+                        )
+                    })
+                    .transpose()
+            };
             let focal = focal.transpose()?;
-            let principal_point = principal_point.transpose()?;
+            let principal_point = rows(&principal_point_raw, "principal_point_adjustments_xy", 2)?;
+            let radial_bspline = rows(&radial_bspline_raw, "radial_bspline_adjustments", 2)?;
+            let rolling_shutter = rows(&rolling_shutter_raw, "rolling_shutter_rates_xyz", 3)?;
             if camera_indexes_raw.len() != image_count * 4 {
                 return Err(format!(
                     "images/camera_indexes holds {} bytes, not {}",
@@ -472,6 +506,8 @@ fn verify_images_section<R: Read + Seek>(
                 raw_to_u32(&camera_indexes_raw).as_ref(),
                 focal.as_ref(),
                 principal_point.as_ref(),
+                radial_bspline.as_ref(),
+                rolling_shutter.as_ref(),
             )
         })();
         if let Err(e) = check {

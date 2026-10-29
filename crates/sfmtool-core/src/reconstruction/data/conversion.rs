@@ -256,8 +256,25 @@ impl SfmrReconstruction {
             data.camera_indexes.as_standard_layout().as_slice().unwrap(),
             data.focal_adjustments.as_ref(),
             data.principal_point_adjustments_xy.as_ref(),
+            data.radial_bspline_adjustments.as_ref(),
+            data.rolling_shutter_rates_xyz.as_ref(),
         )
         .map_err(SfmrError::InvalidFormat)?;
+        // A reconstruction does not yet hold the per-image radial B-spline
+        // correction, the rolling-shutter rates or a camera's scanlines
+        // setting, so a value that carries any of them is refused rather than
+        // projected without the corrections, or saved without the setting.
+        sfmtool_sfmr_format::refuse_per_image_lens_corrections(&data.cameras)?;
+        if let Some(c) = data
+            .cameras
+            .iter()
+            .position(|c| c.rolling_shutter_scanlines.is_some())
+        {
+            return Err(SfmrError::Unsupported(format!(
+                "camera {c} has a rolling_shutter_scanlines setting, which a reconstruction \
+                 in this build does not yet keep"
+            )));
+        }
         let per_image_adjustments: Vec<PerImageAdjustments> = data
             .cameras
             .iter()
@@ -685,6 +702,9 @@ impl SfmrReconstruction {
             thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.as_deref().cloned(),
             focal_adjustments,
             principal_point_adjustments_xy,
+            // A reconstruction holds neither (`from_sfmr_data` refuses them).
+            radial_bspline_adjustments: None,
+            rolling_shutter_rates_xyz: None,
             positions_xyzw,
             colors_rgb,
             reprojection_errors,

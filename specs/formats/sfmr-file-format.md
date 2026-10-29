@@ -186,6 +186,8 @@ reconstruction.sfmr (ZIP archive)
 │   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # (Optional, v11+) 128x128 image thumbnails (RGB)
 │   ├── focal_adjustments.{N}.float64.zst      # (Optional, v13+) per-image focal scale
 │   ├── principal_point_adjustments_xy.{N}.2.float64.zst # (Optional, v13+) per-image principal-point offset, short-side unit
+│   ├── radial_bspline_adjustments.{N}.2.float64.zst # (Optional, v14+) per-image radial B-spline correction, units of ρ
+│   ├── rolling_shutter_rates_xyz.{N}.3.float64.zst  # (Optional, v14+) per-image rolling-shutter rates, rad per short side of readout
 │   └── metadata.json.zst                      # Image metadata
 ├── derived/                                   # Recomputable from the sections above (v10+)
 │   ├── depth_statistics.json.zst              # Per-image depth stats
@@ -248,7 +250,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 13,
+  "version": 14,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -413,10 +415,10 @@ order in which the section hashes combine into `content_xxh128` is stated once,
 in the `content_xxh128` entry below.
 
 - `metadata_xxh128`: Hash of the uncompressed JSON content of `metadata.json.zst`
-- `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`, so it covers each camera's `per_image_adjustments` key (version 13+)
+- `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`, so it covers each camera's `per_image_adjustments` key (version 13+) and `rolling_shutter_scanlines` key (version 14+)
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
-- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
+- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates (version 14+) participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc` first, before `feature_indexes`; `plain_bitmap_zncc` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
 - `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
@@ -524,13 +526,30 @@ Array of camera intrinsic parameters:
 camera's intrinsics that vary per image: `"focal"` when each of its images has
 its own focal scale in
 [`images/focal_adjustments`](#imagesfocal_adjustmentsnfloat64zst-optional-version-13),
-and `"principal_point"` when each has its own principal-point offset in
-[`images/principal_point_adjustments_xy`](#imagesprincipal_point_adjustments_xyn2float64zst-optional-version-13).
-It names only those two, each at most once, in that order. A camera that
-varies neither has no key, so the cameras entry of a file without adjustments
-is byte for byte what version 12 writes. The key is what tells a zero
-adjustment that was solved for apart from one that was never enabled; the
-distortion, and every other parameter, stays the camera's for all its images.
+`"principal_point"` when each has its own principal-point offset in
+[`images/principal_point_adjustments_xy`](#imagesprincipal_point_adjustments_xyn2float64zst-optional-version-13),
+and, from version 14, `"radial_bspline"` when each has its own radial
+B-spline correction in
+[`images/radial_bspline_adjustments`](#imagesradial_bspline_adjustmentsn2float64zst-optional-version-14)
+(only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"` when each has its
+own rolling-shutter rates in
+[`images/rolling_shutter_rates_xyz`](#imagesrolling_shutter_rates_xyzn3float64zst-optional-version-14).
+It names only those four, each at most once, in that order. A camera that
+varies none has no key, so the cameras entry of a file without adjustments is
+byte for byte what version 12 writes. The key is what tells a zero adjustment
+that was solved for apart from one that was never enabled; every other
+parameter stays the camera's for all its images.
+
+**`rolling_shutter_scanlines`** (version 14+, optional) is `"ROWS"` or
+`"COLUMNS"`: whether the camera's sensor reads its image one row at a time,
+the rows one after another down the image, or one column at a time across it.
+It is the axis the readout position of the
+[rolling-shutter rates](#imagesrolling_shutter_rates_xyzn3float64zst-optional-version-14)
+is measured along. It is required on a camera that lists `"rolling_shutter"`
+and allowed on any other, so that a known setting can be recorded before any
+rates are solved. An absent key means the scanlines are not known; it does not
+mean `"ROWS"`. Only rows against columns is stored, not the direction the scan
+advances in: a scan that advances the other way fits with every rate negated.
 
 **Supported camera models and parameter names:**
 
@@ -798,7 +817,7 @@ Binary array mapping each image to its camera:
 
 An image is read through its camera's intrinsics, with the image's
 **intrinsic adjustment** applied where its camera lists a parameter in
-`per_image_adjustments` (version 13+): the two columns below. An image whose
+`per_image_adjustments` (version 13+): the columns below. An image whose
 camera lists nothing is read through the camera exactly.
 
 #### Per-image intrinsic adjustments (Optional, version 13+)
@@ -868,10 +887,68 @@ its own unshared copy of the distortion, and a bundle adjustment releasing the
 distortion would solve one spline per image, each from that image's
 observations alone. The distortion is the part of the lens the images do share,
 and the part that needs observations from many images to reach the edge of the
-field. The adjustment keeps it shared and lets only the three parameters that
-do vary move per image.
+field. The adjustment keeps it shared and lets only the parameters that do
+vary move per image.
 
-The two columns are each present exactly when at least one camera lists its
+**The radial B-spline correction and the rolling shutter (version 14+).** An
+`SFMTOOL_PINHOLE` camera's images can also each have their own change to the
+radial distortion, for distortion that changes with the focus distance, and
+each image of any camera its own rolling-shutter rates, for the image
+distortion a sensor that reads its scanlines one after another records when the
+camera turns during the readout. With `(x, y) = (Px, Py)/(−Pz)` a point's
+normalised coordinates in the camera frame (+X right, +Y up), `ρ = √(x² + y²)`,
+and `f_i`, `(cx_i, cy_i)` the image's focal and principal point after its focal
+scale and principal-point offset, image `i` maps a point to a pixel in three
+steps. Step 1 is written for an `SFMTOOL_PINHOLE` camera; on any other model,
+which has no radial correction, it is the model's own distortion of `(x, y)`.
+
+```
+1. radial:   (x_d, y_d) = (x, y) · (ρ + δ(ρ) + Δδ_i(ρ)) / ρ
+             Δδ_i(ρ)    = e_0·B0(ρ) + e_1·B1(ρ)
+             B0 = 3τ²(1 − τ),  B1 = τ³,  τ = ρ/ρ_max          (0 ≤ ρ ≤ ρ_max)
+             Δδ_i(ρ)    = e_1 + 3(e_1 − e_0)·(ρ − ρ_max)/ρ_max (ρ > ρ_max)
+2. rolling:  t = −f_i·y_d/m  (ROWS)      t = f_i·x_d/m  (COLUMNS),   m = min(w, h)
+             x_r = x_d + t·( ωy·(1 + x²) − ωx·x·y + ωz·y)
+             y_r = y_d + t·(−ωx·(1 + y²) + ωy·x·y − ωz·x)
+3. pixels:   u = cx_i + f_i·x_r,   v = cy_i − f_i·y_r
+```
+
+`δ` is the camera's own radial spline on `[0, ρ_max]`, `ρ_max` being its
+`bspline_rho_max`. `B0` and `B1` are its centre-anchored cubic basis with the
+minimum two coefficients, so the correction `[e_0, e_1]` has no constant and no
+linear part and does not overlap the focal scale; `e_1` is its value at
+`ρ_max`, and past `ρ_max` it continues along its end tangent as the camera's
+spline does. The readout position `t` is the pixel distance of the point's
+scanline from the principal point's scanline, in short-side units, measured
+before the rolling-shutter step, and the scanlines are the camera's
+`rolling_shutter_scanlines`. The rates `[ωx, ωy, ωz]` are the camera's angular
+velocity in the camera frame times the time to read one short side of
+scanlines: radians of rotation per short side of readout, not radians per
+second, since the images cannot tell the readout time apart from the rotation.
+The image's stored pose is the camera's pose when the principal point's
+scanline was read. With both fields zero each step is the identity and the map
+is the one above. The full derivation and the solve are in
+[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md#the-map-for-image-i).
+
+**Units of the per-image adjustments.** Each per-image adjustment is stored in a
+unit that means the same at any resolution, so a uniform camera resize (which
+scales the camera's focal and principal point with the image) leaves every
+stored value unchanged. The four units are not the same, on purpose:
+
+| Term | Unit | Why |
+|---|---|---|
+| focal scale `s` | dimensionless: the image's focal is its camera's times `1 + s`; the bundle adjustment solves it as `ln(1 + s)` | a scale of the focal is a ratio, so it is the same at any resolution and reads directly as "this image's focal is 1.3% longer"; the log makes a focal `k` times longer and one `k` times shorter equally far from the camera's |
+| principal-point offset `a` | a fraction of the image's short side, `min(width, height)`, the same unit on both axes: the image's principal point is its camera's plus `a·min(width, height)` | it moves the pixel grid after the focal is applied, so it is measured across the image; the short side is one length in x and y, so one offset means the same number of pixels whichever way the lens shifts; it is not a fraction of the focal, which the solve can release, so that an offset does not change in pixels when the focal moves |
+| radial B-spline correction `e` | units of `ρ`, the normalised radius, on the spline's domain `[0, bspline_rho_max]` | it is added to the camera's `δ`, which is in units of `ρ`, before the focal is applied; `e_1` is the correction's value at `ρ_max` |
+| rolling-shutter rates `ω` | radians of rotation per short side of readout: the camera's angular velocity in the `.sfmr` camera frame times the time to read `min(width, height)` scanlines; the readout position `t` is the pixel distance from the principal point's scanline in short-side units | a sensor reads its scanlines, which are pixel rows or columns, at a fixed time per scanline, so the time a pixel is read follows its pixel distance, and the readout position is measured across the image like the principal-point offset; the focal then drops out of the rates, and a uniform resize scales the scanline count and the time per scanline inversely; with `t` in normalised units the stored rate would be the angular velocity times `f_i` times the time per scanline, so each image's own focal scale (focus breathing) would change what its stored rates mean. The rates are not radians per second: the images cannot tell the readout time apart from the rotation |
+
+The units mean that prior widths of different terms cannot be compared as
+numbers. On a 2040×1536 image with a 1447.8 px focal read by rows, a rate `ωx`
+of 2·10⁻³ moves the centre of the bottom edge by about 1.9 px (`t ≈ 0.5`,
+`y ≈ −0.53`, so `t·ωx·(1 + y²)·f ≈ 0.5 × 2·10⁻³ × 1.28 × 1447.8`), while a
+principal-point offset of 0.0131 of the short side is about 20 px.
+
+The columns are each present exactly when at least one camera lists its
 parameter in [`per_image_adjustments`](#4-cameras-camerasmetadatajsonzst), and
 a reader refuses a file that breaks any of these rules:
 
@@ -879,17 +956,39 @@ a reader refuses a file that breaks any of these rules:
 - a row whose image's camera does not list the parameter holds exactly `0` (a
   writer writes `+0.0`);
 - every value is finite, and every focal adjustment is above `−1`;
-- `per_image_adjustments` names only `"focal"` and `"principal_point"`, each
-  at most once, in that order;
-- a file below version 13 has neither the columns nor the key.
+- `per_image_adjustments` names only `"focal"`, `"principal_point"`,
+  `"radial_bspline"` and `"rolling_shutter"`, each at most once, in that order;
+- only an `SFMTOOL_PINHOLE` camera lists `"radial_bspline"`, and a camera that
+  lists `"rolling_shutter"` has a `rolling_shutter_scanlines` setting, which is
+  `"ROWS"` or `"COLUMNS"`;
+- a file below version 13 has none of the columns and no
+  `per_image_adjustments` key, and a file below version 14 has neither
+  `radial_bspline_adjustments` nor `rolling_shutter_rates_xyz`, no camera
+  listing `"radial_bspline"` or `"rolling_shutter"`, and no
+  `rolling_shutter_scanlines` key.
 
-`read_sfmr` and `write_sfmr_with_options` read and write the adjustments as
-stored, bit for bit. Every consumer that reads one image's camera reads it with
-the image's adjustment applied, through `image_intrinsics(i)`. A format with no
-per-image intrinsics receives each image's intrinsics on export: a COLMAP
-export writes a camera with a non-zero adjustment on any of its images as one
-COLMAP camera per image of it
+`read_sfmr` and `write_sfmr_with_options` read and write the focal and
+principal-point adjustments and the scanlines settings as stored, bit for bit.
+Every consumer that reads one image's camera reads it with the image's focal
+and principal-point adjustment applied, through `image_intrinsics(i)`. A format
+with no per-image intrinsics receives each image's intrinsics on export: a
+COLMAP export writes a camera with a non-zero adjustment on any of its images
+as one COLMAP camera per image of it
 ([to-colmap-bin-command.md](../cli/colmap-interop/to-colmap-bin-command.md)).
+
+No consumer applies the radial B-spline correction or the rolling-shutter
+rates when it reads an image through its camera, so `read_sfmr` and
+`write_sfmr_with_options` refuse, with `SfmrError::Unsupported` naming the
+camera and the column, a file in which some camera lists `"radial_bspline"` or
+`"rolling_shutter"`, even with every value zero, once every rule above has
+passed; `verify_sfmr` checks such a file by the rules alone. A
+`SfmrReconstruction` holds no scanlines setting, so building one from data
+that carries one (`SfmrReconstruction::load`, the binding's `from_data`) is
+refused the same way rather than saved without it. Applying the corrections,
+and the bundle adjustment that solves them, are specified in
+[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md). A
+COLMAP export is unaffected by them: an `SFMTOOL_PINHOLE` camera cannot be
+exported to COLMAP at all.
 
 ##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
 
@@ -906,6 +1005,24 @@ COLMAP camera per image of it
 - **Format**: `[a_x,i, a_y,i]` in the short-side unit: the image's principal
   point is its camera's plus `a_x,i·m` in x and `a_y,i·m` in y, where
   `m = min(width, height)` of the image's camera
+
+##### `images/radial_bspline_adjustments.{N}.2.float64.zst` (Optional, version 14+)
+
+- **Shape**: `(N, 2)` where N = image_count
+- **Data type**: `float64` (little-endian)
+- **Format**: `[e_0, e_1]`, the image's radial correction's coefficients in its
+  camera's two-coefficient B-spline basis, in units of `ρ`; added to the
+  camera's spline for that image. Only an `SFMTOOL_PINHOLE` camera lists
+  `"radial_bspline"`.
+
+##### `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` (Optional, version 14+)
+
+- **Shape**: `(N, 3)` where N = image_count
+- **Data type**: `float64` (little-endian)
+- **Format**: `[ωx, ωy, ωz]`, the camera's angular velocity in the `.sfmr`
+  camera frame (+X right, +Y up, looking down −Z) times the time to read one
+  short side of scanlines, in radians of rotation per short side of readout,
+  along the axis its camera's `rolling_shutter_scanlines` names
 
 #### `images/quaternions_wxyz.{N}.4.float64.zst`
 
@@ -2264,8 +2381,10 @@ For the structure, a file fails verification when:
 - a camera's `per_image_adjustments` or an image's intrinsic adjustment breaks
   a rule of
   [Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13),
-  including a file below version 13 that carries either (a non-zero
-  adjustment is valid);
+  including a file below version 13 that carries either and a file below
+  version 14 that carries a radial B-spline correction, rolling-shutter rates
+  or a `rolling_shutter_scanlines` setting (a non-zero adjustment is valid), or
+  `cameras/metadata.json` does not parse;
 - the `has_*` flags in `points3d/metadata.json` break a presence rule between
   the optional per-point columns and `feature_source`;
 - in a version 2+ file, `positions_xyzw` is not `point_count` rows of 32 bytes,
@@ -2340,8 +2459,17 @@ describes. Other parts of this spec are implemented by:
   `validate_per_image_adjustments` in the format crate's
   [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs), which read, write
   and verify all call. The `read_sfmr` / `write_sfmr` dicts carry the columns
-  as `focal_adjustments` and `principal_point_adjustments_xy` and the keys as
-  `per_image_adjustments`, one list of names per camera.
+  as `focal_adjustments`, `principal_point_adjustments_xy`,
+  `radial_bspline_adjustments` and `rolling_shutter_rates_xyz`, the
+  `per_image_adjustments` keys as one list of names per camera, and the
+  scanlines settings as `rolling_shutter_scanlines`, one `"ROWS"`, `"COLUMNS"`
+  or `None` per camera. The scanlines setting is `SfmrCamera::rolling_shutter_scanlines`,
+  a `RollingShutterScanlines`. The refusal of the radial B-spline correction
+  and the rolling shutter is `refuse_per_image_lens_corrections` in the same
+  file, which `read_sfmr` and `write_sfmr_with_options` call, and
+  `SfmrReconstruction::from_sfmr_data` in
+  [conversion.rs](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs)
+  calls it and refuses a scanlines setting.
 - Points at infinity: `SfmrReconstruction::classify_points_at_infinity` applies
   the point-or-bearing test and stores each scored point as finite or at
   `w = 0` as the test decides, and `materialize_points_at_infinity` places
@@ -2590,17 +2718,35 @@ appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numb
 
 ## Versioning and Migration
 
-The format spans thirteen versions (`1` to `13`), all valid; each extends the
+The format spans fourteen versions (`1` to `14`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.
-Version 13 is the current format version: a reader accepts any version up to
+Version 14 is the current format version: a reader accepts any version up to
 it. This section is the one place the versions and their changes are
 described; [Version History](#version-history) is an index into it.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals
-in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12, per-image intrinsic adjustments in 13) was
-introduced this way, and a writer that picked its version by content would make
-"which version is this file" a question about its columns.
+in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observation readings in 12, per-image intrinsic adjustments in 13, the
+radial B-spline correction, the rolling-shutter rates and the scanlines setting
+in 14) was introduced this way, and a writer that picked its version by
+content would make "which version is this file" a question about its columns.
+
+### Version 13 → Version 14
+
+| Change | Detail |
+|---|---|
+| `images/radial_bspline_adjustments.{N}.2.float64.zst` | New **optional** column: per image, `[e_0, e_1]`, its radial correction's coefficients in the camera's two-coefficient B-spline basis, in units of `ρ` ([Per-image intrinsic adjustments](#per-image-intrinsic-adjustments-optional-version-13)). Present exactly when some camera lists `"radial_bspline"`. Folded into `images_xxh128` in its lexicographic slot, after `quaternions_wxyz`. |
+| `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | New **optional** column: per image, `[ωx, ωy, ωz]`, the camera's angular velocity in the `.sfmr` camera frame times the time to read one short side of scanlines, in radians of rotation per short side of readout. Present exactly when some camera lists `"rolling_shutter"`. Folded into `images_xxh128` after `radial_bspline_adjustments` and before `sift_content_hashes`. |
+| `cameras/metadata.json` `per_image_adjustments` | May also name `"radial_bspline"` (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"`, in the order `"focal"`, `"principal_point"`, `"radial_bspline"`, `"rolling_shutter"`. |
+| `cameras/metadata.json` `rolling_shutter_scanlines` | New optional key on each camera, `"ROWS"` or `"COLUMNS"`. Required on a camera that lists `"rolling_shutter"`, allowed on any other. Part of `cameras_xxh128`. |
+
+Migration is mechanical. A version 13 file reads with every radial correction
+and every rate zero and no camera carrying `rolling_shutter_scanlines`, which
+is every image read through its camera exactly as before, and saves as version
+14 with none of the new entries, so its cameras and images sections are
+unchanged and only the version in `metadata.json` differs. A version 14 file
+with none of the new entries maps back to version 13 by its version number
+alone.
 
 ### Version 12 → Version 13
 
@@ -2839,6 +2985,11 @@ row, reads `tracks/points3d_indexes` as `tracks/point_indexes` and both
 One line per version, newest first. Each version's changes are described in
 the migration section it links to.
 
+- **Version 14**: the optional per-image radial B-spline correction and
+  rolling-shutter rates, the `images/radial_bspline_adjustments` and
+  `images/rolling_shutter_rates_xyz` columns and their names in
+  `per_image_adjustments`, and the cameras' `rolling_shutter_scanlines` key.
+  See [Version 13 → Version 14](#version-13--version-14).
 - **Version 13**: optional per-image intrinsic adjustments, the
   `images/focal_adjustments` and `images/principal_point_adjustments_xy`
   columns and the cameras' `per_image_adjustments` key. See

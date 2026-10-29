@@ -68,9 +68,23 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
 
 /// Read a complete `.sfmr` file into columnar data.
 ///
-/// Every rule of the format is checked. The per-image intrinsic adjustments
-/// are read as stored.
+/// Every rule of the format is checked. The focal and principal-point
+/// adjustments and the cameras' `rolling_shutter_scanlines` settings are read
+/// as stored. A file in which some camera varies the radial B-spline
+/// correction or the rolling shutter per image is refused with
+/// [`SfmrError::Unsupported`], naming the camera and the column, because this
+/// build does not yet apply either correction where an image is read through
+/// its camera (see [`refuse_per_image_lens_corrections`]).
 pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
+    let data = read_sfmr_file(path)?;
+    refuse_per_image_lens_corrections(&data.cameras)?;
+    Ok(data)
+}
+
+/// [`read_sfmr`] without its refusal of the per-image radial B-spline
+/// correction and rolling-shutter rates: every rule of the format checked,
+/// and every column read as stored.
+pub(crate) fn read_sfmr_file(path: &Path) -> Result<SfmrData, SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
         operation: "Failed to open file",
         path: path.to_path_buf(),
@@ -124,6 +138,8 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         thumbnails_y_x_rgb: images.thumbnails_y_x_rgb,
         focal_adjustments: images.focal_adjustments,
         principal_point_adjustments_xy: images.principal_point_adjustments_xy,
+        radial_bspline_adjustments: images.radial_bspline_adjustments,
+        rolling_shutter_rates_xyz: images.rolling_shutter_rates_xyz,
         depth_statistics: images.depth_statistics,
         observed_depth_histogram_counts: images.observed_depth_histogram_counts,
         positions_xyzw: points.positions_xyzw,
@@ -241,6 +257,8 @@ struct ImagesSection {
     thumbnails_y_x_rgb: Option<Array4<u8>>,
     focal_adjustments: Option<Array1<f64>>,
     principal_point_adjustments_xy: Option<Array2<f64>>,
+    radial_bspline_adjustments: Option<Array2<f64>>,
+    rolling_shutter_rates_xyz: Option<Array2<f64>>,
     depth_statistics: DepthStatistics,
     observed_depth_histogram_counts: Array2<u32>,
 }
@@ -349,8 +367,12 @@ fn read_images_section(
         None
     };
 
-    let (focal_adjustments, principal_point_adjustments_xy) =
-        read_per_image_adjustments(archive, metadata, cameras, &camera_indexes)?;
+    let AdjustmentColumns {
+        focal_adjustments,
+        principal_point_adjustments_xy,
+        radial_bspline_adjustments,
+        rolling_shutter_rates_xyz,
+    } = read_per_image_adjustments(archive, metadata, cameras, &camera_indexes)?;
 
     // Depth statistics, under `images/` before version 10 and `derived/` from
     // version 10 on.
@@ -378,23 +400,74 @@ fn read_images_section(
         thumbnails_y_x_rgb,
         focal_adjustments,
         principal_point_adjustments_xy,
+        radial_bspline_adjustments,
+        rolling_shutter_rates_xyz,
         depth_statistics,
         observed_depth_histogram_counts,
     })
 }
 
-/// The focal and the principal-point adjustment columns, each `None` where
-/// absent.
-type AdjustmentColumns = (Option<Array1<f64>>, Option<Array2<f64>>);
+/// The four per-image adjustment columns, each `None` where absent.
+struct AdjustmentColumns {
+    focal_adjustments: Option<Array1<f64>>,
+    principal_point_adjustments_xy: Option<Array2<f64>>,
+    radial_bspline_adjustments: Option<Array2<f64>>,
+    rolling_shutter_rates_xyz: Option<Array2<f64>>,
+}
 
-/// The per-image intrinsic adjustment columns (version 13+), each present
-/// exactly when some camera lists its parameter in `per_image_adjustments`,
-/// checked against the format's rules.
+/// Why a file below the version that introduced the per-image adjustments it
+/// carries is refused, or `None` when it carries none it should not.
 ///
-/// A file below version 13 carries neither the columns nor the key, and is
-/// refused when it does; it reads with no column, which is every adjustment
-/// zero. An entry that no camera's key accounts for is refused as well, so a
-/// column is never silently ignored.
+/// `stored` says which of the four columns the archive holds, in the order of
+/// [`PER_IMAGE_ADJUSTMENT_NAMES`]. The reader and the verifier both ask this,
+/// so they refuse the same files.
+pub(crate) fn per_image_adjustments_too_new(
+    version: u32,
+    cameras: &[SfmrCamera],
+    stored: [bool; 4],
+) -> Option<String> {
+    let lists = |names: &[&str]| {
+        cameras.iter().any(|c| {
+            c.per_image_adjustments
+                .iter()
+                .any(|n| names.contains(&n.as_str()))
+        })
+    };
+    if version < SFMR_PER_IMAGE_ADJUSTMENTS_VERSION
+        && (cameras.iter().any(|c| !c.per_image_adjustments.is_empty())
+            || stored.iter().any(|&s| s))
+    {
+        return Some(format!(
+            "a version {version} file carries per-image intrinsic adjustments, which version \
+             {SFMR_PER_IMAGE_ADJUSTMENTS_VERSION} introduced"
+        ));
+    }
+    if version < SFMR_PER_IMAGE_LENS_CORRECTIONS_VERSION
+        && (lists(&["radial_bspline", "rolling_shutter"])
+            || stored[2]
+            || stored[3]
+            || cameras
+                .iter()
+                .any(|c| c.rolling_shutter_scanlines.is_some()))
+    {
+        return Some(format!(
+            "a version {version} file carries a per-image radial B-spline correction, \
+             rolling-shutter rates or a rolling_shutter_scanlines setting, which version \
+             {SFMR_PER_IMAGE_LENS_CORRECTIONS_VERSION} introduced"
+        ));
+    }
+    None
+}
+
+/// The per-image adjustment columns (version 13+ for the focal and the
+/// principal point, 14+ for the radial B-spline correction and the
+/// rolling-shutter rates), each present exactly when some camera lists its
+/// parameter in `per_image_adjustments`, checked against the format's rules.
+///
+/// A file below the version that introduced a column or a key carries
+/// neither, and is refused when it does; it reads with no column, which is
+/// every adjustment zero. An entry that no camera's key accounts for is
+/// refused as well, so a column is never silently ignored.
 fn read_per_image_adjustments(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
@@ -402,57 +475,61 @@ fn read_per_image_adjustments(
     camera_indexes: &Array1<u32>,
 ) -> Result<AdjustmentColumns, SfmrError> {
     let image_count = metadata.image_count as usize;
-    let focal_name = entries::images_focal_adjustments(image_count);
-    let principal_point_name = entries::images_principal_point_adjustments_xy(image_count);
-    if metadata.version < SFMR_PER_IMAGE_ADJUSTMENTS_VERSION {
-        let keyed = cameras.iter().any(|c| !c.per_image_adjustments.is_empty());
-        let stored = [&focal_name, &principal_point_name]
-            .into_iter()
-            .any(|name| archive.index_for_name(name).is_some());
-        if keyed || stored {
-            return Err(SfmrError::InvalidFormat(format!(
-                "a version {} file carries per-image intrinsic adjustments, which version \
-                 {SFMR_PER_IMAGE_ADJUSTMENTS_VERSION} introduced",
-                metadata.version
-            )));
-        }
-        return Ok((None, None));
+    let names = [
+        entries::images_focal_adjustments(image_count),
+        entries::images_principal_point_adjustments_xy(image_count),
+        entries::images_radial_bspline_adjustments(image_count),
+        entries::images_rolling_shutter_rates_xyz(image_count),
+    ];
+    let stored = names
+        .each_ref()
+        .map(|name| archive.index_for_name(name).is_some());
+    if let Some(e) = per_image_adjustments_too_new(metadata.version, cameras, stored) {
+        return Err(SfmrError::InvalidFormat(e));
     }
-    let mut listed = [false; 2];
+    let mut listed = [false; 4];
     for (c, camera) in cameras.iter().enumerate() {
         let flags = parse_per_image_adjustment_names(&camera.per_image_adjustments)
             .map_err(|e| SfmrError::InvalidFormat(format!("camera {c}: {e}")))?;
-        listed[0] |= flags[0];
-        listed[1] |= flags[1];
+        for (l, f) in listed.iter_mut().zip(flags) {
+            *l |= f;
+        }
     }
     // An entry without a listing camera is read anyway, so that the shared
     // rules below name it rather than this reader skipping it unseen.
-    let focal_adjustments = if listed[0] || archive.index_for_name(&focal_name).is_some() {
-        let values: Vec<f64> = read_binary_array(archive, &focal_name, image_count)?;
+    let focal_adjustments = if listed[0] || stored[0] {
+        let values: Vec<f64> = read_binary_array(archive, &names[0], image_count)?;
         Some(Array1::from_vec(values))
     } else {
         None
     };
-    let principal_point_adjustments_xy = if listed[1]
-        || archive.index_for_name(&principal_point_name).is_some()
-    {
-        let values: Vec<f64> = read_binary_array(archive, &principal_point_name, image_count * 2)?;
-        Some(
-            Array2::from_shape_vec((image_count, 2), values).map_err(|e| {
-                SfmrError::ShapeMismatch(format!("principal_point_adjustments_xy reshape: {e}"))
-            })?,
-        )
-    } else {
-        None
+    let mut read_rows = |k: usize, width: usize| -> Result<Option<Array2<f64>>, SfmrError> {
+        if !(listed[k] || stored[k]) {
+            return Ok(None);
+        }
+        let values: Vec<f64> = read_binary_array(archive, &names[k], image_count * width)?;
+        Array2::from_shape_vec((image_count, width), values)
+            .map(Some)
+            .map_err(|e| SfmrError::ShapeMismatch(format!("{} reshape: {e}", names[k])))
     };
+    let principal_point_adjustments_xy = read_rows(1, 2)?;
+    let radial_bspline_adjustments = read_rows(2, 2)?;
+    let rolling_shutter_rates_xyz = read_rows(3, 3)?;
     validate_per_image_adjustments(
         cameras,
         camera_indexes.as_slice().unwrap(),
         focal_adjustments.as_ref(),
         principal_point_adjustments_xy.as_ref(),
+        radial_bspline_adjustments.as_ref(),
+        rolling_shutter_rates_xyz.as_ref(),
     )
     .map_err(SfmrError::InvalidFormat)?;
-    Ok((focal_adjustments, principal_point_adjustments_xy))
+    Ok(AdjustmentColumns {
+        focal_adjustments,
+        principal_point_adjustments_xy,
+        radial_bspline_adjustments,
+        rolling_shutter_rates_xyz,
+    })
 }
 
 struct PointsSection {

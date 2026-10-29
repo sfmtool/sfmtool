@@ -226,8 +226,27 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// See [`WriteOptions`] for available options. By default, depth statistics
 /// are recomputed from the reconstruction data to ensure trustworthiness.
-/// The per-image intrinsic adjustments are written as given.
+/// The focal and principal-point adjustments and the cameras'
+/// `rolling_shutter_scanlines` settings are written as given. A value in
+/// which some camera varies the radial B-spline correction or the rolling
+/// shutter per image is refused with [`SfmrError::Unsupported`] and nothing is
+/// written: this build does not yet apply either correction where an image is
+/// read through its camera, so it does not write a file that
+/// [`crate::read_sfmr`] would refuse (see
+/// [`refuse_per_image_lens_corrections`]).
 pub fn write_sfmr_with_options(
+    path: &Path,
+    data: &mut SfmrData,
+    options: &WriteOptions,
+) -> Result<(), SfmrError> {
+    refuse_per_image_lens_corrections(&data.cameras)?;
+    write_sfmr_file(path, data, options)
+}
+
+/// [`write_sfmr_with_options`] without its refusal of the per-image radial
+/// B-spline correction and rolling-shutter rates: every rule of the format
+/// checked, and every column written as given.
+pub(crate) fn write_sfmr_file(
     path: &Path,
     data: &mut SfmrData,
     options: &WriteOptions,
@@ -413,6 +432,8 @@ fn write_sfmr_into<S: EntrySink>(
         data.camera_indexes.as_slice().unwrap(),
         data.focal_adjustments.as_ref(),
         data.principal_point_adjustments_xy.as_ref(),
+        data.radial_bspline_adjustments.as_ref(),
+        data.rolling_shutter_rates_xyz.as_ref(),
     )
     .map_err(SfmrError::InvalidFormat)?;
 
@@ -712,6 +733,30 @@ fn write_images<S: EntrySink>(
         bytemuck::cast_slice(data.quaternions_wxyz.as_slice().unwrap()),
         &mut images_hasher,
     )?;
+
+    // images/radial_bspline_adjustments and images/rolling_shutter_rates_xyz
+    // (optional, version 14+; after quaternions_wxyz, before
+    // sift_content_hashes, in that order)
+    for (column, name) in [
+        (
+            &data.radial_bspline_adjustments,
+            entries::images_radial_bspline_adjustments(image_count),
+        ),
+        (
+            &data.rolling_shutter_rates_xyz,
+            entries::images_rolling_shutter_rates_xyz(image_count),
+        ),
+    ] {
+        if let Some(column) = column {
+            let values: Vec<f64> = column.iter().copied().collect();
+            binary_hashed(
+                sink,
+                &name,
+                bytemuck::cast_slice(&values),
+                &mut images_hasher,
+            )?;
+        }
+    }
 
     // images/sift_content_hashes (sift_files only; absent in embedded_patches)
     if !is_embedded {

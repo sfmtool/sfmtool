@@ -5,6 +5,7 @@ use crate::*;
 use ndarray::{Array1, Array2, Array4};
 use std::collections::BTreeMap;
 
+mod lens_corrections;
 mod observation_readings;
 mod per_image_adjustments;
 
@@ -73,6 +74,7 @@ fn make_test_data() -> SfmrData {
             width: 1920,
             height: 1080,
             per_image_adjustments: Vec::new(),
+            rolling_shutter_scanlines: None,
             parameters: [
                 ("focal_length_x".into(), 1000.0),
                 ("focal_length_y".into(), 1000.0),
@@ -116,6 +118,8 @@ fn make_test_data() -> SfmrData {
         thumbnails_y_x_rgb: Some(Array4::zeros((image_count, 128, 128, 3))),
         focal_adjustments: None,
         principal_point_adjustments_xy: None,
+        radial_bspline_adjustments: None,
+        rolling_shutter_rates_xyz: None,
         // Points sit at negative z: in front of the identity camera in the
         // canonical convention (the camera looks down −Z).
         positions_xyzw: Array2::from_shape_vec(
@@ -688,8 +692,11 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen at format version 13, which stamps the new version into
-    // `metadata.json`, hashed; this fixture has no per-image adjustments, so
+    // Frozen at format version 14, which stamps the new version into
+    // `metadata.json`, hashed; this fixture has no per-image corrections and
+    // no scanlines setting, so its cameras and images sections are what
+    // version 13 wrote. Before that it was frozen at version 13, which also
+    // stamped its version only: this fixture has no per-image adjustments, so
     // its cameras and images sections are what version 12 wrote. Before that
     // it was frozen at version 12, where this fixture had no patch frame and so
     // no reference observations, and before that at version 11, which
@@ -705,7 +712,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "b3a059ecc67ea7e09b9f123454d88aa8"
+        "2f7510125cc35cb2658fedec76c5ad2d"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -1047,6 +1054,8 @@ fn test_empty_reconstruction() {
         thumbnails_y_x_rgb: Some(Array4::zeros((0, 128, 128, 3))),
         focal_adjustments: None,
         principal_point_adjustments_xy: None,
+        radial_bspline_adjustments: None,
+        rolling_shutter_rates_xyz: None,
         positions_xyzw: Array2::zeros((0, 4)),
         colors_rgb: Array2::zeros((0, 3)),
         reprojection_errors: Array1::from_vec(vec![]),
@@ -1112,6 +1121,7 @@ fn test_multiple_cameras() {
         width: 3840,
         height: 2160,
         per_image_adjustments: Vec::new(),
+        rolling_shutter_scanlines: None,
         parameters: [
             ("focal_length_x".into(), 2000.0),
             ("focal_length_y".into(), 2000.0),
@@ -3133,6 +3143,7 @@ fn json_maps_serialize_in_sorted_key_order() {
         width: 1920,
         height: 1080,
         per_image_adjustments: Vec::new(),
+        rolling_shutter_scanlines: None,
         parameters: [
             ("radial_distortion_k1".into(), 0.1),
             ("focal_length_x".into(), 1000.0),
@@ -3298,6 +3309,14 @@ fn entry_names_are_pinned() {
     assert_eq!(
         e::images_principal_point_adjustments_xy(11),
         "images/principal_point_adjustments_xy.11.2.float64.zst"
+    );
+    assert_eq!(
+        e::images_radial_bspline_adjustments(11),
+        "images/radial_bspline_adjustments.11.2.float64.zst"
+    );
+    assert_eq!(
+        e::images_rolling_shutter_rates_xyz(11),
+        "images/rolling_shutter_rates_xyz.11.3.float64.zst"
     );
     // The 128s here are the fixed thumbnail edge, not a dimension.
     assert_eq!(

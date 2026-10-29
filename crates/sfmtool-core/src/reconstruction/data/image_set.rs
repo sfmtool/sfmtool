@@ -38,9 +38,24 @@ impl PerImageAdjustments {
     }
 
     /// The flags a camera's stored `per_image_adjustments` list names, or a
-    /// message saying why the list is not one the format allows.
+    /// message saying why the list is not one the format allows or one this
+    /// build holds: a reconstruction does not yet vary the radial B-spline
+    /// correction or the rolling shutter per image.
     pub fn from_names<S: AsRef<str>>(names: &[S]) -> Result<Self, String> {
-        let [focal, principal_point] = parse_per_image_adjustment_names(names)?;
+        let [focal, principal_point, radial_bspline, rolling_shutter] =
+            parse_per_image_adjustment_names(names)?;
+        if let Some(name) = [
+            (radial_bspline, "radial_bspline"),
+            (rolling_shutter, "rolling_shutter"),
+        ]
+        .into_iter()
+        .find_map(|(set, name)| set.then_some(name))
+        {
+            return Err(format!(
+                "per_image_adjustments names {name:?}, which a reconstruction in this build \
+                 does not yet vary per image"
+            ));
+        }
         Ok(Self {
             focal,
             principal_point,
