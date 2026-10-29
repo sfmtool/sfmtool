@@ -276,7 +276,7 @@ COLMAP at all.
 
 - [`IntrinsicAdjustment`](../../crates/sfmtool-core/src/camera/intrinsics.rs)
   gains `radial: [f64; 2]` and `rolling_shutter: [f64; 3]` (proposed names),
-  zero by default, and `is_zero` tests all five fields.
+  zero by default, and `is_zero` tests all four fields.
 - `CameraIntrinsics::with_adjustment` applies the radial correction by
   replacing the camera's coefficients with `c + K·e_i` (or with `e_i` itself on a
   camera whose spline is empty), so the image's intrinsics remain an ordinary
