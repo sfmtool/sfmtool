@@ -59,15 +59,21 @@ two corrections together lower the held-out reprojection error from 0.386 px to
 
 Every quantity of the proposal is in the `.sfmr` camera frame: +X right, +Y up,
 the camera looking down −Z. A camera-frame point `P = (Px, Py, Pz)` in front of
-the camera (`Pz < 0`) has normalized undistorted coordinates
+the camera (`Pz < 0`) has undistorted coordinates
 
 ```
 (x, y) = (Px, Py) / (−Pz),        ρ = hypot(x, y)
 ```
 
-These are the `(x, y)` that `CameraIntrinsics::project` in
+in **focal units**: a pixel offset from the principal point divided by the
+focal, the tangent of the angle off the axis. These are the `(x, y)` that
+`CameraIntrinsics::project` in
 [projection.rs](../../crates/sfmtool-core/src/camera/distortion/projection.rs)
-takes. The rates `ω` are the camera's angular velocity in this frame.
+takes, and the distorted `(x_d, y_d)` below are in the same unit. Distances
+across the image itself, such as the principal-point offset and the
+rolling-shutter readout position, are in the **short-side unit**, a fraction of
+`m = min(width, height)` pixels; one focal unit is `f/m` short-side units
+([GLOSSARY.md](../GLOSSARY.md#camera-intrinsics)).
 
 **The one place y-up meets pixel-down** is the existing pixel mapping, and the
 proposal does not change it. `CameraIntrinsics::project` calls the model's
@@ -121,18 +127,22 @@ which is the linear part. `Δδ_i(ρ_max) = e_i1`. Past `ρ_max`, `Δδ_i` conti
 along its end tangent like the camera's spline,
 `Δδ_i(ρ) = e_i1 + 3(e_i1 − e_i0)·(ρ − ρ_max)/ρ_max`.
 
-**2. Rolling shutter.** The readout time `t` is
+**2. Rolling shutter.** A rolling-shutter sensor reads each scanline a fixed
+time after the one before, so the time a pixel is read is proportional to its
+pixel distance from a reference scanline. The readout position `t` is that
+distance in short-side units, measured at the pixel the point reaches before
+the rolling-shutter step, `u = cx_i + f_i·x_d`, `v = cy_i − f_i·y_d`:
 
 ```
-t = y_d    for ROWS      (one row at a time)
-t = x_d    for COLUMNS   (one column at a time)
+t = (v − cy_i)/m = −f_i·y_d/m    for ROWS      (one row at a time; t grows down the image)
+t = (u − cx_i)/m =  f_i·x_d/m    for COLUMNS   (one column at a time; t grows to the right)
 ```
 
-the position across the scanlines, in normalized `.sfmr` coordinates, measured
-from the scanline through the image's principal point, where `t = 0`, so the
-image's stored pose is the camera's pose when that scanline was read. The
-readout duration is folded into the rates, so `t` is in normalized image units
-and the rates are in radians per normalized image unit of `t`. Then
+with `m = min(width, height)` of the camera. `t = 0` is the scanline through the
+image's principal point. The origin is a definition, not a fitted quantity: a
+constant offset in `t` adds the image motion of a small pose rotation, which the
+image's pose absorbs. So the image's stored pose is the camera's pose when that
+scanline was read. Then, in focal units,
 
 ```
 x_r = x_d + t·ẋ,        ẋ =  ωy·(1 + x²) − ωx·x·y + ωz·y
@@ -145,13 +155,34 @@ of the camera with angular velocity `ω`. The point's camera coordinates change 
 `ẇ = ωx·Py − ωy·Px`, and differentiating `x = Px/w`, `y = Py/w` gives
 `ẋ = Ṗx/w − x·ẇ/w` and `ẏ = Ṗy/w − y·ẇ/w`, which are the two terms above.
 
+**What a rate means.** With `τ_row` the time between two scanlines, a pixel at
+readout position `t` is read `t·m·τ_row` after the reference scanline, so its
+displacement is `t·m·τ_row·ṗ(ω_true)` for the camera's true angular velocity
+`ω_true`. `ṗ` is linear in `ω`, so the stored rates are
+
+```
+ω = ω_true · m · τ_row
+```
+
+the camera's angular velocity in the `.sfmr` camera frame times the time to read
+one short side of scanlines: radians of rotation per short side of readout. They
+are not radians per second, because the images cannot tell the readout time
+apart from the rotation; only their product moves pixels. For `ROWS` on a
+landscape sensor the short side is the frame's height, so `ω` is the camera's
+rotation, in radians, during the readout of one frame. On the measured camera an
+`ωx` of 2·10⁻³ is about 2 mrad (0.11°) of rotation during one frame's readout; a
+known frame readout time `T` converts it to radians per second as `ω/T`, so
+`T = 20 ms` gives 0.1 rad/s.
+
+The rates do not depend on the focal: the readout position counts pixels, not
+focal units, so an image's own focal scale (focus breathing) does not change
+what its stored rates mean. A uniform resize by `k` multiplies `m` by `k` and
+divides `τ_row` by `k`, so it leaves them unchanged.
+
 Only whether the scanlines are rows or columns is part of the model, not the
-direction the scan advances in. A scan that advances the other way gives the
-same fit with every rate negated, and the rates are zero-mean and free, so they
-take either sign. For `ROWS`, `t` grows up the image (`+y` is up), while a usual
-sensor reads its rows down the image; the fitted rates are then the negative of
-the angular velocity times the readout duration per unit, and nothing else in
-the model changes.
+direction the scan advances in. A scan that advances the other way (rows read
+bottom to top, columns right to left) gives the same fit with every rate
+negated, and the rates are zero-mean and free, so they take either sign.
 
 **3. Pixels.** The existing step, as for the existing adjustments:
 
@@ -165,7 +196,7 @@ which is the `.sfmr` reading of the kernels' `distort(x, −y)` followed by
 Two simplifications are made, and both are deliberate:
 
 - **The velocity is evaluated at the undistorted point** `(x, y)` and scaled
-  by the distorted time `t`; the effect of the distortion on the velocity, and
+  by the readout position `t` of the distorted point; the effect of the distortion on the velocity, and
   of the rolling-shutter displacement on `t`, are second order (a few pixels of
   displacement times a percent of distortion).
 - **Translation during readout is not modelled.** The image motion a camera
@@ -197,9 +228,9 @@ that mean. Holding the mean is required:
   common vertical stretch of every image is close to stretching the scene
   vertically, for an orbit capture. With the mean free, the measured mean `ωx`
   grew from −7·10⁻⁴ to −1.7·10⁻³ as the rate prior widened, with no change in
-  held-out error (signs in the scratch solver's convention, see
-  [Measured results](#measured-results); in this draft's frame that `ωx` is
-  positive).
+  held-out error (in the scratch solver's units, see
+  [Measured results](#measured-results); in this draft's units that `ωx` has
+  the same sign and is about 6% larger, −7.4·10⁻⁴ to −1.8·10⁻³).
 
 This is the same structure the per-image focal and principal point already have
 ("Per-image values only" and "Re-centring after every round" in
@@ -224,9 +255,9 @@ Because `δ + Δδ_i` is the camera-basis spline with coefficients `c + K·e_i`,
 this is `bspline_is_monotone(c + K·e_i, ρ_max, ρ_max)` unchanged, per image.
 
 The rolling-shutter step `(x_d, y_d) → (x_r, y_r)` is invertible where its
-Jacobian `I + ∂(t·ṗ)/∂(x_d, y_d)` is close to the identity, which it is for rates of the
-measured size (the rates are about 10⁻³ and the image's normalized half-height
-about 0.5). A writer keeps it injective over the image's field.
+Jacobian `I + ∂(t·ṗ)/∂(x_d, y_d)` is close to the identity, which it is for
+rates of the measured size (the rates are about 10⁻³, and `t` reaches about 0.5
+at the image's edge). A writer keeps it injective over the image's field.
 
 ### Unprojection
 
@@ -244,11 +275,11 @@ as they are:
 repeat:
     (x, y)ₖ       = radial_inverse((x_d, y_d)ₖ)              # existing, exact
     (x_d, y_d)ₖ₊₁ = (x_r, y_r) − t((x_d, y_d)ₖ) · ṗ((x, y)ₖ)
-until the step is under 1e-12 in normalized units, or a cap of iterations
+until the step is under 1e-12 focal units, or a cap of iterations
 ```
 
 The iteration contracts by about the size of `∂(t·ṗ)/∂(x_d, y_d)`, of order
-`|ω|·(1 + ρ²)`, about 10⁻³ on the measured capture, so each pass gains about
+`|ω|·(f_i/m)·(1 + ρ²)`, about 10⁻³ on the measured capture, so each pass gains about
 three digits and three or four passes reach rounding. A non-converged
 iteration is reported the way the radial inverse reports one, and the
 step guard below keeps a solve from producing rates where it would happen.
@@ -276,10 +307,10 @@ gains, under
 
 | Entry | Proposed content |
 |---|---|
-| `images/radial_adjustments.{N}.2.float64.zst` | Optional. Per image, `[e_0, e_1]`, its radial correction coefficients, dimensionless. Present exactly when some camera lists `"radial"`. |
-| `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | Optional. Per image, `[ωx, ωy, ωz]`, the angular velocity in the `.sfmr` camera frame (+X right, +Y up, looking down −Z), in radians per normalized image unit of readout time, defined by the formulas in [The map for image `i`](#the-map-for-image-i). Present exactly when some camera lists `"rolling_shutter"`. |
-| `cameras/metadata.json` `per_image_adjustments` | May also name `"radial"` (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"`, in the order `"focal"`, `"principal_point"`, `"radial"`, `"rolling_shutter"`. |
-| `cameras/metadata.json` `rolling_shutter_scanlines` | Optional string, `"ROWS"` or `"COLUMNS"`: whether the sensor reads one row at a time (`t = y_d`) or one column at a time (`t = x_d`). Required on a camera that lists `"rolling_shutter"`; allowed on any other camera, so a known setting can be recorded before any rates are solved. Part of `cameras_xxh128`. |
+| `images/radial_bspline_adjustments.{N}.2.float64.zst` | Optional. Per image, `[e_0, e_1]`, its radial correction's coefficients in the camera's two-coefficient B-spline basis, in units of `ρ`. Present exactly when some camera lists `"radial_bspline"`. |
+| `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | Optional. Per image, `[ωx, ωy, ωz]`: the camera's angular velocity in the `.sfmr` camera frame (+X right, +Y up, looking down −Z) times the time to read one short side of scanlines, in radians of rotation per short side of readout, defined by the formulas in [The map for image `i`](#the-map-for-image-i). Present exactly when some camera lists `"rolling_shutter"`. |
+| `cameras/metadata.json` `per_image_adjustments` | May also name `"radial_bspline"` (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"`, in the order `"focal"`, `"principal_point"`, `"radial_bspline"`, `"rolling_shutter"`. |
+| `cameras/metadata.json` `rolling_shutter_scanlines` | Optional string, `"ROWS"` or `"COLUMNS"`: whether the sensor reads one row at a time (readout position `t = (v − cy_i)/min(width, height)`) or one column at a time (`t = (u − cx_i)/min(width, height)`). Required on a camera that lists `"rolling_shutter"`; allowed on any other camera, so a known setting can be recorded before any rates are solved. Part of `cameras_xxh128`. |
 
 The rules are those of the existing columns: a column is present exactly when
 some camera lists its name; a row of an image whose camera does not list it holds
@@ -287,6 +318,18 @@ exactly `+0.0`; every value is finite. The two columns fold into
 `images_xxh128` in their lexicographic slots, after `quaternions_wxyz`. Their
 units are in
 [Units of the per-image adjustments](#units-of-the-per-image-adjustments).
+
+**Why `radial_bspline`.** The per-image radial correction is named
+`radial_bspline` in every place it appears: the column
+`radial_bspline_adjustments`, the `per_image_adjustments` entry
+`"radial_bspline"`, `IntrinsicAdjustment::radial_bspline`, the release
+`image_radial_bspline` and the other keys built from it. The stored numbers are
+coefficients in the camera's B-spline basis, so the name matches the camera's
+own `bspline_c*` and `bspline_rho_max`, and it leaves room for another per-image
+radial form later. It was chosen over plain `radial`, which names the effect
+rather than the stored numbers, and over `distortion`, which the shared release
+`CameraRelease::distortion` already uses for the whole lens distortion. "Radial
+correction" stays the plain-prose name for what it does.
 
 #### Units of the per-image adjustments
 
@@ -299,13 +342,14 @@ not the same, on purpose:
 |---|---|---|
 | focal scale `s` (existing) | dimensionless: the image's focal is its camera's times `1 + s`; the bundle adjustment solves it as `ln(1 + s)` | a scale of the focal is a ratio, so it is the same at any resolution and reads directly as "this image's focal is 1.3% longer"; the log makes a focal `k` times longer and one `k` times shorter equally far from the camera's |
 | principal-point offset `a` (existing) | a fraction of the image's short side, `min(width, height)`, the same unit on both axes: the image's principal point is its camera's plus `a·min(width, height)` | it moves the pixel grid after the focal is applied, so it is measured across the image; the short side is one length in x and y, so one offset means the same number of pixels whichever way the lens shifts; it is not a fraction of the focal, which the solve can release, so that an offset does not change in pixels when the focal moves |
-| radial correction `e` (new) | units of `ρ`, the normalized radius on the spline's domain `[0, bspline_rho_max]` | it is added to the camera's `δ`, which is in units of `ρ`, before the focal is applied; `e_1` is the correction's value at `ρ_max` |
-| rolling-shutter rates `ω` (new) | radians per normalized image unit of `t`, where `t` is `y_d` or `x_d`, in the units of `(Px, Py)/(−Pz)`, the tangent of the angle off the axis | the correction acts in normalized image coordinates, before the focal and principal point; in those units `ω` is the camera's angular velocity times the readout time per unit of `t`, and the velocity formulas are exact; with `t` in short-side units the rates would mean something different for each focal, the image's own focal scale included, so changing an image's focal would change what its stored rates mean |
+| radial B-spline correction `e` (new) | units of `ρ`, the radius in focal units, on the spline's domain `[0, bspline_rho_max]` | it is added to the camera's `δ`, which is in units of `ρ`, before the focal is applied; `e_1` is the correction's value at `ρ_max` |
+| rolling-shutter rates `ω` (new) | radians of rotation per short side of readout: the camera's angular velocity in the `.sfmr` camera frame times the time to read `min(width, height)` scanlines; the readout position `t` is the pixel distance from the principal point's scanline in short-side units | a sensor reads its scanlines, which are pixel rows or columns, at a fixed time per scanline, so the time a pixel is read follows its pixel distance, and the readout position is measured across the image like the principal-point offset; the focal then drops out of the rates, and a uniform resize scales the scanline count and the time per scanline inversely; with `t` in focal units the stored rate would be the angular velocity times `f_i` times the time per scanline, so each image's own focal scale (focus breathing) would change what its stored rates mean. The rates are not radians per second: the images cannot tell the readout time apart from the rotation |
 
 The units also mean that prior widths of different terms cannot be compared as
 numbers. On the measured capture an `ωx` of one rate width, 2·10⁻³, moves the
-centre of the bottom edge by about 2 px, while the principal point's
-derived width of 0.0131 of the short side is about 20 px.
+centre of the bottom edge by about 1.9 px (`t ≈ 0.5`, `y ≈ −0.53` focal units,
+so `t·ωx·(1 + y²)·f ≈ 0.5 × 2·10⁻³ × 1.28 × 1447.8`), while the principal
+point's derived width of 0.0131 of the short side is about 20 px.
 
 When this draft is filed, this table goes into the `.sfmr` format spec,
 [sfmr-file-format.md § Per-image intrinsic adjustments](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13),
@@ -328,7 +372,7 @@ COLMAP at all.
 ### Core: the adjustment and the kernels
 
 - [`IntrinsicAdjustment`](../../crates/sfmtool-core/src/camera/intrinsics.rs)
-  gains `radial: [f64; 2]` and `rolling_shutter: [f64; 3]` (proposed names),
+  gains `radial_bspline: [f64; 2]` and `rolling_shutter: [f64; 3]` (proposed names),
   zero by default, and `is_zero` tests all four fields.
 - `CameraIntrinsics::with_adjustment` applies the radial correction by
   replacing the camera's coefficients with `c + K·e_i` (or with `e_i` itself on a
@@ -353,15 +397,15 @@ COLMAP at all.
   corrections without change of its own.
 - The per-camera scanlines setting is stored in memory beside the camera's
   [`PerImageAdjustments`](../../crates/sfmtool-core/src/reconstruction/data/image_set.rs),
-  which gains `radial`, `rolling_shutter` and
+  which gains `radial_bspline`, `rolling_shutter` and
   `rolling_shutter_scanlines: Option<RollingShutterScanlines>`, an enum
   `RollingShutterScanlines { Rows, Columns }` (proposed).
 - The ray Jacobian
   ([sfmtool-pinhole-kernels.md § Ray Jacobian](../core/camera/sfmtool-pinhole-kernels.md#ray-jacobian))
   becomes the derivative of the whole map. In `.sfmr` coordinates, with `D` the
-  existing radial 2×2 read with the image's spline, `∇t` equal to `(0, 1)` for
-  `ROWS` and `(1, 0)` for `COLUMNS` (`∂t/∂(x_d, y_d)`), and
-  `J_rs = I + ṗ·∇tᵀ`,
+  existing radial 2×2 read with the image's spline, `∇t = ∂t/∂(x_d, y_d)`,
+  which is `(0, −f_i/m)` for `ROWS` and `(f_i/m, 0)` for `COLUMNS` (from
+  `t = −f_i·y_d/m` and `t = f_i·x_d/m`), and `J_rs = I + ṗ·∇tᵀ`,
 
   ```
   ∂(x_r, y_r)/∂(x, y) = J_rs · D + t · ∂ṗ/∂(x, y)
@@ -388,17 +432,18 @@ COLMAP at all.
 In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
 
 - [`CameraRelease`](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
-  gains `image_radial: bool` and `image_rolling_shutter: bool` (proposed), and
-  `bundle_adjust` two flags `opt_image_radial` and `opt_image_rolling_shutter`,
+  gains `image_radial_bspline: bool` and `image_rolling_shutter: bool` (proposed), and
+  `bundle_adjust` two flags `opt_image_radial_bspline` and `opt_image_rolling_shutter`,
   narrowed per camera by them as the existing per-image flags are. Both are
-  refused on any model but `SFMTOOL_PINHOLE`; `image_radial` also on a camera
+  refused on any model but `SFMTOOL_PINHOLE`; `image_radial_bspline` also on a camera
   whose spline domain is not positive and finite.
 - The kernel takes one fixed scanlines setting per camera
   (`RollingShutterScanlines`, `Rows` or `Columns`), from the caller. `UNKNOWN`
   is the reconstruction-level adjustment's business, since it compares two
   solves ([Choosing rows or columns](#choosing-rows-or-columns)).
 - **Columns.** Each image's block of the reduced system grows from
-  `[δθ×3, δt×3, t_i, a_x, a_y]` to fourteen wide, `… , e_i0, e_i1, ωx, ωy, ωz`,
+  `[δθ×3, δt×3, ln(1 + s_i), a_x, a_y]` to fourteen wide,
+  `… , e_i0, e_i1, ωx, ωy, ωz`,
   in a solve where some camera releases a new per-image field, with the image's
   unreleased slots pinned. At the image's intrinsics, in `.sfmr` coordinates
   and then through the existing pixel step `F = f_i·diag(1, −1)`:
@@ -413,6 +458,22 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
   with `û = (x, y)/ρ`, `Bj` read at `min(ρ, ρ_max)`, as the shared spline's
   column reads it, and `J_rs = I + ṗ·∇tᵀ` as in the ray Jacobian above (the
   identity without rates).
+
+  **The focal columns gain a term.** The readout position is in pixels, so
+  `t = ∓f_i·(y_d or x_d)/m` is proportional to the image's focal and
+  `∂t/∂f_i = t/f_i`. With `u = cx_i + f_i·x_r`, `v = cy_i − f_i·y_r` and
+  `(x_r, y_r) = (x_d, y_d) + t·ṗ`,
+
+  ```
+  ∂(u, v)/∂f_i          = (x_r + t·ẋ, −y_r − t·ẏ)
+  ∂(u, v)/∂ln(1 + s_i)  = f_i·∂(u, v)/∂f_i = (u − cx_i, v − cy_i) + F·t·ṗ
+  ```
+
+  so the per-image log focal scale's column is the existing
+  `(u − cx_i, v − cy_i)` plus `F·t·ṗ`, and the shared focal's column, read
+  through `f_i = f·(1 + s_i)`, gains `(1 + s_i)·diag(1, −1)·t·ṗ` beside its
+  existing `(u − cx_i, v − cy_i)/f`. Both columns stay exact; without rates the
+  added term is zero and the columns are the existing ones.
   The per-observation camera block gains the five columns in further
   instantiations rather than widening the existing ones, for the reason the
   spec already gives for the principal point's columns: the Schur elimination's
@@ -421,9 +482,9 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
   3.8 times the factorization's cost.
 - **The prior** extends "The prior" of
   [bundle-adjustment.md](../core/geometry/bundle-adjustment.md#the-per-image-release)
-  with two more terms per camera, `‖e_i − ē‖²/σ_radial²` and
+  with two more terms per camera, `‖e_i − ē‖²/σ_radial_bspline²` and
   `‖ω_i − ω̄‖²/σ_rs²`, isotropic over each field's components, in the same
-  `σ_n²`-scaled units. `ImagePriorWidths` gains `radial` and `rolling_shutter`
+  `σ_n²`-scaled units. `ImagePriorWidths` gains `radial_bspline` and `rolling_shutter`
   (proposed). How the widths are chosen is open
   ([open question](#open-questions)).
 - **The mean hold.** The mean of `e` and of `ω` over the camera's solved images
@@ -486,8 +547,9 @@ measured. `k` such cameras cost `k` races; the cases with more than one are rare
 enough not to justify a combinatorial search over all `2ᵏ` combinations.
 
 A weight between rows and columns is not solved for, because the wrong choice is
-a local minimum: a continuous blend `t = λ·y − (1 − λ)·x`, which is rows at
-`λ = 1` and columns at `λ = 0`, released from `λ = 0` stays there
+a local minimum: a continuous blend of the two readout positions,
+`t = λ·(v − cy_i)/m + (1 − λ)·(u − cx_i)/m`, which is rows at `λ = 1` and
+columns at `λ = 0`, released from `λ = 0` stays there
 ([Alternatives considered](#alternatives-considered)).
 
 The cost compared is the robust cost the damping ladder compares (data, priors
@@ -536,11 +598,11 @@ observer argument is part of the work.
 
 - `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each
-  `releases` dict takes `"image_radial"`, `"image_rolling_shutter"` (bools) and
+  `releases` dict takes `"image_radial_bspline"`, `"image_rolling_shutter"` (bools) and
   `"rolling_shutter_scanlines"` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`; a
   missing key is the camera's stored setting, or `"UNKNOWN"` where it has
-  none), with `opt_image_radial=` and `opt_image_rolling_shutter=` for every camera at once;
-  `image_prior` dicts take `radial` and `rolling_shutter` widths. The report's
+  none), with `opt_image_radial_bspline=` and `opt_image_rolling_shutter=` for every camera at once;
+  `image_prior` dicts take `radial_bspline` and `rolling_shutter` widths. The report's
   `CameraAdjustment` gains the scanlines setting used, under `UNKNOWN` the costs
   with rows and with columns and whether one was stopped, and
   `ImageAdjustmentSpread` the new fields' spreads, with `ImageAdjustmentParameter`
@@ -548,14 +610,14 @@ observer argument is part of the work.
 - The kernel binding `sfmtool.geometry.bundle_adjust`
   ([bundle_adjust.rs](../../crates/sfmtool-py/src/geometry/bundle_adjust.rs))
   keeps `image_adjustments` as `(n_img, 3)` and takes the new fields as two more
-  arrays, `image_radial_adjustments` `(n_img, 2)` and
+  arrays, `image_radial_bspline_adjustments` `(n_img, 2)` and
   `image_rolling_shutter_rates` `(n_img, 3)`, with a `rolling_shutter_scanlines`
   sequence per camera (`"ROWS"` or `"COLUMNS"`, since the kernel runs one
   solve with a known setting and the race is the reconstruction-level
   adjustment's; for a camera that releases no rates and whose images' rates are
   zero the value is ignored), so existing callers are not broken by a wider
   array.
-- `read_sfmr` / `write_sfmr` dicts carry `radial_adjustments`,
+- `read_sfmr` / `write_sfmr` dicts carry `radial_bspline_adjustments`,
   `rolling_shutter_rates_xyz` and each camera's `rolling_shutter_scanlines`.
 - The viewer's Bundle Adjust dialog
   ([bundle_adjust_prompt.rs](../../crates/sfm-explorer/src/bundle_adjust_prompt.rs),
@@ -569,7 +631,7 @@ observer argument is part of the work.
   reason on a camera that is not `SFMTOOL_PINHOLE`, through its `CameraGate`.
   The MCP `bundle_adjust` tool
   ([edit.rs](../../crates/sfm-explorer/src/mcp/tools/catalog/edit.rs)) gains
-  `release_image_radial`, `release_image_rolling_shutter` and
+  `release_image_radial_bspline`, `release_image_rolling_shutter` and
   `rolling_shutter_scanlines` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`),
   call-wide and per camera, as its existing release keys are; omitted, it is
   the camera's stored setting, or `"UNKNOWN"` where it has none.
@@ -598,10 +660,17 @@ each fold's held-out points are re-triangulated through the trained cameras,
 the new terms included, and their reprojection RMS over all observations is the
 score. Solves were capped at 150 to 400 evaluations; 100 against 400 changed the
 held-out RMS by under 0.0003 px. The scratch solver wrote the rolling-shutter
-term in the kernels' optical frame (y down, `t` growing down the image for
-rows). That is the same family of maps as the one above, with
-`ω = (−ωx, ωy, ωz)` of its rates for rows and `ω = (ωx, −ωy, −ωz)` for columns,
-so every fit and score here holds unchanged; only a quoted rate's sign depends on the convention.
+term in the kernels' optical frame (y down) with the readout position in focal
+units: `t_o = (v − cy_i)/f_i` for rows and `t_o = (u − cx_i)/f_i` for columns.
+For each image this draft's `t` is a fixed multiple of it, `t = (f_i/m)·t_o`,
+and matching the two displacements gives this draft's rates as
+`ω = (m/f_i)·(ωx, −ωy, −ωz)` of the scratch solver's, for rows and for columns.
+`m/f_i` is about 1.06 here (`1536/1447.8`), varying by the ±1.3% of the
+per-image focal scale. So the model above is the same family of maps image by
+image, and every fit and held-out score here carries over unchanged. Two things
+differ slightly: a prior width in this draft's units is about 1.06 times the
+scratch solver's width quoted below, and the mean hold weights the images by
+`m/f_i`, which varies too little to matter.
 
 **Held-out RMS, px:**
 
@@ -689,11 +758,13 @@ better and has a physical reading; it could serve as a fallback for a camera
 whose scanlines are unknown and not worth two solves
 ([open question](#open-questions)).
 
-**A continuous readout blend.** `t = λ·y − (1 − λ)·x` with one `λ ∈ [0, 1]` per
-camera and shared rates. The scratch solver wrote it as `λ·y_o + (1 − λ)·x_o` in
-the optical frame, which is the negative of this `t` and so the same fit with
-every rate negated. In this draft's frame, `λ·y + (1 − λ)·x` runs along the other
-diagonal and is not what was measured between `λ = 0` and `λ = 1`. The solve's cost (px², priors included) at fixed `λ`:
+**A continuous readout blend.**
+`t = λ·(v − cy_i)/m + (1 − λ)·(u − cx_i)/m`, the rows position at `λ = 1` and
+the columns position at `λ = 0`, with one `λ ∈ [0, 1]` per camera and shared
+rates. The scratch solver wrote it in focal units in the optical frame,
+`λ·(v − cy_i)/f_i + (1 − λ)·(u − cx_i)/f_i`, which is this `t` times `m/f_i`, the
+same fit with the rates rescaled as in [Measured results](#measured-results).
+The solve's cost (px², priors included) at fixed `λ`:
 
 | λ | 0 | 0.25 | 0.5 | 0.75 | 1 |
 |---|---|---|---|---|---|
@@ -767,7 +838,8 @@ When built, the tests cover at least:
   correction of 0.1 at the domain end is about 145 px at this focal);
   `loose` of 10⁻² and `floor` of 10⁻⁴ for both new fields would be a starting
   point. Fixed, defaults inside the flat region of the measurements (4·10⁻³ for
-  the radial correction, 4·10⁻³ for the rates) would do. The measurements say
+  the radial correction, 4·10⁻³ for the rates, about 4.2·10⁻³ in this draft's
+  rate units) would do. The measurements say
   the widths do little work past those values, which argues for fixed defaults;
   the existing release derives its widths because a fixed lens and a
   stabilised one differ, which argues for deriving. Also open: whether one
@@ -807,11 +879,6 @@ When built, the tests cover at least:
   Every measured image has orientation 1.
 - **The CLI.** Whether `sfm xform --bundle-adjust` gains keys for the per-image
   releases and the scanlines setting.
-- **Naming.** `radial` against `distortion` for the per-image correction
-  (the shared release is `CameraRelease::distortion`), and the names of the new
-  types and columns, to settle in the glossary when the draft is filed. The
-  scanlines term is already settled there
-  ([GLOSSARY.md](../GLOSSARY.md#camera-intrinsics)).
 - **Breadth of the evidence.** One capture from one phone. The other checked-in
   datasets would need promotion to `SFMTOOL_PINHOLE` before they could test the
   terms, and a second phone capture would show whether the scanlines setting
