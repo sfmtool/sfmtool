@@ -899,8 +899,11 @@ camera turns during the readout. With `(x, y) = (Px, Py)/(−Pz)` a point's
 normalised coordinates in the camera frame (+X right, +Y up), `ρ = √(x² + y²)`,
 and `f_i`, `(cx_i, cy_i)` the image's focal and principal point after its focal
 scale and principal-point offset, image `i` maps a point to a pixel in three
-steps. Step 1 is written for an `SFMTOOL_PINHOLE` camera; on any other model,
-which has no radial correction, it is the model's own distortion of `(x, y)`.
+steps. The map is that of an `SFMTOOL_PINHOLE` camera. The format lets a camera
+of any model list `"rolling_shutter"`; what its rates mean on another model,
+such as an `SFMTOOL_FISHEYE` camera whose field reaches 90°, is an open
+question of
+[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md#open-questions).
 
 ```
 1. radial:   (x_d, y_d) = (x, y) · (ρ + δ(ρ) + Δδ_i(ρ)) / ρ
@@ -986,9 +989,10 @@ passed; `verify_sfmr` checks such a file by the rules alone. A
 that carries one (`SfmrReconstruction::load`, the binding's `from_data`) is
 refused the same way rather than saved without it. Applying the corrections,
 and the bundle adjustment that solves them, are specified in
-[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md). A
-COLMAP export is unaffected by them: an `SFMTOOL_PINHOLE` camera cannot be
-exported to COLMAP at all.
+[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md). No
+COLMAP export meets either correction: a file that carries one is refused on
+read, and an `SFMTOOL_PINHOLE` camera, the only model that may list
+`"radial_bspline"`, cannot be exported to COLMAP at all.
 
 ##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
 
