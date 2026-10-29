@@ -404,8 +404,10 @@ With several `UNKNOWN` cameras, their choices are made one camera at a time, in
 camera index order, each by its own race of two solves. While one camera's race
 runs, the `UNKNOWN` cameras already decided use the setting their race chose,
 and those not yet decided keep their rates held at zero, where the scanlines
-setting has no effect, so no setting is assumed for them. The last race releases
-every camera's rates and its winner is the solve's answer. `k` such cameras cost
+setting has no effect, so no setting is assumed for them. A camera whose setting
+is `ROWS` or `COLUMNS` releases its rates at that setting in every race. In the
+last race no released rates are held at zero, and its winner is the solve's
+answer. `k` such cameras cost
 `k` races; the cases with more than one are rare enough not to justify a
 combinatorial search over all `2ᵏ` combinations.
 
