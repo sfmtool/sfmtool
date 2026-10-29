@@ -9,7 +9,7 @@ algorithms, file-format I/O, GUI viewer, and PyO3 bindings. Config lives in
 
 This repo uses [Pixi](https://pixi.sh). Run everything via `pixi run …`.
 Environments: `default` (runtime), `test` (adds pytest, ruff, maturin,
-cargo-llvm-cov), `dev` (ipython), `docs` (zensical), `cuda` (CUDA-enabled
+cargo-llvm-cov), `dev` (ipython), `cuda` (CUDA-enabled
 pycolmap). `test-ci` is `test` minus the editable `sfmtool` self-install, so
 `pixi install` does no Rust build — CI uses it and compiles the extension once
 via `maturin develop --release`; locally prefer `test` (imports work with no
@@ -26,7 +26,6 @@ pixi run doc                        # Rustdoc gate (warnings are errors)
 pixi run maturin develop --release  # Rebuild PyO3 bindings after Rust edits
 pixi run gui [-- path.sfmr]         # Build and run the SfM Explorer (release)
 pixi run gui-mcp [path.sfmr]        # …with its MCP endpoint, for an agent to drive
-pixi run docs-{build,serve}         # Zensical docs
 pixi run sfm …                      # Run the CLI
 ```
 
@@ -73,7 +72,7 @@ with no `_`-prefixed component, is public API. The compiled extension
 `sfmtool._sfmtool` is internal by this rule; the public home of its bindings is
 the module of the same name on the package, `sfmtool.<submodule>`
 (`from sfmtool.fileio import read_sfmr`), and `tests/test_module_layout.py` fails
-on a path into the extension from `tests/`, `scripts/` or `docs/`. See
+on a path into the extension from `tests/` or `scripts/`. See
 `specs/python-bindings.md`.
 
 - **Re-exporting subpackage.** Its `__init__.py` imports names from its own
@@ -163,6 +162,14 @@ say what was checked ("n/a: Rust core only, no viewer, CLI image or docs
 change"). `skills/implement-change/SKILL.md` § "Screenshots" says how to take
 them on copies of `test-data`, crop out local paths and usernames, and host
 them on the fork.
+
+**The docs site is in another repository.** Its pages, their screenshots and
+its build live in
+[sfmtool/sfmtool.github.io](https://github.com/sfmtool/sfmtool.github.io),
+usually checked out beside this one as `../sfmtool.github.io`, and are served at
+<https://sfmtool.github.io/>. A change to a docs page, with its screenshots,
+goes in a PR to that repository, not to this one. When a change here alters
+what a docs page says or shows, open that PR as well.
 
 ### Writing style
 
@@ -286,7 +293,6 @@ empty-handed". Name the thing and say what it does.
   child process so an abort is a retried attempt rather than a dead pytest
   worker. Don't run `sfm sift` or a solve in either directory: the marker would
   put their output in `test-data`.
-- `docs/` — Zensical site, deployed to GitHub Pages.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). See "Quality reports"
   below.
@@ -321,8 +327,7 @@ empty-handed". Name the thing and say what it does.
   (`target/debug` vs `target/release`). A **cargo home** stays keyed on
   `Cargo.lock` alone, so the two kinds are on different generations and
   `ci_prune_caches.sh` takes one hash per call — prune them in separate
-  invocations. pixi envs are not cached anywhere, in either workflow),
-  `docs.yml`, `publish_to_pypi.yml`.
+  invocations. pixi envs are not cached anywhere), `publish_to_pypi.yml`.
 
 ## CLI
 

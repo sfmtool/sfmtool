@@ -149,19 +149,6 @@ bench-sift = "python scripts/benchmark_sift.py"
 [feature.dev.tasks]
 ipython = "ipython"
 
-# Zensical is pre-1.0 in the 0.0.x series, where the patch component is the
-# only thing that moves and every release is allowed to break. So the pin is a
-# single patch rather than a semver range: the docs build is only ever exercised
-# against the one version we checked it against, and moving it forward is a
-# deliberate commit that rebuilds the site and diffs the output. Bump the whole
-# window (`>=0.0.N, <0.0.N+1`) rather than widening it.
-[feature.docs.pypi-dependencies]
-zensical = ">=0.0.72, <0.0.73"
-
-[feature.docs.tasks]
-docs-serve = "zensical serve"
-docs-build = "zensical build"
-
 # Pins every non-CUDA environment to the CUDA-free platforms, whose macOS entry
 # is `osx-arm64-macos13` (macOS 13.3 or later, for pycolmap 4.2.1; see the
 # workspace `platforms` comment). A feature's
@@ -195,5 +182,4 @@ test = { features = ["runtime", "editable", "lint", "test", "test-tasks", "cpu"]
 # (test-linux-rust, test-linux-python).
 test-ci = { features = ["runtime", "lint", "test", "cpu"], solve-group = "default" }
 dev = { features = ["runtime", "editable", "dev", "cpu"], solve-group = "default" }
-docs = { features = ["runtime", "editable", "docs", "cpu"], solve-group = "default" }
 cuda = { features = ["runtime", "editable", "cuda"], solve-group = "cuda" }

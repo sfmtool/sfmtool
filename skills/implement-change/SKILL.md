@@ -231,8 +231,10 @@ and hosts the pictures:
    rows out or clear the panel first.
 
    For an image a CLI command writes, run the command on the scratchpad copy
-   and use its output; for a docs page, screenshot the page from
-   `pixi run docs-serve`. The same privacy check and hosting apply.
+   and use its output. The same privacy check and hosting apply. A docs
+   page lives in the sfmtool/sfmtool.github.io repository, usually checked
+   out as `../sfmtool.github.io`; screenshot it from `pixi run docs-serve`
+   run there, and put the pictures in that repository's PR.
 5. **Hosting.** Put the PNGs in one orphan commit "Screenshots for <branch>"
    on a `pr-<branch>-screenshots` branch of the fork, built without touching
    the checkout:

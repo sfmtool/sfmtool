@@ -6,6 +6,11 @@
 A tool for creating and exploring Structure from Motion (SfM) reconstructions,
 built on [COLMAP](https://colmap.github.io/) and [OpenCV](https://opencv.org/).
 
+The documentation is at [sfmtool.github.io](https://sfmtool.github.io/), built
+from the
+[sfmtool/sfmtool.github.io](https://github.com/sfmtool/sfmtool.github.io)
+repository.
+
 Under construction - project is being restructured to better fit what it
 evolved into.
 
@@ -64,9 +69,6 @@ pixi run gui
 
 # Run tests
 pixi run test
-
-# Serve docs locally
-pixi run docs-serve
 ```
 
 ## Project Structure

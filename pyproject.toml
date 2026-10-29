@@ -52,7 +52,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/sfmtool/sfmtool"
-Documentation = "https://sfmtool.github.io/sfmtool/"
+Documentation = "https://sfmtool.github.io/"
 Repository = "https://github.com/sfmtool/sfmtool"
 Issues = "https://github.com/sfmtool/sfmtool/issues"
 

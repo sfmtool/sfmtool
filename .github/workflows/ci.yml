@@ -544,9 +544,9 @@ jobs:
   # That reads like two extra cache entries but is close to none: the single
   # `<OS>-cargo-test-target` entry it replaces already held both trees (1322 MB
   # on Windows, 1156 MB on macOS), so the split mostly *divides* that between
-  # two keys rather than adding a second copy. Dropping docs.yml's 1828 MB pixi
-  # env cache in the same change leaves the budget clearly better off either
-  # way. See "Rust caches" above prune-caches for the budget rules.
+  # two keys rather than adding a second copy. Dropping the docs workflow's
+  # 1828 MB pixi env cache in the same change left the budget clearly better
+  # off either way. See "Rust caches" above prune-caches for the budget rules.
   test-os-rust:
     needs: changes
     if: needs.changes.outputs.code == 'true'

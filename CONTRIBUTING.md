@@ -35,11 +35,15 @@ pixi run test-rust                  # Rust tests with coverage
                                     # (excludes sfmtool-py + sfm-explorer)
 pixi run coverage-all               # Combined Python + Rust coverage
 pixi run gui                        # Launch the SfM Explorer GUI
-pixi run docs-serve                 # Live-rebuild the Zensical docs site
 ```
 
-Environments: `default`, `test`, `dev`, `docs`, `cuda`. The CI matrix uses
+Environments: `default`, `test`, `dev`, `cuda`. The CI matrix uses
 `test`. See `pixi.toml` for the full task list.
+
+The documentation site, <https://sfmtool.github.io/>, is built from its own
+repository,
+[sfmtool/sfmtool.github.io](https://github.com/sfmtool/sfmtool.github.io).
+A change to a docs page, with its screenshots, goes in a PR there.
 
 ## Before you submit a PR
 

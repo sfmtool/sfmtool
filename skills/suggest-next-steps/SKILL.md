@@ -9,7 +9,7 @@ Produce two lists: concrete next implementation tasks, and speculative new-featu
 
 ## How to work
 
-1. Read the specs under `specs/` and `docs/` to understand intended scope.
+1. Read the specs under `specs/` to understand intended scope.
 2. Read the code to understand what is actually built.
 3. Identify gaps: parts of existing specs that aren't implemented, or are partially implemented.
 4. Think about adjacent features that would be natural extensions — things that aren't in any spec yet but fit the project's direction.

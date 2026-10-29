@@ -5,8 +5,8 @@
 
 The compiled extension `sfmtool._sfmtool` is internal. Each of its submodules
 has a public module of the same name (`sfmtool.fileio`, `sfmtool.geometry`, ...),
-and the tests, the scripts and the docs import from those. This test scans
-them as text for a path into the extension and fails on any it finds outside
+and the tests and the scripts import from those. This test scans them as
+text for a path into the extension and fails on any it finds outside
 the allowlist below.
 """
 
@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCANNED = ("tests", "scripts", "docs")
+SCANNED = ("tests", "scripts")
 SUFFIXES = {".py", ".md", ".sh", ".ps1", ".toml", ".txt", ".json", ".yml", ".yaml"}
 
 # `sfmtool._sfmtool`, `from sfmtool import _sfmtool` and relative imports of it.

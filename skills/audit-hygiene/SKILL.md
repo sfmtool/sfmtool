@@ -14,7 +14,7 @@ prioritized list of structural fixes.
 
 - Python under `src/sfmtool/` and `tests/`
 - Rust crates under `crates/`
-- Top-level layout (`scripts/`, `specs/`, `docs/`)
+- Top-level layout (`scripts/`, `specs/`)
 
 ## What to look for
 

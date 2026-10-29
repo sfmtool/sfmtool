@@ -92,6 +92,10 @@ names.
 > Embedded Patches step before the Track View steps and describes the table's
 > current columns. Track View keeps showing no per-observation readings for a
 > point with no patch frame._
+>
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the tutorial's Convert to Embedded Patches step goes in a PR there._
 
 The tutorial's "Viewing 3D Point Tracks" step says the Track View table "shows
 the SIFT feature sizes and reprojection error in both pixels and degrees".
@@ -174,6 +178,10 @@ Expected: `drag {from_px, to_px, mouse_button, modifiers, steps}` and
 `scroll {at_px, delta}`, going through the same input path as `click`.
 
 ## 5. The GUI tutorial no longer matches the viewer (medium)
+
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
 
 What a new user sees after `sfm explorer` differs from every screenshot in
 `docs/tutorials/getting-started.md`:
@@ -333,6 +341,10 @@ example. A reader would take that as 58 photographs.
 
 ## 13. CLI quickstart gaps (docs)
 
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
+
 The CLI steps run word for word: 85 of 85 images registered in 51 s. Four
 things would help a new reader:
 
@@ -352,6 +364,10 @@ things would help a new reader:
 
 ## 14. CLI output in the docs is out of date (docs)
 
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
+
 - `sfm inspect -v` now also prints *Tool options*, *Depth reliability*,
   *Point or bearing* and *Integrity: OK*.
 - `sfm motion`'s summary table now has the columns Dist, Rot, StepR, CovR,
@@ -368,6 +384,10 @@ that counts vary, and add a docs test that runs the quickstart on
 a test instead of leaving the docs stale.
 
 ## 15. Write each GUI step as a card (docs)
+
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
 
 The GUI steps describe a gesture ("I've looked over to the right", "it should
 be easy to move the viewport") but not where the reader should end up or how
@@ -395,6 +415,10 @@ A worked card, run during this bash on
 
 ## 16. Use a ground-truth reconstruction for the GUI tutorial (docs)
 
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
+
 Distances and angles in a step card only mean something in a reconstruction
 with a known scale and up direction. `seoul_bull_sculpture_ground_truth_v01.sfmr`
 and `kerry_park_ground_truth_v01.sfmr` are in metres with Z up. The dino has no
@@ -405,6 +429,10 @@ width or the toy's height. Alternatively, move the GUI tutorial to the Seoul
 Bull.
 
 ## 17. Generate the docs screenshots from stored scene recipes (docs)
+
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
 
 All six GUI screenshots drifted and nothing noticed. Store each one's state
 (window size, layout, selection, view, Image Detail overlay and view, display
@@ -420,6 +448,10 @@ one call; until then the recipe is a list of existing calls
 `set_image_detail_view`, `set_view`).
 
 ## 18. Add a page on exploring a reconstruction with an agent (docs)
+
+> _Status (2026-10-28): **Not done** — the docs moved to the
+> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> the fix goes in a PR there._
 
 The user docs never mention the MCP endpoint. A short page should cover
 `pixi run gui-mcp <file>.sfmr` (or `sfm explorer --mcp`), registering it with

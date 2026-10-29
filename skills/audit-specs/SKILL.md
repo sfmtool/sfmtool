@@ -1,11 +1,11 @@
 ---
 name: audit-specs
-description: Audit every spec in specs/ and docs/ against the corresponding code and produce a consistency report. Use when the user asks to check spec/code drift, verify specs are still accurate, or review the state of specifications.
+description: Audit every spec in specs/ against the corresponding code and produce a consistency report. Use when the user asks to check spec/code drift, verify specs are still accurate, or review the state of specifications.
 ---
 
 # Audit specs against code
 
-Walk every specification, design document, and user documentation under `specs/` and `docs/`, compare each to the code that implements it, and produce a single consolidated report.
+Walk every specification and design document under `specs/`, compare each to the code that implements it, and produce a single consolidated report. The user documentation is in the sfmtool/sfmtool.github.io repository and is not part of this audit.
 
 ## Scope
 
@@ -21,7 +21,7 @@ window and produces a report nobody finishes, so the audit runs at two depths:
 
 The deep pass is bidirectional:
 
-- **Spec → code.** For each sampled file under `specs/` (recursively — `specs/cli/<category>/`, `specs/core/<module>/`, `specs/formats/`, `specs/gui/`, `specs/workspace/`) and under `docs/` — locate the implementing code and compare.
+- **Spec → code.** For each sampled file under `specs/` (recursively — `specs/cli/<category>/`, `specs/core/<module>/`, `specs/formats/`, `specs/gui/`, `specs/workspace/`) — locate the implementing code and compare.
 - **Code → spec.** Every significant code surface — CLI commands in `src/sfmtool/_commands/`, crates in `crates/`, modules in `src/sfmtool/`, user-facing file formats — check whether a spec or doc covers it. This half stays exhaustive but shallow: it is a coverage list, built from the import/command inventory, not a per-surface essay. Unspecced code is a first-class finding, not a footnote.
 
 ### Choosing the sample
@@ -38,8 +38,8 @@ Two pools, in this order:
 
 ```bash
 SEED=$RANDOM; N=10                     # record SEED in the report
-find specs docs -name '*.md' ! -name 'README.md' ! -name 'TEMPLATE.md' | sort > /tmp/all.txt
-grep -hoE '^### (specs|docs)/[a-zA-Z0-9/_.-]+\.md' reports/*-spec-audit.md 2>/dev/null \
+find specs -name '*.md' ! -name 'README.md' ! -name 'TEMPLATE.md' | sort > /tmp/all.txt
+grep -hoE '^### specs/[a-zA-Z0-9/_.-]+\.md' reports/*-spec-audit.md 2>/dev/null \
   | sed 's/^### //' | sort -u > /tmp/done.txt
 comm -23 /tmp/all.txt /tmp/done.txt > /tmp/pool.txt   # never-audited first
 [ -s /tmp/pool.txt ] || cp /tmp/all.txt /tmp/pool.txt # all covered? reopen the field

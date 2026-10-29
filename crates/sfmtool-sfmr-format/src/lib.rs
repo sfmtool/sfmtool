@@ -7,7 +7,7 @@
 //! It stores SfM reconstructions as ZIP archives with zstandard-compressed
 //! columnar binary data and JSON metadata.
 //!
-//! See `docs/sfmr-file-format.md` for the specification.
+//! See `specs/formats/sfmr-file-format.md` for the specification.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(
