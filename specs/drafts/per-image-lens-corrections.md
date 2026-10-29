@@ -13,10 +13,11 @@ spline in the camera's own basis, added to the camera's spline for that image;
 each image has its own rolling-shutter rotation rates `ω = (ωx, ωy, ωz)`; each
 camera has a rolling-shutter scanlines setting, stored as `ROWS` or `COLUMNS`
 and chosen in the bundle adjustment as `ROWS`, `COLUMNS` or `UNKNOWN`, where
-`UNKNOWN` solves with each and keeps the lower cost, and a camera with no
-stored setting is solved as `UNKNOWN`, never as an assumed `ROWS`; every new
-per-image field is zero-mean over its camera's images with the mean held. Not decided: the prior widths, the early-stopping
-rule for `UNKNOWN`, and the questions listed under
+`UNKNOWN` solves with each and keeps the lower cost, and a camera that
+releases its rates with no stored setting is solved as `UNKNOWN`, never as an
+assumed `ROWS`; every new per-image field is zero-mean over its camera's images
+with the mean held. Not decided: the prior widths, the early-stopping rule for
+`UNKNOWN`, and the questions listed under
 [Open questions](#open-questions).
 
 ## Purpose
@@ -403,14 +404,14 @@ setting into the camera.
 With several `UNKNOWN` cameras, their choices are made one camera at a time, in
 camera index order, each by its own race of two solves. While one camera's race
 runs, the `UNKNOWN` cameras already decided use the setting their race chose,
-and those not yet decided keep their rates held at zero, where the scanlines
+and those not yet decided have their rates held at zero, where the scanlines
 setting has no effect, so no setting is assumed for them. A camera whose setting
 is `ROWS` or `COLUMNS` releases its rates at that setting in every race.
 
 The first race starts from the caller's reconstruction. Each race after it
 starts from the state the previous race's winner reached: its poses, its points,
-every intrinsic it released, and the earlier `UNKNOWN` cameras' rates at the
-settings their races chose. The earlier races' work is carried forward rather
+every intrinsic and rate it released, including the earlier `UNKNOWN` cameras'
+rates at the settings their races chose. The earlier races' work is carried forward rather
 than thrown away. Both solves of a race start from that same state, with the
 raced camera's rates at zero, so the two are compared from one start as in a
 single race. In the last race no released rates are held at zero, and the
