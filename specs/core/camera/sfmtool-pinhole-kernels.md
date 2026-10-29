@@ -171,8 +171,8 @@ cannot take an adjustment (a correction on another model, a degenerate spline
 domain, or rates without a scanlines setting), and `with_adjustment` panics on
 those; `SfmrReconstruction::from_sfmr_data` refuses them with an error first.
 `check_rolling_shutter` says the same of a rolling shutter set on the field
-directly (non-zero rates on another model, or a rate that is not finite), on
-which the projection methods panic. `ImageSet::check_image_intrinsics` runs
+directly: non-zero rates on another model, on which the projection methods
+panic, or a rate that is not finite. `ImageSet::check_image_intrinsics` runs
 both over every camera and image, for an edit that pairs images with other
 cameras or changes a camera, its flags or its scanlines setting; the binding's
 `clone_with_changes` calls it before anything is read, and the binding's

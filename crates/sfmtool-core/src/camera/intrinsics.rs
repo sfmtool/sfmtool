@@ -1094,7 +1094,8 @@ impl CameraIntrinsics {
     /// [`Self::rolling_shutter`], or a message saying why not: non-zero rates
     /// need an `SFMTOOL_PINHOLE` camera, and every rate must be finite. A
     /// caller that sets the field directly checks it with this before
-    /// projecting, since a projection method panics on what this refuses.
+    /// projecting, since a projection method panics on rates on another model
+    /// and returns non-finite pixels for a rate that is not finite.
     pub fn check_rolling_shutter(&self) -> Result<(), String> {
         let Some(rolling_shutter) = &self.rolling_shutter else {
             return Ok(());

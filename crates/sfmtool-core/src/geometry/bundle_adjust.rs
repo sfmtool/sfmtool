@@ -609,7 +609,9 @@ impl<'a> BaCameras<'a> {
         }
     }
 
-    /// Panic on a camera list or column that does not describe `n_img` images.
+    /// Panic on a camera list or column that does not describe `n_img` images,
+    /// on a camera whose rolling shutter the projection cannot apply, and on
+    /// an image adjustment its camera cannot take.
     fn check(&self, n_img: usize) {
         assert!(!self.cameras.is_empty(), "BaCameras holds no camera");
         assert_eq!(
