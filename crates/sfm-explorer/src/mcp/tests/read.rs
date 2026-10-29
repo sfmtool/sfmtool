@@ -422,7 +422,12 @@ fn get_camera_image_reports_the_image_s_own_intrinsics() {
     let adjusted = image(&mut state, &mut viewer, 5);
     assert_eq!(
         adjusted["intrinsic_adjustment"],
-        json!({ "focal": 0.01, "principal_point": [0.02, -0.01] })
+        json!({
+            "focal": 0.01,
+            "principal_point": [0.02, -0.01],
+            "radial_bspline": [0.0, 0.0],
+            "rolling_shutter": [0.0, 0.0, 0.0],
+        })
     );
     let intrinsics = &adjusted["image_intrinsics"];
     let number = |value: &Value| value.as_f64().expect("a number");
@@ -441,11 +446,26 @@ fn get_camera_image_reports_the_image_s_own_intrinsics() {
     let plain = image(&mut state, &mut viewer, 4);
     assert_eq!(
         plain["intrinsic_adjustment"],
-        json!({ "focal": 0.0, "principal_point": [0.0, 0.0] })
+        json!({
+            "focal": 0.0,
+            "principal_point": [0.0, 0.0],
+            "radial_bspline": [0.0, 0.0],
+            "rolling_shutter": [0.0, 0.0, 0.0],
+        })
     );
     assert_eq!(
         plain["image_intrinsics"],
-        json!({ "focal_lengths": [1000.0, 1000.0], "principal_point": [960.0, 540.0] })
+        json!({
+            "focal_lengths": [1000.0, 1000.0],
+            "principal_point": [960.0, 540.0],
+            "params": {
+                "focal_length_x": 1000.0,
+                "focal_length_y": 1000.0,
+                "principal_point_x": 960.0,
+                "principal_point_y": 540.0,
+            },
+            "rolling_shutter": null,
+        })
     );
 
     let lens = |state: &mut AppState, viewer: &mut Viewer3D, index: usize| {
@@ -464,4 +484,87 @@ fn get_camera_image_reports_the_image_s_own_intrinsics() {
         lens(&mut state, &mut viewer, 0)["per_image_adjustments"],
         json!([])
     );
+    assert_eq!(
+        lens(&mut state, &mut viewer, 0)["rolling_shutter_scanlines"],
+        Value::Null
+    );
+}
+
+/// `get_camera_image` reports an image's radial correction and rolling-shutter
+/// rates as stored, and the spline and rolling shutter its intrinsics carry
+/// with them applied; `get_camera_intrinsics` names both as varying per image
+/// and reports the camera's scanlines setting.
+#[test]
+fn get_camera_image_reports_the_image_s_lens_corrections() {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections, LENS_CORRECTIONS};
+
+    let (_, mut viewer) = two_reconstructions();
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/alpha.sfmr"),
+        with_lens_corrections(
+            as_sfmtool_pinhole(recon(8, "A")),
+            5,
+            LENS_CORRECTIONS,
+            sfmtool_core::camera::RollingShutterScanlines::Columns,
+        ),
+    ));
+    let image = |state: &mut AppState, viewer: &mut Viewer3D, index: usize| {
+        call(
+            state,
+            viewer,
+            "get_camera_image",
+            json!({ "camera_image": index }),
+        )
+    };
+
+    let corrected = image(&mut state, &mut viewer, 5);
+    assert_eq!(
+        corrected["intrinsic_adjustment"],
+        json!({
+            "focal": 0.0,
+            "principal_point": [0.0, 0.0],
+            "radial_bspline": [0.01, 0.02],
+            "rolling_shutter": [0.02, -0.01, 0.005],
+        })
+    );
+    let intrinsics = &corrected["image_intrinsics"];
+    assert_eq!(
+        intrinsics["rolling_shutter"],
+        json!({ "scanlines": "COLUMNS", "rates": [0.02, -0.01, 0.005] })
+    );
+    // The camera's spline is zero, so the image's is its correction written
+    // in the camera's four-coefficient basis, ending at e_1.
+    let params = &intrinsics["params"];
+    assert_eq!(params["bspline_rho_max"], json!(1.2));
+    let end = params["bspline_c3"].as_f64().expect("a number");
+    assert!((end - 0.02).abs() < 1e-12, "{params}");
+    assert_eq!(
+        corrected["camera_intrinsics"]["camera_model"],
+        "SFMTOOL_PINHOLE"
+    );
+
+    let plain = image(&mut state, &mut viewer, 4);
+    assert_eq!(plain["image_intrinsics"]["rolling_shutter"], Value::Null);
+    assert_eq!(
+        plain["image_intrinsics"]["params"]["bspline_c3"],
+        json!(0.0)
+    );
+
+    let lens = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_intrinsics",
+        json!({ "camera_intrinsics_index": 1 }),
+    );
+    assert_eq!(
+        lens["per_image_adjustments"],
+        json!([
+            "focal",
+            "principal_point",
+            "radial_bspline",
+            "rolling_shutter"
+        ])
+    );
+    assert_eq!(lens["rolling_shutter_scanlines"], "COLUMNS");
 }

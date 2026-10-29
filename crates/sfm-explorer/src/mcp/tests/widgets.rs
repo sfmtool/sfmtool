@@ -995,6 +995,7 @@ fn the_image_detail_toolbar_s_dropdowns_are_named_by_their_labels() {
                         crate::image_detail::ImageIntrinsicsKey::new(
                             CameraRef::new(node.id, 0),
                             &Default::default(),
+                            None,
                         ),
                         camera,
                     )),

@@ -984,13 +984,15 @@ its rolling-shutter rates: `SfmrReconstruction` holds them and the scanlines
 settings, and `image_intrinsics(i)` applies them
 ([../core/camera/sfmtool-pinhole-kernels.md § Per-image
 corrections](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)),
-for rates on `SFMTOOL_PINHOLE` alone. The viewer and the Python package do not
-yet, so `read_sfmr` and `write_sfmr_with_options` refuse, with
+for rates on `SFMTOOL_PINHOLE` alone, and SfM Explorer draws and measures each
+image through them ([../gui/camera-views.md](../gui/camera-views.md)). The
+Python package does not yet, so `read_sfmr` and `write_sfmr_with_options`
+refuse, with
 `SfmrError::Unsupported` naming the camera and the column, a file in which some
 camera lists `"radial_bspline"` or `"rolling_shutter"`, even with every value
 zero, once every rule above has passed; `verify_sfmr` checks such a file by
 the rules alone. A scanlines setting on its own reads, writes and loads. The
-reading of the corrections by the viewer and the Python package, and the
+reading of the corrections by the Python package, and the
 bundle adjustment that solves them, are specified in
 [per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md). No
 COLMAP export meets either correction: a file that carries one is refused on

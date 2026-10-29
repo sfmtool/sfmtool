@@ -562,23 +562,30 @@ pub(crate) fn image_intrinsics(
     Some(image_set.image_intrinsics(index))
 }
 
-/// `camera` with `adjustment` applied, borrowed when the adjustment is zero:
+/// `camera` with `adjustment` applied, its rolling-shutter rates read on
+/// `scanlines`, the scanlines setting of the camera the image belongs to:
 /// what [`image_intrinsics`] gives for a camera the image set does not hold,
-/// such as a camera model proposal's proposed camera.
+/// such as a camera model proposal's proposed camera. Borrowed when the
+/// adjustment is zero.
 ///
-/// No scanlines setting is passed, so an adjustment with rolling-shutter rates
-/// panics here, as does a radial correction on a camera that is not
-/// `SFMTOOL_PINHOLE`. The viewer cannot hold either yet: it reads a file
-/// through `read_sfmr`, which refuses both per-image corrections, and no edit
-/// it offers solves them.
+/// `None` when `camera` cannot take the adjustment
+/// ([`CameraIntrinsics::check_adjustment`](sfmtool_core::CameraIntrinsics::check_adjustment)):
+/// a radial correction or rolling-shutter rates on a camera that is not
+/// `SFMTOOL_PINHOLE`, or rates with no scanlines setting. A caller draws
+/// nothing for that camera rather than drawing it without the correction, and
+/// nothing here panics.
 pub(crate) fn adjusted_intrinsics<'a>(
     camera: &'a sfmtool_core::CameraIntrinsics,
     adjustment: &sfmtool_core::IntrinsicAdjustment,
-) -> std::borrow::Cow<'a, sfmtool_core::CameraIntrinsics> {
+    scanlines: Option<sfmtool_core::camera::RollingShutterScanlines>,
+) -> Option<std::borrow::Cow<'a, sfmtool_core::CameraIntrinsics>> {
     if adjustment.is_zero() {
-        std::borrow::Cow::Borrowed(camera)
+        Some(std::borrow::Cow::Borrowed(camera))
     } else {
-        std::borrow::Cow::Owned(camera.with_adjustment(adjustment, None))
+        camera.check_adjustment(adjustment, scanlines).ok()?;
+        Some(std::borrow::Cow::Owned(
+            camera.with_adjustment(adjustment, scanlines),
+        ))
     }
 }
 

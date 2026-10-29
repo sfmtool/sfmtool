@@ -6,7 +6,10 @@
 [core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md),
 [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md),
 [core/reconstruction/bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
-[core/reconstruction/edited-reconstruction.md](../core/reconstruction/edited-reconstruction.md)
+[core/reconstruction/edited-reconstruction.md](../core/reconstruction/edited-reconstruction.md),
+[gui/camera-views.md](../gui/camera-views.md),
+[gui/camera-intrinsics.md](../gui/camera-intrinsics.md),
+[gui/mcp-server.md](../gui/mcp-server.md)
 and [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md).
 
 Decided by the maintainer: the per-image radial correction is a two-coefficient
@@ -305,8 +308,9 @@ reader, a writer and a verifier hold them to, their hash slots, the migration
 from version 13 and the table of
 [Units of the per-image adjustments](#units-of-the-per-image-adjustments). In
 memory the scanlines setting is `SfmrCamera::rolling_shutter_scanlines`, a
-`RollingShutterScanlines`, in the format crate. Until the viewer and the Python
-package apply the corrections where they read an image through its camera,
+`RollingShutterScanlines`, in the format crate. Until the Python package
+applies the corrections where it reads an image through its camera (the viewer
+does, [Bindings, viewer, CLI](#bindings-viewer-cli)),
 `read_sfmr` and `write_sfmr_with_options` refuse a file in which a camera lists
 `"radial_bspline"` or `"rolling_shutter"` (`refuse_per_image_lens_corrections`
 in [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs)). The core step
@@ -656,6 +660,28 @@ observer argument is part of the work.
 
 ### Bindings, viewer, CLI
 
+**SfM Explorer's drawing and measuring is built.** Every viewer site that
+reads an image's intrinsics reads them through `ImageSet::image_intrinsics(i)`
+(or, for a camera the image set does not hold, `adjusted_intrinsics` with the
+camera's scanlines setting), so the frustums and their image quads, the
+background photograph's mesh, the track rays, the camera-view click ray, the
+camera lock's residual, Image Detail's intrinsics layer, Track View's tiles,
+hover views and zoom, the bench, the photometric view sources, the reference
+pick, the camera model proposal's rug and observation layer, and `get_point`'s
+per-observation error all apply both corrections. No shader carries lens
+arithmetic: the meshes are placed along CPU `pixel_to_ray` rays, and an image
+with rates on an undistorted lens takes the tessellated frustum path. A camera
+that cannot take an image's corrections, such as a camera model proposal's
+fitted camera of another model, gives no adjusted intrinsics rather than a
+panic or a drawing without them. Image Detail's legend states the radial
+correction and the rates with the scanlines setting, and `get_camera_image`
+and `get_camera_intrinsics` report them
+([gui/camera-views.md](../gui/camera-views.md),
+[gui/camera-intrinsics.md](../gui/camera-intrinsics.md),
+[gui/mcp-server.md](../gui/mcp-server.md)). With every new field zero the
+viewer draws exactly what it drew before. The Bundle Adjust dialog's release
+checkboxes and **Scanlines** choice for the two corrections, below, are proposed.
+
 - `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each
   `releases` dict takes `"image_radial_bspline"`, `"image_rolling_shutter"` (bools) and
@@ -929,11 +955,11 @@ When built, the tests cover at least:
 - **Reporting and display.** How the new fields are summarised by the
   reconstruction-level report and by the CLI (`sfm inspect`, `sfm analyze`),
   for example the rolling-shutter displacement at the edge in pixels and the
-  radial correction at `ρ_max` in pixels; how the viewer shows them in an
-  image's intrinsics detail
+  radial correction at `ρ_max` in pixels. The viewer's part is settled: Image
+  Detail's intrinsics legend states both corrections, and its distortion
+  overlay draws the image's own field, readout included
   ([intrinsics/mod.rs](../../crates/sfm-explorer/src/image_detail/intrinsics/mod.rs),
-  [gui/camera-intrinsics.md](../gui/camera-intrinsics.md)); and whether its
-  distortion overlay draws the image's own field.
+  [gui/camera-intrinsics.md](../gui/camera-intrinsics.md)).
 - **The format version.** Settled and built: version 14 as above, with older
   files reading as zero corrections, and a `rolling_shutter_scanlines` setting
   allowed without rates.

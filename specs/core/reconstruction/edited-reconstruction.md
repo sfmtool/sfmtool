@@ -157,9 +157,8 @@ corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)).
 scanlines setting keeps an entry. `from_sfmr_data` reads all of them and
 refuses an image whose adjustment its camera cannot take (non-zero rates on a
 model other than `SFMTOOL_PINHOLE`, for example), and `to_sfmr_data` writes
-them. The viewer and the Python package do not read the two corrections yet,
-so `load` and `save` still refuse a file that varies either, at the file
-boundary
+them. SfM Explorer reads both, but the Python package does not yet, so `load`
+and `save` still refuse a file that varies either, at the file boundary
 ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
 The binding's `SfmrReconstruction` exposes them as
 `radial_bspline_adjustments`, `rolling_shutter_rates_xyz` and

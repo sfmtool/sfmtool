@@ -480,8 +480,8 @@ fn rates_on_another_model_are_refused_and_the_file_boundary_still_refuses_both()
     let flags = PerImageAdjustments::from_names(&["radial_bspline", "rolling_shutter"]).unwrap();
     assert!(flags.radial_bspline && flags.rolling_shutter && flags.any());
 
-    // The viewer and the Python package do not read the corrections yet, so a
-    // save is still refused, and nothing is written.
+    // The Python package does not read the corrections yet, so a save is
+    // still refused, and nothing is written.
     let dir = std::env::temp_dir().join("sfmr_core_lens_corrections_save");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

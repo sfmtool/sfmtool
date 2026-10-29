@@ -73,8 +73,8 @@ pub fn read_sfmr_content_hash(path: &Path) -> Result<ContentHash, SfmrError> {
 /// as stored. A file in which some camera varies the radial B-spline
 /// correction or the rolling shutter per image is refused with
 /// [`SfmrError::Unsupported`], naming the camera and the column, because the
-/// viewer and the Python package in this build do not yet apply either
-/// correction where they read an image through its camera (see
+/// Python package in this build does not yet apply either correction where it
+/// reads an image through its camera (see
 /// [`refuse_per_image_lens_corrections`]).
 pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     let data = read_sfmr_file(path)?;

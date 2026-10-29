@@ -613,3 +613,42 @@ fn the_readout_measures_through_the_image_s_own_intrinsics() {
     .expect("keypoints");
     assert!(shared[0] > 1.0, "the adjustment moved nothing: {shared:?}");
 }
+
+/// The readout measures through the image's radial correction and rolling
+/// shutter: with keypoints made through a corrected image's intrinsics, the
+/// stored pose still agrees with itself, with rows and with columns, where the
+/// camera alone would leave a residual of pixels.
+#[test]
+fn the_readout_measures_through_the_image_s_lens_corrections() {
+    use sfmtool_core::camera::RollingShutterScanlines;
+    for scanlines in [
+        RollingShutterScanlines::Rows,
+        RollingShutterScanlines::Columns,
+    ] {
+        let corrected = crate::test_support::with_lens_corrections(
+            crate::test_support::as_sfmtool_pinhole(SfmrReconstruction::demo(64)),
+            IMAGE,
+            crate::test_support::LENS_CORRECTIONS,
+            scanlines,
+        );
+        let (mut state, mut viewer, _id) = looking_through(with_projected_keypoints(corrected));
+        enter(&mut viewer, &mut state).expect("camera view of a posed image");
+        let lock = viewer.camera_lock.as_ref().expect("a held lock");
+        let stored = residuals(lock, &stored_pose(&state)).1.expect("keypoints");
+        assert!(
+            stored[0] < 1e-3,
+            "the stored pose disagrees with itself: {stored:?}"
+        );
+
+        let shared = sfmtool_core::reconstruction::move_camera::residual_quantiles_px(
+            &state.scene[0].recon().image_set.cameras[0],
+            &stored_pose(&state),
+            &sfmtool_core::reconstruction::move_camera::edited_image_reprojection_samples(
+                state.scene[0].edited(),
+                IMAGE,
+            ),
+        )
+        .expect("keypoints");
+        assert!(shared[0] > 1.0, "the corrections moved nothing: {shared:?}");
+    }
+}

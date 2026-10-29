@@ -424,6 +424,10 @@ impl ImageDetail {
     ) -> Option<&mut ChangeLayer> {
         let refit = proposal.fit.as_ref().ok()?;
         let cols = grid_cols.max(1);
+        // A camera that cannot take the image's adjustment has no change
+        // field to draw, rather than one drawn without the correction.
+        let current = image.apply(&proposal.source)?;
+        let proposed = image.apply(&refit.camera)?;
         let stale = !matches!(
             &self.change_layer,
             Some((k, g, n, _)) if *k == image && *g == proposal.generation && *n == cols
@@ -433,12 +437,7 @@ impl ImageDetail {
                 image,
                 proposal.generation,
                 cols,
-                ChangeLayer::compute(
-                    &image.apply(&proposal.source),
-                    &image.apply(&refit.camera),
-                    cols,
-                    refit.theta_fit_deg,
-                ),
+                ChangeLayer::compute(&current, &proposed, cols, refit.theta_fit_deg),
             ));
         }
         self.change_layer.as_mut().map(|(.., layer)| layer)

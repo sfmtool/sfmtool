@@ -230,8 +230,8 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// `rolling_shutter_scanlines` settings are written as given. A value in
 /// which some camera varies the radial B-spline correction or the rolling
 /// shutter per image is refused with [`SfmrError::Unsupported`] and nothing is
-/// written: the viewer and the Python package in this build do not yet apply
-/// either correction where they read an image through its camera, so it does
+/// written: the Python package in this build does not yet apply either
+/// correction where it reads an image through its camera, so it does
 /// not write a file that [`crate::read_sfmr`] would refuse (see
 /// [`refuse_per_image_lens_corrections`]).
 pub fn write_sfmr_with_options(

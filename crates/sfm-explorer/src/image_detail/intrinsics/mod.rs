@@ -70,7 +70,7 @@ use std::borrow::Cow;
 use axes::AxisGeometry;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke};
 use sfmtool_core::camera::report;
-use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::camera::{CameraIntrinsics, RollingShutterScanlines};
 use sfmtool_core::reconstruction::{ImageSet, PerImageAdjustments};
 use sfmtool_core::IntrinsicAdjustment;
 
@@ -87,9 +87,10 @@ pub(crate) enum LayerModel {
     Proposed(u64),
 }
 
-/// Which image intrinsics a layer is drawn through: the camera, and the
-/// intrinsic adjustment of the image shown, which the layer applies to
-/// whichever camera it draws, the current one or an open proposal's.
+/// Which image intrinsics a layer is drawn through: the camera, the intrinsic
+/// adjustment of the image shown and the camera's rolling-shutter scanlines
+/// setting, which the layer applies to whichever camera it draws, the current
+/// one or an open proposal's.
 ///
 /// The adjustment is held as its bits so the key can be hashed. Every zero
 /// adjustment is one key, so the images of a camera with no adjustment share
@@ -101,11 +102,17 @@ pub(crate) struct ImageIntrinsicsKey {
     /// The bits of the adjustment's focal scale, principal-point offset,
     /// radial correction and rolling-shutter rates, in that order.
     adjustment: [u64; 8],
+    /// The camera's scanlines setting, which the rates are read on.
+    scanlines: Option<RollingShutterScanlines>,
 }
 
 impl ImageIntrinsicsKey {
-    /// The key of `camera` under `adjustment`.
-    pub(crate) fn new(camera: crate::scene::CameraRef, adjustment: &IntrinsicAdjustment) -> Self {
+    /// The key of `camera` under `adjustment`, its rates read on `scanlines`.
+    pub(crate) fn new(
+        camera: crate::scene::CameraRef,
+        adjustment: &IntrinsicAdjustment,
+        scanlines: Option<RollingShutterScanlines>,
+    ) -> Self {
         let adjustment = if adjustment.is_zero() {
             [0; 8]
         } else {
@@ -114,7 +121,11 @@ impl ImageIntrinsicsKey {
             let [w_x, w_y, w_z] = adjustment.rolling_shutter;
             [adjustment.focal, a_x, a_y, e_0, e_1, w_x, w_y, w_z].map(f64::to_bits)
         };
-        Self { camera, adjustment }
+        Self {
+            camera,
+            adjustment,
+            scanlines,
+        }
     }
 
     /// The key of image `index` of `image_set`, in node `recon`, or `None`
@@ -130,6 +141,9 @@ impl ImageIntrinsicsKey {
         Some(Self::new(
             crate::scene::CameraRef::new(recon, camera),
             &image.intrinsic_adjustment,
+            image_set
+                .camera_per_image_adjustments(camera)
+                .rolling_shutter_scanlines,
         ))
     }
 
@@ -144,10 +158,16 @@ impl ImageIntrinsicsKey {
         }
     }
 
-    /// `camera` with the image's adjustment applied: borrowed when the
-    /// adjustment is zero.
-    pub(crate) fn apply<'a>(&self, camera: &'a CameraIntrinsics) -> Cow<'a, CameraIntrinsics> {
-        crate::scene::adjusted_intrinsics(camera, &self.adjustment())
+    /// `camera` with the image's adjustment applied, its rates read on the
+    /// camera's scanlines setting: borrowed when the adjustment is zero, and
+    /// `None` when `camera` cannot take the adjustment, such as a radial
+    /// correction or rates on a proposed camera of another model
+    /// ([`crate::scene::adjusted_intrinsics`]).
+    pub(crate) fn apply<'a>(
+        &self,
+        camera: &'a CameraIntrinsics,
+    ) -> Option<Cow<'a, CameraIntrinsics>> {
+        crate::scene::adjusted_intrinsics(camera, &self.adjustment(), self.scanlines)
     }
 }
 
@@ -395,10 +415,8 @@ impl super::ImageDetail {
         let proposed = proposal
             .filter(|p| p.camera_ref() == key.camera)
             .and_then(|p| {
-                p.fit
-                    .as_ref()
-                    .ok()
-                    .map(|refit| (p, key.apply(&refit.camera)))
+                let refit = p.fit.as_ref().ok()?;
+                Some((p, key.apply(&refit.camera)?))
             });
         let (axes_model, axes_camera) = match &proposed {
             Some((p, proposed)) if !settings.axes_on_current_model => {
@@ -530,12 +548,18 @@ fn draw_legend(painter: &egui::Painter, panel: Rect, lines: &[String]) -> Option
 ///
 /// The focal scale is a percentage of the camera's focal. The principal-point
 /// offset is in pixels and in percent of the image's short side, the unit it
-/// is stored in, read off `camera`'s size.
+/// is stored in, read off `camera`'s size. The radial correction is its two
+/// coefficients, in units of the normalized radius, and what the correction
+/// comes to at the spline's domain end in pixels of `camera`'s focal, its
+/// second coefficient times the focal. The rolling-shutter rates are in
+/// milliradians per short side of readout, with the camera's scanlines
+/// setting, `scanlines`.
 fn adjustment_lines(
     varies: PerImageAdjustments,
     adjustment: &IntrinsicAdjustment,
     camera: &CameraIntrinsics,
 ) -> Vec<String> {
+    let scanlines = varies.rolling_shutter_scanlines;
     let mut lines = Vec::new();
     if varies.focal {
         lines.push(format!(
@@ -552,6 +576,30 @@ fn adjustment_lines(
             signed(a_y * short_side),
             signed_to(100.0 * a_x, 2),
             signed_to(100.0 * a_y, 2),
+        ));
+    }
+    if varies.radial_bspline {
+        let [e_0, e_1] = adjustment.radial_bspline;
+        let (focal, _) = camera.focal_lengths();
+        lines.push(format!(
+            "radial correction ({}, {}) {MIDDOT} {} px at the spline's domain end",
+            signed_to(e_0, 5),
+            signed_to(e_1, 5),
+            signed(e_1 * focal),
+        ));
+    }
+    if varies.rolling_shutter {
+        let [w_x, w_y, w_z] = adjustment.rolling_shutter;
+        let scanlines = match scanlines {
+            Some(RollingShutterScanlines::Rows) => "rows",
+            Some(RollingShutterScanlines::Columns) => "columns",
+            None => "no scanlines setting",
+        };
+        lines.push(format!(
+            "rolling shutter ({}, {}, {}) mrad per short side {MIDDOT} {scanlines}",
+            signed_to(1000.0 * w_x, 2),
+            signed_to(1000.0 * w_y, 2),
+            signed_to(1000.0 * w_z, 2),
         ));
     }
     lines

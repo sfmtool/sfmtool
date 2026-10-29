@@ -53,8 +53,11 @@ The relationship is: `recon.images[i]` (an `SfmrImage`) references
 `recon.cameras[image.camera_index]`.
 
 **Each image is drawn through its own intrinsics.** An image may carry an
-intrinsic adjustment of its camera's focal and principal point
-([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+intrinsic adjustment of its camera's focal and principal point, and on an
+`SFMTOOL_PINHOLE` camera a radial correction added to the camera's spline and
+rolling-shutter rates read on the camera's scanlines setting
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13),
+[../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)),
 so the intrinsics an image was taken with are its camera's with that
 adjustment applied, `ImageSet::image_intrinsics(i)`. Everything in this spec
 that reads an image's intrinsics reads those: the frustum's opening and its
@@ -65,6 +68,19 @@ camera exactly. The geometry is built when it changes, not every frame
 ([`frustum_geometry`](../../crates/sfm-explorer/src/scene_renderer/upload/frustums.rs),
 [`bg_image_mesh`](../../crates/sfm-explorer/src/scene_renderer/upload/bg_image.rs)),
 so each image's intrinsics are read once per build.
+
+**The lens is applied on the CPU.** No shader distorts or undistorts: every
+vertex that depends on a lens, the tessellated frustum grid, its image quad
+and the background mesh, is placed along a ray `pixel_to_ray` of the image's
+intrinsics gave, and the shaders only transform those positions. So the radial
+correction and the rolling shutter reach the GPU as vertex positions, as the
+camera's own distortion does. An image whose intrinsics distort, which
+includes non-zero rolling-shutter rates on an undistorted lens
+(`CameraIntrinsics::has_distortion`), takes the tessellated path: a flat quad
+between four corner rays would leave out how the readout bends the frame's
+edges. The field of view camera view fits reads only the image's focal, as it
+does for a distorted lens; the background mesh is what places the photograph
+along the image's own rays, exact at its grid nodes.
 
 There is already a `camera/frustum.rs` module with `compute_frustum_corners()` that takes
 raw arrays (`&[f64; 3]` center, `&[f64; 9]` rotation, individual intrinsic floats).

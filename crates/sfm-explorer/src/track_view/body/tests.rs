@@ -6558,3 +6558,47 @@ fn a_tile_is_warped_through_its_image_s_own_intrinsics() {
         "the projection read the shared camera"
     );
 }
+
+/// A track-stage tile is warped through its observation's radial correction
+/// and rolling shutter: with the test corrections on the first observation's
+/// image, the tile's patch Jacobian, its picture and its hover view's
+/// projection are exactly those of the same image on a camera entry holding
+/// the corrected intrinsics, and not the camera's alone.
+#[test]
+fn a_tile_is_warped_through_its_image_s_lens_corrections() {
+    use crate::test_support::{
+        as_sfmtool_pinhole, image_on_own_camera, with_lens_corrections, LENS_CORRECTIONS,
+    };
+
+    let (state, id, label, _, _) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let image = track.observations[0].image as usize;
+    let src = state
+        .cached_photograph(id, image)
+        .expect("a cached photograph");
+    let shared = as_sfmtool_pinhole(state.node(id).expect("loaded").recon().clone());
+    let corrected = with_lens_corrections(
+        shared.clone(),
+        image,
+        LENS_CORRECTIONS,
+        sfmtool_core::camera::RollingShutterScanlines::Rows,
+    );
+    let own = image_on_own_camera(&corrected, image);
+
+    let read = |recon: &sfmtool_core::SfmrReconstruction| {
+        let jacobian = super::tile::patch_jacobian(recon, &track, 0).expect("a Jacobian");
+        let tile = super::tile::image(recon, &track, 0, &src).expect("a tile");
+        let context = super::tile::context(recon, &track, 0, &src).expect("a context");
+        (jacobian, tile, context.projection_px)
+    };
+    let (shared, corrected, own) = (read(&shared), read(&corrected), read(&own));
+    assert_eq!(corrected, own);
+    assert_ne!(
+        corrected.0, shared.0,
+        "the Jacobian left the corrections out"
+    );
+    assert_ne!(
+        corrected.2, shared.2,
+        "the projection left the corrections out"
+    );
+}

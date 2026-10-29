@@ -655,13 +655,22 @@ photograph.
 intrinsics, `ImageSet::image_intrinsics(i)`: its camera's with the image's
 intrinsic adjustment applied
 ([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
-since that is the lens the photograph was taken through. The principal point,
-its offset from the centre, the axes and rings, the distortion field and the
-hover readout are all that image's. While a camera model proposal is open, the
-proposed camera is drawn with the same adjustment applied, as the switch keeps
-each image's adjustment on top of whichever camera it becomes. An image whose
-adjustment is zero, which is every image of a file without adjustments, is drawn
-through its camera exactly.
+since that is the lens the photograph was taken through. On an
+`SFMTOOL_PINHOLE` camera that includes the image's radial correction and its
+rolling shutter, read on the camera's scanlines setting
+([../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)).
+The principal point, its offset from the centre, the axes and rings, the
+distortion field and the hover readout are all that image's; the distortion
+field and the hover readout's `distortion` line measure the image's whole map
+against the family's ideal one, so they include the readout's displacement.
+While a camera model proposal is open, the proposed camera is drawn with the
+same adjustment applied, as the switch keeps each image's adjustment on top of
+whichever camera it becomes. A camera that cannot take the adjustment (a
+radial correction or rates on a model other than `SFMTOOL_PINHOLE`) has no
+proposed layer, rather than one drawn without the corrections; the switch
+refuses a camera whose images carry either correction in any case, so its
+proposal has no fitted camera. An image whose adjustment is zero, which is
+every image of a file without adjustments, is drawn through its camera exactly.
 
 **The adjustment, in the legend.** When the image's camera varies some
 parameter per image (its `per_image_adjustments` is not empty), the legend
@@ -669,8 +678,16 @@ leads with one line per varied parameter stating this image's value:
 `focal adjustment +1.00%`, the focal scale as a percentage of the camera's
 focal, and `principal-point adjustment (+21.6, −10.8) px · (+2.00%, −1.00%) of
 the short side`, the offset in pixels and in percent of the image's short side,
-the unit it is stored in. A zero adjustment is stated as zero. A camera that
-varies nothing per image adds no line, so the legend reads as it always did.
+the unit it is stored in. On a camera that varies them, two more lines state
+the image's lens corrections: `radial correction (+0.01000, +0.02000) · +20.0
+px at the spline's domain end`, the correction's two coefficients in units of
+the normalized radius and its value at `bspline_rho_max` in pixels of the
+image's focal (the second coefficient times the focal), and `rolling shutter
+(+20.00, −10.00, +5.00) mrad per short side · rows`, the rates `(ωx, ωy, ωz)`
+in milliradians per short side of readout and the camera's scanlines setting,
+`rows` or `columns`. A zero adjustment is stated as zero. A camera that
+varies nothing per image adds no line, so the legend reads as it always did;
+a scanlines setting alone varies nothing and adds none.
 
 **Principal point.** A reticle at `(cx, cy)` — a 3.5 px open ring with four
 arms reaching outward from just outside it — drawn last and fully opaque per the
@@ -1464,7 +1481,7 @@ family, and the arrow field is a few hundred round trips.
 
 | Product | Cost | Cached on | Invalidated by |
 |---------|------|-----------|----------------|
-| Distortion field | `cols × rows` ray round trips | `(ImageIntrinsicsKey, LayerModel)` and the grid density: the camera and the image's intrinsic adjustment, so every image with a zero adjustment shares its camera's entry and each adjusted image shown has its own | camera change, grid density change, node close; a newer proposal's entries replace the camera's older proposed ones |
+| Distortion field | `cols × rows` ray round trips | `(ImageIntrinsicsKey, LayerModel)` and the grid density: the camera, the image's whole intrinsic adjustment (its focal scale, principal-point offset, radial correction and rolling-shutter rates) and the camera's scanlines setting, so every image with a zero adjustment shares its camera's entry and each adjusted image shown has its own | camera change, grid density change, node close; a newer proposal's entries replace the camera's older proposed ones |
 | Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node close |
 | FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node close |
 | Proposed derived rows and change profile | the same, for the proposed camera, and `samples × 32 azimuths` for the change | `(CameraRef, generation)`, one entry | a change of the proposal's inputs, node close |
@@ -1764,6 +1781,18 @@ only for a camera that lists per-image parameters keeps every existing file's
 panel unchanged, and stating a zero adjustment as zero, rather than leaving the
 line out, says that the parameter is varied and this image's happens to be zero.
 MCP's `get_camera_image` reports the same numbers.
+
+**The lens corrections are stated in the same legend** (2026-10-29). An
+image's radial correction and rolling-shutter rates are two more lines of that
+legend, by the same rule. The radial correction is quoted as its two stored
+coefficients and as its value at the spline's domain end in pixels, since the
+coefficients are in units of the normalized radius and do not say on their own
+how far a pixel moves; the second coefficient is that value, so the pixel
+figure is it times the image's focal. The rates are quoted in milliradians per
+short side of readout, the stored unit scaled so that a rate of the measured
+size reads as a few units, with the scanlines setting they are read on. `P`
+stays `K · S · [R | t]`, a linear map that leaves out every distortion, the
+corrections included.
 
 **Independent layer, not an `OverlayMode` variant** (2026-08-23). The first
 draft made the intrinsics overlay an eighth exclusive mode, matching the

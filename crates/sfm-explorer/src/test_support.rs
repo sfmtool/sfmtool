@@ -374,6 +374,61 @@ pub(crate) fn with_adjustment(
     recon
 }
 
+/// Per-image lens corrections about ten times the size the one measured phone
+/// capture shows, so that what they move is well clear of rounding: a radial
+/// correction of two percent of the normalized radius at the spline's domain
+/// end, and rolling-shutter rates of tens of milliradians per short side.
+pub(crate) const LENS_CORRECTIONS: sfmtool_core::IntrinsicAdjustment =
+    sfmtool_core::IntrinsicAdjustment {
+        focal: 0.0,
+        principal_point: [0.0; 2],
+        radial_bspline: [0.01, 0.02],
+        rolling_shutter: [0.02, -0.01, 0.005],
+    };
+
+/// `recon` with every camera made `SFMTOOL_PINHOLE`, the camera's focal and
+/// principal point kept and a spline of four zero coefficients on `[0, 1.2]`,
+/// so it projects as the pinhole did but can take a radial correction and
+/// rolling-shutter rates.
+pub(crate) fn as_sfmtool_pinhole(
+    mut recon: sfmtool_core::SfmrReconstruction,
+) -> sfmtool_core::SfmrReconstruction {
+    for camera in &mut recon.image_set.cameras {
+        let (focal_length, _) = camera.focal_lengths();
+        let (principal_point_x, principal_point_y) = camera.principal_point();
+        camera.model = sfmtool_core::CameraModel::SfmtoolPinhole {
+            focal_length,
+            principal_point_x,
+            principal_point_y,
+            bspline_rho_max: 1.2,
+            bspline: vec![0.0; 4],
+        };
+    }
+    recon
+}
+
+/// `recon` with `adjustment` on image `image`, the image's camera listing all
+/// four parameters as varying per image, with the scanlines setting
+/// `scanlines`.
+pub(crate) fn with_lens_corrections(
+    recon: sfmtool_core::SfmrReconstruction,
+    image: usize,
+    adjustment: sfmtool_core::IntrinsicAdjustment,
+    scanlines: sfmtool_core::camera::RollingShutterScanlines,
+) -> sfmtool_core::SfmrReconstruction {
+    let mut recon = with_adjustment(recon, image, adjustment);
+    let camera = recon.image_set.images[image].camera_index as usize;
+    let varies = &mut recon.image_set.per_image_adjustments[camera];
+    varies.radial_bspline = true;
+    varies.rolling_shutter = true;
+    varies.rolling_shutter_scanlines = Some(scanlines);
+    recon
+        .image_set
+        .check_image_intrinsics()
+        .expect("the corrections apply to the camera");
+    recon
+}
+
 /// `recon` with image `image` moved onto a camera entry of its own that holds
 /// the image's intrinsics, its adjustment applied, and with no adjustment.
 ///

@@ -201,6 +201,7 @@ fn the_image_detail_toolbar_and_its_gear_popup_name_their_controls() {
                 crate::image_detail::ImageIntrinsicsKey::new(
                     CameraRef::new(node.id, 0),
                     &Default::default(),
+                    None,
                 ),
                 &camera,
             )),

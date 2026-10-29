@@ -962,8 +962,8 @@ class TestPerImageLensCorrections:
     rolling-shutter rates, and per camera a rolling-shutter scanlines setting.
 
     This build refuses the two corrections at the file boundary, since the
-    viewer and the Python package do not yet apply them where they read an image
-    through its camera; a reconstruction built from a dict holds them, and a
+    Python package does not yet apply them where it reads an image through its
+    camera; a reconstruction built from a dict holds them, and a
     scanlines setting on its own reads and writes through the dicts and a
     reconstruction."""
 

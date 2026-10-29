@@ -433,7 +433,8 @@ pub(super) fn get_camera_image(
     let image = &recon.image_set.images[index];
     // The shared camera names the model and the size; the image's own
     // intrinsics, the camera with the image's intrinsic adjustment applied,
-    // give the focal and the principal point it was taken with.
+    // give the focal, the principal point, the spline (its radial correction
+    // added) and the rolling shutter it was taken with.
     let camera = &recon.image_set.cameras[image.camera_index as usize];
     let intrinsics = recon.image_set.image_intrinsics(index);
     let (fx, fy) = intrinsics.focal_lengths();
@@ -453,10 +454,17 @@ pub(super) fn get_camera_image(
         "intrinsic_adjustment": {
             "focal": adjustment.focal,
             "principal_point": adjustment.principal_point,
+            "radial_bspline": adjustment.radial_bspline,
+            "rolling_shutter": adjustment.rolling_shutter,
         },
         "image_intrinsics": {
             "focal_lengths": [fx, fy],
             "principal_point": [cx, cy],
+            "params": render::camera_intrinsics(&intrinsics)["params"],
+            "rolling_shutter": intrinsics.rolling_shutter.map(|rolling_shutter| json!({
+                "scanlines": rolling_shutter.scanlines.as_str(),
+                "rates": rolling_shutter.rates,
+            })),
         },
         "quaternion_wxyz": [quaternion.w, quaternion.i, quaternion.j, quaternion.k],
         "translation_xyz": render::vector(&image.translation_xyz),
@@ -529,9 +537,13 @@ pub(super) fn get_camera_intrinsics(
     // Which of the camera's parameters vary per image, by name, in the order
     // the `.sfmr` file lists them: empty when every image reads the camera as
     // it is.
+    let varies = recon.image_set.camera_per_image_adjustments(index);
+    object.insert("per_image_adjustments".into(), json!(varies.names()));
+    // Whether the camera's sensor reads rows or columns, which its images'
+    // rolling-shutter rates are read on: null where the file records none.
     object.insert(
-        "per_image_adjustments".into(),
-        json!(recon.image_set.camera_per_image_adjustments(index).names()),
+        "rolling_shutter_scanlines".into(),
+        json!(varies.rolling_shutter_scanlines.map(|s| s.as_str())),
     );
     // How far out this camera's photographs reach, beside the spline domain
     // an agent may set from it. The detected keypoint reads the images'

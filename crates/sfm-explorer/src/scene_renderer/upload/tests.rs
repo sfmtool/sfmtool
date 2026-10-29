@@ -3311,3 +3311,158 @@ fn zero_adjustments_draw_exactly_the_shared_camera() {
         assert_eq!(rays(&listed), rays(&recon));
     }
 }
+
+// ── per-image lens corrections ──────────────────────────────────────────
+
+/// The three ways image [`ADJUSTED`] of an `SFMTOOL_PINHOLE` reconstruction
+/// can be read: through the shared camera, with the test lens corrections on
+/// top of it, its rates read on `scanlines`, and on a camera entry of its own
+/// holding the corrected intrinsics.
+fn corrected_triple(
+    recon: SfmrReconstruction,
+    scanlines: sfmtool_core::camera::RollingShutterScanlines,
+) -> (SfmrReconstruction, SfmrReconstruction, SfmrReconstruction) {
+    use crate::test_support::{
+        as_sfmtool_pinhole, image_on_own_camera, with_lens_corrections, LENS_CORRECTIONS,
+    };
+    let shared = as_sfmtool_pinhole(recon);
+    let corrected = with_lens_corrections(shared.clone(), ADJUSTED, LENS_CORRECTIONS, scanlines);
+    let own = image_on_own_camera(&corrected, ADJUSTED);
+    (shared, corrected, own)
+}
+
+/// Both scanlines settings.
+const SCANLINES: [sfmtool_core::camera::RollingShutterScanlines; 2] = [
+    sfmtool_core::camera::RollingShutterScanlines::Rows,
+    sfmtool_core::camera::RollingShutterScanlines::Columns,
+];
+
+/// An image with a radial correction and rolling-shutter rates draws its
+/// frustum and image quad through them: exactly the frustum of the same image
+/// on a camera entry that holds the corrected intrinsics, and not the shared
+/// camera's, with rows and with columns.
+#[test]
+fn a_frustum_is_built_through_its_image_s_lens_corrections() {
+    for scanlines in SCANLINES {
+        let (shared, corrected, own) = corrected_triple(demo(16), scanlines);
+        let geometry = |recon: &SfmrReconstruction| {
+            frustum_bytes(&super::frustums::frustum_geometry(recon, 1.0, true))
+        };
+        assert_eq!(geometry(&corrected), geometry(&own));
+        assert_ne!(geometry(&corrected), geometry(&shared));
+    }
+}
+
+/// Rolling-shutter rates alone, on a lens that does not distort, still draw
+/// the image's frustum as a tessellated grid: a flat quad between the four
+/// corner rays would leave out how the readout bends the frame's edges.
+#[test]
+fn rates_alone_tessellate_the_image_s_frustum() {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections, LENS_CORRECTIONS};
+    let shared = as_sfmtool_pinhole(demo(16));
+    let rates = sfmtool_core::IntrinsicAdjustment {
+        rolling_shutter: LENS_CORRECTIONS.rolling_shutter,
+        ..Default::default()
+    };
+    let corrected = with_lens_corrections(
+        shared.clone(),
+        ADJUSTED,
+        rates,
+        sfmtool_core::camera::RollingShutterScanlines::Rows,
+    );
+    let images = shared.image_set.images.len();
+    let flat = super::frustums::frustum_geometry(&shared, 1.0, true);
+    assert_eq!(flat.pinhole_quads.len(), images);
+    assert!(flat.distorted_vertices.is_empty());
+
+    let geometry = super::frustums::frustum_geometry(&corrected, 1.0, true);
+    assert_eq!(geometry.pinhole_quads.len(), images - 1);
+    assert!(geometry
+        .pinhole_quads
+        .iter()
+        .all(|q| q.frustum_index != ADJUSTED as u32));
+    let n = DISTORTION_SUBDIVISIONS + 1;
+    assert_eq!(geometry.distorted_vertices.len(), n * n);
+    assert!(geometry
+        .distorted_vertices
+        .iter()
+        .all(|v| v.frustum_index == ADJUSTED as u32));
+}
+
+/// The background photograph's mesh is laid along the rays of the image's
+/// corrected intrinsics, tessellated as a distorted lens's is.
+#[test]
+fn the_background_mesh_is_built_through_its_image_s_lens_corrections() {
+    for scanlines in SCANLINES {
+        let (shared, corrected, own) = corrected_triple(demo(16), scanlines);
+        let mesh = |recon: &SfmrReconstruction| {
+            let (vertices, indices) = super::bg_image::bg_image_mesh(recon, ADJUSTED);
+            (bytemuck::cast_slice::<_, u8>(&vertices).to_vec(), indices)
+        };
+        assert_eq!(mesh(&corrected), mesh(&own));
+        let (corrected, shared) = (mesh(&corrected), mesh(&shared));
+        assert_ne!(corrected, shared);
+        assert!(
+            corrected.1.len() > shared.1.len(),
+            "the corrected image's mesh is not tessellated as a distorted lens's"
+        );
+    }
+}
+
+/// A track ray leaves its image through the image's corrected intrinsics, so
+/// the ray from the corrected image moves and the other image's does not.
+#[test]
+fn track_rays_leave_through_their_image_s_lens_corrections() {
+    for scanlines in SCANLINES {
+        let (shared, corrected, own) = corrected_triple(demo(4), scanlines);
+        let cache = sift_cache(shared.image_set.images.len(), 8);
+        let rays = |recon: &SfmrReconstruction| {
+            let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+            assert_eq!(edges.len(), 2, "point 3 is observed by images 3 and 4");
+            edges
+                .iter()
+                .map(|e| [e.endpoint_a, e.endpoint_b])
+                .collect::<Vec<_>>()
+        };
+        let (shared, corrected, own) = (rays(&shared), rays(&corrected), rays(&own));
+        assert_eq!(corrected, own);
+        assert_ne!(
+            corrected[0], shared[0],
+            "the corrected image's ray did not move"
+        );
+        assert_eq!(corrected[1], shared[1], "the other image's ray moved");
+    }
+}
+
+/// With every correction zero, a camera that lists the radial correction and
+/// the rolling shutter as varying per image, with a scanlines setting, draws
+/// exactly what it drew without them: the frustums, the background mesh and
+/// the track rays are the same bytes.
+#[test]
+fn zero_lens_corrections_draw_exactly_the_shared_camera() {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections};
+    for scanlines in SCANLINES {
+        let recon = as_sfmtool_pinhole(demo(4));
+        let listed = with_lens_corrections(recon.clone(), ADJUSTED, Default::default(), scanlines);
+        let varies = listed.image_set.camera_per_image_adjustments(0);
+        assert!(varies.radial_bspline && varies.rolling_shutter);
+        assert_eq!(
+            frustum_bytes(&super::frustums::frustum_geometry(&listed, 1.0, true)),
+            frustum_bytes(&super::frustums::frustum_geometry(&recon, 1.0, true)),
+        );
+        let (a, b) = (
+            super::bg_image::bg_image_mesh(&listed, ADJUSTED),
+            super::bg_image::bg_image_mesh(&recon, ADJUSTED),
+        );
+        assert_eq!(
+            (bytemuck::cast_slice::<_, u8>(&a.0), a.1),
+            (bytemuck::cast_slice::<_, u8>(&b.0), b.1)
+        );
+        let cache = sift_cache(recon.image_set.images.len(), 8);
+        let rays = |recon: &SfmrReconstruction| {
+            let edges = track_ray_edges(&edited_of(recon), point(3), &cache, &identity());
+            bytemuck::cast_slice::<_, u8>(&edges).to_vec()
+        };
+        assert_eq!(rays(&listed), rays(&recon));
+    }
+}

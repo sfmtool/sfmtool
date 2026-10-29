@@ -1158,6 +1158,7 @@ fn the_layer_cache_does_not_serve_the_proposed_camera_as_the_current_one() {
     let camera_ref = super::ImageIntrinsicsKey::new(
         proposal.camera_ref(),
         &sfmtool_core::IntrinsicAdjustment::default(),
+        None,
     );
     let generation = proposal.generation;
     let current = &state.scene[0].recon().image_set.cameras[0];
@@ -1491,4 +1492,198 @@ fn a_zero_adjustment_draws_the_shared_camera_and_says_so() {
 
 fn shapes_mention(shapes: &[String], text: &str) -> bool {
     shapes.iter().any(|s| s.contains(text))
+}
+
+// ── The image's lens corrections ────────────────────────────────────────
+
+#[test]
+fn the_legend_states_the_radial_correction_and_the_rolling_shutter() {
+    use crate::test_support::LENS_CORRECTIONS;
+    use sfmtool_core::camera::RollingShutterScanlines;
+    use sfmtool_core::reconstruction::PerImageAdjustments;
+
+    // The demo camera: focal 1000 px.
+    let camera = sfmtool_core::SfmrReconstruction::demo(1).image_set.cameras[0].clone();
+    let lines = |radial_bspline, rolling_shutter, scanlines| {
+        super::adjustment_lines(
+            PerImageAdjustments {
+                focal: false,
+                principal_point: false,
+                radial_bspline,
+                rolling_shutter,
+                rolling_shutter_scanlines: scanlines,
+            },
+            &LENS_CORRECTIONS,
+            &camera,
+        )
+    };
+    let rows = Some(RollingShutterScanlines::Rows);
+    // A scanlines setting alone varies nothing, so it adds no line.
+    assert!(lines(false, false, rows).is_empty());
+    assert_eq!(
+        lines(true, false, None),
+        ["radial correction (+0.01000, +0.02000) · +20.0 px at the spline's domain end"]
+    );
+    assert_eq!(
+        lines(false, true, rows),
+        ["rolling shutter (+20.00, −10.00, +5.00) mrad per short side · rows"]
+    );
+    assert_eq!(
+        lines(false, true, Some(RollingShutterScanlines::Columns)),
+        ["rolling shutter (+20.00, −10.00, +5.00) mrad per short side · columns"]
+    );
+    assert_eq!(lines(true, true, rows).len(), 2);
+}
+
+/// `recon` made `SFMTOOL_PINHOLE`, with the test lens corrections on image 0
+/// read on rows; with `listed` false its camera keeps the scanlines setting
+/// but lists nothing as varying per image, so the legend states nothing.
+fn corrected(
+    recon: sfmtool_core::SfmrReconstruction,
+    listed: bool,
+) -> sfmtool_core::SfmrReconstruction {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections, LENS_CORRECTIONS};
+    let mut recon = with_lens_corrections(
+        as_sfmtool_pinhole(recon),
+        0,
+        LENS_CORRECTIONS,
+        sfmtool_core::camera::RollingShutterScanlines::Rows,
+    );
+    if !listed {
+        let varies = &mut recon.image_set.per_image_adjustments[0];
+        let scanlines = varies.rolling_shutter_scanlines;
+        *varies = Default::default();
+        varies.rolling_shutter_scanlines = scanlines;
+    }
+    recon
+}
+
+/// The layer is drawn through the image's radial correction and rolling
+/// shutter: the corrected image draws exactly what the same image on a camera
+/// entry holding its corrected intrinsics draws, the axes, rings and
+/// distortion field included, and not what the camera alone draws; the legend
+/// states both corrections once the camera lists them.
+#[test]
+fn the_layer_is_drawn_through_the_image_s_lens_corrections() {
+    use crate::test_support::{as_sfmtool_pinhole, image_on_own_camera};
+
+    let mut settings = IntrinsicsDisplaySettings {
+        enabled: true,
+        rings: true,
+        distortion: true,
+        ..Default::default()
+    };
+    let frame = |node: &crate::scene::SceneNode, settings: &mut IntrinsicsDisplaySettings| {
+        let (_, sift, _) = demo_panel_fixture();
+        let camera = &node.recon().image_set.cameras[0];
+        let (w, h) = (camera.width, camera.height);
+        let image =
+            sfmtool_core::camera::image::ImageU8::new(w, h, 3, vec![90u8; (w * h * 3) as usize]);
+        let mut shapes = Vec::new();
+        flatten(
+            &panel_frame(
+                node,
+                &sift,
+                &image,
+                &crate::state::FeatureDisplaySettings::default(),
+                settings,
+            ),
+            &mut shapes,
+        );
+        shapes
+    };
+    let unlisted = frame(
+        &edited_panel_fixture(|r| corrected(r, false)),
+        &mut settings,
+    );
+    let own = frame(
+        &edited_panel_fixture(|r| image_on_own_camera(&corrected(r, false), 0)),
+        &mut settings,
+    );
+    let shared = frame(&edited_panel_fixture(as_sfmtool_pinhole), &mut settings);
+    assert_eq!(unlisted, own);
+    assert_ne!(unlisted, shared);
+    assert!(!shapes_mention(&unlisted, "radial correction"));
+
+    let listed = frame(&edited_panel_fixture(|r| corrected(r, true)), &mut settings);
+    assert!(
+        shapes_mention(&listed, "radial correction (+0.01000, +0.02000)"),
+        "{listed:?}"
+    );
+    assert!(
+        shapes_mention(
+            &listed,
+            "rolling shutter (+20.00, −10.00, +5.00) mrad per short side · rows"
+        ),
+        "{listed:?}"
+    );
+}
+
+/// A camera that lists both corrections, with every correction zero, draws
+/// the camera alone and states the corrections as zero.
+#[test]
+fn zero_lens_corrections_draw_the_shared_camera_and_say_so() {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections};
+
+    let listed = layer_frame(&edited_panel_fixture(|recon| {
+        with_lens_corrections(
+            as_sfmtool_pinhole(recon),
+            0,
+            Default::default(),
+            sfmtool_core::camera::RollingShutterScanlines::Columns,
+        )
+    }));
+    assert!(
+        shapes_mention(&listed, "radial correction (+0.00000, +0.00000) · +0.0 px"),
+        "{listed:?}"
+    );
+    assert!(
+        shapes_mention(
+            &listed,
+            "rolling shutter (+0.00, +0.00, +0.00) mrad per short side · columns"
+        ),
+        "{listed:?}"
+    );
+    let plain = layer_frame(&edited_panel_fixture(as_sfmtool_pinhole));
+    let unlegended = |shapes: &[String]| {
+        shapes
+            .iter()
+            .filter(|s| {
+                !s.contains("adjustment") && !s.contains("correction") && !s.contains("rolling")
+            })
+            .count()
+    };
+    assert_eq!(unlegended(&listed), unlegended(&plain));
+}
+
+/// A camera that cannot take an image's corrections, such as a proposed
+/// camera of another model, gives no adjusted intrinsics rather than
+/// panicking or dropping the corrections; a zero adjustment gives the camera.
+#[test]
+fn a_camera_that_cannot_take_the_corrections_gives_none() {
+    use crate::test_support::LENS_CORRECTIONS;
+    let pinhole = sfmtool_core::SfmrReconstruction::demo(1).image_set.cameras[0].clone();
+    let rows = Some(sfmtool_core::camera::RollingShutterScanlines::Rows);
+    let camera = crate::scene::CameraRef::new(crate::scene::ReconId::next(), 0);
+    let key = super::ImageIntrinsicsKey::new(camera, &LENS_CORRECTIONS, rows);
+    assert!(key.apply(&pinhole).is_none());
+    let zero = super::ImageIntrinsicsKey::new(camera, &Default::default(), rows);
+    assert_eq!(zero.apply(&pinhole).as_deref(), Some(&pinhole));
+    // Rates with no scanlines setting cannot be read either.
+    let spline = crate::test_support::as_sfmtool_pinhole(sfmtool_core::SfmrReconstruction::demo(1))
+        .image_set
+        .cameras[0]
+        .clone();
+    assert!(
+        super::ImageIntrinsicsKey::new(camera, &LENS_CORRECTIONS, None)
+            .apply(&spline)
+            .is_none()
+    );
+    let applied = super::ImageIntrinsicsKey::new(camera, &LENS_CORRECTIONS, rows)
+        .apply(&spline)
+        .expect("an SFMTOOL_PINHOLE camera takes both corrections");
+    assert_eq!(
+        applied.rolling_shutter.map(|r| r.rates),
+        Some(LENS_CORRECTIONS.rolling_shutter)
+    );
 }

@@ -62,10 +62,13 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "One camera image: its pose (world-to-camera quaternion and translation, \
                           plus the camera centre those imply), the intrinsics record it was shot \
                           through, its intrinsic_adjustment of that record (the focal scale as \
-                          a fraction and the principal-point offset in fractions of the \
-                          image's shorter side, all zero for an image read through the record \
-                          as it is), its image_intrinsics (the focal lengths and principal \
-                          point in pixels with the adjustment applied), how many observations \
+                          a fraction, the principal-point offset in fractions of the image's \
+                          shorter side, the radial_bspline correction's two coefficients and \
+                          the rolling_shutter rates in radians per short side of readout, all \
+                          zero for an image read through the record as it is), its \
+                          image_intrinsics (the focal lengths and principal point in pixels, \
+                          every parameter by name, and the rolling shutter's scanlines and \
+                          rates or null, with the adjustment applied), how many observations \
                           it carries, and a reprojection-error summary. The error summary is \
                           null when it cannot be computed — an embedded-patches \
                           reconstruction has no .sift file to read features from.",
@@ -81,8 +84,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           stored parameter by name, and the camera images that use it. The \
                           parameters are a name-to-value map in the model's own declaration \
                           order, which is the order `sfm inspect` prints. \
-                          per_image_adjustments names which of focal and principal_point \
-                          each image adjusts, empty when none does. outermost_keypoint \
+                          per_image_adjustments names which of focal, principal_point, \
+                          radial_bspline and rolling_shutter each image adjusts, empty when \
+                          none does, and rolling_shutter_scanlines is ROWS, COLUMNS or null, \
+                          the setting the images' rates are read on. outermost_keypoint \
                           is the keypoint of those images furthest from the principal point, \
                           as a radius in pixels and an incidence angle under this model: \
                           observed among the reconstruction's observations, and detected \

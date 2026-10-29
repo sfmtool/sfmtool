@@ -1101,3 +1101,62 @@ fn an_adjusted_images_observations_are_reprojected_with_its_adjustment() {
         assert_ne!(observation.current, project(&recon.image_set.cameras[0]));
     }
 }
+
+/// A proposal on a camera whose images carry a radial correction and
+/// rolling-shutter rates opens without panicking: the switch refuses the fit,
+/// and the observation layer reprojects under the current camera through the
+/// image's corrected intrinsics, with no proposed reprojection.
+#[test]
+fn a_corrected_images_observations_are_reprojected_through_its_corrections() {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections, LENS_CORRECTIONS};
+
+    let mut node = fisheye_node("/runs/kerry.sfmr");
+    {
+        let recon = node.recon_mut();
+        let pinhole = as_sfmtool_pinhole(recon.clone());
+        *recon = with_lens_corrections(
+            pinhole,
+            2,
+            LENS_CORRECTIONS,
+            sfmtool_core::camera::RollingShutterScanlines::Columns,
+        );
+    }
+    let mut state = AppState::new();
+    state.append_node(node);
+    let id = state.scene[0].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_ref().expect("open");
+    assert!(proposal.fit.is_err(), "the switch refuses lens corrections");
+    let recon = state.scene[0].recon();
+    let current = recon.image_set.image_intrinsics(2);
+    assert!(current.rolling_shutter.is_some());
+    let pose = crate::scene::cam_from_world(&recon.image_set.images[2]);
+    let layer = proposal.image_reprojections(2);
+    let rows = recon
+        .point_set
+        .tracks
+        .iter()
+        .filter(|t| t.image_index == 2)
+        .count();
+    assert_eq!(layer.len(), rows);
+    let mut moved = false;
+    for observation in &layer {
+        assert_eq!(observation.proposed, None);
+        // The fixture's wide points are past 90° and do not reproject through
+        // a pinhole.
+        let Some(current_px) = observation.current else {
+            continue;
+        };
+        let reprojected = recon.point_set.points.iter().find_map(|point| {
+            let p = current.project_homogeneous(&pose, point.position.coords, point.w)?;
+            (p == current_px).then_some(point)
+        });
+        let point = reprojected.expect("the current reprojection is the image's");
+        moved |=
+            recon.image_set.cameras[0].project_homogeneous(&pose, point.position.coords, point.w)
+                != observation.current;
+    }
+    assert!(moved, "the corrections moved no reprojection");
+}

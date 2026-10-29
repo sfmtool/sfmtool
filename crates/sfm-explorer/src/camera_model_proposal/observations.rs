@@ -206,12 +206,22 @@ impl CameraModelProposal {
         }
         let pose = crate::scene::cam_from_world(row);
         let adjustment = &row.intrinsic_adjustment;
-        let current = crate::scene::adjusted_intrinsics(&self.source, adjustment);
-        let proposed = self
-            .fit
-            .as_ref()
-            .ok()
-            .map(|refit| crate::scene::adjusted_intrinsics(&refit.camera, adjustment));
+        let scanlines = self
+            .value
+            .image_set
+            .camera_per_image_adjustments(self.camera)
+            .rolling_shutter_scanlines;
+        // The source is the value's own camera, which every image of the
+        // value can be read through; a refused one has nothing to reproject.
+        let Some(current) = crate::scene::adjusted_intrinsics(&self.source, adjustment, scanlines)
+        else {
+            return Vec::new();
+        };
+        // A proposed camera that cannot take the image's adjustment gives no
+        // proposed reprojection rather than one without the correction.
+        let proposed = self.fit.as_ref().ok().and_then(|refit| {
+            crate::scene::adjusted_intrinsics(&refit.camera, adjustment, scanlines)
+        });
         let start = self.observations.partition_point(|o| o.image < image);
         self.observations[start..]
             .iter()
