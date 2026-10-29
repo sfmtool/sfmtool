@@ -567,9 +567,10 @@ pub(crate) fn image_intrinsics(
 /// such as a camera model proposal's proposed camera.
 ///
 /// No scanlines setting is passed, so an adjustment with rolling-shutter rates
-/// panics here. The viewer cannot hold one yet: it reads a file through
-/// `read_sfmr`, which refuses per-image rolling-shutter rates, and no edit it
-/// offers solves them.
+/// panics here, as does a radial correction on a camera that is not
+/// `SFMTOOL_PINHOLE`. The viewer cannot hold either yet: it reads a file
+/// through `read_sfmr`, which refuses both per-image corrections, and no edit
+/// it offers solves them.
 pub(crate) fn adjusted_intrinsics<'a>(
     camera: &'a sfmtool_core::CameraIntrinsics,
     adjustment: &sfmtool_core::IntrinsicAdjustment,

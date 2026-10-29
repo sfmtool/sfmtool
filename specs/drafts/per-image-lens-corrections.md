@@ -283,7 +283,8 @@ until the step is under 1e-12 focal units, or a cap of iterations
 The iteration contracts by about the size of `∂(t·ṗ)/∂(x_d, y_d)`, of order
 `|ω|·(f_i/m)·(1 + ρ²)`, about 10⁻³ on the measured capture, so each pass gains about
 three digits and three or four passes reach rounding. A non-converged
-iteration is reported the way the radial inverse reports one, and the
+iteration is handled the way the radial inverse handles one: it returns its
+last iterate rather than an error. The
 step guard below keeps a solve from producing rates where it would happen.
 With `ω_i = 0` the loop is skipped and the existing inverse runs alone, bit for
 bit.
@@ -445,13 +446,12 @@ the build settled beyond the bullets below:
   their batch forms in
   [projection.rs](../../crates/sfmtool-core/src/camera/distortion/projection.rs)
   after the model's `distort` and before the focal and principal point, and
-  inverted as in [Unprojection](#unprojection): for example
+  inverted as in [Unprojection](#unprojection):
   `rolling_shutter: Option<RollingShutter>` on `CameraIntrinsics`, with
   `RollingShutter { scanlines: RollingShutterScanlines, rates: [f64; 3] }`, set
   by `ImageSet::image_intrinsics(i)`, which knows the camera's scanlines. Where
-  it sits
-  is an [open question](#open-questions), because it touches every consumer of
-  `CameraIntrinsics`. Whatever its place, `ImageIntrinsicsList` and every
+  it sits was an [open question](#open-questions), because it touches every
+  consumer of `CameraIntrinsics`, and is settled. `ImageIntrinsicsList` and every
   routine that reads an image through `image_intrinsics(i)` (triangulation, the
   bundle adjustment's re-estimation, patch rendering, image warping) gets the
   corrections without change of its own.
