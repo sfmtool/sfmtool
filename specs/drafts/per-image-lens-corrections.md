@@ -291,8 +291,8 @@ units are in
 #### Units of the per-image adjustments
 
 Each per-image adjustment is stored in a unit that means the same at any
-resolution, so a camera resize (which scales the camera's focal and principal
-point with the image) leaves every stored value unchanged. The four units are
+resolution, so a uniform camera resize (which scales the camera's focal and
+principal point with the image) leaves every stored value unchanged. The four units are
 not the same, on purpose:
 
 | Term | Unit | Why |
@@ -303,8 +303,8 @@ not the same, on purpose:
 | rolling-shutter rates `ω` (new) | radians per normalized image unit of `t`, where `t` is `y_d` or `x_d`, in the units of `(Px, Py)/(−Pz)`, the tangent of the angle off the axis | the correction acts in normalized image coordinates, before the focal and principal point; in those units `ω` is the camera's angular velocity times the readout time per unit of `t`, and the velocity formulas are exact; with `t` in short-side units the rates would mean something different for each focal, the image's own focal scale included, so changing an image's focal would change what its stored rates mean |
 
 The units also mean that prior widths of different terms cannot be compared as
-numbers. On the measured capture a rate width of 2·10⁻³ is about 2 px of
-displacement at the centre of the bottom edge, while the principal point's
+numbers. On the measured capture an `ωx` of one rate width, 2·10⁻³, moves the
+centre of the bottom edge by about 2 px, while the principal point's
 derived width of 0.0131 of the short side is about 20 px.
 
 When this draft is filed, this table goes into the `.sfmr` format spec,
