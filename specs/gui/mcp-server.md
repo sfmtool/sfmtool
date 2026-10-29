@@ -2782,9 +2782,12 @@ clicked.
   `spin_button` share a name, and `role` tells them apart. The viewer links
   each of its controls that has a label beside it to that label in this way
   (the Go to Point field is the `text_input` named `Point index, or full ID
-  with hash:`). A control that no visible text names is given a name of its
-  own, which says what it sets and carries the unit where the control shows
-  one: Track View's threshold boxes, followed only by a unit and a reading's
+  with hash:`). A widget that shows text has that text in its name, so a
+  person and an agent call it by the same word: the Track Table's **Track**
+  heading is the `button` named `Sort by Track`, and Track View's *Proj. err*
+  heading the one named `Sort by Proj. err`. A control that no visible text
+  names is given a name of its own, which says what it sets and carries the
+  unit where the control shows one: Track View's threshold boxes, followed only by a unit and a reading's
   name, are `minimum ZNCC whole (%)` to `maximum Proj. err (px)`, and Image
   Detail's two size boxes are `minimum size (px)` and `maximum size (px)`
   (the panels' specs list them: [track-view.md](track-view.md) § "The

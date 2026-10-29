@@ -684,6 +684,58 @@ fn clicking_a_heading_sorts_worst_first_and_a_second_click_reverses() {
     assert_eq!(panel.query.sort, None);
 }
 
+/// Each heading that sorts is named *Sort by* and the text it shows, so an
+/// agent finds the **Track** heading by the word a person reads on it, and a
+/// click on that node sorts by the track length.
+#[test]
+fn a_heading_is_named_after_the_title_it_shows() {
+    let (mut state, _) = state();
+    let (ctx, mut panel) = shown(&mut state);
+    ctx.enable_accesskit();
+    let texts = painted_texts(&ctx, input(1200.0), |ui| panel.show(ui, &mut state));
+    let mut output = ctx.run_ui(input(1200.0), |ui| panel.show(ui, &mut state));
+    output.textures_delta.clear();
+    let nodes: Vec<egui::accesskit::Node> = output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .into_iter()
+        .map(|(_, node)| node)
+        .collect();
+    let sort_buttons: Vec<&egui::accesskit::Node> = nodes
+        .iter()
+        .filter(|node| {
+            node.role() == egui::accesskit::Role::Button
+                && node.label().is_some_and(|l| l.starts_with("Sort by "))
+        })
+        .collect();
+    let mut named: Vec<&str> = sort_buttons
+        .iter()
+        .map(|node| &node.label().unwrap()["Sort by ".len()..])
+        .collect();
+    named.sort_unstable();
+    let mut shown_titles = headings(&texts);
+    shown_titles.push("Point");
+    shown_titles.sort_unstable();
+    assert_eq!(named, shown_titles, "{texts:?}");
+
+    let track = sort_buttons
+        .iter()
+        .find(|node| node.label() == Some("Sort by Track"))
+        .expect("the Track heading");
+    let bounds = track.bounds().expect("the node has a rectangle");
+    let at = egui::pos2(
+        ((bounds.x0 + bounds.x1) / 2.0) as f32,
+        ((bounds.y0 + bounds.y1) / 2.0) as f32,
+    );
+    click(&ctx, &mut panel, &mut state, at);
+    assert_eq!(
+        panel.query.sort.map(|sort| sort.column),
+        Some(TrackTableColumn::TrackLength)
+    );
+}
+
 /// A column holding a bound or the sort cannot be hidden, so a hidden column
 /// never filters or orders the rows unseen.
 #[test]

@@ -5194,6 +5194,41 @@ fn the_sortable_headings_are_the_ones_with_readings() {
     assert_eq!(SortColumn::of_heading("Verdict"), Some(SortColumn::Verdict));
 }
 
+/// Each heading that orders the rows is named *Sort by* and the text it
+/// shows, so an agent clicks the heading a person reads as *Proj. err* by
+/// that word, and no other button is named *Sort by …*.
+#[test]
+fn a_sortable_heading_is_named_after_the_text_it_shows() {
+    use super::table::SortColumn;
+    let (state, _id, _label, mut panel, ctx) = measured_on_the_bench();
+    ctx.enable_accesskit();
+    run_frame(&mut panel, &ctx, &state);
+    let mut output = ctx.run_ui(input(Vec::new()), |ui| {
+        panel.show(ui, &state);
+    });
+    output.textures_delta.clear();
+    let mut named: Vec<String> = output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+        .filter_map(|(_, node)| node.label()?.strip_prefix("Sort by ").map(str::to_string))
+        .collect();
+    named.sort_unstable();
+    let mut sortable: Vec<String> = super::table::ColumnLayout::new()
+        .headers(super::BodyMode::Edited)
+        .into_iter()
+        .map(|(_, heading, _)| heading)
+        .filter(|heading| SortColumn::of_heading(heading).is_some())
+        .map(str::to_string)
+        .collect();
+    sortable.sort_unstable();
+    assert_eq!(named, sortable);
+    assert!(named.iter().any(|name| name == "Proj. err"), "{named:?}");
+}
+
 /// The *Verdict* text of an `out` row says how many bars it fails, and one that
 /// fails none, which lost its image to another sighting, says `out` alone.
 #[test]

@@ -399,22 +399,6 @@ impl SortColumn {
             | SortColumn::Name => false,
         }
     }
-
-    /// What the heading's accessible name calls the column.
-    fn name(self) -> &'static str {
-        match self {
-            SortColumn::Image => "image",
-            SortColumn::Verdict => "missed thresholds",
-            SortColumn::Zncc => "ZNCC",
-            SortColumn::SelfSimilarity => "self-similarity",
-            SortColumn::ProjectionError => "projection error",
-            SortColumn::Shift => "shift",
-            SortColumn::Zoom => "zoom",
-            SortColumn::Reference => "reference",
-            SortColumn::Status => "status",
-            SortColumn::Name => "name",
-        }
-    }
 }
 
 impl SortRule for SortColumn {
@@ -2459,11 +2443,13 @@ fn draw_header(
                     color,
                 );
             }
+            // Named after the heading's own text, so an agent clicks the
+            // heading by the word a person reads on it.
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(
                     egui::WidgetType::Button,
                     true,
-                    format!("Sort by {}", column.name()),
+                    format!("Sort by {label}"),
                 )
             });
             if response.clicked() {

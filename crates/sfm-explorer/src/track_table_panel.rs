@@ -193,6 +193,13 @@ fn column_title(column: TrackTableColumn) -> &'static str {
     }
 }
 
+/// The accessible name of the heading that reads `title`: *Sort by* and the
+/// heading's own text, so `get_widgets` and a screen reader call it by the
+/// word a person sees.
+fn sort_name(title: &str) -> String {
+    format!("Sort by {title}")
+}
+
 /// What a column holds, for its heading's hover text and its entry in the
 /// Columns menu.
 fn column_description(column: TrackTableColumn) -> &'static str {
@@ -1396,7 +1403,7 @@ impl TrackTablePanel {
             match column {
                 None => {
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Sort by point")
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, sort_name(title))
                     });
                     let clicked = response.clicked();
                     response.on_hover_text(match sort {
@@ -1423,11 +1430,7 @@ impl TrackTablePanel {
                         );
                     }
                     response.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            true,
-                            format!("Sort by {}", column.wire_name()),
-                        )
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, sort_name(title))
                     });
                     let clicked = response.clicked();
                     response.on_hover_text(format!(

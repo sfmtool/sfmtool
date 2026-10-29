@@ -245,7 +245,8 @@ decoded.
   rows back in increasing point index, the order with no sort. The click rule
   is Track View's (`crate::table_sort`, which both tables call). Each heading's
   hover text says what the column holds, its wire name and what a click on it
-  does.
+  does. Its accessible name is *Sort by* and the heading's text, *Sort by
+  Track* and *Sort by Point*, not the wire name.
 - **The bounds row**, under the headings, has a minimum box and a maximum box
   per column. A row passes when its value is at least the minimum and at most
   the maximum, both inclusive, and every bound must pass; a row with no value

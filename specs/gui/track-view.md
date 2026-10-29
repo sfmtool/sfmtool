@@ -1219,7 +1219,7 @@ heading the rows are ordered by carries a small triangle after its word,
 pointing up for increasing and down for decreasing, and a heading that orders
 the rows is drawn in the plain text colour under the pointer. Its hover text
 ends by saying what a click does with the order as it stands, and its accessible
-name is *Sort by …*. The keys are what the rows print:
+name is *Sort by* and the heading's text, *Sort by Proj. err*. The keys are what the rows print:
 
 | Heading | Ordered by |
 |---|---|
