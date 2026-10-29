@@ -94,7 +94,7 @@ names.
 > point with no patch frame._
 >
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the tutorial's Convert to Embedded Patches step goes in a PR there._
 
 The tutorial's "Viewing 3D Point Tracks" step says the Track View table "shows
@@ -180,7 +180,7 @@ Expected: `drag {from_px, to_px, mouse_button, modifiers, steps}` and
 ## 5. The GUI tutorial no longer matches the viewer (medium)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 What a new user sees after `sfm explorer` differs from every screenshot in
@@ -342,7 +342,7 @@ example. A reader would take that as 58 photographs.
 ## 13. CLI quickstart gaps (docs)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 The CLI steps run word for word: 85 of 85 images registered in 51 s. Four
@@ -365,7 +365,7 @@ things would help a new reader:
 ## 14. CLI output in the docs is out of date (docs)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 - `sfm inspect -v` now also prints *Tool options*, *Depth reliability*,
@@ -386,7 +386,7 @@ a test instead of leaving the docs stale.
 ## 15. Write each GUI step as a card (docs)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 The GUI steps describe a gesture ("I've looked over to the right", "it should
@@ -416,7 +416,7 @@ A worked card, run during this bash on
 ## 16. Use a ground-truth reconstruction for the GUI tutorial (docs)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 Distances and angles in a step card only mean something in a reconstruction
@@ -431,7 +431,7 @@ Bull.
 ## 17. Generate the docs screenshots from stored scene recipes (docs)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 All six GUI screenshots drifted and nothing noticed. Store each one's state
@@ -450,7 +450,7 @@ one call; until then the recipe is a list of existing calls
 ## 18. Add a page on exploring a reconstruction with an agent (docs)
 
 > _Status (2026-10-28): **Not done** — the docs moved to the
-> sfmtool/sfmtool.github.io repository (branch `move-docs-to-pages-repo`);
+> sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
 
 The user docs never mention the MCP endpoint. A short page should cover
