@@ -96,6 +96,13 @@ names.
 > _Status (2026-10-28): **Not done** — the docs moved to the
 > sfmtool/sfmtool.github.io repository (PR #1058);
 > the tutorial's Convert to Embedded Patches step goes in a PR there._
+>
+> _Status (2026-10-29): **Done** — the point-tracks tutorial, now its own
+> page `tutorials/point-tracks.md`, opens with a Convert to Embedded Patches
+> step (the Scene panel's context menu on the reconstruction's row) before the
+> Track View steps, and lists Track View's current columns (Img, Crop, Patch,
+> Verdict, ZNCC, Self-similarity, Proj. err, Shift, Zoom, Reference, Status,
+> Name), PR sfmtool/sfmtool.github.io#3._
 
 The tutorial's "Viewing 3D Point Tracks" step says the Track View table "shows
 the SIFT feature sizes and reprojection error in both pixels and degrees".
@@ -182,6 +189,19 @@ Expected: `drag {from_px, to_px, mouse_button, modifiers, steps}` and
 > _Status (2026-10-28): **Not done** — the docs moved to the
 > sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
+>
+> _Status (2026-10-29): **Done** — the rewritten `tutorials/point-tracks.md`
+> no longer describes a File / View menu bar (its one menu path, **File >
+> Save**, is in the viewer's File menu); it says where Image Detail and Track
+> View sit in the stock layout and how to dock Image Detail between the 3D
+> Viewer and Track View; it says to open the Display box with its gear if it
+> is closed; its Image Detail screenshots show the intrinsics layer; it names
+> the panel **Track View**; it gives the Track Length colours as red through
+> yellow to green; it covers Z, Home, `,` and `.`, and Q/E turning **Maintain
+> Z-up** off; and it names the image as "the thumbnail numbered 2,
+> `dino_dog_toy_03.jpg` (camera image 2)", saying the Image Browser numbers
+> from 0 and the file names from 01. Its 13 screenshots were retaken, PR
+> sfmtool/sfmtool.github.io#3._
 
 What a new user sees after `sfm explorer` differs from every screenshot in
 `docs/tutorials/getting-started.md`:
@@ -332,6 +352,13 @@ would touch.
 > option is to have Prune Covered Observations remove them as part of its
 > run; its spec (`specs/gui/edits/prune-covered-observations.md`) does not
 > cover repeated observations of the same point today._
+>
+> _Status (2026-10-29): **Partially done** — the point-tracks tutorial now
+> says that *N obs* counts observations, not photographs, that one photograph
+> can hold more than one observation of the same point, which a GLOMAP solve
+> can produce, and points at the Track Table's **Repeat obs.** column, PR
+> sfmtool/sfmtool.github.io#3. The cleanup for repeated observations in one
+> image is still not built._
 
 Point 9873 of `dino`, the longest track at 57 observations, has three
 observations in image 3, three in image 12 and three in image 25, and two in
@@ -344,6 +371,13 @@ example. A reader would take that as 58 photographs.
 > _Status (2026-10-28): **Not done** — the docs moved to the
 > sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
+>
+> _Status (2026-10-29): **Partially done** — Getting Started's step 4 now
+> opens the file with `sfm explorer sfmr/<file>.sfmr`, PR
+> sfmtool/sfmtool.github.io#3. The other three remain: step 1 still gives no
+> command to download the 85 images, steps 2 and 3 still use
+> `--max-features 4000` and `2000` without saying why, and the solver's log
+> lines and warnings are still not mentioned._
 
 The CLI steps run word for word: 85 of 85 images registered in 51 s. Four
 things would help a new reader:
@@ -388,6 +422,16 @@ a test instead of leaving the docs stale.
 > _Status (2026-10-28): **Not done** — the docs moved to the
 > sfmtool/sfmtool.github.io repository (PR #1058);
 > the fix goes in a PR there._
+>
+> _Status (2026-10-29): **Superseded** — the docs repository's `AGENTS.md`
+> sets different rules for tutorial steps (sfmtool/sfmtool.github.io#1 and
+> #2): an agent follows the same text as a person, through the viewer's exact
+> words and a named operation for each gesture, with no agent sections or
+> collapsed tool-call blocks on the page, and each step ends with something
+> to check on screen. That takes this finding's **You should see** part and
+> drops its **Agent** part. A **Precisely** part in a known frame and unit is
+> not among the rules; it depends on finding 16. The point-tracks tutorial is
+> written to these rules, PR sfmtool/sfmtool.github.io#3._
 
 The GUI steps describe a gesture ("I've looked over to the right", "it should
 be easy to move the viewport") but not where the reader should end up or how
