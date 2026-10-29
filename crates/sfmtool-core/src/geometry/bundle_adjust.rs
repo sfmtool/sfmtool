@@ -461,7 +461,9 @@ pub struct BaCameras<'a> {
     /// `None` for no camera with one: what an image's rolling-shutter rates in
     /// [`Self::image_adjustments`] are read on. A camera whose images carry
     /// non-zero rates needs its setting here. A length other than the camera
-    /// count is a caller error, checked with the others.
+    /// count is a caller error, checked with the others. So is an image
+    /// adjustment its camera cannot take (`CameraIntrinsics::check_adjustment`),
+    /// and a camera whose own rolling shutter it could not apply.
     pub rolling_shutter_scanlines: Option<&'a [Option<RollingShutterScanlines>]>,
 }
 
@@ -645,6 +647,21 @@ impl<'a> BaCameras<'a> {
                 self.cameras.len(),
                 "rolling_shutter_scanlines and cameras length mismatch"
             );
+        }
+        // An adjustment its camera cannot take is a caller error too, caught
+        // here with the reason rather than deep in a round's projection.
+        for (c, camera) in self.cameras.iter().enumerate() {
+            if let Err(e) = camera.check_rolling_shutter() {
+                panic!("camera {c}: {e}");
+            }
+        }
+        if let Some(adjustments) = &self.image_adjustments {
+            for (i, (a, &j)) in adjustments.iter().zip(self.image_camera.iter()).enumerate() {
+                let scanlines = self.rolling_shutter_scanlines.and_then(|s| s[j as usize]);
+                if let Err(e) = self.cameras[j as usize].check_adjustment(a, scanlines) {
+                    panic!("image {i}: {e}");
+                }
+            }
         }
     }
 }

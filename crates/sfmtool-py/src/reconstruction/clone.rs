@@ -791,6 +791,13 @@ fn finalize(
         principal_point_adjustments_xy,
         per_image_adjustments,
     )?;
+    // The cameras, the camera column, the adjustments and the flags have all
+    // been applied, any of which can pair an image with a camera that cannot
+    // take its adjustment, so every image is checked before anything reads
+    // one through its intrinsics.
+    recon.image_set.check_image_intrinsics().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
+    })?;
 
     // Recombine the observation-source columns into the enum once the image
     // count is settled. Any column not supplied falls back to the current value.
@@ -967,7 +974,12 @@ fn apply_intrinsic_adjustments(
             )));
         }
         // Each camera keeps its scanlines setting, which the names do not
-        // carry.
+        // carry, an empty list (no camera varies anything) included.
+        let flags = if flags.is_empty() {
+            vec![Default::default(); camera_count]
+        } else {
+            flags
+        };
         let flags: Vec<_> = flags
             .into_iter()
             .enumerate()

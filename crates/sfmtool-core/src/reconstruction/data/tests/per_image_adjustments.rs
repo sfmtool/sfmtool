@@ -494,3 +494,48 @@ fn rates_on_another_model_are_refused_and_the_file_boundary_still_refuses_both()
     assert!(!path.exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_image_paired_with_a_camera_that_cannot_take_its_adjustment_is_reported() {
+    use crate::camera::{RollingShutter, RollingShutterScanlines};
+    // As held, every image can be read through its intrinsics.
+    let recon = corrected_demo();
+    assert_eq!(recon.image_set.check_image_intrinsics(), Ok(()));
+
+    // Its camera replaced by a PINHOLE: a radial correction and rates the new
+    // model cannot take.
+    let mut swapped = corrected_demo();
+    swapped.image_set.cameras[0] = SfmrReconstruction::demo(16).image_set.cameras[0].clone();
+    let err = swapped.image_set.check_image_intrinsics().unwrap_err();
+    assert!(
+        err.starts_with("image 0") && err.contains("SFMTOOL_PINHOLE"),
+        "{err}"
+    );
+
+    // The scanlines setting dropped: rates with nothing to read them on.
+    let mut dropped = corrected_demo();
+    dropped.image_set.per_image_adjustments[0].rolling_shutter_scanlines = None;
+    let err = dropped.image_set.check_image_intrinsics().unwrap_err();
+    assert!(err.contains("rolling_shutter_scanlines"), "{err}");
+
+    // A camera index past the cameras.
+    let mut past = corrected_demo();
+    past.image_set.images[1].camera_index = 3;
+    let err = past.image_set.check_image_intrinsics().unwrap_err();
+    assert!(
+        err.starts_with("image 1") && err.contains("past the 1 cameras"),
+        "{err}"
+    );
+
+    // A camera of another model carrying rates of its own.
+    let mut camera_rates = SfmrReconstruction::demo(16);
+    camera_rates.image_set.cameras[0].rolling_shutter = Some(RollingShutter {
+        scanlines: RollingShutterScanlines::Rows,
+        rates: [1e-3, 0.0, 0.0],
+    });
+    let err = camera_rates.image_set.check_image_intrinsics().unwrap_err();
+    assert!(
+        err.starts_with("camera 0") && err.contains("SFMTOOL_PINHOLE"),
+        "{err}"
+    );
+}

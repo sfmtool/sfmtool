@@ -180,3 +180,61 @@ class TestTheReconstruction:
         )
         with pytest.raises(ValueError, match="rolling shutter"):
             plain.clone_with_changes(cameras=[image for _ in plain.cameras])
+
+
+class TestNoInputReachesAPanic:
+    """Every path that sets a rolling shutter, pairs an image with a camera or
+    changes a scanlines setting is checked, and raises ``ValueError`` rather
+    than letting a projection panic."""
+
+    def test_setstate_refuses_rates_on_another_model(self):
+        cam = CameraIntrinsics(
+            "PINHOLE",
+            640,
+            480,
+            {
+                "focal_length_x": 500.0,
+                "focal_length_y": 500.0,
+                "principal_point_x": 320.0,
+                "principal_point_y": 240.0,
+            },
+        )
+        with pytest.raises(ValueError, match="SFMTOOL_PINHOLE"):
+            cam.__setstate__(("ROWS", (1e-3, 0.0, 0.0)))
+        assert cam.rolling_shutter is None
+        cam.project(0.1, 0.1)
+        # Zero rates on any model are no rolling shutter to apply.
+        cam.__setstate__(("ROWS", (0.0, 0.0, 0.0)))
+        with pytest.raises(ValueError, match="not finite"):
+            _pinhole().__setstate__(("ROWS", (float("nan"), 0.0, 0.0)))
+        d = cam.to_dict()
+        d["rolling_shutter"] = ("COLUMNS", (1e-3, 0.0, 0.0))
+        with pytest.raises(ValueError, match="SFMTOOL_PINHOLE"):
+            CameraIntrinsics.from_dict(d)
+
+    def test_clone_with_changes_checks_every_image_against_its_camera(
+        self, seoul_bull_sfmr_only
+    ):
+        recon, _, _ = _corrected(seoul_bull_sfmr_only, seoul_bull_sfmr_only.parent)
+        plain = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        # The corrected images' cameras replaced by the plain model.
+        with pytest.raises(ValueError, match="image 2"):
+            recon.clone_with_changes(cameras=list(plain.cameras))
+        # An image moved onto a new camera with no scanlines setting.
+        cameras = list(recon.cameras)
+        indexes = np.asarray(recon.camera_indexes).copy()
+        indexes[3] = len(cameras)
+        with pytest.raises(ValueError, match="image 3"):
+            recon.clone_with_changes(
+                cameras=cameras + [cameras[0]], camera_indexes=indexes
+            )
+        # The reconstruction itself is untouched and still reads every image.
+        for i in range(recon.image_count):
+            recon.image_intrinsics(i)
+
+    def test_an_empty_flag_list_keeps_the_scanlines(self, seoul_bull_sfmr_only):
+        recon, _, _ = _corrected(seoul_bull_sfmr_only, seoul_bull_sfmr_only.parent)
+        cleared = recon.clone_with_changes(per_image_adjustments=[])
+        assert cleared.per_image_adjustments == [[] for _ in recon.cameras]
+        assert cleared.rolling_shutter_scanlines == recon.rolling_shutter_scanlines
+        assert cleared.image_intrinsics(3) == recon.image_intrinsics(3)

@@ -2102,3 +2102,37 @@ fn a_camera_entry_carries_no_rolling_shutter() {
     let back = CameraIntrinsics::try_from(&entry).unwrap();
     assert_eq!(back.rolling_shutter, None);
 }
+
+#[test]
+fn a_rolling_shutter_set_directly_is_checked() {
+    let mut camera = simple_pinhole();
+    assert_eq!(camera.check_rolling_shutter(), Ok(()));
+    // Zero rates on any model project as none.
+    camera.rolling_shutter = Some(RollingShutter {
+        scanlines: RollingShutterScanlines::Rows,
+        rates: [0.0; 3],
+    });
+    assert_eq!(camera.check_rolling_shutter(), Ok(()));
+    camera.rolling_shutter = Some(RollingShutter {
+        scanlines: RollingShutterScanlines::Rows,
+        rates: [1e-3, 0.0, 0.0],
+    });
+    assert!(camera
+        .check_rolling_shutter()
+        .unwrap_err()
+        .contains("SFMTOOL_PINHOLE"));
+    let mut pinhole = sfmtool_pinhole_with(vec![0.0; 4]);
+    pinhole.rolling_shutter = Some(RollingShutter {
+        scanlines: RollingShutterScanlines::Columns,
+        rates: [1e-3, 0.0, 0.0],
+    });
+    assert_eq!(pinhole.check_rolling_shutter(), Ok(()));
+    pinhole.rolling_shutter = Some(RollingShutter {
+        scanlines: RollingShutterScanlines::Columns,
+        rates: [f64::NAN, 0.0, 0.0],
+    });
+    assert!(pinhole
+        .check_rolling_shutter()
+        .unwrap_err()
+        .contains("not finite"));
+}

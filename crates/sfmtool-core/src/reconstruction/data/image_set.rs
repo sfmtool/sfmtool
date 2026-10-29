@@ -177,6 +177,43 @@ impl ImageSet {
         }
     }
 
+    /// Whether every image can be read through its intrinsics, or a message
+    /// naming the first that cannot: its camera index is past the cameras, its
+    /// camera carries a rolling shutter the projection cannot apply
+    /// ([`CameraIntrinsics::check_rolling_shutter`]), or its adjustment is one
+    /// its camera cannot take with the camera's scanlines setting
+    /// ([`CameraIntrinsics::check_adjustment`]).
+    ///
+    /// [`Self::image_intrinsics`] and the projection methods panic on what this
+    /// refuses, so an edit that pairs images with other cameras, or changes a
+    /// camera, its flags or its scanlines setting, calls this before anything
+    /// projects.
+    pub fn check_image_intrinsics(&self) -> Result<(), String> {
+        for (c, camera) in self.cameras.iter().enumerate() {
+            camera
+                .check_rolling_shutter()
+                .map_err(|e| format!("camera {c}: {e}"))?;
+        }
+        for (i, image) in self.images.iter().enumerate() {
+            let c = image.camera_index as usize;
+            let Some(camera) = self.cameras.get(c) else {
+                return Err(format!(
+                    "image {i} ({}): camera index {c} is past the {} cameras",
+                    image.name,
+                    self.cameras.len()
+                ));
+            };
+            camera
+                .check_adjustment(
+                    &image.intrinsic_adjustment,
+                    self.camera_per_image_adjustments(c)
+                        .rolling_shutter_scanlines,
+                )
+                .map_err(|e| format!("image {i} ({}): {e}", image.name))?;
+        }
+        Ok(())
+    }
+
     /// Every camera's rolling-shutter scanlines setting, one per camera: the
     /// list [`ImageIntrinsicsList::new`] and the bundle adjustment read the
     /// images' rates on.

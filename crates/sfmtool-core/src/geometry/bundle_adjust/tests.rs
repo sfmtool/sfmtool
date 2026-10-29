@@ -8741,3 +8741,52 @@ fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
 }
 
 mod per_image;
+
+#[test]
+#[should_panic(
+    expected = "image 0: rolling-shutter rates need the camera's rolling_shutter_scanlines"
+)]
+fn rates_without_a_scanlines_setting_are_refused_before_the_solve() {
+    let truth = sfmtool_pinhole(250.0, &PLANTED_PINHOLE_BSPLINE);
+    let (mut s, _) = make_pinhole_scene_for(truth.clone(), 4, 50);
+    let n_img = s.quats.len();
+    let adjustments = vec![
+        IntrinsicAdjustment {
+            rolling_shutter: [1e-3, 0.0, 0.0],
+            ..Default::default()
+        };
+        n_img
+    ];
+    bundle_adjust(
+        &BaCameras {
+            cameras: std::slice::from_ref(&truth),
+            image_camera: Cow::Owned(vec![0; n_img]),
+            releases: None,
+            image_adjustments: Some(Cow::Borrowed(&adjustments)),
+            rolling_shutter_scanlines: None,
+        },
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        None,
+        None,
+        FreePointPolicy::default(),
+        None,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        None,
+        &DEFAULT_SCHEDULE,
+        5,
+        2,
+        12,
+        &Progress::none(),
+    );
+}

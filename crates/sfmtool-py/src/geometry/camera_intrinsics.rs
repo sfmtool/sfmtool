@@ -37,6 +37,25 @@ fn rolling_shutter_from_py(value: Option<PyRollingShutter>) -> PyResult<Option<R
         .transpose()
 }
 
+/// Set `camera`'s rolling shutter from its Python form, refusing with a
+/// `ValueError` one the projection methods cannot apply
+/// (`CameraIntrinsics::check_rolling_shutter`), and leaving `camera` as it was
+/// then.
+fn set_rolling_shutter(
+    camera: &mut CameraIntrinsics,
+    value: Option<PyRollingShutter>,
+) -> PyResult<()> {
+    let candidate = CameraIntrinsics {
+        rolling_shutter: rolling_shutter_from_py(value)?,
+        ..camera.clone()
+    };
+    candidate
+        .check_rolling_shutter()
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    *camera = candidate;
+    Ok(())
+}
+
 pub(crate) fn parse_scanlines(name: &str) -> PyResult<RollingShutterScanlines> {
     RollingShutterScanlines::parse(name).map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -209,18 +228,7 @@ impl PyCameraIntrinsics {
             Some(v) if !v.is_none() => Some(v.extract()?),
             _ => None,
         };
-        inner.rolling_shutter = rolling_shutter_from_py(rolling_shutter)?;
-        if inner.rolling_shutter.is_some_and(|r| !r.is_zero())
-            && !matches!(
-                inner.model,
-                sfmtool_core::CameraModel::SfmtoolPinhole { .. }
-            )
-        {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "rolling-shutter rates apply only to an SFMTOOL_PINHOLE camera, not {}",
-                inner.model_name()
-            )));
-        }
+        set_rolling_shutter(&mut inner, rolling_shutter)?;
         Ok(Self { inner })
     }
 
@@ -720,8 +728,7 @@ impl PyCameraIntrinsics {
 
     /// Restore the rolling shutter :meth:`__reduce__` pickled.
     fn __setstate__(&mut self, state: Option<PyRollingShutter>) -> PyResult<()> {
-        self.inner.rolling_shutter = rolling_shutter_from_py(state)?;
-        Ok(())
+        set_rolling_shutter(&mut self.inner, state)
     }
 }
 

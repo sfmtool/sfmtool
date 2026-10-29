@@ -1090,6 +1090,27 @@ impl CameraIntrinsics {
         out
     }
 
+    /// Whether the projection methods can apply this camera's own
+    /// [`Self::rolling_shutter`], or a message saying why not: non-zero rates
+    /// need an `SFMTOOL_PINHOLE` camera, and every rate must be finite. A
+    /// caller that sets the field directly checks it with this before
+    /// projecting, since a projection method panics on what this refuses.
+    pub fn check_rolling_shutter(&self) -> Result<(), String> {
+        let Some(rolling_shutter) = &self.rolling_shutter else {
+            return Ok(());
+        };
+        if let Some(rate) = rolling_shutter.rates.iter().find(|r| !r.is_finite()) {
+            return Err(format!("a rolling-shutter rate is not finite: {rate}"));
+        }
+        if !rolling_shutter.is_zero() && !matches!(self.model, CameraModel::SfmtoolPinhole { .. }) {
+            return Err(format!(
+                "rolling-shutter rates apply only to an SFMTOOL_PINHOLE camera, not {}",
+                self.model_name()
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether [`Self::with_adjustment`] can apply `adjustment` to this camera
     /// with the scanlines setting `scanlines`, or a message saying why not: a
     /// non-zero radial correction needs an `SFMTOOL_PINHOLE` camera whose

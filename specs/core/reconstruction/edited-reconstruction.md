@@ -166,7 +166,12 @@ The binding's `SfmrReconstruction` exposes them as
 `rolling_shutter_scanlines`, and `CameraIntrinsics.with_adjustment` takes
 `radial_bspline`, `rolling_shutter` and `rolling_shutter_scanlines`;
 `clone_with_changes` has no keys for them yet and refuses the two names in
-`per_image_adjustments`. The rest is specified in
+`per_image_adjustments`, keeps every camera's scanlines setting when it sets
+the flags (an empty list included), and refuses, naming the image, a result in
+which an image's adjustment is one its camera cannot take
+(`ImageSet::check_image_intrinsics`), such as after its `cameras` or
+`camera_indexes` move an image with rates onto a camera of another model or
+one with no scanlines setting. The rest is specified in
 [per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller
