@@ -11,9 +11,9 @@ and [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md).
 Decided by the maintainer: the per-image radial correction is a two-coefficient
 spline in the camera's own basis, added to the camera's spline for that image;
 each image has its own rolling-shutter rotation rates `ω = (ωx, ωy, ωz)`; each
-camera has a readout axis, stored as `X` or `Y` and chosen in the bundle
-adjustment as `X`, `Y` or `UNKNOWN`, where `UNKNOWN` solves with each axis and
-keeps the lower cost; every new per-image field is zero-mean over its camera's
+camera has a rolling-shutter scanlines setting, stored as `ROWS` or `COLUMNS`
+and chosen in the bundle adjustment as `ROWS`, `COLUMNS` or `UNKNOWN`, where
+`UNKNOWN` solves with each and keeps the lower cost; every new per-image field is zero-mean over its camera's
 images with the mean held. Not decided: the prior widths, the early-stopping
 rule for `UNKNOWN`, and the questions listed under
 [Open questions](#open-questions).
@@ -41,9 +41,10 @@ This draft proposes two more per-image corrections of the same kind for the
 - **per-image rolling-shutter rates**, the rate at which the camera turned while
   the sensor read the image out, for the image distortion that turning causes;
 
-and **a per-camera readout axis**, which says whether the sensor reads rows in
-sequence (time varies down the image) or columns in sequence (time varies across
-it).
+and **a per-camera rolling-shutter scanlines setting**, which says whether the
+sensor reads one row at a time, rows one after another down the image (`ROWS`,
+the usual case and the default), or one column at a time across it
+(`COLUMNS`).
 
 On the one capture measured, a handheld Pixel 7 Pro sequence of 85 images, the
 two corrections together lower the held-out reprojection error from 0.386 px to
@@ -110,12 +111,12 @@ along its end tangent like the camera's spline,
 **2. Rolling shutter.** The readout time `t` is
 
 ```
-t = yd    for readout axis Y   (rows are read in sequence, so time varies with y)
-t = xd    for readout axis X
+t = yd    for ROWS      (one row at a time, rows read one after another down the image)
+t = xd    for COLUMNS   (one column at a time, across the image)
 ```
 
-measured from the line through the image's principal point, where `t = 0`, so
-the image's stored pose is the camera's pose when that line was read. The
+measured from the scanline through the image's principal point, where `t = 0`,
+so the image's stored pose is the camera's pose when that scanline was read. The
 readout duration is folded into the rates, so `t` is in normalized image units
 and the rates are in radians per normalized image unit of `t`. Then
 
@@ -129,9 +130,9 @@ of the camera with angular velocity `ω` in the optical frame: a fixed world
 point's camera coordinates change as `Ṗ = −ω × P`, and differentiating
 `(Px/Pz, Py/Pz)` gives exactly these two terms. In the `.sfmr` camera frame the
 same rotation has angular velocity `S·ω = (ωx, −ωy, −ωz)`, since
-`S = diag(1, −1, −1)` is a rotation. The sign of the readout direction is not
-part of the model: a sensor that reads bottom to top gives the same fit with
-every rate negated.
+`S = diag(1, −1, −1)` is a rotation. Only whether the scanlines are rows or
+columns is part of the model, not the direction the scan advances in: a sensor
+that reads its rows bottom to top gives the same fit with every rate negated.
 
 **3. Pixels.** As for the existing adjustments:
 
@@ -251,7 +252,7 @@ gains, under
 | `images/radial_adjustments.{N}.2.float64.zst` | Optional. Per image, `[e_0, e_1]`, its radial correction coefficients, dimensionless. Present exactly when some camera lists `"radial"`. |
 | `images/rolling_shutter_rates_xyz.{N}.3.float64.zst` | Optional. Per image, `[ωx, ωy, ωz]`, in radians per normalized image unit of readout time, defined by the formulas in [The map for image `i`](#the-map-for-image-i). Present exactly when some camera lists `"rolling_shutter"`. |
 | `cameras/metadata.json` `per_image_adjustments` | May also name `"radial"` (only on an `SFMTOOL_PINHOLE` camera) and `"rolling_shutter"`, in the order `"focal"`, `"principal_point"`, `"radial"`, `"rolling_shutter"`. |
-| `cameras/metadata.json` `readout_axis` | Optional string, `"X"` or `"Y"`. Required on a camera that lists `"rolling_shutter"`; allowed on any other camera, so a known axis can be recorded before any rates are solved. Part of `cameras_xxh128`. |
+| `cameras/metadata.json` `rolling_shutter_scanlines` | Optional string, `"ROWS"` or `"COLUMNS"`: whether the sensor reads one row at a time (`t = yd`) or one column at a time (`t = xd`). Required on a camera that lists `"rolling_shutter"`; allowed on any other camera, so a known setting can be recorded before any rates are solved. Part of `cameras_xxh128`. |
 
 The rules are those of the existing columns: a column is present exactly when
 some camera lists its name; a row of an image whose camera does not list it holds
@@ -262,7 +263,7 @@ normalized unit, so a camera resize leaves them unchanged, as it leaves the
 focal scale and the short-side offsets.
 
 A file of version 13 or older reads with every radial coefficient and every rate
-zero and no camera carrying a readout axis, which is the image read through its
+zero and no camera carrying `rolling_shutter_scanlines`, which is the image read through its
 camera exactly as before (no rates means zero corrections). A version 14 file
 with none of the new entries maps back to version 13 by its version number
 alone. `validate_per_image_adjustments` in
@@ -290,21 +291,24 @@ COLMAP at all.
   after the model's `distort` and before the focal and principal point, and
   inverted as in [Unprojection](#unprojection): for example
   `rolling_shutter: Option<RollingShutter>` on `CameraIntrinsics`, with
-  `RollingShutter { axis: ReadoutAxis, rates: [f64; 3] }`, set by
-  `ImageSet::image_intrinsics(i)`, which knows the camera's axis. Where it sits
+  `RollingShutter { scanlines: RollingShutterScanlines, rates: [f64; 3] }`, set
+  by `ImageSet::image_intrinsics(i)`, which knows the camera's scanlines. Where
+  it sits
   is an [open question](#open-questions), because it touches every consumer of
   `CameraIntrinsics`. Whatever its place, `ImageIntrinsicsList` and every
   routine that reads an image through `image_intrinsics(i)` (triangulation, the
   bundle adjustment's re-estimation, patch rendering, image warping) gets the
   corrections without change of its own.
-- The per-camera axis is stored in memory beside the camera's
+- The per-camera scanlines setting is stored in memory beside the camera's
   [`PerImageAdjustments`](../../crates/sfmtool-core/src/reconstruction/data/image_set.rs),
-  which gains `radial`, `rolling_shutter` and `readout_axis: Option<ReadoutAxis>`.
+  which gains `radial`, `rolling_shutter` and
+  `rolling_shutter_scanlines: Option<RollingShutterScanlines>`, an enum
+  `RollingShutterScanlines { Rows, Columns }` (proposed).
 - The ray Jacobian
   ([sfmtool-pinhole-kernels.md § Ray Jacobian](../core/camera/sfmtool-pinhole-kernels.md#ray-jacobian))
   becomes the derivative of the whole map. With `D` the existing radial 2×2
-  read with the image's spline, `∇t` equal to `(0, 1)` for axis Y and `(1, 0)`
-  for axis X, and `J_rs = I + v·∇tᵀ`,
+  read with the image's spline, `∇t` equal to `(0, 1)` for `ROWS` and `(1, 0)`
+  for `COLUMNS`, and `J_rs = I + v·∇tᵀ`,
 
   ```
   ∂(xr, yr)/∂(xn, yn) = J_rs · D + t · ∂v/∂(xn, yn)
@@ -324,9 +328,10 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
   narrowed per camera by them as the existing per-image flags are. Both are
   refused on any model but `SFMTOOL_PINHOLE`; `image_radial` also on a camera
   whose spline domain is not positive and finite.
-- The kernel takes one fixed axis per camera (`ReadoutAxis`, `X` or `Y`), from
-  the caller. `UNKNOWN` is the reconstruction-level adjustment's business, since
-  it compares two solves ([Choosing the axis](#choosing-the-axis)).
+- The kernel takes one fixed scanlines setting per camera
+  (`RollingShutterScanlines`, `Rows` or `Columns`), from the caller. `UNKNOWN`
+  is the reconstruction-level adjustment's business, since it compares two
+  solves ([Choosing rows or columns](#choosing-rows-or-columns)).
 - **Columns.** Each image's block of the reduced system grows from
   `[δθ×3, δt×3, t_i, a_x, a_y]` to fourteen wide, `… , e_i0, e_i1, ωx, ωy, ωz`,
   in a solve where some camera releases a new per-image field, with the image's
@@ -380,27 +385,29 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
   fields are zero, takes the instantiations it takes today and computes the
   same output bit for bit.
 
-### Choosing the axis
+### Choosing rows or columns
 
 The reconstruction-level adjustment
 ([bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
 [bundle_adjust.rs](../../crates/sfmtool-core/src/reconstruction/bundle_adjust.rs))
-takes a readout axis choice per camera that releases the rates: `X`, `Y` or
-`UNKNOWN` (proposed `ReadoutAxisChoice`), defaulting to the camera's stored
-`readout_axis`, or `UNKNOWN` where it has none. A known axis runs one solve.
-`UNKNOWN` runs the solve once with each axis and keeps the one with the lower
-cost, writing its axis into the camera. With several `UNKNOWN` cameras the
-choices are made one camera at a time, the others held at their stored axis or
-at `Y`; the cases with more than one are rare enough not to justify a
-combinatorial search.
+takes a scanlines choice per camera that releases the rates: `ROWS`, `COLUMNS`
+or `UNKNOWN` (proposed `RollingShutterScanlinesChoice`), defaulting to the
+camera's stored `rolling_shutter_scanlines`, or to `ROWS`, the usual case, where
+it has none. `UNKNOWN` is a value of the option only, never stored. `ROWS` or
+`COLUMNS` runs one solve. `UNKNOWN` runs the solve once with each and keeps the
+one with the lower cost, writing its setting into the camera. With several
+`UNKNOWN` cameras the choices are made one camera at a time, the others held at
+their stored setting or at `ROWS`; the cases with more than one are rare enough
+not to justify a combinatorial search.
 
-A weight between the axes is not solved for, because the wrong axis is a local
-minimum: a continuous blend `t = λ·y + (1 − λ)·x` released from `λ = 0` stays
-there ([Alternatives considered](#alternatives-considered)).
+A weight between rows and columns is not solved for, because the wrong choice is
+a local minimum: a continuous blend `t = λ·y + (1 − λ)·x`, which is rows at
+`λ = 1` and columns at `λ = 0`, released from `λ = 0` stays there
+([Alternatives considered](#alternatives-considered)).
 
 The cost compared is the robust cost the damping ladder compares (data, priors
 and spline penalty), in units of `σ_n²`. Both solves start from the same state
-(the rates start at zero, where the axis does not matter), so the first round's
+(the rates start at zero, where the scanlines do not matter), so the first round's
 trim, kept observations and `σ_n` are the same for both and their costs are
 directly comparable through that round. After it each solve trims from its own
 state, and the final comparison is over the observations both final rounds
@@ -419,22 +426,22 @@ it cannot plausibly catch up:
   of its iteration budget at its recent rate, the mean of its last three
   iterations' decrease times the iterations the schedule has left;
 - the leading solve then runs to the end alone, and the report says the other
-  axis was stopped and at what gap;
+  choice was stopped and at what gap;
 - if the rule never fires, the final costs decide, as two full solves would.
 
 25 is the likelihood-ratio threshold the point-or-bearing test already uses
 (`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD` in
 [point_or_bearing.rs](../../crates/sfmtool-core/src/reconstruction/triangulation/point_or_bearing.rs)),
-taken as a starting value, not a derived one. On the measured capture the two
-axes' final costs differ by about 840 such units, so the rule would fire long
+taken as a starting value, not a derived one. On the measured capture the
+final costs with rows and with columns differ by about 840 such units, so the rule would fire long
 before the end there. The rule assumes that the trailing solve's
 per-iteration decrease does not grow again, which a Levenberg–Marquardt solve
 does not promise (its damping can fall and its steps grow), and that an early
 lead is not reversed while the poses are still settling. **It must be measured
 on real solves before it is adopted**: the measurement records both solves'
 full cost trajectories, on the measured capture from its stored state and from
-a raw `sfm solve` output, and on synthetic scenes with rates planted on each
-axis, and reports the first iteration after which the sign of `D` never changes
+a raw `sfm solve` output, and on synthetic scenes with rates planted under
+rows and under columns, and reports the first iteration after which the sign of `D` never changes
 and whether the rule ever stops the eventual winner. A per-iteration cost needs
 to reach the comparator from the kernel; `Progress` reports phases, counts and
 messages today, and whether the cost travels as a message or through a small
@@ -445,31 +452,33 @@ observer argument is part of the work.
 - `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each
   `releases` dict takes `"image_radial"`, `"image_rolling_shutter"` (bools) and
-  `"readout_axis"` (`"X"`, `"Y"` or `"UNKNOWN"`), with `opt_image_radial=` and
-  `opt_image_rolling_shutter=` for every camera at once; `image_prior` dicts take
-  `radial` and `rolling_shutter` widths. The report's `CameraAdjustment` gains the
-  axis used, under `UNKNOWN` both axes' costs and whether one was stopped, and
+  `"rolling_shutter_scanlines"` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`), with
+  `opt_image_radial=` and `opt_image_rolling_shutter=` for every camera at once;
+  `image_prior` dicts take `radial` and `rolling_shutter` widths. The report's
+  `CameraAdjustment` gains the scanlines setting used, under `UNKNOWN` the costs
+  with rows and with columns and whether one was stopped, and
   `ImageAdjustmentSpread` the new fields' spreads, with `ImageAdjustmentParameter`
   gaining a variant for each so `near_prior` can name them.
 - The kernel binding `sfmtool.geometry.bundle_adjust`
   ([bundle_adjust.rs](../../crates/sfmtool-py/src/geometry/bundle_adjust.rs))
   keeps `image_adjustments` as `(n_img, 3)` and takes the new fields as two more
   arrays, `image_radial_adjustments` `(n_img, 2)` and
-  `image_rolling_shutter_rates` `(n_img, 3)`, with a `readout_axes` sequence per
-  camera, so existing callers are not broken by a wider array.
+  `image_rolling_shutter_rates` `(n_img, 3)`, with a `rolling_shutter_scanlines`
+  sequence per camera (`"ROWS"` or `"COLUMNS"`), so existing callers are not broken by a wider array.
 - `read_sfmr` / `write_sfmr` dicts carry `radial_adjustments`,
-  `rolling_shutter_rates_xyz` and each camera's `readout_axis`.
+  `rolling_shutter_rates_xyz` and each camera's `rolling_shutter_scanlines`.
 - The viewer's Bundle Adjust dialog
   ([bundle_adjust_prompt.rs](../../crates/sfm-explorer/src/bundle_adjust_prompt.rs),
   [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md)) gains, per
   camera, **Release radial distortion per image** and **Release rolling shutter
   per image** beside the existing **Release focal length per image** and
-  **Release principal point per image**, and a readout axis choice (`X`, `Y`,
-  `Unknown`) shown while the rolling shutter is ticked. Both are greyed with the
+  **Release principal point per image**, and a **Scanlines** choice (`Rows`,
+  `Columns`, `Unknown`) shown while the rolling shutter is ticked. Both are greyed with the
   reason on a camera that is not `SFMTOOL_PINHOLE`, through its `CameraGate`.
   The MCP `bundle_adjust` tool
   ([edit.rs](../../crates/sfm-explorer/src/mcp/tools/catalog/edit.rs)) gains
-  `release_image_radial`, `release_image_rolling_shutter` and `readout_axis`,
+  `release_image_radial`, `release_image_rolling_shutter` and
+  `rolling_shutter_scanlines` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`),
   call-wide and per camera, as its existing release keys are.
 - `sfm xform --bundle-adjust` has no key for the existing per-image releases
   or the principal point, and gains none here
@@ -503,14 +512,14 @@ held-out RMS by under 0.0003 px.
 |---|---|
 | none (baseline, as v012) | 0.386 |
 | shear alone | 0.344 |
-| rolling shutter, axis Y, alone | 0.331 (better than shear in all 5 folds) |
-| 2-coefficient correction (σ 2·10⁻³) + rolling shutter Y | **0.2304** |
-| 2-coefficient correction + rolling shutter X | 0.2374 |
+| rolling shutter, rows, alone | 0.331 (better than shear in all 5 folds) |
+| 2-coefficient correction (σ 2·10⁻³) + rolling shutter, rows | **0.2304** |
+| 2-coefficient correction + rolling shutter, columns | 0.2374 |
 | 2-coefficient correction + shear | 0.2384 |
-| 2-coefficient correction + shear + rolling shutter Y | 0.2254 |
+| 2-coefficient correction + shear + rolling shutter, rows | 0.2254 |
 
-Axis Y beats both axis X and shear in all 5 folds. Adding shear on top of
-rolling shutter Y is better in all 5 folds too, but the two terms inflate each
+Rows beat both columns and shear in all 5 folds. Adding shear on top of
+rolling shutter with rows is better in all 5 folds too, but the two terms inflate each
 other: 1.55 px and 1.9 px at the image edge together, against 0.76 px and
 1.34 px apart, so the proposal does not combine them.
 
@@ -547,7 +556,7 @@ hold.
 | ρ | [0, 0.3) | [0.3, 0.5) | [0.5, 0.6) | [0.6, 0.7) | [0.7, 0.75) | [0.75, 0.83) |
 |---|---|---|---|---|---|---|
 | baseline | 0.330 | 0.395 | 0.436 | 0.549 | 0.670 | 0.612 |
-| 2-coefficient + rolling shutter Y | 0.196 | 0.242 | 0.255 | 0.307 | 0.362 | 0.576 |
+| 2-coefficient + rolling shutter, rows | 0.196 | 0.242 | 0.255 | 0.307 | 0.362 | 0.576 |
 
 The outermost band has about 85 observations.
 
@@ -572,15 +581,15 @@ better, not what physically causes the residual they remove.
 
 ## Alternatives considered
 
-**An axis-free per-image shear.** A traceless symmetric linear map per image,
-`Δx = a·x + s·y`, `Δy = s·x − a·y`, two parameters. To first order, rolling
-shutter along either axis is a linear map of the image plane; once the part a
-rotation of the pose and a change of focal absorb is removed, what remains is
-exactly this shear, so it needs no axis. It reaches 0.2384 with the radial
-correction against 0.2304 for rolling shutter Y, and rolling shutter beats it in
-every fold. It is not the proposal because the full rolling-shutter field fits
+**A per-image shear, with no scanlines setting.** A traceless symmetric linear
+map per image, `Δx = a·x + s·y`, `Δy = s·x − a·y`, two parameters. To first
+order, rolling shutter with rows or with columns is a linear map of the image
+plane; once the part a rotation of the pose and a change of focal absorb is
+removed, what remains is exactly this shear, so it does not need to know which.
+It reaches 0.2384 with the radial correction against 0.2304 for rolling shutter
+with rows, and rolling shutter beats it in every fold. It is not the proposal because the full rolling-shutter field fits
 better and has a physical reading; it could serve as a fallback for a camera
-whose axis is unknown and not worth two solves
+whose scanlines are unknown and not worth two solves
 ([open question](#open-questions)).
 
 **A continuous readout blend.** `t = λ·y + (1 − λ)·x` with one `λ ∈ [0, 1]` per
@@ -590,10 +599,11 @@ camera and shared rates. The solve's cost (px², priors included) at fixed `λ`:
 |---|---|---|---|---|---|
 | cost | 1190.3 | 1196.1 | 1187.1 | 1150.5 | 1134.0 |
 
-The cost is not convex in `λ`: the wrong axis (`λ = 0` here) is a local
-minimum. Released from 0, `λ` stayed at 0; released from 0.5 and from 1, it
-ended at 1. The two axes differ by about 56 px², about 840 in χ² units at the
-0.258 px noise level. This is why `UNKNOWN` compares two solves rather than
+`λ = 1` is rows and `λ = 0` is columns. The cost is not convex in `λ`: the
+wrong choice (`λ = 0`, columns, here) is a local minimum. Released from 0, `λ`
+stayed at 0; released from 0.5 and from 1, it ended at 1, rows. Rows and
+columns differ by about 56 px², about 840 in χ² units at the 0.258 px noise
+level. This is why `UNKNOWN` compares two solves rather than
 solving for a weight.
 
 **A focus-tied radial correction.** One shared two-coefficient shape per camera,
@@ -617,12 +627,12 @@ When built, the tests cover at least:
   `[0, ρ_max]`, for several `N` including 2.
 - **Round trip.** `pixel_to_ray` inverts `ray_to_pixel` to 1e-9 px over the
   image with planted radial corrections and rates of ten times the measured
-  size, on both axes.
+  size, with rows and with columns.
 - **Jacobian.** The analytic ray Jacobian and the five new columns agree with
   central differences.
 - **Recovery.** On the per-image tests' synthetic scenes, planted radial
-  corrections and rates on each axis are recovered within their noise, the mean
-  stays at its start value, and `UNKNOWN` picks the planted axis.
+  corrections and rates under rows and under columns are recovered within their noise, the mean
+  stays at its start value, and `UNKNOWN` picks the planted scanlines.
 - **Format.** Version 14 round-trips the columns and keys bit for bit; a reader
   rejects each broken rule; version 13 files read with zero corrections.
 
@@ -638,7 +648,7 @@ When built, the tests cover at least:
 ## Open questions
 
 - **The early-stopping rule for `UNKNOWN`.** The rule in
-  [Choosing the axis](#choosing-the-axis), with its threshold of 25 and three
+  [Choosing rows or columns](#choosing-rows-or-columns), with its threshold of 25 and three
   consecutive iterations, is a proposal to be measured on real solves before it
   is adopted. Whether lockstep should be per LM iteration or per schedule round
   (simpler, and needs no per-iteration cost from the kernel, but stops later) is
@@ -665,9 +675,9 @@ When built, the tests cover at least:
   correction carries over unchanged in `θ`; the rolling-shutter velocity above
   is the tangent-plane form and would need a ray-space form for a fisheye whose
   field reaches 90°.
-- **The shear fallback.** Whether to offer the axis-free shear as a release,
-  for a camera whose axis is unknown and a caller that will not pay for two
-  solves.
+- **The shear fallback.** Whether to offer the shear, which needs no scanlines
+  setting, as a release, for a camera whose scanlines are unknown and a caller
+  that will not pay for two solves.
 - **The focus-tied correction.** Whether to add it as a later amendment, and
   where its per-image focus value comes from (EXIF `SubjectDistance`, or the
   solved focal scale).
@@ -680,19 +690,21 @@ When built, the tests cover at least:
   [gui/camera-intrinsics.md](../gui/camera-intrinsics.md)); and whether its
   distortion overlay draws the image's own field.
 - **The format version.** Version 14 as above, with older files reading as zero
-  corrections; and whether a `readout_axis` without rates is worth allowing, or
-  should come only with the rates.
-- **Images whose pixel axes are not the sensor's.** The axis is per camera, in
-  the stored image's pixel axes. A camera whose images are stored in both
-  orientations (portrait photographs rotated by their EXIF orientation) would
-  need the axis per image, or one camera per orientation. Every measured image
-  has orientation 1.
+  corrections; and whether `rolling_shutter_scanlines` without rates is worth
+  allowing, or should come only with the rates.
+- **Images whose pixel axes are not the sensor's.** The scanlines setting is per
+  camera, in terms of the stored image's rows and columns. A camera whose images
+  are stored in both orientations (portrait photographs rotated by their EXIF
+  orientation) would need the setting per image, or one camera per orientation.
+  Every measured image has orientation 1.
 - **The CLI.** Whether `sfm xform --bundle-adjust` gains keys for the per-image
-  releases and the readout axis.
+  releases and the scanlines setting.
 - **Naming.** `radial` against `distortion` for the per-image correction
   (the shared release is `CameraRelease::distortion`), and the names of the new
-  types and columns, to settle in the glossary when the draft is filed.
+  types and columns, to settle in the glossary when the draft is filed. The
+  scanlines term is already settled there
+  ([GLOSSARY.md](../GLOSSARY.md#camera-intrinsics)).
 - **Breadth of the evidence.** One capture from one phone. The other checked-in
   datasets would need promotion to `SFMTOOL_PINHOLE` before they could test the
-  terms, and a second phone capture would show whether the readout axis and the
-  size of the rates generalise.
+  terms, and a second phone capture would show whether the scanlines setting
+  and the size of the rates generalise.
