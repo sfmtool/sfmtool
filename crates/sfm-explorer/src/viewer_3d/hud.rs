@@ -63,8 +63,8 @@ const HUD_COLLAPSE_GLYPH: &str = "🗙";
 
 /// The accessible names of the two buttons: the glyph each shows, then the
 /// words of its hover text.
-pub(super) const HUD_EXPAND_NAME: &str = "⚙ Display controls";
-pub(super) const HUD_COLLAPSE_NAME: &str = "🗙 Collapse display controls";
+const HUD_EXPAND_NAME: &str = "⚙ Display controls";
+const HUD_COLLAPSE_NAME: &str = "🗙 Collapse display controls";
 
 /// Stable id of one collapsible section, independent of the `Ui` that hosts it.
 ///

@@ -2789,10 +2789,10 @@ clicked.
   is named by the glyph and then what it does, so its name starts with what a
   person sees and still says what it is for: the Scene tree's eye on a
   Points row is `👁 Show points`, and the Background Tasks panel's cancel
-  button `🗙 Cancel`. A control that no visible text
-  names is given a name of its own, which says what it sets and carries the
-  unit where the control shows one: Track View's threshold boxes, followed only by a unit and a reading's
-  name, are `minimum ZNCC whole (%)` to `maximum Proj. err (px)`, and Image
+  button `🗙 Cancel`. A control that no visible text names is given a name of
+  its own, which says what it sets and carries the unit where the control
+  shows one: Track View's threshold boxes, followed only by a unit and a
+  reading's name, are `minimum ZNCC whole (%)` to `maximum Proj. err (px)`, and Image
   Detail's two size boxes are `minimum size (px)` and `maximum size (px)`
   (the panels' specs list them: [track-view.md](track-view.md) § "The
   thresholds", [multi-panel-image-browser.md](multi-panel-image-browser.md) §

@@ -82,7 +82,7 @@ pub(super) const CANCEL: &str = "\u{1f5d9}";
 
 /// The Cancel button's accessible name: its glyph, then the word it stands
 /// for.
-pub(super) const CANCEL_NAME: &str = "\u{1f5d9} Cancel";
+const CANCEL_NAME: &str = "\u{1f5d9} Cancel";
 
 /// What leads a waiting task's line, where a queue's line has its name.
 pub(super) const WAITING: &str = "waiting";

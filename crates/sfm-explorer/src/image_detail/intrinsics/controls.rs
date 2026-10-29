@@ -20,7 +20,7 @@ use sfmtool_core::camera::CameraIntrinsics;
 pub(crate) const GEAR: &str = "⚙";
 
 /// The gear's accessible name: its glyph, then what its popup holds.
-pub(crate) const GEAR_NAME: &str = "⚙ Intrinsics settings";
+const GEAR_NAME: &str = "⚙ Intrinsics settings";
 
 /// Draw the layer's contribution to the Image Detail toolbar.
 ///
