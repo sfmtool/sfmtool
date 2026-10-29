@@ -515,9 +515,11 @@ other: 1.55 px and 1.9 px at the image edge together, against 0.76 px and
 1.34 px apart, so the proposal does not combine them.
 
 **One coefficient against two.** At a tighter prior (σ 5·10⁻⁴), a
-one-parameter cubic (δ ∝ ρ²) with rolling shutter gives 0.257 against 0.255
-for the two-coefficient correction with rolling shutter, the two-coefficient
-form better in all 5 folds.
+one-parameter quadratic correction, δ ∝ ρ² (a multiple of `(ρ/ρ_max)²` added to
+`δ`), with rolling shutter gives 0.257 against 0.255 for the two-coefficient
+correction with rolling shutter, the two-coefficient form better in all 5
+folds. The `k1`-type one-parameter form, δ ∝ ρ³, was not tested in a re-solve;
+both δ ∝ ρ² and δ ∝ ρ³ lie in the span of the two-coefficient basis.
 
 **Prior widths.** For the radial correction, σ is quoted as `δ` at the domain
 end (`e_1`, since `B1(ρ_max) = 1`):
