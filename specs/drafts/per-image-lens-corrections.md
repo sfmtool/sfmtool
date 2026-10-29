@@ -13,8 +13,9 @@ spline in the camera's own basis, added to the camera's spline for that image;
 each image has its own rolling-shutter rotation rates `ω = (ωx, ωy, ωz)`; each
 camera has a rolling-shutter scanlines setting, stored as `ROWS` or `COLUMNS`
 and chosen in the bundle adjustment as `ROWS`, `COLUMNS` or `UNKNOWN`, where
-`UNKNOWN` solves with each and keeps the lower cost; every new per-image field is zero-mean over its camera's
-images with the mean held. Not decided: the prior widths, the early-stopping
+`UNKNOWN` solves with each and keeps the lower cost, and a camera with no
+stored setting is solved as `UNKNOWN`, never as an assumed `ROWS`; every new
+per-image field is zero-mean over its camera's images with the mean held. Not decided: the prior widths, the early-stopping
 rule for `UNKNOWN`, and the questions listed under
 [Open questions](#open-questions).
 
@@ -43,7 +44,7 @@ This draft proposes two more per-image corrections of the same kind for the
 
 and **a per-camera rolling-shutter scanlines setting**, which says whether the
 sensor reads one row at a time, rows one after another down the image (`ROWS`,
-the usual case and the default), or one column at a time across it
+the usual case), or one column at a time across it
 (`COLUMNS`).
 
 On the one capture measured, a handheld Pixel 7 Pro sequence of 85 images, the
@@ -391,14 +392,22 @@ The reconstruction-level adjustment
 ([bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
 [bundle_adjust.rs](../../crates/sfmtool-core/src/reconstruction/bundle_adjust.rs))
 takes a scanlines choice per camera that releases the rates: `ROWS`, `COLUMNS`
-or `UNKNOWN` (proposed `RollingShutterScanlinesChoice`), defaulting to the
-camera's stored `rolling_shutter_scanlines`, or to `ROWS`, the usual case, where
-it has none. `UNKNOWN` is a value of the option only, never stored. `ROWS` or
-`COLUMNS` runs one solve. `UNKNOWN` runs the solve once with each and keeps the
-one with the lower cost, writing its setting into the camera. With several
-`UNKNOWN` cameras the choices are made one camera at a time, the others held at
-their stored setting or at `ROWS`; the cases with more than one are rare enough
-not to justify a combinatorial search.
+or `UNKNOWN` (proposed `RollingShutterScanlinesChoice`). Where the caller does
+not choose, it is the camera's stored `rolling_shutter_scanlines`, used as
+stored, or `UNKNOWN` where the camera has none: an absent setting means the
+scanlines are not known, and no setting is assumed. `UNKNOWN` is a value of the
+option only, never stored. `ROWS` or `COLUMNS` runs one solve. `UNKNOWN` runs
+the solve once with each and keeps the one with the lower cost, writing its
+setting into the camera.
+
+With several `UNKNOWN` cameras, their choices are made one camera at a time, in
+camera index order, each by its own race of two solves. While one camera's race
+runs, the `UNKNOWN` cameras already decided use the setting their race chose,
+and those not yet decided keep their rates held at zero, where the scanlines
+setting has no effect, so no setting is assumed for them. The last race releases
+every camera's rates and its winner is the solve's answer. `k` such cameras cost
+`k` races; the cases with more than one are rare enough not to justify a
+combinatorial search over all `2ᵏ` combinations.
 
 A weight between rows and columns is not solved for, because the wrong choice is
 a local minimum: a continuous blend `t = λ·y + (1 − λ)·x`, which is rows at
@@ -452,8 +461,9 @@ observer argument is part of the work.
 - `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each
   `releases` dict takes `"image_radial"`, `"image_rolling_shutter"` (bools) and
-  `"rolling_shutter_scanlines"` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`), with
-  `opt_image_radial=` and `opt_image_rolling_shutter=` for every camera at once;
+  `"rolling_shutter_scanlines"` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`; a
+  missing key is the camera's stored setting, or `"UNKNOWN"` where it has
+  none), with `opt_image_radial=` and `opt_image_rolling_shutter=` for every camera at once;
   `image_prior` dicts take `radial` and `rolling_shutter` widths. The report's
   `CameraAdjustment` gains the scanlines setting used, under `UNKNOWN` the costs
   with rows and with columns and whether one was stopped, and
@@ -464,7 +474,9 @@ observer argument is part of the work.
   keeps `image_adjustments` as `(n_img, 3)` and takes the new fields as two more
   arrays, `image_radial_adjustments` `(n_img, 2)` and
   `image_rolling_shutter_rates` `(n_img, 3)`, with a `rolling_shutter_scanlines`
-  sequence per camera (`"ROWS"` or `"COLUMNS"`), so existing callers are not broken by a wider array.
+  sequence per camera (`"ROWS"` or `"COLUMNS"`, since the kernel runs one
+  solve with a known setting and the race is the reconstruction-level
+  adjustment's), so existing callers are not broken by a wider array.
 - `read_sfmr` / `write_sfmr` dicts carry `radial_adjustments`,
   `rolling_shutter_rates_xyz` and each camera's `rolling_shutter_scanlines`.
 - The viewer's Bundle Adjust dialog
@@ -473,13 +485,16 @@ observer argument is part of the work.
   camera, **Release radial distortion per image** and **Release rolling shutter
   per image** beside the existing **Release focal length per image** and
   **Release principal point per image**, and a **Scanlines** choice (`Rows`,
-  `Columns`, `Unknown`) shown while the rolling shutter is ticked. Both are greyed with the
+  `Columns`, `Unknown`) shown while the rolling shutter is ticked, which opens
+  on the camera's stored setting, or on `Unknown` where it has none. Both
+  checkboxes are greyed with the
   reason on a camera that is not `SFMTOOL_PINHOLE`, through its `CameraGate`.
   The MCP `bundle_adjust` tool
   ([edit.rs](../../crates/sfm-explorer/src/mcp/tools/catalog/edit.rs)) gains
   `release_image_radial`, `release_image_rolling_shutter` and
   `rolling_shutter_scanlines` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`),
-  call-wide and per camera, as its existing release keys are.
+  call-wide and per camera, as its existing release keys are; omitted, it is
+  the camera's stored setting, or `"UNKNOWN"` where it has none.
 - `sfm xform --bundle-adjust` has no key for the existing per-image releases
   or the principal point, and gains none here
   ([open question](#open-questions)).
@@ -653,6 +668,13 @@ When built, the tests cover at least:
   is adopted. Whether lockstep should be per LM iteration or per schedule round
   (simpler, and needs no per-iteration cost from the kernel, but stops later) is
   part of the same measurement.
+- **Several `UNKNOWN` cameras.** The races in
+  [Choosing rows or columns](#choosing-rows-or-columns) run one camera at a time,
+  with the undecided cameras' rates held at zero. An earlier race is then
+  decided without the later cameras' rolling shutter, which those cameras'
+  poses absorb in part. Whether that can change an earlier choice, and whether a
+  second pass over the cameras is worth its cost, is untested: every measured
+  capture has one camera.
 - **Prior widths.** Whether the new widths are derived per camera by the
   existing empirical Bayes scheme (`ImagePriorOptions` `loose` and `floor`)
   or fixed. Derived, the loose widths cannot be the existing 0.1 (a radial
