@@ -1947,6 +1947,62 @@ fn with_both_queues_running_the_newest_stage_is_still_shown() {
     state.finish_background_tasks();
 }
 
+/// The Cancel button on a running line and on a waiting line is named by its
+/// glyph and then the word it stands for, not by the glyph alone.
+#[test]
+fn every_cancel_button_is_named_by_its_glyph_and_cancel() {
+    let (mut state, id) = adjustable();
+    let other = second_node(&mut state);
+    let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+    let fast = running(&mut state, other, Operation::BENCH_FIT);
+    let mut held = Vec::new();
+    for operation in [
+        Operation::RETRIANGULATE_ALL_POINTS,
+        Operation::BENCH_GROWN_PLANE_NORMAL,
+    ] {
+        let node = third_node(&mut state);
+        let mut waiting = Gate::new();
+        state
+            .start_background_task(operation, node, waiting_job(waiting.held()))
+            .expect("a busy queue queues the task");
+        held.push(waiting);
+    }
+    state.poll_background_tasks();
+
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    painted_at(&ctx, &mut state, input());
+    let mut output = ctx.run_ui(input(), |ui| super::panel::show(ui, &mut state));
+    output.textures_delta.clear();
+    let names: Vec<String> = output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+        .filter_map(|(_, node)| node.label().map(str::to_string))
+        .collect();
+    // Two running lines and two waiting lines.
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| *name == "\u{1f5d9} Cancel")
+            .count(),
+        4,
+        "{names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name == super::panel::CANCEL),
+        "{names:?}"
+    );
+
+    fast.open();
+    gate.open();
+    drop(held);
+    state.finish_background_tasks();
+}
+
 /// With a task running and one waiting in each queue, the panel at the height
 /// it has at the bottom of the left column still shows the chosen task's
 /// newest stage: each queue's waiting tasks take one line under its own,

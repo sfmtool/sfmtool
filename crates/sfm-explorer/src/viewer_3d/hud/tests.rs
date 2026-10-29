@@ -426,6 +426,46 @@ fn a_collapsed_hud_never_draws_its_sections() {
     );
 }
 
+/// The names AccessKit gives the buttons of one quiet frame.
+fn button_names(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState) -> Vec<String> {
+    let mut output = ctx.run_ui(quiet_input(), |ui| draw(ui, viewer, state, false));
+    output.textures_delta.clear();
+    output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .iter()
+        .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+        .filter_map(|(_, node)| node.label().map(str::to_string))
+        .collect()
+}
+
+/// The close button and the gear are named by their glyph and then the words
+/// of their hover text, not by the glyph alone.
+#[test]
+fn the_close_button_and_the_gear_are_named_by_glyph_and_purpose() {
+    let mut state = demo_state();
+    let (mut viewer, ctx) = settled(&mut state);
+    ctx.enable_accesskit();
+    let open = button_names(&mut viewer, &ctx, &mut state);
+    assert!(
+        open.iter()
+            .any(|name| name == "\u{1f5d9} Collapse display controls"),
+        "{open:?}"
+    );
+
+    viewer.hud_open = false;
+    warm_up(&mut viewer, &ctx, &mut state);
+    let collapsed = button_names(&mut viewer, &ctx, &mut state);
+    assert!(
+        collapsed
+            .iter()
+            .any(|name| name == "\u{2699} Display controls"),
+        "{collapsed:?}"
+    );
+}
+
 /// Clicks the close button, then the gear it collapses to. Both directions in
 /// one test because each needs the other's end state to start from.
 #[test]
