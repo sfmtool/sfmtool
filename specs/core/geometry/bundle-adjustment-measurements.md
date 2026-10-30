@@ -2,9 +2,10 @@
 
 This file records the measurements behind the free-point choices of
 [bundle-adjustment.md](bundle-adjustment.md#free-points-inverse-depth-and-the-storage-decision),
-and, in its last two sections, those behind the regularization and the
-step-guard retry of a released spline, and those behind the per-image release
-of each image's focal and principal point.
+and, in its last three sections, those behind the regularization and the
+step-guard retry of a released spline, those behind the per-image release
+of each image's focal and principal point, and those behind each image's
+radial correction and rolling-shutter rates.
 Under `FreePointPolicy::CROSS` the bundle adjustment solves every free point in
 inverse depth and decides once, at the end of the solve, whether it is stored as
 a position or as a direction, by the point-or-bearing test at the noise level
@@ -727,3 +728,213 @@ principal point a family of exact solutions, the critical motion for a varying
 focal: from noise-free observations such scenes end with residuals under
 `10⁻⁶` px and offsets 0.4 to 0.9 px from the planted ones, which only the prior
 chooses among.
+
+## Per-image radial corrections and rolling-shutter rates
+
+These measurements are behind the two further per-image corrections of an
+`SFMTOOL_PINHOLE` camera, each image's radial correction and its
+rolling-shutter rates
+([../camera/sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)), and
+their release
+([bundle-adjustment.md § The per-image
+corrections](bundle-adjustment.md#the-per-image-corrections)). They bear on
+five decisions: the radial correction has two coefficients; the rolling
+shutter is the full rotation field on a known scanlines setting rather than a
+per-image shear; a camera whose setting is not known runs one solve with rows
+and one with columns rather than solving for a weight between them; the mean
+of each correction over a camera's images is held; and the prior widths' loose
+cap and floor.
+
+### Cross-validation with a scratch solver
+
+These numbers come from an independent bundle adjustment written with scipy
+in a scratch directory outside the tree, **not from the kernel**. They show
+that the corrections predict held-out points better; they do not show the
+physical cause.
+
+**Data.** `dino_dog_toy_ground_truth_candidate_v012.sfmr` in the maintainer's
+local `dino_dog_toy_ws` (not checked in): 85 handheld Pixel 7 Pro images at
+2040×1536, 1176 points, 23731 observations; one `SFMTOOL_PINHOLE` camera with 8
+spline coefficients, `bspline_rho_max` 0.84, focal 1447.8 px, with per-image
+focal and principal point released. EXIF focus distance 0.15 to 0.48 m,
+exposures mostly 1/120 s, every EXIF orientation 1.
+
+**Method.** Plain least squares keeping every observation (no trim, no robust
+loss), with the per-image focal and principal-point priors at the kernel's
+derived widths for v012 (0.0134 and 0.0131). 5-fold cross-validation by point:
+each fold's held-out points are re-triangulated through the trained cameras,
+the corrections included, and their reprojection RMS over all observations is
+the score. Solves were capped at 150 to 400 evaluations; 100 against 400
+changed the held-out RMS by under 0.0003 px.
+
+The scratch solver wrote the rolling-shutter term in the kernels' optical frame
+(y down) with the readout position in focal units: `t_o = (v − cy_i)/f_i` for
+rows and `t_o = (u − cx_i)/f_i` for columns. For each image the stored model's
+readout position is a fixed multiple of it, `t = (f_i/m)·t_o` with
+`m = min(width, height)`, and matching the two displacements gives the stored
+rates as `ω = (m/f_i)·(ωx, −ωy, −ωz)` of the scratch solver's, for rows and for
+columns. `m/f_i` is about 1.06 here (`1536/1447.8`), varying by the ±1.3% of the
+per-image focal scale. So the two are the same family of maps image by image,
+and every fit and held-out score here carries over unchanged. Two things
+differ slightly: a prior width in the stored unit is about 1.06 times the
+scratch solver's width quoted below, and the kernel's mean hold weights the
+images by `m/f_i`, which varies too little to matter.
+
+**Held-out RMS, px:**
+
+| Terms added to v012 | Held-out RMS |
+|---|---|
+| none (baseline, as v012) | 0.386 |
+| shear alone | 0.344 |
+| rolling shutter, rows, alone | 0.331 (better than shear in all 5 folds) |
+| 2-coefficient correction (σ 2·10⁻³) + rolling shutter, rows | **0.2304** |
+| 2-coefficient correction + rolling shutter, columns | 0.2374 |
+| 2-coefficient correction + shear | 0.2384 |
+| 2-coefficient correction + shear + rolling shutter, rows | 0.2254 |
+
+Rows beat both columns and shear in all 5 folds. Adding shear on top of
+rolling shutter with rows is better in all 5 folds too, but the two terms
+inflate each other: 1.55 px and 1.9 px at the image edge together, against
+0.76 px and 1.34 px apart, so the bundle adjustment does not combine them. The
+shear is `Δx = a·x + s·y`, `Δy = s·x − a·y` per image, two parameters, with no
+scanlines setting: to first order, rolling shutter with rows or with columns
+is a linear map of the image plane, and once the part a rotation of the pose
+and a change of focal absorb is removed, what remains is this traceless
+symmetric map. The full rolling-shutter field fits better in every fold and
+has a physical reading, so it is the correction the kernel has; whether to
+offer the shear as a fallback is an [open
+question](../camera/sfmtool-pinhole-kernels.md#open-questions).
+
+**One coefficient against two.** At a tighter prior (σ 5·10⁻⁴), a
+one-parameter quadratic correction, δ ∝ ρ² (a multiple of `(ρ/ρ_max)²` added to
+`δ`), with rolling shutter gives 0.257 against 0.255 for the two-coefficient
+correction with rolling shutter, the two-coefficient form better in all 5
+folds. The `k1`-type one-parameter form, δ ∝ ρ³, was not tested in a re-solve;
+both δ ∝ ρ² and δ ∝ ρ³ lie in the span of the two-coefficient basis.
+
+**Prior widths.** For the radial correction, σ is quoted as `δ` at the domain
+end (`e_1`, since `B1(ρ_max) = 1`):
+
+| Radial σ | Held-out RMS | Note |
+|---|---|---|
+| 2.5·10⁻⁴ | 0.281 | rate mean free |
+| 5·10⁻⁴ | 0.255 | rate mean free |
+| 1·10⁻³ | 0.238 | rate mean free |
+| 2·10⁻³ | 0.230 | rate mean free |
+| 2·10⁻³ | 0.2384 | mean held, with shear |
+| 4·10⁻³ | 0.2374 | mean held, with shear |
+| 8·10⁻³ | 0.2374 | mean held, with shear |
+
+| Rate σ | 1·10⁻³ | 2·10⁻³ | 4·10⁻³ | 8·10⁻³ |
+|---|---|---|---|---|
+| Held-out RMS | 0.2553 | 0.2549 | 0.2548 | 0.2548 |
+
+The held-out error is flat for the radial correction at σ ≥ 4·10⁻³ and for the
+rates at σ ≥ 2·10⁻³: past those widths the priors do no work beyond the mean
+hold. This is why `10⁻²` is loose enough for the derived widths' cap.
+
+With the mean of the rates free, the mean `ωx` over the images grew from
+−7·10⁻⁴ to −1.7·10⁻³ as the rate prior widened, with no change in held-out
+error (in the scratch solver's units; in the stored unit that `ωx` has the same
+sign and is about 6% larger, −7.4·10⁻⁴ to −1.8·10⁻³). The mean rate is a
+near-gauge, which is why the bundle adjustment holds it.
+
+**By distance from the centre** (held-out RMS, px):
+
+| ρ | [0, 0.3) | [0.3, 0.5) | [0.5, 0.6) | [0.6, 0.7) | [0.7, 0.75) | [0.75, 0.83) |
+|---|---|---|---|---|---|---|
+| baseline | 0.330 | 0.395 | 0.436 | 0.549 | 0.670 | 0.612 |
+| 2-coefficient + rolling shutter, rows | 0.196 | 0.242 | 0.255 | 0.307 | 0.362 | 0.576 |
+
+The outermost band has about 85 observations.
+
+**Fitted sizes.**
+
+- The rolling-shutter displacement at the centre of the bottom edge has a
+  median of 1.3 px and a maximum of 5.5 px; its lag-1 autocorrelation along the
+  capture sequence is about 0.4, so it changes from one photograph to the next
+  rather than following a slow drift.
+- The per-image radial correction is several pixels at ρ = 0.75 and
+  correlates at −0.98 with the EXIF focus distance in dioptres, which is what
+  focus-dependent distortion would give.
+- The poses rotate by a median of 0.15° to 0.24° when the terms are added.
+- Earlier residual fits, with the poses and points held, found no missing
+  shared lens term: decentering, thin prism, aspect ratio and skew were all at
+  the noise level. Only per-image fields remained, which is why no other part
+  of the lens is adjusted per image.
+
+**A continuous readout blend.**
+`t = λ·(v − cy_i)/m + (1 − λ)·(u − cx_i)/m`, the rows position at `λ = 1` and
+the columns position at `λ = 0`, with one `λ ∈ [0, 1]` per camera and shared
+rates. The scratch solver wrote it in focal units in the optical frame,
+`λ·(v − cy_i)/f_i + (1 − λ)·(u − cx_i)/f_i`, which is this `t` times `m/f_i`,
+the same fit with the rates rescaled as above. The solve's cost (px², priors
+included) at fixed `λ`:
+
+| λ | 0 | 0.25 | 0.5 | 0.75 | 1 |
+|---|---|---|---|---|---|
+| cost | 1190.3 | 1196.1 | 1187.1 | 1150.5 | 1134.0 |
+
+The cost is not convex in `λ`: the wrong choice (`λ = 0`, columns, here) is a
+local minimum. Released from 0, `λ` stayed at 0; released from 0.5 and from 1,
+it ended at 1, rows. Rows and columns differ by about 56 px², about 840 in χ²
+units at the 0.258 px noise level. This is why a camera whose scanlines are
+`UNKNOWN` runs two solves rather than solving for a weight
+([../reconstruction/bundle-adjust.md § The rolling-shutter
+scanlines](../reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines)).
+
+**A focus-tied radial correction.** One shared two-coefficient shape per
+camera, scaled for each image by its centred EXIF focus distance in dioptres
+(two parameters per camera rather than two per image). With shear it gives
+0.2467, and 0.706 in the outermost band, worse than free per-image coefficients
+there. With a small free per-image remainder (σ 5·10⁻⁴) and shear it gives
+0.2361, better than free coefficients with shear in all 5 folds. It needs a
+focus value for every image: EXIF `SubjectDistance`, or the solved per-image
+focal scale as a stand-in, which correlates at 0.96 with the dioptres. Whether
+to add it is an [open
+question](../camera/sfmtool-pinhole-kernels.md#open-questions).
+
+**Caveats.** One capture from one phone. A scratch solver with plain least
+squares rather than the kernel's soft-L1 and trim schedule, and capped
+evaluations. Cross-validation shows that the terms predict held-out points
+better, not what physically causes the residual they remove.
+
+### The kernel's release on the dino candidate
+
+The kernel, through its binding, on
+`dino_dog_toy_ground_truth_candidate_v012.sfmr` in the maintainer's local
+`dino_dog_toy_ws` (not checked in), with 85 images, 1245 points and 24931
+observations (the file gained points after the scratch experiments' 1176 and
+23731), keeping every observation (one round of `(inf, 1000)`, which a derived
+prior runs twice) with the free points kept in their representation, releasing
+the focal, the spline, each image's focal and principal point, and with them
+each image's radial correction and rates on `ROWS`. Training RMS per
+component, with no held-out score:
+
+| Solve | Training RMS, px | Time |
+|---|---|---|
+| as stored, no step | 0.2500 | |
+| re-solved with no new terms | 0.2494 | 6.6 s |
+| with both corrections, rows | **0.1443** | 13.5 to 20 s |
+| with both corrections, columns | 0.1486 | 15 s |
+
+against the scratch solver's 0.256 without the terms and 0.149 to 0.164 with
+them (two-coefficient correction and rows, fixed widths). On rows the derived
+widths were `2.96·10⁻³` for the radial correction and `1.28·10⁻³` for the rates
+(the focal's `0.0150`, the principal point's `0.0131`). The fitted radial
+correction has a median size of 1.9 px at `ρ = 0.5`, 4.9 px at `ρ = 0.75` and
+6.6 px at `ρ_max`, with a largest of 22.5 px at `ρ = 0.75`; its coefficients
+spread `2.0·10⁻³` in `e_0` and `6.9·10⁻³` in `e_1`, so the one width pooled over
+both sits near `e_0`'s spread and holds `e_1` more tightly than its own spread
+would (an [open question](bundle-adjustment.md#open-questions)). The rates
+spread `1.1·10⁻³` to `1.5·10⁻³` per component, and their displacement at the
+centre of the bottom edge has a median of 1.0 px and a largest of 5.3 px,
+against the scratch solver's 1.3 and 5.5 px. The mean rates ended within
+`2·10⁻⁷` of zero, their start, under `2·10⁻⁴` of their spread, and the mean
+radial correction was zero to rounding after its move into the spline: the
+mean hold of width `10⁻⁶` holds the mean far inside any width.
+
+The reconstruction-level adjustment's race on the same file, which chose rows,
+is in
+[../reconstruction/bundle-adjust-measurements.md](../reconstruction/bundle-adjust-measurements.md#the-first-race-on-the-dino-candidate).

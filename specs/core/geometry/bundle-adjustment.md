@@ -1097,7 +1097,8 @@ narrowed per camera by `CameraRelease::image_radial_bspline` and
 `CameraRelease::image_rolling_shutter`. They are for distortion that changes
 with the focus distance and for the image distortion a camera's turning causes
 while a rolling-shutter sensor reads the image out
-([drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#purpose)).
+([sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)).
 Both exist on `SFMTOOL_PINHOLE` alone, the radial correction only where the
 camera's spline domain end `bspline_rho_max` is positive and finite and its
 spline is empty or has at least two coefficients; a camera of another model
@@ -1111,9 +1112,15 @@ reconstruction-level adjustment's, which releases both corrections from Rust
 and from the Python `EditedReconstruction.bundle_adjust`
 ([../reconstruction/bundle-adjust.md § The rolling-shutter
 scanlines](../reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines)).
-The viewer's Bundle Adjust dialog and the MCP tool hold both corrections as
-they are read; their releases are specified in
-[drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
+The viewer's Bundle Adjust dialog
+([../../gui/edits/bundle-adjust.md § The
+dialog](../../gui/edits/bundle-adjust.md#the-dialog)), the MCP
+`bundle_adjust` tool
+([../../gui/mcp-server.md](../../gui/mcp-server.md#resect_camera_image--bundle_adjust))
+and `sfm xform --bundle-adjust`
+([../../cli/reconstruction/xform/xform-command.md § Per-image
+releases](../../cli/reconstruction/xform/xform-command.md#per-image-releases))
+release both through that adjustment.
 
 Neither correction holds a shared value of its kind, as the focal scale and the
 principal-point offset do: the rates have no shared counterpart, and the camera's
@@ -1168,16 +1175,16 @@ the dino capture a rate of `2·10⁻³` moves the centre of the bottom edge by a
 
 **The mean hold.** The mean over the camera's images the round solves of each
 component of `e` and of `ω` is held at its value at the start of the round,
-zero for a fresh release. It has to be held, for two reasons
-([drafts/per-image-lens-corrections.md § Why the mean must be
-held](../../drafts/per-image-lens-corrections.md#why-the-mean-must-be-held)):
-the camera's basis contains the correction's span exactly, `c + K·e_i`, so with
-the camera's spline released the mean correction and `c` move every image's
-spline alike and no observation tells them apart, while the spline penalty,
-which reads `c` alone, would pull the mean away; and the mean rate over a
-camera's images is nearly a common vertical stretch of the scene, which on the
-dino capture drifted from `−7·10⁻⁴` to `−1.7·10⁻³` with no change in held-out
-error as a free mean's prior widened.
+zero for a fresh release. It has to be held, for two reasons: the camera's
+basis contains the correction's span exactly, `c + K·e_i`, so with the camera's
+spline released the mean correction and `c` move every image's spline alike
+and no observation tells them apart, while the spline penalty, which reads `c`
+alone, would pull the mean away; and the mean rate over a camera's images is
+nearly a common vertical stretch of the scene, for an orbit capture, which on
+the dino capture drifted from `−7.4·10⁻⁴` to `−1.8·10⁻³` in `ωx` with no change
+in held-out error as a free mean's prior widened
+([bundle-adjustment-measurements.md § Cross-validation with a scratch
+solver](bundle-adjustment-measurements.md#cross-validation-with-a-scratch-solver)).
 
 The hold is a stiff prior, one term per camera and component,
 `σ_n²·(x̄ − x̄₀)²/σ_h²` with `x̄₀` the mean at the round's start and
@@ -1195,8 +1202,9 @@ the mean its curvature is `σ_n²·10¹²`, `6·10¹⁰` at `σ_n = 0.25` px, fa
 the data's curvature along a near-gauge and the spline penalty's along `K·ē`, so
 the mean moves by a small fraction of what they ask for: on the dino capture the
 mean rates ended within `2·10⁻⁷` of their start, under `2·10⁻⁴` of the rates'
-spread (see the draft's [Measured
-results](../../drafts/per-image-lens-corrections.md#measured-results)). On each
+spread
+([bundle-adjustment-measurements.md § The kernel's release on the dino
+candidate](bundle-adjustment-measurements.md#the-kernels-release-on-the-dino-candidate)). On each
 image's own slot it adds `w_h/n²`, `8.6·10⁶` at 85 images, of the order of the
 data's own diagonal there, so the dense LU loses at most a digit or two to it. An exact constraint in a bordered system would hold
 the mean exactly, but adds a row per camera and component to a system that
@@ -1220,7 +1228,10 @@ each spread is clamped to its own `[floor, loose]`. `ImagePriorOptions` defaults
 both new fields to `loose = 10⁻²` and `floor = 10⁻⁴`: the existing loose width of
 `0.1` would allow a radial correction of about 145 px at the domain end on the
 dino capture, and the measured held-out error is flat above about `4·10⁻³` for
-the radial correction and `2·10⁻³` for the rates, so `10⁻²` is loose enough for
+the radial correction and `2·10⁻³` for the rates
+([bundle-adjustment-measurements.md § Cross-validation with a scratch
+solver](bundle-adjustment-measurements.md#cross-validation-with-a-scratch-solver)),
+so `10⁻²` is loose enough for
 a first round and a cap, and `10⁻⁴` is about a tenth of a pixel at the image's
 edge. `fixed` sets all four widths.
 
@@ -2482,9 +2493,11 @@ validation, and outputs are unchanged.
   cover those two radial releases only. Each image's focal and principal point
   are adjusted per image ("The per-image release"); its distortion is always
   its camera's apart from the per-image radial correction and rolling-shutter
-  rates of an `SFMTOOL_PINHOLE` camera ("The per-image corrections"), whose
-  remaining parts are proposed in
-  [per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md).
+  rates of an `SFMTOOL_PINHOLE` camera ("The per-image corrections"). No other
+  part of the lens varies per image, and the rolling shutter exists on
+  `SFMTOOL_PINHOLE` alone
+  ([../camera/sfmtool-pinhole-kernels.md § What the corrections leave out, and
+  why](../camera/sfmtool-pinhole-kernels.md#what-the-corrections-leave-out-and-why)).
 - Gauge fixing and covariance estimation. The kernel holds no pose fixed to
   set the gauge and reports no uncertainty. A caller that wants a gauge states
   it through the point constraints (held points, or ranged points, which fix
@@ -2508,6 +2521,18 @@ validation, and outputs are unchanged.
   [`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#per-image-intrinsic-adjustments)
   and compares the derived widths with the held-out error at fixed widths
   around them.
+- **One width for both radial coefficients.** The radial correction's prior is
+  isotropic over `e_0` and `e_1`, though the two coefficients mean different
+  things. On the dino candidate `e_1` spreads about 3.4 times as far as `e_0`,
+  and the pooled width sits near `e_0`'s spread
+  ([`bundle-adjustment-measurements.md`](bundle-adjustment-measurements.md#the-kernels-release-on-the-dino-candidate)).
+  A width per coefficient, or one read as the correction's size at a radius,
+  are the alternatives.
+- **The breadth of the evidence for the per-image corrections.** The radial
+  correction and the rolling-shutter rates were measured on one capture from
+  one phone. The other checked-in datasets need promotion to `SFMTOOL_PINHOLE`
+  before they can test them, and a second phone capture would show whether the
+  scanlines setting and the size of the rates generalise.
 - **A per-image focal on a two-focal model.** The log focal scale's column
   `(u − cx_i, v − cy_i)` is exact on a two-focal model too, since one
   scale moves both focals; whether to release it past `focal_is_releasable` is

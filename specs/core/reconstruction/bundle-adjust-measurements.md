@@ -1,17 +1,47 @@
 # Reconstruction-Level Bundle Adjustment Measurements
 
 This file records measurements behind the reconstruction-level bundle
-adjustment of [bundle-adjust.md](bundle-adjust.md). Its one section measures a
-rule proposed for the scanlines race, which runs one solve with rows and one
-with columns for a camera whose rolling-shutter scanlines are `UNKNOWN`
+adjustment of [bundle-adjust.md](bundle-adjust.md), all of the scanlines race,
+which runs one solve with rows and one with columns for a camera whose
+rolling-shutter scanlines are `UNKNOWN`
 ([bundle-adjust.md § The rolling-shutter
-scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)). The rule, proposed
-in [per-image-lens-corrections.md § Choosing rows or
-columns](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns),
-stops the trailing solve once it cannot plausibly catch up. These measurements
-replay it on races run to the end, and decided it: the recommendation below is
-what the adjustment runs by default ([bundle-adjust.md § Stopping the trailing
-solve early](bundle-adjust.md#stopping-the-trailing-solve-early)).
+scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)). The first section
+records the first race run to the end, on the `dino_dog_toy` candidate. The
+second measures a rule that stops the trailing solve once it cannot plausibly
+catch up: it replays the rule on races run to the end, and decided it, since
+the recommendation there is what the adjustment runs by default
+([bundle-adjust.md § Stopping the trailing solve
+early](bundle-adjust.md#stopping-the-trailing-solve-early)).
+
+## The first race on the dino candidate
+
+This run checked that the race chooses the scanlines the scratch solver's
+cross-validation favoured, rows
+([../geometry/bundle-adjustment-measurements.md § Per-image radial corrections
+and rolling-shutter
+rates](../geometry/bundle-adjustment-measurements.md#per-image-radial-corrections-and-rolling-shutter-rates)),
+and what the race costs against one solve, before the early stop existed.
+
+`EditedReconstruction.bundle_adjust` on the maintainer's local
+`dino_dog_toy_ground_truth_candidate_v012.sfmr` (not checked in; 85 images,
+24931 observations, one `SFMTOOL_PINHOLE` camera that stores no scanlines
+setting), releasing the focal, the spline, each image's focal and principal
+point and both corrections, with the scanlines left to fall back to `UNKNOWN`,
+over one `(inf, 1000)` round with the crossing off. The race kept rows, at a
+cost of 49350 against 52349 for columns in units of the pooled `σ_n²`
+(0.146 px) over all 24931 observations, both final rounds keeping every
+observation. The difference, about 3000 such units, is larger than the scratch
+solver's 840 for its blend at fixed `λ`; the two compare different solves (the
+kernel's soft-L1 cost under derived widths, the scratch solver's plain least
+squares under fixed ones). The median residual went from 0.2315 px to
+0.1220 px and the training RMS per component from 0.2500 px to 0.1443 px, the
+kernel's figure for rows, with no point deleted. The derived widths were
+`2.96·10⁻³` for the radial correction, `1.28·10⁻³` for the rates, `0.0150` for
+the focal and `0.0131` for the principal point, as the kernel's run on rows
+found; the mean rates ended within `1.8·10⁻⁷` of zero. The call took 28 s for
+the two solves and the measuring run together, against 13.5 to 20 s for one
+solve on rows in the kernel's run. The cost of a second full solve is what the
+early stop below was measured to cut.
 
 ## Stopping the trailing solve of a scanlines race
 
@@ -23,7 +53,15 @@ stopped when, for `K` consecutive pairs with the same solve trailing, both
 `D > T` and `D` exceeds what the trailing solve would remove in the rest of its
 budget at its recent rate: the mean of its last three decreases times the steps
 the schedule has left (the **budget term**). The leading solve then runs to the
-end alone. The proposal is `T = 25` and `K = 3`.
+end alone. The proposal is `T = 25` and `K = 3`. 25 is the likelihood-ratio
+threshold the point-or-bearing test uses
+(`DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD` in
+[point_or_bearing.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/point_or_bearing.rs)),
+taken as a starting value, not a derived one. The rule assumes that the
+trailing solve's per-iteration decrease does not grow again, which a
+Levenberg–Marquardt solve does not promise (its damping can fall and its steps
+grow), and that an early lead is not reversed while the poses are still
+settling; the measurement tests both.
 
 The measurement runs both solves to the end and replays the rule offline on
 their cost trajectories, so it can say what the rule would have done without

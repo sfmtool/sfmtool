@@ -333,9 +333,9 @@ end is not positive and finite or the spline has one coefficient
 naming the camera); `image_radial_bspline_is_releasable` and
 `image_rolling_shutter_is_releasable` answer per camera, as
 `focal_is_releasable` does. The rates are solved on the scanlines
-[The rolling-shutter scanlines](#the-rolling-shutter-scanlines) chooses.
-[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns)
-keeps the proposed rule for stopping the losing solve of that choice early.
+[The rolling-shutter scanlines](#the-rolling-shutter-scanlines) chooses, which
+stops the trailing solve of a race early
+([Stopping the trailing solve early](#stopping-the-trailing-solve-early)).
 
 **Each image's focal and principal point are released per image, and the
 camera's value moves to their mean.** `image_focal` and `image_principal_point`
@@ -568,8 +568,10 @@ rates at zero, because a rate read on rows means something else on columns.
 lower cost, stopping the trailing one once it cannot plausibly catch up
 ([Stopping the trailing solve early](#stopping-the-trailing-solve-early)). A
 continuous weight between the two readout positions is not
-solved for instead, because the wrong choice is a local minimum
-([per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#alternatives-considered)).
+solved for instead, because the wrong choice is a local minimum: released from
+columns, a weight between the two stayed there on the dino capture
+([`../geometry/bundle-adjustment-measurements.md`](../geometry/bundle-adjustment-measurements.md#cross-validation-with-a-scratch-solver)
+§ "A continuous readout blend").
 The two are one **race**. Where both solves run to the end, the cost compared
 is the robust cost the kernel's
 damping ladder compares (the data, the per-image prior with its mean holds,
@@ -686,7 +688,10 @@ crossing off, the race chose rows at a cost of 49350 against 52349 for columns
 over all 24931 observations at a pooled `σ_n` of 0.146 px, and the training
 RMS per component went from 0.2500 px to 0.1443 px, the kernel's figure for
 rows, in 28 s for both solves and the measuring run, with both solves run to
-the end. Under the default schedule with the crossing on and the same
+the end
+([bundle-adjust-measurements.md § The first race on the dino
+candidate](bundle-adjust-measurements.md#the-first-race-on-the-dino-candidate)).
+Under the default schedule with the crossing on and the same
 releases, the early stop stopped columns at round 1, iteration 12, at a gap of
 953 units over 24918 observations, and rows ran on to the end; the call took
 25.5 s against 38.7 s for two full solves, and the rows solve's cost after
@@ -1103,6 +1108,12 @@ solve under a fixed corrections prior and then used as stored, an explicit
   rates held at zero, which their poses absorb in part. Whether releasing them
   could change an earlier choice, and whether a second pass over the cameras is
   worth its cost, is untested: every measured capture has one camera.
+- **A second near tie for the early stop.** The evidence that a race's early
+  lead can reverse, which is why the threshold is 100 rather than 25, is one
+  near tie, the seoul bull's 7.4 units
+  ([bundle-adjust-measurements.md](bundle-adjust-measurements.md#what-the-rule-would-do)).
+  A second capture whose rows and columns solves end close would be worth
+  replaying.
 - **Reporting the guard per camera.** When the final round settles with a
   camera's distortion held at its step guard, the kernel's progress line names
   the camera, and `report.free_point_decision.converged` is `false`. Whether

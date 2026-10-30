@@ -178,10 +178,14 @@ releases both per camera, chooses the rates' scanlines and writes the chosen
 setting into the camera, from Rust and from
 `EditedReconstruction.bundle_adjust`
 ([bundle-adjust.md § The rolling-shutter
-scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)). The viewer's
-Bundle Adjust dialog and the MCP tool, which do not release them, are specified
-in
-[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
+scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)), and so do the
+viewer's Bundle Adjust dialog
+([../../gui/edits/bundle-adjust.md § The
+dialog](../../gui/edits/bundle-adjust.md#the-dialog)), the MCP `bundle_adjust`
+tool and `sfm xform --bundle-adjust`
+([../../cli/reconstruction/xform/xform-command.md § Per-image
+releases](../../cli/reconstruction/xform/xform-command.md#per-image-releases)),
+which call it.
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller
 makes most often, so `recon.point_count()`, `recon.image_count()`,

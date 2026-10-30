@@ -156,6 +156,21 @@ The limits:
 
 ## Per-image corrections
 
+A phone camera does not take every photograph through quite the same lens. Its
+autofocus moves the lens, which changes the focal and, slightly, the shape of
+the radial distortion; its stabiliser shifts the lens sideways; and its sensor
+reads the image out one scanline after another, so a camera that turns while it
+takes a photograph records the last scanlines from a slightly different
+direction than the first. A reconstruction that gives every photograph the same
+lens leaves these effects in its residuals, where they look like a lens error
+that grows toward the edge of the frame and that no single shared lens fits. On
+the one capture measured, 85 handheld Pixel 7 Pro images, the two corrections
+below together lower the held-out reprojection error from 0.386 px to 0.230 px,
+and lower it at every distance from the centre
+([../geometry/bundle-adjustment-measurements.md § Per-image radial corrections
+and rolling-shutter
+rates](../geometry/bundle-adjustment-measurements.md#per-image-radial-corrections-and-rolling-shutter-rates)).
+
 An image of an `SFMTOOL_PINHOLE` camera may carry a radial correction and
 rolling-shutter rates of its own, beside its focal scale and principal-point
 offset: the four parts of its
@@ -302,7 +317,55 @@ from the same `forward_projection_invertible` call.
 The bundle adjustment holds an image's corrections and differentiates its own
 columns through them
 ([bundle-adjustment.md § Held image
-adjustments](../geometry/bundle-adjustment.md#the-per-image-release)).
+adjustments](../geometry/bundle-adjustment.md#held-image-adjustments)), and
+releases them per image
+([bundle-adjustment.md § The per-image
+corrections](../geometry/bundle-adjustment.md#the-per-image-corrections)).
+
+### What the corrections leave out, and why
+
+- **The velocity is read at the undistorted point** `(x, y)` and scaled by the
+  readout position `t` of the distorted point. The effect of the distortion on
+  the velocity, and of the rolling-shutter displacement on `t`, are second
+  order: a few pixels of displacement times a percent of distortion.
+- **Translation during readout is not modelled.** The image motion a camera
+  translation causes depends on each point's depth, so it is not a per-image
+  2D field and cannot be a per-image intrinsic. The measured scene was at 0.15
+  to 0.5 m, where translation during readout is largest relative to the scene;
+  the model fits it there only as far as a rotation can stand in for it.
+- **The step is invertible where it is close to the identity**, which its
+  Jacobian `I + ∂(t·ṗ)/∂(x_d, y_d)` is for rates of the measured size (about
+  `10⁻³`, with `t` reaching about 0.5 at the image's edge). A reader does not
+  check it; the bundle adjustment's step guard keeps a solve from producing
+  rates past it
+  ([bundle-adjustment.md § The per-image
+  corrections](../geometry/bundle-adjustment.md#the-per-image-corrections)).
+- **The origin of `t`** is the principal point's scanline by definition, not a
+  fitted quantity: a constant offset in `t` adds the image motion of a small
+  pose rotation, which the image's pose absorbs. So the image's pose is the
+  camera's pose when that scanline was read.
+- **Only rows against columns is part of the model**, not the direction the
+  scan advances in. A scan that advances the other way gives the same fit with
+  every rate negated, and the rates take either sign.
+- **No other part of the lens varies per image.** Residual fits with the poses
+  and points held found decentering, thin prism, aspect ratio and skew at the
+  noise level, and only per-image fields left.
+- **Two coefficients, not one.** A one-parameter `ρ²` correction predicted
+  held-out points slightly worse in every fold, and both one-parameter forms,
+  `ρ²` and `ρ³`, lie in the two-coefficient span.
+- **Not a per-image shear.** A traceless symmetric linear map per image needs no
+  scanlines setting, since to first order it is what is left of either readout
+  once the pose and the focal absorb the rest, but the full rotation field
+  fits held-out points better in every fold and has a physical reading.
+- **Not tied to the focus distance.** A shared radial shape scaled by each
+  image's focus distance has two parameters per camera rather than two per
+  image, but fits the outermost band worse than free per-image coefficients,
+  and needs a focus value for every image.
+
+The measurements behind the last four are in
+[../geometry/bundle-adjustment-measurements.md § Per-image radial corrections
+and rolling-shutter
+rates](../geometry/bundle-adjustment-measurements.md#per-image-radial-corrections-and-rolling-shutter-rates).
 
 ## Monotonicity enforcement
 
@@ -404,3 +467,27 @@ holds on the derivative as well as the projection.
   rows and on columns; the analytic Jacobian agrees with central differences;
   the batch forms and the ray grid agree with the scalar forms; a point at
   infinity projects as its direction; and rates on another model panic.
+
+## Open questions
+
+- **The corrections on `SFMTOOL_FISHEYE`.** Whether the fisheye gets the same
+  two corrections. The radial correction carries over unchanged in `θ`; the
+  rolling-shutter velocity above is the tangent-plane form and would need a
+  ray-space form for a fisheye whose field reaches 90°. The planned trial is
+  the checked-in `kerry_park` dataset (two fisheyes at 480×480, with its ground
+  truth `kerry_park_ground_truth_v01.sfmr`). The `.sfmr` format lets a camera
+  of any model list `"rolling_shutter"`, while the projection methods panic on
+  non-zero rates on any model but this one and a reconstruction that carries
+  them is refused when it is read.
+- **A shear fallback.** Whether to offer the per-image shear, which needs no
+  scanlines setting, as a release for a camera whose scanlines are unknown and
+  a caller that will not pay for the two solves of a scanlines race.
+- **A focus-tied radial correction.** Whether to add the shared shape scaled by
+  each image's focus distance, and where its per-image focus value comes from:
+  EXIF `SubjectDistance`, or the solved focal scale, which correlates with the
+  focus distance in dioptres at 0.96 on the measured capture.
+- **Images whose pixel axes are not the sensor's.** The scanlines setting is
+  per camera, in terms of the stored image's rows and columns. A camera whose
+  images are stored in both orientations (portrait photographs rotated by
+  their EXIF orientation) would need the setting per image, or one camera per
+  orientation. Every measured image has orientation 1.

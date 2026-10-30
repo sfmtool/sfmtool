@@ -229,7 +229,8 @@ The default output is a compact label/value block. The fields per type:
   The radial correction's size is `f_i·e_i1`, the image's correction
   `Δδ_i(ρ_max) = e_i1` at its camera's spline domain end, in focal units,
   times the image's own focal
-  ([drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#the-map-for-image-i)).
+  ([sfmtool-camera-models.md § Per-image radial
+  correction](../../formats/sfmtool-camera-models.md#per-image-radial-correction)).
   The rolling shutter's is how far the image's rates move the pixel at the
   centre of the edge whose scanlines are read farthest from the scanline
   through the camera's principal point: the bottom edge's centre `(width/2,

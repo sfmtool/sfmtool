@@ -896,14 +896,20 @@ radial distortion, for distortion that changes with the focus distance, and
 each image of any camera its own rolling-shutter rates, for the image
 distortion a sensor that reads its scanlines one after another records when the
 camera turns during the readout. With `(x, y) = (Px, Py)/(−Pz)` a point's
-normalised coordinates in the camera frame (+X right, +Y up), `ρ = √(x² + y²)`,
+normalised coordinates in the camera frame (+X right, +Y up), in **focal
+units** (a pixel offset from the principal point divided by the focal, the
+tangent of the angle off the axis), `ρ = √(x² + y²)`,
 and `f_i`, `(cx_i, cy_i)` the image's focal and principal point after its focal
 scale and principal-point offset, image `i` maps a point to a pixel in three
 steps. The map is that of an `SFMTOOL_PINHOLE` camera. The format lets a camera
-of any model list `"rolling_shutter"`; what its rates mean on another model,
-such as an `SFMTOOL_FISHEYE` camera whose field reaches 90°, is an open
-question of
-[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md#open-questions).
+of any model list `"rolling_shutter"`, but this format defines what the rates
+mean on `SFMTOOL_PINHOLE` alone: the tangent-plane velocity below does not
+carry over to a camera whose field reaches 90°, such as an `SFMTOOL_FISHEYE`
+one, and sfmtool refuses a reconstruction with non-zero rates on any other
+model when it reads one. Whether the fisheye gets a form of its own is an open
+question
+([../core/camera/sfmtool-pinhole-kernels.md § Open
+questions](../core/camera/sfmtool-pinhole-kernels.md#open-questions)).
 
 ```
 1. radial:   (x_d, y_d) = (x, y) · (ρ + δ(ρ) + Δδ_i(ρ)) / ρ
@@ -930,8 +936,35 @@ scanlines: radians of rotation per short side of readout, not radians per
 second, since the images cannot tell the readout time apart from the rotation.
 The image's stored pose is the camera's pose when the principal point's
 scanline was read. With both fields zero each step is the identity and the map
-is the one above. The full derivation and the solve are in
-[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md#the-map-for-image-i).
+is the one above.
+
+The rolling-shutter step adds `t·ṗ`, where `ṗ = (ẋ, ẏ)` is the image-plane
+velocity of a fixed point under a rotation of the camera with angular velocity
+`ω`: the point's camera coordinates change as `Ṗ = −ω × P`, and differentiating
+`(Px, Py)/(−Pz)` gives the two bracketed terms of step 2. With `τ` the time
+between two scanlines, a pixel at readout position `t` is read `t·m·τ` after the
+principal point's scanline, so its displacement is `t·m·τ·ṗ(ω_true)` for the
+camera's true angular velocity `ω_true`; `ṗ` is linear in `ω`, so the stored
+rates are `ω = ω_true·m·τ`. For `ROWS` on a landscape sensor the short side is
+the frame's height, so `ω` is the camera's rotation, in radians, during the
+readout of one frame: an `ωx` of 2·10⁻³ is about 2 mrad (0.11°), and a known
+frame readout time `T` converts it to radians per second as `ω/T`, so
+`T = 20 ms` gives 0.1 rad/s. A uniform resize by `k` multiplies `m` by `k` and
+divides `τ` by `k`, so it leaves the rates unchanged, and the readout position
+counts pixels, so an image's own focal scale does not change what its rates
+mean. Only whether the scanlines are rows or columns is stored, not the
+direction the scan advances in: a scan that advances the other way (rows read
+bottom to top, columns right to left) is the same map with every rate negated.
+The velocity is read at the undistorted point and `t` at the distorted one, as
+step 2 writes them, which leaves out only second-order terms of the physical
+readout, and the stored values mean the map exactly as written. Translation of
+the camera during the readout is not part of the map, since the image motion it
+causes depends on each point's depth.
+
+A writer keeps each image's rolling-shutter step injective over its image, as
+it keeps the radial map monotone, and a reader does not check either: for rates
+of the size a real readout gives, about 10⁻³, the step's Jacobian
+`I + ∂(t·ṗ)/∂(x_d, y_d)` is within about 10⁻³ of the identity.
 
 **Units of the per-image adjustments.** Each per-image adjustment is stored in a
 unit that means the same at any resolution, so a uniform camera resize (which
@@ -942,8 +975,8 @@ stored value unchanged. The four units are not the same, on purpose:
 |---|---|---|
 | focal scale `s` | dimensionless: the image's focal is its camera's times `1 + s`; the bundle adjustment solves it as `ln(1 + s)` | a scale of the focal is a ratio, so it is the same at any resolution and reads directly as "this image's focal is 1.3% longer"; the log makes a focal `k` times longer and one `k` times shorter equally far from the camera's |
 | principal-point offset `a` | a fraction of the image's short side, `min(width, height)`, the same unit on both axes: the image's principal point is its camera's plus `a·min(width, height)` | it moves the pixel grid after the focal is applied, so it is measured across the image; the short side is one length in x and y, so one offset means the same number of pixels whichever way the lens shifts; it is not a fraction of the focal, which the solve can release, so that an offset does not change in pixels when the focal moves |
-| radial B-spline correction `e` | units of `ρ`, the normalised radius, on the spline's domain `[0, bspline_rho_max]` | it is added to the camera's `δ`, which is in units of `ρ`, before the focal is applied; `e_1` is the correction's value at `ρ_max` |
-| rolling-shutter rates `ω` | radians of rotation per short side of readout: the camera's angular velocity in the `.sfmr` camera frame times the time to read `min(width, height)` scanlines; the readout position `t` is the pixel distance from the principal point's scanline in short-side units | a sensor reads its scanlines, which are pixel rows or columns, at a fixed time per scanline, so the time a pixel is read follows its pixel distance, and the readout position is measured across the image like the principal-point offset; the focal then drops out of the rates, and a uniform resize scales the scanline count and the time per scanline inversely; with `t` in normalised units the stored rate would be the angular velocity times `f_i` times the time per scanline, so each image's own focal scale (focus breathing) would change what its stored rates mean. The rates are not radians per second: the images cannot tell the readout time apart from the rotation |
+| radial B-spline correction `e` | units of `ρ`, the radius in focal units, on the spline's domain `[0, bspline_rho_max]` | it is added to the camera's `δ`, which is in units of `ρ`, before the focal is applied; `e_1` is the correction's value at `ρ_max` |
+| rolling-shutter rates `ω` | radians of rotation per short side of readout: the camera's angular velocity in the `.sfmr` camera frame times the time to read `min(width, height)` scanlines; the readout position `t` is the pixel distance from the principal point's scanline in short-side units | a sensor reads its scanlines, which are pixel rows or columns, at a fixed time per scanline, so the time a pixel is read follows its pixel distance, and the readout position is measured across the image like the principal-point offset; the focal then drops out of the rates, and a uniform resize scales the scanline count and the time per scanline inversely; with `t` in focal units the stored rate would be the angular velocity times `f_i` times the time per scanline, so each image's own focal scale (focus breathing) would change what its stored rates mean. The rates are not radians per second: the images cannot tell the readout time apart from the rotation |
 
 The units mean that prior widths of different terms cannot be compared as
 numbers. On a 2040×1536 image with a 1447.8 px focal read by rows, a rate `ωx`
@@ -990,7 +1023,11 @@ write anything; `sfm undistort` removes
 both with the distortion
 ([undistort-command.md](../cli/image-processing/undistort-command.md)). The
 bundle adjustment that solves the two corrections is specified in
-[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md).
+[../core/geometry/bundle-adjustment.md § The per-image
+corrections](../core/geometry/bundle-adjustment.md#the-per-image-corrections),
+and the choice of a camera's scanlines in
+[../core/reconstruction/bundle-adjust.md § The rolling-shutter
+scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines).
 
 ##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
 
