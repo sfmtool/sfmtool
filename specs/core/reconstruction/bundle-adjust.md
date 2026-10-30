@@ -832,8 +832,9 @@ the centroid itself moves when the cameras do. Measuring both against one image 
 would leave the frame carrying the gauge drift of the solve.
 
 **The race blocks threads.** Each solve of a race waits in its progress sink
-for the other, and the calling thread waits for both, while the solves'
-parallel work runs on the rayon pool. Called from the only worker of a
+for the other, and the calling thread, which runs the rows solve, then waits
+for the columns solve's thread, while the solves' parallel work runs on the
+rayon pool. Called from the only worker of a
 one-thread rayon pool, the race would deadlock: that worker would wait on
 solves whose work waits on it. No caller does: the viewer runs the adjustment
 on a `std` thread and the Python binding on the calling thread with the

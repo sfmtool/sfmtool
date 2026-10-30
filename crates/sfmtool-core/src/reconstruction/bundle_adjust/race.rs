@@ -489,12 +489,13 @@ impl Drop for Finish<'_, '_> {
 /// its tap, which passes it on to the solve's own flag at the solve's next
 /// event, so a cancellation lands at most one event late. And the race blocks
 /// threads: each solve in its progress sink while it waits for the other, and
-/// the calling thread until both return. The solves' parallel work runs on
-/// the rayon pool, so called from the only worker of a one-thread pool the
-/// race would deadlock, that worker waiting on solves whose work waits on it.
-/// The solves run on `std` threads of their own, and no caller runs the race
-/// on a pool worker: the viewer calls the adjustment on a `std` thread, the
-/// Python binding on the calling thread with the interpreter released.
+/// the calling thread, which runs the rows solve, until the columns solve's
+/// own `std` thread returns. The solves' parallel work runs on the rayon pool,
+/// so called from the only worker of a one-thread pool the race would
+/// deadlock, that worker waiting on solves whose work waits on it. No caller
+/// runs the race on a pool worker: the viewer calls the adjustment on a `std`
+/// thread, the Python binding on the calling thread with the interpreter
+/// released.
 pub(super) fn race<T: Send>(
     part: &Progress<'_>,
     options: ScanlinesEarlyStopOptions,
