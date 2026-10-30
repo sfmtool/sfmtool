@@ -203,8 +203,10 @@ The default output is a compact label/value block. The fields per type:
   operation's recorded **tool options** — the ordered `transforms` list for
   `xform`, solver flags for `solve`, etc.), workspace, per-camera parameter
   tables (the shared camera's parameters, with an `Adjusted per image:` line
-  naming `focal` and `principal_point` as the camera's `per_image_adjustments`
-  lists them, for a camera whose images carry intrinsic adjustments), rig
+  naming `focal`, `principal_point`, `radial_bspline` and `rolling_shutter` as
+  the camera's `per_image_adjustments` lists them, for a camera whose images
+  carry intrinsic adjustments, and a `Rolling-shutter scanlines: ROWS` or
+  `COLUMNS` line for a camera with a scanlines setting), rig
   configuration, 3D point statistics with histograms, reprojection
   error, per-point depth-reliability diagnostics (inverse-depth z-score and
   condition number) followed by the point-or-bearing counts described below,

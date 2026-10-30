@@ -92,7 +92,9 @@ def create_colmap_db_from_reconstruction(
     The cameras follow the COLMAP export's rule: a camera with a non-zero
     intrinsic adjustment on any of its images is written as one camera per
     image of it, each with that image's intrinsics, so a COLMAP solve started
-    from the database begins at each image's intrinsics.
+    from the database begins at each image's intrinsics. A reconstruction whose
+    images carry a radial correction or rolling-shutter rates is refused with
+    ``ValueError`` before the database is created, as that export refuses it.
 
     Args:
         recon: SfmrReconstruction containing camera parameters, poses, and tracks

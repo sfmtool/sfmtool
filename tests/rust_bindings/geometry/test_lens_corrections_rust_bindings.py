@@ -106,6 +106,18 @@ class TestWithAdjustment:
                 rolling_shutter=RATES, rolling_shutter_scanlines="X"
             )
 
+    def test_a_value_that_is_not_finite_is_refused(self):
+        # As from_dict and __setstate__ refuse a rate that is not finite,
+        # rather than handing back a camera that projects to NaN.
+        nan, inf = float("nan"), float("inf")
+        for rates in ((nan, 0.0, 0.0), (0.0, inf, 0.0), (1e-3, 0.0, -inf)):
+            with pytest.raises(ValueError, match="not finite"):
+                _pinhole().with_adjustment(
+                    rolling_shutter=rates, rolling_shutter_scanlines="ROWS"
+                )
+        with pytest.raises(ValueError, match="not finite"):
+            _pinhole().with_adjustment(radial_bspline=(nan, 0.0))
+
     def test_the_rolling_shutter_survives_dict_and_pickle(self):
         image = _pinhole().with_adjustment(
             rolling_shutter=RATES, rolling_shutter_scanlines="COLUMNS"
@@ -161,16 +173,15 @@ class TestTheReconstruction:
         assert image.rolling_shutter == ("ROWS", RATES)
         assert recon.image_intrinsics(0) == recon.cameras[recon.camera_indexes[0]]
 
-        # The file boundary still refuses them: the Python package and the
-        # viewer do not read them yet.
-        with pytest.raises(Exception, match="radial_bspline"):
-            recon.save(tmp_path / "corrected.sfmr")
-
-        # clone_with_changes has no keys for their values yet.
-        with pytest.raises(ValueError, match="does not yet set"):
-            plain.clone_with_changes(
-                per_image_adjustments=[["radial_bspline"] for _ in plain.cameras]
-            )
+        # A file keeps them, and a load reads each image through them again.
+        out = tmp_path / "corrected.sfmr"
+        recon.save(out)
+        loaded = SfmrReconstruction.load(out)
+        np.testing.assert_array_equal(loaded.radial_bspline_adjustments, radial)
+        np.testing.assert_array_equal(loaded.rolling_shutter_rates_xyz, rates)
+        assert loaded.rolling_shutter_scanlines == recon.rolling_shutter_scanlines
+        for i in range(recon.image_count):
+            assert loaded.image_intrinsics(i) == recon.image_intrinsics(i)
 
     def test_a_camera_list_refuses_a_rolling_shutter(self, seoul_bull_sfmr_only):
         plain = SfmrReconstruction.load(seoul_bull_sfmr_only)

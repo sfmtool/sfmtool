@@ -595,18 +595,21 @@ def densify_reconstruction(
     6. Align back to original coordinate space
 
     Steps 4 and 5 run through pycolmap, which has no per-image intrinsics, so a
-    reconstruction with a non-zero per-image intrinsic adjustment is refused
-    with ``ValueError``.
+    reconstruction with a non-zero per-image intrinsic adjustment (a focal
+    scale, a principal-point offset, a radial correction or rolling-shutter
+    rates) is refused with ``ValueError``, naming the camera and the parts its
+    images adjust.
     """
-    from .camera.cameras import _adjusted_cameras
+    from .camera.cameras import _camera_adjustments
 
-    adjusted = _adjusted_cameras(recon)
+    adjusted = _camera_adjustments(recon)
     if adjusted:
+        camera, names = next(iter(adjusted.items()))
         raise ValueError(
-            f"Camera {adjusted[0]} has per-image intrinsic adjustments. Densify "
-            "triangulates and bundle adjusts through pycolmap, which has no "
-            "per-image intrinsics: it would solve one camera per image, each "
-            "with its own lens distortion."
+            f"Camera {camera} has per-image intrinsic adjustments "
+            f"({', '.join(names)}). Densify triangulates and bundle adjusts "
+            "through pycolmap, which has no per-image intrinsics: it would solve "
+            "one camera per image, each with its own lens distortion."
         )
     image_names = recon.image_names
     quaternions = recon.quaternions_wxyz

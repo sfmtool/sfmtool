@@ -88,7 +88,16 @@ following in image order, and `camera_id` is 1-based over the written list.
 
 A COLMAP rig sensor holds one camera, so a reconstruction with rig data whose
 sensor's camera would be split is refused with an error naming the camera,
-before anything is written. The implicit rigs written for a reconstruction
+before anything is written.
+
+An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
+rolling-shutter rates (format version 14). No COLMAP camera model holds either,
+nor the `SFMTOOL_PINHOLE` spline itself, so a reconstruction whose images carry
+a non-zero value of either is refused before anything is written, with an error
+naming the camera and the correction and pointing at `sfm undistort`, which
+removes both with the distortion. This check comes before the split and the
+rig check, so no path through the export, rig or not, writes an image without
+its corrections. The implicit rigs written for a reconstruction
 without rig data are built from the written cameras, one per camera.
 
 Import does not fold cameras back: `sfm from-colmap-bin` reads each COLMAP
@@ -161,9 +170,12 @@ it shares with `sfm to-nerfstudio`. That helper parses `--range` with
 and calls `subset_by_image_indices`. The shim then hands the result to
 `save_colmap_binary` in [`colmap/io.py`](../../../src/sfmtool/colmap/io.py),
 which calls `materialize_infinity_for_export` before converting and writing.
-`save_colmap_binary` builds the written cameras with `_colmap_cameras` and
-renumbers the rig sensors' cameras with `_colmap_rig_frame_data`, which refuses
-a split sensor camera. The Rust writer it calls,
+`save_colmap_binary` builds the written cameras with `_colmap_cameras`, which
+refuses an image's radial correction or rolling-shutter rates
+(`_refuse_lens_corrections` in
+[`camera/cameras.py`](../../../src/sfmtool/camera/cameras.py)), and renumbers
+the rig sensors' cameras with `_colmap_rig_frame_data`, which refuses a split
+sensor camera. The Rust writer it calls,
 [`write_colmap_binary`](../../../crates/sfmtool-colmap/src/colmap_io/write.rs),
 writes the cameras it is handed and knows nothing of adjustments.
 
@@ -177,3 +189,6 @@ without `--filter-points`, and the range error cases.
 checks a camera with an adjusted image written once per image with each image's
 intrinsics beside a camera written whole, and the refusal of a split rig sensor
 camera.
+[`tests/test_per_image_lens_corrections.py`](../../../tests/test_per_image_lens_corrections.py)
+checks the refusal of a radial correction and of rolling-shutter rates, with
+nothing written.

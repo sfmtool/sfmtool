@@ -946,7 +946,8 @@ impl CameraIntrinsics {
     ///
     /// # Panics
     ///
-    /// Panics when the adjustment carries a non-zero radial correction or
+    /// Panics when the adjustment carries a radial coefficient or a rate that
+    /// is not finite, a non-zero radial correction or
     /// non-zero rates on a model other than `SFMTOOL_PINHOLE`, a radial
     /// correction on a camera whose spline domain end is not positive and
     /// finite or whose spline has a single coefficient, or non-zero rates with
@@ -1114,16 +1115,22 @@ impl CameraIntrinsics {
 
     /// Whether [`Self::with_adjustment`] can apply `adjustment` to this camera
     /// with the scanlines setting `scanlines`, or a message saying why not: a
-    /// non-zero radial correction needs an `SFMTOOL_PINHOLE` camera whose
-    /// spline domain end is positive and finite and whose spline is empty or
-    /// has at least two coefficients, and non-zero rolling-shutter rates need
-    /// an `SFMTOOL_PINHOLE` camera and a scanlines setting.
+    /// non-zero radial correction needs finite coefficients and an
+    /// `SFMTOOL_PINHOLE` camera whose spline domain end is positive and finite
+    /// and whose spline is empty or has at least two coefficients, and
+    /// non-zero rolling-shutter rates need finite rates, an `SFMTOOL_PINHOLE`
+    /// camera and a scanlines setting.
     pub fn check_adjustment(
         &self,
         adjustment: &IntrinsicAdjustment,
         scanlines: Option<RollingShutterScanlines>,
     ) -> Result<(), String> {
         if adjustment.radial_bspline != [0.0, 0.0] {
+            if let Some(e) = adjustment.radial_bspline.iter().find(|e| !e.is_finite()) {
+                return Err(format!(
+                    "a radial correction coefficient is not finite: {e}"
+                ));
+            }
             let CameraModel::SfmtoolPinhole {
                 bspline,
                 bspline_rho_max,
@@ -1150,6 +1157,9 @@ impl CameraIntrinsics {
             }
         }
         if adjustment.rolling_shutter != [0.0; 3] {
+            if let Some(rate) = adjustment.rolling_shutter.iter().find(|r| !r.is_finite()) {
+                return Err(format!("a rolling-shutter rate is not finite: {rate}"));
+            }
             if !matches!(self.model, CameraModel::SfmtoolPinhole { .. }) {
                 return Err(format!(
                     "rolling-shutter rates apply only to an SFMTOOL_PINHOLE camera, not {}",

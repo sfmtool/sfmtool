@@ -2043,6 +2043,24 @@ fn rates_are_set_on_the_scanlines_and_a_camera_that_cannot_take_them_is_refused(
         ),
         (sfmtool_pinhole_with(vec![0.0; 4]), rates, None, "scanlines"),
         (
+            sfmtool_pinhole_with(vec![0.0; 4]),
+            IntrinsicAdjustment {
+                rolling_shutter: [1e-3, f64::NAN, 0.0],
+                ..Default::default()
+            },
+            Some(RollingShutterScanlines::Rows),
+            "not finite",
+        ),
+        (
+            sfmtool_pinhole_with(vec![0.0; 4]),
+            IntrinsicAdjustment {
+                radial_bspline: [f64::INFINITY, 0.0],
+                ..Default::default()
+            },
+            None,
+            "not finite",
+        ),
+        (
             simple_pinhole(),
             IntrinsicAdjustment {
                 radial_bspline: [0.01, 0.0],

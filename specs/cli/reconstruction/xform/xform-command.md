@@ -426,7 +426,10 @@ adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 and so is one with a non-zero per-image intrinsic adjustment on any image
 ([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
 since pycolmap has no per-image intrinsics and sfmtool's adjustment holds each
-image's adjustment and writes it back unchanged,
+image's adjustment and writes it back unchanged, the radial correction, the
+rolling-shutter rates and each camera's scanlines setting included (an image
+carries those only on an `SFMTOOL_PINHOLE` camera, so it never reaches the
+pycolmap path, whose COLMAP export refuses them),
 with every camera's focal released, and the lens distortion released on each
 camera whose model has some the solve can release: the spline, and `k1` on a
 `SIMPLE_RADIAL_FISHEYE` camera beside it. The principal point is held on both

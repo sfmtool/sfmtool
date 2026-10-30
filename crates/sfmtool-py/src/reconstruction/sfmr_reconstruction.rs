@@ -1673,10 +1673,19 @@ impl PySfmrReconstruction {
     /// ``image_file_hashes`` (a ``list[bytes]`` or ``None``),
     /// ``focal_adjustments`` (an ``(N,)`` float64 array, or ``None`` for every
     /// image's scale zero), ``principal_point_adjustments_xy`` (an ``(N, 2)``
-    /// float64 array or ``None``) and ``per_image_adjustments`` (one list of
-    /// names per camera, as :attr:`per_image_adjustments` gives it). An image
-    /// keeps its intrinsic adjustment by index unless these are passed, so a
-    /// caller that reorders or replaces the images passes them too. To produce an
+    /// float64 array or ``None``), ``radial_bspline_adjustments`` (an
+    /// ``(N, 2)`` float64 array or ``None``), ``rolling_shutter_rates_xyz``
+    /// (an ``(N, 3)`` float64 array or ``None``), ``per_image_adjustments``
+    /// (one list of names per camera, as :attr:`per_image_adjustments` gives
+    /// it) and ``rolling_shutter_scanlines`` (one ``"ROWS"``, ``"COLUMNS"`` or
+    /// ``None`` per camera, as :attr:`rolling_shutter_scanlines` gives it, or
+    /// ``None`` for no camera's setting). An image keeps its intrinsic
+    /// adjustment, and a camera its scanlines setting, by index unless these
+    /// are passed, so a caller that reorders or replaces the images or the
+    /// cameras passes them too. Every image is then checked against its
+    /// camera, and one its camera cannot take (a radial correction or rates
+    /// on a model other than ``SFMTOOL_PINHOLE``, rates without a scanlines
+    /// setting, a value that is not finite) raises ``ValueError``. To produce an
     /// ``embedded_patches`` reconstruction, set ``feature_source``,
     /// ``keypoints_xy``, and ``image_file_hashes`` together.
     ///

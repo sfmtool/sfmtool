@@ -226,27 +226,11 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// Sorts tracks by `(point_indexes, image_indexes)` if not already sorted.
 /// See [`WriteOptions`] for available options. By default, depth statistics
 /// are recomputed from the reconstruction data to ensure trustworthiness.
-/// The focal and principal-point adjustments and the cameras'
-/// `rolling_shutter_scanlines` settings are written as given. A value in
-/// which some camera varies the radial B-spline correction or the rolling
-/// shutter per image is refused with [`SfmrError::Unsupported`] and nothing is
-/// written: the Python package in this build does not yet apply either
-/// correction where it reads an image through its camera, so it does
-/// not write a file that [`crate::read_sfmr`] would refuse (see
-/// [`refuse_per_image_lens_corrections`]).
+/// Every rule of the format is checked. The per-image intrinsic adjustments
+/// (the focal scales, the principal-point offsets, the radial B-spline
+/// corrections and the rolling-shutter rates) and the cameras'
+/// `rolling_shutter_scanlines` settings are written as given.
 pub fn write_sfmr_with_options(
-    path: &Path,
-    data: &mut SfmrData,
-    options: &WriteOptions,
-) -> Result<(), SfmrError> {
-    refuse_per_image_lens_corrections(&data.cameras)?;
-    write_sfmr_file(path, data, options)
-}
-
-/// [`write_sfmr_with_options`] without its refusal of the per-image radial
-/// B-spline correction and rolling-shutter rates: every rule of the format
-/// checked, and every column written as given.
-pub(crate) fn write_sfmr_file(
     path: &Path,
     data: &mut SfmrData,
     options: &WriteOptions,

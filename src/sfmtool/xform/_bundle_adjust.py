@@ -10,7 +10,11 @@ bundle adjustment with the focal and the lens distortion released (the spline,
 and k1 on any SIMPLE_RADIAL_FISHEYE camera beside it), and the principal point
 too where ``release_principal_point`` is set. So does one with a non-zero
 per-image intrinsic adjustment: pycolmap has no per-image intrinsics, and
-sfmtool's adjustment holds each image's adjustment and writes it back.
+sfmtool's adjustment holds each image's adjustment and writes it back. An
+image's radial correction or rolling-shutter rates sit on an
+`SFMTOOL_PINHOLE` camera, so a reconstruction with either always takes
+sfmtool's path, which holds both and each camera's scanlines setting; the
+pycolmap path's COLMAP export refuses them.
 
 Either path releases every camera's lens by default. ``cameras=`` limits the
 release to the cameras it names and holds the rest.

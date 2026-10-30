@@ -217,14 +217,27 @@ def export_to_nerfstudio(
 ) -> dict:
     """Write a complete nerfstudio dataset directory derived from `recon`.
 
+    A camera with lens distortion, or one whose images carry a radial
+    correction or rolling-shutter rates, is refused with ``ValueError`` before
+    any file is written: each frame's lens is an undistorted pinhole.
+
     Returns a small summary dict (counts, output_dir) for the CLI to print.
     """
+    from .camera.cameras import _refuse_lens_corrections
+
     for i, cam in enumerate(recon.cameras):
         if cam.has_distortion:
             raise ValueError(
                 f"Camera {i} ({cam.model}) has nonzero distortion. "
                 "Run `sfm undistort` first to produce a pinhole reconstruction."
             )
+    # A camera with no distortion can still have images that carry a radial
+    # correction or rolling-shutter rates, which transforms.json cannot hold.
+    _refuse_lens_corrections(
+        recon,
+        "transforms.json holds an OPENCV lens per frame, which has neither. "
+        "Run `sfm undistort` first to produce a pinhole reconstruction.",
+    )
     if include_colmap:
         from .colmap.io import _colmap_cameras, _colmap_rig_frame_data
 

@@ -360,9 +360,19 @@ def _colmap_cameras(recon) -> tuple[list, np.ndarray, list[int | None]]:
     Returns ``(cameras, camera_indexes, camera_map)``: the cameras to write,
     each image's index into them, and for each camera of ``recon`` its index
     among them, or ``None`` for a camera written once per image.
-    """
-    from ..camera.cameras import _adjusted_cameras
 
+    An image's radial correction or rolling-shutter rates have no COLMAP form,
+    so a reconstruction whose images carry either is refused with
+    ``ValueError``, naming the camera and the correction, before anything is
+    written.
+    """
+    from ..camera.cameras import _adjusted_cameras, _refuse_lens_corrections
+
+    _refuse_lens_corrections(
+        recon,
+        "COLMAP has no camera model that holds either, so the export would drop "
+        "them; run `sfm undistort` first to remove them with the distortion.",
+    )
     split = set(_adjusted_cameras(recon))
     camera_indexes = np.asarray(recon.camera_indexes)
     cameras = []
@@ -835,7 +845,9 @@ def save_colmap_binary(
     adjustment on any of its images is written as one COLMAP camera per image
     of it, each with that image's intrinsics; every other camera is written
     once. A reconstruction whose rig sensor has such a camera is refused with
-    ``ValueError``, since a COLMAP rig sensor holds one camera.
+    ``ValueError``, since a COLMAP rig sensor holds one camera, and so is one
+    whose images carry a radial correction or rolling-shutter rates, which no
+    COLMAP camera model holds.
 
     The canonical poses/points are converted back to COLMAP convention on the
     way out (inverse of the import conversion). Pass

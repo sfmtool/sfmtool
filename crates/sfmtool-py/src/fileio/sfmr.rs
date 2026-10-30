@@ -100,9 +100,7 @@ where
 /// per-image radial B-spline correction in units of the normalised radius,
 /// `rolling_shutter_rates_xyz`, the `(N, 3)` float64 per-image rolling-shutter
 /// rates in radians per short side of readout, and `rolling_shutter_scanlines`,
-/// each camera's `"ROWS"`, `"COLUMNS"` or `None`. This build refuses a file in
-/// which some camera names `"radial_bspline"` or `"rolling_shutter"`, so both
-/// columns read as `None`; a scanlines setting reads as stored.
+/// each camera's `"ROWS"`, `"COLUMNS"` or `None`. All three read as stored.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -646,10 +644,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
 /// anything per image, and a missing `rolling_shutter_scanlines` that no
-/// camera has a scanlines setting. A dict in which some camera names
-/// `"radial_bspline"` or `"rolling_shutter"` is refused, since the Python
-/// package in this build does not yet apply either correction where it reads
-/// an image through its camera.
+/// camera has a scanlines setting.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`

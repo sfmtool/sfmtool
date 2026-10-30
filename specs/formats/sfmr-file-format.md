@@ -970,34 +970,26 @@ a reader refuses a file that breaks any of these rules:
   listing `"radial_bspline"` or `"rolling_shutter"`, and no
   `rolling_shutter_scanlines` key.
 
-`read_sfmr` and `write_sfmr_with_options` read and write the focal and
-principal-point adjustments and the scanlines settings as stored, bit for bit.
-Every consumer that reads one image's camera reads it with the image's focal
-and principal-point adjustment applied, through `image_intrinsics(i)`. A format
-with no per-image intrinsics receives each image's intrinsics on export: a
-COLMAP export writes a camera with a non-zero adjustment on any of its images
-as one COLMAP camera per image of it
-([to-colmap-bin-command.md](../cli/colmap-interop/to-colmap-bin-command.md)).
-
-The core library reads each image through its radial B-spline correction and
-its rolling-shutter rates: `SfmrReconstruction` holds them and the scanlines
-settings, and `image_intrinsics(i)` applies them
+`read_sfmr` and `write_sfmr_with_options` read and write all four columns
+and the scanlines settings as stored, bit for bit. Every consumer that reads
+one image's camera reads it with the image's adjustment applied, through
+`image_intrinsics(i)`: its focal scale, its principal-point offset, and its
+radial B-spline correction and rolling-shutter rates
 ([../core/camera/sfmtool-pinhole-kernels.md § Per-image
 corrections](../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)),
-for rates on `SFMTOOL_PINHOLE` alone, and SfM Explorer draws and measures each
-image through them ([../gui/camera-views.md](../gui/camera-views.md)). The
-Python package does not yet, so `read_sfmr` and `write_sfmr_with_options`
-refuse, with
-`SfmrError::Unsupported` naming the camera and the column, a file in which some
-camera lists `"radial_bspline"` or `"rolling_shutter"`, even with every value
-zero, once every rule above has passed; `verify_sfmr` checks such a file by
-the rules alone. A scanlines setting on its own reads, writes and loads. The
-reading of the corrections by the Python package, and the
-bundle adjustment that solves them, are specified in
-[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md). No
-COLMAP export meets either correction: a file that carries one is refused on
-read, and an `SFMTOOL_PINHOLE` camera, the only model that may list
-`"radial_bspline"`, cannot be exported to COLMAP at all.
+the rates applied on `SFMTOOL_PINHOLE` alone. The core library, SfM Explorer
+([../gui/camera-views.md](../gui/camera-views.md)) and the Python package all
+do. A format with no per-image intrinsics receives each image's focal and
+principal point on export: a COLMAP export writes a camera with a non-zero
+adjustment on any of its images as one COLMAP camera per image of it
+([to-colmap-bin-command.md](../cli/colmap-interop/to-colmap-bin-command.md)).
+No export format holds the radial correction or the rolling shutter, so each
+export of a reconstruction whose images carry either refuses it, naming the
+camera and the correction, before it writes anything; `sfm undistort` removes
+both with the distortion
+([undistort-command.md](../cli/image-processing/undistort-command.md)). The
+bundle adjustment that solves the two corrections is specified in
+[per-image-lens-corrections.md](../drafts/per-image-lens-corrections.md).
 
 ##### `images/focal_adjustments.{N}.float64.zst` (Optional, version 13+)
 
@@ -2473,12 +2465,10 @@ describes. Other parts of this spec are implemented by:
   `per_image_adjustments` keys as one list of names per camera, and the
   scanlines settings as `rolling_shutter_scanlines`, one `"ROWS"`, `"COLUMNS"`
   or `None` per camera. The scanlines setting is `SfmrCamera::rolling_shutter_scanlines`,
-  a `RollingShutterScanlines`. The refusal of the radial B-spline correction
-  and the rolling shutter is `refuse_per_image_lens_corrections` in the same
-  file, which `read_sfmr` and `write_sfmr_with_options` call, and
-  `SfmrReconstruction::from_sfmr_data` in
+  a `RollingShutterScanlines`. `SfmrReconstruction::from_sfmr_data` in
   [conversion.rs](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs)
-  calls it and refuses a scanlines setting.
+  reads the corrections and the scanlines settings, refusing with
+  `SfmrError::Unsupported` an image whose adjustment its camera cannot take.
 - Points at infinity: `SfmrReconstruction::classify_points_at_infinity` applies
   the point-or-bearing test and stores each scored point as finite or at
   `w = 0` as the test decides, and `materialize_points_at_infinity` places

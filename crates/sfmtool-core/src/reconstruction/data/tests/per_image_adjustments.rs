@@ -454,7 +454,7 @@ fn a_scanlines_setting_alone_is_kept() {
 }
 
 #[test]
-fn rates_on_another_model_are_refused_and_the_file_boundary_still_refuses_both() {
+fn rates_on_another_model_are_refused_and_a_save_keeps_both_corrections() {
     use sfmtool_sfmr_format::{RollingShutterScanlines, SfmrError};
     // Rolling-shutter rates on the demo's PINHOLE camera: the format allows
     // them, and this build applies them on SFMTOOL_PINHOLE alone.
@@ -480,18 +480,40 @@ fn rates_on_another_model_are_refused_and_the_file_boundary_still_refuses_both()
     let flags = PerImageAdjustments::from_names(&["radial_bspline", "rolling_shutter"]).unwrap();
     assert!(flags.radial_bspline && flags.rolling_shutter && flags.any());
 
-    // The Python package does not read the corrections yet, so a save is
-    // still refused, and nothing is written.
+    // A save keeps both corrections and the scanlines setting, and a load
+    // reads them back bit for bit.
     let dir = std::env::temp_dir().join("sfmr_core_lens_corrections_save");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("corrected.sfmr");
-    match corrected_demo().save(&path) {
-        Err(SfmrError::Unsupported(e)) => assert!(e.contains("radial_bspline"), "{e}"),
-        other => panic!("the save was not refused: {:?}", other.map(|_| ())),
+    let corrected = corrected_demo();
+    corrected.save(&path).unwrap();
+    let loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
+    assert_eq!(
+        loaded.image_set.per_image_adjustments,
+        corrected.image_set.per_image_adjustments
+    );
+    for (a, b) in loaded
+        .image_set
+        .images
+        .iter()
+        .zip(&corrected.image_set.images)
+    {
+        let (a, b) = (a.intrinsic_adjustment, b.intrinsic_adjustment);
+        assert_eq!(
+            a.radial_bspline.map(f64::to_bits),
+            b.radial_bspline.map(f64::to_bits)
+        );
+        assert_eq!(
+            a.rolling_shutter.map(f64::to_bits),
+            b.rolling_shutter.map(f64::to_bits)
+        );
     }
-    assert!(!path.exists());
+    assert_eq!(
+        loaded.content_xxh128().unwrap().content_xxh128,
+        corrected.content_xxh128().unwrap().content_xxh128
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

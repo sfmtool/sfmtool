@@ -43,7 +43,13 @@ sfm to-nerfstudio <INPUT.sfmr> [<OUTPUT_DIR>] [OPTIONS...]
 
 Input cameras must all be pinhole (zero distortion). The command rejects any
 reconstruction with a distorted camera and tells the user to run
-`sfm undistort` first.
+`sfm undistort` first. It rejects the same way, naming the camera and the
+correction, a reconstruction whose images carry a radial correction or
+rolling-shutter rates
+([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+even on an `SFMTOOL_PINHOLE` camera whose own spline is zero: a frame's lens is
+an `OPENCV` pinhole with no distortion, which holds neither. Both checks run
+before any file is written.
 
 ## Output Structure
 

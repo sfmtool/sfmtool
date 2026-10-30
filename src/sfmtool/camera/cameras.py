@@ -164,29 +164,91 @@ SFMTOOL_PINHOLE = "SFMTOOL_PINHOLE"
 SFMTOOL_SPLINE_MODELS = (SFMTOOL_FISHEYE, SFMTOOL_PINHOLE)
 
 
+# Each part of an image's intrinsic adjustment: the name a camera's
+# `per_image_adjustments` lists it by, and the reconstruction's column of it.
+_ADJUSTMENT_COLUMNS = (
+    ("focal", "focal_adjustments"),
+    ("principal_point", "principal_point_adjustments_xy"),
+    ("radial_bspline", "radial_bspline_adjustments"),
+    ("rolling_shutter", "rolling_shutter_rates_xyz"),
+)
+
+# The two parts only an `SFMTOOL_PINHOLE` camera's images carry, and how a
+# message names each.
+_LENS_CORRECTIONS = {
+    "radial_bspline": "a radial correction (radial_bspline)",
+    "rolling_shutter": "rolling-shutter rates (rolling_shutter)",
+}
+
+
+def _adjustment_masks(recon) -> dict[str, np.ndarray]:
+    """Per part of the intrinsic adjustment, by its name in
+    ``per_image_adjustments``, an ``(N,)`` bool array saying whether each image
+    of ``recon`` has a non-zero value of it."""
+    masks = {}
+    for name, column in _ADJUSTMENT_COLUMNS:
+        values = getattr(recon, column)
+        if values is None:
+            masks[name] = np.zeros(recon.image_count, dtype=bool)
+        else:
+            values = np.asarray(values)
+            nonzero = values != 0.0
+            masks[name] = nonzero if values.ndim == 1 else np.any(nonzero, axis=1)
+    return masks
+
+
 def _adjusted_image_mask(recon) -> np.ndarray:
     """Whether each image of ``recon`` has a non-zero intrinsic adjustment.
 
     An ``(N,)`` bool array: ``True`` where the image's intrinsics differ from
-    its camera's (``recon.image_intrinsics(i)``), ``False`` where it is read
-    through its camera exactly.
+    its camera's (``recon.image_intrinsics(i)``) in its focal, its principal
+    point, its radial correction or its rolling-shutter rates, ``False``
+    where it is read through its camera exactly.
     """
     mask = np.zeros(recon.image_count, dtype=bool)
-    focal = recon.focal_adjustments
-    if focal is not None:
-        mask |= np.asarray(focal) != 0.0
-    principal_point = recon.principal_point_adjustments_xy
-    if principal_point is not None:
-        mask |= np.any(np.asarray(principal_point) != 0.0, axis=1)
+    for part in _adjustment_masks(recon).values():
+        mask |= part
     return mask
 
 
 def _adjusted_cameras(recon) -> list[int]:
     """The cameras of ``recon`` with a non-zero intrinsic adjustment on any of
     their images, in index order."""
-    mask = _adjusted_image_mask(recon)
+    return sorted(_camera_adjustments(recon))
+
+
+def _camera_adjustments(recon) -> dict[int, list[str]]:
+    """Per camera of ``recon`` with a non-zero intrinsic adjustment on any of
+    its images, the parts that are non-zero, named and ordered as
+    ``per_image_adjustments`` names them."""
     camera_indexes = np.asarray(recon.camera_indexes)
-    return sorted({int(c) for c in camera_indexes[mask]})
+    adjusted: dict[int, list[str]] = {}
+    for name, mask in _adjustment_masks(recon).items():
+        for c in sorted({int(c) for c in camera_indexes[mask]}):
+            adjusted.setdefault(c, []).append(name)
+    return dict(sorted(adjusted.items()))
+
+
+def _lens_corrected_cameras(recon) -> dict[int, list[str]]:
+    """Per camera of ``recon`` whose images carry a non-zero radial correction
+    or rolling-shutter rates, the names of those corrections."""
+    return {
+        c: [n for n in names if n in _LENS_CORRECTIONS]
+        for c, names in _camera_adjustments(recon).items()
+        if any(n in _LENS_CORRECTIONS for n in names)
+    }
+
+
+def _refuse_lens_corrections(recon, reason: str) -> None:
+    """Raise ``ValueError`` when an image of ``recon`` carries a non-zero
+    radial correction or rolling-shutter rates, naming the first such camera
+    and its corrections; ``reason`` says why the caller cannot hold them."""
+    corrected = _lens_corrected_cameras(recon)
+    if not corrected:
+        return
+    camera, names = next(iter(corrected.items()))
+    what = " and ".join(_LENS_CORRECTIONS[n] for n in names)
+    raise ValueError(f"The images of camera {camera} carry {what}. {reason}")
 
 
 def get_intrinsic_matrix(camera) -> np.ndarray:
@@ -240,7 +302,8 @@ def colmap_camera_from_intrinsics(camera_meta, *, width=None, height=None):
     `EQUIDISTANT_FISHEYE` becomes `SIMPLE_RADIAL_FISHEYE` with `k = 0`, which
     parameterizes the identical map (see `EQUIDISTANT_FISHEYE_CARRIER`).
     `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE` have no carrier and raise
-    ValueError.
+    ValueError. So does an image's intrinsics with a radial correction or
+    rolling-shutter rates, which only an `SFMTOOL_PINHOLE` camera carries.
 
     Args:
         camera_meta: CameraIntrinsics object

@@ -557,8 +557,10 @@ impl PyCameraIntrinsics {
     ///
     /// Raises:
     ///     ValueError: When the camera cannot take the adjustment (a radial
-    ///         correction or rates on another model, a degenerate spline
-    ///         domain, or rates without a scanlines setting).
+    ///         coefficient or a rate that is not finite, a radial correction
+    ///         or rates on another model, a degenerate spline domain, or rates
+    ///         without a scanlines setting), as ``from_dict`` and pickling
+    ///         refuse a rolling shutter they cannot apply.
     #[pyo3(signature = (
         focal=0.0,
         principal_point=(0.0, 0.0),

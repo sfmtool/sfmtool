@@ -12,10 +12,14 @@ For each image in a reconstruction, this module:
 5. Writes a workspace config (.sfm-workspace.json)
 
 Each image is read through its own intrinsics, its camera's with its intrinsic
-adjustment applied, and written through its camera's pinhole, which has no
-adjustment. Undistortion removes the adjustment along with the distortion, so
-the undistorted reconstruction has no adjustments and no camera lists any in
-``per_image_adjustments``.
+adjustment applied (its focal scale, its principal-point offset, its radial
+correction and its rolling-shutter rates), and written through its camera's
+pinhole, which has no adjustment. The warp and the keypoint remap go through
+the image's own ``project`` and ``unproject``, which apply the radial
+correction and the rolling shutter, so undistortion removes the adjustment
+along with the distortion: the undistorted reconstruction has no adjustments,
+no camera lists any in ``per_image_adjustments``, and no camera keeps a
+``rolling_shutter_scanlines`` setting, since its images have no readout left.
 """
 
 import json
@@ -598,8 +602,9 @@ def undistort_reconstruction_images(
         rig_frame_data=rig_frame_data,
     )
     # The images were warped into their cameras' pinholes, so no image has an
-    # adjustment: the dict carries no adjustment columns and no camera's
-    # per_image_adjustments, and the output reads like an unadjusted file.
+    # adjustment: the dict carries no adjustment columns, no camera's
+    # per_image_adjustments and no scanlines setting, and the output reads
+    # like an unadjusted file.
 
     sfmr_out_dir = output_dir / "sfmr"
     sfmr_out_dir.mkdir(parents=True, exist_ok=True)

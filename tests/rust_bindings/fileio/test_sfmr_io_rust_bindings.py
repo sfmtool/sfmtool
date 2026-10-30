@@ -961,11 +961,8 @@ class TestPerImageLensCorrections:
     """Format version 14 stores per image a radial B-spline correction and
     rolling-shutter rates, and per camera a rolling-shutter scanlines setting.
 
-    This build refuses the two corrections at the file boundary, since the
-    Python package does not yet apply them where it reads an image through its
-    camera; a reconstruction built from a dict holds them, and a
-    scanlines setting on its own reads and writes through the dicts and a
-    reconstruction."""
+    The dicts and a reconstruction read and write both corrections and the
+    scanlines setting as stored, together or each on its own."""
 
     def test_a_file_without_them_reads_none(self, seoul_bull_sfmr_only):
         data = read_sfmr(seoul_bull_sfmr_only)
@@ -1014,7 +1011,7 @@ class TestPerImageLensCorrections:
             ("rolling_shutter", "rolling_shutter_rates_xyz", 3),
         ],
     )
-    def test_a_dict_that_varies_a_correction_is_refused(
+    def test_a_dict_that_varies_a_correction_round_trips(
         self, seoul_bull_sfmr_only, tmp_path, name, key, width
     ):
         data = read_sfmr(seoul_bull_sfmr_only)
@@ -1023,18 +1020,28 @@ class TestPerImageLensCorrections:
         n_img = len(data["image_names"])
         data["per_image_adjustments"] = [[name] for _ in data["cameras"]]
         data["rolling_shutter_scanlines"] = ["ROWS" for _ in data["cameras"]]
-        data[key] = np.zeros((n_img, width))
+        values = np.zeros((n_img, width))
+        values[1] = np.linspace(1e-3, -2e-3, width)
+        values[4] = 1.0 / 3.0 * 1e-2
+        data[key] = values
         out = tmp_path / f"{name}.sfmr"
-        with pytest.raises(OSError, match=f"images/{key}"):
-            write_sfmr(out, data)
-        assert not out.exists()
-        # A reconstruction holds them, and refuses them on save.
+        write_sfmr(out, data)
+        again = read_sfmr(out)
+        assert again["per_image_adjustments"] == data["per_image_adjustments"]
+        assert again["rolling_shutter_scanlines"] == data["rolling_shutter_scanlines"]
+        assert again[key].tobytes() == values.tobytes()
+        ok, errors = verify_sfmr(out)
+        assert ok, errors
+        # A reconstruction holds them, and a save and a load keep them.
         recon = SfmrReconstruction.from_data(Path(seoul_bull_sfmr_only).parent, data)
         assert recon.per_image_adjustments == [[name] for _ in data["cameras"]]
-        np.testing.assert_array_equal(getattr(recon, key), data[key])
-        with pytest.raises(OSError, match=f"images/{key}"):
-            recon.save(out)
-        assert not out.exists()
+        np.testing.assert_array_equal(getattr(recon, key), values)
+        saved = tmp_path / f"{name}_saved.sfmr"
+        recon.save(saved)
+        loaded = SfmrReconstruction.load(saved)
+        assert getattr(loaded, key).tobytes() == values.tobytes()
+        assert loaded.image_intrinsics(1) == recon.image_intrinsics(1)
+        assert loaded.image_intrinsics(1) != loaded.cameras[0]
 
     def test_a_reconstruction_keeps_a_scanlines_setting(
         self, seoul_bull_sfmr_only, tmp_path
@@ -1053,9 +1060,28 @@ class TestPerImageLensCorrections:
         loaded.save(again)
         assert read_sfmr(again)["rolling_shutter_scanlines"] == settings
 
-    def test_clone_with_changes_refuses_the_new_names(self, seoul_bull_sfmr_only):
+    def test_clone_with_changes_sets_the_new_names(self, seoul_bull_sfmr_only):
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        with pytest.raises(ValueError, match='"rolling_shutter"'):
+        n = len(recon.cameras)
+        flagged = recon.clone_with_changes(
+            per_image_adjustments=[["rolling_shutter"] for _ in range(n)],
+            rolling_shutter_scanlines=["COLUMNS" for _ in range(n)],
+        )
+        assert flagged.per_image_adjustments == [["rolling_shutter"]] * n
+        assert flagged.rolling_shutter_scanlines == ["COLUMNS"] * n
+        np.testing.assert_array_equal(
+            flagged.rolling_shutter_rates_xyz, np.zeros((recon.image_count, 3))
+        )
+        # None clears every camera's setting; a list must have one per camera.
+        cleared = flagged.clone_with_changes(rolling_shutter_scanlines=None)
+        assert cleared.rolling_shutter_scanlines == [None] * n
+        with pytest.raises(ValueError, match="one per camera"):
+            recon.clone_with_changes(rolling_shutter_scanlines=["ROWS"] * (n + 1))
+        with pytest.raises(ValueError, match='"UNKNOWN"'):
+            recon.clone_with_changes(rolling_shutter_scanlines=["UNKNOWN"] * n)
+        with pytest.raises(ValueError, match=r"shape \(N, 3\)"):
             recon.clone_with_changes(
-                per_image_adjustments=[["rolling_shutter"] for _ in recon.cameras]
+                rolling_shutter_rates_xyz=np.zeros((recon.image_count, 2))
             )
+        with pytest.raises(ValueError, match="must match image count"):
+            recon.clone_with_changes(radial_bspline_adjustments=np.zeros((1, 2)))

@@ -308,19 +308,16 @@ reader, a writer and a verifier hold them to, their hash slots, the migration
 from version 13 and the table of
 [Units of the per-image adjustments](#units-of-the-per-image-adjustments). In
 memory the scanlines setting is `SfmrCamera::rolling_shutter_scanlines`, a
-`RollingShutterScanlines`, in the format crate. Until the Python package
-applies the corrections where it reads an image through its camera (the viewer
-does, [Bindings, viewer, CLI](#bindings-viewer-cli)),
-`read_sfmr` and `write_sfmr_with_options` refuse a file in which a camera lists
-`"radial_bspline"` or `"rolling_shutter"` (`refuse_per_image_lens_corrections`
-in [types.rs](../../crates/sfmtool-sfmr-format/src/types.rs)). The core step
-lifted the other two refusals: `SfmrReconstruction::from_sfmr_data` reads the
-corrections and the scanlines setting
+`RollingShutterScanlines`, in the format crate. `read_sfmr` and
+`write_sfmr_with_options` read and write the corrections as stored: the
+file-boundary refusal that held them back until the Python package applied
+them was removed with the Python step
+([Bindings, viewer, CLI](#bindings-viewer-cli)).
+`SfmrReconstruction::from_sfmr_data` reads the corrections and the scanlines
+setting
 ([conversion.rs](../../crates/sfmtool-core/src/reconstruction/data/conversion.rs)),
 refusing only an image whose adjustment its camera cannot take, and
-`PerImageAdjustments::from_names` reads the two names. The file-boundary
-refusal is lifted with the Python step
-([Bindings, viewer, CLI](#bindings-viewer-cli)).
+`PerImageAdjustments::from_names` reads the two names.
 
 **Built:** [sfmtool-camera-models.md § Per-image radial
 correction](../formats/sfmtool-camera-models.md#per-image-radial-correction)
@@ -394,7 +391,9 @@ alone. `validate_per_image_adjustments` in
 and columns.
 
 COLMAP export is unaffected: an `SFMTOOL_PINHOLE` camera cannot be exported to
-COLMAP at all.
+COLMAP at all, and each COLMAP export refuses an image's corrections up front,
+naming the camera and the correction
+([Bindings, viewer, CLI](#bindings-viewer-cli)).
 
 ### Core: the adjustment and the kernels
 
@@ -679,8 +678,46 @@ and `get_camera_intrinsics` report them
 ([gui/camera-views.md](../gui/camera-views.md),
 [gui/camera-intrinsics.md](../gui/camera-intrinsics.md),
 [gui/mcp-server.md](../gui/mcp-server.md)). With every new field zero the
-viewer draws exactly what it drew before. The Bundle Adjust dialog's release
-checkboxes and **Scanlines** choice for the two corrections, below, are proposed.
+viewer draws exactly what it drew before.
+
+**The Python package's reading is built**, with each consumer as
+[edited-reconstruction.md](../core/reconstruction/edited-reconstruction.md),
+[sfmr-file-format.md § Per-image intrinsic
+adjustments](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)
+and the command specs linked here describe it. `read_sfmr` and `write_sfmr`
+dicts carry `radial_bspline_adjustments`, `rolling_shutter_rates_xyz` and each
+camera's `rolling_shutter_scanlines`, and `load` and `save` keep them.
+`clone_with_changes` takes the three keys and checks every image against its
+camera; `CameraIntrinsics.with_adjustment` refuses a value that is not finite,
+as `from_dict` does. Every Python reader of one image's lens reads
+`image_intrinsics(i)`, so the strips, the patch renderer, the panorama sources
+and the web export project through both corrections, and a reader that hands
+the lens to pycolmap (the epipolar display's undistortion, densify's matching)
+refuses the `SFMTOOL_PINHOLE` camera they sit on. The exports and the commands
+that cannot hold them refuse them, naming the camera and the correction, before
+writing anything: COLMAP binary
+and database export
+([to-colmap-bin-command.md](../cli/colmap-interop/to-colmap-bin-command.md#cameras)),
+`sfm to-nerfstudio`
+([to-nerfstudio-command.md](../cli/colmap-interop/to-nerfstudio-command.md))
+and `sfm densify`
+([densify-command.md](../cli/reconstruction/densify-command.md)). `sfm
+undistort` removes both through the image's own `project` and `unproject`, and
+its output keeps no scanlines setting
+([undistort-command.md](../cli/image-processing/undistort-command.md)). `sfm
+merge` carries both and makes two cameras one only when their scanlines
+settings match too
+([merge-command.md](../cli/reconstruction/merge-command.md)). `sfm camrig cp`
+notes the corrections and a scanlines setting it cannot copy
+([camrig-command.md](../cli/workspace/camrig-command.md)). `sfm xform
+--bundle-adjust` takes sfmtool's path, which holds both
+([xform-command.md](../cli/reconstruction/xform/xform-command.md)), and `sfm
+inspect --verbose` names them and the scanlines setting
+([inspect-command.md](../cli/reconstruction/inspect-command.md)).
+
+The releases and the scanlines choice for the two corrections below, in the
+bindings, the viewer's Bundle Adjust dialog and the MCP tool, are proposed; the
+`read_sfmr` / `write_sfmr` bullet is built.
 
 - `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each

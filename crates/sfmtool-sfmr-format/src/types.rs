@@ -58,9 +58,10 @@ pub enum SfmrError {
     #[error("Hash verification failed: {0}")]
     HashMismatch(String),
 
-    /// The file holds something the format allows but this build does not
-    /// yet read everywhere it would have to (see
-    /// [`refuse_per_image_lens_corrections`]).
+    /// The data holds something the format allows but a reader of it cannot
+    /// apply: `SfmrReconstruction::from_sfmr_data` in `sfmtool-core` returns
+    /// it for an image whose adjustment its camera cannot take, such as
+    /// non-zero rolling-shutter rates on a model other than `SFMTOOL_PINHOLE`.
     #[error("Unsupported: {0}")]
     Unsupported(String),
 }
@@ -775,41 +776,6 @@ pub fn validate_per_image_adjustments(
                 ));
             }
         }
-    }
-    Ok(())
-}
-
-/// Refuse a reconstruction that varies the radial B-spline correction or the
-/// rolling shutter per image: one in which some camera lists
-/// `"radial_bspline"` or `"rolling_shutter"` in `per_image_adjustments`.
-/// That is also the only way a valid file holds
-/// `images/radial_bspline_adjustments` or `images/rolling_shutter_rates_xyz`,
-/// and so the only way it holds a non-zero value of either.
-///
-/// The core library and the viewer apply both corrections where they read an
-/// image through its camera, but the Python package in this build does not
-/// yet, so the package would read a file that holds one without it.
-/// [`crate::read_sfmr`] calls this once every rule of the format has passed,
-/// and [`crate::write_sfmr_with_options`] before it writes anything. A
-/// camera's
-/// `rolling_shutter_scanlines` setting is not refused here: on its own it
-/// changes no projection.
-pub fn refuse_per_image_lens_corrections(cameras: &[SfmrCamera]) -> Result<(), SfmrError> {
-    for (c, camera) in cameras.iter().enumerate() {
-        let flags = parse_per_image_adjustment_names(&camera.per_image_adjustments)
-            .map_err(|e| SfmrError::InvalidFormat(format!("camera {c}: {e}")))?;
-        let (parameter, column) = if flags[2] {
-            ("radial_bspline", "images/radial_bspline_adjustments")
-        } else if flags[3] {
-            ("rolling_shutter", "images/rolling_shutter_rates_xyz")
-        } else {
-            continue;
-        };
-        return Err(SfmrError::Unsupported(format!(
-            "camera {c} lists {parameter:?} in per_image_adjustments, and the Python package \
-             in this build does not yet apply {column} where it reads an image through its \
-             camera"
-        )));
     }
     Ok(())
 }

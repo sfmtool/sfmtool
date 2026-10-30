@@ -498,14 +498,20 @@ def print_reconstruction_summary(
     # Camera information
     from ..camera.cameras import _CAMERA_PARAM_NAMES
 
-    # Each camera's shared intrinsics, and which of them its images adjust.
+    # Each camera's shared intrinsics, which of them its images adjust, and
+    # the scanlines its images' rolling-shutter rates are read on.
     per_image_adjustments = recon.per_image_adjustments
+    rolling_shutter_scanlines = recon.rolling_shutter_scanlines
     click.echo("\nCameras:")
     for idx, cam in enumerate(recon.cameras):
         click.echo(f"  Camera {idx}: {cam.model} {cam.width}x{cam.height}")
         if per_image_adjustments[idx]:
             click.echo(
                 "    Adjusted per image: " + ", ".join(per_image_adjustments[idx])
+            )
+        if rolling_shutter_scanlines[idx] is not None:
+            click.echo(
+                f"    Rolling-shutter scanlines: {rolling_shutter_scanlines[idx]}"
             )
         params = cam.parameters
         if params:

@@ -19,9 +19,16 @@ from ..camera.cameras import _CAMERA_PARAM_NAMES
 
 
 def _camera_dict_to_pycolmap(cam_dict):
-    """Convert a camera dict (model, width, height, parameters) to pycolmap.Camera."""
+    """Convert a camera dict (model, width, height, parameters) to pycolmap.Camera.
+
+    A dict with a rolling shutter raises ``ValueError``: pycolmap has no model
+    for one. Its camera is an ``SFMTOOL_PINHOLE``, which pycolmap does not
+    know either.
+    """
     import pycolmap
 
+    if cam_dict.get("rolling_shutter") is not None:
+        raise ValueError("pycolmap has no camera model with a rolling shutter")
     model = cam_dict["model"]
     params = cam_dict["parameters"]
     param_names = _CAMERA_PARAM_NAMES.get(model)
@@ -171,6 +178,7 @@ def _refine_single_camera_pose(
 def refine_camera_poses(
     merged_images,
     merged_cameras,
+    merged_scanlines,
     merged_points,
     merged_tracks,
     workspace_dir,
@@ -182,8 +190,10 @@ def refine_camera_poses(
 
     Uses parallel processing to refine poses for all images concurrently. Each
     image is read through its own intrinsics: its merged camera with its
-    intrinsic adjustment (``merged_images["focal_adjustments"]`` and
-    ``["principal_point_adjustments_xy"]``) applied.
+    intrinsic adjustment (``merged_images["focal_adjustments"]``,
+    ``["principal_point_adjustments_xy"]``, ``["radial_bspline_adjustments"]``
+    and ``["rolling_shutter_rates_xyz"]``) applied, the rates read on the
+    camera's entry of ``merged_scanlines``.
     """
     click.echo("  Refining camera poses using merged 3D points...")
 
@@ -192,6 +202,8 @@ def refine_camera_poses(
     camera_dicts = [cam.to_dict() for cam in merged_cameras]
     focal_adjustments = merged_images["focal_adjustments"]
     principal_point_adjustments = merged_images["principal_point_adjustments_xy"]
+    radial_bspline_adjustments = merged_images["radial_bspline_adjustments"]
+    rolling_shutter_rates = merged_images["rolling_shutter_rates_xyz"]
 
     # Build image_idx -> [(feat_idx, point_id), ...]
     image_observations = {}
@@ -216,14 +228,24 @@ def refine_camera_poses(
     tasks = []
     for img_idx, img_name in enumerate(merged_images["names"]):
         cam_idx = merged_images["camera_indexes"][img_idx]
-        focal = float(focal_adjustments[img_idx])
-        principal_point = tuple(float(v) for v in principal_point_adjustments[img_idx])
-        if focal == 0.0 and principal_point == (0.0, 0.0):
+        adjustment = {
+            "focal": float(focal_adjustments[img_idx]),
+            "principal_point": tuple(
+                float(v) for v in principal_point_adjustments[img_idx]
+            ),
+            "radial_bspline": tuple(
+                float(v) for v in radial_bspline_adjustments[img_idx]
+            ),
+            "rolling_shutter": tuple(float(v) for v in rolling_shutter_rates[img_idx]),
+        }
+        if all(np.all(np.asarray(v) == 0.0) for v in adjustment.values()):
             cam_dict = camera_dicts[cam_idx]
         else:
             cam_dict = (
                 merged_cameras[cam_idx]
-                .with_adjustment(focal=focal, principal_point=principal_point)
+                .with_adjustment(
+                    **adjustment, rolling_shutter_scanlines=merged_scanlines[cam_idx]
+                )
                 .to_dict()
             )
         observations = image_observations.get(img_idx, [])
@@ -309,6 +331,8 @@ def refine_camera_poses(
         "translations": np.array(refined_translations),
         "focal_adjustments": focal_adjustments,
         "principal_point_adjustments_xy": principal_point_adjustments,
+        "radial_bspline_adjustments": radial_bspline_adjustments,
+        "rolling_shutter_rates_xyz": rolling_shutter_rates,
         "feature_tool_hashes": merged_images["feature_tool_hashes"],
         "sift_hashes": merged_images["sift_hashes"],
         "thumbnails_y_x_rgb": merged_images["thumbnails_y_x_rgb"],

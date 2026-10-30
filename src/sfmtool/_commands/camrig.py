@@ -276,6 +276,15 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
             "per-image intrinsic adjustments of its images: a .camrig holds no "
             "per-image data"
         )
+    with_scanlines = summary.get("scanlines_cameras")
+    if with_scanlines:
+        which = ("camera " if len(with_scanlines) == 1 else "cameras ") + ", ".join(
+            str(c) for c in with_scanlines
+        )
+        click.echo(
+            f"  note:     {which} copied without the rolling_shutter_scanlines "
+            "setting: a .camrig has no place for it"
+        )
 
 
 @camrig.command("spherical-tiles")

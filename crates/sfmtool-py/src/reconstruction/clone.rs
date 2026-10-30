@@ -17,6 +17,7 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use sfmtool_core::camera::RollingShutterScanlines;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{SfmrReconstruction, SiftKeypointFill};
 
@@ -173,6 +174,14 @@ struct DeferredChanges {
     focal_adjustments: Option<Option<Vec<f64>>>,
     /// `principal_point_adjustments_xy`, applied with `focal_adjustments`.
     principal_point_adjustments_xy: Option<Option<Vec<[f64; 2]>>>,
+    /// `radial_bspline_adjustments`, applied with `focal_adjustments`.
+    radial_bspline_adjustments: Option<Option<Vec<[f64; 2]>>>,
+    /// `rolling_shutter_rates_xyz`, applied with `focal_adjustments`.
+    rolling_shutter_rates_xyz: Option<Option<Vec<[f64; 3]>>>,
+    /// `rolling_shutter_scanlines`, one setting per camera, applied after
+    /// `per_image_adjustments`: the outer `Option` is "was the kwarg passed",
+    /// the inner one "with a list, or with `None` for no camera's setting".
+    rolling_shutter_scanlines: Option<Option<Vec<Option<RollingShutterScanlines>>>>,
     /// `per_image_adjustments`, one list of names per camera, checked against
     /// the camera count once `cameras` has settled it.
     per_image_adjustments: Option<Vec<sfmtool_core::reconstruction::PerImageAdjustments>>,
@@ -553,20 +562,39 @@ fn apply_image_field(
             });
         }
         "principal_point_adjustments_xy" => {
-            deferred.principal_point_adjustments_xy = Some(if value.is_none() {
+            deferred.principal_point_adjustments_xy =
+                Some(extract_rows(value, "principal_point_adjustments_xy")?);
+        }
+        "radial_bspline_adjustments" => {
+            deferred.radial_bspline_adjustments =
+                Some(extract_rows(value, "radial_bspline_adjustments")?);
+        }
+        "rolling_shutter_rates_xyz" => {
+            deferred.rolling_shutter_rates_xyz =
+                Some(extract_rows(value, "rolling_shutter_rates_xyz")?);
+        }
+        "rolling_shutter_scanlines" => {
+            deferred.rolling_shutter_scanlines = Some(if value.is_none() {
                 None
             } else {
-                let arr = extract_array2!(value, "principal_point_adjustments_xy", f64)?;
-                if arr.shape()[1] != 2 {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "clone_with_changes(): 'principal_point_adjustments_xy' must have \
-                         shape (N, 2), got shape ({}, {})",
-                        arr.shape()[0],
-                        arr.shape()[1]
-                    )));
-                }
-                let flat = to_contiguous!(arr);
-                Some(flat.as_chunks::<2>().0.to_vec())
+                let settings: Vec<Option<String>> = value.extract()?;
+                let parsed = settings
+                    .iter()
+                    .enumerate()
+                    .map(|(c, setting)| {
+                        setting
+                            .as_deref()
+                            .map(RollingShutterScanlines::parse)
+                            .transpose()
+                            .map_err(|e| {
+                                pyo3::exceptions::PyValueError::new_err(format!(
+                                    "clone_with_changes(): 'rolling_shutter_scanlines' \
+                                     camera {c}: {e}"
+                                ))
+                            })
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                Some(parsed)
             });
         }
         "per_image_adjustments" => {
@@ -579,24 +607,13 @@ fn apply_image_field(
                 .iter()
                 .enumerate()
                 .map(|(c, names)| {
-                    let refuse = |e: String| {
-                        pyo3::exceptions::PyValueError::new_err(format!(
-                            "clone_with_changes(): 'per_image_adjustments' camera {c}: {e}"
-                        ))
-                    };
-                    let flags =
-                        sfmtool_core::reconstruction::PerImageAdjustments::from_names(names)
-                            .map_err(refuse)?;
-                    // There is no key for the values of these two yet, nor
-                    // for the scanlines setting the rates are read on.
-                    if flags.radial_bspline || flags.rolling_shutter {
-                        return Err(refuse(
-                            "clone_with_changes() does not yet set \"radial_bspline\" or \
-                             \"rolling_shutter\""
-                                .to_string(),
-                        ));
-                    }
-                    Ok(flags)
+                    sfmtool_core::reconstruction::PerImageAdjustments::from_names(names).map_err(
+                        |e| {
+                            pyo3::exceptions::PyValueError::new_err(format!(
+                                "clone_with_changes(): 'per_image_adjustments' camera {c}: {e}"
+                            ))
+                        },
+                    )
                 })
                 .collect::<PyResult<Vec<_>>>()?;
             deferred.per_image_adjustments = Some(flags);
@@ -604,6 +621,27 @@ fn apply_image_field(
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// A per-image `(N, K)` float64 column of `clone_with_changes` as its rows, or
+/// `None` for a value of `None`.
+fn extract_rows<const K: usize>(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Option<Vec<[f64; K]>>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    let arr = extract_array2!(value, name, f64)?;
+    if arr.shape()[1] != K {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "clone_with_changes(): '{name}' must have shape (N, {K}), got shape ({}, {})",
+            arr.shape()[0],
+            arr.shape()[1]
+        )));
+    }
+    let flat = to_contiguous!(arr);
+    Ok(Some(flat.as_chunks::<K>().0.to_vec()))
 }
 
 /// Apply one keyword argument of the tracks and the observation source (the
@@ -781,7 +819,10 @@ fn finalize(
         observation_readings,
         focal_adjustments,
         principal_point_adjustments_xy,
+        radial_bspline_adjustments,
+        rolling_shutter_rates_xyz,
         per_image_adjustments,
+        rolling_shutter_scanlines,
     } = deferred;
 
     apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
@@ -789,7 +830,10 @@ fn finalize(
         &mut recon,
         focal_adjustments,
         principal_point_adjustments_xy,
+        radial_bspline_adjustments,
+        rolling_shutter_rates_xyz,
         per_image_adjustments,
+        rolling_shutter_scanlines,
     )?;
     // The cameras, the camera column, the adjustments and the flags have all
     // been applied, any of which can pair an image with a camera that cannot
@@ -925,78 +969,124 @@ fn apply_image_count_changes(
     Ok(())
 }
 
-/// Apply `focal_adjustments`, `principal_point_adjustments_xy` and
-/// `per_image_adjustments` once the image count and the cameras are settled.
-/// A column passed as `None` sets every image's value of it to zero, and an
-/// empty or `None` `per_image_adjustments` lets no camera vary anything. An
-/// image left with a non-zero value its camera does not vary is refused on
-/// save, as the format requires.
+/// Apply the four per-image adjustment columns, `per_image_adjustments` and
+/// `rolling_shutter_scanlines` once the image count and the cameras are
+/// settled. A column passed as `None` sets every image's value of it to zero,
+/// an empty or `None` `per_image_adjustments` lets no camera vary anything,
+/// and a `None` `rolling_shutter_scanlines` leaves no camera a setting. A
+/// camera keeps its scanlines setting by index unless
+/// `rolling_shutter_scanlines` is passed. An image left with a non-zero value
+/// its camera does not vary, or a camera that varies the rolling shutter with
+/// no scanlines setting, is refused on save, as the format requires.
 fn apply_intrinsic_adjustments(
     recon: &mut SfmrReconstruction,
     focal_adjustments: Option<Option<Vec<f64>>>,
     principal_point_adjustments_xy: Option<Option<Vec<[f64; 2]>>>,
+    radial_bspline_adjustments: Option<Option<Vec<[f64; 2]>>>,
+    rolling_shutter_rates_xyz: Option<Option<Vec<[f64; 3]>>>,
     per_image_adjustments: Option<Vec<sfmtool_core::reconstruction::PerImageAdjustments>>,
+    rolling_shutter_scanlines: Option<Option<Vec<Option<RollingShutterScanlines>>>>,
 ) -> PyResult<()> {
-    let image_count = recon.image_set.images.len();
-    let check_rows = |name: &str, rows: usize| {
-        if rows == image_count {
-            Ok(())
-        } else {
-            Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "clone_with_changes(): '{name}' length ({rows}) must match image count \
-                 ({image_count})"
-            )))
-        }
-    };
-    if let Some(values) = focal_adjustments {
-        if let Some(values) = &values {
-            check_rows("focal_adjustments", values.len())?;
-        }
-        for (i, im) in recon.image_set.images.iter_mut().enumerate() {
-            im.intrinsic_adjustment.focal = values.as_ref().map_or(0.0, |v| v[i]);
-        }
-    }
-    if let Some(rows) = principal_point_adjustments_xy {
+    use sfmtool_core::IntrinsicAdjustment;
+
+    /// Set one part of every image's adjustment from `rows`, or to `zero`
+    /// where `rows` is `None`.
+    fn set_column<T: Copy>(
+        recon: &mut SfmrReconstruction,
+        name: &str,
+        rows: Option<Option<Vec<T>>>,
+        zero: T,
+        part: impl Fn(&mut IntrinsicAdjustment) -> &mut T,
+    ) -> PyResult<()> {
+        let Some(rows) = rows else {
+            return Ok(());
+        };
+        let image_count = recon.image_set.images.len();
         if let Some(rows) = &rows {
-            check_rows("principal_point_adjustments_xy", rows.len())?;
+            if rows.len() != image_count {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): '{name}' length ({}) must match image count \
+                     ({image_count})",
+                    rows.len()
+                )));
+            }
         }
         for (i, im) in recon.image_set.images.iter_mut().enumerate() {
-            im.intrinsic_adjustment.principal_point = rows.as_ref().map_or([0.0, 0.0], |r| r[i]);
+            *part(&mut im.intrinsic_adjustment) = rows.as_ref().map_or(zero, |r| r[i]);
         }
+        Ok(())
     }
-    if let Some(flags) = per_image_adjustments {
-        let camera_count = recon.image_set.cameras.len();
-        if !flags.is_empty() && flags.len() != camera_count {
+
+    set_column(recon, "focal_adjustments", focal_adjustments, 0.0, |a| {
+        &mut a.focal
+    })?;
+    set_column(
+        recon,
+        "principal_point_adjustments_xy",
+        principal_point_adjustments_xy,
+        [0.0; 2],
+        |a| &mut a.principal_point,
+    )?;
+    set_column(
+        recon,
+        "radial_bspline_adjustments",
+        radial_bspline_adjustments,
+        [0.0; 2],
+        |a| &mut a.radial_bspline,
+    )?;
+    set_column(
+        recon,
+        "rolling_shutter_rates_xyz",
+        rolling_shutter_rates_xyz,
+        [0.0; 3],
+        |a| &mut a.rolling_shutter,
+    )?;
+
+    let camera_count = recon.image_set.cameras.len();
+    if per_image_adjustments.is_none() && rolling_shutter_scanlines.is_none() {
+        return Ok(());
+    }
+    // One entry per camera: the flags passed, or each camera's own, each with
+    // the camera's scanlines setting by index.
+    let mut flags: Vec<_> = (0..camera_count)
+        .map(|c| recon.image_set.camera_per_image_adjustments(c))
+        .collect();
+    if let Some(passed) = per_image_adjustments {
+        if !passed.is_empty() && passed.len() != camera_count {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "clone_with_changes(): 'per_image_adjustments' has {} entries, one per \
                  camera is {camera_count}",
-                flags.len()
+                passed.len()
             )));
         }
-        // Each camera keeps its scanlines setting, which the names do not
-        // carry, an empty list (no camera varies anything) included.
-        let flags = if flags.is_empty() {
-            vec![Default::default(); camera_count]
-        } else {
-            flags
-        };
-        let flags: Vec<_> = flags
-            .into_iter()
-            .enumerate()
-            .map(|(c, f)| sfmtool_core::reconstruction::PerImageAdjustments {
-                rolling_shutter_scanlines: recon
-                    .image_set
-                    .camera_per_image_adjustments(c)
-                    .rolling_shutter_scanlines,
+        // An empty list is no camera varying anything.
+        for (c, entry) in flags.iter_mut().enumerate() {
+            let f = passed.get(c).copied().unwrap_or_default();
+            *entry = sfmtool_core::reconstruction::PerImageAdjustments {
+                rolling_shutter_scanlines: entry.rolling_shutter_scanlines,
                 ..f
-            })
-            .collect();
-        recon.image_set.per_image_adjustments = if flags.iter().any(|f| f.is_set()) {
-            flags
-        } else {
-            Vec::new()
-        };
+            };
+        }
     }
+    if let Some(settings) = rolling_shutter_scanlines {
+        if let Some(settings) = &settings {
+            if settings.len() != camera_count {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "clone_with_changes(): 'rolling_shutter_scanlines' has {} entries, one \
+                     per camera is {camera_count}",
+                    settings.len()
+                )));
+            }
+        }
+        for (c, entry) in flags.iter_mut().enumerate() {
+            entry.rolling_shutter_scanlines = settings.as_ref().and_then(|s| s[c]);
+        }
+    }
+    recon.image_set.per_image_adjustments = if flags.iter().any(|f| f.is_set()) {
+        flags
+    } else {
+        Vec::new()
+    };
     Ok(())
 }
 

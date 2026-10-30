@@ -60,7 +60,10 @@ non-zero intrinsic adjustment on any of its images is written as one camera per
 image of it, each that image's intrinsics, and every other camera once. A COLMAP
 solve started from the database therefore begins at each image's intrinsics, and
 each fundamental matrix is computed from the two images' own intrinsics. The
-database holds no rigs, so no rig is refused here.
+database holds no rigs, so no rig is refused here. A reconstruction whose
+images carry a radial correction or rolling-shutter rates is refused, naming
+the camera and the correction, before the database is created, as
+`sfm to-colmap-bin` refuses it.
 
 ### From `.matches`
 

@@ -81,7 +81,10 @@ and its bundle adjustment would refine each such camera, distortion included, fr
 one image's observations. So a reconstruction with a non-zero per-image intrinsic
 adjustment
 ([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
-is refused before any work, with an error naming a camera that has one.
+is refused before any work, with an error naming a camera that has one and the
+parts its images adjust: `focal`, `principal_point`, `radial_bspline` or
+`rolling_shutter`. A radial correction or rolling-shutter rates sit on an
+`SFMTOOL_PINHOLE` camera, which pycolmap does not know either.
 
 ## Usage Examples
 

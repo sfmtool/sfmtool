@@ -291,9 +291,12 @@ def copy_from_sfmr(
     or the lone camera of a rig-less reconstruction. Returns a summary dict.
 
     A `.camrig` holds no per-image data, so a camera is copied as the shared
-    camera, without its images' intrinsic adjustments. The summary's
-    `adjusted_cameras` lists the copied cameras whose images have a non-zero
-    adjustment, for the caller to say so.
+    camera, without its images' intrinsic adjustments (their focal scales,
+    principal-point offsets, radial corrections and rolling-shutter rates),
+    and has no place for a camera's `rolling_shutter_scanlines` setting. The
+    summary's `adjusted_cameras` lists the copied cameras whose images have a
+    non-zero adjustment, and `scanlines_cameras` those with a scanlines
+    setting, for the caller to say so.
     """
     from .._sfmtool.reconstruction import SfmrReconstruction
     from ..camera.cameras import _adjusted_cameras
@@ -316,6 +319,8 @@ def copy_from_sfmr(
     )
     copied = summary.pop("source_cameras")
     summary["adjusted_cameras"] = [c for c in _adjusted_cameras(recon) if c in copied]
+    scanlines = recon.rolling_shutter_scanlines
+    summary["scanlines_cameras"] = [c for c in copied if scanlines[c] is not None]
     return summary
 
 

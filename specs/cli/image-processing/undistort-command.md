@@ -124,9 +124,20 @@ is read through its own intrinsics, its camera's with the adjustment applied,
 and written through its camera's pinhole, which has no adjustment. An
 adjustment describes how one photograph departs from its camera's lens, so
 undistortion removes it along with the distortion: every image of a camera
-comes out through the same pinhole. The output has no adjustments: it stores
-no adjustment columns and no camera lists a parameter in
-`per_image_adjustments`, so it reads like any unadjusted file.
+comes out through the same pinhole. That holds for all four parts of an
+adjustment: the focal scale, the principal-point offset, and on an
+`SFMTOOL_PINHOLE` camera the radial correction and the rolling-shutter rates.
+The warp map and the keypoint remap read the source pixels through the image's
+own intrinsics, whose spline has the radial correction added and whose
+`project` and `unproject` apply the rolling-shutter step and its inverse
+([sfmtool-pinhole-kernels.md § Per-image
+corrections](../../core/camera/sfmtool-pinhole-kernels.md#per-image-corrections)),
+so each output pixel and keypoint lies on the ray the corrected image saw
+there, and the rolling shutter, a rotation during readout, is removed exactly.
+The output has no adjustments: it stores no adjustment columns, no camera lists
+a parameter in `per_image_adjustments`, and no camera keeps a
+`rolling_shutter_scanlines` setting, since its images have no readout left to
+describe, so it reads like any unadjusted file.
 
 The pinhole is fitted once per camera, to the camera's shared intrinsics, not
 to each image's. An image whose principal point is offset therefore loses a

@@ -5,15 +5,12 @@
 //! version 14: the two optional `images/` columns, the names
 //! `"radial_bspline"` and `"rolling_shutter"` in the cameras'
 //! `per_image_adjustments` key, the cameras' `rolling_shutter_scanlines` key,
-//! the rules a reader, a writer and a verifier hold them to, and the refusal
-//! of the two corrections at the file boundary.
+//! and the rules a reader, a writer and a verifier hold them to.
 
 use super::{
     archive_names, images_digest, make_embedded_test_data, make_test_data, read_json_entry_of,
     restamp_hashes, rewrite_entries,
 };
-use crate::read::read_sfmr_file;
-use crate::write::write_sfmr_file;
 use crate::*;
 use ndarray::Array2;
 
@@ -91,14 +88,14 @@ fn both_columns_and_both_camera_keys_round_trip_bit_for_bit() {
         let path = dir.join(name);
         let radial = data.radial_bspline_adjustments.clone().unwrap();
         let rolling = data.rolling_shutter_rates_xyz.clone().unwrap();
-        write_sfmr_file(&path, &mut data, &WriteOptions::default()).unwrap();
+        write_sfmr_with_options(&path, &mut data, &WriteOptions::default()).unwrap();
         assert_eq!(data.metadata.version, 14);
 
         let names = archive_names(&path);
         assert!(names.contains(&RADIAL_ENTRY.to_string()), "{names:?}");
         assert!(names.contains(&ROLLING_ENTRY.to_string()), "{names:?}");
 
-        let loaded = read_sfmr_file(&path).unwrap();
+        let loaded = read_sfmr(&path).unwrap();
         assert_eq!(
             bits(loaded.radial_bspline_adjustments.as_ref().unwrap()),
             bits(&radial)
@@ -148,8 +145,8 @@ fn all_four_per_image_columns_round_trip_together() {
     data.focal_adjustments = Some(ndarray::Array1::from_vec(vec![0.01, -0.02, 0.0]));
     data.principal_point_adjustments_xy = Some(Array2::from_elem((3, 2), 0.0));
     data.principal_point_adjustments_xy.as_mut().unwrap()[[1, 0]] = 0.004;
-    write_sfmr_file(&path, &mut data, &WriteOptions::default()).unwrap();
-    let loaded = read_sfmr_file(&path).unwrap();
+    write_sfmr_with_options(&path, &mut data, &WriteOptions::default()).unwrap();
+    let loaded = read_sfmr(&path).unwrap();
     assert_eq!(loaded.focal_adjustments, data.focal_adjustments);
     assert_eq!(
         loaded.principal_point_adjustments_xy,
@@ -316,7 +313,7 @@ fn a_file_below_version_14_with_a_new_column_or_key_is_refused() {
     write_sfmr(&good, &mut data).unwrap();
     let bad = dir.join("scanlines_v13.sfmr");
     rewrite_entries(&good, &bad, to_version_13);
-    let Err(err) = read_sfmr_file(&bad) else {
+    let Err(err) = read_sfmr(&bad) else {
         panic!("the reader accepted a version 13 file with a scanlines setting");
     };
     let err = err.to_string();
@@ -332,14 +329,14 @@ fn a_file_below_version_14_with_a_new_column_or_key_is_refused() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Write `data_with_corrections` without the guard, rewrite it with `edit`,
+/// Write `data_with_corrections`, rewrite it with `edit`,
 /// and return the reader's error and the verifier's errors.
 fn read_and_verify_edited(
     dir: &std::path::Path,
     edit: impl Fn(&str, &[u8]) -> Option<Vec<u8>>,
 ) -> (String, Vec<String>) {
     let good = dir.join("good.sfmr");
-    write_sfmr_file(
+    write_sfmr_with_options(
         &good,
         &mut data_with_corrections(),
         &WriteOptions::default(),
@@ -347,7 +344,7 @@ fn read_and_verify_edited(
     .unwrap();
     let bad = dir.join("bad.sfmr");
     rewrite_entries(&good, &bad, edit);
-    let err = match read_sfmr_file(&bad) {
+    let err = match read_sfmr(&bad) {
         Ok(_) => panic!("the reader accepted the edited file"),
         Err(e) => e.to_string(),
     };
@@ -387,7 +384,7 @@ fn assert_named(err: &str, errors: &[String], needle: &str) {
 
 /// The writer's error for `data`, which it must refuse.
 fn write_error(dir: &std::path::Path, mut data: SfmrData) -> String {
-    write_sfmr_file(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
+    write_sfmr_with_options(&dir.join("w.sfmr"), &mut data, &WriteOptions::default())
         .unwrap_err()
         .to_string()
 }
@@ -462,7 +459,7 @@ fn a_non_zero_row_under_a_camera_that_does_not_list_it_is_refused() {
     // A negative zero is a zero.
     let mut data = data_with_corrections();
     data.rolling_shutter_rates_xyz.as_mut().unwrap()[[2, 0]] = -0.0;
-    write_sfmr_file(&dir.join("z.sfmr"), &mut data, &WriteOptions::default()).unwrap();
+    write_sfmr_with_options(&dir.join("z.sfmr"), &mut data, &WriteOptions::default()).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -587,24 +584,15 @@ fn the_new_names_parse_in_order() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Until this build applies the two corrections where an image is read
-/// through its camera, the public reader and writer refuse a reconstruction
-/// that varies either, even with every value zero, naming the camera and the
-/// column. The format's own rules are checked first.
+/// The public reader and writer take a reconstruction that varies either
+/// correction alone, with every value zero as well, and keep its flags. A
+/// broken rule is still reported as the format error it is.
 #[test]
-fn the_reader_and_the_writer_refuse_the_corrections() {
-    let dir = temp_dir("sfmr_test_lens_corrections_guard");
-    for (tag, names, needle) in [
-        (
-            "radial",
-            vec!["radial_bspline"],
-            "images/radial_bspline_adjustments",
-        ),
-        (
-            "rolling",
-            vec!["rolling_shutter"],
-            "images/rolling_shutter_rates_xyz",
-        ),
+fn the_reader_and_the_writer_keep_each_correction_alone() {
+    let dir = temp_dir("sfmr_test_lens_corrections_alone");
+    for (tag, names) in [
+        ("radial", vec!["radial_bspline"]),
+        ("rolling", vec!["rolling_shutter"]),
     ] {
         let mut data = data_with_corrections();
         data.cameras[0].per_image_adjustments = names.iter().map(|n| n.to_string()).collect();
@@ -615,28 +603,21 @@ fn the_reader_and_the_writer_refuse_the_corrections() {
             data.rolling_shutter_rates_xyz = Some(Array2::zeros((3, 3)));
         }
         let path = dir.join(format!("{tag}.sfmr"));
-        write_sfmr_file(&path, &mut data, &WriteOptions::default()).unwrap();
-
-        let Err(err) = read_sfmr(&path) else {
-            panic!("{tag}: the reader accepted the corrections");
-        };
-        assert!(matches!(err, SfmrError::Unsupported(_)), "{tag}: {err}");
-        let err = err.to_string();
-        assert!(
-            err.contains("camera 0") && err.contains(needle) && err.contains(names[0]),
-            "{tag}: {err}"
+        write_sfmr(&path, &mut data).unwrap();
+        let loaded = read_sfmr(&path).unwrap();
+        assert_eq!(loaded.cameras[0].per_image_adjustments, names, "{tag}");
+        assert_eq!(
+            loaded.radial_bspline_adjustments, data.radial_bspline_adjustments,
+            "{tag}"
         );
-
-        let target = dir.join(format!("{tag}_written.sfmr"));
-        let err = write_sfmr(&target, &mut data).unwrap_err();
-        assert!(matches!(err, SfmrError::Unsupported(_)), "{tag}: {err}");
-        assert!(err.to_string().contains(needle), "{tag}: {err}");
-        assert!(!target.exists(), "{tag}: a refused write left a file");
+        assert_eq!(
+            loaded.rolling_shutter_rates_xyz, data.rolling_shutter_rates_xyz,
+            "{tag}"
+        );
     }
-    // The reader refuses only a file that is otherwise valid: a broken rule
-    // is reported as the format error it is.
+    // A broken rule is reported as the format error it is.
     let path = dir.join("broken.sfmr");
-    write_sfmr_file(
+    write_sfmr_with_options(
         &dir.join("good.sfmr"),
         &mut data_with_corrections(),
         &WriteOptions::default(),

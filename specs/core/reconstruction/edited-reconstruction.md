@@ -157,20 +157,23 @@ corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)).
 scanlines setting keeps an entry. `from_sfmr_data` reads all of them and
 refuses an image whose adjustment its camera cannot take (non-zero rates on a
 model other than `SFMTOOL_PINHOLE`, for example), and `to_sfmr_data` writes
-them. SfM Explorer reads both, but the Python package does not yet, so `load`
-and `save` still refuse a file that varies either, at the file boundary
+them. SfM Explorer and the Python package read both, and `load` and `save`
+read and write them as held
 ([../../formats/sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
 The binding's `SfmrReconstruction` exposes them as
 `radial_bspline_adjustments`, `rolling_shutter_rates_xyz` and
 `rolling_shutter_scanlines`, and `CameraIntrinsics.with_adjustment` takes
-`radial_bspline`, `rolling_shutter` and `rolling_shutter_scanlines`;
-`clone_with_changes` has no keys for them yet and refuses the two names in
-`per_image_adjustments`, keeps every camera's scanlines setting when it sets
-the flags (an empty list included), and refuses, naming the image, a result in
-which an image's adjustment is one its camera cannot take
-(`ImageSet::check_image_intrinsics`), such as after its `cameras` or
-`camera_indexes` move an image with rates onto a camera of another model or
-one with no scanlines setting. The rest is specified in
+`radial_bspline`, `rolling_shutter` and `rolling_shutter_scanlines`, refusing
+with `ValueError` an adjustment the camera cannot take, a radial coefficient
+or a rate that is not finite included, as `from_dict` and pickling refuse a
+rate that is not finite. `clone_with_changes` takes the same three keys and
+the two names in `per_image_adjustments`; it keeps every camera's scanlines
+setting by index unless `rolling_shutter_scanlines` is passed, an empty flag
+list included, so a routine that rebuilds the cameras, such as a merge, passes
+it. It refuses, naming the image, a result in which an image's adjustment is
+one its camera cannot take (`ImageSet::check_image_intrinsics`), such as after
+its `cameras` or `camera_indexes` move an image with rates onto a camera of
+another model or one with no scanlines setting. The rest is specified in
 [per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller
