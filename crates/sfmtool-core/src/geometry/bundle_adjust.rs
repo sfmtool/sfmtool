@@ -52,7 +52,7 @@ use crate::CameraIntrinsics;
 /// A point behind the camera / outside the model domain contributes this pixel
 /// residual per component — large enough to be trimmed, finite so the robust
 /// cost stays well-posed (matches `reprojection_residuals` / `pose_refine`).
-const INVALID_RESIDUAL: f64 = 1e6;
+pub(crate) const INVALID_RESIDUAL: f64 = 1e6;
 
 /// The trim's in-front floor for a finite observation, as a fraction of the
 /// round's scene scale ([`in_front_floor`]). A point whose in-front measure is
@@ -744,13 +744,47 @@ pub struct BundleAdjustment {
     /// One entry per camera: the prior its per-image release ran under, or
     /// `None` for a camera with no per-image release.
     pub image_priors: Vec<Option<ImagePrior>>,
+    /// One entry per camera: the radial correction `[e_0, e_1]` the solve
+    /// moved from its images into its spline, summed over the rounds. Zero for
+    /// a camera that releases no radial correction per image, or whose spline
+    /// is empty. An image of the camera that was not in the solve keeps its
+    /// spline by taking this off its own correction.
+    pub moved_radial_bspline: Vec<[f64; 2]>,
+    /// What the final round ended with, for comparing two solves of one
+    /// problem; `None` when no round ran or the solve exited degenerate.
+    pub final_round: Option<FinalRound>,
+}
+
+/// The final round of a solve as the cost its damping ladder compares: the
+/// observations it kept, their residuals at the state the solve returned, the
+/// round's loss scale, and the cost of its prior and its spline penalty. The
+/// reconstruction-level adjustment reads it to compare the solves with rows and
+/// with columns over the observations both kept.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalRound {
+    /// The observations the round solved over, as indexes into the
+    /// observation arrays, in increasing order.
+    pub kept: Vec<usize>,
+    /// Each kept observation's residual `(u − u_obs, v − v_obs)` in pixels at
+    /// the state the solve returned, `None` where it does not project.
+    pub residuals: Vec<Option<[f64; 2]>>,
+    /// The round's loss scale, px.
+    pub loss_scale: f64,
+    /// The per-image prior's cost at the state the round ended at, the mean
+    /// holds' with it, in units of the noise level `σ_n²` it was weighed at:
+    /// `Σ (x − x̄)²/σ² + Σ (x̄ − x̄₀)²/σ_h²`. Zero without a per-image release.
+    pub prior: f64,
+    /// The released splines' second-difference penalty at the state the round
+    /// ended at, before the round moved its mean radial correction into the
+    /// spline, px².
+    pub spline_penalty: f64,
 }
 
 /// Soft-L1 robust cost of a squared-residual-over-scale² argument:
 /// `ρ(z) = 2·(√(1 + z) − 1)`, applied per residual COMPONENT (matching
 /// scipy's element-wise `loss="soft_l1"` that this kernel replaces).
 #[inline]
-fn rho(z: f64) -> f64 {
+pub(crate) fn rho(z: f64) -> f64 {
     2.0 * ((1.0 + z).sqrt() - 1.0)
 }
 
@@ -1596,6 +1630,38 @@ fn residual_norms_depths(
     (norms, depths)
 }
 
+/// The residual `(u − u_obs, v − v_obs)` of each observation in `kept` at the
+/// given state, `None` where its point is not finite or it does not project:
+/// [`residual_norms_depths`]'s projection, as components.
+#[allow(clippy::too_many_arguments)]
+fn kept_residuals(
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
+    quats: &[UnitQuaternion<f64>],
+    trans: &[Vector3<f64>],
+    points: &[[f64; 3]],
+    is_dir: &[bool],
+    uv: &[[f64; 2]],
+    obs_img: &[u32],
+    obs_pt: &[u32],
+    kept: &[usize],
+) -> Vec<Option<[f64; 2]>> {
+    kept.iter()
+        .map(|&k| {
+            let pi = obs_pt[k] as usize;
+            let p = points[pi];
+            if !p.iter().all(|c| c.is_finite()) {
+                return None;
+            }
+            let i = obs_img[k] as usize;
+            let rot = quats[i] * Vector3::new(p[0], p[1], p[2]);
+            let c = if is_dir[pi] { rot } else { rot + trans[i] };
+            let (u, v) = cams[image_camera[i] as usize].ray_to_pixel([c.x, c.y, c.z])?;
+            Some([u - uv[k][0], v - uv[k][1]])
+        })
+        .collect()
+}
+
 /// The trim's in-front floor for finite observations at one round's state:
 /// [`IN_FRONT_FLOOR_FRACTION`] of the scene scale, the median in-front measure
 /// over the observations of finite points that are in front at all. Zero when
@@ -2420,6 +2486,27 @@ pub(crate) fn focal_is_releasable(model: &CameraModel) -> bool {
     }
 }
 
+/// Whether each image's radial correction can be released on a camera of this
+/// model: an `SFMTOOL_PINHOLE` whose spline domain end is positive and finite
+/// and whose spline the two-coefficient basis inserts into (empty, or at least
+/// two coefficients). The gate in [`Lens::new`] reads it, and so does the
+/// public per-camera
+/// `reconstruction::bundle_adjust::image_radial_bspline_is_releasable`.
+pub(crate) fn image_radial_bspline_is_releasable(model: &CameraModel) -> bool {
+    matches!(model, CameraModel::SfmtoolPinhole { .. })
+        && model.radial_spline().is_some_and(|(bspline, d_max, _)| {
+            bspline.len() != 1 && d_max.is_finite() && d_max > 0.0
+        })
+}
+
+/// Whether each image's rolling-shutter rates can be released on a camera of
+/// this model: an `SFMTOOL_PINHOLE`, the one model whose image plane the
+/// rolling-shutter step is defined on. Read like
+/// [`image_radial_bspline_is_releasable`].
+pub(crate) fn image_rolling_shutter_is_releasable(model: &CameraModel) -> bool {
+    matches!(model, CameraModel::SfmtoolPinhole { .. })
+}
+
 /// One camera's state across the staged loop: the camera the caller handed in,
 /// the releases its model admits, and the current values of the parameters
 /// those releases move.
@@ -2512,16 +2599,10 @@ impl<'a> Lens<'a> {
         // positive, finite end and a spline the two-coefficient basis inserts
         // into (empty, or at least two coefficients). Same degrade; the
         // binding rejects it loudly first.
-        let pinhole = matches!(base.model, CameraModel::SfmtoolPinhole { .. });
-        let opt_image_rolling_shutter = opt_image_rolling_shutter && pinhole;
-        let opt_image_radial_bspline = opt_image_radial_bspline
-            && pinhole
-            && base
-                .model
-                .radial_spline()
-                .is_some_and(|(bspline, d_max, _)| {
-                    bspline.len() != 1 && d_max.is_finite() && d_max > 0.0
-                });
+        let opt_image_rolling_shutter =
+            opt_image_rolling_shutter && image_rolling_shutter_is_releasable(&base.model);
+        let opt_image_radial_bspline =
+            opt_image_radial_bspline && image_radial_bspline_is_releasable(&base.model);
         let k1 = match base.model {
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1,
@@ -2751,6 +2832,11 @@ struct ImageRoundResult {
     /// every other image and the shared camera held. `None` where the block is
     /// not positive definite, or the camera releases nothing per image.
     inv_info: Vec<Option<ImageParamsMatrix>>,
+    /// The prior's and the mean holds' cost at the state the round ended at,
+    /// in the units of the data's `Σ r²` (weighed at the round's `σ_n²`).
+    prior_cost: f64,
+    /// The released splines' penalty at the state the round ended at, px².
+    spline_penalty: f64,
 }
 
 /// Component `k` of an adjustment in the order of an image's adjustment slots
@@ -4343,13 +4429,21 @@ fn solve_lm<const CAM_COLS: usize>(
         }
         points[p] = [xf[c].x, xf[c].y, xf[c].z];
     }
+    // The cost the ladder last accepted, less its data: what a comparison of
+    // two solves adds to the data it measures itself.
+    let final_prior = prior_cost(&adj);
+    let final_penalty = penalty_cost(&penalties, |j| &bsplines[j]);
     for (j, lens) in lenses.iter_mut().enumerate() {
         lens.f = fs[j];
         lens.k1 = k1s[j];
         lens.bspline = std::mem::take(&mut bsplines[j]);
         lens.pp = pps[j];
     }
-    let mut image_result = ImageRoundResult::default();
+    let mut image_result = ImageRoundResult {
+        prior_cost: final_prior,
+        spline_penalty: final_penalty,
+        ..ImageRoundResult::default()
+    };
     if image_cols {
         for (ci, &i) in img_ids.iter().enumerate() {
             adjustments[i] = adj[ci];
@@ -4765,6 +4859,11 @@ fn bundle_adjust_staged(
     // measures, and how that round ended.
     let mut prev_kept: Vec<usize> = Vec::new();
     let mut last_end = RoundEnd::Stopped;
+    // The last round's loss scale and the cost of its prior (in units of its
+    // `σ_n²`) and its spline penalty, and the radial correction each camera's
+    // re-centring has moved into its spline.
+    let mut last_costs: Option<(f64, f64, f64)> = None;
+    let mut moved_radial: Vec<[f64; 2]> = vec![[0.0; 2]; cameras.len()];
     let rounds = progress.split_evenly(schedule.len());
     for ((rnd, stage), p_round) in schedule.iter().enumerate().zip(rounds) {
         // Between rounds the poses and the points hold what the last round
@@ -4858,6 +4957,8 @@ fn bundle_adjust_staged(
                 free_point_decision: None,
                 image_adjustments: returned_adjustments(&adj_state, adjustments, n_img),
                 image_priors: image_priors_of(&lenses, &round_widths, derive, &spreads),
+                moved_radial_bspline: moved_radial,
+                final_round: None,
             };
         }
         let anchors_now = anchors.as_deref();
@@ -4976,13 +5077,23 @@ fn bundle_adjust_staged(
                     spreads[j] = spread;
                 }
             }
-            recentre_adjustments(
+            let moved = recentre_adjustments(
                 &mut lenses,
                 image_camera,
                 &mut adj_state,
                 &image_result.images,
             );
+            for (total, m) in moved_radial.iter_mut().zip(moved) {
+                total[0] += m[0];
+                total[1] += m[1];
+            }
         }
+        let prior = if sigma_n > 0.0 {
+            image_result.prior_cost / (sigma_n * sigma_n)
+        } else {
+            0.0
+        };
+        last_costs = Some((stage.loss_scale, prior, image_result.spline_penalty));
         prev_kept = kept;
         drop(round);
         progress.count(rnd as u64 + 1, Some(schedule.len() as u64), "round");
@@ -5108,6 +5219,24 @@ fn bundle_adjust_staged(
             }
         })
         .collect();
+    let final_round = last_costs.map(|(loss_scale, prior, spline_penalty)| FinalRound {
+        residuals: kept_residuals(
+            &intrinsics_final.intrinsics,
+            &intrinsics_final.image_entry,
+            quats,
+            trans,
+            points,
+            is_dir,
+            uv,
+            obs_img,
+            obs_pt,
+            &prev_kept,
+        ),
+        kept: prev_kept,
+        loss_scale,
+        prior,
+        spline_penalty,
+    });
     BundleAdjustment {
         cameras: cams_final,
         residual_norms,
@@ -5115,6 +5244,8 @@ fn bundle_adjust_staged(
         free_point_decision,
         image_adjustments: returned_adjustments(&adj_state, adjustments, n_img),
         image_priors: image_priors_of(&lenses, &round_widths, derive, &spreads),
+        moved_radial_bspline: moved_radial,
+        final_round,
     }
 }
 
@@ -5180,12 +5311,16 @@ fn image_priors_of(
 /// `e_i −= ē`, which changes no image's spline `c + K·e_i` beyond rounding; a
 /// camera whose spline is empty keeps `ē` in its images. The mean rates are
 /// left where the round held them, having no shared value to move into.
+///
+/// Returns, per camera, the mean radial correction moved into its spline, zero
+/// where none was.
 fn recentre_adjustments(
     lenses: &mut [Lens<'_>],
     image_camera: &[u32],
     adj: &mut [IntrinsicAdjustment],
     solved: &[usize],
-) {
+) -> Vec<[f64; 2]> {
+    let mut moved = vec![[0.0; 2]; lenses.len()];
     for (j, lens) in lenses.iter_mut().enumerate() {
         if !lens.releases_image() {
             continue;
@@ -5239,8 +5374,10 @@ fn recentre_adjustments(
                 adj[i].radial_bspline[0] -= mean[0];
                 adj[i].radial_bspline[1] -= mean[1];
             }
+            moved[j] = mean;
         }
     }
+    moved
 }
 
 /// The weighted median of `(value, weight)` samples: the smallest value at

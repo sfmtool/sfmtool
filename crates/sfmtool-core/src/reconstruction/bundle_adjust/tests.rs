@@ -24,6 +24,8 @@ use crate::reconstruction::data::{
 
 use super::*;
 
+mod corrections;
+
 const IMG_W: u32 = 640;
 const IMG_H: u32 = 480;
 const FOCAL: f64 = 500.0;
@@ -594,6 +596,10 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 principal_point_released: false,
                 image_focal_released: false,
                 image_principal_point_released: false,
+                image_radial_bspline_released: false,
+                image_rolling_shutter_released: false,
+                rolling_shutter_scanlines: None,
+                scanlines_race: None,
                 principal_point_before: [320.0, 240.0],
                 principal_point_after: [320.0, 240.0],
                 outermost_observed: report.cameras[0].outermost_observed,
@@ -609,6 +615,10 @@ fn two_cameras_are_adjusted_each_through_its_own_lens() {
                 principal_point_released: false,
                 image_focal_released: false,
                 image_principal_point_released: false,
+                image_radial_bspline_released: false,
+                image_rolling_shutter_released: false,
+                rolling_shutter_scanlines: None,
+                scanlines_race: None,
                 principal_point_before: [327.0, 235.0],
                 principal_point_after: [327.0, 235.0],
                 outermost_observed: report.cameras[1].outermost_observed,
@@ -2025,6 +2035,7 @@ fn the_report_names_the_images_beyond_two_prior_widths() {
             ImageAdjustmentParameter::PrincipalPoint => {
                 a.principal_point[0].hypot(a.principal_point[1]) / 0.002
             }
+            other => panic!("{other:?} was not released"),
         };
         assert!((near.widths / want - 1.0).abs() < 1e-6);
     }

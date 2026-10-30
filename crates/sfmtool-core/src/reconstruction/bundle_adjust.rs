@@ -8,7 +8,8 @@
 //! out, and the input is left exactly as it was. It is the reconstruction-level
 //! caller of the array kernel in
 //! [`crate::geometry::bundle_adjust()`]: it gathers the poses, the points and the
-//! observation pixels the kernel takes, runs it once, and writes the answer back
+//! observation pixels the kernel takes, runs it once (twice for each camera
+//! whose rolling-shutter scanlines are not known), and writes the answer back
 //! into a value of the same shape.
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
@@ -16,11 +17,15 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use super::data::{ImageSet, PerImageAdjustments, SfmrReconstruction};
 
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
+use crate::analysis::reprojection_noise::{
+    camera_keypoint_resolution_px, gated_reprojection_noise, ObservationResidual, OUTLIER_GATE,
+};
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
-use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
+use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment, RollingShutterScanlines};
 use crate::geometry::bundle_adjust::{
-    BaCameras, BaSchedule, DistanceReference, FreePointDecision, FreePointPolicy, PointConstraints,
-    PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+    rho, BaCameras, BaSchedule, BundleAdjustment, DistanceReference, FreePointDecision,
+    FreePointPolicy, PointConstraints, PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE,
+    DEFAULT_SCHEDULE, INVALID_RESIDUAL,
 };
 pub use crate::geometry::bundle_adjust::{
     CameraRelease, ImagePrior, ImagePriorOptions, ImagePriorWidths,
@@ -86,8 +91,17 @@ pub struct BundleAdjustOptions {
     ///   and a per-image focal satisfies the distortion's need for a focal.
     ///   Each image is held toward that mean by the prior
     ///   [`Self::image_prior`] chooses.
+    /// - [`CameraRelease::image_radial_bspline`] releases each image's radial
+    ///   correction and [`CameraRelease::image_rolling_shutter`] each image's
+    ///   rolling-shutter rates, on `SFMTOOL_PINHOLE` alone, the radial
+    ///   correction only where the spline domain end is positive and finite
+    ///   ([`image_radial_bspline_is_releasable`],
+    ///   [`image_rolling_shutter_is_releasable`]). The mean of each over the
+    ///   camera's images is held, and the mean radial correction moves into
+    ///   the camera's spline after every round. The rates are read on the
+    ///   scanlines [`Self::rolling_shutter_scanlines`] chooses.
     ///
-    /// A camera with none of the five is held, so a rig can release some
+    /// A camera with none of the seven is held, so a rig can release some
     /// cameras and hold the rest.
     /// With every camera held the solve still runs, and refines the poses and
     /// the points alone.
@@ -115,12 +129,80 @@ pub struct BundleAdjustOptions {
     /// The widths of the prior on a per-image release: derived for each
     /// camera from the solve by default, or fixed.
     pub image_prior: ImagePriorOptions,
+    /// The scanlines each camera that releases its images' rolling-shutter
+    /// rates is solved on, one entry per camera in camera index order, or
+    /// empty for every camera's default; any other length is refused
+    /// ([`BundleAdjustError::ScanlinesCount`]). An entry of `None` is the
+    /// camera's stored `rolling_shutter_scanlines`, or
+    /// [`RollingShutterScanlinesChoice::Unknown`] where it has none: an absent
+    /// setting means the scanlines are not known, and none is assumed. The
+    /// entry of a camera that does not release its rates is ignored, and its
+    /// images' held rates are read on its stored setting.
+    pub rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
+}
+
+/// How the scanlines of a camera that releases its images' rolling-shutter
+/// rates are chosen: [`Self::Rows`] or [`Self::Columns`] runs one solve on that
+/// setting, and [`Self::Unknown`] runs one with each and keeps the one with the
+/// lower cost. The adjustment writes the setting the rates were solved on into
+/// the camera, so `Unknown` is a value of this option only, never stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollingShutterScanlinesChoice {
+    /// One row at a time.
+    Rows,
+    /// One column at a time.
+    Columns,
+    /// Not known: solve with each, keep the lower cost.
+    Unknown,
+}
+
+impl RollingShutterScanlinesChoice {
+    /// The choice's name on every surface: `"ROWS"`, `"COLUMNS"` or
+    /// `"UNKNOWN"`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Rows => "ROWS",
+            Self::Columns => "COLUMNS",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+
+    /// The choice a name states, or a message saying that it states none.
+    pub fn parse(name: &str) -> Result<Self, String> {
+        match name {
+            "ROWS" => Ok(Self::Rows),
+            "COLUMNS" => Ok(Self::Columns),
+            "UNKNOWN" => Ok(Self::Unknown),
+            other => Err(format!(
+                "rolling_shutter_scanlines is {other:?}, not \"ROWS\", \"COLUMNS\" or \"UNKNOWN\""
+            )),
+        }
+    }
+
+    /// The stored setting this choice is, `None` for [`Self::Unknown`].
+    pub fn setting(self) -> Option<RollingShutterScanlines> {
+        match self {
+            Self::Rows => Some(RollingShutterScanlines::Rows),
+            Self::Columns => Some(RollingShutterScanlines::Columns),
+            Self::Unknown => None,
+        }
+    }
+}
+
+impl From<RollingShutterScanlines> for RollingShutterScanlinesChoice {
+    fn from(setting: RollingShutterScanlines) -> Self {
+        match setting {
+            RollingShutterScanlines::Rows => Self::Rows,
+            RollingShutterScanlines::Columns => Self::Columns,
+        }
+    }
 }
 
 impl Default for BundleAdjustOptions {
     fn default() -> Self {
         Self {
             releases: Vec::new(),
+            rolling_shutter_scanlines: Vec::new(),
             schedule: DEFAULT_SCHEDULE.to_vec(),
             max_iters: DEFAULT_MAX_ITERS,
             min_track: DEFAULT_MIN_TRACK,
@@ -202,6 +284,30 @@ pub enum BundleAdjustError {
         camera: usize,
         /// Its model's name.
         camera_model: &'static str,
+    },
+    /// A camera in the solve was asked to release each image's radial
+    /// correction, and it is not an `SFMTOOL_PINHOLE` whose spline domain end
+    /// is positive and finite.
+    ImageRadialBsplineNotReleasable {
+        /// The camera's index among the reconstruction's cameras.
+        camera: usize,
+        /// Its model's name.
+        camera_model: &'static str,
+    },
+    /// A camera in the solve was asked to release each image's
+    /// rolling-shutter rates, and it is not an `SFMTOOL_PINHOLE`.
+    ImageRollingShutterNotReleasable {
+        /// The camera's index among the reconstruction's cameras.
+        camera: usize,
+        /// Its model's name.
+        camera_model: &'static str,
+    },
+    /// The scanlines list's length is neither zero nor the camera count.
+    ScanlinesCount {
+        /// The entries given.
+        choices: usize,
+        /// The cameras the image set holds.
+        cameras: usize,
     },
     /// A camera in the solve was asked to release its distortion without its
     /// focal.
@@ -285,6 +391,29 @@ impl std::fmt::Display for BundleAdjustError {
                  the adjustment's focal-scale column is exact for SIMPLE_PINHOLE, \
                  EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE and \
                  SFMTOOL_PINHOLE"
+            ),
+            BundleAdjustError::ImageRadialBsplineNotReleasable {
+                camera,
+                camera_model,
+            } => write!(
+                f,
+                "the radial correction cannot be released per image on camera {camera}, a \
+                 {camera_model}; it is released on an SFMTOOL_PINHOLE with a positive, finite \
+                 bspline_rho_max and a spline that is empty or has at least two coefficients"
+            ),
+            BundleAdjustError::ImageRollingShutterNotReleasable {
+                camera,
+                camera_model,
+            } => write!(
+                f,
+                "the rolling shutter cannot be released per image on camera {camera}, a \
+                 {camera_model}; it is released on SFMTOOL_PINHOLE alone"
+            ),
+            BundleAdjustError::ScanlinesCount { choices, cameras } => write!(
+                f,
+                "the rolling-shutter scanlines list has {choices} entries and the \
+                 reconstruction has {cameras} camera(s); give one entry per camera, or none \
+                 for every camera's stored setting"
             ),
             BundleAdjustError::DistortionWithoutFocal { camera } => write!(
                 f,
@@ -397,6 +526,17 @@ pub struct CameraAdjustment {
     pub image_focal_released: bool,
     /// Whether each image's principal-point offset was released.
     pub image_principal_point_released: bool,
+    /// Whether each image's radial correction was released.
+    pub image_radial_bspline_released: bool,
+    /// Whether each image's rolling-shutter rates were released.
+    pub image_rolling_shutter_released: bool,
+    /// The scanlines the rates were solved on, which the camera now stores;
+    /// `None` when they were not released.
+    pub rolling_shutter_scanlines: Option<RollingShutterScanlines>,
+    /// The comparison that chose [`Self::rolling_shutter_scanlines`] under
+    /// [`RollingShutterScanlinesChoice::Unknown`]; `None` for a camera whose
+    /// scanlines were given or stored.
+    pub scanlines_race: Option<ScanlinesRace>,
     /// Its principal point before the solve, `[cx, cy]` in pixels.
     pub principal_point_before: [f64; 2],
     /// Its principal point after the solve, which is the one before it unless
@@ -412,6 +552,31 @@ pub struct CameraAdjustment {
     /// What the per-image release did to the camera's images; `None` when the
     /// camera released no per-image parameter.
     pub image_adjustments: Option<ImageAdjustmentSpread>,
+}
+
+/// The two solves that chose one camera's scanlines under
+/// [`RollingShutterScanlinesChoice::Unknown`], one with each setting, and the
+/// cost each ended at. The lower cost won; a tie goes to rows.
+///
+/// The costs are the robust cost the kernel's damping ladder compares (the
+/// data, the per-image prior with its mean holds, and the spline penalty), in
+/// units of `σ_n²`. Each solve's final round trims from its own state, so the
+/// data are summed over the observations both final rounds kept, each at its
+/// own final state, and both costs are divided by one noise level `σ_n`
+/// measured over the two solves' residuals there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScanlinesRace {
+    /// The cost of the solve with rows.
+    pub rows_cost: f64,
+    /// The cost of the solve with columns.
+    pub columns_cost: f64,
+    /// The observations the two costs were summed over.
+    pub observations: usize,
+    /// The pooled noise level `σ_n` the costs are in units of, px.
+    pub sigma_px: f64,
+    /// Whether either solve was stopped before the end of its schedule.
+    /// Always `false`: both run their whole schedule.
+    pub stopped_early: bool,
 }
 
 /// How a camera's images' intrinsic adjustments ended after a per-image
@@ -438,9 +603,20 @@ pub struct ImageAdjustmentSpread {
     /// The standard deviation of their principal-point offsets, `[x, y]` in
     /// pixels.
     pub principal_point_std: [f64; 2],
+    /// The mean of their radial corrections `[e_0, e_1]`, in units of `ρ`;
+    /// zero to rounding once the mean has moved into the camera's spline.
+    pub radial_bspline_mean: [f64; 2],
+    /// The standard deviation of their radial corrections, per coefficient.
+    pub radial_bspline_std: [f64; 2],
+    /// The mean of their rolling-shutter rates `[ωx, ωy, ωz]`, in radians per
+    /// short side of readout: held at its start through the solve.
+    pub rolling_shutter_mean: [f64; 3],
+    /// The standard deviation of their rolling-shutter rates, per component.
+    pub rolling_shutter_std: [f64; 3],
     /// The widths the final round ran under: the focal scale's as a fraction,
-    /// the principal point's in the short-side unit. `NaN` for a parameter not
-    /// released per image.
+    /// the principal point's in the short-side unit, the radial correction's
+    /// in units of `ρ` and the rates' in radians per short side. `NaN` for a
+    /// parameter not released per image.
     pub prior: ImagePriorWidths,
     /// Whether the widths were derived from the solve, rather than fixed.
     pub prior_derived: bool,
@@ -462,7 +638,9 @@ pub struct NearPrior {
     /// Which of its adjustments.
     pub parameter: ImageAdjustmentParameter,
     /// How far from the mean, in prior widths: `|t − t̄|/σ` for the focal
-    /// scale, with `t = ln(1 + s)`, `‖a − ā‖/σ` for the principal-point offset.
+    /// scale, with `t = ln(1 + s)`, `‖a − ā‖/σ` for the principal-point
+    /// offset, `‖e − ē‖/σ` for the radial correction and `‖ω − ω̄‖/σ` for the
+    /// rolling-shutter rates.
     pub widths: f64,
 }
 
@@ -473,15 +651,22 @@ pub enum ImageAdjustmentParameter {
     Focal,
     /// The principal-point offset.
     PrincipalPoint,
+    /// The radial correction.
+    RadialBspline,
+    /// The rolling-shutter rates.
+    RollingShutter,
 }
 
 impl ImageAdjustmentParameter {
-    /// The parameter's name on every surface: `"focal"` or
-    /// `"principal_point"`, the words a camera's `per_image_adjustments` list.
+    /// The parameter's name on every surface: `"focal"`,
+    /// `"principal_point"`, `"radial_bspline"` or `"rolling_shutter"`, the
+    /// words a camera's `per_image_adjustments` list.
     pub fn name(self) -> &'static str {
         match self {
             ImageAdjustmentParameter::Focal => "focal",
             ImageAdjustmentParameter::PrincipalPoint => "principal_point",
+            ImageAdjustmentParameter::RadialBspline => "radial_bspline",
+            ImageAdjustmentParameter::RollingShutter => "rolling_shutter",
         }
     }
 }
@@ -490,10 +675,17 @@ impl ImageAdjustmentParameter {
 ///
 /// Every posed image's pose, every live point's position and, as
 /// [`BundleAdjustOptions::releases`] states camera by camera, each camera's
-/// focal, its `k1` or radial spline, and its principal point are refined
-/// together
+/// focal, its `k1` or radial spline, its principal point and each of its posed
+/// images' intrinsic adjustment are refined together
 /// against every observation that carries a pixel, by the staged robust solve in
-/// [`crate::geometry::bundle_adjust()`]. The posed images may be taken through
+/// [`crate::geometry::bundle_adjust()`]. A camera that releases its images'
+/// rolling-shutter rates solves them on the scanlines
+/// [`BundleAdjustOptions::rolling_shutter_scanlines`] chooses; where they are
+/// [`RollingShutterScanlinesChoice::Unknown`], the solve runs once with rows and
+/// once with columns and keeps the lower cost, one camera at a time in camera
+/// index order, each race starting from the previous winner's state, and the
+/// setting kept is written into the camera
+/// ([`CameraAdjustment::scanlines_race`]). The posed images may be taken through
 /// any number of the image set's cameras; each keeps its own lens in the solve, and a
 /// camera no posed image uses is not in it and comes back as it went in. A free
 /// point goes in as the position or the direction it is and, under the default
@@ -522,7 +714,8 @@ impl ImageAdjustmentParameter {
 /// `progress` is where this call names its four stages (gathering the kernel's
 /// arrays, the residuals it starts from, the solve, writing the answer back),
 /// says how big the problem is, and passes on the rounds and iterations the
-/// kernel reports underneath. It is also how the call is asked to stop: a
+/// kernel reports underneath; a race splits the solve into one phase per
+/// solve, `solve with rows` and `solve with columns`, and says the two costs. It is also how the call is asked to stop: a
 /// cancelled adjustment returns [`BundleAdjustError::Cancelled`] and writes
 /// nothing, because a half-converged state is not an answer anybody asked for.
 /// Pass `&Progress::none()` to report nothing and never stop, which is one
@@ -606,6 +799,14 @@ pub fn bundle_adjust(
             cameras: camera_count,
         });
     }
+    if !options.rolling_shutter_scanlines.is_empty()
+        && options.rolling_shutter_scanlines.len() != camera_count
+    {
+        return Err(BundleAdjustError::ScanlinesCount {
+            choices: options.rolling_shutter_scanlines.len(),
+            cameras: camera_count,
+        });
+    }
     let releases: Vec<CameraRelease> = used
         .iter()
         .map(|&c| {
@@ -641,20 +842,25 @@ pub fn bundle_adjust(
                 camera_model: camera.model_name(),
             });
         }
+        if release.image_radial_bspline && !image_radial_bspline_is_releasable(camera) {
+            return Err(BundleAdjustError::ImageRadialBsplineNotReleasable {
+                camera: camera_index,
+                camera_model: camera.model_name(),
+            });
+        }
+        if release.image_rolling_shutter && !image_rolling_shutter_is_releasable(camera) {
+            return Err(BundleAdjustError::ImageRollingShutterNotReleasable {
+                camera: camera_index,
+                camera_model: camera.model_name(),
+            });
+        }
     }
-    // Every kernel flag on, and each camera's own release narrowing them: the
-    // checks above leave only releases its model admits, so the kernel frees
-    // exactly what the report below says it did.
-    let image_adjustments: Vec<IntrinsicAdjustment> = posed
-        .iter()
-        .map(|&i| image_set.images[i].intrinsic_adjustment)
-        .collect();
-    let releases_image = releases
-        .iter()
-        .any(|r| r.image_focal || r.image_principal_point);
-    // Each solved camera's scanlines setting, which its images' held
-    // rolling-shutter rates are read on.
-    let scanlines: Vec<_> = used
+
+    // Each solved camera's stored scanlines setting, which its images' held
+    // rolling-shutter rates are read on, and, for a camera that releases its
+    // rates, the choice of the scanlines they are solved on: the caller's, or
+    // the stored setting, or `Unknown` where there is none.
+    let stored_scanlines: Vec<Option<RollingShutterScanlines>> = used
         .iter()
         .map(|&c| {
             image_set
@@ -662,17 +868,53 @@ pub fn bundle_adjust(
                 .rolling_shutter_scanlines
         })
         .collect();
-    let ba_cameras = BaCameras {
-        cameras: &source_cameras,
-        image_camera: image_camera.as_slice().into(),
-        releases: Some(&releases),
-        image_adjustments: (releases_image || image_adjustments.iter().any(|a| !a.is_zero()))
-            .then(|| image_adjustments.as_slice().into()),
-        rolling_shutter_scanlines: scanlines
-            .iter()
-            .any(Option::is_some)
-            .then_some(scanlines.as_slice()),
-    };
+    let choices: Vec<Option<RollingShutterScanlinesChoice>> = used
+        .iter()
+        .zip(&releases)
+        .zip(&stored_scanlines)
+        .map(|((&c, release), stored)| {
+            release.image_rolling_shutter.then(|| {
+                options
+                    .rolling_shutter_scanlines
+                    .get(c as usize)
+                    .copied()
+                    .flatten()
+                    .unwrap_or_else(|| {
+                        stored.map_or(RollingShutterScanlinesChoice::Unknown, Into::into)
+                    })
+            })
+        })
+        .collect();
+    // The setting each camera's rates are read on before any race: the chosen
+    // one, none for a camera whose choice is `Unknown` (its rates are held at
+    // zero until its race), and the stored one for a camera that does not
+    // release its rates.
+    let mut scanlines: Vec<Option<RollingShutterScanlines>> = choices
+        .iter()
+        .zip(&stored_scanlines)
+        .map(|(choice, &stored)| choice.map_or(stored, RollingShutterScanlinesChoice::setting))
+        .collect();
+    // The cameras whose scanlines a race decides, in camera index order.
+    let races: Vec<usize> = (0..used.len())
+        .filter(|&j| choices[j] == Some(RollingShutterScanlinesChoice::Unknown))
+        .collect();
+    // A camera whose rates are solved on another setting than they were stored
+    // on starts them at zero: a rate read on rows means something else on
+    // columns. A raced camera starts at zero too, since both of its solves
+    // start from one state.
+    let fresh_rates: Vec<bool> = (0..used.len())
+        .map(|j| choices[j].is_some() && scanlines[j] != stored_scanlines[j])
+        .collect();
+    // Each posed image's intrinsic adjustment goes in beside the cameras.
+    let mut image_adjustments: Vec<IntrinsicAdjustment> = posed
+        .iter()
+        .map(|&i| image_set.images[i].intrinsic_adjustment)
+        .collect();
+    for (slot, adjustment) in image_adjustments.iter_mut().enumerate() {
+        if fresh_rates[image_camera[slot] as usize] {
+            adjustment.rolling_shutter = [0.0; 3];
+        }
+    }
 
     // The solve is all of the time; the other three walk arrays the size of the
     // reconstruction once. An estimate, as every set of weights is.
@@ -680,27 +922,31 @@ pub fn bundle_adjust(
 
     let gather = p_gather.phase("gather arrays");
     // ── The arrays the kernel takes ────────────────────────────────────────
-    let mut quats: Vec<UnitQuaternion<f64>> = posed
-        .iter()
-        .map(|&i| image_set.images[i].quaternion_wxyz)
-        .collect();
-    let mut trans: Vec<Vector3<f64>> = posed
-        .iter()
-        .map(|&i| image_set.images[i].translation_xyz)
-        .collect();
     let n_pt = recon.point_set.points.len();
-    let mut points: Vec<[f64; 3]> = recon
-        .point_set
-        .points
-        .iter()
-        .map(|p| [p.position.x, p.position.y, p.position.z])
-        .collect();
-    let is_dir: Vec<bool> = recon
-        .point_set
-        .points
-        .iter()
-        .map(|p| p.is_at_infinity())
-        .collect();
+    let start = SolveState {
+        quats: posed
+            .iter()
+            .map(|&i| image_set.images[i].quaternion_wxyz)
+            .collect(),
+        trans: posed
+            .iter()
+            .map(|&i| image_set.images[i].translation_xyz)
+            .collect(),
+        points: recon
+            .point_set
+            .points
+            .iter()
+            .map(|p| [p.position.x, p.position.y, p.position.z])
+            .collect(),
+        is_dir: recon
+            .point_set
+            .points
+            .iter()
+            .map(|p| p.is_at_infinity())
+            .collect(),
+        cameras: source_cameras.clone(),
+        adjustments: image_adjustments,
+    };
 
     let mut uv: Vec<[f64; 2]> = Vec::with_capacity(recon.point_set.tracks.len());
     let mut obs_img: Vec<u32> = Vec::with_capacity(recon.point_set.tracks.len());
@@ -763,6 +1009,14 @@ pub fn bundle_adjust(
         }
         None => None,
     };
+    let problem = Problem {
+        image_camera: &image_camera,
+        uv: &uv,
+        obs_img: &obs_img,
+        obs_pt: &obs_pt,
+        constraints: constraints.as_ref(),
+        options,
+    };
 
     drop(gather);
     progress_info!(
@@ -773,41 +1027,25 @@ pub fn bundle_adjust(
         uv.len()
     );
 
-    // ── The two solves ────────────────────────────────────────────────────
+    // ── The solves ────────────────────────────────────────────────────────
     //
     // The first is the kernel over an **empty** schedule, which runs no round
     // and reports the residuals at the state it was handed: the "before" median
     // is then measured by the same projection the "after" one is, rather than by
-    // a second spelling of it here.
+    // a second spelling of it here. It reads every image as the value holds it.
     let residuals = p_before.phase("residuals before");
-    let before = crate::geometry::bundle_adjust::bundle_adjust(
-        &ba_cameras,
-        &mut quats.clone(),
-        &mut trans.clone(),
-        &mut points.clone(),
-        &uv,
-        &obs_img,
-        &obs_pt,
-        Some(&is_dir),
-        constraints.as_ref(),
-        // An empty schedule runs no round and decides nothing; the policy is
-        // stated off so that this call only measures.
-        FreePointPolicy::NO_CROSS,
-        None,
-        DEFAULT_PROTECTED_LOSS_SCALE,
+    let original_adjustments: Vec<IntrinsicAdjustment> = posed
+        .iter()
+        .map(|&i| image_set.images[i].intrinsic_adjustment)
+        .collect();
+    let (_, before) = problem.run(
+        &SolveState {
+            adjustments: original_adjustments,
+            ..start.clone()
+        },
+        &releases,
+        &stored_scanlines,
         false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        None,
-        &[],
-        options.max_iters,
-        options.min_track,
-        options.min_obs,
         &residuals,
     );
     let (median_before, measured) = median_finite(&before.residual_norms);
@@ -818,40 +1056,100 @@ pub fn bundle_adjust(
     drop(residuals);
 
     let solve = p_solve.phase("solve");
-    let solved = crate::geometry::bundle_adjust::bundle_adjust(
-        &ba_cameras,
-        &mut quats,
-        &mut trans,
-        &mut points,
-        &uv,
-        &obs_img,
-        &obs_pt,
-        Some(&is_dir),
-        constraints.as_ref(),
-        options.free_points,
-        None,
-        DEFAULT_PROTECTED_LOSS_SCALE,
-        true,
-        // One request, both kernel rungs: `k1` and the spline live on different
-        // models, and the kernel decides each per camera.
-        true,
-        true,
-        // The principal point and the per-image releases, which each camera's
-        // release narrows like the rest.
-        true,
-        true,
-        true,
-        // Each image's radial correction and rolling-shutter rates, which
-        // this adjustment holds as they are read.
-        false,
-        false,
-        Some(&options.image_prior),
-        &options.schedule,
-        options.max_iters,
-        options.min_track,
-        options.min_obs,
-        &solve,
-    );
+    // The radial correction each camera's re-centring moved into its spline,
+    // summed over the solves the answer descends from.
+    let mut moved_radial = vec![[0.0f64; 2]; used.len()];
+    let mut scanlines_races: Vec<Option<ScanlinesRace>> = vec![None; used.len()];
+    let (state, solved) = if races.is_empty() {
+        problem.run(&start, &releases, &scanlines, true, &solve)
+    } else {
+        // One race per camera whose scanlines are unknown, in camera index
+        // order: two solves from one state, each with the raced camera's rates
+        // on one setting, the cameras not yet raced holding theirs at zero.
+        // The winner's state is where the next race starts, and the last
+        // winner is the answer.
+        let parts: Vec<Progress<'_>> = solve.split_evenly(2 * races.len()).collect();
+        let mut state = start;
+        let mut last: Option<BundleAdjustment> = None;
+        for (r, &j) in races.iter().enumerate() {
+            let narrowed: Vec<CameraRelease> = releases
+                .iter()
+                .enumerate()
+                .map(|(k, release)| CameraRelease {
+                    image_rolling_shutter: release.image_rolling_shutter
+                        && !races[r + 1..].contains(&k),
+                    ..*release
+                })
+                .collect();
+            let mut outcomes = Vec::with_capacity(2);
+            for (part, setting) in parts[2 * r..2 * r + 2].iter().zip([
+                RollingShutterScanlines::Rows,
+                RollingShutterScanlines::Columns,
+            ]) {
+                let mut settings = scanlines.clone();
+                settings[j] = Some(setting);
+                let phase = part.phase(match setting {
+                    RollingShutterScanlines::Rows => "solve with rows",
+                    RollingShutterScanlines::Columns => "solve with columns",
+                });
+                let (next, adjustment) = problem.run(&state, &narrowed, &settings, true, &phase);
+                drop(phase);
+                if progress.is_cancelled() {
+                    return Err(BundleAdjustError::Cancelled);
+                }
+                outcomes.push((setting, next, adjustment));
+            }
+            let (columns, rows) = (outcomes.pop().unwrap(), outcomes.pop().unwrap());
+            let race = compare_scanlines(
+                &rows.2,
+                &columns.2,
+                &image_camera,
+                &obs_img,
+                &obs_pt,
+                &state.cameras,
+            )
+            .ok_or(BundleAdjustError::Degenerate {
+                observations: uv.len(),
+                min_obs: options.min_obs,
+            })?;
+            let winner = if race.columns_cost < race.rows_cost {
+                columns
+            } else {
+                rows
+            };
+            progress_info!(
+                solve,
+                "camera {}: cost {:.1} with rows and {:.1} with columns over {} observations; \
+                 solved on {}",
+                used[j],
+                race.rows_cost,
+                race.columns_cost,
+                race.observations,
+                winner.0.as_str()
+            );
+            scanlines[j] = Some(winner.0);
+            scanlines_races[j] = Some(race);
+            if r + 1 < races.len() {
+                for (total, m) in moved_radial.iter_mut().zip(&winner.2.moved_radial_bspline) {
+                    total[0] += m[0];
+                    total[1] += m[1];
+                }
+            }
+            state = winner.1;
+            last = Some(winner.2);
+        }
+        (state, last.expect("at least one race"))
+    };
+    for (total, m) in moved_radial.iter_mut().zip(&solved.moved_radial_bspline) {
+        total[0] += m[0];
+        total[1] += m[1];
+    }
+    let SolveState {
+        quats,
+        trans,
+        points,
+        ..
+    } = state;
     let (median_after, measured) = median_finite(&solved.residual_norms);
     progress_info!(
         solve,
@@ -891,10 +1189,11 @@ pub fn bundle_adjust(
         out.image_set.cameras[c as usize] = solved_camera.clone();
     }
     // A camera with a per-image release: each posed image takes its solved
-    // adjustment, each unposed image of the camera the shift its shared value
+    // adjustment, each unposed image of the camera the shift its shared values
     // took, so that its intrinsics are as they were, and the camera records the
-    // released parameters as varying per image.
-    if releases_image {
+    // released parameters as varying per image, and the scanlines its rates
+    // were solved on.
+    if releases.iter().any(releases_per_image) {
         write_back_image_adjustments(
             &mut out.image_set,
             &posed,
@@ -903,6 +1202,9 @@ pub fn bundle_adjust(
             &source_cameras,
             &solved.cameras,
             &solved.image_adjustments,
+            &moved_radial,
+            &scanlines,
+            &stored_scanlines,
         );
     }
     // The outermost observation of each camera's images, under the camera the
@@ -923,6 +1225,14 @@ pub fn bundle_adjust(
                 || releases[j].image_principal_point,
             image_focal_released: releases[j].image_focal,
             image_principal_point_released: releases[j].image_principal_point,
+            image_radial_bspline_released: releases[j].image_radial_bspline,
+            image_rolling_shutter_released: releases[j].image_rolling_shutter,
+            rolling_shutter_scanlines: if releases[j].image_rolling_shutter {
+                scanlines[j]
+            } else {
+                None
+            },
+            scanlines_race: scanlines_races[j],
             principal_point_before: source_cameras[j].principal_point().into(),
             principal_point_after: solved.cameras[j].principal_point().into(),
             outermost_observed: outermost[j].observed,
@@ -1001,14 +1311,206 @@ pub fn bundle_adjust(
     Ok((out, report))
 }
 
+/// Whether `release` releases any per-image parameter.
+fn releases_per_image(release: &CameraRelease) -> bool {
+    release.image_focal
+        || release.image_principal_point
+        || release.image_radial_bspline
+        || release.image_rolling_shutter
+}
+
+/// The state one solve starts from and the next one starts from after it: the
+/// posed images' poses, the points and their representations, the solved
+/// cameras and the posed images' intrinsic adjustments, each in the kernel's
+/// order.
+#[derive(Clone)]
+struct SolveState {
+    quats: Vec<UnitQuaternion<f64>>,
+    trans: Vec<Vector3<f64>>,
+    points: Vec<[f64; 3]>,
+    is_dir: Vec<bool>,
+    cameras: Vec<CameraIntrinsics>,
+    adjustments: Vec<IntrinsicAdjustment>,
+}
+
+/// What every solve of one adjustment shares: the observations, the image to
+/// camera column, the point constraints and the caller's options.
+struct Problem<'a> {
+    image_camera: &'a [u32],
+    uv: &'a [[f64; 2]],
+    obs_img: &'a [u32],
+    obs_pt: &'a [u32],
+    constraints: Option<&'a PointConstraints>,
+    options: &'a BundleAdjustOptions,
+}
+
+impl Problem<'_> {
+    /// Run the kernel from `state` with each camera's `releases` and the
+    /// `scanlines` its images' rates are read on, and return the state it
+    /// ended at with its result. With `solve` off it runs an empty schedule
+    /// with every release flag off and the crossing off, which only measures
+    /// the residuals at `state`.
+    fn run(
+        &self,
+        state: &SolveState,
+        releases: &[CameraRelease],
+        scanlines: &[Option<RollingShutterScanlines>],
+        solve: bool,
+        progress: &Progress<'_>,
+    ) -> (SolveState, BundleAdjustment) {
+        let options = self.options;
+        let ba_cameras = BaCameras {
+            cameras: &state.cameras,
+            image_camera: self.image_camera.into(),
+            releases: Some(releases),
+            image_adjustments: (releases.iter().any(releases_per_image)
+                || state.adjustments.iter().any(|a| !a.is_zero()))
+            .then(|| state.adjustments.as_slice().into()),
+            rolling_shutter_scanlines: scanlines.iter().any(Option::is_some).then_some(scanlines),
+        };
+        let mut next = state.clone();
+        let result = crate::geometry::bundle_adjust::bundle_adjust(
+            &ba_cameras,
+            &mut next.quats,
+            &mut next.trans,
+            &mut next.points,
+            self.uv,
+            self.obs_img,
+            self.obs_pt,
+            Some(&state.is_dir),
+            self.constraints,
+            // An empty schedule runs no round and decides nothing; the policy
+            // is stated off so that the measuring run only measures.
+            if solve {
+                options.free_points
+            } else {
+                FreePointPolicy::NO_CROSS
+            },
+            None,
+            DEFAULT_PROTECTED_LOSS_SCALE,
+            // Every kernel flag on, and each camera's own release narrowing
+            // them: the checks in `bundle_adjust` leave only releases its
+            // model admits, so the kernel frees exactly what the report says
+            // it did. `k1` and the spline live on different models, and the
+            // kernel decides each per camera.
+            solve,
+            solve,
+            solve,
+            solve,
+            solve,
+            solve,
+            solve,
+            solve,
+            solve.then_some(&options.image_prior),
+            if solve { &options.schedule } else { &[] },
+            options.max_iters,
+            options.min_track,
+            options.min_obs,
+            progress,
+        );
+        next.is_dir.clone_from(&result.point_at_infinity);
+        next.cameras.clone_from(&result.cameras);
+        next.adjustments.clone_from(&result.image_adjustments);
+        (next, result)
+    }
+}
+
+/// The comparison of the solve with rows and the solve with columns of one
+/// race, from their final rounds: the cost the damping ladder compares (the
+/// robust data cost, the prior with its mean holds and the spline penalty), in
+/// units of one pooled `σ_n²`, the data summed over the observations both
+/// final rounds kept, each at its own final state. `σ_n` is the gated RMS of
+/// both solves' residuals of finite points there, as the kernel measures a
+/// round's noise. A solve that ran no round or exited degenerate costs `+∞`,
+/// and the other is measured over its own kept observations alone; `None` when
+/// both did.
+fn compare_scanlines(
+    rows: &BundleAdjustment,
+    columns: &BundleAdjustment,
+    image_camera: &[u32],
+    obs_img: &[u32],
+    obs_pt: &[u32],
+    cameras: &[CameraIntrinsics],
+) -> Option<ScanlinesRace> {
+    let solves = [rows, columns];
+    let finals = [rows.final_round.as_ref(), columns.final_round.as_ref()];
+    let live: Vec<usize> = (0..2).filter(|&s| finals[s].is_some()).collect();
+    if live.is_empty() {
+        return None;
+    }
+    // Each observation's place among each solve's kept observations.
+    let n_obs = obs_img.len();
+    let mut place = [vec![usize::MAX; n_obs], vec![usize::MAX; n_obs]];
+    for (s, f) in finals.iter().enumerate() {
+        if let Some(f) = f {
+            for (q, &k) in f.kept.iter().enumerate() {
+                place[s][k] = q;
+            }
+        }
+    }
+    let common: Vec<usize> = (0..n_obs)
+        .filter(|&k| live.iter().all(|&s| place[s][k] != usize::MAX))
+        .collect();
+    let mut pooled = Vec::with_capacity(2 * common.len());
+    for &k in &common {
+        for &s in &live {
+            if solves[s].point_at_infinity[obs_pt[k] as usize] {
+                continue;
+            }
+            let f = finals[s].expect("a live solve");
+            if let Some(residual) = f.residuals[place[s][k]] {
+                pooled.push(ObservationResidual {
+                    camera: image_camera[obs_img[k] as usize] as usize,
+                    residual,
+                });
+            }
+        }
+    }
+    let resolution = cameras
+        .iter()
+        .map(camera_keypoint_resolution_px)
+        .fold(f64::from(f32::EPSILON), f64::max);
+    let loss_scale = finals[live[0]].expect("a live solve").loss_scale;
+    let sigma = gated_reprojection_noise(&pooled, cameras.len(), OUTLIER_GATE)
+        .sigma_px
+        .unwrap_or(loss_scale)
+        .max(resolution);
+    let s2n = sigma * sigma;
+    let cost = |s: usize| -> f64 {
+        let Some(f) = finals[s] else {
+            return f64::INFINITY;
+        };
+        let s2 = f.loss_scale * f.loss_scale;
+        let data: f64 = common
+            .iter()
+            .map(|&k| match f.residuals[place[s][k]] {
+                Some([dx, dy]) => s2 * (rho(dx * dx / s2) + rho(dy * dy / s2)),
+                None => s2 * rho(INVALID_RESIDUAL * INVALID_RESIDUAL / s2),
+            })
+            .sum();
+        (data + f.spline_penalty) / s2n + f.prior
+    };
+    Some(ScanlinesRace {
+        rows_cost: cost(0),
+        columns_cost: cost(1),
+        observations: common.len(),
+        sigma_px: sigma,
+        stopped_early: false,
+    })
+}
+
 /// Write a per-image release's answer into `image_set`, which already holds the
 /// solved cameras: each posed image of a camera that released a per-image
-/// parameter takes its solved adjustment from `solved` (one per posed image, in
-/// `posed` order); each unposed image of such a camera takes the shift the
-/// re-centring gave its camera's shared value, so that its intrinsics are the
-/// ones it had; and the camera's `per_image_adjustments` gains the released
-/// parameters. `used`, `releases`, `before` and `after` are per camera of the
-/// solve.
+/// parameter takes its solved adjustment of the released kinds from `solved`
+/// (one per posed image, in `posed` order); each unposed image of such a camera
+/// takes the shift the re-centring gave its camera's shared values, so that
+/// its intrinsics are the ones it had; and the camera's `per_image_adjustments`
+/// gains the released parameters and, where its rates were released, the
+/// scanlines they were solved on. `used`, `releases`, `before`, `after`,
+/// `moved_radial` (the radial correction moved into each camera's spline),
+/// `scanlines` (each camera's setting in the solve) and `stored` (each one's
+/// stored setting) are per camera of the solve.
+#[allow(clippy::too_many_arguments)]
 fn write_back_image_adjustments(
     image_set: &mut ImageSet,
     posed: &[usize],
@@ -1017,6 +1519,9 @@ fn write_back_image_adjustments(
     before: &[CameraIntrinsics],
     after: &[CameraIntrinsics],
     solved: &[IntrinsicAdjustment],
+    moved_radial: &[[f64; 2]],
+    scanlines: &[Option<RollingShutterScanlines>],
+    stored: &[Option<RollingShutterScanlines>],
 ) {
     let camera_count = image_set.cameras.len();
     if image_set.per_image_adjustments.len() < camera_count {
@@ -1039,14 +1544,28 @@ fn write_back_image_adjustments(
         if release.image_principal_point {
             adjustment.principal_point = solved[slot].principal_point;
         }
+        if release.image_radial_bspline {
+            adjustment.radial_bspline = solved[slot].radial_bspline;
+        }
+        if release.image_rolling_shutter {
+            adjustment.rolling_shutter = solved[slot].rolling_shutter;
+        }
     }
     for (j, (&c, release)) in used.iter().zip(releases).enumerate() {
-        if !(release.image_focal || release.image_principal_point) {
+        if !releases_per_image(release) {
             continue;
         }
         let flags = &mut image_set.per_image_adjustments[c as usize];
         flags.focal |= release.image_focal;
         flags.principal_point |= release.image_principal_point;
+        flags.radial_bspline |= release.image_radial_bspline;
+        flags.rolling_shutter |= release.image_rolling_shutter;
+        // An unposed image's rates were read on the stored setting, and mean
+        // something else on another one.
+        let rates_reread = release.image_rolling_shutter && scanlines[j] != stored[j];
+        if release.image_rolling_shutter {
+            flags.rolling_shutter_scanlines = scanlines[j];
+        }
         let m = f64::from(before[j].width.min(before[j].height));
         let (f_before, f_after) = (before[j].focal_lengths().0, after[j].focal_lengths().0);
         let (pp_before, pp_after) = (before[j].principal_point(), after[j].principal_point());
@@ -1061,6 +1580,13 @@ fn write_back_image_adjustments(
             if release.image_principal_point {
                 adjustment.principal_point[0] -= (pp_after.0 - pp_before.0) / m;
                 adjustment.principal_point[1] -= (pp_after.1 - pp_before.1) / m;
+            }
+            if release.image_radial_bspline {
+                adjustment.radial_bspline[0] -= moved_radial[j][0];
+                adjustment.radial_bspline[1] -= moved_radial[j][1];
+            }
+            if rates_reread {
+                adjustment.rolling_shutter = [0.0; 3];
             }
         }
     }
@@ -1102,29 +1628,48 @@ fn image_adjustment_spread(
     let (focal_mean, focal_std) = mean_std(&|a| a.focal.ln_1p());
     let (x_mean, x_std) = mean_std(&|a| a.principal_point[0]);
     let (y_mean, y_std) = mean_std(&|a| a.principal_point[1]);
+    let radial: [(f64, f64); 2] = std::array::from_fn(|k| mean_std(&|a| a.radial_bspline[k]));
+    let rates: [(f64, f64); 3] = std::array::from_fn(|k| mean_std(&|a| a.rolling_shutter[k]));
     let mut near_prior = Vec::new();
     for (&i, a) in images.iter().zip(&adjustments) {
-        if release.image_focal {
-            let widths = (a.focal.ln_1p() - focal_mean).abs() / prior.widths.focal;
-            if widths > 2.0 {
-                near_prior.push(NearPrior {
-                    image: i,
-                    parameter: ImageAdjustmentParameter::Focal,
-                    widths,
-                });
-            }
-        }
-        if release.image_principal_point {
-            let widths = (a.principal_point[0] - x_mean).hypot(a.principal_point[1] - y_mean)
-                / prior.widths.principal_point;
-            if widths > 2.0 {
-                near_prior.push(NearPrior {
-                    image: i,
-                    parameter: ImageAdjustmentParameter::PrincipalPoint,
-                    widths,
-                });
-            }
-        }
+        let mut push =
+            |on: bool, parameter: ImageAdjustmentParameter, distance: f64, width: f64| {
+                let widths = distance / width;
+                if on && widths > 2.0 {
+                    near_prior.push(NearPrior {
+                        image: i,
+                        parameter,
+                        widths,
+                    });
+                }
+            };
+        push(
+            release.image_focal,
+            ImageAdjustmentParameter::Focal,
+            (a.focal.ln_1p() - focal_mean).abs(),
+            prior.widths.focal,
+        );
+        push(
+            release.image_principal_point,
+            ImageAdjustmentParameter::PrincipalPoint,
+            (a.principal_point[0] - x_mean).hypot(a.principal_point[1] - y_mean),
+            prior.widths.principal_point,
+        );
+        push(
+            release.image_radial_bspline,
+            ImageAdjustmentParameter::RadialBspline,
+            (a.radial_bspline[0] - radial[0].0).hypot(a.radial_bspline[1] - radial[1].0),
+            prior.widths.radial_bspline,
+        );
+        push(
+            release.image_rolling_shutter,
+            ImageAdjustmentParameter::RollingShutter,
+            (0..3)
+                .map(|k| (a.rolling_shutter[k] - rates[k].0).powi(2))
+                .sum::<f64>()
+                .sqrt(),
+            prior.widths.rolling_shutter,
+        );
     }
     ImageAdjustmentSpread {
         images: images.len(),
@@ -1132,6 +1677,10 @@ fn image_adjustment_spread(
         focal_std,
         principal_point_mean: [x_mean * m, y_mean * m],
         principal_point_std: [x_std * m, y_std * m],
+        radial_bspline_mean: radial.map(|(mean, _)| mean),
+        radial_bspline_std: radial.map(|(_, std)| std),
+        rolling_shutter_mean: rates.map(|(mean, _)| mean),
+        rolling_shutter_std: rates.map(|(_, std)| std),
         prior: prior.widths,
         prior_derived: prior.derived,
         spread: prior.spread,
@@ -1181,6 +1730,22 @@ pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool {
         .is_some_and(|(bspline, d_max, _)| {
             bspline.len() >= MIN_BSPLINE_COEFFS && d_max.is_finite() && d_max > 0.0
         })
+}
+
+/// Whether each image's radial correction can be released on this camera: an
+/// `SFMTOOL_PINHOLE` whose spline domain end is positive and finite and whose
+/// spline is empty or has at least two coefficients, the camera the
+/// two-coefficient correction is defined on. A caller offering the release as
+/// a choice asks this first, as it asks [`focal_is_releasable`].
+pub fn image_radial_bspline_is_releasable(camera: &CameraIntrinsics) -> bool {
+    crate::geometry::bundle_adjust::image_radial_bspline_is_releasable(&camera.model)
+}
+
+/// Whether each image's rolling-shutter rates can be released on this camera:
+/// an `SFMTOOL_PINHOLE`, the one model whose image plane the rolling-shutter
+/// step is defined on.
+pub fn image_rolling_shutter_is_releasable(camera: &CameraIntrinsics) -> bool {
+    crate::geometry::bundle_adjust::image_rolling_shutter_is_releasable(&camera.model)
 }
 
 /// Resize point `p`'s patch frame so it keeps the angular size it had.

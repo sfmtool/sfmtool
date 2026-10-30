@@ -1274,6 +1274,10 @@ fn adjustment(
         outermost_observed: None,
         image_focal_released: false,
         image_principal_point_released: false,
+        image_radial_bspline_released: false,
+        image_rolling_shutter_released: false,
+        rolling_shutter_scanlines: None,
+        scanlines_race: None,
         image_adjustments: None,
     }
 }
@@ -2993,6 +2997,10 @@ fn per_image(
         focal_std: 0.004,
         principal_point_mean: [0.0, 0.0],
         principal_point_std: [19.0, 21.0],
+        radial_bspline_mean: [0.0; 2],
+        radial_bspline_std: [0.0; 2],
+        rolling_shutter_mean: [0.0; 3],
+        rolling_shutter_std: [0.0; 3],
         prior: ImagePriorWidths {
             focal: if image_focal { 0.0042 } else { f64::NAN },
             principal_point: if image_principal_point {
