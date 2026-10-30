@@ -497,7 +497,7 @@ pub fn bundle_adjust<'py>(
         opt_image_radial_bspline,
         opt_image_rolling_shutter,
     )?;
-    let prior = image_prior_from_py(image_prior.as_ref(), true)?;
+    let prior = image_prior_from_py(image_prior.as_ref())?;
 
     let n_img = quaternions_wxyz.shape()[0];
     let image_camera: Vec<u32> = to_contiguous!(image_camera).into_owned();
@@ -799,21 +799,16 @@ pub fn bundle_adjust<'py>(
 }
 
 /// One camera's prior widths as the dict every binding reports them in:
-/// ``focal`` and ``principal_point``, and with `corrections` also
-/// ``radial_bspline`` and ``rolling_shutter``, which only this kernel binding
-/// releases.
+/// ``focal``, ``principal_point``, ``radial_bspline`` and ``rolling_shutter``.
 pub(crate) fn widths_to_py<'py>(
     py: Python<'py>,
     widths: &ImagePriorWidths,
-    corrections: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("focal", widths.focal)?;
     d.set_item("principal_point", widths.principal_point)?;
-    if corrections {
-        d.set_item("radial_bspline", widths.radial_bspline)?;
-        d.set_item("rolling_shutter", widths.rolling_shutter)?;
-    }
+    d.set_item("radial_bspline", widths.radial_bspline)?;
+    d.set_item("rolling_shutter", widths.rolling_shutter)?;
     Ok(d)
 }
 
@@ -828,27 +823,21 @@ fn image_prior_to_py<'py>(
         return Ok(py.None().into_bound(py));
     };
     let d = PyDict::new(py);
-    d.set_item("widths", widths_to_py(py, &prior.widths, true)?)?;
+    d.set_item("widths", widths_to_py(py, &prior.widths)?)?;
     d.set_item("derived", prior.derived)?;
-    d.set_item("spread", widths_to_py(py, &prior.spread, true)?)?;
+    d.set_item("spread", widths_to_py(py, &prior.spread)?)?;
     Ok(d.into_any())
 }
 
 /// Read one widths dict of an ``image_prior`` argument, starting from
-/// `default`: ``focal`` and ``principal_point``, and with `corrections` also
-/// ``radial_bspline`` and ``rolling_shutter``, each a positive finite number,
-/// any other key refused.
+/// `default`: ``focal``, ``principal_point``, ``radial_bspline`` and
+/// ``rolling_shutter``, each a positive finite number, any other key refused.
 fn widths_from_py(
     what: &str,
     obj: &Bound<'_, PyAny>,
     default: ImagePriorWidths,
-    corrections: bool,
 ) -> PyResult<ImagePriorWidths> {
-    let keys = if corrections {
-        "'focal', 'principal_point', 'radial_bspline' and 'rolling_shutter'"
-    } else {
-        "'focal' and 'principal_point'"
-    };
+    let keys = "'focal', 'principal_point', 'radial_bspline' and 'rolling_shutter'";
     let dict = obj.cast::<PyDict>().map_err(|_| {
         pyo3::exceptions::PyValueError::new_err(format!(
             "image_prior['{what}'] must be a dict of {keys}"
@@ -865,8 +854,8 @@ fn widths_from_py(
         match key.as_str() {
             "focal" => widths.focal = width,
             "principal_point" => widths.principal_point = width,
-            "radial_bspline" if corrections => widths.radial_bspline = width,
-            "rolling_shutter" if corrections => widths.rolling_shutter = width,
+            "radial_bspline" => widths.radial_bspline = width,
+            "rolling_shutter" => widths.rolling_shutter = width,
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
                     "image_prior['{what}'] has no key '{key}'; its keys are {keys}"
@@ -886,12 +875,7 @@ fn widths_from_py(
 /// Read an ``image_prior`` argument: a dict of ``loose``, ``floor`` and
 /// ``fixed`` (each a widths dict, ``fixed`` also ``None``), each missing key at
 /// its default, any other key refused. `None` is the default options.
-/// `corrections` says whether the widths dicts take the radial correction's and
-/// the rolling-shutter rates' keys, which only this kernel binding releases.
-pub(crate) fn image_prior_from_py(
-    obj: Option<&Bound<'_, PyDict>>,
-    corrections: bool,
-) -> PyResult<ImagePriorOptions> {
+pub(crate) fn image_prior_from_py(obj: Option<&Bound<'_, PyDict>>) -> PyResult<ImagePriorOptions> {
     let mut options = ImagePriorOptions::default();
     let Some(dict) = obj else {
         return Ok(options);
@@ -899,13 +883,13 @@ pub(crate) fn image_prior_from_py(
     for (key, value) in dict.iter() {
         let key: String = key.extract()?;
         match key.as_str() {
-            "loose" => options.loose = widths_from_py("loose", &value, options.loose, corrections)?,
-            "floor" => options.floor = widths_from_py("floor", &value, options.floor, corrections)?,
+            "loose" => options.loose = widths_from_py("loose", &value, options.loose)?,
+            "floor" => options.floor = widths_from_py("floor", &value, options.floor)?,
             "fixed" => {
                 options.fixed = if value.is_none() {
                     None
                 } else {
-                    Some(widths_from_py("fixed", &value, options.loose, corrections)?)
+                    Some(widths_from_py("fixed", &value, options.loose)?)
                 }
             }
             _ => {

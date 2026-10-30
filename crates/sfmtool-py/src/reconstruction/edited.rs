@@ -27,6 +27,7 @@ use sfmtool_core::geometry::{
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::{
     bundle_adjust as core_bundle_adjust, BundleAdjustOptions, CameraRelease,
+    RollingShutterScanlinesChoice, ScanlinesRace,
 };
 use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointMap, PointRecord, RecordObservation, RowMap,
@@ -840,21 +841,43 @@ impl PyEditedReconstruction {
     ///         every camera the posed images use (default ``False``), on every
     ///         model. The camera's principal point takes its images' mean
     ///         after every round.
+    ///     opt_image_radial_bspline: Release each posed image's radial
+    ///         correction, on every camera the posed images use (default
+    ///         ``False``). Accepted on ``SFMTOOL_PINHOLE`` with a positive,
+    ///         finite ``bspline_rho_max``. The mean of the camera's images'
+    ///         corrections is held and moved into its spline after every round.
+    ///     opt_image_rolling_shutter: Release each posed image's
+    ///         rolling-shutter rates, on every camera the posed images use
+    ///         (default ``False``), on ``SFMTOOL_PINHOLE``. The mean of the
+    ///         camera's images' rates is held. The rates are solved on the
+    ///         camera's stored ``rolling_shutter_scanlines``, or, where it has
+    ///         none, once on rows and once on columns, keeping the solve with
+    ///         the lower cost; ``releases`` chooses per camera.
     ///     image_prior: The widths of the prior that holds each image's
     ///         adjustment toward its camera's mean: a dict of ``loose`` and
-    ///         ``floor`` (each a dict of ``focal`` and ``principal_point``,
-    ///         defaults 0.1 and 0.001; the focal's of the log focal scale
-    ///         ``log(1 + s)``, read as a fraction, and the principal point's in
-    ///         units of the image's short side) and ``fixed`` (such a dict, or
-    ///         ``None``, the default, to derive each camera's widths from the
-    ///         solve). The focal scale is held and re-centred as its log, so
-    ///         the camera's focal takes the geometric mean of its images'.
+    ///         ``floor`` (each a dict of ``focal``, ``principal_point``,
+    ///         ``radial_bspline`` and ``rolling_shutter``, defaults 0.1, 0.1,
+    ///         0.01 and 0.01 loose and 0.001, 0.001, 1e-4 and 1e-4 floor; the
+    ///         focal's of the log focal scale ``log(1 + s)``, read as a
+    ///         fraction, the principal point's in units of the image's short
+    ///         side, the radial correction's in units of the normalized radius
+    ///         and the rates' in radians per short side of readout) and
+    ///         ``fixed`` (such a dict, or ``None``, the default, to derive each
+    ///         camera's widths from the solve). The focal scale is held and
+    ///         re-centred as its log, so the camera's focal takes the geometric
+    ///         mean of its images'.
     ///     releases: One entry per camera of the image set, in camera index order,
     ///         each a dict ``{"focal": bool, "distortion": bool,
     ///         "principal_point": bool, "image_focal": bool,
-    ///         "image_principal_point": bool}`` (a missing key is ``False``).
-    ///         Overrides ``opt_f``, ``opt_distortion``, ``opt_pp``,
-    ///         ``opt_image_f`` and ``opt_image_pp``.
+    ///         "image_principal_point": bool, "image_radial_bspline": bool,
+    ///         "image_rolling_shutter": bool, "rolling_shutter_scanlines":
+    ///         str}`` (a missing flag is ``False``).
+    ///         ``rolling_shutter_scanlines`` is ``"ROWS"``, ``"COLUMNS"`` or
+    ///         ``"UNKNOWN"`` (solve with each, keep the lower cost); missing
+    ///         or ``None`` it is the camera's stored setting, or ``"UNKNOWN"``
+    ///         where it has none. Overrides ``opt_f``, ``opt_distortion``,
+    ///         ``opt_pp``, ``opt_image_f``, ``opt_image_pp``,
+    ///         ``opt_image_radial_bspline`` and ``opt_image_rolling_shutter``.
     ///         A camera with neither is held; an entry for a camera no posed
     ///         image uses is ignored. Every refusal ``opt_f`` and
     ///         ``opt_distortion`` raise applies to each entry and names the
@@ -886,18 +909,30 @@ impl PyEditedReconstruction {
     ///     ``outermost_observed``, the camera's outermost
     ///     observation under the solved camera (a dict of ``radius_px``,
     ///     ``theta_deg``, ``image`` and ``xy``, or ``None``),
-    ///     ``image_focal_released``, ``image_principal_point_released`` and
+    ///     ``image_focal_released``, ``image_principal_point_released``,
+    ///     ``image_radial_bspline_released``, ``image_rolling_shutter_released``,
+    ///     ``rolling_shutter_scanlines`` (``"ROWS"`` or ``"COLUMNS"``, the
+    ///     setting the rates were solved on and the camera now stores, or
+    ///     ``None`` where they were not released), ``scanlines_race`` (where
+    ///     the scanlines were unknown, a dict of ``rows_cost`` and
+    ///     ``columns_cost``, in units of ``sigma_px`` squared, ``observations``,
+    ///     ``sigma_px`` and ``stopped_early``, always ``False``; otherwise
+    ///     ``None``) and
     ///     ``image_adjustments``: ``None`` where the camera released nothing
     ///     per image, and otherwise a dict of ``images``, ``focal_mean`` and
     ///     ``focal_std`` (of the log focal scale ``log(1 + s)``, the units of
     ///     the prior's focal width, read as fractions), ``principal_point_mean`` and
-    ///     ``principal_point_std`` (``(x, y)`` in pixels), ``prior`` and
-    ///     ``spread`` (dicts of ``focal`` and ``principal_point``, ``NaN`` for
-    ///     a parameter not released per image or not derived),
+    ///     ``principal_point_std`` (``(x, y)`` in pixels),
+    ///     ``radial_bspline_mean`` and ``radial_bspline_std`` (``(e_0, e_1)``),
+    ///     ``rolling_shutter_mean`` and ``rolling_shutter_std``
+    ///     (``(wx, wy, wz)``), ``prior`` and ``spread`` (dicts of ``focal``,
+    ///     ``principal_point``, ``radial_bspline`` and ``rolling_shutter``,
+    ///     ``NaN`` for a parameter not released per image or not derived),
     ///     ``prior_derived``, and ``near_prior``, a list of dicts of
-    ///     ``image``, ``parameter`` (``"focal"`` or ``"principal_point"``) and
-    ///     ``widths``, the images whose adjustment ended more than two prior
-    ///     widths from the camera's mean. ``focal_released`` and
+    ///     ``image``, ``parameter`` (``"focal"``, ``"principal_point"``,
+    ///     ``"radial_bspline"`` or ``"rolling_shutter"``) and ``widths``, the
+    ///     images whose adjustment ended more than two prior widths from the
+    ///     camera's mean. ``focal_released`` and
     ///     ``principal_point_released`` are true where the per-image release
     ///     of the kind was. It also carries
     ///     ``free_point_decision``, the storage decision as
@@ -913,7 +948,7 @@ impl PyEditedReconstruction {
     /// camera, ``switch_camera_model`` to its own spline model with
     /// ``coeff_count`` and ``spline_domain_deg``.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, opt_pp=false, opt_image_f=false, opt_image_pp=false, image_prior=None, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
+    #[pyo3(signature = (*, opt_f=false, opt_distortion=false, opt_pp=false, opt_image_f=false, opt_image_pp=false, opt_image_radial_bspline=false, opt_image_rolling_shutter=false, image_prior=None, releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12, free_points_cross=true))]
     fn bundle_adjust(
         &self,
         py: Python<'_>,
@@ -922,6 +957,8 @@ impl PyEditedReconstruction {
         opt_pp: bool,
         opt_image_f: bool,
         opt_image_pp: bool,
+        opt_image_radial_bspline: bool,
+        opt_image_rolling_shutter: bool,
         image_prior: Option<Bound<'_, PyDict>>,
         releases: Option<Vec<Bound<'_, PyDict>>>,
         schedule: Option<Vec<(f64, f64)>>,
@@ -931,26 +968,33 @@ impl PyEditedReconstruction {
         free_points_cross: bool,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
         let value = materialised(&self.inner);
-        let releases = match releases {
+        let (releases, rolling_shutter_scanlines) = match releases {
             Some(entries) => entries
                 .iter()
                 .enumerate()
                 .map(|(i, entry)| camera_release_from_py(i, entry))
-                .collect::<PyResult<Vec<CameraRelease>>>()?,
-            None => vec![
-                CameraRelease {
-                    focal: opt_f,
-                    distortion: opt_distortion,
-                    principal_point: opt_pp,
-                    image_focal: opt_image_f,
-                    image_principal_point: opt_image_pp,
-                    ..CameraRelease::HELD
-                };
-                value.image_set.cameras.len()
-            ],
+                .collect::<PyResult<Vec<_>>>()?
+                .into_iter()
+                .unzip(),
+            None => (
+                vec![
+                    CameraRelease {
+                        focal: opt_f,
+                        distortion: opt_distortion,
+                        principal_point: opt_pp,
+                        image_focal: opt_image_f,
+                        image_principal_point: opt_image_pp,
+                        image_radial_bspline: opt_image_radial_bspline,
+                        image_rolling_shutter: opt_image_rolling_shutter,
+                    };
+                    value.image_set.cameras.len()
+                ],
+                Vec::new(),
+            ),
         };
         let options = BundleAdjustOptions {
             releases,
+            rolling_shutter_scanlines,
             schedule: match schedule {
                 Some(rounds) => rounds
                     .into_iter()
@@ -967,10 +1011,7 @@ impl PyEditedReconstruction {
             free_points: FreePointPolicy {
                 cross: free_points_cross,
             },
-            image_prior: crate::geometry::bundle_adjust::image_prior_from_py(
-                image_prior.as_ref(),
-                false,
-            )?,
+            image_prior: crate::geometry::bundle_adjust::image_prior_from_py(image_prior.as_ref())?,
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
@@ -1003,6 +1044,22 @@ impl PyEditedReconstruction {
             c.set_item(
                 "image_principal_point_released",
                 camera.image_principal_point_released,
+            )?;
+            c.set_item(
+                "image_radial_bspline_released",
+                camera.image_radial_bspline_released,
+            )?;
+            c.set_item(
+                "image_rolling_shutter_released",
+                camera.image_rolling_shutter_released,
+            )?;
+            c.set_item(
+                "rolling_shutter_scanlines",
+                camera.rolling_shutter_scanlines.map(|s| s.as_str()),
+            )?;
+            c.set_item(
+                "scanlines_race",
+                scanlines_race_to_py(py, camera.scanlines_race.as_ref())?,
             )?;
             c.set_item(
                 "image_adjustments",
@@ -1117,9 +1174,13 @@ fn image_adjustment_spread_to_py<'py>(
     d.set_item("focal_std", spread.focal_std)?;
     d.set_item("principal_point_mean", spread.principal_point_mean)?;
     d.set_item("principal_point_std", spread.principal_point_std)?;
-    d.set_item("prior", widths(py, &spread.prior, false)?)?;
+    d.set_item("radial_bspline_mean", spread.radial_bspline_mean)?;
+    d.set_item("radial_bspline_std", spread.radial_bspline_std)?;
+    d.set_item("rolling_shutter_mean", spread.rolling_shutter_mean)?;
+    d.set_item("rolling_shutter_std", spread.rolling_shutter_std)?;
+    d.set_item("prior", widths(py, &spread.prior)?)?;
     d.set_item("prior_derived", spread.prior_derived)?;
-    d.set_item("spread", widths(py, &spread.spread, false)?)?;
+    d.set_item("spread", widths(py, &spread.spread)?)?;
     let near = PyList::empty(py);
     for n in &spread.near_prior {
         let e = PyDict::new(py);
@@ -1132,16 +1193,56 @@ fn image_adjustment_spread_to_py<'py>(
     Ok(d.into_any())
 }
 
+/// The comparison that chose a camera's scanlines, as the dict the report
+/// carries, or ``None`` where the scanlines were given or stored.
+fn scanlines_race_to_py<'py>(
+    py: Python<'py>,
+    race: Option<&ScanlinesRace>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let Some(race) = race else {
+        return Ok(py.None().into_bound(py));
+    };
+    let d = PyDict::new(py);
+    d.set_item("rows_cost", race.rows_cost)?;
+    d.set_item("columns_cost", race.columns_cost)?;
+    d.set_item("observations", race.observations)?;
+    d.set_item("sigma_px", race.sigma_px)?;
+    d.set_item("stopped_early", race.stopped_early)?;
+    Ok(d.into_any())
+}
+
 /// One entry of ``bundle_adjust``'s ``releases``: a dict of ``focal``,
-/// ``distortion``, ``principal_point``, ``image_focal`` and
-/// ``image_principal_point``, each a bool and ``False`` where missing. Any
-/// other key raises, so a misspelt release is not silently a held camera.
-fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<CameraRelease> {
+/// ``distortion``, ``principal_point``, ``image_focal``,
+/// ``image_principal_point``, ``image_radial_bspline`` and
+/// ``image_rolling_shutter``, each a bool and ``False`` where missing, and
+/// ``rolling_shutter_scanlines``, ``"ROWS"``, ``"COLUMNS"`` or ``"UNKNOWN"``,
+/// the camera's default where missing or ``None``. Any other key raises, so a
+/// misspelt release is not silently a held camera.
+fn camera_release_from_py(
+    index: usize,
+    entry: &Bound<'_, PyDict>,
+) -> PyResult<(CameraRelease, Option<RollingShutterScanlinesChoice>)> {
     let mut release = CameraRelease::HELD;
+    let mut scanlines = None;
     for (key, value) in entry.iter() {
         let key: String = key.extract().map_err(|_| {
             PyValueError::new_err(format!("releases[{index}]: keys must be strings"))
         })?;
+        if key == "rolling_shutter_scanlines" {
+            if !value.is_none() {
+                let name: String = value.extract().map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "releases[{index}]['rolling_shutter_scanlines'] must be \"ROWS\", \
+                         \"COLUMNS\", \"UNKNOWN\" or None"
+                    ))
+                })?;
+                scanlines = Some(
+                    RollingShutterScanlinesChoice::parse(&name)
+                        .map_err(|e| PyValueError::new_err(format!("releases[{index}]: {e}")))?,
+                );
+            }
+            continue;
+        }
         let flag: bool = value.extract().map_err(|_| {
             PyValueError::new_err(format!("releases[{index}]['{key}'] must be a bool"))
         })?;
@@ -1151,14 +1252,17 @@ fn camera_release_from_py(index: usize, entry: &Bound<'_, PyDict>) -> PyResult<C
             "principal_point" => release.principal_point = flag,
             "image_focal" => release.image_focal = flag,
             "image_principal_point" => release.image_principal_point = flag,
+            "image_radial_bspline" => release.image_radial_bspline = flag,
+            "image_rolling_shutter" => release.image_rolling_shutter = flag,
             _ => {
                 return Err(PyValueError::new_err(format!(
                     "releases[{index}] has the key '{key}'; an entry takes 'focal', \
-                     'distortion', 'principal_point', 'image_focal' and \
-                     'image_principal_point'"
+                     'distortion', 'principal_point', 'image_focal', \
+                     'image_principal_point', 'image_radial_bspline', \
+                     'image_rolling_shutter' and 'rolling_shutter_scanlines'"
                 )))
             }
         }
     }
-    Ok(release)
+    Ok((release, scanlines))
 }

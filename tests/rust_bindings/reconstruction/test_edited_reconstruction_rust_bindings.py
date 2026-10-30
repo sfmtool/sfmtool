@@ -676,11 +676,116 @@ class TestSwitchCameraModel:
             tuple(offsets.std(axis=0) * short), rel=1e-9
         )
         assert spread["prior_derived"]
-        assert set(spread["prior"]) == {"focal", "principal_point"}
-        assert set(spread["spread"]) == {"focal", "principal_point"}
+        widths = {"focal", "principal_point", "radial_bspline", "rolling_shutter"}
+        assert set(spread["prior"]) == widths
+        assert set(spread["spread"]) == widths
+        assert np.isnan(spread["prior"]["radial_bspline"])
+        assert np.isnan(spread["prior"]["rolling_shutter"])
         for near in spread["near_prior"]:
             assert near["parameter"] in ("focal", "principal_point")
             assert near["widths"] > 2.0
+        assert camera["rolling_shutter_scanlines"] is None
+        assert camera["scanlines_race"] is None
+
+    def test_each_image_correction_is_released_and_the_scanlines_raced(self, embedded):
+        # SIMPLE_RADIAL takes neither correction, and the refusal names the
+        # camera.
+        with pytest.raises(
+            ValueError, match="radial correction .* on camera 0, a SIMPLE_RADIAL"
+        ):
+            embedded.bundle_adjust(opt_image_radial_bspline=True)
+        with pytest.raises(
+            ValueError, match="rolling shutter .* on camera 0, a SIMPLE_RADIAL"
+        ):
+            embedded.bundle_adjust(opt_image_rolling_shutter=True)
+        spline, _ = embedded.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=6)
+        # The camera stores no scanlines, so its rates are solved on rows and
+        # on columns and the lower cost is kept.
+        adjusted, report = spline.bundle_adjust(
+            opt_image_radial_bspline=True, opt_image_rolling_shutter=True
+        )
+        camera = report["cameras"][0]
+        assert camera["image_radial_bspline_released"]
+        assert camera["image_rolling_shutter_released"]
+        race = camera["scanlines_race"]
+        assert set(race) == {
+            "rows_cost",
+            "columns_cost",
+            "observations",
+            "sigma_px",
+            "stopped_early",
+        }
+        assert race["stopped_early"] is False
+        assert race["observations"] > 0 and race["sigma_px"] > 0.0
+        chosen = "ROWS" if race["rows_cost"] <= race["columns_cost"] else "COLUMNS"
+        assert camera["rolling_shutter_scanlines"] == chosen
+        value = adjusted.materialize()[0]
+        assert value.rolling_shutter_scanlines == [chosen]
+        assert value.per_image_adjustments == [["radial_bspline", "rolling_shutter"]]
+        radial = np.asarray(value.radial_bspline_adjustments)
+        rates = np.asarray(value.rolling_shutter_rates_xyz)
+        assert np.any(radial != 0.0) and np.any(rates != 0.0)
+        spread = camera["image_adjustments"]
+        np.testing.assert_allclose(spread["radial_bspline_mean"], 0.0, atol=1e-12)
+        assert spread["radial_bspline_std"] == pytest.approx(
+            tuple(radial.std(axis=0)), rel=1e-9
+        )
+        assert spread["rolling_shutter_mean"] == pytest.approx(
+            tuple(rates.mean(axis=0)), abs=1e-15
+        )
+        assert spread["rolling_shutter_std"] == pytest.approx(
+            tuple(rates.std(axis=0)), rel=1e-9
+        )
+        assert np.isfinite(spread["prior"]["radial_bspline"])
+        assert np.isfinite(spread["prior"]["rolling_shutter"])
+        assert np.isnan(spread["prior"]["focal"])
+        for near in spread["near_prior"]:
+            assert near["parameter"] in ("radial_bspline", "rolling_shutter")
+
+    def test_the_scanlines_and_the_corrections_prior_are_chosen_per_camera(
+        self, embedded
+    ):
+        spline, _ = embedded.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=6)
+        fixed = {"radial_bspline": 2e-3, "rolling_shutter": 3e-3}
+        adjusted, report = spline.bundle_adjust(
+            releases=[
+                {
+                    "image_rolling_shutter": True,
+                    "rolling_shutter_scanlines": "COLUMNS",
+                }
+            ],
+            image_prior={"fixed": fixed},
+        )
+        camera = report["cameras"][0]
+        assert camera["scanlines_race"] is None
+        assert camera["rolling_shutter_scanlines"] == "COLUMNS"
+        assert not camera["image_radial_bspline_released"]
+        spread = camera["image_adjustments"]
+        assert not spread["prior_derived"]
+        assert spread["prior"]["rolling_shutter"] == 3e-3
+        assert np.isnan(spread["prior"]["radial_bspline"])
+        value = adjusted.materialize()[0]
+        assert value.rolling_shutter_scanlines == ["COLUMNS"]
+        assert value.per_image_adjustments == [["rolling_shutter"]]
+        # Now stored, the setting is used with no choice given, and an
+        # explicit UNKNOWN races again.
+        _, stored = adjusted.bundle_adjust(opt_image_rolling_shutter=True)
+        assert stored["cameras"][0]["scanlines_race"] is None
+        assert stored["cameras"][0]["rolling_shutter_scanlines"] == "COLUMNS"
+        _, raced = adjusted.bundle_adjust(
+            releases=[
+                {"image_rolling_shutter": True, "rolling_shutter_scanlines": "UNKNOWN"}
+            ]
+        )
+        assert raced["cameras"][0]["scanlines_race"] is not None
+        with pytest.raises(ValueError, match='not "ROWS", "COLUMNS" or "UNKNOWN"'):
+            spline.bundle_adjust(
+                releases=[
+                    {"image_rolling_shutter": True, "rolling_shutter_scanlines": "X"}
+                ]
+            )
+        with pytest.raises(ValueError, match='must be "ROWS"'):
+            spline.bundle_adjust(releases=[{"rolling_shutter_scanlines": 1}])
 
     def test_the_per_image_releases_are_chosen_per_camera_with_their_prior(
         self, embedded
@@ -720,7 +825,8 @@ class TestSwitchCameraModel:
         with pytest.raises(
             ValueError,
             match="'focus'; an entry takes 'focal', 'distortion', 'principal_point', "
-            "'image_focal' and 'image_principal_point'",
+            "'image_focal', 'image_principal_point', 'image_radial_bspline', "
+            "'image_rolling_shutter' and 'rolling_shutter_scanlines'",
         ):
             switched.bundle_adjust(releases=[{"focus": True}])
         with pytest.raises(ValueError, match="camera 0 .* together with its focal"):
