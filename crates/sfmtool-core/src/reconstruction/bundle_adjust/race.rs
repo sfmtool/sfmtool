@@ -824,8 +824,9 @@ mod tests {
         // the pair at which the rule would stop columns. Rows runs each
         // iteration 50 ms behind, so columns has reported its third first and
         // the pair could be judged from the frozen traces once rows returns.
-        // One solve then sleeps before it returns. Either way no stop is judged after the
-        // cancellation, the call is cancelled, and the phases close alike.
+        // One solve then sleeps before it returns. Either way no stop is
+        // judged after the cancellation, the call is cancelled, and the phases
+        // close alike.
         let rows = [2000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0];
         let columns = [1500.0; 6];
         let mut seen = Vec::new();
