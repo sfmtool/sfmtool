@@ -475,5 +475,6 @@ reconstruction. What it does is covered headlessly.
 - Reading the bench: the solve takes the reconstruction's tracks alone. Feeding
   it hand-verified bench tracks, exempt from trimming, is proposed in
   [`bench-inconsistent-fit-amendment.md`](../../drafts/bench-inconsistent-fit-amendment.md).
-- Reporting progress, or a per-round trace. One entry, after it has run; live
-  progress arrives with the background panel above.
+- A per-round trace. The Action Log has one entry, after it has run; its
+  progress while it runs is the Background Tasks panel's
+  ([../background-tasks.md](../background-tasks.md)).
