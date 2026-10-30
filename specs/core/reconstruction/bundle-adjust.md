@@ -589,8 +589,9 @@ The report's camera entry states the setting the rates were solved on
 pooled `σ_n`, and `stopped_early`, which is always `false`, since both solves
 run their whole schedule. Stopping the losing solve once it cannot catch up is
 proposed in
-[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns),
-to be measured before it is built.
+[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns)
+and measured, not built, in
+[bundle-adjust-measurements.md](bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race).
 
 On the maintainer's `dino_dog_toy_ground_truth_candidate_v012.sfmr` (one
 `SFMTOOL_PINHOLE` camera with no stored setting, 85 images, 24931

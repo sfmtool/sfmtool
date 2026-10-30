@@ -644,7 +644,13 @@ What the build settled beyond the design below:
 
 **Stopping the trailing solve early is not built**: both solves run their whole
 schedule, and the report's `stopped_early` is always `false`. The rule below
-stays a proposal to be measured ([open question](#open-questions)).
+is measured in
+[bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race),
+and whether to build it waits on the maintainer ([open question](#open-questions)).
+The kernel reports the per-iteration cost it needs through `Progress`
+(`COST_VALUE`, with `KEPT_VALUE` and `NOISE_VALUE` per round,
+[bundle-adjustment.md](../core/geometry/bundle-adjustment.md)), and the
+`scanlines_race` example records both solves' trajectories with it.
 
 The reconstruction-level adjustment
 ([bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
@@ -720,10 +726,10 @@ on real solves before it is adopted**: the measurement records both solves'
 full cost trajectories, on the measured capture from its stored state and from
 a raw `sfm solve` output, and on synthetic scenes with rates planted under
 rows and under columns, and reports the first iteration after which the sign of `D` never changes
-and whether the rule ever stops the eventual winner. A per-iteration cost needs
-to reach the comparator from the kernel; `Progress` reports phases, counts and
-messages today, and whether the cost travels as a message or through a small
-observer argument is part of the work.
+and whether the rule ever stops the eventual winner. The per-iteration cost
+reaches the comparator from the kernel as a `Progress` value, a named number
+beside the phases, counts and messages, rather than as a message to be parsed
+or an observer argument on a kernel with several dozen call sites.
 
 ### Bindings, viewer, CLI
 
@@ -1075,11 +1081,24 @@ When built, the tests cover at least:
 
 - **The early-stopping rule for `UNKNOWN`.** The built race runs both solves
   to the end, which roughly doubles the cost of a solve. The rule in
-  [Choosing rows or columns](#choosing-rows-or-columns), with its threshold of 25 and three
-  consecutive iterations, is a proposal to be measured on real solves before it
-  is adopted. Whether lockstep should be per LM iteration or per schedule round
-  (simpler, and needs no per-iteration cost from the kernel, but stops later) is
-  part of the same measurement.
+  [Choosing rows or columns](#choosing-rows-or-columns), with its threshold of
+  25 and three consecutive iterations, is measured in
+  [bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race)
+  on the dino candidate (from its stored state, under both schedules), a raw
+  dino solve, the seoul bull switched to `SFMTOOL_PINHOLE` and eight synthetic
+  scenes. Measured: the gap's sign is the winner's from the first iteration on
+  every input but the seoul bull, a near tie of 7.4 units, where the winner
+  trails by up to 305 units in the second round and the sign settles only in the
+  third; with its budget term the rule never stops the winner at a threshold of
+  25 or 100 and saves about a third of the race's iterations on the dino
+  candidate and almost half on the raw solve; without the budget term, or at a
+  threshold of 10, it stops the winner on the seoul bull; lockstep per schedule
+  round saves almost nothing. The measurement recommends adopting it with
+  changes: lockstep per LM iteration with each round's end as a barrier, the
+  budget term kept, a threshold of 100, three consecutive iterations, the gap in
+  units of the two solves' mean round-start noise level squared, the round's
+  start skipped, and no stop while the two rounds' kept observations differ.
+  Whether to build it, or keep two full solves, is the maintainer's decision.
 - **Several `UNKNOWN` cameras.** The races in
   [Choosing rows or columns](#choosing-rows-or-columns), built as described,
   run one camera at a time,
