@@ -804,7 +804,7 @@ pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]
 /// released its images' rolling-shutter rates also says the scanlines they
 /// were solved on, and `scanlines_race` the two solves that chose them where
 /// they were not known, `null` where they were given or stored.
-pub(super) fn image_adjustments_json(
+pub(crate) fn image_adjustments_json(
     cameras: &[sfmtool_core::CameraAdjustment],
 ) -> Vec<serde_json::Value> {
     let number = |x: f64| if x.is_finite() { json!(x) } else { json!(null) };

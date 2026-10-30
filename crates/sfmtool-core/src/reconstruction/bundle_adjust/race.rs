@@ -146,7 +146,9 @@ pub(super) struct StopPoint {
 /// counts nor breaks a run. A pair holds when both rounds kept the same count
 /// of observations, both measured a noise level, the trailing solve has a
 /// rate, `D > gap_threshold` and `D > rate × left`, `left` being the
-/// iterations left in the round plus `max_iters` per later round. Rounds are
+/// iterations left in the round plus `max_iters` per later round, and the
+/// trailing solve still has an iteration to run: a pair at which it has
+/// finished its last round, and keeps its last cost, does not hold. Rounds are
 /// compared while both solves have one; once either has none the rule has no
 /// more pairs.
 #[derive(Debug, Clone)]
@@ -232,7 +234,8 @@ impl EarlyStopRule {
             let gap = (c[0] - c[1]).abs();
             let rate = rate(&rounds[trailing].costs, i, sigma2)?;
             let left = self.max_iters.saturating_sub(i) + self.max_iters * (self.rounds - 1 - r);
-            let holds = rounds[0].kept == rounds[1].kept
+            let holds = !spent(&traces[trailing], r, i)
+                && rounds[0].kept == rounds[1].kept
                 && gap > self.options.gap_threshold
                 && gap > rate * left as f64;
             holds.then_some((trailing, gap, c, sigma2))
@@ -262,6 +265,15 @@ impl EarlyStopRule {
             }
         }
     }
+}
+
+/// Whether `trace` has no iteration left to run at pair `i` of round `r`: it
+/// returned with `r` its last round, having finished that round before
+/// iteration `i`. Stopping it there would save nothing, and the race reads it
+/// only once it has returned, so a stop there would come after its thread had
+/// ended.
+fn spent(trace: &SolveTrace, r: usize, i: usize) -> bool {
+    trace.finished && trace.rounds.len() == r + 1 && trace.rounds[r].costs.len() <= i
 }
 
 /// The mean of the last [`RATE_WINDOW`] decreases of `costs` up to step `i`
@@ -472,6 +484,17 @@ impl Drop for Finish<'_, '_> {
 /// is the caller's to discard. `rounds` is how many rounds each solve runs
 /// ([`crate::geometry::bundle_adjust::rounds_run`]). A cancellation of `part`
 /// stops both.
+///
+/// Two hazards for a caller. Each solve sees `part`'s cancel flag only through
+/// its tap, which passes it on to the solve's own flag at the solve's next
+/// event, so a cancellation lands at most one event late. And the race blocks
+/// threads: each solve in its progress sink while it waits for the other, and
+/// the calling thread until both return. The solves' parallel work runs on
+/// the rayon pool, so called from the only worker of a one-thread pool the
+/// race would deadlock, that worker waiting on solves whose work waits on it.
+/// The solves run on `std` threads of their own, and no caller runs the race
+/// on a pool worker: the viewer calls the adjustment on a `std` thread, the
+/// Python binding on the calling thread with the interpreter released.
 pub(super) fn race<T: Send>(
     part: &Progress<'_>,
     options: ScanlinesEarlyStopOptions,
@@ -501,6 +524,10 @@ pub(super) fn race<T: Send>(
             let _finish = Finish(race, s);
             solve(SETTINGS[s], &phase)
         };
+        // The rule judges a pair only while the trailing solve still has an
+        // iteration to run, which it waits for in its progress sink, so a stop
+        // of this solve was set before it left its last wait, and reading it
+        // here gives the same answer whatever the other thread is doing.
         if let Some(stop) = race.lock().stop.filter(|stop| stop.stopped == s) {
             progress_note!(
                 phase,
@@ -721,6 +748,111 @@ mod tests {
                 }
             }
             assert_eq!(got, want, "rows first: {rows_first}");
+        }
+    }
+
+    /// One scripted solve: one round of 500 kept observations at noise 1 px,
+    /// reporting `costs` (the start and one per iteration), stopping where it
+    /// is cancelled, sleeping `delay` before each iteration. It returns the
+    /// costs it reported.
+    fn scripted(costs: &[f64], delay: Duration, progress: &Progress<'_>) -> Vec<f64> {
+        progress.value(KEPT_VALUE, 500.0);
+        progress.value(NOISE_VALUE, 1.0);
+        let mut said = Vec::new();
+        for (k, &cost) in costs.iter().enumerate() {
+            if k > 0 {
+                if progress.is_cancelled() {
+                    break;
+                }
+                std::thread::sleep(delay);
+            }
+            progress.value(COST_VALUE, cost);
+            said.push(cost);
+        }
+        said
+    }
+
+    /// What [`scripted_race`] returns: each solve's costs, the stop, and the
+    /// notes the phases closed with.
+    type Scripted = (
+        [Vec<f64>; 2],
+        Option<StopPoint>,
+        Vec<(&'static str, Option<String>)>,
+    );
+
+    /// The race of two scripted solves, one round of `max_iters` 5, the rule
+    /// at a threshold of 100 and a count of 3, with one solve delayed.
+    fn scripted_race(rows: &[f64], columns: &[f64], delayed: usize) -> Scripted {
+        let notes = Mutex::new(Vec::new());
+        let sink = |event: Event<'_>| {
+            if let Event::Leave { phase, note, .. } = event {
+                notes
+                    .lock()
+                    .unwrap()
+                    .push((phase, note.map(str::to_string)));
+            }
+        };
+        let part = Progress::to(&sink);
+        let (results, stop) = race(&part, options(100.0, 3), 5, 1, |setting, p| {
+            let s = usize::from(setting == RollingShutterScanlines::Columns);
+            let delay = Duration::from_millis(if s == delayed { 100 } else { 0 });
+            scripted(if s == 0 { rows } else { columns }, delay, p)
+        });
+        (results, stop, notes.into_inner().unwrap())
+    }
+
+    #[test]
+    fn a_trailer_that_has_finished_its_last_round_is_not_stopped() {
+        // Columns trails by 500 at a rate of nothing and ends its only round
+        // after two iterations; rows runs on. The third holding pair would be
+        // iteration 3, where columns has nothing left to run, so the rule does
+        // not fire, both solves run to the end, and whichever thread is slower
+        // the answer and the phases' notes are the same.
+        let rows = [2000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0];
+        let columns = [1500.0, 1500.0, 1500.0];
+        let traces = [
+            finished(vec![round(500.0, 1.0, &rows)]),
+            finished(vec![round(500.0, 1.0, &columns)]),
+        ];
+        assert_eq!(
+            EarlyStopRule::new(options(100.0, 3), 5, 1).advance(&traces),
+            None
+        );
+        let want = ([rows.to_vec(), columns.to_vec()], None);
+        for delayed in [0, 1] {
+            let (results, stop, notes) = scripted_race(&rows, &columns, delayed);
+            assert_eq!((results, stop), want.clone(), "delayed: {delayed}");
+            assert_eq!(
+                notes,
+                [("solve with rows", None), ("solve with columns", None)],
+                "delayed: {delayed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stopped_trailer_is_stopped_and_noted_the_same_whichever_thread_is_slower() {
+        // Columns would run five iterations; the rule stops it at the third,
+        // and it reports nothing after.
+        let rows = [2000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0];
+        let columns = [1500.0; 6];
+        for delayed in [0, 1] {
+            let (results, stop, notes) = scripted_race(&rows, &columns, delayed);
+            let stop = stop.expect("fires");
+            assert_eq!((stop.stopped, stop.round, stop.iteration), (1, 0, 3));
+            assert_eq!(results[0], rows.to_vec(), "delayed: {delayed}");
+            assert_eq!(results[1], columns[..4].to_vec(), "delayed: {delayed}");
+            assert_eq!(
+                notes,
+                [
+                    ("solve with rows", None),
+                    (
+                        "solve with columns",
+                        Some("stopped at round 1, iteration 3".to_string())
+                    )
+                ],
+                "delayed: {delayed}"
+            );
         }
     }
 

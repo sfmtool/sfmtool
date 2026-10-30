@@ -631,8 +631,9 @@ decreases within the round (fewer early in a round) times the iterations it has
 left, those left in the round plus `max_iters` for each later round of the
 schedule as the kernel runs it (a one-round schedule with a derived prior runs
 as two). The pair at a round's start is skipped, neither counting nor breaking
-a run, and no pair holds while the two rounds kept different counts of
-observations. These are the definitions
+a run; no pair holds while the two rounds kept different counts of
+observations, nor once the trailing solve has finished its last round and has
+no iteration left to save. These are the definitions
 [`scripts/scanlines_race_early_stop.py`](../../../scripts/scanlines_race_early_stop.py)
 replays, and the race's tests reproduce the measurement's stops on its
 synthetic scenes. The leading solve then runs to the end alone; if the rule
@@ -829,6 +830,22 @@ of an unposed corner of the capture rather than leaving it alone.
 measured against the input's poses and the "after" against the output's, because
 the centroid itself moves when the cameras do. Measuring both against one image set
 would leave the frame carrying the gauge drift of the solve.
+
+**The race blocks threads.** Each solve of a race waits in its progress sink
+for the other, and the calling thread waits for both, while the solves'
+parallel work runs on the rayon pool. Called from the only worker of a
+one-thread rayon pool, the race would deadlock: that worker would wait on
+solves whose work waits on it. No caller does: the viewer runs the adjustment
+on a `std` thread and the Python binding on the calling thread with the
+interpreter released. Each solve also sees the caller's cancel flag only
+through its tap, which passes it on at the solve's next event.
+
+**A stop is judged only while the trailer has work left.** The rule does not
+count a pair at which the trailing solve has finished its last round, so every
+stop is judged while that solve still waits in its sink for the pair, and the
+stopped solve's note and `stopped_early` are set before its thread can end.
+Counting such pairs would record a stop that saves nothing, at a moment that
+depends on which thread reads it.
 
 ## Parameters
 

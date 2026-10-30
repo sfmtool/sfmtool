@@ -229,7 +229,16 @@ early](bundle-adjust.md#stopping-the-trailing-solve-early)). The built rule
 reproduces this replay's stops on the synthetic scenes at `τ_w = 4·10⁻³` in the
 race's tests, and on the dino candidate under the default schedule it stopped
 columns at round 1, iteration 12, as the table above has it, in 25.5 s against
-38.7 s for two full solves; the seoul bull ran both to the end.
+38.7 s for two full solves; the seoul bull ran both to the end. The built rule
+adds one condition the replay above did not have, and the replay script now
+applies it too: a pair does not hold once the trailing solve has finished its
+last round, since stopping it there saves nothing. Rerun on all twelve inputs,
+the replay's per-iteration rows are unchanged by it at every threshold and
+count: every stop in the table above falls at a pair the trailing solve itself
+reached, before it had finished its last round. (On the columns scene at
+`τ_w = 3·10⁻⁴` that pair, at `T = 10` and `T = 25`, is the last iteration the
+trailing solve ran, so the stop saves none; the solve is still waiting at the
+pair when the rule fires, so the stop does not depend on the threads' timing.)
 
 The recommendation as made: adopt the rule with changes, if two full solves
 cost too much: lockstep per

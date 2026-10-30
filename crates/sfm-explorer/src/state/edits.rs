@@ -285,7 +285,7 @@ fn image_prior_clause(
 /// on rows chosen: cost 49350.0 with rows, 52349.0 with columns over 24931
 /// observations, both solves run to the end`, and one whose trailing solve was
 /// stopped early reads `, rolling shutter on rows chosen: columns stopped at
-/// round 1, iteration 12 (gap 152.3 over 24918 observations), cost 47166.3
+/// round 1, iteration 12 (gap 953.4 over 24918 observations), cost 48612.4
 /// with rows at the end`. One over several cameras names each camera by its
 /// index, `, camera 1 rolling shutter on columns`.
 fn scanlines_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {

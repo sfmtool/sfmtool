@@ -25,7 +25,8 @@ left. Two lockstep units are replayed:
   last cost. The budget is the iterations left in the round plus ``max_iters``
   for each round after it. The pair at a round's start, before either solve's
   first iteration in it, is skipped: it neither counts toward ``K`` nor breaks
-  a run.
+  a run. A pair at which the trailing solve has finished its last round does
+  not hold, since stopping it there would save nothing.
 - ``round``: one schedule round of each solve per pair, compared at the
   round's end. The rate is the mean decrease over the last three rounds, each
   from its start to its end, and the budget is the rounds left.
@@ -120,7 +121,11 @@ def evaluate_iteration(rounds, max_iters, threshold, count, budget=True):
         d = abs(c[0] - c[1])
         rate = iteration_rate(rounds[trailing][r]["costs"], i, round_sigma2(rounds, r))
         left = max(0, max_iters - i) + max_iters * (n_rounds - 1 - r)
-        holds = d > threshold and rate is not None
+        # A trailing solve that has finished its last round has nothing left
+        # to save: the pair does not hold.
+        trailer = rounds[trailing]
+        spent = r == len(trailer) - 1 and len(trailer[r]["costs"]) - 1 < i
+        holds = not spent and d > threshold and rate is not None
         if holds and budget:
             holds = d > rate * left
         if holds and trailing == trailing_before:
