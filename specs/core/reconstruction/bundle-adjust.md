@@ -594,7 +594,9 @@ has no effect, so no setting is assumed for them; a camera given `Rows` or
 `Columns` releases its rates at that setting in every race. The first race
 starts from the caller's value. Each later race starts from the state the
 previous winner reached, its poses, points, cameras and image adjustments, so
-the earlier races' work is carried forward. Both solves of a race start from
+the earlier races' work is carried forward; starting near convergence also
+makes the later races cheaper than the first, though by how much is not
+measured. Both solves of a race start from
 that same state, with the raced camera's rates at zero, and the last race's
 winner is the answer. `k` such cameras cost `2k` solves; the cases with more
 than one camera are rare enough not to justify a search over all `2ᵏ`

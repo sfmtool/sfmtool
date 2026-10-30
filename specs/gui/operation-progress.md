@@ -486,7 +486,9 @@ a bundle adjustment as they run reads the cost each LM iteration ends at
 and the scanlines race's measurement records the two solves' trajectories that
 way ([../core/reconstruction/bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md)).
 A message would carry the number as text, to be formatted and parsed back, and
-a collector that keeps messages would keep one line per iteration. The viewer's
+a collector that keeps messages would keep one line per iteration. An observer
+argument on the bundle-adjustment kernel would have to be passed at each of
+its several dozen call sites. The viewer's
 collector and `PhaseLog` ignore values. With nothing listening, `value` is one
 branch on a null sink; its argument is evaluated either way, so a kernel reports
 only numbers it computes anyway.

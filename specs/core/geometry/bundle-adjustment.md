@@ -1135,7 +1135,8 @@ three adjustment columns in two more instantiations, `BASE_CORR_CAM_COLS` and
 `BSPLINE_CORR_CAM_COLS`, so the widths stay one instantiation each and number
 eight; an image's slots its camera does not release are pinned. The reduced
 system is dense and factored by LU, so at 85 images its width goes from 765 to
-1190. In `.sfmr` coordinates, at the image's intrinsics, with the pixel step
+1190, about 3.8 times the factorization's cost. In `.sfmr` coordinates, at
+the image's intrinsics, with the pixel step
 `F = f_i·diag(1, −1)`, `û = (x, y)/ρ` the undistorted point's direction and
 `J_rs = I + ṗ·∇tᵀ` the rolling-shutter step's derivative in the distorted point
 ("Held image adjustments", above; the identity without rates):
