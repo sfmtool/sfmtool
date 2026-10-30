@@ -4694,7 +4694,8 @@ fn bundle_adjust_staged(
     for (j, lens) in lenses.iter().enumerate() {
         assert!(
             !lens.opt_image_rolling_shutter || lens.scanlines.is_some(),
-            "camera {j} releases its images' rolling-shutter rates without a              rolling_shutter_scanlines setting to read them on"
+            "camera {j} releases its images' rolling-shutter rates without a \
+             rolling_shutter_scanlines setting to read them on"
         );
     }
     let spline_cols = lenses.iter().any(|l| l.opt_bspline);

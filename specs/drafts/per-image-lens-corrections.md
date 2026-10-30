@@ -530,8 +530,9 @@ What the build settled beyond the design below:
   dropped, since no model gate is at fault.
 - The rolling-shutter guard's distance from the identity is the largest
   Frobenius norm at the image's four corners of
-  `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, read at the distorted point
-  each corner pixel has before the step, with the proposed bound of `0.5`.
+  `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, read with each corner
+  pixel's normalized position taken as its distorted point, with the proposed
+  bound of `0.5`.
 
 The design the build follows:
 
@@ -903,7 +904,8 @@ The outermost band has about 85 observations.
   the noise level. Only per-image fields remained.
 
 **The kernel's run.** The kernel, through its binding, on
-`dino_dog_toy_ground_truth_candidate_v012.sfmr` as it is now (85 images, 1245
+`dino_dog_toy_ground_truth_candidate_v012.sfmr` in the maintainer's local
+`dino_dog_toy_ws` (not checked in), as it is now (85 images, 1245
 points, 24931 observations; the file has gained points since the scratch
 experiments' 1176 and 23731), keeping every observation (one round of
 `(inf, 1000)`, which a derived prior runs twice) with the free points kept in

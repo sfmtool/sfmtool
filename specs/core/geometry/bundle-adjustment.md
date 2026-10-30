@@ -1204,8 +1204,9 @@ edge. `fixed` sets all four widths.
 `[0, ρ_max]` and its tail, or when its rolling-shutter step at the image's
 corners is farther from the identity than `0.5`. That distance is
 `CameraIntrinsics::rolling_shutter_contraction`, the largest Frobenius norm at
-the four corners of `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, read at the
-distorted point each corner pixel has before the step: it bounds the
+the four corners of `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, read with each
+corner pixel's normalized position taken as its distorted point, which differs
+from it only by the step's own small displacement: it bounds the
 contraction of the unprojection's fixed-point iteration, which converges while
 it is under one. Measured rates give about `10⁻³`, so `0.5` holds no real image
 and keeps the iteration well inside convergence.

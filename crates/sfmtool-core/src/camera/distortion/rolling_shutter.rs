@@ -130,8 +130,9 @@ impl CameraIntrinsics {
     /// How far the rolling-shutter step is from the identity at the image's
     /// four corners: the largest Frobenius norm there of
     /// `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, the step's Jacobian
-    /// with respect to the distorted point less `I`, read at the distorted
-    /// point each corner pixel has before the step. It bounds the contraction
+    /// with respect to the distorted point less `I`, read with each corner
+    /// pixel's normalized position taken as its distorted point, which differs
+    /// from it only by the step's own small displacement. It bounds the contraction
     /// of the unprojection's fixed-point iteration there, which converges
     /// while it is under one. `0` for a camera without an active rolling
     /// shutter, and `NaN` where the radial map is singular or a value is not
