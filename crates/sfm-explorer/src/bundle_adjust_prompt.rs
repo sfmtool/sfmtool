@@ -668,8 +668,9 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                 );
                 ui.end_row();
 
-                // The per-image releases, each under the shared release it is
-                // nearest to.
+                // The per-image releases: the focal, the radial distortion and
+                // the principal point each under the shared release of its
+                // kind, then the rolling shutter, which has none.
                 ui.label("");
                 ui.add_enabled_ui(gate.focal_refusal.is_none(), |ui| {
                     ui.checkbox(&mut row.image_focal, "Release focal length per image")
