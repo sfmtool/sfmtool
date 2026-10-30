@@ -711,15 +711,19 @@ other camera's block, so two cameras' lens parameters couple only through the
 poses and points they both observe. A few cameras add a few slots beside the
 `6·n_im` pose slots, so the dense solve costs what it does with one.
 
-The per-observation camera block keeps a fixed width, one of six, each a
+The per-observation camera block keeps a fixed width, one of eight, each a
 compile-time instantiation of the solve: `2 + 6` columns when no camera
 releases a spline or a principal point, `2 + 4 + 6` when some camera releases a
 spline, each of those with the principal point's two columns before the pose
-(`4 + 6`, `4 + 4 + 6`) when some camera releases its principal point, and each
+(`4 + 6`, `4 + 4 + 6`) when some camera releases its principal point, each
 of those two with the image's three adjustment columns after the pose
 (`4 + 6 + 3`, `4 + 4 + 6 + 3`) when some camera releases a per-image parameter
 (see "The per-image release"), where each image's block in the reduced system
-is nine wide rather than six. In
+is nine wide rather than six, and each of those two with the image's five
+correction columns after its adjustment columns (`4 + 6 + 8`, `4 + 4 + 6 + 8`)
+when some camera releases a radial correction or rolling-shutter rates per
+image (see "The per-image corrections"), where each image's block is fourteen
+wide. In
 the spline instantiations a spline column that carries no coefficient (one of
 the gauge-anchored pair, or any spline column of a camera whose spline is not
 released) points at the observing camera's own `k1` slot and is exactly zero,
@@ -788,10 +792,10 @@ On an `SFMTOOL_PINHOLE` camera an image may also carry a radial correction
 `e_i`, read as the spline `c + K·e_i`, and rolling-shutter rates `ω_i`, read on
 the camera's entry of `BaCameras::rolling_shutter_scanlines`
 ([sfmtool-pinhole-kernels.md § Per-image
-corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)). This
-kernel holds both: no flag releases them.
-Unless a camera releases them per image ("The per-image release", below), the
-solve holds them: they are inputs, read wherever a camera is read (above). The released parameters are still the
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)).
+Unless a camera releases them per image ("The per-image release" and "The
+per-image corrections", below), the solve holds them: they are inputs, read
+wherever a camera is read (above). The released parameters are still the
 camera's shared ones, with each image's adjustment applied on top of them, so a
 camera's lens block is unchanged and its columns from an adjusted image are:
 
@@ -1058,6 +1062,168 @@ the kernel's, the reconstruction-level adjustment's, growth's and rotation
 initialisation's test scenes (377 solves) gave identical outputs before and
 after the release was added.
 
+### The per-image corrections
+
+`opt_image_radial_bspline` and `opt_image_rolling_shutter` release each image's
+radial correction `e_i = (e_i0, e_i1)` and its rolling-shutter rates
+`ω_i = (ωx, ωy, ωz)`
+([sfmtool-pinhole-kernels.md § Per-image
+corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)),
+narrowed per camera by `CameraRelease::image_radial_bspline` and
+`CameraRelease::image_rolling_shutter`. They are for distortion that changes
+with the focus distance and for the image distortion a camera's turning causes
+while a rolling-shutter sensor reads the image out
+([drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#purpose)).
+Both exist on `SFMTOOL_PINHOLE` alone, the radial correction only where the
+camera's spline domain end `bspline_rho_max` is positive and finite and its
+spline is empty or has at least two coefficients; a camera of another model
+holds them whatever the flags say, and the binding refuses the request.
+
+The solve reads each camera's rates on one fixed scanlines setting, its entry
+of `BaCameras::rolling_shutter_scanlines`, `Rows` or `Columns`. A camera that
+releases its rates without one is a caller error, and the solve panics on it.
+Choosing between rows and columns compares two solves, so it is the
+reconstruction-level adjustment's; that choice, with the reconstruction-level
+releases of both corrections, the Python `EditedReconstruction.bundle_adjust`
+keys, the viewer's Bundle Adjust dialog and the MCP tool, is specified in
+[drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns),
+and those surfaces hold both corrections as they are read.
+
+Neither correction holds a shared value of its kind, as the focal scale and the
+principal-point offset do: the rates have no shared counterpart, and the camera's
+spline `c` is released by `opt_bspline` on its own terms. The mean over the
+camera's images is held instead ("The mean hold", below).
+
+**The columns.** In a solve where some camera releases a correction, each
+image's block of the reduced system grows to fourteen wide,
+`[δθ×3, δt×3, t_i, a_x, a_y, e_0, e_1, ωx, ωy, ωz]`, and stays as it was
+otherwise. The per-observation camera block carries the five columns after the
+three adjustment columns in two more instantiations, `BASE_CORR_CAM_COLS` and
+`BSPLINE_CORR_CAM_COLS`, so the widths stay one instantiation each and number
+eight; an image's slots its camera does not release are pinned. The reduced
+system is dense and factored by LU, so at 85 images its width goes from 765 to
+1190. In `.sfmr` coordinates, at the image's intrinsics, with the pixel step
+`F = f_i·diag(1, −1)`, `û = (x, y)/ρ` the undistorted point's direction and
+`J_rs = I + ṗ·∇tᵀ` the rolling-shutter step's derivative in the distorted point
+("Held image adjustments", above; the identity without rates):
+
+```
+∂(u, v)/∂e_j = F·J_rs·(B_j(ρ) + B_j'(ρ_max)·(ρ − ρ_max)₊)·û       j = 0, 1
+∂(u, v)/∂ω   = F·t·[[ −x·y,       1 + x²,  y ],
+                    [ −(1 + y²),  x·y,    −x ]]
+```
+
+`B_0 = 3τ²(1 − τ)` and `B_1 = τ³`, `τ = ρ/ρ_max`, are the two-coefficient
+basis on the camera's domain, read at `min(ρ, ρ_max)` with the linear tail past
+`ρ_max`, as the shared spline's columns read theirs. The correction adds
+`e_0·B_0 + e_1·B_1` to the image's `δ`, so it moves the distorted point by the
+basis column, and the readout position `t` reads the distorted point, which is
+where `J_rs` comes from. The rolling-shutter step `x_r = x_d + t·ṗ` is linear
+in the rates and `t` does not read them, so the rate columns are exact and do
+not depend on the rates. The kernel computes both in the radial kernels'
+optical frame, where the pixel step is `f_i·I`, and computes the rate columns
+at zero rates too, reading `t` on the camera's setting, since that is where a
+fresh release starts (`CameraIntrinsics::rolling_shutter_rate_columns`). The
+focal columns' rolling-shutter terms are those of "Held image adjustments".
+
+**The prior** gains two terms per camera, isotropic over each field's
+components and in the same `σ_n²`-scaled units:
+
+```
+σ_n² · Σ_i ( ‖e_i − ē‖² / σ_rb,c²  +  ‖ω_i − ω̄‖² / σ_rs,c² )
+```
+
+with `σ_rb,c` and `σ_rs,c` the camera's `ImagePriorWidths::radial_bspline` and
+`::rolling_shutter`, in units of `ρ` and in radians per short side of readout.
+It is added exactly into the dense reduced system, as the other terms are. The
+four widths are in different units, so they cannot be compared as numbers: on
+the dino capture a rate of `2·10⁻³` moves the centre of the bottom edge by about
+1.9 px, while a principal-point width of `0.0131` is about 20 px.
+
+**The mean hold.** The mean over the camera's images the round solves of each
+component of `e` and of `ω` is held at its value at the start of the round,
+zero for a fresh release. It has to be held, for two reasons
+([drafts/per-image-lens-corrections.md § Why the mean must be
+held](../../drafts/per-image-lens-corrections.md#why-the-mean-must-be-held)):
+the camera's basis contains the correction's span exactly, `c + K·e_i`, so with
+the camera's spline released the mean correction and `c` move every image's
+spline alike and no observation tells them apart, while the spline penalty,
+which reads `c` alone, would pull the mean away; and the mean rate over a
+camera's images is nearly a common vertical stretch of the scene, which on the
+dino capture drifted from `−7·10⁻⁴` to `−1.7·10⁻³` with no change in held-out
+error as a free mean's prior widened.
+
+The hold is a stiff prior, one term per camera and component,
+`σ_n²·(x̄ − x̄₀)²/σ_h²` with `x̄₀` the mean at the round's start and
+`σ_h = MEAN_HOLD_WIDTH = 10⁻⁶` in the field's own unit. Its normal equations are
+`(w_h/n²)·𝟏𝟏ᵀ` over the component's `n` image slots and `(w_h/n)·(x̄ − x̄₀)` in
+each one's gradient entry, `w_h = σ_n²/σ_h²`, and its value enters the cost the
+damping ladder compares. It is added to the damped system after the damping
+rather than to the matrix the damping scales, so that its stiffness does not
+damp the images' own steps. A camera with one image in the round holds that
+image's correction and rates.
+
+`10⁻⁶` is a hundred times tighter than the `10⁻⁴` on the mean the scratch
+experiments used, and is chosen against the two things it competes with. Along
+the mean its curvature is `σ_n²·10¹²`, `6·10¹⁰` at `σ_n = 0.25` px, far above
+the data's curvature along a near-gauge and the spline penalty's along `K·ē`, so
+the mean moves by a small fraction of what they ask for: on the dino capture the
+mean rates ended within `2·10⁻⁷` of their start, under `2·10⁻⁴` of the rates'
+spread (see the draft's [Measured
+results](../../drafts/per-image-lens-corrections.md#measured-results)). On each
+image's own slot it adds `w_h/n²`, `8.6·10⁶` at 85 images, of the order of the
+data's own diagonal there, so the dense LU loses at most a digit or two to it. An exact constraint in a bordered system would hold
+the mean exactly, but adds a row per camera and component to a system that
+otherwise needs none, and the stiff prior is already tight to well under any
+width.
+
+**Re-centring after every round.** A camera that releases a radial correction
+per image then moves the mean correction over its solved images into its spline,
+`c ← c + K·ē` and `e_i −= ē` for every image of the camera, which leaves every
+image's spline `c + K·e_i` unchanged to rounding and the mean at zero for the
+next round; a camera whose spline is empty keeps `ē` in its images. The mean
+rate is left where the round held it, having no shared value to move into. The
+spline is written into the camera even where `opt_bspline` does not release it.
+
+**Deriving the widths.** The new widths are derived per camera by the steps of
+"Deriving the widths" above, extended to the new slots: each image's data-only
+block is read over its fourteen slots, the prior's pull is undone over every
+released parameter together, the radial correction's two coefficients are
+pooled as two samples per image and the rates' three components as three, and
+each spread is clamped to its own `[floor, loose]`. `ImagePriorOptions` defaults
+both new fields to `loose = 10⁻²` and `floor = 10⁻⁴`: the existing loose width of
+`0.1` would allow a radial correction of about 145 px at the domain end on the
+dino capture, and the measured held-out error is flat above about `4·10⁻³` for
+the radial correction and `2·10⁻³` for the rates, so `10⁻²` is loose enough for
+a first round and a cap, and `10⁻⁴` is about a tenth of a pixel at the image's
+edge. `fixed` sets all four widths.
+
+**Step guards.** A candidate step is also rejected and re-damped when an image's
+`e_i` or `ω_i` is not finite, when its spline `c + K·e_i` at the candidate's `c`
+(`e_i` itself on a camera with an empty spline) fails `bspline_is_monotone` over
+`[0, ρ_max]` and its tail, or when its rolling-shutter step at the image's
+corners is farther from the identity than `0.5`. That distance is
+`CameraIntrinsics::rolling_shutter_contraction`, the largest Frobenius norm at
+the four corners of `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, read at the
+distorted point each corner pixel has before the step: it bounds the
+contraction of the unprojection's fixed-point iteration, which converges while
+it is under one. Measured rates give about `10⁻³`, so `0.5` holds no real image
+and keeps the iteration well inside convergence.
+
+**The spline penalty** is unchanged: it smooths the shared coefficients `c`,
+and a two-coefficient correction has no interior coefficient for it to act on.
+
+**The result.** `BundleAdjustment::image_adjustments` carries each image's
+solved correction and rates, and each camera's `ImagePrior` reports
+`radial_bspline` and `rolling_shutter` widths and spreads beside the other two,
+`NaN` for a field the camera does not release per image.
+
+**Parity.** A solve in which no camera releases a correction takes the
+instantiations it took before the corrections could be released, and computes
+the same output bit for bit: the kernel's, the reconstruction-level
+adjustment's, growth's and rotation initialisation's test scenes (412 solves)
+gave identical outputs before and after.
+
 ### Parity
 
 With one camera and every image on it, the layout above reduces to
@@ -1111,12 +1277,20 @@ bundle_adjust(
     opt_image_f=False,         # each image's focal scale, on the opt_f models
     opt_image_pp=False,        # each image's principal-point offset, any model
     image_adjustments=None,    # (n_img, 3) [focal, a_x, a_y]; None = none
-    image_prior=None,          # {"loose", "floor", "fixed"}: dicts of focal
-                               # and principal_point; None = the defaults
+    image_prior=None,          # {"loose", "floor", "fixed"}: dicts of focal,
+                               # principal_point, radial_bspline and
+                               # rolling_shutter; None = the defaults
     schedule=[(50.0, 5.0), (12.0, 2.0), (4.0, 1.0)],
     max_iters=60,
     min_track=2,
     min_obs=12,
+    opt_image_radial_bspline=False,  # each image's radial correction,
+                               # SFMTOOL_PINHOLE only
+    opt_image_rolling_shutter=False, # each image's rates, SFMTOOL_PINHOLE
+                               # with a scanlines setting
+    image_radial_bspline_adjustments=None,  # (n_img, 2) [e_0, e_1]; None = 0
+    image_rolling_shutter_rates=None,       # (n_img, 3) [wx, wy, wz]; None = 0
+    rolling_shutter_scanlines=None,  # one "ROWS" / "COLUMNS" / None per camera
 ) -> dict                      # cameras (list of CameraIntrinsics),
                                # quaternions_wxyz (n_img, 4),
                                # translations (n_img, 3), points (n_pt, 3),
@@ -1124,6 +1298,8 @@ bundle_adjust(
                                # point_at_infinity (n_pt,),
                                # free_point_decision (dict or None),
                                # image_adjustments (n_img, 3),
+                               # image_radial_bspline_adjustments (n_img, 2),
+                               # image_rolling_shutter_rates (n_img, 3),
                                # image_priors (list of dict or None)
 ```
 
@@ -1144,15 +1320,29 @@ past `cameras` raise `ValueError` as well. `opt_image_f` raises for a camera
 whose focal `opt_f` would refuse. `image_adjustments` is the kernel's
 `BaCameras::image_adjustments`, one `[focal, a_x, a_y]` row per image, held
 unless a per-image release moves it, and `image_adjustments` in the result is
-`BundleAdjustment::image_adjustments` in the same layout. The binding has no
-argument for a radial correction or rolling-shutter rates, so every image it
-solves has both at zero; the reconstruction-level adjustment passes them
-([bundle-adjust.md](../reconstruction/bundle-adjust.md)). `image_prior` is
+`BundleAdjustment::image_adjustments` in the same layout. Each image's radial
+correction and rates are two more arrays rather than wider columns of
+`image_adjustments`, so a caller that predates them is not broken by a wider
+array: `image_radial_bspline_adjustments` (n_img, 2) and
+`image_rolling_shutter_rates` (n_img, 3) go in held unless
+`opt_image_radial_bspline` or `opt_image_rolling_shutter` moves them, zero where
+absent, and come back in the same layouts. The new arguments come after
+`min_obs`, so a positional call that predates them reads as it did.
+`rolling_shutter_scanlines` is `BaCameras::rolling_shutter_scanlines`, one
+`"ROWS"`, `"COLUMNS"` or `None` per camera: one known setting each, since the
+kernel runs one solve, and not read for a camera that releases no rates and
+whose images' rates are zero. `opt_image_radial_bspline` raises for a camera
+that is not `SFMTOOL_PINHOLE` or whose spline domain end is not positive and
+finite, `opt_image_rolling_shutter` for a camera that is not `SFMTOOL_PINHOLE` or
+has no scanlines setting, and an image correction its camera cannot take
+(`CameraIntrinsics::check_adjustment`: not finite, on another model, or rates
+with no setting) raises naming the image. `image_prior` is
 `ImagePriorOptions` as a dict of `loose`, `floor` and `fixed`, each a dict of
-`focal` and `principal_point` (`fixed` also `None`), a missing key at its
-default; an unknown key, or a width that is not positive and finite, raises.
-`image_priors` holds one entry per camera, `None` where it released nothing per
-image, and otherwise a dict of `widths`, `derived` and `spread`.
+`focal`, `principal_point`, `radial_bspline` and `rolling_shutter` (`fixed` also
+`None`), a missing key at its default; an unknown key, or a width that is not
+positive and finite, raises. `image_priors` holds one entry per camera, `None`
+where it released nothing per image, and otherwise a dict of `widths`,
+`derived` and `spread`, each widths dict with the four keys.
 
 `held`, `distance` and `distance_from` are the flat form of the kernel's
 `PointConstraints`: the binding assembles them, so a caller states each point's
@@ -1391,6 +1581,40 @@ Python's point of view).
     to under 60% of the spread and recovers the spread within 15%, and reads
     the focal in `t`: the same deviations given as log focal scales and as
     principal-point offsets derive the same spread.
+- **The per-image corrections**
+  ([`bundle_adjust/tests/per_image/corrections.rs`](../../../crates/sfmtool-core/src/geometry/bundle_adjust/tests/per_image/corrections.rs)),
+  on the per-image release's scenes through a 60° `SFMTOOL_PINHOLE` with a mild
+  barrel spline:
+  - the five correction columns match a central difference of the projection
+    and point at the image's own slots, on rows and on columns, at a held
+    correction and rates and at zero ones;
+  - from thirty images with radial corrections (spread `3·10⁻³`) and rates
+    (`4·10⁻³`) drawn about a zero mean and 0.1 px of noise, each is recovered to
+    25% and 15% of its spread (rms) on rows and on columns, the mean
+    rate stays under `10⁻⁷`, the mean correction is zero to rounding and the
+    camera's spline moves by under `10⁻⁷`;
+  - with the camera's spline released beside corrections that share a common
+    part, the camera takes the common part and every image reads its planted
+    spline, within 0.3 and 0.5 px at three radii;
+  - rates whose mean starts away from zero, planted with a common part of
+    `3·10⁻³`, end with their mean at its start to `10⁻⁷` and their differences
+    from it recovered;
+  - the derived widths recover planted spreads of both fields within
+    `[0.7, 1.4]` over forty images with half a pixel of noise, images that do not
+    vary derive both floors, and `fixed` widths cover both fields;
+  - the re-centring moves the mean correction into the spline and leaves every
+    image's spline as it was, an unsolved image's included;
+  - an image pulled toward a correction that folds its spline keeps it
+    monotone, and one pulled toward rates of 0.8 per short side stops at the
+    rolling-shutter guard, each having moved toward its pull; the guard's
+    distance is zero without rates and linear in them;
+  - the correction flags on with nothing released per image give the solve with
+    them off bit for bit, a `SIMPLE_PINHOLE` holds both corrections whatever its
+    release, and releasing rates with no scanlines setting panics;
+  - the binding returns held corrections bit for bit, recovers released ones
+    about their mean on rows and on columns, reports the four widths and
+    refuses each malformed argument
+    ([`test_bundle_adjust_rust_bindings.py`](../../../tests/rust_bindings/geometry/test_bundle_adjust_rust_bindings.py)).
 - **Directions carry the `k1` release**: on a scene whose finite cloud sits near the
   optical axis (no `θ³` signal) and whose far field is marked at infinity,
   `opt_k1` recovers the planted curvature — and the same solve with the

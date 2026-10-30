@@ -20,8 +20,9 @@ and chosen in the bundle adjustment as `ROWS`, `COLUMNS` or `UNKNOWN`, where
 `UNKNOWN` solves with each and keeps the lower cost, and a camera that
 releases its rates with no stored setting is solved as `UNKNOWN`, never as an
 assumed `ROWS`; every new per-image field is zero-mean over its camera's images
-with the mean held. Not decided: the prior widths, the early-stopping rule for
-`UNKNOWN`, and the questions listed under
+with the mean held, by a stiff prior on the mean; the new prior widths are
+derived per camera like the existing ones. Not decided: the early-stopping rule
+for `UNKNOWN`, and the questions listed under
 [Open questions](#open-questions).
 
 ## Purpose
@@ -432,7 +433,8 @@ the build settled beyond the bullets below:
   held rates (the focal columns' `t·ṗ` term of
   [Core: the bundle adjustment](#core-the-bundle-adjustment) and the spline
   column's `(I + ṗ·∇tᵀ)`); its spline step guard checks each image's
-  `c + K·e_i`. Releasing the corrections is the next step.
+  `c + K·e_i`. The kernel's releases of both are built too
+  ([Core: the bundle adjustment](#core-the-bundle-adjustment)).
 - A model switch refuses a camera whose images carry either correction.
 
 - [`IntrinsicAdjustment`](../../crates/sfmtool-core/src/camera/intrinsics.rs)
@@ -492,10 +494,49 @@ the build settled beyond the bullets below:
 
 ### Core: the bundle adjustment
 
-In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
+**Built** in the kernel and its binding, and filed in
+[bundle-adjustment.md § The per-image
+corrections](../core/geometry/bundle-adjustment.md#the-per-image-corrections):
+`CameraRelease::image_radial_bspline` and `::image_rolling_shutter`, the
+kernel's `opt_image_radial_bspline` and `opt_image_rolling_shutter`, one fixed
+scanlines setting per camera read from `BaCameras::rolling_shutter_scanlines`,
+the fourteen-wide image blocks in two new instantiations, the five columns, the
+two new prior terms with `ImagePriorWidths::radial_bspline` and
+`::rolling_shutter`, the mean hold, the move of the mean radial correction into
+the spline after each round, the derived widths, the step guards, the report
+and the parity. The binding is in [Bindings, viewer, CLI](#bindings-viewer-cli).
+What the build settled beyond the design below:
+
+- **The prior widths are derived per camera**, by the existing scheme extended
+  to the new slots, the radial correction's two coefficients pooled as two
+  samples per image and the rates' three components as three, clamped to
+  `ImagePriorOptions` `loose = 10⁻²` and `floor = 10⁻⁴` for both new fields, the
+  draft's proposed starting point; `fixed` sets them as it sets the others.
+- **The mean is held by a stiff prior** on the mean over the camera's solved
+  images, per camera and component, `σ_n²·(x̄ − x̄₀)²/σ_h²` with
+  `σ_h = 10⁻⁶` in the field's own unit, rather than by a bordered system. It is
+  added to the damped system after the damping, so its stiffness does not damp
+  the images' own steps. The standing spec says why `10⁻⁶`: a hundred times the
+  scratch solver's `10⁻⁴`, far above the data's and the spline penalty's
+  curvature along the mean, and on each image's slot of the order of the data's
+  own diagonal, so it costs the factorization a digit or two at most. A camera
+  with one image in the round holds that image's correction and rates.
+- The mean radial correction is moved into the camera's spline after each round
+  only where the spline is not empty; a camera with an empty spline keeps it in
+  its images, held near zero by the hold. The spline is written into the camera
+  even where the shared spline is not released.
+- A camera that releases its rates without a scanlines setting is a caller
+  error: the kernel panics and the binding raises, rather than the release being
+  dropped, since no model gate is at fault.
+- The rolling-shutter guard's distance from the identity is the largest
+  Frobenius norm at the image's four corners of
+  `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, read at the distorted point
+  each corner pixel has before the step, with the proposed bound of `0.5`.
+
+The design the build follows:
 
 - [`CameraRelease`](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
-  gains `image_radial_bspline: bool` and `image_rolling_shutter: bool` (proposed), and
+  gains `image_radial_bspline: bool` and `image_rolling_shutter: bool`, and
   `bundle_adjust` two flags `opt_image_radial_bspline` and `opt_image_rolling_shutter`,
   narrowed per camera by them as the existing per-image flags are. Both are
   refused on any model but `SFMTOOL_PINHOLE`; `image_radial_bspline` also on a camera
@@ -547,18 +588,13 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
   [bundle-adjustment.md](../core/geometry/bundle-adjustment.md#the-per-image-release)
   with two more terms per camera, `‖e_i − ē‖²/σ_radial_bspline²` and
   `‖ω_i − ω̄‖²/σ_rs²`, isotropic over each field's components, in the same
-  `σ_n²`-scaled units. `ImagePriorWidths` gains `radial_bspline` and `rolling_shutter`
-  (proposed). How the widths are chosen is open
-  ([open question](#open-questions)).
+  `σ_n²`-scaled units. `ImagePriorWidths` gains `radial_bspline` and
+  `rolling_shutter`, derived per camera (above).
 - **The mean hold.** The mean of `e` and of `ω` over the camera's solved images
-  is held at the value it starts the round at (zero for a fresh release), as an
-  exact linear constraint per camera and component. Proposed: a bordered
-  system, one Lagrange row per constraint, solved by the dense LU the reduced
-  system already uses, since LU does not need the matrix to be positive
-  definite. The alternative, a stiff prior on the mean, is simpler but leaves
-  the mean held only to the stiffness. After each round, any rounding residue
+  is held at the value it starts the round at (zero for a fresh release), per
+  camera and component, by the stiff prior above. After each round, any residue
   of `ē` is moved into the shared spline (`c ← c + K·ē`, `e_i ← e_i − ē`, which
-  changes no image's intrinsics to rounding), and of `ω̄` is left as it is.
+  changes no image's intrinsics to rounding), and `ω̄` is left as it is.
 - **The width derivation** (steps 2 to 5 of "Deriving the widths") reads each
   image's block over all its moving slots, so it extends to the new slots as
   it is.
@@ -567,8 +603,8 @@ In [bundle_adjust.rs](../../crates/sfmtool-core/src/geometry/bundle_adjust.rs):
   over `[0, ρ_max]` (per image, through the existing `bspline_step_admissible`),
   or when the rolling-shutter step's Jacobian at the image's corners is farther
   from the identity than the unprojection's fixed-point iteration tolerates (a
-  bound of 0.5 on its distance from `I` is proposed: far from any measured
-  value and well inside the iteration's convergence).
+  bound of 0.5 on its distance from `I`: far from any measured value and well
+  inside the iteration's convergence).
 - **The spline penalty** (`SplinePenalty`) is unchanged: it smooths the shared
   coefficients `c`, and a two-coefficient correction has no interior
   coefficient for it to act on.
@@ -715,9 +751,10 @@ notes the corrections and a scanlines setting it cannot copy
 inspect --verbose` names them and the scanlines setting
 ([inspect-command.md](../cli/reconstruction/inspect-command.md)).
 
-The releases and the scanlines choice for the two corrections below, in the
-bindings, the viewer's Bundle Adjust dialog and the MCP tool, are proposed; the
-`read_sfmr` / `write_sfmr` bullet is built.
+The releases and the scanlines choice for the two corrections below, in
+`EditedReconstruction.bundle_adjust`, the viewer's Bundle Adjust dialog and the
+MCP tool, are proposed; the kernel binding's and the `read_sfmr` /
+`write_sfmr` bullets are built.
 
 - `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each
@@ -730,8 +767,10 @@ bindings, the viewer's Bundle Adjust dialog and the MCP tool, are proposed; the
   with rows and with columns and whether one was stopped, and
   `ImageAdjustmentSpread` the new fields' spreads, with `ImageAdjustmentParameter`
   gaining a variant for each so `near_prior` can name them.
-- The kernel binding `sfmtool.geometry.bundle_adjust`
-  ([bundle_adjust.rs](../../crates/sfmtool-py/src/geometry/bundle_adjust.rs))
+- **Built:** the kernel binding `sfmtool.geometry.bundle_adjust`
+  ([bundle_adjust.rs](../../crates/sfmtool-py/src/geometry/bundle_adjust.rs),
+  [bundle-adjustment.md §
+  Bindings](../core/geometry/bundle-adjustment.md#bindings))
   keeps `image_adjustments` as `(n_img, 3)` and takes the new fields as two more
   arrays, `image_radial_bspline_adjustments` `(n_img, 2)` and
   `image_rolling_shutter_rates` `(n_img, 3)`, with a `rolling_shutter_scanlines`
@@ -863,6 +902,37 @@ The outermost band has about 85 observations.
   shared lens term: decentering, thin prism, aspect ratio and skew were all at
   the noise level. Only per-image fields remained.
 
+**The kernel's run.** The kernel, through its binding, on
+`dino_dog_toy_ground_truth_candidate_v012.sfmr` as it is now (85 images, 1245
+points, 24931 observations; the file has gained points since the scratch
+experiments' 1176 and 23731), keeping every observation (one round of
+`(inf, 1000)`, which a derived prior runs twice) with the free points kept in
+their representation, releasing the focal, the spline, each image's focal and
+principal point, and with them each image's radial correction and rates on
+`ROWS`. Training RMS per component, with no held-out score:
+
+| Solve | Training RMS, px | Time |
+|---|---|---|
+| as stored, no step | 0.2500 | |
+| re-solved with no new terms | 0.2494 | 6.6 s |
+| with both corrections, rows | **0.1443** | 13.5 to 20 s |
+| with both corrections, columns | 0.1486 | 15 s |
+
+against the scratch solver's 0.256 without the terms and 0.149 to 0.164 with
+them (two-coefficient correction and rows, fixed widths). On rows the derived
+widths were `2.96·10⁻³` for the radial correction and `1.28·10⁻³` for the rates
+(the focal's `0.0150`, the principal point's `0.0131`). The fitted radial
+correction has a median size of 1.9 px at `ρ = 0.5`, 4.9 px at `ρ = 0.75` and
+6.6 px at `ρ_max`, with a largest of 22.5 px at `ρ = 0.75`; its coefficients
+spread `2.0·10⁻³` in `e_0` and `6.9·10⁻³` in `e_1`, so the one width pooled over
+both sits near `e_0`'s spread and holds `e_1` more tightly than its own spread
+would. The rates spread `1.1·10⁻³` to `1.5·10⁻³` per component, and their
+displacement at the centre of the bottom edge has a median of 1.0 px and a
+largest of 5.3 px, against the scratch solver's 1.3 and 5.5 px. The mean rates
+ended within `2·10⁻⁷` of zero, their start, under `2·10⁻⁴` of their spread,
+and the mean radial correction was zero to rounding after its move into the
+spline.
+
 **Caveats.** One capture from one phone. A scratch solver with plain least
 squares rather than the kernel's soft-L1 and trim schedule, and capped
 evaluations. Cross-validation shows that the terms predict held-out points
@@ -955,21 +1025,17 @@ When built, the tests cover at least:
   choice is kept once the later cameras' rates are released. Whether releasing
   them could have changed an earlier choice, and whether a second pass over the
   cameras is worth its cost, is untested: every measured capture has one camera.
-- **Prior widths.** Whether the new widths are derived per camera by the
-  existing empirical Bayes scheme (`ImagePriorOptions` `loose` and `floor`)
-  or fixed. Derived, the loose widths cannot be the existing 0.1 (a radial
-  correction of 0.1 at the domain end is about 145 px at this focal);
-  `loose` of 10⁻² and `floor` of 10⁻⁴ for both new fields would be a starting
-  point. Fixed, defaults inside the flat region of the measurements (4·10⁻³ for
-  the radial correction, 4·10⁻³ for the rates, about 4.2·10⁻³ in this draft's
-  rate units) would do. The measurements say
-  the widths do little work past those values, which argues for fixed defaults;
-  the existing release derives its widths because a fixed lens and a
-  stabilised one differ, which argues for deriving. Also open: whether one
-  isotropic width over `e_0` and `e_1` is right when the two coefficients mean
-  different things.
-- **How the mean is held.** An exact constraint in a bordered system (proposed)
-  or a stiff prior on the mean.
+- **Prior widths.** Settled and built: derived per camera by the existing
+  scheme, with `loose` of 10⁻² and `floor` of 10⁻⁴ for both new fields
+  ([Core: the bundle adjustment](#core-the-bundle-adjustment)). Still open:
+  whether one isotropic width over `e_0` and `e_1` is right when the two
+  coefficients mean different things. On the dino capture `e_1` spreads about
+  3.4 times as far as `e_0`, and the pooled width sits near `e_0`'s spread
+  ([Measured results](#measured-results)); a width per coefficient, or one
+  read as the correction's size at a radius, would be the alternatives.
+- **How the mean is held.** Settled and built: a stiff prior on the mean of
+  width `10⁻⁶`, not a bordered system
+  ([Core: the bundle adjustment](#core-the-bundle-adjustment)).
 - **Where the rolling shutter sits in memory.** Settled and built:
   `rolling_shutter: Option<RollingShutter>` on `CameraIntrinsics`, read by every
   projection routine, with every comparison and every place that builds a
