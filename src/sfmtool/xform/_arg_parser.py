@@ -107,6 +107,20 @@ def _parse_opt_int(value: str) -> int | None:
     return int(value)
 
 
+def _parse_camera_list(value: str) -> list[int]:
+    """Parse ``0+1+3`` into camera indexes."""
+    return [int(v) for v in value.split("+") if v.strip()]
+
+
+# What a value of each parser's own is, for the usage error on one that does
+# not parse; a built-in caster is named by its type (``int``, ``float``).
+_VALUE_NAMES: dict[Callable[[str], object], str] = {
+    _parse_bool: "boolean (on, off, true, false, yes, no, 1 or 0)",
+    _parse_opt_int: "integer or none",
+    _parse_camera_list: "camera list (camera indexes joined by '+')",
+}
+
+
 def _parse_kv_params(
     param: str, option_name: str, keys: dict[str, Callable[[str], object]]
 ) -> dict:
@@ -142,7 +156,8 @@ def _parse_kv_params(
             except ValueError:
                 raise click.UsageError(
                     f"Invalid value for {option_name} key '{key}': "
-                    f"'{value}' is not a valid {caster.__name__}"
+                    f"'{value}' is not a valid "
+                    f"{_VALUE_NAMES.get(caster, caster.__name__)}"
                 )
     return kwargs
 
@@ -298,11 +313,6 @@ def parse_localize_keypoints_params(param: str) -> LocalizeKeypointsTransform:
     return LocalizeKeypointsTransform(
         **_parse_kv_params(param, "--localize-keypoints", _LOCALIZE_KEYPOINTS_KEYS)
     )
-
-
-def _parse_camera_list(value: str) -> list[int]:
-    """Parse ``0+1+3`` into camera indexes."""
-    return [int(v) for v in value.split("+") if v.strip()]
 
 
 # Each --bundle-adjust key maps to a caster; the transform and the adjustment

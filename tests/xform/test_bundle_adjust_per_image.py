@@ -69,8 +69,15 @@ class TestTheKeys:
             )
         with pytest.raises(click.UsageError, match="only with image_rolling_shutter"):
             parse_transform_args(["--bundle-adjust", "scanlines=rows"])
-        with pytest.raises(click.UsageError, match="not a valid"):
+        # The error names the key and the values it takes, not a function.
+        with pytest.raises(click.UsageError) as refused:
             parse_transform_args(["--bundle-adjust", "image_focal=maybe"])
+        assert str(refused.value) == (
+            "Invalid value for --bundle-adjust key 'image_focal': 'maybe' is not a "
+            "valid boolean (on, off, true, false, yes, no, 1 or 0)"
+        )
+        with pytest.raises(click.UsageError, match="not a valid camera list"):
+            parse_transform_args(["--bundle-adjust", "cameras=one"])
         with pytest.raises(ValueError, match="scanlines must be one of"):
             BundleAdjustTransform(image_rolling_shutter=True, scanlines="rows")
 

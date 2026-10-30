@@ -496,9 +496,12 @@ the rates are held at zero mean. A held camera releases nothing per image. Any
 per-image key sends the run through sfmtool's adjustment, announced as
 `Running bundle adjustment (sfmtool; a per-image release, which pycolmap
 cannot hold)...` when no camera has a spline model, so on a reconstruction of
-COLMAP models it releases the focal only on the models the adjustment releases
-it on, the distortion only where it is `k1` of a `SIMPLE_RADIAL_FISHEYE`, and
-it accepts `cross=off`. A camera that cannot take a release is refused with
+COLMAP models every released camera's focal is released too, which needs a
+model whose focal the adjustment can release (a `SIMPLE_RADIAL` camera is
+refused: `the focal cannot be released on camera 0, a SIMPLE_RADIAL; ...`),
+the distortion is released only where it is `k1` of a
+`SIMPLE_RADIAL_FISHEYE`, and `cross=off` is accepted. A camera that cannot
+take a release is refused with
 the adjustment's own sentence, naming the camera, before anything is written:
 `the radial correction cannot be released per image on camera 0, a
 SIMPLE_PINHOLE; ...` (the radial correction and the rates are released on an
@@ -544,8 +547,8 @@ rows chosen: columns stopped at round 1, iteration 12: cost 16552.7 with rows,
 17506.1 with columns (gap 953.4 over 24918 observations)`, the two costs at the
 pair the stop was decided at. The lines follow the viewer's Action Log clauses
 for the same run ([`../../../gui/edits/bundle-adjust.md`](../../../gui/edits/bundle-adjust.md)),
-except that the rates' width is in milliradians and a count of no image beyond
-two widths is stated. They are
+except that the rates' width is in milliradians, the pixel widths have two
+decimals rather than one, and a count of no image beyond two widths is stated. They are
 `format_image_prior_widths` and `format_scanlines` in
 [`_bundle_adjust.py`](../../../../src/sfmtool/xform/_bundle_adjust.py). The
 recorded transform description lists the keys given, `Bundle adjustment
