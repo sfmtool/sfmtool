@@ -26,6 +26,10 @@
 //! that shows messages would print one line per iteration; a collector that
 //! compares nothing ignores values.
 //!
+//! A caller that reads a nested call's events before they reach its own sink,
+//! or holds them back, gives the call a [`Progress::tapped`] copy of its
+//! `Progress` and passes on what it chooses with [`Progress::forward`].
+//!
 //! [`Progress`] is the one parameter carrying all five, and the values. A
 //! function that can be slow takes a `&Progress`, passes it down, and reports
 //! through it; a caller that wants none of this passes `&Progress::none()`,
@@ -291,6 +295,64 @@ impl<'a> Progress<'a> {
             cancel: Some(flag),
             ..self
         }
+    }
+
+    /// The same `Progress`, at the same depth, over the same range, with the
+    /// same detail setting and cancel flag, whose events go to `tap` instead
+    /// of to this one's sink.
+    ///
+    /// For a caller that reads what a nested call reports, or holds it back,
+    /// before passing it on: `tap` sees every event the nested call emits,
+    /// already carrying its depth and its fraction of the whole operation, and
+    /// passes on what it chooses with [`Self::forward`] on this `Progress`.
+    /// The two solves of a race report through one each, which is how each
+    /// solve's costs reach the comparison while its phases still reach the
+    /// caller.
+    ///
+    /// ```
+    /// use sfmtool_progress::{Event, Progress};
+    /// use std::sync::Mutex;
+    ///
+    /// let seen = Mutex::new(Vec::new());
+    /// let sink = |event: Event<'_>| {
+    ///     if let Event::Enter { phase, depth } = event {
+    ///         seen.lock().unwrap().push((phase, depth));
+    ///     }
+    /// };
+    /// let progress = Progress::to(&sink);
+    /// let outer = progress.phase("outer");
+    /// let costs = Mutex::new(Vec::new());
+    /// let tap = |event: Event<'_>| {
+    ///     if let Event::Value { value, .. } = event {
+    ///         costs.lock().unwrap().push(value);
+    ///     }
+    ///     outer.forward(event);
+    /// };
+    /// let tapped = outer.tapped(&tap);
+    /// tapped.value("cost", 2.5);
+    /// let _inner = tapped.phase("inner");
+    /// assert_eq!(*costs.lock().unwrap(), [2.5]);
+    /// assert_eq!(*seen.lock().unwrap(), [("outer", 0), ("inner", 1)]);
+    /// ```
+    pub fn tapped<'b>(&self, tap: &'b (dyn Fn(Event<'_>) + Sync)) -> Progress<'b>
+    where
+        'a: 'b,
+    {
+        Progress {
+            sink: Some(tap),
+            cancel: self.cancel,
+            detail: self.detail,
+            depth: self.depth,
+            offset: self.offset,
+            extent: self.extent,
+        }
+    }
+
+    /// Send `event` to this `Progress`'s sink as it is, depth and fraction
+    /// included: what the tap of a [`Self::tapped`] `Progress` calls to pass
+    /// on an event it read. Nothing when no sink is attached.
+    pub fn forward(&self, event: Event<'_>) {
+        self.emit(event);
     }
 
     /// Record the phases opened with [`Self::detail_phase`], or not.

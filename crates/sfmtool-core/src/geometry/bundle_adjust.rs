@@ -111,6 +111,19 @@ pub const KEPT_VALUE: &str = "kept observations";
 /// state it starts from.
 pub const NOISE_VALUE: &str = "noise";
 
+/// How many rounds [`bundle_adjust`] runs over a schedule of `schedule_len`
+/// rounds: those rounds, or two for a one-round schedule whose per-image prior
+/// is derived (`derived_prior`: some camera releases a per-image parameter and
+/// the widths are not fixed), which runs its round a second time under widths
+/// derived from the first.
+pub(crate) fn rounds_run(schedule_len: usize, derived_prior: bool) -> usize {
+    if derived_prior && schedule_len == 1 {
+        2
+    } else {
+        schedule_len
+    }
+}
+
 /// Default widening multiplier on a stage's `loss_scale` for protected
 /// observations (see [`bundle_adjust`]'s `protected`).
 pub const DEFAULT_PROTECTED_LOSS_SCALE: f64 = 3.0;
@@ -4848,7 +4861,7 @@ fn bundle_adjust_staged(
     // A one-round schedule runs its round a second time under widths derived
     // from the first, so that every derived prior is derived at least once.
     let repeated: [BaSchedule; 2];
-    let schedule: &[BaSchedule] = if derive && schedule.len() == 1 {
+    let schedule: &[BaSchedule] = if rounds_run(schedule.len(), derive) > schedule.len() {
         repeated = [schedule[0], schedule[0]];
         &repeated
     } else {

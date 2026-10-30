@@ -30,6 +30,14 @@ left. Two lockstep units are replayed:
   round's end. The rate is the mean decrease over the last three rounds, each
   from its start to its end, and the budget is the rounds left.
 
+The rule the adjustment runs is the ``iteration`` one at ``T = 100`` and
+``K = 3``, built as ``EarlyStopRule`` in
+``crates/sfmtool-core/src/reconstruction/bundle_adjust/race.rs`` with these
+definitions of the pairs, the gap, the rate and the budget, and one more
+condition this replay does not apply: no pair holds while the two rounds kept
+different counts of observations. Record the trajectories with the example's
+early stop off, its default, so that both solves run to the end.
+
 Usage::
 
     pixi run python scripts/scanlines_race_early_stop.py out1.json [out2.json ...]

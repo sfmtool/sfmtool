@@ -274,9 +274,35 @@ fn unknown_scanlines_pick_the_planted_ones() {
         );
         let camera = &report.cameras[0];
         let race = camera.scanlines_race.expect("a race");
-        assert!(!race.stopped_early);
+        // The planted rates are clear enough that the other solve is stopped,
+        // and the costs are the two at the stop, their difference the gap.
+        let stop = race.stop.expect("the trailing solve was stopped");
+        assert!(race.stopped_early);
+        assert_ne!(stop.stopped, planted);
         assert!(race.observations > 1000, "{race:?}");
         assert!(race.sigma_px > 0.05 && race.sigma_px < 0.2, "{race:?}");
+        assert!(
+            ((race.rows_cost - race.columns_cost).abs() - stop.gap).abs() < 1e-9 * stop.gap,
+            "{race:?}"
+        );
+        assert!(stop.gap > 100.0 && stop.winner_cost.is_finite(), "{race:?}");
+        // The stopped solve's phase says where it stopped.
+        let stopped_phase = match stop.stopped {
+            RollingShutterScanlines::Rows => "solve with rows",
+            RollingShutterScanlines::Columns => "solve with columns",
+        };
+        let note = format!(
+            "stopped at round {}, iteration {}",
+            stop.round, stop.iteration
+        );
+        assert!(
+            collector
+                .left()
+                .iter()
+                .any(|(name, _, said)| *name == stopped_phase && said.as_deref() == Some(&note)),
+            "{:?}",
+            collector.left()
+        );
         let (won, lost) = match planted {
             RollingShutterScanlines::Rows => (race.rows_cost, race.columns_cost),
             RollingShutterScanlines::Columns => (race.columns_cost, race.rows_cost),
@@ -305,7 +331,7 @@ fn unknown_scanlines_pick_the_planted_ones() {
             .collect();
         assert!(
             said.iter()
-                .any(|t| t.starts_with("camera 0: cost") && t.ends_with(planted.as_str())),
+                .any(|t| t.starts_with("camera 0: ") && t.ends_with(planted.as_str())),
             "{said:?}"
         );
         // The solved rates are near the planted ones.
@@ -477,6 +503,26 @@ fn several_unknown_cameras_are_raced_in_order_each_from_the_last_winner() {
         Some(RollingShutterScanlines::Columns)
     );
     assert!(report.cameras.iter().all(|c| c.scanlines_race.is_some()));
+    // Each race ran the early stop, and where it stopped a solve it stopped
+    // the one not chosen; the answer is the one two full solves per race give.
+    for camera in &report.cameras {
+        if let Some(stop) = camera.scanlines_race.unwrap().stop {
+            assert_ne!(Some(stop.stopped), camera.rolling_shutter_scanlines);
+        }
+    }
+    let full = BundleAdjustOptions {
+        scanlines_early_stop: ScanlinesEarlyStopOptions {
+            enabled: false,
+            ..ScanlinesEarlyStopOptions::default()
+        },
+        ..BundleAdjustOptions::uniform(2, both)
+    };
+    let (full_out, _) = bundle_adjust(&source, &full, &Progress::none()).expect("full solves");
+    same_bits(
+        &state_bits(&out),
+        &state_bits(&full_out),
+        "against two full solves each",
+    );
 
     let first = releasing(&[
         both,
@@ -766,11 +812,204 @@ fn a_cancelled_race_stops_both_solves() {
     .err()
     .expect("the sink stopped it");
     assert_eq!(error, BundleAdjustError::Cancelled);
-    assert_eq!(race_phases(&collector), ["solve with rows"]);
+    // Both solves started at once, and each left its phase: the
+    // cancellation stopped both, and nothing was written back.
+    assert_eq!(
+        race_phases(&collector),
+        ["solve with rows", "solve with columns"]
+    );
+    let left: Vec<_> = collector
+        .left()
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .filter(|name| name.starts_with("solve with"))
+        .collect();
+    assert_eq!(left, ["solve with rows", "solve with columns"]);
     assert!(collector
         .entered()
         .iter()
         .all(|(name, _)| *name != "write back"));
+
+    // With the early stop off the solves run one after the other, and the
+    // second never starts.
+    let collector = Collector::cancelling();
+    let sink = |event: Event<'_>| collector.push(event);
+    let progress = Progress::to(&sink).cancelled_by(&collector.cancel);
+    let error = bundle_adjust(&source, &full_solves(), &progress)
+        .err()
+        .expect("the sink stopped it");
+    assert_eq!(error, BundleAdjustError::Cancelled);
+    assert_eq!(race_phases(&collector), ["solve with rows"]);
+}
+
+/// Both corrections released per image with the early stop off: two full
+/// solves, one after the other.
+fn full_solves() -> BundleAdjustOptions {
+    BundleAdjustOptions {
+        scanlines_early_stop: ScanlinesEarlyStopOptions {
+            enabled: false,
+            ..ScanlinesEarlyStopOptions::default()
+        },
+        ..BundleAdjustOptions::uniform(1, CORRECTIONS)
+    }
+}
+
+/// The report as text, every float in it spelled exactly.
+fn report_text(report: &BundleAdjustReport) -> String {
+    format!("{report:?}")
+}
+
+#[test]
+fn the_stop_falls_where_the_measurement_replayed_it() {
+    // The measurement's synthetic scenes at the default rate spread are
+    // these: the rule stops columns at round 2, iteration 4 with rows
+    // planted, and rows at round 2, iteration 2 with columns planted
+    // (bundle-adjust-measurements.md, "What the rule would do").
+    for (n, planted, stopped, iteration) in [
+        (
+            0,
+            RollingShutterScanlines::Rows,
+            RollingShutterScanlines::Columns,
+            4,
+        ),
+        (
+            1,
+            RollingShutterScanlines::Columns,
+            RollingShutterScanlines::Rows,
+            2,
+        ),
+    ] {
+        let source = one_camera_source(planted, 70 + 10 * n as u64);
+        let (_, report) = bundle_adjust(
+            &source,
+            &BundleAdjustOptions::uniform(1, CORRECTIONS),
+            &Progress::none(),
+        )
+        .expect("well posed");
+        let stop = report.cameras[0].scanlines_race.unwrap().stop.unwrap();
+        assert_eq!(
+            (stop.stopped, stop.round, stop.iteration),
+            (stopped, 2, iteration),
+            "{planted:?}: {stop:?}"
+        );
+    }
+}
+
+#[test]
+fn the_winner_of_a_stopped_race_is_the_solve_it_would_be_alone() {
+    // The rule stops the trailing solve, and the answer is, to the bit, the
+    // one two full solves give, and the one a solve given the winner's
+    // setting gives: holding the winner in its progress sink changed nothing
+    // it computed.
+    for (n, planted) in BOTH.into_iter().enumerate() {
+        let source = one_camera_source(planted, 70 + 10 * n as u64);
+        let (raced, raced_report) = bundle_adjust(
+            &source,
+            &BundleAdjustOptions::uniform(1, CORRECTIONS),
+            &Progress::none(),
+        )
+        .expect("well posed");
+        assert!(
+            raced_report.cameras[0]
+                .scanlines_race
+                .unwrap()
+                .stopped_early
+        );
+        let (full, full_report) =
+            bundle_adjust(&source, &full_solves(), &Progress::none()).expect("well posed");
+        let given = BundleAdjustOptions {
+            rolling_shutter_scanlines: vec![Some(planted.into())],
+            ..BundleAdjustOptions::uniform(1, CORRECTIONS)
+        };
+        let (alone, alone_report) =
+            bundle_adjust(&source, &given, &Progress::none()).expect("well posed");
+        same_bits(
+            &state_bits(&raced),
+            &state_bits(&full),
+            "against two full solves",
+        );
+        same_bits(
+            &state_bits(&raced),
+            &state_bits(&alone),
+            "against one solve",
+        );
+        // The reports differ in the race alone.
+        let mut without_race = raced_report.clone();
+        without_race.cameras[0].scanlines_race = None;
+        let mut full_without = full_report.clone();
+        full_without.cameras[0].scanlines_race = None;
+        assert_eq!(report_text(&without_race), report_text(&full_without));
+        assert_eq!(report_text(&without_race), report_text(&alone_report));
+        // The two full solves chose the same setting, by its final costs.
+        let full_race = full_report.cameras[0].scanlines_race.unwrap();
+        assert!(full_race.stop.is_none() && !full_race.stopped_early);
+    }
+}
+
+#[test]
+fn a_race_the_rule_never_stops_is_two_full_solves_to_the_bit() {
+    let source = one_camera_source(RollingShutterScanlines::Rows, 70);
+    let never = BundleAdjustOptions {
+        scanlines_early_stop: ScanlinesEarlyStopOptions {
+            gap_threshold: f64::INFINITY,
+            ..ScanlinesEarlyStopOptions::default()
+        },
+        ..BundleAdjustOptions::uniform(1, CORRECTIONS)
+    };
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+    let (raced, raced_report) =
+        bundle_adjust(&source, &never, &Progress::to(&sink)).expect("well posed");
+    let (full, full_report) =
+        bundle_adjust(&source, &full_solves(), &Progress::none()).expect("well posed");
+    same_bits(&state_bits(&raced), &state_bits(&full), "value");
+    assert_eq!(report_text(&raced_report), report_text(&full_report));
+    assert!(raced_report.cameras[0]
+        .scanlines_race
+        .unwrap()
+        .stop
+        .is_none());
+    // The columns solve's events are held until the rows solve has closed
+    // its phase, so each solve's phase reads whole, rows first.
+    let solves: Vec<String> = collector
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Owned::Enter(name, _) if name.starts_with("solve with") => Some(format!(">{name}")),
+            Owned::Leave(name, _, _) if name.starts_with("solve with") => Some(format!("<{name}")),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        solves,
+        [
+            ">solve with rows",
+            "<solve with rows",
+            ">solve with columns",
+            "<solve with columns"
+        ]
+    );
+}
+
+#[test]
+fn a_stopped_race_stops_at_the_same_place_every_time() {
+    // The rule reads the solves' values, never the threads' timing.
+    let source = one_camera_source(RollingShutterScanlines::Columns, 80);
+    let runs: Vec<(Vec<u64>, String)> = (0..4)
+        .map(|_| {
+            let (out, report) = bundle_adjust(
+                &source,
+                &BundleAdjustOptions::uniform(1, CORRECTIONS),
+                &Progress::none(),
+            )
+            .expect("well posed");
+            (state_bits(&out), report_text(&report))
+        })
+        .collect();
+    for run in &runs[1..] {
+        same_bits(&run.0, &runs[0].0, "value");
+        assert_eq!(run.1, runs[0].1);
+    }
 }
 
 #[test]

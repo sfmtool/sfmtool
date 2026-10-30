@@ -4105,14 +4105,17 @@ the dialog's **Scanlines** choice: `"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`, any
 other value refused at the parse. Omitted, call-wide and in the camera's entry,
 it is the camera's stored setting, or `"UNKNOWN"` where the camera stores none:
 an absent setting means the scanlines are not known, and none is assumed.
-`"UNKNOWN"` solves the adjustment once with each setting and keeps the lower
-cost, so it takes about twice as long. The setting the rates were solved on is
+`"UNKNOWN"` solves the adjustment once with each setting, side by side, stops
+the trailing solve once it cannot catch up, and keeps the lower cost, so it
+takes up to twice as long. The setting the rates were solved on is
 written into the camera. It is ignored for a camera that does not release its
 rates. The report adds each such camera's scanlines, `, rolling shutter on
 rows`, and under `"UNKNOWN"` both costs, `, rolling shutter on rows chosen:
 cost 49350.0 with rows, 52349.0 with columns over 24931 observations, both
-solves run to the end` ([edits/bundle-adjust.md](edits/bundle-adjust.md) §
-"The Action Log").
+solves run to the end`, or, where the trailing solve was stopped, where and the
+gap, `, rolling shutter on rows chosen: columns stopped at round 1, iteration
+12 (gap 953.4 over 24918 observations), cost 48612.4 with rows at the end`
+([edits/bundle-adjust.md](edits/bundle-adjust.md) § "The Action Log").
 
 An entry naming a camera the node does not have, or one camera
 twice, is refused before anything starts, and a camera no posed image uses is
@@ -4174,7 +4177,8 @@ and carries no such field otherwise:
     "scanlines_race": {                        // under UNKNOWN; null where it was given or stored
       "rows_cost": 49350.0, "columns_cost": 52349.0, // in units of sigma_px squared
       "observations": 24931, "sigma_px": 0.146,
-      "stopped_early": false                   // both solves ran their whole schedule
+      "stopped_early": false,                  // true where the trailing solve was stopped
+      "stop": null                             // or where it was stopped, below
     },
     "images": 85,                              // its posed images
     "focal_mean": 0.0, "focal_std": 0.0122,    // ln(1 + focal), read as fractions
@@ -4194,6 +4198,21 @@ and carries no such field otherwise:
     ]
   }
 ]
+```
+
+A race whose trailing solve was stopped has `"stopped_early": true` and a
+`stop` of the solve stopped, the round and the iteration, each counted from 1,
+the gap there, and the winner's cost at the end of its schedule; its
+`rows_cost` and `columns_cost` are then the two solves' costs at the stop, over
+the `observations` both rounds kept, in units of `sigma_px` squared, the mean
+of the two round-start noise levels squared
+([../core/reconstruction/bundle-adjust.md](../core/reconstruction/bundle-adjust.md)
+§ "Stopping the trailing solve early"):
+
+```jsonc
+"stop": { "stopped": "COLUMNS", "round": 1, "iteration": 12,
+          "gap": 953.4,               // units of sigma_px squared
+          "winner_cost": 48612.4 }    // the winner's own final round, units of its sigma_n squared
 ```
 
 The focal's, the principal point's and the radial correction's means are zero

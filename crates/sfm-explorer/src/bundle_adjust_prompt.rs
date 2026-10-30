@@ -760,8 +760,9 @@ fn scanlines_choice(ui: &mut egui::Ui, camera: usize, choice: &mut RollingShutte
             .labelled_by(label.id)
             .on_hover_text(
                 "Whether this camera's sensor reads its image one row or one column at a time. \
-                 Unknown solves the adjustment once with each and keeps the one with the lower \
-                 cost, which takes twice as long.",
+                 Unknown solves the adjustment once with each, side by side, stops the one \
+                 that falls behind once it cannot catch up, and keeps the one with the lower \
+                 cost, which takes up to twice as long.",
             );
     });
 }

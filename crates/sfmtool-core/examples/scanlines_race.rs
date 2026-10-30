@@ -9,13 +9,19 @@
 //! through its `Progress` for each schedule round of each solve: the
 //! observations the round kept, its noise level, and the cost its damping
 //! ladder compares before its first iteration and after each. The race's own
-//! comparison is kept beside them. `scripts/scanlines_race_early_stop.py`
+//! comparison is kept beside them. The race's early stop is off, so both
+//! solves run to the end, one after the other, unless `--early-stop` turns
+//! it on: the race then runs as the adjustment runs it by default, the
+//! stopped solve's trajectory ends where it was stopped, the JSON's `stop`
+//! says where, and only the whole run's `seconds` is a wall time (the
+//! columns solve's events reach the sink after the rows solve's). `scripts/scanlines_race_early_stop.py`
 //! evaluates the rule on the output, and
 //! `specs/core/reconstruction/bundle-adjust-measurements.md` holds the results.
 //!
 //! Usage:
 //!   scanlines_race <in.sfmr> <out.json> [--pinhole] [--release lens|corrections]
 //!     [--schedule default|inf] [--no-cross] [--max-iters N] [--workspace DIR]
+//!     [--early-stop]
 //!
 //! `--pinhole` first switches every camera to `SFMTOOL_PINHOLE`, which the
 //! corrections need. `--release lens` (the default) releases each camera's
@@ -134,6 +140,7 @@ fn main() {
     options.rolling_shutter_scanlines =
         vec![Some(RollingShutterScanlinesChoice::Unknown); cameras.len()];
     options.schedule = schedule;
+    options.scanlines_early_stop.enabled = flag("--early-stop");
     if flag("--no-cross") {
         options.free_points = FreePointPolicy::NO_CROSS;
     }
@@ -213,6 +220,13 @@ fn main() {
                 "columns_cost": race.columns_cost,
                 "sigma_px": race.sigma_px,
                 "observations": race.observations,
+                "stop": race.stop.map(|stop| json!({
+                    "stopped": stop.stopped.as_str(),
+                    "round": stop.round,
+                    "iteration": stop.iteration,
+                    "gap": stop.gap,
+                    "winner_cost": stop.winner_cost,
+                })),
                 "solves": {"rows": solve_json(&solves[0]), "columns": solve_json(&solves[1])},
             })
         })
@@ -224,6 +238,7 @@ fn main() {
         "schedule": schedule_name,
         "max_iters": options.max_iters,
         "cross": options.free_points.cross,
+        "early_stop": options.scanlines_early_stop.enabled,
         "observations": report.observations,
         "median_residual_before": report.median_residual_before,
         "median_residual_after": report.median_residual_after,

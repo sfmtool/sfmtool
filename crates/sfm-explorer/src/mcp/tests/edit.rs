@@ -3841,7 +3841,10 @@ fn bundle_adjust_solves_the_rolling_shutter_on_the_scanlines_it_is_given() {
     assert!(race["columns_cost"].as_f64().is_some(), "{row}");
     assert!(race["observations"].as_u64().is_some(), "{row}");
     assert!(race["sigma_px"].as_f64().is_some(), "{row}");
+    // This scene's two solves end nearly level, so neither is stopped.
     assert_eq!(race["stopped_early"], false, "{row}");
+    assert_eq!(race["stop"], Value::Null, "{row}");
+    assert!(report.contains("both solves run to the end"), "{report}");
     assert!(row["prior"]["radial_bspline"].as_f64().is_some(), "{row}");
     assert!(row["prior"]["rolling_shutter"].as_f64().is_some(), "{row}");
     assert_eq!(row["prior"]["focal"], Value::Null, "{row}");
@@ -3934,4 +3937,62 @@ fn bundle_adjust_refuses_the_corrections_on_a_camera_that_cannot_take_them() {
             "{error}"
         );
     }
+}
+
+/// A race whose trailing solve was stopped answers with where: the solve
+/// stopped, its round and iteration, the gap there and the winner's cost at
+/// the end.
+#[test]
+fn a_stopped_race_reply_says_where_the_trailing_solve_was_stopped() {
+    let (mut state, _) = editable();
+    with_flat_spline_cameras(&mut state);
+    perturb(&mut state, 0.02);
+    let options = sfmtool_core::BundleAdjustOptions {
+        rolling_shutter_scanlines: vec![Some(
+            sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice::Unknown,
+        )],
+        // A threshold of nothing and a count of one, so that the rule stops
+        // the trailing solve of this scene, whose solves end nearly level.
+        scanlines_early_stop:
+            sfmtool_core::reconstruction::bundle_adjust::ScanlinesEarlyStopOptions {
+                enabled: true,
+                gap_threshold: 0.0,
+                count: 1,
+            },
+        ..sfmtool_core::BundleAdjustOptions::uniform(
+            1,
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+                image_radial_bspline: true,
+                image_rolling_shutter: true,
+                ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+            },
+        )
+    };
+    let (_, report) = sfmtool_core::bundle_adjust(
+        state.scene[0].recon(),
+        &options,
+        &sfmtool_core::progress::Progress::none(),
+    )
+    .expect("well posed");
+    let stop = report.cameras[0]
+        .scanlines_race
+        .and_then(|race| race.stop)
+        .expect("the trailing solve was stopped");
+    let rows = crate::mcp::edit::image_adjustments_json(&report.cameras);
+    let race = &rows[0]["scanlines_race"];
+    assert_eq!(race["stopped_early"], true, "{race}");
+    let wire = &race["stop"];
+    assert_eq!(wire["stopped"], stop.stopped.as_str(), "{race}");
+    assert_eq!(wire["round"], stop.round, "{race}");
+    assert_eq!(wire["iteration"], stop.iteration, "{race}");
+    assert_eq!(wire["gap"].as_f64(), Some(stop.gap), "{race}");
+    assert_eq!(
+        wire["winner_cost"].as_f64(),
+        Some(stop.winner_cost),
+        "{race}"
+    );
+    assert_ne!(
+        rows[0]["rolling_shutter_scanlines"], wire["stopped"],
+        "the stopped solve is not the one chosen"
+    );
 }

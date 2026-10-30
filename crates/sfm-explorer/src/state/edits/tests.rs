@@ -3233,11 +3233,35 @@ fn the_entry_names_the_scanlines_and_both_costs_of_a_race() {
         observations: 24931,
         sigma_px: 0.146,
         stopped_early: false,
+        stop: None,
     });
     assert_eq!(
         scanlines_clause(std::slice::from_ref(&raced)),
         ", rolling shutter on columns chosen: cost 52349.0 with rows, 49350.0 with columns \
          over 24931 observations, both solves run to the end"
+    );
+
+    // A race whose trailing solve was stopped names it, where, and the gap,
+    // and the winner's cost at the end.
+    let mut stopped = with_corrections(per_image(0, false, false, false), false, Some(Rows));
+    stopped.scanlines_race = Some(sfmtool_core::reconstruction::bundle_adjust::ScanlinesRace {
+        rows_cost: 16552.7,
+        columns_cost: 17506.1,
+        observations: 24918,
+        sigma_px: 0.31,
+        stopped_early: true,
+        stop: Some(sfmtool_core::reconstruction::bundle_adjust::ScanlinesStop {
+            stopped: Columns,
+            round: 1,
+            iteration: 12,
+            gap: 953.38,
+            winner_cost: 48612.41,
+        }),
+    });
+    assert_eq!(
+        scanlines_clause(std::slice::from_ref(&stopped)),
+        ", rolling shutter on rows chosen: columns stopped at round 1, iteration 12 \
+         (gap 953.4 over 24918 observations), cost 48612.4 with rows at the end"
     );
 
     // Over several cameras each is named; a camera that released no rates
@@ -3389,5 +3413,65 @@ fn a_rolling_shutter_on_a_given_setting_runs_one_solve_and_names_it() {
             .camera_per_image_adjustments(0)
             .rolling_shutter_scanlines,
         Some(sfmtool_core::camera::RollingShutterScanlines::Columns)
+    );
+}
+
+#[test]
+fn a_race_whose_trailing_solve_is_stopped_says_where_in_the_entry_and_the_breakdown() {
+    // The demo is noiseless, so its two solves end nearly level; a threshold
+    // of nothing and a count of one let the rule stop the trailing solve.
+    let (mut state, id) = sfmtool_pinhole_state();
+    let options = sfmtool_core::BundleAdjustOptions {
+        rolling_shutter_scanlines: vec![Some(
+            sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice::Unknown,
+        )],
+        scanlines_early_stop:
+            sfmtool_core::reconstruction::bundle_adjust::ScanlinesEarlyStopOptions {
+                enabled: true,
+                gap_threshold: 0.0,
+                count: 1,
+            },
+        ..sfmtool_core::BundleAdjustOptions::uniform(
+            1,
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+                image_radial_bspline: true,
+                image_rolling_shutter: true,
+                ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+            },
+        )
+    };
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_tasks();
+
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    let text = &entry.text;
+    assert!(text.contains(" chosen: "), "{text}");
+    assert!(text.contains(" stopped at round "), "{text}");
+    assert!(text.contains(" at the end"), "{text}");
+    assert!(!text.contains("both solves run to the end"), "{text}");
+    // The stopped solve's row in the breakdown ends early and says where.
+    let stopped: Vec<_> = entry
+        .detail
+        .iter()
+        .filter_map(|row| match row {
+            crate::progress::Detail::Phase { name, note, .. }
+                if name.starts_with("solve with ") =>
+            {
+                Some((*name, note.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stopped.len(), 2, "{stopped:?}");
+    assert_eq!(
+        stopped
+            .iter()
+            .filter(|(_, note)| note
+                .as_deref()
+                .is_some_and(|n| n.starts_with("stopped at round ")))
+            .count(),
+        1,
+        "{stopped:?}"
     );
 }

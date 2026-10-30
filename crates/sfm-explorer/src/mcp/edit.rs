@@ -804,7 +804,9 @@ pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]
 /// released its images' rolling-shutter rates also says the scanlines they
 /// were solved on, and `scanlines_race` the two solves that chose them where
 /// they were not known, `null` where they were given or stored.
-fn image_adjustments_json(cameras: &[sfmtool_core::CameraAdjustment]) -> Vec<serde_json::Value> {
+pub(super) fn image_adjustments_json(
+    cameras: &[sfmtool_core::CameraAdjustment],
+) -> Vec<serde_json::Value> {
     let number = |x: f64| if x.is_finite() { json!(x) } else { json!(null) };
     let widths = |w: &sfmtool_core::geometry::ImagePriorWidths| {
         json!({
@@ -825,6 +827,13 @@ fn image_adjustments_json(cameras: &[sfmtool_core::CameraAdjustment]) -> Vec<ser
                     "observations": race.observations,
                     "sigma_px": number(race.sigma_px),
                     "stopped_early": race.stopped_early,
+                    "stop": race.stop.map(|stop| json!({
+                        "stopped": stop.stopped.as_str(),
+                        "round": stop.round,
+                        "iteration": stop.iteration,
+                        "gap": number(stop.gap),
+                        "winner_cost": number(stop.winner_cost),
+                    })),
                 })
             });
             Some(json!({

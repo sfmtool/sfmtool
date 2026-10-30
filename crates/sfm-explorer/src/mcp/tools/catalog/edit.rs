@@ -446,10 +446,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           the radial correction's then moved into the camera's spline; the \
                           rates are solved on \
                           the rolling_shutter_scanlines, and under UNKNOWN once with each \
-                          setting, the lower cost kept. The reply's image_adjustments says, per \
+                          setting, side by side, the trailing solve stopped once it cannot \
+                          catch up, the lower cost kept. The reply's image_adjustments says, per \
                           camera that released something per image, how far its images spread, \
                           the prior's widths, the images beyond two widths, and the scanlines \
-                          the rates were solved on with both costs where they were raced. The \
+                          the rates were solved on with both costs where they were raced and \
+                          where the trailing solve was stopped. The \
                           label says what each camera \
                           released, and the report names each released camera's focal and \
                           principal point before and after. By default every free point \
@@ -548,7 +550,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "The default for every camera that releases its images' \
                              rolling-shutter rates: whether its sensor reads one row (ROWS) or \
                              one column (COLUMNS) at a time, or UNKNOWN, which solves once with \
-                             each and keeps the one with the lower cost, taking twice as long. \
+                             each, side by side, stops the trailing one once it cannot catch up \
+                             and keeps the one with the lower cost, taking up to twice as long. \
                              The setting the rates were solved on is written into the camera. \
                              Omitted, each camera's stored setting, or UNKNOWN where it stores \
                              none; ignored for a camera that does not release its rates.",

@@ -916,8 +916,14 @@ impl PyEditedReconstruction {
     ///     ``None`` where they were not released), ``scanlines_race`` (where
     ///     the scanlines were unknown, a dict of ``rows_cost`` and
     ///     ``columns_cost``, in units of ``sigma_px`` squared, ``observations``,
-    ///     ``sigma_px`` and ``stopped_early``, always ``False``; otherwise
-    ///     ``None``) and
+    ///     ``sigma_px``, ``stopped_early`` and ``stop``: ``None`` where both
+    ///     solves ran to the end and the costs are their final ones, and where
+    ///     the trailing solve was stopped early, with the costs then the two at
+    ///     the stop, a dict of ``stopped`` (``"ROWS"`` or ``"COLUMNS"``),
+    ///     ``round`` and ``iteration`` (each counted from 1), ``gap`` (the
+    ///     trailing cost less the leading one there) and ``winner_cost`` (the
+    ///     winner's cost at the end of its schedule, in units of the noise level
+    ///     of its own final round squared); otherwise ``None``) and
     ///     ``image_adjustments``: ``None`` where the camera released nothing
     ///     per image, and otherwise a dict of ``images``, ``focal_mean`` and
     ///     ``focal_std`` (of the log focal scale ``log(1 + s)``, the units of
@@ -1012,6 +1018,7 @@ impl PyEditedReconstruction {
                 cross: free_points_cross,
             },
             image_prior: crate::geometry::bundle_adjust::image_prior_from_py(image_prior.as_ref())?,
+            scanlines_early_stop: Default::default(),
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
@@ -1208,6 +1215,18 @@ fn scanlines_race_to_py<'py>(
     d.set_item("observations", race.observations)?;
     d.set_item("sigma_px", race.sigma_px)?;
     d.set_item("stopped_early", race.stopped_early)?;
+    match race.stop {
+        Some(stop) => {
+            let s = PyDict::new(py);
+            s.set_item("stopped", stop.stopped.as_str())?;
+            s.set_item("round", stop.round)?;
+            s.set_item("iteration", stop.iteration)?;
+            s.set_item("gap", stop.gap)?;
+            s.set_item("winner_cost", stop.winner_cost)?;
+            d.set_item("stop", s)?;
+        }
+        None => d.set_item("stop", py.None())?,
+    }
     Ok(d.into_any())
 }
 

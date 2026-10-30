@@ -733,3 +733,47 @@ fn a_rayon_loop_stops_and_hands_back_what_it_had() {
     assert_eq!(fractions.len(), done.len());
     assert!(fractions.iter().all(|f| (0.0..=1.0).contains(f)));
 }
+
+// ---------------------------------------------------------------------------
+// A tapped Progress
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_tapped_progress_keeps_its_depth_range_detail_and_cancel_flag() {
+    let collector = Collector::new();
+    let sink = |event: Event<'_>| collector.push(event);
+    let flag = AtomicBool::new(false);
+    let progress = Progress::to(&sink).cancelled_by(&flag).detailed(true);
+    let [_, second] = progress.split([1.0, 1.0]);
+    let outer = second.phase("outer");
+    // The tap holds the values back and passes everything else on.
+    let held = Mutex::new(Vec::new());
+    let tap = |event: Event<'_>| match event {
+        Event::Value { name, value } => held.lock().unwrap().push((name, value)),
+        other => outer.forward(other),
+    };
+    let tapped = outer.tapped(&tap);
+    assert!(tapped.is_detailed());
+    {
+        let _inner = tapped.detail_phase("inner");
+        tapped.set_fraction(0.5);
+        tapped.value("cost", 4.0);
+    }
+    assert!(!tapped.is_cancelled());
+    flag.store(true, Ordering::Relaxed);
+    assert!(tapped.is_cancelled());
+    drop(outer);
+
+    assert_eq!(*held.lock().unwrap(), [("cost", 4.0)]);
+    assert_eq!(
+        collector.boundaries(),
+        [
+            (">outer".to_string(), 0),
+            (">inner".to_string(), 1),
+            ("<inner".to_string(), 1),
+            ("<outer".to_string(), 0),
+        ]
+    );
+    // Half of the second half of the whole.
+    assert_eq!(collector.fractions(), [0.75]);
+}

@@ -277,45 +277,59 @@ fn image_prior_clause(
 
 /// The Action Log's clause for the rolling-shutter scanlines: for each camera
 /// that released its images' rolling-shutter rates, the scanlines they were
-/// solved on, and where the scanlines were not known, the cost of the solve
-/// with each and whether either was stopped before the end of its schedule;
-/// nothing when no camera released the rates.
+/// solved on, and where the scanlines were not known, the race that chose
+/// them; nothing when no camera released the rates.
 ///
 /// A camera whose scanlines were given or stored reads `, rolling shutter on
-/// rows`; one whose scanlines were raced reads `, rolling shutter on rows
-/// chosen: cost 49350.0 with rows, 52349.0 with columns over 24931
-/// observations, both solves run to the end`. One over several cameras names
-/// each camera by its index, `, camera 1 rolling shutter on columns`.
+/// rows`. One whose scanlines were raced to the end reads `, rolling shutter
+/// on rows chosen: cost 49350.0 with rows, 52349.0 with columns over 24931
+/// observations, both solves run to the end`, and one whose trailing solve was
+/// stopped early reads `, rolling shutter on rows chosen: columns stopped at
+/// round 1, iteration 12 (gap 152.3 over 24918 observations), cost 47166.3
+/// with rows at the end`. One over several cameras names each camera by its
+/// index, `, camera 1 rolling shutter on columns`.
 fn scanlines_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     let one = cameras.len() == 1;
     cameras
         .iter()
         .filter(|c| c.image_rolling_shutter_released)
         .filter_map(|c| {
-            let setting = match c.rolling_shutter_scanlines? {
-                sfmtool_core::camera::RollingShutterScanlines::Rows => "rows",
-                sfmtool_core::camera::RollingShutterScanlines::Columns => "columns",
-            };
+            let setting = scanlines_word(c.rolling_shutter_scanlines?);
             let camera = if one {
                 String::new()
             } else {
                 format!("camera {} ", c.camera)
             };
-            let race = c.scanlines_race.map_or(String::new(), |race| {
-                let ended = if race.stopped_early {
-                    "one solve stopped early"
-                } else {
-                    "both solves run to the end"
-                };
-                format!(
-                    " chosen: cost {:.1} with rows, {:.1} with columns over {} observations, \
-                     {ended}",
-                    race.rows_cost, race.columns_cost, race.observations
-                )
-            });
+            let race = c
+                .scanlines_race
+                .map_or(String::new(), |race| match race.stop {
+                    None => format!(
+                        " chosen: cost {:.1} with rows, {:.1} with columns over {} observations, \
+                         both solves run to the end",
+                        race.rows_cost, race.columns_cost, race.observations
+                    ),
+                    Some(stop) => format!(
+                        " chosen: {} stopped at round {}, iteration {} (gap {:.1} over {} \
+                         observations), cost {:.1} with {setting} at the end",
+                        scanlines_word(stop.stopped),
+                        stop.round,
+                        stop.iteration,
+                        stop.gap,
+                        race.observations,
+                        stop.winner_cost
+                    ),
+                });
             Some(format!(", {camera}rolling shutter on {setting}{race}"))
         })
         .collect()
+}
+
+/// A scanlines setting in prose: `rows` or `columns`.
+fn scanlines_word(setting: sfmtool_core::camera::RollingShutterScanlines) -> &'static str {
+    match setting {
+        sfmtool_core::camera::RollingShutterScanlines::Rows => "rows",
+        sfmtool_core::camera::RollingShutterScanlines::Columns => "columns",
+    }
 }
 
 /// The Action Log entry's schedule clause: `, schedule (inf, 1000)` when the

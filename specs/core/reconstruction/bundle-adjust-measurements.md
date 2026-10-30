@@ -5,12 +5,13 @@ adjustment of [bundle-adjust.md](bundle-adjust.md). Its one section measures a
 rule proposed for the scanlines race, which runs one solve with rows and one
 with columns for a camera whose rolling-shutter scanlines are `UNKNOWN`
 ([bundle-adjust.md § The rolling-shutter
-scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)). The race runs both
-solves to the end. The rule, proposed in
-[per-image-lens-corrections.md § Choosing rows or
+scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)). The rule, proposed
+in [per-image-lens-corrections.md § Choosing rows or
 columns](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns),
-would stop the trailing solve once it cannot plausibly catch up. The rule is
-not built; these measurements are for deciding whether to build it.
+stops the trailing solve once it cannot plausibly catch up. These measurements
+replay it on races run to the end, and decided it: the recommendation below is
+what the adjustment runs by default ([bundle-adjust.md § Stopping the trailing
+solve early](bundle-adjust.md#stopping-the-trailing-solve-early)).
 
 ## Stopping the trailing solve of a scanlines race
 
@@ -56,8 +57,8 @@ candidate; it is 716 against 870 on the raw solve, whose two final rounds kept
 
 The tools are the `scanlines_race` example of `sfmtool-core`
 ([scanlines_race.rs](../../../crates/sfmtool-core/examples/scanlines_race.rs)),
-which runs the race with every camera `UNKNOWN` and writes both solves'
-trajectories to JSON, and
+which runs the race with every camera `UNKNOWN` and the early stop off (its
+`--early-stop` runs it on) and writes both solves' trajectories to JSON, and
 [`scripts/scanlines_race_early_stop.py`](../../../scripts/scanlines_race_early_stop.py),
 which replays the rule on them. The synthetic scenes are written by the
 ignored test `write_scanlines_race_scenes` in
@@ -221,7 +222,17 @@ round to save.
 
 ### Recommendation
 
-Adopt the rule with changes, if two full solves cost too much: lockstep per
+Adopted and built as recommended, with `T = 100` and `K = 3` the defaults of
+`ScanlinesEarlyStopOptions`
+([bundle-adjust.md § Stopping the trailing solve
+early](bundle-adjust.md#stopping-the-trailing-solve-early)). The built rule
+reproduces this replay's stops on the synthetic scenes at `τ_w = 4·10⁻³` in the
+race's tests, and on the dino candidate under the default schedule it stopped
+columns at round 1, iteration 12, as the table above has it, in 25.5 s against
+38.7 s for two full solves; the seoul bull ran both to the end.
+
+The recommendation as made: adopt the rule with changes, if two full solves
+cost too much: lockstep per
 LM iteration with each round's end as a barrier between the two solves, the
 budget term kept, `T = 100` rather than 25, and `K = 3`, with `D` divided by
 the mean of the two solves' round-start noise levels squared, the pair at a

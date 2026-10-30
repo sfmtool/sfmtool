@@ -714,9 +714,13 @@ class TestSwitchCameraModel:
             "observations",
             "sigma_px",
             "stopped_early",
+            "stop",
         }
-        assert race["stopped_early"] is False
         assert race["observations"] > 0 and race["sigma_px"] > 0.0
+        # This fixture's two solves end nearly level, so the early stop does
+        # not fire: both ran to the end and the final costs decided.
+        assert race["stop"] is None
+        assert race["stopped_early"] is False
         chosen = "ROWS" if race["rows_cost"] <= race["columns_cost"] else "COLUMNS"
         assert camera["rolling_shutter_scanlines"] == chosen
         value = adjusted.materialize()[0]

@@ -23,7 +23,7 @@ use crate::analysis::reprojection_noise::{
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
 use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment, RollingShutterScanlines};
 use crate::geometry::bundle_adjust::{
-    rho, BaCameras, BaSchedule, BundleAdjustment, DistanceReference, FreePointDecision,
+    rho, rounds_run, BaCameras, BaSchedule, BundleAdjustment, DistanceReference, FreePointDecision,
     FreePointPolicy, PointConstraints, PointConstraintsError, DEFAULT_PROTECTED_LOSS_SCALE,
     DEFAULT_SCHEDULE, INVALID_RESIDUAL,
 };
@@ -139,13 +139,21 @@ pub struct BundleAdjustOptions {
     /// entry of a camera that does not release its rates is ignored, and its
     /// images' held rates are read on its stored setting.
     pub rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
+    /// How the trailing solve of a race under
+    /// [`RollingShutterScanlinesChoice::Unknown`] is stopped early: on by
+    /// default, the two solves run on two threads in lockstep and the one that
+    /// cannot plausibly catch up is stopped; off, both run to the end, one
+    /// after the other.
+    pub scanlines_early_stop: ScanlinesEarlyStopOptions,
 }
 
 /// How the scanlines of a camera that releases its images' rolling-shutter
 /// rates are chosen: [`Self::Rows`] or [`Self::Columns`] runs one solve on that
 /// setting, and [`Self::Unknown`] runs one with each and keeps the one with the
-/// lower cost. The adjustment writes the setting the rates were solved on into
-/// the camera, so `Unknown` is a value of this option only, never stored.
+/// lower cost, stopping the trailing one early where
+/// [`BundleAdjustOptions::scanlines_early_stop`] says. The adjustment writes
+/// the setting the rates were solved on into the camera, so `Unknown` is a
+/// value of this option only, never stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RollingShutterScanlinesChoice {
     /// One row at a time.
@@ -209,6 +217,7 @@ impl Default for BundleAdjustOptions {
             min_obs: DEFAULT_MIN_OBS,
             free_points: FreePointPolicy::default(),
             image_prior: ImagePriorOptions::default(),
+            scanlines_early_stop: ScanlinesEarlyStopOptions::default(),
         }
     }
 }
@@ -556,14 +565,20 @@ pub struct CameraAdjustment {
 
 /// The two solves that chose one camera's scanlines under
 /// [`RollingShutterScanlinesChoice::Unknown`], one with each setting, and the
-/// cost each ended at. The lower cost won; a tie goes to rows.
+/// costs the race was decided on. The lower cost won; a tie goes to rows.
 ///
 /// The costs are the robust cost the kernel's damping ladder compares (the
 /// data, the per-image prior with its mean holds, and the spline penalty), in
-/// units of `σ_n²`. Each solve's final round trims from its own state, so the
-/// data are summed over the observations both final rounds kept, each at its
-/// own final state, and both costs are divided by one noise level `σ_n`
-/// measured over the two solves' residuals there.
+/// units of a noise level squared. Where both solves ran to the end
+/// ([`Self::stop`] `None`), they are their final costs: each solve's final
+/// round trims from its own state, so the data are summed over the
+/// observations both final rounds kept, each at its own final state, and both
+/// costs are divided by one noise level `σ_n` measured over the two solves'
+/// residuals there. Where the early stop fired, they are the two solves' costs
+/// at the pair of iterations it fired at, as their damping ladders compared
+/// them: over the observations their rounds kept, the same count for both, in
+/// units of the mean of their two round-start noise levels squared, so that
+/// their difference is the gap [`ScanlinesStop::gap`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScanlinesRace {
     /// The cost of the solve with rows.
@@ -572,11 +587,40 @@ pub struct ScanlinesRace {
     pub columns_cost: f64,
     /// The observations the two costs were summed over.
     pub observations: usize,
-    /// The pooled noise level `σ_n` the costs are in units of, px.
+    /// The noise level the costs are in units of, px: the pooled `σ_n`, or at
+    /// a stop the root of the mean of the two round-start noise levels squared.
     pub sigma_px: f64,
-    /// Whether either solve was stopped before the end of its schedule.
-    /// Always `false`: both run their whole schedule.
+    /// Whether the trailing solve was stopped before the end of its schedule:
+    /// [`Self::stop`] is `Some`.
     pub stopped_early: bool,
+    /// Where the trailing solve was stopped, and the winner's cost at the end;
+    /// `None` when both solves ran their whole schedule.
+    pub stop: Option<ScanlinesStop>,
+}
+
+/// Where the early stop of a scanlines race stopped the trailing solve
+/// ([`ScanlinesEarlyStopOptions`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScanlinesStop {
+    /// The setting of the solve that was stopped, the one not chosen.
+    pub stopped: RollingShutterScanlines,
+    /// The schedule round it was stopped in, counted from 1, as the kernel
+    /// runs the schedule (a one-round schedule with a derived prior runs as
+    /// two).
+    pub round: usize,
+    /// The iterations each solve had run in that round at the pair the rule
+    /// fired at, counted from 1; a solve that had finished the round sooner
+    /// had run fewer.
+    pub iteration: usize,
+    /// The gap `D` there, the trailing cost less the leading one, in units of
+    /// [`ScanlinesRace::sigma_px`] squared.
+    pub gap: f64,
+    /// The winner's cost at the end of its schedule, measured as the race
+    /// measures one solve's cost when the other has none: over the
+    /// observations its final round kept, each at its final state, in units
+    /// of the `σ_n²` of its own residuals there. It compares with neither cost
+    /// of the race, which are at the stop.
+    pub winner_cost: f64,
 }
 
 /// How a camera's images' intrinsic adjustments ended after a per-image
@@ -682,7 +726,9 @@ impl ImageAdjustmentParameter {
 /// rolling-shutter rates solves them on the scanlines
 /// [`BundleAdjustOptions::rolling_shutter_scanlines`] chooses; where they are
 /// [`RollingShutterScanlinesChoice::Unknown`], the solve runs once with rows and
-/// once with columns and keeps the lower cost, one camera at a time in camera
+/// once with columns, side by side, stopping the one that cannot plausibly
+/// catch up ([`BundleAdjustOptions::scanlines_early_stop`]), and keeps the
+/// lower cost, one camera at a time in camera
 /// index order, each race starting from the previous winner's state, and the
 /// setting kept is written into the camera
 /// ([`CameraAdjustment::scanlines_race`]). The posed images may be taken through
@@ -714,8 +760,10 @@ impl ImageAdjustmentParameter {
 /// `progress` is where this call names its four stages (gathering the kernel's
 /// arrays, the residuals it starts from, the solve, writing the answer back),
 /// says how big the problem is, and passes on the rounds and iterations the
-/// kernel reports underneath; a race splits the solve into one phase per
-/// solve, `solve with rows` and `solve with columns`, and says the two costs. It is also how the call is asked to stop: a
+/// kernel reports underneath; a race runs its two solves in two phases,
+/// `solve with rows` and `solve with columns`, the second's events passed on
+/// after the first closes, and says the two costs and where the trailing solve
+/// was stopped. It is also how the call is asked to stop: a
 /// cancelled adjustment returns [`BundleAdjustError::Cancelled`] and writes
 /// nothing, because a half-converged state is not an answer anybody asked for.
 /// Pass `&Progress::none()` to report nothing and never stop, which is one
@@ -1068,7 +1116,14 @@ pub fn bundle_adjust(
         // on one setting, the cameras not yet raced holding theirs at zero.
         // The winner's state is where the next race starts, and the last
         // winner is the answer.
-        let parts: Vec<Progress<'_>> = solve.split_evenly(2 * races.len()).collect();
+        // One share of the solve per race: under the early stop the race's two
+        // solves run at once and report over the same share.
+        let parts: Vec<Progress<'_>> = solve.split_evenly(races.len()).collect();
+        let early_stop = options.scanlines_early_stop;
+        // The rounds each solve runs, for the early stop's budget: a race
+        // releases its camera's rates per image, so the prior is derived unless
+        // it is fixed.
+        let rounds = rounds_run(options.schedule.len(), options.image_prior.fixed.is_none());
         let mut state = start;
         let mut last: Option<BundleAdjustment> = None;
         for (r, &j) in races.iter().enumerate() {
@@ -1081,62 +1136,139 @@ pub fn bundle_adjust(
                     ..*release
                 })
                 .collect();
-            let mut outcomes = Vec::with_capacity(2);
-            for (part, setting) in parts[2 * r..2 * r + 2].iter().zip([
-                RollingShutterScanlines::Rows,
-                RollingShutterScanlines::Columns,
-            ]) {
+            let run_one = |setting: RollingShutterScanlines, p: &Progress<'_>| {
                 let mut settings = scanlines.clone();
                 settings[j] = Some(setting);
-                let phase = part.phase(match setting {
-                    RollingShutterScanlines::Rows => "solve with rows",
-                    RollingShutterScanlines::Columns => "solve with columns",
-                });
-                let (next, adjustment) = problem.run(&state, &narrowed, &settings, true, &phase);
-                drop(phase);
+                problem.run(&state, &narrowed, &settings, true, p)
+            };
+            let ([mut rows, mut columns], stop) = if early_stop.enabled {
+                race::race(&parts[r], early_stop, options.max_iters, rounds, run_one)
+            } else {
+                // Two full solves, one after the other; a cancellation stops
+                // the first, and the second never starts.
+                let mut halves = parts[r].split_evenly(2);
+                let mut alone = |s: usize| {
+                    let half = halves.next().expect("two halves");
+                    let phase = half.phase(race::SOLVE_PHASES[s]);
+                    run_one(race::SETTINGS[s], &phase)
+                };
+                let rows = alone(0);
                 if progress.is_cancelled() {
                     return Err(BundleAdjustError::Cancelled);
                 }
-                outcomes.push((setting, next, adjustment));
-            }
-            let (columns, rows) = (outcomes.pop().unwrap(), outcomes.pop().unwrap());
-            let race = compare_scanlines(
-                &rows.2,
-                &columns.2,
-                &image_camera,
-                &obs_img,
-                &obs_pt,
-                &state.cameras,
-            )
-            .ok_or(BundleAdjustError::Degenerate {
-                observations: uv.len(),
-                min_obs: options.min_obs,
-            })?;
-            let winner = if race.columns_cost < race.rows_cost {
-                columns
-            } else {
-                rows
+                ([rows, alone(1)], None)
             };
-            progress_info!(
-                solve,
-                "camera {}: cost {:.1} with rows and {:.1} with columns over {} observations; \
-                 solved on {}",
-                used[j],
-                race.rows_cost,
-                race.columns_cost,
-                race.observations,
-                winner.0.as_str()
-            );
-            scanlines[j] = Some(winner.0);
+            if progress.is_cancelled() {
+                return Err(BundleAdjustError::Cancelled);
+            }
+            // A winner that went on to exit degenerate would leave the race
+            // with no answer that two full solves would have had, so the
+            // stopped solve then runs to the end alone and the final costs
+            // decide.
+            let stop = match stop {
+                Some(stop) if [&rows, &columns][1 - stop.stopped].1.final_round.is_none() => {
+                    let phase = parts[r].phase(race::SOLVE_PHASES[stop.stopped]);
+                    let again = run_one(race::SETTINGS[stop.stopped], &phase);
+                    drop(phase);
+                    if progress.is_cancelled() {
+                        return Err(BundleAdjustError::Cancelled);
+                    }
+                    *[&mut rows, &mut columns][stop.stopped] = again;
+                    None
+                }
+                other => other,
+            };
+            let compare = |rows: Option<&BundleAdjustment>, columns: Option<&BundleAdjustment>| {
+                compare_scanlines(
+                    rows,
+                    columns,
+                    &image_camera,
+                    &obs_img,
+                    &obs_pt,
+                    &state.cameras,
+                )
+            };
+            let (race, winner) = match stop {
+                None => {
+                    let race = compare(Some(&rows.1), Some(&columns.1)).ok_or(
+                        BundleAdjustError::Degenerate {
+                            observations: uv.len(),
+                            min_obs: options.min_obs,
+                        },
+                    )?;
+                    let winner = usize::from(race.columns_cost < race.rows_cost);
+                    (race, winner)
+                }
+                Some(stop) => {
+                    let winner = 1 - stop.stopped;
+                    let solves = [&rows.1, &columns.1];
+                    let alone = if winner == 0 {
+                        compare(Some(solves[0]), None)
+                    } else {
+                        compare(None, Some(solves[1]))
+                    }
+                    .expect("the winner ran its final round");
+                    let race = ScanlinesRace {
+                        rows_cost: stop.costs[0],
+                        columns_cost: stop.costs[1],
+                        observations: stop.kept,
+                        sigma_px: stop.sigma2.sqrt(),
+                        stopped_early: true,
+                        stop: Some(ScanlinesStop {
+                            stopped: race::SETTINGS[stop.stopped],
+                            round: stop.round + 1,
+                            iteration: stop.iteration,
+                            gap: stop.gap,
+                            winner_cost: alone.rows_cost.min(alone.columns_cost),
+                        }),
+                    };
+                    (race, winner)
+                }
+            };
+            let setting = race::SETTINGS[winner];
+            let (next, adjustment) = if winner == 0 { rows } else { columns };
+            match race.stop {
+                None => progress_info!(
+                    solve,
+                    "camera {}: cost {:.1} with rows and {:.1} with columns over {} observations; \
+                     solved on {}",
+                    used[j],
+                    race.rows_cost,
+                    race.columns_cost,
+                    race.observations,
+                    setting.as_str()
+                ),
+                Some(stop) => progress_info!(
+                    solve,
+                    "camera {}: {} stopped at round {}, iteration {}, {:.1} behind (cost {:.1} \
+                     with rows and {:.1} with columns there over {} observations); {} ended at \
+                     cost {:.1}; solved on {}",
+                    used[j],
+                    scanlines_word(stop.stopped),
+                    stop.round,
+                    stop.iteration,
+                    stop.gap,
+                    race.rows_cost,
+                    race.columns_cost,
+                    race.observations,
+                    scanlines_word(setting),
+                    stop.winner_cost,
+                    setting.as_str()
+                ),
+            }
+            scanlines[j] = Some(setting);
             scanlines_races[j] = Some(race);
             if r + 1 < races.len() {
-                for (total, m) in moved_radial.iter_mut().zip(&winner.2.moved_radial_bspline) {
+                for (total, m) in moved_radial
+                    .iter_mut()
+                    .zip(&adjustment.moved_radial_bspline)
+                {
                     total[0] += m[0];
                     total[1] += m[1];
                 }
             }
-            state = winner.1;
-            last = Some(winner.2);
+            state = next;
+            last = Some(adjustment);
         }
         (state, last.expect("at least one race"))
     };
@@ -1311,6 +1443,14 @@ pub fn bundle_adjust(
     Ok((out, report))
 }
 
+/// A scanlines setting in prose: `rows` or `columns`.
+fn scanlines_word(setting: RollingShutterScanlines) -> &'static str {
+    match setting {
+        RollingShutterScanlines::Rows => "rows",
+        RollingShutterScanlines::Columns => "columns",
+    }
+}
+
 /// Whether `release` releases any per-image parameter.
 fn releases_per_image(release: &CameraRelease) -> bool {
     release.image_focal
@@ -1421,19 +1561,19 @@ impl Problem<'_> {
 /// units of one pooled `σ_n²`, the data summed over the observations both
 /// final rounds kept, each at its own final state. `σ_n` is the gated RMS of
 /// both solves' residuals of finite points there, as the kernel measures a
-/// round's noise. A solve that ran no round or exited degenerate costs `+∞`,
+/// round's noise. A solve that is `None`, ran no round or exited degenerate costs `+∞`,
 /// and the other is measured over its own kept observations alone; `None` when
 /// both did.
 fn compare_scanlines(
-    rows: &BundleAdjustment,
-    columns: &BundleAdjustment,
+    rows: Option<&BundleAdjustment>,
+    columns: Option<&BundleAdjustment>,
     image_camera: &[u32],
     obs_img: &[u32],
     obs_pt: &[u32],
     cameras: &[CameraIntrinsics],
 ) -> Option<ScanlinesRace> {
     let solves = [rows, columns];
-    let finals = [rows.final_round.as_ref(), columns.final_round.as_ref()];
+    let finals = solves.map(|s| s.and_then(|s| s.final_round.as_ref()));
     let live: Vec<usize> = (0..2).filter(|&s| finals[s].is_some()).collect();
     if live.is_empty() {
         return None;
@@ -1454,7 +1594,7 @@ fn compare_scanlines(
     let mut pooled = Vec::with_capacity(2 * common.len());
     for &k in &common {
         for &s in &live {
-            if solves[s].point_at_infinity[obs_pt[k] as usize] {
+            if solves[s].expect("a live solve").point_at_infinity[obs_pt[k] as usize] {
                 continue;
             }
             let f = finals[s].expect("a live solve");
@@ -1496,6 +1636,7 @@ fn compare_scanlines(
         observations: common.len(),
         sigma_px: sigma,
         stopped_early: false,
+        stop: None,
     })
 }
 
@@ -1891,6 +2032,9 @@ fn median_finite(residuals: &[f64]) -> (f64, usize) {
     }
     (median_in_place(&mut finite), measured)
 }
+
+mod race;
+pub use race::ScanlinesEarlyStopOptions;
 
 #[cfg(test)]
 mod tests;

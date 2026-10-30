@@ -128,8 +128,9 @@ observations the solve keeps.
     § "The rolling-shutter scanlines"). It opens on the camera's stored
     `rolling_shutter_scanlines`, or on `Unknown` where the camera stores none,
     since an absent setting means the scanlines are not known and the dialog
-    assumes none. `Unknown` solves the adjustment once with each setting and
-    keeps the one with the lower cost, which takes about twice as long; its
+    assumes none. `Unknown` solves the adjustment once with each setting, side
+    by side, stops the one that falls behind once it cannot catch up, and
+    keeps the one with the lower cost, which takes up to twice as long; its
     hover text says so. The setting the rates were solved on is written into
     the camera, so a second adjustment of the node opens on it. Clearing the
     rolling shutter hides the choice and keeps what it held.
@@ -236,7 +237,14 @@ The job hands these to `sfmtool_core::bundle_adjust` with its own `Progress`,
 so under `Unknown` the operation's breakdown in the Action Log and the
 Background Tasks panel shows both solves of the race, `solve with rows` and
 `solve with columns`, and the core function's message stating the two costs
-and the setting kept.
+and the setting kept. The two solves run side by side, and the core function
+holds the columns solve's events until the rows solve has closed its phase, so
+the panel shows the rows solve as it runs and the columns solve after it. A
+solve the early stop stopped
+([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)
+§ "Stopping the trailing solve early") has fewer rounds under its phase than
+the other, and its row's note says where it stopped, `stopped at round 1,
+iteration 12`.
 
 No images are decoded. The adjustment reprojects points through the poses and
 the lens the value already carries, so this edit reads nothing off disk.
@@ -331,9 +339,13 @@ the scanlines they were solved on, `, rolling shutter on rows`, and, where the
 setting was `Unknown`, the race that chose it: `, rolling shutter on rows
 chosen: cost 49350.0 with rows, 52349.0 with columns over 24931 observations,
 both solves run to the end`, the costs being the core function's
-`ScanlinesRace` and `both solves run to the end` its `stopped_early` being
-false (`one solve stopped early` otherwise); `, camera 1 rolling shutter on
-columns` over several cameras. The
+`ScanlinesRace` and `both solves run to the end` its `stop` being `None`. A race
+whose trailing solve was stopped names the solve stopped, the round and
+iteration, and the gap there over the observations both rounds kept, then the
+winner's cost at the end of its schedule: `, rolling shutter on rows chosen:
+columns stopped at round 1, iteration 12 (gap 953.4 over 24918 observations),
+cost 48612.4 with rows at the end`, from the race's `stop`; `, camera 1
+rolling shutter on columns` over several cameras. The
 three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.
@@ -390,15 +402,18 @@ Explorer (`sfm-explorer` lib tests, headless):
   the widths in the entry, and the camera marked as varying it; the label
   naming the corrections released per image in their order, the entry's
   widths of the radial correction and the rates, and its scanlines clause for
-  a given setting, for a race with both costs, over several cameras and with
-  no rates released; the correction gates greyed on the demo's `PINHOLE`
+  a given setting, for a race with both costs, for a race whose trailing solve
+  was stopped, over several cameras and with no rates released; the correction gates greyed on the demo's `PINHOLE`
   naming the camera and its model, open on an `SFMTOOL_PINHOLE`, the radial
   one closed alone with a reason on a domain end that is not positive, and
   the stored scanlines read into the gate; and a run on the demo switched to
   `SFMTOOL_PINHOLE` releasing both corrections under `Unknown`, its label, the
   entry's both costs and that both solves ran to the end, the breakdown's
   `solve with rows` and `solve with columns`, and the camera marked as
-  varying both with a setting stored, beside a run on `Columns` with no race.
+  varying both with a setting stored, beside a run on `Columns` with no race;
+  and a run under an early stop of threshold 0 and count 1, its entry naming
+  where the trailing solve stopped and the stopped solve's breakdown row
+  noting it.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held
   and the points crossing), the crossing checkbox cleared answering
   `FreePointPolicy::NO_CROSS`,

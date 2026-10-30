@@ -21,9 +21,9 @@ and chosen in the bundle adjustment as `ROWS`, `COLUMNS` or `UNKNOWN`, where
 releases its rates with no stored setting is solved as `UNKNOWN`, never as an
 assumed `ROWS`; every new per-image field is zero-mean over its camera's images
 with the mean held, by a stiff prior on the mean; the new prior widths are
-derived per camera like the existing ones. Not decided: the early-stopping rule
-for `UNKNOWN`, and the questions listed under
-[Open questions](#open-questions).
+derived per camera like the existing ones; `UNKNOWN` stops the trailing solve
+early by the measured rule, with a threshold of 100 and a count of 3. Not
+decided: the questions listed under [Open questions](#open-questions).
 
 ## Purpose
 
@@ -621,7 +621,8 @@ rolling-shutter
 scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines):
 `RollingShutterScanlinesChoice` and `BundleAdjustOptions::rolling_shutter_scanlines`,
 the fallback to the stored setting or `UNKNOWN`, one solve for `ROWS` or
-`COLUMNS`, two full solves for `UNKNOWN` compared by the cost below, the races
+`COLUMNS`, two solves for `UNKNOWN` compared by the cost below where both run
+to the end, the races
 of several `UNKNOWN` cameras in camera index order from the previous winner's
 state, the chosen setting written into the camera, and the report's
 `ScanlinesRace`. The kernel states its final round's cost for the comparison
@@ -639,18 +640,23 @@ What the build settled beyond the design below:
 - A camera whose rates are solved on another setting than the one they were
   stored on starts them at zero, and its unposed images' rates are set to zero
   when the written setting changes, since they were read on the old one.
-- A cancellation stops the running solve, and the call refuses before the other
-  solve of the race starts.
+- A cancellation stops both solves of the race, which run side by side, and
+  the call refuses; with the early stop off it stops the running solve, and
+  the other does not start.
 
-**Stopping the trailing solve early is not built**: both solves run their whole
-schedule, and the report's `stopped_early` is always `false`. The rule below
-is measured in
-[bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race),
-and whether to build it waits on the maintainer ([open question](#open-questions)).
-The kernel reports the per-iteration cost it needs through `Progress`
-(`COST_VALUE`, with `KEPT_VALUE` and `NOISE_VALUE` per round,
-[bundle-adjustment.md](../core/geometry/bundle-adjustment.md)), and the
-`scanlines_race` example records both solves' trajectories with it.
+**Stopping the trailing solve early is built**, as the measurement in
+[bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race)
+recommended, and filed in [bundle-adjust.md § Stopping the trailing solve
+early](../core/reconstruction/bundle-adjust.md#stopping-the-trailing-solve-early):
+`ScanlinesEarlyStopOptions` (on, a threshold of 100, a count of 3) in
+`BundleAdjustOptions::scanlines_early_stop`, the two solves on two threads in
+lockstep per LM iteration with each round's end as a barrier, the gap in units
+of the mean of the two round-start noise levels squared, the budget term, the
+round's start skipped, no stop while the two rounds kept different counts, and
+the report's `ScanlinesStop`. The kernel reports the per-iteration cost it
+needs through `Progress` (`COST_VALUE`, with `KEPT_VALUE` and `NOISE_VALUE` per
+round, [bundle-adjustment.md](../core/geometry/bundle-adjustment.md)). The
+proposal below, with its threshold of 25, is kept as it was made.
 
 The reconstruction-level adjustment
 ([bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
@@ -697,7 +703,8 @@ directly comparable through that round. After it each solve trims from its own
 state, and the final comparison is over the observations both final rounds
 kept, each at its own final state, with one pooled `σ_n`.
 
-**Stopping the trailing solve early.** Two full solves cost twice one. The
+**Stopping the trailing solve early** (as proposed; built with the changes
+above). Two full solves cost twice one. The
 proposal is to run them in lockstep, one LM iteration of each at a time (on two
 threads, each with its own `Progress`), and to stop the trailing solve once
 it cannot plausibly catch up:
@@ -836,7 +843,8 @@ the `EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
   `image_rolling_shutter_is_releasable`. The version label names the
   corrections released per image, and the Action Log entry adds their prior
   widths, the scanlines the rates were solved on and, under `Unknown`, both
-  costs and that both solves ran to the end. The MCP `bundle_adjust` tool
+  costs and either that both solves ran to the end or which solve was
+  stopped, where, and the gap there. The MCP `bundle_adjust` tool
   ([edit.rs](../../crates/sfm-explorer/src/mcp/tools/catalog/edit.rs)) takes
   `release_image_radial_bspline`, `release_image_rolling_shutter` and
   `rolling_shutter_scanlines` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`),
@@ -845,7 +853,7 @@ the `EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
   Its `image_prior` widths take `radial_bspline` and `rolling_shutter`, and
   each `image_adjustments` row of its reply carries the two release flags, the
   scanlines used, the race (`scanlines_race`, both costs, the observations,
-  `sigma_px` and `stopped_early`) and the corrections' means, spreads and
+  `sigma_px`, `stopped_early` and `stop`) and the corrections' means, spreads and
   widths.
 - `sfm xform --bundle-adjust` has no key for the existing per-image releases
   or the principal point, and gains none here
@@ -1079,26 +1087,13 @@ When built, the tests cover at least:
 
 ## Open questions
 
-- **The early-stopping rule for `UNKNOWN`.** The built race runs both solves
-  to the end, which roughly doubles the cost of a solve. The rule in
-  [Choosing rows or columns](#choosing-rows-or-columns), with its threshold of
-  25 and three consecutive iterations, is measured in
-  [bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race)
-  on the dino candidate (from its stored state, under both schedules), a raw
-  dino solve, the seoul bull switched to `SFMTOOL_PINHOLE` and eight synthetic
-  scenes. Measured: the gap's sign is the winner's from the first iteration on
-  every input but the seoul bull, a near tie of 7.4 units, where the winner
-  trails by up to 305 units in the second round and the sign settles only in the
-  third; with its budget term the rule never stops the winner at a threshold of
-  25 or 100 and saves about a third of the race's iterations on the dino
-  candidate and almost half on the raw solve; without the budget term, or at a
-  threshold of 10, it stops the winner on the seoul bull; lockstep per schedule
-  round saves almost nothing. The measurement recommends adopting it with
-  changes: lockstep per LM iteration with each round's end as a barrier, the
-  budget term kept, a threshold of 100, three consecutive iterations, the gap in
-  units of the two solves' mean round-start noise level squared, the round's
-  start skipped, and no stop while the two rounds' kept observations differ.
-  Whether to build it, or keep two full solves, is the maintainer's decision.
+- **The early-stopping rule for `UNKNOWN`.** Settled and built: the rule the
+  measurement recommended, on by default with a threshold of 100 and a count
+  of 3 ([Choosing rows or columns](#choosing-rows-or-columns),
+  [bundle-adjust.md § Stopping the trailing solve
+  early](../core/reconstruction/bundle-adjust.md#stopping-the-trailing-solve-early)).
+  The evidence that a lead can reverse is still one near tie (the seoul bull),
+  so a second capture with a near tie would be worth replaying.
 - **Several `UNKNOWN` cameras.** The races in
   [Choosing rows or columns](#choosing-rows-or-columns), built as described,
   run one camera at a time,

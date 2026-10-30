@@ -70,6 +70,15 @@ pub struct BundleAdjustOptions {
     /// releases its rates is solved on. `None` is the stored setting, or
     /// `Unknown` where the camera has none.
     pub rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
+    /// How the trailing solve of a race under `Unknown` is stopped early.
+    pub scanlines_early_stop: ScanlinesEarlyStopOptions,
+}
+
+/// The early stop of a scanlines race. The default is on, 100, 3.
+pub struct ScanlinesEarlyStopOptions {
+    pub enabled: bool,      // off: both solves run to the end, one after the other
+    pub gap_threshold: f64, // the gap D the trailing solve must trail by
+    pub count: usize,       // consecutive pairs the rule must hold for
 }
 
 impl BundleAdjustOptions {
@@ -142,11 +151,21 @@ pub struct CameraAdjustment {
 
 /// The two solves that chose one camera's scanlines.
 pub struct ScanlinesRace {
-    pub rows_cost: f64,      // in units of σ_n²
+    pub rows_cost: f64,      // in units of sigma_px²: final, or at the stop
     pub columns_cost: f64,
-    pub observations: usize, // the observations both final rounds kept
-    pub sigma_px: f64,       // the pooled σ_n
-    pub stopped_early: bool, // always false: both solves run to the end
+    pub observations: usize, // both final rounds kept, or both rounds at the stop
+    pub sigma_px: f64,       // the pooled σ_n, or at the stop √σ̄²
+    pub stopped_early: bool, // stop is Some
+    pub stop: Option<ScanlinesStop>, // None: both solves ran to the end
+}
+
+/// Where the early stop stopped the trailing solve.
+pub struct ScanlinesStop {
+    pub stopped: RollingShutterScanlines, // the setting not chosen
+    pub round: usize,       // counted from 1, as the kernel runs the schedule
+    pub iteration: usize,   // within the round, counted from 1
+    pub gap: f64,           // D there, in units of sigma_px²
+    pub winner_cost: f64,   // the winner's at the end, over its own final round
 }
 
 /// How a camera's images' adjustments ended, over its posed images.
@@ -545,11 +564,14 @@ camera.
 solved on another setting than the one they were stored on starts its images'
 rates at zero, because a rate read on rows means something else on columns.
 
-`Unknown` runs two full solves, one with each setting, and keeps the one with
-the lower cost. A continuous weight between the two readout positions is not
+`Unknown` runs two solves, one with each setting, and keeps the one with the
+lower cost, stopping the trailing one once it cannot plausibly catch up
+([Stopping the trailing solve early](#stopping-the-trailing-solve-early)). A
+continuous weight between the two readout positions is not
 solved for instead, because the wrong choice is a local minimum
 ([per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#alternatives-considered)).
-The two are one **race**. The cost compared is the robust cost the kernel's
+The two are one **race**. Where both solves run to the end, the cost compared
+is the robust cost the kernel's
 damping ladder compares (the data, the per-image prior with its mean holds,
 and the spline penalty), in units of `σ_n²`, read from each solve's
 `BundleAdjustment::final_round`
@@ -578,20 +600,82 @@ combinations. Whether a decided camera's choice would change once the later
 cameras' rates are released is not tested
 ([open question](#open-questions)).
 
-`progress` gives the solve phase one share per solve of a race, each a phase
-named `solve with rows` or `solve with columns`, and says each race's two costs
-and the setting kept. A cancellation stops the solve that is running and the
-call returns `Cancelled` before the other starts.
+#### Stopping the trailing solve early
+
+`BundleAdjustOptions::scanlines_early_stop`, a `ScanlinesEarlyStopOptions`,
+is on by default with a threshold `T` of 100 and a count `K` of 3, the values
+[bundle-adjust-measurements.md](bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race)
+recommends. It is a field of the options so that a caller measuring the race
+can turn it off and record both solves to the end, as the `scanlines_race`
+example does; the viewer and the Python binding run the default. The rule is
+`EarlyStopRule` and the two threads are `race`, in
+[race.rs](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust/race.rs).
+
+The two solves of a race run on two threads, each through its own `Progress`
+(a `Progress::tapped` copy of the race's, with its own cancel flag), in
+lockstep per LM iteration: after each of its iterations a solve waits in its
+progress sink until the other has finished the same iteration or the round,
+and at the first value of each round after the first, its kept count after
+its trim, until the other has finished the round before, so neither runs an
+iteration of round `r + 1` before both have finished round `r`. The rule reads what the kernel reports
+([../geometry/bundle-adjustment.md](../geometry/bundle-adjustment.md)): each
+round's kept count (`KEPT_VALUE`), its noise level at its start
+(`NOISE_VALUE`) and the cost its damping ladder compares before its first
+iteration and after each (`COST_VALUE`). After each pair of iterations it reads
+the gap `D = (C_trailing − C_leading)/σ̄²`, `σ̄²` the mean of the two solves'
+round-start noise levels squared; a solve that has finished the round keeps
+its last cost. The trailing solve is stopped, through its cancel flag, when for
+`K` consecutive pairs with the same solve trailing both `D > T` and `D`
+exceeds the **budget term**: the mean of the trailing solve's last three
+decreases within the round (fewer early in a round) times the iterations it has
+left, those left in the round plus `max_iters` for each later round of the
+schedule as the kernel runs it (a one-round schedule with a derived prior runs
+as two). The pair at a round's start is skipped, neither counting nor breaking
+a run, and no pair holds while the two rounds kept different counts of
+observations. These are the definitions
+[`scripts/scanlines_race_early_stop.py`](../../../scripts/scanlines_race_early_stop.py)
+replays, and the race's tests reproduce the measurement's stops on its
+synthetic scenes. The leading solve then runs to the end alone; if the rule
+never fires, the final costs decide as above.
+
+The rule is a function of the reported values alone, read pair by pair in
+order, so where it fires never depends on the threads' timing. A solve that
+is not stopped computes what it would compute alone: being held in its
+progress sink and having a cancel flag that nobody sets change nothing in its
+arithmetic, so the winner's answer is, to the bit, the one two full solves
+give, and a race the rule never stops is two full solves to the bit. The
+stopped solve returns the state it reached, which is discarded. Should the
+winner go on to exit degenerate, the stopped solve runs again to the end alone
+and the final costs decide, as two full solves would have. Several `Unknown`
+cameras each run their race under the rule, in the order and from the states
+above. With `enabled` off, the two solves run one after the other, each to the
+end of its schedule.
+
+`progress` gives the solve phase one share per race. Under the early stop both
+solves report over that share, each in a phase named `solve with rows` or
+`solve with columns`; the columns solve's events are held until the rows solve
+has closed its phase, so that a collector that tracks one open phase per depth
+reads each solve's phase whole, rows first. A stopped solve's phase ends at the
+round it was stopped in and carries the note `stopped at round 2, iteration 4`.
+The solve phase says each race's two costs and the setting kept, and for a
+stopped race which solve was stopped, where, the gap and the winner's final
+cost. A cancellation of the caller's `progress` stops both solves, and the call
+returns `Cancelled`, writing nothing back; with the early stop off it stops the
+solve that is running and the other does not start.
 
 The report's camera entry states the setting the rates were solved on
 (`rolling_shutter_scanlines`) and, under `Unknown`, the race
-(`scanlines_race`): the two costs, the observations they were summed over, the
-pooled `σ_n`, and `stopped_early`, which is always `false`, since both solves
-run their whole schedule. Stopping the losing solve once it cannot catch up is
-proposed in
-[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns)
-and measured, not built, in
-[bundle-adjust-measurements.md](bundle-adjust-measurements.md#stopping-the-trailing-solve-of-a-scanlines-race).
+(`scanlines_race`). Where both solves ran to the end, `stop` is `None`,
+`stopped_early` is `false`, and the costs, the observations and `sigma_px` are
+the final comparison's above. Where the rule fired, `stopped_early` is `true`
+and `stop` says which solve was stopped, at which round and iteration, and the
+gap `D` there; the two costs are each solve's cost at that pair, over the
+observations both rounds kept (`observations`, the same count for both), in
+units of `σ̄²` (`sigma_px` is `√σ̄²`), so they compare with each other and their
+difference is the gap; and `stop.winner_cost` is the winner's cost at the end
+of its schedule, measured as the final comparison measures a race with one
+solve, over the observations its final round kept and in units of the `σ_n²` of
+its own residuals there, which compares with neither cost at the stop.
 
 On the maintainer's `dino_dog_toy_ground_truth_candidate_v012.sfmr` (one
 `SFMTOOL_PINHOLE` camera with no stored setting, 85 images, 24931
@@ -600,7 +684,16 @@ principal point and both corrections over one `(inf, 1000)` round with the
 crossing off, the race chose rows at a cost of 49350 against 52349 for columns
 over all 24931 observations at a pooled `σ_n` of 0.146 px, and the training
 RMS per component went from 0.2500 px to 0.1443 px, the kernel's figure for
-rows, in 28 s for both solves and the measuring run.
+rows, in 28 s for both solves and the measuring run, with both solves run to
+the end. Under the default schedule with the crossing on and the same
+releases, the early stop stopped columns at round 1, iteration 12, at a gap of
+953 units over 24918 observations, and rows ran on to the end; the call took
+25.5 s against 38.7 s for two full solves, and the rows solve's cost after
+each iteration and the final median residual were the full solves' to the bit.
+On the seoul bull switched to `SFMTOOL_PINHOLE`, a near tie of 7.4 units, the
+rule did not fire, both trajectories and the final costs were the full solves'
+to the bit, and the call took 0.7 s against 1.1 s, the two solves running side
+by side.
 
 ### 4. Writing the answer back
 
@@ -787,7 +880,9 @@ camera in the solve carrying the `CameraAdjustment` fields
 `outermost_observed` a dict of `radius_px`, `theta_deg`, `image` and `xy`, or
 `None`, `rolling_shutter_scanlines` `"ROWS"`, `"COLUMNS"` or `None`,
 `scanlines_race` a dict of `rows_cost`, `columns_cost`, `observations`,
-`sigma_px` and `stopped_early`, or `None`, and `image_adjustments` the
+`sigma_px`, `stopped_early` and `stop` (`None`, or a dict of `stopped`,
+`"ROWS"` or `"COLUMNS"`, `round`, `iteration`, `gap` and `winner_cost`), or
+`None`, and `image_adjustments` the
 `ImageAdjustmentSpread` as a dict, `None` without a per-image release: its
 pairs as `(x, y)`, its radial correction's as `(e_0, e_1)` and its rates' as
 `(wx, wy, wz)`, `prior` and `spread` as dicts of `focal`, `principal_point`,
@@ -909,8 +1004,25 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   distances; the refusals on a `SIMPLE_PINHOLE`, an `SFMTOOL_FISHEYE` and an
   `SFMTOOL_PINHOLE` whose domain end is zero or infinite, and of a scanlines
   list one camera short; a scanlines choice on a camera that releases no rates
-  changing no bit of the answer; and a cancellation in the first solve of a
-  race ending the call before the second solve opens.
+  changing no bit of the answer; and a cancellation stopping both solves of a
+  race, and with the early stop off ending the call before the second solve
+  opens.
+- The early stop (`tests/corrections.rs`): on the planted scenes the rule
+  stops the solve on the other scanlines where the measurement's replay did
+  (columns at round 2, iteration 4 with rows planted, rows at round 2,
+  iteration 2 with columns planted), the costs at the stop differing by the
+  gap and the stopped phase's note saying where; the stopped race's answer
+  equal to the bit to two full solves' and to one solve on the winner's
+  setting, the reports differing in the race alone; a race the rule never
+  stops (an infinite threshold) equal to two full solves to the bit, report
+  included, with the columns solve's phase reported after the rows solve's;
+  repeated runs giving the same answer and stop to the bit; two `Unknown`
+  cameras equal to the bit to two full solves per race. In `race.rs`, the rule
+  on scripted trajectories: the count, the threshold, the budget term with its
+  later rounds, a change of trailing solve restarting the count, a round's
+  start skipped, no stop under different kept counts, a finished solve keeping
+  its last cost, the gap's units, the rate's window, and the same stop
+  whichever solve reports first.
 - A camera no posed image uses (one nothing references, one only an unposed
   image uses) coming back untouched, left out of the report, and its entry in
   the release list ignored even where its model could not take it.
@@ -965,11 +1077,6 @@ solve under a fixed corrections prior and then used as stored, an explicit
 - **The CLI.** `sfm xform --bundle-adjust` releases neither the shared principal
   point nor the per-image releases, and has no scanlines choice. Whether it
   gains keys for them is open.
-- **Stopping the losing solve of a race early.** Both solves of a race run
-  their whole schedule, which costs twice one solve. The draft proposes a rule
-  that stops the trailing solve once it cannot catch up, to be measured on real
-  solves before it is built
-  ([per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#open-questions)).
 - **Several `Unknown` cameras.** Each race is decided with the later cameras'
   rates held at zero, which their poses absorb in part. Whether releasing them
   could change an earlier choice, and whether a second pass over the cameras is
