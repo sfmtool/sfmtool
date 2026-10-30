@@ -783,10 +783,9 @@ notes the corrections and a scanlines setting it cannot copy
 inspect --verbose` names them and the scanlines setting
 ([inspect-command.md](../cli/reconstruction/inspect-command.md)).
 
-The releases and the scanlines choice for the two corrections below, in the
-viewer's Bundle Adjust dialog and the MCP tool, are proposed; the
-`EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
-`write_sfmr` bullets are built.
+The releases and the scanlines choice for the two corrections below are built:
+the `EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
+`write_sfmr` bullets, and the viewer's Bundle Adjust dialog and the MCP tool.
 
 - **Built** ([bundle-adjust.md § Python
   bindings](../core/reconstruction/bundle-adjust.md#python-bindings)):
@@ -815,22 +814,33 @@ viewer's Bundle Adjust dialog and the MCP tool, are proposed; the
   array.
 - `read_sfmr` / `write_sfmr` dicts carry `radial_bspline_adjustments`,
   `rolling_shutter_rates_xyz` and each camera's `rolling_shutter_scanlines`.
-- The viewer's Bundle Adjust dialog
-  ([bundle_adjust_prompt.rs](../../crates/sfm-explorer/src/bundle_adjust_prompt.rs),
-  [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md)) gains, per
-  camera, **Release radial distortion per image** and **Release rolling shutter
-  per image** beside the existing **Release focal length per image** and
-  **Release principal point per image**, and a **Scanlines** choice (`Rows`,
-  `Columns`, `Unknown`) shown while the rolling shutter is ticked, which opens
-  on the camera's stored setting, or on `Unknown` where it has none. Both
-  checkboxes are greyed with the
-  reason on a camera that is not `SFMTOOL_PINHOLE`, through its `CameraGate`.
-  The MCP `bundle_adjust` tool
-  ([edit.rs](../../crates/sfm-explorer/src/mcp/tools/catalog/edit.rs)) gains
+- **Built** ([gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md),
+  [gui/mcp-server.md](../gui/mcp-server.md)): the viewer's Bundle Adjust dialog
+  ([bundle_adjust_prompt.rs](../../crates/sfm-explorer/src/bundle_adjust_prompt.rs))
+  has, per camera, **Release radial distortion per image** and **Release
+  rolling shutter per image** beside **Release focal length per image** and
+  **Release principal point per image**, on a second line of the camera's row
+  under its shared releases, and a **Scanlines** drop-down (`Rows`, `Columns`,
+  `Unknown`) shown while the rolling shutter is ticked, which opens on the
+  camera's stored setting, or on `Unknown` where it has none. Both checkboxes
+  are greyed with the reason on a camera that is not `SFMTOOL_PINHOLE`, and the
+  radial one also on an `SFMTOOL_PINHOLE` whose spline domain end is not
+  positive and finite, through its `CameraGate` and the core function's
+  `image_radial_bspline_is_releasable` and
+  `image_rolling_shutter_is_releasable`. The version label names the
+  corrections released per image, and the Action Log entry adds their prior
+  widths, the scanlines the rates were solved on and, under `Unknown`, both
+  costs and that both solves ran to the end. The MCP `bundle_adjust` tool
+  ([edit.rs](../../crates/sfm-explorer/src/mcp/tools/catalog/edit.rs)) takes
   `release_image_radial_bspline`, `release_image_rolling_shutter` and
   `rolling_shutter_scanlines` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`),
-  call-wide and per camera, as its existing release keys are; omitted, it is
-  the camera's stored setting, or `"UNKNOWN"` where it has none.
+  call-wide and per camera, as its other release keys are; omitted, the
+  scanlines are the camera's stored setting, or `"UNKNOWN"` where it has none.
+  Its `image_prior` widths take `radial_bspline` and `rolling_shutter`, and
+  each `image_adjustments` row of its reply carries the two release flags, the
+  scanlines used, the race (`scanlines_race`, both costs, the observations,
+  `sigma_px` and `stopped_early`) and the corrections' means, spreads and
+  widths.
 - `sfm xform --bundle-adjust` has no key for the existing per-image releases
   or the principal point, and gains none here
   ([open question](#open-questions)).

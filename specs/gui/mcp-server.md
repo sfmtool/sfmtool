@@ -4025,6 +4025,8 @@ The two bulk edits.
 //                 "release_image_principal_point": true }
 // bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_image_principal_point": true,
 //                 "image_prior": { "fixed": { "principal_point": 0.013 } } }
+// bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_image_radial_bspline": true,
+//                 "release_image_rolling_shutter": true, "rolling_shutter_scanlines": "UNKNOWN" }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "free_points_cross": false }
 // bundle_adjust { "reconstruction_label": "dino_dog_toy", "release_focal": true,
 //                 "schedule": [[null, 1000]] }
@@ -4053,16 +4055,22 @@ dialog collects, camera by camera: whether each camera's focal is released,
 whether its lens distortion (`k1` on `SIMPLE_RADIAL_FISHEYE`, the spline on
 `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`) is released with it, and whether its
 principal point is released, which any model can do with or without its focal,
-and whether each of its images' focal and principal point are released.
+whether each of its images' focal and principal point are released, and, on an
+`SFMTOOL_PINHOLE` camera, whether each of its images' radial correction and
+rolling-shutter rates are, with the scanlines the rates are solved on.
 `release_focal`, `release_distortion`, `release_principal_point`,
-`release_image_focal` and `release_image_principal_point` are the defaults every
-camera of the node's image set takes, each `false` when left out, and `cameras`
-overrides them: a list of `{ camera_intrinsics_index, release_focal?,
-release_distortion?, release_principal_point?, release_image_focal?,
-release_image_principal_point? }`, one entry per camera that differs, each
-naming its camera by the index `get_camera_intrinsics` and `get_camera_image`
-report, and a field it leaves out taking the call's default. A camera with none
-of the five is held.
+`release_image_focal`, `release_image_principal_point`,
+`release_image_radial_bspline` and `release_image_rolling_shutter` are the
+defaults every camera of the node's image set takes, each `false` when left
+out, and `rolling_shutter_scanlines` the scanlines every camera's rates are
+solved on; `cameras` overrides them: a list of `{ camera_intrinsics_index,
+release_focal?, release_distortion?, release_principal_point?,
+release_image_focal?, release_image_principal_point?,
+release_image_radial_bspline?, release_image_rolling_shutter?,
+rolling_shutter_scanlines? }`, one entry per camera that differs, each naming
+its camera by the index `get_camera_intrinsics` and `get_camera_image` report,
+and a field it leaves out taking the call's default. A camera with none of the
+seven releases is held.
 
 A per-image release solves each image's focal scale or principal-point offset,
 the dialog's **Release focal length per image** and **Release principal point
@@ -4078,8 +4086,35 @@ prior's widths, an object of `loose`, `floor` and `fixed`, each an object of
 number, a left-out one at its default: `loose` is the first round's widths and the most a derived width may be (0.1 each), `floor`
 the least (0.001 each), and `fixed`, given, the widths every round runs under,
 derived from nothing. Omitted or `null`, each camera's widths are derived from
-the solve. An unknown key at either level, or a width that is not a positive
-number, is refused at the parse. An entry naming a camera the node does not have, or one camera
+the solve. Each of the three also takes `radial_bspline` (in units of the
+radius over the focal) and `rolling_shutter` (in radians per short side of
+readout), 0.01 loose and 0.0001 floor by default. An unknown key at either
+level, or a width that is not a positive number, is refused at the parse.
+
+`release_image_radial_bspline` and `release_image_rolling_shutter` are the
+dialog's **Release radial distortion per image** and **Release rolling shutter
+per image**: each image's radial correction, two coefficients added to the
+camera's spline for that image, and its rolling-shutter rates, held toward the
+mean of the camera's images. That mean is held through each round, and the
+radial correction's is then moved into the camera's spline
+([../core/reconstruction/bundle-adjust.md](../core/reconstruction/bundle-adjust.md)).
+Each is the core function's refusal, naming the camera, on a model other than
+`SFMTOOL_PINHOLE`, and the radial correction also on an `SFMTOOL_PINHOLE` whose
+spline domain end is not positive and finite. `rolling_shutter_scanlines` is
+the dialog's **Scanlines** choice: `"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`, any
+other value refused at the parse. Omitted, call-wide and in the camera's entry,
+it is the camera's stored setting, or `"UNKNOWN"` where the camera stores none:
+an absent setting means the scanlines are not known, and none is assumed.
+`"UNKNOWN"` solves the adjustment once with each setting and keeps the lower
+cost, so it takes about twice as long. The setting the rates were solved on is
+written into the camera. It is ignored for a camera that does not release its
+rates. The report adds each such camera's scanlines, `, rolling shutter on
+rows`, and under `"UNKNOWN"` both costs, `, rolling shutter on rows chosen:
+cost 49350.0 with rows, 52349.0 with columns over 24931 observations, both
+solves run to the end` ([edits/bundle-adjust.md](edits/bundle-adjust.md) §
+"The Action Log").
+
+An entry naming a camera the node does not have, or one camera
 twice, is refused before anything starts, and a camera no posed image uses is
 not in the solve, so what it is given is ignored. `free_points_cross` is the
 dialog's crossing checkbox: by default every free point is solved in inverse
@@ -4133,13 +4168,27 @@ and carries no such field otherwise:
     "camera_intrinsics_index": 0,
     "release_image_focal": true,
     "release_image_principal_point": true,
+    "release_image_radial_bspline": true,
+    "release_image_rolling_shutter": true,
+    "rolling_shutter_scanlines": "ROWS",       // the setting the rates were solved on; null without them
+    "scanlines_race": {                        // under UNKNOWN; null where it was given or stored
+      "rows_cost": 49350.0, "columns_cost": 52349.0, // in units of sigma_px squared
+      "observations": 24931, "sigma_px": 0.146,
+      "stopped_early": false                   // both solves ran their whole schedule
+    },
     "images": 85,                              // its posed images
     "focal_mean": 0.0, "focal_std": 0.0122,    // ln(1 + focal), read as fractions
     "principal_point_mean_px": [0.0, 0.0],     // the offsets, pixels
     "principal_point_std_px": [18.2, 18.4],
-    "prior": { "focal": 0.0120, "principal_point": 0.0127 }, // the final round's widths
+    "radial_bspline_mean": [0.0, 0.0],         // [e_0, e_1], units of the radius over the focal
+    "radial_bspline_std": [0.0011, 0.0019],
+    "rolling_shutter_mean": [0.0, 0.0, 0.0],   // [wx, wy, wz], rad per short side of readout
+    "rolling_shutter_std": [0.0021, 0.0017, 0.0004],
+    "prior": { "focal": 0.0120, "principal_point": 0.0127, // the final round's widths
+               "radial_bspline": 0.0015, "rolling_shutter": 0.0020 },
     "prior_derived": true,                     // false under image_prior.fixed
-    "spread": { "focal": 0.0120, "principal_point": 0.0127 }, // before the clamp
+    "spread": { "focal": 0.0120, "principal_point": 0.0127, // before the clamp
+                "radial_bspline": 0.0015, "rolling_shutter": 0.0020 },
     "near_prior": [                            // beyond two widths from the mean
       { "image_index": 52, "parameter": "principal_point", "widths": 3.2 }
     ]
@@ -4147,7 +4196,9 @@ and carries no such field otherwise:
 ]
 ```
 
-The means are zero to rounding, since the camera holds them. The focal's
+The focal's, the principal point's and the radial correction's means are zero
+to rounding, since the camera takes them; the rates' mean is held where it
+started, zero for a camera whose images had none. The focal's
 figures, `focal_mean`, `focal_std`, its width, its spread and a `focal` row's
 `widths`, are of the log focal scale `ln(1 + focal)`, the parameter the solve
 holds and re-centres, since a focal scale is multiplicative: for small values
@@ -6782,13 +6833,16 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 | `set_viewer_3d_display` numbers | Each slider's range and decimals (`viewer_3d::display::Field::control`) | The only values accepted, the ends included; a value inside is rounded to the decimals the slider shows. The ranges are listed beside the document in § "`get_viewer_3d_display` / `set_viewer_3d_display`". |
-| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the five decisions each row of the Bundle Adjust dialog collects. |
+| `bundle_adjust` `release_focal` | `false`, every camera's focal is held | The default for every camera of one of the seven releases each row of the Bundle Adjust dialog collects. |
 | `bundle_adjust` `release_distortion` | `false`, every camera's distortion is held | The second; `true` needs the same camera's focal. |
 | `bundle_adjust` `release_principal_point` | `false`, every camera's principal point is held | The third; accepted on every model, with or without the focal. |
 | `bundle_adjust` `release_image_focal` | `false`, every image's focal scale is held | The fourth; refused where `release_focal` is, and moves the camera's focal to its images' mean. |
 | `bundle_adjust` `release_image_principal_point` | `false`, every image's principal-point offset is held | The fifth; accepted on every model, and moves the camera's principal point to its images' mean. |
-| `bundle_adjust` `image_prior` | each camera's widths derived from the solve, loose 0.1 and floor 0.001 | The core function's `ImagePriorOptions::default()`; the dialog has no control for it. |
-| `bundle_adjust` `cameras` | empty, every camera takes the five defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
+| `bundle_adjust` `release_image_radial_bspline` | `false`, every image's radial correction is held | The sixth; accepted on `SFMTOOL_PINHOLE` alone, with a positive finite spline domain end. |
+| `bundle_adjust` `release_image_rolling_shutter` | `false`, every image's rolling-shutter rates are held | The seventh; accepted on `SFMTOOL_PINHOLE` alone. |
+| `bundle_adjust` `rolling_shutter_scanlines` | each camera's stored setting, or `"UNKNOWN"` where it stores none | The dialog's Scanlines choice opens on the same; an absent setting is never taken as rows. |
+| `bundle_adjust` `image_prior` | each camera's widths derived from the solve, loose 0.1 and floor 0.001, and 0.01 and 0.0001 for the radial correction and the rates | The core function's `ImagePriorOptions::default()`; the dialog has no control for it. |
+| `bundle_adjust` `cameras` | empty, every camera takes the call's defaults | An entry's left-out field takes the call's default, so an entry states only what differs. |
 | `bundle_adjust` `free_points_cross` | `true`, free points cross | The core function's default, `FreePointPolicy::CROSS`; `false` is the dialog's crossing checkbox cleared. |
 | `bundle_adjust` `schedule` | `[[50, 5], [12, 2], [4, 1]]` (`DEFAULT_SCHEDULE`) | The core function's default, whatever the dialog last ran on the node; a `null` trim is unbounded. |
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |

@@ -70,11 +70,13 @@ there is one decision to take, camera by camera: how much of each lens may move,
 and in what form. One more is about the points, and one about which
 observations the solve keeps.
 
-- **One row per camera** the posed images use, in camera index order: `Camera 0
-  SFMTOOL_FISHEYE  24 images`, then five checkboxes, all clear by default. A
-  camera only unposed images use is not in the solve and has no row. A lens that
-  moves is a different claim about the capture than a pose that does, so the
-  smaller claim is the default, and a camera left clear is held.
+- **One row per camera** the posed images use, in camera index order, on two
+  lines: `Camera 0 SFMTOOL_FISHEYE  24 images` and the three shared releases on
+  the first, and under them the four per-image releases and, while the rolling
+  shutter is ticked, the **Scanlines** choice. Every checkbox is clear by
+  default. A camera only unposed images use is not in the solve and has no row.
+  A lens that moves is a different claim about the capture than a pose that
+  does, so the smaller claim is the default, and a camera left clear is held.
   - **Release focal length** releases that camera's focal. It is **disabled**
     when the camera's model is not one the adjustment's focal column is exact
     for, with a hover explanation naming the camera by its camera index and its
@@ -102,17 +104,46 @@ observations the solve keeps.
   - **Release principal point per image** releases a principal point for each
     image of that camera, a small offset of the camera's that a stabilised lens
     changes from one photograph to the next, on every model.
-
-  Two more per-image releases for an `SFMTOOL_PINHOLE` camera, its radial
-  correction and its rolling shutter with a **Scanlines** choice, are proposed
-  in
-  [`per-image-lens-corrections.md`](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
+  - **Release radial distortion per image** releases each image's radial
+    correction, two coefficients added to the camera's spline for that image
+    ([`../../formats/sfmtool-camera-models.md`](../../formats/sfmtool-camera-models.md#per-image-radial-correction)).
+    It is **disabled** on every model but `SFMTOOL_PINHOLE`, with a hover
+    explanation naming the camera and its model and saying to switch it to
+    `SFMTOOL_PINHOLE` first, and on an `SFMTOOL_PINHOLE` whose spline domain end
+    is not positive and finite or whose spline has a single coefficient, with
+    a hover explanation saying so
+    (`image_radial_bspline_is_releasable` in
+    [`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)).
+  - **Release rolling shutter per image** releases each image's
+    rolling-shutter rates, how far the camera turned while its sensor read the
+    image out. It is **disabled** on every model but `SFMTOOL_PINHOLE`, with a
+    hover explanation naming the camera and its model
+    (`image_rolling_shutter_is_releasable`).
+  - **Scanlines**, a drop-down of `Rows`, `Columns` and `Unknown`, shown beside
+    **Release rolling shutter per image** while it is ticked and named by its
+    `Scanlines` label in the accessibility tree and `get_widgets`. It says
+    whether the sensor reads one row or one column at a time, and is the
+    camera's entry of the core function's `rolling_shutter_scanlines`
+    ([`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)
+    § "The rolling-shutter scanlines"). It opens on the camera's stored
+    `rolling_shutter_scanlines`, or on `Unknown` where the camera stores none,
+    since an absent setting means the scanlines are not known and the dialog
+    assumes none. `Unknown` solves the adjustment once with each setting and
+    keeps the one with the lower cost, which takes about twice as long; its
+    hover text says so. The setting the rates were solved on is written into
+    the camera, so a second adjustment of the node opens on it. Clearing the
+    rolling shutter hides the choice and keeps what it held.
 
   Each image is held toward the mean of its camera's images by a prior whose
   widths the solve derives, and the camera's own value moves to that mean
   ([`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)
-  § "The per-image release"), which each per-image box's hover text says. So a
-  ticked per-image box shows the shared box of its kind **ticked and greyed**,
+  § "The per-image release"), which each per-image focal and principal-point
+  box's hover text says. For the radial correction and the rolling shutter the
+  mean over the camera's images is held through each round instead, and the
+  radial correction's then moved into the camera's spline, which their hover
+  texts say, so neither stands for a shared release and neither greys one. So
+  a ticked per-image focal or principal-point box shows the shared box of its
+  kind **ticked and greyed**,
   its hover text saying that the per-image release moves the camera's value to
   the mean of its images'. What the user set in the shared box is kept, so
   clearing the per-image box gives it back as it was; the release the row
@@ -121,8 +152,9 @@ observations the solve keeps.
 
   So a rig that mixes an `OPENCV_FISHEYE` camera with spline cameras releases
   the spline cameras and holds the other, whose focal and distortion
-  checkboxes, shared and per image, are greyed; its principal point can still
-  be released, shared or per image.
+  checkboxes, shared and per image, and per-image radial and rolling-shutter
+  checkboxes are greyed; its principal point can still be released, shared or
+  per image.
 
   A spline camera's coefficient count and domain end are not in this dialog:
   they choose how the lens curve is parameterized, which the adjustment only
@@ -187,14 +219,24 @@ options to the next value and a report. The viewer adds the invocation, the
 version and the history entry, in
 [state/edits.rs](../../../crates/sfm-explorer/src/state/edits.rs).
 
-The dialog sets three options. The camera rows are `releases`, which holds one
-`CameraRelease` per camera of the node's image set: each row's five checkboxes
-for its camera, less anything its model cannot take and less a shared release
-its per-image box of the same kind stands for, and held for a camera with no
-row. The prior on the per-image releases is the core function's default,
-derived from the solve. The crossing checkbox is `free_points`, and the Schedule box is
-`schedule`. The iteration budget and the two floors are the core function's
-defaults, which are the kernel's.
+The dialog sets four options, through `BundleAdjustAnswer::options` in
+[bundle_adjust_prompt.rs](../../../crates/sfm-explorer/src/bundle_adjust_prompt.rs).
+The camera rows are `releases`, which holds one `CameraRelease` per camera of
+the node's image set: each row's seven checkboxes for its camera, less
+anything its model cannot take and less a shared release its per-image box of
+the same kind stands for, and held for a camera with no row. The Scanlines
+choices are `rolling_shutter_scanlines`, one entry per camera of the image
+set: the row's choice for a camera whose rolling shutter the row releases, and
+`None` for every other camera. The prior on the per-image releases is the
+core function's default, derived from the solve. The crossing checkbox is
+`free_points`, and the Schedule box is `schedule`. The iteration budget and
+the two floors are the core function's defaults, which are the kernel's.
+
+The job hands these to `sfmtool_core::bundle_adjust` with its own `Progress`,
+so under `Unknown` the operation's breakdown in the Action Log and the
+Background Tasks panel shows both solves of the race, `solve with rows` and
+`solve with columns`, and the core function's message stating the two costs
+and the setting kept.
 
 No images are decoded. The adjustment reprojects points through the poses and
 the lens the value already carries, so this edit reads nothing off disk.
@@ -239,7 +281,9 @@ released parts named in the order focal, principal point, lens distortion:
 
 The parts a camera released per image follow as a phrase of their own, `,
 focal and principal point released per image`, or after its shared parts, `,
-lens distortion released, focal released per image`; a part released per image
+lens distortion released, focal released per image`, in the order focal,
+radial distortion, principal point, rolling shutter: `, focal, radial
+distortion and rolling shutter released per image`. A part released per image
 is not named again among the shared ones, though its shared value moves with it
 and the Action Log states that change.
 
@@ -276,8 +320,20 @@ two widths from its mean, `, per-image widths focal 0.42 %, principal point
 naming only the parameters it released per image, and `, camera 1 per-image
 widths …` over several cameras. The focal's width is of the log focal scale
 `ln(1 + s)` the solve holds, which reads as a percentage of the focal. The
-derived widths are the solve's own estimate of how far the lens moves between photographs, and the images beyond two widths
-are the ones to look at. The
+radial correction's width is in units of the radius over the focal, which is a
+fraction of the focal, with the pixels it is at the camera's focal, `radial
+distortion 0.00120 of the focal (1.7 px)`, and the rolling-shutter rates' in
+radians per short side of readout, `rolling shutter 0.00200 rad per short
+side`. The derived widths are the solve's own estimate of how far the lens
+moves between photographs, and the images beyond two widths are the ones to
+look at. A camera that released its images' rolling-shutter rates then adds
+the scanlines they were solved on, `, rolling shutter on rows`, and, where the
+setting was `Unknown`, the race that chose it: `, rolling shutter on rows
+chosen: cost 49350.0 with rows, 52349.0 with columns over 24931 observations,
+both solves run to the end`, the costs being the core function's
+`ScanlinesRace` and `both solves run to the end` its `stopped_early` being
+false (`one solve stopped early` otherwise); `, camera 1 rolling shutter on
+columns` over several cameras. The
 three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.
@@ -331,7 +387,18 @@ Explorer (`sfm-explorer` lib tests, headless):
   derived and fixed, with its count of images beyond two widths, and none
   without a per-image release; and the principal point released per image on
   the demo's two-focal `PINHOLE`, named in the label, the camera's change and
-  the widths in the entry, and the camera marked as varying it.
+  the widths in the entry, and the camera marked as varying it; the label
+  naming the corrections released per image in their order, the entry's
+  widths of the radial correction and the rates, and its scanlines clause for
+  a given setting, for a race with both costs, over several cameras and with
+  no rates released; the correction gates greyed on the demo's `PINHOLE`
+  naming the camera and its model, open on an `SFMTOOL_PINHOLE`, the radial
+  one closed alone with a reason on a domain end that is not positive, and
+  the stored scanlines read into the gate; and a run on the demo switched to
+  `SFMTOOL_PINHOLE` releasing both corrections under `Unknown`, its label, the
+  entry's both costs and that both solves ran to the end, the breakdown's
+  `solve with rows` and `solve with columns`, and the camera marked as
+  varying both with a setting stored, beside a run on `Columns` with no race.
 - `bundle_adjust_prompt/tests.rs`: the dialog's default (every camera held
   and the points crossing), the crossing checkbox cleared answering
   `FreePointPolicy::NO_CROSS`,
@@ -343,6 +410,11 @@ Explorer (`sfm-explorer` lib tests, headless):
   their kind and the per-image focal refused where the shared one is, a
   per-image focal carrying the distortion, a drawn row keeping its distortion
   beside a per-image focal and leaving its shared boxes as the user set them,
+  the Scanlines choice opening on the stored setting or on `Unknown`, the
+  corrections answered with the scanlines of each camera that releases its
+  rates and never on a camera that cannot take them, the options the answer
+  runs with, a Scanlines choice answered only beside a released rolling
+  shutter, a drawn row keeping its corrections and its Scanlines choice,
   the refusal text naming the camera, the keys that run
   and cancel it, an ordinary frame answering nothing, and a second ask not
   stacking a second dialog; the schedule box's text read and written for the
@@ -351,14 +423,25 @@ Explorer (`sfm-explorer` lib tests, headless):
   schedule the box states and doing nothing while it states none, and the box
   opening with the schedule last run on that node and the default on another.
 - `mcp/tests/widgets.rs`: the dialog's camera row listing **Release focal
-  length**, **Release lens distortion** and **Release focal length per image**
-  greyed and **Release principal point** and **Release principal point per
-  image** enabled on the demo's `PINHOLE` camera.
+  length**, **Release lens distortion**, **Release focal length per image**,
+  **Release radial distortion per image** and **Release rolling shutter per
+  image** greyed, **Release principal point** and **Release principal point
+  per image** enabled, and no **Scanlines** choice, on the demo's `PINHOLE`
+  camera; and on the demo switched to `SFMTOOL_PINHOLE` the two corrections
+  enabled, and a click on **Release rolling shutter per image** showing the
+  **Scanlines** drop-down on `Unknown`.
 - `mcp/tests/edit.rs`: the wire's `release_principal_point` and the per-camera
   field parsed; the per-image releases, their per-camera fields and
   `image_prior` parsed, a malformed prior refused at the parse, and a run
   releasing the principal point per image answering with its
-  `image_adjustments`; the wire's `schedule` parsed with `null` as the
+  `image_adjustments`; the corrections' releases, `rolling_shutter_scanlines`
+  call-wide and per camera and the corrections' prior widths parsed, an
+  unknown scanlines name refused at the parse; runs on flat-spline
+  `SFMTOOL_PINHOLE` cameras answering with the race's costs when the
+  scanlines are omitted on a camera storing none, with the given setting and
+  no race call-wide, per camera and from the stored setting, and the
+  corrections' spreads and widths; and the corrections refused naming the
+  camera on the demo's `PINHOLE`; the wire's `schedule` parsed with `null` as the
   unbounded trim, each malformed or out-of-range schedule refused at the
   parse, and a run under `[[null, 1000]]` naming it in the report and
   opening the dialog with it.
