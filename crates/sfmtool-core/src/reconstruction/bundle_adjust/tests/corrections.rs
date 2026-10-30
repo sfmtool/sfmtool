@@ -792,3 +792,43 @@ fn a_scanlines_choice_reads_and_writes_its_names() {
         RollingShutterScanlinesChoice::Columns
     );
 }
+
+/// Writes one-camera scenes with rates planted on rows and on columns at a few
+/// rate spreads, for the `scanlines_race` example to race. Run by hand, with
+/// `SCANLINES_RACE_SCENES` naming the directory to write them into:
+/// `cargo test -p sfmtool-core --lib write_scanlines_race_scenes -- --ignored`.
+/// The directory needs a `.sfm-workspace.json` for the example to load them.
+#[test]
+#[ignore = "writes the scanlines race measurement's scenes; run by hand"]
+fn write_scanlines_race_scenes() {
+    let dir = std::path::PathBuf::from(
+        std::env::var("SCANLINES_RACE_SCENES").expect("SCANLINES_RACE_SCENES names a directory"),
+    );
+    for tau_w in [4e-3, 1e-3, 3e-4, 1e-4] {
+        for (n, planted) in BOTH.into_iter().enumerate() {
+            let salt = 70 + 10 * n as u64;
+            let draws = correction_draws(CORRECTION_IMAGES, 3e-3, tau_w, salt);
+            let mut source = corrections_source(vec![spline_pinhole()], |_| 0, &draws, &[planted]);
+            // The format needs each point's patch frame beside embedded
+            // observations; the solve does not read it.
+            let n_pt = source.point_set.points.len();
+            let frame = |axis: usize| {
+                Array2::from_shape_fn((n_pt, 3), |(_, k)| if k == axis { 0.01f32 } else { 0.0 })
+            };
+            source.point_set.patch_u_halfvec_xyz = Some(frame(0));
+            source.point_set.patch_v_halfvec_xyz = Some(frame(1));
+            // And every keypoint inside its image, which the noise can push a
+            // keypoint at the edge out of by a fraction of a pixel.
+            if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+                &mut source.point_set.observations
+            {
+                for mut row in keypoints_xy.rows_mut() {
+                    row[0] = row[0].clamp(0.0, 639.99);
+                    row[1] = row[1].clamp(0.0, 479.99);
+                }
+            }
+            let name = format!("planted_{}_rates_{tau_w:e}.sfmr", planted.as_str());
+            source.save(&dir.join(name)).expect("write a scene");
+        }
+    }
+}
