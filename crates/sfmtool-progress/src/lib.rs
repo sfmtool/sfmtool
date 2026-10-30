@@ -18,21 +18,22 @@
 //! at this instant (**status**), how far along it is (**counts**), and, in the
 //! other direction, stop (**cancellation**).
 //!
-//! A sixth thing rides along with them: a **value**, a number the computation
-//! reached and names, for a caller that acts on it rather than prints it, such
-//! as the cost each iteration of a solve ends at, which a caller comparing two
-//! solves reads as they run. It is not a message because a number written into
-//! text would have to be parsed back, and a collector that shows messages
-//! would print one line per iteration; a collector that compares nothing
-//! ignores values.
+//! A sixth kind of report sits beside them: a **value**, a number the
+//! computation reached and names, for a caller that acts on it rather than
+//! prints it, such as the cost each iteration of a solve ends at, which a
+//! caller comparing two solves reads as they run. It is not a message because
+//! a number written into text would have to be parsed back, and a collector
+//! that shows messages would print one line per iteration; a collector that
+//! compares nothing ignores values.
 //!
 //! [`Progress`] is the one parameter carrying all five, and the values. A
 //! function that can be slow takes a `&Progress`, passes it down, and reports
 //! through it; a caller that wants none of this passes `&Progress::none()`,
-//! whose every method is a branch on a null sink. Nothing here decides where output goes: the sink is
-//! the caller's closure, so the viewer routes it to a panel, a command-line run
-//! to stderr, a test to a `Vec`. That is deliberate, because this crate carries
-//! no logging dependency and is not about to grow one.
+//! whose every method is a branch on a null sink. Nothing here decides where
+//! output goes: the sink is the caller's closure, so the viewer routes it to a
+//! panel, a command-line run to stderr, a test to a `Vec`. That is deliberate,
+//! because this crate carries no logging dependency and is not about to grow
+//! one.
 //!
 //! ## Why a parameter rather than an ambient collector
 //!

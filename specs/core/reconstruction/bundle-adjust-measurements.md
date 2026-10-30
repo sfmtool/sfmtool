@@ -131,7 +131,8 @@ and at its end (negative while rows leads):
 | Synthetic rows, `τ_w = 3·10⁻⁴` | 1 | −1.1 | −1.2 | −1.2 | | | −1.2 |
 | | 2 | −37.2 | −37.2 | | | | −37.2 |
 | | 3 | −49.7 | −49.7 | | | | −49.7 |
-| Synthetic rows, `τ_w = 10⁻⁴` | 2 | −16.4 | −16.4 | | | | −16.4 |
+| Synthetic rows, `τ_w = 10⁻⁴` | 1 | −0.1 | −0.2 | −0.2 | | | −0.2 |
+| | 2 | −16.4 | −16.4 | | | | −16.4 |
 | | 3 | −20.8 | −20.8 | | | | −20.8 |
 
 The columns scenes mirror the rows ones. What the trajectories show:
@@ -157,7 +158,9 @@ The columns scenes mirror the rows ones. What the trajectories show:
   start: on the seoul bull the columns solve starts its second round at a cost
   of 111796 units against 2813 at the end of the first, and is back to the
   rows solve's level within three iterations. A replay that read the gap at a
-  round's start would see −109017 there.
+  round's start would see −109017 there. The rows solve starts its third round
+  at 4914 units against the columns solve's 2087, a gap of +2828, and is within
+  4.3 units of it after one iteration.
 - **The kept observations agree.** Both solves' trims kept the same count in
   every round of every input except the raw solve's last round, 85746 against
   85739.

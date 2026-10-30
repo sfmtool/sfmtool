@@ -3087,9 +3087,8 @@ fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'
 /// before the first iteration and once at the end of each, and is polled at the
 /// top of each: an iteration boundary is where this solve holds a consistent
 /// state, since a candidate step is only ever written once it has improved the
-/// cost. A stopped solve scatters back
-/// what the last accepted step left, which is what it would have returned had
-/// the budget run out there.
+/// cost. A stopped solve scatters back what the last accepted step left, which
+/// is what it would have returned had the budget run out there.
 #[allow(clippy::too_many_arguments)]
 fn solve_lm<const CAM_COLS: usize>(
     lenses: &mut [Lens<'_>],
