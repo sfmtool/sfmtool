@@ -209,11 +209,16 @@ fn principal_point_changes(cameras: &[sfmtool_core::CameraAdjustment]) -> String
 /// A solve over one camera reads `, per-image widths focal 0.42 %, principal
 /// point 1.31 % of the short side (20.1 px), derived, 2 images beyond two
 /// widths`, naming only the parameters released per image; one over several
-/// names each camera by its index, `, camera 1 per-image widths …`.
-/// `short_side` is each camera's short side in pixels, by camera index.
+/// names each camera by its index, `, camera 1 per-image widths …`. The radial
+/// correction's width is in units of the radius over the focal, which is a
+/// fraction of the focal, `radial distortion 0.00120 of the focal (1.7 px)`,
+/// and the rolling-shutter rates' in radians per short side of readout,
+/// `rolling shutter 0.00200 rad per short side`. `short_side` and `focal` are
+/// each camera's short side and focal in pixels, by camera index.
 fn image_prior_clause(
     cameras: &[sfmtool_core::CameraAdjustment],
     short_side: impl Fn(usize) -> f64,
+    focal: impl Fn(usize) -> f64,
 ) -> String {
     let one = cameras.len() == 1;
     cameras
@@ -224,12 +229,25 @@ fn image_prior_clause(
             if c.image_focal_released {
                 parts.push(format!("focal {:.2} %", 100.0 * spread.prior.focal));
             }
+            if c.image_radial_bspline_released {
+                let width = spread.prior.radial_bspline;
+                parts.push(format!(
+                    "radial distortion {width:.5} of the focal ({:.1} px)",
+                    width * focal(c.camera)
+                ));
+            }
             if c.image_principal_point_released {
                 let width = spread.prior.principal_point;
                 parts.push(format!(
                     "principal point {:.2} % of the short side ({:.1} px)",
                     100.0 * width,
                     width * short_side(c.camera)
+                ));
+            }
+            if c.image_rolling_shutter_released {
+                parts.push(format!(
+                    "rolling shutter {:.5} rad per short side",
+                    spread.prior.rolling_shutter
                 ));
             }
             let how = if spread.prior_derived {
@@ -253,6 +271,49 @@ fn image_prior_clause(
                 ", {camera}per-image widths {}, {how}{beyond}",
                 parts.join(", ")
             ))
+        })
+        .collect()
+}
+
+/// The Action Log's clause for the rolling-shutter scanlines: for each camera
+/// that released its images' rolling-shutter rates, the scanlines they were
+/// solved on, and where the scanlines were not known, the cost of the solve
+/// with each and whether either was stopped before the end of its schedule;
+/// nothing when no camera released the rates.
+///
+/// A camera whose scanlines were given or stored reads `, rolling shutter on
+/// rows`; one whose scanlines were raced reads `, rolling shutter on rows
+/// chosen: cost 49350.0 with rows, 52349.0 with columns over 24931
+/// observations, both solves run to the end`. One over several cameras names
+/// each camera by its index, `, camera 1 rolling shutter on columns`.
+fn scanlines_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
+    let one = cameras.len() == 1;
+    cameras
+        .iter()
+        .filter(|c| c.image_rolling_shutter_released)
+        .filter_map(|c| {
+            let setting = match c.rolling_shutter_scanlines? {
+                sfmtool_core::camera::RollingShutterScanlines::Rows => "rows",
+                sfmtool_core::camera::RollingShutterScanlines::Columns => "columns",
+            };
+            let camera = if one {
+                String::new()
+            } else {
+                format!("camera {} ", c.camera)
+            };
+            let race = c.scanlines_race.map_or(String::new(), |race| {
+                let ended = if race.stopped_early {
+                    "one solve stopped early"
+                } else {
+                    "both solves run to the end"
+                };
+                format!(
+                    " chosen: cost {:.1} with rows, {:.1} with columns over {} observations, \
+                     {ended}",
+                    race.rows_cost, race.columns_cost, race.observations
+                )
+            });
+            Some(format!(", {camera}rolling shutter on {setting}{race}"))
         })
         .collect()
 }
@@ -315,8 +376,10 @@ fn free_point_clause(decision: Option<&sfmtool_core::geometry::FreePointDecision
 /// principal point released`, `, focal, principal point and lens distortion
 /// released`. The parts released per image follow as a phrase of their own,
 /// `, focal and principal point released per image`, or after the shared ones,
-/// `, lens distortion released, focal released per image`; a part released
-/// per image is not named again among the shared ones, though its shared value
+/// `, lens distortion released, focal released per image`, in the order focal,
+/// radial distortion, principal point, rolling shutter: `, focal, radial
+/// distortion and rolling shutter released per image`. A part released per
+/// image is not named again among the shared ones, though its shared value
 /// moves with it. When every camera released the same thing, one phrase: `,
 /// focal released` over one camera, and `, focal released on every camera`
 /// over several. When the cameras differ, each is named by its index, `,
@@ -329,13 +392,13 @@ fn release_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     };
     let words = |c: &sfmtool_core::CameraAdjustment| {
-        let pick = |pairs: [(bool, &'static str); 3]| -> Vec<&'static str> {
+        let pick = |pairs: &[(bool, &'static str)]| -> Vec<&'static str> {
             pairs
-                .into_iter()
-                .filter_map(|(released, part)| released.then_some(part))
+                .iter()
+                .filter_map(|&(released, part)| released.then_some(part))
                 .collect()
         };
-        let shared = pick([
+        let shared = pick(&[
             (c.focal_released && !c.image_focal_released, "focal"),
             (
                 c.principal_point_released && !c.image_principal_point_released,
@@ -343,10 +406,11 @@ fn release_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
             ),
             (c.distortion_released, "lens distortion"),
         ]);
-        let per_image = pick([
+        let per_image = pick(&[
             (c.image_focal_released, "focal"),
+            (c.image_radial_bspline_released, "radial distortion"),
             (c.image_principal_point_released, "principal point"),
-            (false, ""),
+            (c.image_rolling_shutter_released, "rolling shutter"),
         ]);
         match (shared.is_empty(), per_image.is_empty()) {
             (true, true) => "held".to_string(),
@@ -1770,10 +1834,15 @@ impl AppState {
             let schedule = schedule_clause(&options.schedule);
             let focal = focal_changes(&report.cameras);
             let principal_point = principal_point_changes(&report.cameras);
-            let image_prior = image_prior_clause(&report.cameras, |c| {
-                let camera = &adjusted.image_set.cameras[c];
-                f64::from(camera.width.min(camera.height))
-            });
+            let image_prior = image_prior_clause(
+                &report.cameras,
+                |c| {
+                    let camera = &adjusted.image_set.cameras[c];
+                    f64::from(camera.width.min(camera.height))
+                },
+                |c| adjusted.image_set.cameras[c].focal_lengths().0,
+            );
+            let scanlines = scanlines_clause(&report.cameras);
             let free_points = free_point_clause(report.free_point_decision.as_ref());
             let deleted = if report.points_deleted > 0 {
                 format!(", {} points deleted", report.points_deleted)
@@ -1781,7 +1850,7 @@ impl AppState {
                 String::new()
             };
             let text = format!(
-                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{principal_point}{image_prior}{free_points}{deleted}",
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{schedule}{focal}{principal_point}{image_prior}{scanlines}{free_points}{deleted}",
                 report.images,
                 report.points,
                 report.observations,

@@ -406,15 +406,20 @@ pub(super) fn add_camera_image_to_tracks(
 /// the transport, which is what the call used to do for any reconstruction
 /// worth adjusting.
 ///
-/// `defaults` is the release every camera of the node's image set takes, and each
-/// of `overrides` replaces it for one camera, field by field. An override
-/// naming a camera the image set does not have, or naming one camera twice, is
-/// refused before anything starts. `options` carries the rest of the request;
-/// its release list is the one built here.
+/// `defaults` is the release every camera of the node's image set takes, and
+/// `default_scanlines` the scanlines every camera's rolling-shutter rates are
+/// solved on, `None` for the camera's stored setting or `Unknown` where it has
+/// none; each of `overrides` replaces them for one camera, field by field. An
+/// override naming a camera the image set does not have, or naming one camera
+/// twice, is refused before anything starts. `options` carries the rest of the
+/// request; its release and scanlines lists are the ones built here.
 pub(super) fn bundle_adjust(
     state: &mut AppState,
     label: &str,
     defaults: sfmtool_core::reconstruction::bundle_adjust::CameraRelease,
+    default_scanlines: Option<
+        sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice,
+    >,
     overrides: &[super::CameraReleaseOverride],
     mut options: sfmtool_core::BundleAdjustOptions,
 ) -> super::Outcome {
@@ -426,6 +431,7 @@ pub(super) fn bundle_adjust(
         .node(id)
         .map_or(0, |node| node.edited().base.image_set.cameras.len());
     let mut releases = vec![defaults; count];
+    let mut scanlines = vec![default_scanlines; count];
     let mut named = vec![false; count];
     for entry in overrides {
         let c = entry.camera_intrinsics_index;
@@ -450,10 +456,19 @@ pub(super) fn bundle_adjust(
             image_principal_point: entry
                 .release_image_principal_point
                 .unwrap_or(defaults.image_principal_point),
-            ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+            image_radial_bspline: entry
+                .release_image_radial_bspline
+                .unwrap_or(defaults.image_radial_bspline),
+            image_rolling_shutter: entry
+                .release_image_rolling_shutter
+                .unwrap_or(defaults.image_rolling_shutter),
         };
+        if entry.rolling_shutter_scanlines.is_some() {
+            scanlines[c] = entry.rolling_shutter_scanlines;
+        }
     }
     options.releases = releases;
+    options.rolling_shutter_scanlines = scanlines;
     let since = state.action_log.revision();
     match state.start_bundle_adjust(id, &options) {
         Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
@@ -785,23 +800,50 @@ pub(super) fn cancel_background_tasks(state: &mut AppState, named: Option<&[u64]
 /// the solve that released a per-image parameter, with the spread of its
 /// images' adjustments and the prior they were solved under. A width or spread
 /// the solve has none of (a parameter not released per image, or not derived)
-/// is `null`, which is how JSON writes the report's `NaN`.
+/// is `null`, which is how JSON writes the report's `NaN`. A camera that
+/// released its images' rolling-shutter rates also says the scanlines they
+/// were solved on, and `scanlines_race` the two solves that chose them where
+/// they were not known, `null` where they were given or stored.
 fn image_adjustments_json(cameras: &[sfmtool_core::CameraAdjustment]) -> Vec<serde_json::Value> {
     let number = |x: f64| if x.is_finite() { json!(x) } else { json!(null) };
-    let widths = |w: &sfmtool_core::geometry::ImagePriorWidths| json!({ "focal": number(w.focal), "principal_point": number(w.principal_point) });
+    let widths = |w: &sfmtool_core::geometry::ImagePriorWidths| {
+        json!({
+            "focal": number(w.focal),
+            "principal_point": number(w.principal_point),
+            "radial_bspline": number(w.radial_bspline),
+            "rolling_shutter": number(w.rolling_shutter),
+        })
+    };
     cameras
         .iter()
         .filter_map(|c| {
             let spread = c.image_adjustments.as_ref()?;
+            let race = c.scanlines_race.map(|race| {
+                json!({
+                    "rows_cost": number(race.rows_cost),
+                    "columns_cost": number(race.columns_cost),
+                    "observations": race.observations,
+                    "sigma_px": number(race.sigma_px),
+                    "stopped_early": race.stopped_early,
+                })
+            });
             Some(json!({
                 "camera_intrinsics_index": c.camera,
                 "release_image_focal": c.image_focal_released,
                 "release_image_principal_point": c.image_principal_point_released,
+                "release_image_radial_bspline": c.image_radial_bspline_released,
+                "release_image_rolling_shutter": c.image_rolling_shutter_released,
+                "rolling_shutter_scanlines": c.rolling_shutter_scanlines.map(|s| s.as_str()),
+                "scanlines_race": race,
                 "images": spread.images,
                 "focal_mean": spread.focal_mean,
                 "focal_std": spread.focal_std,
                 "principal_point_mean_px": spread.principal_point_mean,
                 "principal_point_std_px": spread.principal_point_std,
+                "radial_bspline_mean": spread.radial_bspline_mean,
+                "radial_bspline_std": spread.radial_bspline_std,
+                "rolling_shutter_mean": spread.rolling_shutter_mean,
+                "rolling_shutter_std": spread.rolling_shutter_std,
                 "prior": widths(&spread.prior),
                 "prior_derived": spread.prior_derived,
                 "spread": widths(&spread.spread),

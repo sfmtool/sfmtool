@@ -439,9 +439,18 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           release_image_principal_point solve each image's own focal and \
                           principal point, held toward the mean of the camera's images by a \
                           prior whose width the solve derives (image_prior sets it), with the \
-                          camera's value moved to that mean; the reply's image_adjustments says, \
-                          per such camera, how far its images spread, the prior's widths and \
-                          the images beyond two widths. The label says what each camera \
+                          camera's value moved to that mean. On an SFMTOOL_PINHOLE camera, \
+                          release_image_radial_bspline and release_image_rolling_shutter solve \
+                          each image's radial correction and rolling-shutter rates, held toward \
+                          the mean of the camera's images, which is held through each round, \
+                          the radial correction's then moved into the camera's spline; the \
+                          rates are solved on \
+                          the rolling_shutter_scanlines, and under UNKNOWN once with each \
+                          setting, the lower cost kept. The reply's image_adjustments says, per \
+                          camera that released something per image, how far its images spread, \
+                          the prior's widths, the images beyond two widths, and the scanlines \
+                          the rates were solved on with both costs where they were raced. The \
+                          label says what each camera \
                           released, and the report names each released camera's focal and \
                           principal point before and after. By default every free point \
                           is solved in inverse depth and stored as a position or a direction by \
@@ -510,19 +519,59 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         ),
                     ),
                     (
+                        "release_image_radial_bspline",
+                        flag(
+                            "The default for every camera: solve a radial correction for each \
+                             of its images, two coefficients added to the camera's spline for \
+                             that image, as well as the poses and points. The mean of the \
+                             camera's images' corrections is held through each round and then \
+                             moved into the camera's spline. Refused, naming the camera, \
+                             on a model other than SFMTOOL_PINHOLE, and on an SFMTOOL_PINHOLE \
+                             whose spline domain end is not positive and finite. Defaults to \
+                             false.",
+                        ),
+                    ),
+                    (
+                        "release_image_rolling_shutter",
+                        flag(
+                            "The default for every camera: solve each of its images' \
+                             rolling-shutter rates, how far the camera turned while the sensor \
+                             read the image out, as well as the poses and points, read on the \
+                             scanlines rolling_shutter_scanlines chooses. The mean of the \
+                             camera's images' rates is held. Refused, naming the camera, on a \
+                             model other than SFMTOOL_PINHOLE. Defaults to false.",
+                        ),
+                    ),
+                    (
+                        "rolling_shutter_scanlines",
+                        scanlines_schema(
+                            "The default for every camera that releases its images' \
+                             rolling-shutter rates: whether its sensor reads one row (ROWS) or \
+                             one column (COLUMNS) at a time, or UNKNOWN, which solves once with \
+                             each and keeps the one with the lower cost, taking twice as long. \
+                             The setting the rates were solved on is written into the camera. \
+                             Omitted, each camera's stored setting, or UNKNOWN where it stores \
+                             none; ignored for a camera that does not release its rates.",
+                        ),
+                    ),
+                    (
                         "image_prior",
                         json!({
                             "type": "object",
                             "description":
-                                "The widths of the prior that holds each image's focal scale and \
-                                 principal-point offset toward the mean of its camera's images, \
-                                 the focal's of the log focal scale ln(1 + focal), read as a \
-                                 fraction, and the principal point's a fraction of the \
-                                 image's short side. loose is the first round's widths and \
-                                 the most a derived width may be (default 0.1 each), floor the \
-                                 least (default 0.001 each), and fixed, when given, the widths \
-                                 every round runs under, derived from nothing. Omitted, each \
-                                 camera's widths are derived from the solve.",
+                                "The widths of the prior that holds each image's intrinsic \
+                                 adjustment toward the mean of its camera's images: the focal's \
+                                 of the log focal scale ln(1 + focal), read as a fraction, the \
+                                 principal point's a fraction of the image's short side, the \
+                                 radial correction's in units of the radius over the focal, and \
+                                 the rolling-shutter rates' in radians per short side of \
+                                 readout. loose is the first round's widths and the most a \
+                                 derived width may be (default 0.1 for the focal and the \
+                                 principal point, 0.01 for the other two), floor the least \
+                                 (default 0.001, and 0.0001 for the other two), and fixed, when \
+                                 given, the widths every round runs under, derived from \
+                                 nothing. Omitted, each camera's widths are derived from the \
+                                 solve.",
                             "properties": {
                                 "loose": prior_widths_schema("The first round's widths and the most a derived width may be."),
                                 "floor": prior_widths_schema("The least a derived width may be."),
@@ -572,8 +621,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "type": "array",
                             "description":
                                 "Per-camera overrides of release_focal, release_distortion, \
-                                 release_principal_point, release_image_focal and \
-                                 release_image_principal_point. \
+                                 release_principal_point, release_image_focal, \
+                                 release_image_principal_point, release_image_radial_bspline, \
+                                 release_image_rolling_shutter and rolling_shutter_scanlines. \
                                  Each entry names a camera by camera_intrinsics_index, the index \
                                  get_camera_intrinsics and get_camera_image report, and states \
                                  what it releases; a field left out takes the call's default. A \
@@ -594,6 +644,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                     "release_principal_point": flag("Solve this camera's principal point. Omit for the call's release_principal_point."),
                                     "release_image_focal": flag("Solve each of this camera's images' focal scale. Omit for the call's release_image_focal."),
                                     "release_image_principal_point": flag("Solve each of this camera's images' principal-point offset. Omit for the call's release_image_principal_point."),
+                                    "release_image_radial_bspline": flag("Solve each of this camera's images' radial correction. Omit for the call's release_image_radial_bspline."),
+                                    "release_image_rolling_shutter": flag("Solve each of this camera's images' rolling-shutter rates. Omit for the call's release_image_rolling_shutter."),
+                                    "rolling_shutter_scanlines": scanlines_schema("The scanlines this camera's images' rates are solved on. Omit for the call's rolling_shutter_scanlines."),
                                 },
                                 "required": ["camera_intrinsics_index"],
                                 "additionalProperties": false,

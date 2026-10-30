@@ -29,15 +29,11 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
     // is installed by the poll at the top of a later frame, which is
     // also where the panel caches it invalidates are dropped.
     if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
-        let options = sfmtool_core::BundleAdjustOptions {
-            releases: answer.releases,
-            free_points: answer.free_points,
-            schedule: answer.schedule,
-            ..sfmtool_core::BundleAdjustOptions::default()
-        };
+        let recon = answer.recon;
+        let options = answer.options();
         // The refusal is already an Action Log row: the start writes it
         // itself, in the words the menu's own gate uses.
-        let _ = app_state.start_bundle_adjust(answer.recon, &options);
+        let _ = app_state.start_bundle_adjust(recon, &options);
     }
 
     // The workspace path a minimal copy records. The file was chosen in the

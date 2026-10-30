@@ -680,9 +680,10 @@ fn path_tells_two_buttons_of_one_name_apart() {
     assert!(sentence.ends_with("dialogs are open."), "{sentence}");
 }
 
-/// The Bundle Adjust dialog's camera row carries its five release
+/// The Bundle Adjust dialog's camera row carries its seven release
 /// checkboxes, and the principal point's, shared and per image, are enabled on
-/// a camera whose focal cannot be released: the demo's two-focal `PINHOLE`.
+/// a camera whose focal cannot be released: the demo's two-focal `PINHOLE`,
+/// which can take neither per-image correction.
 #[test]
 fn the_bundle_adjust_row_offers_the_principal_point_on_any_model() {
     let mut harness = Harness::new();
@@ -709,6 +710,47 @@ fn the_bundle_adjust_row_offers_the_principal_point_on_any_model() {
     // point offered on any model.
     assert_eq!(enabled("Release focal length per image"), json!(false));
     assert_eq!(enabled("Release principal point per image"), json!(true));
+    // The corrections are SFMTOOL_PINHOLE's alone, and with the rolling
+    // shutter clear there is no Scanlines choice.
+    assert_eq!(enabled("Release radial distortion per image"), json!(false));
+    assert_eq!(enabled("Release rolling shutter per image"), json!(false));
+    assert!(named(widgets, "Scanlines").is_empty(), "{window:#}");
+}
+
+/// On an `SFMTOOL_PINHOLE` camera both per-image corrections are offered, and
+/// ticking the rolling shutter shows the Scanlines choice beside it, on
+/// `Unknown` for a camera that stores no setting.
+#[test]
+fn the_bundle_adjust_row_offers_the_corrections_and_the_scanlines_on_an_sfmtool_pinhole() {
+    let mut harness = Harness::new();
+    {
+        let recon = harness.state.scene[0].recon_mut();
+        *recon = crate::test_support::as_sfmtool_pinhole(recon.clone());
+    }
+    let demo = harness.state.scene[0].id;
+    harness.state.open_bundle_adjust(demo);
+    // A new window widens to its rows over its first few frames.
+    for _ in 0..3 {
+        harness.settle();
+    }
+    let frame = harness.settle();
+    let window = listing(&frame, None);
+    let widgets = &window["dialogs"][0]["widgets"];
+    let radial = the(widgets, "Release radial distortion per image");
+    assert_eq!(radial["enabled"], json!(true), "{radial:#}");
+    let shutter = the(widgets, "Release rolling shutter per image").clone();
+    assert_eq!(shutter["enabled"], json!(true), "{shutter:#}");
+    assert!(named(widgets, "Scanlines").is_empty(), "{window:#}");
+
+    harness.click_at(centre(&shutter), egui::PointerButton::Primary);
+    let frame = harness.settle();
+    let window = listing(&frame, None);
+    let widgets = &window["dialogs"][0]["widgets"];
+    let scanlines = named(widgets, "Scanlines")
+        .into_iter()
+        .find(|entry| entry["role"] == json!("combo_box"))
+        .unwrap_or_else(|| panic!("no Scanlines choice in {window:#}"));
+    assert_eq!(scanlines["value"], json!("Unknown"), "{scanlines:#}");
 }
 
 // ── What the input tools will resolve through ───────────────────────────

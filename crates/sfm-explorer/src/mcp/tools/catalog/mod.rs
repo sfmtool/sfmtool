@@ -47,9 +47,20 @@ fn flag(description: &str) -> Value {
     json!({ "type": "boolean", "description": description })
 }
 
+/// `bundle_adjust`'s scanlines choice, call-wide or for one camera:
+/// `"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`.
+fn scanlines_schema(description: &str) -> Value {
+    json!({
+        "type": "string",
+        "enum": ["ROWS", "COLUMNS", "UNKNOWN"],
+        "description": description,
+    })
+}
+
 /// One camera's widths of the prior on its per-image releases, as
-/// `bundle_adjust`'s `image_prior` states each of its three: `focal` and
-/// `principal_point`, each a positive number, a left-out one at its default.
+/// `bundle_adjust`'s `image_prior` states each of its three: `focal`,
+/// `principal_point`, `radial_bspline` and `rolling_shutter`, each a positive
+/// number, a left-out one at its default.
 fn prior_widths_schema(description: &str) -> Value {
     json!({
         "type": ["object", "null"],
@@ -64,6 +75,16 @@ fn prior_widths_schema(description: &str) -> Value {
                 "type": "number",
                 "exclusiveMinimum": 0,
                 "description": "The principal-point offset's width, a fraction of the image's short side.",
+            },
+            "radial_bspline": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "The radial correction's width, in units of the radius over the focal.",
+            },
+            "rolling_shutter": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "The rolling-shutter rates' width, in radians per short side of readout.",
             },
         },
         "additionalProperties": false,

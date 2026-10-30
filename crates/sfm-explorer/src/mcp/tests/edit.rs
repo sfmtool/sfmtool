@@ -712,6 +712,9 @@ fn bundle_adjust_parses_its_camera_entries() {
                 release_principal_point: Some(true),
                 release_image_focal: None,
                 release_image_principal_point: None,
+                release_image_radial_bspline: None,
+                release_image_rolling_shutter: None,
+                rolling_shutter_scanlines: None,
             },
             super::super::CameraReleaseOverride {
                 camera_intrinsics_index: 0,
@@ -720,6 +723,9 @@ fn bundle_adjust_parses_its_camera_entries() {
                 release_principal_point: None,
                 release_image_focal: None,
                 release_image_principal_point: None,
+                release_image_radial_bspline: None,
+                release_image_rolling_shutter: None,
+                rolling_shutter_scanlines: None,
             },
         ]
     );
@@ -2648,6 +2654,9 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_principal_point: false,
             release_image_focal: false,
             release_image_principal_point: false,
+            release_image_radial_bspline: false,
+            release_image_rolling_shutter: false,
+            rolling_shutter_scanlines: None,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
@@ -2670,6 +2679,9 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_principal_point: false,
             release_image_focal: false,
             release_image_principal_point: false,
+            release_image_radial_bspline: false,
+            release_image_rolling_shutter: false,
+            rolling_shutter_scanlines: None,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
@@ -2688,6 +2700,9 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_principal_point: true,
             release_image_focal: false,
             release_image_principal_point: false,
+            release_image_radial_bspline: false,
+            release_image_rolling_shutter: false,
+            rolling_shutter_scanlines: None,
             cameras: Vec::new(),
             free_points_cross: true,
             schedule: None,
@@ -2706,6 +2721,9 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             release_principal_point: false,
             release_image_focal: false,
             release_image_principal_point: false,
+            release_image_radial_bspline: false,
+            release_image_rolling_shutter: false,
+            rolling_shutter_scanlines: None,
             cameras: Vec::new(),
             free_points_cross: false,
             schedule: None,
@@ -3707,4 +3725,213 @@ fn a_running_proposal_job_is_not_reported_or_cancelled_on_the_wire() {
     )["proposed"]
         .clone();
     assert_eq!(proposed["triangulation"]["state"], "ready", "{proposed}");
+}
+
+/// The corrections' releases, the scanlines choice, each camera's override of
+/// them and the corrections' prior widths parse into the request; a scanlines
+/// name the wire does not know is refused at the parse.
+#[test]
+fn bundle_adjust_parses_its_corrections_and_scanlines() {
+    use sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice;
+    let map = json!({
+        "reconstruction_label": "a",
+        "release_image_radial_bspline": true,
+        "release_image_rolling_shutter": true,
+        "rolling_shutter_scanlines": "COLUMNS",
+        "cameras": [{ "camera_intrinsics_index": 1, "release_image_radial_bspline": false,
+                      "rolling_shutter_scanlines": "UNKNOWN" }],
+        "image_prior": { "loose": { "radial_bspline": 0.02, "rolling_shutter": 0.03 } }
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    let Command::BundleAdjust {
+        release_image_radial_bspline,
+        release_image_rolling_shutter,
+        rolling_shutter_scanlines,
+        cameras,
+        image_prior,
+        ..
+    } = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call")
+    else {
+        panic!("not a bundle_adjust");
+    };
+    assert!(release_image_radial_bspline && release_image_rolling_shutter);
+    assert_eq!(
+        rolling_shutter_scanlines,
+        Some(RollingShutterScanlinesChoice::Columns)
+    );
+    assert_eq!(cameras[0].release_image_radial_bspline, Some(false));
+    assert_eq!(cameras[0].release_image_rolling_shutter, None);
+    assert_eq!(
+        cameras[0].rolling_shutter_scanlines,
+        Some(RollingShutterScanlinesChoice::Unknown)
+    );
+    assert_eq!(image_prior.loose.radial_bspline, 0.02);
+    assert_eq!(image_prior.loose.rolling_shutter, 0.03);
+
+    for (arguments, expected) in [
+        (
+            json!({ "reconstruction_label": "a", "rolling_shutter_scanlines": "rows" }),
+            "wants rolling_shutter_scanlines to be \"ROWS\", \"COLUMNS\" or \"UNKNOWN\"",
+        ),
+        (
+            json!({ "reconstruction_label": "a", "rolling_shutter_scanlines": 2 }),
+            "wants rolling_shutter_scanlines to be a string",
+        ),
+        (
+            json!({ "reconstruction_label": "a",
+                    "cameras": [{ "camera_intrinsics_index": 0,
+                                  "rolling_shutter_scanlines": "X" }] }),
+            "\"ROWS\", \"COLUMNS\" or \"UNKNOWN\"",
+        ),
+        (
+            json!({ "reconstruction_label": "a",
+                    "image_prior": { "floor": { "rolling_shutter": -1.0 } } }),
+            "positive number",
+        ),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        let error = tools::parse("bundle_adjust", Some(&map)).expect_err("refused at the parse");
+        assert!(error.0.contains(expected), "{arguments}: {error}");
+    }
+}
+
+/// The rolling shutter released on the wire: with no scanlines given on a
+/// camera that stores none, both settings are raced and the reply carries both
+/// costs; a call-wide setting and a camera's own override are each solved on
+/// as given, with no race; and the corrections' spreads and widths are in the
+/// reply.
+#[test]
+fn bundle_adjust_solves_the_rolling_shutter_on_the_scanlines_it_is_given() {
+    let (mut state, mut viewer) = editable();
+    with_flat_spline_cameras(&mut state);
+    perturb(&mut state, 0.02);
+    assert_eq!(
+        state.scene[0]
+            .recon()
+            .image_set
+            .camera_per_image_adjustments(0)
+            .rolling_shutter_scanlines,
+        None
+    );
+
+    // Omitted on a camera that stores no setting: UNKNOWN, a race.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "release_image_radial_bspline": true,
+                "release_image_rolling_shutter": true }),
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(
+        report.contains("radial distortion and rolling shutter released per image"),
+        "{report}"
+    );
+    assert!(report.contains(" chosen: cost "), "{report}");
+    let row = &reply["image_adjustments"][0];
+    assert_eq!(row["release_image_radial_bspline"], true, "{row}");
+    assert_eq!(row["release_image_rolling_shutter"], true, "{row}");
+    let chosen = row["rolling_shutter_scanlines"]
+        .as_str()
+        .expect("the setting used");
+    assert!(chosen == "ROWS" || chosen == "COLUMNS", "{row}");
+    let race = &row["scanlines_race"];
+    assert!(race["rows_cost"].as_f64().is_some(), "{row}");
+    assert!(race["columns_cost"].as_f64().is_some(), "{row}");
+    assert!(race["observations"].as_u64().is_some(), "{row}");
+    assert!(race["sigma_px"].as_f64().is_some(), "{row}");
+    assert_eq!(race["stopped_early"], false, "{row}");
+    assert!(row["prior"]["radial_bspline"].as_f64().is_some(), "{row}");
+    assert!(row["prior"]["rolling_shutter"].as_f64().is_some(), "{row}");
+    assert_eq!(row["prior"]["focal"], Value::Null, "{row}");
+    assert_eq!(row["radial_bspline_std"].as_array().map(Vec::len), Some(2));
+    assert_eq!(row["rolling_shutter_std"].as_array().map(Vec::len), Some(3));
+    assert_eq!(
+        row["rolling_shutter_mean"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert!(row["near_prior"].as_array().is_some(), "{row}");
+
+    // Given call-wide: one solve on it, and no race.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "release_image_rolling_shutter": true,
+                "rolling_shutter_scanlines": "COLUMNS" }),
+    );
+    let row = &reply["image_adjustments"][0];
+    assert_eq!(row["rolling_shutter_scanlines"], "COLUMNS", "{row}");
+    assert_eq!(row["scanlines_race"], Value::Null, "{row}");
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains(", rolling shutter on columns"), "{report}");
+
+    // A camera's own override wins over the call's.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "release_image_rolling_shutter": true,
+                "rolling_shutter_scanlines": "UNKNOWN",
+                "cameras": [{ "camera_intrinsics_index": 0,
+                              "rolling_shutter_scanlines": "ROWS" }] }),
+    );
+    let row = &reply["image_adjustments"][0];
+    assert_eq!(row["rolling_shutter_scanlines"], "ROWS", "{row}");
+    assert_eq!(row["scanlines_race"], Value::Null, "{row}");
+
+    // Omitted on a camera that now stores rows: that setting, and no race.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "release_image_rolling_shutter": true }),
+    );
+    let row = &reply["image_adjustments"][0];
+    assert_eq!(row["rolling_shutter_scanlines"], "ROWS", "{row}");
+    assert_eq!(row["scanlines_race"], Value::Null, "{row}");
+
+    // A camera's override can hold what the call releases.
+    let reply = adjusted(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "release_image_rolling_shutter": true,
+                "cameras": [{ "camera_intrinsics_index": 0,
+                              "release_image_rolling_shutter": false }] }),
+    );
+    assert_eq!(reply["image_adjustments"], Value::Null, "{reply}");
+}
+
+/// The corrections on a camera that cannot take them are the core function's
+/// refusal, naming the camera.
+#[test]
+fn bundle_adjust_refuses_the_corrections_on_a_camera_that_cannot_take_them() {
+    let (mut state, mut viewer) = editable();
+    for (key, what) in [
+        ("release_image_radial_bspline", "radial correction"),
+        ("release_image_rolling_shutter", "rolling shutter"),
+    ] {
+        let map = json!({ "reconstruction_label": "run_a", key: true })
+            .as_object()
+            .cloned()
+            .expect("an object");
+        let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+        let error = match agent(&mut state, &mut viewer, command) {
+            Outcome::Done(Err(error)) => error,
+            Outcome::Deferred(super::super::Deferred::Background(pending)) => {
+                state.finish_background_tasks();
+                match super::super::edit::background_reply(&state, &pending)
+                    .expect("the operation finished")
+                {
+                    Err(error) => error,
+                    Ok(_) => panic!("a PINHOLE cannot take {key}"),
+                }
+            }
+            _ => panic!("bundle_adjust must defer or refuse"),
+        };
+        assert!(
+            error
+                .0
+                .contains(&format!("{what} cannot be released per image on camera 0")),
+            "{error}"
+        );
+    }
 }

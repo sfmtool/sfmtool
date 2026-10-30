@@ -90,6 +90,7 @@ fn gate(camera: usize, camera_model: &'static str) -> CameraGate {
             | "SFMTOOL_PINHOLE"
     );
     let distortion = spline || camera_model == "SIMPLE_RADIAL_FISHEYE";
+    let pinhole = camera_model == "SFMTOOL_PINHOLE";
     CameraGate {
         camera,
         camera_model,
@@ -97,6 +98,11 @@ fn gate(camera: usize, camera_model: &'static str) -> CameraGate {
         focal_refusal: (!focal).then(|| format!("camera {camera} cannot release its focal")),
         distortion_refusal: (!distortion)
             .then(|| format!("camera {camera} has no distortion to release")),
+        image_radial_bspline_refusal: (!pinhole)
+            .then(|| format!("camera {camera} cannot release a radial correction")),
+        image_rolling_shutter_refusal: (!pinhole)
+            .then(|| format!("camera {camera} cannot release a rolling shutter")),
+        scanlines: None,
     }
 }
 
@@ -149,6 +155,7 @@ fn enter_runs_it_with_every_camera_held_and_the_points_crossing_which_is_the_def
             releases: vec![HELD; 4],
             free_points: FreePointPolicy::CROSS,
             schedule: DEFAULT_SCHEDULE.to_vec(),
+            rolling_shutter_scanlines: vec![None; 4],
         })
     );
     assert!(prompt.pending.is_none(), "the answered dialog stayed up");
@@ -468,4 +475,135 @@ fn drawing_a_row_keeps_its_distortion_beside_a_per_image_focal_and_its_own_boxes
         !row.focal && !row.principal_point,
         "the shared boxes were set"
     );
+}
+
+/// Two `SFMTOOL_PINHOLE` cameras, camera 0 storing no scanlines setting and
+/// camera 1 storing columns, and an `OPENCV_FISHEYE` camera 2, which can take
+/// neither correction.
+fn pinholes() -> BundleAdjustGates {
+    BundleAdjustGates {
+        camera_count: 3,
+        cameras: vec![
+            gate(0, "SFMTOOL_PINHOLE"),
+            CameraGate {
+                scanlines: Some(RollingShutterScanlines::Columns),
+                ..gate(1, "SFMTOOL_PINHOLE")
+            },
+            gate(2, "OPENCV_FISHEYE"),
+        ],
+    }
+}
+
+#[test]
+fn the_scanlines_choice_opens_on_the_stored_setting_or_unknown() {
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(ReconId::next(), "dino".to_string(), pinholes());
+    let rows = &prompt.pending.as_ref().unwrap().rows;
+    // No stored setting is never an assumed rows.
+    assert_eq!(rows[0].scanlines, RollingShutterScanlinesChoice::Unknown);
+    assert_eq!(rows[1].scanlines, RollingShutterScanlinesChoice::Columns);
+    assert!(rows
+        .iter()
+        .all(|r| !r.image_radial_bspline && !r.image_rolling_shutter));
+}
+
+#[test]
+fn the_corrections_are_answered_with_the_scanlines_of_each_camera_that_releases_its_rates() {
+    let mut prompt = BundleAdjustPrompt::default();
+    let id = ReconId::next();
+    prompt.ask(id, "dino".to_string(), pinholes());
+    {
+        let rows = &mut prompt.pending.as_mut().unwrap().rows;
+        rows[0].image_radial_bspline = true;
+        rows[0].image_rolling_shutter = true;
+        rows[1].image_rolling_shutter = true;
+        rows[1].scanlines = RollingShutterScanlinesChoice::Rows;
+        // Camera 2 is an OPENCV_FISHEYE: what its greyed boxes hold is never
+        // answered.
+        rows[2].image_radial_bspline = true;
+        rows[2].image_rolling_shutter = true;
+    }
+    let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
+    assert_eq!(
+        answer.releases,
+        vec![
+            CameraRelease {
+                image_radial_bspline: true,
+                image_rolling_shutter: true,
+                ..HELD
+            },
+            CameraRelease {
+                image_rolling_shutter: true,
+                ..HELD
+            },
+            HELD,
+        ]
+    );
+    assert_eq!(
+        answer.rolling_shutter_scanlines,
+        vec![
+            Some(RollingShutterScanlinesChoice::Unknown),
+            Some(RollingShutterScanlinesChoice::Rows),
+            None,
+        ]
+    );
+
+    // The job runs with exactly these, and the core function's defaults for
+    // the rest.
+    let options = answer.clone().options();
+    assert_eq!(options.releases, answer.releases);
+    assert_eq!(
+        options.rolling_shutter_scanlines,
+        answer.rolling_shutter_scanlines
+    );
+    assert_eq!(options.schedule, answer.schedule);
+    assert_eq!(options.free_points, answer.free_points);
+    assert_eq!(
+        options.image_prior,
+        sfmtool_core::geometry::ImagePriorOptions::default()
+    );
+}
+
+#[test]
+fn a_scanlines_choice_is_answered_only_beside_a_released_rolling_shutter() {
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(ReconId::next(), "dino".to_string(), pinholes());
+    {
+        let rows = &mut prompt.pending.as_mut().unwrap().rows;
+        rows[0].image_radial_bspline = true;
+        rows[1].scanlines = RollingShutterScanlinesChoice::Rows;
+    }
+    let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
+    assert_eq!(
+        answer.releases[0],
+        CameraRelease {
+            image_radial_bspline: true,
+            ..HELD
+        }
+    );
+    assert_eq!(answer.rolling_shutter_scanlines, vec![None; 3]);
+}
+
+#[test]
+fn drawing_a_row_keeps_its_corrections_and_its_scanlines_choice() {
+    // Drawing the second line, with the Scanlines choice shown, leaves what
+    // the user set alone, and a cleared rolling shutter keeps the choice for
+    // when it is ticked again.
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(ReconId::next(), "dino".to_string(), pinholes());
+    {
+        let rows = &mut prompt.pending.as_mut().unwrap().rows;
+        rows[0].image_radial_bspline = true;
+        rows[0].image_rolling_shutter = true;
+        rows[0].scanlines = RollingShutterScanlinesChoice::Columns;
+        rows[1].scanlines = RollingShutterScanlinesChoice::Rows;
+    }
+
+    assert_eq!(frame(&mut prompt, Vec::new()), None);
+
+    let rows = &prompt.pending.as_ref().expect("still up").rows;
+    assert!(rows[0].image_radial_bspline && rows[0].image_rolling_shutter);
+    assert_eq!(rows[0].scanlines, RollingShutterScanlinesChoice::Columns);
+    assert!(!rows[1].image_rolling_shutter);
+    assert_eq!(rows[1].scanlines, RollingShutterScanlinesChoice::Rows);
 }

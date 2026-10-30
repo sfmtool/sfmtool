@@ -3071,8 +3071,9 @@ fn the_label_names_the_parts_released_per_image() {
 fn the_entry_names_each_camera_s_per_image_widths() {
     use super::image_prior_clause;
     let short_side = |_| 1536.0;
+    let focal = |_| 1400.0;
     assert_eq!(
-        image_prior_clause(&[per_image(0, true, true, false)], short_side),
+        image_prior_clause(&[per_image(0, true, true, false)], short_side, focal),
         ", per-image widths focal 0.42 %, principal point 1.31 % of the short side \
          (20.1 px), derived, 2 images beyond two widths"
     );
@@ -3085,12 +3086,16 @@ fn the_entry_names_each_camera_s_per_image_widths() {
         .near_prior
         .truncate(1);
     assert_eq!(
-        image_prior_clause(&[adjustment(0, true, false, false), fixed], short_side),
+        image_prior_clause(
+            &[adjustment(0, true, false, false), fixed],
+            short_side,
+            focal
+        ),
         ", camera 1 per-image widths principal point 1.31 % of the short side (20.1 px), \
          fixed, 1 image beyond two widths"
     );
     assert_eq!(
-        image_prior_clause(&[adjustment(0, true, true, false)], short_side),
+        image_prior_clause(&[adjustment(0, true, true, false)], short_side, focal),
         ""
     );
 }
@@ -3137,4 +3142,252 @@ fn a_per_image_principal_point_is_named_in_the_label_and_the_entry() {
     );
     assert!(last.contains(", derived"), "{last}");
     assert!(!last.contains("per-image widths focal"), "{last}");
+}
+
+/// `c` with each image's radial correction released as `radial` states, and
+/// its rolling-shutter rates released on `scanlines` where that is `Some`, at
+/// the widths the final round ran under.
+fn with_corrections(
+    mut c: sfmtool_core::CameraAdjustment,
+    radial: bool,
+    scanlines: Option<sfmtool_core::camera::RollingShutterScanlines>,
+) -> sfmtool_core::CameraAdjustment {
+    c.image_radial_bspline_released = radial;
+    c.image_rolling_shutter_released = scanlines.is_some();
+    c.rolling_shutter_scanlines = scanlines;
+    if let Some(spread) = c.image_adjustments.as_mut() {
+        if radial {
+            spread.prior.radial_bspline = 0.0012;
+        }
+        if scanlines.is_some() {
+            spread.prior.rolling_shutter = 0.002;
+        }
+    }
+    c
+}
+
+#[test]
+fn the_label_names_the_corrections_released_per_image() {
+    use super::release_clause;
+    use sfmtool_core::camera::RollingShutterScanlines::Rows;
+    assert_eq!(
+        release_clause(&[with_corrections(
+            per_image(0, false, false, false),
+            true,
+            Some(Rows)
+        )]),
+        ", radial distortion and rolling shutter released per image"
+    );
+    assert_eq!(
+        release_clause(&[with_corrections(
+            per_image(0, true, true, false),
+            true,
+            Some(Rows)
+        )]),
+        ", focal, radial distortion, principal point and rolling shutter released per image"
+    );
+    assert_eq!(
+        release_clause(&[
+            with_corrections(per_image(0, false, false, false), false, Some(Rows)),
+            adjustment(1, false, false, false)
+        ]),
+        ", camera 0 rolling shutter released per image, camera 1 held"
+    );
+}
+
+#[test]
+fn the_entry_names_the_widths_of_the_corrections() {
+    use super::image_prior_clause;
+    use sfmtool_core::camera::RollingShutterScanlines::Columns;
+    let short_side = |_| 1536.0;
+    let focal = |_| 1400.0;
+    assert_eq!(
+        image_prior_clause(
+            &[with_corrections(
+                per_image(0, false, false, false),
+                true,
+                Some(Columns)
+            )],
+            short_side,
+            focal
+        ),
+        ", per-image widths radial distortion 0.00120 of the focal (1.7 px), rolling shutter \
+         0.00200 rad per short side, derived, 2 images beyond two widths"
+    );
+}
+
+#[test]
+fn the_entry_names_the_scanlines_and_both_costs_of_a_race() {
+    use super::scanlines_clause;
+    use sfmtool_core::camera::RollingShutterScanlines::{Columns, Rows};
+    let stored = with_corrections(per_image(0, false, false, false), false, Some(Rows));
+    assert_eq!(
+        scanlines_clause(std::slice::from_ref(&stored)),
+        ", rolling shutter on rows"
+    );
+
+    let mut raced = with_corrections(per_image(0, false, false, false), false, Some(Columns));
+    raced.scanlines_race = Some(sfmtool_core::reconstruction::bundle_adjust::ScanlinesRace {
+        rows_cost: 52349.0,
+        columns_cost: 49350.0,
+        observations: 24931,
+        sigma_px: 0.146,
+        stopped_early: false,
+    });
+    assert_eq!(
+        scanlines_clause(std::slice::from_ref(&raced)),
+        ", rolling shutter on columns chosen: cost 52349.0 with rows, 49350.0 with columns \
+         over 24931 observations, both solves run to the end"
+    );
+
+    // Over several cameras each is named; a camera that released no rates
+    // says nothing, and neither does a solve where none did.
+    let mut camera_1 = stored.clone();
+    camera_1.camera = 1;
+    assert_eq!(
+        scanlines_clause(&[adjustment(0, true, false, false), camera_1]),
+        ", camera 1 rolling shutter on rows"
+    );
+    assert_eq!(scanlines_clause(&[per_image(0, true, true, false)]), "");
+}
+
+/// The demo node with its camera an `SFMTOOL_PINHOLE` whose spline is flat,
+/// which projects as the `PINHOLE` did, and stores no scanlines setting.
+fn sfmtool_pinhole_state() -> (AppState, ReconId) {
+    let (mut state, id) = adjustable_state();
+    let recon = state.scene[0].recon_mut();
+    *recon = crate::test_support::as_sfmtool_pinhole(recon.clone());
+    (state, id)
+}
+
+#[test]
+fn the_correction_gates_open_on_an_sfmtool_pinhole_and_name_the_camera_elsewhere() {
+    // The demo's two-focal PINHOLE: both greyed, naming the camera and the model.
+    let (state, _) = adjustable_state();
+    let gate = &crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited())[0];
+    for why in [
+        gate.image_radial_bspline_refusal.as_deref(),
+        gate.image_rolling_shutter_refusal.as_deref(),
+    ] {
+        let why = why.expect("a PINHOLE cannot take the corrections");
+        assert!(why.contains("Camera 0, a PINHOLE camera"), "{why}");
+        assert!(why.contains("SFMTOOL_PINHOLE"), "{why}");
+    }
+    assert_eq!(gate.scanlines, None);
+
+    let (mut state, _) = sfmtool_pinhole_state();
+    let gate = &crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited())[0];
+    assert_eq!(gate.image_radial_bspline_refusal, None);
+    assert_eq!(gate.image_rolling_shutter_refusal, None);
+
+    // A domain end that is not positive closes the radial correction alone,
+    // and a stored setting is what the Scanlines choice opens on.
+    {
+        let recon = state.scene[0].recon_mut();
+        if let sfmtool_core::CameraModel::SfmtoolPinhole {
+            bspline_rho_max, ..
+        } = &mut recon.image_set.cameras[0].model
+        {
+            *bspline_rho_max = 0.0;
+        }
+        let mut flags = recon.image_set.camera_per_image_adjustments(0);
+        flags.rolling_shutter_scanlines =
+            Some(sfmtool_core::camera::RollingShutterScanlines::Columns);
+        recon.image_set.per_image_adjustments = vec![flags];
+    }
+    let gate = &crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited())[0];
+    let why = gate
+        .image_radial_bspline_refusal
+        .as_deref()
+        .expect("no domain to correct on");
+    assert!(why.contains("The spline of camera 0"), "{why}");
+    assert_eq!(gate.image_rolling_shutter_refusal, None);
+    assert_eq!(
+        gate.scanlines,
+        Some(sfmtool_core::camera::RollingShutterScanlines::Columns)
+    );
+}
+
+#[test]
+fn a_rolling_shutter_with_unknown_scanlines_runs_both_solves_and_names_both_costs() {
+    let (mut state, id) = sfmtool_pinhole_state();
+    let options = sfmtool_core::BundleAdjustOptions {
+        rolling_shutter_scanlines: vec![Some(
+            sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice::Unknown,
+        )],
+        ..sfmtool_core::BundleAdjustOptions::uniform(
+            1,
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+                image_radial_bspline: true,
+                image_rolling_shutter: true,
+                ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+            },
+        )
+    };
+
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_tasks();
+
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, radial distortion and rolling shutter released per image"
+    );
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    let text = &entry.text;
+    assert!(
+        text.contains(", per-image widths radial distortion "),
+        "{text}"
+    );
+    assert!(text.contains(", rolling shutter on "), "{text}");
+    assert!(text.contains(" chosen: cost "), "{text}");
+    assert!(text.contains(" with rows, "), "{text}");
+    assert!(text.contains(" with columns over "), "{text}");
+    assert!(text.contains("both solves run to the end"), "{text}");
+    // The progress reported both solves of the race.
+    let phases: Vec<&str> = phase_rows(&entry.detail)
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .collect();
+    assert!(phases.contains(&"solve with rows"), "{phases:?}");
+    assert!(phases.contains(&"solve with columns"), "{phases:?}");
+    // The setting kept is written into the camera.
+    let flags = state.scene[0]
+        .recon()
+        .image_set
+        .camera_per_image_adjustments(0);
+    assert!(flags.rolling_shutter && flags.radial_bspline);
+    assert!(flags.rolling_shutter_scanlines.is_some());
+}
+
+#[test]
+fn a_rolling_shutter_on_a_given_setting_runs_one_solve_and_names_it() {
+    let (mut state, id) = sfmtool_pinhole_state();
+    let options = sfmtool_core::BundleAdjustOptions {
+        rolling_shutter_scanlines: vec![Some(
+            sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice::Columns,
+        )],
+        ..sfmtool_core::BundleAdjustOptions::uniform(
+            1,
+            sfmtool_core::reconstruction::bundle_adjust::CameraRelease {
+                image_rolling_shutter: true,
+                ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+            },
+        )
+    };
+
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background_tasks();
+
+    let text = &newest(&state).text;
+    assert!(text.contains(", rolling shutter on columns"), "{text}");
+    assert!(!text.contains(" chosen: "), "{text}");
+    assert_eq!(
+        state.scene[0]
+            .recon()
+            .image_set
+            .camera_per_image_adjustments(0)
+            .rolling_shutter_scanlines,
+        Some(sfmtool_core::camera::RollingShutterScanlines::Columns)
+    );
 }

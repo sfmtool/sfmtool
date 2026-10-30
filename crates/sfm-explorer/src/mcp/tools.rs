@@ -406,6 +406,13 @@ pub(crate) fn parse(
             release_image_principal_point: args
                 .optional_bool("release_image_principal_point")?
                 .unwrap_or(false),
+            release_image_radial_bspline: args
+                .optional_bool("release_image_radial_bspline")?
+                .unwrap_or(false),
+            release_image_rolling_shutter: args
+                .optional_bool("release_image_rolling_shutter")?
+                .unwrap_or(false),
+            rolling_shutter_scanlines: args.scanlines_choice("rolling_shutter_scanlines")?,
             cameras: args.camera_releases("cameras")?,
             free_points_cross: args.optional_bool("free_points_cross")?.unwrap_or(true),
             schedule: args.schedule("schedule")?,
@@ -1644,9 +1651,9 @@ impl Args<'_> {
     /// default when absent or `null`.
     ///
     /// A closed object of `loose`, `floor` and `fixed`, each optional; each of
-    /// those a closed object of `focal` and `principal_point`, each a positive
-    /// number, a left-out one at its default, and `fixed` also `null`, which
-    /// derives the widths.
+    /// those a closed object of `focal`, `principal_point`, `radial_bspline`
+    /// and `rolling_shutter`, each a positive number, a left-out one at its
+    /// default, and `fixed` also `null`, which derives the widths.
     fn image_prior(
         &self,
         key: &str,
@@ -1668,7 +1675,8 @@ impl Args<'_> {
             |field: &str,
              default: sfmtool_core::geometry::ImagePriorWidths|
              -> Result<Option<sfmtool_core::geometry::ImagePriorWidths>, ToolError> {
-                let expected = "an object of focal and principal_point";
+                let expected =
+                    "an object of focal, principal_point, radial_bspline and rolling_shutter";
                 let map = match inner.map.get(field) {
                     None | Some(Value::Null) => return Ok(None),
                     Some(value) => value
@@ -1677,11 +1685,18 @@ impl Args<'_> {
                 };
                 let tool = format!("bundle_adjust.image_prior.{field}");
                 let widths = Args { tool: &tool, map };
-                widths.reject_unknown(&["focal", "principal_point"])?;
+                widths.reject_unknown(&[
+                    "focal",
+                    "principal_point",
+                    "radial_bspline",
+                    "rolling_shutter",
+                ])?;
                 let mut out = default;
                 for (name, slot) in [
                     ("focal", &mut out.focal),
                     ("principal_point", &mut out.principal_point),
+                    ("radial_bspline", &mut out.radial_bspline),
+                    ("rolling_shutter", &mut out.rolling_shutter),
                 ] {
                     if let Some(width) = widths.optional_f64(name)? {
                         if !(width.is_finite() && width > 0.0) {
@@ -1704,16 +1719,44 @@ impl Args<'_> {
         Ok(options)
     }
 
+    /// `bundle_adjust`'s scanlines choice: `"ROWS"`, `"COLUMNS"` or
+    /// `"UNKNOWN"`, or `None` when absent or `null`, for each camera's stored
+    /// setting.
+    fn scanlines_choice(
+        &self,
+        key: &str,
+    ) -> Result<
+        Option<sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice>,
+        ToolError,
+    > {
+        self.optional_string(key)?
+            .map(|name| {
+                sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice::parse(
+                    &name,
+                )
+                .map_err(|_| {
+                    self.error(format!(
+                        "wants {key} to be \"ROWS\", \"COLUMNS\" or \"UNKNOWN\" — got {name:?}."
+                    ))
+                })
+            })
+            .transpose()
+    }
+
     /// `bundle_adjust`'s per-camera release overrides; empty when absent.
     ///
     /// Each element is a closed object: `camera_intrinsics_index`, required,
     /// and `release_focal`, `release_distortion`, `release_principal_point`,
-    /// `release_image_focal` and `release_image_principal_point`, each
-    /// optional. A field left out stays `None`, for the call's default to fill.
+    /// `release_image_focal`, `release_image_principal_point`,
+    /// `release_image_radial_bspline`, `release_image_rolling_shutter` and
+    /// `rolling_shutter_scanlines`, each optional. A field left out stays
+    /// `None`, for the call's default to fill.
     fn camera_releases(&self, key: &str) -> Result<Vec<super::CameraReleaseOverride>, ToolError> {
         let expected = "an array of objects, each with camera_intrinsics_index and optionally \
                         release_focal, release_distortion, release_principal_point, \
-                        release_image_focal and release_image_principal_point";
+                        release_image_focal, release_image_principal_point, \
+                        release_image_radial_bspline, release_image_rolling_shutter and \
+                        rolling_shutter_scanlines";
         let value = match self.map.get(key) {
             None | Some(Value::Null) => return Ok(Vec::new()),
             Some(value) => value,
@@ -1740,6 +1783,12 @@ impl Args<'_> {
                     release_image_focal: inner.optional_bool("release_image_focal")?,
                     release_image_principal_point: inner
                         .optional_bool("release_image_principal_point")?,
+                    release_image_radial_bspline: inner
+                        .optional_bool("release_image_radial_bspline")?,
+                    release_image_rolling_shutter: inner
+                        .optional_bool("release_image_rolling_shutter")?,
+                    rolling_shutter_scanlines: inner
+                        .scanlines_choice("rolling_shutter_scanlines")?,
                 })
             })
             .collect()

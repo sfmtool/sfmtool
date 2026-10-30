@@ -93,6 +93,16 @@ pub(crate) struct CameraReleaseOverride {
     /// Release each of its images' principal-point offset, or `None` for the
     /// call's `release_image_principal_point`.
     pub(crate) release_image_principal_point: Option<bool>,
+    /// Release each of its images' radial correction, or `None` for the
+    /// call's `release_image_radial_bspline`.
+    pub(crate) release_image_radial_bspline: Option<bool>,
+    /// Release each of its images' rolling-shutter rates, or `None` for the
+    /// call's `release_image_rolling_shutter`.
+    pub(crate) release_image_rolling_shutter: Option<bool>,
+    /// The scanlines its images' rates are solved on, or `None` for the
+    /// call's `rolling_shutter_scanlines`.
+    pub(crate) rolling_shutter_scanlines:
+        Option<sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice>,
 }
 
 /// Everything the MCP surface can ask the viewer to do. One variant per tool.
@@ -349,8 +359,11 @@ pub(crate) enum Command {
         camera_image: CameraImageSel,
     },
     /// Bundle-adjust one node. `release_focal`, `release_distortion`,
-    /// `release_principal_point`, `release_image_focal` and
-    /// `release_image_principal_point` are the release every camera takes;
+    /// `release_principal_point`, `release_image_focal`,
+    /// `release_image_principal_point`, `release_image_radial_bspline` and
+    /// `release_image_rolling_shutter` are the release every camera takes, and
+    /// `rolling_shutter_scanlines` the scanlines every camera's rates are
+    /// solved on, `None` for each camera's stored setting or `Unknown`;
     /// `cameras` overrides them camera by camera. `free_points_cross` is the
     /// adjustment's `free_points` switch, `schedule` its trim schedule, `None`
     /// for the core function's default, and `image_prior` the widths of the
@@ -362,6 +375,10 @@ pub(crate) enum Command {
         release_principal_point: bool,
         release_image_focal: bool,
         release_image_principal_point: bool,
+        release_image_radial_bspline: bool,
+        release_image_rolling_shutter: bool,
+        rolling_shutter_scanlines:
+            Option<sfmtool_core::reconstruction::bundle_adjust::RollingShutterScanlinesChoice>,
         cameras: Vec<CameraReleaseOverride>,
         free_points_cross: bool,
         schedule: Option<Vec<sfmtool_core::geometry::BaSchedule>>,
@@ -1595,6 +1612,9 @@ pub(crate) fn apply_with_window(
             release_principal_point,
             release_image_focal,
             release_image_principal_point,
+            release_image_radial_bspline,
+            release_image_rolling_shutter,
+            rolling_shutter_scanlines,
             cameras,
             free_points_cross,
             schedule,
@@ -1608,8 +1628,10 @@ pub(crate) fn apply_with_window(
                 principal_point: release_principal_point,
                 image_focal: release_image_focal,
                 image_principal_point: release_image_principal_point,
-                ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
+                image_radial_bspline: release_image_radial_bspline,
+                image_rolling_shutter: release_image_rolling_shutter,
             },
+            rolling_shutter_scanlines,
             &cameras,
             sfmtool_core::BundleAdjustOptions {
                 free_points: sfmtool_core::geometry::FreePointPolicy {

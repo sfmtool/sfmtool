@@ -7,11 +7,13 @@
 //! See `specs/gui/edits/bundle-adjust.md`. The adjustment takes its decisions
 //! about the lens from the user, camera by camera -- whether each camera's
 //! focal length is released, whether with it the lens distortion the
-//! adjustment can free, whether its principal point is, and whether each of
-//! its images' focal length and principal point are -- one about the points:
-//! whether a point may cross between a position and a direction -- and the
-//! trim schedule. That is the whole dialog: one row of five checkboxes per
-//! camera, the crossing checkbox,
+//! adjustment can free, whether its principal point is, whether each of its
+//! images' focal length and principal point are, and on an `SFMTOOL_PINHOLE`
+//! camera whether each image's radial correction and rolling-shutter rates are,
+//! with the scanlines the rates are read on -- one about the points: whether a
+//! point may cross between a position and a direction -- and the trim schedule.
+//! That is the whole dialog: two lines per camera, of three shared and four
+//! per-image checkboxes and the Scanlines choice, the crossing checkbox,
 //! the schedule's text box with its presets, `Run` and `Cancel`. Everything
 //! else about the solve is the core function's defaults. A spline
 //! camera's coefficient count and domain are not the adjustment's to change:
@@ -23,11 +25,14 @@
 
 use std::collections::HashMap;
 
+use sfmtool_core::camera::RollingShutterScanlines;
 use sfmtool_core::geometry::{BaSchedule, FreePointPolicy, DEFAULT_SCHEDULE};
 use sfmtool_core::reconstruction::bundle_adjust::{
-    check_schedule, distortion_is_releasable, focal_is_releasable, CameraRelease,
+    check_schedule, distortion_is_releasable, focal_is_releasable,
+    image_radial_bspline_is_releasable, image_rolling_shutter_is_releasable, CameraRelease,
+    RollingShutterScanlinesChoice,
 };
-use sfmtool_core::EditedReconstruction;
+use sfmtool_core::{CameraModel, EditedReconstruction};
 
 use crate::scene::ReconId;
 
@@ -131,10 +136,12 @@ pub(crate) fn parse_schedule(text: &str) -> Result<Vec<BaSchedule>, String> {
 }
 
 /// One camera the posed images use, as its row in the dialog shows it: which
-/// camera, how many posed images it takes, and why its focal or distortion
-/// checkbox is greyed. Its principal-point checkboxes are never greyed for the
-/// model, since every model can release its principal point, shared or per
-/// image; its per-image focal checkbox is greyed for the focal's reason.
+/// camera, how many posed images it takes, why its focal, distortion,
+/// per-image radial or per-image rolling-shutter checkbox is greyed, and the
+/// scanlines setting it stores. Its principal-point checkboxes are never
+/// greyed for the model, since every model can release its principal point,
+/// shared or per image; its per-image focal checkbox is greyed for the focal's
+/// reason.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CameraGate {
     /// The camera's index among the image set's cameras.
@@ -150,6 +157,19 @@ pub(crate) struct CameraGate {
     /// has some the adjustment can free. The distortion checkbox carries this
     /// as its disabled hover text.
     pub(crate) distortion_refusal: Option<String>,
+    /// Why its images' radial correction cannot be released, or `None` when it
+    /// can: on an `SFMTOOL_PINHOLE` whose spline domain end is positive and
+    /// finite. The per-image radial checkbox carries this as its disabled
+    /// hover text.
+    pub(crate) image_radial_bspline_refusal: Option<String>,
+    /// Why its images' rolling-shutter rates cannot be released, or `None` on
+    /// an `SFMTOOL_PINHOLE`. The per-image rolling-shutter checkbox carries
+    /// this as its disabled hover text.
+    pub(crate) image_rolling_shutter_refusal: Option<String>,
+    /// The scanlines setting the camera stores, which the row's Scanlines
+    /// choice opens on; `None` where it stores none, and the choice opens on
+    /// `Unknown`.
+    pub(crate) scanlines: Option<RollingShutterScanlines>,
 }
 
 /// One [`CameraGate`] per camera the posed images use, in camera index order.
@@ -177,6 +197,7 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
             // camera's images share, each image's adjustment held on top.
             let camera = &image_set.cameras[c as usize];
             let camera_model = camera.model_name();
+            let pinhole = matches!(camera.model, CameraModel::SfmtoolPinhole { .. });
             CameraGate {
                 camera: c as usize,
                 camera_model,
@@ -195,6 +216,35 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
                          first."
                     )
                 }),
+                image_radial_bspline_refusal: (!image_radial_bspline_is_releasable(camera)).then(
+                    || {
+                        if pinhole {
+                            format!(
+                                "The spline of camera {c} has a domain end that is not positive \
+                                 and finite, or a single coefficient, so its images' radial \
+                                 distortion cannot be released."
+                            )
+                        } else {
+                            format!(
+                                "Camera {c}, a {camera_model} camera, cannot release its \
+                                 images' radial distortion: the per-image radial correction is \
+                                 defined on SFMTOOL_PINHOLE alone. Switch the camera to \
+                                 SFMTOOL_PINHOLE first."
+                            )
+                        }
+                    },
+                ),
+                image_rolling_shutter_refusal: (!image_rolling_shutter_is_releasable(camera))
+                    .then(|| {
+                        format!(
+                            "Camera {c}, a {camera_model} camera, cannot release its images' \
+                             rolling shutter: the rolling-shutter rates are defined on \
+                             SFMTOOL_PINHOLE alone. Switch the camera to SFMTOOL_PINHOLE first."
+                        )
+                    }),
+                scanlines: image_set
+                    .camera_per_image_adjustments(c as usize)
+                    .rolling_shutter_scanlines,
             }
         })
         .collect()
@@ -237,6 +287,26 @@ pub struct BundleAdjustAnswer {
     /// The trim schedule the text box stated, already checked by
     /// [`check_schedule`].
     pub schedule: Vec<BaSchedule>,
+    /// The scanlines each camera's rolling-shutter rates are solved on, one
+    /// entry per camera in the node's image set: the row's Scanlines choice
+    /// for a camera whose rates the row releases, and `None` for every other
+    /// camera.
+    pub rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
+}
+
+impl BundleAdjustAnswer {
+    /// The options the adjustment runs with: the answer's releases, free-point
+    /// policy, schedule and scanlines, and the core function's defaults for
+    /// everything else, the per-image prior's widths among them.
+    pub(crate) fn options(self) -> sfmtool_core::BundleAdjustOptions {
+        sfmtool_core::BundleAdjustOptions {
+            releases: self.releases,
+            free_points: self.free_points,
+            schedule: self.schedule,
+            rolling_shutter_scanlines: self.rolling_shutter_scanlines,
+            ..sfmtool_core::BundleAdjustOptions::default()
+        }
+    }
 }
 
 /// The dialog, what it remembers while it is up, and the schedule last run on
@@ -250,17 +320,55 @@ pub struct BundleAdjustPrompt {
     last_schedule: HashMap<ReconId, Vec<BaSchedule>>,
 }
 
-/// One camera row's five checkboxes, as the user left them. A ticked per-image
-/// box shows the shared box of its kind ticked and greyed, without changing
-/// what the shared box itself holds, so clearing the per-image box gives the
-/// shared box back as the user left it.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// One camera row's seven checkboxes and its Scanlines choice, as the user
+/// left them. A ticked per-image focal or principal-point box shows the shared
+/// box of its kind ticked and greyed, without changing what the shared box
+/// itself holds, so clearing the per-image box gives the shared box back as the
+/// user left it.
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct RowState {
     focal: bool,
     distortion: bool,
     principal_point: bool,
     image_focal: bool,
     image_principal_point: bool,
+    image_radial_bspline: bool,
+    image_rolling_shutter: bool,
+    /// The Scanlines choice, kept while the rolling-shutter box is clear, so
+    /// that ticking the box again shows what was chosen.
+    scanlines: RollingShutterScanlinesChoice,
+}
+
+impl Default for RowState {
+    /// Every checkbox clear, and the Scanlines choice `Unknown`, which is what
+    /// a camera that stores no setting opens on.
+    fn default() -> Self {
+        Self {
+            focal: false,
+            distortion: false,
+            principal_point: false,
+            image_focal: false,
+            image_principal_point: false,
+            image_radial_bspline: false,
+            image_rolling_shutter: false,
+            scanlines: RollingShutterScanlinesChoice::Unknown,
+        }
+    }
+}
+
+impl RowState {
+    /// A row as the dialog opens it for `gate`'s camera: every checkbox clear,
+    /// and the Scanlines choice on the camera's stored setting, or `Unknown`
+    /// where it stores none, since an absent setting means the scanlines are
+    /// not known.
+    fn opening(gate: &CameraGate) -> Self {
+        Self {
+            scanlines: gate
+                .scanlines
+                .map_or(RollingShutterScanlinesChoice::Unknown, Into::into),
+            ..Self::default()
+        }
+    }
 }
 
 /// The question being asked: which node, what the controls say, and why each
@@ -282,8 +390,10 @@ impl Pending {
     /// What camera row `j` releases: what its checkboxes say, less anything its
     /// model cannot release, and the distortion only with the focal, shared or
     /// per image. The principal point is released on any model, with or
-    /// without the focal. A per-image release is passed as it is, without the
-    /// shared one of its kind, which it already moves.
+    /// without the focal. A per-image focal or principal point is passed as it
+    /// is, without the shared one of its kind, which it already moves. The
+    /// radial correction and the rolling shutter per image are passed where
+    /// the camera can take them.
     fn release(&self, j: usize) -> CameraRelease {
         let gate = &self.gates.cameras[j];
         let row = self.rows[j];
@@ -298,7 +408,10 @@ impl Pending {
             principal_point: row.principal_point && !row.image_principal_point,
             image_focal,
             image_principal_point: row.image_principal_point,
-            ..CameraRelease::HELD
+            image_radial_bspline: row.image_radial_bspline
+                && gate.image_radial_bspline_refusal.is_none(),
+            image_rolling_shutter: row.image_rolling_shutter
+                && gate.image_rolling_shutter_refusal.is_none(),
         }
     }
 
@@ -313,6 +426,22 @@ impl Pending {
         }
         releases
     }
+
+    /// The scanlines list the answer carries: one entry per camera in the image
+    /// set, the row's Scanlines choice where the row releases the camera's
+    /// rolling shutter, and `None` elsewhere.
+    fn scanlines(&self) -> Vec<Option<RollingShutterScanlinesChoice>> {
+        let mut scanlines = vec![None; self.gates.camera_count];
+        for (j, gate) in self.gates.cameras.iter().enumerate() {
+            if let Some(slot) = scanlines.get_mut(gate.camera) {
+                *slot = self
+                    .release(j)
+                    .image_rolling_shutter
+                    .then_some(self.rows[j].scanlines);
+            }
+        }
+        scanlines
+    }
 }
 
 impl BundleAdjustPrompt {
@@ -321,11 +450,13 @@ impl BundleAdjustPrompt {
     /// Idempotent while the dialog is already up, so a menu item racing itself
     /// cannot stack two of them. Every checkbox starts **clear**: a lens that
     /// moves is a different claim about the capture than a pose that does, and
-    /// the default should be the smaller one. The schedule starts as the one
-    /// last run on `recon` this session, or the core function's default.
+    /// the default should be the smaller one. Each Scanlines choice starts on
+    /// its camera's stored setting, or `Unknown` where it stores none. The
+    /// schedule starts as the one last run on `recon` this session, or the
+    /// core function's default.
     pub(crate) fn ask(&mut self, recon: ReconId, label: String, gates: BundleAdjustGates) {
         if self.pending.is_none() {
-            let rows = vec![RowState::default(); gates.cameras.len()];
+            let rows = gates.cameras.iter().map(RowState::opening).collect();
             let schedule = self
                 .last_schedule
                 .get(&recon)
@@ -419,6 +550,7 @@ impl BundleAdjustPrompt {
                 cross: pending.free_points_cross,
             },
             schedule,
+            rolling_shutter_scanlines: pending.scanlines(),
         });
         if answer.is_some() || cancel || !still_open {
             self.pending = None;
@@ -462,19 +594,22 @@ fn schedule_row(ui: &mut egui::Ui, text: &mut String) {
     });
 }
 
-/// The camera rows: per camera the posed images use, its index, model and
-/// image count, and its "Release focal length", "Release lens distortion",
-/// "Release principal point", "Release focal length per image" and "Release
-/// principal point per image" checkboxes.
+/// The camera rows: per camera the posed images use, two lines. The first
+/// holds its index, model and image count, and its "Release focal length",
+/// "Release lens distortion" and "Release principal point" checkboxes; the
+/// second, under them, its "Release focal length per image", "Release radial
+/// distortion per image", "Release principal point per image" and "Release
+/// rolling shutter per image" checkboxes, and the Scanlines choice while the
+/// rolling shutter is ticked.
 ///
 /// A checkbox the camera's model cannot take is greyed, with the reason as its
 /// hover text. The distortion checkbox is also greyed while the same row's
 /// focal is released neither shared nor per image, and cleared when it is not:
 /// neither k1 nor the spline can change the scale at the centre of the image,
 /// which is the focal's job. The principal-point checkboxes are enabled on
-/// every model and need no focal. A ticked per-image box shows the shared box
-/// of its kind ticked and greyed, since releasing a value per image moves the
-/// camera's value to the images' mean.
+/// every model and need no focal. A ticked per-image focal or principal-point
+/// box shows the shared box of its kind ticked and greyed, since releasing a
+/// value per image moves the camera's value to the images' mean.
 fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
     egui::Grid::new("bundle_adjust_cameras")
         .num_columns(6)
@@ -531,6 +666,11 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                      moved.",
                     "principal point",
                 );
+                ui.end_row();
+
+                // The per-image releases, each under the shared release it is
+                // nearest to.
+                ui.label("");
                 ui.add_enabled_ui(gate.focal_refusal.is_none(), |ui| {
                     ui.checkbox(&mut row.image_focal, "Release focal length per image")
                         .on_disabled_hover_text(gate.focal_refusal.clone().unwrap_or_default())
@@ -541,6 +681,21 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                              a prior whose width the solve derives, and the camera's focal \
                              length moves to that mean.",
                         );
+                });
+                let radial_why = gate.image_radial_bspline_refusal.as_deref();
+                ui.add_enabled_ui(radial_why.is_none(), |ui| {
+                    ui.checkbox(
+                        &mut row.image_radial_bspline,
+                        "Release radial distortion per image",
+                    )
+                    .on_disabled_hover_text(radial_why.unwrap_or_default())
+                    .on_hover_text(
+                        "Solve a radial correction for each image of this camera, a small \
+                         change to the camera's radial distortion for that photograph, added \
+                         to the camera's spline. Each image is held toward the mean of the \
+                         camera's images by a prior whose width the solve derives; that mean \
+                         is held through each round and then moved into the camera's spline.",
+                    );
                 });
                 ui.checkbox(
                     &mut row.image_principal_point,
@@ -553,9 +708,61 @@ fn camera_rows(ui: &mut egui::Ui, pending: &mut Pending) {
                      whose width the solve derives, and the camera's principal point moves to \
                      that mean.",
                 );
+                let shutter_why = gate.image_rolling_shutter_refusal.as_deref();
+                ui.add_enabled_ui(shutter_why.is_none(), |ui| {
+                    ui.checkbox(
+                        &mut row.image_rolling_shutter,
+                        "Release rolling shutter per image",
+                    )
+                    .on_disabled_hover_text(shutter_why.unwrap_or_default())
+                    .on_hover_text(
+                        "Solve each image's rolling-shutter rates: how far this camera turned \
+                         while its sensor read the image out, one scanline at a time. Each \
+                         image is held toward the mean of the camera's images by a prior whose \
+                         width the solve derives, and that mean is held where it starts.",
+                    );
+                });
+                if row.image_rolling_shutter && shutter_why.is_none() {
+                    scanlines_choice(ui, gate.camera, &mut row.scanlines);
+                }
                 ui.end_row();
             }
         });
+}
+
+/// The Scanlines choice of camera `camera`'s row: `Rows`, `Columns` or
+/// `Unknown`, named by its `Scanlines` label.
+fn scanlines_choice(ui: &mut egui::Ui, camera: usize, choice: &mut RollingShutterScanlinesChoice) {
+    const CHOICES: [(RollingShutterScanlinesChoice, &str); 3] = [
+        (RollingShutterScanlinesChoice::Rows, "Rows"),
+        (RollingShutterScanlinesChoice::Columns, "Columns"),
+        (RollingShutterScanlinesChoice::Unknown, "Unknown"),
+    ];
+    let text = |c: RollingShutterScanlinesChoice| {
+        CHOICES
+            .iter()
+            .find(|(k, _)| *k == c)
+            .map_or("Unknown", |(_, text)| *text)
+    };
+    ui.horizontal(|ui| {
+        // `labelled_by` the label, which names the drop-down for a screen
+        // reader and in `get_widgets`.
+        let label = ui.label("Scanlines");
+        egui::ComboBox::from_id_salt(("bundle_adjust_scanlines", camera))
+            .selected_text(text(*choice))
+            .show_ui(ui, |ui| {
+                for (value, text) in CHOICES {
+                    ui.selectable_value(choice, value, text);
+                }
+            })
+            .response
+            .labelled_by(label.id)
+            .on_hover_text(
+                "Whether this camera's sensor reads its image one row or one column at a time. \
+                 Unknown solves the adjustment once with each and keeps the one with the lower \
+                 cost, which takes twice as long.",
+            );
+    });
 }
 
 /// A shared release's checkbox: the user's own `value`, or, while the
