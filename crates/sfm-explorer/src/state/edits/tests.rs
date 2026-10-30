@@ -3260,8 +3260,8 @@ fn the_entry_names_the_scanlines_and_both_costs_of_a_race() {
     });
     assert_eq!(
         scanlines_clause(std::slice::from_ref(&stopped)),
-        ", rolling shutter on rows chosen: columns stopped at round 1, iteration 12 \
-         (gap 953.4 over 24918 observations), cost 48612.4 with rows at the end"
+        ", rolling shutter on rows chosen: columns stopped at round 1, iteration 12: \
+         cost 16552.7 with rows, 17506.1 with columns (gap 953.4 over 24918 observations)"
     );
 
     // Over several cameras each is named; a camera that released no rates
@@ -3448,7 +3448,7 @@ fn a_race_whose_trailing_solve_is_stopped_says_where_in_the_entry_and_the_breakd
     let text = &entry.text;
     assert!(text.contains(" chosen: "), "{text}");
     assert!(text.contains(" stopped at round "), "{text}");
-    assert!(text.contains(" at the end"), "{text}");
+    assert!(text.contains(" with columns (gap "), "{text}");
     assert!(!text.contains("both solves run to the end"), "{text}");
     // The stopped solve's row in the breakdown ends early and says where.
     let stopped: Vec<_> = entry

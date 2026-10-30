@@ -340,12 +340,18 @@ setting was `Unknown`, the race that chose it: `, rolling shutter on rows
 chosen: cost 49350.0 with rows, 52349.0 with columns over 24931 observations,
 both solves run to the end`, the costs being the core function's
 `ScanlinesRace` and `both solves run to the end` its `stop` being `None`. A race
-whose trailing solve was stopped names the solve stopped, the round and
-iteration, and the gap there over the observations both rounds kept, then the
-winner's cost at the end of its schedule: `, rolling shutter on rows chosen:
-columns stopped at round 1, iteration 12 (gap 953.4 over 24918 observations),
-cost 48612.4 with rows at the end`, from the race's `stop`; `, camera 1
-rolling shutter on columns` over several cameras. The
+whose trailing solve was stopped names the solve stopped and the round and
+iteration of the pair the stop was decided at, then the two costs at that
+pair, the gap between them and the observations both rounds kept: `, rolling
+shutter on rows chosen: columns stopped at round 1, iteration 12: cost 16552.7
+with rows, 17506.1 with columns (gap 953.4 over 24918 observations)`, from the
+race's `stop` and its `rows_cost` and `columns_cost`, which at a stop are the
+two costs at that pair, in units of the mean of the two round-start noise
+levels squared, so they compare with each other. The winner's cost at the end
+of its schedule (`stop.winner_cost`) is not in the clause: it is in units of
+the winner's own final noise level squared, so it compares with neither cost
+at the stop nor with an unstopped race's costs. `, camera 1 rolling shutter on
+columns` over several cameras. The
 three counts
 are what went **into** the solve, which is not always the whole node: an unposed
 image is not in it, and neither is a point nothing posed observes.

@@ -4113,8 +4113,9 @@ rates. The report adds each such camera's scanlines, `, rolling shutter on
 rows`, and under `"UNKNOWN"` both costs, `, rolling shutter on rows chosen:
 cost 49350.0 with rows, 52349.0 with columns over 24931 observations, both
 solves run to the end`, or, where the trailing solve was stopped, where and the
-gap, `, rolling shutter on rows chosen: columns stopped at round 1, iteration
-12 (gap 953.4 over 24918 observations), cost 48612.4 with rows at the end`
+two costs there, `, rolling shutter on rows chosen: columns stopped at round
+1, iteration 12: cost 16552.7 with rows, 17506.1 with columns (gap 953.4 over
+24918 observations)`
 ([edits/bundle-adjust.md](edits/bundle-adjust.md) § "The Action Log").
 
 An entry naming a camera the node does not have, or one camera

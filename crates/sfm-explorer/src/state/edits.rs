@@ -285,9 +285,12 @@ fn image_prior_clause(
 /// on rows chosen: cost 49350.0 with rows, 52349.0 with columns over 24931
 /// observations, both solves run to the end`, and one whose trailing solve was
 /// stopped early reads `, rolling shutter on rows chosen: columns stopped at
-/// round 1, iteration 12 (gap 953.4 over 24918 observations), cost 48612.4
-/// with rows at the end`. One over several cameras names each camera by its
-/// index, `, camera 1 rolling shutter on columns`.
+/// round 1, iteration 12: cost 16552.7 with rows, 17506.1 with columns (gap
+/// 953.4 over 24918 observations)`, the two costs at the pair the stop was
+/// decided at, which compare with each other; the winner's cost at the end of
+/// its schedule, in its own units, is the report's and not the clause's. One
+/// over several cameras names each camera by its index, `, camera 1 rolling
+/// shutter on columns`.
 fn scanlines_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
     let one = cameras.len() == 1;
     cameras
@@ -309,14 +312,15 @@ fn scanlines_clause(cameras: &[sfmtool_core::CameraAdjustment]) -> String {
                         race.rows_cost, race.columns_cost, race.observations
                     ),
                     Some(stop) => format!(
-                        " chosen: {} stopped at round {}, iteration {} (gap {:.1} over {} \
-                         observations), cost {:.1} with {setting} at the end",
+                        " chosen: {} stopped at round {}, iteration {}: cost {:.1} with rows, \
+                         {:.1} with columns (gap {:.1} over {} observations)",
                         scanlines_word(stop.stopped),
                         stop.round,
                         stop.iteration,
+                        race.rows_cost,
+                        race.columns_cost,
                         stop.gap,
-                        race.observations,
-                        stop.winner_cost
+                        race.observations
                     ),
                 });
             Some(format!(", {camera}rolling shutter on {setting}{race}"))
