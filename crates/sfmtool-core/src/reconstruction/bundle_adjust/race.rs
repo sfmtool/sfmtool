@@ -383,7 +383,9 @@ impl Race<'_> {
     /// Judge what the traces now allow, stopping the trailing solve where the
     /// rule fires, and wake every waiting solve.
     fn changed(&self, shared: &mut Shared) {
-        if shared.stop.is_none() {
+        // Once the caller has cancelled, the traces stop where each solve
+        // happened to be, so no further pair is judged.
+        if shared.stop.is_none() && !shared.cancelled {
             if let Some(stop) = shared.rule.advance(&shared.traces) {
                 self.flags[stop.stopped].store(true, Ordering::Relaxed);
                 shared.stop = Some(stop);
@@ -528,8 +530,15 @@ pub(super) fn race<T: Send>(
         // The rule judges a pair only while the trailing solve still has an
         // iteration to run, which it waits for in its progress sink, so a stop
         // of this solve was set before it left its last wait, and reading it
-        // here gives the same answer whatever the other thread is doing.
-        if let Some(stop) = race.lock().stop.filter(|stop| stop.stopped == s) {
+        // here gives the same answer whatever the other thread is doing. A
+        // cancelled race notes no stop: it is refused, and where each solve
+        // was when the cancellation reached it is a matter of timing.
+        let stop = {
+            let shared = race.lock();
+            let cancelled = shared.cancelled || race.part.is_cancelled();
+            shared.stop.filter(|stop| stop.stopped == s && !cancelled)
+        };
+        if let Some(stop) = stop {
             progress_note!(
                 phase,
                 "stopped at round {}, iteration {}",
@@ -756,13 +765,19 @@ mod tests {
     /// reporting `costs` (the start and one per iteration), stopping where it
     /// is cancelled, sleeping `delay` before each iteration. It returns the
     /// costs it reported.
-    fn scripted(costs: &[f64], delay: Duration, progress: &Progress<'_>) -> Vec<f64> {
+    fn scripted(
+        costs: &[f64],
+        delay: Duration,
+        after_cancel: Duration,
+        progress: &Progress<'_>,
+    ) -> Vec<f64> {
         progress.value(KEPT_VALUE, 500.0);
         progress.value(NOISE_VALUE, 1.0);
         let mut said = Vec::new();
         for (k, &cost) in costs.iter().enumerate() {
             if k > 0 {
                 if progress.is_cancelled() {
+                    std::thread::sleep(after_cancel);
                     break;
                 }
                 std::thread::sleep(delay);
@@ -797,9 +812,58 @@ mod tests {
         let (results, stop) = race(&part, options(100.0, 3), 5, 1, |setting, p| {
             let s = usize::from(setting == RollingShutterScanlines::Columns);
             let delay = Duration::from_millis(if s == delayed { 100 } else { 0 });
-            scripted(if s == 0 { rows } else { columns }, delay, p)
+            let costs = if s == 0 { rows } else { columns };
+            scripted(costs, delay, Duration::ZERO, p)
         });
         (results, stop, notes.into_inner().unwrap())
+    }
+
+    #[test]
+    fn a_cancelled_race_judges_no_more_pairs_and_notes_no_stop() {
+        // The caller cancels when the rows solve reports its third iteration,
+        // the pair at which the rule would stop columns. Rows runs each
+        // iteration 50 ms behind, so columns has reported its third first and
+        // the pair could be judged from the frozen traces once rows returns.
+        // One solve then sleeps before it returns. Either way no stop is judged after the
+        // cancellation, the call is cancelled, and the phases close alike.
+        let rows = [2000.0, 1000.0, 1000.0, 1000.0, 1000.0, 1000.0];
+        let columns = [1500.0; 6];
+        let mut seen = Vec::new();
+        for slow in [0, 1] {
+            let flag = AtomicBool::new(false);
+            let costs = std::sync::atomic::AtomicUsize::new(0);
+            let notes = Mutex::new(Vec::new());
+            // Only the rows solve's events arrive live: the columns solve's
+            // are held until the rows solve has closed its phase.
+            let sink = |event: Event<'_>| match event {
+                Event::Value {
+                    name: COST_VALUE, ..
+                } => {
+                    if costs.fetch_add(1, Ordering::Relaxed) + 1 == 4 {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                }
+                Event::Leave { phase, note, .. } => notes
+                    .lock()
+                    .unwrap()
+                    .push((phase, note.map(str::to_string))),
+                _ => {}
+            };
+            let part = Progress::to(&sink).cancelled_by(&flag);
+            let (_, stop) = race(&part, options(100.0, 3), 5, 1, |setting, p| {
+                let s = usize::from(setting == RollingShutterScanlines::Columns);
+                let after = Duration::from_millis(if s == slow { 200 } else { 0 });
+                let costs = if s == 0 { &rows[..] } else { &columns[..] };
+                let delay = Duration::from_millis(if s == 0 { 50 } else { 0 });
+                scripted(costs, delay, after, p)
+            });
+            assert!(part.is_cancelled(), "slow: {slow}");
+            assert_eq!(stop, None, "slow: {slow}");
+            seen.push(notes.into_inner().unwrap());
+        }
+        let want: Vec<(&str, Option<String>)> =
+            vec![("solve with rows", None), ("solve with columns", None)];
+        assert_eq!(seen, [want.clone(), want]);
     }
 
     #[test]

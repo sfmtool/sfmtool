@@ -846,7 +846,10 @@ count a pair at which the trailing solve has finished its last round, so every
 stop is judged while that solve still waits in its sink for the pair, and the
 stopped solve's note and `stopped_early` are set before its thread can end.
 Counting such pairs would record a stop that saves nothing, at a moment that
-depends on which thread reads it.
+depends on which thread reads it. For the same reason no pair is judged once
+the caller's cancellation has reached the race, since each solve's trace then
+ends wherever the cancellation found it, and a cancelled race notes no stop on
+either phase.
 
 ## Parameters
 
