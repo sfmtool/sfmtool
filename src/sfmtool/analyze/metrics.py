@@ -86,6 +86,36 @@ def _compute_per_image_metrics(
     return results
 
 
+# The legend line of each per-image correction column.
+_CORRECTION_LEGENDS = {
+    "Radial": "Radial = the image's radial correction at its camera's spline domain "
+    "end, px (f·e_1)",
+    "RShut": "RShut = the rolling-shutter displacement at the edge centre read "
+    "farthest from the principal point's scanline, px",
+}
+
+
+def _correction_columns(recon: SfmrReconstruction) -> list[tuple[str, np.ndarray]]:
+    """The per-image correction columns the table shows, as ``(title,
+    values)`` with one value per image of ``recon``: ``Radial`` when a camera
+    varies the radial correction per image and ``RShut`` when one varies the
+    rolling-shutter rates, in pixels as
+    :func:`sfmtool.analyze._correction_sizes.image_correction_sizes` measures
+    them (NaN for an image of another camera); none for a reconstruction with
+    neither."""
+    varied = {name for names in recon.per_image_adjustments for name in names}
+    if not varied & {"radial_bspline", "rolling_shutter"}:
+        return []
+    from ._correction_sizes import image_correction_sizes
+
+    sizes = image_correction_sizes(recon)
+    return [
+        (title, sizes[key])
+        for title, key in (("Radial", "radial_bspline"), ("RShut", "rolling_shutter"))
+        if key in varied
+    ]
+
+
 def print_metrics_analysis(
     sfmr_path: Path,
     recon_name: str | None = None,
@@ -137,6 +167,10 @@ def print_metrics_analysis(
     )
     num_no_obs = sum(1 for d in per_image_sorted if d["observation_count"] == 0)
 
+    # The per-image correction columns, each shown when some camera varies it.
+    correction_columns = _correction_columns(rust_recon)
+    correction_header = "".join(f"  {title:>7}" for title, _ in correction_columns)
+
     click.echo(f"\nPer-image metrics analysis for: {recon_name}")
     click.echo("=" * 100)
     click.echo(
@@ -177,9 +211,9 @@ def print_metrics_analysis(
     hist_indent = " " * 6
     click.echo(
         f"{'Image (by mean error desc)':<{name_width}} {'Obs':>5}  {'MeanErr':>8}  {'MedErr':>8}  "
-        f"{'MaxErr':>8}  {'MeanTL':>6}  {'Flag':<4}"
+        f"{'MaxErr':>8}  {'MeanTL':>6}{correction_header}  {'Flag':<4}"
     )
-    click.echo("-" * 100)
+    click.echo("-" * (100 + len(correction_header)))
 
     for entry in per_image_sorted:
         name = entry["image_name"]
@@ -187,11 +221,15 @@ def print_metrics_analysis(
             name = "..." + name[-(name_width - 3) :]
 
         obs = entry["observation_count"]
+        corrections = "".join(
+            f"  {values[entry['image_index']]:>7.2f}"
+            for _, values in correction_columns
+        )
 
         if obs == 0:
             click.echo(
                 f"{name:<{name_width}} {obs:>5}  {'N/A':>8}  {'N/A':>8}  "
-                f"{'N/A':>8}  {'N/A':>6}  {'--':<4}"
+                f"{'N/A':>8}  {'N/A':>6}{corrections}  {'--':<4}"
             )
             continue
 
@@ -209,7 +247,7 @@ def print_metrics_analysis(
 
         click.echo(
             f"{name:<{name_width}} {obs:>5}  {mean_err:>8.3f}  {med_err:>8.3f}  "
-            f"{max_err:>8.3f}  {mean_tl:>6.1f}  {flag:<4}"
+            f"{max_err:>8.3f}  {mean_tl:>6.1f}{corrections}  {flag:<4}"
         )
 
         if len(entry["errors"]) > 0:
@@ -221,7 +259,7 @@ def print_metrics_analysis(
             )
             click.echo(f"{hist_indent}{hist_str}")
 
-    click.echo("-" * 100)
+    click.echo("-" * (100 + len(correction_header)))
     click.echo(
         f"{hist_indent}{'0':<{hist_width // 2}}{hist_max:>{hist_width - hist_width // 2}.1f} px"
     )
@@ -235,4 +273,6 @@ def print_metrics_analysis(
     )
     click.echo("--  no observations (image registered but no points)")
     click.echo("MeanTL = mean track length (avg number of images observing each point)")
+    for title, _ in correction_columns:
+        click.echo(_CORRECTION_LEGENDS[title])
     click.echo("")

@@ -433,6 +433,48 @@ def _print_tool_options(tool_options) -> None:
         click.echo(f"    {key}: {tool_options[key]}")
 
 
+def _correction_size_lines(recon: SfmrReconstruction) -> dict[int, list[str]]:
+    """Per camera whose images vary a radial correction or rolling-shutter
+    rates, the lines giving their sizes in pixels over its images.
+
+    ``Radial correction at the spline domain end: median 0.84 px, max 2.10 px
+    over 17 images``, from the absolute value of each image's ``f_i·e_i1``,
+    and ``Rolling-shutter displacement at the bottom edge centre: median 0.52
+    px, max 1.30 px over 17 images`` (the edge named by the camera's scanlines
+    setting and principal point), as
+    :func:`sfmtool.analyze._correction_sizes.image_correction_sizes` measures
+    them.
+    """
+    from ._correction_sizes import image_correction_sizes, rolling_shutter_edge
+
+    if not any(
+        "radial_bspline" in p or "rolling_shutter" in p
+        for p in recon.per_image_adjustments
+    ):
+        return {}
+    sizes = image_correction_sizes(recon)
+    camera_indexes = np.asarray(recon.camera_indexes)
+    scanlines = recon.rolling_shutter_scanlines
+    lines: dict[int, list[str]] = {}
+    for c, camera in enumerate(recon.cameras):
+        mask = camera_indexes == c
+        for key in ("radial_bspline", "rolling_shutter"):
+            values = np.abs(sizes[key][mask])
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                continue
+            if key == "radial_bspline":
+                what = "Radial correction at the spline domain end"
+            else:
+                edge, _, _ = rolling_shutter_edge(camera, scanlines[c])
+                what = f"Rolling-shutter displacement at the {edge}"
+            lines.setdefault(c, []).append(
+                f"{what}: median {np.median(values):.2f} px, max "
+                f"{values.max():.2f} px over {values.size} images"
+            )
+    return lines
+
+
 def print_reconstruction_summary(
     recon: SfmrReconstruction, recon_name: str | None = None
 ):
@@ -498,10 +540,12 @@ def print_reconstruction_summary(
     # Camera information
     from ..camera.cameras import _CAMERA_PARAM_NAMES
 
-    # Each camera's shared intrinsics, which of them its images adjust, and
-    # the scanlines its images' rolling-shutter rates are read on.
+    # Each camera's shared intrinsics, which of them its images adjust, the
+    # scanlines its images' rolling-shutter rates are read on, and how large
+    # its images' radial corrections and rolling shutters are in pixels.
     per_image_adjustments = recon.per_image_adjustments
     rolling_shutter_scanlines = recon.rolling_shutter_scanlines
+    correction_lines = _correction_size_lines(recon)
     click.echo("\nCameras:")
     for idx, cam in enumerate(recon.cameras):
         click.echo(f"  Camera {idx}: {cam.model} {cam.width}x{cam.height}")
@@ -513,6 +557,8 @@ def print_reconstruction_summary(
             click.echo(
                 f"    Rolling-shutter scanlines: {rolling_shutter_scanlines[idx]}"
             )
+        for line in correction_lines.get(idx, []):
+            click.echo(f"    {line}")
         params = cam.parameters
         if params:
             canonical_order = _CAMERA_PARAM_NAMES.get(cam.model)

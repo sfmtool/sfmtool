@@ -17,7 +17,11 @@ sfmtool's path, which holds both and each camera's scanlines setting; the
 pycolmap path's COLMAP export refuses them.
 
 Either path releases every camera's lens by default. ``cameras=`` limits the
-release to the cameras it names and holds the rest.
+release to the cameras it names and holds the rest. A per-image release
+(``image_focal=``, ``image_principal_point=``, ``image_radial_bspline=``,
+``image_rolling_shutter=``, with ``scanlines=`` choosing the rates' scanlines)
+applies to the released cameras and always takes sfmtool's path, since
+pycolmap has no per-image intrinsics.
 
 sfmtool's adjustment solves every free point in inverse depth and stores it as a
 position or a direction by the point-or-bearing test at the end of the solve,
@@ -45,6 +49,91 @@ from ._switch_camera_model import format_outermost_keypoint
 
 # The camera models only sfmtool's own bundle adjustment can refine.
 SPLINE_MODELS = ("SFMTOOL_FISHEYE", "SFMTOOL_PINHOLE")
+
+# The values of ``scanlines=``: the `RollingShutterScanlinesChoice` names.
+SCANLINES_CHOICES = ("ROWS", "COLUMNS", "UNKNOWN")
+
+
+def format_image_prior_widths(
+    camera: dict, focal_px: float, short_side_px: float
+) -> str | None:
+    """One line giving the widths of the prior a camera's per-image release
+    ran under, or ``None`` when the camera released nothing per image.
+
+    ``per-image widths focal 0.42 %, radial distortion 0.00531 of the focal
+    (1.85 px), principal point 1.31 % of the short side (20.12 px), rolling
+    shutter 4.92 mrad per short side, derived, 2 images beyond two widths``,
+    naming only the parameters ``camera`` (a ``report["cameras"]`` entry)
+    released per image; ``fixed`` in place of ``derived`` when the widths were
+    given, and ``no image beyond two widths`` when none ended there.
+    ``focal_px`` and ``short_side_px`` turn the radial and principal-point
+    widths into pixels.
+    """
+    spread = camera["image_adjustments"]
+    if spread is None:
+        return None
+    prior = spread["prior"]
+    parts = []
+    if camera["image_focal_released"]:
+        parts.append(f"focal {100.0 * prior['focal']:.2f} %")
+    if camera["image_radial_bspline_released"]:
+        width = prior["radial_bspline"]
+        parts.append(
+            f"radial distortion {width:.5f} of the focal ({width * focal_px:.2f} px)"
+        )
+    if camera["image_principal_point_released"]:
+        width = prior["principal_point"]
+        parts.append(
+            f"principal point {100.0 * width:.2f} % of the short side "
+            f"({width * short_side_px:.2f} px)"
+        )
+    if camera["image_rolling_shutter_released"]:
+        parts.append(
+            f"rolling shutter {1000.0 * prior['rolling_shutter']:.2f} mrad per "
+            "short side"
+        )
+    beyond = len({n["image"] for n in spread["near_prior"]})
+    beyond_text = {0: "no image", 1: "1 image"}.get(beyond, f"{beyond} images")
+    how = "derived" if spread["prior_derived"] else "fixed"
+    return (
+        f"per-image widths {', '.join(parts)}, {how}, {beyond_text} beyond two widths"
+    )
+
+
+def format_scanlines(camera: dict) -> str | None:
+    """One line saying which scanlines a camera's rolling-shutter rates were
+    solved on, or ``None`` when the camera did not release them.
+
+    ``rolling shutter on rows`` where the scanlines were given or stored;
+    where they were raced, ``rolling shutter on columns chosen: cost 1823.6
+    with rows, 1817.6 with columns over 1272 observations, both solves run to
+    the end``, or, when the trailing solve was stopped early, ``rolling
+    shutter on rows chosen: columns stopped at round 1, iteration 12: cost
+    16552.7 with rows, 17506.1 with columns (gap 953.4 over 24918
+    observations)``, the two costs at the pair the stop was decided at.
+    """
+    setting = camera["rolling_shutter_scanlines"]
+    if not camera["image_rolling_shutter_released"] or setting is None:
+        return None
+    line = f"rolling shutter on {setting.lower()}"
+    race = camera["scanlines_race"]
+    if race is None:
+        return line
+    costs = (
+        f"cost {race['rows_cost']:.1f} with rows, "
+        f"{race['columns_cost']:.1f} with columns"
+    )
+    stop = race["stop"]
+    if stop is None:
+        return (
+            f"{line} chosen: {costs} over {race['observations']} observations, "
+            "both solves run to the end"
+        )
+    return (
+        f"{line} chosen: {stop['stopped'].lower()} stopped at round "
+        f"{stop['round']}, iteration {stop['iteration']}: {costs} "
+        f"(gap {stop['gap']:.1f} over {race['observations']} observations)"
+    )
 
 
 def format_free_point_decision(decision: dict | None) -> str | None:
@@ -93,6 +182,26 @@ class BundleAdjustTransform:
             position and a direction (``--bundle-adjust cross=off`` clears it).
             The pycolmap path refuses ``cross=False``, since it has no way to
             keep each point's representation.
+        image_focal: Release each image's focal scale on every released camera
+            (``image_focal=on``).
+        image_principal_point: Release each image's principal-point offset
+            (``image_principal_point=on``).
+        image_radial_bspline: Release each image's radial correction
+            (``image_radial_bspline=on``), on an ``SFMTOOL_PINHOLE`` camera.
+        image_rolling_shutter: Release each image's rolling-shutter rates
+            (``image_rolling_shutter=on``), on an ``SFMTOOL_PINHOLE`` camera.
+        scanlines: The scanlines the rates are solved on, ``"ROWS"``,
+            ``"COLUMNS"`` or ``"UNKNOWN"`` (solve with each and keep the lower
+            cost). ``None``, the default, is each camera's stored setting, or
+            ``"UNKNOWN"`` where it has none. Given only with
+            ``image_rolling_shutter``.
+
+    Any per-image release runs sfmtool's adjustment, which refuses one on a
+    camera that cannot take it, naming the camera.
+
+    Raises:
+        ValueError: For a ``scanlines`` value that is not one of the three, or
+            one given without ``image_rolling_shutter``.
     """
 
     def __init__(
@@ -102,12 +211,43 @@ class BundleAdjustTransform:
         release_distortion: bool = True,
         cameras: list[int] | None = None,
         cross: bool = True,
+        image_focal: bool = False,
+        image_principal_point: bool = False,
+        image_radial_bspline: bool = False,
+        image_rolling_shutter: bool = False,
+        scanlines: str | None = None,
     ):
+        if scanlines is not None:
+            if scanlines not in SCANLINES_CHOICES:
+                raise ValueError(
+                    f"scanlines must be one of {', '.join(SCANLINES_CHOICES)}, "
+                    f"got {scanlines!r}"
+                )
+            if not image_rolling_shutter:
+                raise ValueError(
+                    "scanlines= chooses the scanlines of the rolling-shutter "
+                    "rates, which are released only with image_rolling_shutter=on"
+                )
         self.release_focal = release_focal
         self.release_principal_point = release_principal_point
         self.release_distortion = release_distortion
         self.cameras = None if cameras is None else sorted(set(cameras))
         self.cross = cross
+        self.image_focal = image_focal
+        self.image_principal_point = image_principal_point
+        self.image_radial_bspline = image_radial_bspline
+        self.image_rolling_shutter = image_rolling_shutter
+        self.scanlines = scanlines
+
+    @property
+    def releases_per_image(self) -> bool:
+        """Whether any per-image release is asked for."""
+        return (
+            self.image_focal
+            or self.image_principal_point
+            or self.image_radial_bspline
+            or self.image_rolling_shutter
+        )
 
     def _released(self, recon: SfmrReconstruction) -> list[bool]:
         """Whether each camera of the table has its lens released: all of them
@@ -128,6 +268,12 @@ class BundleAdjustTransform:
         self._released(recon)
         if any(c.model in SPLINE_MODELS for c in recon.cameras):
             return self._apply_sfmtool(recon)
+        if self.releases_per_image:
+            print(
+                "  Running bundle adjustment (sfmtool; a per-image release, "
+                "which pycolmap cannot hold)..."
+            )
+            return self._apply_sfmtool(recon, announce=False)
         if _adjusted_image_mask(recon).any():
             print(
                 "  Running bundle adjustment (sfmtool; an image has a per-image "
@@ -137,8 +283,9 @@ class BundleAdjustTransform:
         if not self.cross:
             raise click.UsageError(
                 "--bundle-adjust cross=off applies to sfmtool's adjustment, which "
-                "runs when a camera has a spline model or an image has a "
-                "per-image intrinsic adjustment; pycolmap's adjustment solves "
+                "runs when a camera has a spline model, an image has a "
+                "per-image intrinsic adjustment or a per-image release is asked "
+                "for; pycolmap's adjustment solves "
                 "every point finite and reclassifies the points at infinity "
                 "afterwards"
             )
@@ -162,8 +309,8 @@ class BundleAdjustTransform:
                 "model, which pycolmap cannot refine)..."
             )
         # Each released camera frees its focal, its principal point when asked
-        # and, where its model has any the solve can free, its lens distortion;
-        # a held camera frees none of them.
+        # and, where its model has any the solve can free, its lens distortion,
+        # and each per-image field asked for; a held camera frees none of them.
         releases = [
             {
                 "focal": released and self.release_focal,
@@ -172,6 +319,13 @@ class BundleAdjustTransform:
                 and self.release_focal
                 and self.release_distortion
                 and distortion_is_releasable(camera),
+                "image_focal": released and self.image_focal,
+                "image_principal_point": released and self.image_principal_point,
+                "image_radial_bspline": released and self.image_radial_bspline,
+                "image_rolling_shutter": released and self.image_rolling_shutter,
+                "rolling_shutter_scanlines": self.scanlines
+                if released and self.image_rolling_shutter
+                else None,
             }
             for camera, released in zip(recon.cameras, self._released(recon))
         ]
@@ -196,6 +350,19 @@ class BundleAdjustTransform:
                     ("focal", camera["focal_released"]),
                     ("principal point", camera["principal_point_released"]),
                     ("distortion", camera["distortion_released"]),
+                    ("focal per image", camera["image_focal_released"]),
+                    (
+                        "principal point per image",
+                        camera["image_principal_point_released"],
+                    ),
+                    (
+                        "radial distortion per image",
+                        camera["image_radial_bspline_released"],
+                    ),
+                    (
+                        "rolling shutter per image",
+                        camera["image_rolling_shutter_released"],
+                    ),
                 )
                 if flag
             ]
@@ -213,6 +380,15 @@ class BundleAdjustTransform:
                 f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}"
                 f"{principal_point}; released: {', '.join(released) or 'none'}"
             )
+            lens = recon.cameras[camera["camera"]]
+            for line in (
+                format_image_prior_widths(
+                    camera, camera["focal_after"], min(lens.width, lens.height)
+                ),
+                format_scanlines(camera),
+            ):
+                if line:
+                    print(f"    Camera {camera['camera']} {line}")
         result = adjusted.materialize()[0]
         # How far out the photographs reach, under the adjusted cameras: the
         # outermost observation, and the outermost feature detected in the
@@ -462,4 +638,14 @@ class BundleAdjustTransform:
             params += ", cameras=" + "+".join(str(c) for c in self.cameras)
         if not self.cross:
             params += ", cross=off"
+        for key in (
+            "image_focal",
+            "image_principal_point",
+            "image_radial_bspline",
+            "image_rolling_shutter",
+        ):
+            if getattr(self, key):
+                params += f", {key}=on"
+        if self.scanlines is not None:
+            params += f", scanlines={self.scanlines.lower()}"
         return f"Bundle adjustment (release: {opt_str}{params})"

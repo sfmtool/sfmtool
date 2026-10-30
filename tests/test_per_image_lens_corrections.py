@@ -147,6 +147,93 @@ class TestTheReconstruction:
         assert "Adjusted per image: radial_bspline, rolling_shutter" in result.output
         assert "Rolling-shutter scanlines: ROWS" in result.output
 
+    @pytest.mark.parametrize(
+        "scanlines, edge", [("ROWS", "bottom"), ("COLUMNS", "right")]
+    )
+    def test_inspect_gives_the_corrections_sizes_in_pixels(
+        self, seoul_bull_sfmr_only, tmp_path, scanlines, edge
+    ):
+        """The radial correction is ``f_i·e_i1`` at the spline domain end, and
+        the rolling shutter's displacement at the edge centre read farthest from
+        the principal point's scanline matches the model's first-order formula,
+        the velocity at the undistorted point times the readout position."""
+        recon = _corrected(
+            _refit(SfmrReconstruction.load(seoul_bull_sfmr_only)), scanlines=scanlines
+        )
+        out = tmp_path / "corrected.sfmr"
+        recon.save(out)
+        result = CliRunner().invoke(main, ["inspect", str(out), "--verbose"])
+        assert result.exit_code == 0, result.output
+        n = recon.image_count
+
+        f_2 = recon.image_intrinsics(2).focal_lengths[0]
+        assert (
+            "    Radial correction at the spline domain end: median 0.00 px, max "
+            f"{abs(f_2 * RADIAL[1]):.2f} px over {n} images"
+        ) in result.output
+
+        # The image's pixel at the edge centre, its ray, and the displacement
+        # the rates give it by the formula in the draft's "The map for image i".
+        camera = recon.image_intrinsics(3)
+        f = camera.focal_lengths[0]
+        cx, cy = camera.principal_point
+        m = min(camera.width, camera.height)
+        if scanlines == "ROWS":
+            assert cy <= camera.height / 2
+            u, v = camera.width / 2, camera.height
+            t = (v - cy) / m
+        else:
+            assert cx <= camera.width / 2
+            u, v = camera.width, camera.height / 2
+            t = (u - cx) / m
+        without = recon.cameras[0]
+        ray = without.pixel_to_ray(u, v)
+        x, y = ray[0] / -ray[2], ray[1] / -ray[2]
+        wx, wy, wz = RATES
+        xdot = wy * (1 + x * x) - wx * x * y + wz * y
+        ydot = -wx * (1 + y * y) + wy * x * y - wz * x
+        expected = f * t * np.hypot(xdot, ydot)
+        assert (
+            f"    Rolling-shutter displacement at the {edge} edge centre: median "
+            f"0.00 px, max {expected:.2f} px over {n} images"
+        ) in result.output
+
+        from sfmtool.analyze._correction_sizes import image_correction_sizes
+
+        sizes = image_correction_sizes(recon)
+        assert sizes["rolling_shutter"][3] == pytest.approx(expected, rel=1e-3)
+        assert sizes["radial_bspline"][2] == pytest.approx(f_2 * RADIAL[1])
+
+    def test_inspect_gives_no_sizes_without_the_corrections(self, seoul_bull_sfmr_only):
+        result = CliRunner().invoke(
+            main, ["inspect", str(seoul_bull_sfmr_only), "--verbose"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "Radial correction at" not in result.output
+        assert "Rolling-shutter displacement" not in result.output
+
+    def test_analyze_metrics_lists_each_images_corrections(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = _corrected(_refit(SfmrReconstruction.load(seoul_bull_sfmr_only)))
+        out = tmp_path / "corrected.sfmr"
+        recon.save(out)
+        result = CliRunner().invoke(main, ["analyze", str(out), "--metrics"])
+        assert result.exit_code == 0, result.output
+        header = next(x for x in result.output.splitlines() if x.startswith("Image ("))
+        assert header.split()[-3:] == ["Radial", "RShut", "Flag"]
+        name = recon.image_names[2].split("/")[-1]
+        row = next(x for x in result.output.splitlines() if name in x).split()
+        f_2 = recon.image_intrinsics(2).focal_lengths[0]
+        assert float(row[6]) == pytest.approx(f_2 * RADIAL[1], abs=0.005)
+        assert "RShut = the rolling-shutter displacement" in result.output
+
+        plain = CliRunner().invoke(
+            main, ["analyze", str(seoul_bull_sfmr_only), "--metrics"]
+        )
+        assert plain.exit_code == 0, plain.output
+        assert "Radial" not in plain.output and "RShut" not in plain.output
+
 
 class TestColmapExport:
     """COLMAP has no form for either correction, so each COLMAP writer refuses

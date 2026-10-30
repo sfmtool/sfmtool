@@ -191,6 +191,15 @@ otherwise the feature's position in the image's `.sift` file. The computation is
 | Median reprojection error | MedErr | Median error (robust to outliers) |
 | Max reprojection error | MaxErr | Worst single observation error |
 | Mean track length | MeanTL | Mean observation count of observed 3D points |
+| Radial correction | Radial | The image's radial correction at its camera's spline domain end, `f_i·e_i1`, in px, signed (positive moves the pixel outward); shown when a camera varies it per image |
+| Rolling-shutter displacement | RShut | How far the image's rolling-shutter rates move the pixel at the edge centre read farthest from the principal point's scanline, in px; shown when a camera varies the rates per image |
+
+The two correction columns are the sizes `sfm inspect --verbose` summarises per
+camera, measured the same way
+([inspect-command.md](inspect-command.md#verbose-output---verbose---v)); each
+appears, with a legend line under the table, only when some camera of the
+reconstruction lists that correction in its `per_image_adjustments`, and shows
+`nan` for an image of a camera that does not.
 
 ### Output
 

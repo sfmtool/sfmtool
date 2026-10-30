@@ -54,7 +54,11 @@ from ..xform._arg_parser import (
         "and each point stored as a position or a direction by its rays at the "
         "end; 'cameras=0+1' releases only those cameras' lenses, and "
         "'cross=off' keeps every point in the representation it has (e.g. "
-        "'--bundle-adjust cameras=0,cross=off')."
+        "'--bundle-adjust cameras=0,cross=off'). 'image_focal=on', "
+        "'image_principal_point=on', 'image_radial_bspline=on' and "
+        "'image_rolling_shutter=on' release that field of each image, by "
+        "sfmtool's adjustment, and 'scanlines=rows|columns|unknown' chooses the "
+        "scanlines the rolling-shutter rates are solved on."
     ),
 )
 @click.option(
@@ -368,7 +372,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
     Optimization:
-      --bundle-adjust [cameras=0+1,cross=off]  Apply bundle adjustment
+      --bundle-adjust [PARAMS]            Apply bundle adjustment (cameras=, cross=, image_*=, scanlines=)
       --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
       --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)
@@ -423,6 +427,11 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Move a fisheye to the spline model, then refine its focal and spline
         sfm xform in.sfmr out.sfmr --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust
+
+    \b
+        # Release each image's radial correction and rolling shutter, racing
+        # rows against columns where the scanlines are not known
+        sfm xform in.sfmr out.sfmr --bundle-adjust image_radial_bspline=on,image_rolling_shutter=on
 
     \b
         # Discover points at infinity, capping features per image

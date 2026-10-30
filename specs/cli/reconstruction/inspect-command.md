@@ -217,6 +217,36 @@ The default output is a compact label/value block. The fields per type:
   absolute workspace path, which means none was recorded (as `sfm xform
   --minimal` writes), prints as `(none recorded)`.
 
+  A camera whose images vary the radial correction or the rolling-shutter
+  rates gets a line for each giving its size in pixels over the camera's
+  images, the median and the maximum of each image's absolute value:
+
+  ```text
+      Radial correction at the spline domain end: median 0.81 px, max 3.66 px over 17 images
+      Rolling-shutter displacement at the bottom edge centre: median 1.30 px, max 2.80 px over 17 images
+  ```
+
+  The radial correction's size is `f_i·e_i1`, the image's correction
+  `Δδ_i(ρ_max) = e_i1` at its camera's spline domain end, in focal units,
+  times the image's own focal
+  ([drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#the-map-for-image-i)).
+  The rolling shutter's is how far the image's rates move the pixel at the
+  centre of the edge whose scanlines are read farthest from the scanline
+  through the camera's principal point: the bottom edge's centre `(width/2,
+  height)` for `ROWS` when the principal point is in the top half or on the
+  middle, else the top edge's, and the right or left edge's centre for
+  `COLUMNS`. It is measured through the camera model rather than by its
+  formula: the pixel is turned into a ray through the image's intrinsics
+  without its rates (`CameraIntrinsics.with_adjustment` with the image's other
+  fields) and projected back through `image_intrinsics(i)`, which has them. An
+  image with zero rates counts as 0 px. A camera with no scanlines setting,
+  whose rates the format then requires to be zero, gets no rolling-shutter
+  line. The sizes are
+  `image_correction_sizes` in
+  [`_correction_sizes.py`](../../../src/sfmtool/analyze/_correction_sizes.py),
+  which `sfm analyze --metrics` lists per image
+  ([analyze-command.md](analyze-command.md#per-image-quality-metrics---metrics)).
+
   The point-or-bearing counts are the short form of `sfm analyze
   --depth-reliability`'s second part (see
   [analyze-command.md](analyze-command.md) § "Depth Reliability"): the

@@ -1095,9 +1095,10 @@ solve under a fixed corrections prior and then used as stored, an explicit
 
 ## Open questions
 
-- **The CLI.** `sfm xform --bundle-adjust` releases neither the shared principal
-  point nor the per-image releases, and has no scanlines choice. Whether it
-  gains keys for them is open.
+- **The CLI's shared principal point.** `sfm xform --bundle-adjust` takes the
+  per-image releases and the scanlines choice
+  ([xform-command.md § Per-image releases](../../cli/reconstruction/xform/xform-command.md#per-image-releases))
+  but has no key for the shared principal point. Whether it gains one is open.
 - **Several `Unknown` cameras.** Each race is decided with the later cameras'
   rates held at zero, which their poses absorb in part. Whether releasing them
   could change an earlier choice, and whether a second pass over the cameras is

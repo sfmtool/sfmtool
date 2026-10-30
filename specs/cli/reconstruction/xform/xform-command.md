@@ -408,12 +408,14 @@ later refit of the spline; the default domain of a switch stays the far corner.
 
 ### Optimization
 
-#### `--bundle-adjust [cameras=0+1,cross=off]`
+#### `--bundle-adjust [cameras=0+1,cross=off,image_focal=on,...,scanlines=rows]`
 
 Applies bundle adjustment via pycolmap to refine camera poses and 3D point positions.
 The value is optional, as for `--refine-normals`: bare `--bundle-adjust` takes no
 parameters, `cameras=` (also `--bundle-adjust=cameras=0`) applies to both
-paths below, and `cross=` to the sfmtool path alone.
+paths below, and `cross=` and the per-image keys (`image_focal=`,
+`image_principal_point=`, `image_radial_bspline=`, `image_rolling_shutter=`
+and `scanlines=`, [below](#per-image-releases)) to the sfmtool path alone.
 
 ```bash
 --remove-short-tracks 2 --bundle-adjust
@@ -424,18 +426,20 @@ of `SFMTOOL_FISHEYE` or `SFMTOOL_PINHOLE` (as `--camera-model` produces) is
 adjusted by sfmtool's own reconstruction-level bundle adjustment instead
 ([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md)),
 and so is one with a non-zero per-image intrinsic adjustment on any image
-([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)),
+([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+and any run given a per-image key,
 since pycolmap has no per-image intrinsics and sfmtool's adjustment holds each
-image's adjustment and writes it back unchanged, the radial correction, the
+image's adjustment and writes it back, unchanged unless a per-image key releases
+it, the radial correction, the
 rolling-shutter rates and each camera's scanlines setting included (an image
 carries those only on an `SFMTOOL_PINHOLE` camera, so it never reaches the
 pycolmap path, whose COLMAP export refuses them),
 with every camera's focal released, and the lens distortion released on each
 camera whose model has some the solve can release: the spline, and `k1` on a
-`SIMPLE_RADIAL_FISHEYE` camera beside it. The principal point is held on both
-paths: `--bundle-adjust` has no key for it, though the transform behind it,
+`SIMPLE_RADIAL_FISHEYE` camera beside it. The shared principal point is held on
+both paths: `--bundle-adjust` has no key for it, though the transform behind it,
 `BundleAdjustTransform`, takes `release_principal_point` and passes it to
-either solver. That path needs inline keypoints (an
+either solver; `image_principal_point=on` moves it to its images' mean. That path needs inline keypoints (an
 `embedded_patches` reconstruction) and a camera model whose focal it can release
 for every posed image whose camera is released, and stops with the adjustment's
 own refusal, naming the camera, otherwise; a rig with one spline camera and one
@@ -461,10 +465,11 @@ budget or settled with a distortion held at its step guard.
 `cross=off` (any of `off`, `false`, `0`, `no`; `on` is the default) keeps every
 point in the representation it has for the whole solve and prints no decision.
 It belongs to the sfmtool path: pycolmap's adjustment solves every point finite
-and reclassifies the points at infinity afterwards, so on a reconstruction whose
-cameras are all COLMAP models `cross=off` is a usage error rather than a
-setting that would be ignored. A reconstruction whose cameras are all COLMAP
-models goes through pycolmap as described below, unchanged.
+and reclassifies the points at infinity afterwards, so on a run that takes the
+pycolmap path (every camera a COLMAP model, no image with a per-image
+adjustment, and no per-image key) `cross=off` is a usage error rather than a
+setting that would be ignored. Such a run goes through pycolmap as described
+below, unchanged.
 
 `cameras=0+1` releases the lens of the named cameras (camera indexes,
 joined by `+`) and holds every other camera's intrinsics exactly as they are,
@@ -474,6 +479,79 @@ pycolmap path each other camera's intrinsics are held constant in the solve,
 which otherwise runs as pycolmap's own bundle adjustment does: every registered
 image, with the gauge fixed by two camera poses; it prints which cameras were
 released and which held. An index past the reconstruction's cameras is a usage error.
+
+##### Per-image releases
+
+`image_focal=on`, `image_principal_point=on`, `image_radial_bspline=on` and
+`image_rolling_shutter=on` (each a boolean, spelled as for `cross=`; off is the
+default) release that field of each image on every camera the run releases
+(every camera, or those `cameras=` names), as the `CameraRelease` fields of the
+same names do
+([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md#python-bindings)):
+each image's focal scale, its principal-point offset, its radial correction
+and its rolling-shutter rates. Each image is held toward its camera's mean by a
+prior whose widths the adjustment derives. A per-image focal or principal point
+moves the camera's shared value to its images' mean; the radial correction and
+the rates are held at zero mean. A held camera releases nothing per image. Any
+per-image key sends the run through sfmtool's adjustment, announced as
+`Running bundle adjustment (sfmtool; a per-image release, which pycolmap
+cannot hold)...` when no camera has a spline model, so on a reconstruction of
+COLMAP models it releases the focal only on the models the adjustment releases
+it on, the distortion only where it is `k1` of a `SIMPLE_RADIAL_FISHEYE`, and
+it accepts `cross=off`. A camera that cannot take a release is refused with
+the adjustment's own sentence, naming the camera, before anything is written:
+`the radial correction cannot be released per image on camera 0, a
+SIMPLE_PINHOLE; ...` (the radial correction and the rates are released on an
+`SFMTOOL_PINHOLE` camera alone, and the focal per image on the models whose
+focal the adjustment can release).
+
+`scanlines=rows`, `columns` or `unknown` (any case) chooses the scanlines the
+rates are solved on, for every released camera: `unknown` solves with each and
+keeps the lower cost, stopping the trailing solve early by the adjustment's
+rule
+([`../../../core/reconstruction/bundle-adjust.md`](../../../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines)).
+Without the key each camera is solved on its stored setting, or as `unknown`
+where it has none: no setting is assumed. The setting the rates were solved on
+is written into the camera. Another value, or `scanlines=` without
+`image_rolling_shutter=on`, is a usage error when the arguments are parsed.
+
+```bash
+--bundle-adjust image_focal=on,image_principal_point=on
+--camera-model SFMTOOL_PINHOLE,coeffs=4 --bundle-adjust image_radial_bspline=on,image_rolling_shutter=on
+--bundle-adjust cameras=1,image_rolling_shutter=on,scanlines=columns
+```
+
+After each camera's focal line, which names what was released (`released:
+focal, distortion, radial distortion per image, rolling shutter per image`), a
+camera that released a per-image field prints the widths of the prior its final
+round ran under, whether they were derived or fixed, and how many of its images
+ended more than two widths from the mean, and a camera that released the rates
+prints the scanlines they were solved on and, where they were raced, the race:
+
+```text
+    Camera 0 (17 images): focal 333.908 -> 339.765; released: focal, distortion, radial distortion per image, rolling shutter per image
+    Camera 0 per-image widths radial distortion 0.00500 of the focal (1.70 px), rolling shutter 2.91 mrad per short side, derived, 3 images beyond two widths
+    Camera 0 rolling shutter on rows chosen: cost 1771.1 with rows, 1772.1 with columns over 1273 observations, both solves run to the end
+```
+
+The focal's width is a percentage of the focal (of `ln(1 + s)`), the
+principal point's a percentage of the short side with its pixels, the radial
+correction's a fraction of the focal (a radius in focal units) with its pixels
+at the adjusted focal, and the rates' in milliradians per short side of
+readout. A camera whose scanlines were given or stored reads `rolling shutter
+on rows`; a race whose trailing solve was stopped reads `rolling shutter on
+rows chosen: columns stopped at round 1, iteration 12: cost 16552.7 with rows,
+17506.1 with columns (gap 953.4 over 24918 observations)`, the two costs at the
+pair the stop was decided at. The lines follow the viewer's Action Log clauses
+for the same run ([`../../../gui/edits/bundle-adjust.md`](../../../gui/edits/bundle-adjust.md)),
+except that the rates' width is in milliradians and a count of no image beyond
+two widths is stated. They are
+`format_image_prior_widths` and `format_scanlines` in
+[`_bundle_adjust.py`](../../../../src/sfmtool/xform/_bundle_adjust.py). The
+recorded transform description lists the keys given, `Bundle adjustment
+(release: focal,distortion, image_rolling_shutter=on, scanlines=columns)`. `sfm
+inspect --verbose` then gives the corrections' sizes in pixels
+([`../inspect-command.md`](../inspect-command.md)).
 
 ```bash
 --camera-model SFMTOOL_FISHEYE,coeffs=8 --bundle-adjust

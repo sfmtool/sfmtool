@@ -306,10 +306,17 @@ def _parse_camera_list(value: str) -> list[int]:
 
 
 # Each --bundle-adjust key maps to a caster; the transform and the adjustment
-# own the range checks.
+# own the range checks. The four per-image keys are the `CameraRelease` field
+# names, and `scanlines` abbreviates the binding's `rolling_shutter_scanlines`,
+# as `wspath` abbreviates `workspace_path` inside a comma-separated value.
 _BUNDLE_ADJUST_KEYS: dict[str, Callable[[str], object]] = {
     "cameras": _parse_camera_list,
     "cross": _parse_bool,
+    "image_focal": _parse_bool,
+    "image_principal_point": _parse_bool,
+    "image_radial_bspline": _parse_bool,
+    "image_rolling_shutter": _parse_bool,
+    "scanlines": str,
 }
 
 
@@ -319,11 +326,29 @@ def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
     An empty string is the bare option. ``cameras=0+1`` releases the lens of
     those cameras only and holds the rest. ``cross=off`` keeps every point in
     the representation it has rather than letting the storage decision move it
-    between a position and a direction.
+    between a position and a direction. ``image_focal=on``,
+    ``image_principal_point=on``, ``image_radial_bspline=on`` and
+    ``image_rolling_shutter=on`` release that field of each image on the
+    released cameras, and ``scanlines=rows``, ``columns`` or ``unknown`` (any
+    case) chooses the scanlines the rolling-shutter rates are solved on.
     """
     kwargs = _parse_kv_params(param, "--bundle-adjust", _BUNDLE_ADJUST_KEYS)
+    scanlines = kwargs.get("scanlines")
+    if scanlines is not None:
+        scanlines = scanlines.upper()
+        if scanlines not in ("ROWS", "COLUMNS", "UNKNOWN"):
+            raise click.UsageError(
+                "Invalid value for --bundle-adjust key 'scanlines': "
+                f"'{kwargs['scanlines']}' is not rows, columns or unknown"
+            )
     return BundleAdjustTransform(
-        cameras=kwargs.get("cameras"), cross=kwargs.get("cross", True)
+        cameras=kwargs.get("cameras"),
+        cross=kwargs.get("cross", True),
+        image_focal=kwargs.get("image_focal", False),
+        image_principal_point=kwargs.get("image_principal_point", False),
+        image_radial_bspline=kwargs.get("image_radial_bspline", False),
+        image_rolling_shutter=kwargs.get("image_rolling_shutter", False),
+        scanlines=scanlines,
     )
 
 

@@ -791,14 +791,20 @@ settings match too
 ([merge-command.md](../cli/reconstruction/merge-command.md)). `sfm camrig cp`
 notes the corrections and a scanlines setting it cannot copy
 ([camrig-command.md](../cli/workspace/camrig-command.md)). `sfm xform
---bundle-adjust` takes sfmtool's path, which holds both
-([xform-command.md](../cli/reconstruction/xform/xform-command.md)), and `sfm
-inspect --verbose` names them and the scanlines setting
-([inspect-command.md](../cli/reconstruction/inspect-command.md)).
+--bundle-adjust` takes sfmtool's path, which holds both, releases them and
+the existing per-image fields on its `image_*=` keys and chooses the
+scanlines on `scanlines=`
+([xform-command.md](../cli/reconstruction/xform/xform-command.md#per-image-releases)),
+and `sfm inspect --verbose` names them and the scanlines setting and gives
+their sizes in pixels
+([inspect-command.md](../cli/reconstruction/inspect-command.md)), which `sfm
+analyze --metrics` lists per image
+([analyze-command.md](../cli/reconstruction/analyze-command.md#per-image-quality-metrics---metrics)).
 
 The releases and the scanlines choice for the two corrections below are built:
 the `EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
-`write_sfmr` bullets, and the viewer's Bundle Adjust dialog and the MCP tool.
+`write_sfmr` bullets, the viewer's Bundle Adjust dialog and the MCP tool, and
+`sfm xform --bundle-adjust`.
 
 - **Built** ([bundle-adjust.md § Python
   bindings](../core/reconstruction/bundle-adjust.md#python-bindings)):
@@ -855,9 +861,34 @@ the `EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
   scanlines used, the race (`scanlines_race`, both costs, the observations,
   `sigma_px`, `stopped_early` and `stop`) and the corrections' means, spreads and
   widths.
-- `sfm xform --bundle-adjust` has no key for the existing per-image releases
-  or the principal point, and gains none here
-  ([open question](#open-questions)).
+- **Built**
+  ([xform-command.md § Per-image releases](../cli/reconstruction/xform/xform-command.md#per-image-releases)):
+  `sfm xform --bundle-adjust` takes `image_focal=`, `image_principal_point=`,
+  `image_radial_bspline=` and `image_rolling_shutter=` (booleans, the
+  `CameraRelease` field names) for every camera it releases, and
+  `scanlines=rows|columns|unknown`, accepted only beside
+  `image_rolling_shutter=on`; omitted, the scanlines are each camera's stored
+  setting, or `unknown` where it has none. Any per-image key runs sfmtool's
+  adjustment, which refuses a camera that cannot take a release with its own
+  sentence naming the camera. After each camera's focal line the run prints
+  the per-image prior's widths (the focal as a percentage, the principal point
+  as a percentage of the short side with pixels, the radial correction as a
+  fraction of the focal with pixels, the rates in milliradians per short side),
+  whether they were derived, how many images ended beyond two widths, and the
+  scanlines the rates were solved on with, under `unknown`, both costs and
+  either that both solves ran to the end or which solve was stopped, where,
+  and the gap there. It has no key for the shared principal point
+  ([bundle-adjust.md § Open questions](../core/reconstruction/bundle-adjust.md#open-questions)).
+- **Built** ([inspect-command.md](../cli/reconstruction/inspect-command.md),
+  [analyze-command.md](../cli/reconstruction/analyze-command.md)): `sfm
+  inspect --verbose` gives, for each camera whose images vary them, the median
+  and maximum over its images of the radial correction at the spline domain
+  end, `|f_i·e_i1|`, and of the rolling-shutter displacement at the centre of
+  the edge read farthest from the principal point's scanline, both in pixels;
+  the displacement is measured by projecting the pixel's ray through the
+  image's intrinsics with and without its rates. `sfm analyze --metrics` adds
+  each image's two sizes as `Radial` and `RShut` columns when a camera varies
+  them.
 
 ## Measured results
 
@@ -1133,14 +1164,17 @@ When built, the tests cover at least:
 - **The focus-tied correction.** Whether to add it as a later amendment, and
   where its per-image focus value comes from (EXIF `SubjectDistance`, or the
   solved focal scale).
-- **Reporting and display.** How the new fields are summarised by the
-  reconstruction-level report and by the CLI (`sfm inspect`, `sfm analyze`),
-  for example the rolling-shutter displacement at the edge in pixels and the
-  radial correction at `ρ_max` in pixels. The viewer's part is settled: Image
-  Detail's intrinsics legend states both corrections, and its distortion
-  overlay draws the image's own field, readout included
+- **Reporting and display.** Settled and built. The viewer: Image Detail's
+  intrinsics legend states both corrections, and its distortion overlay draws
+  the image's own field, readout included
   ([intrinsics/mod.rs](../../crates/sfm-explorer/src/image_detail/intrinsics/mod.rs),
-  [gui/camera-intrinsics.md](../gui/camera-intrinsics.md)).
+  [gui/camera-intrinsics.md](../gui/camera-intrinsics.md)). The CLI: `sfm
+  xform --bundle-adjust` prints the widths and the race the reconstruction-level
+  report carries, `sfm inspect --verbose` the median and maximum of each
+  correction's size in pixels per camera (the radial correction at `ρ_max`,
+  the rolling-shutter displacement at the edge centre read farthest from the
+  principal point's scanline), and `sfm analyze --metrics` each image's
+  ([Bindings, viewer, CLI](#bindings-viewer-cli)).
 - **The format version.** Settled and built: version 14 as above, with older
   files reading as zero corrections, and a `rolling_shutter_scanlines` setting
   allowed without rates.
@@ -1149,8 +1183,12 @@ When built, the tests cover at least:
   are stored in both orientations (portrait photographs rotated by their EXIF
   orientation) would need the setting per image, or one camera per orientation.
   Every measured image has orientation 1.
-- **The CLI.** Whether `sfm xform --bundle-adjust` gains keys for the per-image
-  releases and the scanlines setting.
+- **The CLI.** Settled and built: `sfm xform --bundle-adjust` gains
+  `image_focal=`, `image_principal_point=`, `image_radial_bspline=`,
+  `image_rolling_shutter=` and `scanlines=`
+  ([Bindings, viewer, CLI](#bindings-viewer-cli)). Whether it gains a key for
+  the shared principal point stays open
+  ([bundle-adjust.md § Open questions](../core/reconstruction/bundle-adjust.md#open-questions)).
 - **Breadth of the evidence.** One capture from one phone. The other checked-in
   datasets would need promotion to `SFMTOOL_PINHOLE` before they could test the
   terms, and a second phone capture would show whether the scanlines setting
