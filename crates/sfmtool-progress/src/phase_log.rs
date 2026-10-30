@@ -148,7 +148,10 @@ impl PhaseLog {
                         .push((level, text.to_string()));
                 }
             }
-            Event::Status { .. } | Event::Count { .. } | Event::Fraction { .. } => {}
+            Event::Status { .. }
+            | Event::Count { .. }
+            | Event::Fraction { .. }
+            | Event::Value { .. } => {}
         }
     }
 

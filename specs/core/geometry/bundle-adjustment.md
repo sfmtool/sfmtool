@@ -139,7 +139,7 @@ pub fn bundle_adjust(
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
-    progress: &Progress<'_>,             // phases, counts and the cancel flag
+    progress: &Progress<'_>,             // phases, counts, values and the cancel flag
 ) -> BundleAdjustment;
 
 pub struct BundleAdjustment {
@@ -209,7 +209,19 @@ from scalars.
 
 `progress` is where the rounds and the LM iterations inside them are reported: a
 phase per schedule round with an iteration count under it, so a caller knows
-which round a long solve is in. It is also how the solve is asked to stop, which
+which round a long solve is in. Each round also reports three values
+(`Progress::value`) under names the module exports: `KEPT_VALUE`, the
+observations its trim kept, and, in a solve with a per-image release,
+`NOISE_VALUE`, the noise level `σ_n` it weighs the prior at, both before its
+first iteration; and `COST_VALUE`, the cost its damping ladder compares (the
+robust data cost over the kept observations at the round's loss scale, the
+per-image prior with its mean holds and the spline penalty, in px²), once before
+the first iteration and once at the end of each. The cost never rises within a
+round and stays where it was after an iteration whose ladder found no downhill
+step. Divided by the round's `σ_n²` it is in the units the scanlines race
+compares; two solves' costs compare directly only within one round and over
+the same kept observations. A caller comparing two solves as they run reads
+them ([../reconstruction/bundle-adjust-measurements.md](../reconstruction/bundle-adjust-measurements.md)). It is also how the solve is asked to stop, which
 it is between rounds and between iterations, those being the points where the
 state is a whole answer rather than a half-written candidate. A stopped solve
 returns the state it had reached rather than an error, since it has no `Result`

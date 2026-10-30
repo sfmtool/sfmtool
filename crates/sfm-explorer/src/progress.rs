@@ -402,6 +402,9 @@ impl State {
                 let seen = self.fraction.unwrap_or(0.0);
                 self.fraction = Some(of_whole.max(seen));
             }
+            // A value is for a caller that compares what a kernel reached as
+            // it runs; the panel shows phases, messages and counts.
+            Event::Value { .. } => {}
         }
     }
 

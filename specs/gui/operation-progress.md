@@ -49,7 +49,9 @@ So a kernel says five things, and they are one problem:
 | and, in the other direction: stop | **cancellation** |
 
 All five are a channel between a long computation and whoever asked for it, and
-one parameter carries all five: a `Progress` that every long function in
+one parameter carries all five, with a sixth thing beside them for a caller that
+acts on what a kernel reached rather than shows it, a named number, the
+**value** (§ "A value is not a message"): a `Progress` that every long function in
 `sfmtool-core` accepts. The viewer collects what comes back and an Action Log
 entry expands to show it. Running an operation off the GUI thread, so that a
 panel can draw the same thing while it is still going, is
@@ -105,6 +107,10 @@ impl<'a> Progress<'a> {
     pub fn count(&self, done: u64, total: Option<u64>, unit: &'static str);
     /// Where this call has got to within its own range, 0..=1.
     pub fn set_fraction(&self, f: f32);
+    /// A number this call reached, under the name its documentation gives it,
+    /// for a caller that acts on it as the call runs (§ "A value is not a
+    /// message").
+    pub fn value(&self, name: &'static str, value: f64);
 
     /// Carve this call's range into N pieces, one per nested call, in
     /// proportion to `weights`. They are relative: normalised to their sum, so
@@ -165,6 +171,10 @@ pub enum Event<'a> {
     /// Where the bar sits, already mapped out of the reporting call's range
     /// into the whole operation's, and already clamped monotone.
     Fraction { of_whole: f32 },
+    /// A number the computation reached, named by the kernel that reports it,
+    /// for a caller that acts on it. A collector that compares nothing ignores
+    /// it.
+    Value { name: &'static str, value: f64 },
 }
 
 pub enum Level { Info, Warn }
@@ -465,6 +475,21 @@ kernels a background task reaches, and harmless everywhere else.
 
 It is also not the viewport status line, which stays what it is, the newest
 Action Log entry ([action-log.md](action-log.md)).
+
+### A value is not a message
+
+`progress.value("cost", c)` hands the caller a number the call has already
+computed, under a name the kernel documents with its units and when it is
+reported. Its reader is code, not a person: a caller that compares two solves of
+a bundle adjustment as they run reads the cost each LM iteration ends at
+([../core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md)),
+and the scanlines race's measurement records the two solves' trajectories that
+way ([../core/reconstruction/bundle-adjust-measurements.md](../core/reconstruction/bundle-adjust-measurements.md)).
+A message would carry the number as text, to be formatted and parsed back, and
+a collector that keeps messages would keep one line per iteration. The viewer's
+collector and `PhaseLog` ignore values. With nothing listening, `value` is one
+branch on a null sink; its argument is evaluated either way, so a kernel reports
+only numbers it computes anyway.
 
 ### Where a message ends up
 

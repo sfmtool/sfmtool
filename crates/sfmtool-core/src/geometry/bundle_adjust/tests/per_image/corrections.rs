@@ -56,6 +56,30 @@ fn run_corrections(
     prior: Option<&ImagePriorOptions>,
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
+    run_corrections_to(
+        s,
+        start,
+        start_adj,
+        release,
+        scanlines,
+        prior,
+        schedule,
+        &Progress::none(),
+    )
+}
+
+/// [`run_corrections`], reporting to `progress`.
+#[allow(clippy::too_many_arguments)]
+fn run_corrections_to(
+    s: &mut Scene,
+    start: &CameraIntrinsics,
+    start_adj: &[IntrinsicAdjustment],
+    release: CameraRelease,
+    scanlines: Option<RollingShutterScanlines>,
+    prior: Option<&ImagePriorOptions>,
+    schedule: &[BaSchedule],
+    progress: &Progress<'_>,
+) -> BundleAdjustment {
     let n_img = s.quats.len();
     let adjustments: Vec<IntrinsicAdjustment> = if start_adj.is_empty() {
         vec![IntrinsicAdjustment::default(); n_img]
@@ -96,7 +120,7 @@ fn run_corrections(
         60,
         2,
         12,
-        &Progress::none(),
+        progress,
     )
 }
 
@@ -826,4 +850,107 @@ fn releasing_rates_without_a_scanlines_setting_panics() {
         None,
         &DEFAULT_SCHEDULE,
     );
+}
+
+#[test]
+fn each_round_reports_its_cost_once_per_iteration_and_listening_changes_nothing() {
+    // The same solve with nothing listening and with a sink: the answers are
+    // the same bit for bit, and each round reports its kept observations and
+    // its noise level, then the cost the ladder compares once before its first
+    // iteration and once after each, never rising.
+    use crate::progress::Event;
+    use std::sync::Mutex;
+
+    let truth = spline_pinhole();
+    let planted = correction_draws(30, 3e-3, 4e-3, 90);
+    let mut quiet = per_image_scene_on(
+        &truth,
+        Some(RollingShutterScanlines::Rows),
+        30,
+        400,
+        &planted,
+        0.1,
+        21,
+        |_| 80,
+    );
+    perturb_poses(&mut quiet);
+    let mut heard = quiet.clone();
+    let run = |s: &mut Scene, progress: &Progress<'_>| {
+        run_corrections_to(
+            s,
+            &truth,
+            &[],
+            CORRECTIONS,
+            Some(RollingShutterScanlines::Rows),
+            None,
+            &DEFAULT_SCHEDULE,
+            progress,
+        )
+    };
+    let quiet_out = run(&mut quiet, &Progress::none());
+
+    // What each round said, in order: its values, and how many iterations it
+    // counted.
+    #[derive(Default)]
+    struct Round {
+        values: Vec<(&'static str, f64)>,
+        iterations: usize,
+    }
+    let rounds: Mutex<Vec<Round>> = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        let mut rounds = rounds.lock().unwrap();
+        match event {
+            Event::Enter { phase: "round", .. } => rounds.push(Round::default()),
+            Event::Value { name, value } => rounds.last_mut().unwrap().values.push((name, value)),
+            Event::Count {
+                unit: "iteration", ..
+            } => rounds.last_mut().unwrap().iterations += 1,
+            _ => {}
+        }
+    };
+    let heard_out = run(&mut heard, &Progress::to(&sink));
+
+    assert_eq!(format!("{quiet_out:?}"), format!("{heard_out:?}"));
+    for (a, b) in [
+        (format!("{:?}", quiet.quats), format!("{:?}", heard.quats)),
+        (format!("{:?}", quiet.trans), format!("{:?}", heard.trans)),
+        (format!("{:?}", quiet.points), format!("{:?}", heard.points)),
+    ] {
+        assert_eq!(a, b);
+    }
+
+    let rounds = rounds.into_inner().unwrap();
+    assert_eq!(rounds.len(), DEFAULT_SCHEDULE.len());
+    let n_obs = quiet.uv.len() as f64;
+    for (r, round) in rounds.iter().enumerate() {
+        let names: Vec<&str> = round.values.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names[..2], [KEPT_VALUE, NOISE_VALUE], "round {r}");
+        let (kept, noise) = (round.values[0].1, round.values[1].1);
+        assert!(
+            kept > 0.9 * n_obs && kept <= n_obs,
+            "round {r}: kept {kept}"
+        );
+        assert!(noise > 0.0 && noise < 5.0, "round {r}: noise {noise}");
+        let costs: Vec<f64> = round.values[2..]
+            .iter()
+            .map(|&(name, cost)| {
+                assert_eq!(name, COST_VALUE, "round {r}");
+                cost
+            })
+            .collect();
+        assert!(round.iterations > 0, "round {r}");
+        assert_eq!(costs.len(), round.iterations + 1, "round {r}");
+        assert!(
+            costs.windows(2).all(|w| w[1] <= w[0]),
+            "round {r}: {costs:?}"
+        );
+        assert!(costs.last() < costs.first(), "round {r}: {costs:?}");
+    }
+    // The final round's last cost is the one its result states, less the data
+    // the comparison of two solves measures itself.
+    let last = rounds.last().unwrap();
+    let noise = last.values[1].1;
+    let final_round = quiet_out.final_round.as_ref().expect("a final round");
+    let cost = last.values.last().unwrap().1;
+    assert!(cost > final_round.spline_penalty + final_round.prior * noise * noise);
 }

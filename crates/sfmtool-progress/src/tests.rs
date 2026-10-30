@@ -19,6 +19,7 @@ enum Owned {
     Message(Level, u8, String),
     Count(u64, Option<u64>, &'static str),
     Fraction(f32),
+    Value(&'static str, f64),
 }
 
 /// Somewhere for events to land, shaped like the collector the viewer will
@@ -43,6 +44,7 @@ impl Collector {
             Event::Message { level, depth, text } => Owned::Message(level, depth, text.to_string()),
             Event::Count { done, total, unit } => Owned::Count(done, total, unit),
             Event::Fraction { of_whole } => Owned::Fraction(of_whole),
+            Event::Value { name, value } => Owned::Value(name, value),
             Event::Status { text } => {
                 *self.status.lock().unwrap() = Some(text.to_string());
                 return;
@@ -429,6 +431,31 @@ fn a_status_replaces_while_a_message_appends() {
         ]
     );
     assert_eq!(collector.status().as_deref(), Some("dino_43.jpg"));
+}
+
+#[test]
+fn a_value_reaches_the_sink_through_a_phase_and_a_split() {
+    let collector = Collector::new();
+    let sink = |event: Event<'_>| collector.push(event);
+    let progress = Progress::to(&sink);
+
+    Progress::none().value("cost", 1.0);
+    let [_, second] = progress.split([1.0, 1.0]);
+    {
+        let round = second.phase("round");
+        round.value("cost", 12.5);
+        round.value("cost", 12.25);
+    }
+    assert_eq!(
+        collector.events(),
+        vec![
+            Owned::Enter("round", 0),
+            Owned::Value("cost", 12.5),
+            Owned::Value("cost", 12.25),
+            Owned::Leave("round", 0, None),
+        ]
+    );
+    assert_eq!(collector.status(), None);
 }
 
 #[test]

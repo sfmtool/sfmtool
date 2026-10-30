@@ -916,6 +916,7 @@ enum Owned {
     Message(Level, u8, String),
     Count(u64, Option<u64>, &'static str),
     Fraction(f32),
+    Value(&'static str, f64),
 }
 
 /// Somewhere for the events to land, with the cancel flag beside them so that
@@ -956,6 +957,7 @@ impl Collector {
                 Owned::Count(done, total, unit)
             }
             Event::Fraction { of_whole } => Owned::Fraction(of_whole),
+            Event::Value { name, value } => Owned::Value(name, value),
             // The adjustment sets no status, and a status is live state a
             // finished entry would not keep anyway.
             Event::Status { .. } => return,

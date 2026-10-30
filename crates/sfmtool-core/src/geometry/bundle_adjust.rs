@@ -89,6 +89,28 @@ pub const DEFAULT_SCHEDULE: [BaSchedule; 3] = [
     },
 ];
 
+/// The name of the [`Progress::value`] each schedule round reports once before
+/// its first LM iteration and once at the end of each: the cost its damping
+/// ladder compares at the state the round holds, the robust data cost over the
+/// round's kept observations at its loss scale, the per-image prior with its
+/// mean holds and the released splines' penalty, in px². It never rises within
+/// a round, and it stays where it was after an iteration whose ladder found no
+/// downhill step. Divided by the round's [`NOISE_VALUE`] squared it is in units
+/// of `σ_n²`, the units [`FinalRound::prior`] is in and two solves are compared
+/// in; two solves' costs compare directly only within one round and over the
+/// same kept observations ([`KEPT_VALUE`]).
+pub const COST_VALUE: &str = "cost";
+
+/// The name of the [`Progress::value`] each schedule round reports before its
+/// first cost: how many observations its trim kept.
+pub const KEPT_VALUE: &str = "kept observations";
+
+/// The name of the [`Progress::value`] each schedule round of a solve with a
+/// per-image release reports before its first cost: the noise level `σ_n` the
+/// round weighs its prior at, px, the gated RMS of its kept residuals at the
+/// state it starts from.
+pub const NOISE_VALUE: &str = "noise";
+
 /// Default widening multiplier on a stage's `loss_scale` for protected
 /// observations (see [`bundle_adjust`]'s `protected`).
 pub const DEFAULT_PROTECTED_LOSS_SCALE: f64 = 3.0;
@@ -1318,13 +1340,17 @@ fn image_spline(c: &[f64], e: [f64; 2]) -> Vec<f64> {
 /// `progress` is where the rounds and the LM iterations inside them are
 /// reported: one phase per schedule round, carrying that round's trim and loss
 /// scale, and an iteration count under it, so a caller knows which round a long
-/// solve is in. It is also how this call is asked to stop, which it is between
-/// rounds and between iterations; a stopped solve returns the state it had
-/// reached rather than an error, since it has no `Result` to put one in, and
-/// the caller asks `Progress::is_cancelled` again to find out. Pass
-/// `&Progress::none()` to report nothing and never stop: every method on it is
-/// a branch on a null sink, so the solve runs exactly as it did before this
-/// parameter existed.
+/// solve is in. Each round also reports, as [`Progress::value`]s, the
+/// observations it kept ([`KEPT_VALUE`]), its noise level where a per-image
+/// release weighs a prior at one ([`NOISE_VALUE`]), and the cost its damping
+/// ladder compares before its first iteration and after each ([`COST_VALUE`]),
+/// for a caller comparing two solves as they run. It is also how this call is
+/// asked to stop, which it is between rounds and between iterations; a stopped
+/// solve returns the state it had reached rather than an error, since it has no
+/// `Result` to put one in, and the caller asks `Progress::is_cancelled` again
+/// to find out. Pass `&Progress::none()` to report nothing and never stop:
+/// every method on it is a branch on a null sink, so the solve runs exactly as
+/// it did before this parameter existed.
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust(
     cameras: &BaCameras<'_>,
@@ -3057,9 +3083,11 @@ fn penalty_cost<'a>(penalties: &[SplinePenalty], spline_of: impl Fn(usize) -> &'
 /// the width; an instantiation without their columns leaves them pinned.
 ///
 /// `progress` counts the iterations, names the stages inside one of them at the
-/// detail level, and is polled at the top of each: an iteration boundary is
-/// where this solve holds a consistent state, since a candidate step is only
-/// ever written once it has improved the cost. A stopped solve scatters back
+/// detail level, reports the cost the ladder compares as [`COST_VALUE`] once
+/// before the first iteration and once at the end of each, and is polled at the
+/// top of each: an iteration boundary is where this solve holds a consistent
+/// state, since a candidate step is only ever written once it has improved the
+/// cost. A stopped solve scatters back
 /// what the last accepted step left, which is what it would have returned had
 /// the budget run out there.
 #[allow(clippy::too_many_arguments)]
@@ -3516,6 +3544,7 @@ fn solve_lm<const CAM_COLS: usize>(
     let mut prev_cost = cost_at(&cams, &view_adjustment, &q, &t, &x, &inv_depth)
         + penalty_cost(&penalties, |j| &bsplines[j])
         + prior_cost(&adj);
+    progress.value(COST_VALUE, prev_cost);
     // The latest linearisation's data-only block of each image's slots, the
     // points eliminated, for the derivation of the prior's widths, and which
     // images carried a translation column in it.
@@ -4359,6 +4388,7 @@ fn solve_lm<const CAM_COLS: usize>(
             lambda *= 4.0;
         }
         drop(ladder);
+        progress.value(COST_VALUE, prev_cost);
         // No rung found a downhill step. Where a rung had to hold a distortion,
         // the step that would lower the cost is the one the guard forbids.
         if !improved {
@@ -4984,6 +5014,10 @@ fn bundle_adjust_staged(
         } else {
             0.0
         };
+        round.value(KEPT_VALUE, kept.len() as f64);
+        if image_cols {
+            round.value(NOISE_VALUE, sigma_n);
+        }
         round_widths.clone_from(&widths);
         let image_round = ImageRound {
             widths: &round_widths,
