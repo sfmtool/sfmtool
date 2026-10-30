@@ -450,6 +450,7 @@ pub(super) fn bundle_adjust(
             image_principal_point: entry
                 .release_image_principal_point
                 .unwrap_or(defaults.image_principal_point),
+            ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
         };
     }
     options.releases = releases;

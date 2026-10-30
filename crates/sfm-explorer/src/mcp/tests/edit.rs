@@ -828,7 +828,7 @@ fn bundle_adjust_parses_its_per_image_releases_and_prior() {
         image_prior.fixed,
         Some(sfmtool_core::geometry::ImagePriorWidths {
             focal: 0.01,
-            principal_point: defaults.loose.principal_point,
+            ..defaults.loose
         })
     );
 

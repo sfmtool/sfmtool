@@ -3000,11 +3000,13 @@ fn per_image(
             } else {
                 f64::NAN
             },
+            ..ImagePriorWidths::NAN
         },
         prior_derived: true,
         spread: ImagePriorWidths {
             focal: 0.0042,
             principal_point: 0.0131,
+            ..ImagePriorWidths::NAN
         },
         near_prior: vec![
             NearPrior {

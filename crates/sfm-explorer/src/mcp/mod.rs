@@ -1608,6 +1608,7 @@ pub(crate) fn apply_with_window(
                 principal_point: release_principal_point,
                 image_focal: release_image_focal,
                 image_principal_point: release_image_principal_point,
+                ..sfmtool_core::reconstruction::bundle_adjust::CameraRelease::HELD
             },
             &cameras,
             sfmtool_core::BundleAdjustOptions {

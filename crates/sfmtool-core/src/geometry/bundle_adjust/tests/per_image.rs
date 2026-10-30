@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod corrections;
+
 /// A standard normal draw from two deterministic uniforms (Box–Muller).
 fn gaussian(i: usize, salt: u64) -> f64 {
     let u1 = 0.5 * (jitter(i, salt) + 1.0) * 0.9998 + 0.0001;
@@ -27,6 +29,24 @@ fn wide_pinhole(cx: f64, cy: f64) -> CameraIntrinsics {
 /// that land inside it.
 fn per_image_scene(
     truth: &CameraIntrinsics,
+    n_img: usize,
+    n_pt: usize,
+    planted: &[IntrinsicAdjustment],
+    noise_px: f64,
+    noise_salt: u64,
+    per_image: impl Fn(usize) -> usize,
+) -> Scene {
+    per_image_scene_on(
+        truth, None, n_img, n_pt, planted, noise_px, noise_salt, per_image,
+    )
+}
+
+/// [`per_image_scene`] with each image's planted rolling-shutter rates read on
+/// `scanlines`.
+#[allow(clippy::too_many_arguments)]
+fn per_image_scene_on(
+    truth: &CameraIntrinsics,
+    scanlines: Option<RollingShutterScanlines>,
     n_img: usize,
     n_pt: usize,
     planted: &[IntrinsicAdjustment],
@@ -81,7 +101,7 @@ fn per_image_scene(
             if seen[i] >= per_image(i) {
                 continue;
             }
-            let cam = truth.with_adjustment(&planted[i], None);
+            let cam = truth.with_adjustment(&planted[i], scanlines);
             let c = quats[i] * Vector3::new(x[0], x[1], x[2]) + trans[i];
             let Some((u, v)) = cam.ray_to_pixel([c.x, c.y, c.z]) else {
                 continue;
@@ -164,6 +184,8 @@ fn run_image(
         true,
         true,
         true,
+        false,
+        false,
         prior,
         schedule,
         60,
@@ -171,6 +193,17 @@ fn run_image(
         12,
         &Progress::none(),
     )
+}
+
+/// Which of an image's adjustment parameters a camera releasing its focal
+/// scale and principal-point offset as given releases, in the order of
+/// [`IMG_PARAMS`].
+fn releases(focal: bool, principal_point: bool) -> [bool; IMG_PARAMS] {
+    let mut out = [false; IMG_PARAMS];
+    out[0] = focal;
+    out[1] = principal_point;
+    out[2] = principal_point;
+    out
 }
 
 /// The release of each image's principal point alone.
@@ -248,6 +281,10 @@ fn image_adjustment_columns_match_a_central_difference() {
             opt_pp: false,
             opt_image_f: focal,
             opt_image_pp: true,
+            opt_image_radial_bspline: false,
+            opt_image_rolling_shutter: false,
+            scanlines: None,
+            rho_max: 0.0,
             n_coeffs: 0,
             d_max: 0.0,
             radial: SplineRadial::IncidenceAngle,
@@ -591,6 +628,8 @@ fn fixed_widths_are_used_as_given() {
     let fixed = ImagePriorWidths {
         focal: 0.0123,
         principal_point: 0.0456,
+        radial_bspline: 0.0789,
+        rolling_shutter: 0.0321,
     };
     let options = ImagePriorOptions {
         fixed: Some(fixed),
@@ -605,7 +644,10 @@ fn fixed_widths_are_used_as_given() {
         &DEFAULT_SCHEDULE,
     );
     let prior = out.image_priors[0].unwrap();
-    assert_eq!(prior.widths, fixed);
+    assert_eq!(prior.widths.focal, fixed.focal);
+    assert_eq!(prior.widths.principal_point, fixed.principal_point);
+    // The corrections are not released, so they report no width.
+    assert!(prior.widths.radial_bspline.is_nan() && prior.widths.rolling_shutter.is_nan());
     assert!(!prior.derived);
     assert!(prior.spread.focal.is_nan() && prior.spread.principal_point.is_nan());
 }
@@ -625,6 +667,8 @@ fn a_narrow_prior_leaves_the_images_mean_free() {
     let narrow = ImagePriorWidths {
         focal: 1e-5,
         principal_point: 1e-5,
+        radial_bspline: 1e-5,
+        rolling_shutter: 1e-5,
     };
     let options = ImagePriorOptions {
         fixed: Some(narrow),
@@ -671,6 +715,8 @@ fn a_narrow_focal_prior_leaves_the_images_mean_free() {
         fixed: Some(ImagePriorWidths {
             focal: 1e-5,
             principal_point: 1e-5,
+            radial_bspline: 1e-5,
+            rolling_shutter: 1e-5,
         }),
         ..ImagePriorOptions::default()
     };
@@ -899,6 +945,8 @@ fn an_image_principal_point_pulled_off_the_image_stays_on_it() {
         fixed: Some(ImagePriorWidths {
             focal: 1.0,
             principal_point: 10.0,
+            radial_bspline: 10.0,
+            rolling_shutter: 10.0,
         }),
         ..ImagePriorOptions::default()
     };
@@ -941,7 +989,7 @@ fn the_derivation_undoes_the_prior_and_subtracts_the_noise() {
     let sigma = 0.002;
     let n = 400;
     let sigma_noise = 0.5;
-    let samples: Vec<(IntrinsicAdjustment, Option<Matrix3<f64>>)> = (0..n)
+    let samples: Vec<(IntrinsicAdjustment, Option<ImageParamsMatrix>)> = (0..n)
         .map(|i| {
             // The images' variances differ by a factor of four.
             let v = tau * tau * (0.5 + 0.75 * (jitter(i, 7) + 1.0));
@@ -949,7 +997,7 @@ fn the_derivation_undoes_the_prior_and_subtracts_the_noise() {
             // The pull of a prior stated at the level of the noise:
             // `d = d̂·σ²/(σ² + v)`.
             let pull = sigma * sigma / (sigma * sigma + v);
-            let mut inv = Matrix3::zeros();
+            let mut inv = ImageParamsMatrix::zeros();
             inv[(1, 1)] = v / (sigma_noise * sigma_noise);
             inv[(2, 2)] = v / (sigma_noise * sigma_noise);
             (
@@ -966,12 +1014,13 @@ fn the_derivation_undoes_the_prior_and_subtracts_the_noise() {
     let round = ImagePriorWidths {
         focal: 0.1,
         principal_point: sigma,
+        radial_bspline: sigma,
+        rolling_shutter: sigma,
     };
     let options = ImagePriorOptions::default();
     let (next, spread) = derive_image_prior_widths(
         &samples,
-        false,
-        true,
+        releases(false, true),
         round,
         sigma_noise,
         sigma_noise,
@@ -992,8 +1041,7 @@ fn the_derivation_undoes_the_prior_and_subtracts_the_noise() {
     // One image of positive weight leaves the loose width.
     let (one, one_spread) = derive_image_prior_widths(
         &samples[..1],
-        false,
-        true,
+        releases(false, true),
         round,
         sigma_noise,
         sigma_noise,
@@ -1012,12 +1060,12 @@ fn the_focal_width_is_derived_from_the_log_focal_scale() {
     // 20% is wide enough that the stored scales `s` spread differently.
     let tau = 0.2;
     let sigma_noise = 0.5;
-    let samples = |focal: bool| -> Vec<(IntrinsicAdjustment, Option<Matrix3<f64>>)> {
+    let samples = |focal: bool| -> Vec<(IntrinsicAdjustment, Option<ImageParamsMatrix>)> {
         (0..200)
             .map(|i| {
                 let v = 0.01 * (0.5 + 0.75 * (jitter(i, 7) + 1.0));
                 let x = tau * gaussian(i, 50) + v.sqrt() * gaussian(i, 60);
-                let mut inv = Matrix3::zeros();
+                let mut inv = ImageParamsMatrix::zeros();
                 for k in 0..3 {
                     inv[(k, k)] = v / (sigma_noise * sigma_noise);
                 }
@@ -1043,12 +1091,13 @@ fn the_focal_width_is_derived_from_the_log_focal_scale() {
     let round = ImagePriorWidths {
         focal: 0.1,
         principal_point: 0.1,
+        radial_bspline: 0.1,
+        rolling_shutter: 0.1,
     };
     let options = ImagePriorOptions::default();
     let (_, of_focal) = derive_image_prior_widths(
         &samples(true),
-        true,
-        false,
+        releases(true, false),
         round,
         sigma_noise,
         sigma_noise,
@@ -1056,8 +1105,7 @@ fn the_focal_width_is_derived_from_the_log_focal_scale() {
     );
     let (_, of_pp) = derive_image_prior_widths(
         &samples(false),
-        false,
-        true,
+        releases(false, true),
         round,
         sigma_noise,
         sigma_noise,

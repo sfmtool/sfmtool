@@ -91,6 +91,94 @@ impl CameraIntrinsics {
         ))
     }
 
+    /// `∂(x_r, y_r)/∂ω`, the derivative of the rolling-shutter step's moved
+    /// point with respect to the rates, at the camera-frame point `ray`, in
+    /// the optical frame, read on `scanlines` whatever rates the camera
+    /// carries: `t·∂ṗ/∂ω`, with the readout position `t` of the point's
+    /// distorted position at this camera's focal. The step is linear in the
+    /// rates, so the columns do not depend on them. `None` when the ray is
+    /// behind the camera. The bundle adjustment's rate columns are these times
+    /// the focal.
+    pub(crate) fn rolling_shutter_rate_columns(
+        &self,
+        scanlines: RollingShutterScanlines,
+        ray: [f64; 3],
+    ) -> Option<[[f64; 3]; 2]> {
+        let (rx, ry, rz) = (ray[0], -ray[1], -ray[2]);
+        if rz <= 0.0 {
+            return None;
+        }
+        let (x, y) = (rx / rz, ry / rz);
+        let (x_d, y_d) = self.model.distort(x, y);
+        let m = f64::from(self.width.min(self.height));
+        let step = RollingShutterStep {
+            rates: [0.0; 3],
+            scanlines,
+            f_over_m: self.focal_lengths().0 / m,
+        };
+        let t = step.readout(x_d, y_d);
+        // `ṗ` is linear in `ω`, so its column for one rate is the velocity at
+        // that unit rate.
+        let columns: [[f64; 2]; 3] = std::array::from_fn(|k| {
+            let mut unit = step;
+            unit.rates[k] = 1.0;
+            unit.velocity(x, y)
+        });
+        Some([columns.map(|c| t * c[0]), columns.map(|c| t * c[1])])
+    }
+
+    /// How far the rolling-shutter step is from the identity at the image's
+    /// four corners: the largest Frobenius norm there of
+    /// `∂(t·ṗ)/∂(x_d, y_d) = ṗ·∇tᵀ + t·∂ṗ/∂(x, y)·D⁻¹`, the step's Jacobian
+    /// with respect to the distorted point less `I`, read at the distorted
+    /// point each corner pixel has before the step. It bounds the contraction
+    /// of the unprojection's fixed-point iteration there, which converges
+    /// while it is under one. `0` for a camera without an active rolling
+    /// shutter, and `NaN` where the radial map is singular or a value is not
+    /// finite.
+    pub(crate) fn rolling_shutter_contraction(&self) -> f64 {
+        let Some(step) = self.rolling_shutter_step() else {
+            return 0.0;
+        };
+        let f = self.focal_lengths().0;
+        let (cx, cy) = self.principal_point();
+        let (w, h) = (f64::from(self.width), f64::from(self.height));
+        let mut worst = 0.0f64;
+        for (u, v) in [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)] {
+            let (x_d, y_d) = ((u - cx) / f, (v - cy) / f);
+            let (x, y) = self.model.undistort(x_d, y_d);
+            let Some(d) = self.model.distort_jacobian(x, y) else {
+                return f64::NAN;
+            };
+            let det = d[0][0] * d[1][1] - d[0][1] * d[1][0];
+            if !(det.is_finite() && det != 0.0) {
+                return f64::NAN;
+            }
+            let d_inv = [
+                [d[1][1] / det, -d[0][1] / det],
+                [-d[1][0] / det, d[0][0] / det],
+            ];
+            let t = step.readout(x_d, y_d);
+            let p = step.velocity(x, y);
+            let g = step.readout_gradient();
+            let vj = step.velocity_jacobian(x, y);
+            let mut norm2 = 0.0;
+            for r in 0..2 {
+                for c in 0..2 {
+                    let tv = t * (vj[r][0] * d_inv[0][c] + vj[r][1] * d_inv[1][c]);
+                    let e = p[r] * g[c] + tv;
+                    norm2 += e * e;
+                }
+            }
+            let norm = norm2.sqrt();
+            if !norm.is_finite() {
+                return f64::NAN;
+            }
+            worst = worst.max(norm);
+        }
+        worst
+    }
+
     /// [`Self::ray_to_pixel_with_jacobian`] of a camera with an active
     /// rolling shutter: the derivative of the whole map, the radial 2×2 `D`
     /// composed with the step's `(I + ṗ·∇tᵀ)·D + t·∂ṗ/∂(x, y)`.

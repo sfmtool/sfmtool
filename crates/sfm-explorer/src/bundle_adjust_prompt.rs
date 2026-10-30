@@ -298,6 +298,7 @@ impl Pending {
             principal_point: row.principal_point && !row.image_principal_point,
             image_focal,
             image_principal_point: row.image_principal_point,
+            ..CameraRelease::HELD
         }
     }
 

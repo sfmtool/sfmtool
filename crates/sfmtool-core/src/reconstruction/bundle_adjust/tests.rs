@@ -1993,6 +1993,8 @@ fn the_report_names_the_images_beyond_two_prior_widths() {
             fixed: Some(ImagePriorWidths {
                 focal: 0.002,
                 principal_point: 0.002,
+                radial_bspline: 0.002,
+                rolling_shutter: 0.002,
             }),
             ..ImagePriorOptions::default()
         },
@@ -2003,6 +2005,8 @@ fn the_report_names_the_images_beyond_two_prior_widths() {
             fixed: Some(ImagePriorWidths {
                 focal: 1.0,
                 principal_point: 1.0,
+                radial_bspline: 1.0,
+                rolling_shutter: 1.0,
             }),
             ..ImagePriorOptions::default()
         },

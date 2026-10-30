@@ -11,7 +11,9 @@ use numpy::{
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
+use sfmtool_core::camera::{
+    CameraIntrinsics, CameraModel, IntrinsicAdjustment, RollingShutterScanlines,
+};
 use sfmtool_core::geometry::{
     bundle_adjust as core_bundle_adjust, BaCameras, BaSchedule, DistanceReference,
     FreePointDecision, FreePointPolicy, ImagePrior, ImagePriorOptions, ImagePriorWidths,
@@ -20,6 +22,7 @@ use sfmtool_core::geometry::{
 use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::focal_is_releasable;
 
+use crate::geometry::camera_intrinsics::parse_scanlines;
 use crate::geometry::PyCameraIntrinsics;
 use crate::helpers::value_err;
 
@@ -93,12 +96,16 @@ fn build_constraints(
 /// release must be one the camera's model admits, or the call raises rather
 /// than letting the kernel hold that camera's parameter fixed behind the
 /// caller's back.
+#[allow(clippy::too_many_arguments)]
 fn check_releases(
     cameras: &[CameraIntrinsics],
+    scanlines: &[Option<RollingShutterScanlines>],
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
     opt_image_f: bool,
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
 ) -> PyResult<()> {
     // The two distortion rungs live on different models, so no camera could
     // ever satisfy both releases — reject the combination up front with the
@@ -129,6 +136,46 @@ fn check_releases(
                  EQUIDISTANT_FISHEYE, SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE or \
                  SFMTOOL_PINHOLE; camera {j} is {model}"
             )));
+        }
+        // The per-image corrections exist on `SFMTOOL_PINHOLE` alone; the
+        // radial correction also needs a spline domain to live on and a
+        // spline the two-coefficient basis inserts into, and the rates the
+        // camera's scanlines setting to be read on.
+        let pinhole = matches!(camera.model, CameraModel::SfmtoolPinhole { .. });
+        if opt_image_radial_bspline {
+            let domain = camera
+                .model
+                .radial_spline()
+                .is_some_and(|(bspline, d_max, _)| {
+                    bspline.len() != 1 && d_max.is_finite() && d_max > 0.0
+                });
+            if !pinhole {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "opt_image_radial_bspline requires every camera to be SFMTOOL_PINHOLE; \
+                     camera {j} is {model}"
+                )));
+            }
+            if !domain {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "opt_image_radial_bspline requires a positive, finite bspline_rho_max and \
+                     a spline that is empty or has at least two coefficients; camera {j}'s \
+                     is not"
+                )));
+            }
+        }
+        if opt_image_rolling_shutter {
+            if !pinhole {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "opt_image_rolling_shutter requires every camera to be SFMTOOL_PINHOLE; \
+                     camera {j} is {model}"
+                )));
+            }
+            if scanlines[j].is_none() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "opt_image_rolling_shutter requires every camera's \
+                     rolling_shutter_scanlines, \"ROWS\" or \"COLUMNS\"; camera {j} has none"
+                )));
+            }
         }
         // The curvature rung exists on exactly one model — no other camera has
         // a single radial coefficient acting on `θ` for `f·θ³·û` to be its
@@ -228,18 +275,43 @@ fn check_releases(
 ///     opt_image_pp: Release each image's principal-point offset, on any
 ///         model. The camera's principal point is held in the solve and takes
 ///         the images' mean after every round.
+///     opt_image_radial_bspline: Release each image's radial correction.
+///         Every camera must be SFMTOOL_PINHOLE with a positive, finite
+///         ``bspline_rho_max`` and a spline that is empty or has at least two
+///         coefficients. The mean of the camera's images' corrections is held
+///         through each round and moved into the camera's spline after it.
+///     opt_image_rolling_shutter: Release each image's rolling-shutter rates.
+///         Every camera must be SFMTOOL_PINHOLE and have a
+///         ``rolling_shutter_scanlines`` entry. The mean of the camera's
+///         images' rates is held at its value when the solve starts.
 ///     image_adjustments: Optional (n_img, 3) float64 array of each image's
 ///         intrinsic adjustment, ``[focal, a_x, a_y]``: the focal scale (the
 ///         image's focal is the camera's times ``1 + focal``) and the
 ///         principal-point offset in units of the image's short side. Held
 ///         unless a per-image release moves it; absent is every image read
 ///         through its camera exactly.
+///     image_radial_bspline_adjustments: Optional (n_img, 2) float64 array of
+///         each image's radial correction ``[e_0, e_1]``, the coefficients of
+///         the two-coefficient basis on its camera's spline domain, in units of
+///         the normalized radius; absent is zero for every image. Held unless
+///         ``opt_image_radial_bspline`` moves it.
+///     image_rolling_shutter_rates: Optional (n_img, 3) float64 array of each
+///         image's rolling-shutter rates ``[wx, wy, wz]``, in radians per
+///         short side of readout; absent is zero for every image. Held unless
+///         ``opt_image_rolling_shutter`` moves it.
+///     rolling_shutter_scanlines: Optional sequence with one entry per camera,
+///         ``"ROWS"``, ``"COLUMNS"`` or ``None``: what each camera's images'
+///         rates are read on. A camera whose images have non-zero rates, or
+///         that releases them, needs one; for any other camera it is not
+///         read.
 ///     image_prior: Optional dict choosing the widths of the prior on a
 ///         per-image release: ``loose`` and ``floor`` (each a dict of
-///         ``focal`` and ``principal_point``, defaults 0.1 and 0.001; the
-///         focal's of ``log(1 + focal)``, read as a fraction), and
-///         ``fixed`` (such a dict, or ``None`` to derive the widths from the
-///         solve, the default).
+///         ``focal``, ``principal_point``, ``radial_bspline`` and
+///         ``rolling_shutter``, defaults 0.1, 0.1, 0.01 and 0.01 loose and
+///         0.001, 0.001, 1e-4 and 1e-4 floor; the focal's of
+///         ``log(1 + focal)``, read as a fraction), and ``fixed`` (such a
+///         dict, or ``None`` to derive the widths from the solve, the
+///         default).
 ///     schedule: [(trim_px, loss_scale), ...] staged rounds
 ///         (default [(50, 5), (12, 2), (4, 1)]); must not be empty.
 ///     max_iters: LM iteration budget per round (default 60).
@@ -262,20 +334,28 @@ fn check_releases(
 ///     ``to_direction`` and ``unscored``. ``residual_norms`` are unweighted
 ///     reprojection norms at the final state, ``+inf`` where the point is
 ///     non-finite, behind the camera or outside the model domain.
-///     ``image_adjustments`` is every image's adjustment after the solve, in
-///     the input's layout. ``image_priors`` holds one entry per camera:
-///     ``None`` where the camera released nothing per image, and otherwise a
-///     dict of ``widths`` (the widths the final round ran under, ``NaN`` for a
-///     parameter not released per image), ``derived`` and ``spread`` (the last
-///     derivation's spread before it was clamped, ``NaN`` where nothing was
-///     derived), each widths dict holding ``focal`` and ``principal_point``.
+///     ``image_adjustments`` (n_img, 3), ``image_radial_bspline_adjustments``
+///     (n_img, 2) and ``image_rolling_shutter_rates`` (n_img, 3) are every
+///     image's adjustment after the solve, in the inputs' layouts.
+///     ``image_priors`` holds one entry per camera: ``None`` where the camera
+///     released nothing per image, and otherwise a dict of ``widths`` (the
+///     widths the final round ran under, ``NaN`` for a parameter not released
+///     per image), ``derived`` and ``spread`` (the last derivation's spread
+///     before it was clamped, ``NaN`` where nothing was derived), each widths
+///     dict holding ``focal``, ``principal_point``, ``radial_bspline`` and
+///     ``rolling_shutter``.
 ///
 /// Raises:
 ///     ValueError: On a shape mismatch, an empty ``cameras`` or ``schedule``,
 ///         an index out of range in ``image_camera``, ``obs_image`` or
 ///         ``obs_point``, a malformed ``distance_from`` entry, a release some
 ///         camera's model does not admit, ``opt_k1`` with ``opt_bspline``,
-///         ``image_adjustments`` of the wrong shape, an ``image_prior`` with an
+///         ``image_adjustments``, ``image_radial_bspline_adjustments`` or
+///         ``image_rolling_shutter_rates`` of the wrong shape,
+///         ``rolling_shutter_scanlines`` of the wrong length or with an entry
+///         other than ``"ROWS"``, ``"COLUMNS"`` or ``None``, an image
+///         correction its camera cannot take (non-finite, on another model,
+///         or rates on a camera with no scanlines setting), an ``image_prior`` with an
 ///         unknown key or a width that is not positive and finite, a
 ///         ``protected_loss_scale`` that is not positive and finite, or
 ///         a point constraint the kernel refuses (held and ranged together, a
@@ -310,6 +390,11 @@ fn check_releases(
     max_iters=60,
     min_track=2,
     min_obs=12,
+    opt_image_radial_bspline=false,
+    opt_image_rolling_shutter=false,
+    image_radial_bspline_adjustments=None,
+    image_rolling_shutter_rates=None,
+    rolling_shutter_scanlines=None,
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust<'py>(
@@ -341,6 +426,11 @@ pub fn bundle_adjust<'py>(
     max_iters: usize,
     min_track: usize,
     min_obs: usize,
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
+    image_radial_bspline_adjustments: Option<PyReadonlyArray2<'py, f64>>,
+    image_rolling_shutter_rates: Option<PyReadonlyArray2<'py, f64>>,
+    rolling_shutter_scanlines: Option<Vec<Option<String>>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     if quaternions_wxyz.shape()[1] != 4 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -378,10 +468,36 @@ pub fn bundle_adjust<'py>(
             "cameras must hold at least one CameraIntrinsics",
         ));
     }
+    let scanlines: Vec<Option<RollingShutterScanlines>> = match rolling_shutter_scanlines {
+        Some(entries) => {
+            if entries.len() != cams.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "rolling_shutter_scanlines must have one entry per camera: {} given for \
+                     {} cameras",
+                    entries.len(),
+                    cams.len()
+                )));
+            }
+            entries
+                .iter()
+                .map(|e| e.as_deref().map(parse_scanlines).transpose())
+                .collect::<PyResult<_>>()?
+        }
+        None => vec![None; cams.len()],
+    };
     // Every requested release must be one each camera's model admits; the
     // binding raises rather than letting the kernel degrade it.
-    check_releases(&cams, opt_f, opt_k1, opt_bspline, opt_image_f)?;
-    let prior = image_prior_from_py(image_prior.as_ref())?;
+    check_releases(
+        &cams,
+        &scanlines,
+        opt_f,
+        opt_k1,
+        opt_bspline,
+        opt_image_f,
+        opt_image_radial_bspline,
+        opt_image_rolling_shutter,
+    )?;
+    let prior = image_prior_from_py(image_prior.as_ref(), true)?;
 
     let n_img = quaternions_wxyz.shape()[0];
     let image_camera: Vec<u32> = to_contiguous!(image_camera).into_owned();
@@ -397,28 +513,67 @@ pub fn bundle_adjust<'py>(
             cams.len()
         )));
     }
-    let adjustments: Option<Vec<IntrinsicAdjustment>> = match image_adjustments {
-        Some(a) => {
-            if a.shape() != [n_img, 3] {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "image_adjustments must have shape (n_img, 3): {:?} given for {n_img} \
-                     images",
-                    a.shape()
-                )));
-            }
-            let flat = to_contiguous!(a);
-            Some(
-                flat.chunks(3)
-                    .map(|r| IntrinsicAdjustment {
-                        focal: r[0],
-                        principal_point: [r[1], r[2]],
-                        ..Default::default()
-                    })
-                    .collect(),
-            )
+    // Each image's adjustment, from the three arrays that hold its parts;
+    // `None` where the caller gave none of them.
+    let rows_of = |name: &str,
+                   a: Option<PyReadonlyArray2<'py, f64>>,
+                   width: usize|
+     -> PyResult<Option<Vec<f64>>> {
+        let Some(a) = a else {
+            return Ok(None);
+        };
+        if a.shape() != [n_img, width] {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "{name} must have shape (n_img, {width}): {:?} given for {n_img} images",
+                a.shape()
+            )));
         }
-        None => None,
+        Ok(Some(to_contiguous!(a).into_owned()))
     };
+    let adjustment_rows = rows_of("image_adjustments", image_adjustments, 3)?;
+    let radial_rows = rows_of(
+        "image_radial_bspline_adjustments",
+        image_radial_bspline_adjustments,
+        2,
+    )?;
+    let rate_rows = rows_of(
+        "image_rolling_shutter_rates",
+        image_rolling_shutter_rates,
+        3,
+    )?;
+    let adjustments: Option<Vec<IntrinsicAdjustment>> = if adjustment_rows.is_none()
+        && radial_rows.is_none()
+        && rate_rows.is_none()
+    {
+        None
+    } else {
+        let at = |rows: &Option<Vec<f64>>, i: usize, k: usize, width: usize| {
+            rows.as_ref().map_or(0.0, |r| r[i * width + k])
+        };
+        Some(
+            (0..n_img)
+                .map(|i| IntrinsicAdjustment {
+                    focal: at(&adjustment_rows, i, 0, 3),
+                    principal_point: [at(&adjustment_rows, i, 1, 3), at(&adjustment_rows, i, 2, 3)],
+                    radial_bspline: [at(&radial_rows, i, 0, 2), at(&radial_rows, i, 1, 2)],
+                    rolling_shutter: [
+                        at(&rate_rows, i, 0, 3),
+                        at(&rate_rows, i, 1, 3),
+                        at(&rate_rows, i, 2, 3),
+                    ],
+                })
+                .collect(),
+        )
+    };
+    // An image correction its camera cannot take raises here, naming the
+    // image, rather than in the kernel's own check.
+    if let Some(adjustments) = &adjustments {
+        for (i, (a, &j)) in adjustments.iter().zip(&image_camera).enumerate() {
+            cams[j as usize]
+                .check_adjustment(a, scanlines[j as usize])
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("image {i}: {e}")))?;
+        }
+    }
     let n_pt = points.shape()[0];
     if let Some(ref mask) = point_at_infinity {
         if mask.shape()[0] != n_pt {
@@ -527,7 +682,7 @@ pub fn bundle_adjust<'py>(
                 image_camera: image_camera.as_slice().into(),
                 releases: None,
                 image_adjustments: adjustments.map(Into::into),
-                rolling_shutter_scanlines: None,
+                rolling_shutter_scanlines: Some(&scanlines),
             },
             &mut quats,
             &mut trans,
@@ -546,6 +701,8 @@ pub fn bundle_adjust<'py>(
             opt_pp,
             opt_image_f,
             opt_image_pp,
+            opt_image_radial_bspline,
+            opt_image_rolling_shutter,
             Some(&prior),
             &stages,
             max_iters,
@@ -608,6 +765,31 @@ pub fn bundle_adjust<'py>(
         .map_err(value_err)?
         .into_pyarray(py),
     )?;
+    let n_out = out.image_adjustments.len();
+    d.set_item(
+        "image_radial_bspline_adjustments",
+        numpy::ndarray::Array2::from_shape_vec(
+            (n_out, 2),
+            out.image_adjustments
+                .iter()
+                .flat_map(|a| a.radial_bspline)
+                .collect(),
+        )
+        .map_err(value_err)?
+        .into_pyarray(py),
+    )?;
+    d.set_item(
+        "image_rolling_shutter_rates",
+        numpy::ndarray::Array2::from_shape_vec(
+            (n_out, 3),
+            out.image_adjustments
+                .iter()
+                .flat_map(|a| a.rolling_shutter)
+                .collect(),
+        )
+        .map_err(value_err)?
+        .into_pyarray(py),
+    )?;
     let priors = pyo3::types::PyList::empty(py);
     for prior in &out.image_priors {
         priors.append(image_prior_to_py(py, prior.as_ref())?)?;
@@ -617,14 +799,21 @@ pub fn bundle_adjust<'py>(
 }
 
 /// One camera's prior widths as the dict every binding reports them in:
-/// ``focal`` and ``principal_point``.
+/// ``focal`` and ``principal_point``, and with `corrections` also
+/// ``radial_bspline`` and ``rolling_shutter``, which only this kernel binding
+/// releases.
 pub(crate) fn widths_to_py<'py>(
     py: Python<'py>,
     widths: &ImagePriorWidths,
+    corrections: bool,
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("focal", widths.focal)?;
     d.set_item("principal_point", widths.principal_point)?;
+    if corrections {
+        d.set_item("radial_bspline", widths.radial_bspline)?;
+        d.set_item("rolling_shutter", widths.rolling_shutter)?;
+    }
     Ok(d)
 }
 
@@ -639,23 +828,30 @@ fn image_prior_to_py<'py>(
         return Ok(py.None().into_bound(py));
     };
     let d = PyDict::new(py);
-    d.set_item("widths", widths_to_py(py, &prior.widths)?)?;
+    d.set_item("widths", widths_to_py(py, &prior.widths, true)?)?;
     d.set_item("derived", prior.derived)?;
-    d.set_item("spread", widths_to_py(py, &prior.spread)?)?;
+    d.set_item("spread", widths_to_py(py, &prior.spread, true)?)?;
     Ok(d.into_any())
 }
 
 /// Read one widths dict of an ``image_prior`` argument, starting from
-/// `default`: ``focal`` and ``principal_point``, each a positive finite
-/// number, any other key refused.
+/// `default`: ``focal`` and ``principal_point``, and with `corrections` also
+/// ``radial_bspline`` and ``rolling_shutter``, each a positive finite number,
+/// any other key refused.
 fn widths_from_py(
     what: &str,
     obj: &Bound<'_, PyAny>,
     default: ImagePriorWidths,
+    corrections: bool,
 ) -> PyResult<ImagePriorWidths> {
+    let keys = if corrections {
+        "'focal', 'principal_point', 'radial_bspline' and 'rolling_shutter'"
+    } else {
+        "'focal' and 'principal_point'"
+    };
     let dict = obj.cast::<PyDict>().map_err(|_| {
         pyo3::exceptions::PyValueError::new_err(format!(
-            "image_prior['{what}'] must be a dict of 'focal' and 'principal_point'"
+            "image_prior['{what}'] must be a dict of {keys}"
         ))
     })?;
     let mut widths = default;
@@ -669,10 +865,11 @@ fn widths_from_py(
         match key.as_str() {
             "focal" => widths.focal = width,
             "principal_point" => widths.principal_point = width,
+            "radial_bspline" if corrections => widths.radial_bspline = width,
+            "rolling_shutter" if corrections => widths.rolling_shutter = width,
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "image_prior['{what}'] has no key '{key}'; its keys are 'focal' and \
-                     'principal_point'"
+                    "image_prior['{what}'] has no key '{key}'; its keys are {keys}"
                 )))
             }
         }
@@ -689,7 +886,12 @@ fn widths_from_py(
 /// Read an ``image_prior`` argument: a dict of ``loose``, ``floor`` and
 /// ``fixed`` (each a widths dict, ``fixed`` also ``None``), each missing key at
 /// its default, any other key refused. `None` is the default options.
-pub(crate) fn image_prior_from_py(obj: Option<&Bound<'_, PyDict>>) -> PyResult<ImagePriorOptions> {
+/// `corrections` says whether the widths dicts take the radial correction's and
+/// the rolling-shutter rates' keys, which only this kernel binding releases.
+pub(crate) fn image_prior_from_py(
+    obj: Option<&Bound<'_, PyDict>>,
+    corrections: bool,
+) -> PyResult<ImagePriorOptions> {
     let mut options = ImagePriorOptions::default();
     let Some(dict) = obj else {
         return Ok(options);
@@ -697,13 +899,13 @@ pub(crate) fn image_prior_from_py(obj: Option<&Bound<'_, PyDict>>) -> PyResult<I
     for (key, value) in dict.iter() {
         let key: String = key.extract()?;
         match key.as_str() {
-            "loose" => options.loose = widths_from_py("loose", &value, options.loose)?,
-            "floor" => options.floor = widths_from_py("floor", &value, options.floor)?,
+            "loose" => options.loose = widths_from_py("loose", &value, options.loose, corrections)?,
+            "floor" => options.floor = widths_from_py("floor", &value, options.floor, corrections)?,
             "fixed" => {
                 options.fixed = if value.is_none() {
                     None
                 } else {
-                    Some(widths_from_py("fixed", &value, options.loose)?)
+                    Some(widths_from_py("fixed", &value, options.loose, corrections)?)
                 }
             }
             _ => {

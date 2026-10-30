@@ -796,6 +796,8 @@ pub fn rotation_init(
         false,
         false,
         false,
+        false,
+        false,
         None,
         &DEFAULT_SCHEDULE,
         BA_MAX_ITERS,

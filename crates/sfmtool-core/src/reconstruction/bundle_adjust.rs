@@ -801,6 +801,8 @@ pub fn bundle_adjust(
         false,
         false,
         false,
+        false,
+        false,
         None,
         &[],
         options.max_iters,
@@ -839,6 +841,10 @@ pub fn bundle_adjust(
         true,
         true,
         true,
+        // Each image's radial correction and rolling-shutter rates, which
+        // this adjustment holds as they are read.
+        false,
+        false,
         Some(&options.image_prior),
         &options.schedule,
         options.max_iters,

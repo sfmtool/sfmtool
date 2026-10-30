@@ -944,6 +944,7 @@ impl PyEditedReconstruction {
                     principal_point: opt_pp,
                     image_focal: opt_image_f,
                     image_principal_point: opt_image_pp,
+                    ..CameraRelease::HELD
                 };
                 value.image_set.cameras.len()
             ],
@@ -966,7 +967,10 @@ impl PyEditedReconstruction {
             free_points: FreePointPolicy {
                 cross: free_points_cross,
             },
-            image_prior: crate::geometry::bundle_adjust::image_prior_from_py(image_prior.as_ref())?,
+            image_prior: crate::geometry::bundle_adjust::image_prior_from_py(
+                image_prior.as_ref(),
+                false,
+            )?,
         };
         let (next, report) = py
             .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
@@ -1113,9 +1117,9 @@ fn image_adjustment_spread_to_py<'py>(
     d.set_item("focal_std", spread.focal_std)?;
     d.set_item("principal_point_mean", spread.principal_point_mean)?;
     d.set_item("principal_point_std", spread.principal_point_std)?;
-    d.set_item("prior", widths(py, &spread.prior)?)?;
+    d.set_item("prior", widths(py, &spread.prior, false)?)?;
     d.set_item("prior_derived", spread.prior_derived)?;
-    d.set_item("spread", widths(py, &spread.spread)?)?;
+    d.set_item("spread", widths(py, &spread.spread, false)?)?;
     let near = PyList::empty(py);
     for n in &spread.near_prior {
         let e = PyDict::new(py);

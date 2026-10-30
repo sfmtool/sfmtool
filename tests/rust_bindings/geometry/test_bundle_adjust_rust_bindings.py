@@ -1530,12 +1530,20 @@ def test_a_fixed_image_prior_is_used_as_given():
         image_prior={"fixed": {"focal": 0.02, "principal_point": 0.03}},
     )
     (prior,) = out["image_priors"]
+    nan = pytest.approx(np.nan, nan_ok=True)
     assert prior == {
-        "widths": {"focal": 0.02, "principal_point": 0.03},
+        "widths": {
+            "focal": 0.02,
+            "principal_point": 0.03,
+            "radial_bspline": nan,
+            "rolling_shutter": nan,
+        },
         "derived": False,
         "spread": {
-            "focal": pytest.approx(np.nan, nan_ok=True),
-            "principal_point": pytest.approx(np.nan, nan_ok=True),
+            "focal": nan,
+            "principal_point": nan,
+            "radial_bspline": nan,
+            "rolling_shutter": nan,
         },
     }
 
@@ -1571,3 +1579,140 @@ def test_opt_image_f_names_the_camera_that_cannot_release_its_focal():
     )
     with pytest.raises(ValueError, match="opt_image_f .* camera 1 is PINHOLE"):
         _run_cameras(s, [_TWO_CAMERAS[0], pinhole], opt_image_f=True)
+
+
+# ── Per-image radial corrections and rolling-shutter rates ─────────────────
+
+
+_RADIAL = np.array(
+    [[3e-3 * np.cos(1.1 * i + 0.3), 3e-3 * np.sin(0.9 * i)] for i in range(10)]
+)
+_RADIAL -= _RADIAL.mean(axis=0)
+_RATES = np.array(
+    [
+        [4e-3 * np.cos(0.8 * i), 4e-3 * np.sin(1.3 * i + 0.5), 3e-3 * np.cos(2.1 * i)]
+        for i in range(10)
+    ]
+)
+_RATES -= _RATES.mean(axis=0)
+
+
+def _corrected_scene(radial, rates, scanlines="ROWS"):
+    """``_wide_pinhole_scene`` whose image ``i`` is observed through the planted
+    spline camera with ``radial[i]`` and ``rates[i]`` applied."""
+    cam = _sfmtool_pinhole_cam(250.0, _PLANTED_PINHOLE_BSPLINE)
+    s = _wide_pinhole_scene(cam)
+    rays = []
+    for i, p in zip(s["obs_image"], s["obs_point"]):
+        r = _quat_to_matrix(s["quats"][i])
+        rays.append(r @ s["points"][p] + s["trans"][i])
+    rays = np.asarray(rays)
+    uv = np.empty((len(rays), 2))
+    for i in range(len(s["quats"])):
+        rows = s["obs_image"] == i
+        image = cam.with_adjustment(
+            radial_bspline=tuple(radial[i]),
+            rolling_shutter=tuple(rates[i]),
+            rolling_shutter_scanlines=scanlines,
+        )
+        uv[rows] = image.ray_to_pixel_batch(np.ascontiguousarray(rays[rows]))
+    s["uv"] = uv
+    return s
+
+
+def test_held_corrections_are_read_and_returned_as_given():
+    s = _corrected_scene(_RADIAL, _RATES)
+    out = _run(
+        s,
+        image_radial_bspline_adjustments=_RADIAL,
+        image_rolling_shutter_rates=_RATES,
+        rolling_shutter_scanlines=["ROWS"],
+    )
+    assert np.max(out["residual_norms"]) < 1e-5
+    npt.assert_array_equal(out["image_radial_bspline_adjustments"], _RADIAL)
+    npt.assert_array_equal(out["image_rolling_shutter_rates"], _RATES)
+    npt.assert_array_equal(out["image_adjustments"], np.zeros((10, 3)))
+    assert out["image_priors"] == [None]
+    # Without them, the same pixels do not fit.
+    bare = _run(s)
+    assert np.max(bare["residual_norms"]) > 0.05
+    npt.assert_array_equal(bare["image_rolling_shutter_rates"], np.zeros((10, 3)))
+
+
+@pytest.mark.parametrize("scanlines", ["ROWS", "COLUMNS"])
+def test_released_corrections_are_recovered_about_their_mean(scanlines):
+    s = _corrected_scene(_RADIAL, _RATES, scanlines)
+    out = _run(
+        s,
+        opt_image_radial_bspline=True,
+        opt_image_rolling_shutter=True,
+        rolling_shutter_scanlines=[scanlines],
+    )
+    radial = out["image_radial_bspline_adjustments"]
+    rates = out["image_rolling_shutter_rates"]
+    assert radial.shape == (10, 2) and rates.shape == (10, 3)
+    npt.assert_allclose(radial, _RADIAL, atol=3e-4)
+    npt.assert_allclose(rates, _RATES, atol=3e-4)
+    # The mean rate is held where it started, and the mean radial correction
+    # is moved into the camera's spline.
+    npt.assert_allclose(rates.mean(axis=0), 0.0, atol=1e-8)
+    npt.assert_allclose(radial.mean(axis=0), 0.0, atol=1e-15)
+    assert np.median(out["residual_norms"]) < 0.05
+    (prior,) = out["image_priors"]
+    assert prior["derived"]
+    assert set(prior["widths"]) == {
+        "focal",
+        "principal_point",
+        "radial_bspline",
+        "rolling_shutter",
+    }
+    assert np.isnan(prior["widths"]["focal"])
+    assert prior["widths"]["radial_bspline"] > 0.0
+    assert prior["widths"]["rolling_shutter"] > 0.0
+
+
+def test_fixed_correction_widths_are_used_as_given():
+    s = _corrected_scene(_RADIAL, _RATES)
+    out = _run(
+        s,
+        opt_image_radial_bspline=True,
+        opt_image_rolling_shutter=True,
+        rolling_shutter_scanlines=["ROWS"],
+        image_prior={"fixed": {"radial_bspline": 0.004, "rolling_shutter": 0.005}},
+    )
+    (prior,) = out["image_priors"]
+    assert not prior["derived"]
+    assert prior["widths"]["radial_bspline"] == 0.004
+    assert prior["widths"]["rolling_shutter"] == 0.005
+
+
+def test_correction_argument_validation():
+    s = _corrected_scene(_RADIAL, _RATES)
+    with pytest.raises(
+        ValueError,
+        match=r"image_radial_bspline_adjustments must have shape \(n_img, 2\)",
+    ):
+        _run(s, image_radial_bspline_adjustments=_RATES)
+    with pytest.raises(
+        ValueError, match=r"image_rolling_shutter_rates must have shape \(n_img, 3\)"
+    ):
+        _run(s, image_rolling_shutter_rates=_RADIAL)
+    with pytest.raises(ValueError, match="one entry per camera"):
+        _run(s, rolling_shutter_scanlines=["ROWS", "ROWS"])
+    with pytest.raises(ValueError, match="ROWS"):
+        _run(s, rolling_shutter_scanlines=["DIAGONAL"])
+    with pytest.raises(ValueError, match="camera 0 has none"):
+        _run(s, opt_image_rolling_shutter=True)
+    with pytest.raises(ValueError, match="image 0: .*scanlines"):
+        _run(s, image_rolling_shutter_rates=_RATES)
+    with pytest.raises(ValueError, match=r"image_prior\['fixed'\] has no key 'radial'"):
+        _run(s, image_prior={"fixed": {"radial": 0.1}})
+    plain = _scene(n_img=10)
+    with pytest.raises(
+        ValueError, match="opt_image_radial_bspline .* camera 0 is SIMPLE_PINHOLE"
+    ):
+        _run(plain, opt_image_radial_bspline=True)
+    with pytest.raises(
+        ValueError, match="opt_image_rolling_shutter .* camera 0 is SIMPLE_PINHOLE"
+    ):
+        _run(plain, opt_image_rolling_shutter=True, rolling_shutter_scanlines=["ROWS"])

@@ -20,7 +20,7 @@
 use std::borrow::Cow;
 
 use nalgebra::{
-    DMatrix, DVector, Matrix2, Matrix3, Point3, SMatrix, UnitQuaternion, Vector2, Vector3,
+    DMatrix, DVector, Matrix2, Matrix3, Point3, SMatrix, SVector, UnitQuaternion, Vector2, Vector3,
 };
 use rayon::prelude::*;
 
@@ -452,7 +452,8 @@ pub struct BaCameras<'a> {
     /// focal, distortion or principal point is still the camera's shared one,
     /// the adjustment applied on top of it. The solve holds the adjustments
     /// unless the image's camera releases them per image (`opt_image_f`,
-    /// `opt_image_pp`), and returns them in
+    /// `opt_image_pp`, `opt_image_radial_bspline`,
+    /// `opt_image_rolling_shutter`), and returns them in
     /// [`BundleAdjustment::image_adjustments`]. A length other than the image
     /// count is a caller error, checked with the others. All-zero adjustments
     /// with no per-image release are the same solve as `None`, to the bit.
@@ -460,7 +461,8 @@ pub struct BaCameras<'a> {
     /// Each camera's rolling-shutter scanlines setting, one per camera, or
     /// `None` for no camera with one: what an image's rolling-shutter rates in
     /// [`Self::image_adjustments`] are read on. A camera whose images carry
-    /// non-zero rates needs its setting here. A length other than the camera
+    /// non-zero rates, or that releases them per image, needs its setting
+    /// here. A length other than the camera
     /// count is a caller error, checked with the others. So is an image
     /// adjustment its camera cannot take (`CameraIntrinsics::check_adjustment`),
     /// and a camera whose own rolling shutter it could not apply.
@@ -472,7 +474,7 @@ pub struct BaCameras<'a> {
 ///
 /// The per-camera half of a release decision: [`BaCameras::releases`] holds one
 /// per camera, and the reconstruction-level adjustment takes its list in this
-/// type too. A camera with none of the five is held, which is also `Default`.
+/// type too. A camera with none of the seven is held, which is also `Default`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CameraRelease {
     /// Release the focal length.
@@ -493,6 +495,18 @@ pub struct CameraRelease {
     /// mean after every round, so this moves the shared principal point as
     /// well, and with [`Self::principal_point`] it is the same release.
     pub image_principal_point: bool,
+    /// Release each image's radial correction, the `radial_bspline` of its
+    /// [`IntrinsicAdjustment`], on an `SFMTOOL_PINHOLE` camera whose spline
+    /// domain end is positive and finite. The mean of the camera's images'
+    /// corrections is held through each round, and moved into the camera's
+    /// spline after it.
+    pub image_radial_bspline: bool,
+    /// Release each image's rolling-shutter rates, the `rolling_shutter` of
+    /// its [`IntrinsicAdjustment`], on an `SFMTOOL_PINHOLE` camera, read on
+    /// the camera's entry of [`BaCameras::rolling_shutter_scanlines`], which
+    /// it must have. The mean of the camera's images' rates is held at its
+    /// value when the solve starts.
+    pub image_rolling_shutter: bool,
 }
 
 impl CameraRelease {
@@ -503,6 +517,8 @@ impl CameraRelease {
         principal_point: false,
         image_focal: false,
         image_principal_point: false,
+        image_radial_bspline: false,
+        image_rolling_shutter: false,
     };
     /// The focal alone.
     pub const FOCAL: CameraRelease = CameraRelease {
@@ -524,6 +540,8 @@ impl CameraRelease {
         principal_point: true,
         image_focal: true,
         image_principal_point: true,
+        image_radial_bspline: true,
+        image_rolling_shutter: true,
     };
 }
 
@@ -534,13 +552,33 @@ impl CameraRelease {
 /// `focal` is the width of the log focal scale `t = ln(1 + s)`, which reads as
 /// a fraction of the focal for small values, as the scale `s` does, since
 /// `t ≈ s`; `principal_point` is the principal-point offset's, in the
-/// short-side unit `min(width, height)` and the same on both axes.
+/// short-side unit `min(width, height)` and the same on both axes;
+/// `radial_bspline` is the radial correction's, in units of the normalized
+/// radius `ρ` and the same for both coefficients; `rolling_shutter` is the
+/// rolling-shutter rates', in radians per short side of readout and the same
+/// for all three. The four units differ, so the widths cannot be compared as
+/// numbers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImagePriorWidths {
     /// The width of the log focal scale `ln(1 + s)`, read as a fraction.
     pub focal: f64,
     /// The principal-point offset's width, in the short-side unit.
     pub principal_point: f64,
+    /// The radial correction's width, in units of `ρ`.
+    pub radial_bspline: f64,
+    /// The rolling-shutter rates' width, in radians per short side of readout.
+    pub rolling_shutter: f64,
+}
+
+impl ImagePriorWidths {
+    /// Every width `NaN`: what a camera reports for the parameters it does
+    /// not release per image.
+    pub const NAN: ImagePriorWidths = ImagePriorWidths {
+        focal: f64::NAN,
+        principal_point: f64::NAN,
+        radial_bspline: f64::NAN,
+        rolling_shutter: f64::NAN,
+    };
 }
 
 /// How the widths of the prior on a per-image release are chosen.
@@ -569,10 +607,14 @@ impl Default for ImagePriorOptions {
             loose: ImagePriorWidths {
                 focal: 0.1,
                 principal_point: 0.1,
+                radial_bspline: 0.01,
+                rolling_shutter: 0.01,
             },
             floor: ImagePriorWidths {
                 focal: 0.001,
                 principal_point: 0.001,
+                radial_bspline: 1e-4,
+                rolling_shutter: 1e-4,
             },
             fixed: None,
         }
@@ -789,6 +831,43 @@ const IMG_ADJ_COLS: usize = 3;
 /// reduced system; `a_x` and `a_y` follow it.
 const IMG_S_SLOT: usize = POSE_COLS;
 
+/// An image's correction columns, after its three adjustment columns, in the
+/// instantiations that carry them: the radial correction `e_0`, `e_1`, then the
+/// rolling-shutter rates `ωx`, `ωy`, `ωz`.
+const IMG_CORR_COLS: usize = 5;
+
+/// The radial correction's first slot, relative to the start of an image's
+/// block in the reduced system; `e_1` follows it.
+const IMG_E_SLOT: usize = IMG_S_SLOT + IMG_ADJ_COLS;
+
+/// The rolling-shutter rates' first slot, relative to the start of an image's
+/// block in the reduced system; `ωy` and `ωz` follow it.
+const IMG_RS_SLOT: usize = IMG_E_SLOT + 2;
+
+/// How many of an image's slots a per-image release can move, after its pose:
+/// the log focal scale, `a_x`, `a_y`, `e_0`, `e_1`, `ωx`, `ωy`, `ωz`. The
+/// per-image prior, its widths' derivation and the solve's report index them
+/// in this order, `k = 0..IMG_PARAMS`, at slot `IMG_S_SLOT + k`.
+const IMG_PARAMS: usize = IMG_ADJ_COLS + IMG_CORR_COLS;
+
+/// One image's inverse data-only block over its adjustment slots, in the order
+/// of [`IMG_PARAMS`].
+type ImageParamsMatrix = SMatrix<f64, IMG_PARAMS, IMG_PARAMS>;
+
+/// The width of the stiff prior that holds the mean of each camera's radial
+/// corrections and rolling-shutter rates, per component, at its value at the
+/// start of the round: `σ_n²·(x̄ − x̄₀)²/MEAN_HOLD_WIDTH²` in the units of the
+/// data's `Σ r²`, in each field's own unit. See "The mean hold" in
+/// `specs/core/geometry/bundle-adjustment.md` for why this value.
+const MEAN_HOLD_WIDTH: f64 = 1e-6;
+
+/// The largest distance from the identity the rolling-shutter step may have at
+/// an image's corners for a candidate step to be accepted
+/// (`CameraIntrinsics::rolling_shutter_contraction`): far from any measured
+/// value, about `10⁻³`, and well inside the unprojection's fixed-point
+/// iteration, which converges while it is under one.
+const ROLLING_SHUTTER_CONTRACTION_LIMIT: f64 = 0.5;
+
 /// [`BASE_PP_CAM_COLS`] with the image's three adjustment columns after the
 /// pose: the width when some camera releases a per-image parameter and none its
 /// spline. A per-image release always carries the shared principal point's
@@ -801,8 +880,34 @@ const BASE_IMG_CAM_COLS: usize = BASE_PP_CAM_COLS + IMG_ADJ_COLS;
 /// spline.
 const BSPLINE_IMG_CAM_COLS: usize = BSPLINE_PP_CAM_COLS + IMG_ADJ_COLS;
 
-// The six widths name six instantiations, and `carries_pp_cols` and
-// `carries_image_cols` tell them apart by width alone.
+/// [`BASE_IMG_CAM_COLS`] with the image's five correction columns after its
+/// adjustment columns: the width when some camera releases a radial correction
+/// or rolling-shutter rates per image and none its spline. The image's block in
+/// the reduced system is then fourteen wide.
+const BASE_CORR_CAM_COLS: usize = BASE_IMG_CAM_COLS + IMG_CORR_COLS;
+
+/// [`BSPLINE_IMG_CAM_COLS`] with the image's five correction columns: the width
+/// when some camera releases a per-image correction and some its spline.
+const BSPLINE_CORR_CAM_COLS: usize = BSPLINE_IMG_CAM_COLS + IMG_CORR_COLS;
+
+// The eight widths name eight instantiations, and `carries_pp_cols`,
+// `carries_image_cols` and `carries_correction_cols` tell them apart by width
+// alone.
+const _: () = assert!(
+    BASE_CORR_CAM_COLS != BASE_CAM_COLS
+        && BASE_CORR_CAM_COLS != BSPLINE_CAM_COLS
+        && BASE_CORR_CAM_COLS != BASE_PP_CAM_COLS
+        && BASE_CORR_CAM_COLS != BSPLINE_PP_CAM_COLS
+        && BASE_CORR_CAM_COLS != BASE_IMG_CAM_COLS
+        && BASE_CORR_CAM_COLS != BSPLINE_IMG_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BASE_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BSPLINE_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BASE_PP_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BSPLINE_PP_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BASE_IMG_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BSPLINE_IMG_CAM_COLS
+        && BSPLINE_CORR_CAM_COLS != BASE_CORR_CAM_COLS
+);
 const _: () = assert!(
     BASE_CAM_COLS != BASE_PP_CAM_COLS
         && BASE_CAM_COLS != BSPLINE_CAM_COLS
@@ -824,7 +929,17 @@ const _: () = assert!(
 /// for them, as only those that release a principal point pay for its two.
 #[inline]
 const fn carries_image_cols(cam_cols: usize) -> bool {
-    cam_cols == BASE_IMG_CAM_COLS || cam_cols == BSPLINE_IMG_CAM_COLS
+    cam_cols == BASE_IMG_CAM_COLS
+        || cam_cols == BSPLINE_IMG_CAM_COLS
+        || carries_correction_cols(cam_cols)
+}
+
+/// Whether an observation block `cam_cols` wide carries each image's five
+/// correction columns, after its three adjustment columns. Only the solves that
+/// release a radial correction or rolling-shutter rates per image pay for them.
+#[inline]
+const fn carries_correction_cols(cam_cols: usize) -> bool {
+    cam_cols == BASE_CORR_CAM_COLS || cam_cols == BSPLINE_CORR_CAM_COLS
 }
 
 /// Whether an observation block `cam_cols` wide carries the principal point's
@@ -837,11 +952,14 @@ const fn carries_pp_cols(cam_cols: usize) -> bool {
 }
 
 /// The width of an image's block in the reduced system for observation blocks
-/// `cam_cols` wide: its six pose slots, and its three adjustment slots in the
-/// instantiations that carry them.
+/// `cam_cols` wide: its six pose slots, its three adjustment slots in the
+/// instantiations that carry them, and its five correction slots in those that
+/// carry them.
 #[inline]
 const fn image_block_cols(cam_cols: usize) -> usize {
-    if carries_image_cols(cam_cols) {
+    if carries_correction_cols(cam_cols) {
+        POSE_COLS + IMG_PARAMS
+    } else if carries_image_cols(cam_cols) {
         POSE_COLS + IMG_ADJ_COLS
     } else {
         POSE_COLS
@@ -1145,6 +1263,24 @@ fn image_spline(c: &[f64], e: [f64; 2]) -> Vec<f64> {
 /// these flags existed, bit for bit. See "The per-image release" in
 /// `specs/core/geometry/bundle-adjustment.md`.
 ///
+/// `opt_image_radial_bspline` and `opt_image_rolling_shutter` release each
+/// image's radial correction and rolling-shutter rates, on an
+/// `SFMTOOL_PINHOLE` camera (the radial correction only where its spline domain
+/// end is positive and finite), narrowed per camera by
+/// [`CameraRelease::image_radial_bspline`] and
+/// [`CameraRelease::image_rolling_shutter`]. A camera that releases its rates
+/// needs its entry of [`BaCameras::rolling_shutter_scanlines`], which the solve
+/// reads them on, and the solve panics on one without. Each image's correction
+/// and rates are held toward their camera's mean by the same prior, with their
+/// own widths, and that mean is held, per component, at its value at the start
+/// of each round by a stiff prior: the camera's spline and the mean radial
+/// correction move the images' splines alike, and the mean rate is nearly
+/// indistinguishable from a stretch of the scene. After each round the mean
+/// radial correction is moved into the camera's spline, which changes no
+/// image's intrinsics. With neither flag on, or no camera releasing either, the
+/// solve is the one before these flags existed, bit for bit. See "The
+/// per-image corrections" in `specs/core/geometry/bundle-adjustment.md`.
+///
 /// `progress` is where the rounds and the LM iterations inside them are
 /// reported: one phase per schedule round, carrying that round's trim and loss
 /// scale, and an iteration count under it, so a caller knows which round a long
@@ -1175,6 +1311,8 @@ pub fn bundle_adjust(
     opt_pp: bool,
     opt_image_f: bool,
     opt_image_pp: bool,
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
     image_prior: Option<&ImagePriorOptions>,
     schedule: &[BaSchedule],
     max_iters: usize,
@@ -1243,6 +1381,8 @@ pub fn bundle_adjust(
         opt_pp,
         opt_image_f,
         opt_image_pp,
+        opt_image_radial_bspline,
+        opt_image_rolling_shutter,
         &image_prior.copied().unwrap_or_default(),
         schedule,
         max_iters,
@@ -1898,6 +2038,17 @@ struct LinLens<'a> {
     /// offset. Read only in the instantiations that carry their columns.
     opt_image_f: bool,
     opt_image_pp: bool,
+    /// Whether the image's radial correction is released, and its
+    /// rolling-shutter rates. Read only in the instantiations that carry their
+    /// columns.
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
+    /// The camera's rolling-shutter scanlines setting, which a released rate's
+    /// column reads the readout position on.
+    scanlines: Option<RollingShutterScanlines>,
+    /// The camera's spline domain end `ρ_max`, the domain of the image's
+    /// radial correction; read only where that correction is released.
+    rho_max: f64,
     n_coeffs: usize,
     d_max: f64,
     radial: SplineRadial,
@@ -1933,6 +2084,8 @@ fn observation_blocks<const CAM_COLS: usize>(
     let pp_cols = carries_pp_cols(CAM_COLS);
     let pp_c = pose_c - 2;
     let adj_c = pose_c + IMG_S_SLOT;
+    let e_c = pose_c + IMG_E_SLOT;
+    let rs_c = pose_c + IMG_RS_SLOT;
     let lens = &st.lenses[st.ci_cam[ci]];
     let (q, t, xp, uv, cam) = (st.q, st.t, st.xp, st.uv, lens.cam);
     let (f, f_image) = (lens.f, lens.f_image);
@@ -1949,7 +2102,8 @@ fn observation_blocks<const CAM_COLS: usize>(
     let mut cam_j = SMatrix::<f64, 2, CAM_COLS>::zeros();
     let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
     let mut ref_cols: Vec<(usize, Vector2<f64>)> = Vec::new();
-    // Column indices: `[f, k1, (spline), cx, cy, δθ×3, δt×3, (s, a_x, a_y)]`, the lens
+    // Column indices: `[f, k1, (spline), cx, cy, δθ×3, δt×3, (s, a_x, a_y,
+    // (e_0, e_1, ωx, ωy, ωz))]`, the lens
     // columns in the block of this observation's camera. Spline slots start at
     // that camera's K1_SLOT dummy and are pointed at their coefficient's slot
     // below, where the observation actually carries one.
@@ -2066,6 +2220,56 @@ fn observation_blocks<const CAM_COLS: usize>(
                 // unit, added to the principal point as `a·m`.
                 cam_j[(0, adj_c + 1)] = lens.m;
                 cam_j[(1, adj_c + 2)] = lens.m;
+            }
+        }
+        if carries_correction_cols(CAM_COLS) {
+            if lens.opt_image_radial_bspline {
+                // ∂(u, v)/∂e_j = f_i·(I + ṗ·∇tᵀ)·(B_j(ρ) + B_j'(ρ_max)·(ρ − ρ_max)₊)·û
+                // with the two-coefficient basis on the camera's domain: the
+                // correction adds `e_0·B0 + e_1·B1` to the image's `δ`, read
+                // as the shared spline's columns read theirs, and the readout
+                // position moves with the distorted point, which is the
+                // `(I + ṗ·∇tᵀ)` of the spline column above. Its two functions
+                // are the full basis's last two, the ones that carry a
+                // coefficient.
+                let (first, cols) = bspline_columns(
+                    f_image,
+                    MIN_BSPLINE_COEFFS,
+                    lens.rho_max,
+                    SplineRadial::ImagePlaneRadius,
+                    p_cam,
+                );
+                for (j, col) in cols.iter().enumerate() {
+                    let full = first + j;
+                    if full < 2 {
+                        continue;
+                    }
+                    let mut col = *col;
+                    if let Some((_, [px, py], [gx, gy])) = motion {
+                        let g = (gx * col[0] + gy * col[1]) / f_image;
+                        col[0] += f_image * px * g;
+                        col[1] += f_image * py * g;
+                    }
+                    cam_j[(0, e_c + full - 2)] = col[0];
+                    cam_j[(1, e_c + full - 2)] = col[1];
+                }
+            }
+            if lens.opt_image_rolling_shutter {
+                // ∂(u, v)/∂ω = f_i·t·∂ṗ/∂ω: the step `x_r = x_d + t·ṗ` is
+                // linear in the rates, and `t` reads the distorted point,
+                // which they do not move. Read on the camera's scanlines
+                // whatever the image's rates, zero ones included.
+                let scanlines = lens
+                    .scanlines
+                    .expect("a camera that releases its rates has a scanlines setting");
+                if let Some(cols) =
+                    cam.rolling_shutter_rate_columns(scanlines, [p_cam.x, p_cam.y, p_cam.z])
+                {
+                    for k in 0..3 {
+                        cam_j[(0, rs_c + k)] = f_image * cols[0][k];
+                        cam_j[(1, rs_c + k)] = f_image * cols[1][k];
+                    }
+                }
             }
         }
         // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ (finite), −[R·d]ₓ
@@ -2238,6 +2442,12 @@ struct Lens<'a> {
     /// adjustments are re-centred after a round.
     opt_image_f: bool,
     opt_image_pp: bool,
+    /// Whether each image's radial correction, and its rolling-shutter rates,
+    /// is released. Neither holds a shared value: the mean of the images' is
+    /// held in the solve instead, and the mean radial correction is moved
+    /// into the camera's spline after each round.
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
     /// The focal, the model's first where it carries two.
     f: f64,
     /// The radial coefficient; `0.0` for a model without one.
@@ -2264,6 +2474,8 @@ impl<'a> Lens<'a> {
         opt_pp: bool,
         opt_image_f: bool,
         opt_image_pp: bool,
+        opt_image_radial_bspline: bool,
+        opt_image_rolling_shutter: bool,
     ) -> Self {
         // The analytic focal column `∂(u, v)/∂f = (u − cx)/f` is exact only
         // on the models `focal_is_releasable` admits (its doc says why), and
@@ -2294,6 +2506,22 @@ impl<'a> Lens<'a> {
                 .is_some_and(|(bspline, d_max, _)| {
                     bspline.len() >= MIN_BSPLINE_COEFFS && d_max.is_finite() && d_max > 0.0
                 });
+        // The per-image corrections exist on `SFMTOOL_PINHOLE` alone: its
+        // rolling-shutter step is defined on that model's image plane, and its
+        // radial correction is a spline on its own domain, which has to have a
+        // positive, finite end and a spline the two-coefficient basis inserts
+        // into (empty, or at least two coefficients). Same degrade; the
+        // binding rejects it loudly first.
+        let pinhole = matches!(base.model, CameraModel::SfmtoolPinhole { .. });
+        let opt_image_rolling_shutter = opt_image_rolling_shutter && pinhole;
+        let opt_image_radial_bspline = opt_image_radial_bspline
+            && pinhole
+            && base
+                .model
+                .radial_spline()
+                .is_some_and(|(bspline, d_max, _)| {
+                    bspline.len() != 1 && d_max.is_finite() && d_max > 0.0
+                });
         let k1 = match base.model {
             CameraModel::SimpleRadialFisheye {
                 radial_distortion_k1,
@@ -2316,6 +2544,8 @@ impl<'a> Lens<'a> {
             opt_pp,
             opt_image_f,
             opt_image_pp,
+            opt_image_radial_bspline,
+            opt_image_rolling_shutter,
             f: base.focal_lengths().0,
             k1,
             bspline,
@@ -2325,7 +2555,25 @@ impl<'a> Lens<'a> {
 
     /// Whether any per-image parameter of this camera is released.
     fn releases_image(&self) -> bool {
-        self.opt_image_f || self.opt_image_pp
+        self.opt_image_f || self.opt_image_pp || self.releases_correction()
+    }
+
+    /// Whether this camera releases a radial correction or rolling-shutter
+    /// rates per image.
+    fn releases_correction(&self) -> bool {
+        self.opt_image_radial_bspline || self.opt_image_rolling_shutter
+    }
+
+    /// Which of an image's [`IMG_PARAMS`] adjustment parameters this camera
+    /// releases: the log focal scale, `a_x`, `a_y`, `e_0`, `e_1`, `ωx`, `ωy`,
+    /// `ωz`.
+    fn image_releases(&self) -> [bool; IMG_PARAMS] {
+        let (f, pp) = (self.opt_image_f, self.opt_image_pp);
+        let (e, rs) = (
+            self.opt_image_radial_bspline,
+            self.opt_image_rolling_shutter,
+        );
+        [f, pp, pp, e, e, rs, rs, rs]
     }
 
     /// The camera at the current state.
@@ -2338,9 +2586,11 @@ impl<'a> Lens<'a> {
     /// `base` untouched; off the principal-point releases, shared and per
     /// image, the principal point rides along inside `base` the same way. A
     /// per-image principal-point release moves the shared one when the images'
-    /// offsets are re-centred, so it is written here.
+    /// offsets are re-centred, so it is written here, and a per-image radial
+    /// correction moves the shared spline when the images' mean correction is
+    /// moved into it, so the spline is written then too.
     fn at(&self, f: f64, k1: f64, bspline: &[f64], pp: [f64; 2]) -> CameraIntrinsics {
-        let camera = if self.opt_bspline {
+        let camera = if self.opt_bspline || self.opt_image_radial_bspline {
             self.base.with_focal_bspline(f, bspline)
         } else {
             self.base.with_focal_k1(f, k1)
@@ -2496,22 +2746,70 @@ struct ImageRoundResult {
     /// Per image of `images`, the inverse of its data-only block of the
     /// reduced system at the round's last linearisation (the points eliminated,
     /// no prior, no damping), over the adjustment slots its camera releases, in
-    /// the order log focal scale, `a_x`, `a_y`, and zero in a slot its camera does
-    /// not release. Multiplied by `σ_n²` it is the adjustments' covariance with
+    /// the order of [`IMG_PARAMS`], and zero in a slot its camera does not
+    /// release. Multiplied by `σ_n²` it is the adjustments' covariance with
     /// every other image and the shared camera held. `None` where the block is
     /// not positive definite, or the camera releases nothing per image.
-    inv_info: Vec<Option<Matrix3<f64>>>,
+    inv_info: Vec<Option<ImageParamsMatrix>>,
 }
 
-/// Component `k` of an adjustment in the order of an image's adjustment slots:
-/// the log focal scale `ln(1 + s)`, `a_x`, `a_y`.
+/// Component `k` of an adjustment in the order of an image's adjustment slots
+/// ([`IMG_PARAMS`]): the log focal scale `ln(1 + s)`, `a_x`, `a_y`, the radial
+/// correction `e_0`, `e_1`, and the rolling-shutter rates `ωx`, `ωy`, `ωz`.
 #[inline]
 fn adj_component(a: &IntrinsicAdjustment, k: usize) -> f64 {
     match k {
         0 => log_focal_scale(a.focal),
         1 => a.principal_point[0],
-        _ => a.principal_point[1],
+        2 => a.principal_point[1],
+        3 | 4 => a.radial_bspline[k - 3],
+        _ => a.rolling_shutter[k - 5],
     }
+}
+
+/// The radial-correction and rolling-shutter slots `k` of an image's
+/// [`IMG_PARAMS`] parameters that `released` marks.
+fn released_corrections(released: [bool; IMG_PARAMS]) -> impl Iterator<Item = usize> {
+    (IMG_ADJ_COLS..IMG_PARAMS).filter(move |&k| released[k])
+}
+
+/// The weight `σ_n²/σ²` of each of an image's [`IMG_PARAMS`] parameters under
+/// a camera's prior widths `w` (`[focal, principal point, radial correction,
+/// rolling shutter]` as weights, one per kind).
+#[inline]
+fn param_weight(weights: &[f64; 4], k: usize) -> f64 {
+    match k {
+        0 => weights[0],
+        1 | 2 => weights[1],
+        3 | 4 => weights[2],
+        _ => weights[3],
+    }
+}
+
+/// The mean holds' cost on the compact adjustments `adj`: per camera and per
+/// radial-correction and rolling-shutter component it releases, `w_h·(x̄ − x̄₀)²`
+/// over its images `cam_imgs[j]`, with `x̄₀` the mean the round started from,
+/// `hold_start[j][k]`, and `w_h = σ_n²/MEAN_HOLD_WIDTH²`.
+fn mean_hold_cost(
+    lenses: &[Lens<'_>],
+    cam_imgs: &[Vec<usize>],
+    hold_start: &[[f64; IMG_PARAMS]],
+    w_hold: f64,
+    adj: &[IntrinsicAdjustment],
+) -> f64 {
+    let mut cost = 0.0;
+    for (j, imgs) in cam_imgs.iter().enumerate() {
+        if imgs.is_empty() {
+            continue;
+        }
+        let n = imgs.len() as f64;
+        let released = lenses[j].image_releases();
+        for k in released_corrections(released) {
+            let mean = imgs.iter().map(|&c| adj_component(&adj[c], k)).sum::<f64>() / n;
+            cost += w_hold * (mean - hold_start[j][k]).powi(2);
+        }
+    }
+    cost
 }
 
 /// The prior's cost on the compact adjustments `adj`: per camera with a
@@ -2521,7 +2819,7 @@ fn adj_component(a: &IntrinsicAdjustment, k: usize) -> f64 {
 fn image_prior_cost(
     lenses: &[Lens<'_>],
     cam_imgs: &[Vec<usize>],
-    weights: &[[f64; 2]],
+    weights: &[[f64; 4]],
     adj: &[IntrinsicAdjustment],
 ) -> f64 {
     let mut cost = 0.0;
@@ -2530,7 +2828,7 @@ fn image_prior_cost(
             continue;
         }
         let n = imgs.len() as f64;
-        let [w_f, w_pp] = weights[j];
+        let [w_f, w_pp, ..] = weights[j];
         if lenses[j].opt_image_f {
             let mean = imgs.iter().map(|&c| adj_component(&adj[c], 0)).sum::<f64>() / n;
             cost += w_f
@@ -2552,6 +2850,15 @@ fn image_prior_cost(
                         .map(|&c| (adj[c].principal_point[axis] - mean).powi(2))
                         .sum::<f64>();
             }
+        }
+        let released = lenses[j].image_releases();
+        for k in released_corrections(released) {
+            let w = param_weight(&weights[j], k);
+            let mean = imgs.iter().map(|&c| adj_component(&adj[c], k)).sum::<f64>() / n;
+            cost += w * imgs
+                .iter()
+                .map(|&c| (adj_component(&adj[c], k) - mean).powi(2))
+                .sum::<f64>();
         }
     }
     cost
@@ -2697,6 +3004,7 @@ fn solve_lm<const CAM_COLS: usize>(
         CAM_COLS == BSPLINE_CAM_COLS
             || CAM_COLS == BSPLINE_PP_CAM_COLS
             || CAM_COLS == BSPLINE_IMG_CAM_COLS
+            || CAM_COLS == BSPLINE_CORR_CAM_COLS
             || lenses.iter().all(|l| !l.opt_bspline),
         "a released spline needs the spline instantiation"
     );
@@ -2716,6 +3024,10 @@ fn solve_lm<const CAM_COLS: usize>(
     debug_assert!(
         image_cols || lenses.iter().all(|l| !l.releases_image()),
         "a per-image release needs an instantiation with its columns"
+    );
+    debug_assert!(
+        carries_correction_cols(CAM_COLS) || lenses.iter().all(|l| !l.releases_correction()),
+        "a per-image correction needs an instantiation with its columns"
     );
     debug_assert!(
         !image_cols || (image_round.is_some() && !adjustments.is_empty()),
@@ -2810,8 +3122,9 @@ fn solve_lm<const CAM_COLS: usize>(
             }
         }
     }
-    // The prior's weights `σ_n²/σ²` per camera, `[focal, principal point]`.
-    let prior_weights: Vec<[f64; 2]> = match image_round {
+    // The prior's weights `σ_n²/σ²` per camera, `[focal, principal point,
+    // radial correction, rolling shutter]`.
+    let prior_weights: Vec<[f64; 4]> = match image_round {
         Some(r) if image_cols => r
             .widths
             .iter()
@@ -2820,13 +3133,39 @@ fn solve_lm<const CAM_COLS: usize>(
                 [
                     s2 / (w.focal * w.focal),
                     s2 / (w.principal_point * w.principal_point),
+                    s2 / (w.radial_bspline * w.radial_bspline),
+                    s2 / (w.rolling_shutter * w.rolling_shutter),
                 ]
             })
             .collect(),
-        _ => vec![[0.0; 2]; n_cam],
+        _ => vec![[0.0; 4]; n_cam],
     };
+    // The mean holds: each camera's mean radial correction and mean rates over
+    // its images in the round, per component, held at the value the round
+    // starts from by a stiff prior of weight `σ_n²/MEAN_HOLD_WIDTH²`.
+    let correction_cols = carries_correction_cols(CAM_COLS);
+    let w_hold = match image_round {
+        Some(r) if correction_cols => r.sigma_n * r.sigma_n / (MEAN_HOLD_WIDTH * MEAN_HOLD_WIDTH),
+        _ => 0.0,
+    };
+    let hold_start: Vec<[f64; IMG_PARAMS]> = cam_imgs
+        .iter()
+        .map(|imgs| {
+            let mut mean = [0.0; IMG_PARAMS];
+            if correction_cols && !imgs.is_empty() {
+                let n = imgs.len() as f64;
+                for (k, m) in mean.iter_mut().enumerate() {
+                    *m = imgs.iter().map(|&c| adj_component(&adj[c], k)).sum::<f64>() / n;
+                }
+            }
+            mean
+        })
+        .collect();
     let prior_cost = |adj: &[IntrinsicAdjustment]| -> f64 {
-        if image_cols {
+        if correction_cols {
+            image_prior_cost(lenses, &cam_imgs, &prior_weights, adj)
+                + mean_hold_cost(lenses, &cam_imgs, &hold_start, w_hold, adj)
+        } else if image_cols {
             image_prior_cost(lenses, &cam_imgs, &prior_weights, adj)
         } else {
             0.0
@@ -3094,7 +3433,7 @@ fn solve_lm<const CAM_COLS: usize>(
     // The latest linearisation's data-only block of each image's slots, the
     // points eliminated, for the derivation of the prior's widths, and which
     // images carried a translation column in it.
-    let mut info: Vec<SMatrix<f64, 9, 9>> = Vec::new();
+    let mut info: Vec<DMatrix<f64>> = Vec::new();
     let mut info_translation: Vec<bool> = Vec::new();
     let mut round_support: Vec<bool> = Vec::new();
 
@@ -3161,6 +3500,14 @@ fn solve_lm<const CAM_COLS: usize>(
                         opt_pp: lenses[j].opt_pp,
                         opt_image_f: lenses[j].opt_image_f,
                         opt_image_pp: lenses[j].opt_image_pp,
+                        opt_image_radial_bspline: lenses[j].opt_image_radial_bspline,
+                        opt_image_rolling_shutter: lenses[j].opt_image_rolling_shutter,
+                        scanlines: lenses[j].scanlines,
+                        rho_max: lenses[j]
+                            .base
+                            .model
+                            .radial_spline()
+                            .map_or(0.0, |(_, d_max, _)| d_max),
                         n_coeffs: shapes[j].0,
                         d_max: shapes[j].1,
                         radial: shapes[j].2,
@@ -3289,36 +3636,23 @@ fn solve_lm<const CAM_COLS: usize>(
             // of the prior's widths reads its variances from. The coupling a
             // ranged point's reference columns add to an image's pose is left
             // out, being a share of another image's observation.
-            info = vec![SMatrix::<f64, 9, 9>::zeros(); n_im];
-            for (ci, block) in info.iter_mut().enumerate() {
-                if image_released[ci] {
-                    let o = img_slot(ci);
-                    *block = h_cc.fixed_view::<9, 9>(o, o).into_owned();
-                }
-            }
-            for (p, obs) in pt_obs.iter().enumerate() {
-                if cp_held[p] {
-                    continue;
-                }
-                let mut vd = v_pp[p];
-                if cp_tangent[p] || (has_inverse && cp_bound[p]) {
-                    vd[(2, 2)] = 1.0;
-                }
-                let Some(v_inv) = vd.try_inverse() else {
-                    continue;
-                };
-                for &a in obs {
-                    let ci = obs_ci[a];
-                    if !image_released[ci] {
-                        continue;
-                    }
-                    let wa = w_cp[a].fixed_rows::<9>(pose_c).into_owned();
-                    for &b in obs.iter().filter(|&&b| obs_ci[b] == ci) {
-                        let wb = w_cp[b].fixed_rows::<9>(pose_c).into_owned();
-                        info[ci] -= wa * v_inv * wb.transpose();
-                    }
-                }
-            }
+            let info_inputs = ImageInfoInputs {
+                h_cc: &h_cc,
+                image_slot0: n_shared,
+                image_released: &image_released,
+                pt_obs: &pt_obs,
+                cp_held: &cp_held,
+                v_pp: &v_pp,
+                cp_tangent: &cp_tangent,
+                cp_bound: &cp_bound,
+                obs_ci: &obs_ci,
+                pose_c,
+            };
+            info = if correction_cols {
+                image_info_blocks::<CAM_COLS, { POSE_COLS + IMG_PARAMS }>(&info_inputs, &w_cp)
+            } else {
+                image_info_blocks::<CAM_COLS, { POSE_COLS + IMG_ADJ_COLS }>(&info_inputs, &w_cp)
+            };
             info_translation = img_has_finite.clone();
             // The prior on each camera's images: `w·(I − 𝟏𝟏ᵀ/n)` over the
             // camera's images in the round, per released parameter, and
@@ -3330,13 +3664,17 @@ fn solve_lm<const CAM_COLS: usize>(
                     continue;
                 }
                 let n = imgs.len() as f64;
-                let [w_f, w_pp] = prior_weights[j];
+                let [w_f, w_pp, ..] = prior_weights[j];
                 let mut kinds: Vec<(usize, f64)> = Vec::new();
                 if lenses[j].opt_image_f {
                     kinds.push((0, w_f));
                 }
                 if lenses[j].opt_image_pp {
                     kinds.extend([(1, w_pp), (2, w_pp)]);
+                }
+                let released = lenses[j].image_releases();
+                for k in released_corrections(released) {
+                    kinds.push((k, param_weight(&prior_weights[j], k)));
                 }
                 for &(k, w) in &kinds {
                     let mean = imgs.iter().map(|&c| adj_component(&adj[c], k)).sum::<f64>() / n;
@@ -3349,6 +3687,30 @@ fn solve_lm<const CAM_COLS: usize>(
                             h_cc[(ia, ib)] += w * (delta - 1.0 / n);
                         }
                     }
+                }
+            }
+        }
+
+        // The mean holds' normal equations, `(w_h/n²)·𝟏𝟏ᵀ` over each held
+        // component's slots and `(w_h/n)·(x̄ − x̄₀)` in each gradient entry,
+        // added to the damped system rather than to `h_cc`, so that their
+        // stiffness does not damp the images' own steps.
+        let mut holds: Vec<(Vec<usize>, f64, f64)> = Vec::new();
+        if correction_cols {
+            for (j, imgs) in cam_imgs.iter().enumerate() {
+                if imgs.is_empty() {
+                    continue;
+                }
+                let n = imgs.len() as f64;
+                let released = lenses[j].image_releases();
+                for k in released_corrections(released) {
+                    let mean = imgs.iter().map(|&c| adj_component(&adj[c], k)).sum::<f64>() / n;
+                    let slots = imgs.iter().map(|&c| img_slot(c) + IMG_S_SLOT + k).collect();
+                    holds.push((
+                        slots,
+                        w_hold / (n * n),
+                        w_hold * (mean - hold_start[j][k]) / n,
+                    ));
                 }
             }
         }
@@ -3371,6 +3733,14 @@ fn solve_lm<const CAM_COLS: usize>(
                 s[(dd, dd)] += lambda * h_cc[(dd, dd)].max(1e-12);
             }
             let mut g_red = g_c.clone();
+            for (slots, h, g) in &holds {
+                for &a in slots {
+                    g_red[a] += g;
+                    for &b in slots {
+                        s[(a, b)] += h;
+                    }
+                }
+            }
             // Schur-eliminate the points. A direction's block is 2×2 in the
             // first two slots (its third row/column carry exact zeros); the
             // third diagonal is pinned to 1 so the uniform 3×3 inversion
@@ -3517,16 +3887,15 @@ fn solve_lm<const CAM_COLS: usize>(
                 }
             }
             if image_cols {
-                // Pin each image's adjustment slots its camera does not
-                // release.
+                // Pin each image's adjustment slots, and correction slots, its
+                // camera does not release.
                 for (c, &j) in ci_cam.iter().enumerate() {
                     let o = img_slot(c) + IMG_S_SLOT;
-                    if !lenses[j].opt_image_f {
-                        pin_slot(&mut s, &mut g_red, o);
-                    }
-                    if !lenses[j].opt_image_pp {
-                        pin_slot(&mut s, &mut g_red, o + 1);
-                        pin_slot(&mut s, &mut g_red, o + 2);
+                    let released = lenses[j].image_releases();
+                    for (k, &on) in released.iter().enumerate().take(img_cols - POSE_COLS) {
+                        if !on {
+                            pin_slot(&mut s, &mut g_red, o + k);
+                        }
                     }
                 }
             }
@@ -3696,6 +4065,44 @@ fn solve_lm<const CAM_COLS: usize>(
                         adj_cand[c].principal_point[0] += delta[o + 1];
                         adj_cand[c].principal_point[1] += delta[o + 2];
                     }
+                    // A radial correction stays finite, and the spline the
+                    // image reads, `c + K·e` at its camera's candidate spline,
+                    // stays monotone on the camera's domain.
+                    if lens.opt_image_radial_bspline {
+                        let o = img_slot(c) + IMG_E_SLOT;
+                        for (i, e) in adj_cand[c].radial_bspline.iter_mut().enumerate() {
+                            *e += delta[o + i];
+                        }
+                        let e = adj_cand[c].radial_bspline;
+                        let c_cand = bspline_cand[j].as_deref().unwrap_or(&bsplines[j]);
+                        let spline = if c_cand.is_empty() {
+                            e.to_vec()
+                        } else {
+                            image_spline(c_cand, e)
+                        };
+                        let d_max = lens
+                            .base
+                            .model
+                            .radial_spline()
+                            .map_or(0.0, |(_, d_max, _)| d_max);
+                        if !bspline_step_admissible(&spline, d_max) {
+                            image_ok = false;
+                            break;
+                        }
+                    }
+                    // Rolling-shutter rates stay finite; how far their step is
+                    // from the identity is checked on the candidate camera
+                    // below.
+                    if lens.opt_image_rolling_shutter {
+                        let o = img_slot(c) + IMG_RS_SLOT;
+                        for (i, w) in adj_cand[c].rolling_shutter.iter_mut().enumerate() {
+                            *w += delta[o + i];
+                        }
+                        if !adj_cand[c].rolling_shutter.iter().all(|w| w.is_finite()) {
+                            image_ok = false;
+                            break;
+                        }
+                    }
                 }
                 if (lens.opt_pp || lens.opt_image_pp)
                     && (lens.opt_image_pp || !adj_cand[c].is_zero())
@@ -3797,6 +4204,21 @@ fn solve_lm<const CAM_COLS: usize>(
                     lenses[j].at(f_cand[j], k1_cand[j], bs, pp_cand[j])
                 })
                 .collect();
+            // Each image whose rates are released keeps its rolling-shutter
+            // step close enough to the identity at its corners for the
+            // unprojection's fixed-point iteration to converge with margin.
+            if correction_cols
+                && !ci_cam.iter().enumerate().all(|(c, &j)| {
+                    !lenses[j].opt_image_rolling_shutter
+                        || cams_cand[j]
+                            .with_adjustment(&adj_cand[c], scanlines[j])
+                            .rolling_shutter_contraction()
+                            <= ROLLING_SHUTTER_CONTRACTION_LIMIT
+                })
+            {
+                lambda *= 4.0;
+                continue;
+            }
             let new_cost = cost_at(
                 &cams_cand,
                 &view_adjustment_cand,
@@ -3939,46 +4361,107 @@ fn solve_lm<const CAM_COLS: usize>(
                 if info.is_empty() || !lens.releases_image() {
                     return None;
                 }
-                image_adjustment_inv_info(
-                    &info[ci],
-                    info_translation[ci],
-                    lens.opt_image_f,
-                    lens.opt_image_pp,
-                )
+                image_adjustment_inv_info(&info[ci], info_translation[ci], lens.image_releases())
             })
             .collect();
     }
     (ending, image_result)
 }
 
+/// What [`image_info_blocks`] reads of one linearisation.
+struct ImageInfoInputs<'a> {
+    /// The reduced system's data-only blocks, before the prior and the damping.
+    h_cc: &'a DMatrix<f64>,
+    /// The first image's first slot in the reduced system.
+    image_slot0: usize,
+    /// Per compact image, whether its camera releases a per-image parameter.
+    image_released: &'a [bool],
+    /// Per compact point, its observations' indices into the round's blocks.
+    pt_obs: &'a [Vec<usize>],
+    cp_held: &'a [bool],
+    v_pp: &'a [Matrix3<f64>],
+    cp_tangent: &'a [bool],
+    /// Per compact point in inverse depth, whether its `ρ` is held at its
+    /// bound this iteration; empty where no point is in inverse depth.
+    cp_bound: &'a [bool],
+    obs_ci: &'a [usize],
+    /// The first pose column of an observation's camera block.
+    pose_c: usize,
+}
+
+/// Each released image's own `N`-wide block of the reduced system from the
+/// data alone, its points eliminated undamped, and a zero block for every other
+/// image: what the derivation of the prior's widths reads its variances from.
+/// `N` is the image block's width, its pose and every adjustment slot the
+/// instantiation carries. The coupling a ranged point's reference columns add
+/// to an image's pose is left out, being a share of another image's
+/// observation.
+fn image_info_blocks<const CAM_COLS: usize, const N: usize>(
+    inputs: &ImageInfoInputs<'_>,
+    w_cp: &[SMatrix<f64, CAM_COLS, 3>],
+) -> Vec<DMatrix<f64>> {
+    let mut info = vec![SMatrix::<f64, N, N>::zeros(); inputs.image_released.len()];
+    for (ci, block) in info.iter_mut().enumerate() {
+        if inputs.image_released[ci] {
+            let o = inputs.image_slot0 + N * ci;
+            *block = inputs.h_cc.fixed_view::<N, N>(o, o).into_owned();
+        }
+    }
+    for (p, obs) in inputs.pt_obs.iter().enumerate() {
+        if inputs.cp_held[p] {
+            continue;
+        }
+        let mut vd = inputs.v_pp[p];
+        if inputs.cp_tangent[p] || inputs.cp_bound.get(p).copied().unwrap_or(false) {
+            vd[(2, 2)] = 1.0;
+        }
+        let Some(v_inv) = vd.try_inverse() else {
+            continue;
+        };
+        for &a in obs {
+            let ci = inputs.obs_ci[a];
+            if !inputs.image_released[ci] {
+                continue;
+            }
+            let wa = w_cp[a].fixed_rows::<N>(inputs.pose_c).into_owned();
+            for &b in obs.iter().filter(|&&b| inputs.obs_ci[b] == ci) {
+                let wb = w_cp[b].fixed_rows::<N>(inputs.pose_c).into_owned();
+                info[ci] -= wa * v_inv * wb.transpose();
+            }
+        }
+    }
+    info.iter()
+        .map(|m| DMatrix::from_column_slice(N, N, m.as_slice()))
+        .collect()
+}
+
 /// The inverse of one image's data-only block `h` (its pose and adjustment
 /// slots) over the slots that move, read back on the adjustment slots: the
 /// three rotation slots, the translation where `translation` says the image
-/// carries one, and the released adjustment slots. Inverting the whole block
-/// counts each adjustment's coupling with the same image's pose against it.
-/// The result is in the order log focal scale, `a_x`, `a_y`, zero in a slot not
-/// released. `None` where that block is not positive definite.
+/// carries one, and the adjustment slots `released` marks, in the order of
+/// [`IMG_PARAMS`]. Inverting the whole block counts each adjustment's coupling
+/// with the same image's pose against it. The result is in the order of
+/// [`IMG_PARAMS`], zero in a slot not released. `None` where that block is not
+/// positive definite.
 fn image_adjustment_inv_info(
-    h: &SMatrix<f64, 9, 9>,
+    h: &DMatrix<f64>,
     translation: bool,
-    focal: bool,
-    principal_point: bool,
-) -> Option<Matrix3<f64>> {
+    released: [bool; IMG_PARAMS],
+) -> Option<ImageParamsMatrix> {
     let mut slots: Vec<usize> = (0..3).collect();
     if translation {
         slots.extend(3..6);
     }
     let first_adj = slots.len();
-    if focal {
-        slots.push(IMG_S_SLOT);
-    }
-    if principal_point {
-        slots.extend([IMG_S_SLOT + 1, IMG_S_SLOT + 2]);
-    }
+    slots.extend(
+        (0..IMG_PARAMS)
+            .filter(|&k| released[k])
+            .map(|k| IMG_S_SLOT + k),
+    );
     let n = slots.len();
     let sub = DMatrix::from_fn(n, n, |r, c| h[(slots[r], slots[c])]);
     let inv = sub.cholesky()?.inverse();
-    let mut out = Matrix3::zeros();
+    let mut out = ImageParamsMatrix::zeros();
     for (r, &sr) in slots.iter().enumerate().skip(first_adj) {
         for (c, &sc) in slots.iter().enumerate().skip(first_adj) {
             out[(sr - IMG_S_SLOT, sc - IMG_S_SLOT)] = inv[(r, c)];
@@ -4165,6 +4648,8 @@ fn bundle_adjust_staged(
     opt_pp: bool,
     opt_image_f: bool,
     opt_image_pp: bool,
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
     image_prior: &ImagePriorOptions,
     schedule: &[BaSchedule],
     max_iters: usize,
@@ -4201,12 +4686,21 @@ fn bundle_adjust_staged(
                 opt_pp && r.principal_point,
                 opt_image_f && r.image_focal,
                 opt_image_pp && r.image_principal_point,
+                opt_image_radial_bspline && r.image_radial_bspline,
+                opt_image_rolling_shutter && r.image_rolling_shutter,
             )
         })
         .collect();
+    for (j, lens) in lenses.iter().enumerate() {
+        assert!(
+            !lens.opt_image_rolling_shutter || lens.scanlines.is_some(),
+            "camera {j} releases its images' rolling-shutter rates without a              rolling_shutter_scanlines setting to read them on"
+        );
+    }
     let spline_cols = lenses.iter().any(|l| l.opt_bspline);
     let pp_cols = lenses.iter().any(|l| l.opt_pp);
     let image_cols = lenses.iter().any(Lens::releases_image);
+    let correction_cols = lenses.iter().any(Lens::releases_correction);
     let n_img = quats.len();
     // The adjustments the solve reads, and under a per-image release moves:
     // every image's, zero where the caller gave none. Without a per-image
@@ -4225,11 +4719,7 @@ fn bundle_adjust_staged(
     let derive = image_cols && image_prior.fixed.is_none();
     let mut widths: Vec<ImagePriorWidths> =
         vec![image_prior.fixed.unwrap_or(image_prior.loose); cameras.len()];
-    let no_widths = ImagePriorWidths {
-        focal: f64::NAN,
-        principal_point: f64::NAN,
-    };
-    let mut spreads: Vec<ImagePriorWidths> = vec![no_widths; cameras.len()];
+    let mut spreads: Vec<ImagePriorWidths> = vec![ImagePriorWidths::NAN; cameras.len()];
     let mut round_widths: Vec<ImagePriorWidths> = widths.clone();
     // A one-round schedule runs its round a second time under widths derived
     // from the first, so that every derived prior is derived at least once.
@@ -4423,13 +4913,15 @@ fn bundle_adjust_staged(
                 )
             };
         }
-        let (end, image_result) = match (spline_cols, pp_cols, image_cols) {
-            (false, false, false) => round_at!(BASE_CAM_COLS),
-            (true, false, false) => round_at!(BSPLINE_CAM_COLS),
-            (false, true, false) => round_at!(BASE_PP_CAM_COLS),
-            (true, true, false) => round_at!(BSPLINE_PP_CAM_COLS),
-            (false, _, true) => round_at!(BASE_IMG_CAM_COLS),
-            (true, _, true) => round_at!(BSPLINE_IMG_CAM_COLS),
+        let (end, image_result) = match (spline_cols, pp_cols, image_cols, correction_cols) {
+            (false, false, false, _) => round_at!(BASE_CAM_COLS),
+            (true, false, false, _) => round_at!(BSPLINE_CAM_COLS),
+            (false, true, false, _) => round_at!(BASE_PP_CAM_COLS),
+            (true, true, false, _) => round_at!(BSPLINE_PP_CAM_COLS),
+            (false, _, true, false) => round_at!(BASE_IMG_CAM_COLS),
+            (true, _, true, false) => round_at!(BSPLINE_IMG_CAM_COLS),
+            (false, _, true, true) => round_at!(BASE_CORR_CAM_COLS),
+            (true, _, true, true) => round_at!(BSPLINE_CORR_CAM_COLS),
         };
         last_end = end;
         if image_cols {
@@ -4463,17 +4955,17 @@ fn bundle_adjust_staged(
                     if !lens.releases_image() {
                         continue;
                     }
-                    let samples: Vec<(IntrinsicAdjustment, Option<Matrix3<f64>>)> = image_result
-                        .images
-                        .iter()
-                        .zip(&image_result.inv_info)
-                        .filter(|(&i, _)| image_camera[i] as usize == j)
-                        .map(|(&i, &inv)| (adj_state[i], inv))
-                        .collect();
+                    let samples: Vec<(IntrinsicAdjustment, Option<ImageParamsMatrix>)> =
+                        image_result
+                            .images
+                            .iter()
+                            .zip(&image_result.inv_info)
+                            .filter(|(&i, _)| image_camera[i] as usize == j)
+                            .map(|(&i, &inv)| (adj_state[i], inv))
+                            .collect();
                     let (next, spread) = derive_image_prior_widths(
                         &samples,
-                        lens.opt_image_f,
-                        lens.opt_image_pp,
+                        lens.image_releases(),
                         round_widths[j],
                         sigma_n,
                         sigma_end,
@@ -4655,13 +5147,12 @@ fn image_priors_of(
         .enumerate()
         .map(|(j, lens)| {
             lens.releases_image().then(|| {
+                let or_nan = |on: bool, w: f64| if on { w } else { f64::NAN };
                 let keep = |w: ImagePriorWidths| ImagePriorWidths {
-                    focal: if lens.opt_image_f { w.focal } else { f64::NAN },
-                    principal_point: if lens.opt_image_pp {
-                        w.principal_point
-                    } else {
-                        f64::NAN
-                    },
+                    focal: or_nan(lens.opt_image_f, w.focal),
+                    principal_point: or_nan(lens.opt_image_pp, w.principal_point),
+                    radial_bspline: or_nan(lens.opt_image_radial_bspline, w.radial_bspline),
+                    rolling_shutter: or_nan(lens.opt_image_rolling_shutter, w.rolling_shutter),
                 };
                 ImagePrior {
                     widths: keep(widths[j]),
@@ -4682,6 +5173,12 @@ fn image_priors_of(
 /// `f ← f·exp(t̄)` and `t −= t̄`, which multiplies the focal by the geometric
 /// mean of `1 + s` and divides each `1 + s` by it. Applied to every image of
 /// the camera, the ones the round did not solve included.
+///
+/// A camera that releases a radial correction per image moves the mean
+/// correction `ē`, which the round held, into its spline, `c ← c + K·ē` and
+/// `e_i −= ē`, which changes no image's spline `c + K·e_i` beyond rounding; a
+/// camera whose spline is empty keeps `ē` in its images. The mean rates are
+/// left where the round held them, having no shared value to move into.
 fn recentre_adjustments(
     lenses: &mut [Lens<'_>],
     image_camera: &[u32],
@@ -4729,6 +5226,19 @@ fn recentre_adjustments(
                 adj[i].focal = (log_focal_scale(adj[i].focal) - mean).exp_m1();
             }
         }
+        if lens.opt_image_radial_bspline && !lens.bspline.is_empty() {
+            let mut mean = [0.0; 2];
+            for &i in &of_camera {
+                mean[0] += adj[i].radial_bspline[0];
+                mean[1] += adj[i].radial_bspline[1];
+            }
+            mean = [mean[0] / n, mean[1] / n];
+            lens.bspline = image_spline(&lens.bspline, mean);
+            for &i in &images {
+                adj[i].radial_bspline[0] -= mean[0];
+                adj[i].radial_bspline[1] -= mean[1];
+            }
+        }
     }
 }
 
@@ -4763,7 +5273,7 @@ fn weighted_median(samples: &mut [(f64, f64)]) -> f64 {
 /// the weight. The centre is each slot's weighted median rather than the mean
 /// the deviations are taken from, so an image that moves the mean by its share,
 /// which moves every deviation alike, does not widen the spread.
-fn robust_spread(dev: &[Vec<(f64, f64)>; 3], slots: &[usize], start: f64, floor: f64) -> f64 {
+fn robust_spread(dev: &[Vec<(f64, f64)>], slots: &[usize], start: f64, floor: f64) -> f64 {
     let mut s = start;
     for _ in 0..8 {
         let weight_of = |v: f64| {
@@ -4801,7 +5311,8 @@ fn robust_spread(dev: &[Vec<(f64, f64)>; 3], slots: &[usize], start: f64, floor:
 ///
 /// `samples` holds each image of the camera the round solved: its adjustment,
 /// and the inverse `H_i⁻¹` of its data-only block over the adjustment slots
-/// ([`ImageRoundResult::inv_info`]). The deviation `d_i` from the mean is
+/// ([`ImageRoundResult::inv_info`]); `released` says which of the
+/// [`IMG_PARAMS`] parameters the camera releases. The deviation `d_i` from the mean is
 /// de-shrunk as `d̂_i = (I + H_i⁻¹·W)·d_i`, with `W = σ_prior²·P⁻¹` the
 /// round's prior curvature (`P` its prior variances, `σ_prior` the level its
 /// weight was stated at), every released parameter together: exactly the
@@ -4809,29 +5320,30 @@ fn robust_spread(dev: &[Vec<(f64, f64)>; 3], slots: &[usize], start: f64, floor:
 /// variance, its covariance `V_i = σ_noise²·H_i⁻¹` with every other image held,
 /// is read at `σ_noise`, the level of the round's solved residuals. The spread is
 /// [`robust_spread`]'s; the principal point pools its two axes as two samples
-/// per image. A parameter with fewer than two images of usable variance keeps
-/// the loose width and reports a `NaN` spread. Returns the next widths and the
-/// spreads.
+/// per image, the radial correction its two coefficients and the rates their
+/// three components. A parameter with fewer than two images of usable variance
+/// keeps the loose width and reports a `NaN` spread. Returns the next widths
+/// and the spreads.
 fn derive_image_prior_widths(
-    samples: &[(IntrinsicAdjustment, Option<Matrix3<f64>>)],
-    focal: bool,
-    principal_point: bool,
+    samples: &[(IntrinsicAdjustment, Option<ImageParamsMatrix>)],
+    released: [bool; IMG_PARAMS],
     round: ImagePriorWidths,
     sigma_prior: f64,
     sigma_noise: f64,
     options: &ImagePriorOptions,
 ) -> (ImagePriorWidths, ImagePriorWidths) {
     let mut next = options.loose;
-    let mut spread = ImagePriorWidths {
-        focal: f64::NAN,
-        principal_point: f64::NAN,
-    };
+    let mut spread = ImagePriorWidths::NAN;
     if samples.is_empty() {
         return (next, spread);
     }
+    // The four kinds of parameter, each with its slots in the order of
+    // `IMG_PARAMS` and its field of the widths.
+    const KINDS: [&[usize]; 4] = [&[0], &[1, 2], &[3, 4], &[5, 6, 7]];
+    let get = |mut w: ImagePriorWidths, kind: usize| *width_of_kind(&mut w, kind);
+    let kind_of = |k: usize| KINDS.iter().position(|slots| slots.contains(&k)).unwrap();
     let n = samples.len() as f64;
-    let released = [focal, principal_point, principal_point];
-    let mut mean = [0.0; 3];
+    let mut mean = [0.0; IMG_PARAMS];
     for (a, _) in samples {
         for (k, m) in mean.iter_mut().enumerate() {
             *m += adj_component(a, k);
@@ -4840,27 +5352,23 @@ fn derive_image_prior_widths(
     for m in mean.iter_mut() {
         *m /= n;
     }
-    let inv_var = |w: f64, on: bool| {
-        if on {
+    let prior_curvature = SVector::<f64, IMG_PARAMS>::from_fn(|k, _| {
+        if released[k] {
+            let w = get(round, kind_of(k));
             sigma_prior * sigma_prior / (w * w)
         } else {
             0.0
         }
-    };
-    let prior_curvature = Vector3::new(
-        inv_var(round.focal, focal),
-        inv_var(round.principal_point, principal_point),
-        inv_var(round.principal_point, principal_point),
-    );
-    // Per slot (log focal scale, `a_x`, `a_y`): the de-shrunk deviation `d̂` of
+    });
+    // Per slot (in the order of `IMG_PARAMS`): the de-shrunk deviation `d̂` of
     // each image with a usable variance, and that variance `v`; and per
     // parameter kind how many images have one.
-    let mut dev: [Vec<(f64, f64)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    let mut weighted_images = [0usize; 2];
+    let mut dev: [Vec<(f64, f64)>; IMG_PARAMS] = Default::default();
+    let mut weighted_images = [0usize; 4];
     for (a, inv) in samples {
         let Some(inv) = inv else { continue };
         let v_mat = inv * (sigma_noise * sigma_noise);
-        let d = Vector3::from_fn(|k, _| {
+        let d = SVector::<f64, IMG_PARAMS>::from_fn(|k, _| {
             if released[k] {
                 adj_component(a, k) - mean[k]
             } else {
@@ -4868,8 +5376,8 @@ fn derive_image_prior_widths(
             }
         });
         let d_hat = d + inv * prior_curvature.component_mul(&d);
-        let mut counted = [false; 2];
-        for k in 0..3 {
+        let mut counted = [false; 4];
+        for k in 0..IMG_PARAMS {
             if !released[k] {
                 continue;
             }
@@ -4878,34 +5386,34 @@ fn derive_image_prior_widths(
                 continue;
             }
             dev[k].push((d_hat[k], v));
-            counted[usize::from(k > 0)] = true;
+            counted[kind_of(k)] = true;
         }
-        for kind in 0..2 {
+        for kind in 0..4 {
             weighted_images[kind] += usize::from(counted[kind]);
         }
     }
-    for (kind, on) in [focal, principal_point].into_iter().enumerate() {
-        if !on || weighted_images[kind] < 2 {
+    for (kind, slots) in KINDS.iter().enumerate() {
+        if !released[slots[0]] || weighted_images[kind] < 2 {
             continue;
         }
-        let slots: &[usize] = if kind == 0 { &[0] } else { &[1, 2] };
-        let (round_width, floor) = if kind == 0 {
-            (round.focal, options.floor.focal)
-        } else {
-            (round.principal_point, options.floor.principal_point)
-        };
-        let s = robust_spread(&dev, slots, round_width, floor);
-        if kind == 0 {
-            spread.focal = s;
-            next.focal = s.max(options.floor.focal).min(options.loose.focal);
-        } else {
-            spread.principal_point = s;
-            next.principal_point = s
-                .max(options.floor.principal_point)
-                .min(options.loose.principal_point);
-        }
+        let floor = get(options.floor, kind);
+        let s = robust_spread(&dev, slots, get(round, kind), floor);
+        *width_of_kind(&mut spread, kind) = s;
+        *width_of_kind(&mut next, kind) = s.max(floor).min(get(options.loose, kind));
     }
     (next, spread)
+}
+
+/// The width of one kind of per-image parameter, the kinds in the order of
+/// [`IMG_PARAMS`]: the focal, the principal point, the radial correction and
+/// the rolling-shutter rates.
+fn width_of_kind(w: &mut ImagePriorWidths, kind: usize) -> &mut f64 {
+    match kind {
+        0 => &mut w.focal,
+        1 => &mut w.principal_point,
+        2 => &mut w.radial_bspline,
+        _ => &mut w.rolling_shutter,
+    }
 }
 
 #[cfg(test)]
