@@ -132,6 +132,8 @@ pub fn bundle_adjust(
     opt_pp: bool,
     opt_image_f: bool,
     opt_image_pp: bool,
+    opt_image_radial_bspline: bool,
+    opt_image_rolling_shutter: bool,
     image_prior: Option<&ImagePriorOptions>, // None = ImagePriorOptions::default()
     schedule: &[BaSchedule],             // default 50/5 → 12/2 → 4/1
     max_iters: usize,                    // LM iterations per round
@@ -147,6 +149,16 @@ pub struct BundleAdjustment {
     pub free_point_decision: Option<FreePointDecision>, // the storage decision; None under NO_CROSS or on a degenerate exit
     pub image_adjustments: Vec<IntrinsicAdjustment>, // n_img, after the solve
     pub image_priors: Vec<Option<ImagePrior>>,       // n_cam; None without a per-image release
+    pub moved_radial_bspline: Vec<[f64; 2]>,         // n_cam, the mean radial correction moved into each spline
+    pub final_round: Option<FinalRound>,             // the final round's cost; None with no round or on a degenerate exit
+}
+
+pub struct FinalRound {
+    pub kept: Vec<usize>,                   // the observations the final round solved over, ascending
+    pub residuals: Vec<Option<[f64; 2]>>,   // each one's (u − u_obs, v − v_obs) at the returned state
+    pub loss_scale: f64,                    // the round's, px
+    pub prior: f64,                         // prior and mean holds, in units of the round's σ_n²
+    pub spline_penalty: f64,                // px²
 }
 ```
 
@@ -157,7 +169,7 @@ let out = bundle_adjust(
     &BaCameras::shared(&cam, quats.len()),
     &mut quats, &mut trans, &mut points, &uv, &obs_img, &obs_pt,
     None, None, FreePointPolicy::default(), None, DEFAULT_PROTECTED_LOSS_SCALE,
-    true, false, false, false, false, false, None, &DEFAULT_SCHEDULE, 60, 2, 12,
+    true, false, false, false, false, false, false, false, None, &DEFAULT_SCHEDULE, 60, 2, 12,
     &Progress::none(),
 );
 let solved_focal = out.cameras[0].focal_lengths().0;
@@ -1083,11 +1095,13 @@ The solve reads each camera's rates on one fixed scanlines setting, its entry
 of `BaCameras::rolling_shutter_scanlines`, `Rows` or `Columns`. A camera that
 releases its rates without one is a caller error, and the solve panics on it.
 Choosing between rows and columns compares two solves, so it is the
-reconstruction-level adjustment's; that choice, with the reconstruction-level
-releases of both corrections, the Python `EditedReconstruction.bundle_adjust`
-keys, the viewer's Bundle Adjust dialog and the MCP tool, is specified in
-[drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns),
-and those surfaces hold both corrections as they are read.
+reconstruction-level adjustment's, which releases both corrections from Rust
+and from the Python `EditedReconstruction.bundle_adjust`
+([../reconstruction/bundle-adjust.md § The rolling-shutter
+scanlines](../reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines)).
+The viewer's Bundle Adjust dialog and the MCP tool hold both corrections as
+they are read; their releases are specified in
+[drafts/per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
 
 Neither correction holds a shared value of its kind, as the focal scale and the
 principal-point offset do: the rates have no shared counterpart, and the camera's
@@ -1218,6 +1232,25 @@ and a two-coefficient correction has no interior coefficient for it to act on.
 solved correction and rates, and each camera's `ImagePrior` reports
 `radial_bspline` and `rolling_shutter` widths and spreads beside the other two,
 `NaN` for a field the camera does not release per image.
+`BundleAdjustment::moved_radial_bspline` is, per camera, the mean radial
+correction the re-centring moved into its spline, summed over the rounds, so a
+caller holding images the solve did not see (the reconstruction-level
+adjustment's unposed ones) takes it off their corrections and leaves their
+splines as they were.
+
+**The final round's cost.** `BundleAdjustment::final_round` states what the
+last round's damping ladder compared, split so that a caller can compare two
+solves of one problem: the observations the round kept, each one's residual at
+the state the solve returned, the round's loss scale, the prior's cost with the
+mean holds' as `Σ (x − x̄)²/σ² + Σ (x̄ − x̄₀)²/σ_h²` (the ladder's prior cost over
+the round's `σ_n²`), and the spline penalty in px², both at the state the
+round's last accepted step left, before the re-centring. The data term is left
+to the caller, because two solves trim from their own states and are compared
+over the observations both kept, under one noise level. The
+reconstruction-level adjustment's scanlines race reads it
+([../reconstruction/bundle-adjust.md § The rolling-shutter
+scanlines](../reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines)).
+Neither field changes the solve.
 
 **Parity.** A solve in which no camera releases a correction takes the
 instantiations it took before the corrections could be released, and computes
@@ -2436,9 +2469,9 @@ validation, and outputs are unchanged.
   spline of `SFMTOOL_FISHEYE` / `SFMTOOL_PINHOLE`; `opt_k1`/`opt_bspline`
   cover those two radial releases only. Each image's focal and principal point
   are adjusted per image ("The per-image release"); its distortion is always
-  its camera's, and the kernel models no rolling shutter. A per-image radial
-  correction and per-image rolling-shutter rates for `SFMTOOL_PINHOLE` are
-  proposed in
+  its camera's apart from the per-image radial correction and rolling-shutter
+  rates of an `SFMTOOL_PINHOLE` camera ("The per-image corrections"), whose
+  remaining parts are proposed in
   [per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md).
 - Gauge fixing and covariance estimation. The kernel holds no pose fixed to
   set the gauge and reports no uncertainty. A caller that wants a gauge states

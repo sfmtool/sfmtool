@@ -66,11 +66,28 @@ pub struct BundleAdjustOptions {
     pub free_points: FreePointPolicy,
     /// The widths of the prior on a per-image release; derived by default.
     pub image_prior: ImagePriorOptions,
+    /// One per camera of the image set, or empty: the scanlines a camera that
+    /// releases its rates is solved on. `None` is the stored setting, or
+    /// `Unknown` where the camera has none.
+    pub rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
 }
 
 impl BundleAdjustOptions {
     /// The defaults with `release` for each of `camera_count` cameras.
     pub fn uniform(camera_count: usize, release: CameraRelease) -> Self;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RollingShutterScanlinesChoice {
+    Rows,
+    Columns,
+    Unknown, // solve with each, keep the lower cost; never stored
+}
+
+impl RollingShutterScanlinesChoice {
+    pub fn name(self) -> &'static str;                  // "ROWS", "COLUMNS", "UNKNOWN"
+    pub fn parse(name: &str) -> Result<Self, String>;
+    pub fn setting(self) -> Option<RollingShutterScanlines>; // None for Unknown
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -80,13 +97,15 @@ pub struct CameraRelease {
     pub principal_point: bool, // (cx, cy), on any model
     pub image_focal: bool,           // each image's focal scale; moves the focal too
     pub image_principal_point: bool, // each image's offset; moves the principal point too
+    pub image_radial_bspline: bool,  // each image's radial correction; SFMTOOL_PINHOLE
+    pub image_rolling_shutter: bool, // each image's rolling-shutter rates; SFMTOOL_PINHOLE
 }
 
 impl CameraRelease {
     pub const HELD: CameraRelease;                 // nothing
     pub const FOCAL: CameraRelease;                // the focal alone
     pub const FOCAL_AND_DISTORTION: CameraRelease; // the focal and the distortion
-    pub const ALL: CameraRelease;                  // all five
+    pub const ALL: CameraRelease;                  // all seven
 }
 
 pub struct BundleAdjustReport {
@@ -111,10 +130,23 @@ pub struct CameraAdjustment {
     pub principal_point_released: bool, // shared or per image
     pub image_focal_released: bool,
     pub image_principal_point_released: bool,
+    pub image_radial_bspline_released: bool,
+    pub image_rolling_shutter_released: bool,
+    pub rolling_shutter_scanlines: Option<RollingShutterScanlines>, // the rates' setting; None unless released
+    pub scanlines_race: Option<ScanlinesRace>, // under Unknown
     pub principal_point_before: [f64; 2], // [cx, cy], px
     pub principal_point_after: [f64; 2],  // the before unless released
     pub outermost_observed: Option<KeypointReach>, // under the solved camera
     pub image_adjustments: Option<ImageAdjustmentSpread>, // with a per-image release
+}
+
+/// The two solves that chose one camera's scanlines.
+pub struct ScanlinesRace {
+    pub rows_cost: f64,      // in units of σ_n²
+    pub columns_cost: f64,
+    pub observations: usize, // the observations both final rounds kept
+    pub sigma_px: f64,       // the pooled σ_n
+    pub stopped_early: bool, // always false: both solves run to the end
 }
 
 /// How a camera's images' adjustments ended, over its posed images.
@@ -124,6 +156,10 @@ pub struct ImageAdjustmentSpread {
     pub focal_std: f64,                  // the mean zero after the re-centring
     pub principal_point_mean: [f64; 2],  // px
     pub principal_point_std: [f64; 2],   // px
+    pub radial_bspline_mean: [f64; 2],   // [e_0, e_1], in units of ρ
+    pub radial_bspline_std: [f64; 2],
+    pub rolling_shutter_mean: [f64; 3],  // [ωx, ωy, ωz], rad per short side
+    pub rolling_shutter_std: [f64; 3],
     pub prior: ImagePriorWidths,         // the final round's; NaN where not released
     pub prior_derived: bool,
     pub spread: ImagePriorWidths,        // the last derivation's, before the clamp
@@ -132,15 +168,18 @@ pub struct ImageAdjustmentSpread {
 
 pub struct NearPrior {
     pub image: usize,                       // its index in the reconstruction
-    pub parameter: ImageAdjustmentParameter, // Focal or PrincipalPoint
-    pub widths: f64,                        // |t − t̄|/σ_t, t = ln(1 + s), or ‖a − ā‖/σ_pp
+    pub parameter: ImageAdjustmentParameter, // Focal, PrincipalPoint, RadialBspline or RollingShutter
+    pub widths: f64,                        // |t − t̄|/σ_t, t = ln(1 + s), ‖a − ā‖/σ_pp, ‖e − ē‖/σ_e or ‖ω − ω̄‖/σ_ω
 }
 
 pub enum BundleAdjustError {
     NoKeypoints,
     ReleaseCount { releases: usize, cameras: usize },
+    ScanlinesCount { choices: usize, cameras: usize },
     FocalNotReleasable { camera: usize, camera_model: &'static str },
     ImageFocalNotReleasable { camera: usize, camera_model: &'static str },
+    ImageRadialBsplineNotReleasable { camera: usize, camera_model: &'static str },
+    ImageRollingShutterNotReleasable { camera: usize, camera_model: &'static str },
     DistortionWithoutFocal { camera: usize },
     DistortionNotReleasable { camera: usize, camera_model: &'static str },
     NoPosedImages,
@@ -162,6 +201,11 @@ pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool;
 
 /// Whether this camera has lens distortion the adjustment can release.
 pub fn distortion_is_releasable(camera: &CameraIntrinsics) -> bool;
+
+/// Whether each image's radial correction, or its rolling-shutter rates, can
+/// be released on this camera.
+pub fn image_radial_bspline_is_releasable(camera: &CameraIntrinsics) -> bool;
+pub fn image_rolling_shutter_is_releasable(camera: &CameraIntrinsics) -> bool;
 ```
 
 ### Why it is shaped this way
@@ -249,16 +293,30 @@ every image ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.
 § "The principal-point release"), so the report states how far it moved,
 `principal_point_before` and `principal_point_after`, for a person to judge.
 
-**Each image's radial correction and rolling-shutter rates are held.** An
-image of an `SFMTOOL_PINHOLE` camera may carry both
+**Each image's radial correction and rolling-shutter rates are read, and
+released per camera.** An image of an `SFMTOOL_PINHOLE` camera may carry both
 ([../camera/sfmtool-pinhole-kernels.md § Per-image
 corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)). The
 adjustment passes them to the kernel with each posed image's adjustment, and
 each camera's scanlines setting in `BaCameras::rolling_shutter_scanlines`, so
-every observation is read through them while the shared lens is released; no
-release moves them, and they are written back as they were. Releasing them is
-specified in
-[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#core-the-bundle-adjustment).
+every observation is read through them. A camera that does not release them
+holds them, and its images keep the ones they came in with.
+`image_radial_bspline` and `image_rolling_shutter` release them
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "The per-image corrections"): each image's correction and rates are held
+toward the camera's mean by the prior, that mean is held, and the mean radial
+correction moves into the camera's spline after every round. Unlike the focal
+and the principal point, they hold no shared value of their kind, so neither
+moves `focal_released` or `distortion_released`. They are refused on any model
+but `SFMTOOL_PINHOLE`, and the radial correction also where the spline domain
+end is not positive and finite or the spline has one coefficient
+(`ImageRadialBsplineNotReleasable`, `ImageRollingShutterNotReleasable`, each
+naming the camera); `image_radial_bspline_is_releasable` and
+`image_rolling_shutter_is_releasable` answer per camera, as
+`focal_is_releasable` does. The rates are solved on the scanlines
+[The rolling-shutter scanlines](#the-rolling-shutter-scanlines) chooses.
+[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns)
+keeps the proposed rule for stopping the losing solve of that choice early.
 
 **Each image's focal and principal point are released per image, and the
 camera's value moves to their mean.** `image_focal` and `image_principal_point`
@@ -276,7 +334,7 @@ beside the per-image flags. A per-image focal is refused on the models a shared
 one is (`ImageFocalNotReleasable`), and stands for the focal a distortion
 release needs, since the images' mean scale is the camera's central scale.
 
-**The kernel is handed the choice, not re-told it.** The kernel's six flags
+**The kernel is handed the choice, not re-told it.** The kernel's eight flags
 are requests to every camera; `BaCameras::releases` narrows them per camera
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)). This
 function passes every flag on and each camera's checked release in that list,
@@ -386,7 +444,7 @@ without solving anything:
   observation mode always carries one.
 - No image with a finite pose (`NoPosedImages`).
 - A release list whose length is neither zero nor the camera count
-  (`ReleaseCount`).
+  (`ReleaseCount`), and the same of the scanlines list (`ScanlinesCount`).
 - Then, for each camera the posed images use, in camera index order, the first of: a
   distortion release without the focal, shared or per image
   (`DistortionWithoutFocal`); a
@@ -394,8 +452,13 @@ without solving anything:
   (`FocalNotReleasable`); a per-image focal release on such a model
   (`ImageFocalNotReleasable`); and a distortion release on a camera that is neither a
   `SIMPLE_RADIAL_FISHEYE` nor a spline model whose spline is defined, at least
-  two coefficients on a positive finite domain end (`DistortionNotReleasable`).
-  Each names the camera by its camera index, and the last two its model.
+  two coefficients on a positive finite domain end (`DistortionNotReleasable`);
+  a per-image radial correction on a camera that is not an `SFMTOOL_PINHOLE`
+  whose spline domain end is positive and finite and whose spline is empty or
+  has at least two coefficients (`ImageRadialBsplineNotReleasable`); and
+  per-image rolling-shutter rates on a camera that is not an `SFMTOOL_PINHOLE`
+  (`ImageRollingShutterNotReleasable`). Each names the camera by its camera
+  index, and every one but the first its model.
 - No observation of any point in a posed image (`NoObservations`).
 - Constraint columns stating something the adjustment cannot honour
   (`Constraints`), by the rules of
@@ -447,19 +510,95 @@ is the rule
 [`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md) states
 for a consumer that drops an image.
 
-### 3. The two runs
+### 3. The runs
 
-The kernel runs twice. The second is the adjustment. The **first** runs it over
+The kernel runs twice, or, where a camera's scanlines are unknown, twice per
+such camera and once more. The **first** run measures: it runs the kernel over
 an **empty** schedule, with the crossing off, which executes no round, decides
 nothing and reports the residuals at the state it was handed: the "before"
 median is then measured by the same projection the "after" one is, through the
 same camera model, rather than by a second spelling of the reprojection in this
-module. Both runs start from the cameras the value holds, so the "before"
-median describes the input value.
+module. It reads the value as it holds it, so the "before" median describes the
+input value. The rest are the adjustment: one solve, or the races of
+[The rolling-shutter scanlines](#the-rolling-shutter-scanlines), whose last
+winner is the answer.
 
 Both medians are taken over the finite residuals of the points that survive, so
 the two numbers describe one population and their difference is the improvement
 on it.
+
+### The rolling-shutter scanlines
+
+A camera that releases its images' rates (`image_rolling_shutter`) needs to
+know whether its sensor reads rows or columns, and the rates are solved on one
+setting. `BundleAdjustOptions::rolling_shutter_scanlines` chooses it per camera,
+as `RollingShutterScanlinesChoice::Rows`, `Columns` or `Unknown`. Where the
+caller does not choose (an empty list or a `None` entry), it is the camera's
+stored `rolling_shutter_scanlines`, used as stored, or `Unknown` where the
+camera has none: an absent setting means the scanlines are not known, and no
+setting is assumed. A camera that does not release its rates ignores its entry,
+and its images' held rates are read on its stored setting. `Unknown` is a value
+of the option only: the setting the rates were solved on is written into the
+camera.
+
+`Rows` or `Columns` runs one solve on that setting. A camera whose rates are
+solved on another setting than the one they were stored on starts its images'
+rates at zero, because a rate read on rows means something else on columns.
+
+`Unknown` runs two full solves, one with each setting, and keeps the one with
+the lower cost. A continuous weight between the two readout positions is not
+solved for instead, because the wrong choice is a local minimum
+([per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#alternatives-considered)).
+The two are one **race**. The cost compared is the robust cost the kernel's
+damping ladder compares (the data, the per-image prior with its mean holds,
+and the spline penalty), in units of `σ_n²`, read from each solve's
+`BundleAdjustment::final_round`
+([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)
+§ "The per-image corrections"). Each solve's final round trims from its own
+state, so the data are summed over the observations both final rounds kept,
+each at its own final state, and both costs are divided by one noise level:
+the gated RMS of both solves' residuals of finite points there, measured as the
+kernel measures a round's noise, never under the keypoint resolution. A tie
+goes to rows. A solve that exits degenerate costs `+∞`, and a race in which both
+do is the call's `Degenerate` refusal.
+
+Several `Unknown` cameras are raced one at a time, in camera index order. While
+one camera's race runs, the cameras already raced use the setting their race
+chose, and those not yet raced have their rates held at zero, where the setting
+has no effect, so no setting is assumed for them; a camera given `Rows` or
+`Columns` releases its rates at that setting in every race. The first race
+starts from the caller's value. Each later race starts from the state the
+previous winner reached, its poses, points, cameras and image adjustments, so
+the earlier races' work is carried forward. Both solves of a race start from
+that same state, with the raced camera's rates at zero, and the last race's
+winner is the answer. `k` such cameras cost `2k` solves; the cases with more
+than one camera are rare enough not to justify a search over all `2ᵏ`
+combinations. Whether a decided camera's choice would change once the later
+cameras' rates are released is not tested
+([open question](#open-questions)).
+
+`progress` gives the solve phase one share per solve of a race, each a phase
+named `solve with rows` or `solve with columns`, and says each race's two costs
+and the setting kept. A cancellation stops the solve that is running and the
+call returns `Cancelled` before the other starts.
+
+The report's camera entry states the setting the rates were solved on
+(`rolling_shutter_scanlines`) and, under `Unknown`, the race
+(`scanlines_race`): the two costs, the observations they were summed over, the
+pooled `σ_n`, and `stopped_early`, which is always `false`, since both solves
+run their whole schedule. Stopping the losing solve once it cannot catch up is
+proposed in
+[per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#choosing-rows-or-columns),
+to be measured before it is built.
+
+On the maintainer's `dino_dog_toy_ground_truth_candidate_v012.sfmr` (one
+`SFMTOOL_PINHOLE` camera with no stored setting, 85 images, 24931
+observations), releasing the focal, the spline, each image's focal and
+principal point and both corrections over one `(inf, 1000)` round with the
+crossing off, the race chose rows at a cost of 49350 against 52349 for columns
+over all 24931 observations at a pooled `σ_n` of 0.146 px, and the training
+RMS per component went from 0.2500 px to 0.1443 px, the kernel's figure for
+rows, in 28 s for both solves and the measuring run.
 
 ### 4. Writing the answer back
 
@@ -486,8 +625,15 @@ on it.
   `1 + s ← (1 + s)·f_before/f_after`, so that its intrinsics are the ones it
   had (the focal's is the shift the kernel's re-centring gave every image of
   the camera, `ln(1 + s) −= ln(f_after/f_before)`, the logs of the geometric
-  means it moved the focal by); and the camera's `per_image_adjustments` gains the released parameters,
-  so a solved zero is recorded as solved.
+  means it moved the focal by), and `e −= Δ` for the radial correction, with
+  `Δ` the mean correction the kernel moved into the spline over the solves the
+  answer descends from (`BundleAdjustment::moved_radial_bspline`), so that its
+  spline `c + K·e` is the one it had where the shared spline is held. An
+  unposed image's rates are kept, or set to zero where the camera's setting
+  changed, since they were read on the old one. The camera's
+  `per_image_adjustments` gains the released parameters, so a solved zero is
+  recorded as solved, and, where the rates were released, its
+  `rolling_shutter_scanlines` becomes the setting they were solved on.
 - **Positions and representations.** Each point in the solve takes its solved
   coordinate, and `w` follows the kernel's returned representation.
 - **The stored error.** Each point's error column becomes the RMS of that
@@ -593,13 +739,14 @@ would leave the frame carrying the gauge drift of the solve.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `releases` | empty: every camera held | One `CameraRelease` per camera of the image set: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal` or `image_focal`, `principal_point` its principal point on any model, `image_focal` each image's focal scale where `focal` is accepted, and `image_principal_point` each image's principal-point offset on any model. |
+| `releases` | empty: every camera held | One `CameraRelease` per camera of the image set: `focal` releases that camera's focal, `distortion` its `k1` or spline and needs `focal` or `image_focal`, `principal_point` its principal point on any model, `image_focal` each image's focal scale where `focal` is accepted, `image_principal_point` each image's principal-point offset on any model, and `image_radial_bspline` and `image_rolling_shutter` each image's radial correction and rolling-shutter rates on `SFMTOOL_PINHOLE`. |
 | `schedule` | `DEFAULT_SCHEDULE`, `[(50, 5), (12, 2), (4, 1)]` | The staged trim schedule, `(trim_px, loss_scale)` per round; `trim_px` may be `f64::INFINITY`. |
 | `max_iters` | `60` | LM iteration budget per round. |
 | `min_track` | `2` | Trim survivors a point needs to stay in a round's solve. |
 | `min_obs` | `12` | Trim survivors below which a round exits degenerate. |
 | `free_points` | `FreePointPolicy::CROSS` | Whether free points cross between a position and a direction by the storage decision; `NO_CROSS` honours the value's representation. |
-| `image_prior` | `ImagePriorOptions::default()`: loose 0.1, floor 0.001, derived | The widths of the prior on a per-image release, the focal's of the log focal scale `ln(1 + s)`, read as a fraction, and the principal point's in the short-side unit: the first round's and the cap, the floor, and `fixed` widths that replace the derivation. |
+| `image_prior` | `ImagePriorOptions::default()`: loose 0.1, 0.1, 0.01, 0.01, floor 0.001, 0.001, 1e-4, 1e-4, derived | The widths of the prior on a per-image release, the focal's of the log focal scale `ln(1 + s)`, read as a fraction, the principal point's in the short-side unit, the radial correction's in units of `ρ` and the rates' in radians per short side: the first round's and the cap, the floor, and `fixed` widths that replace the derivation. |
+| `rolling_shutter_scanlines` | empty: each camera's stored setting, or `Unknown` | One `Option<RollingShutterScanlinesChoice>` per camera of the image set: the scanlines a camera that releases its rates is solved on ([The rolling-shutter scanlines](#the-rolling-shutter-scanlines)). |
 
 The defaults after `releases` are the kernel's own
 ([`../geometry/bundle-adjustment.md`](../geometry/bundle-adjustment.md)), stated
@@ -608,30 +755,43 @@ here so a caller sees what it is getting.
 ## Python bindings
 
 `EditedReconstruction.bundle_adjust(*, opt_f=False, opt_distortion=False,
-opt_pp=False, opt_image_f=False, opt_image_pp=False, image_prior=None,
-releases=None, schedule=None, max_iters=60, min_track=2, min_obs=12,
-free_points_cross=True)` returns `(EditedReconstruction, report)`.
+opt_pp=False, opt_image_f=False, opt_image_pp=False,
+opt_image_radial_bspline=False, opt_image_rolling_shutter=False,
+image_prior=None, releases=None, schedule=None, max_iters=60, min_track=2,
+min_obs=12, free_points_cross=True)` returns `(EditedReconstruction, report)`.
 `free_points_cross=False` is `FreePointPolicy::NO_CROSS`. `opt_f`,
-`opt_distortion`, `opt_pp`, `opt_image_f` and `opt_image_pp` are the release
-given to every camera of the image set. `releases`, when given, replaces them: a
+`opt_distortion`, `opt_pp`, `opt_image_f`, `opt_image_pp`,
+`opt_image_radial_bspline` and `opt_image_rolling_shutter` are the release
+given to every camera of the image set, each camera's rates solved on its
+default scanlines. `releases`, when given, replaces them: a
 list with one dict per camera in the image set, in camera index order, each
 `{"focal": bool, "distortion": bool, "principal_point": bool, "image_focal":
-bool, "image_principal_point": bool}`, a missing key meaning `False`; an unknown
-key is a `ValueError` naming the five keys an entry takes, and a value that is
-not a bool is one too. `image_prior` is `ImagePriorOptions` as a dict of
-`loose`, `floor` and `fixed`, each a dict of `focal` and `principal_point`
-(`fixed` also `None`), a missing key at its default; an unknown key, or a width
-that is not positive and finite, is a `ValueError`. It materialises the version's value when its
+bool, "image_principal_point": bool, "image_radial_bspline": bool,
+"image_rolling_shutter": bool, "rolling_shutter_scanlines": str}`, a missing
+flag meaning `False` and a missing or `None` `rolling_shutter_scanlines` the
+camera's default; `"ROWS"`, `"COLUMNS"` and `"UNKNOWN"` are the
+`RollingShutterScanlinesChoice` values. An unknown key is a `ValueError` naming
+the eight keys an entry takes, and a flag that is not a bool, or a scanlines
+value that is not one of the three names or `None`, is one too. `image_prior`
+is `ImagePriorOptions` as a dict of `loose`, `floor` and `fixed`, each a dict
+of `focal`, `principal_point`, `radial_bspline` and `rolling_shutter` (`fixed`
+also `None`), a missing key at its default; an unknown key, or a width that is
+not positive and finite, is a `ValueError`. It materialises the version's value when its
 overlay is not empty, runs the function over it, and wraps the answer as a new
 base with an empty overlay, so the Python surface is the viewer's edit exactly.
 The report is the fields above as a dict, `cameras` a list with one dict per
 camera in the solve carrying the `CameraAdjustment` fields
 (`principal_point_before` and `principal_point_after` each a `(cx, cy)` pair,
 `outermost_observed` a dict of `radius_px`, `theta_deg`, `image` and `xy`, or
-`None`, and `image_adjustments` the `ImageAdjustmentSpread` as a dict, `None`
-without a per-image release: its pairs as `(x, y)`, `prior` and `spread` as
-dicts of `focal` and `principal_point`, and `near_prior` a list of dicts of
-`image`, `parameter` (`"focal"` or `"principal_point"`) and `widths`),
+`None`, `rolling_shutter_scanlines` `"ROWS"`, `"COLUMNS"` or `None`,
+`scanlines_race` a dict of `rows_cost`, `columns_cost`, `observations`,
+`sigma_px` and `stopped_early`, or `None`, and `image_adjustments` the
+`ImageAdjustmentSpread` as a dict, `None` without a per-image release: its
+pairs as `(x, y)`, its radial correction's as `(e_0, e_1)` and its rates' as
+`(wx, wy, wz)`, `prior` and `spread` as dicts of `focal`, `principal_point`,
+`radial_bspline` and `rolling_shutter`, and `near_prior` a list of dicts of
+`image`, `parameter` (`"focal"`, `"principal_point"`, `"radial_bspline"` or
+`"rolling_shutter"`) and `widths`),
 `free_point_decision`
 the dict the kernel binding reports (`sigma_px`, `observation_count`,
 `outlier_count`, `decided`, `converged`, `to_finite`, `to_direction`,
@@ -725,6 +885,28 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   an `OPENCV_FISHEYE` refused naming it; a distortion beside a per-image focal
   accepted; and a solve with no per-image release reporting no spread and
   marking no camera.
+- The per-image corrections
+  ([corrections.rs](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust/tests/corrections.rs)),
+  on a scene of 30 `SFMTOOL_PINHOLE` images from a general motion, each image's
+  keypoints made through its own planted radial correction and rates with
+  0.1 px of noise: with the rates planted on rows and on columns and no stored
+  setting, the fallback to `Unknown` racing both and choosing the planted
+  scanlines at the lower cost, writing them into the camera, marking both
+  names, recovering the rates and naming the comparison on `progress`; a
+  choice of `Rows` run as one solve on rows whatever the camera stores, a
+  stored `Columns` used with no choice, and an explicit `Unknown` racing beside
+  a stored setting; two `Unknown` cameras raced in camera index order, the
+  answer equal to the bit to two adjustments in sequence (the first racing
+  camera 0 with camera 1's rates held, the second started from its answer), so
+  each race starts from the previous winner's state; an unposed image's spline
+  unchanged to `10⁻¹²` while the mean correction moved into the camera's, and
+  the report's means, standard deviations and widths of both corrections;
+  under narrow fixed widths, `near_prior` naming both corrections at their own
+  distances; the refusals on a `SIMPLE_PINHOLE`, an `SFMTOOL_FISHEYE` and an
+  `SFMTOOL_PINHOLE` whose domain end is zero or infinite, and of a scanlines
+  list one camera short; a scanlines choice on a camera that releases no rates
+  changing no bit of the answer; and a cancellation in the first solve of a
+  race ending the call before the second solve opens.
 - A camera no posed image uses (one nothing references, one only an unposed
   image uses) coming back untouched, left out of the report, and its entry in
   the release list ignored even where its model could not take it.
@@ -750,8 +932,12 @@ and written back, a principal point released on an `OPENCV_FISHEYE`, the
 per-image focal refused on the fixture's `SIMPLE_RADIAL` and released on a
 `SFMTOOL_PINHOLE` switch of it, with both per-image releases written back
 averaging zero and reported, the per-image principal point released alone
-under a fixed prior, a malformed `image_prior` refused, and the unknown-key
-refusal naming the five keys.
+under a fixed prior, a malformed `image_prior` refused, the unknown-key
+refusal naming the eight keys, both corrections refused on the fixture's
+`SIMPLE_RADIAL` and released on its `SFMTOOL_PINHOLE` switch with the
+scanlines raced, written back and reported, a `"COLUMNS"` choice run as one
+solve under a fixed corrections prior and then used as stored, an explicit
+`"UNKNOWN"` racing again, and a misspelt or mistyped scanlines value refused.
 
 ## Non-goals
 
@@ -773,7 +959,17 @@ refusal naming the five keys.
 ## Open questions
 
 - **The CLI.** `sfm xform --bundle-adjust` releases neither the shared principal
-  point nor the per-image releases. Whether it gains keys for them is open.
+  point nor the per-image releases, and has no scanlines choice. Whether it
+  gains keys for them is open.
+- **Stopping the losing solve of a race early.** Both solves of a race run
+  their whole schedule, which costs twice one solve. The draft proposes a rule
+  that stops the trailing solve once it cannot catch up, to be measured on real
+  solves before it is built
+  ([per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#open-questions)).
+- **Several `Unknown` cameras.** Each race is decided with the later cameras'
+  rates held at zero, which their poses absorb in part. Whether releasing them
+  could change an earlier choice, and whether a second pass over the cameras is
+  worth its cost, is untested: every measured capture has one camera.
 - **Reporting the guard per camera.** When the final round settles with a
   camera's distortion held at its step guard, the kernel's progress line names
   the camera, and `report.free_point_decision.converged` is `false`. Whether

@@ -173,7 +173,14 @@ list included, so a routine that rebuilds the cameras, such as a merge, passes
 it. It refuses, naming the image, a result in which an image's adjustment is
 one its camera cannot take (`ImageSet::check_image_intrinsics`), such as after
 its `cameras` or `camera_indexes` move an image with rates onto a camera of
-another model or one with no scanlines setting. The rest is specified in
+another model or one with no scanlines setting. The bundle adjustment
+releases both per camera, chooses the rates' scanlines and writes the chosen
+setting into the camera, from Rust and from
+`EditedReconstruction.bundle_adjust`
+([bundle-adjust.md § The rolling-shutter
+scanlines](bundle-adjust.md#the-rolling-shutter-scanlines)). The viewer's
+Bundle Adjust dialog and the MCP tool, which do not release them, are specified
+in
 [per-image-lens-corrections.md](../../drafts/per-image-lens-corrections.md#bindings-viewer-cli).
 
 `SfmrReconstruction` keeps a forwarding method for each of the reads a caller

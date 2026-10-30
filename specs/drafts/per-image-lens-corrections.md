@@ -615,6 +615,37 @@ The design the build follows:
 
 ### Choosing rows or columns
 
+**Built** in the reconstruction-level adjustment and
+`EditedReconstruction.bundle_adjust`, and filed in [bundle-adjust.md § The
+rolling-shutter
+scanlines](../core/reconstruction/bundle-adjust.md#the-rolling-shutter-scanlines):
+`RollingShutterScanlinesChoice` and `BundleAdjustOptions::rolling_shutter_scanlines`,
+the fallback to the stored setting or `UNKNOWN`, one solve for `ROWS` or
+`COLUMNS`, two full solves for `UNKNOWN` compared by the cost below, the races
+of several `UNKNOWN` cameras in camera index order from the previous winner's
+state, the chosen setting written into the camera, and the report's
+`ScanlinesRace`. The kernel states its final round's cost for the comparison
+(`BundleAdjustment::final_round`,
+[bundle-adjustment.md § The per-image
+corrections](../core/geometry/bundle-adjustment.md#the-per-image-corrections)).
+What the build settled beyond the design below:
+
+- The pooled `σ_n` is the gated RMS of both solves' residuals of finite points
+  over the observations both final rounds kept, measured as the kernel measures
+  a round's noise and never under the keypoint resolution. The prior's cost is
+  each solve's own `Σ (x − x̄)²/σ² + Σ (x̄ − x̄₀)²/σ_h²`, the mean holds included,
+  and the spline penalty is taken before the round's re-centring.
+- A tie goes to rows, and a solve that exits degenerate costs `+∞`.
+- A camera whose rates are solved on another setting than the one they were
+  stored on starts them at zero, and its unposed images' rates are set to zero
+  when the written setting changes, since they were read on the old one.
+- A cancellation stops the running solve, and the call refuses before the other
+  solve of the race starts.
+
+**Stopping the trailing solve early is not built**: both solves run their whole
+schedule, and the report's `stopped_early` is always `false`. The rule below
+stays a proposal to be measured ([open question](#open-questions)).
+
 The reconstruction-level adjustment
 ([bundle-adjust.md](../core/reconstruction/bundle-adjust.md),
 [bundle_adjust.rs](../../crates/sfmtool-core/src/reconstruction/bundle_adjust.rs))
@@ -752,12 +783,14 @@ notes the corrections and a scanlines setting it cannot copy
 inspect --verbose` names them and the scanlines setting
 ([inspect-command.md](../cli/reconstruction/inspect-command.md)).
 
-The releases and the scanlines choice for the two corrections below, in
-`EditedReconstruction.bundle_adjust`, the viewer's Bundle Adjust dialog and the
-MCP tool, are proposed; the kernel binding's and the `read_sfmr` /
+The releases and the scanlines choice for the two corrections below, in the
+viewer's Bundle Adjust dialog and the MCP tool, are proposed; the
+`EditedReconstruction.bundle_adjust`, kernel binding and `read_sfmr` /
 `write_sfmr` bullets are built.
 
-- `EditedReconstruction.bundle_adjust` in
+- **Built** ([bundle-adjust.md § Python
+  bindings](../core/reconstruction/bundle-adjust.md#python-bindings)):
+  `EditedReconstruction.bundle_adjust` in
   [edited.rs](../../crates/sfmtool-py/src/reconstruction/edited.rs): each
   `releases` dict takes `"image_radial_bspline"`, `"image_rolling_shutter"` (bools) and
   `"rolling_shutter_scanlines"` (`"ROWS"`, `"COLUMNS"` or `"UNKNOWN"`; a
@@ -935,6 +968,23 @@ ended within `2·10⁻⁷` of zero, their start, under `2·10⁻⁴` of their sp
 and the mean radial correction was zero to rounding after its move into the
 spline.
 
+**The reconstruction-level run.** `EditedReconstruction.bundle_adjust` on the
+same file, releasing the same parts with the scanlines left to fall back to
+`UNKNOWN` (the camera stores none), over one `(inf, 1000)` round with the
+crossing off, raced rows against columns and kept rows, at a cost of 49350
+against 52349 in units of the pooled `σ_n²` (0.146 px) over all 24931
+observations, both final rounds keeping every observation. The difference,
+about 3000 such units, is larger than the scratch solver's 840 for its blend at
+fixed `λ`; the two compare different solves (the kernel's soft-L1 cost under
+derived widths, the scratch solver's plain least squares under fixed ones). The
+median residual went from 0.2315 px to 0.1220 px and the training RMS per
+component from 0.2500 px to 0.1443 px, the kernel's figure for rows, with no
+point deleted. The derived widths were `2.96·10⁻³` for the radial correction,
+`1.28·10⁻³` for the rates, `0.0150` for the focal and `0.0131` for the principal
+point, as the kernel's run on rows found; the mean rates ended within
+`1.8·10⁻⁷` of zero. The call took 28 s for the two solves and the measuring run
+together, against 13.5 to 20 s for one solve on rows in the kernel's run.
+
 **Caveats.** One capture from one phone. A scratch solver with plain least
 squares rather than the kernel's soft-L1 and trim schedule, and capped
 evaluations. Cross-validation shows that the terms predict held-out points
@@ -1013,14 +1063,16 @@ When built, the tests cover at least:
 
 ## Open questions
 
-- **The early-stopping rule for `UNKNOWN`.** The rule in
+- **The early-stopping rule for `UNKNOWN`.** The built race runs both solves
+  to the end, which roughly doubles the cost of a solve. The rule in
   [Choosing rows or columns](#choosing-rows-or-columns), with its threshold of 25 and three
   consecutive iterations, is a proposal to be measured on real solves before it
   is adopted. Whether lockstep should be per LM iteration or per schedule round
   (simpler, and needs no per-iteration cost from the kernel, but stops later) is
   part of the same measurement.
 - **Several `UNKNOWN` cameras.** The races in
-  [Choosing rows or columns](#choosing-rows-or-columns) run one camera at a time,
+  [Choosing rows or columns](#choosing-rows-or-columns), built as described,
+  run one camera at a time,
   each starting from the previous race's winner, with the undecided cameras'
   rates held at zero. An earlier race is then decided without the later
   cameras' rolling shutter, which those cameras' poses absorb in part, and its
