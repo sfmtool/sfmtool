@@ -88,7 +88,8 @@ following in image order, and `camera_id` is 1-based over the written list.
 
 A COLMAP rig sensor holds one camera, so a reconstruction with rig data whose
 sensor's camera would be split is refused with an error naming the camera,
-before anything is written.
+before anything is written. The implicit rigs written for a reconstruction
+without rig data are built from the written cameras, one per camera.
 
 An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
 rolling-shutter rates (format version 14). No COLMAP camera model holds either,
@@ -97,8 +98,7 @@ a non-zero value of either is refused before anything is written, with an error
 naming the camera and the correction and pointing at `sfm undistort`, which
 removes both with the distortion. This check comes before the split and the
 rig check, so no path through the export, rig or not, writes an image without
-its corrections. The implicit rigs written for a reconstruction
-without rig data are built from the written cameras, one per camera.
+its corrections.
 
 Import does not fold cameras back: `sfm from-colmap-bin` reads each COLMAP
 camera as one camera and gives no image an adjustment.

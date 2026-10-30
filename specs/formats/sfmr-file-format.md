@@ -983,9 +983,10 @@ do. A format with no per-image intrinsics receives each image's focal and
 principal point on export: a COLMAP export writes a camera with a non-zero
 adjustment on any of its images as one COLMAP camera per image of it
 ([to-colmap-bin-command.md](../cli/colmap-interop/to-colmap-bin-command.md)).
-No export format holds the radial correction or the rolling shutter, so each
-export of a reconstruction whose images carry either refuses it, naming the
-camera and the correction, before it writes anything; `sfm undistort` removes
+Neither COLMAP nor nerfstudio holds the radial correction or the rolling
+shutter, so each COLMAP export and `sfm to-nerfstudio` refuse a reconstruction
+whose images carry either, naming the camera and the correction, before they
+write anything; `sfm undistort` removes
 both with the distortion
 ([undistort-command.md](../cli/image-processing/undistort-command.md)). The
 bundle adjustment that solves the two corrections is specified in
