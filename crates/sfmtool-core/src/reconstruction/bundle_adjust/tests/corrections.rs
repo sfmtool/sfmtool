@@ -568,6 +568,45 @@ fn an_unposed_image_keeps_its_spline_and_the_report_states_the_spread() {
 }
 
 #[test]
+fn an_unposed_image_drops_its_rates_when_the_setting_changes() {
+    // The camera stores COLUMNS and its unposed image 7 carries rates read on
+    // them. Solved on COLUMNS, the image keeps its rates; solved on ROWS, the
+    // setting written is rows and the image's rates, which meant something
+    // else on columns, are zero.
+    let mut source = one_camera_source(RollingShutterScanlines::Columns, 145);
+    source.image_set.per_image_adjustments = vec![PerImageAdjustments {
+        rolling_shutter: true,
+        rolling_shutter_scanlines: Some(RollingShutterScanlines::Columns),
+        ..PerImageAdjustments::default()
+    }];
+    source.image_set.images[7].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    let rates = [1e-3, -2e-3, 5e-4];
+    source.image_set.images[7]
+        .intrinsic_adjustment
+        .rolling_shutter = rates;
+    for (choice, kept) in [
+        (RollingShutterScanlinesChoice::Columns, rates),
+        (RollingShutterScanlinesChoice::Rows, [0.0; 3]),
+    ] {
+        let options = BundleAdjustOptions {
+            rolling_shutter_scanlines: vec![Some(choice)],
+            ..BundleAdjustOptions::uniform(1, CORRECTIONS)
+        };
+        let (out, _) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
+        assert_eq!(
+            out.image_set
+                .camera_per_image_adjustments(0)
+                .rolling_shutter_scanlines,
+            choice.setting()
+        );
+        assert_eq!(
+            out.image_set.images[7].intrinsic_adjustment.rolling_shutter, kept,
+            "{choice:?}"
+        );
+    }
+}
+
+#[test]
 fn the_report_names_the_corrections_beyond_two_prior_widths() {
     let source = one_camera_source(RollingShutterScanlines::Rows, 150);
     let options = BundleAdjustOptions {

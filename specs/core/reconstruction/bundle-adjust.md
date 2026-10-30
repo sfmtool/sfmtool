@@ -559,7 +559,8 @@ state, so the data are summed over the observations both final rounds kept,
 each at its own final state, and both costs are divided by one noise level:
 the gated RMS of both solves' residuals of finite points there, measured as the
 kernel measures a round's noise, never under the keypoint resolution. A tie
-goes to rows. A solve that exits degenerate costs `+∞`, and a race in which both
+between the two computed costs goes to rows; that breaks an exact tie and is
+not a setting assumed in place of the race. A solve that exits degenerate costs `+∞`, and a race in which both
 do is the call's `Degenerate` refusal.
 
 Several `Unknown` cameras are raced one at a time, in camera index order. While
@@ -900,7 +901,9 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   camera 0 with camera 1's rates held, the second started from its answer), so
   each race starts from the previous winner's state; an unposed image's spline
   unchanged to `10⁻¹²` while the mean correction moved into the camera's, and
-  the report's means, standard deviations and widths of both corrections;
+  the report's means, standard deviations and widths of both corrections; an
+  unposed image's rates kept when its camera's stored `Columns` is solved on
+  and set to zero when the rates are solved on `Rows` instead;
   under narrow fixed widths, `near_prior` naming both corrections at their own
   distances; the refusals on a `SIMPLE_PINHOLE`, an `SFMTOOL_FISHEYE` and an
   `SFMTOOL_PINHOLE` whose domain end is zero or infinite, and of a scanlines
