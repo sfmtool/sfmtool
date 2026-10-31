@@ -336,8 +336,8 @@ def test_embed_patches_rounds_keep_the_references_without_bitmaps(
     """With the self-similarity cull off, round 1's sub-pixel pass renders no
     bitmaps. The references its views were aligned to are still recorded in
     the intermediate compaction, so round 2 refines against the same ones: a
-    point is left at ``-1`` only where its views were aligned to nothing,
-    because the reference-view rule found no eligible view."""
+    point is left at ``-1`` only where its views were aligned to nothing, as
+    where the localizer kept fewer than two of its views."""
     import sfmtool._embed_patches as ep
 
     compacted: list[SfmrReconstruction] = []
