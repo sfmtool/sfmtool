@@ -558,6 +558,33 @@ impl GrownPlaneSequence {
         self.pairs.iter().filter(|p| p.refusal.is_none()).count()
     }
 
+    /// How well the views agree at the final plane: the mean `grid_zncc` of
+    /// the views that joined it ([`GrownPlaneView::Joined`]) or had their
+    /// shift fitted at it ([`GrownPlaneView::ShiftOnly`]), each a robust grid
+    /// score against the reference, with a `NaN` score left out. The
+    /// reference has no score of its own and does not count. `NaN` when no
+    /// view has a score, as when no view joined.
+    ///
+    /// Under [`GrownPlaneOutcome::WeakTurn`] it is the joined views' mean at
+    /// the plane found and not turned to, and no view has its shift fitted.
+    pub fn agreement(&self) -> f64 {
+        let (sum, n) = self
+            .views
+            .iter()
+            .filter_map(|v| match v {
+                GrownPlaneView::Joined { grid_zncc, .. }
+                | GrownPlaneView::ShiftOnly { grid_zncc, .. } => Some(*grid_zncc),
+                _ => None,
+            })
+            .filter(|z| !z.is_nan())
+            .fold((0.0, 0usize), |(sum, n), z| (sum + z, n + 1));
+        if n == 0 {
+            f64::NAN
+        } else {
+            sum / n as f64
+        }
+    }
+
     /// Whether the step turned the patch: some view joined, and the turn
     /// was not a large one on weak evidence.
     pub fn turned(&self) -> bool {

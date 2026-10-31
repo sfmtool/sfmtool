@@ -502,9 +502,138 @@ fn the_run_refuses_a_value_it_cannot_refine() {
             spot_window: 0,
             ..GrownPlaneNormalOptions::default()
         },
+        ..RefineNormalsOptions::default()
     };
     assert!(
         run(&recon, &views, &bad) == RefineNormalsError::BadOption("spot_window"),
         "a first window of no samples is refused"
     );
+
+    let past_the_end = RefineNormalsOptions {
+        point_indexes: Some(vec![0, 3]),
+        ..RefineNormalsOptions::default()
+    };
+    assert_eq!(
+        run(&recon, &views, &past_the_end),
+        RefineNormalsError::PointOutOfRange {
+            point: 3,
+            point_count: 3
+        }
+    );
+}
+
+// ---- A list of points --------------------------------------------------------
+
+#[test]
+fn a_list_of_points_refines_those_and_leaves_the_others_bit_for_bit() {
+    let scene = plane_scene();
+    let mut recon = tilted_value(&scene, &three_points(), 25.0);
+    to_infinity(&mut recon, 1);
+    let (full, full_report) = refine_over(&scene, &recon);
+
+    // Point 2 asked for twice, point 1 (at infinity) once, point 0 not at
+    // all.
+    let options = RefineNormalsOptions {
+        point_indexes: Some(vec![2, 1, 2]),
+        ..RefineNormalsOptions::default()
+    };
+    let (out, report) = refine_normals(&recon, &scene.views(), &options, &Progress::none())
+        .expect("the run refines");
+    assert_eq!(report.points.len(), 3, "{report:?}");
+    assert_eq!(outcome_of(&report, 0), &RefineNormalsOutcome::NotAsked);
+    assert_eq!(outcome_of(&report, 1), &RefineNormalsOutcome::AtInfinity);
+    assert_eq!(report.not_asked(), 1, "{report:?}");
+    assert_eq!(report.read(), 1, "{report:?}");
+    assert_eq!(report.turned(), 1, "{report:?}");
+
+    // The point asked for gets the full run's answer for it.
+    assert_eq!(
+        format!("{:?}", outcome_of(&report, 2)),
+        format!("{:?}", outcome_of(&full_report, 2))
+    );
+    assert!(record_of(&out, 2).agrees_with(&record_of(&full, 2)));
+    assert!(degrees(frame_normal(&out, 2), truth()) < 2.0);
+
+    // The point not asked for keeps every column it had, bit for bit, where
+    // the full run turned it. The readings column the write added for point
+    // 2 holds no reading for it, as for any point a run does not rewrite.
+    let mut kept = record_of(&out, 0);
+    for observation in &mut kept.observations {
+        let reading = observation.reading.take().expect("the column was added");
+        assert!(reading.plain_bitmap_zncc.is_nan() && reading.cos_view_angle.is_nan());
+    }
+    kept.reading_options = None;
+    assert_eq!(format!("{kept:?}"), format!("{:?}", record_of(&recon, 0)));
+    assert!(degrees(frame_normal(&full, 0), truth()) < 2.0);
+    assert!(degrees(frame_normal(&out, 0), truth()) > 20.0);
+    assert_eq!(
+        out.point_set
+            .patch_u_halfvec_xyz
+            .as_ref()
+            .map(|a| a.row(0).to_vec()),
+        recon
+            .point_set
+            .patch_u_halfvec_xyz
+            .as_ref()
+            .map(|a| a.row(0).to_vec())
+    );
+    assert_eq!(
+        out.point_set
+            .patch_v_halfvec_xyz
+            .as_ref()
+            .map(|a| a.row(0).to_vec()),
+        recon
+            .point_set
+            .patch_v_halfvec_xyz
+            .as_ref()
+            .map(|a| a.row(0).to_vec())
+    );
+}
+
+#[test]
+fn an_empty_list_refines_nothing_and_returns_the_value_as_it_was() {
+    let scene = plane_scene();
+    let recon = tilted_value(&scene, &three_points(), 25.0);
+    let options = RefineNormalsOptions {
+        point_indexes: Some(Vec::new()),
+        ..RefineNormalsOptions::default()
+    };
+    let (out, report) = refine_normals(&recon, &scene.views(), &options, &Progress::none())
+        .expect("the run refines");
+    assert_eq!(report.not_asked(), 3, "{report:?}");
+    assert_eq!(report.read(), 0, "{report:?}");
+    assert!(report.mean_agreement().is_nan());
+    assert_eq!(
+        out.content_xxh128().expect("hashes").content_xxh128,
+        recon.content_xxh128().expect("hashes").content_xxh128
+    );
+}
+
+// ---- The agreement -----------------------------------------------------------
+
+#[test]
+fn a_turned_point_reports_how_well_its_views_agree_at_the_plane() {
+    let scene = plane_scene();
+    let recon = tilted_value(&scene, &three_points(), 25.0);
+    let (_, report) = refine_over(&scene, &recon);
+    let mut agreements = Vec::new();
+    for p in 0..3u32 {
+        let RefineNormalsOutcome::Turned { agreement, .. } = *outcome_of(&report, p) else {
+            panic!("point {p} turned: {report:?}");
+        };
+        // The textured plane seen at its own plane: the views agree well.
+        assert!(
+            agreement > 0.5 && agreement <= 1.0,
+            "point {p}: {agreement}"
+        );
+        agreements.push(agreement);
+    }
+    let mean = agreements.iter().sum::<f64>() / 3.0;
+    assert!((report.mean_agreement() - mean).abs() < 1e-12);
+
+    // No point turned on a flat wall, so there is no agreement to average.
+    let wall = Scene::looking_at(&wide_centres(), WORLD, camera(), |_, _| 127.5);
+    let (_, report) = refine_over(&wall, &tilted_value(&wall, &three_points(), 15.0));
+    assert_eq!(report.none_joined(), 3, "{report:?}");
+    assert!(report.mean_agreement().is_nan());
 }

@@ -2,6 +2,8 @@
 
 **Status:** Draft. Every caller of the photometric normal refinement (`patch::normal_refine::refine_patch_normal` and its batch form `refine_patch_cloud_normals`) switches to the grown-plane normal, and the photometric search is then deleted. The work is a sequence of pull requests, one per step below.
 
+Built: step 1, the point list (`RefineNormalsOptions::point_indexes`, outcome `NotAsked`, refusal `PointOutOfRange`) and the agreement (`GrownPlaneSequence::agreement`, carried on `Turned` and on `LeftUnchanged(WeakTurn)`, with the report's `mean_agreement` over the turned points), described in [core/bench/refine-normals.md](../core/bench/refine-normals.md). Not built: steps 2 to 9.
+
 Decided (2026-10-30): `sfm xform --refine-normals` keeps its name; `compare --strips` reports the grown plane's agreement score where it reported the mean ΔΦ; `sfm embed-patches` keeps its rounds of "refine normals, select views, refine keypoints" with only the normal step swapped. Whether `embed-patches` needs the normal step in every round is left for later.
 
 Amends: [core/bench/refine-normals.md](../core/bench/refine-normals.md) (a point subset, a Python binding and an agreement score), [cli/reconstruction/xform/refine-normals-command.md](../cli/reconstruction/xform/refine-normals-command.md), [cli/reconstruction/embed-patches-command.md](../cli/reconstruction/embed-patches-command.md), [core/patch/patch-cloud.md](../core/patch/patch-cloud.md), [core/bench/editable-track.md](../core/bench/editable-track.md) § "Estimating the normal", and the specs this draft deletes (§ [Step 8](#8-delete-the-photometric-search)).
@@ -37,7 +39,7 @@ Each step is one pull request through the `implement-change` skill, and each upd
 
 `RefineNormalsOptions` gains an optional list of point indexes. A point left out keeps every column it had and is reported as not asked for. The default, no list, refines every finite point, as now.
 
-`RefineNormalsOutcome::Turned` and `LeftUnchanged` gain the point's **agreement**: the mean robust grid ZNCC (`grid_zncc`) at the final plane over the views that joined it or had their shift fitted (`GrownPlaneView::Joined` and `GrownPlaneView::ShiftOnly`). `NaN` when no view has a score. The report gains its mean over the points that have one. The grown plane computes no score at the starting normal, so there is no before-and-after difference.
+`RefineNormalsOutcome::Turned` and `LeftUnchanged` gain the point's **agreement**: the mean robust grid ZNCC (`grid_zncc`) at the final plane over the views that joined it or had their shift fitted (`GrownPlaneView::Joined` and `GrownPlaneView::ShiftOnly`). `NaN` when no view has a score. The report gains its mean over the turned points that have one; a `WeakTurn` point's agreement is at a plane not written, and does not count. The grown plane computes no score at the starting normal, so there is no before-and-after difference.
 
 ### 2. A Python binding for `bench::refine_normals`
 

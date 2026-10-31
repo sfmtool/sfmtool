@@ -1,9 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Refine every finite point's normal: for each point, what Track View's
-//! *Grown Plane Normal* and *Commit* do to a track put on the bench from it,
-//! with every verdict `in` and pinned, written back as one new value.
+//! Refine every finite point's normal, or those of a list of points: for each
+//! point, what Track View's *Grown Plane Normal* and *Commit* do to a track
+//! put on the bench from it, with every verdict `in` and pinned, written back
+//! as one new value.
 //!
 //! `specs/core/bench/refine-normals.md` is the design. A point's refinement is
 //! three bench steps: [`track_of_point`] builds its track,
@@ -41,6 +42,12 @@ pub struct RefineNormalsOptions {
     /// The step each point gets: Track View's *Grown Plane Normal* runs
     /// `GrownPlaneNormalOptions::default()`, and so does the default here.
     pub normal: GrownPlaneNormalOptions,
+    /// The points to refine, by index. `None`, the default, refines every
+    /// finite point. A point not listed keeps every column it had and is
+    /// reported as [`RefineNormalsOutcome::NotAsked`]; a point listed twice is
+    /// refined once; an index past the last point refuses the run
+    /// ([`RefineNormalsError::PointOutOfRange`]).
+    pub point_indexes: Option<Vec<u32>>,
 }
 
 /// Why the step ran on a point and left its normal as it was.
@@ -54,6 +61,12 @@ pub enum NormalLeftUnchanged {
     WeakTurn {
         /// The turn the step would have made, degrees.
         turn_deg: f64,
+        /// The joined views' mean robust grid ZNCC at the plane found and not
+        /// turned to
+        /// ([`GrownPlaneSequence::agreement`](super::GrownPlaneSequence::agreement)):
+        /// how well they agree on that plane, not on the normal the point
+        /// keeps.
+        agreement: f64,
     },
 }
 
@@ -74,9 +87,17 @@ pub enum RefineNormalsOutcome {
         /// ([`PointRecord::agrees_with`]) and the stored reference is not a
         /// pick only the display render made, so the point was not rewritten.
         unchanged: bool,
+        /// How well the views agree at the plane the step found
+        /// ([`GrownPlaneSequence::agreement`](super::GrownPlaneSequence::agreement)):
+        /// the mean robust grid ZNCC of the views that joined it or had their
+        /// shift fitted at it, the reference not counted; `NaN` when none has
+        /// a score.
+        agreement: f64,
     },
     /// The step ran and left the normal as it was, so
-    /// the point keeps every column it had.
+    /// the point keeps every column it had. Where no view joined there is no
+    /// plane and no agreement; a large turn on weak evidence carries the
+    /// agreement at the plane it found.
     LeftUnchanged(NormalLeftUnchanged),
     /// The step refused the point, and it keeps every column it had.
     NotRefined(NormalError),
@@ -87,6 +108,9 @@ pub enum RefineNormalsOutcome {
     /// The point is at infinity (`w = 0`), whose patch faces along its own
     /// bearing: it was skipped, and keeps every column it had.
     AtInfinity,
+    /// The point is not in [`RefineNormalsOptions::point_indexes`]: the run
+    /// did not look at it, and it keeps every column it had.
+    NotAsked,
 }
 
 /// One point's status: its index, which the input and the returned value
@@ -116,9 +140,15 @@ impl RefineNormalsReport {
     }
 
     /// Points the step ran on or tried to: every status but
-    /// [`RefineNormalsOutcome::AtInfinity`].
+    /// [`RefineNormalsOutcome::AtInfinity`] and
+    /// [`RefineNormalsOutcome::NotAsked`].
     pub fn read(&self) -> usize {
-        self.count(|o| !matches!(o, RefineNormalsOutcome::AtInfinity))
+        self.count(|o| {
+            !matches!(
+                o,
+                RefineNormalsOutcome::AtInfinity | RefineNormalsOutcome::NotAsked
+            )
+        })
     }
 
     /// Points turned: [`RefineNormalsOutcome::Turned`], unchanged ones
@@ -193,6 +223,12 @@ impl RefineNormalsReport {
         self.count(|o| matches!(o, RefineNormalsOutcome::AtInfinity))
     }
 
+    /// Points left out of [`RefineNormalsOptions::point_indexes`], which the
+    /// run did not look at.
+    pub fn not_asked(&self) -> usize {
+        self.count(|o| matches!(o, RefineNormalsOutcome::NotAsked))
+    }
+
     /// Points the step refused with an error `is` accepts, such as
     /// `|e| matches!(e, NormalError::TooFewObservations(_))`.
     pub fn with_error(&self, is: impl Fn(&NormalError) -> bool) -> usize {
@@ -214,6 +250,28 @@ impl RefineNormalsReport {
             f64::NAN
         } else {
             median_in_place(&mut turns)
+        }
+    }
+
+    /// The mean agreement of the turned points, a `NaN` agreement left out;
+    /// `NaN` where no turned point has one. A point left unchanged on a large
+    /// turn on weak evidence does not count: its agreement is at a plane the
+    /// run did not write.
+    pub fn mean_agreement(&self) -> f64 {
+        let (sum, n) = self
+            .points
+            .iter()
+            .filter_map(|p| match p.outcome {
+                RefineNormalsOutcome::Turned { agreement, .. } if !agreement.is_nan() => {
+                    Some(agreement)
+                }
+                _ => None,
+            })
+            .fold((0.0, 0usize), |(sum, n), z| (sum + z, n + 1));
+        if n == 0 {
+            f64::NAN
+        } else {
+            sum / n as f64
         }
     }
 
@@ -257,6 +315,14 @@ pub enum RefineNormalsError {
     /// A [`GrownPlaneNormalOptions`] setting, named, is outside what the step
     /// takes.
     BadOption(&'static str),
+    /// [`RefineNormalsOptions::point_indexes`] names a point the value does
+    /// not hold.
+    PointOutOfRange {
+        /// The index named.
+        point: u32,
+        /// How many points the value holds.
+        point_count: usize,
+    },
     /// The caller asked the run to stop, so nothing was written.
     Cancelled,
 }
@@ -294,6 +360,10 @@ impl std::fmt::Display for RefineNormalsError {
                     "the grown plane normal's {name} is outside what it takes"
                 )
             }
+            RefineNormalsError::PointOutOfRange { point, point_count } => write!(
+                f,
+                "point {point} was asked for, and the reconstruction has {point_count} points"
+            ),
             RefineNormalsError::Cancelled => write!(
                 f,
                 "the refinement was asked to stop before it had an answer, so nothing was \
@@ -340,8 +410,9 @@ impl From<RefitPointsError> for RefineNormalsError {
     }
 }
 
-/// Turn every finite point of `recon` to its grown-plane normal and hand back
-/// a copy of `recon` that holds the answers.
+/// Turn every finite point of `recon`, or every finite point of
+/// [`RefineNormalsOptions::point_indexes`], to its grown-plane normal and hand
+/// back a copy of `recon` that holds the answers.
 ///
 /// For each point this runs the steps the bench runs when a person puts the
 /// point on the bench, presses *Grown Plane Normal* and presses *Commit*, with
@@ -367,9 +438,14 @@ impl From<RefitPointsError> for RefineNormalsError {
 /// relocalized against the turned patches runs
 /// [`refit_points`](super::refit_points()) afterwards.
 ///
-/// **Every finite point is refined, held and ranged ones included**, and
-/// keeps its constraint: the step moves no centre, so a held coordinate and a
-/// ranged distance still describe the point written.
+/// **Every finite point asked for is refined, held and ranged ones
+/// included**, and keeps its constraint: the step moves no centre, so a held
+/// coordinate and a ranged distance still describe the point written.
+///
+/// **A point not asked for is not looked at**
+/// ([`RefineNormalsOutcome::NotAsked`]) and keeps every column it had. A
+/// point asked for gets the answer a run over every point gives it, since no
+/// point's step reads another point's answer.
 ///
 /// **A point at infinity is skipped** ([`RefineNormalsOutcome::AtInfinity`]):
 /// its patch faces along its own bearing, and the step refuses it. Nothing
@@ -417,7 +493,7 @@ impl From<RefitPointsError> for RefineNormalsError {
 /// # Errors
 ///
 /// [`RefineNormalsError`] states which precondition of the whole run did not
-/// hold, or that the run was cancelled.
+/// hold, that a point asked for is not in it, or that the run was cancelled.
 pub fn refine_normals(
     recon: &SfmrReconstruction,
     images: &[ProjectedImage<'_>],
@@ -430,18 +506,29 @@ pub fn refine_normals(
         NormalError::BadGrownPlaneOption(name) => RefineNormalsError::BadOption(name),
         other => unreachable!("the options' check refuses only an option: {other}"),
     })?;
+    let point_count = recon.point_count();
+    let asked = asked_points(options.point_indexes.as_deref(), point_count)?;
     let [p_refine, p_write] = progress.split([0.95, 0.05]);
 
     // The copy the write needs, wrapped once for every point's steps.
     let edited = EditedReconstruction::new(Arc::new(recon.clone_for_edit()));
-    let total = recon.point_count();
+    let total = asked
+        .as_ref()
+        .map_or(point_count, |a| a.iter().filter(|&&x| x).count());
     let refined: Option<Vec<(RefinedNormal, Option<PointRecord>)>> = {
         let mut phase = p_refine.phase("refine normals");
         let step = (total / 100).max(1);
         let done = AtomicUsize::new(0);
-        let refined = (0..total)
+        let refined = (0..point_count)
             .into_par_iter()
             .map(|p| {
+                if asked.as_ref().is_some_and(|a| !a[p]) {
+                    let status = RefinedNormal {
+                        index: p as u32,
+                        outcome: RefineNormalsOutcome::NotAsked,
+                    };
+                    return Some((status, None));
+                }
                 if phase.is_cancelled() {
                     return None;
                 }
@@ -487,6 +574,25 @@ pub fn refine_normals(
     Ok((out, report))
 }
 
+/// Which points the run refines, one flag per point; `None` for every point.
+/// A point listed twice is flagged once.
+fn asked_points(
+    point_indexes: Option<&[u32]>,
+    point_count: usize,
+) -> Result<Option<Vec<bool>>, RefineNormalsError> {
+    let Some(indexes) = point_indexes else {
+        return Ok(None);
+    };
+    let mut asked = vec![false; point_count];
+    for &point in indexes {
+        let flag = asked
+            .get_mut(point as usize)
+            .ok_or(RefineNormalsError::PointOutOfRange { point, point_count })?;
+        *flag = true;
+    }
+    Ok(Some(asked))
+}
+
 /// One point's refinement: its status, and the record to write where it
 /// changed.
 fn refine_one(
@@ -529,6 +635,7 @@ fn refine_one(
                 status(RefineNormalsOutcome::LeftUnchanged(
                     NormalLeftUnchanged::WeakTurn {
                         turn_deg: sequence.turn_deg.unwrap_or(f64::NAN),
+                        agreement: sequence.agreement(),
                     },
                 )),
                 None,
@@ -557,6 +664,7 @@ fn refine_one(
             joined: sequence.joined(),
             low_confidence: sequence.precision.is_some_and(|p| p.low_confidence),
             unchanged,
+            agreement: sequence.agreement(),
         }),
         (!unchanged).then_some(record),
     )

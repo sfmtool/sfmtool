@@ -390,6 +390,9 @@ fn a_large_turn_on_weak_evidence_keeps_the_start() {
     assert!((ratio - turn / precision.sigma_weak_deg).abs() < 1e-12);
     assert!(ratio < options.min_turn_sigma_ratio, "{report}");
     assert_eq!(sequence.joined(), centres.len() - 1, "{report}");
+    // The agreement is the joined views' at the plane found, not turned to.
+    let agreement = sequence.agreement();
+    assert!(agreement > 0.5 && agreement <= 1.0, "{report}");
     assert!(!sequence.picks.is_empty());
     assert_eq!(
         sequence.views[sequence.reference.expect("a reference")],
@@ -1541,4 +1544,69 @@ fn the_shift_only_fit_finds_the_shift_to_the_content_and_keeps_the_keypoints() {
     // Not written: every keypoint, 1.5 px off the content or not, is the one
     // the step was given.
     assert_keypoints_kept(&track, &turned);
+
+    // The agreement counts the views fitted for their shift alone beside the
+    // joined ones.
+    let scores: Vec<f64> = sequence
+        .views
+        .iter()
+        .filter_map(|v| match v {
+            GrownPlaneView::Joined { grid_zncc, .. }
+            | GrownPlaneView::ShiftOnly { grid_zncc, .. } => Some(*grid_zncc),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scores.len(), sequence.joined() + shift_only);
+    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
+    assert!((sequence.agreement() - mean).abs() < 1e-12, "{report}");
+}
+
+/// The agreement is the mean score of the joined and shift-only views, the
+/// reference and the views left out not counted and a `NaN` score left out;
+/// with no score it is `NaN`.
+#[test]
+fn the_agreement_averages_the_scored_views_only() {
+    let sequence = |views: Vec<GrownPlaneView>| GrownPlaneSequence {
+        reference: Some(0),
+        working_resolution: 16,
+        window_half_widths: Vec::new(),
+        views,
+        trace: Vec::new(),
+        picks: Vec::new(),
+        pairs: Vec::new(),
+        outcome: GrownPlaneOutcome::Turned,
+        normal: None,
+        turn_deg: None,
+        precision: None,
+    };
+    let joined = |z: f64| GrownPlaneView::Joined {
+        shift: [0.0; 2],
+        grid_zncc: z,
+        distance: None,
+        held_zncc: Some(z),
+    };
+    let left_out = GrownPlaneView::LeftOut {
+        reason: GrownPlaneRefusal::UnderFloor,
+        distance: None,
+        held_zncc: Some(0.1),
+    };
+    let scored = sequence(vec![
+        GrownPlaneView::Reference,
+        joined(0.9),
+        GrownPlaneView::ShiftOnly {
+            shift: [0.0; 2],
+            grid_zncc: 0.6,
+        },
+        joined(f64::NAN),
+        left_out.clone(),
+        GrownPlaneView::NotAttempted,
+    ]);
+    assert!((scored.agreement() - 0.75).abs() < 1e-12);
+    let none = sequence(vec![
+        GrownPlaneView::Reference,
+        left_out,
+        GrownPlaneView::NotAttempted,
+    ]);
+    assert!(none.agreement().is_nan());
+    assert!(sequence(Vec::new()).agreement().is_nan());
 }

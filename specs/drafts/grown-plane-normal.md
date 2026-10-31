@@ -79,7 +79,7 @@ pub struct GrownPlaneSequence {
     pub turn_deg: Option<f64>,             // the turn from the start to it, made or not
     pub precision: Option<GrownPlanePrecision>,
 }
-// joined(), left_out(), shift_only(), matched(), pairs_kept(), turned(),
+// joined(), left_out(), shift_only(), matched(), pairs_kept(), agreement(), turned(),
 // turn_sigma_ratio();
 // Display: "5 of 5 views joined, 2 of 2 pairs kept; σ 0.56° weakest, 0.48°
 // strongest (0.67° weakest with each view once)",

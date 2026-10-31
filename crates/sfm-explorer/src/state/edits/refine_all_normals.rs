@@ -137,7 +137,8 @@ fn refine_summary(report: &RefineNormalsReport) -> String {
                 RefineNormalsOutcome::NoBitmap => None,
                 RefineNormalsOutcome::Turned { .. }
                 | RefineNormalsOutcome::LeftUnchanged(_)
-                | RefineNormalsOutcome::AtInfinity => continue,
+                | RefineNormalsOutcome::AtInfinity
+                | RefineNormalsOutcome::NotAsked => continue,
             };
             let (k, w) = left_as_they_were(reason);
             groups[k] += 1;

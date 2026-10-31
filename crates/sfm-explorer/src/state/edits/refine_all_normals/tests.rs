@@ -179,14 +179,21 @@ fn the_entry_counts_what_happened_to_each_point() {
         joined: 3,
         low_confidence,
         unchanged,
+        agreement: 0.8,
     };
     let outcomes = [
         turned(4.0, false, false),
         turned(10.0, true, false),
         turned(2.0, false, true),
         RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::NoneJoined),
-        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::WeakTurn { turn_deg: 80.0 }),
-        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::WeakTurn { turn_deg: 75.0 }),
+        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::WeakTurn {
+            turn_deg: 80.0,
+            agreement: 0.7,
+        }),
+        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::WeakTurn {
+            turn_deg: 75.0,
+            agreement: 0.7,
+        }),
         RefineNormalsOutcome::NotRefined(NormalError::TooFewObservations(1)),
         RefineNormalsOutcome::NoBitmap,
         RefineNormalsOutcome::AtInfinity,

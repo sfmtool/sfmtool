@@ -1,15 +1,18 @@
 # Refining every point's normal
 
-`bench::refine_normals` does to every finite point of a reconstruction what the
-bench does to one point when a person puts it on the bench, presses *Grown
-Plane Normal* and presses *Commit*, with every observation kept: one plane is
+`bench::refine_normals` does to every finite point of a reconstruction, or to
+the finite points of a list, what the bench does to one point when a person
+puts it on the bench, presses *Grown Plane Normal* and presses *Commit*, with
+every observation kept: one plane is
 fitted to the photographs the point is seen in, the point's patch is turned
 about its centre to face along that plane's normal, the stored bitmap is
 rendered again from the reference observation and each observation's readings
 are taken again. The point's centre does not move and no keypoint moves. It
 returns a new reconstruction holding the answers, with
-every point at the index it had, and a report with one status per point. It
-moves no camera and no lens, and leaves points at infinity as they are.
+every point at the index it had, and a report with one status per point and,
+for each point turned, how well its views agree at the plane. It moves no
+camera and no lens, and leaves points at infinity and points not on the list as
+they are.
 
 It is what a reviewer wants when the patches of a reconstruction face the wrong
 way, for instance after a solve that stored each patch facing its cameras
@@ -34,6 +37,8 @@ and re-exported from `sfmtool_core::bench`. It has no Python binding.
 pub struct RefineNormalsOptions {
     /// The step each point gets; Track View's Grown Plane Normal runs the default.
     pub normal: GrownPlaneNormalOptions,
+    /// The points to refine; None, the default, refines every finite point.
+    pub point_indexes: Option<Vec<u32>>,
 }
 
 pub fn refine_normals(
@@ -58,16 +63,18 @@ pub enum RefineNormalsOutcome {
         joined: usize,
         low_confidence: bool,
         unchanged: bool,
+        agreement: f64,
     },
     LeftUnchanged(NormalLeftUnchanged),
     NotRefined(NormalError),
     NoBitmap,
     AtInfinity,
+    NotAsked,
 }
 
 pub enum NormalLeftUnchanged {
     NoneJoined,
-    WeakTurn { turn_deg: f64 },
+    WeakTurn { turn_deg: f64, agreement: f64 },
 }
 
 pub enum RefineNormalsError {
@@ -77,6 +84,7 @@ pub enum RefineNormalsError {
     ViewsMissing { got: usize, expected: usize },
     ImageOutOfRange { point: u32, image: u32, image_count: usize },
     BadOption(&'static str),
+    PointOutOfRange { point: u32, point_count: usize },
     Cancelled,
 }
 ```
@@ -88,9 +96,8 @@ It is shaped as `refit_points` is, for the reasons
 takes the photographs decoded, one `ProjectedImage` per image, and reads no
 file; it takes a plain `SfmrReconstruction`, so a caller holding an overlay
 folds it first and no `PointMap` comes back; it borrows the value and writes
-its answers into one copy, wrapped once for every point's steps; and it has no
-`which` argument, since one point is the bench's *Grown Plane Normal* and
-*Commit*.
+its answers into one copy, wrapped once for every point's steps. Unlike the
+refit, it takes a list of the points to refine (below).
 
 - **The options hold the step's `GrownPlaneNormalOptions`** rather than
   repeating its fields, so the refinement of a point is that step on that
@@ -98,6 +105,16 @@ its answers into one copy, wrapped once for every point's steps; and it has no
   Plane Normal* runs. They are checked once, up front
   (`GrownPlaneNormalOptions::check`), so a setting the step does not take
   refuses the run as `BadOption` rather than every point.
+- **A list of points is an option, not a second function.** A caller that
+  refines the points a command names (`inspect --strips`, `compare --strips`)
+  gets the same answers for them as a run over every point, since no point's
+  step reads another point's answer, and the report keeps one status per point
+  of the value, so an index means the same point in the input, the output and
+  the report. A point not listed is `NotAsked` and keeps every column it had.
+  An index past the last point refuses the run (`PointOutOfRange`) before
+  anything is copied, rather than being dropped, since a caller that names a
+  point it does not hold has its indexes wrong. A point listed more than once
+  is refined once.
 - **No noise level is measured.** The step and the reading it ends with weight
   no rays, so there is no `measure noise` stage and no `NoNoiseLevel` refusal,
   which the refit has.
@@ -137,30 +154,57 @@ println!(
   `σ`, with each view counted once, is over its bar. `unchanged` says the
   record agrees with the stored one (`PointRecord::agrees_with`) and the stored
   reference is not one only the display render picked, so the point was not
-  rewritten.
+  rewritten. `agreement` is how well the views agree at the plane (below).
 - `LeftUnchanged(NoneJoined)`: no view joined the plane, or the reference-view
-  rule found no reference, so there is no plane. The point keeps every column
-  it had.
-- `LeftUnchanged(WeakTurn { turn_deg })`: a view joined, but the turn to the
-  plane is large on weak evidence, so the step kept the normal. The point keeps
-  every column it had.
+  rule found no reference, so there is no plane and no agreement. The point
+  keeps every column it had.
+- `LeftUnchanged(WeakTurn { turn_deg, agreement })`: a view joined, but the
+  turn to the plane is large on weak evidence, so the step kept the normal.
+  `agreement` is the joined views' at the plane found and not turned to, so it
+  says how well they agree on that plane, not on the normal the point keeps.
+  The point keeps every column it had.
 - `NotRefined(NormalError)`: the step refused the point (fewer than two
   observations, for one), and it keeps every column it had.
 - `NoBitmap`: the step turned the patch but rendered no bitmap, in a value that
   stores one per point, so there is no record to write and the point keeps
   every column it had.
 - `AtInfinity`: the point is stored with `w = 0`, and was skipped.
+- `NotAsked`: the run was given a list of points
+  (`RefineNormalsOptions::point_indexes`) and the point is not on it. The run
+  did not look at it, and it keeps every column it had. A point at infinity
+  not on the list is `NotAsked`.
 
-The counts are read off the statuses: `read` (every status but `AtInfinity`),
-`turned`, `unchanged`, `low_confidence` (of the turned points), `none_joined`,
-`weak_turn`, `kept` (`NotRefined` and `NoBitmap`), `at_infinity`,
-`with_error(is)` and `median_turn_deg` (`NaN` where none was turned).
+The counts are read off the statuses: `read` (every status but `AtInfinity`
+and `NotAsked`), `turned`, `unchanged`, `low_confidence` (of the turned
+points), `none_joined`, `weak_turn`, `kept` (`NotRefined` and `NoBitmap`),
+`at_infinity`, `not_asked`, `with_error(is)`, `median_turn_deg` (`NaN` where
+none was turned) and `mean_agreement`.
+
+**The agreement** of a point is the mean robust grid ZNCC (`grid_zncc`) of
+the views that joined the plane (`GrownPlaneView::Joined`) or had their shift
+alone fitted at it (`GrownPlaneView::ShiftOnly`), each read against the
+reference at the final plane, as `GrownPlaneSequence::agreement` computes it.
+A view whose score is `NaN` is left out, and the agreement is `NaN` when no
+view has a score. The reference view has no `grid_zncc` of its own, since it
+is what every other view is scored against, so it does not count; a view left
+out does not count either, since it is not in the plane. A shift-only view
+does count, its score under the floor or not: it is a view of the point the
+plane has to explain, and leaving the ones that agree badly out would flatter
+the plane. The step computes no score at the starting normal, so there is no
+before-and-after difference. Under `WeakTurn` no view has its shift fitted,
+so the agreement is the joined views' alone.
+
+`mean_agreement` is the mean of the turned points' agreements, a `NaN` one
+left out, and `NaN` where no turned point has one. A `WeakTurn` point does
+not count: its agreement is at a plane the run did not write, and the mean is
+meant to describe the normals the run wrote.
 
 `RefineNormalsError` refuses the run as a whole, before anything is copied:
 `NoKeypoints`, `NoPatchFrames`, `NoPosedImage`, `ViewsMissing` and
 `ImageOutOfRange` are the refit's own checks, run by the same function
 ([`refit-points.md`](refit-points.md) § "The report"); `BadOption` names the
-setting the step does not take; `Cancelled` says the run was asked to stop.
+setting the step does not take; `PointOutOfRange` names an index of the list
+past the last point; `Cancelled` says the run was asked to stop.
 
 ## What one point's refinement is
 
@@ -210,8 +254,8 @@ divides by `w`, and the one number it derives, `turn_deg`, is the step's.
 
 ### Constraints
 
-**Every finite point is refined, held and ranged points included, and keeps
-its constraint.** The refit leaves a held point out because the fit places the
+**Every finite point asked for is refined, held and ranged points included,
+and keeps its constraint.** The refit leaves a held point out because the fit places the
 point where its keypoints say and a held point's coordinate is the reviewer's;
 it reads a ranged point's direction at its distance for the same reason
 ([`refit-points.md`](refit-points.md) § "Constraints"). The grown-plane step
@@ -247,7 +291,8 @@ write back
 Each point's step is called with `&Progress::none()`, for the reason the
 refit's fits are ([`refit-points.md`](refit-points.md) § "Stages and
 progress"); the loop's phase reports the count and the fraction from an atomic
-counter.
+counter. With a list of points, `n` is the number of points on it, each
+counted once, and a point not on it is not counted.
 
 ### Cancellation
 
@@ -323,7 +368,21 @@ on the grown plane normal's synthetic textured plane seen from six views out to
   `Cancelled` and leaves the input untouched.
 - **One thread and the default pool** give the same value.
 - **The refusals**: `sift_files`, no frames, no posed image, too few views, an
-  option the step does not take.
+  option the step does not take, a listed index past the last point.
+- **A list of points**: with point 1 at infinity, the list `[2, 1, 2]` refines
+  point 2 once, to the record and status a run over every point gives it,
+  reports point 1 `AtInfinity` and point 0 `NotAsked`, and point 0 keeps its
+  record bit for bit, its patch frame unturned, apart from the readings column
+  the write added, which holds no reading for it. An empty list refines
+  nothing and returns the value unchanged.
+- **The agreement**: each of the three points turned on the textured plane has
+  an agreement over 0.5 and at most 1, and `mean_agreement` is their mean; on
+  the flat wall no point is turned and `mean_agreement` is `NaN`.
+  `GrownPlaneSequence::agreement`'s own tests, in
+  [`bench/tests/grown_plane_normal.rs`](../../../crates/sfmtool-core/src/bench/tests/grown_plane_normal.rs),
+  check that it averages the joined and shift-only views, the reference, the
+  views left out and a `NaN` score not counted, that it is `NaN` with no score,
+  and that it is the joined views' alone under `WeakTurn`.
 
 ## Non-goals
 
@@ -331,8 +390,6 @@ on the grown plane normal's synthetic textured plane seen from six views out to
   the cameras are the input; moving the points is
   [`refit-points.md`](refit-points.md)'s refit.
 - **Changing which observations a point has.** Every verdict is pinned `in`.
-- **Refining a list of points.** The run is over every point; one point is
-  *Grown Plane Normal* and *Commit* on the bench.
 - **Choosing the normal step.** The run uses the grown-plane normal only; the
   other normal steps are per-track bench steps.
 - **A Python binding.** Python reaches the step for one track as
