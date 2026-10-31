@@ -391,8 +391,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           show_patches, show_points_at_infinity, show_target_indicator), the \
                           sizes (point_size_log2, infinity_point_px, length_scale), the patch \
                           sliders, maintain_z_up, the Advanced sliders, the Debug overlays \
-                          (show_controls_help, show_fps, show_mcp_status_line) and tool, the tool strip's choice of what an unmodified \
-                          left drag does (navigate or eraser_brush). These decide what a \
+                          (show_controls_help, show_fps, show_mcp_status_line) and tool, the \
+                          tool strip's choice of what an unmodified left drag does (navigate or \
+                          eraser_brush). These decide what a \
                           screenshot of the viewer_3d panel shows. The field of view is in \
                           get_scene's view block instead.",
             kind: Read,
