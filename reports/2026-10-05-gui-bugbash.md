@@ -383,7 +383,7 @@ would touch.
 > keeping in each image the one with the lowest reprojection error, and
 > scores the point's RMS again (`SfmrReconstruction::drop_repeat_observations`,
 > `specs/core/reconstruction/drop-repeat-observations.md`). A `.sfmr` written
-> before still holds them; branch `colmap-import-drop-repeat-observations`._
+> before still holds them; PR #1081._
 
 Point 9873 of `dino`, the longest track at 57 observations, has three
 observations in image 3, three in image 12 and three in image 25, and two in
