@@ -591,6 +591,7 @@ that need none.
 **What it does:** `check_sfmr_path` gives every command that takes a reconstruction the same usage error.
 **Why it matters:** small utility with a uniform user-facing message.
 **Recommendation:** add a note to `specs/cli/README.md` beside the `_range_options` description.
+> _Status (2026-10-31): **Done** — `specs/cli/README.md` § "How `sfm` loads its commands" now has a paragraph on the shared `_`-named helpers in `_commands/`, describing `_range_options.py` and `check_sfmr_path` in `_sfmr_path.py` (its error text and the 17 commands that call it); the README had no `_range_options` mention before, so the note went in that section, branch `fix-1031-30-sfmr-path-helper-note`._
 
 ### WGSL prelude `shaders/common.wgsl` (gui/architecture.md shader tree)
 **What it does:** `shaders/common.wgsl` declares `ReconUniforms`, `PICK_TAG_*` and `INF_DEPTH`, and six pipelines prepend it.

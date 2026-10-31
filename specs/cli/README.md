@@ -33,6 +33,21 @@ help and category, that every command defined in a `sfmtool._commands`
 module has a row, and that `import sfmtool` and `sfm --help` import none of
 numpy, OpenCV, pycolmap and the command modules.
 
+A helper that several commands share is a `_`-named module in
+`sfmtool._commands`, so it has no row in `COMMANDS`.
+[`_range_options.py`](../../src/sfmtool/_commands/_range_options.py) applies
+the `--range` option of `sfm to-colmap-bin` and `sfm to-nerfstudio`.
+[`_sfmr_path.py`](../../src/sfmtool/_commands/_sfmr_path.py) provides
+`check_sfmr_path`, which raises a `click.UsageError` reading "<label> must be
+a .sfmr file, got: <path>" when a path argument does not end in `.sfmr`
+(compared case-insensitively), so a wrong argument fails as a usage error
+rather than inside a reader or writer.
+`sfm align`, `analyze`, `compare`, `densify`, `embed-patches`, `epipolar`,
+`flow` (for its optional reconstruction), `from-colmap-bin`, `heatmap`,
+`merge`, `panorama`, `render-patches`, `to-colmap-bin`, `to-nerfstudio`,
+`undistort`, `web-export` and `xform` call it on their `.sfmr` arguments, so
+they all report that mistake in the same words.
+
 ## Workspace
 
 | Command | Spec |
