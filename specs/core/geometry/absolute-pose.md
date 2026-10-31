@@ -277,7 +277,8 @@ reprojection error over its six degrees of freedom with
 
 Refinement is **trimmed least-squares**, not a robust loss: from the initial
 pose, each of `trim_rounds` rounds computes every observation's residual norm,
-keeps those at or below the `keep_fraction`-quantile of the norms, and refits
+keeps those at or below the `keep_fraction`-quantile of the norms (the linear
+quantile of [`numeric`](../README.md#median-and-quantile)), and refits
 on that subset by Levenberg–Marquardt. Each LM step is taken over a local
 `SO(3) × ℝ³` perturbation of the pose (`R ← exp([δθ]ₓ)·R`, `t ← t + δt`), and
 the Jacobian is analytic: the projection block from
