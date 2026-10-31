@@ -87,10 +87,15 @@ The geometric filter runs only when `affines1`, `affines2` and
 `match_image_pairs_batch` runs `match_image_pair` over a list of pairs in
 parallel with Rayon, taking per-camera intrinsics and image sizes and per-image
 poses and features, and returns one result per pair in input order. The core
-function indexes its slices without checking, so its Python binding checks
-first: it raises `ValueError` when the per-image or per-camera lists differ in
-length, when a pair names an image index out of range, or when a camera index
-is negative or out of range.
+function indexes its slices without checking, so its Python binding checks the
+indexes first: it raises `ValueError` when the per-image or per-camera lists
+differ in length, when a pair names an image index out of range, or when a
+camera index is negative or out of range. It does not check array shapes. An
+intrinsic or rotation matrix that is not 3 × 3, a translation that is not of
+length 3, or a descriptor array with fewer rows than its image's positions
+panics, as does an affine-shape array with too few rows when the filter runs,
+and Python sees `pyo3_runtime.PanicException` rather than `ValueError`. The
+`match_image_pair` binding does not check shapes either.
 
 The poses are `cam_from_world` in the COLMAP/OpenCV camera convention (+Z
 forward, Y down), because everything here is pixel-space algebra on `K`, `R`
@@ -303,10 +308,12 @@ rotation.
 | `min_triangulation_angle` | `5.0` | Degrees; below it the size stage is skipped. |
 | `geometric_size_ratio_min` | `0.8` | Size stage lower bound. `sfm densify` sets it to `1 / --geometric-size-ratio-max`. |
 | `geometric_size_ratio_max` | `1.25` | Size stage upper bound. |
+| `enable_geometric_filtering` | `True` | Python dataclass only. When `False`, `feature_match.match_image_pair` passes no filter settings to the binding and `sfm densify` reads no affine shapes, so the pair is matched without the filter. `sfm densify` builds the dataclass only under `--enable-geometric-filtering`, which is off by default. |
 
 The four filter defaults are `GeometricFilterConfig::default()` in
 `geometric_filter.rs` and the matching Python dataclass in
-[`_geometric_filter.py`](../../../src/sfmtool/feature_match/_geometric_filter.py).
+[`_geometric_filter.py`](../../../src/sfmtool/feature_match/_geometric_filter.py),
+which adds `enable_geometric_filtering`.
 
 ## Python bindings
 
