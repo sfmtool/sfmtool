@@ -105,10 +105,12 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   are not options of this command. The grown plane was compared with the
   photometric search it replaced on the seoul_bull and kerry_park ground
   truths in
-  [retire-photometric-normal.md](../../drafts/retire-photometric-normal.md#measurement-2026-10-30):
+  [embed-patches-normal-rounds-amendment.md](../../drafts/embed-patches-normal-rounds-amendment.md#measurement-2026-10-30):
   lower median normal error on both, a higher mean, about one percentage
   point fewer observations passing the `0.70` blur-matched bar, and three to
-  five times the run time.
+  five times the run time, most of it in round 2's normal step. Every round
+  runs the normal step; running it in one round only is proposed in that
+  draft.
 - **Patch views.** Each point is localized over its track **plus** the other views
   that geometrically see the surfel and pass photometric vetting (based on
   `--min-relative-zncc`).

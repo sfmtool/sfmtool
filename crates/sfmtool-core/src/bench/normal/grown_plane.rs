@@ -38,7 +38,7 @@
 //! tilt fit's own unknowns and are reported, never written: the turn is made
 //! about the patch centre, so every keypoint stays as it was given.
 //!
-//! `specs/drafts/grown-plane-normal.md` is the design.
+//! `specs/core/bench/grown-plane-normal.md` specifies the step.
 
 use std::collections::BTreeSet;
 
