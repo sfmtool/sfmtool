@@ -544,6 +544,8 @@ Non-goals/deferrals checked: 1; no longer hold: 0
 
 > _Status (2026-10-17): **Partially done** — bullets 1 and 2: the `jq` example now shows `"version": 2`, with its `rig_attributes` keys in the alphabetical order the writer emits; the "must be regenerated" sentence is deleted (`sfm inspect` confirms `kerry_park.camrig` is version 2), branch `fix-round-09-camrig-example-version`. Still open: the third bullet (say what the two `measured_*` angles are)._
 
+> _Status (2026-10-31): **Done** — bullet 3: § "Rig type and attributes" now defines `measured_max_nn_angle` (largest angle from a tile direction to its nearest other tile direction; diagnostic) and `measured_max_coverage_angle` (largest angle from any direction to its nearest tile direction, estimated from 50 000 random probes; sets the half-FOV and the resampling cell radius), both in radians; "the sphere-point relaxer" is now `evenly_distributed_sphere_points`, linked to `spherical-tiles-rig.md` § "Tile layout", and the row's plain path is a link, branch `fix-1031-24-camrig-format-spec`._
+
 **Third copies:** none found.
 **Recommendation:** update spec — three small edits.
 **Unclear / incorrect / suspicious:** none.
