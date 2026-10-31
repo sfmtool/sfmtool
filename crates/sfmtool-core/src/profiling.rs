@@ -5,7 +5,7 @@
 //! share.
 //!
 //! Each `prof` module (`geometry::focal_vote::prof`, `camera::remap::prof`,
-//! `features::cluster_match::covisibility::prof` and the five under `patch`)
+//! `features::cluster_match::covisibility::prof` and the four under `patch`)
 //! declares its own phase statics, event counters and report text, and builds
 //! them from the pieces here: the cached `SFMTOOL_PROFILE` gate ([`enabled`]),
 //! the accumulating [`Phase`] timer, the [`count`] increment, and the two

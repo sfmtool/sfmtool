@@ -30,7 +30,7 @@ and the AVX2 kernels (`compute_channel_grids_avx2` for the whole grid up to
 `score_cell_one_channel_avx2` for one cell) with their scalar fallbacks,
 dispatched at runtime, in
 [keypoint_localize/kernels.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/kernels.rs).
-Opt-in phase timing (`SFMTOOL_PROFILE=1`) is in
+Opt-in phase timing ([`SFMTOOL_PROFILE=1`](../README.md#phase-timing-with-sfmtool_profile)) is in
 [keypoint_localize/prof.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/prof.rs).
 None of it is public: a caller chooses the search through
 `KeypointLocalizeParams::search_strategy` and sizes it through
