@@ -47,8 +47,8 @@ use sfmtool_core::geometry::rotation_init as core_rotation_init;
 ///     "inlier_fractions" (n_posed,)}``, or ``None`` when the arrays are
 ///     empty, ``f0`` is not finite and positive, ``max_images < 2``, no
 ///     rotation edge validates, the component is too small, or the seed
-///     baseline fails (too few near-field rows, or too few points in front
-///     of both cameras). A row of ``points`` that ``point_at_infinity`` marks
+///     baseline fails (too few near-field rows, no usable translation
+///     direction, or too few points in front of both cameras). A row of ``points`` that ``point_at_infinity`` marks
 ///     is a unit world-frame direction; other finite rows are positions. The
 ///     far-field clusters enter the finishing adjustment as directions, and
 ///     its storage decision stores every point by what its rays support.

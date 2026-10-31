@@ -36,8 +36,8 @@ The kernel models every image as one distortion-free pinhole camera, a
 `SimplePinhole` at `f0` with its principal point at the image centre, and
 reads the positions as pixels of that camera. It applies no distortion model
 anywhere: the homography test of § 1, the seed rays and the resection all
-assume that camera. Positions from a lens with real distortion, such as a fisheye,
-give wrong poses and raise no error, so a caller with such a camera
+assume that camera. Positions from a lens with real distortion, such as a
+fisheye, give wrong poses and raise no error, so a caller with such a camera
 undistorts the positions to a pinhole first.
 
 ## Frame convention
@@ -59,15 +59,16 @@ S = diag(1, −1, −1),      R_canonical = S · R_optical · S
 
 which is its own inverse (`S² = I`). This is applied once, at the boundary where
 an edge is built: nothing downstream of `build_edges` sees an optical-frame
-rotation, and nothing upstream of it sees a canonical one. Getting it wrong raises
-no error, because `S R S` is still a rotation matrix, of the same angle. Since
-`S = −M` with `M = diag(−1, 1, 1)`, `S R S = M R M`: an unconjugated rotation
-is the rotation of the scene mirrored left to right, so rotations about the
-vertical `Y` axis and the viewing `Z` axis come out in the wrong sense and
-rotations about `X` do not. The observations are not mirrored, so the result
-is not a clean mirror image of the scene but starting rotations that disagree
-with the observations. When those rotations are small, the finishing
-adjustment of § 4 can move them back: the synthetic scenes in
+rotation, and nothing upstream of it sees a canonical one. Getting it wrong
+raises no error, because `S R S` is still a rotation matrix, of the same
+angle. Since `S = −M` with `M = diag(−1, 1, 1)`, `S R S = M R M`: an
+unconjugated rotation is the rotation of the scene mirrored left to right,
+so rotations about the vertical `Y` axis and the viewing `Z` axis come out
+in the wrong sense and rotations about `X` do not. The observations are not
+mirrored, so the result is not a clean mirror image of the scene but
+starting rotations that disagree with the observations. When those rotations
+are small, the finishing adjustment of § 4 can move them back: the synthetic
+scenes in
 [tests.rs](../../../crates/sfmtool-core/src/geometry/rotation_init/tests.rs)
 pan by about 2° per image and still pass with the conjugation removed.
 
@@ -148,9 +149,10 @@ translation column. The adjustment runs with the default crossing
 ([bundle-adjustment.md](bundle-adjustment.md) § "Free points: inverse depth
 and the storage decision"), so at its end every point, far-field or not, is
 stored as a position or a direction by what its rays support at the noise the
-adjustment measures. Because the scale gauge is flat, the scale can also change without affecting
-the cost, so after the adjustment the posed translations and the positions are rescaled
-to pin the seed baseline back to unit; the directions are left alone.
+adjustment measures. Because the scale gauge is flat, the scale can also
+change without affecting the cost, so after the adjustment the posed
+translations and the positions are rescaled to pin the seed baseline back to
+unit; the directions are left alone.
 
 ## Output
 
