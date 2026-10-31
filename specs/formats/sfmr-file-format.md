@@ -334,7 +334,7 @@ JSON structure describing the reconstruction:
 - `sensor_count`: (Optional) Total sensors across all rigs. Present only when rig data exists.
 - `frame_count`: (Optional) Number of frames (temporal instants). Present only when rig data exists.
 
-A file of version 9, 10 or 11 may also carry a top-level `lineage` key, which
+A file of version 9 or later may also carry a top-level `lineage` key, which
 the format no longer defines. A reader skips it and a writer does not write it;
 see [Version 8 → Version 9](#version-8--version-9).
 
@@ -2447,6 +2447,12 @@ For the structure, a file fails verification when:
 - the tracks are not sorted by `(point_indexes, image_indexes)`, an
   `observation_counts` entry is below `1`, or the counts do not sum to
   `observation_count`;
+- in a version 12+ file with `has_uv_frames` set, `reference_observations` is
+  not `point_count` rows of 4 bytes, or a row is neither `-1` nor an index from
+  `0` to `observation_counts[i] − 1` into its point's observations, the
+  constraint
+  [`tracks/reference_observations`](#tracksreference_observationsnint32zst-with-the-patch-frame-version-12)
+  states;
 - `has_feature_indexes` in `tracks/metadata.json` disagrees with
   `feature_source`, or an `embedded_patches` file sets `has_keypoints_xy` to
   `false`;
@@ -2897,8 +2903,8 @@ Retiring the key needed **no version bump**. A version number is what a reader
 gates on to know where data is and what it means; it is not chosen by which
 optional data a file carries ([Versioning and Migration](#versioning-and-migration)).
 The key was optional from the version that introduced it, and a file without it
-has always been a valid version 9, 10 or 11 file, so every file written now is
-one that a reader of any of those versions already reads correctly. A file that
+has always been a valid file of version 9 or later, so a file written without
+it is one that a reader of its version already reads correctly. A file that
 carries the key needs no gate either, because a current reader treats it the
 same at every version: it skips the key.
 
