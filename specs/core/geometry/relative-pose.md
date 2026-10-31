@@ -53,8 +53,9 @@ them, and when the slices differ in length they use the first
 `min(r1.len(), r2.len())` correspondences and ignore the rest; the masks and
 residuals they return have that length. The Python bindings take `(N, 3)`
 `float64` arrays, normalize each row to unit length, and raise `ValueError`
-for a row that is zero or non-finite, for a shape other than `(N, 3)`, and
-for two arrays of different lengths.
+for a row that is zero or non-finite, for a 2-D array whose rows do not have
+3 entries, and for two arrays of different lengths. An array that is not
+2-D or not `float64` raises `TypeError`.
 
 | Option | Both | Rust default | Python | Meaning |
 |---|---|---|---|---|
