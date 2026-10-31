@@ -47,7 +47,7 @@ record_phases=True)` is the one binding that offers it
 Each extension submodule `<name>` has a public module `sfmtool.<name>`, a
 Python file that re-exports it with `from ._sfmtool.<name> import *` and takes
 its `__all__`, so the public module exports exactly the submodule's names, as
-the same objects:
+the same objects. `sfmtool.sift` is the exception, described below the table:
 
 | Public module | Extension submodule |
 |---------------|---------------------|
@@ -65,13 +65,18 @@ the same objects:
 | [`sfmtool.spherical`](../src/sfmtool/spherical.py) | `_sfmtool.spherical` |
 
 `sfmtool.sift` is the one subpackage among them: beside the bindings it holds
-the Python SIFT file I/O and the OpenCV and COLMAP extractors. `sfmtool.analysis`
-holds the analysis bindings and is a different module from `sfmtool.analyze`,
-the Python reconstruction analysis that calls some of them; each keeps its
-name, the one from the extension and the one from the code it holds.
-`sfmtool.fileio` is named `fileio` rather than `io` because
-`from sfmtool import *` binds every public module, and a module named `io`
-would replace the standard library's `io` in the importing namespace.
+the Python SIFT file I/O and the OpenCV and COLMAP extractors. Its
+[`__init__.py`](../src/sfmtool/sift/__init__.py) re-exports the bindings with
+`from sfmtool._sfmtool.sift import *` and sets no `__all__`, so
+`from sfmtool.sift import *` binds the bindings and also those of its Python
+submodules (`file`, `extract_opencv`, …) that are already imported.
+`sfmtool.analysis` holds the analysis bindings and is a different module from
+`sfmtool.analyze`, the Python reconstruction analysis that calls some of them;
+each keeps its name, the one from the extension and the one from the code it
+holds. `sfmtool.fileio` is named `fileio` rather than `io` because
+`from sfmtool import *` binds it with the other public modules (see below), and
+a module named `io` would replace the standard library's `io` in the importing
+namespace.
 
 The package root [`sfmtool/__init__.py`](../src/sfmtool/__init__.py) imports
 the three root names of the extension and no binding from a submodule, so a
@@ -81,13 +86,22 @@ this way, where a flat root surface would hold the binding
 `match_image_pair` and `sfmtool.feature_match` the Python
 `match_image_pair` that takes different arguments, and the bench's steps
 (`commit`, `split`, `fit`) would read as something else beside the rest. The
-public modules are bound on the root on first use through `_LAZY_SUBPACKAGES`,
-so `import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and `import
-sfmtool` still loads nothing but the extension. Since each binding's `__module__`
-is its public module, a class with a `__reduce__`, such as `CameraIntrinsics`,
-pickles and unpickles through that path. `sfmtool.write_sift` on the
-root is the Python function in `sfmtool.sift.file`, which checks its arguments
-and then calls `sfmtool.fileio.write_sift`.
+eleven public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
+and bound on the root on first use by the root's module `__getattr__`, so
+`import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and
+`import sfmtool` still loads nothing but the extension. The root also holds
+Python names, none of them a binding: `_LAZY_NAMES` maps each Python submodule
+to the names the root reads from it on first use, such as `SiftReader` and
+`write_sift` from `sfmtool.sift.file`, `extract_sift_with_colmap` from
+`sfmtool.sift.extract_colmap` and `init_workspace` from `sfmtool._workspace`.
+The root's `__all__` is the three extension names, the `_LAZY_NAMES` names and
+the `_LAZY_SUBPACKAGES` modules, so `from sfmtool import *` imports and binds
+exactly those, and no other subpackage: not `sfmtool.align`,
+`sfmtool.analyze` or `sfmtool.camera`. Since each binding's `__module__` is
+its public module, a class with a `__reduce__`, such as `CameraIntrinsics`,
+pickles and unpickles through that path. `sfmtool.write_sift` on the root is
+the Python function in `sfmtool.sift.file`, which checks its arguments and then
+calls `sfmtool.fileio.write_sift`.
 
 Code inside `src/sfmtool/` may import from `._sfmtool` directly, as it may
 import any internal name. Tests, scripts, the docs and spec examples import
@@ -100,7 +114,9 @@ it up. The same test parses each script's imports and fails on one that names
 an internal `sfmtool` module or name, since a script, unlike a test, never has
 an internal name as its subject.
 [`test_reconstruction_patches_registration.py`](../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py)
-checks that each public module exports exactly its submodule's `__all__`.
+checks that each public module exports exactly its submodule's `__all__`,
+and for `sfmtool.sift`, which has no `__all__` of its own, that it holds each
+binding as the same object.
 
 A binding's Python name carries no language suffix such as `_py` or `_rs`.
 Where the Rust function behind it is named `<name>_py` to keep it apart from

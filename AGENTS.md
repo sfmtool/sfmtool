@@ -86,11 +86,12 @@ on a path into the extension from `tests/` or `scripts/`. See
   `analyze/`, `camera/`, `camrig/`, `colmap/`, `merge/`, `motion/`, `rig/`,
   `sift/`). A plain module name there is public; a module that is not meant as
   API, such as a helper for one sibling, takes `_` (`motion/_recon_console.py`).
-- **The `sfmtool` package root** binds its public names through `_LAZY_NAMES`
-  in `__init__.py`, so its own modules are `_`-named, except `cli.py`, the
-  `sfm` entry point named in `pyproject.toml`, and the binding modules
-  (`analysis.py`, `geometry.py`, `fileio.py`, …), each of which re-exports one
-  extension submodule. The root re-exports no binding flat.
+- **The `sfmtool` package root** binds the public names of its Python
+  submodules through `_LAZY_NAMES` in `__init__.py`, and the binding modules
+  and `rig` through `_LAZY_SUBPACKAGES`, so its own modules are `_`-named,
+  except `cli.py`, the `sfm` entry point named in `pyproject.toml`, and the
+  binding modules (`analysis.py`, `geometry.py`, `fileio.py`, …), each of which
+  re-exports one extension submodule. The root re-exports no binding flat.
 - **`_commands/`** is internal as a whole, because of its underscore. Inside
   it, a plain name is a command module, one per row in `cli.COMMANDS`, and a
   helper shared by several commands takes `_` (`_range_options.py`) so it is
