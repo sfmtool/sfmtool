@@ -278,16 +278,9 @@ impl SelfSimilarityEllipse {
 }
 
 /// How far, in grid px, a length bounding what the readings cannot see may
-/// exceed the value read and still leave it exact.
-///
-/// The kernels sum in `f32`, so a surface that is the same on every line in
-/// exact arithmetic, a ridge of uniform stripes, reads crossings that differ
-/// from line to line by about 1e-7 grid px, and more where the surface falls
-/// through the level shallowly, since a crossing's error is the reading's
-/// divided by the step it is interpolated across. 1e-4 is a thousand times
-/// the rounding seen on such a ridge, and a region that widens by that much
-/// per line would take ten thousand lines past the border to widen by one
-/// grid px, so no widening that could change a reported length is excused.
+/// exceed the value read and still leave it exact: an allowance for the
+/// kernels' `f32` sums. Its size is argued under "The minor axis of a
+/// run-off" in "Lower bounds" of `specs/core/patch/zncc-self-similarity-radius.md`.
 const LENGTH_SLACK: f64 = 1e-4;
 
 /// The ellipse of the region of the `(2r + 1)²` `surface` at or above `level`,

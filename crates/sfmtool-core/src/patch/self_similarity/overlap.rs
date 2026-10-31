@@ -259,13 +259,9 @@ const BAND_ROWS: usize = 8;
 /// How many multiples of `f64::EPSILON · √N · S` a centred sum of squares
 /// taken from the summed-area tables must exceed to count as spread, where
 /// `N` is the tile's sample count and `S` its channel's sum of squares over
-/// the whole tile.
-///
-/// A rectangle's `Σ v²` and `Σ v` are differences of table entries as large
-/// as `S`, so a window constant at a level far from the tile's mean keeps a
-/// residue of a few `ε · S` after `Σ v² − (Σ v)² / n`. At a level of 60000
-/// in a 24×24 tile that is about `1e-5`, which the absolute flat test would
-/// take for texture.
+/// the whole tile. Why the tables leave such a residue is under "The dense
+/// route" in `specs/core/patch/zncc-self-similarity-radius.md`, "Implementation
+/// notes".
 const SAT_ROUNDING_ULPS: f64 = 64.0;
 
 /// A tile ready for the dense route: each channel centred by its own mean in
