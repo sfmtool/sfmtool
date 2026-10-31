@@ -138,7 +138,7 @@ def _parse_labels(text: str) -> tuple[str, str]:
     "--strips-refine/--strips-no-refine",
     default=True,
     show_default=True,
-    help="Refine patch normals for photoconsistency before rendering --strips.",
+    help="Turn the listed points to their grown-plane normals before rendering --strips.",
 )
 @click.option(
     "--strips-labels",
