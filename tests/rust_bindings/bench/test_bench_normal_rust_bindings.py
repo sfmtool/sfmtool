@@ -333,6 +333,16 @@ class TestGrownPlaneNormal:
         assert seq["left_out"] == sum(v["kind"] == "left_out" for v in views)
         assert seq["shift_only"] == sum(v["kind"] == "shift_only" for v in views)
         assert seq["matched"] == len({e["observation"] for e in seq["trace"]})
+        # The agreement is the mean score of the views in the plane.
+        scores = [
+            v["grid_zncc"]
+            for v in views
+            if v["kind"] in ("joined", "shift_only") and not np.isnan(v["grid_zncc"])
+        ]
+        if scores:
+            assert seq["agreement"] == pytest.approx(np.mean(scores))
+        else:
+            assert np.isnan(seq["agreement"])
         # Every view grown against the reference was picked, and every view
         # picked was grown.
         assert {p["observation"] for p in seq["picks"]} == {

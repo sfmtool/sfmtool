@@ -17,7 +17,8 @@ It is what a reviewer wants when the patches of a reconstruction face the wrong
 way, for instance after a solve that stored each patch facing its cameras
 rather than along its surface. The viewer runs it as **Refine All Normals** on a
 reconstruction row's context menu
-([`../../gui/edits/refine-all-normals.md`](../../gui/edits/refine-all-normals.md)).
+([`../../gui/edits/refine-all-normals.md`](../../gui/edits/refine-all-normals.md)),
+and Python calls it as `sfmtool.bench.refine_normals` (§ "Python binding").
 The per-point step is the bench's `grown_plane_normal`
 ([`editable-track.md`](editable-track.md) § "Estimating the normal", designed
 in [`../../drafts/grown-plane-normal.md`](../../drafts/grown-plane-normal.md)),
@@ -28,7 +29,7 @@ point is, sharing its preconditions and its writer.
 
 The function, its options, its report and its error are in
 [`bench/refine_normals.rs`](../../../crates/sfmtool-core/src/bench/refine_normals.rs)
-and re-exported from `sfmtool_core::bench`. It has no Python binding.
+and re-exported from `sfmtool_core::bench`.
 
 ```rust
 /// How a whole-reconstruction normal refinement runs.
@@ -339,6 +340,39 @@ capture of 250 000 observations would take on the order of two minutes on this
 machine, on top of decoding its photographs; that figure is an extrapolation,
 since no checked-in reconstruction that size carries embedded patches.
 
+## Python binding
+
+`sfmtool.bench.refine_normals(recon, images, *, point_indexes=None,
+working_resolution=None, ..., depth_likelihood_ratio_threshold=None,
+progress=None)`
+([`bench/refine_normals.rs`](../../../crates/sfmtool-py/src/bench/refine_normals.rs))
+takes an `sfmtool.reconstruction.SfmrReconstruction` and `images` as
+`sfmtool.bench.refit_points` does (one decoded image per image, or an
+`ImagePyramidSet`), `point_indexes` as `RefineNormalsOptions::point_indexes`,
+and `sfmtool.bench.grown_plane_normal`'s keyword arguments, each `None` for the
+Rust default, which make up `RefineNormalsOptions::normal`. A caller holding an
+`EditedReconstruction` folds it first with its `materialize`. A setting the
+step does not take is refused before the photographs are decoded. It runs with
+the GIL released and raises `ValueError` with the refusal's sentence.
+`progress`, an `sfmtool.ProgressCounter`, is set from the `refine normals`
+stage's count, so it climbs to that stage's `n` (§ "Stages and progress"):
+the points listed, each counted once, or every point, those at infinity
+included.
+
+It returns the new `SfmrReconstruction` and a report dict, as `refit_points`'
+binding does ([`refit-points.md`](refit-points.md) § "Python binding"), with
+the counts `read`, `turned`, `unchanged`, `low_confidence`, `none_joined`,
+`weak_turn`, `kept`, `at_infinity` and `not_asked`, `median_turn_deg`,
+`mean_agreement`, and `points`, one dict per point in index order with its
+`index` and `outcome`: `"turned"`, `"none_joined"`, `"weak_turn"`,
+`"not_refined"`, `"no_bitmap"`, `"at_infinity"` or `"not_asked"`. The two
+kinds of `LeftUnchanged` are outcomes of their own, named as the grown plane
+normal's report names its outcomes. A turned point's dict adds `turn_deg`,
+`joined`, `low_confidence`, `unchanged` and `agreement`; a `"weak_turn"` one
+adds `turn_deg` and `agreement`; a refused one adds `error`, the
+`NormalError`'s name in snake case, and `reason`, its sentence. There is no
+point map, since no index moves.
+
 ## Testing
 
 [`bench/tests/refine_normals.rs`](../../../crates/sfmtool-core/src/bench/tests/refine_normals.rs),
@@ -383,6 +417,15 @@ on the grown plane normal's synthetic textured plane seen from six views out to
   views left out and a `NaN` score not counted, that it is `NaN` with no score,
   and that it is the joined views' alone under `WeakTurn`.
 
+[`tests/rust_bindings/bench/test_refine_normals_rust_bindings.py`](../../../tests/rust_bindings/bench/test_refine_normals_rust_bindings.py)
+checks the binding on the seoul_bull ground truth: no position, keypoint or
+index moves, only the rewritten points' normals change, and the input is
+unchanged; the report's statuses and counts; each turned point's agreement is
+finite and `mean_agreement` is their mean; a list of points gets the statuses a
+run over every point gives them, and the other points keep their normals and
+are `"not_asked"`; the refusals; a refused point's `error` and `reason`; and the
+progress counter.
+
 ## Non-goals
 
 - **Moving a point, a camera or a lens.** The centre is kept and the poses and
@@ -391,5 +434,3 @@ on the grown plane normal's synthetic textured plane seen from six views out to
 - **Changing which observations a point has.** Every verdict is pinned `in`.
 - **Choosing the normal step.** The run uses the grown-plane normal only; the
   other normal steps are per-track bench steps.
-- **A Python binding.** Python reaches the step for one track as
-  `sfmtool.bench.grown_plane_normal`.

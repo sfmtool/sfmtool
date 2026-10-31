@@ -2,7 +2,7 @@
 
 **Status:** Draft. Every caller of the photometric normal refinement (`patch::normal_refine::refine_patch_normal` and its batch form `refine_patch_cloud_normals`) switches to the grown-plane normal, and the photometric search is then deleted. The work is a sequence of pull requests, one per step below.
 
-Built: step 1, the point list (`RefineNormalsOptions::point_indexes`, outcome `NotAsked`, refusal `PointOutOfRange`) and the agreement (`GrownPlaneSequence::agreement`, carried on `Turned` and on `LeftUnchanged(WeakTurn)`, with the report's `mean_agreement` over the turned points), described in [core/bench/refine-normals.md](../core/bench/refine-normals.md). Not built: steps 2 to 9.
+Built: step 1, the point list (`RefineNormalsOptions::point_indexes`, outcome `NotAsked`, refusal `PointOutOfRange`) and the agreement (`GrownPlaneSequence::agreement`, carried on `Turned` and on `LeftUnchanged(WeakTurn)`, with the report's `mean_agreement` over the turned points), described in [core/bench/refine-normals.md](../core/bench/refine-normals.md); step 2, the Python binding `sfmtool.bench.refine_normals`, described in the same spec's § "Python binding". Not built: steps 3 to 9.
 
 Decided (2026-10-30): `sfm xform --refine-normals` keeps its name; `compare --strips` reports the grown plane's agreement score where it reported the mean ΔΦ; `sfm embed-patches` keeps its rounds of "refine normals, select views, refine keypoints" with only the normal step swapped. Whether `embed-patches` needs the normal step in every round is left for later.
 
@@ -43,7 +43,7 @@ Each step is one pull request through the `implement-change` skill, and each upd
 
 ### 2. A Python binding for `bench::refine_normals`
 
-`sfmtool.bench.refine_normals(recon, images, *, point_indexes=None, progress=None)` returns the new reconstruction and a report: counts (turned, unchanged, left unchanged, not refined, at infinity), the median turn and the mean agreement, plus per-point arrays of outcome, turn and agreement.
+`sfmtool.bench.refine_normals(recon, images, *, point_indexes=None, <grown_plane_normal's keywords>, progress=None)` returns the new reconstruction and a report dict shaped as `sfmtool.bench.refit_points`' is: the counts (`read`, `turned`, `unchanged`, `low_confidence`, `none_joined`, `weak_turn`, `kept`, `at_infinity`, `not_asked`), `median_turn_deg` and `mean_agreement`, and `points`, one dict per point with its `outcome` and, where they apply, its `turn_deg` and `agreement`. `progress` is an `sfmtool.ProgressCounter`, as `PatchCloud.refine_normals` takes, so step 6 keeps its progress bar.
 
 ### 3. `sfm xform --refine-normals`
 

@@ -630,6 +630,7 @@ fn sequence_dict<'py>(
     d.set_item("normal", maybe_vector(py, sequence.normal))?;
     d.set_item("turn_deg", sequence.turn_deg)?;
     d.set_item("turn_sigma_ratio", sequence.turn_sigma_ratio())?;
+    d.set_item("agreement", sequence.agreement())?;
     let precision = match &sequence.precision {
         Some(p) => {
             let q = PyDict::new(py);
@@ -1131,7 +1132,9 @@ fn grid_plane_normal(
 /// turn from the start to that plane, the report's ``tilt`` degrees it gives
 /// or would have given, or ``None``), ``turn_sigma_ratio`` (``turn_deg``
 /// over ``sigma_weak_deg``, 0 where that is not finite, or ``None``),
-/// ``precision`` (``None`` when no
+/// ``agreement`` (the mean ``grid_zncc`` at the final plane of the views
+/// ``"joined"`` and ``"shift_only"``, a ``NaN`` score left out; ``NaN`` when
+/// none has a score), ``precision`` (``None`` when no
 /// view joined, else ``sigma_weak_deg`` and ``sigma_strong_deg`` from every
 /// kept estimate's information summed, ``discounted_sigma_weak_deg`` and
 /// ``discounted_sigma_strong_deg`` with each kept pair's halved, and
@@ -1249,36 +1252,33 @@ fn grown_plane_normal(
     depth_likelihood_ratio_threshold: Option<f64>,
     record_phases: bool,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let defaults = GrownPlaneNormalOptions::default();
-    let options = GrownPlaneNormalOptions {
+    let options = GrownPlaneKeywords {
         working_resolution,
-        spot_window: spot_window.unwrap_or(defaults.spot_window),
-        window_fractions: window_fractions.unwrap_or_else(|| defaults.window_fractions.clone()),
-        zncc_tolerance: zncc_tolerance.unwrap_or(defaults.zncc_tolerance),
-        max_agreement_distance: max_agreement_distance.unwrap_or(defaults.max_agreement_distance),
-        min_held_zncc: min_held_zncc.unwrap_or(defaults.min_held_zncc),
-        low_confidence_sigma_deg: low_confidence_sigma_deg
-            .unwrap_or(defaults.low_confidence_sigma_deg),
-        weak_turn_deg: weak_turn_deg.unwrap_or(defaults.weak_turn_deg),
-        min_turn_sigma_ratio: min_turn_sigma_ratio.unwrap_or(defaults.min_turn_sigma_ratio),
-        max_pairs: max_pairs.unwrap_or(defaults.max_pairs),
-        target_sigma_deg: target_sigma_deg.unwrap_or(defaults.target_sigma_deg),
-        max_selected_views: max_selected_views.unwrap_or(defaults.max_selected_views),
-        first_rung_deg: first_rung_deg.unwrap_or(defaults.first_rung_deg),
-        first_rung_min_deg: first_rung_min_deg.unwrap_or(defaults.first_rung_min_deg),
-        first_rung_max_deg: first_rung_max_deg.unwrap_or(defaults.first_rung_max_deg),
-        rung_ratio: rung_ratio.unwrap_or(defaults.rung_ratio),
-        min_coverage: min_coverage.unwrap_or(defaults.min_coverage),
-        max_iterations: max_iterations.unwrap_or(defaults.max_iterations),
-        initial_damping: initial_damping.unwrap_or(defaults.initial_damping),
-        min_improvement: min_improvement.unwrap_or(defaults.min_improvement),
-        fit: fit_options(
-            max_seed_offset_px,
-            max_cache_bytes,
-            sigma_px,
-            depth_likelihood_ratio_threshold,
-        ),
-    };
+        spot_window,
+        window_fractions,
+        zncc_tolerance,
+        max_agreement_distance,
+        min_held_zncc,
+        low_confidence_sigma_deg,
+        weak_turn_deg,
+        min_turn_sigma_ratio,
+        max_pairs,
+        target_sigma_deg,
+        max_selected_views,
+        first_rung_deg,
+        first_rung_min_deg,
+        first_rung_max_deg,
+        rung_ratio,
+        min_coverage,
+        max_iterations,
+        initial_damping,
+        min_improvement,
+        max_seed_offset_px,
+        max_cache_bytes,
+        sigma_px,
+        depth_likelihood_ratio_threshold,
+    }
+    .options();
     // Refuse the settings before the photographs are decoded.
     options.check().map_err(refused)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
@@ -1304,6 +1304,86 @@ fn grown_plane_normal(
         },
         d.unbind(),
     ))
+}
+
+/// The grown plane normal's keyword arguments, each `None` where the caller
+/// left it out. [`grown_plane_normal`] and the run over every point,
+/// `refine_normals`, take the same ones.
+pub(super) struct GrownPlaneKeywords {
+    pub(super) working_resolution: Option<u32>,
+    pub(super) spot_window: Option<u32>,
+    pub(super) window_fractions: Option<Vec<f64>>,
+    pub(super) zncc_tolerance: Option<f64>,
+    pub(super) max_agreement_distance: Option<f64>,
+    pub(super) min_held_zncc: Option<f64>,
+    pub(super) low_confidence_sigma_deg: Option<f64>,
+    pub(super) weak_turn_deg: Option<f64>,
+    pub(super) min_turn_sigma_ratio: Option<f64>,
+    pub(super) max_pairs: Option<usize>,
+    pub(super) target_sigma_deg: Option<f64>,
+    pub(super) max_selected_views: Option<usize>,
+    pub(super) first_rung_deg: Option<f64>,
+    pub(super) first_rung_min_deg: Option<f64>,
+    pub(super) first_rung_max_deg: Option<f64>,
+    pub(super) rung_ratio: Option<f64>,
+    pub(super) min_coverage: Option<f64>,
+    pub(super) max_iterations: Option<u32>,
+    pub(super) initial_damping: Option<f64>,
+    pub(super) min_improvement: Option<f64>,
+    pub(super) max_seed_offset_px: Option<f64>,
+    pub(super) max_cache_bytes: Option<usize>,
+    pub(super) sigma_px: Option<f64>,
+    pub(super) depth_likelihood_ratio_threshold: Option<f64>,
+}
+
+impl GrownPlaneKeywords {
+    /// The step's options: each keyword given, and the Rust default for each
+    /// one left out.
+    pub(super) fn options(self) -> GrownPlaneNormalOptions {
+        let defaults = GrownPlaneNormalOptions::default();
+        GrownPlaneNormalOptions {
+            working_resolution: self.working_resolution,
+            spot_window: self.spot_window.unwrap_or(defaults.spot_window),
+            window_fractions: self
+                .window_fractions
+                .unwrap_or_else(|| defaults.window_fractions.clone()),
+            zncc_tolerance: self.zncc_tolerance.unwrap_or(defaults.zncc_tolerance),
+            max_agreement_distance: self
+                .max_agreement_distance
+                .unwrap_or(defaults.max_agreement_distance),
+            min_held_zncc: self.min_held_zncc.unwrap_or(defaults.min_held_zncc),
+            low_confidence_sigma_deg: self
+                .low_confidence_sigma_deg
+                .unwrap_or(defaults.low_confidence_sigma_deg),
+            weak_turn_deg: self.weak_turn_deg.unwrap_or(defaults.weak_turn_deg),
+            min_turn_sigma_ratio: self
+                .min_turn_sigma_ratio
+                .unwrap_or(defaults.min_turn_sigma_ratio),
+            max_pairs: self.max_pairs.unwrap_or(defaults.max_pairs),
+            target_sigma_deg: self.target_sigma_deg.unwrap_or(defaults.target_sigma_deg),
+            max_selected_views: self
+                .max_selected_views
+                .unwrap_or(defaults.max_selected_views),
+            first_rung_deg: self.first_rung_deg.unwrap_or(defaults.first_rung_deg),
+            first_rung_min_deg: self
+                .first_rung_min_deg
+                .unwrap_or(defaults.first_rung_min_deg),
+            first_rung_max_deg: self
+                .first_rung_max_deg
+                .unwrap_or(defaults.first_rung_max_deg),
+            rung_ratio: self.rung_ratio.unwrap_or(defaults.rung_ratio),
+            min_coverage: self.min_coverage.unwrap_or(defaults.min_coverage),
+            max_iterations: self.max_iterations.unwrap_or(defaults.max_iterations),
+            initial_damping: self.initial_damping.unwrap_or(defaults.initial_damping),
+            min_improvement: self.min_improvement.unwrap_or(defaults.min_improvement),
+            fit: fit_options(
+                self.max_seed_offset_px,
+                self.max_cache_bytes,
+                self.sigma_px,
+                self.depth_likelihood_ratio_threshold,
+            ),
+        }
+    }
 }
 
 /// Register the normal steps on the `sfmtool.bench` submodule.

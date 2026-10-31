@@ -3954,7 +3954,8 @@ observation index, or `None`), `working_resolution`, `window_half_widths` (a
 list of ints), `outcome` (`"turned"`, `"none_joined"` or `"weak_turn"`),
 `normal` (an array, the plane found under `"weak_turn"` too, or `None` when
 no view joined), `turn_deg` and `turn_sigma_ratio` (the turn to that plane
-and its ratio to `sigma_weak_deg`, or `None`),
+and its ratio to `sigma_weak_deg`, or `None`), `agreement`
+(`GrownPlaneSequence::agreement`, `NaN` when no view has a score),
 `precision` (`None`, or `sigma_weak_deg`, `sigma_strong_deg`,
 `discounted_sigma_weak_deg`, `discounted_sigma_strong_deg` and
 `low_confidence`), `turned`, `joined`, `left_out`, `shift_only`, `matched`,

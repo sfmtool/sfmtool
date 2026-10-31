@@ -61,6 +61,7 @@ mod nearby_tracks;
 mod normal;
 mod patch_read;
 mod range;
+mod refine_normals;
 mod refit_points;
 mod track_at_pixel;
 
@@ -2482,6 +2483,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     normal::register(m)?;
     patch_read::register(m)?;
     range::register(m)?;
+    refine_normals::register(m)?;
     refit_points::register(m)?;
     track_at_pixel::register(m)?;
     Ok(())
