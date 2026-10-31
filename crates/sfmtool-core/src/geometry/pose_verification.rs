@@ -5,10 +5,10 @@
 //! ([`verify_poses`] / [`repair_poses`]).
 //!
 //! Detects and repairs misregistered cameras in a reconstruction without a
-//! reference solve, an image ordering, or a motion model. The ruler is the
-//! [`DisplacementNeighborhood`] substrate — which images are near-duplicate
-//! viewpoints of which, measured by keypoint displacement over the 2D cluster
-//! tracks — and [`verify_poses`] holds the current poses against it with two
+//! reference solve, an image ordering, or a motion model. The screens compare
+//! the current poses with the [`DisplacementNeighborhood`] substrate, which
+//! records which images are near-duplicate viewpoints of which, measured by
+//! keypoint displacement over the 2D cluster tracks. [`verify_poses`] runs two
 //! screens: self-resection of each camera against its own 2D-3D support, and the
 //! measured relative rotation of each low-displacement neighbour pair against
 //! the pose-implied one. [`repair_poses`] re-initializes a flagged camera from
@@ -491,15 +491,9 @@ pub fn verify_poses(
 /// Verify, then repair the flagged cameras against the displacement
 /// neighborhood. See the module docs and `specs/core/geometry/pose-verification.md`.
 ///
-/// Runs [`verify_poses`], then walks the flagged cameras in ascending image
-/// order: re-initialize from the top-2 `nearest` registered neighbours
-/// (chordal mean of their rotations, mean of their centres, `t = −R·c`),
-/// trimmed pose-only refinement against the current structure, and accept
-/// only when the all-observation inlier fraction reaches
-/// `max(inlier_floor, before + inlier_margin)`. Accepted repairs update the
-/// working poses (later repairs see them); rejected repairs leave the pose
-/// untouched and the flag standing. Deterministic for identical inputs and
-/// seed.
+/// Runs [`verify_poses`], then attempts a pose-only repair of each flagged
+/// camera in ascending image order, as the spec's § Repair describes.
+/// Deterministic for identical inputs and seed.
 #[allow(clippy::too_many_arguments)]
 pub fn repair_poses(
     cluster_indexes: &[u32],
