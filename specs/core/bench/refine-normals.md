@@ -3,16 +3,15 @@
 `bench::refine_normals` does to every finite point of a reconstruction, or to
 the finite points of a list, what the bench does to one point when a person
 puts it on the bench, presses *Grown Plane Normal* and presses *Commit*, with
-every observation kept: one plane is
-fitted to the photographs the point is seen in, the point's patch is turned
-about its centre to face along that plane's normal, the stored bitmap is
-rendered again from the reference observation and each observation's readings
-are taken again. The point's centre does not move and no keypoint moves. It
-returns a new reconstruction holding the answers, with
-every point at the index it had, and a report with one status per point and,
-for each point turned, how well its views agree at the plane. It moves no
-camera and no lens, and leaves points at infinity and points not on the list as
-they are.
+every observation kept: one plane is fitted to the photographs the point is
+seen in, the point's patch is turned about its centre to face along that
+plane's normal, the stored bitmap is rendered again from the reference
+observation and each observation's readings are taken again. The point's
+centre does not move and no keypoint moves. It returns a new reconstruction
+holding the answers, with every point at the index it had, and a report with
+one status per point and, for each point turned, how well its views agree at
+the plane. It moves no camera and no lens, and leaves points at infinity and
+points not on the list as they are.
 
 It is what a reviewer wants when the patches of a reconstruction face the wrong
 way, for instance after a solve that stored each patch facing its cameras
@@ -255,15 +254,15 @@ divides by `w`, and the one number it derives, `turn_deg`, is the step's.
 ### Constraints
 
 **Every finite point asked for is refined, held and ranged points included,
-and keeps its constraint.** The refit leaves a held point out because the fit places the
-point where its keypoints say and a held point's coordinate is the reviewer's;
-it reads a ranged point's direction at its distance for the same reason
-([`refit-points.md`](refit-points.md) § "Constraints"). The grown-plane step
-moves no centre: the position written is the stored one, bit for bit, so a
-held coordinate and a ranged distance both still describe the point. The
-record carries the point's stored constraint triple, so the point is written
-held or ranged as it was. The step writes no keypoint either, so the point's
-rays say what they said before the run.
+and keeps its constraint.** The refit leaves a held point out because the
+fit places the point where its keypoints say and a held point's coordinate is
+the reviewer's; it reads a ranged point's direction at its distance for the
+same reason ([`refit-points.md`](refit-points.md) § "Constraints"). The
+grown-plane step moves no centre: the position written is the stored one, bit
+for bit, so a held coordinate and a ranged distance both still describe the
+point. The record carries the point's stored constraint triple, so the point
+is written held or ranged as it was. The step writes no keypoint either, so
+the point's rays say what they said before the run.
 
 A ranged point at an infinite distance is stored with `w = 0`, so it is
 skipped as a point at infinity.
