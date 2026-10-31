@@ -163,7 +163,7 @@ fn flatten_stack(xs: &[Vec<Vec<f64>>]) -> (Vec<f32>, usize, usize, usize) {
 fn sum_sq_diff_avx2_matches_scalar() {
     // The dispatched AVX2 residual reduction agrees with the scalar reference
     // (up to f32 summation order), including a length that exercises the n % 8
-    // tail. Mirrors fronto_cache::resample_avx2_matches_scalar.
+    // tail.
     for len in [0usize, 1, 7, 8, 31, 173, 512] {
         let row: Vec<f32> = (0..len)
             .map(|i| ((i * 7 % 53) as f32 - 26.0) * 0.13)

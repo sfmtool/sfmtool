@@ -67,9 +67,8 @@ fn from_center_normal_render_is_upright() {
 fn repose_preserves_upright_orientation() {
     // Reposing a patch onto a new (still camera-facing) normal must keep it
     // upright — the in-plane orientation is preserved across the normal change,
-    // it does not accumulate a 90° turn per repose. Uses the public
-    // `from_center_normal`/`normal` surface (repose is crate-internal): rebuild
-    // the frame from the patch's own `v_axis`, exactly as `repose_patch` does.
+    // it does not accumulate a 90° turn per repose. Rebuilds the frame on the
+    // new normal from the patch's own `v_axis` with `from_center_normal`.
     let (f, cx, cy) = (500.0, 320.0, 240.0);
     let cam = pinhole(f, cx, cy, 640, 480);
     let pose = RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
