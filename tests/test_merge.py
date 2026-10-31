@@ -664,18 +664,9 @@ class TestMergePointsAtInfinity:
             for recon_idx, point_id in group:
                 assert not recons[recon_idx].point_is_at_infinity[point_id]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "merge_points_and_tracks in sfmtool-core averages positions as "
-            "[f64; 3] and drops w, so a point at infinity comes out as a finite "
-            "point at unit distance along its direction. Fixing it needs a rule "
-            "for merging a finite point with a point at infinity that shares "
-            "its observations, and pose refinement must leave points at "
-            "infinity out of PnP."
-        ),
-    )
     def test_merge_keeps_points_at_infinity(self, seoul_bull_workspace, tmp_path):
+        """Both halves hold the same points at infinity, so the merge keeps each
+        at infinity along its direction and makes no other point one."""
         original, subset_a, subset_b, infinite_ids = _subsets_with_points_at_infinity(
             seoul_bull_workspace, tmp_path
         )
@@ -684,6 +675,7 @@ class TestMergePointsAtInfinity:
 
         mapping = _merged_point_ids(original, merged, set(infinite_ids.tolist()))
         assert len(mapping) == len(infinite_ids)
+        assert merged.point_is_at_infinity.sum() == len(infinite_ids)
         for orig_id, merged_id in mapping.items():
             assert merged.point_is_at_infinity[merged_id]
             assert np.allclose(
