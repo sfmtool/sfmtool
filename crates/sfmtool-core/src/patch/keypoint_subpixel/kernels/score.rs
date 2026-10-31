@@ -15,7 +15,7 @@ use crate::patch::keypoint_subpixel::prof;
 /// support into `out` (`out[channel * n + k]`), folding `√w` in so a plain dot
 /// realizes the windowed inner product. A channel flat in this core (windowed
 /// norm² below [`FLAT_NORM_SQ_EPS`]) is written as zeros. Mirrors
-/// `keypoint_localize::znorm_core` / `normal_refine::znormalize_into`.
+/// `keypoint_localize::znorm_core` / `normal_refine::znormalize_into_kept`.
 pub(in crate::patch::keypoint_subpixel) fn znorm_core(
     raw: &[f32],
     support: &Support,

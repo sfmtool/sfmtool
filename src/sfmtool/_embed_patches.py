@@ -5,8 +5,8 @@
 
 :func:`embed_patches` runs the whole photometric pipeline (see
 [the pipeline spec](../../specs/core/patch/sift-to-patch-reconstruction.md)): it
-converts to the baseline embedded form, photometrically refines each point's
-patch normal, selects + vets the patch views per point, aligns every view's
+converts to the baseline embedded form, turns each point's patch to its
+grown-plane normal, selects + vets the patch views per point, aligns every view's
 keypoint to the point's reference render (with sub-pixel refinement), then hands the results to
 :func:`sfmtool._patch_compaction.compact_to_embedded_patches` — the write tail
 that culls under-supported points and renumbers the survivors into a valid
@@ -30,6 +30,7 @@ from sfmtool._patch_compaction import (
 )
 from sfmtool._pose_math import recon_camera_centers
 from sfmtool._progress import _poll_progress, _timed_step
+from sfmtool._sfmtool.bench import refine_normals
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import ImagePyramidSet, PatchCloud
 from sfmtool.xform._filter_by_zncc_self_similarity_radius import (
@@ -223,7 +224,7 @@ def _keypoint_anchoring_enabled() -> bool:
     A stored keypoint is the position an observation was actually matched at; the
     reprojection carries the point's residual, so sampling there measures the
     appearance shifted by that residual. The stages that already had a way to say
-    so (normal refinement, the sub-pixel refiner) have always been anchored; this
+    so (the normal step, the sub-pixel refiner) have always been anchored; this
     switch covers the two that gained one later — view selection and the discrete
     localizer. ``SFMTOOL_EMBED_KEYPOINT_ANCHOR=0`` reverts both to projection
     anchoring.
@@ -271,6 +272,40 @@ def _mean_angle_deg(n0: np.ndarray, n1: np.ndarray) -> float:
         return 0.0
     dots = np.clip(np.sum(n0 * n1, axis=1), -1.0, 1.0)
     return float(np.degrees(np.arccos(dots)).mean())
+
+
+def _grown_plane_normals(
+    recon: SfmrReconstruction,
+    pyramids: ImagePyramidSet,
+    log: Any,
+    label: str,
+) -> PatchCloud:
+    """Turn each finite point's patch of ``recon`` to its grown-plane normal
+    (``sfmtool.bench.refine_normals`` on its default settings) and return the
+    turned patch frames.
+
+    The plane is fitted over each point's track, every observation ``in``, at
+    the keypoints ``recon`` stores; no keypoint moves. A point at infinity, and
+    a point the step leaves unchanged or refuses, keeps its frame. Only the
+    frames are taken from the refined value: its colours, reference
+    observations and readings are not, since the later steps choose each
+    point's reference, and the compaction and the final passes write the
+    colours, bitmaps and readings the output stores.
+    """
+    with (
+        _timed_step(log, f"  {label}: refining normals ({recon.point_count} pts)..."),
+        _poll_progress(log, recon.point_count) as counter,
+    ):
+        refined, report = refine_normals(recon, pyramids, progress=counter)
+    if log:
+        agreement = report["mean_agreement"]
+        agreement_text = "n/a" if np.isnan(agreement) else f"{agreement:.2f}"
+        log(
+            f"  {label}: turned {report['turned']} of {report['read']} normals "
+            f"(mean agreement {agreement_text}); left unchanged: "
+            f"{report['none_joined'] + report['weak_turn']}, refused: {report['kept']}"
+        )
+    return refined.patches
 
 
 def _drop_grazing_observations(
@@ -400,9 +435,6 @@ def embed_patches(
     subpixel: bool = True,
     rounds: int = 2,
     max_obliquity_deg: float = 80.0,
-    obliquity_weight_power: float = 2.0,
-    fronto_prior_weight: float = 0.05,
-    max_refine_views: int = 8,
     max_zncc_self_similarity_radius: float = DEFAULT_MAX_ZNCC_SELF_SIMILARITY_RADIUS,
     localize_search_strategy: str = "exhaustive",
     sampler: str = "per_view",
@@ -418,10 +450,11 @@ def embed_patches(
        frame, copies each observation's SIFT detection keypoint inline, and reads
        each image's hash from the ``.sift`` metadata. Everything below runs
        ``embedded_patches → embedded_patches``.
-    1. **Refine each normal** photometrically, anchoring every view on its stored
-       (SIFT) keypoint rather than the reprojected point center
-       (``use_stored_keypoints``). Points at infinity keep their fixed
-       tangent-sphere frame untouched.
+    1. **Refine each normal**: turn each finite point's patch to its
+       grown-plane normal (``sfmtool.bench.refine_normals`` on its default
+       settings), the one plane fitted over the point's track at the stored
+       (SIFT) keypoints. No keypoint moves. A point at infinity, and a point
+       the step leaves unchanged or refuses, keeps its frame.
     2. **Select the patch views** per point: the track plus other views that
        geometrically see the surfel and clear ``min_relative_zncc`` against a
        track-seeded template — the track views again rendered at their stored
@@ -484,9 +517,9 @@ def embed_patches(
             away, so it is refused before it is scored. The radius reads at most ``3``,
             so ``3`` or more turns nothing out; ``0`` disables it. Default ``2.5``.
         resolution: The ``R × R`` patch grid the kernels render/score on.
-        sampler: Pyramid sampler for every photometric kernel in the pipeline
-            (normal refinement, view selection, the discrete localizer, and the
-            sub-pixel refiner): ``"per_view"`` (default: the sampler rule picks
+        sampler: Pyramid sampler for view selection, the discrete localizer,
+            the sub-pixel refiner and the stored bitmaps (the normal step uses
+            the grown plane's own sampling): ``"per_view"`` (default: the sampler rule picks
             ``"anisotropic"`` or ``"bilinear_mip"`` for each view from its
             zoom), or one sampler for every view, ``"bilinear_mip"``,
             ``"bilinear"`` or ``"anisotropic"``.
@@ -496,9 +529,11 @@ def embed_patches(
             render-only pass to render the stored bitmaps + validity at those
             keypoints).
         rounds: Number of (normal-refinement, keypoint-refinement) rounds. Round 1
-            runs the SIFT-anchored normal refine, the discrete localizer (the
-            seed), then the sub-pixel keypoint refine. Each subsequent round
-            re-refines every normal against the *previous* round's keypoints, then
+            fits the grown-plane normal at the SIFT keypoints, then runs the
+            discrete localizer (the seed) and the sub-pixel keypoint refine. Each
+            subsequent round fits every normal again over the point's current
+            views (those view selection added included) at the *previous*
+            round's keypoints, then
             re-refines the keypoints against the new normals — a fixed-point
             alternation. The per-point patch views can only shrink across rounds (the
             grazing-observation drop below); it is never expanded after round 1.
@@ -511,29 +546,6 @@ def embed_patches(
             view only crosses the threshold once the tilt reaches it — pruning each
             round chases the tilt and culls a surfel that has gone fully edge-on
             rather than letting it settle into a smear.
-        obliquity_weight_power: Exponent ``p`` of the multiplicative obliquity
-            view-weight ``|v̂·n|^p`` folded into the robust normal-refinement
-            consensus (use A). ``0.0`` disables it; ``2.0`` (default) is the
-            ``cos²θ`` foreshortening weight that softly down-weights oblique views —
-            a continuous complement to the hard ``max_obliquity_deg`` cut.
-        fronto_prior_weight: Weight ``λ`` of the additive fronto-parallel prior
-            ``λ·mean_v (v̂·n)²`` on each candidate normal during refinement (use B).
-            ``0.0`` disables it; the small default (``0.05``) pulls a low-parallax
-            (flat-``Φ``) normal toward facing the cameras instead of drifting to a
-            photometrically-equivalent tilt, without overriding a normal that real
-            parallax constrains.
-        max_refine_views: When ``> 0``, cap the **round-2+ normal-refinement
-            basis** at this many views per point — the D-optimal geometric pick of
-            the most normal-informative views (see
-            ``specs/core/patch/patch-normal-refine-view-subset.md``). Applied only to the
-            fine-tuning rounds, whose patch views are the ``select_views``-expanded one;
-            the round-1 (raw-track) refine is untouched. Lossless for the output:
-            only the refinement basis shrinks — every observation stays, and the
-            stored bitmaps still pick their reference view from all the patch views. ``0`` uses
-            all views (disables the cap); the default is ``8`` (cuts roughly a
-            third off end-to-end time on points with many views — the round-2+ refine
-            pass itself ~5x — at the cost of a different, not necessarily worse,
-            normal on high-view points).
         max_zncc_self_similarity_radius: Cull points whose round-1 stored
             bitmap can slide over itself further than this, in **patch-grid px**,
             **early** — right after round 1's localize + sub-pixel refine, before
@@ -593,28 +605,14 @@ def embed_patches(
                 normal="mean_viewing", extent="feature_size", extent_value=half_extent
             )
 
-    # 1. Refine each normal over the embedded recon, anchoring every view on its
-    #    stored SIFT keypoint (use_stored_keypoints) instead of the reprojected
-    #    center. (Stored bitmaps are NOT rendered here — the final round's
-    #    sub-pixel pass renders them at the final keypoints, step 3.5.)
-    cloud = embedded.patches
-    if cloud is None:
+    # 1. Turn each finite point's patch to its grown-plane normal, fitted at
+    #    the stored SIFT keypoints. (Stored bitmaps are NOT rendered here — the
+    #    final round's sub-pixel pass renders them at the final keypoints,
+    #    step 3.5.)
+    if embedded.patches is None:
         raise ValueError("to_embedded_patches produced no patch frames to refine")
-    n_before = _patch_normals(cloud) if log else None
-    with (
-        _timed_step(log, f"  round 1/{rounds}: refining normals ({len(cloud)} pts)..."),
-        _poll_progress(log, len(cloud)) as counter,
-    ):
-        cloud.refine_normals(
-            embedded,
-            pyramids,
-            resolution=resolution,
-            use_stored_keypoints=True,
-            obliquity_weight_power=obliquity_weight_power,
-            fronto_prior_weight=fronto_prior_weight,
-            sampler=sampler,
-            progress=counter,
-        )
+    n_before = _patch_normals(embedded.patches) if log else None
+    cloud = _grown_plane_normals(embedded, pyramids, log, f"round 1/{rounds}")
 
     # 2. Expand + vet the patch views per point (round 1 only; membership is fixed
     #    afterwards).
@@ -763,39 +761,17 @@ def embed_patches(
     # consistent in the compacted dense indexing.
     work_recon, work_cloud, work_loc = recon, cloud, localizations
     hashes = embedded.image_file_hashes
-    if log and max_refine_views > 0 and rounds > 1:
-        log(
-            f"  rounds 2+: normal-refinement basis capped at the "
-            f"{max_refine_views} most-informative views per point (D-optimal)"
-        )
     for r in range(2, rounds + 1):
         # Intermediate recons carry no bitmaps — nothing reads them; the final
         # bitmaps are rendered by the last round's sub-pixel pass below.
         emb_r = compact_to_embedded_patches(
             work_recon, work_cloud, work_loc, hashes, min_views=1
         )
-        cloud_r = emb_r.patches
-        n_before = _patch_normals(cloud_r) if log else None
-        with (
-            _timed_step(
-                log, f"  round {r}/{rounds}: refining normals ({len(cloud_r)} pts)..."
-            ),
-            _poll_progress(log, len(cloud_r)) as counter,
-        ):
-            cloud_r.refine_normals(
-                emb_r,
-                pyramids,
-                resolution=resolution,
-                use_stored_keypoints=True,
-                obliquity_weight_power=obliquity_weight_power,
-                fronto_prior_weight=fronto_prior_weight,
-                sampler=sampler,
-                # The round-2+ patch views are the select_views-expanded ones; the
-                # D-optimal cap (0 = off) trims the refinement basis only —
-                # membership (and the stored bitmaps' reference pick) still span every view.
-                max_refine_views=max_refine_views,
-                progress=counter,
-            )
+        n_before = _patch_normals(emb_r.patches) if log else None
+        # Each point's track is now the views the localizer kept, the ones
+        # view selection added included, so the plane is fitted over all of
+        # them at the previous round's keypoints.
+        cloud_r = _grown_plane_normals(emb_r, pyramids, log, f"round {r}/{rounds}")
         base_loc = _localizations_from_recon(emb_r)
         # Re-prune grazing observations against THIS round's refined normal: the
         # low-parallax degeneracy tilts a normal toward grazing gradually over

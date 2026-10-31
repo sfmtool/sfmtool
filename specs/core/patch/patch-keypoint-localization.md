@@ -332,7 +332,7 @@ input order:
 | `max_member_zncc_self_similarity_radius` | 2.5 | drop a view whose own core's [ZNCC self-similarity radius](zncc-self-similarity-radius.md) is above this (patch-grid px); `0` disables, and `3` or more rejects nothing; see [The member gate's default](#the-member-gates-default) |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the template and the ZNCC are scored on |
-| `window` | `GaussianDisk { sigma: 0.6 }` | per-pixel scoring weight and support, shared with [normal refinement](patch-normal-refinement.md) |
+| `window` | `GaussianDisk { sigma: 0.6 }` | per-pixel scoring weight and support, as the other patch kernels take it ([patch-view-selection.md](patch-view-selection.md#the-shared-render-and-score-helpers)) |
 | `sampler` | the sampler rule | which sampler renders each view's tiles, chosen once per view at its starting keypoint ([image-warping.md](../camera/image-warping.md) § "Choosing the sampler per view"), so the localizer reads a view through the sampler the bench and the stored bitmap read it through |
 
 | `search_strategy` | `Exhaustive` | how each view's shift grid is traversed: `Exhaustive` or `PlusDescent`; see [How the alignment was measured](#how-the-alignment-was-measured) |
@@ -717,7 +717,7 @@ faster.
 `WarpMap::from_patch` and the sampler's remap, over the patch cloud's frame
 ([patch-cloud.md](patch-cloud.md)), which is camera-model agnostic through
 `ray_to_pixel`. The z-normalization is shared with
-[normal refinement](patch-normal-refinement.md) (`pub(super)`), not
+the other patch kernels ([patch-view-selection.md](patch-view-selection.md#the-shared-render-and-score-helpers)), not
 duplicated, and the reference-view rule's render is
 `stored_bitmap::render_reference`, the one every writer of the stored bitmap
 calls.

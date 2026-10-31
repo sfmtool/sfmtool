@@ -1,11 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for the bench's normal steps: the photometric normal
-//! search (`fit_normal`), Track View's *Finite Diff Normal* and today's *Grid
-//! Plane Normal* (`finite_difference_normal` with its two layouts), the
-//! cell-registered grid-plane normal (`grid_plane_normal`) and Track View's
-//! *Grown Plane Normal* (`grown_plane_normal`).
+//! Python bindings for the bench's normal steps: Track View's *Finite Diff
+//! Normal* and today's *Grid Plane Normal* (`finite_difference_normal` with
+//! its two layouts), the cell-registered grid-plane normal
+//! (`grid_plane_normal`) and Track View's *Grown Plane Normal*
+//! (`grown_plane_normal`).
 //!
 //! Each takes a track-stage track and gives back the turned track and a report,
 //! as every other step does, and refuses with the core's sentence.
@@ -19,14 +19,14 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::bench::{
-    finite_difference_normal as core_finite_difference_normal, fit_normal as core_fit_normal,
+    finite_difference_normal as core_finite_difference_normal,
     grid_plane_normal as core_grid_plane_normal, grown_plane_normal as core_grown_plane_normal,
-    FiniteDifferenceOptions, FitNormalOptions, GridPlaneAcceptance, GridPlaneCells,
-    GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration, GridPlaneNormalOptions,
-    GridPlaneOutcome, GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt,
-    GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
-    GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
-    NormalReport, PieceLayout,
+    FiniteDifferenceOptions, GridPlaneAcceptance, GridPlaneCells, GridPlaneDetail,
+    GridPlaneFitModel, GridPlaneIteration, GridPlaneNormalOptions, GridPlaneOutcome,
+    GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt, GrownPlaneNormalOptions,
+    GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal, GrownPlaneSequence,
+    GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate, NormalReport,
+    PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -656,18 +656,6 @@ fn sequence_dict<'py>(
 /// The dict form of where a normal came from, `kind` naming which estimate.
 fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bound<'py, PyDict>> {
     let d = match estimate {
-        &NormalEstimate::Photometric {
-            before,
-            after,
-            views,
-        } => {
-            let d = PyDict::new(py);
-            d.set_item("kind", "photometric")?;
-            d.set_item("before", before)?;
-            d.set_item("after", after)?;
-            d.set_item("views", views)?;
-            d
-        }
         &NormalEstimate::FiniteDifference {
             pieces,
             u,
@@ -723,69 +711,6 @@ fn parse_layout(word: &str) -> PyResult<PieceLayout> {
             "unknown layout: {other:?} (expected cross|grid)"
         ))),
     }
-}
-
-/// Turn a track-stage `track`'s patch to the normal its ``in`` sightings agree
-/// on best, by the photometric normal search.
-///
-/// The centre does not move. The step ends as a fit does, reading the turned
-/// track back with its bitmap rendered again. ``images`` and the four
-/// keywords are :func:`fit`'s; the keywords set the reading the step ends with.
-///
-/// Returns ``(EditableTrack, report)``; the report is described under
-/// :func:`grid_plane_normal`, with an ``estimate`` of ``kind``
-/// ``"photometric"`` carrying ``before`` and ``after`` (the consensus ZNCC at
-/// the normal the patch had and at the one found) and ``views``. Raises
-/// ``ValueError`` with the reason when the step is refused.
-#[pyfunction]
-#[pyo3(signature = (
-    track,
-    edited,
-    images,
-    *,
-    max_seed_offset_px = None,
-    max_cache_bytes = None,
-    sigma_px = None,
-    depth_likelihood_ratio_threshold = None,
-))]
-#[allow(clippy::too_many_arguments)]
-fn fit_normal(
-    py: Python<'_>,
-    track: &PyEditableTrack,
-    edited: &PyEditedReconstruction,
-    images: &Bound<'_, PyAny>,
-    max_seed_offset_px: Option<f64>,
-    max_cache_bytes: Option<usize>,
-    sigma_px: Option<f64>,
-    depth_likelihood_ratio_threshold: Option<f64>,
-) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let posed = PosedViews::from_reconstruction(&edited.inner.base);
-    let pyramids = resolve_pyramids(&posed, images)?;
-    let views = views_of(&posed, &pyramids);
-    let options = FitNormalOptions {
-        fit: fit_options(
-            max_seed_offset_px,
-            max_cache_bytes,
-            sigma_px,
-            depth_likelihood_ratio_threshold,
-        ),
-        ..FitNormalOptions::default()
-    };
-    let (next, report) = core_fit_normal(
-        &track.inner,
-        &edited.inner,
-        &views,
-        &options,
-        &Progress::none(),
-    )
-    .map_err(refused)?;
-    let d = normal_report_dict(py, &report)?;
-    Ok((
-        PyEditableTrack {
-            inner: Arc::new(next),
-        },
-        d.unbind(),
-    ))
 }
 
 /// Turn a track-stage `track`'s patch to the plane through where smaller
@@ -1388,7 +1313,6 @@ impl GrownPlaneKeywords {
 
 /// Register the normal steps on the `sfmtool.bench` submodule.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(fit_normal, m)?)?;
     m.add_function(wrap_pyfunction!(finite_difference_normal, m)?)?;
     m.add_function(wrap_pyfunction!(grid_plane_normal, m)?)?;
     m.add_function(wrap_pyfunction!(grown_plane_normal, m)?)?;

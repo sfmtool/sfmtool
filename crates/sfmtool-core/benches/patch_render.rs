@@ -1,16 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Benchmarks for the patch-normal-refinement render primitives.
+//! Benchmarks for the patch render primitives.
 //!
-//! The refinement hot loop is, per candidate normal and per view:
-//! `WarpMap::from_patch` → (`compute_svd` →) `remap_bilinear` /
-//! `remap_aniso_with_pyramid`. These benches measure each primitive at the
-//! small patch resolutions the refinement uses (R = 8..32), and pair each
-//! library call with a hand-inlined *sequential* re-implementation to expose
-//! how much of the cost is rayon parallel scaffolding (the library versions
-//! parallelize over the R rows of a tiny grid, nested inside
-//! `refine_patch_cloud_normals`'s per-patch parallelism in real use).
+//! A patch kernel renders a patch from a view with `WarpMap::from_patch` →
+//! (`compute_svd` →) `remap_bilinear` / `remap_aniso_with_pyramid`. These
+//! benches measure each primitive at the small patch resolutions the patch
+//! kernels use (R = 8..32), and pair each library call with a hand-inlined
+//! *sequential* re-implementation to expose how much of the cost is rayon
+//! parallel scaffolding (the library versions parallelize over the R rows of a
+//! tiny grid, nested inside the per-patch parallelism of a batch driver in
+//! real use).
 //!
 //! Run with:
 //!   cargo bench -p sfmtool-core --bench patch_render
@@ -25,9 +25,6 @@ use sfmtool_core::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, samp
 use sfmtool_core::camera::WarpMap;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
-use sfmtool_core::patch::normal_refine::{
-    refine_patch_normal, NormalRefineParams, ProjectedImage, Sampler,
-};
 use sfmtool_core::{CameraIntrinsics, CameraModel};
 use std::hint::black_box;
 
@@ -270,49 +267,5 @@ fn bench_primitives(crit: &mut Criterion) {
     group.finish();
 }
 
-fn bench_refine(crit: &mut Criterion) {
-    // Six views in a small arc around the patch.
-    let centers: Vec<[f64; 3]> = (0..6)
-        .map(|i| [-0.75 + 0.3 * i as f64, 0.05 * i as f64, 0.0])
-        .collect();
-    let camera = pinhole();
-    let images: Vec<ImageU8> = centers.iter().map(|&c| render_view(c)).collect();
-    let max_levels = ((IMG_H.min(IMG_W) as f32).log2().floor() as usize).max(1) + 1;
-    let pyramids: Vec<ImageU8Pyramid> = images
-        .iter()
-        .map(|im| ImageU8Pyramid::build(im, max_levels))
-        .collect();
-    let poses: Vec<RigidTransform> = centers.iter().map(|&c| cam_pose(c)).collect();
-    let views: Vec<ProjectedImage<'_>> = poses
-        .iter()
-        .zip(&pyramids)
-        .map(|(cam_from_world, pyramid)| ProjectedImage {
-            camera: &camera,
-            cam_from_world,
-            pyramid,
-        })
-        .collect();
-    let patch = tilted_patch();
-
-    let mut group = crit.benchmark_group("refine_patch_normal");
-    group.sample_size(20);
-    for (name, sampler) in [
-        ("anisotropic", Sampler::Anisotropic),
-        ("bilinear_mip", Sampler::BilinearMip),
-        ("bilinear", Sampler::Bilinear),
-    ] {
-        let params = NormalRefineParams {
-            sampler: sampler.into(),
-            // Benchmark the full per-patch cost (confidence is off by default).
-            compute_confidence: true,
-            ..NormalRefineParams::default()
-        };
-        group.bench_function(BenchmarkId::new(name, 16), |b| {
-            b.iter(|| black_box(refine_patch_normal(&patch, &views, 16, &params, None)))
-        });
-    }
-    group.finish();
-}
-
-criterion_group!(benches, bench_primitives, bench_refine);
+criterion_group!(benches, bench_primitives);
 criterion_main!(benches);

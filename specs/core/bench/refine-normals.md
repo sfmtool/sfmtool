@@ -19,6 +19,11 @@ rather than along its surface. The viewer runs it as **Refine All Normals** on a
 reconstruction row's context menu
 ([`../../gui/edits/refine-all-normals.md`](../../gui/edits/refine-all-normals.md)),
 and Python calls it as `sfmtool.bench.refine_normals` (§ "Python binding").
+The commands that turn patch normals call that binding: `sfm xform
+--refine-normals`, `inspect --strips`, `compare --strips` and each round of
+`sfm embed-patches`
+([`../../cli/reconstruction/embed-patches-command.md`](../../cli/reconstruction/embed-patches-command.md)
+§ "Behaviour Notes").
 The per-point step is the bench's `grown_plane_normal`
 ([`editable-track.md`](editable-track.md) § "Estimating the normal", designed
 in [`../../drafts/grown-plane-normal.md`](../../drafts/grown-plane-normal.md)),

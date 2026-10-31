@@ -295,9 +295,6 @@ def strips_mode_3d(
     context=None,
     normal="mean",
     k_neighbors=12,
-    refine=False,
-    refine_range=25.0,
-    refine_steps=7,
 ):
     """Render reconstruction tracks as patch strips by projecting one 3D oriented
     patch per track into each observing camera (`WarpMap.from_patch`).
@@ -306,11 +303,6 @@ def strips_mode_3d(
     per the chosen policy, world half-size = the median over views of each
     keypoint's scale back-projected to world) is rendered into every observing
     view, so the strip tiles are the same world patch seen from each camera.
-
-    With ``refine`` the per-patch normals are optimized for cross-view
-    photoconsistency by the Rust ``PatchCloud.refine_normals`` routine
-    (``refine_range`` / ``refine_steps`` set its search cone and grid resolution),
-    and each track is shown as a before/after pair.
     """
     recon = SfmrReconstruction.load(sfmr_path)
     names = list(recon.image_names)
@@ -409,93 +401,23 @@ def strips_mode_3d(
         wm = WarpMap.from_patch(p, cam_of[i], pose_of[i], res)
         return np.asarray(wm.remap_bilinear(image(i)), np.float32)
 
-    # Optionally refine the rendered tracks' patch normals with the Rust routine
-    # (PatchCloud.refine_normals): photometric consensus over all observing views,
-    # in place and in parallel. Restricting to the displayed tracks' point ids
-    # keeps it cheap on large clouds. Base normals are already in `pid_normal`;
-    # read the refined normals and the Rust consensus Φ (init / refined, scored on
-    # the same frozen support, so Δ >= 0) back per point id.
-    pid_refined = pid_normal
-    pid_phi: dict = {}
-    pid_init_phi: dict = {}
-    if refine:
-        all_images = [image(i) for i in range(len(names))]
-        res = cloud.refine_normals(
-            recon,
-            all_images,
-            resolution=patch,
-            angular_range_deg=refine_range,
-            init_steps=refine_steps,
-            point_indexes=[int(pid) for pid, _ in tracks],
-            # Cross-validation baseline: anchor at the reprojected center so
-            # the Φ delta isn't sensitive to whether the recon happens to
-            # carry inline keypoints (the auto-default would switch to
-            # stored on embedded_patches recons).
-            use_stored_keypoints=False,
-        )
-        pid_refined = {
-            int(p): np.asarray(cloud[i].normal, np.float64)
-            for i, p in enumerate(cloud.point_indexes)
-        }
-        pid_phi = {
-            int(p): float(res["photoconsistency"][i])
-            for i, p in enumerate(cloud.point_indexes)
-        }
-        pid_init_phi = {
-            int(p): float(res["init_photoconsistency"][i])
-            for i, p in enumerate(cloud.point_indexes)
-        }
-
     rows = []
-    deltas = []
     print(f"{len(tracks)} tracks (>= {min_track} images), labeled by image index:")
     for ti, (pid, obs) in enumerate(tracks):
-        base_n = pid_normal.get(int(pid))
-        if base_n is None or np.linalg.norm(base_n) < 0.5:
-            base_n = np.array([0.0, 0.0, 1.0])
+        normal_n = pid_normal.get(int(pid))
+        if normal_n is None or np.linalg.norm(normal_n) < 0.5:
+            normal_n = np.array([0.0, 0.0, 1.0])
         center, up, half = patch_frame(pid, obs)
-
-        if refine:
-            best_n = pid_refined.get(int(pid), base_n)
-            base_phi = pid_init_phi.get(int(pid), float("nan"))
-            ref_phi = pid_phi.get(int(pid), float("nan"))
-            if np.isfinite(base_phi) and np.isfinite(ref_phi):
-                deltas.append(ref_phi - base_phi)
-        else:
-            best_n, base_phi, ref_phi = base_n, None, None
-
         ext = half * extent_scale
 
-        def patch_of(i, _f, _p=make_patch(center, up, ext, best_n)):
+        def patch_of(i, _f, _p=make_patch(center, up, ext, normal_n)):
             return render_into(_p, i, render_patch)
 
-        def base_patch_of(i, _f, _p=make_patch(center, up, ext, base_n)):
-            return render_into(_p, i, render_patch)
-
-        if refine:
-            # Before (base normal) row, then after (refined) row.
-            b_strip, _, _ = render_track_strip(
-                obs, base_patch_of, w, tile=tile, inner=inner
-            )
-            r_strip, _, nobs = render_track_strip(
-                obs, patch_of, w, tile=tile, inner=inner
-            )
-            rows.extend((b_strip, r_strip))
-            print(
-                f"  track {ti:3d}: {nobs:2d} obs  consensus Φ base={base_phi:+.3f} "
-                f"refined={ref_phi:+.3f}  Δ={ref_phi - base_phi:+.3f}"
-            )
-        else:
-            strip, mean_ncc, nobs = render_track_strip(
-                obs, patch_of, w, tile=tile, inner=inner
-            )
-            rows.append(strip)
-            print(f"  track {ti:3d}: {nobs:2d} obs  mean pairwise NCC {mean_ncc:+.3f}")
-
-    if refine and deltas:
-        print(
-            f"normal refinement: mean ΔΦ = {np.mean(deltas):+.3f} over {len(deltas)} tracks"
+        strip, mean_ncc, nobs = render_track_strip(
+            obs, patch_of, w, tile=tile, inner=inner
         )
+        rows.append(strip)
+        print(f"  track {ti:3d}: {nobs:2d} obs  mean pairwise NCC {mean_ncc:+.3f}")
 
     width = max(r.shape[1] for r in rows)
     sep_row = np.full((2, width, 3), 40, np.uint8)
@@ -686,11 +608,6 @@ def main(argv=None):
         "--k-neighbors", type=int, default=12, help="neighbors for --normal geometric"
     )
     ap.add_argument(
-        "--refine-normal",
-        action="store_true",
-        help="optimize each --sfmr patch normal for cross-view photoconsistency",
-    )
-    ap.add_argument(
         "--context",
         type=int,
         default=None,
@@ -732,7 +649,6 @@ def main(argv=None):
                 context=args.context,
                 normal=args.normal,
                 k_neighbors=args.k_neighbors,
-                refine=args.refine_normal,
             )
         m = read_matches(matches)
         names = list(m["image_names"])

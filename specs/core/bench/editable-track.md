@@ -663,8 +663,7 @@ pub fn score_bitmap(
 // rows carry a keypoint, both ways of rendering give no bitmap from the `in`
 // rows, and the render is a bitmap for judging
 // (`TrackPayload::bitmap_for_judging`, § "The stored bitmap's reference"). The
-// viewer's live evaluation and `fit_normal` / `finite_difference_normal` end
-// with it.
+// viewer's live evaluation and every normal step end with it.
 pub fn evaluate_rendering_bitmap(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -688,16 +687,6 @@ pub fn set_stage(
     options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, StageReport), StageError>;
-
-// Turn the patch to the normal its sightings agree on best, keeping its centre,
-// then read it back and render its bitmap.
-pub fn fit_normal(
-    track: &EditableTrack,
-    edited: &EditedReconstruction,
-    images: &[ProjectedImage<'_>],
-    options: &FitNormalOptions,       // the photometric search, its grid, the reading
-    progress: &Progress<'_>,
-) -> Result<(EditableTrack, NormalReport), NormalError>;
 
 // Turn the patch to the plane its fitted pieces lie on, keeping its centre, then
 // read it back and render its bitmap.
@@ -2988,29 +2977,15 @@ proposed in
 ### Estimating the normal
 
 A fit moves the patch along the sightings' rays and keeps the way it faces.
-Four steps do the opposite: each estimates which way the surface under the patch
+Three steps do the opposite: each estimates which way the surface under the patch
 faces, turns the patch to that normal with `tilt_patch` (§ "Placing, sizing and
 turning by hand"), and ends as a fit does, by reading the track back, rendering
 its stored bitmap over the turned square and scoring every row against it. The
 centre does not move, the turn is the
 least rotation, and it stops where `tilt_patch`'s cap stops it, which the
-`NormalReport`'s `tilt` says. All four take the track stage only, refuse a track at
+`NormalReport`'s `tilt` says. All three take the track stage only, refuse a track at
 infinity (whose patch faces along its own bearing) and need two `in`
 observations; `normal_preconditions` is that half of their validation.
-
-**`fit_normal` reads the normal from the photographs' agreement.** It runs the
-photometric normal refinement
-([`../patch/patch-normal-refinement.md`](../patch/patch-normal-refinement.md))
-over the `in` sightings, each view's tile anchored at the sighting's own
-keypoint, and turns the patch to the normal it finds. The search is seeded
-from the patch's normal and from the mean viewing direction and covers
-`angular_range_deg` (25 degrees) around each, so a normal further away is
-reached by running the step again; the refinement is not idempotent by design,
-and a second run re-seeds from the first's answer. `min_views` is two here,
-where the kernel's own default is three, so the step runs on any track a fit
-runs on. A search that scores no normal is refused as `NotScored`. No Track
-View entry or wire method runs it; its callers are its Python binding
-(`sfmtool.bench.fit_normal`) and the tests.
 
 **`finite_difference_normal` reads the normal from where smaller pieces fit.**
 Along each of the patch's two in-plane axes it places `pieces` square pieces
@@ -3240,12 +3215,9 @@ its centre with `tilt_patch` and writes no keypoint: the image shifts it
 solves for are the tilt fit's own unknowns, reported per view, and every
 keypoint stays where it was given.
 
-The photometric estimate and the finite difference differ in what they can be
-fooled by. The photometric one
-weighs every texel of the patch at once, so a tilt that suits the texture it
-sees can win over the surface's; the finite difference depends only on where
-each piece is placed along its rays, and so on depth, but a piece small enough
-to hold little texture fits poorly. The grid plane normal reads depth by
+The finite difference depends only on where each piece is placed along its
+rays, and so on depth, but a piece small enough to hold little texture fits
+poorly. The grid plane normal reads depth by
 parallax as the finite difference does, but refuses each cell in each view
 by its own reading before any geometry, weights the cells by how well their
 rays pin them, and keeps a turn only when the views' agreement does not fall.
@@ -3895,7 +3867,7 @@ The normal steps, in
 [bench/normal.rs](../../../crates/sfmtool-py/src/bench/normal.rs), take the
 track, the reconstruction and `images` the way `fit` does, with `fit`'s four
 keywords for the reading they end with (and, for `finite_difference_normal`,
-the pieces' fits). `fit_normal` takes nothing else.
+the pieces' fits).
 `finite_difference_normal` takes `layout` (`"cross"`, the default, or
 `"grid"`), `pieces` (default 2) and `overlap` as a fraction (default 0), and
 refuses bad settings before it reads a photograph; Track View's Grid Plane
@@ -3909,8 +3881,7 @@ as the word `"windowed_zncc"` (the default) or `"none"`, and
 report)`, the report carrying `normal` (the one the patch now shows), `tilt`
 (as `tilt_patch` reports it), `evaluate` (the reading's report), `text` (the
 `NormalReport` sentence) and `estimate`, a dict whose `kind` names the
-`NormalEstimate`: `"photometric"` with `before`, `after` and `views`;
-`"finite_difference"` with `pieces`, `u`, `v` and `both_axes`; `"grid_plane"`
+`NormalEstimate`: `"finite_difference"` with `pieces`, `u`, `v` and `both_axes`; `"grid_plane"`
 (`PieceLayout::Grid`) with `pieces`, `fitted`, `both_axes` and `off_plane`;
 and `"grid_plane_cells"` (`grid_plane_normal`) with `outcome` (`"turned"`,
 `"undetermined"` or `"unstable"`), `stop` (`"not_run"`, `"converged"`,
@@ -4374,11 +4345,10 @@ side gives real baseline. These fits classify at a stated 0.5 px
 
 Over the plane seen by three views:
 - A patch tilted 20 degrees off the plane is turned to less than half that by
-  `fit_normal`, with the consensus ZNCC not falling, and by
   `finite_difference_normal` at two pieces with no overlap and at three with
   half, every piece fitting, both with `PieceLayout::Cross` and with
   `PieceLayout::Grid`.
-- Both steps keep the centre and leave the track read and its bitmap rendered.
+- Both layouts keep the centre and leave the track read and its bitmap rendered.
 - `normal_preconditions` and the piece and overlap bounds refuse what the track
   and the settings alone rule out.
 

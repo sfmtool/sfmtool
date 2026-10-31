@@ -191,8 +191,8 @@ def compact_to_embedded_patches(
         patch_bitmaps: Optional ``(point_count, R, R, 4)`` uint8 stored bitmaps
             scattered per source point (the pipeline sources these from
             ``refine_keypoints(render_bitmaps=True)``, each the reference view's
-            tile at the final keypoints; ``refine_normals(render_bitmaps=True)``'s
-            ``bitmaps`` fit too); culled to the survivors and stored as the patch
+            tile at the final keypoints; ``PatchCloud.render_bitmaps``'
+            bitmaps fit too); culled to the survivors and stored as the patch
             bitmaps.
         valid: Optional bool mask per source point (parallel to ``recon``'s
             points): ``True`` where the keypoint refiner produced a valid
@@ -300,8 +300,9 @@ def compact_to_embedded_patches(
         )
 
     # The stored normal must describe the frame that is actually written. `cloud`
-    # arrives already rotated by `refine_normals` (which mutates it in place),
-    # while `recon.normals` is the pre-refinement array — carrying it through
+    # arrives carrying the refined frames (embed-patches takes them from the
+    # grown-plane normal step's output), while `recon.normals` is the
+    # pre-refinement array — carrying it through
     # verbatim would store a plane the refinement has moved away from. Re-derive
     # each finite survivor's normal from its own surviving half-vectors:
     # `normalize(u × v)` is the patch frame's outward normal by definition (see

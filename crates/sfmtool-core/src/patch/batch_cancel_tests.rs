@@ -19,7 +19,7 @@ use crate::patch::keypoint_subpixel::{refine_patch_cloud_keypoints, KeypointSubp
 use crate::patch::member_coherence::{
     validate_patch_cloud_member_coherence, MemberCoherenceParams,
 };
-use crate::patch::normal_refine::{refine_patch_cloud_normals, NormalRefineParams, ProjectedImage};
+use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
 use crate::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 use crate::patch::PatchCloud;
@@ -98,8 +98,7 @@ impl Reported {
 }
 
 /// A batch handed a `Progress` cancelled before it starts returns `Cancelled`,
-/// finishes no patch, reports no count and renders nothing, and normal
-/// refinement leaves the cloud as it was.
+/// finishes no patch, reports no count and renders nothing.
 #[test]
 fn a_batch_cancelled_before_it_starts_does_no_work() {
     let cams = [camera(), camera(), camera()];
@@ -136,26 +135,6 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         );
     };
 
-    check("normal refinement", &|progress, done| {
-        let mut refined = cloud.clone();
-        let params = NormalRefineParams::default();
-        let out = refine_patch_cloud_normals(
-            &mut refined,
-            &views,
-            &patch_views,
-            R,
-            &params,
-            None,
-            Some(done),
-            progress,
-        );
-        assert_eq!(
-            format!("{:?}", refined.patches),
-            format!("{:?}", cloud.patches),
-            "the cloud changed"
-        );
-        out.is_err()
-    });
     check("view selection", &|progress, done| {
         let params = ViewSelectParams {
             resolution: R,
@@ -233,60 +212,4 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
         )
         .is_err()
     });
-}
-
-/// Normal refinement cancelled part of the way through returns `Cancelled`,
-/// not the patches it refined, and leaves the cloud as it was: the flag is set
-/// by the first `patches` count, which the batch sends after its first patch.
-/// The cloud is many times larger than the patches the worker threads can
-/// have started by then.
-#[test]
-fn normal_refinement_cancelled_part_way_leaves_the_cloud() {
-    let cams = [camera(), camera(), camera()];
-    let poses: Vec<RigidTransform> = [-0.2, 0.0, 0.2]
-        .iter()
-        .map(|&x| RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], [-x, 0.0, 0.0]))
-        .collect();
-    let pyr = pyramid();
-    let views: Vec<ProjectedImage<'_>> = cams
-        .iter()
-        .zip(&poses)
-        .map(|(camera, cam_from_world)| ProjectedImage {
-            camera,
-            cam_from_world,
-            pyramid: &pyr,
-        })
-        .collect();
-    let original = cloud(2000);
-    let patch_views: Vec<Vec<u32>> = vec![vec![0, 1, 2]; original.len()];
-    let cancel = AtomicBool::new(false);
-    let sink = |event: Event<'_>| {
-        if let Event::Count { .. } = event {
-            cancel.store(true, Ordering::Relaxed);
-        }
-    };
-    let progress = Progress::to(&sink).cancelled_by(&cancel);
-    let done = AtomicUsize::new(0);
-    let mut refined = original.clone();
-    let out = refine_patch_cloud_normals(
-        &mut refined,
-        &views,
-        &patch_views,
-        R,
-        &NormalRefineParams::default(),
-        None,
-        Some(&done),
-        &progress,
-    );
-    assert!(out.is_err(), "a cancelled batch returned results");
-    let finished = done.load(Ordering::Relaxed);
-    assert!(
-        (1..original.len()).contains(&finished),
-        "the batch should stop part of the way through, finished {finished}"
-    );
-    assert_eq!(
-        format!("{:?}", refined.patches),
-        format!("{:?}", original.patches),
-        "the cloud changed"
-    );
 }

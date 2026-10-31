@@ -15,7 +15,6 @@ use crate::reconstruction::SfmrReconstruction;
 /// indices observing its source 3D point, in track order.
 ///
 /// The result can be passed as the `patch_views` of a batch driver, such as
-/// [`refine_patch_cloud_normals`](super::normal_refine::refine_patch_cloud_normals),
 /// [`localize_patch_cloud_keypoints`](super::keypoint_localize::localize_patch_cloud_keypoints)
 /// or
 /// [`validate_patch_cloud_member_coherence`](super::member_coherence::validate_patch_cloud_member_coherence),

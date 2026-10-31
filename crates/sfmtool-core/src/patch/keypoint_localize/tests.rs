@@ -1453,8 +1453,6 @@ fn search_shift_matches_reference_flat_channel_and_invalid() {
 ///   * the first span past the 16-lane kernel (`span = 17`), which the
 ///     dispatcher sends to the chunked kernel; that kernel is held to the
 ///     scalar form bit for bit by `wide_compute_channel_grids_match_scalar_exactly`.
-///
-/// Mirrors `super::normal_refine::fronto_cache::tests::resample_avx2_matches_scalar`.
 #[test]
 fn compute_channel_grids_avx2_matches_scalar() {
     for &(resolution, margin) in &[

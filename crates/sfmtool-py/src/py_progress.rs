@@ -5,7 +5,7 @@
 //! GIL-releasing Rust pass.
 //!
 //! The heavy patch-cloud kernels (e.g. [`crate::PyPatchCloud`]'s
-//! `refine_normals`) run a single `par_iter().collect()` over hundreds of
+//! `localize_keypoints`) run a single `par_iter().collect()` over hundreds of
 //! thousands of patches inside
 //! `py.detach()`, so from Python the call is one opaque blocking step. A caller
 //! that wants intra-pass feedback constructs a [`ProgressCounter`], passes it to
@@ -26,7 +26,7 @@ use pyo3::prelude::*;
 /// counter is monotonic within a single kernel call; reuse across calls should
 /// :meth:`reset` first.
 // `from_py_object`: this class is accepted by value as a kernel argument (e.g.
-// `refine_normals(progress=...)`), which extracts it via a `Clone` — cheap here,
+// `localize_keypoints(progress=...)`), which extracts it via a `Clone` — cheap here,
 // as the clone only bumps the `Arc` refcount onto the shared counter.
 #[pyclass(name = "ProgressCounter", module = "sfmtool", from_py_object)]
 #[derive(Clone, Default)]

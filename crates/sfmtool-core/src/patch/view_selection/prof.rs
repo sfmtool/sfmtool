@@ -8,18 +8,16 @@
 //! [`select_patch_cloud_views`](super::select_patch_cloud_views); a summary is
 //! printed to stderr when the batch finishes. With the variable unset the
 //! timers compile to a single branch on a cached flag, so the hot path is
-//! unaffected. Mirrors `keypoint_localize::prof` / `normal_refine::prof`.
+//! unaffected. Mirrors `keypoint_localize::prof`.
 //!
 //! Phase times are *thread-summed* (CPU-seconds, not wall-clock): with N rayon
 //! threads busy, one wall second accumulates up to N phase-seconds. Shares of
 //! the total are therefore meaningful; absolute values exceed wall time.
 //!
 //! Selection drives the shared support/render machinery of `normal_refine`
-//! (`build_level_context` / `normalized_stack`), whose own `normal_refine::prof`
-//! timers also tick while a selection batch runs; those counters are reset at
-//! the start of the next refine batch, so the leakage is harmless. The phases
-//! here are at selection's own altitude: the reference build, and the per-view
-//! ZNCC scoring split into its render and dot legs.
+//! (`build_level_context` / `normalized_stack`). The phases here are at
+//! selection's own altitude: the reference build, and the per-view ZNCC scoring
+//! split into its render and dot legs.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

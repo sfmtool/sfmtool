@@ -23,6 +23,7 @@ from sfmtool._patch_compaction import (
     image_file_hashes_from_images,
     reference_observations_from_images,
 )
+from sfmtool.bench import refine_normals
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import PatchCloud
 from sfmtool.fileio import verify_sfmr
@@ -32,13 +33,16 @@ from .conftest import load_images, rotation_matrices
 
 
 def _run_pipeline(recon, images, resolution=12):
-    """The upstream kernels the compaction consumes (refine → select → localize)."""
-    cloud = PatchCloud.from_reconstruction(
-        recon, normal="mean_viewing", extent_value=5.0
-    )
-    res = cloud.refine_normals(
-        recon, images, resolution=resolution, render_bitmaps=True
-    )
+    """The upstream kernels the compaction consumes (refine → select → localize).
+
+    The normals are turned as ``sfm embed-patches`` turns them: the grown-plane
+    normal (``sfmtool.bench.refine_normals``) over the ``embedded_patches``
+    value ``to_embedded_patches`` builds, starting from the mean-viewing frame.
+    The bitmaps are each point's reference-view tile at the turned frame."""
+    embedded = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    turned, _ = refine_normals(embedded, images)
+    cloud = turned.patches
+    bitmaps, _ = cloud.render_bitmaps(turned, images, resolution=resolution)
     sel = cloud.select_views(recon, images, resolution=resolution)
     patch_views = {
         int(r["point_index"]): np.asarray(r["admitted"]).tolist() for r in sel
@@ -46,7 +50,7 @@ def _run_pipeline(recon, images, resolution=12):
     locs = cloud.localize_keypoints(
         recon, images, patch_views=patch_views, resolution=resolution
     )
-    return cloud, res["bitmaps"], locs
+    return cloud, bitmaps, locs
 
 
 def test_from_halfvec_arrays_round_trips_a_cloud():
@@ -354,7 +358,7 @@ def test_compact_normals_match_the_written_patch_frame(
 ):
     """Regression: the compaction must store the normal of the cloud it *writes*.
 
-    ``refine_normals`` rotates the patch cloud in place, so the source recon's
+    The normal step turns the patch frames, so the source recon's
     ``normals_xyz`` array describes the pre-refinement plane. Carrying it through
     verbatim left the written file self-inconsistent (stored normal vs.
     ``normalize(u × v)`` of the stored frame). Assert the format's finite-patch
