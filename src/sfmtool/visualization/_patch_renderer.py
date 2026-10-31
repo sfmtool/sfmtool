@@ -298,8 +298,8 @@ def render_patches(
         bitmaps = np.asarray(bitmaps)
     if mode == "texture" and bitmaps is None:
         raise PatchRenderError(
-            "texture mode needs per-point patch bitmaps; rerun refine with "
-            "`bitmaps=true`, or pick --mode normal/flat/wire"
+            "texture mode needs per-point patch bitmaps; add them with "
+            "`sfm xform --add-patch-bitmaps`, or pick --mode normal/flat/wire"
         )
 
     # Precompute everything that doesn't depend on the image: the scaled quad
