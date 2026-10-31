@@ -207,12 +207,12 @@ lowest-displacement registered neighbours, chosen as in Screen B over the
 same `min_shared` floor — the chordal mean `R` of their rotations, the
 mean `c` of their centres, and `t = −R·c` — then trimmed pose-only
 refinement against the current structure (5 trim rounds keeping the
-best 0.6 of observations each, final inliers at `INLIER_PX` = 3 px). A camera is skipped, and its flag stands, when it
-has fewer than two registered near neighbours, when the chordal mean has
-no polar factor (`polar_rotation` returns `None` for a non-finite or
-degenerate sum), or when it has fewer than `min_obs` observations of
-valid points. Accept only
-when the all-observation inlier fraction reaches
+best 0.6 of observations each, final inliers at `INLIER_PX` = 3 px). A
+camera is skipped, and its flag stands, when it has fewer than two
+registered near neighbours, when the chordal mean has no polar factor
+(`polar_rotation` returns `None` for a non-finite or degenerate sum), or
+when it has fewer than `min_obs` observations of valid points. Accept
+only when the all-observation inlier fraction reaches
 `max(inlier_floor, before + inlier_margin)` (defaults 0.10 and 0.05): an
 "improvement" below the absolute floor means the camera's neighbourhood
 structure is itself broken, which pose-only repair cannot fix (re-posing
