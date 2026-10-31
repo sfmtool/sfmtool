@@ -656,7 +656,7 @@ def test_a_malformed_descriptor_order_is_refused(tmp_path):
         (list(range(_N - 1)), "expected"),
         ([0] * _N, "repeats"),
     ]:
-        with pytest.raises((ValueError, OSError)):
+        with pytest.raises(ValueError, match=match):
             write_kdf(
                 forest,
                 str(tmp_path / f"bad{len(order)}{order[0]}.kdf"),

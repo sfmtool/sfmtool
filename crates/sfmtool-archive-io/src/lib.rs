@@ -104,6 +104,45 @@ pub enum ArchiveIoError {
     ShapeMismatch(String),
 }
 
+/// Implement `From<ArchiveIoError>` for a format crate's error enum.
+///
+/// The enum must have variants `Io(std::io::Error)`, `Zip(ZipError)`,
+/// `Json(serde_json::Error)`, `InvalidFormat(String)` and
+/// `ShapeMismatch(String)`; each [`ArchiveIoError`] variant becomes the one of
+/// the same name. The five format crates share this one conversion so their
+/// error enums keep the same variants with the same meaning.
+///
+/// ```
+/// #[derive(Debug)]
+/// pub enum MyFormatError {
+///     Io(std::io::Error),
+///     Zip(zip::result::ZipError),
+///     Json(serde_json::Error),
+///     InvalidFormat(String),
+///     ShapeMismatch(String),
+/// }
+/// sfmtool_archive_io::impl_from_archive_io_error!(MyFormatError);
+///
+/// let e: MyFormatError = sfmtool_archive_io::ArchiveIoError::InvalidFormat("x".into()).into();
+/// assert!(matches!(e, MyFormatError::InvalidFormat(s) if s == "x"));
+/// ```
+#[macro_export]
+macro_rules! impl_from_archive_io_error {
+    ($error:ty) => {
+        impl ::core::convert::From<$crate::ArchiveIoError> for $error {
+            fn from(e: $crate::ArchiveIoError) -> Self {
+                match e {
+                    $crate::ArchiveIoError::Io(e) => Self::Io(e),
+                    $crate::ArchiveIoError::Zip(e) => Self::Zip(e),
+                    $crate::ArchiveIoError::Json(e) => Self::Json(e),
+                    $crate::ArchiveIoError::InvalidFormat(s) => Self::InvalidFormat(s),
+                    $crate::ArchiveIoError::ShapeMismatch(s) => Self::ShapeMismatch(s),
+                }
+            }
+        }
+    };
+}
+
 // ── Reading ─────────────────────────────────────────────────────────────
 
 /// Decompress a zstandard-compressed entry from a ZIP archive,

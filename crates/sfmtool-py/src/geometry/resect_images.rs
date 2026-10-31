@@ -231,7 +231,7 @@ pub(crate) fn read_cluster_patches(
 ) -> PyResult<Option<MatchesData>> {
     path.map(|path| {
         py.detach(|| sfmtool_matches_format::read_matches(path))
-            .map_err(os_err)
+            .map_err(crate::format_errors::read_err)
     })
     .transpose()
 }

@@ -523,7 +523,7 @@ def test_member_cells_zncc_rejected_on_a_member_not_kept(tmp_path):
     # Member 3 is not_evaluated, so its ZNCCs must be NaN.
     cells["member_cell_zncc"][3, 0, 0] = 0.5
     data.update(cells)
-    with pytest.raises(OSError, match="member_cell_zncc\[3\]\[0\]\[0\] is 0.5"):
+    with pytest.raises(ValueError, match="member_cell_zncc\[3\]\[0\]\[0\] is 0.5"):
         write_matches(tmp_path / "bad_zncc.matches", data)
 
 
@@ -548,5 +548,5 @@ def test_member_cells_rejected_on_a_member_not_kept(tmp_path):
     data = _cluster_patch_dict()
     # Member 3 is not_evaluated, so it carries no cell readings.
     data.update(_member_cells(8, kept=[1, 3]))
-    with pytest.raises(OSError, match="member 3 is not_evaluated, not kept"):
+    with pytest.raises(ValueError, match="member 3 is not_evaluated, not kept"):
         write_matches(tmp_path / "bad.matches", data)

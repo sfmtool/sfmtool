@@ -97,6 +97,8 @@ macro_rules! to_contiguous {
 
 pub(crate) mod helpers;
 
+pub(crate) mod format_errors;
+
 pub(crate) mod csr_args;
 
 pub(crate) mod readings;
