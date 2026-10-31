@@ -298,21 +298,21 @@ the source workspace cannot be located.
 
 Any exception raised while the command runs is reported as a
 `ClickException` carrying the exception's message, and the command exits with
-status 1. The failures it can meet include a missing source image
-(a `FileNotFoundError`, reported as "`Error: Image not found: …`"), a missing or unreadable source
-`.sift` file, a source image that cannot be decoded, an undistorted image that
-cannot be written (`write_image_rgb` / `write_image_rgba`), and a camera model
-that cannot be fitted with a pinhole (see [Cameras](#cameras)). Images are
-processed in order and nothing is cleaned up, so the partially written output
-workspace is left on disk.
+status 1. The failures it can meet include a missing source image (a
+`FileNotFoundError`, reported as "`Error: Image not found: …`"), a missing or
+unreadable source `.sift` file, a source image that cannot be decoded, an
+undistorted image that cannot be written (`write_image_rgb` /
+`write_image_rgba`), and a camera model that cannot be fitted with a pinhole
+(see [Cameras](#cameras)). Images are processed in order and nothing is
+cleaned up, so the partially written output workspace is left on disk.
 
 ### Stdout
 
 On startup: the materialisation line when the input has points at infinity
 (see [Points at infinity](#points-at-infinity)), then one
-"`Undistorting N images (fit=..., filter=...)...`" line. For each unique source camera, when
-its first image is processed: a two-column table of original vs pinhole
-parameters. A progress line is printed for the first three images and then
+"`Undistorting N images (fit=..., filter=...)...`" line. For each unique
+source camera, when its first image is processed: a two-column table of
+original vs pinhole parameters. A progress line is printed for the first three images and then
 every tenth. After the per-image loop the feature-drop summary is printed, then
 a table for each rig-sensor camera no image uses, and then the closing summary,
 which names the output paths once:
