@@ -123,6 +123,11 @@ it cannot register every image into a single one). `sfm solve` writes one
   `{stem}-{N}{suffix}` siblings; without it, each model is auto-named from the
   images it actually contains. This keeps a small fragment that happened to land
   at a lower model index from claiming the requested output name.
+- **Each point is seen once per image.** A model is converted to `.sfmr`
+  through the COLMAP import, which drops a track's observations beyond one per
+  image, keeping the one with the lowest reprojection error, and prints
+  `Dropped N repeat observation(s) from M point(s)` when it drops any. See
+  [drop-repeat-observations.md](../../core/reconstruction/drop-repeat-observations.md).
 
 ## Rig Support
 

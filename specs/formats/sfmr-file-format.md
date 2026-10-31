@@ -1400,6 +1400,9 @@ does which:
   stores the RMS. A COLMAP import does not keep COLMAP's per-point error,
   which is the mean of the observation errors: `colmap_binary_to_rust_sfmr` and
   `pycolmap_to_rust_sfmr` pass zeros, and `from_data` scores every point.
+  Both then drop the repeat observations of each point and score the points
+  that lost one again over the observations they keep
+  ([drop-repeat-observations.md](../core/reconstruction/drop-repeat-observations.md)).
   `sfm xform --bundle-adjust` through pycolmap recomputes every point after the
   solve. `sfm embed-patches` and `sfm xform --localize-keypoints` score every
   point on the keypoints written, in `compact_to_embedded_patches`, and so does

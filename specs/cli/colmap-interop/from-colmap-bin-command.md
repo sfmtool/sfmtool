@@ -71,6 +71,18 @@ coordinates. `colmap_binary_to_rust_sfmr` passes zeros and
 models through the same path, and through `pycolmap_to_rust_sfmr` for a rig
 solve, so a solve's output stores the RMS too.
 
+## Repeat observations
+
+A GLOMAP model can hold a point whose track has several observations in one
+image. The import keeps, in each such image, the observation with the lowest
+reprojection error against the point and drops the others, then scores the
+point's RMS again over what it keeps; this runs before `--detect-infinity`.
+When it drops anything it prints `Dropped N repeat observation(s) from M
+point(s)`. The rule, its tie-break and its handling of points at infinity are
+in [drop-repeat-observations.md](../../core/reconstruction/drop-repeat-observations.md).
+`sfm solve` writes its models through the same import, so a solve's output has
+no repeat observations either.
+
 ## Usage Examples
 
 ```bash

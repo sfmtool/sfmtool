@@ -433,6 +433,39 @@ def _detect_infinity_points(recon):
     return classified
 
 
+def _drop_repeat_observations(recon):
+    """Drop the repeat observations of a freshly imported reconstruction.
+
+    A GLOMAP solve can hand back a point whose track holds several observations
+    in one image. In each such image the observation with the lowest
+    reprojection error is kept and the others are dropped, so every point is
+    seen at most once per image. See
+    ``specs/core/reconstruction/drop-repeat-observations.md``.
+    """
+    cleaned, summary = recon.drop_repeat_observations()
+    if summary["observations_dropped"]:
+        print(
+            f"  Dropped {summary['observations_dropped']} repeat observation(s) "
+            f"from {summary['points_changed']} point(s)"
+        )
+    return cleaned
+
+
+def _finish_import(workspace_dir, sfmr_dict: dict, classify_infinity: bool):
+    """The ``SfmrReconstruction`` both COLMAP imports build from their data.
+
+    Repeat observations are dropped before points at infinity are classified,
+    so the noise the classification measures is not raised by them.
+    """
+    from .._sfmtool.reconstruction import SfmrReconstruction
+
+    recon = SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
+    recon = _drop_repeat_observations(recon)
+    if classify_infinity:
+        recon = _detect_infinity_points(recon)
+    return recon
+
+
 def colmap_binary_to_rust_sfmr(
     colmap_dir: str | Path,
     image_dir: str | Path,
@@ -447,10 +480,12 @@ def colmap_binary_to_rust_sfmr(
     ``apply_world_rotation=False`` for an in-pipeline round trip (D3), which
     applies ``S`` on the camera frames only and leaves the world untouched.
 
-    When ``classify_infinity`` is true (the default), points whose depth the
-    solve could not pin down are reclassified as points at infinity.
+    Each point keeps one observation per image: where a track holds several
+    in one image, the one with the lowest reprojection error is kept (see
+    :func:`_drop_repeat_observations`). When ``classify_infinity`` is true (the
+    default), points whose depth the solve could not pin down are then
+    reclassified as points at infinity.
     """
-    from .._sfmtool.reconstruction import SfmrReconstruction
     from .._sfmtool.fileio import read_colmap_binary
 
     colmap_dir = Path(colmap_dir)
@@ -502,10 +537,7 @@ def colmap_binary_to_rust_sfmr(
         rig_frame_data=rig_frame_data,
     )
 
-    recon = SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
-    if classify_infinity:
-        recon = _detect_infinity_points(recon)
-    return recon
+    return _finish_import(workspace_dir, sfmr_dict, classify_infinity)
 
 
 def pycolmap_to_rust_sfmr(
@@ -521,15 +553,16 @@ def pycolmap_to_rust_sfmr(
     the way in. Pass ``apply_world_rotation=False`` for an in-pipeline round
     trip (D3), applying ``S`` on the camera frames only (world untouched).
 
-    When ``classify_infinity`` is true (the default), points whose depth the
-    solve could not pin down are reclassified as points at infinity.
+    Each point keeps one observation per image: where a track holds several
+    in one image, the one with the lowest reprojection error is kept (see
+    :func:`_drop_repeat_observations`). When ``classify_infinity`` is true (the
+    default), points whose depth the solve could not pin down are then
+    reclassified as points at infinity.
 
     Each COLMAP camera becomes one camera, and no image gets an intrinsic
     adjustment: a COLMAP reconstruction with one camera per image reads as one
     camera per image.
     """
-    from .._sfmtool.reconstruction import SfmrReconstruction
-
     image_dir = Path(image_dir).absolute()
 
     cameras = reconstruction.cameras
@@ -647,10 +680,7 @@ def pycolmap_to_rust_sfmr(
         rig_frame_data=rig_frame_data,
     )
 
-    recon = SfmrReconstruction.from_data(workspace_dir, sfmr_dict)
-    if classify_infinity:
-        recon = _detect_infinity_points(recon)
-    return recon
+    return _finish_import(workspace_dir, sfmr_dict, classify_infinity)
 
 
 def _extract_rig_frame_data(

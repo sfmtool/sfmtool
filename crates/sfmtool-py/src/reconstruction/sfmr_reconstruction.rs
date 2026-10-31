@@ -1204,6 +1204,39 @@ impl PySfmrReconstruction {
         Ok((Self { inner }, dict.into_any().unbind()))
     }
 
+    /// Drop every repeat observation, returning a new reconstruction and what
+    /// was dropped.
+    ///
+    /// A repeat observation is one of a point's observations beyond one per
+    /// image. For each point and each image in which its track holds more than
+    /// one observation, the observation with the lowest reprojection error
+    /// against the point is kept and the others in that image are dropped; a
+    /// point at infinity projects its bearing. An observation the camera cannot
+    /// image, or whose pixel is not known, ranks after every one that
+    /// projects, and equal errors keep the observation that comes first in the
+    /// track. No point moves or is removed, and each keeps every image it was
+    /// seen in. A changed point's error is scored again over the observations
+    /// it keeps, and the per-image depth statistics are derived again; normals
+    /// are kept. The COLMAP import runs this on every reconstruction it reads.
+    ///
+    /// Returns:
+    ///     ``(reconstruction, summary)``. ``summary`` is a dict of the counts
+    ///     ``observations_dropped`` and ``points_changed``. A reconstruction
+    ///     with no repeat observation is returned unchanged.
+    ///
+    /// Raises:
+    ///     IOError: A ``.sift`` file could not be read.
+    fn drop_repeat_observations(&self, py: Python<'_>) -> PyResult<(Self, Py<PyAny>)> {
+        let recon = &self.inner;
+        let (inner, report) = py
+            .detach(|| recon.drop_repeat_observations(&Progress::none()))
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let dict = PyDict::new(py);
+        dict.set_item("observations_dropped", report.observations_dropped)?;
+        dict.set_item("points_changed", report.points_changed)?;
+        Ok((Self { inner }, dict.into_any().unbind()))
+    }
+
     /// Triangulation observability diagnostics for the stored finite points.
     ///
     /// Re-triangulates each finite point from its observing cameras' rays toward

@@ -251,7 +251,8 @@ fn a_point_that_loses_a_row_is_scored_again() {
     keep_row[row + 1] = false;
     let keep_point = vec![true; POINTS];
 
-    let pruned = prune_rows(&start, &keep_row, &keep_point);
+    let (mut pruned, lost) = start.select_rows(&keep_row, &keep_point);
+    assert!(pruned.rescore_points_from_inline_keypoints(&lost));
 
     // Rows 3 px and ~0 px off: the RMS is 3 / sqrt(2).
     let got = pruned.point_set.points[1].rms_reprojection_error;

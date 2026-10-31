@@ -16,6 +16,7 @@ pub mod move_camera;
 pub mod outermost_keypoint;
 pub mod point_correspondence;
 pub mod prune_covered;
+pub mod repeat_observations;
 pub mod switch_camera_model;
 pub mod thumbnail;
 pub mod triangulation;
@@ -30,6 +31,8 @@ pub use prune_covered::{
     prune_covered_observations, PruneCoveredBand, PruneCoveredError, PruneCoveredOptions,
     PruneCoveredReport,
 };
+
+pub use repeat_observations::RepeatObservationsReport;
 
 pub use triangulation::retriangulate::{
     retriangulate_points, GeometryChange, RetriangulateError, RetriangulateOptions,

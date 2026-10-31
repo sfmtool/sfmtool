@@ -344,3 +344,101 @@ class TestColmapImportErrors:
             classify_infinity=False,
         )
         self._assert_rms(recon)
+
+
+# =============================================================================
+# COLMAP import drops repeat observations
+# =============================================================================
+
+
+class TestColmapImportRepeatObservations:
+    """A COLMAP import keeps one observation of each point per image.
+
+    The model written here gives one point a second observation in an image it
+    is already seen in, on the unused feature of that image farthest from the
+    point's own, so the import keeps the point's own observation.
+    """
+
+    def _model(self, tmp_path, sfmr_path):
+        import pycolmap
+
+        from sfmtool.colmap.io import save_colmap_binary
+        from sfmtool.reconstruction import SfmrReconstruction
+
+        model_dir = tmp_path / "colmap_model"
+        save_colmap_binary(SfmrReconstruction.load(sfmr_path), model_dir)
+        return pycolmap.Reconstruction(str(model_dir))
+
+    def _import(self, model, sfmr_path):
+        from sfmtool import load_workspace_config
+        from sfmtool.colmap.io import build_metadata, pycolmap_to_rust_sfmr
+
+        workspace_dir = sfmr_path.parent
+        metadata = build_metadata(
+            workspace_dir=workspace_dir,
+            output_path=workspace_dir / "imported.sfmr",
+            workspace_config=load_workspace_config(workspace_dir),
+            operation="import",
+            tool_name="glomap",
+            image_count=model.num_reg_images(),
+            point_count=len(model.points3D),
+            observation_count=sum(
+                len(p.track.elements) for p in model.points3D.values()
+            ),
+            camera_count=len(model.cameras),
+        )
+        return pycolmap_to_rust_sfmr(
+            model,
+            sfmr_path.parent / "test_17_image",
+            metadata,
+            classify_infinity=False,
+        )
+
+    def test_a_repeat_observation_is_dropped_on_import(
+        self, tmp_path, seoul_bull_workspace, capsys
+    ):
+        model = self._model(tmp_path, seoul_bull_workspace)
+        clean = self._import(model, seoul_bull_workspace)
+        assert "repeat observation" not in capsys.readouterr().out
+
+        pid = min(model.points3D.keys())
+        point = model.points3D[pid]
+        element = point.track.elements[0]
+        image = model.images[element.image_id]
+        used = {
+            te.point2D_idx
+            for p in model.points3D.values()
+            for te in p.track.elements
+            if te.image_id == element.image_id
+        }
+        xy = np.array([p2d.xy for p2d in image.points2D])
+        distance = np.linalg.norm(xy - xy[element.point2D_idx], axis=1)
+        distance[list(used)] = -1.0
+        extra = int(np.argmax(distance))
+        assert distance[extra] > 10.0
+        track = point.track
+        track.add_element(element.image_id, extra)
+        point.track = track
+        assert len(model.points3D[pid].track.elements) == len(point.track.elements)
+
+        recon = self._import(model, seoul_bull_workspace)
+        out = capsys.readouterr().out
+        assert "Dropped 1 repeat observation(s) from 1 point(s)" in out
+
+        # The import is the clean one: the extra observation went, the point's
+        # own stayed, and every column agrees.
+        assert recon.observation_count == clean.observation_count
+        assert recon.point_count == clean.point_count
+        np.testing.assert_array_equal(
+            recon.track_image_indexes, clean.track_image_indexes
+        )
+        np.testing.assert_array_equal(
+            recon.track_feature_indexes, clean.track_feature_indexes
+        )
+        np.testing.assert_array_equal(
+            recon.track_point_indexes, clean.track_point_indexes
+        )
+        np.testing.assert_array_equal(recon.keypoints_xy, clean.keypoints_xy)
+        np.testing.assert_allclose(
+            recon.rms_reprojection_errors, clean.rms_reprojection_errors
+        )

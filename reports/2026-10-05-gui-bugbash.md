@@ -377,6 +377,13 @@ would touch.
 > can produce, and points at the Track Table's **Repeat obs.** column, PR
 > sfmtool/sfmtool.github.io#3. The cleanup for repeated observations in one
 > image is still not built._
+>
+> _Status (2026-10-30): **Done** — every COLMAP import (`sfm solve`, `sfm
+> from-colmap-bin`, `sfm densify`) now drops a point's repeat observations,
+> keeping in each image the one with the lowest reprojection error, and
+> scores the point's RMS again (`SfmrReconstruction::drop_repeat_observations`,
+> `specs/core/reconstruction/drop-repeat-observations.md`). A `.sfmr` written
+> before still holds them; branch `colmap-import-drop-repeat-observations`._
 
 Point 9873 of `dino`, the longest track at 57 observations, has three
 observations in image 3, three in image 12 and three in image 25, and two in

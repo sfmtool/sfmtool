@@ -6,7 +6,7 @@
 //! [`SfmrReconstruction`] holds all data from a `.sfmr` file using nalgebra
 //! geometric types — the in-memory side of the format's I/O boundary, described
 //! in `specs/formats/sfmr-file-format.md`. This file owns the type definitions
-//! and their accessors; the rest of the type's surface lives in five children:
+//! and their accessors; the rest of the type's surface lives in six children:
 //!
 //! - [`conversion`] — the `.sfmr` boundary: the [`sfmtool_sfmr_format::SfmrData`] round
 //!   trip (the raw columnar I/O representation) plus the `load`/`save` wrappers.
@@ -17,6 +17,8 @@
 //! - [`demo`] — a synthetic reconstruction with no files behind it.
 //! - [`sift_keypoints`] — a `sift_files` reconstruction's inline keypoint
 //!   column, filled from its `.sift` files.
+//! - [`select_rows`] — the value with some observation rows and points taken
+//!   out, every per-point and per-observation column kept in step.
 //!
 //! The type itself is two owned halves: an [`ImageSet`] of the cameras, the
 //! posed images and the per-image columns, and a [`PointSet`] of the points,
@@ -45,6 +47,7 @@ mod image_set;
 mod point_set;
 mod readings;
 mod recompute;
+mod select_rows;
 mod sift_keypoints;
 
 pub use affine_shape::patch_affine_shape;
