@@ -676,6 +676,82 @@ class TestUndistortWorkspace:
 
 
 # =============================================================================
+# Rig data
+# =============================================================================
+
+
+class TestUndistortRig:
+    def test_sensor_camera_with_no_images_gets_a_pinhole(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """A rig sensor whose camera no image uses keeps a pinhole camera.
+
+        A subset of a rig reconstruction keeps every sensor, so a sensor whose
+        images were all dropped names a camera with no image.
+        """
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        n = recon.image_count
+        cam0 = recon.cameras[0]
+        # A second camera, a copy of the first at half the focal length, that
+        # only rig sensor 1 names.
+        d = cam0.to_dict()
+        params = dict(d["parameters"])
+        for key in ("focal_length", "focal_length_x", "focal_length_y"):
+            if key in params:
+                params[key] = params[key] / 2
+        cam1 = type(cam0).from_dict({**d, "parameters": params})
+        rig_frame_data = {
+            "rigs_metadata": {
+                "rig_count": 1,
+                "sensor_count": 2,
+                "rigs": [
+                    {
+                        "name": "rig0",
+                        "sensor_count": 2,
+                        "sensor_offset": 0,
+                        "ref_sensor_name": "sensor0",
+                        "sensor_names": ["sensor0", "sensor1"],
+                    }
+                ],
+            },
+            "sensor_camera_indexes": np.array([0, 1], dtype=np.uint32),
+            "sensor_quaternions_wxyz": np.array(
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+            ),
+            "sensor_translations_xyz": np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
+            "frames_metadata": {"frame_count": n},
+            "rig_indexes": np.zeros(n, dtype=np.uint32),
+            "image_sensor_indexes": np.zeros(n, dtype=np.uint32),
+            "image_frame_indexes": np.arange(n, dtype=np.uint32),
+        }
+        data = read_sfmr(seoul_bull_workspace)
+        data["cameras"] = [cam0, cam1]
+        data["metadata"]["camera_count"] = 2
+        data["per_image_adjustments"] = [[], []]
+        data["rolling_shutter_scanlines"] = [None, None]
+        data["rig_frame_data"] = rig_frame_data
+        rig_path = seoul_bull_workspace.parent / "rig.sfmr"
+        write_sfmr(rig_path, data)
+
+        _, _, _, undistorted = _run_undistort(rig_path, tmp_path)
+
+        assert len(undistorted.cameras) == 2
+        assert all(cam.model == "PINHOLE" for cam in undistorted.cameras)
+        out_sensor_cameras = np.asarray(
+            undistorted.rig_frame_data["sensor_camera_indexes"]
+        )
+        assert out_sensor_cameras.tolist() == [0, 1]
+        assert set(np.asarray(undistorted.camera_indexes).tolist()) == {0}
+        # The image-less camera's pinhole is fitted at the camera's own size.
+        pinhole = undistorted.cameras[1]
+        expected = cam1.best_fit_inside_pinhole(cam1.width, cam1.height)
+        assert (pinhole.width, pinhole.height) == (cam1.width, cam1.height)
+        assert pinhole.to_dict()["parameters"] == pytest.approx(
+            expected.to_dict()["parameters"]
+        )
+
+
+# =============================================================================
 # E2E CLI test
 # =============================================================================
 
@@ -689,7 +765,11 @@ class TestUndistortE2E:
         result = runner.invoke(main, ["undistort", str(sfmr_path)])
 
         assert result.exit_code == 0, f"Failed: {result.output}"
-        assert "Successfully undistorted" in result.output
+        assert "Undistorted 17 images" in result.output
+        # The output paths are printed once, in the closing summary.
+        assert result.output.count("Output directory: ") == 1
+        assert result.output.count("Reconstruction: ") == 1
+        assert "Successfully undistorted" not in result.output
 
         # Clean up the output directory created next to the fixture sfmr
         import shutil
@@ -706,7 +786,7 @@ class TestUndistortE2E:
         result = runner.invoke(main, ["undistort", str(sfmr_path), "--fit", "outside"])
 
         assert result.exit_code == 0, f"Failed: {result.output}"
-        assert "Successfully undistorted" in result.output
+        assert "Undistorted 17 images" in result.output
 
         # Clean up
         import shutil

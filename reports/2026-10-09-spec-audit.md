@@ -349,15 +349,22 @@ Non-goals/deferrals checked: 3; no longer hold: 0
   - **Code: source `.sift` files come from the workspace's current config.** `get_sift_path_for_image(image_path, feature_tool=…)` (:378) resolves through the current `feature_prefix_dir`, while `get_sift_path_from_recon` exists for "the features a given reconstruction was built from". After a re-extraction with another tool, undistort reads the wrong `.sift` and remaps tracks through unrelated indexes with no error. `source_feature_tool/options` also come from the workspace, as the spec documents. Fix the code, then the sentence.
     > _Status (2026-10-17): **Done** — `undistort_reconstruction_images` reads each source `.sift` through `get_sift_path_from_recon` and takes `source_feature_tool` / `source_feature_options` from the input `.sfmr`'s `workspace.contents`; its `source_workspace_config` parameter is gone, the spec states the lookup, and a test rewrites the workspace config before undistorting, branch `fix-round-03-undistort-sift-lookup`._
   - **Points at infinity are not mentioned.** The first step, `materialize_infinity_for_export` (:254), places `w = 0` points at a finite depth, so the output has none. Add a subsection.
+    > _Status (2026-10-31): **Done** — the spec has a § "Points at infinity" naming `materialize_infinity_for_export` and its printed line, branch `fix-1031-07-undistort-command`._
   - Stdout: the paths are printed twice (`_undistort_images.py:605-611` and `undistort.py:119-122`), and the counts line is cameras/points/observations. "a single summary line" contradicts its own two-line example.
+    > _Status (2026-10-31): **Done** — the command no longer echoes the paths after `undistort_reconstruction_images` prints them; § "Stdout" shows the closing summary with its cameras/points/observations line, § "Feature-drop summary" describes its two lines, and the CLI test checks each path is printed once, branch `fix-1031-07-undistort-command`._
   - Errors: a missing `.sift`, an unreadable image and a failed `imwrite` also become `ClickException`.
     > _Status (2026-10-10): **Not done** — the finding's `imwrite` now reads `write_image_rgb` / `write_image_rgba`; a failed write still becomes `ClickException`, branch `python-image-writes-via-rust`._
+    > _Status (2026-10-31): **Done** — § "Error behavior" says every exception becomes a `ClickException` and lists the missing image or `.sift`, an undecodable image, a failed `write_image_rgb` / `write_image_rgba` and a camera model with no pinhole fit, branch `fix-1031-07-undistort-command`._
   - The thumbnail is embedded in the output `.sfmr` as well as the `.sift`.
+    > _Status (2026-10-31): **Done** — § "Thumbnail" says so, branch `fix-1031-07-undistort-command`._
   - "a future revision may call `SfmrReconstruction.recompute_reprojection_errors()`" names a method that does not exist. Delete or move to `specs/drafts/`.
+    > _Status (2026-10-31): **Done** — deleted with the paragraph around it, which was wrong: `SfmrReconstruction.from_data` scores every point through the pinhole cameras on the new `.sift` positions, so the section now says the errors describe the output, branch `fix-1031-07-undistort-command`._
   - Failure 4: "produced by `_build_sfmr_data_dict` / `SfmrReconstruction.from_data`" → "computed from the surviving points when the output `.sfmr` is built". Failure 5: "explicitly ruled out as unnecessary" → "Descriptors are not re-extracted".
+    > _Status (2026-10-31): **Done** — both sentences rewritten, branch `fix-1031-07-undistort-command`._
 **Third copies:** none of concern.
 **Recommendation:** update code (feature lookup through the reconstruction, duplicated paths), then the spec.
 **Unclear / incorrect / suspicious:** A rig sensor naming a camera no image uses raises `KeyError` (`cam_idx_to_new_idx[int(ci)]`). The pinhole size comes from the decoded image, not the camera's width and height. `progress_callback` is never passed.
+    > _Status (2026-10-31): **Partially done** — a rig-sensor camera no image uses now gets a pinhole fitted at the camera's own size instead of a `KeyError`, with a test, and § "Cameras" says so; the pinhole size from the decoded image is what the spec already states; `progress_callback` is still never passed by the command, branch `fix-1031-07-undistort-command`._
 Non-goals/deferrals checked: 3; no longer hold: 0 (one names a non-existent method)
 
 ### specs/core/patch/fronto-parallel-patch-cache.md

@@ -114,9 +114,17 @@ best-fit pinhole with the source image's width and height:
 - `--fit outside` uses `CameraIntrinsics.best_fit_outside_pinhole(w, h)`.
 
 Output images keep the source resolution. The cameras in the output
-`.sfmr` are contiguous — only the cameras actually used by images are emitted —
-and `camera_indexes` and `rig_frame_data.sensor_camera_indexes` are remapped
-accordingly.
+`.sfmr` are contiguous — only the cameras used by an image or by a rig sensor
+are emitted — and `camera_indexes` and `rig_frame_data.sensor_camera_indexes`
+are remapped accordingly. A rig sensor can name a camera no image uses, as in a
+subset of a rig reconstruction that dropped all of one sensor's images. That
+camera has no image to take a size from, so its pinhole is fitted at the
+camera's own `width` and `height`.
+
+Only a perspective camera model can be fitted with a pinhole. A fisheye or
+equirectangular camera makes the fit raise `ValueError` ("camera model '…' is
+not a perspective projection and cannot be converted to a pinhole"), and the
+command fails (see [Error behavior](#error-behavior)).
 
 An image with an intrinsic adjustment
 ([sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
@@ -154,6 +162,19 @@ image's is built for it alone, since its source intrinsics are its own.
 Image quaternions and translations are unchanged. Undistortion affects only
 the camera intrinsics; extrinsics are invariant.
 
+### Points at infinity
+
+Undistortion handles finite points only, so its first step is
+`materialize_infinity_for_export` in
+[`colmap/io.py`](../../../src/sfmtool/colmap/io.py). When the input has points
+at infinity (`w = 0`), it prints
+"`  Undistortion: materializing N point(s) at infinity`" and replaces the
+reconstruction with `SfmrReconstruction.materialize_points_at_infinity()`,
+which places each such point along its stored direction at a finite depth far
+enough that its parallax falls below one pixel in every camera that observes
+it. The rest of the command works on that reconstruction, and the output
+`.sfmr` stores every point with `w = 1`, so it has no points at infinity.
+
 ### `.sift` files
 
 For every image the command writes a new `.sift` file under
@@ -188,11 +209,12 @@ in exact descending size; the format allows that (see
 
 **Descriptors.** SIFT descriptors are copied through unchanged. The
 undistortion-induced resampling produces only small local geometric changes,
-which SIFT is designed to tolerate; re-extracting from the undistorted pixels
-was explicitly ruled out as unnecessary.
+which SIFT is designed to tolerate. Descriptors are not re-extracted from the
+undistorted pixels.
 
-**Thumbnail.** Regenerated from the in-memory undistorted image (resized to
-128×128 with `cv2.INTER_AREA`) and embedded in the `.sift` file. The
+**Thumbnail.** Regenerated from the in-memory undistorted image (its RGB
+channels resized to 128×128 with `cv2.INTER_AREA`) and embedded in the `.sift`
+file. The same thumbnail is the image's thumbnail in the output `.sfmr`. The
 `.sift` file is written **after** the image file; `image_file_xxh128` in the
 `.sift` metadata is therefore the hash of the bytes actually on disk.
 
@@ -215,15 +237,13 @@ After all images are processed the command builds a per-image table
 
 ### Reprojection errors and depth statistics
 
-Per-point reprojection errors are carried through from the source
-reconstruction (filtered to surviving points) — they are **not** recomputed
-against the new pinhole cameras. The stored errors therefore reflect the
-*source* camera model's reprojection under the *source* feature positions, not
-the new pinhole reprojection. This is a known limitation; a future revision
-may call `SfmrReconstruction.recompute_reprojection_errors()` after track
-remapping. Depth statistics are produced by `_build_sfmr_data_dict` /
-`SfmrReconstruction.from_data` with the remaining points; they are not
-explicitly recomputed.
+Per-point reprojection errors and depth statistics are computed from the
+surviving points when the output `.sfmr` is built. `SfmrReconstruction.from_data`
+fills the inline keypoints from the newly written `.sift` files, then
+recomputes the depth statistics and scores each point's RMS reprojection error
+through the pinhole cameras, so the stored errors describe the output, not the
+source ([sfmr-file-format.md](../../formats/sfmr-file-format.md)). The errors
+the source reconstruction stored are not kept.
 
 ### Rig data
 
@@ -234,7 +254,8 @@ remapped to the new contiguous camera indices.
 
 ### Feature-drop summary
 
-After processing, the command prints a single summary line of the form:
+After processing, the command prints a summary line, followed by the image
+that lost the largest share of its features when any image lost one:
 
 ```
 Feature summary: 12345/13500 kept (1155 dropped, 8.6%)
@@ -275,18 +296,33 @@ the source workspace cannot be located.
 
 ### Error behavior
 
-Missing source image files raise a fatal error (`FileNotFoundError` surfaced
-through Click as a `ClickException`). The partially written output workspace
-is left on disk.
+Any exception raised while the command runs is reported as a
+`ClickException` carrying the exception's message, and the command exits with
+status 1. The failures it can meet include a missing source image
+(a `FileNotFoundError`, reported as "`Error: Image not found: …`"), a missing or unreadable source
+`.sift` file, a source image that cannot be decoded, an undistorted image that
+cannot be written (`write_image_rgb` / `write_image_rgba`), and a camera model
+that cannot be fitted with a pinhole (see [Cameras](#cameras)). Images are
+processed in order and nothing is cleaned up, so the partially written output
+workspace is left on disk.
 
 ### Stdout
 
-On startup: one "`Undistorting N images (fit=..., filter=...)...`" line.
-For each unique source camera: a two-column table of original vs pinhole
+On startup: the materialisation line when the input has points at infinity
+(see [Points at infinity](#points-at-infinity)), then one
+"`Undistorting N images (fit=..., filter=...)...`" line. For each unique source camera, when
+its first image is processed: a two-column table of original vs pinhole
 parameters. A progress line is printed for the first three images and then
-every tenth. After the per-image loop the feature-drop summary is printed,
-followed by a final counts line (image / point / observation totals and the
-output paths).
+every tenth. After the per-image loop the feature-drop summary is printed, then
+a table for each rig-sensor camera no image uses, and then the closing summary,
+which names the output paths once:
+
+```
+Undistorted 17 images
+Output directory: sfmr/solve_001_undistorted
+Reconstruction: sfmr/solve_001_undistorted/sfmr/undistorted.sfmr
+  1 cameras, 780 3D points, 4512 observations
+```
 
 ## Usage Examples
 

@@ -105,19 +105,14 @@ def undistort(
             except ValueError:
                 source_sfmr_path = reconstruction_path.name
 
-        # Undistort all images
-        image_count, output_dir_str, sfmr_path = undistort_reconstruction_images(
+        # Undistort all images. It prints its own summary, with the output paths.
+        undistort_reconstruction_images(
             recon=recon,
             output_dir=output_dir,
             fit=fit,
             resampling_filter=resampling_filter,
             source_sfmr_path=source_sfmr_path,
         )
-
-        click.echo(f"\nSuccessfully undistorted {image_count} images")
-        click.echo(f"Output directory: {output_dir_str}")
-        if sfmr_path:
-            click.echo(f"Reconstruction: {sfmr_path}")
 
     except Exception as e:
         raise click.ClickException(str(e))
