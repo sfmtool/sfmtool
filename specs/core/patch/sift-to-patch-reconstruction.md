@@ -130,12 +130,12 @@ Consequences of the contract:
   `use_stored_keypoints=True`, each view's patch on an `embedded_patches` recon is
   rendered at its stored per-observation keypoint rather than at `project_i(X_p)`.
   `embed-patches` enables this, so its refine runs over the SIFT-detection
-  keypoints `to_embedded_patches` carried in. `sfm xform --refine-normals` now
-  does the same: gated to `embedded_patches`, its `apply` reads the stored frame
-  back (`recon.patches`) and refines with `use_stored_keypoints=True`. Because it
-  reuses that frame, it has no frame-sizing / seeding (`extent` /
-  `extent_value` / `initial_normals`) or `save_patches` knobs — those live on
-  `to_embedded_patches`, the step that builds the frame (see
+  keypoints `to_embedded_patches` carried in. `sfm xform --refine-normals`,
+  gated to `embedded_patches`, also reads the stored keypoints and frame,
+  through the grown-plane normal (`bench::refine_normals`). Because it reuses
+  that frame, it has no frame-sizing or seeding knobs (`extent` /
+  `extent_value` / `initial_normals`); those live on `to_embedded_patches`, the
+  step that builds the frame (see
   `specs/cli/reconstruction/xform/refine-normals-command.md`).
 - **The low-level builder stays dual-mode.** `PatchCloud::from_reconstruction`
   (and the diagnostic `strips/_solve` engine and `scripts/exp_*`/`cmp_*`) may

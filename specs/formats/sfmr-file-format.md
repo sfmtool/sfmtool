@@ -2066,14 +2066,17 @@ Which observation each point's patch bitmap is, or is to be, rendered from:
   reference to the observation of the same image in its new track, and
   records the reference its views were aligned to only where the point
   stored none or the stored image left its track), and `--refine-keypoints`
-  and `--refine-normals` without `bitmaps` (the first records, for a point at
-  `-1`, the rule's pick its views were aligned to). A writer that
+  without `bitmaps` (which records, for a point at `-1`, the rule's pick its
+  views were aligned to). A writer that
   renders the bitmaps renders each point that has a reference from that
   observation, and runs the reference-view rule only for a point at `-1`,
   writing the observation it picks: `--add-patch-bitmaps`, `--refine-keypoints`
-  and `--refine-normals` with `bitmaps`, and `sfm embed-patches` on an input
+  with `bitmaps`, and `sfm embed-patches` on an input
   that is already `embedded_patches`, with the replacement above for the
-  writers that align keypoints. In memory,
+  writers that align keypoints. `--refine-normals` writes, for each point it
+  turns, the commit's reference, which is the stored one or, for a point at
+  `-1`, the rule's pick, and the bitmap rendered from it where the file stores
+  bitmaps; every other point keeps its entry. In memory,
   `SfmrReconstruction::to_sfmr_data` writes the column as the reconstruction
   holds it, except that a pick only SfM Explorer's display render made is
   written as `-1` (`PointSet::saved_reference_observations`) unless a bench
@@ -2194,10 +2197,15 @@ sorts), present or absent together, flagged by `has_observation_readings`:
     sampler and window, with its scores against the point's stored bitmap
     whichever template it searched with, `NaN` where it stores none;
   - `sfm embed-patches` (after its last round, against the bitmaps it stores),
-    `sfm xform --localize-keypoints`, `--refine-keypoints` and
-    `--refine-normals` read every observation again on its render, under their
-    own resolution and sampler (`PatchCloud.read_observations`), with `NaN`
-    scores where they store no bitmap;
+    `sfm xform --localize-keypoints` and `--refine-keypoints` read every
+    observation again on its render, under their own resolution and sampler
+    (`PatchCloud.read_observations`), with `NaN` scores where they store no
+    bitmap;
+  - `sfm xform --refine-normals` writes the commit's rows for each point it
+    turns, and carries every other row; where the file has no readings it adds
+    the columns, with the rows it does not write not measured
+    ([../core/bench/refit-points.md](../core/bench/refit-points.md) § "Writing
+    the answers");
   - bundle adjustment (Rust and Python), the similarity transforms, point and
     image filters, the covered-observation prune, the viewer's edits and every
     other writer that copies, removes or reorders observations carry the rows;

@@ -64,7 +64,7 @@ in-place `--refine-keypoints`, with a fundamentally different shape:
   render renders the point from the
   reference it then stores. Re-run
   `sfm xform --refine-keypoints bitmaps=true` (or
-  `--refine-normals bitmaps=true`) to regenerate them (a frames-without-bitmaps
+  `--add-patch-bitmaps`) to regenerate them (a frames-without-bitmaps
   `embedded_patches` recon is valid — see `specs/gui/patch-rendering.md`).
   There is no `bitmaps` key on this op.
 - **Observation readings are read again.** Every kept observation was rendered

@@ -582,32 +582,30 @@ patch frames carried through unchanged — note that the patch `(u, v)` frames a
 *not* re-fit to the adjusted geometry, so re-run `sfm embed-patches` (or
 `--refine-normals`) afterward if the poses/points moved materially.
 
-#### `--refine-normals [<params>]`
+#### `--refine-normals`
 
-Refines each finite point's `normal` to the one that maximizes photometric
-cross-view consensus, leaving the point count, positions, poses, and cameras
-unchanged. Because it is photometric it reads the workspace source images, so
-those must still be present where the reconstruction was created. The refined
-patch cloud (per-point in-plane `u`/`v` half-extent vectors) is always re-written
-beside the normals in the `.sfmr` `points3d/` section (the stored frame stays
-consistent with them); `bitmaps` (on by default) additionally renders the
-per-point patch textures so the output is self-contained, and `bitmaps=false`
-skips that render. The optional value is a comma-separated `key=value` string;
-with no value it runs the v1 defaults.
+Turns each finite point's patch to its grown-plane normal, one plane fitted to
+the photographs the point is seen in, as the viewer's *Refine All Normals*
+does, leaving the point count, positions, keypoints, poses and cameras
+unchanged. It reads the workspace source images, so those must still be
+present where the reconstruction was created. A turned point gets a new normal,
+patch frame, colour and observation readings, and a new bitmap where the
+reconstruction stores bitmaps; it adds no bitmap column. Every other point
+keeps every column it had. The option takes no keys, and a value given to it is
+a usage error.
 
 The operation requires an `embedded_patches` reconstruction and rejects
-`sift_files`, so the canonical chain is `--to-embedded-patches
---refine-normals`: convert first, then refine, so the refinement positions its
-views on the stored per-observation keypoints.
+`sift_files`, so the usual chain is `--to-embedded-patches --refine-normals`:
+convert first, then refine, so the grown plane reads the stored
+per-observation keypoints and patch frames.
 
-See [refine-normals-command.md](refine-normals-command.md) for the
-full parameter list and semantics.
+See [refine-normals-command.md](refine-normals-command.md) for what it writes
+and prints.
 
 ```bash
 --refine-normals
---refine-normals angular_range_deg=25,init_steps=7
---refine-normals bitmaps=false
 --to-embedded-patches --refine-normals
+--to-embedded-patches --add-patch-bitmaps --refine-normals
 ```
 
 #### `--refine-keypoints [<params>]`
@@ -658,8 +656,8 @@ still in the track, since no bitmap is written for it to disagree with; a
 point that stores none, or whose stored image left the track, records the
 reference its views were aligned to, or `-1` where they were aligned to
 nothing) —
-re-run `--refine-keypoints` or `--refine-normals` to regenerate them (both
-render bitmaps by default); there is no `bitmaps` key on this op. Because it is
+run `--add-patch-bitmaps`, or `--refine-keypoints` (which renders bitmaps by
+default), to regenerate them; there is no `bitmaps` key on this op. Because it is
 photometric it reads the workspace source images, so those must still be
 present where the reconstruction was created. The optional value is a
 comma-separated `key=value` string; with no value it runs the binding defaults
@@ -758,8 +756,8 @@ line, on a reconstruction without thumbnails.
 Discards the per-point patch bitmap column
 (`clone_with_changes(patch_bitmaps=None)`). The patch frames
 (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the normals stay, so the
-patches keep their geometry and a later `--add-patch-bitmaps`,
-`--refine-keypoints` or `--refine-normals` can render onto them. The
+patches keep their geometry and a later `--add-patch-bitmaps` or
+`--refine-keypoints` can render onto them. The
 `tracks/reference_observations` column stays as it was: each entry names the
 observation the point's bitmap is to be rendered from again, so a later
 `--add-patch-bitmaps` renders the same bitmaps
@@ -815,7 +813,7 @@ fewer than two observations that render in frame gets a zero row, as
 
 `resolution` defaults to 24, the default of `KeypointSubpixelParams::resolution`
 ([keypoint_subpixel/params.rs](../../../../crates/sfmtool-core/src/patch/keypoint_subpixel/params.rs))
-and of the `resolution` key of `--refine-keypoints` and `--refine-normals`; it
+and of the `resolution` key of `--refine-keypoints`; it
 cannot default to the file's `patch_bitmap_resolution`, which is `null` whenever
 the step has anything to do. `sampler` takes the values and default of the
 `sampler` key of `--refine-keypoints`. Those are the only two keys: the other
@@ -828,8 +826,7 @@ observation's tile at its keypoint and keeps the entry, so
 `--drop-patch-bitmaps` followed by `--add-patch-bitmaps` at the same resolution
 and sampler gives back the same references and, byte for byte, the bitmap of
 every point that has one. The writers that render bitmaps after moving
-keypoints or frames (`--refine-keypoints`, `--refine-normals`, `sfm
-embed-patches`) render each point that has a reference from the `f32`
+keypoints or frames (`--refine-keypoints`, `sfm embed-patches`) render each point that has a reference from the `f32`
 keypoints and frame the file stores, not their own `f64` working values, for
 this reason. A point at `-1` gets the tile of the observation the
 reference-view rule picks among its track, rendered at that observation's
@@ -860,10 +857,10 @@ file whose bitmaps are absent.
 For a point at `-1`, its bitmap therefore equals what `--refine-keypoints`
 renders for a patch whose keypoints it did not move and whose every view passes the refiner's projection
 gate (the refiner runs the rule over the views that pass it), and what the
-bench commits. `--refine-normals` picks the reference view among every input
-view as well, records it, and renders every point with a reference again from
-the stored keypoints and frame; a point the rule finds no eligible view for
-gets no bitmap there either.
+bench commits. `--refine-normals` writes, for each point it turns, the bitmap
+the bench commits, where the reconstruction stores bitmaps, and records the
+reference it was rendered from; a point the rule finds no reference for is not
+turned and keeps the bitmap it had.
 
 #### What the four steps do not touch
 

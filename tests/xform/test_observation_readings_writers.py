@@ -89,21 +89,23 @@ def test_localize_keypoints_reads_every_observation_at_its_resolution(
     assert np.isnan(readings["plain_bitmap_zncc"]).all()
 
 
-def test_refine_normals_reads_every_observation_again(seoul_bull_workspace):
+def test_refine_normals_reads_the_turned_points_again(seoul_bull_workspace):
+    # The input has no readings column, so the run adds one: the observations
+    # of each point it turned and rewrote are read at the value's patch
+    # resolution, and every other row is not measured.
     recon = _embedded(seoul_bull_workspace)
-    out = RefineNormalsTransform(
-        resolution=12,
-        init_steps=5,
-        refine_levels=2,
-        sampler="bilinear",
-        bitmaps=True,
-    ).apply(recon)
+    assert recon.observation_readings is None
+    out = RefineNormalsTransform().apply(recon)
     readings = out.observation_readings
-    assert readings["options"]["resolution"] == 12
-    assert readings["options"]["sampler"] == "bilinear"
-    assert readings["options"]["anisotropic_threshold"] is None
-    assert _measured(readings).mean() > 0.9
-    assert np.isfinite(readings["plain_bitmap_zncc"]).any()
+    assert readings["options"]["resolution"] == 24
+    assert readings["options"]["sampler"] == "per_view"
+    point_of_row = np.asarray(out.track_point_indexes)
+    # A point the run did not rewrite keeps its normal bit for bit.
+    rewritten = (np.asarray(out.normals) != np.asarray(recon.normals)).any(axis=1)
+    assert rewritten.any() and not rewritten.all()
+    measured = _measured(readings)
+    assert measured[rewritten[point_of_row]].mean() > 0.9
+    assert not measured[~rewritten[point_of_row]].any()
 
 
 def test_a_bitmap_resolution_or_sampler_change_drops_the_readings(

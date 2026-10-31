@@ -12,7 +12,7 @@ inspecting the reconstruction's geometry and patches.
 Fill modes:
 
 * ``texture`` -- warp the per-point RGBA patch bitmap onto the projected quad
-  (requires patch bitmaps, e.g. ``sfm xform ... --refine-normals bitmaps=true``).
+  (requires patch bitmaps, e.g. ``sfm xform ... --add-patch-bitmaps``).
 * ``normal``  -- flat-shade each quad by its world normal (``(n + 1) / 2``).
 * ``flat``    -- flat-shade each quad by the point's reconstruction colour.
 * ``wire``    -- outline only, no fill.

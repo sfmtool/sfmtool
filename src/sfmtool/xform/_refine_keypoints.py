@@ -3,7 +3,7 @@
 
 """Subpixel keypoint refinement as an ``sfm xform`` operation.
 
-Like ``RefineNormalsTransform``, ``RefineKeypointsTransform`` is a *modifier*:
+``RefineKeypointsTransform`` is a *modifier*:
 it removes no points, drops no views, and moves no 3D geometry — it only
 rewrites the per-observation ``keypoints_xy`` values to the sub-pixel locations
 that best match the point's reference render (forward-additive ECC
@@ -17,7 +17,7 @@ view; without, a point keeps the reference it stores.
 The track structure (``track_image_indexes`` / ``track_point_indexes`` /
 ``observation_counts``) is untouched. Because the refinement is photometric it
 reads the workspace's source images (``workspace_dir / image_name``), the same
-way ``--refine-normals`` does; a missing image is a hard error.
+way ``--localize-keypoints`` does; a missing image is a hard error.
 
 The operation requires an ``embedded_patches`` reconstruction (enforced by
 ``apply_transforms``): the refiner seeds each view from the recon's stored
@@ -263,7 +263,7 @@ class RefineKeypointsTransform:
                 sampler=self.sampler,
             )
         # Stored bitmaps were rendered at the old keypoints, so they go, as
-        # ``--refine-normals bitmaps=false`` drops them. With no bitmap written
+        # ``--drop-patch-bitmaps`` drops them. With no bitmap written
         # there is nothing for the reference to agree with, so a point that
         # stores a reference keeps it, even one nothing was aligned to, and a
         # point at -1 takes the one its views were aligned to.

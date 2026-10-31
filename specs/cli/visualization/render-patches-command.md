@@ -26,7 +26,7 @@ rendering. Produce a suitable input with:
 ```bash
 sfm xform in.sfmr out.sfmr --to-embedded-patches
 # for --mode texture, build the bitmaps too:
-sfm xform in.sfmr out.sfmr --to-embedded-patches --refine-normals bitmaps=true
+sfm xform in.sfmr out.sfmr --to-embedded-patches --add-patch-bitmaps
 ```
 
 ## Options

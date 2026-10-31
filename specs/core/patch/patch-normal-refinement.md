@@ -6,8 +6,8 @@ the point as a small flat patch, renders that patch from each of those images
 for a range of candidate normals, and keeps the normal whose renderings look most
 alike. It searches a coarse grid of candidates first, then finer grids centered
 on the best one. A patch usually starts with its normal along the mean viewing
-direction, so it faces the cameras rather than lying along the surface. `sfm embed-patches` and
-`sfm xform --refine-normals` run this refinement so that the patch stored with
+direction, so it faces the cameras rather than lying along the surface. `sfm embed-patches`
+runs this refinement so that the patch stored with
 each point follows the surface, and the `--strips` views of `sfm compare` and
 `sfm inspect` can run it on the points they display before rendering their
 patches.
@@ -495,10 +495,8 @@ pub fn track_views_from_reconstruction(
 `refine_patch_normal` composes `WarpMap::from_patch` + `remap` over the
 `ProjectedImage` pyramids.
 
-**Who consumes the representative.** `sfm xform --refine-normals bitmaps=true`
-scatters the per-patch textures to per-3D-point rows and persists them as the
-`.sfmr` `patch_bitmaps_y_x_rgba` array, and `sfm inspect --strips` renders
-through the same flag. The `sfm embed-patches` pipeline does **not**: it takes
+**Who consumes the representative.** `sfm inspect --strips` renders the
+per-patch textures through this flag. The `sfm embed-patches` pipeline does **not**: it takes
 its stored bitmaps from the sub-pixel keypoint refiner instead
 (`refine_keypoints(render_bitmaps=True)`), because that renders each point's
 stored bitmap at the *final* per-view keypoints rather than one round stale,
@@ -687,10 +685,14 @@ which `refine_patch_cloud_normals` reports per batch.
 
 ## Non-goals
 
-`sfm embed-patches` and `sfm xform --refine-normals` estimate a normal with
-this search only; neither fits the depths of the patch's pieces and takes the
-plane through them. A normal from gated grid pieces, which would replace this
-search for those callers and retire it, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
+`sfm embed-patches` estimates a normal with this search only; it does not fit
+the depths of the patch's pieces and take the plane through them. A normal
+from gated grid pieces, which would replace this search for that caller and
+retire it, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
+`sfm xform --refine-normals` runs the grown-plane normal instead
+([refine-normals-command.md](../../cli/reconstruction/xform/refine-normals-command.md)),
+and moving the other callers to it is
+[retire-photometric-normal.md](../../drafts/retire-photometric-normal.md).
 
 ## Open questions
 

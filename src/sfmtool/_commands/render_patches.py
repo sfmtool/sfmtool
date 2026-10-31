@@ -126,7 +126,7 @@ def render_patches_command(
     \b
         sfm xform in.sfmr out.sfmr --to-embedded-patches
         # for --mode texture, build bitmaps too:
-        sfm xform in.sfmr out.sfmr --to-embedded-patches --refine-normals bitmaps=true
+        sfm xform in.sfmr out.sfmr --to-embedded-patches --add-patch-bitmaps
 
     Patches are painted back-to-front (painter's algorithm); there is no true
     occlusion, so a distant patch can show through a nearer one.

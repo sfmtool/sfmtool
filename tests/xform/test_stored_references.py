@@ -141,15 +141,20 @@ def _assert_references_follow_their_images(
     return kept, lost
 
 
-def _assert_drop_then_add_reproduces(out: SfmrReconstruction, sampler="per_view"):
+def _assert_drop_then_add_reproduces(
+    out: SfmrReconstruction, sampler="per_view", points=None
+):
     """Dropping and adding the bitmaps gives every point that has a reference
     the same reference and the same bitmap bytes. A point at -1 has no bitmap
-    and is left out of the comparison."""
+    and is left out of the comparison, as is a point not in ``points`` (a
+    boolean mask) when it is given."""
     again = AddPatchBitmapsTransform(resolution=RESOLUTION, sampler=sampler).apply(
         DropPatchBitmapsTransform().apply(out)
     )
     refs = np.asarray(out.reference_observations)
     named = refs >= 0
+    if points is not None:
+        named &= points
     assert named.any()
     np.testing.assert_array_equal(
         np.asarray(again.reference_observations)[named], refs[named]
@@ -190,18 +195,20 @@ def test_refine_keypoints_keeps_stored_references(embedded):
 def test_refine_normals_keeps_stored_references(embedded):
     stored = _other_references(embedded)
     recon = embedded.clone_with_changes(reference_observations=stored)
-    out = RefineNormalsTransform(
-        resolution=RESOLUTION, init_steps=3, refine_levels=1, sampler="per_view"
-    ).apply(recon)
+    out = RefineNormalsTransform().apply(recon)
     refs = np.asarray(out.reference_observations)
     np.testing.assert_array_equal(refs[stored >= 0], stored[stored >= 0])
-    _assert_drop_then_add_reproduces(out)
-
-    bare = RefineNormalsTransform(
-        resolution=RESOLUTION, init_steps=3, refine_levels=1, bitmaps=False
-    ).apply(recon)
-    assert bare.patch_bitmaps is None
-    np.testing.assert_array_equal(np.asarray(bare.reference_observations), stored)
+    # A point the run did not rewrite keeps its normal and every other column
+    # bit for bit, its bitmap included, and that bitmap was rendered from the
+    # reference the fixture replaced; each rewritten point's bitmap is rendered
+    # from its own reference.
+    rewritten = (np.asarray(out.normals) != np.asarray(recon.normals)).any(axis=1)
+    assert rewritten.any()
+    np.testing.assert_array_equal(
+        np.asarray(out.patch_bitmaps)[~rewritten],
+        np.asarray(recon.patch_bitmaps)[~rewritten],
+    )
+    _assert_drop_then_add_reproduces(out, points=rewritten)
 
 
 @pytest.mark.parametrize("rounds", [1, 2])

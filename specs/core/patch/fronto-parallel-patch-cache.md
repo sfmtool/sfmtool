@@ -192,10 +192,9 @@ runtime-R kernel.
 The cache lives in
 [fronto_cache.rs](../../../crates/sfmtool-core/src/patch/normal_refine/fronto_cache.rs),
 selected by `NormalRefineParams { cache: CacheMode, cache_supersample }` and
-reachable from `PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
-`sfm xform --refine-normals cache=…/quality=…`. It is on by default
+reachable from `PatchCloud.refine_normals(cache=…, cache_supersample=…)`. It is on by default
 (`CacheMode::FrontoParallel`, `cache_supersample = 2` — the quality-preserving
-operating point); `cache=off` / `quality=fine` opts back into the exact
+operating point); `cache=off` opts back into the exact
 source-rendering path.
 
 That one file holds the whole cache: `prerender` (the per-view base render,
@@ -210,11 +209,7 @@ falls that patch back to source rendering; nothing else in the search changes.
 The knobs are on `NormalRefineParams` (`cache: CacheMode { Off, FrontoParallel }`,
 with room to grow, and `cache_supersample: f64`) rather than globals, which is
 what lets the `PatchCloud.refine_normals(cache=…, cache_supersample=…)` binding
-and the `sfm xform --refine-normals cache=/cache_supersample=/quality=` keys be a
-straight pass-through. `quality` is a preset over the pair: `coarse` is
-`cache=fronto, cache_supersample=2` — the default operating point — and `fine` is
-`cache=off`, the exact source path. See
-`specs/cli/reconstruction/xform/refine-normals-command.md`.
+be a straight pass-through.
 
 **Two resample kernels, one result.** `resample_support` runtime-dispatches (the
 `kdforest` `is_x86_feature_detected!` pattern) to `resample_support_avx2` —
@@ -245,7 +240,6 @@ since the cache must not drop points — and on the `kerry_park` fisheye rig for
 distortion independence. That last one is a bounded-divergence check, not an
 exactness proof: the three-corner fit leaves the projection's curvature over the
 patch as fit error under any model (see "Limitations").
-`tests/xform/test_refine_normals.py` covers the preset and the CLI validation.
 
 ## Non-goals
 

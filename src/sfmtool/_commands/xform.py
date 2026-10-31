@@ -67,15 +67,14 @@ from ..xform._arg_parser import (
     flag_value="",
     multiple=True,
     help=(
-        "Refine per-point surface normals by photometric cross-view consensus. "
-        "Optional comma-separated key=value params (e.g. "
-        "'angular_range_deg=25,init_steps=7'). Renders and persists the "
-        "per-point RGBA patch textures by default so the output is "
-        "self-contained; pass 'bitmaps=false' to skip the render (e.g. on an "
-        "intermediate stage). A point that stores a reference observation "
-        "keeps it and is rendered from it. Requires an embedded_patches reconstruction "
-        "(convert first with --to-embedded-patches); reads the workspace source "
-        "images, which must still be present where it was created."
+        "Turn each finite point's patch to its grown-plane normal: one plane "
+        "fitted to the photographs the point is seen in. Takes no keys. A "
+        "turned point's bitmap is rendered again where the reconstruction "
+        "stores bitmaps (--add-patch-bitmaps adds them), and its observations "
+        "are read again. Moves no point and no keypoint. Requires an "
+        "embedded_patches reconstruction (convert first with "
+        "--to-embedded-patches); reads the workspace source images, which must "
+        "still be present where it was created."
     ),
 )
 @click.option(
@@ -373,7 +372,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
     Optimization:
       --bundle-adjust [PARAMS]            Apply bundle adjustment (cameras=, cross=, image_*=, scanlines=)
-      --refine-normals [PARAMS]           Refine per-point normals by photometric consensus (reads source images)
+      --refine-normals                    Turn each patch to its grown-plane normal (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
       --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)
 
@@ -439,7 +438,7 @@ def xform(ctx, input_path, output_path, **kwargs):
 
     \b
         # Bundle-adjust, then refine surface normals against the final geometry
-        sfm xform in.sfmr out.sfmr --bundle-adjust --refine-normals angular_range_deg=25,init_steps=7
+        sfm xform in.sfmr out.sfmr --bundle-adjust --refine-normals
 
     \b
         # Refine keypoints to sub-pixel and refine normals in one pass

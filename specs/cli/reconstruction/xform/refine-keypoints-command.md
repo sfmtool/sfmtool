@@ -147,7 +147,7 @@ without re-rendering; it costs a tile render and a self-similarity reading per v
 point, so a multi-stage pipeline can pass `bitmaps=false` on intermediate stages
 and render once on the finalizing stage. With `bitmaps=false` the command
 writes the keypoints and drops any stored bitmaps, which were rendered at the
-old keypoints, as `--refine-normals bitmaps=false` does. With no bitmap
+old keypoints, as `--drop-patch-bitmaps` does. With no bitmap
 written there is nothing for the reference to agree with, so a point that
 stores a reference `≥ 0` keeps it, even one whose tile does not render at its
 keypoint and so aligned nothing, and a point at `-1` records the rule's pick

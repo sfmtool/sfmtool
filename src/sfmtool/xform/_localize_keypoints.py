@@ -25,7 +25,7 @@ observations (and possibly fewer points) than the input.
 The localizer renders no bitmaps, and any stored ones would be stale after the
 keypoints move and views drop, so the output carries patch *frames* but **no
 bitmaps** — re-run ``--refine-keypoints bitmaps=true`` (or
-``--refine-normals bitmaps=true``) to regenerate them.
+``--add-patch-bitmaps``) to regenerate them.
 
 Because the search is photometric it reads the workspace's source images
 (``workspace_dir / image_name``), the same way ``--refine-keypoints`` does; a

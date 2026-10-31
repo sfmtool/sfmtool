@@ -166,6 +166,8 @@ the subject should check it as a claim about the code, one at a time.
 | 5 | cli/reconstruction/xform/refine-normals-command.md:3 | Leads with a bare flag and "surfaces"; does not say it needs an embedded-patches input. (borderline) | "`sfm xform --refine-normals` replaces the normal stored with each finite point of an embedded-patches reconstruction by the normal at which the point's patch looks most alike across the images that observe it, and rewrites the point's patch frame, and by default its RGBA patch texture, to match." |
 | 6 | core/patch/reference-view.md:3 | Problem first; says what the rule is in sentence 6. (borderline; the deep read passed it) | none proposed |
 
+> _Status (2026-10-30): row 5 **Superseded** — `refine-normals-command.md` was rewritten for the grown-plane normal, and its opening now says what the option does and that it needs an embedded-patches reconstruction, branch `grown-plane-xform-refine`._
+
 ### 5. Coverage both ways
 
 **Specs never cited from `crates/`, `src/`, `tests/` or `scripts/`: 63 of 202**
@@ -310,10 +312,14 @@ Non-goals/deferrals checked: 0 (none present); no longer hold: 0
 
 > _Status (2026-10-17): **Partially done** — the "False claim" bullet: took the report's second option. The spec's `key=value` section and the `RefineNormalsTransform` class docstring now say the transform restates each forwarded binding default and passes it explicitly (it reads `resolution`, `sampler` and `confidence` itself, and `quality` sets the cache knobs), and the new `test_forwarded_defaults_match_the_binding` compares those defaults with the `PatchCloud.refine_normals` signature, branch `fix-round-10-refine-normals-defaults`. Still open: the section's other bullets._
 
+> _Status (2026-10-30): **Superseded** — the spec was rewritten when `--refine-normals` moved to the grown-plane normal (`sfmtool.bench.refine_normals`, no keys): the key table, the pseudocode, the `RemoveLargeFeaturesFilter` comparison, the infinity-normal contradiction and the v1 residue are gone, branch `grown-plane-xform-refine`._
+
 **Third copies:** `_refine_normals.py` module docstring (~22 lines) and class docstring (~16 lines) both re-derive "Why this fits `xform`". Shrink to contract plus link and drop the false "cannot drift" claim.
 **Recommendation:** update spec; discuss whether the transform should stop restating the binding's defaults.
 
 > _Status (2026-10-17): **Partially done** — the class docstring no longer makes the "cannot drift" claim, and the transform keeps restating the defaults (it uses some of the values itself), now pinned by a test, branch `fix-round-10-refine-normals-defaults`. Still open: shrinking both docstrings to the contract plus a link._
+
+> _Status (2026-10-30): **Superseded** — the transform now runs the grown-plane normal and takes no keys, so the restated defaults, their test and the photometric docstrings are gone; both docstrings are short and point at the spec, branch `grown-plane-xform-refine`._
 
 **Unclear / incorrect / suspicious:** none beyond the above.
 Non-goals/deferrals checked: 5; no longer hold: 0

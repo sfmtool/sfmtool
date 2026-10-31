@@ -99,14 +99,6 @@ def _parse_bool(value: str) -> bool:
     raise ValueError(value)
 
 
-def _parse_opt_int(value: str) -> int | None:
-    """Parse an optional integer (``none``/``off`` → ``None``, else ``int``)."""
-    v = value.strip().lower()
-    if v in ("none", "off"):
-        return None
-    return int(value)
-
-
 def _parse_camera_list(value: str) -> list[int]:
     """Parse ``0+1+3`` into camera indexes."""
     return [int(v) for v in value.split("+") if v.strip()]
@@ -116,7 +108,6 @@ def _parse_camera_list(value: str) -> list[int]:
 # not parse; a built-in caster is named by its type (``int``, ``float``).
 _VALUE_NAMES: dict[Callable[[str], object], str] = {
     _parse_bool: "boolean (on, off, true, false, yes, no, 1 or 0)",
-    _parse_opt_int: "integer or none",
     _parse_camera_list: "camera list (camera indexes joined by '+')",
 }
 
@@ -170,44 +161,24 @@ def _take_arg(args: list[str], i: int, option: str) -> tuple[str, int]:
     return args[i], i
 
 
-# Each --refine-normals key maps to a caster for its value; the
-# RefineNormalsTransform constructor owns range/enum validation. Keys mirror the
-# PatchCloud.refine_normals binding parameters. (Frame-sizing / cloud-building
-# knobs — extent, extent_value, initial_normals — and the save_patches opt-in
-# live on `--to-embedded-patches`, the step that actually builds the patch frame;
-# refine-normals reuses the stored frame, so it doesn't take them.)
-_REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
-    "bitmaps": _parse_bool,
-    "angular_range_deg": float,
-    "init_steps": int,
-    "refine_levels": int,
-    "resolution": int,
-    "objective": str,
-    "robust_iters": int,
-    "search_robust_iters": _parse_opt_int,
-    "window": str,
-    "window_sigma": float,
-    "sampler": str,
-    "min_valid_fraction": float,
-    "min_views": int,
-    "cache": str,
-    "cache_supersample": float,
-    "quality": str,
-    "confidence": _parse_bool,
-}
-
-
 def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
-    """Parse a ``--refine-normals`` comma-separated ``key=value`` string.
+    """Parse a ``--refine-normals`` value, which must be empty.
 
-    An empty string runs the v1 defaults. Unknown keys, malformed tokens (no
-    ``=`` or an empty key), and unparseable values raise ``click.UsageError``;
-    range/enum validation is the transform constructor's job (its ``ValueError``
-    is re-raised as ``UsageError`` by the caller).
+    The option takes no keys: it turns each patch to its grown-plane normal,
+    which takes no settings here, and the photometric search's keys are gone.
+    Blank comma segments are tolerated, as the ``key=value`` options tolerate
+    them; any other token raises ``click.UsageError``.
     """
-    return RefineNormalsTransform(
-        **_parse_kv_params(param, "--refine-normals", _REFINE_NORMALS_KEYS)
-    )
+    given = [token.strip() for token in param.split(",") if token.strip()]
+    if given:
+        raise click.UsageError(
+            f"--refine-normals takes no keys, and was given '{','.join(given)}'. "
+            "It turns each patch to its grown-plane normal, which takes no "
+            "settings here; the keys of the photometric search it ran before "
+            "were removed. A turned point's bitmap is rendered again where the "
+            "reconstruction stores bitmaps, and --add-patch-bitmaps adds them."
+        )
+    return RefineNormalsTransform()
 
 
 # Each --refine-keypoints key maps to a caster for its value; the
