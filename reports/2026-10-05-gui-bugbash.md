@@ -269,6 +269,14 @@ max_error?, order_by, limit}` that returns ids with the summary fields.
 
 ## 7. A solve that is not gravity-aligned gets an unreadable default view (low)
 
+> _Status (2026-10-31): **Declined** — the maintainer chose not to estimate
+> a scene up direction in the viewer. The cameras' mean up vector is not a
+> reliable estimate of gravity: it tilts for a sequence whose cameras all
+> pitch the same way, so acting on it could tilt an aligned reconstruction.
+> The sign error in this finding's first estimate came from reading the pose
+> quaternion with COLMAP's forward axis; finding 8 now states the convention
+> (forward is `Rᵀ·(0,0,−1)`, up is `Rᵀ·(0,1,0)`)._
+
 The dino solve's true up direction, taken as the mean of the camera images'
 up vectors, is about (0.50, −0.31, 0.81): roughly 36° from the viewer's Z up.
 On opening, and after `set_view {fit: null}`, the view looks at the scene from
@@ -311,6 +319,13 @@ description that says which way the camera looks and which way is up in its
 frame.
 
 ## 9. `convert_to_embedded_patches` requires `reconstruction_label` (low)
+
+> _Status (2026-10-31): **Declined** — the requirement is deliberate.
+> `specs/gui/mcp-server.md` requires `reconstruction_label` on every tool in
+> the editing family, because the selection belongs to the person at the
+> window and can move between an agent's calls. The argument's description
+> says so ("Named rather than defaulting to the selected one"), and did
+> before this bug bash._
 
 `convert_to_embedded_patches {}` with `dino` selected is refused:
 *"convert_to_embedded_patches needs reconstruction_label."* Almost every
