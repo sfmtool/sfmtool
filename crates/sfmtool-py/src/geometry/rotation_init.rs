@@ -28,7 +28,9 @@ use sfmtool_core::geometry::rotation_init as core_rotation_init;
 ///     cluster_indexes: (n_obs,) uint32 cluster id per observation,
 ///         nondecreasing (each distinct cluster is a contiguous run).
 ///     image_indexes: (n_obs,) uint32 image id per observation.
-///     positions_xy: (n_obs, 2) float64 full-pixel keypoint positions.
+///     positions_xy: (n_obs, 2) float64 full-pixel keypoint positions of a
+///         distortion-free pinhole camera; distorted input gives wrong poses
+///         with no error.
 ///     width: Shared image width; the principal point is the image centre.
 ///     height: Shared image height.
 ///     f0: Shared focal in pixels (typically a focal-vote consensus).
@@ -42,9 +44,11 @@ use sfmtool_core::geometry::rotation_init as core_rotation_init;
 ///     A dict ``{"image_indexes" (n_posed,) uint32, "quaternions_wxyz"
 ///     (n_posed, 4), "translations" (n_posed, 3), "points" (n_clusters, 3)
 ///     with NaN where absent, "point_at_infinity" (n_clusters,) bool,
-///     "inlier_fractions" (n_posed,)}``, or ``None`` when no rotation edge
-///     validates, the component is too small, or the seed fails its
-///     cheirality floor. A row of ``points`` that ``point_at_infinity`` marks
+///     "inlier_fractions" (n_posed,)}``, or ``None`` when the arrays are
+///     empty, ``f0`` is not finite and positive, ``max_images < 2``, no
+///     rotation edge validates, the component is too small, or the seed
+///     baseline fails (too few near-field rows, no usable translation
+///     direction, or too few points in front of both cameras). A row of ``points`` that ``point_at_infinity`` marks
 ///     is a unit world-frame direction; other finite rows are positions. The
 ///     far-field clusters enter the finishing adjustment as directions, and
 ///     its storage decision stores every point by what its rays support.

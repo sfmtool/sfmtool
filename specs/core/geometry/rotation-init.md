@@ -17,8 +17,28 @@ triangulated points) for a caller's refinement machinery.
 
 ## Inputs
 
-The flat cluster-observation arrays (as in `focal_vote`), the shared
-image size, a focal `f0` (typically a focal-vote consensus), and a seed.
+- The flat cluster-observation arrays, as in `focal_vote`: per observation a
+  cluster id (`cluster_indexes`), an image id (`image_indexes`) and a
+  full-pixel keypoint position (`positions_xy`), all of one length.
+  `cluster_indexes` must be nondecreasing, so that each distinct cluster is
+  one contiguous run. The Rust kernel does not check this, and an unsorted
+  array splits a cluster into several runs with no error; the binding raises
+  `ValueError` on it.
+- The image size `width × height`, shared by every image. It sets the
+  principal point, at the image centre, and the image diagonal that the
+  displacement gate in § 1 scales by.
+- A focal `f0` in pixels, shared by every image, typically a focal-vote
+  consensus.
+- A `seed` for the homography RANSAC, and the core's size bounds
+  `min_images` and `max_images`.
+
+The kernel models every image as one distortion-free pinhole camera, a
+`SimplePinhole` at `f0` with its principal point at the image centre, and
+reads the positions as pixels of that camera. It applies no distortion model
+anywhere: the homography test of § 1, the seed rays and the resection all
+assume that camera. Positions from a lens with real distortion, such as a
+fisheye, give wrong poses and raise no error, so a caller with such a camera
+undistorts the positions to a pinhole first.
 
 ## Frame convention
 
@@ -39,9 +59,18 @@ S = diag(1, −1, −1),      R_canonical = S · R_optical · S
 
 which is its own inverse (`S² = I`). This is applied once, at the boundary where
 an edge is built: nothing downstream of `build_edges` sees an optical-frame
-rotation, and nothing upstream of it sees a canonical one. Getting it wrong is
-silent — `S R S` is still a rotation matrix, of the same angle — so it shows up
-only as a reconstruction that is mirrored about the horizontal axis.
+rotation, and nothing upstream of it sees a canonical one. Getting it wrong
+raises no error, because `S R S` is still a rotation matrix, of the same
+angle. Since `S = −M` with `M = diag(−1, 1, 1)`, `S R S = M R M`: an
+unconjugated rotation is the rotation of the scene mirrored left to right,
+so rotations about the vertical `Y` axis and the viewing `Z` axis come out
+in the wrong sense and rotations about `X` do not. The observations are not
+mirrored, so the result is not a clean mirror image of the scene but
+starting rotations that disagree with the observations. When those rotations
+are small, the finishing adjustment of § 4 can move them back: the synthetic
+scenes in
+[tests.rs](../../../crates/sfmtool-core/src/geometry/rotation_init/tests.rs)
+pan by about 2° per image and still pass with the conjugation removed.
 
 ## Mechanism
 
@@ -53,15 +82,22 @@ vote's pair tables do: each cluster keeps one position per member image
 (last observation wins) and contributes every pair of its distinct member
 images. The kernel builds these tables itself rather than reading the
 sampled `ClusterCovisibility` tables, because a single sampled member pair
-per cluster undercounts covisibility far enough to starve the 25-shared
-gate that follows, on exactly the parallax-poor captures this method
-exists for.
+per cluster undercounts covisibility far enough to leave too few pairs
+with the 25 shared clusters the gate that follows requires, on exactly the
+parallax-poor captures this method exists for.
 
-Candidate pairs per image: the largest-mean-displacement covisible
-partners (at least 25 shared clusters, displacement at least
-`0.05 × diagonal`, up to 3 edges per image). Per candidate: estimate the
-homography over the pair's shared-cluster correspondences (centred
-coordinates); require at least 12 inliers; validate as a conjugate
+Candidate pairs: each image proposes its 3 covisible partners of largest
+mean displacement among those with at least 25 shared clusters and a mean
+displacement of at least `0.05 × diagonal` (`MAX_EDGES_PER_IMAGE = 3`). The
+cap is on what an image proposes, not on its edges: an image also gains every
+pair a partner proposes, so it can end with more than 3 edges, and a
+candidate that fails validation is not replaced by the next partner. Each
+pair is tried once. Per candidate: estimate the homography over the pair's
+shared-cluster correspondences, in coordinates centred on the principal
+point, with
+[`estimate_homography`](focal-vote.md#homography-estimation) at an inlier
+gate of 3 px of symmetric transfer error (`H_MAX_ERROR_PX = 3.0`); require
+at least 12 inliers; validate as a conjugate
 rotation at `f0` by the orthogonality residual (`< 0.12`; a finite-plane
 homography never passes). A validated edge stores `R_ij` — the
 polar-orthogonalized `K⁻¹ H K`, conjugated by `S` into the canonical frame (see
@@ -76,8 +112,9 @@ highest-degree image, then iterative rotation averaging to consensus —
 each image's rotation is re-estimated as the chordal mean of its
 neighbours' propagated estimates (`R_j ← mean over edges (i,j) of
 R_ij · R_i`), sweeping until the largest single-image update falls below
-0.1° or 20 sweeps. Averaging exists to absorb tree drift: a chain of
-edge rotations accumulates error that a tree alone passes to its leaves.
+0.1° or 20 sweeps. Averaging reduces the error that accumulates along a
+chain of edge rotations, which tree propagation alone passes on to the
+images at the end of the chain.
 
 ### 3. Seed baseline and structure
 
@@ -103,18 +140,19 @@ That adjustment starts the far field at infinity, over a mask the kernel
 builds itself as the deduplicated union of the H-inlier clusters of the
 component's validated edges. The mask is not optional and not the
 caller's to supply: with the far clusters started as finite points, a
-dominant far cloud rewards baseline collapse, and the LM walks the flat
-scale gauge downward toward a zero baseline, where the core degenerates to a
-panorama — each staged round is individually well behaved, and the walk
-compounds across them. Started as
+dominant far cloud rewards baseline collapse, and LM reduces the scale
+toward a zero baseline, where the core degenerates to a panorama. Each staged
+round is individually well behaved, and the reductions add up across the
+rounds. Started as
 directions, the far clusters sit at zero inverse depth, where they carry no
 translation column. The adjustment runs with the default crossing
 ([bundle-adjustment.md](bundle-adjustment.md) § "Free points: inverse depth
 and the storage decision"), so at its end every point, far-field or not, is
 stored as a position or a direction by what its rays support at the noise the
-adjustment measures. Because the gauge is flat it can also wander harmlessly,
-so after the adjustment the posed translations and the positions are rescaled
-to pin the seed baseline back to unit; the directions are left alone.
+adjustment measures. Because the scale gauge is flat, the scale can also
+change without affecting the cost, so after the adjustment the posed
+translations and the positions are rescaled to pin the seed baseline back to
+unit; the directions are left alone.
 
 ## Output
 
@@ -123,6 +161,19 @@ triangulated points (`NaN` where absent), `point_at_infinity` saying which
 rows are unit world-frame directions as the finishing adjustment stored them,
 and each posed image's surviving inlier fraction from the final adjustment.
 The far-field mask the adjustment starts from is internal.
+
+The kernel returns `None` when:
+
+- the arrays are empty, or their lengths differ (the binding raises
+  `ValueError` on differing lengths instead);
+- `f0` is not finite and positive, or `max_images < 2`;
+- no rotation edge validates;
+- the largest connected component of the edge graph has fewer than
+  `min_images` images, or fewer than 2;
+- the seed edge has fewer than 10 near-field correspondences, or its
+  near rows give no usable translation direction;
+- fewer than 10 of the seed's near-field correspondences triangulate in
+  front of both cameras under either sign of the translation.
 
 ## Binding
 
@@ -134,6 +185,21 @@ It builds on `estimate_homography` ([focal-vote.md](focal-vote.md)),
 rotation-locked resection
 ([rotation-locked-resection.md](rotation-locked-resection.md)), and the
 staged bundle adjustment ([bundle-adjustment.md](bundle-adjustment.md)).
+
+```rust
+// sfmtool_core::geometry::rotation_init
+pub fn rotation_init(
+    cluster_indexes: &[u32],
+    image_indexes: &[u32],
+    positions_xy: &[[f64; 2]],
+    width: u32,
+    height: u32,
+    f0: f64,
+    seed: u64,
+    min_images: usize,     // DEFAULT_MIN_IMAGES = 8
+    max_images: usize,     // DEFAULT_MAX_IMAGES = 14
+) -> Option<RotationInit>
+```
 
 ```python
 rotation_init(cluster_indexes, image_indexes, positions_xy,

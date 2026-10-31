@@ -613,9 +613,15 @@ fn retriangulate_posed(
 /// with the principal point at the image centre. `seed` drives the homography
 /// RANSAC; same inputs and seed give bit-identical output.
 ///
-/// Returns `None` when no rotation edge validates, the largest connected
-/// component has fewer than `min_images` images, or the seed baseline fails
-/// its cheirality floor.
+/// Every image is modelled as a distortion-free `SimplePinhole` at `f0`, so
+/// the positions must be pinhole pixels: distorted input gives wrong poses
+/// with no error.
+///
+/// Returns `None` when the arrays are empty or their lengths differ, `f0` is
+/// not finite and positive, `max_images < 2`, no rotation edge validates, the
+/// largest connected component has fewer than `min_images` (or 2) images, or
+/// the seed baseline fails: fewer than 10 near-field rows, no usable
+/// translation direction, or fewer than 10 points in front under either sign.
 #[allow(clippy::too_many_arguments)]
 pub fn rotation_init(
     cluster_indexes: &[u32],
