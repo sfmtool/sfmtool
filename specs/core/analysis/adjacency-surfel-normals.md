@@ -1,11 +1,23 @@
 # Adjacency surfel normals: robust plane fit over image-space neighbours
 
-## Overview
+## Purpose
 
-Given a point cloud and its
-[observation adjacency graph](observation-adjacency-graph.md), estimate a
-surface normal at each selected point by fitting a plane **through the point
-itself** to the *directions* of its graph neighbours. Because the plane is
+Adjacency surfel normals gives each selected point of a point cloud a
+surface normal, and a verdict on whether that normal is well determined,
+from the positions of the points next to it, without reading any image.
+Which points are next to each other is decided in the images rather than in
+3D: two points are neighbours when their observations lie close together in
+the images that see both. The kernel fits a plane through the point to the
+directions toward those neighbours, discounting neighbours that lie on
+another surface, and returns per-point arrays of normals and fit
+diagnostics. It is offered to Python as
+`sfmtool.analysis.estimate_adjacency_surfel_normals`; no pipeline in this
+repository calls it.
+
+The neighbours come from the
+[observation adjacency graph](observation-adjacency-graph.md), and the
+kernel estimates a surface normal at each selected point by fitting a plane
+**through the point itself** to the *directions* of its graph neighbours. Because the plane is
 anchored at the point (surfel semantics) and fitted on unit directions, each
 neighbour contributes its angular deviation once, rather than in proportion
 to its distance — distant neighbours supply the angular leverage the fit
