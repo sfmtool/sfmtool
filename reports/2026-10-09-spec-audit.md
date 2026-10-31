@@ -430,6 +430,8 @@ Non-goals/deferrals checked: 3; no longer hold: 0
 **Unclear / incorrect / suspicious:** "(CLI `--no-piecewise`)" for an off default; the flag is `--piecewise/--no-piecewise`. A "Why this shape" plus example per sub-API is a pattern worth a TEMPLATE note.
 Non-goals/deferrals checked: 12; no longer hold: 0
 
+> _Status (2026-10-31): **Partially done** — the spec's Rust API now lists `refine_cluster_patches_borrowed`, and "Why this shape" says why it takes borrowed pyramids; § "Python bindings" says the dict's `regate_at_refined_shape` reports whether the whole grid's gate ran, so it is False when the member gate's bar is 0; the open question "Shift only, or shift and scale, per cell" is folded into the Non-goal, now "No fit beyond a shift per cell"; the `params.rs` comment cites "Measured cost" instead of "Performance"; and § "Parameters" names the flag `--piecewise/--no-piecewise`. Still open: the `PiecewiseParams` rename, the work-order residue and the run log, the Failure 4 sentence, the mannered prose, the other third copies, and the TEMPLATE note; branch `fix-1031-14-cluster-patch-refinement-spec`._
+
 ### specs/core/patch/reference-view.md
 **Summary:** The rule that picks which observation's render becomes a point's stored bitmap, its fallbacks and facing limit, and since #857/#871 the stored bitmap itself and the bench pin. Thresholds, rule, fallbacks, bindings and tests all match.
 **Implementing code:** `crates/sfmtool-core/src/patch/reference_view.rs` (+ `tile.rs`, `agreement.rs`, `track.rs`), `patch/stored_bitmap.rs`, `patch/normal_refine/obliquity.rs`, `bench/evaluate.rs`, `bench/fit.rs`, `crates/sfmtool-py/src/patches/{view_tile,render_bitmaps}.rs`, `src/sfmtool/_patch_compaction.py`.
