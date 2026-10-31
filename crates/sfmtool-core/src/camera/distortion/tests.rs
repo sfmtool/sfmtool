@@ -2393,7 +2393,7 @@ fn equidistant_native_jacobian_is_scale_invariant_in_the_ray() {
 // SIMPLE_RADIAL_FISHEYE — the one-coefficient equidistant map
 //
 // `θ_d = θ·(1 + k1·θ²)` shares the native model's closed-form derivative
-// (`k1 = 0` recovers it exactly). The BA's `opt_k1` rung linearizes through
+// (`k1 = 0` recovers it exactly). The BA's `opt_k1` release linearizes through
 // this Jacobian, so it is pinned here the same way the native one is:
 // against a central difference over a field that runs past 90°, with the
 // domain and the on-axis limit checked alongside.

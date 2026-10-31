@@ -1309,7 +1309,7 @@ fn image_spline(c: &[f64], e: [f64; 2]) -> Vec<f64> {
 /// `opt_k1` and `opt_bspline` are exclusive on any one camera
 /// (no model carries both parameters). Callers stage the releases — fixed →
 /// `opt_f` → `opt_f` plus the model's distortion release — so the distortion
-/// rung opens on a focal that has already settled.
+/// is released on a focal that has already settled.
 ///
 /// `opt_image_f` and `opt_image_pp` release each image's intrinsic adjustment:
 /// its focal scale (on the models `opt_f` admits) and its principal-point
@@ -1726,53 +1726,22 @@ fn in_front_floor(depths: &[f64], is_dir: &[bool], obs_pt: &[u32]) -> f64 {
     IN_FRONT_FLOOR_FRACTION * *median
 }
 
-/// Re-estimation (rounds after the first): the shared retriangulation
-/// operation ([`crate::reconstruction::triangulation`]) at the round's
-/// geometry with the adjustment's settings. `marks` is on with the round's
-/// direction mask, `few` is `absent`, and the floor, cheirality and bar rules
-/// are off. A finite track rebuilds from all supplied observations by
-/// ray-midpoint batch triangulation; a direction track re-estimates in closed
-/// form as the normalized mean of its observations' back-rotated rays
-/// `R_iᵀ · pixel_to_ray(uv)`. Tracks with fewer than two usable observations,
-/// and points with none, become `NaN`; callers refill from their full
-/// observation set (the bootstrap's post-BA refill rule). The adjustment's
-/// trim, not the operation, decides what a point behind a camera means, which
-/// is why cheirality stays off.
+/// Re-estimation (rounds after the first): rebuild every point at the round's
+/// geometry through the shared retriangulation operation
+/// ([`crate::reconstruction::triangulation`]) with the adjustment's settings.
+/// `specs/core/geometry/bundle-adjustment.md` § "The staged loop" (step 1) and
+/// § "The parametrisation" ("Re-estimation between rounds") are the design, and
+/// `specs/core/reconstruction/triangulation-rules.md` § "Callers and their
+/// settings" lists the operation's settings for this caller.
 ///
-/// The operation builds its CSR grouping with a **stable** sort, so a track's
-/// observations accumulate in the order the caller listed them and the result
-/// is defined by the input order rather than by a sort's tie-breaking.
-///
-/// Each observation's ray is `pixel_to_ray` through the camera of its own
-/// image, so a track seen by two cameras back-projects each observation
-/// through its own lens.
-///
-/// `cross_trim` is the inverse-depth policy for free points: `None` with the
-/// crossing off, and with it on, the trim threshold of the round about to
-/// start. Off, every free point keeps its representation as it came in (the
-/// mask is honoured for the whole solve). On, each free point starts the next
-/// round from whichever of three states fits its whole track best, read as the
-/// sum over its observations of the squared residual capped at `cross_trim`:
-/// the state the last round left it in, its midpoint, and its mean ray at
-/// `ρ = 0`, preferred in that order on a tie. The midpoint is read with
-/// cheirality on, so one behind a camera that observes the point is the mean
-/// ray. A state in the other representation than the last round left is taken
-/// only when at least `min_track` of the track's observations reproject under
-/// `cross_trim` from it, the number the next round's trim needs to keep the
-/// track in the solve; otherwise the last state stands, since a change of
-/// representation the next round cannot solve on would come back unscored and
-/// be reset to the row it was handed in with. A point with no estimate takes
-/// its midpoint, or its mean ray where that costs less, with no guard. The
-/// choice is not a decision about how the point is stored: the next
-/// round solves it in inverse depth from there, where it can move to or away
-/// from infinity, and the storage decision is taken at the end of the solve.
-/// It is a choice among starting values because neither closed form is right
-/// for every track: the midpoint of nearly parallel rays can land near the
-/// cameras, where its residuals put the whole track past the trim, and the mean
-/// ray of a near point's rays is off by its parallax. A free point with fewer
-/// than two usable observations becomes `NaN`, as any track does. A ranged
-/// point is carried by the distance rule at whatever origin its reference
-/// resolves to now, and a held point is not re-estimated at all.
+/// A track with fewer than two usable observations, and a point with none,
+/// becomes `NaN`; what happens to it then is the caller's choice (the spec's
+/// step 1 says what growth and the reconstruction-level adjustment do).
+/// `cross_trim` is `None` with the crossing off, where every free point keeps
+/// the representation it came in with, and otherwise the trim threshold of the
+/// round about to start, which the choice among a free point's three starting
+/// states reads; `min_track` is the count of observations under that trim a
+/// change of representation needs.
 #[allow(clippy::too_many_arguments)]
 fn retriangulate_round(
     cams: &[CameraIntrinsics],
@@ -2603,28 +2572,15 @@ impl<'a> Lens<'a> {
         opt_image_radial_bspline: bool,
         opt_image_rolling_shutter: bool,
     ) -> Self {
-        // The analytic focal column `∂(u, v)/∂f = (u − cx)/f` is exact only
-        // on the models `focal_is_releasable` admits (its doc says why), and
-        // the image's log-focal-scale column `u − cx_i` on the same ones. Every other model degrades to a fixed focal here; the binding
-        // rejects it loudly first. A per-image release holds the shared value
-        // of its kind for the solve.
+        // Which model each release is exact on, and why, is in
+        // `specs/core/geometry/bundle-adjustment.md` § "The solve" (the focal,
+        // the `k1` release, the spline release), § "The per-image release" and
+        // § "The per-image corrections". A model a release is not exact for
+        // keeps the parameter fixed here; the binding rejects the request first.
         let opt_image_f = opt_image_f && focal_is_releasable(&base.model);
         let opt_f = opt_f && focal_is_releasable(&base.model) && !opt_image_f;
         let opt_pp = opt_pp && !opt_image_pp;
-        // The curvature rung exists on exactly one model:
-        // `SIMPLE_RADIAL_FISHEYE` is the only one whose single radial
-        // coefficient acts on the ray's own `θ`, which is what makes
-        // `∂(u, v)/∂k1 = f·θ³·û` exact. Same degrade.
         let opt_k1 = opt_k1 && matches!(base.model, CameraModel::SimpleRadialFisheye { .. });
-        // The spline rung exists on the two models that carry a spline,
-        // `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, whose dimensionless
-        // coefficients act on the ray's own radial coordinate `d`, making
-        // `∂(u, v)/∂cᵢ = f·Bᵢ(d)·û` exact — and only when the spline is
-        // actually defined (at least `MIN_BSPLINE_COEFFS` coefficients on a
-        // positive finite domain end; anything shorter evaluates as the
-        // identity and carries nothing to release). Same degrade; `opt_k1` and
-        // `opt_bspline` are therefore exclusive on any one camera, which the
-        // spline instantiation's pinned-K1 dummy slot relies on.
         let opt_bspline = opt_bspline
             && base
                 .model
@@ -2632,12 +2588,6 @@ impl<'a> Lens<'a> {
                 .is_some_and(|(bspline, d_max, _)| {
                     bspline.len() >= MIN_BSPLINE_COEFFS && d_max.is_finite() && d_max > 0.0
                 });
-        // The per-image corrections exist on `SFMTOOL_PINHOLE` alone: its
-        // rolling-shutter step is defined on that model's image plane, and its
-        // radial correction is a spline on its own domain, which has to have a
-        // positive, finite end and a spline the two-coefficient basis inserts
-        // into (empty, or at least two coefficients). Same degrade; the
-        // binding rejects it loudly first.
         let opt_image_rolling_shutter =
             opt_image_rolling_shutter && image_rolling_shutter_is_releasable(&base.model);
         let opt_image_radial_bspline =
@@ -4066,7 +4016,7 @@ fn solve_lm<const CAM_COLS: usize>(
                             return LensStep::Rejected;
                         }
                     }
-                    // The curvature rung's plausibility guard: a step that
+                    // The `k1` release's plausibility guard: a step that
                     // folds the distorted map inside the imaged field marks
                     // the camera for a retry with its `k1` held. A held `k1` is
                     // checked again, since the guard reads the candidate focal.
@@ -4085,7 +4035,7 @@ fn solve_lm<const CAM_COLS: usize>(
                             }
                         }
                     }
-                    // The spline rung's plausibility guard: a step that folds
+                    // The spline release's plausibility guard: a step that folds
                     // the spline map anywhere on its domain marks the camera the
                     // same way. A held spline is the current, admissible one.
                     if lens.opt_bspline && !held[j] {
