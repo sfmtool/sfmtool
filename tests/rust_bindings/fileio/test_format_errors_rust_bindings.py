@@ -6,9 +6,11 @@
 The `.sfmr`, `.sift`, `.matches` and `.camrig` bindings map their errors
 through one table (`crates/sfmtool-py/src/format_errors.rs`): an I/O failure is
 an `OSError` of the subclass for its kind, a file that cannot be parsed is an
-`OSError`, and data a writer was handed that breaks a rule of the format is a
-`ValueError`. These tests trigger each variant through each format's reader,
-verifier and writer.
+`OSError`, data a writer was handed that breaks a rule of the format is a
+`ValueError`, and a `.sfmr` that holds something this build cannot apply is a
+`ValueError`. These tests trigger each variant through each format's readers,
+verifier and writer, and through `SfmrReconstruction`'s `load`, `from_data`
+and `save`. The `.kdf` cases are in `spatial/test_kdf_rust_bindings.py`.
 """
 
 import json
@@ -41,9 +43,10 @@ from sfmtool.fileio import (
     MatchesFile,
     SiftWriteQueue,
 )
+from sfmtool.reconstruction import SfmrReconstruction
 
 from tests.rust_bindings.fileio.test_matches_file_rust_bindings import _pairwise_dict
-from tests.conftest import SEOUL_BULL_GROUND_TRUTH
+from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
 
 _SFMR = SEOUL_BULL_GROUND_TRUTH
 
@@ -244,3 +247,34 @@ def test_a_write_the_filesystem_refuses_is_an_os_error(tmp_path):
             read_sfmr(str(_SFMR)),
             skip_recompute_depth_stats=True,
         )
+
+
+def test_a_missing_reconstruction_is_a_file_not_found_error(tmp_path):
+    with pytest.raises(FileNotFoundError, match="missing"):
+        SfmrReconstruction.load(str(tmp_path / "missing.sfmr"))
+
+
+def test_a_reconstruction_this_build_cannot_apply_is_a_value_error(tmp_path):
+    # The format allows rolling-shutter rates on any camera model, but a
+    # reconstruction applies them on SFMTOOL_PINHOLE alone, so loading a
+    # SIMPLE_RADIAL one with rates is `Unsupported`.
+    shutil.copy(SEOUL_BULL_DIR / ".sfm-workspace.json", tmp_path)
+    data = read_sfmr(str(_SFMR))
+    data["per_image_adjustments"] = [["rolling_shutter"] for _ in data["cameras"]]
+    data["rolling_shutter_rates_xyz"] = np.full((len(data["image_names"]), 3), 1e-3)
+    data["rolling_shutter_scanlines"] = ["ROWS"] * len(data["cameras"])
+    path = tmp_path / "rolling.sfmr"
+    write_sfmr(str(path), data, skip_recompute_depth_stats=True)
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        SfmrReconstruction.load(str(path))
+    with pytest.raises(ValueError, match="Unsupported"):
+        SfmrReconstruction.from_data(tmp_path, data)
+
+
+def test_a_save_the_filesystem_refuses_is_an_os_error(tmp_path):
+    parent = tmp_path / "a_file"
+    parent.write_bytes(b"")
+    recon = SfmrReconstruction.load(str(_SFMR))
+    with pytest.raises(FileExistsError):
+        recon.save(str(parent / "out.sfmr"))
