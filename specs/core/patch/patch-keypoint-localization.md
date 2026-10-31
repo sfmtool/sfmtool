@@ -746,6 +746,6 @@ render, which is where a widened search spends its time, and reports
 uncancelled `Progress::none()` and buffers that fit, they compute the same
 numbers.
 
-**Profiling.** `SFMTOOL_PROFILE=1` times the reference resolution, the renders,
+**Profiling.** [`SFMTOOL_PROFILE=1`](../README.md#phase-timing-with-sfmtool_profile) times the reference resolution, the renders,
 the searches and their sub-phases, and counts the views each gate drops
 ([keypoint_localize/prof.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/prof.rs)).

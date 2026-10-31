@@ -1075,7 +1075,7 @@ as much as the arithmetic; removing it changed no result.
 
 **Profiling is opt-in and free when off.** `cluster_refine::prof` carries the
 house phase timers and counters — gate, template, cascade, tile builds and their
-pixel volume, evaluations per cascade stage — behind `SFMTOOL_PROFILE=1`,
+pixel volume, evaluations per cascade stage — behind [`SFMTOOL_PROFILE=1`](../README.md#phase-timing-with-sfmtool_profile),
 compiling to one branch on a cached flag when the variable is unset.
 
 ### Measured cost

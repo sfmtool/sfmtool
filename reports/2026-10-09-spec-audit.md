@@ -593,6 +593,8 @@ that need none.
 **Why it matters:** small utility, but a user-visible switch that 10 specs mention and none defines.
 **Recommendation:** define `SFMTOOL_PROFILE` once in `specs/core/README.md` (values, output, which modules report) and link to it.
 
+> _Status (2026-11-01): **Done** — `specs/core/README.md` § "Phase timing with `SFMTOOL_PROFILE`" defines which values turn it on, that the value is read once and cached, and the stderr summaries; it lists the six `prof` modules that print a batch summary with the calls that print each, and `camera::remap::prof`, whose sampler counters three of those summaries print. The 8 specs that mention the variable link to it, and the `profiling.rs` module doc now counts four `prof` modules under `patch`, branch `fix-1031-31-sfmtool-profile-env`._
+
 ### src/sfmtool/_commands/_sfmr_path.py
 **What it does:** `check_sfmr_path` gives every command that takes a reconstruction the same usage error.
 **Why it matters:** small utility with a uniform user-facing message.
