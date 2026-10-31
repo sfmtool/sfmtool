@@ -331,15 +331,23 @@ Non-goals/deferrals checked: 5; no longer hold: 0
 **Implementing code:** `crates/sfmtool-core/src/geometry/rotation_init.rs` (+ `tests.rs`), `crates/sfmtool-py/src/geometry/rotation_init.rs`, `tests/rust_bindings/geometry/test_rotation_init_rust_bindings.py`. No other caller.
 **Inconsistencies:**
   - **Undocumented input assumption.** The kernel builds `SimplePinhole` at `f0` with a centred principal point (~:607-615) and ignores distortion throughout. Inputs says only "a focal `f0`". Fisheye input gives wrong poses with no error. State it.
+    > _Status (2026-10-31): **Done** — § Inputs states that every image is a distortion-free `SimplePinhole` at `f0` with a centred principal point and that distorted input gives wrong poses with no error; the Rust doc and the binding docstring say so too, branch `fix-1031-02-rotation-init-spec`._
   - Inputs refers to "the flat cluster-observation arrays (as in `focal_vote`)" without the precondition the Rust doc states (nondecreasing cluster indexes, contiguous runs).
+    > _Status (2026-10-31): **Done** — § Inputs lists the arrays and the nondecreasing precondition, which the kernel does not check and the binding does, branch `fix-1031-02-rotation-init-spec`._
   - "up to 3 edges per image" is wrong: `MAX_EDGES_PER_IMAGE` caps the candidates an image proposes; it can gain more as another image's partner.
+    > _Status (2026-10-31): **Done** — § 1 says each image proposes 3 candidates, can end with more edges, and a failed candidate is not replaced, branch `fix-1031-02-rotation-init-spec`._
   - The homography inlier gate `H_MAX_ERROR_PX = 3.0` px, which alone decides the far/near partition, is not stated.
+    > _Status (2026-10-31): **Done** — § 1 states the 3 px symmetric-transfer gate (`H_MAX_ERROR_PX = 3.0`) and links `estimate_homography`, branch `fix-1031-02-rotation-init-spec`._
   - The `None` cases are incomplete (empty or mismatched arrays, bad `f0`, `max_images < 2`, fewer than 10 near rows on the seed edge).
+    > _Status (2026-10-31): **Done** — § Output lists every `None` case, including the degenerate translation direction; the Rust doc and binding docstring list them too, branch `fix-1031-02-rotation-init-spec`._
   - The Rust signature (9 positional arguments) is never shown. `seed`, `min_images`, `max_images` are caller choices that the naming rule puts in a `RotationInitOptions`. Discuss.
+    > _Status (2026-10-31): **Partially done** — § Binding shows the Rust signature. **Needs decision** — whether `seed`, `min_images` and `max_images` move into a `RotationInitOptions` struct, a public Rust API change, branch `fix-1031-02-rotation-init-spec`._
   - Mannered prose: "would starve the 25-shared gate" → "would leave too few pairs with 25 shared clusters"; "the LM walks the flat scale gauge downward" → "LM reduces the scale toward a zero baseline"; "Averaging exists to absorb tree drift" → "Averaging reduces the error that accumulates along a chain of edge rotations"; "wander harmlessly" → "change without affecting the cost".
+    > _Status (2026-10-31): **Done** — all four phrases reworded along those lines, branch `fix-1031-02-rotation-init-spec`._
 **Third copies:** The comment at ~:694-699 re-derives the far-mask rationale in different words from spec §4; the `point_at_infinity` doc (5 lines) and binding docstring (9 lines) repeat it. Shrink the code comment to a line plus a link.
 **Recommendation:** update spec (assumptions, gate, `None` cases, edge count, prose); discuss the options struct.
 **Unclear / incorrect / suspicious:** The Frame convention says a missing `S` conjugation gives a reconstruction "mirrored about the horizontal axis". `S R S = M R M` with `M = diag(−1,1,1)`, so it would be a left-right mirror, and the canonical rays would more likely fail cheirality. Verify or reword. `estimate_homography` lives in `homography_estimation.rs`, documented only in focal-vote.md.
+  > _Status (2026-10-31): **Done** — the Frame convention now says `S R S = M R M` is a left-right mirror of the rotations (yaw and roll reversed, pitch kept) that disagrees with the observations, not a clean mirror of the scene, and that the finishing adjustment can correct small rotations: with the conjugation removed, every `rotation_init` test still passes. § 1 links `estimate_homography` to focal-vote.md § "Homography estimation", branch `fix-1031-02-rotation-init-spec`._
 Non-goals/deferrals checked: 3; no longer hold: 0
 
 ### specs/cli/image-processing/undistort-command.md
