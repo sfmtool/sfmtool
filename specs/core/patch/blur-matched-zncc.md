@@ -475,8 +475,9 @@ plain score's `0.65` lost 5.2%, while turning out more of the wrong views
 per-observation covariance's `1 − ZNCC` is the localizer's peak; whether
 either should read the blur-matched score against the bitmap is an open
 question of
-[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md)
-Part 6. Alignment never reads them.
+[../../drafts/sharper-patch-bitmap.md](../../drafts/sharper-patch-bitmap.md),
+Part 5 for member coherence and Part 6 for the covariance. Alignment never
+reads them.
 
 **Measured.** On the 661 pool tracks of the reference-view work, each track's
 bitmap rendered where it stands and the track evaluated again, 5,422
@@ -646,7 +647,7 @@ plain value for such a pair.
 | `MATCHED_LENGTH_TOLERANCE` | `0.05` | A target within this fraction of the sharper tile's semi-major axis is not blurred to, whatever the ratio |
 | `MIN_SHARPER_LENGTH` | `0.05` grid px | The shortest semi-major axis the skip ratio reads |
 | `MAX_BLUR_SIGMA` | `3` grid px | The widest blur |
-| `MIN_WINDOWED_SAMPLES` | `8` | The fewest samples with data in both tiles and weight in the window a whole-tile reading is taken over |
+| `MIN_WINDOWED_SAMPLES` | `8` | The fewest samples with data in both tiles and weight in the window that any reading is taken over: the whole tile, the middle square and each ninth of the grid |
 
 Each consumer's option and its default are in that consumer's spec. The
 constants are defined in
