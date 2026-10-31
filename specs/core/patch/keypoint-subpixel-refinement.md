@@ -137,8 +137,8 @@ This is a **local refiner**, and its guarantees hold only inside that scope:
   or supply per-point seeds. (`refine_normals` is a normal optimizer rather
   than a local refiner, so its `use_stored_keypoints` flag stays a plain bool
   defaulting to `True`; explicit `False` anchors every view at the reprojected
-  centre regardless of reconstruction kind, which is what `sfm compare --strips`
-  and the cross-validation script want as a defined comparison reference.)
+  centre regardless of reconstruction kind, which is what the cross-validation
+  script wants as a defined comparison reference.)
 - **Scope: local only.** It searches no grid and visits no distant candidates;
   it takes a few Gauss–Newton steps from the seed.
 - **Does not change membership, with one exception.** It never adds a view, and

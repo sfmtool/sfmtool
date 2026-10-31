@@ -120,8 +120,24 @@ otherwise feature-index matching.
 `--strips OUT.png` renders points where the two solves differ as a side-by-side patch-strip
 montage — one point per row, the reference solve's views on the left and the target solve's on
 the right. Each tile is the point's oriented surfel projected into one observing view, so a
-clean column means the solve placed a real, photoconsistent surface point there. The point
-normals are refined for cross-view photoconsistency first (`--strips-no-refine` to skip).
+clean column means the solve placed a real, photoconsistent surface point there.
+
+Before rendering, each reconstruction's listed points are turned to their grown-plane normals
+(`--strips-no-refine` to skip) by `sfmtool.bench.refine_normals` with `point_indexes` set to
+the points in that reconstruction's column
+([core/bench/refine-normals.md](../../core/bench/refine-normals.md) § "Python binding"). The
+run reads each point's patch frame and keypoints, so a `sift_files` reconstruction is converted
+to `embedded_patches` for it first (`SfmrReconstruction.to_embedded_patches` with its
+defaults). The strips render each turned point at its new normal; a point the run left
+unchanged or refused keeps its stored normal, and so does every point of a reconstruction the
+run refuses as a whole, with a line naming the column and the refusal (`--strips: kept the
+reference normals as stored (…)`). The command then prints the run's mean agreement for each
+reconstruction, the mean robust grid ZNCC of the turned points at their new planes, `n/a` when
+no point was turned or the run was refused:
+
+```text
+  --strips: normal refinement mean agreement ref=0.85 target=0.85
+```
 
 Unlike `sfm xform --refine-normals` and `sfm render-patches`, which require an
 `embedded_patches` reconstruction, `--strips` is deliberately ungated. It is a
@@ -131,7 +147,8 @@ which stays dual-mode
 ([`strips/_solve.py`](../../../src/sfmtool/strips/_solve.py)). The montage is
 deeply `.sift`-tied — its frame sizing and its ranking metrics read feature
 scales — and as a comparison tool it earns its keep directly on solves, with no
-conversion step in the way.
+conversion step for the user to run (the normal refinement above converts a copy for its own
+use only).
 
 The strip view always puts points in correspondence by keypoint coordinate (the robust choice
 across SIFT backends), independent of the `--by-coordinate`/`--by-feature-index` choice used for

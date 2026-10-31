@@ -37,8 +37,6 @@ _EXTENT_FACTOR = 2.5  # PatchCloud half-extent as a multiple of feature size
 _DISP = 72  # tile size shown when no wider --strips-context is requested
 _MIN_TRACK = 3  # minimum observing views for a point to be renderable
 _MIN_VOTES = 2  # minimum coordinate-match votes to accept a correspondence
-_REFINE_RANGE_DEG = 25.0  # normal-refinement angular search half-range
-_REFINE_STEPS = 7  # normal-refinement initial search steps
 
 # Single-axis --strips-rank modes: each ranks corresponding points by a quantity
 # toward one end. The natural end is used when --strips-end is unset.
@@ -187,6 +185,23 @@ def _overview_rows(
     for p in uold[:per]:
         add(f"unique to {left_label}", p, None, None)
     return rows
+
+
+def _refine_listed(recon: _SolveStrips, pids: list[int], label: str) -> float:
+    """Turn ``recon``'s listed points to their grown-plane normals and return
+    the mean agreement, ``nan`` when there is none. When the run refuses the
+    reconstruction, say why and keep its stored normals."""
+    if not pids:
+        return float("nan")
+    try:
+        return recon.refine(pids)
+    except ValueError as e:
+        print(f"  --strips: kept the {label} normals as stored ({e})")
+        return float("nan")
+
+
+def _agreement_text(agreement: float) -> str:
+    return "n/a" if np.isnan(agreement) else f"{agreement:.2f}"
 
 
 def render_comparison_strips(
@@ -352,29 +367,12 @@ def render_comparison_strips(
     if refine:
         ref_pids = [r[1] for r in rows if r[1] is not None]
         tgt_pids = [r[2] for r in rows if r[2] is not None]
-        d1 = (
-            r1.refine(
-                ref_pids, angular_range_deg=_REFINE_RANGE_DEG, init_steps=_REFINE_STEPS
-            )
-            if ref_pids
-            else float("nan")
+        a1 = _refine_listed(r1, ref_pids, left_label)
+        a2 = _refine_listed(r2, tgt_pids, right_label)
+        print(
+            "  --strips: normal refinement mean agreement "
+            f"ref={_agreement_text(a1)} target={_agreement_text(a2)}"
         )
-        d2 = (
-            r2.refine(
-                tgt_pids, angular_range_deg=_REFINE_RANGE_DEG, init_steps=_REFINE_STEPS
-            )
-            if tgt_pids
-            else float("nan")
-        )
-        if np.isnan(d1) and np.isnan(d2):
-            print(
-                "  --strips: normal refinement had no valid photoconsistency "
-                "(low-texture/degenerate points); using stored normals"
-            )
-        else:
-            print(
-                f"  --strips: normal refinement mean ΔΦ ref={d1:+.3f} target={d2:+.3f}"
-            )
 
     # Triangulation angles were already computed when ranking; reuse them rather
     # than recomputing per row (every rendered corresponding pid is a candidate).

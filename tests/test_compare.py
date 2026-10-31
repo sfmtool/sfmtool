@@ -581,7 +581,48 @@ class TestCompareCoordinateAndStrips:
         )
         assert result.exit_code == 0, result.output
         assert "--strips: wrote" in result.output
+        assert "normal refinement mean agreement ref=0." in result.output
+        assert "ΔΦ" not in result.output
         assert out.exists() and out.stat().st_size > 0
+
+    def test_strips_refine_turns_listed_points(self, seoul_bull_workspace):
+        # A sift_files recon is converted and its listed points get the grown
+        # plane's normals; the strips read them, and the others keep theirs.
+        from sfmtool.strips._solve import _SolveStrips
+
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        engine = _SolveStrips(recon, recon.workspace_dir, patch=32, extent_factor=2.5)
+        before = {p: engine._normal(p) for p in range(6)}
+        agreement = engine.refine([0, 1, 2])
+        assert 0.0 < agreement <= 1.0
+        assert sorted(engine._refined_normals) == [0, 1, 2]
+        for p in (0, 1, 2):
+            assert not np.allclose(engine._normal(p), before[p])
+            assert np.isclose(np.linalg.norm(engine._normal(p)), 1.0)
+        for p in (3, 4, 5):
+            np.testing.assert_array_equal(engine._normal(p), before[p])
+
+    def test_cli_strips_refused_run_keeps_stored_normals(
+        self, seoul_bull_workspace, tmp_path, monkeypatch
+    ):
+        import sfmtool.bench as bench
+
+        def refuse(recon, images, **kwargs):
+            raise ValueError("the reconstruction stores no keypoints")
+
+        monkeypatch.setattr(bench, "refine_normals", refuse)
+        p = str(seoul_bull_workspace)
+        out = tmp_path / "strips.png"
+        result = CliRunner().invoke(
+            main, ["compare", p, p, "--strips", str(out), "--strips-num", "4"]
+        )
+        assert result.exit_code == 0, result.output
+        assert (
+            "--strips: kept the reference normals as stored "
+            "(the reconstruction stores no keypoints)" in result.output
+        )
+        assert "normal refinement mean agreement ref=n/a target=n/a" in result.output
+        assert out.exists()
 
     def test_cli_strips_single_axis(self, seoul_bull_workspace, tmp_path):
         # A geometry-only single axis with an explicit end (no normal refine).

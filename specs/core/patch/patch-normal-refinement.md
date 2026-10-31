@@ -8,8 +8,7 @@ alike. It searches a coarse grid of candidates first, then finer grids centered
 on the best one. A patch usually starts with its normal along the mean viewing
 direction, so it faces the cameras rather than lying along the surface. `sfm embed-patches`
 runs this refinement so that the patch stored with
-each point follows the surface, and the `--strips` view of `sfm compare` can
-run it on the points it displays before rendering their patches.
+each point follows the surface. It is the only command that runs it.
 
 ## Problem
 
@@ -691,10 +690,12 @@ which `refine_patch_cloud_normals` reports per batch.
 the depths of the patch's pieces and take the plane through them. A normal
 from gated grid pieces, which would replace this search for that caller and
 retire it, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
-`sfm xform --refine-normals` and `sfm inspect --strips` run the grown-plane
-normal instead
+`sfm xform --refine-normals`, `sfm inspect --strips` and `sfm compare --strips`
+run the grown-plane normal instead
 ([refine-normals-command.md](../../cli/reconstruction/xform/refine-normals-command.md),
-[inspect-command.md](../../cli/reconstruction/inspect-command.md)), and moving the other callers to it is
+[inspect-command.md](../../cli/reconstruction/inspect-command.md),
+[compare-command.md](../../cli/reconstruction/compare-command.md)), and moving
+`sfm embed-patches` and the other callers to it is
 [retire-photometric-normal.md](../../drafts/retire-photometric-normal.md).
 
 ## Open questions

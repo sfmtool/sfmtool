@@ -98,6 +98,9 @@ class _SolveStrips:
                 exclude_points_at_infinity=exclude_points_at_infinity,
             )
         self._cloud_index = {int(p): i for i, p in enumerate(self.cloud.point_indexes)}
+        # Grown-plane normals `refine` turned, by point index; they take the place
+        # of the cloud's stored normal when the strips render.
+        self._refined_normals: dict[int, np.ndarray] = {}
 
         self.obs: dict[int, list[int]] = {}
         # Per-observation (image_index, feature_index) for feature-size lookups.
@@ -149,33 +152,37 @@ class _SolveStrips:
         avoid reading them a second time."""
         self._images = {i: images[i] for i in range(len(images))}
 
-    def refine(self, point_ids, *, angular_range_deg: float, init_steps: int) -> float:
-        """Refine the listed points' normals in place; return mean ΔΦ over them."""
-        res = self.cloud.refine_normals(
-            self.recon,
-            [self.image(i) for i in range(len(self.names))],
-            resolution=self.patch,
-            angular_range_deg=angular_range_deg,
-            init_steps=init_steps,
-            point_indexes=[int(p) for p in point_ids],
-            # `compare --strips` is the strip-render reference: anchor every
-            # view at the reprojected center so the comparison metric is the
-            # same regardless of whether the recon happens to carry inline
-            # keypoints. Without this lock the auto-default would silently
-            # switch to stored keypoints on embedded_patches recons and
-            # change strip output / ΔΦ values.
-            use_stored_keypoints=False,
+    def refine(self, point_ids) -> float:
+        """Turn the listed points to their grown-plane normals and return the
+        mean agreement over the turned ones (``nan`` when none has one).
+
+        Runs ``sfmtool.bench.refine_normals`` on the listed points, converting a
+        ``sift_files`` recon to ``embedded_patches`` first, since the run reads
+        each point's patch frame and keypoints. The strips then render each
+        turned point at its new normal; a point the run did not turn keeps its
+        stored one. Raises ``ValueError`` with the run's sentence when it refuses
+        the reconstruction, leaving every normal as stored.
+        """
+        from ..bench import refine_normals
+
+        recon = self.recon
+        if recon.feature_source == "sift_files":
+            recon = recon.to_embedded_patches()
+        images = [self.image(i) for i in range(len(self.names))]
+        refined, report = refine_normals(
+            recon, images, point_indexes=[int(p) for p in point_ids]
         )
-        phi = np.asarray(res["photoconsistency"])
-        init = np.asarray(res["init_photoconsistency"])
-        deltas = [
-            phi[self._cloud_index[int(p)]] - init[self._cloud_index[int(p)]]
-            for p in point_ids
-            if int(p) in self._cloud_index
-        ]
-        return float(np.mean(deltas)) if deltas else float("nan")
+        normals = np.asarray(refined.normals, np.float64)
+        for point in report["points"]:
+            if point["outcome"] == "turned":
+                pid = int(point["index"])
+                self._refined_normals[pid] = normals[pid]
+        return float(report["mean_agreement"])
 
     def _normal(self, pid: int) -> np.ndarray:
+        refined = self._refined_normals.get(int(pid))
+        if refined is not None:
+            return refined
         i = self._cloud_index.get(int(pid))
         if i is None:
             return np.array([0.0, 0.0, 1.0])
