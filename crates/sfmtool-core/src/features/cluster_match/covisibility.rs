@@ -25,11 +25,9 @@ use sfmtool_matches_format::{ClusterMemberStatus, MatchesData};
 use crate::geometry::focal_vote::contiguous;
 
 /// Dense-backend image cap. Storage is a row-major `u32` matrix (`4·N²`
-/// bytes): 64 MB at this bound, which sits inside the spec's ~4–5 k-image
-/// window where dense storage stops being reasonable. Construction errors
-/// with [`CovisibilityError::TooManyImages`] above it; a sparse backend
-/// behind the same type is the intended remedy when a larger consumer
-/// appears.
+/// bytes), 64 MB at this bound; construction errors with
+/// [`CovisibilityError::TooManyImages`] above it. See the spec's
+/// "Complexity and bounds".
 pub const MAX_DENSE_IMAGES: usize = 4096;
 
 /// Errors from [`ClusterCovisibility::from_clusters`] input validation, plus
@@ -144,19 +142,8 @@ impl Default for SeedImageGroupParams {
 
 /// One greedy mutually-covisible seed group: its images, the edge it was
 /// grown from, and the covisibility evidence for the group's internal pairs.
-///
-/// The seed pair is the group's **maximum-shared pair**: the founding edge
-/// was the strongest among all non-excluded pairs at that step, and every
-/// image the group later took in was non-excluded then, so
-/// `count(a, b) <= seed_shared` holds for every pair `(a, b)` drawn from
-/// [`Self::images`]. A caller that wants the group's best-supported pair
-/// therefore reads [`Self::seed_pair`] instead of re-scanning the group.
-///
-/// [`Self::pair_shared`], [`Self::pair_displacement_magnitude`] and
-/// [`Self::pair_displacement_vector`] carry out what the matrix already holds
-/// about the group's internal pairs, so a consumer classifying the group's
-/// motion regime reads it here rather than querying the covisibility object
-/// pair by pair.
+/// The spec's "Rust API" says what each field holds and "Seed-group
+/// algorithm" why the seed pair is the group's maximum-shared pair.
 ///
 /// Not `Eq`: the displacement fields hold floating-point means.
 #[derive(Clone, Debug, PartialEq)]
@@ -164,48 +151,20 @@ pub struct SeedImageGroup {
     /// The group's image indexes, sorted ascending.
     pub images: Vec<u32>,
     /// The strongest-edge pair the group was grown from, `(i, j)` with
-    /// `i < j`.
+    /// `i < j`; no pair of [`Self::images`] shares more clusters.
     pub seed_pair: (u32, u32),
     /// That pair's shared-cluster count.
     pub seed_shared: u32,
-    /// Shared-cluster count for every pair of [`Self::images`], as the
-    /// condensed upper triangle in ascending-pair order: for indexes
-    /// `a < b` into [`Self::images`], the entry sits at
-    /// `a·(2·len − a − 1)/2 + (b − a − 1)` (the standard condensed
-    /// ordering, i.e. the pairs enumerated `(0,1), (0,2), …, (0,len−1),
-    /// (1,2), …`). Length `len·(len−1)/2`. Read straight off the counts
-    /// matrix, so `pair_shared[k]` equals [`ClusterCovisibility::count`] on
-    /// that pair; the entry for [`Self::seed_pair`] is [`Self::seed_shared`],
-    /// which is the maximum over the whole vector.
+    /// Shared-cluster count for every pair of [`Self::images`], in condensed
+    /// upper-triangle order `(0,1), (0,2), …, (1,2), …`.
     pub pair_shared: Vec<u32>,
-    /// Mean keypoint displacement magnitude (pixels) for the same pairs in
-    /// the same condensed order, read off the sparse
-    /// [`DisplacementNeighborhood`] — the exhaustive per-pair mean over the
-    /// pair's shared-cluster keypoints, not the seeded one-sample-per-cluster
-    /// tables behind [`ClusterCovisibility::pair_displacement_magnitude`].
-    /// `None` when the covisibility was built without positions (no
-    /// neighborhood). A pair the neighborhood holds no entry for reads `0.0`:
-    /// it shares no accepted clusters.
-    ///
-    /// `f32`, one rounding of the neighborhood's `f64` mean per entry: the
-    /// quantity is a mean over keypoint coordinates the `.matches` backbone
-    /// stores at single precision, so there is no double-precision content to
-    /// carry. The neighborhood keeps its own `f64` accumulation and mean —
-    /// pose verification reads those — and this field is only the narrowed
-    /// report to a consumer classifying the group's motion regime.
+    /// Exhaustive mean keypoint displacement magnitude (pixels) per pair, in
+    /// the order of [`Self::pair_shared`], from the
+    /// [`DisplacementNeighborhood`]; `None` without positions.
     pub pair_displacement_magnitude: Option<Vec<f32>>,
-    /// Mean keypoint displacement *vector* (pixels) for the same pairs in the
-    /// same condensed order, from the same [`DisplacementNeighborhood`]
-    /// entries, `None` and `[0.0, 0.0]` under exactly the conditions
-    /// [`Self::pair_displacement_magnitude`] is `None` and `0.0` under, and
-    /// narrowed to `f32` by the same single rounding.
-    ///
-    /// Oriented by the pair's ascending image indexes, not by the group's
-    /// enumeration: entry `k` covers the pair `(images[a], images[b])` with
-    /// `a < b`, and because [`Self::images`] is sorted ascending that pair's
-    /// key is `(images[a], images[b])` too — so the vector always points from
-    /// the earlier image's keypoint to the later one's (see
-    /// [`DisplacementNeighborhood`]'s orientation contract).
+    /// Exhaustive mean keypoint displacement vector (pixels) per pair, in the
+    /// same order and from the same source, pointing from the lower-index
+    /// image to the higher; `None` without positions.
     pub pair_displacement_vector: Option<Vec<[f32; 2]>>,
 }
 
@@ -565,12 +524,9 @@ impl ClusterCovisibility {
     }
 
     /// Lazy iterator of greedy mutually-covisible groups of images (see the
-    /// spec's Seed-group algorithm): each `next()` scans for the strongest
-    /// remaining edge and greedily extends it, yielding a
-    /// [`SeedImageGroup`], so consumers take as many groups as they need and
-    /// drop the rest unpaid. Deterministic: the sequence depends only on the
-    /// input arrays, groups are disjoint, and the first `k` groups are
-    /// identical however many are consumed.
+    /// spec's "Seed-group algorithm" for the steps and guarantees). Each
+    /// `next()` computes one [`SeedImageGroup`], so a consumer takes as many
+    /// groups as it needs and the groups it does not take are never computed.
     pub fn seed_image_groups(&self, params: &SeedImageGroupParams) -> SeedImageGroups<'_> {
         SeedImageGroups {
             covis: self,

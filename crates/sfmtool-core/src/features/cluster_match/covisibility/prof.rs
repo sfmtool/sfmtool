@@ -8,13 +8,9 @@
 //! [`from_clusters_with_positions`](super::ClusterCovisibility::from_clusters_with_positions);
 //! a summary goes to stderr when the build finishes. With the variable unset
 //! every timer is one branch on a cached flag, so the hot path is unaffected.
-//! Mirrors `crate::geometry::focal_vote::prof`.
-//!
-//! The phases here are the ones a caller cannot separate from outside: the
-//! positioned build runs three passes over the same arrays and returns one
-//! object, so only an internal timer says which pass the wall time went to.
-//! Each phase is timed once per build, so the `Instant` pair costs nothing
-//! measurable even when profiling is on.
+//! Mirrors `crate::geometry::focal_vote::prof`. Why the build times itself
+//! and what each phase covers: `specs/core/features/cluster-covisibility.md`
+//! § "Complexity and bounds".
 
 pub(crate) use crate::profiling::{enabled, Phase};
 use crate::profiling::{report_overhead, report_phases, reset_all, RowFormat};

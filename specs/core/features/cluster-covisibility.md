@@ -127,7 +127,8 @@ shared-count votes and the sampled displacement draw), `mean_fold` (the `N²`
 divide-and-mirror over the sampled tables), and `neighborhood_accum` /
 `neighborhood_sort` (the exhaustive cross-image member-pair accumulation and
 the pair sort behind `DisplacementNeighborhood`). With the variable unset each
-timer is one branch on a cached flag.
+timer is one branch on a cached flag; with it set, each phase is timed once
+per build, so the timers cost nothing measurable either way.
 
 ## Rust API
 
