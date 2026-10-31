@@ -1111,12 +1111,16 @@ into the point's own track, in `tracks/reference_observations`.
   point a zero row and `-1`, and `sfm embed-patches` drops it as it drops any
   point with no bitmap. The floor is set so that a tile under it is not a
   reference, so the rule does not fall back to the most covered view under
-  it, nor to a mean of the views. A point with fewer than two views gets no
-  bitmap either. With every stored reference cleared, the rule finds no
-  eligible view for 57 of the 1,171 points of the BadlandPanorama solve, every
-  one of whose views has less than 90% of its tile on the photograph, for 1
-  of the 18,992 points of a `dino_dog_toy` solve, and for none of the points
-  of the eight other datasets of
+  it, nor to a mean of the views. A point that names no reference and has
+  fewer than two views to hand gets no bitmap either. A point that names a
+  reference observation is not passed to the rule: a whole-cloud render gives
+  it that observation's tile however many views it has, or a zero row that
+  keeps the reference where that photograph is not to hand. With every stored
+  reference cleared, the rule finds no eligible view for 57 of the 1,171
+  points of the BadlandPanorama solve, every one of whose views has less than
+  90% of its tile on the photograph, for 1 of the 18,992 points of a
+  `dino_dog_toy` solve, and for none of the points of the eight other datasets
+  of
   [§ "How the values were measured"](#how-the-values-were-measured).
 - **A fused mean already in a file** stays readable. A file older than
   `.sfmr` version 12, or one written before the stored bitmap stopped being a
@@ -1378,8 +1382,10 @@ uint8, `valid` `(R, R)` bool, `sampler`, `coverage`, `clipped_share`,
 `viewing_angle_deg`, `tilt_direction_deg`, `jacobian` `(2, 2)` or `None`, and
 `patch_frame`, the `OrientedPatch` the tile was rendered through. It raises
 `ValueError` for a `resolution` outside 2 to 1024, a keypoint that is not
-finite, an `ImagePyramidSet` without `image_index`, or an `image_index` given
-with a plain array, which holds one photograph.
+finite, an unknown `sampler`, an `ImagePyramidSet` without `image_index`, an
+`image_index` given with a plain array, which holds one photograph, or a
+photograph whose size differs from the camera's, and `IndexError` for an
+`image_index` past the set's images.
 
 ```python
 tile = patch.render_view_tile(camera, pose, photo, keypoint=(812.4, 377.9))
