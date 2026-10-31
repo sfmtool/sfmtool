@@ -186,7 +186,7 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 
 > _Status (2026-10-17): **Partially done** — decided by the maintainer on 2026-10-17: `track_views` for a track's images read from the reconstruction, `patch_views` for the ordered per-patch list a driver evaluates against, not "set" because the lists are ordered; one `patch::track_views_from_reconstruction` and one `patch::track_keypoints_from_reconstruction` (new `patch/track_views.rs`) replace `normal_refine::view_indices_from_reconstruction`, `member_coherence::member_views_from_reconstruction` / `member_keypoints_from_reconstruction` and the `view_selection` / `keypoint_localize` forwards; the batch drivers, one-patch kernels, bench locals and bindings take `patch_views` / `patch_keypoints` (was `view_sets`, `view_set`, `member_views`, `view_indices`, `starting_keypoints`, `member_keypoints`, `patch_view_keypoints`), `select_views(candidate_views=…)` becomes `track_views=…`, "view set `G`" becomes the patch's views `G` in the specs and doc comments, and the glossary has a "Per-patch view lists" section, branch `decided-1017-04-patch-views`. Still open: `patch::run_over_cloud`._
 
-> _Status (2026-10-31): `refine_patch_cloud_normals` was deleted with the photometric normal search, so four batch drivers repeat the skeleton rather than five, branch `retire-photometric-search`. Still open: `patch::run_over_cloud`._
+> _Status (2026-10-31): **Partially done** — `refine_patch_cloud_normals` was deleted with the photometric normal search, so four batch drivers repeat the skeleton rather than five, branch `retire-photometric-search`. Still open: `patch::run_over_cloud`._
 
 ## Rust: core algorithms
 
