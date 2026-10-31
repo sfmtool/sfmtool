@@ -68,6 +68,14 @@ answer folded into the spec.
   bisector of the two views' rays, where both renders are foreshortened alike.
 - **The window schedule.** Whether the fractions `[1/8, 1/5, 1/3, 1/2]` of the
   grid's side are the right schedule.
+- **The cheaper growths' constants.** The early stop's margin of 0.25 and its
+  first stage, the second fitted window; the second growth from the starting
+  plane on the second rung only; and the shift-only fit's window, the second
+  fitted stage's, and its two whole-grid iterations are constants of the step,
+  each kept on one sweep of the ground truths because it saved time while the
+  judged points stayed at 52 of 63 and every dataset share moved by about half
+  a percentage point or less. Whether other values save more without moving
+  points is not measured.
 - **The optimiser.** The prototype's pattern search took larger first steps, up
   to 0.08 tilt units and 1 px, and could leave a basin a local fit stays in.
   Whether the Levenberg–Marquardt fit reaches what the pattern search reached
