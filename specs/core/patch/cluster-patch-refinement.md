@@ -202,9 +202,10 @@ cloning a pyramid copies every pixel of a decoded image: the bench's evaluation
 registers an in-memory cluster over the pyramids of the `ProjectedImage`s the
 patch kernels already read, and would otherwise have to copy them into a table
 it owns. `refine_cluster_patches` calls it, so the two return the same result
-and panic on the same inputs. Nothing returns a `Result` — a member that cannot be evaluated is
-*data* (`NotEvaluated`, `RejectedUnlocalizable`, …), and the failures that
-remain are caller bugs (non-parallel inputs, malformed CSR), which assert.
+and panic on the same inputs. Nothing returns a `Result` — a member that
+cannot be evaluated is *data* (`NotEvaluated`, `RejectedUnlocalizable`, …), and
+the failures that remain are caller bugs (non-parallel inputs, malformed CSR),
+which assert.
 `warp_consistency_residuals` stands apart from the result because it is a fit
 over a whole refined cluster set, and a caller that only wants warps should not
 pay for it. The member-grid sampler and the radius are public so the bench
@@ -1196,7 +1197,8 @@ template edge length while the kernel's `radius` is a half-width;
 | `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`cluster_refine.rs`) |
 
 The piecewise stage is `ClusterRefineParams::piecewise`, `None` by default (CLI
-`--piecewise/--no-piecewise`, default `--no-piecewise`). Its settings are `PiecewiseParams::default()` in
+`--piecewise/--no-piecewise`, default `--no-piecewise`). Its settings are
+`PiecewiseParams::default()` in
 `crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs`, with
 `ACCEPT_ZNCC_TOLERANCE`; the other module constants the table marks are the
 robust fit's, in `crates/sfmtool-core/src/patch/cell_registration.rs`. The defaults of
