@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::pattern::{count_frame_fields, validate_pattern};
-use sfmtool_archive_io::ArchiveIoError;
 
 /// Errors that can occur when reading or writing `.camrig` files.
 #[derive(Error, Debug)]
@@ -36,22 +35,9 @@ pub enum CamRigError {
 
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
-
-    #[error("Hash verification failed: {0}")]
-    HashMismatch(String),
 }
 
-impl From<ArchiveIoError> for CamRigError {
-    fn from(e: ArchiveIoError) -> Self {
-        match e {
-            ArchiveIoError::Io(e) => CamRigError::Io(e),
-            ArchiveIoError::Zip(e) => CamRigError::Zip(e),
-            ArchiveIoError::Json(e) => CamRigError::Json(e),
-            ArchiveIoError::InvalidFormat(s) => CamRigError::InvalidFormat(s),
-            ArchiveIoError::ShapeMismatch(s) => CamRigError::ShapeMismatch(s),
-        }
-    }
-}
+sfmtool_archive_io::impl_from_archive_io_error!(CamRigError);
 
 /// Current `.camrig` format version. [`crate::write_camrig`] always writes
 /// this version; [`crate::read_camrig`] accepts any version up to it.

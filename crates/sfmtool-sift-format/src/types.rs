@@ -7,8 +7,6 @@ use ndarray::{Array2, Array3};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use sfmtool_archive_io::ArchiveIoError;
-
 /// Edge length, in pixels, of the square RGB thumbnail every `.sift` carries.
 ///
 /// The format pins this: it is written into the archive entry's *name*
@@ -90,22 +88,9 @@ pub enum SiftError {
     /// `feature_options` that is not a JSON object.
     #[error("Invalid metadata: {0}")]
     InvalidMetadata(String),
-
-    #[error("Hash verification failed: {0}")]
-    HashMismatch(String),
 }
 
-impl From<ArchiveIoError> for SiftError {
-    fn from(e: ArchiveIoError) -> Self {
-        match e {
-            ArchiveIoError::Io(e) => SiftError::Io(e),
-            ArchiveIoError::Zip(e) => SiftError::Zip(e),
-            ArchiveIoError::Json(e) => SiftError::Json(e),
-            ArchiveIoError::InvalidFormat(s) => SiftError::InvalidFormat(s),
-            ArchiveIoError::ShapeMismatch(s) => SiftError::ShapeMismatch(s),
-        }
-    }
-}
+sfmtool_archive_io::impl_from_archive_io_error!(SiftError);
 
 /// Feature tool metadata from `feature_tool_metadata.json.zst`.
 ///

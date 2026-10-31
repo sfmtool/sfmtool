@@ -287,7 +287,7 @@ def test_write_rejects_cluster_file_with_stale_pair_counts(tmp_path):
     data = _cluster_data()
     data["metadata"]["image_pair_count"] = 2
     data["metadata"]["match_count"] = 5
-    with pytest.raises(OSError, match="must not set metadata.image_pair_count"):
+    with pytest.raises(ValueError, match="must not set metadata.image_pair_count"):
         write_matches(tmp_path / "bad.matches", data)
 
 
@@ -308,7 +308,7 @@ def test_write_requires_member_geometry(tmp_path):
     for key in ("member_positions", "member_affine_shapes"):
         data = _cluster_data()
         del data[key]
-        with pytest.raises(OSError, match="mandatory since format version 6"):
+        with pytest.raises(ValueError, match="mandatory since format version 6"):
             write_matches(tmp_path / "bad.matches", data)
 
 
@@ -319,7 +319,7 @@ def test_write_rejects_singular_reference_shape(tmp_path):
     # Make S_ref rank-1: the reference->member warp S @ S_ref^-1 could not be
     # recovered from it.
     data["member_affine_shapes"][0, 1] = 2.0 * data["member_affine_shapes"][0, 0]
-    with pytest.raises(OSError, match="is singular"):
+    with pytest.raises(ValueError, match="is singular"):
         write_matches(tmp_path / "bad.matches", data)
 
 

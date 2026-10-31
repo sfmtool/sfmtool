@@ -204,6 +204,12 @@ it is opt-in.
 Errors are one enum rather than `Result<_, String>` so each format crate can map
 variant to variant into its own public error (`SfmrError`, `MatchesError`,
 `SiftError`, `CamRigError`, `KdfError`) and keep `ArchiveIoError` out of its public API.
+Each of the five has the variants `Io`, `Zip`, `Json`, `InvalidFormat` and
+`ShapeMismatch` with the same meaning, and gets its conversion from the one
+macro `impl_from_archive_io_error!(MyError)`, which maps each `ArchiveIoError`
+variant to the variant of the same name. The Python bindings rely on that
+sharing to raise one exception class per variant
+([python-bindings.md](../python-bindings.md#format-errors)).
 
 **Example — write two hashed columns, then read one back:**
 

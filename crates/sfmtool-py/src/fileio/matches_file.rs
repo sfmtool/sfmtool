@@ -18,6 +18,7 @@ use pyo3::prelude::*;
 
 use sfmtool_matches_format::{ClusterCellStatus, ClusterMemberStatus, ClusterSelect, MatchesData};
 
+use crate::format_errors::{read_err, write_err};
 use crate::helpers::serde_to_py;
 
 /// A parsed `.matches` file (or an in-memory selection derived from one).
@@ -104,8 +105,7 @@ impl PyMatchesFile {
     ///     path: `.matches` file path (str or Path).
     #[new]
     fn new(path: PathBuf) -> PyResult<Self> {
-        let inner = sfmtool_matches_format::read_matches(&path)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let inner = sfmtool_matches_format::read_matches(&path).map_err(read_err)?;
         Ok(Self { inner })
     }
 
@@ -498,8 +498,7 @@ impl PyMatchesFile {
     ///     zstd_level: Entry compression level (default 3).
     #[pyo3(signature = (path, zstd_level=3))]
     fn save(&self, path: PathBuf, zstd_level: i32) -> PyResult<()> {
-        sfmtool_matches_format::write_matches(&path, &self.inner, zstd_level)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+        sfmtool_matches_format::write_matches(&path, &self.inner, zstd_level).map_err(write_err)
     }
 }
 
