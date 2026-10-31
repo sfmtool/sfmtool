@@ -139,7 +139,9 @@ edges and corners (`viewer_3d/overlay.rs::draw_info_overlay`):
   status line's row (28 px down) when that row is clear of the status message,
   and otherwise to a row of its own under it (46 px down), so it is never
   drawn over either (`overlay::camera_position_top`).
-- **Hover overlay** (bottom-left): Shows what's under the cursor
+- **Hover overlay** (bottom-left): Shows what's under the cursor, drawn only
+  while the cursor is over the viewport, so it goes when the cursor moves onto
+  the HUD, into another panel or off the window
   - Over a point: `Point3D #N | depth: X.XXXX`
   - Over a frustum: `Camera: image_name`
   - Over background with depth: `depth: X.XXXX`
@@ -186,6 +188,7 @@ otherwise claims entirely.
 | Advanced | Target fog | 0.5–100, log, default 10 | Target indicator fog falloff multiplier |
 | Debug | Controls help | on | Paint the bottom-right navigation cheat sheet |
 | Debug | Frame rate | on | Include fps in the top-left scene stats |
+| Debug | MCP status line | on | Show an agent's actions in the status line; off, the line is empty after an agent's action until a person acts ([action-log.md](action-log.md#the-viewport-status-line)) |
 | Debug | Touchpad counters | — | DirectManipulation `H`/`C`/`U`/`G` counters and handler status |
 
 The whole **Patches** section is omitted when the loaded reconstruction carries

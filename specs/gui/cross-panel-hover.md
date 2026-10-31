@@ -48,6 +48,13 @@ Both fields are cleared in `append_node()` alongside `selected_image` and
 When the pointer leaves a panel or moves to empty space, both hover fields
 are cleared to `None`.
 
+**Pointer off the window:** when the pointer leaves the window altogether, egui
+gets `Event::PointerGone` and has no pointer position, so no panel has the
+pointer and none would clear the fields. After the dock's panels have drawn,
+`AppState::forget_hover_without_pointer` clears both whenever egui has no
+pointer. A person's mouse moving off the window and the MCP `hover` with
+`leave: true` ([mcp-server.md](mcp-server.md#click--hover)) both end there.
+
 **Panel pointer ownership:** Each panel reports a `has_pointer` flag in its
 response. When a panel has the pointer, it "owns" hover state and sets both
 fields (the one it produces plus clearing the other). This prevents stale
@@ -77,7 +84,10 @@ conversion is gated on whether the 3D viewer currently has pointer focus
 
 The 3D viewer also renders hover info in the bottom-left overlay. This
 is independent of the `hovered_*` state fields — the overlay shows info for
-whatever entity is under the cursor in the 3D viewport itself.
+whatever entity is under the cursor in the 3D viewport itself, and only while
+the cursor is over the viewport (`hover_pixel` is set): the read-back it comes
+from runs only then, so what it last read is stale once the cursor is on the
+HUD, in another panel or off the window.
 
 #### Image Browser
 

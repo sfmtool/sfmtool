@@ -149,7 +149,13 @@ Each of these found at least one real bug in the first run.
 - **Screenshot every panel a feature draws in**, and read the text in the
   image: headers, button captions, numbers, units. `screenshot` with
   `panel_name` (use `show_panel` first if it is behind a tab) and
-  `max_dimension` around 1000.
+  `max_dimension` around 1000. For a picture that goes into the report or
+  the docs, take it as a person would see the window:
+  `set_viewer_3d_display {"show_mcp_status_line": false}` keeps your own calls
+  off the 3D view's status line, and `hover {"leave": true}` takes the pointer
+  out of the window so no hover label or highlight is left from your last
+  `hover` or `click`. Turn the status line back on while you hunt, since it
+  is where a refusal shows.
 - **Drive the real gestures.** `get_widgets` gives ids and rectangles, and
   `click` (with `count: 2`, `mouse_button: "right"`, `modifiers`), `hover`,
   `drag`, `scroll`, `press_key` and `type_text` reach the same code paths as

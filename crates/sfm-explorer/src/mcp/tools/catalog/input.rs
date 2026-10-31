@@ -21,7 +21,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           (the clickable widget under the pointer, or null) and the dialogs and \
                           menus open after the click; what the click did is read back with the \
                           tool that reports that state, and the Action Log records it as it \
-                          would a person's. The pointer stays where it was left.",
+                          would a person's. The pointer stays where it was left; hover with \
+                          leave: true takes it out of the window.",
             kind: Input,
             schema: object(
                 &[
@@ -57,13 +58,28 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           submenu and what a key read over a panel needs. Aimed as click is, \
                           with at_px and an optional panel_name, or with widget. The reply gives \
                           at_px, hit (the clickable widget the pointer arrived over, or null) \
-                          and the dialogs and menus open once it has settled.",
+                          and the dialogs and menus open once it has settled. With leave: true \
+                          instead, the pointer leaves the window as a person's mouse moving off \
+                          it does: nothing is hovered any more, so the 3D Viewer draws no hover \
+                          label and no panel highlights what was under the pointer, which is the \
+                          state to take a screenshot in; the reply's at_px and hit are null.",
             kind: Input,
             schema: object(
                 &[
                     ("panel_name", panel_name_schema("at_px is a point of")),
                     ("at_px", at_px_schema()),
                     ("widget", widget_schema()),
+                    (
+                        "leave",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "true moves the pointer out of the window instead of to a \
+                                 point, and is given alone, without at_px, widget or \
+                                 panel_name. The next click, hover, drag or scroll brings it \
+                                 back.",
+                        }),
+                    ),
                 ],
                 &[],
             ),

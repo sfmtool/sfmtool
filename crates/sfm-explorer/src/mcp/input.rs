@@ -49,6 +49,10 @@ pub(crate) const MAX_DRAG_POINTS: usize = 120;
 /// the last event, so this is far more than a scroll takes at any frame rate.
 const MAX_SCROLL_COAST_FRAMES: usize = 120;
 
+/// Where `hover` with `leave: true` puts the tracked pointer: above and left
+/// of the window, inside no panel's rectangle, in points and in pixels alike.
+const OFF_WINDOW: egui::Pos2 = egui::pos2(-1.0, -1.0);
+
 /// How far a `scroll` moves, in the units of one of the two devices.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum ScrollDelta {
@@ -90,6 +94,9 @@ pub(crate) enum InputCommand {
     },
     /// Move the pointer and leave it there.
     Hover { target: PointerTarget },
+    /// Take the pointer out of the window, as a person moving the mouse off
+    /// it does: `hover` with `leave: true`.
+    Leave,
     /// Press a mouse button at the first point of a path, move through the
     /// rest one point per frame, and release at the last.
     Drag {
@@ -130,7 +137,7 @@ impl InputCommand {
     pub(crate) fn tool_name(&self) -> &'static str {
         match self {
             InputCommand::Click { .. } => "click",
-            InputCommand::Hover { .. } => "hover",
+            InputCommand::Hover { .. } | InputCommand::Leave => "hover",
             InputCommand::Drag { .. } => "drag",
             InputCommand::Scroll { .. } => "scroll",
             InputCommand::PressKey { .. } => "press_key",
@@ -146,7 +153,7 @@ impl InputCommand {
             | InputCommand::Scroll { target, .. } => target.panel(),
             InputCommand::Drag { panel, .. } => *panel,
             InputCommand::PressKey { over, .. } => over.as_ref().and_then(PointerTarget::panel),
-            InputCommand::TypeText { .. } => None,
+            InputCommand::TypeText { .. } | InputCommand::Leave => None,
         }
     }
 
@@ -187,6 +194,8 @@ impl InputCommand {
                 steps.into()
             }
             InputCommand::Hover { .. } => [Look, Move, Settle].into(),
+            // Nothing to aim at, so no frame to aim against.
+            InputCommand::Leave => [Gone, Settle].into(),
             InputCommand::Drag { path_px, .. } => {
                 let mut steps = vec![Look, Move, Down];
                 steps.extend((1..path_px.len()).map(DragTo));
@@ -217,6 +226,7 @@ impl InputCommand {
             }),
             InputCommand::PressKey { over, .. } => over.clone(),
             InputCommand::TypeText { widget, .. } => widget.map(PointerTarget::Widget),
+            InputCommand::Leave => None,
         }
     }
 
@@ -226,7 +236,9 @@ impl InputCommand {
             | InputCommand::Drag { modifiers, .. }
             | InputCommand::Scroll { modifiers, .. }
             | InputCommand::PressKey { modifiers, .. } => *modifiers,
-            InputCommand::Hover { .. } | InputCommand::TypeText { .. } => ModifierKeys::default(),
+            InputCommand::Hover { .. } | InputCommand::Leave | InputCommand::TypeText { .. } => {
+                ModifierKeys::default()
+            }
         }
     }
 }
@@ -313,6 +325,8 @@ enum Step {
     Look,
     /// Move the pointer to the target.
     Move,
+    /// Take the pointer out of the window.
+    Gone,
     /// Press and release the button, in one frame.
     Press,
     /// The second press and release of a double click.
@@ -480,6 +494,17 @@ impl PendingInput {
                 }
                 crate::platform::move_tracked_pointer(aim.pos, aim.window_px);
                 Ok(vec![egui::Event::PointerMoved(aim.pos)])
+            }
+            Step::Gone => {
+                state
+                    .action_log
+                    .record_as(Actor::Mcp, Kind::Input, "hover off the window");
+                // The event `egui_winit` makes when the cursor leaves the
+                // window, and the tracked pointer put outside it, so the
+                // panels that route by `platform::pointer_in_rect` see the
+                // pointer gone as well.
+                crate::platform::move_tracked_pointer(OFF_WINDOW, [OFF_WINDOW.x, OFF_WINDOW.y]);
+                Ok(vec![egui::Event::PointerGone])
             }
             Step::Press | Step::PressAgain => {
                 let aim = self.aim.expect("a move precedes every press");
@@ -838,6 +863,13 @@ impl PendingInput {
                     json!([number_value(at[0]), number_value(at[1])]),
                 );
                 out.insert("hit".into(), self.hit.clone());
+                out.insert("dialogs".into(), listing["dialogs"].clone());
+                out.insert("menus".into(), listing["menus"].clone());
+            }
+            // hover's reply, with no point and nothing under the pointer.
+            InputCommand::Leave => {
+                out.insert("at_px".into(), Value::Null);
+                out.insert("hit".into(), Value::Null);
                 out.insert("dialogs".into(), listing["dialogs"].clone());
                 out.insert("menus".into(), listing["menus"].clone());
             }

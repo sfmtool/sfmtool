@@ -1795,6 +1795,7 @@ toggles are master switches over every node, and the per-node eyes stay with
     "target_fog_multiplier": 10.0,    //           0.5 to 100, 1 decimal
     "show_controls_help": true,       // Debug
     "show_fps": true,
+    "show_mcp_status_line": true,     //        the status line shows the agent's actions
     "tool": "navigate"                // the tool strip: "navigate" or "eraser_brush"
   }
 }
@@ -1807,6 +1808,7 @@ omitted one alone:
 { "point_size_log2": 1.5, "show_target_indicator": true }
 { "show_grid": false, "show_camera_images": false }
 { "maintain_z_up": true }
+{ "show_mcp_status_line": false }    // keep the agent's own calls off the status line
 { "tool": "eraser_brush" }
 ```
 
@@ -1854,6 +1856,17 @@ frame or two after the `drag` replies.
 when no loaded reconstruction carries patch bitmaps, but the value is a master
 switch with nothing to draw, and refusing it would make an agent check for
 patch data before setting a layer it may want for the next file it opens.
+
+**`show_mcp_status_line` keeps an agent's calls off the status line.** It is
+the HUD's Debug > **MCP status line** checkbox, on by default. Set false, the
+viewport status line is empty while the newest entry it would show is the
+agent's, refusals included, and a person's next action shows as before
+([action-log.md](action-log.md#the-viewport-status-line)). The call that turns
+it off is itself the agent's, so the line is empty from that call on. It is the
+setting a screenshot of the window as a person would see it needs, with
+`hover` `leave: true` (§ "`click` / `hover`") to take the pointer and its
+hover label away. `get_scene`'s `status_message` reports the line as drawn, so
+it reads `null` too while the line is empty.
 
 **Refusals are atomic, and all but one happen at the parse.** Every field's range is
 the range of the HUD's slider for it, read from one list
@@ -2632,6 +2645,19 @@ viewport allocates what is left, so the render is the crop less that margin on
 each side — twelve logical points in each axis at the stock style. Each picture
 says its own size in the caption.
 
+**The window as a person would see it.** Between `hud: false` and the default
+there is the picture a person at the window sees when no agent is at work: the
+HUD and the stats drawn, but not the status line the agent's own calls write,
+and no hover label left by its last `hover`. That is two settings rather than a
+screenshot flag, for the reason `hud` is refused on the other panels below: a
+picture drawn differently for the screenshot would not be one the human saw.
+`set_viewer_3d_display { "show_mcp_status_line": false }` (§
+"`get_viewer_3d_display` / `set_viewer_3d_display`") keeps the agent's entries
+off the status line, and `hover { "leave": true }` (§ "`click` / `hover`")
+takes the pointer out of the window. Both stay in force until something
+changes them, so they are set once before a run of screenshots. The tool's
+description says so, so an agent reading only the catalog finds them.
+
 `hud` is accepted with `panel_name: "viewer_3d"` only. With another panel or
 with no panel it is refused at the parse — *"hud applies to the 3D Viewer only;
 the other panels have no picture underneath what is drawn on them"* — rather
@@ -3054,6 +3080,7 @@ already names the Image Detail panel's drawing layers and the viewport HUD, and
 { "widget": "9f03c1a2b7e4d650", "count": 2 }                          // double click on a widget
 { "at_px": [400, 12], "modifiers": ["control", "shift"] }             // in window pixels
 { "panel_name": "image_detail", "at_px": [210, 160] }                 // hover only (the hover tool)
+{ "leave": true }                                                     // hover: the pointer leaves the window
 ```
 
 `click` takes either `at_px`, with an optional `panel_name`, or `widget`, an
@@ -3061,7 +3088,8 @@ id from a listing; both, neither, and `panel_name` beside `widget` are refused
 at the parse. `mouse_button` is `left` (the default), `middle` or `right`.
 `count` is 1 or 2, since egui reads a third click as a triple click, which no
 widget of this viewer answers. `modifiers` holds any of `shift`, `control`,
-`alt` and `command`. `hover` takes the same target arguments and nothing else.
+`alt` and `command`. `hover` takes the same target arguments and nothing else,
+or instead `leave: true` alone (§ "The pointer leaving the window" below).
 
 **What happens.** The pointer events go into egui's input for the coming
 frames, the same `egui::Event`s `egui_winit` makes from a real mouse:
@@ -3085,6 +3113,25 @@ frames, the same `egui::Event`s `egui_winit` makes from a real mouse:
 The pointer stays at the point afterwards, as a person's does, so a submenu
 opened by hovering stays open and the next `click` inside it lands. `hover`
 is steps 1, 2 and 4.
+
+**The pointer leaving the window.** Because the pointer stays, whatever it was
+left over stays hovered: the 3D Viewer keeps drawing its hover label
+(`Point3D #1314`) and the other panels keep highlighting what was under it, in
+every screenshot after. `hover` with `leave: true`, given alone, takes the
+pointer out of the window as a person's mouse moving off it does. In one frame
+it sends egui's `Event::PointerGone`, the event `egui_winit` sends when the
+cursor leaves the window, and puts the tracked pointer that
+`platform::pointer_in_rect` reads outside the window. A second frame is drawn
+and the reply is built after it. With no pointer, the 3D Viewer draws no hover
+label (it draws one only while the pointer is over it), and
+`AppState::forget_hover_without_pointer` clears the hovered image and point,
+so no panel highlights them ([cross-panel-hover.md](cross-panel-hover.md)). It
+is a form of `hover` rather than a tool of its own because it is the same act,
+moving the pointer, to a place outside the window, and its reply is hover's:
+`at_px` and `hit` are `null`, with the window's `dialogs` and `menus`. The next
+`click`, `hover`, `drag` or `scroll` brings the pointer back. `leave: true`
+with `at_px`, `widget` or `panel_name` is refused at the parse, since there is
+nothing to aim at; `leave: false` is an ordinary `hover`.
 
 **With `widget`**, the point is the centre of the widget's rectangle, and the
 press goes through the same hit test as any other click. The click is refused,
@@ -3144,7 +3191,7 @@ modifiers follow the point as ` with Ctrl+Shift`, in egui's names for the keys
 on the platform. A `hover` is `hover {target} {x},{y}` with the same
 ` on "…"`, written in the frame the pointer moves. `{target}` is a panel's wire
 name or `window`; with `widget` it is `window` and the point is the widget's
-centre.
+centre. `hover` with `leave: true` is `hover off the window`.
 
 #### Mechanics
 

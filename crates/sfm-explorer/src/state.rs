@@ -633,6 +633,13 @@ pub struct AppState {
     /// Whether the top-left scene stats include the frame rate.
     pub show_fps: bool,
 
+    /// Whether the viewport status line shows an entry an agent took over
+    /// MCP: the HUD's **MCP status line** checkbox. On at launch. Off, the
+    /// line is empty while the newest entry it would show is an agent's, so a
+    /// screenshot an agent takes does not carry the agent's own calls; an
+    /// entry a person took still shows. See [`AppState::status_message`].
+    pub show_mcp_status_line: bool,
+
     /// EDL line thickness in pixels. Controls how far the neighbor samples
     /// reach, which determines the width of depth-discontinuity edges.
     pub edl_line_thickness: f32,
@@ -1020,6 +1027,7 @@ impl AppState {
             infinity_point_px: 3.0,
             show_controls_help: true,
             show_fps: true,
+            show_mcp_status_line: true,
             edl_line_thickness: 2.4,
             target_size_multiplier: DEFAULT_TARGET_SIZE_MULTIPLIER,
             target_fog_multiplier: DEFAULT_TARGET_FOG_MULTIPLIER,
@@ -1573,13 +1581,15 @@ impl AppState {
     }
 
     /// What the viewport status line shows: the text of the most recent
-    /// non-query Action Log entry, prefixed `MCP: ` when an agent took it.
+    /// non-query Action Log entry, prefixed `MCP: ` when an agent took it, or
+    /// nothing when an agent took it and [`AppState::show_mcp_status_line`]
+    /// is off.
     ///
     /// Derived rather than stored, so a successful action cannot leave a stale
     /// error on screen and a refusal cannot go unreported. See
     /// [`crate::action_log::ActionLog::status_line`].
     pub fn status_message(&self) -> Option<String> {
-        self.action_log.status_line()
+        self.action_log.status_line(self.show_mcp_status_line)
     }
 
     /// The selected image's local index, when it belongs to `recon`.
@@ -1590,6 +1600,20 @@ impl AppState {
     /// The selected point's local index, when it belongs to `recon`.
     pub fn selected_point_in(&self, recon: ReconId) -> Option<usize> {
         self.selected_point?.index_in(recon)
+    }
+
+    /// Forget the hovered image and point when egui has no pointer: it left
+    /// the window, or an agent's `hover` with `leave: true` took it out.
+    ///
+    /// Each panel writes the two fields only while it has the pointer, so with
+    /// the pointer nowhere no panel would clear them, and the highlight of
+    /// whatever was last under it would stay in every panel that draws one.
+    /// Called after the dock's panels have drawn, once a frame.
+    pub(crate) fn forget_hover_without_pointer(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.pointer.has_pointer()) {
+            self.hovered_image = None;
+            self.hovered_point = None;
+        }
     }
 
     /// The hovered image's local index, when it belongs to `recon`.

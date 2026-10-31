@@ -1130,6 +1130,7 @@ impl App {
                 };
                 DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
                 app_state.dock = dock;
+                app_state.forget_hover_without_pointer(ui.ctx());
                 // The Track Table's filter of the 3D view holds while the
                 // table is open behind another tab, and goes with a close.
                 let table_open = app_state.is_panel_open(dock::Tab::TrackTable);

@@ -91,7 +91,7 @@ fn run_bench_frame(
     busy: Option<&str>,
     bench: Option<(&EditableTrack, Option<usize>, bool)>,
     rect: &mut egui::Rect,
-) -> egui::CursorIcon {
+) -> Frame {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
         events,
@@ -138,7 +138,18 @@ fn run_bench_frame(
         });
     });
     output.textures_delta.clear();
-    output.platform_output.cursor_icon
+    Frame {
+        cursor: output.platform_output.cursor_icon,
+        texts: crate::test_support::output_texts(&output),
+    }
+}
+
+/// What one frame of the viewport asked for and painted.
+struct Frame {
+    /// The cursor it asked for.
+    cursor: egui::CursorIcon,
+    /// Every string it painted.
+    texts: Vec<String>,
 }
 
 /// Move the pointer there and settle, so the viewport's own rect is registered.
@@ -245,6 +256,47 @@ fn a_right_click_on_a_point_opens_its_menu_and_names_the_point() {
         .map(|(text, _)| *text)
         .collect();
     assert_eq!(offered, [EDIT_ON_BENCH_LABEL, RETRIANGULATE_POINT_LABEL]);
+}
+
+/// The hover label names what is under the pointer only while the pointer is
+/// over the viewport. The read-back runs only then, so once the pointer has
+/// left the window the pick the renderer last read is stale, and it is handed
+/// in still, as `dock.rs` hands it in.
+#[test]
+fn the_hover_label_goes_when_the_pointer_leaves_the_window() {
+    let (mut viewer, ctx, mut state) = settled();
+    let pick = Some(PickTarget::Point(picked(&state)));
+    let mut nowhere = egui::Rect::NOTHING;
+    let label = |texts: &[String]| texts.iter().any(|text| text.starts_with("Point3D #7"));
+    let over = run_bench_frame(
+        &mut viewer,
+        &ctx,
+        &mut state,
+        vec![egui::Event::PointerMoved(OVER_A_POINT)],
+        OVER_A_POINT,
+        pick,
+        None,
+        None,
+        &mut nowhere,
+    );
+    assert!(label(&over.texts), "no hover label: {:?}", over.texts);
+
+    let off = egui::pos2(-1.0, -1.0);
+    for events in [vec![egui::Event::PointerGone], Vec::new()] {
+        let gone = run_bench_frame(
+            &mut viewer,
+            &ctx,
+            &mut state,
+            events,
+            off,
+            pick,
+            None,
+            None,
+            &mut nowhere,
+        );
+        assert!(!label(&gone.texts), "a stale hover label: {:?}", gone.texts);
+    }
+    assert_eq!(viewer.hover_pixel, None);
 }
 
 #[test]
@@ -1085,7 +1137,7 @@ fn gesture(
         // The hover frame, before any button is down: what the viewport asks
         // for there is the cursor a person sees over the handle.
         if index == 0 {
-            cursor = output;
+            cursor = output.cursor;
         }
     }
     Dragged {

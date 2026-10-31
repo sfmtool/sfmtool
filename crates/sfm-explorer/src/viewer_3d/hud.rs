@@ -417,6 +417,16 @@ impl Viewer3D {
                 Field::ShowControlsHelp,
             );
             checkbox(ui, log, &mut state.show_fps, Field::ShowFps);
+            checkbox(
+                ui,
+                log,
+                &mut state.show_mcp_status_line,
+                Field::ShowMcpStatusLine,
+            )
+            .on_hover_text(
+                "Show what an agent did over MCP in the status line. Clear it and the line is \
+                 empty after an agent's action, until a person acts.",
+            );
             // The touchpad counters used to be burned into the top-right corner
             // of every frame. They are developer instrumentation, so they live
             // here now and are off unless this section is open.

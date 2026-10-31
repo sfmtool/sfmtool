@@ -924,8 +924,16 @@ impl Viewer3D {
         // The brush's circle, over the scene where the pointer is.
         self.draw_brush(ui, &painter, &response);
 
-        // Draw info overlay
+        // Draw info overlay. The hover label names what is under the pointer,
+        // so it is drawn only while the pointer is over the viewport: the
+        // read-back that `hover_pick` and `hover_depth` come from runs only
+        // then, and what it last read is stale once the pointer is on the HUD,
+        // another panel or off the window.
         let fps = 1.0 / ui.input(|i| i.predicted_dt as f64);
+        let (hover_depth, hover_pick) = match self.hover_pixel {
+            Some(_) => (hover_depth, hover_pick),
+            None => (None, None),
+        };
         self.draw_info_overlay(
             &painter,
             rect,

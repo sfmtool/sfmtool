@@ -212,7 +212,10 @@ and hosts the pictures:
    and prints it. Drive the viewer with
    `pixi run python skills/gui-bug-bash/mcp.py --port P TOOL '{json}'`
    (`skills/gui-bug-bash/SKILL.md` lists the tools) to the state to show, and
-   take each picture with `screenshot` and `--out-dir`/`--name`.
+   take each picture with `screenshot` and `--out-dir`/`--name`. Before a
+   picture of the 3D view or the whole window, send `set_viewer_3d_display
+   {"show_mcp_status_line": false}` and `hover {"leave": true}`, so the
+   picture carries neither your calls in the status line nor a hover label.
 3. **Before**, when something that already existed changed. Make a worktree
    of `<base>/main` in the scratchpad (`git worktree add <scratchpad>/before
    <base>/main`) and build it with `pixi run cargo build --release -p

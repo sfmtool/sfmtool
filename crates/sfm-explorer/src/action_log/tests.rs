@@ -405,7 +405,7 @@ fn a_wire_timestamp_is_rfc_3339_in_the_logs_own_zone() {
 
 #[test]
 fn the_status_line_is_empty_until_something_happens() {
-    assert_eq!(log().status_line(), None);
+    assert_eq!(log().status_line(true), None);
 }
 
 #[test]
@@ -414,11 +414,45 @@ fn the_status_line_skips_queries_and_prefixes_the_agent() {
     log.set_actor(Actor::Mcp);
     log.record_at(at(0.0), Kind::Scene, None, false, "Soloed beta");
     log.record_at(at(1.0), Kind::Query("get_scene"), None, false, "get_scene");
-    assert_eq!(log.status_line().as_deref(), Some("MCP: Soloed beta"));
+    assert_eq!(log.status_line(true).as_deref(), Some("MCP: Soloed beta"));
 
     log.set_actor(Actor::User);
     log.record_at(at(2.0), Kind::Scene, None, false, "Soloed alpha");
-    assert_eq!(log.status_line().as_deref(), Some("Soloed alpha"));
+    assert_eq!(log.status_line(true).as_deref(), Some("Soloed alpha"));
+}
+
+/// With the agent's entries hidden, an agent's entry empties the line rather
+/// than letting an older one show through, and a person's still shows.
+#[test]
+fn the_status_line_hides_the_agent_without_falling_back() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Scene, None, false, "Soloed alpha");
+    log.set_actor(Actor::Mcp);
+    log.record_at(at(1.0), Kind::Scene, None, false, "Soloed beta");
+    assert_eq!(log.status_line(false), None);
+    // A refusal the agent walked into is the agent's too.
+    log.record_at(
+        at(2.0),
+        Kind::Scene,
+        None,
+        true,
+        "Solo failed: no such node",
+    );
+    assert_eq!(log.status_line(false), None);
+
+    log.set_actor(Actor::User);
+    log.record_at(at(3.0), Kind::Scene, None, false, "Soloed gamma");
+    assert_eq!(log.status_line(false).as_deref(), Some("Soloed gamma"));
+    // A successful query the agent makes after it is skipped as before.
+    log.set_actor(Actor::Mcp);
+    log.record_at(
+        at(4.0),
+        Kind::Query("screenshot"),
+        None,
+        false,
+        "screenshot",
+    );
+    assert_eq!(log.status_line(false).as_deref(), Some("Soloed gamma"));
 }
 
 /// A refusal reaches the status line whichever tool it came from: only a
@@ -436,7 +470,7 @@ fn the_status_line_shows_a_failed_query() {
         "get_camera_image failed: no such image",
     );
     assert_eq!(
-        log.status_line().as_deref(),
+        log.status_line(true).as_deref(),
         Some("MCP: get_camera_image failed: no such image")
     );
 }
@@ -572,7 +606,7 @@ fn clear_empties_the_buffer_and_the_next_frame_paints_no_rows() {
     log.record_at(at(0.0), Kind::File, None, false, "Opened alpha");
     log.clear();
     assert_eq!(log.len(), 0);
-    assert_eq!(log.status_line(), None);
+    assert_eq!(log.status_line(true), None);
     let texts = painted(&mut log);
     assert!(
         !texts.iter().any(|text| text == "Opened alpha"),

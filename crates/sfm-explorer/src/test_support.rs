@@ -217,6 +217,12 @@ pub(crate) fn painted_texts(
 ) -> Vec<String> {
     let mut output = ctx.run_ui(input, run_ui);
     output.textures_delta.clear();
+    output_texts(&output)
+}
+
+/// Every string a frame already run painted, for a test that needs the rest
+/// of its output as well.
+pub(crate) fn output_texts(output: &egui::FullOutput) -> Vec<String> {
     let mut texts = Vec::new();
     for clipped in &output.shapes {
         collect_texts(&clipped.shape, &mut texts);

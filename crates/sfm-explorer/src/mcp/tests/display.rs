@@ -545,6 +545,69 @@ fn get_viewer_3d_display_returns_the_defaults() {
     assert_eq!(document["edl_line_thickness"], 2.4);
     assert_eq!(document["maintain_z_up"], true);
     assert_eq!(document["show_fps"], true);
+    assert_eq!(document["show_mcp_status_line"], true);
+}
+
+/// `show_mcp_status_line` goes over the wire and back, and off it empties the
+/// status line for the agent's own entries, the set call's among them, while
+/// a person's entry still shows.
+#[test]
+fn show_mcp_status_line_hides_the_agent_s_entries_from_the_status_line() {
+    let (mut state, mut viewer) = quiet_scene();
+    call(
+        &mut state,
+        &mut viewer,
+        "solo_reconstruction",
+        json!({ "reconstruction_label": "beta" }),
+    );
+    assert!(state
+        .status_message()
+        .is_some_and(|line| line.starts_with("MCP: ")));
+
+    let reply = set_viewer_3d(
+        &mut state,
+        &mut viewer,
+        json!({ "show_mcp_status_line": false }),
+    );
+    assert_eq!(reply["show_mcp_status_line"], false);
+    assert!(!state.show_mcp_status_line);
+    assert_eq!(
+        viewer_3d_display(&mut state, &mut viewer)["show_mcp_status_line"],
+        false
+    );
+    assert_eq!(
+        state
+            .action_log
+            .entries()
+            .rev()
+            .find(|e| e.kind == Kind::Display)
+            .map(|e| e.text.as_str()),
+        Some("MCP status line off")
+    );
+    assert_eq!(state.status_message(), None, "the agent's row is hidden");
+
+    // A person's action shows, and the agent's after it hides it again.
+    state.action_log.set_actor(Actor::User);
+    state.action_log.record(Kind::Scene, "Soloed alpha");
+    assert_eq!(state.status_message().as_deref(), Some("Soloed alpha"));
+    call(
+        &mut state,
+        &mut viewer,
+        "solo_reconstruction",
+        json!({ "reconstruction_label": null }),
+    );
+    assert_eq!(state.status_message(), None);
+
+    let reply = set_viewer_3d(
+        &mut state,
+        &mut viewer,
+        json!({ "show_mcp_status_line": true }),
+    );
+    assert_eq!(reply["show_mcp_status_line"], true);
+    assert_eq!(
+        state.status_message().as_deref(),
+        Some("MCP: MCP status line on")
+    );
 }
 
 /// A call writes what it names and nothing else, and the reply is the whole
@@ -887,6 +950,7 @@ fn every_viewer_3d_display_field_records_the_hud_s_words() {
             "Target fog 1.0",
             "Controls help off",
             "Frame rate off",
+            "MCP status line off",
         ]
     );
 }

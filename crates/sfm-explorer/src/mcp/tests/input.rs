@@ -313,6 +313,7 @@ impl Harness {
                     },
                 );
                 state.dock = dock;
+                state.forget_hover_without_pointer(ui.ctx());
             });
         });
         output.textures_delta.clear();
@@ -528,6 +529,69 @@ fn a_right_click_on_a_scene_row_opens_its_context_menu_and_a_hover_opens_align_t
         "{}",
         last.text
     );
+}
+
+/// `hover` with `leave: true` takes the pointer out of the window: egui and
+/// the tracked pointer both lose it, and the hovered image and point that the
+/// pointer's last panel left behind are forgotten, so no panel highlights
+/// them. The reply is hover's, with nothing to point at.
+#[test]
+fn hover_with_leave_takes_the_pointer_out_of_the_window_and_clears_the_hover() {
+    let mut harness = Harness::new();
+    // Over the Background Tasks panel, which writes neither hover field, with
+    // a point and an image hovered as the 3D view's read-back leaves them.
+    harness.ok(
+        "hover",
+        json!({ "panel_name": "background_tasks", "at_px": [5, 5] }),
+    );
+    let demo = harness.state.scene[0].id;
+    harness.state.hovered_point = Some(crate::scene::PointRef::new(demo, 3));
+    harness.state.hovered_image = Some(crate::scene::ImageRef::new(demo, 1));
+    harness.settle();
+    assert!(
+        harness.state.hovered_point.is_some(),
+        "kept with the pointer in"
+    );
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN);
+    assert!(crate::platform::pointer_in_rect(&harness.ctx, window));
+
+    let since = harness.state.action_log.revision();
+    let reply = harness.ok("hover", json!({ "leave": true }));
+    assert_eq!(reply["at_px"], Value::Null);
+    assert_eq!(reply["hit"], Value::Null);
+    assert_eq!(reply["dialogs"], json!([]));
+    assert_eq!(reply["menus"], json!([]));
+    assert_eq!(harness.state.hovered_point, None);
+    assert_eq!(harness.state.hovered_image, None);
+    assert!(!harness.ctx.input(|input| input.pointer.has_pointer()));
+    assert!(!crate::platform::pointer_in_rect(&harness.ctx, window));
+    let rows = harness.rows_since(since);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(rows[0].text, "hover off the window");
+    assert_eq!(rows[0].actor, Actor::Mcp);
+    assert_eq!(rows[0].kind, Kind::Input);
+
+    // A hover brings the pointer back.
+    harness.ok("hover", json!({ "panel_name": "scene", "at_px": [5, 5] }));
+    assert!(harness.ctx.input(|input| input.pointer.has_pointer()));
+    assert!(crate::platform::pointer_in_rect(&harness.ctx, window));
+}
+
+/// `leave` is given alone: there is nothing to aim at.
+#[test]
+fn hover_with_leave_and_a_target_is_refused() {
+    let mut harness = Harness::new();
+    for arguments in [
+        json!({ "leave": true, "at_px": [5, 5] }),
+        json!({ "leave": true, "widget": "0123456789abcdef" }),
+        json!({ "leave": true, "panel_name": "scene" }),
+    ] {
+        let error = harness.refused("hover", arguments.clone());
+        assert!(error.0.contains("with leave: true"), "{arguments}: {error}");
+    }
+    // leave: false is a hover like any other, and needs its target.
+    let error = harness.refused("hover", json!({ "leave": false }));
+    assert!(error.0.contains("needs either at_px"), "{error}");
 }
 
 /// A menu bar button opens its menu, and a click on one of its items runs

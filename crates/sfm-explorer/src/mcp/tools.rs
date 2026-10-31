@@ -760,9 +760,25 @@ pub(crate) fn parse(
             },
             modifiers: args.modifier_keys("modifiers")?,
         }),
-        "hover" => Command::Input(InputCommand::Hover {
-            target: pointer_target(&args)?,
-        }),
+        "hover" => match args.optional_bool("leave")? {
+            Some(true) => {
+                let with: Vec<&str> = ["at_px", "widget", "panel_name"]
+                    .into_iter()
+                    .filter(|key| args.map.contains_key(*key))
+                    .collect();
+                if !with.is_empty() {
+                    return Err(args.error(format!(
+                        "was given {} with leave: true. The pointer leaves the window, so there \
+                         is nothing to aim at; give leave alone.",
+                        with.join(" and ")
+                    )));
+                }
+                Command::Input(InputCommand::Leave)
+            }
+            _ => Command::Input(InputCommand::Hover {
+                target: pointer_target(&args)?,
+            }),
+        },
         "drag" => Command::Input(InputCommand::Drag {
             panel: match args.map.get("panel_name") {
                 None | Some(Value::Null) => None,

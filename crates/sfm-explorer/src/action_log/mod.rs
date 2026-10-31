@@ -1138,18 +1138,24 @@ impl ActionLog {
     /// not, because a refusal is something the person at the window should see
     /// whichever tool it came from.
     ///
+    /// With `show_agent` false an entry the agent took is not shown, and
+    /// nothing older is shown in its place: the line is empty until someone
+    /// else acts. An older entry in its place would put a past outcome on
+    /// screen as if it were the latest.
+    ///
     /// A fresh `String` rather than a stored one: it is built once a frame and
     /// prefixes at most five bytes, where keeping the prefixed form would mean
     /// two copies of every text.
-    pub(crate) fn status_line(&self) -> Option<String> {
+    pub(crate) fn status_line(&self, show_agent: bool) -> Option<String> {
         let entry = self
             .entries()
             .rev()
             .find(|entry| entry.failed || !matches!(entry.kind, Kind::Query(_)))?;
-        Some(match entry.actor {
-            Actor::Mcp => format!("MCP: {}", entry.text),
-            _ => entry.text.clone(),
-        })
+        match entry.actor {
+            Actor::Mcp if !show_agent => None,
+            Actor::Mcp => Some(format!("MCP: {}", entry.text)),
+            _ => Some(entry.text.clone()),
+        }
     }
 
     /// The whole log as clipboard text, one line per entry, with the detail of

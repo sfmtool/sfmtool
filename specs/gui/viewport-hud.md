@@ -232,7 +232,7 @@ Debug closed.
 | **Patches** | Patch Opacity, Patch Size, Patch Edge Cutoff |
 | **Camera** | Maintain Z-up ([viewport-navigation.md](viewport-navigation.md#maintain-z-up)), Field of View (10°–120°) + reset |
 | **Advanced** | EDL Line Thickness (0.5–8 px), Frustum Size (0.05–5, log), Target Size (0.05–5, log), Target Fog (0.5–100, log) |
-| **Debug** | Controls-help toggle, fps toggle, touchpad diagnostic counters |
+| **Debug** | Controls-help toggle, fps toggle, MCP status line toggle ([action-log.md](action-log.md#the-viewport-status-line)), touchpad diagnostic counters |
 
 Every checkbox and slider but the field of view is one entry of
 `viewer_3d::display::Field`

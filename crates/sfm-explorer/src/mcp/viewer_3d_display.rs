@@ -235,5 +235,11 @@ fn description(field: Field) -> &'static str {
         }
         Field::ShowControlsHelp => "Paint the controls cheat sheet (Controls help).",
         Field::ShowFps => "Show the frame rate in the scene stats line (Frame rate).",
+        Field::ShowMcpStatusLine => {
+            "Show an agent's own actions in the status line under the stats, prefixed MCP: \
+             (MCP status line). On by default. Off, the line is empty while the newest entry it \
+             would show is an agent's, which keeps the agent's calls out of a screenshot; an \
+             action a person takes still shows."
+        }
     }
 }

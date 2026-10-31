@@ -181,11 +181,12 @@ pub(crate) enum Field {
     TargetFogMultiplier,
     ShowControlsHelp,
     ShowFps,
+    ShowMcpStatusLine,
 }
 
 impl Field {
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub(crate) const ALL: [Field; 19] = [
+    pub(crate) const ALL: [Field; 20] = [
         Field::ShowPoints,
         Field::ShowCameraImages,
         Field::ShowGrid,
@@ -205,6 +206,7 @@ impl Field {
         Field::TargetFogMultiplier,
         Field::ShowControlsHelp,
         Field::ShowFps,
+        Field::ShowMcpStatusLine,
     ];
 
     /// The name on the wire, which is the name of the field it is stored in.
@@ -229,6 +231,7 @@ impl Field {
             Field::TargetFogMultiplier => "target_fog_multiplier",
             Field::ShowControlsHelp => "show_controls_help",
             Field::ShowFps => "show_fps",
+            Field::ShowMcpStatusLine => "show_mcp_status_line",
         }
     }
 
@@ -256,6 +259,7 @@ impl Field {
             Field::TargetFogMultiplier => "Target fog",
             Field::ShowControlsHelp => "Controls help",
             Field::ShowFps => "Frame rate",
+            Field::ShowMcpStatusLine => "MCP status line",
         }
     }
 
@@ -270,7 +274,8 @@ impl Field {
             | Field::ShowTargetIndicator
             | Field::MaintainZUp
             | Field::ShowControlsHelp
-            | Field::ShowFps => return Control::Checkbox,
+            | Field::ShowFps
+            | Field::ShowMcpStatusLine => return Control::Checkbox,
             Field::PointSizeLog2 | Field::PatchSizeLog2 => SIZE_LOG2,
             Field::InfinityPointPx => SliderRange::linear(1.0, 16.0, 1).with_unit(" px"),
             Field::LengthScale => SliderRange::logarithmic(0.001, 100.0, 3),
@@ -360,6 +365,7 @@ impl Field {
             Field::TargetFogMultiplier => Number(state.target_fog_multiplier),
             Field::ShowControlsHelp => Flag(state.show_controls_help),
             Field::ShowFps => Flag(state.show_fps),
+            Field::ShowMcpStatusLine => Flag(state.show_mcp_status_line),
         }
     }
 
@@ -379,6 +385,7 @@ impl Field {
                     Field::MaintainZUp => &mut viewer.maintain_z_up,
                     Field::ShowControlsHelp => &mut state.show_controls_help,
                     Field::ShowFps => &mut state.show_fps,
+                    Field::ShowMcpStatusLine => &mut state.show_mcp_status_line,
                     _ => return,
                 };
                 *slot = on;

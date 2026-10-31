@@ -320,6 +320,14 @@ description should say why; otherwise it should default like the rest.
 
 ## 10. Screenshots carry the MCP status line and stale hover labels (low)
 
+> _Status (2026-10-30): **Done** — a Debug > **MCP status line** checkbox in
+> the 3D Viewer's display controls, `show_mcp_status_line` on
+> `get_viewer_3d_display` / `set_viewer_3d_display` (on by default), leaves
+> the status line empty while its newest entry is an agent's; `hover
+> {"leave": true}` takes the pointer out of the window, the 3D view draws its
+> hover label only while the pointer is over it, and the hovered image and
+> point are cleared once egui has no pointer, branch `mcp-clean-screenshots`._
+
 Every whole-window or `viewer_3d` screenshot shows the yellow status line of
 the last MCP call (`MCP: hover window 1270,700`, `MCP: Camera placed`) under
 the stats line, and a hover label left from an earlier `hover`

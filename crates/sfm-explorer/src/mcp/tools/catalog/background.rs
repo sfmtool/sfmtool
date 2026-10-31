@@ -76,6 +76,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           same frame. The 3D viewport is panel_name \"viewer_3d\", and hud: false \
                           returns its render alone with nothing drawn over it. A panel that is \
                           closed, or behind another tab in its node, is refused naming show_panel. \
+                          For the window as a person would see it with no agent at work, call \
+                          set_viewer_3d_display with show_mcp_status_line: false, which keeps \
+                          the agent's own calls off the status line, and hover with leave: true, \
+                          which takes the pointer out of the window so no hover label or \
+                          highlight is drawn. \
                           Answered after the next frame has been rendered, so it reflects any \
                           change made in the same batch of calls.",
             kind: Read,

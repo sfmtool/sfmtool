@@ -454,9 +454,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             description: "Change the 3D viewport's display controls, the checkboxes and sliders \
                           of its Display HUD: which layers are drawn (points, camera images, grid, \
                           patches, points at infinity, the orbit target's indicator), point and \
-                          patch sizes, the scene scale, Maintain Z-up, the Advanced sliders and \
-                          the two Debug overlays, and the tool strip's tool (navigate or \
-                          eraser_brush; the brush is refused while a camera is being moved). \
+                          patch sizes, the scene scale, Maintain Z-up, the Advanced sliders, \
+                          the Debug overlays (the controls help, the frame rate and whether the \
+                          status line shows an agent's actions, show_mcp_status_line), and the \
+                          tool strip's tool (navigate or eraser_brush; the brush is refused \
+                          while a camera is being moved). \
                           Every field is optional and every omitted one \
                           is left alone; the reply is the whole document, as \
                           get_viewer_3d_display returns it. It works whether or not the HUD is \

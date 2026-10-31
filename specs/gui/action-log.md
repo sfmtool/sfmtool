@@ -134,6 +134,16 @@ the log and has no state of its own. Consequences that differ from before:
   does not read its own polling back as the viewer's status. A refused query
   does reach it, like any other failure.
 
+**Hiding the agent's entries.** The HUD's Debug > **MCP status line** checkbox
+(`AppState::show_mcp_status_line`, `show_mcp_status_line` on
+`set_viewer_3d_display`) is on by default. Cleared, the line is empty whenever
+the entry it would show was the agent's, refusals included, and it does not
+fall back to an older entry, which would put a past outcome on screen as if it
+were the latest; the next entry a person takes shows as before. It is there so
+an agent can take a screenshot of the window as a person would see it, without
+its own calls written across the 3D view. The log itself is unchanged, and
+`get_scene`'s `status_message` reports what the line shows.
+
 ### Surfacing a refusal
 
 A refusal the person at the window walked into is only an answer if they can
@@ -581,8 +591,9 @@ impl ActionLog {
     pub(crate) fn oldest_revision(&self) -> u64;
 
     /// The most recent entry that is not a successful query, as the status line shows it:
-    /// prefixed `MCP: ` when its actor is `Mcp`.
-    pub(crate) fn status_line(&self) -> Option<String>;
+    /// prefixed `MCP: ` when its actor is `Mcp`, or `None` for an `Mcp` entry
+    /// when `show_agent` is false.
+    pub(crate) fn status_line(&self, show_agent: bool) -> Option<String>;
 
     /// The whole log as clipboard text, one line per entry.
     pub(crate) fn to_clipboard_text(&self) -> String;
@@ -616,7 +627,8 @@ And on `AppState`, replacing the `status_message: Option<String>` field:
 
 ```rust
 impl AppState {
-    /// What the viewport status line shows. See `ActionLog::status_line`.
+    /// What the viewport status line shows: `ActionLog::status_line` with
+    /// `show_agent` from `AppState::show_mcp_status_line`.
     pub fn status_message(&self) -> Option<String>;
 
     /// The scene and the log at once — a split borrow, for the two callers
