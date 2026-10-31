@@ -4,7 +4,7 @@
 """Tests for the ``CameraViews`` value object and ``PatchCloud.from_tracks``.
 
 ``CameraViews`` lets a caller drive the patch kernels
-(:meth:`PatchCloud.localize_keypoints`, ``refine_keypoints``, ``refine_normals``,
+(:meth:`PatchCloud.localize_keypoints`, ``refine_keypoints``,
 ``select_views``) and :class:`ImagePyramidSet` from in-memory posed views instead
 of a full reconstruction, and ``PatchCloud.from_tracks`` builds a cloud from
 arrays. See ``specs/core/patch/patch-cloud.md`` ("Patch operations without a
@@ -266,11 +266,6 @@ class TestViewsModeRequiredArguments:
         views, cloud, images = scene
         with pytest.raises(ValueError, match="patch_views is required"):
             cloud.localize_keypoints(views, images)
-
-    def test_refine_normals_requires_patch_views(self, scene):
-        views, cloud, images = scene
-        with pytest.raises(ValueError, match="patch_views is required"):
-            cloud.refine_normals(views, images)
 
     def test_select_views_requires_track_views(self, scene):
         views, cloud, images = scene

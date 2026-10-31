@@ -215,7 +215,7 @@ pub(super) fn resolve_patch_scene<'py>(
 
 /// Resolve the `images` argument of a PatchCloud kernel method — either a
 /// prebuilt [`PyImagePyramidSet`] (validated against the scene, shared) or a list
-/// of numpy images (pyramids built for this call). Shared by `refine_normals`,
+/// of numpy images (pyramids built for this call). Shared by
 /// `select_views`, `localize_keypoints`, and `refine_keypoints` so they handle
 /// imagery identically for a reconstruction and a `CameraViews`.
 pub(crate) fn resolve_pyramids(
@@ -283,7 +283,7 @@ pub(super) fn extract_camera_list(obj: &Bound<'_, PyAny>) -> PyResult<Vec<Camera
 /// A ``CameraViews`` carries no tracks, so the per-point view lists the kernels
 /// otherwise derive from the reconstruction's tracks must be supplied explicitly:
 /// ``patch_views`` (:meth:`PatchCloud.localize_keypoints`,
-/// :meth:`PatchCloud.refine_keypoints`, :meth:`PatchCloud.refine_normals`,
+/// :meth:`PatchCloud.refine_keypoints`,
 /// :meth:`PatchCloud.validate_member_coherence`) and ``track_views``
 /// (:meth:`PatchCloud.select_views`) become required.
 ///
@@ -413,8 +413,8 @@ impl PyCameraViews {
 /// Per-image source pyramids prebuilt **once** and shared across PatchCloud
 /// kernel calls.
 ///
-/// Every :class:`PatchCloud` kernel method (:meth:`PatchCloud.refine_normals`,
-/// :meth:`PatchCloud.select_views`, :meth:`PatchCloud.localize_keypoints`,
+/// Every :class:`PatchCloud` kernel method
+/// (:meth:`PatchCloud.select_views`, :meth:`PatchCloud.localize_keypoints`,
 /// :meth:`PatchCloud.refine_keypoints`) accepts one of these anywhere it accepts
 /// the list of numpy images: rather than rebuilding a full image pyramid per
 /// image on **every** call (the per-call ``images`` list path, kept for

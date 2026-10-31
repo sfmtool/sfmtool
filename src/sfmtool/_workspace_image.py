@@ -3,9 +3,10 @@
 
 """Load a reconstruction's source images from its workspace.
 
-Photometric code paths (patch-normal refinement, the ``compare --strips``
-montage) reach back for the workspace's source images the same way the
-SIFT-reading filters reach for ``.sift`` files: ``workspace_dir / image_name``.
+Photometric code paths (the grown-plane normal refinement, the
+``compare --strips`` montage) reach back for the workspace's source images
+the same way the SIFT-reading filters reach for ``.sift`` files:
+``workspace_dir / image_name``.
 A missing or unreadable image is a hard error.
 """
 

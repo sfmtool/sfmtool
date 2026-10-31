@@ -9,7 +9,7 @@
 //!
 //! `PatchCloud`'s heavy per-point kernels each live in their own module as an
 //! additional `#[pymethods]` block (enabled by pyo3's `multiple-pymethods`
-//! feature): `refine_normals`, `select_views`, `localize_keypoints`,
+//! feature): `select_views`, `localize_keypoints`,
 //! `refine_keypoints`, `render_bitmaps`, and `member_coherence`.
 
 use pyo3::prelude::*;
@@ -23,7 +23,6 @@ pub mod member_coherence;
 pub mod oriented_patch;
 pub mod photometric_ransac;
 pub mod refine_keypoints;
-pub mod refine_normals;
 pub mod render_bitmaps;
 pub mod select_views;
 pub mod self_similarity;

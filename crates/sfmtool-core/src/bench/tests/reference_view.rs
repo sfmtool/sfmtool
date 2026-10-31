@@ -26,7 +26,6 @@ use crate::patch::cloud::{OrientedPatch, PatchCloud};
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
 use crate::patch::member_coherence::{member_zncc_matrix, MemberCoherenceParams};
-use crate::patch::normal_refine::{refine_patch_normal, NormalRefineParams};
 use crate::patch::normal_refine::{PatchWindow, ProjectedImage};
 use crate::patch::reference_view::{
     finite_middle, render_view_tile, ReferenceExclusion, ReferenceViewOptions, ViewTile,
@@ -724,47 +723,6 @@ fn the_localizer_aligns_to_a_view_for_a_point_no_view_covers_whole() {
         .position(|&v| v == reference)
         .expect("a kept view");
     assert_eq!(out.zncc[k], 1.0);
-}
-
-#[test]
-fn normal_refinement_stores_the_bitmap_its_reference_names() {
-    let truth = GroundTruth::load();
-    let all = truth.views();
-    let (patch, images, keypoints) = point_inputs(&truth.recon, PARTIAL_POINT);
-    let views: Vec<ProjectedImage<'_>> = images
-        .iter()
-        .map(|&i| {
-            let v = &all[i as usize];
-            ProjectedImage {
-                camera: v.camera,
-                cam_from_world: v.cam_from_world,
-                pyramid: v.pyramid,
-            }
-        })
-        .collect();
-    let params = NormalRefineParams {
-        render_bitmap: true,
-        min_views: 2,
-        ..Default::default()
-    };
-    let out = refine_patch_normal(&patch, &views, 24, &params, Some(&anchors(&keypoints)));
-    let rgba = out.representative.as_ref().expect("a bitmap");
-    // The stored bitmap agrees with its reference: the named view's tile at
-    // the refined patch frame.
-    let all_views: Vec<u32> = (0..views.len() as u32).collect();
-    let render = render_reference(
-        &out.patch,
-        &views,
-        &all_views,
-        &anchors(&keypoints),
-        24,
-        KeypointSubpixelParams::default().sampler,
-        &ReferenceViewOptions::default(),
-        &Progress::none(),
-    );
-    assert_eq!(out.reference, render.reading.choice.reference);
-    let r = out.reference.expect("a reference view");
-    assert_eq!(rgba, &bitmap_from_tile(&render.tiles[r]));
 }
 
 /// [`score_bitmap`] after [`render_bitmap_in_place`] writes the scores the

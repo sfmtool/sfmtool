@@ -52,9 +52,8 @@ pub(super) fn support_offsets(
 /// grids — they are overwritten, not accumulated; the caller does **not** need to
 /// pre-zero them.
 ///
-/// Runtime-dispatched to one of two hand-rolled AVX2 kernels where available
-/// (mirrors `normal_refine::fronto_cache::resample_support_avx2`); the scalar
-/// form is the reference and the non-x86 / non-AVX2 fallback.
+/// Runtime-dispatched to one of two hand-rolled AVX2 kernels where available;
+/// the scalar form is the reference and the non-x86 / non-AVX2 fallback.
 ///
 /// - `span ≤ 16`: `compute_channel_grids_avx2` holds one 16-lane grid row in
 ///   registers and accumulates with FMA, so it agrees with the scalar form to

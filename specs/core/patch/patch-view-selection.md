@@ -7,7 +7,7 @@ pixels agree with the rest on what the patch looks like, not merely the ones the
 geometry says it projects into. It is a standalone, separately-callable
 algorithm, used by the [sift-based → patch-based reconstruction
 pipeline](sift-to-patch-reconstruction.md) alongside
-[normal refinement](patch-normal-refinement.md) and
+the [grown-plane normal](../bench/refine-normals.md) and
 [keypoint localization](patch-keypoint-localization.md).
 
 ## Problem
@@ -103,8 +103,8 @@ The selector is `select_patch_views` / `select_patch_cloud_views` in
 bound as `PatchCloud.select_views` and called per point by the pipeline in
 [_embed_patches.py](../../../src/sfmtool/_embed_patches.py). It reuses the patch
 render + `is_front_facing` for candidacy and the IRLS consensus + windowed ZNCC
-for the reference and scoring — the same machinery as normal refinement and
-keypoint localization.
+for the reference and scoring — the same machinery as member coherence and
+keypoint localization (§ [The shared render and score helpers](#the-shared-render-and-score-helpers)).
 
 `select_patch_views` takes a `Progress` and answers
 `Result<ViewSelection, Cancelled>`. It reports `build reference` and `score
@@ -127,7 +127,7 @@ overwrite each other.
 
 The per-patch kernels of the other batches are different, and each has a plain
 function beside a `_reporting` one that takes a `Progress`:
-`refine_patch_normal`, `refine_patch_keypoints` and
+`refine_patch_keypoints` and
 `member_zncc_matrix`. None of them checks for cancellation or reports phases
 or counts of its own; the `Progress` only times its renders under each sampler
 in detail phases. The plain function is a single call of the `_reporting` one
@@ -318,8 +318,80 @@ expansion. The affine fast path covers every sampler: `Sampler::Bilinear`,
 `Sampler::BilinearMip`, and `Sampler::Anisotropic`, whether the sampler rule
 moved the view or the caller fixed that sampler. A point whose valid track-view count is below `min_track_views`
 (default 2) likewise admits its track views verbatim. The render → z-normalize →
-robust-consensus primitives are shared with `normal_refine` (`pub(super)`), not
+robust-consensus primitives are the shared helpers below, not
 duplicated.
+
+### The shared render and score helpers
+
+View selection's reference, member coherence's matrix, keypoint localization,
+the sub-pixel refiner and cluster refinement render a patch from several
+photographs and correlate the renders through shared helpers in
+[patch/normal_refine](../../../crates/sfmtool-core/src/patch/normal_refine.rs).
+The module is named for the photometric normal refinement it once held; the
+grown-plane normal ([refine-normals.md](../bench/refine-normals.md)) replaced
+that refinement, and the module keeps only the shared pieces.
+
+```rust
+/// A posed photograph: everything a patch needs to be rendered from one view.
+/// The pyramid is built once and borrowed for every render.
+pub struct ProjectedImage<'a> {
+    pub camera: &'a CameraIntrinsics,
+    pub cam_from_world: &'a RigidTransform,
+    pub pyramid: &'a ImageU8Pyramid,
+}
+
+/// Per-pixel weight over the `R×R` patch when scoring (the NCC window);
+/// `sigma` is in normalized patch coordinates, the patch spanning
+/// `(s, t) ∈ [-1, 1]²`.
+pub enum PatchWindow {
+    Uniform,                      // the whole square, uniform
+    Gaussian { sigma: f64 },      // a Gaussian over the square
+    GaussianDisk { sigma: f64 },  // a Gaussian on the inscribed disk: the default
+}
+```
+
+`GaussianDisk { sigma: 0.6 }` is every kernel's default window. It is radial,
+so turning the patch about its normal turns the scored pixels with it and
+leaves the score unchanged, and the corners, which a grazing view stretches
+most, carry no weight. `Sampler` and `SamplerChoice`, re-exported here, are
+specified in [image-warping.md](../camera/image-warping.md) § "Choosing the
+sampler per view"; `viewing_angle` and `surface_to_camera` in
+[reference-view.md](reference-view.md).
+
+**The frozen common support.** `build_level_context` culls the views the patch
+faces away from, keeps each view whose window-weighted share of valid pixels
+(pixels whose warp lands on its photograph) is at least `min_valid_fraction`,
+and takes the pixels valid in every kept view as the support. It needs two
+views and `MIN_MASK_PIXELS` (8) pixels, and returns `None` otherwise. Every
+view is scored over this one pixel set: the windowed means and norms of
+different pixel sets would put the z-normalized renders in different spaces,
+and their dot products would not be correlations. With keypoints, each view's
+mask is built through the patch slid onto its keypoint's ray, the render the
+stack reads.
+
+**The z-normalized stack.** `normalized_stack` renders the kept views over the
+support, each with its sampler, and refuses the stack when a support pixel
+leaves a view's photograph, since several views reading zeros at the same
+pixels would agree on nothing. `znormalize_into_kept` normalizes each colour
+channel of each view on its own: subtract the windowed mean, divide by the
+windowed norm, and fold `√w` in, so a plain dot product of two views'
+channels is their windowed ZNCC. Normalizing each channel apart makes the
+score blind to a per-channel gain and offset, so it survives a camera's white
+balance and exposure while still using colour. A channel whose windowed
+norm² is below `FLAT_NORM_SQ_EPS` (`1e-6`) in any view carries no texture and
+is dropped for every view, which keeps every dot product in one channel
+space; the keep mask it returns lets view selection score a candidate on the
+reference's channels. The moments are summed in `f64`, since the variance
+`Σw·x² − mean·Σw·x` cancels and scales every value of the stack.
+
+**Robust weights.** `irls_view_weights` weights the views of a stack against
+their weighted mean `x̄_w`: from uniform weights, each pass takes each view's
+residual `‖xᵢ − x̄_w‖` over its channels, a scale of `max(1.4826·MAD, ½·median)`
+of the residuals, and a Tukey weight with cutoff `4.685·scale`, normalized to
+sum to one. The median floor keeps a clean stack, whose residuals are all
+alike and whose MAD is near zero, near uniform weights. A pass whose weights
+all vanish keeps the previous ones and stops. View selection's reference is
+the weighted mean these weights give.
 
 ## Limitations
 

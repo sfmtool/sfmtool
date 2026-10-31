@@ -32,14 +32,16 @@ harness on seoul_bull and the Kerry Park candidate ground truth:
      is a much better guide than the average of a wide disc.
    - ``nb3d``: the mean normal of the ``nb3d_k`` points nearest the track in
      3D, for a pixel with no image-space neighbour at its depth.
-   - ``photo``: ``PatchCloud.refine_normals`` over the track's ``in`` views,
-     started from the mean direction to their cameras, over a 45 degree range
-     with a small fronto-parallel prior, on a patch ``photo_scale`` (2) times
-     the track's half-size. This is the only source in the empty pass.
 
-   The other sources (``nb2d``, ``nb2d_principal``, ``photo_from_nb``) and
-   options (``challenger``, ``regrow``, ``photo_scales``, ``photo_views``)
-   are the variants the harness measured and did not keep.
+   In the empty pass neither source has a neighbour, and the track keeps the
+   normal it was found with. The harness also measured a photometric normal
+   (``PatchCloud.refine_normals``) as a third source, the only one in the
+   empty pass; it went with the photometric normal search, so the figures in
+   the README that include it cannot be reproduced.
+
+   The other sources (``nb2d``, ``nb2d_principal``) and options
+   (``challenger``, ``regrow``) are the variants the harness measured and did
+   not keep.
 """
 
 from __future__ import annotations
@@ -60,7 +62,6 @@ from candidates.common import (
     query_offset,
     score_track,
     shape_track,
-    visible_views,
 )
 
 _FALLBACK_GATES = {"min_in_views": 2, "min_zncc_median": 0.7, "ray_consensus": True}
@@ -71,7 +72,7 @@ DEFAULTS = {
     # defaults are three and 0.8), here and in the core cascade.
     "min_in_views": 2,
     "min_zncc_median": 0.7,
-    "source": "nbchain+nb3d+photo",
+    "source": "nbchain+nb3d",
     "nb_radius_px": 20.0,
     "nb_k": 5,
     "nb_depth_tol": 0.15,
@@ -83,18 +84,6 @@ DEFAULTS = {
         [30.0, 8, 0.15, "inv2", "principal"],
         [40.0, 12, 0.30, "inv2", "principal"],
     ],
-    "photo_scale": 2.0,
-    # When set, the photometric normal is estimated at each of these scales and
-    # the results averaged.
-    "photo_scales": None,
-    "photo_range_deg": 45.0,
-    "photo_views": "in",
-    "photo_iters": 1,
-    # Where the photometric search starts when there is no neighbours' normal:
-    # the track's own normal, or the mean direction to its `in` cameras.
-    "photo_init": "mean_view",
-    "photo_max_view_angle_deg": 75.0,
-    "photo_kwargs": {"fronto_prior_weight": 0.05},
     "keep": "force",
     "tolerance": 0.01,
     "clean_after": True,
@@ -135,12 +124,6 @@ def _face(n, to_cam):
     if n is None:
         return None
     return n if n @ to_cam >= 0 else -n
-
-
-def _tangent(n):
-    a = np.array([1.0, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 1.0, 0])
-    e1 = _unit(np.cross(n, a))
-    return e1, np.cross(n, e1)
 
 
 def neighbours_2d(ctx, image, pixel, depth, opts):
@@ -207,103 +190,13 @@ def nb3d_normal(ctx, xyz, half, to_cam, opts):
     return _face(_unit((w[:, None] * ns).sum(0)), to_cam)
 
 
-def camera_views(ctx):
-    from sfmtool import patches
-
-    ds = ctx.dataset
-    views = getattr(ds, "_camera_views", None)
-    if views is None:
-        rec = ds.recon
-        views = patches.CameraViews(
-            list(rec.cameras),
-            np.asarray(rec.quaternions_wxyz, float),
-            np.asarray(rec.translations, float),
-            np.asarray(rec.camera_indexes, np.uint32),
-        )
-        ds._camera_views = views
-    return views
-
-
-def photo_normal(ctx, track, init, to_cam, opts, **kw):
-    """The photometric normal; with several ``photo_scales``, their weighted mean."""
-    scales = opts["photo_scales"] or [opts["photo_scale"]]
-    found = []
-    for scale in scales:
-        n = _photo_normal_at(
-            ctx, track, init, to_cam, {**opts, "photo_scale": scale}, **kw
-        )
-        if n is not None:
-            found.append(n)
-    if not found:
-        return None
-    return _face(_unit(sum(found)), to_cam)
-
-
-def _photo_normal_at(ctx, track, init, to_cam, opts, **kw):
-    from sfmtool import patches
-
-    patch_frame = track.patch_frame
-    half = float(np.linalg.norm(patch_frame["u_halfvec"])) * opts["photo_scale"]
-    images = [
-        int(o["image"])
-        for o in track.observations
-        if opts["photo_views"] == "all" or o["verdict"] == "in"
-    ]
-    if opts["photo_views"] == "visible":
-        # Every photograph the patch projects into and faces, not only the
-        # track's sightings: more views constrain the normal better.
-        seen = visible_views(
-            ctx,
-            patch_frame["center"],
-            None,
-            max_view_angle_deg=opts["photo_max_view_angle_deg"],
-        )
-        images = sorted(set(images) | {int(i) for i, _, _ in seen})
-    if len(images) < 2:
-        return None
-    n = init
-    for it in range(opts["photo_iters"]):
-        e1, e2 = _tangent(n)
-        cloud = patches.PatchCloud.from_halfvec_arrays(
-            np.asarray([e1 * half], np.float32),
-            np.asarray([e2 * half], np.float32),
-            np.asarray([patch_frame["center"]], np.float64),
-        )
-        try:
-            res = cloud.refine_normals(
-                camera_views(ctx),
-                ctx.pyramids,
-                patch_views=[images],
-                use_stored_keypoints=False,
-                min_views=2,
-                angular_range_deg=opts["photo_range_deg"] if it == 0 else 20.0,
-                **{**opts["photo_kwargs"], **kw},
-            )
-        except (ValueError, RuntimeError):
-            return None
-        found = _unit(res["normal"][0])
-        if found is None or not np.all(np.isfinite(found)):
-            return None
-        n = _face(found, to_cam)
-    return n
-
-
 def estimate(ctx, track, image, pixel, opts):
     xyz = np.asarray(track.position, float)
     cam = ctx.camera(image)
     to_cam = _unit(cam.center - xyz)
     depth = cam.depth(xyz)
-    current = _face(patch_normal(track), to_cam)
-    if opts["photo_init"] == "mean_view":
-        dirs = [
-            _unit(ctx.camera(int(o["image"])).center - xyz)
-            for o in track.observations
-            if o["verdict"] == "in"
-        ]
-        current = _face(_unit(sum(dirs)), to_cam)
     half = float(np.linalg.norm(track.patch_frame["u_halfvec"]))
-    # A chain "a+b+c": the first source that gives a normal wins, except that
-    # "photo_from_nb" starts the photometric search from the neighbours' normal.
+    # A chain "a+b+c": the first source that gives a normal wins.
     for src in opts["source"].split("+"):
         if src == "none":
             return None
@@ -315,13 +208,6 @@ def estimate(ctx, track, image, pixel, opts):
             n = nb_chain_normal(ctx, image, pixel, depth, to_cam, opts)
         elif src == "nb3d":
             n = nb3d_normal(ctx, xyz, half, to_cam, opts)
-        elif src == "photo":
-            n = photo_normal(ctx, track, current, to_cam, opts)
-        elif src == "photo_from_nb":
-            nb = nb2d_normal(ctx, image, pixel, depth, to_cam, opts)
-            n = photo_normal(
-                ctx, track, nb if nb is not None else current, to_cam, opts
-            )
         else:
             raise ValueError(f"unknown source {src!r}")
         if n is not None:

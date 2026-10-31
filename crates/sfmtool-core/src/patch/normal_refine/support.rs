@@ -1,12 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Patch window kernel, the frozen `R×R` scoring [`Support`], and the
-//! patch-frame helpers ([`repose_patch`], [`view_render_patch`]) shared by
-//! the refinement and the per-point patch operations, and which sampler each
-//! view of a multi-view render uses ([`ViewSamplers`]).
-
-use nalgebra::Vector3;
+//! Patch window kernel, the frozen `R×R` scoring [`Support`] and its ZNCC
+//! readings, the keypoint-anchored render patch ([`view_render_patch`]), and
+//! which sampler each view of a multi-view render uses ([`ViewSamplers`]).
 
 use crate::patch::cloud::OrientedPatch;
 
@@ -317,28 +314,14 @@ fn zncc_over(
     }
 }
 
-/// Rebuild the patch on a new plane: same `center` / `half_extent`, the input
-/// `v_axis` ("up") reprojected onto the plane of `n` (`u = v × n`), which
-/// preserves the in-plane orientation across the normal change.
-pub(super) fn repose_patch(base: &OrientedPatch, n: &Vector3<f64>) -> OrientedPatch {
-    let mut p = OrientedPatch::from_center_normal(base.center, *n, base.v_axis, base.half_extent);
-    p.w = base.w;
-    p
-}
-
 /// The patch to render into `view`: when `keypoint` is given, `patch` slid
 /// onto the keypoint's ray ([`OrientedPatch::keypoint_slide_offset`]), falling
 /// back to `patch` where the slide refuses it; otherwise `patch` unchanged.
 ///
 /// Borrows `patch` in the no-keypoint hot path (and on a refused slide), so a
-/// refinement without keypoints allocates nothing extra. The slid centre is
-/// where the keypoint's ray meets the plane through the centre facing the
-/// camera, which does not depend on the patch's normal, so every candidate
-/// normal a refinement tries for this view is rendered about the same point.
-///
-// TODO(perf): that slid centre is invariant across candidate normals, but it is
-// recomputed every candidate/level here. If keypoint-anchored refine ever
-// becomes hot, compute it once per view per refine call.
+/// render without keypoints allocates nothing extra. The slid centre is where
+/// the keypoint's ray meets the plane through the centre facing the camera,
+/// which does not depend on the patch's normal.
 pub(in crate::patch) fn view_render_patch<'a>(
     patch: &'a OrientedPatch,
     view: &ProjectedImage<'_>,
@@ -363,15 +346,11 @@ pub(in crate::patch) fn view_render_patch<'a>(
 
 /// Which sampler each view of a multi-view render uses.
 ///
-/// A render that runs once per call (a member gate's matrix, view selection's
-/// reference) applies the
-/// caller's [`SamplerChoice`] to each observation
-/// ([`SamplerChoice::for_observation`]). Normal refinement
-/// renders the same views under many candidate normals, and the Jacobian a
-/// view's choice reads changes with the normal, so it fixes each view's sampler
-/// once from the patch it starts from ([`view_samplers`]) and every candidate
-/// renders the view with that sampler. That keeps the objective from jumping
-/// where a candidate carries a view across the rule's threshold.
+/// A render that applies the caller's [`SamplerChoice`] to each observation
+/// ([`SamplerChoice::for_observation`]), as a member gate's matrix and view
+/// selection's reference do, passes [`ViewSamplers::Each`]; a render whose
+/// caller has already chosen each view's sampler, as view selection's exact
+/// candidate render does, passes [`ViewSamplers::Frozen`].
 #[derive(Debug, Clone, Copy)]
 pub(in crate::patch) enum ViewSamplers<'a> {
     /// Apply the choice to each observation: the render's patch re-anchored on
@@ -404,29 +383,4 @@ impl ViewSamplers<'_> {
             ViewSamplers::Frozen(samplers) => samplers[index],
         }
     }
-}
-
-/// `choice` applied to each of `views` observing `patch` at `resolution`, at
-/// the view's keypoint where `view_keypoints` gives one
-/// ([`SamplerChoice::for_observation`]): what [`ViewSamplers::Frozen`] holds.
-pub(in crate::patch) fn view_samplers(
-    choice: SamplerChoice,
-    patch: &OrientedPatch,
-    views: &[ProjectedImage<'_>],
-    view_keypoints: Option<&[Option<[f64; 2]>]>,
-    resolution: u32,
-) -> Vec<Sampler> {
-    views
-        .iter()
-        .enumerate()
-        .map(|(i, view)| {
-            choice.for_observation(
-                patch,
-                view.camera,
-                view.cam_from_world,
-                view_keypoints.and_then(|k| k[i]),
-                resolution,
-            )
-        })
-        .collect()
 }

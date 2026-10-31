@@ -687,7 +687,7 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
 ```
 
 - **Why a choice rather than a sampler.** Every patch kernel's parameters
-  (`NormalRefineParams`, `ViewSelectParams`, `KeypointLocalizeParams`,
+  (`ViewSelectParams`, `KeypointLocalizeParams`,
   `KeypointSubpixelParams`, `MemberCoherenceParams`) carry a `SamplerChoice`,
   the rule by default. `Fixed` keeps one sampler for every view, for comparison
   runs and for a caller that needs one; `Sampler::X.into()` gives it. The
@@ -721,31 +721,20 @@ let tile = render_tile(view.pyramid, &mut map, sampler);
   keypoint would mean carrying that keypoint through each kernel beside the one
   it renders at, and a kernel that has moved a view should render it as it now
   sits, so the choice is read where each kernel starts.
-- **Why a kernel that iterates chooses once.** Normal refinement fixes each
-  view's sampler from the patch it starts from (`view_samplers`), since the
-  Jacobian changes with the candidate normal and a choice per candidate would
-  make `Φ` jump where a candidate carries a view across the threshold. Every
-  render of a view from its photograph then uses that sampler. Under the
-  default `CacheMode::FrontoParallel` the search does not render candidates
-  from the photographs: it scores them from the fronto-parallel cache, whose
-  base tiles are rendered with plain bilinear, so the sampler reaches only the
-  final scoring of the starting normal and the search's survivors, the
-  confidence stencil and the stored bitmap. With `CacheMode::Off` it
-  reaches every candidate. The localizer and the sub-pixel refiner choose once
-  per view, at its seed keypoint, since their tiles only slide in the patch's
-  plane.
+- **Why a kernel that iterates chooses once.** The localizer and the
+  sub-pixel refiner choose once per view, at its seed keypoint, since their
+  tiles only slide in the patch's plane.
 - **Timing.** `render_tiles` renders a multi-view stack grouped by sampler, and
   each group runs in a `Progress::detail_phase` named `render bilinear`,
   `render bilinear_mip` or `render anisotropic` whose note gives the number of
   views; the single-view kernels open the same phases per render
   (`render_phase`). The phases record only under `Progress::detailed(true)`.
-  The batches that render views (`refine_patch_cloud_normals`,
-  `select_patch_cloud_views`, `localize_patch_cloud_keypoints`,
+  The batches that render views
+  (`select_patch_cloud_views`, `localize_patch_cloud_keypoints`,
   `refine_patch_cloud_keypoints`, `validate_patch_cloud_member_coherence` and
   `render_patch_cloud_bitmaps`) take a `&Progress`, count `patches`, poll for
   cancellation before each patch and return `Cancelled` when it is set, rather
-  than the patches they finished; normal refinement then leaves the cloud as
-  it was. The bench's `evaluate` and `fit` work on one track; they take a
+  than the patches they finished. The bench's `evaluate` and `fit` work on one track; they take a
   `&Progress` too, open the same detail phases and return
   `EvaluateError::Cancelled` / `FitError::Cancelled`.
 
@@ -927,7 +916,7 @@ table above.
 | Batch | gallery sculpture (two runs) | badlands |
 |---|---|---|
 | view selection | 1.06, 1.05 | 1.22 |
-| normal refinement | 1.00, 1.02 | 1.03 |
+| photometric normal refinement (since deleted) | 1.00, 1.02 | 1.03 |
 | localizer | 0.99, 1.00 | 1.08 |
 | member coherence | 1.02, 1.00 | 1.19 |
 | fuse (the fused-mean bitmap the files then stored) | 0.98, 0.82 | 1.24 |

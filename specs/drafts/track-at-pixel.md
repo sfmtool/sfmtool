@@ -126,7 +126,7 @@ draft leaves open.
 | Size and normal priors from nearby surface | patches near the pixel in 2D in every observing image, and patches near the triangulated point in 3D even when they share no image with it; adjacency surfel normals ([adjacency-surfel-normals.md](../core/analysis/adjacency-surfel-normals.md)) |
 | Registration without moving anything | `evaluate`, and patch rendering and scoring with view selection or member coherence ([member-coherence-validation.md](../core/patch/member-coherence-validation.md)) |
 | Registration that moves the sightings | cluster refinement ([cluster-patch-refinement.md](../core/patch/cluster-patch-refinement.md)), keypoint localization over a chosen subset of views ([patch-keypoint-localization.md](../core/patch/patch-keypoint-localization.md)), sub-pixel refinement ([keypoint-subpixel-refinement.md](../core/patch/keypoint-subpixel-refinement.md)), and the bench's `fit` |
-| The patch's normal | normal refinement ([patch-normal-refinement.md](../core/patch/patch-normal-refinement.md)), and the bench's `tilt_patch` to try a prior normal |
+| The patch's normal | normal refinement (`patch-normal-refinement.md` (deleted)), and the bench's `tilt_patch` to try a prior normal |
 | Membership decisions | the thresholds' verdicts (`apply_thresholds`), and member coherence's split proposal for a track that is two surfaces |
 
 ## Evaluation

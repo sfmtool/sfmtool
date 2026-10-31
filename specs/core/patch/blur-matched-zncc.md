@@ -814,8 +814,8 @@ row reads 1. The Python tests are in
   template.
 - **Weighted means' IRLS residuals.** The stored bitmap is the reference
   view's tile, not a mean ([reference-view.md](reference-view.md) § "The
-  stored bitmap"). Normal refinement, which still builds a weighted mean of
-  the views as its consensus, reads its residuals plain; it would blur-match
+  stored bitmap"). View selection, which still builds a weighted mean of
+  the track views as its reference, reads its IRLS residuals plain; it would blur-match
   them only on its own measurement.
 - **Deconvolution.** A blurry tile is not sharpened; the sharper one is
   blurred.

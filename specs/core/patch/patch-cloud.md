@@ -373,7 +373,7 @@ impl PatchCloud {
     /// (R·σ_min)` per view, reduced across views; `Fixed`/`RelativeToSpacing`:
     /// their scalar as the tangent magnitude). Pass `true` to emit finite points only —
     /// needed by an operation that scatters per-point results back and must leave
-    /// infinity points untouched (normal refinement's normal write-back), or that
+    /// infinity points untouched, or that
     /// wants the historical finite-only behavior (e.g. the strips viz).
     ///
     /// `progress` is where the build names its passes, moves the bar and hears
@@ -596,7 +596,8 @@ its nature — a `w = 0` patch is first-class throughout:
   infinity rows (`w = 0`) so this survives a save/load round-trip.
 - **Normal refinement leaves infinity-point frames untouched.** A point at
   infinity has a *fixed* outward normal (`normalize(-d)`), so there is nothing to
-  refine: `refine_patch_normal` skips `w = 0` patches and returns them unchanged.
+  refine: the grown-plane normal refinement (`bench::refine_normals`) reports
+  such a point `AtInfinity` and keeps its frame ([refine-normals.md](../bench/refine-normals.md)).
 - **View selection** handles them: the cheirality gate (`is_in_front`) and
   front-facing test use the homogeneous direction (a `w = 0` patch is always
   front-facing; cheirality is `R·d` forward), and vetting renders through the
@@ -613,9 +614,8 @@ its nature — a `w = 0` patch is first-class throughout:
 - **Included by default.** Since every operation handles them, the binding
   defaults `exclude_points_at_infinity = false`, so a cloud built from a
   reconstruction carries its points at infinity. Operations that are finite by
-  nature opt out with `exclude_points_at_infinity = true`: **normal refinement**
-  (its normal write-back scatters per-point results back and must leave the
-  `(0, 0, 0)` normal of an infinity point untouched) and the **strips viz**.
+  nature opt out with `exclude_points_at_infinity = true`, such as the **strips
+  viz**.
 
 ### Serialization
 
@@ -644,14 +644,12 @@ centre is not stored (it is the point's position). See
 reads it back; `recon.save` writes the `patch_*` arrays beside the normals. Patch
 bitmaps are attached separately via
 `recon.clone_with_changes(patch_bitmaps=<(N, R, R, 4) uint8>)` (the frame must be
-present, so pass `patches=` in the same call unless one is already attached); the
-patch-normal refinement pipeline emits them when asked (see
-`PatchCloud.refine_normals(render_bitmaps=True)` and
-`specs/core/patch/patch-normal-refinement.md`). No command runs that
-photometric refinement: the commands that turn patch normals (`sfm
-embed-patches`, `sfm xform --refine-normals`, `inspect --strips` and `compare
---strips`) run the grown-plane normal, `sfmtool.bench.refine_normals`, which
-returns a new reconstruction carrying the turned frames
+present, so pass `patches=` in the same call unless one is already attached);
+`PatchCloud.render_bitmaps` and `PatchCloud.refine_keypoints(render_bitmaps=True)`
+render them. The commands that turn patch normals (`sfm embed-patches`, `sfm
+xform --refine-normals`, `inspect --strips` and `compare --strips`) run the
+grown-plane normal, `sfmtool.bench.refine_normals`, which returns a new
+reconstruction carrying the turned frames
 ([refine-normals.md](../bench/refine-normals.md)).
 
 The per-point patch frame rides along with the reconstruction's editing
@@ -665,7 +663,7 @@ with it.
 
 ## Patch operations without a reconstruction
 
-Every patch kernel binding (`PatchCloud.refine_normals`, `select_views`,
+Every patch kernel binding (`PatchCloud.select_views`,
 `localize_keypoints`, `refine_keypoints`, `validate_member_coherence`) and
 `ImagePyramidSet` takes a
 reconstruction as its first argument, but consumes only three things from it:
@@ -852,7 +850,7 @@ with `remap_bilinear` or `remap_aniso`. There is no batch helper: the per-view
 map is small and the loop is where a caller wants to make its own decisions
 about which views to skip (`OrientedPatch::is_front_facing`), which resolution
 to use, and whether to pay for `compute_svd`. The kernels that sweep a whole
-cloud — normal refinement, view selection, keypoint localization — do this
+cloud — view selection, keypoint localization, member coherence — do this
 inside `sfmtool-core` and never hand the maps back.
 
 ## Python bindings
