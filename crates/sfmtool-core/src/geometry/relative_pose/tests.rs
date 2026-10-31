@@ -281,3 +281,39 @@ fn rotation_is_deterministic_in_the_seed() {
     assert_eq!(a.inliers, b.inliers);
     assert_eq!(a.rotation, b.rotation);
 }
+
+// ── Input lengths ───────────────────────────────────────────────────────────
+
+#[test]
+fn unequal_lengths_use_the_shorter_prefix() {
+    let (r1, r2, _rot, _t) = two_view_scene(150, 2.0, 0.35, Vector3::new(0.8, -0.3, 0.4));
+    let rot = planted_rotation(0.5);
+    let q2: Vec<Vector3<f64>> = r1.iter().map(|d| rot * d).collect();
+    let essential = RayEssentialOptions {
+        max_angle_rad: 1e-5,
+        min_inliers: 20,
+        ..Default::default()
+    };
+    let rotation = RayRotationOptions {
+        max_angle_rad: 1e-6,
+        ..Default::default()
+    };
+    let n = 120;
+    // Either side may be the longer one; the extra entries are ignored and the
+    // result matches a call on the first `n` correspondences.
+    let e_trimmed = estimate_essential_rays(&r1[..n], &r2[..n], &essential).unwrap();
+    let r_trimmed = fit_ray_rotation(&r1[..n], &q2[..n], &rotation).unwrap();
+    for (a, b, q) in [(&r1[..], &r2[..n], &q2[..n]), (&r1[..n], &r2[..], &q2[..])] {
+        let got = estimate_essential_rays(a, b, &essential).unwrap();
+        assert_eq!(got.inliers.len(), n);
+        assert_eq!(got.residuals_rad.len(), n);
+        assert_eq!(got.e_matrix, e_trimmed.e_matrix);
+        assert_eq!(got.inliers, e_trimmed.inliers);
+
+        let got = fit_ray_rotation(a, q, &rotation).unwrap();
+        assert_eq!(got.inliers.len(), n);
+        assert_eq!(got.residuals_rad.len(), n);
+        assert_eq!(got.rotation, r_trimmed.rotation);
+        assert_eq!(got.inliers, r_trimmed.inliers);
+    }
+}

@@ -136,6 +136,10 @@ fn residuals_for(
 /// angular residual, keeps the largest consensus, then locally optimizes on
 /// it. Returns `None` when no consensus reaches `min_inliers`.
 ///
+/// `r1[i]` and `r2[i]` are one correspondence, and both must be unit length;
+/// they are not normalized or checked. Slices of different lengths are read
+/// to the shorter one, and the mask and residuals have that length.
+///
 /// The returned matrix is **not** projected onto the essential manifold: how
 /// far it is from essential is the measurement the column scan reads
 /// ([`RayEssential::essentialness`]), and a caller decomposing it to a
@@ -146,6 +150,7 @@ pub fn estimate_essential_rays(
     options: &RayEssentialOptions,
 ) -> Option<RayEssential> {
     let n = r1.len().min(r2.len());
+    let (r1, r2) = (&r1[..n], &r2[..n]);
     if n < EPI_SAMPLE.max(options.min_inliers)
         || options.max_angle_rad <= 0.0
         || !options.max_angle_rad.is_finite()
@@ -153,7 +158,7 @@ pub fn estimate_essential_rays(
         return None;
     }
     let sin_tol = options.max_angle_rad.min(std::f64::consts::FRAC_PI_2).sin();
-    let rows = epipolar_rows(&r1[..n], &r2[..n]);
+    let rows = epipolar_rows(r1, r2);
     let mut state = options.seed;
     let samples = draw_samples(&mut state, n, EPI_SAMPLE, options.samples.max(1));
 
@@ -268,12 +273,17 @@ pub struct RayRotation {
 /// Scores seeded three-ray minimal samples by the angular residual, keeps the
 /// largest consensus, then refits on it. Returns `None` when no consensus
 /// reaches `min_inliers`.
+///
+/// `r1[i]` and `r2[i]` are one correspondence, and both must be unit length;
+/// they are not normalized or checked. Slices of different lengths are read
+/// to the shorter one, and the mask and residuals have that length.
 pub fn fit_ray_rotation(
     r1: &[Vector3<f64>],
     r2: &[Vector3<f64>],
     options: &RayRotationOptions,
 ) -> Option<RayRotation> {
     let n = r1.len().min(r2.len());
+    let (r1, r2) = (&r1[..n], &r2[..n]);
     if n < ROT_SAMPLE.max(options.min_inliers)
         || options.max_angle_rad <= 0.0
         || !options.max_angle_rad.is_finite()
