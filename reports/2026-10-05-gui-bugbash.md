@@ -294,7 +294,7 @@ viewer's own Level Horizon (Home) could use the same estimate.
 > looks down −Z with +Y up (OpenGL style), so forward is `R^T·(0,0,−1)`, not
 > `R^T·(0,0,1)` as for COLMAP. Each description now says so, a glossary row
 > settles the name, and a test pins that looking through an image reports that
-> image's quaternion. Branch mcp-quaternion-wxyz._
+> image's quaternion. Branch `mcp-quaternion-wxyz`._
 
 `get_camera_image` reports a camera's rotation as `quaternion_wxyz` (with
 `translation_xyz`); `set_view` and `get_scene`'s view block call the same kind

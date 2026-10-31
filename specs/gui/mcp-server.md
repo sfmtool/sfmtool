@@ -473,7 +473,10 @@ The viewport camera keeps its attitude in the same convention
 the image's quaternion into it with no axis flip. So in camera view, on a
 reconstruction with no display transform, the view block's `quaternion_wxyz`
 is the image's own. `mcp::tests::view::the_view_quaternion_is_the_camera_images_quaternion_in_camera_view`
-pins that. A caller who builds `R` and takes `Rᵀ · (0, 0, 1)` as forward, as
+pins that. Under a display transform the view is in the shared world while
+`get_camera_image` reports the reconstruction's own frame, so the view's
+quaternion is the image's times the conjugate of the transform's
+`rotation_wxyz` (`viewer_3d::transformed_pose`). A caller who builds `R` and takes `Rᵀ · (0, 0, 1)` as forward, as
 for a COLMAP pose, gets the direction behind the camera.
 
 The rotation of a named transform is **`rotation_wxyz`**: the display transform's
