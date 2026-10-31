@@ -489,10 +489,11 @@ cannot distinguish the columns regardless of how well it votes within one.
 Each vote therefore carries a radial-coverage covariate (a high quantile
 of its inliers' radial distance, as a fraction of the half-diagonal),
 and only votes above a coverage floor (`0.50` of the half-diagonal at
-the inliers' radial p90) are **model-informative**. Votes below the
-floor still enter their column's focal pool; they are simply excluded
-from the model verdict. Coverage is deliberately **radial, not
-angular**: angular reach is what actually predicts discrimination, but
+the inliers' radial p90, the linear quantile of
+[`numeric`](../README.md#median-and-quantile)) are
+**model-informative**. Votes below the floor still enter their column's
+focal pool; they are simply excluded from the model verdict. Coverage
+is deliberately **radial, not angular**: angular reach is what actually predicts discrimination, but
 an angular floor disqualifies a narrow-FOV pinhole capture's own
 legitimate votes by attrition and flips its model verdict — the radial
 covariate penalizes votes whose inliers lie near the principal point
