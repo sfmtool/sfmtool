@@ -17,28 +17,12 @@ use crate::patch::blur_matched::{assess_blur, blur_to_length_into, BlurScratch, 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::{
     build_level_context, normalized_stack, weighted_moments_pub, window_weights,
-    znormalize_into_kept, NormalRefineParams, PatchWindow, ProjectedImage, ViewSamplers,
-    FLAT_NORM_SQ_EPS,
+    znormalize_into_kept, PatchWindow, ProjectedImage, ViewSamplers, FLAT_NORM_SQ_EPS,
 };
 use crate::patch::pair_sharpness::TrackBlurs;
 use crate::patch::self_similarity::{zncc_self_similarity_radius, PatchTile, SelfSimilarityParams};
 use crate::progress::Progress;
 use crate::progress_note;
-
-/// A `NormalRefineParams` shim carrying just the gating knobs
-/// [`build_level_context`] and [`normalized_stack`] read, so the matrix drives the
-/// shared support / render machinery without re-deriving it. The `min_views`
-/// floor is 2 (its minimum): every member that passes the per-member validity
-/// gate is kept, and a track that cannot reach two members yields no matrix.
-fn normal_refine_shim(params: &MemberCoherenceParams) -> NormalRefineParams {
-    NormalRefineParams {
-        window: params.window,
-        sampler: params.sampler,
-        min_valid_fraction: params.min_valid_fraction,
-        min_views: 2,
-        ..NormalRefineParams::default()
-    }
-}
 
 /// The pairwise windowed-ZNCC matrix of one point's members.
 ///
@@ -239,19 +223,19 @@ fn fill_member_zncc(
     let k = members.len();
     let w_full = window_weights(params.window, resolution);
     let member_proj: Vec<ProjectedImage<'_>> = members.iter().map(|&i| views[i as usize]).collect();
-    let shim = normal_refine_shim(params);
 
     // Frozen common support at the patch's own normal — `build_reference`'s first
     // step, unchanged except for the anchoring: with keypoints the mask is built
     // through the same recentered render the stack below samples, so the frozen
-    // support intersects where the members are actually read.
+    // support intersects where the members are actually read. Every member that
+    // passes the per-member validity gate is kept, and a track that cannot reach
+    // two members yields no matrix.
     let Some(ctx) = build_level_context(
         patch,
-        &patch.normal(),
         &member_proj,
         resolution,
         &w_full,
-        &shim,
+        params.min_valid_fraction,
         member_keypoints,
     ) else {
         return 0;

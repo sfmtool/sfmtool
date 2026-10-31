@@ -373,7 +373,7 @@ about 0.64.
 
 That also bounds what this route can reach. The best empty-pass normal found
 here, photometric at the ground truth's own position and views
-(`normal_sources/photo_bias.py`, each point weighted by its track length as the
+(`normal_sources/photo_bias.py`, since deleted, each point weighted by its track length as the
 harness weights queries), earns a normal credit of 0.34 on seoul_bull and 0.32
 on Kerry Park. A candidate with every query good and that normal would score
 about 0.54 in each empty pass, and with the full passes' current normals the
@@ -424,9 +424,15 @@ truth was probably curated on the bench, whose finish tilts every track toward
 its neighbours' normal, which would make its normals partly copies of one
 another. Numbers that lean on neighbours' normals there are likely optimistic.
 
-**Photometric normals.** `PatchCloud.refine_normals` is the only normal
-source in the empty pass. At the ground-truth position and views, from the
-mean viewing direction, it is 19 degrees off at the median on seoul_bull and
+**Photometric normals.** `PatchCloud.refine_normals`, the photometric normal
+search, was the only normal source in the empty pass. It has since been
+deleted, with `renormal`'s `photo` source and the scripts that measured it
+(`photo_diag.py`, `photo_bias.py`, `photo_neighbour_oracle.py`,
+`cluster_nb_diag.py`), so `renormal` now has no normal source in the empty
+pass and the figures in this section that include it are a record, not
+something the harness reproduces.
+At the ground-truth position and views, from the
+mean viewing direction, it was 19 degrees off at the median on seoul_bull and
 27 on Kerry Park. Widening the search to 45 degrees with a 0.05 fronto-parallel
 prior brings that to 18 and 16. A patch twice the track's size helps in the
 pipeline, and three times helps seoul_bull more but costs Kerry Park. The
@@ -453,7 +459,7 @@ seoul_bull.
 | Two anchored refits; cleaning at 1.0 px; a 1.0 px projection gate | within ±0.003 |
 | The depth modes' gap at 1.08 or 1.3; the sweep's prior over 20 px and five points; the transfer over 30 px | within ±0.005 |
 | Pseudo-neighbours again, with the photometric settings `renormal` uses (45 degrees, the fronto-parallel prior, twice the size) | 24 to 35 degrees off, against 23 to 24 for the point's own estimate |
-| An oracle for pseudo-neighbours (`photo_neighbour_oracle.py`): the tight-to-wide chain over the true neighbours, each with its photometric normal at its true position and views | no better than the point's own photometric normal: credit 0.319 and 0.304 against 0.344 and 0.318 (0.342 and 0.293 with the point's own added). The same neighbours' ground-truth normals score 0.667 and 0.840. Photometry's error is shared across a surface, so no pseudo-neighbours, however well built, would lift the empty pass |
+| An oracle for pseudo-neighbours (`photo_neighbour_oracle.py`, since deleted): the tight-to-wide chain over the true neighbours, each with its photometric normal at its true position and views | no better than the point's own photometric normal: credit 0.319 and 0.304 against 0.344 and 0.318 (0.342 and 0.293 with the point's own added). The same neighbours' ground-truth normals score 0.667 and 0.840. Photometry's error is shared across a surface, so no pseudo-neighbours, however well built, would lift the empty pass |
 | The photometric normal shrunk toward the mean viewing direction, or pushed further from it; the fronto-parallel prior off | worse in every case. Photometry tilts less than the ground truth (19 and 27 degrees from the mean viewing direction, against 34 and 39) but its error is in the direction of the tilt, not its size: with the prior off it tilts as far as the ground truth and is still 25 degrees off |
 | Snapping the photometric normal to the vertical (the cameras' mean up direction) when within 10 to 25 degrees of it, and into the horizontal plane when within that of it | Kerry Park's normal credit 0.321 to 0.375 at 25 degrees (39% of its ground-truth normals are within 10 degrees of vertical and 40% of horizontal); none on seoul_bull. A prior about city scenes, worth about 0.01 of the mean `S`, not kept |
 | A depth probe for tracks under six views: the patch moved along the ray to 0.7 to 1.45 times its distance, grown and refit there, the best-scoring kept | −0.022 and −0.028 (seoul_bull, the Kerry Park sample); −0.006 and −0.015 when a probe must score 25% more. The views a wrong depth gathers outscore the right depth's |
@@ -950,12 +956,12 @@ anchor from it (which does not depend on the scoring):
 | `candidates/core_cascade.py` | The same cascade run in Rust by `bench.build_track_at_pixel`, with the dataset's SIFT index, keypoints and `.matches` clusters built once into a `bench.TrackAtPixelSources`. Its descriptor route is reported as the member `constellation` |
 | `candidates/planesweep.py` | Needs only the poses and the photographs. Sweeps a patch facing the queried camera along the pixel's ray (uniform in inverse depth, down to infinity), scores each depth by the other views' ZNCC against the query, and fits the best-agreed depths |
 | `candidates/centred.py` | The ensemble, preferring within the winning group the tracks whose queried view's correlation peak is within 0.5 px of the pixel |
-| `candidates/renormal.py` | The core cascade with the gates at two views and 0.7, Python fallbacks when it refuses, and the track re-oriented by the tight-to-wide neighbour chain, the 3D neighbours or the photometric normal. The variants the harness measured and did not keep are options |
+| `candidates/renormal.py` | The core cascade with the gates at two views and 0.7, Python fallbacks when it refuses, and the track re-oriented by the tight-to-wide neighbour chain or the 3D neighbours. The variants the harness measured and did not keep are options; its photometric source went with the photometric normal search |
 | `candidates/core_vote.py` | Each Rust cascade member run alone, their tracks voting on the depth as the ensemble's do |
 | `ground_truth_ceiling.py` | Scores the ground-truth tracks themselves, as a run directory: the ceiling the good-track bar allows |
 | `run_sharded.py` | Runs the harness over every point in parallel shards and merges them into one run directory |
 | `goal_score.py` | The normal-weighted score `S` of "Normals, gates and fallbacks", with each pass's median time |
-| `normal_sources/` | Each normal source measured alone against the ground-truth normal: `normal_diag.py` (neighbours in 2D and 3D, planes, photometric), `nb_sweep.py` (the neighbour estimator's parameters and chains), `photo_diag.py` (`refine_normals` settings), `affine_diag.py` (cluster members' affine shapes), `cluster_nb_diag.py` (pseudo-neighbours from clusters), `photo_bias.py` (how the photometric normal misses the ground truth's, and priors that might correct it), `photo_neighbour_oracle.py` (averaging over true neighbours' photometric normals) |
+| `normal_sources/` | Each normal source measured alone against the ground-truth normal: `normal_diag.py` (neighbours in 2D and 3D, planes), `nb_sweep.py` (the neighbour estimator's parameters and chains), `affine_diag.py` (cluster members' affine shapes), and `grid_plane_eval.py`, `grid_plane_detail.py` and `grid_plane_sweep.py` (the grid-plane and grown-plane normals). The scripts that measured the photometric normal (`photo_diag.py`, `photo_bias.py`, `photo_neighbour_oracle.py`, `cluster_nb_diag.py`) went with the photometric normal search |
 | `candidates/ensemble.py` | Runs every member above at 1, 1.5 and 2 times its own patch size, with the ray consensus in the finish and gates at the good-track bar's ZNCC. The members' tracks all lie on the pixel's ray, so they vote on the depth; the group most distinct members agree on wins, and its track is chosen in the cascade's order |
 
 The baseline's `size_policy` option (`prior`, `largest_view`, `median_view`,
@@ -1049,7 +1055,7 @@ are good references, not exact truth: a built track can beat the GT ZNCC.
 | Hand moves | `bench.tilt_patch`, `translate_patch`, `translate_patch_to_pixel`, `resize_patch`, `spin_patch`, `sight_observation` |
 | Aligning a subset of views to the reference render | `PatchCloud.localize_keypoints(patch_views=…, reference_images=…)` |
 | Sub-pixel refinement against the reference render | `PatchCloud.refine_keypoints(reference_images=…)` |
-| Normal refinement | `PatchCloud.refine_normals` |
+| Normal refinement (the grown-plane normal) | `bench.grown_plane_normal` (one point), `bench.refine_normals` (every point of a reconstruction) |
 | Member coherence (a pairwise ZNCC matrix, and a split proposal) | `PatchCloud.validate_member_coherence` |
 | ZNCC self-similarity radius | `sfmtool.patches.zncc_self_similarity_parts` (one bitmap), `zncc_self_similarity_parts_stack` (a stack) |
 | Adjacency-surfel normals | `analysis.estimate_adjacency_surfel_normals` |

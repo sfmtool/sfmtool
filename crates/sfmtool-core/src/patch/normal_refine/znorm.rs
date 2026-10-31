@@ -3,8 +3,8 @@
 
 //! Render-and-z-normalize numerics: project each kept view's patch into the
 //! frozen support ([`normalized_stack`]), z-normalize the raw stack
-//! ([`znormalize_into`] / [`znormalize_into_kept`]), and the AVX2 moment /
-//! write kernels they dispatch to.
+//! ([`znormalize_into_kept`]), and the AVX2 moment / write kernels they
+//! dispatch to.
 
 use crate::camera::sampler::render_tiles;
 use crate::camera::WarpMap;
@@ -13,16 +13,14 @@ use crate::progress::Progress;
 
 use super::level::LevelContext;
 use super::params::{ProjectedImage, FLAT_NORM_SQ_EPS};
-use super::prof;
 use super::support::{view_render_patch, ViewSamplers};
 
-/// Render the kept views of `patch` and z-normalize each colour channel over
-/// the windowed common support. Returns `xs[view][channel][pixel]`, each
-/// channel vector unit-norm and zero weighted-mean (window weights are folded
-/// in as `√w`, so plain dot products realize the windowed inner product).
-/// Channels that are flat (windowed norm ≈ 0) in *any* kept view are dropped
-/// for every view, keeping all inner products in one space; `None` when no
-/// channel survives.
+/// Render the kept views of `patch` over the frozen support `ctx`. Returns the
+/// raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
+/// `ctx.pixels` order (`n = ctx.pixels.len()`), and the channel count (the
+/// fewest any kept view has); z-normalize them with [`znormalize_into_kept`].
+/// `None` when a kept view has no channel, or when `patch` leaves the frame at
+/// any support pixel in any kept view.
 pub(in crate::patch) fn normalized_stack(
     patch: &OrientedPatch,
     ctx: &LevelContext,
@@ -44,9 +42,7 @@ pub(in crate::patch) fn normalized_stack(
     let n = ctx.pixels.len();
     let r = resolution as usize;
 
-    prof::count(&prof::N_RENDER, n_views as u64);
-
-    // Every kept view's warp first, so a candidate that leaves the frame is
+    // Every kept view's warp first, so a patch that leaves the frame is
     // rejected before anything is resampled, then the renders, grouped by
     // sampler so a detailed run times each sampler's renders in one phase.
     let mut maps = Vec::with_capacity(n_views);
@@ -55,20 +51,15 @@ pub(in crate::patch) fn normalized_stack(
     for &vi in &ctx.kept {
         let view = &views[vi];
         let rpatch = view_render_patch(patch, view, view_keypoints.and_then(|k| k[vi]));
-        let mut map = prof::WARP
-            .time(|| WarpMap::from_patch(&rpatch, view.camera, view.cam_from_world, resolution));
-        // Reject a candidate that pushes any frozen-support pixel out of frame in
+        let mut map = WarpMap::from_patch(&rpatch, view.camera, view.cam_from_world, resolution);
+        // Reject a render that pushes any frozen-support pixel out of frame in
         // any kept view: such a pixel renders as 0 (zero-fill on a NaN warp), and
-        // several views going black at the same pixels fake cross-view agreement,
-        // biasing the level's argmax toward frame-edge tilts. Rejecting keeps Φ
-        // comparable across the level over the exact frozen mask; the final pass
-        // re-intersects each winner's validity separately.
+        // several views going black at the same pixels fake cross-view agreement.
         if ctx
             .pixels
             .iter()
             .any(|&p| !map.is_valid((p % r) as u32, (p / r) as u32))
         {
-            prof::count(&prof::N_REJECT, 1);
             return None;
         }
         let sampler = samplers.get(
@@ -79,26 +70,24 @@ pub(in crate::patch) fn normalized_stack(
             resolution,
         );
         if sampler.needs_svd() {
-            prof::SVD.time(|| map.compute_svd());
+            map.compute_svd();
         }
         maps.push(map);
         chosen.push(sampler);
         pyramids.push(view.pyramid);
     }
-    let images = prof::REMAP.time(|| render_tiles(&pyramids, &mut maps, &chosen, progress));
+    let images = render_tiles(&pyramids, &mut maps, &chosen, progress);
 
     // Raw masked pixel values, flat `[(view*channels + channel)*n + pixel]` in
-    // `ctx.pixels` order — the same layout the cache fills and the consensus reads.
+    // `ctx.pixels` order.
     let mut raw = vec![0f32; n_views * channels * n];
     for (vk, img) in images.iter().enumerate() {
-        prof::ZNORM.time(|| {
-            for c in 0..channels {
-                let base = (vk * channels + c) * n;
-                for (ki, &p) in ctx.pixels.iter().enumerate() {
-                    raw[base + ki] = img.get_pixel((p % r) as u32, (p / r) as u32, c as u32) as f32;
-                }
+        for c in 0..channels {
+            let base = (vk * channels + c) * n;
+            for (ki, &p) in ctx.pixels.iter().enumerate() {
+                raw[base + ki] = img.get_pixel((p % r) as u32, (p / r) as u32, c as u32) as f32;
             }
-        });
+        }
     }
 
     Some((raw, channels))
@@ -111,43 +100,18 @@ pub(in crate::patch) fn normalized_stack(
 /// windowed inner product). A channel flat (windowed norm² < [`FLAT_NORM_SQ_EPS`])
 /// in *any* view is dropped for *every* view. The per-(view, channel) moments
 /// are reduced in **f64** SIMD: the variance `norm_sq = s2 − s1·mean` is
-/// cancellation-sensitive and feeds Φ directly (the stack is the consensus
-/// input), so f32 accumulation there moves normals. The element-wise normalize
-/// is f32 and the stack is stored f32 to halve the memory traffic the consensus
-/// re-reads. Returns the kept-channel count, or `None` when none survive. Shared
-/// by the source-render path ([`normalized_stack`]) and the fronto cache
-/// ([`super::fronto_cache::eval_phi`]) so the two cannot drift.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn znormalize_into(
-    raw: &[f32],
-    views: usize,
-    channels: usize,
-    n: usize,
-    weights: &[f64],
-    total_weight: f64,
-    sqrt_weights: &[f32],
-    out: &mut Vec<f32>,
-) -> Option<usize> {
-    znormalize_into_kept(
-        raw,
-        views,
-        channels,
-        n,
-        weights,
-        total_weight,
-        sqrt_weights,
-        out,
-    )
-    .map(|(kept, _)| kept)
-}
-
-/// Like [`znormalize_into`], but also returns the per-*original*-channel keep
-/// mask (length `channels`, parallel to the input channels): `true` where the
+/// cancellation-sensitive and scales every value of the stack, so f32
+/// accumulation there moves the scores read from it. The element-wise normalize
+/// is f32 and the stack is stored f32 to halve the memory traffic its readers
+/// re-read.
+///
+/// Returns the kept-channel count and the per-*original*-channel keep mask
+/// (length `channels`, parallel to the input channels): `true` where the
 /// channel was textured in every view and survives into the compacted output,
-/// `false` where it was dropped as flat. View selection needs this to anchor a
-/// candidate's score to the *reference's* surviving original channels (so it
-/// never correlates the reference's channel A against a candidate's channel B);
-/// refinement ignores it. Numerically identical to [`znormalize_into`].
+/// `false` where it was dropped as flat. View selection needs the mask to
+/// anchor a candidate's score to the *reference's* surviving original channels
+/// (so it never correlates the reference's channel A against a candidate's
+/// channel B). `None` when no channel survives.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::patch) fn znormalize_into_kept(
     raw: &[f32],
@@ -166,9 +130,9 @@ pub(in crate::patch) fn znormalize_into_kept(
         for c in 0..channels {
             let col = &raw[(v * channels + c) * n..][..n];
             // Moments reduced in f64 (vectorized): the variance difference
-            // `s2 − s1·mean` is cancellation-sensitive and feeds Φ directly (it is
-            // the consensus input, unlike the IRLS residual), so f32 accumulation
-            // here moves normals. A (near-)constant channel cancels below
+            // `s2 − s1·mean` is cancellation-sensitive and scales every value
+            // of the stack (unlike the IRLS residual), so f32 accumulation here
+            // moves the scores read from it. A (near-)constant channel cancels below
             // `FLAT_NORM_SQ_EPS` and is dropped by the flat gate (shared across
             // views) before `1/√norm_sq` is taken, so it never reaches a NaN.
             let (s1, s2) = weighted_moments(col, weights);
@@ -222,22 +186,23 @@ unsafe fn hsum256_pd(v: std::arch::x86_64::__m256d) -> f64 {
     _mm_cvtsd_f64(s1)
 }
 
-/// Weighted moments `(Σ w·x, Σ w·x²)` of `col` over the windowed support,
-/// accumulated in **f64**: the caller forms the cancellation-sensitive variance
-/// `s2 − s1·mean` from these and feeds it (via `1/√norm_sq`) straight into Φ, so
-/// f32 accumulation here moves normals (measured). The baseline target limits the
-/// autovectorized fallback to SSE, so an AVX2+FMA kernel (4-wide f64, widening the
-/// f32 `col`) is dispatched at runtime; same pattern as
-/// [`super::consensus::sum_sq_diff`].
-/// `pub(super)` re-export of [`weighted_moments`] for view selection, which
-/// computes a candidate channel's windowed mean / norm directly (to score it on
-/// the *reference's* surviving channels) rather than going through the
-/// compacting [`znormalize_into`]. Same `(Σw·x, Σw·x²)` convention.
+/// `pub(in crate::patch)` re-export of [`weighted_moments`] for the kernels
+/// that compute a channel's windowed mean / norm directly (view selection
+/// scores a candidate on the *reference's* surviving channels) rather than
+/// going through the compacting [`znormalize_into_kept`]. Same
+/// `(Σw·x, Σw·x²)` convention.
 #[inline]
 pub(in crate::patch) fn weighted_moments_pub(col: &[f32], w: &[f64]) -> (f64, f64) {
     weighted_moments(col, w)
 }
 
+/// Weighted moments `(Σ w·x, Σ w·x²)` of `col` over the windowed support,
+/// accumulated in **f64**: the caller forms the cancellation-sensitive variance
+/// `s2 − s1·mean` from these and scales the stack by `1/√norm_sq`, so f32
+/// accumulation here moves the scores read from it (measured). The baseline
+/// target limits the autovectorized fallback to SSE, so an AVX2+FMA kernel
+/// (4-wide f64, widening the f32 `col`) is dispatched at runtime; same pattern
+/// as [`super::consensus::sum_sq_diff`].
 #[inline]
 pub(super) fn weighted_moments(col: &[f32], w: &[f64]) -> (f64, f64) {
     debug_assert_eq!(col.len(), w.len());

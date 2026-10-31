@@ -1,17 +1,14 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Consensus photoconsistency `Φ`: the reusable [`ConsensusScratch`], the robust
-//! IRLS view weights, the AVX2 residual / SAXPY kernels, and the
-//! [`consensus_phi`] objective evaluations over a z-normalized stack.
+//! Robust consensus weights of a z-normalized stack: the reusable
+//! [`ConsensusScratch`], the IRLS view weights ([`irls_view_weights`]) and the
+//! AVX2 residual / SAXPY kernels they run on.
 
-use super::params::{Objective, MIN_EFFECTIVE_VIEWS};
-use super::prof;
 use crate::numeric::median_in_place;
 
-/// Reused buffers for the consensus / IRLS reductions, so scoring a candidate
-/// allocates nothing after warm-up. The cache path holds one in its `Scratch`;
-/// the source path makes a fresh (default-empty) one per call.
+/// Reused buffers for the IRLS reductions, so repeated weighting allocates
+/// nothing after warm-up.
 #[derive(Default)]
 pub(in crate::patch) struct ConsensusScratch {
     /// View weights (`views`).
@@ -21,8 +18,6 @@ pub(in crate::patch) struct ConsensusScratch {
     /// accumulation precision is immaterial, and f32 keeps both the SAXPY and the
     /// residual a single 8-wide AVX2 path with no f64↔f32 narrowing.
     xbar: Vec<f32>,
-    /// Per-pixel accumulator for a channel's weighted sum (`n`).
-    s: Vec<f64>,
     /// Per-view residual to the consensus (`views`).
     resid: Vec<f64>,
     /// Scratch for the median/MAD sort (`views`), avoids per-iter clones.
@@ -31,41 +26,14 @@ pub(in crate::patch) struct ConsensusScratch {
     wt: Vec<f64>,
 }
 
-/// Unweighted consensus over one channel, `ρ̄ = (V‖x̄‖² − 1)/(V − 1)`. Accumulates
-/// the per-pixel cross-view sum `s[k] = Σ_v x[v,c,k]` by SAXPY over contiguous
-/// per-view rows (`sc.s` reused), then `‖x̄‖² = Σ_k (s[k]/V)²`.
-pub(super) fn mean_pairwise_channel(
-    xs: &[f32],
-    views: usize,
-    channels: usize,
-    n: usize,
-    c: usize,
-    sc: &mut ConsensusScratch,
-) -> f64 {
-    sc.s.clear();
-    sc.s.resize(n, 0.0);
-    for v in 0..views {
-        let row = &xs[(v * channels + c) * n..][..n];
-        sc.s.iter_mut().zip(row).for_each(|(s, &r)| *s += r as f64);
-    }
-    let inv_v = 1.0 / views as f64;
-    let mut norm_sq = 0.0;
-    for &s in &sc.s {
-        let m = s * inv_v;
-        norm_sq += m * m;
-    }
-    (views as f64 * norm_sq - 1.0) / (views as f64 - 1.0)
-}
-
 /// `Σ_k (row[k] − xbar[k])²`, all f32 — the IRLS per-view residual sum. An f64
 /// `.sum()` cannot vectorize (non-associative → a serial dependency chain), and
 /// the crate builds for a baseline target (no `-C target-feature=+avx2`), so the
 /// scalar fallback only reaches SSE; the dispatched AVX2+FMA kernel below is
 /// 8-wide. With `xbar` also f32 there is no per-element narrowing. The residual
 /// only feeds the Tukey reweight (median/MAD/cutoff), so f32 precision is ample
-/// and the found weights — hence normals — are unaffected in practice. Mirrors
-/// the runtime-dispatch pattern of [`super::fronto_cache`] and
-/// `features::sift::simd`.
+/// and the found weights are unaffected in practice. Mirrors the
+/// runtime-dispatch pattern of `features::sift::simd`.
 #[inline]
 pub(super) fn sum_sq_diff(row: &[f32], xbar: &[f32]) -> f32 {
     debug_assert_eq!(row.len(), xbar.len());
@@ -183,38 +151,19 @@ unsafe fn axpy_f32_avx2(xb: &mut [f32], row: &[f32], w: f32, n: usize) {
 /// IRLS view weights into `sc.w` (`Σwᵢ = 1`): a Tukey weight on each view's
 /// residual `‖xᵢ − x̄_w‖` (stacked over channels), scaled by the residual MAD
 /// (floored against the median so a clean, outlier-free stack keeps near-uniform
-/// weights), re-formed `iters` times. All buffers live in `sc` (no per-candidate
-/// / per-iteration allocation); the weighted consensus `xbar` is accumulated by
-/// SAXPY over contiguous per-view rows.
-///
-/// `view_priors` (length `views`, if given) is a multiplicative per-view prior on
-/// the weights — the obliquity view-weight `|v̂·n|^power` (see
-/// [`obliquity`](super::obliquity), use A). It seeds the initial weights and is
-/// re-multiplied into every Tukey reweight, so an oblique view stays down-weighted
-/// throughout. `None` is the plain uniform-init IRLS (byte-for-byte the prior-free
-/// behavior).
+/// weights), re-formed `iters` times from uniform initial weights. All buffers
+/// live in `sc` (no per-call / per-iteration allocation); the weighted consensus
+/// `xbar` is accumulated by SAXPY over contiguous per-view rows.
 pub(in crate::patch) fn irls_view_weights(
     xs: &[f32],
     views: usize,
     channels: usize,
     n: usize,
     iters: u32,
-    view_priors: Option<&[f64]>,
     sc: &mut ConsensusScratch,
 ) {
     sc.w.clear();
-    match view_priors {
-        Some(pr) => {
-            debug_assert_eq!(pr.len(), views, "view_priors must be parallel to views");
-            let sum: f64 = pr.iter().take(views).sum();
-            if sum > 0.0 {
-                sc.w.extend(pr.iter().take(views).map(|&p| p / sum));
-            } else {
-                sc.w.resize(views, 1.0 / views as f64);
-            }
-        }
-        None => sc.w.resize(views, 1.0 / views as f64),
-    }
+    sc.w.resize(views, 1.0 / views as f64);
     sc.xbar.resize(channels * n, 0.0);
     sc.resid.resize(views, 0.0);
     sc.sorted.resize(views, 0.0);
@@ -222,56 +171,44 @@ pub(in crate::patch) fn irls_view_weights(
 
     for _ in 0..iters {
         // Weighted consensus per (channel, pixel): SAXPY each view's row.
-        prof::IRLS_XBAR.time(|| {
-            sc.xbar.iter_mut().for_each(|x| *x = 0.0);
-            for v in 0..views {
-                let wv = sc.w[v] as f32;
-                for c in 0..channels {
-                    let row = &xs[(v * channels + c) * n..][..n];
-                    let xb = &mut sc.xbar[c * n..][..n];
-                    axpy_f32(xb, row, wv);
-                }
+        sc.xbar.iter_mut().for_each(|x| *x = 0.0);
+        for v in 0..views {
+            let wv = sc.w[v] as f32;
+            for c in 0..channels {
+                let row = &xs[(v * channels + c) * n..][..n];
+                let xb = &mut sc.xbar[c * n..][..n];
+                axpy_f32(xb, row, wv);
             }
-        });
+        }
         // Per-view residual to the consensus (contiguous per row), all f32: only
         // the Tukey reweight consumes it, so the precision is immaterial, and the
         // dispatched AVX2 reduction needs no narrowing now that xbar is f32 too.
-        prof::IRLS_RESID.time(|| {
-            for v in 0..views {
-                let mut r2 = 0f32;
-                for c in 0..channels {
-                    let row = &xs[(v * channels + c) * n..][..n];
-                    let xb = &sc.xbar[c * n..][..n];
-                    r2 += sum_sq_diff(row, xb);
-                }
-                sc.resid[v] = (r2 as f64).sqrt();
+        for v in 0..views {
+            let mut r2 = 0f32;
+            for c in 0..channels {
+                let row = &xs[(v * channels + c) * n..][..n];
+                let xb = &sc.xbar[c * n..][..n];
+                r2 += sum_sq_diff(row, xb);
             }
-        });
+            sc.resid[v] = (r2 as f64).sqrt();
+        }
 
-        let should_break = prof::IRLS_REWEIGHT.time(|| {
-            tukey_reweight_from_residuals(
-                &sc.resid,
-                view_priors,
-                &mut sc.sorted,
-                &mut sc.wt,
-                &mut sc.w,
-            )
-        });
-        if should_break {
+        let degenerate =
+            tukey_reweight_from_residuals(&sc.resid, &mut sc.sorted, &mut sc.wt, &mut sc.w);
+        if degenerate {
             break;
         }
     }
 }
 
 /// One Tukey/MAD IRLS reweight step: from the per-view residuals, form the
-/// MAD-scaled Tukey weights (times the optional multiplicative `view_priors`)
-/// and write them, normalized to `Σw = 1`, into `w`. Returns `true` when the
-/// re-weight is degenerate (`Σ` of the raw weights ≈ 0) — the caller should
-/// keep the previous weights and stop iterating. `sorted` / `wt` are reused
-/// scratch. The reweight step of [`irls_view_weights`].
+/// MAD-scaled Tukey weights and write them, normalized to `Σw = 1`, into `w`.
+/// Returns `true` when the re-weight is degenerate (`Σ` of the raw weights ≈
+/// 0) — the caller should keep the previous weights and stop iterating.
+/// `sorted` / `wt` are reused scratch. The reweight step of
+/// [`irls_view_weights`].
 fn tukey_reweight_from_residuals(
     resid: &[f64],
-    view_priors: Option<&[f64]>,
     sorted: &mut Vec<f64>,
     wt: &mut Vec<f64>,
     w: &mut [f64],
@@ -298,12 +235,8 @@ fn tukey_reweight_from_residuals(
             let t = 1.0 - (r / cutoff) * (r / cutoff);
             t * t
         };
-        // Fold the obliquity prior back in each iteration so the
-        // down-weighting persists (the Tukey factor alone would let a
-        // grazing but self-consistent view regain full weight).
-        let wv = tukey * view_priors.map_or(1.0, |pr| pr[v]);
-        wt[v] = wv;
-        sum += wv;
+        wt[v] = tukey;
+        sum += tukey;
     }
     if sum <= 1e-12 {
         return true; // Degenerate re-weight; keep the previous weights.
@@ -312,80 +245,4 @@ fn tukey_reweight_from_residuals(
         w[v] = wt[v] / sum;
     }
     false
-}
-
-/// Consensus photoconsistency `Φ` over the normalized stack, per the
-/// objective. `None` when fewer than 2 views, or when the robust effective
-/// view count `1/Σwᵢ²` drops below [`MIN_EFFECTIVE_VIEWS`] (weights collapsed
-/// onto essentially one view).
-pub(super) fn consensus_phi(
-    xs: &[f32],
-    views: usize,
-    channels: usize,
-    n: usize,
-    objective: Objective,
-    view_priors: Option<&[f64]>,
-    sc: &mut ConsensusScratch,
-) -> Option<f64> {
-    consensus_phi_with_weights(xs, views, channels, n, objective, view_priors, sc)
-        .map(|(phi, _)| phi)
-}
-
-/// [`consensus_phi`] plus the per-view consensus weights that produced it,
-/// normalized to `Σwᵢ = 1` (uniform `1/views` under [`Objective::MeanPairwise`],
-/// the IRLS weights under [`Objective::RobustWeighted`]).
-///
-/// `view_priors` (if given, length `views`) is the multiplicative obliquity prior
-/// on the robust weights (use A); it is applied only under
-/// [`Objective::RobustWeighted`] — [`Objective::MeanPairwise`] is unweighted by
-/// definition and ignores it.
-pub(super) fn consensus_phi_with_weights(
-    xs: &[f32],
-    views: usize,
-    channels: usize,
-    n: usize,
-    objective: Objective,
-    view_priors: Option<&[f64]>,
-    sc: &mut ConsensusScratch,
-) -> Option<(f64, Vec<f64>)> {
-    if views < 2 {
-        return None;
-    }
-    match objective {
-        Objective::MeanPairwise => {
-            let sum: f64 = (0..channels)
-                .map(|c| mean_pairwise_channel(xs, views, channels, n, c, sc))
-                .sum();
-            Some((sum / channels as f64, vec![1.0 / views as f64; views]))
-        }
-        Objective::RobustWeighted { iters } => {
-            irls_view_weights(xs, views, channels, n, iters, view_priors, sc);
-            let sum_w2: f64 = sc.w.iter().map(|&x| x * x).sum();
-            // Degeneracy gate only (the view *count* is gated by `min_views` per
-            // level): as weight concentrates on one view, Σwᵢ² → 1 and ρ̄_w → 0/0.
-            if 1.0 / sum_w2 < MIN_EFFECTIVE_VIEWS || 1.0 - sum_w2 < 1e-9 {
-                return None;
-            }
-            let phi = prof::CONS_FINAL.time(|| {
-                let mut sum = 0.0;
-                sc.s.clear();
-                sc.s.resize(n, 0.0);
-                for c in 0..channels {
-                    // s[k] = Σ_v w[v]·x[v,c,k], SAXPY over contiguous per-view rows.
-                    sc.s.iter_mut().for_each(|x| *x = 0.0);
-                    for v in 0..views {
-                        let wv = sc.w[v];
-                        let row = &xs[(v * channels + c) * n..][..n];
-                        sc.s.iter_mut()
-                            .zip(row)
-                            .for_each(|(s, &r)| *s += wv * r as f64);
-                    }
-                    let norm_sq: f64 = sc.s.iter().map(|&s| s * s).sum();
-                    sum += (norm_sq - sum_w2) / (1.0 - sum_w2);
-                }
-                sum / channels as f64
-            });
-            Some((phi, sc.w.clone()))
-        }
-    }
 }

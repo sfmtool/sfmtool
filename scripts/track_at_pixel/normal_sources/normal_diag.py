@@ -4,8 +4,9 @@
 """How well does each normal source recover the ground-truth normal?
 
 Isolated from the rest of the pipeline: at each GT point's own position and
-sightings, estimate a normal every way we know and measure its angle to the
-GT normal (both turned to face the query camera, so the error is 0..90 deg).
+sightings, estimate a normal from its neighbours in 2D and 3D and from planes
+through them, and measure its angle to the GT normal (both turned to face the
+query camera, so the error is 0..90 deg).
 
     pixi run -e test python scripts/track_at_pixel/normal_sources/normal_diag.py DATASET [--limit N]
 """
@@ -40,12 +41,6 @@ def angle(a, b):
     return float(np.degrees(np.arccos(np.clip(abs(a @ b), -1, 1))))
 
 
-def tangent(n):
-    a = np.array([1.0, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 1.0, 0])
-    e1 = unit(np.cross(n, a))
-    return e1, np.cross(n, e1)
-
-
 def principal(ns, w):
     M = sum(wi * np.outer(n, n) for n, wi in zip(ns, w))
     vals, vecs = np.linalg.eigh(M)
@@ -70,19 +65,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dataset")
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--photo", default="1,2,3")
     args = ap.parse_args()
-    from sfmtool import patches
 
     prepared = prepare(args.dataset, None, quiet=True)
     ds = DatasetContext(prepared)
     rec = ds.recon
-    views = patches.CameraViews(
-        list(rec.cameras),
-        np.asarray(rec.quaternions_wxyz, float),
-        np.asarray(rec.translations, float),
-        np.asarray(rec.camera_indexes, np.uint32),
-    )
     pts = [
         p
         for p in range(rec.point_count)
@@ -90,7 +77,6 @@ def main():
     ]
     if args.limit:
         pts = pts[: args.limit]
-    scales = [float(s) for s in args.photo.split(",") if s]
     errs: dict[str, list] = {}
     times: dict[str, float] = {}
 
@@ -98,33 +84,6 @@ def main():
         errs.setdefault(name, []).append(angle(n, gt))
         if t0 is not None:
             times[name] = times.get(name, 0.0) + time.perf_counter() - t0
-
-    def photo(name, init, xyz, half, images, gt, to_cam, **kw):
-        t0 = time.perf_counter()
-        if init is None:
-            rec_err(name, None, gt)
-            return None
-        e1, e2 = tangent(init)
-        cloud = patches.PatchCloud.from_halfvec_arrays(
-            np.asarray([e1 * half], np.float32),
-            np.asarray([e2 * half], np.float32),
-            np.asarray([xyz], np.float64),
-        )
-        try:
-            res = cloud.refine_normals(
-                views,
-                ds.pyramids,
-                patch_views=[list(map(int, images))],
-                use_stored_keypoints=False,
-                min_views=2,
-                **kw,
-            )
-            n = face(unit(res["normal"][0]), to_cam)
-        except Exception as ex:  # noqa: BLE001
-            print("photo failed", ex)
-            n = None
-        rec_err(name, n, gt, t0)
-        return n
 
     for k, p in enumerate(pts):
         ctx = ds.holdout(p)
@@ -163,7 +122,6 @@ def main():
                 )
             rec_err(f"nb2d_mean_r{r}k{kk}", n, gt, t0)
             if r == 40:
-                nb2d = n
                 # the shipped one averages raw (unflipped) normals
                 if near:
                     n_raw = face(
@@ -209,22 +167,6 @@ def main():
                 gt,
             )
 
-        # Photometric, from several inits and sizes.
-        for s in scales:
-            photo(f"photo_mv_x{s:g}", mv, xyz, half * s, images, gt, to_cam)
-            photo(f"photo_nb2d_x{s:g}", nb2d, xyz, half * s, images, gt, to_cam)
-            photo(
-                f"photo_nb2d_x{s:g}_narrow",
-                nb2d,
-                xyz,
-                half * s,
-                images,
-                gt,
-                to_cam,
-                angular_range_deg=10.0,
-            )
-        photo("photo_gt_x1", gt, xyz, half, images, gt, to_cam)
-        photo("photo_gt_x2", gt, xyz, half * 2, images, gt, to_cam)
         if k % 50 == 0:
             print(f"{k}/{len(pts)}", flush=True)
 

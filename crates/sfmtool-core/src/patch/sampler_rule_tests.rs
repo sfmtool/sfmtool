@@ -17,9 +17,7 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
 use crate::patch::member_coherence::{validate_member_coherence, MemberCoherenceParams};
-use crate::patch::normal_refine::{
-    normalized_stack, view_samplers, LevelContext, ProjectedImage, ViewSamplers,
-};
+use crate::patch::normal_refine::{normalized_stack, LevelContext, ProjectedImage, ViewSamplers};
 use crate::patch::stored_bitmap::render_patch_bitmap;
 use crate::patch::view_selection::{select_patch_views, ViewSelectParams};
 use crate::progress::Progress;
@@ -120,9 +118,15 @@ fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
     let some_kps: Vec<Option<[f64; 2]>> = kps.iter().map(|&k| Some(k)).collect();
 
     let rule = SamplerChoice::per_view();
-    let frozen = view_samplers(rule, &patch, &views, Some(&some_kps), R);
+    let chosen: Vec<Sampler> = views
+        .iter()
+        .zip(&kps)
+        .map(|(view, &kp)| {
+            rule.for_observation(&patch, view.camera, view.cam_from_world, Some(kp), R)
+        })
+        .collect();
     assert_eq!(
-        frozen,
+        chosen,
         [
             Sampler::Anisotropic,
             Sampler::BilinearMip,
@@ -130,7 +134,7 @@ fn unmoved_views_render_the_same_tiles_and_moved_views_do_not() {
         ]
     );
     for (i, view) in views.iter().enumerate() {
-        assert_eq!(frozen[i], bench_choice(&patch, view, kps[i]), "view {i}");
+        assert_eq!(chosen[i], bench_choice(&patch, view, kps[i]), "view {i}");
     }
 
     let ctx = LevelContext {

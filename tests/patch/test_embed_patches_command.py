@@ -191,18 +191,12 @@ def test_embed_patches_normal_step_is_the_grown_plane(
     monkeypatch, seoul_bull_workspace
 ):
     """Each round's normal step is the grown plane (``sfmtool.bench.refine_normals``)
-    run over an embedded_patches value whose tracks carry keypoints, and the
-    photometric ``PatchCloud.refine_normals`` is never called. From round 2 the
-    tracks it reads hold the views view selection added. The turned frames are
-    the ones view selection reads."""
+    run over an embedded_patches value whose tracks carry keypoints. From round 2
+    the tracks it reads hold the views view selection added. The turned frames
+    are the ones view selection reads."""
     from sfmtool.fileio import read_image_rgb
 
     from sfmtool.patches import PatchCloud
-
-    def photometric(*args, **kwargs):
-        raise AssertionError("embed_patches ran the photometric normal refinement")
-
-    monkeypatch.setattr(PatchCloud, "refine_normals", photometric)
 
     calls: list[dict] = []
     real_refine = ep.refine_normals

@@ -39,9 +39,11 @@ with its submodules [tile.rs](../../../crates/sfmtool-core/src/patch/reference_v
 and [track.rs](../../../crates/sfmtool-core/src/patch/reference_view/track.rs);
 the stored bitmap in
 [stored_bitmap.rs](../../../crates/sfmtool-core/src/patch/stored_bitmap.rs).
-The viewing angle is in normal refinement's
-[obliquity.rs](../../../crates/sfmtool-core/src/patch/normal_refine/obliquity.rs),
-whose obliquity priors read the same direction. The bench's evaluation runs
+The viewing angle is in
+[obliquity.rs](../../../crates/sfmtool-core/src/patch/normal_refine/obliquity.rs)
+of `patch::normal_refine`, the module of the shared patch helpers
+([patch-view-selection.md](patch-view-selection.md#the-shared-render-and-score-helpers)).
+The bench's evaluation runs
 them ([evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs)) and
 writes the readings into each row's `TrackMeasurement`
 ([editable-track.md](../bench/editable-track.md)).
@@ -207,11 +209,6 @@ is the warp map's border, and the angle is read at the anchored patch frame's
 centre. The bench, the stored bitmap and the Python binding all call it, so a
 tile rendered from Python is the tile the bench measured, and the stored bitmap
 is the tile the rule read.
-
-The viewing angle sits in normal refinement because its obliquity priors read
-the same direction from a patch to a camera (`surface_to_camera`); one
-function serves both, so the angle the bench reports and the cosine the prior
-weights by cannot disagree.
 
 ```rust
 use sfmtool_core::patch::reference_view::{
@@ -1221,10 +1218,10 @@ to the same reference render: the tile of the point's reference observation
 at its keypoint, or the rule's pick where the point stores none; where the
 rule finds no eligible view there is no reference render, and every view keeps
 its starting keypoint, unscored
-([patch-keypoint-localization.md](patch-keypoint-localization.md)). Normal
-refinement keeps its own weighted consensus of the views, since it chooses a
-normal rather than placing views
-([patch-normal-refinement.md](patch-normal-refinement.md)).
+([patch-keypoint-localization.md](patch-keypoint-localization.md)). View
+selection keeps its own weighted consensus of the track views as the reference
+it vets candidates against, since it chooses views rather than placing them
+([patch-view-selection.md](patch-view-selection.md)).
 
 **The culls read a sharper bitmap.** `embed-patches`' and
 `--filter-by-zncc-self-similarity-radius`' cull on a point's bitmap reads its
@@ -1338,7 +1335,7 @@ the cell readings' constants are in
 bench's evaluation runs the rule with `EvaluateOptions::reference_view`, the
 stored bitmap's render and the sub-pixel refiner with
 `KeypointSubpixelParams::reference_view`, and
-every other caller (the localizer, normal refinement, and the bench's
+every other caller (the localizer and the bench's
 restatement of the rule after a verdict moves) with the `Default`, which
 `EvaluateOptions` and `KeypointSubpixelParams` also hold by default.
 `MIN_TILT_ANGLE_DEG = 0.1` is in
@@ -1457,7 +1454,7 @@ evaluates a track of the seoul_bull ground truth and checks that the rule picks
 exactly one view, with coverage of at least 0.9 and facing the patch, at the
 lowest cost, and that every other row with a cost names its costliest term;
 that a point no view of which covers its tile whole stores the rule's pick, and
-that the sub-pixel refiner, the localizer and normal refinement name a
+that the sub-pixel refiner and the localizer name a
 reference for it, and that a track at `-1` on it is rendered from the pick at
 its first rendering evaluation; that each row's
 self-similarity readings are those of its tile rendered directly; that each
@@ -1486,7 +1483,7 @@ and
 
 ## Non-goals
 
-Normal refinement's template stays its own weighted consensus of the views;
+View selection's reference stays its own weighted consensus of the track views;
 the kernels that place views align them to the reference render (§ "The
 stored bitmap"). Replacing a point's defined reference when a sharper observation is
 added or fitted is not done: a render renders from the defined reference, an

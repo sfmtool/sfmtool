@@ -4,8 +4,8 @@
 //! Tunables, strategy config, and result types for patch-keypoint localization.
 //!
 //! Split out of the localization orchestration ([`super`]); the render/window
-//! knobs on [`KeypointLocalizeParams`] mirror
-//! [`NormalRefineParams`](crate::patch::normal_refine::NormalRefineParams).
+//! knobs on [`KeypointLocalizeParams`] take the same defaults as view
+//! selection's [`ViewSelectParams`](crate::patch::view_selection::ViewSelectParams).
 
 use crate::patch::normal_refine::{PatchWindow, SamplerChoice};
 
@@ -44,9 +44,9 @@ pub enum SearchStrategy {
 
 /// Tunables for [`localize_patch_keypoints`](super::localize_patch_keypoints).
 ///
-/// The render/window knobs mirror
-/// [`NormalRefineParams`](crate::patch::normal_refine::NormalRefineParams) so the
-/// template is built on the same conventions as refinement and selection.
+/// The render/window knobs take the same defaults as view selection's
+/// [`ViewSelectParams`](crate::patch::view_selection::ViewSelectParams), so the
+/// template is built on the same conventions as selection's reference.
 #[derive(Debug, Clone)]
 pub struct KeypointLocalizeParams {
     /// The reach of each view's search around its starting keypoint, in

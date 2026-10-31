@@ -3,7 +3,7 @@
 **Status:** Draft
 
 Amends
-[`../core/patch/patch-normal-refine-view-subset.md`](../core/patch/patch-normal-refine-view-subset.md),
+`../core/patch/patch-normal-refine-view-subset.md` (deleted),
 which specifies the shipped D-optimal view-subset selection and points back here.
 
 The shipped pick is purely geometric: it maximizes `det(M_S)` over
@@ -42,7 +42,7 @@ raw information. The shape of `s(·)` is undecided; the plausible candidates are
 the ZNCC itself, clamped at zero, and a steeper monotone map that effectively
 excludes views below a floor. Which one to use should be settled by the existing
 validation harness
-([`../../scripts/validate_refine_subset.py`](../../scripts/validate_refine_subset.py)),
+(`scripts/validate_refine_subset.py`, deleted),
 whose normal-agreement p95 against the all-views baseline is the metric this is
 trying to move.
 

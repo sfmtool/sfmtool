@@ -1,11 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Opt-in resample-sampler counters, shared by both patch phases (localization's
-//! `render_remap` and refinement's `remap`). Gated on `SFMTOOL_PROFILE`; with the
+//! Opt-in resample-sampler counters, shared by the patch phases (localization's
+//! `render_remap` and the other phases' `remap`). Gated on `SFMTOOL_PROFILE`; with the
 //! variable unset the increments compile to a single branch on a cached flag, so
 //! the hot path is unaffected. The per-phase prof modules
-//! (`keypoint_localize::prof`, `normal_refine::prof`) call [`reset`] at the start
+//! (`keypoint_localize::prof`, `keypoint_subpixel::prof`, `view_selection::prof`)
+//! call [`reset`] at the start
 //! of their batch and [`report`] at the end, so each phase reads its own totals.
 //!
 //! Counting happens per output row (one atomic add per row, not per pixel), so the
