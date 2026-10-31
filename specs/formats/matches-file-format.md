@@ -1536,8 +1536,9 @@ modifying an existing file.
 ### Writing a verified .matches file
 
 Geometric verification does not modify the file it reads. A writer that
-performs geometric verification reads a clusters-bearing file, expands its clusters into image pairs, verifies
-those pairs, and writes a new pairwise file at a separate path. The new file holds
+performs geometric verification reads a clusters-bearing file, expands its
+clusters into image pairs, verifies those pairs, and writes a new pairwise file
+at a separate path. The new file holds
 the pairs that pass verification, their matches and the
 [two-view geometries section](#7-two-view-geometries-optional-section), with
 `has_two_view_geometries` set to `true` in its metadata and its own content hash.
