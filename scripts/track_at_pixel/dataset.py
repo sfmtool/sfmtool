@@ -233,6 +233,7 @@ def _build_cluster_patches(
 
     from sfmtool.fileio import read_sift_metadata
     from sfmtool.matching import background_floor_clusters_kdf
+
     # No public writer exists for a clusters `.matches` file, and `sfm match
     # --cluster` builds its own forest rather than reading an index, so this
     # uses the command's internal writer. See reports/2026-10-08-hygiene-audit.md.
