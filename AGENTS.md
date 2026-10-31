@@ -58,9 +58,11 @@ it. Use `pub(crate)` when sibling modules need it, including methods and fields
 of types declared in private modules. Reserve bare `pub` for an item exposed
 through the crate's public interface, which is `run`, `run_with_args` and
 `RunError` in `lib.rs`. The crate sets `#![warn(unreachable_pub)]` in
-`lib.rs`, so CI's clippy job (`-D warnings`) rejects a bare `pub` function,
-type, constant or `use` that the crate does not export. rustc does not apply
-that lint to struct fields, so a bare `pub` field is caught only in review.
+`lib.rs`, so CI's clippy job (`-D warnings`) rejects a bare `pub` item, such
+as a function, method, type, constant, module or `use`, that the crate does not
+export. That job runs on Linux, so in Windows-only code such as
+`platform/windows.rs` the lint only warns, in the Windows builds. rustc does not
+apply the lint to struct fields, so a bare `pub` field is caught only in review.
 
 ### Python names and privacy
 
