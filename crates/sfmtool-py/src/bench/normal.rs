@@ -1081,8 +1081,8 @@ fn grid_plane_normal(
 /// ``observation``, ``image``, ``angle_deg`` (from the reference, seen from
 /// the patch centre), ``outcome`` (``"matched"`` or ``"left_out"``),
 /// ``combined_normal`` (the plane of the views picked so far, this one among
-/// them, or ``None`` for a try that left the view out or came after the
-/// selection), ``combined_sigma_deg`` (``NaN`` then) and ``attempts``, each
+/// them, or ``None`` for a try that left the view out),
+/// ``combined_sigma_deg`` (``NaN`` then) and ``attempts``, each
 /// with ``stage_zncc`` (a float64 array, one score per stage,
 /// ending at the window stage a growth stopped early at), ``shift``,
 /// ``normal`` (the growth's own plane), ``grid_zncc`` and ``sigma_deg`` (its

@@ -257,15 +257,17 @@ when no view joined. Under `WeakTurn` it is the joined views' mean at the plane
 found and not turned to, since no view has its shift fitted then.
 `bench::refine_normals` reports it per point and its mean over the turned
 points. `turn_sigma_ratio()` is the turn over `precision.sigma_weak_deg`, 0
-where that σ is not finite, the quantity the weak-turn rule bounds.
+where that σ is not finite and `None` when no view joined, the quantity the
+weak-turn rule bounds.
 
 The report's sentence (`Display`) reads, for example, "5 of 5 views joined, 2
 of 2 pairs kept; σ 0.56° weakest, 0.48° strongest (0.67° weakest with each view
-once)"; it adds ", N left out" and ", N shift only" when there are such views,
-", low confidence" when the precision is low, and, under `WeakTurn`, "; normal
-left unchanged: large turn on weak evidence, 19.8° at 1.5σ". When no view
-joined it ends ", normal left unchanged", as in "0 of 3 views joined, 3 left
-out, normal left unchanged".
+once)"; the parenthesis appears only when halving the kept pairs' information
+changes the weakest σ (§ [Wide pairs](#wide-pairs)). It adds ", N left out"
+and ", N shift only" when there are such views, ", low confidence" when the
+precision is low, and, under `WeakTurn`, "; normal left unchanged: large turn
+on weak evidence, 19.8° at 1.5σ". When no view joined it ends ", normal left
+unchanged", as in "0 of 3 views joined, 3 left out, normal left unchanged".
 
 ### Why it is shaped this way
 
@@ -1255,7 +1257,7 @@ proposes them.
 
 The questions still open about the step's settings and rules (the calibration
 of σ, the agreement numbers, the weak-turn thresholds, the ladder, the pairs,
-the selection's model, the window schedule, the optimiser, points where every
-view is weak or narrow, blur matching and the report's fields) are collected,
-with the evidence on each, in
+the selection's model, the window schedule, the cheaper growths' constants, the
+optimiser, points where every view is weak or narrow, blur matching and the
+report's fields) are collected, with the evidence on each, in
 [grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md).

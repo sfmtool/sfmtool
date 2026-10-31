@@ -370,7 +370,7 @@ pub struct GrownPlaneTry {
     pub outcome: GrownPlaneTryOutcome,
     /// The combined plane's outward normal after the try, world frame: the
     /// plane of the views picked so far, this one among them. `None` for a
-    /// try that left the view out and for a try made after the selection.
+    /// try that left the view out.
     pub combined_normal: Option<[f64; 3]>,
     /// `σ` along that plane's weakest direction after the try, degrees;
     /// `NaN` where `combined_normal` is `None`.
