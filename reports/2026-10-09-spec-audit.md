@@ -170,7 +170,7 @@ the subject should check it as a claim about the code, one at a time.
 
 > _Status (2026-10-30): row 5 **Superseded** — `refine-normals-command.md` was rewritten for the grown-plane normal, and its opening now says what the option does and that it needs an embedded-patches reconstruction, branch `grown-plane-xform-refine`._
 
-> _Status (2026-10-31): row 2 **Done** — `relative-pose.md` now opens with what the module estimates, what its two estimators return, that it is offered to Rust and Python through `sfmtool.geometry` and that no pipeline calls it; the old "The setting:" facts moved to the paragraph below it, branch `fix-1031-25-relative-pose-opening`._
+> _Status (2026-10-31): row 2 **Done** — `relative-pose.md` now opens with what the module estimates, what its two estimators return, that it is offered to Rust and, through `sfmtool.geometry`, to Python and that no pipeline calls it; the old "The setting:" facts moved to the paragraph below it, branch `fix-1031-25-relative-pose-opening`._
 
 ### 5. Coverage both ways
 

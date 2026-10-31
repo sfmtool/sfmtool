@@ -2,10 +2,10 @@
 
 ## Overview
 
-Relative pose estimation takes two images taken with the same known
-camera intrinsics, and a set of points matched between them, and
-robustly estimates how the camera moved from the first image to the
-second. It offers one estimator for a camera that moved and one for a
+Relative pose estimation takes two images whose camera intrinsics are
+known, and a set of points matched between them, and robustly estimates
+how the camera moved from the first image to the second. It offers one
+estimator for a camera that moved to a new position and one for a
 camera that only turned. The first returns an epipolar matrix that
 encodes the rotation and the direction of the translation; the second
 returns the rotation. Both also return which matches agree with the
@@ -20,8 +20,8 @@ unit ray the camera saw it along, and the only unknown left is the
 motion between the two poses: a rotation, plus a translation
 recoverable only up to scale (nothing in two views says how far apart
 they are, only in which direction). The module is the 2D–2D sibling of
-the absolute-pose module ([absolute-pose.md](absolute-pose.md)), which solves the complementary problem of one
-camera against known 3D points.
+the absolute-pose module ([absolute-pose.md](absolute-pose.md)), which
+solves the complementary problem of one camera against known 3D points.
 
 Such a pair has two motion models, and the module exposes one estimator
 per model:
