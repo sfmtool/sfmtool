@@ -113,8 +113,11 @@ fn build_feature_to_point_map(
 
 /// Result of merging 3D points and tracks from multiple reconstructions.
 pub struct MergedPointsAndTracks {
-    /// Averaged positions of merged 3D points, `[x, y, z]` per point.
-    pub positions: Vec<[f64; 3]>,
+    /// Homogeneous position of each merged point, `[x, y, z, w]`: a finite
+    /// point stores its Euclidean position with `w = 1`, a point at infinity
+    /// a unit direction with `w = 0`, as [`crate::Point3D`] does. See
+    /// [`merge_points_and_tracks`] for how each is computed.
+    pub positions_xyzw: Vec<[f64; 4]>,
     /// Averaged RGB colors per point.
     pub colors: Vec<[u8; 3]>,
     /// The average of the merged points' stored errors, per point. This is
@@ -135,6 +138,15 @@ pub struct MergedPointsAndTracks {
 /// positions/colors/errors. Remaining unique points are added as-is.
 /// A union-find pass then merges any points (across both groups and unique
 /// points) that share the same observation (merged_image_idx, feature_idx).
+///
+/// Points at infinity (`w = 0`) are kept. A merged point is finite when any
+/// of the points merged into it is finite, and its position is the average
+/// of the finite points' positions alone: a finite point carries a depth that
+/// a point at infinity does not contradict, only fails to measure. A merged
+/// point whose points are all at infinity stays at infinity, with the
+/// normalised sum of their directions as its direction, or the first point's
+/// direction when that sum is zero. Colors and errors are averaged over every
+/// merged point, finite or not.
 ///
 /// Uses `observations_for_point()` for O(1) per-point track lookup.
 ///
@@ -169,7 +181,8 @@ pub fn merge_points_and_tracks(
     }
 
     struct TempPoint {
-        position: [f64; 3],
+        /// `[x, y, z, w]`, as in [`MergedPointsAndTracks::positions_xyzw`].
+        position: [f64; 4],
         color: [f64; 3],
         error: f64,
         observations: HashSet<(u32, u32)>,
@@ -203,7 +216,10 @@ pub fn merge_points_and_tracks(
 
     // Step 1: Create temp points from correspondence groups.
     for group in correspondence_groups {
-        let mut sum_pos = [0.0f64; 3];
+        if group.is_empty() {
+            continue;
+        }
+        let mut sum_pos = PositionSum::default();
         let mut sum_color = [0.0f64; 3];
         let mut sum_error = 0.0f64;
         let mut count = 0usize;
@@ -211,9 +227,12 @@ pub fn merge_points_and_tracks(
 
         for &(recon_idx, point_id) in group {
             let point = &reconstructions[recon_idx].point_set.points[point_id as usize];
-            sum_pos[0] += point.position.x;
-            sum_pos[1] += point.position.y;
-            sum_pos[2] += point.position.z;
+            sum_pos.add([
+                point.position.x,
+                point.position.y,
+                point.position.z,
+                point.w,
+            ]);
             sum_color[0] += point.color[0] as f64;
             sum_color[1] += point.color[1] as f64;
             sum_color[2] += point.color[2] as f64;
@@ -226,7 +245,7 @@ pub fn merge_points_and_tracks(
         let c = count as f64;
         let tp_id = temp_points.len();
         let tp = TempPoint {
-            position: [sum_pos[0] / c, sum_pos[1] / c, sum_pos[2] / c],
+            position: sum_pos.xyzw(),
             color: [sum_color[0] / c, sum_color[1] / c, sum_color[2] / c],
             error: sum_error / c,
             observations,
@@ -251,7 +270,12 @@ pub fn merge_points_and_tracks(
                 obs_to_points.entry(obs).or_default().push(tp_id);
             }
             temp_points.push(TempPoint {
-                position: [point.position.x, point.position.y, point.position.z],
+                position: [
+                    point.position.x,
+                    point.position.y,
+                    point.position.z,
+                    point.w,
+                ],
                 color: [
                     point.color[0] as f64,
                     point.color[1] as f64,
@@ -296,7 +320,7 @@ pub fn merge_points_and_tracks(
 
     // Step 5: Create final merged points.
     let mut result = MergedPointsAndTracks {
-        positions: Vec::with_capacity(point_groups.len()),
+        positions_xyzw: Vec::with_capacity(point_groups.len()),
         colors: Vec::with_capacity(point_groups.len()),
         errors: Vec::with_capacity(point_groups.len()),
         track_image_indexes: Vec::new(),
@@ -305,19 +329,17 @@ pub fn merge_points_and_tracks(
     };
 
     for group_ids in point_groups.values() {
-        let merged_point_id = result.positions.len() as u32;
+        let merged_point_id = result.positions_xyzw.len() as u32;
         let gc = group_ids.len() as f64;
 
-        let mut avg_pos = [0.0f64; 3];
+        let mut sum_pos = PositionSum::default();
         let mut avg_color = [0.0f64; 3];
         let mut avg_error = 0.0f64;
         let mut all_observations: HashSet<(u32, u32)> = HashSet::new();
 
         for &tp_id in group_ids {
             let tp = &temp_points[tp_id];
-            avg_pos[0] += tp.position[0];
-            avg_pos[1] += tp.position[1];
-            avg_pos[2] += tp.position[2];
+            sum_pos.add(tp.position);
             avg_color[0] += tp.color[0];
             avg_color[1] += tp.color[1];
             avg_color[2] += tp.color[2];
@@ -325,9 +347,7 @@ pub fn merge_points_and_tracks(
             all_observations.extend(&tp.observations);
         }
 
-        result
-            .positions
-            .push([avg_pos[0] / gc, avg_pos[1] / gc, avg_pos[2] / gc]);
+        result.positions_xyzw.push(sum_pos.xyzw());
         result.colors.push([
             (avg_color[0] / gc).round() as u8,
             (avg_color[1] / gc).round() as u8,
@@ -343,6 +363,63 @@ pub fn merge_points_and_tracks(
     }
 
     Ok(result)
+}
+
+/// The positions of the points merged into one, kept apart by kind so that
+/// [`merge_points_and_tracks`] can apply its rule for mixing finite points
+/// with points at infinity once every point is in.
+#[derive(Clone, Default)]
+struct PositionSum {
+    /// Sum of the finite points' Euclidean positions.
+    finite: [f64; 3],
+    /// Number of finite points summed.
+    finite_count: usize,
+    /// Sum of the points at infinity's unit directions.
+    direction: [f64; 3],
+    /// The first point at infinity's direction, the fallback when the
+    /// directions sum to zero.
+    first_direction: Option<[f64; 3]>,
+}
+
+impl PositionSum {
+    /// Add one point, `[x, y, z, w]` with `w` either `1` or `0`.
+    fn add(&mut self, xyzw: [f64; 4]) {
+        let p = [xyzw[0], xyzw[1], xyzw[2]];
+        if xyzw[3] == 0.0 {
+            for (sum, v) in self.direction.iter_mut().zip(p) {
+                *sum += v;
+            }
+            self.first_direction.get_or_insert(p);
+        } else {
+            for (sum, v) in self.finite.iter_mut().zip(p) {
+                *sum += v;
+            }
+            self.finite_count += 1;
+        }
+    }
+
+    /// The merged homogeneous position: the mean of the finite points when
+    /// there is one, else the normalised sum of the directions.
+    fn xyzw(&self) -> [f64; 4] {
+        if self.finite_count > 0 {
+            let c = self.finite_count as f64;
+            return [
+                self.finite[0] / c,
+                self.finite[1] / c,
+                self.finite[2] / c,
+                1.0,
+            ];
+        }
+        let d = self.direction;
+        let norm = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        if norm > 0.0 && norm.is_finite() {
+            return [d[0] / norm, d[1] / norm, d[2] / norm, 0.0];
+        }
+        let f = self
+            .first_direction
+            .expect("a merged point has at least one finite point or one at infinity");
+        [f[0], f[1], f[2], 0.0]
+    }
 }
 
 #[cfg(test)]

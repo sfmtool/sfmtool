@@ -5,6 +5,8 @@
 
 Uses pycolmap's absolute pose estimation (PnP + RANSAC) to re-estimate camera
 poses against the merged 3D point cloud, running in parallel across all images.
+Points at infinity are left out: PnP takes Euclidean positions, and such a
+point has none.
 """
 
 import os
@@ -193,7 +195,10 @@ def refine_camera_poses(
     intrinsic adjustment (``merged_images["focal_adjustments"]``,
     ``["principal_point_adjustments_xy"]``, ``["radial_bspline_adjustments"]``
     and ``["rolling_shutter_rates_xyz"]``) applied, the rates read on the
-    camera's entry of ``merged_scanlines``.
+    camera's entry of ``merged_scanlines``. ``merged_points["positions_xyzw"]``
+    holds the points as homogeneous rows; the observations of a point at
+    infinity (``w = 0``) are left out of PnP, since it has no Euclidean
+    position.
     """
     click.echo("  Refining camera poses using merged 3D points...")
 
@@ -205,13 +210,21 @@ def refine_camera_poses(
     radial_bspline_adjustments = merged_images["radial_bspline_adjustments"]
     rolling_shutter_rates = merged_images["rolling_shutter_rates_xyz"]
 
-    # Build image_idx -> [(feat_idx, point_id), ...]
+    # A finite row holds its Euclidean position with w = 1; a row at
+    # infinity holds a direction and is never read below.
+    positions_xyzw = np.asarray(merged_points["positions_xyzw"], dtype=np.float64)
+    point_positions = positions_xyzw[:, :3]
+    point_is_finite = positions_xyzw[:, 3] != 0.0
+
+    # Build image_idx -> [(feat_idx, point_id), ...] over the finite points
     image_observations = {}
     for img_idx, feat_idx, point_id in zip(
         merged_tracks["image_indexes"],
         merged_tracks["feature_indexes"],
         merged_tracks["point_indexes"],
     ):
+        if not point_is_finite[point_id]:
+            continue
         if img_idx not in image_observations:
             image_observations[img_idx] = []
         image_observations[img_idx].append((feat_idx, point_id))
@@ -256,7 +269,7 @@ def refine_camera_poses(
                 img_name,
                 cam_dict,
                 observations,
-                merged_points["positions"],
+                point_positions,
                 workspace_dir,
                 feature_tool,
                 feature_options,

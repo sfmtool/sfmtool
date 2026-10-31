@@ -138,7 +138,7 @@ reverse_image_mapping)` produces the merged point set and track columns:
    not the merged track's RMS, so `sfm merge` scores every point again once it
    has refined the poses), and the union of the
    members' observations remapped into merged-image indices via
-   `reverse_image_mapping`.
+   `reverse_image_mapping`. An empty group is skipped.
 2. **Unique points:** every point not in any group is carried over as its
    own temp point.
 3. **Union-find over observations:** temp points that share an observation
@@ -148,19 +148,33 @@ reverse_image_mapping)` produces the merged point set and track columns:
 4. Each final group is emitted as one merged point (averaged again over the
    temp points) with the union of observations as its track rows.
 
+The merged points are returned as `positions_xyzw`, one homogeneous
+`[x, y, z, w]` row per point, so points at infinity (`w = 0`) survive the
+merge. Steps 1 and 4 average positions by one rule:
+
+- When any point averaged is finite, the result is finite (`w = 1`), at the
+  mean of the finite points' positions alone. A finite point carries a depth;
+  a point at infinity sharing its observations does not contradict that
+  depth, it only failed to measure one. The grouping step never puts a point
+  at infinity into a correspondence group, so this case arises in step 3,
+  when copies of a point share an observation, one finite and one at
+  infinity. `sfm xform --classify-points-at-infinity` can decide such a point
+  again on its merged track.
+- When every point averaged is at infinity, the result is at infinity
+  (`w = 0`), along the normalised sum of their unit directions; when the
+  directions cancel to zero, along the first point's direction.
+
+Colors and errors are averaged over every point, finite or not.
+
 Because the merge keys observations on `(image, feature_index)` identity,
 `embedded_patches` inputs are **rejected** with an error — they have no
 feature indexes, and substituting a placeholder would collapse distinct
 observations within an image.
 
-The merged point set carries no `w`: positions are averaged as `[f64; 3]`
-and `merge/reconstructions.py` stores them as Euclidean, so a point at
-infinity comes out of `sfm merge` as a finite point at unit distance along its
-direction, and pose refinement uses it in PnP as one. Dropping its pairs in
-the grouping step does not prevent this, because step 3 above still merges
-the copies of a point that share an observation. `tests/test_merge.py`
-records this as a strict `xfail`
-(`test_merge_keeps_points_at_infinity`).
+`merge/reconstructions.py` stores the rows as homogeneous positions, and
+its pose refinement ([merge/pose_refinement.py](../../../src/sfmtool/merge/pose_refinement.py))
+leaves the observations of a point at infinity out of PnP, which takes
+Euclidean positions only.
 
 ## Consumers
 
@@ -179,12 +193,15 @@ surfaces.
 ## Testing
 
 Sibling `tests.rs` under `reconstruction/point_correspondence/` covers the
-nested-map construction, first-occurrence semantics, union-find transitive
-merging, observation-key collisions, and the `embedded_patches` rejection.
+nested-map construction, first-occurrence semantics, the rule for merging
+points at infinity (with a finite point, with each other, with cancelling
+directions, and inside a correspondence group), and the `embedded_patches`
+rejection.
 `point_correspondence/by_coordinate/tests.rs` covers the keypoint-position
 matcher: the threshold, mutual nearest keypoints, vote counting, the
 one-to-one resolution and its tie orders, non-finite positions, and agreement
 with an all-pairs reference on about 1,500 observations a side.
 Python-side behavior (infinity filtering, coordinate voting through the
-binding) is covered in `tests/` via the align/merge/compare test modules and
+binding, `sfm merge` keeping points at infinity) is covered in `tests/` via
+the align/merge/compare test modules and
 `tests/test_point_correspondence_coordinate.py`.

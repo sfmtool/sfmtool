@@ -388,9 +388,14 @@ pub fn filter_tracks_by_point_mask_py(
 ///     correspondence_groups: List of groups, each group a list of (recon_idx, point_id).
 ///     image_mapping: Dict mapping image name -> list of (recon_idx, old_img_idx).
 ///
+/// Points at infinity are kept: a merged point is finite when any point
+/// merged into it is finite, at the mean of the finite points alone, and at
+/// infinity otherwise, along the normalised sum of the directions.
+///
 /// Returns:
-///     Dict with keys: positions, colors, errors, track_image_indexes,
-///     track_feature_indexes, track_point_indexes.
+///     Dict with keys: positions_xyzw (N, 4), with w = 1 for a finite point and
+///     w = 0 for a point at infinity, whose x, y, z are a unit direction;
+///     colors, errors, image_indexes, feature_indexes, point_indexes.
 #[pyfunction]
 #[pyo3(name = "merge_points_and_tracks")]
 pub fn merge_points_and_tracks_py(
@@ -454,10 +459,10 @@ pub fn merge_points_and_tracks_py(
 
     // Build output dict with numpy arrays.
     let dict = PyDict::new(py);
-    let positions = numpy::PyArray2::from_vec2(
+    let positions_xyzw = numpy::PyArray2::from_vec2(
         py,
         &result
-            .positions
+            .positions_xyzw
             .iter()
             .map(|p| p.to_vec())
             .collect::<Vec<_>>(),
@@ -469,7 +474,7 @@ pub fn merge_points_and_tracks_py(
     )
     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-    dict.set_item("positions", positions)?;
+    dict.set_item("positions_xyzw", positions_xyzw)?;
     dict.set_item("colors", colors)?;
     dict.set_item("errors", numpy::PyArray1::from_vec(py, result.errors))?;
     dict.set_item(

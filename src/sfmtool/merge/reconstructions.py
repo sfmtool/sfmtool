@@ -83,7 +83,7 @@ def merge_reconstructions(
         reconstructions, point_correspondences, image_mapping
     )
     merged_points = {
-        "positions": merge_result["positions"],
+        "positions_xyzw": merge_result["positions_xyzw"],
         "colors": merge_result["colors"],
         "errors": merge_result["errors"],
     }
@@ -92,7 +92,7 @@ def merge_reconstructions(
         "feature_indexes": merge_result["feature_indexes"],
         "point_indexes": merge_result["point_indexes"],
     }
-    click.echo(f"  Merged 3D points: {len(merged_points['positions'])}")
+    click.echo(f"  Merged 3D points: {len(merged_points['positions_xyzw'])}")
     click.echo(f"  Total observations: {len(merged_tracks['image_indexes'])}")
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")
 
@@ -437,7 +437,7 @@ def _create_merged_reconstruction(
     first_recon = source_reconstructions[0]
 
     observation_counts = np.bincount(
-        tracks["point_indexes"], minlength=len(points["positions"])
+        tracks["point_indexes"], minlength=len(points["positions_xyzw"])
     ).astype(np.uint32)
 
     # Build merged rig_frame_data if source reconstructions have it
@@ -480,7 +480,7 @@ def _create_merged_reconstruction(
             if images["thumbnails_y_x_rgb"] is None
             else np.ascontiguousarray(images["thumbnails_y_x_rgb"], dtype=np.uint8)
         ),
-        positions=np.ascontiguousarray(points["positions"], dtype=np.float64),
+        positions=np.ascontiguousarray(points["positions_xyzw"], dtype=np.float64),
         colors=np.ascontiguousarray(points["colors"], dtype=np.uint8),
         rms_reprojection_errors=np.ascontiguousarray(
             points["errors"], dtype=np.float32
