@@ -408,6 +408,48 @@ pub struct ClustersData {
     pub matcher_options: serde_json::Value,
 }
 
+/// What [`crate::write_clusters_matches`] writes: a clusters file, the
+/// `.matches` file a cluster matcher outputs, with the cluster backbone and no
+/// other section.
+///
+/// It holds the values the caller chooses or reads from the `.sift` files and
+/// leaves out what the writer derives from them: the format version, the
+/// image, cluster and member counts, and the `has_*` flags. The image arrays
+/// are in corpus order, the order [`ClustersData::member_images`] indexes, and
+/// `clusters` must carry the members' geometry
+/// ([`ClustersData::member_positions`] and
+/// [`ClustersData::member_affine_shapes`]).
+#[derive(Debug)]
+pub struct ClustersMatchesData {
+    /// The matcher's name, recorded as `metadata.matching_method` (`"cluster"`
+    /// for `sfm match --cluster`).
+    pub matching_method: String,
+    /// The tool that ran the matcher (e.g. `"sfmtool"`).
+    pub matching_tool: String,
+    /// Version string of the matching tool.
+    pub matching_tool_version: String,
+    /// The matcher's parameters, recorded as `metadata.matching_options`.
+    pub matching_options: BTreeMap<String, serde_json::Value>,
+    /// Workspace reference for relocatability.
+    pub workspace: WorkspaceMetadata,
+    /// ISO 8601 timestamp with timezone.
+    pub timestamp: String,
+    /// Image paths relative to the workspace directory (POSIX format). Their
+    /// number is the file's image count.
+    pub image_names: Vec<String>,
+    /// `N` x 16-byte XXH128 hashes identifying the feature extraction tool.
+    pub feature_tool_hashes: Vec<[u8; 16]>,
+    /// `N` x 16-byte XXH128 hashes of the `.sift` file contents.
+    pub sift_content_hashes: Vec<[u8; 16]>,
+    /// `(N,)` feature count per image as used to build the clusters; every
+    /// member's feature index is below its image's count.
+    pub feature_counts: Array1<u32>,
+    /// `(N, 2)` per-image pixel dimensions (width, height), each ≥ 1.
+    pub image_dims: Array2<u32>,
+    /// The cluster backbone.
+    pub clusters: ClustersData,
+}
+
 /// Sentinel in `ClusterPatchData::reference_members` for a cluster that
 /// could not be refined (no usable reference member).
 pub const CLUSTER_REFERENCE_UNREFINABLE: u32 = u32::MAX;

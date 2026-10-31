@@ -95,16 +95,6 @@ def test_allowlist_has_no_stale_entries():
         assert count == allowed, (relative, count, allowed)
 
 
-# Script files, each with the number of internal-name imports it may have and why.
-ALLOWED_SCRIPT_IMPORTS = {
-    # `_write_clusters_matches` writes a clusters `.matches` file from clusters
-    # computed over the dataset's `.kdf` index. No public writer exists, and
-    # `sfm match --cluster` builds its own forest; which of the two to add is
-    # open in reports/2026-10-08-hygiene-audit.md.
-    "scripts/track_at_pixel/dataset.py": 1,
-}
-
-
 def _internal_imports(path):
     """`line: dotted.name` for each import in `path` of an `sfmtool` module or
     name with a `_`-prefixed component."""
@@ -135,7 +125,7 @@ def test_scripts_import_no_internal_name():
     for path in _script_files():
         relative = path.relative_to(ROOT).as_posix()
         hits = _internal_imports(path)
-        if len(hits) > ALLOWED_SCRIPT_IMPORTS.get(relative, 0):
+        if hits:
             found[relative] = hits
     assert not found, (
         "These scripts import a name internal to `sfmtool` (a `_`-prefixed "
@@ -145,9 +135,3 @@ def test_scripts_import_no_internal_name():
             f"{relative}:{hit}" for relative, hits in found.items() for hit in hits
         )
     )
-
-
-def test_script_allowlist_has_no_stale_entries():
-    for relative, allowed in ALLOWED_SCRIPT_IMPORTS.items():
-        count = len(_internal_imports(ROOT / relative))
-        assert count == allowed, (relative, count, allowed)

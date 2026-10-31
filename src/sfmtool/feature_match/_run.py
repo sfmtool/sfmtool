@@ -279,12 +279,18 @@ def _write_clusters_matches(
     file (clusters backbone, no pairs, no TVGs).
 
     This is the whole output of `sfm match --cluster`. `image_names` must be
-    in corpus order (the order `member_images` indexes).
+    in corpus order (the order `member_images` indexes). The members'
+    detected geometry and each image's hashes and dimensions come from the
+    `.sift` files, and `sfmtool.fileio.write_clusters_matches` writes them.
     """
     from concurrent.futures import ThreadPoolExecutor
     from importlib.metadata import version as get_version
 
-    from .._sfmtool.fileio import read_sift_metadata, read_sift_partial, write_matches
+    from .._sfmtool.fileio import (
+        read_sift_metadata,
+        read_sift_partial,
+        write_clusters_matches,
+    )
 
     cluster_count = len(clusters.cluster_starts) - 1
     member_count = len(clusters.member_images)
@@ -329,51 +335,44 @@ def _write_clusters_matches(
     if max_feature_count:
         matching_options["max_feature_count"] = max_feature_count
 
-    out_abs = Path(os.path.abspath(out_path))
-    data = {
-        "metadata": {
-            "version": 7,
-            "matching_method": "cluster",
-            "matching_tool": "sfmtool",
-            "matching_tool_version": get_version("sfmtool"),
-            "matching_options": matching_options,
-            "workspace": {
-                "absolute_path": str(workspace_dir),
-                "relative_path": os.path.relpath(workspace_dir, out_abs.parent).replace(
-                    "\\", "/"
-                ),
-                "contents": {
-                    "feature_tool": ws_config.get("feature_tool", "colmap"),
-                    "feature_type": ws_config.get("feature_type", "sift"),
-                    "feature_options": ws_config.get("feature_options") or {},
-                    "feature_prefix_dir": ws_config.get("feature_prefix_dir") or "",
-                },
-            },
-            "timestamp": datetime.now().astimezone().isoformat(),
-            "image_count": len(image_names),
-            "cluster_count": cluster_count,
-            "cluster_member_count": member_count,
-            "has_two_view_geometries": False,
-            "has_clusters": True,
-            "has_cluster_patches": False,
-        },
-        "image_names": image_names,
-        "feature_counts": feature_counts,
-        "has_clusters": True,
-        "cluster_starts": clusters.cluster_starts,
-        "member_images": clusters.member_images,
-        "member_features": clusters.member_features,
-        "member_positions": member_positions,
-        "member_affine_shapes": member_affine_shapes,
-        "matcher_options": matching_options,
-        "has_cluster_patches": False,
-        "has_two_view_geometries": False,
-    }
-    _fill_sift_hashes(data, sift_paths, image_names, image_paths)
+    # The hashes and dimensions of each image's .sift file.
+    images: dict = {}
+    _fill_sift_hashes(images, sift_paths, image_names, image_paths)
 
+    out_abs = Path(os.path.abspath(out_path))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     click.echo(f"Writing {out_path}...")
-    write_matches(out_path, data)
+    write_clusters_matches(
+        out_path,
+        matching_method="cluster",
+        matching_tool="sfmtool",
+        matching_tool_version=get_version("sfmtool"),
+        matching_options=matching_options,
+        workspace={
+            "absolute_path": str(workspace_dir),
+            "relative_path": os.path.relpath(workspace_dir, out_abs.parent).replace(
+                "\\", "/"
+            ),
+            "contents": {
+                "feature_tool": ws_config.get("feature_tool", "colmap"),
+                "feature_type": ws_config.get("feature_type", "sift"),
+                "feature_options": ws_config.get("feature_options") or {},
+                "feature_prefix_dir": ws_config.get("feature_prefix_dir") or "",
+            },
+        },
+        timestamp=datetime.now().astimezone().isoformat(),
+        image_names=image_names,
+        feature_tool_hashes=images["feature_tool_hashes"],
+        sift_content_hashes=images["sift_content_hashes"],
+        feature_counts=feature_counts,
+        image_dims=images["image_dims"],
+        cluster_starts=clusters.cluster_starts,
+        member_images=clusters.member_images,
+        member_features=clusters.member_features,
+        member_positions=member_positions,
+        member_affine_shapes=member_affine_shapes,
+        matcher_options=matching_options,
+    )
     click.echo(f"Done: {cluster_count} clusters, {member_count} members")
 
 

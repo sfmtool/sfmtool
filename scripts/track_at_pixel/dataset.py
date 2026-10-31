@@ -222,48 +222,92 @@ def _build_cluster_patches(
     """Cluster from the ``.kdf`` itself, then refine the clusters into patches.
 
     The clustering is ``sfm match --cluster``'s background-floor clustering run
-    over the index rather than over a fresh forest; the file is written by that
-    command's own writer and refined by running ``sfm cluster-patches`` on it
-    with its default options. The index's feature ids run image by image in
+    over the index rather than over a fresh forest. The file is written the way
+    that command writes its own, by ``sfmtool.fileio.write_clusters_matches``
+    with each member's detected position and affine shape read from its
+    ``.sift`` row, and refined by running ``sfm cluster-patches`` on it with
+    its default options. The index's feature ids run image by image in
     ``names`` order, each image's features in ``.sift`` row order, which is
     what makes a cluster member's feature index a ``.sift`` row.
     """
+    import os
     import subprocess
-    from types import SimpleNamespace
+    from datetime import datetime
+    from importlib.metadata import version
 
-    from sfmtool.fileio import read_sift_metadata
+    from sfmtool.fileio import (
+        read_sift_metadata,
+        read_sift_partial,
+        write_clusters_matches,
+    )
     from sfmtool.matching import background_floor_clusters_kdf
-
-    # No public writer exists for a clusters `.matches` file, and `sfm match
-    # --cluster` builds its own forest rather than reading an index, so this
-    # uses the command's internal writer. See reports/2026-10-08-hygiene-audit.md.
-    from sfmtool.feature_match._run import _write_clusters_matches
     from sfmtool.sift.file import get_sift_path_for_image
 
     sift_paths = [get_sift_path_for_image(p) for p in image_paths]
-    counts = [
-        int(read_sift_metadata(str(p))["metadata"]["feature_count"]) for p in sift_paths
-    ]
+    sift_metadata = [read_sift_metadata(str(p)) for p in sift_paths]
+    counts = [int(m["metadata"]["feature_count"]) for m in sift_metadata]
     image_starts = np.concatenate([[0], np.cumsum(counts)]).astype(np.uint32)
     options = {"d": 10, "alpha": 0.8, "min_size": 2}
     starts, images, features = background_floor_clusters_kdf(
         str(kdf), image_starts, **options
     )
+    images, features = np.asarray(images), np.asarray(features)
+    matcher_options = {**options, "index": kdf.name}
+
+    # Each member's detected geometry, gathered from its image's .sift rows.
+    member_positions = np.zeros((len(images), 2), dtype=np.float32)
+    member_affine_shapes = np.zeros((len(images), 2, 2), dtype=np.float32)
+    for i, sift_path in enumerate(sift_paths):
+        on_image = images == i
+        if not on_image.any():
+            continue
+        rows = features[on_image]
+        sift = read_sift_partial(str(sift_path), int(rows.max()) + 1)
+        member_positions[on_image] = sift["positions_xy"][rows]
+        member_affine_shapes[on_image] = sift["affine_shapes"][rows]
+
+    def hashes(key):
+        return [bytes.fromhex(m["content_hash"][key]) for m in sift_metadata]
+
     clusters_path = out.with_name("track_at_pixel_clusters.matches")
     if clusters_path.exists():
         clusters_path.unlink()
-    _write_clusters_matches(
-        SimpleNamespace(
-            cluster_starts=starts, member_images=images, member_features=features
-        ),
+    write_clusters_matches(
         clusters_path,
-        image_paths=image_paths,
-        sift_paths=sift_paths,
+        matching_method="cluster",
+        matching_tool="sfmtool",
+        matching_tool_version=version("sfmtool"),
+        matching_options=matcher_options,
+        workspace={
+            "absolute_path": str(workspace),
+            "relative_path": Path(
+                os.path.relpath(workspace, clusters_path.parent)
+            ).as_posix(),
+            "contents": {
+                "feature_tool": config.get("feature_tool", "colmap"),
+                "feature_type": config.get("feature_type", "sift"),
+                "feature_options": config.get("feature_options") or {},
+                "feature_prefix_dir": config.get("feature_prefix_dir") or "",
+            },
+        },
+        timestamp=datetime.now().astimezone().isoformat(),
         image_names=names,
-        workspace_dir=workspace,
-        ws_config=config,
-        matcher_options={**options, "index": kdf.name},
-        max_feature_count=None,
+        feature_tool_hashes=hashes("feature_tool_xxh128"),
+        sift_content_hashes=hashes("content_xxh128"),
+        feature_counts=np.array(counts, dtype=np.uint32),
+        image_dims=np.array(
+            [
+                (m["metadata"]["image_width"], m["metadata"]["image_height"])
+                for m in sift_metadata
+            ],
+            dtype=np.uint32,
+        ),
+        cluster_starts=starts,
+        member_images=images,
+        member_features=features,
+        member_positions=member_positions,
+        member_affine_shapes=member_affine_shapes,
+        matcher_options=matcher_options,
     )
     subprocess.run(
         ["sfm", "cluster-patches", "-i", str(clusters_path), "-o", str(out)],

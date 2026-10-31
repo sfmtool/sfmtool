@@ -441,7 +441,9 @@ reader uses; `_materialize_clusters` calls `cluster_match` and prints the
 cluster, candidate-match and image-pair counts (the pair expansion is computed
 for that report and not written); and `_write_clusters_matches` writes a
 `.matches` file holding the clusters backbone and no pairs or two-view
-geometries. The backbone carries each member's position and affine shape copied
+geometries, through `sfmtool.fileio.write_clusters_matches`
+([matches-file-format.md](../../formats/matches-file-format.md#implementations)).
+The backbone carries each member's position and affine shape copied
 from its `.sift` row, and the metadata records `matching_method: "cluster"` with
 `matching_options` `{"mode": "background-floor", "d", "alpha", "min_size",
 "preset"}`, plus `max_feature_count` when `--max-features` is given. The

@@ -6,6 +6,7 @@ use ndarray::{Array1, Array2, Array3};
 use std::collections::BTreeMap;
 
 mod cells;
+mod clusters_write;
 
 /// Create minimal valid MatchesData without TVGs for testing.
 fn make_test_data() -> MatchesData {

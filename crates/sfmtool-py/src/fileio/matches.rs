@@ -9,8 +9,9 @@ use pyo3::types::PyDict;
 use std::path::PathBuf;
 
 use sfmtool_matches_format::{
-    ClusterPatchData, ClustersData, MatchesContentHash, MatchesData, MatchesMetadata,
-    MemberCellData, PairsData, TvgMetadata, TwoViewGeometryConfig, TwoViewGeometryData,
+    ClusterPatchData, ClustersData, ClustersMatchesData, MatchesContentHash, MatchesData,
+    MatchesMetadata, MemberCellData, PairsData, TvgMetadata, TwoViewGeometryConfig,
+    TwoViewGeometryData,
 };
 
 use crate::helpers::{
@@ -406,6 +407,100 @@ pub fn write_matches(
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
+/// Write a clusters file: a `.matches` file with the cluster backbone and no
+/// pairs, cluster patches or two-view geometries.
+///
+/// Takes the values `write_matches` reads from its dict, except those this
+/// function derives: the format version, the image, cluster and member counts and
+/// the `has_*` flags. The image arrays are in corpus order, the order
+/// `member_images` indexes. `workspace` is the `metadata["workspace"]` dict
+/// of `read_matches` (`absolute_path`, `relative_path`, `contents`).
+/// `feature_tool_hashes` and `sift_content_hashes` take the forms
+/// `write_matches` takes. `member_positions` `(M, 2)` and
+/// `member_affine_shapes` `(M, 2, 2)` are float32, and the other arrays are
+/// uint32. Raises `IOError` with the writer's message when the arrays
+/// disagree, such as a member index past its image's feature count.
+#[pyfunction]
+#[pyo3(signature = (
+    path,
+    *,
+    matching_method,
+    matching_tool,
+    matching_tool_version,
+    matching_options,
+    workspace,
+    timestamp,
+    image_names,
+    feature_tool_hashes,
+    sift_content_hashes,
+    feature_counts,
+    image_dims,
+    cluster_starts,
+    member_images,
+    member_features,
+    member_positions,
+    member_affine_shapes,
+    matcher_options,
+    zstd_level=3,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn write_clusters_matches(
+    py: Python<'_>,
+    path: PathBuf,
+    matching_method: String,
+    matching_tool: String,
+    matching_tool_version: String,
+    matching_options: &Bound<'_, PyAny>,
+    workspace: &Bound<'_, PyAny>,
+    timestamp: String,
+    image_names: Vec<String>,
+    feature_tool_hashes: &Bound<'_, PyAny>,
+    sift_content_hashes: &Bound<'_, PyAny>,
+    feature_counts: PyReadonlyArray1<u32>,
+    image_dims: PyReadonlyArray2<u32>,
+    cluster_starts: PyReadonlyArray1<u32>,
+    member_images: PyReadonlyArray1<u32>,
+    member_features: PyReadonlyArray1<u32>,
+    member_positions: PyReadonlyArray2<f32>,
+    member_affine_shapes: PyReadonlyArray3<f32>,
+    matcher_options: &Bound<'_, PyAny>,
+    zstd_level: i32,
+) -> PyResult<()> {
+    let data = ClustersMatchesData {
+        matching_method,
+        matching_tool,
+        matching_tool_version,
+        matching_options: py_to_serde(py, matching_options)?,
+        workspace: py_to_serde(py, workspace)?,
+        timestamp,
+        image_names,
+        feature_tool_hashes: py_to_u128_bytes(feature_tool_hashes)?,
+        sift_content_hashes: py_to_u128_bytes(sift_content_hashes)?,
+        feature_counts: feature_counts.as_array().as_standard_layout().into_owned(),
+        image_dims: image_dims.as_array().as_standard_layout().into_owned(),
+        clusters: ClustersData {
+            cluster_starts: cluster_starts.as_array().as_standard_layout().into_owned(),
+            member_images: member_images.as_array().as_standard_layout().into_owned(),
+            member_features: member_features.as_array().as_standard_layout().into_owned(),
+            member_positions: Some(
+                member_positions
+                    .as_array()
+                    .as_standard_layout()
+                    .into_owned(),
+            ),
+            member_affine_shapes: Some(
+                member_affine_shapes
+                    .as_array()
+                    .as_standard_layout()
+                    .into_owned(),
+            ),
+            matcher_options: py_to_serde(py, matcher_options)?,
+        },
+    };
+    sfmtool_matches_format::write_clusters_matches(&path, data, zstd_level)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+}
+
 /// Verify integrity of a .matches file.
 ///
 /// Returns a tuple (is_valid, error_messages).
@@ -419,6 +514,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_matches, m)?)?;
     m.add_function(wrap_pyfunction!(read_matches_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(write_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(write_clusters_matches, m)?)?;
     m.add_function(wrap_pyfunction!(verify_matches, m)?)?;
     Ok(())
 }
