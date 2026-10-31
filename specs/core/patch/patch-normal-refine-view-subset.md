@@ -61,7 +61,7 @@ list lets the caller gather every per-view array it holds (views, directions,
 camera centres, stored keypoints) with the same selection.
 
 The crate default is `0`, so every caller that does not ask for the cap — view
-selection, `inspect`/`compare --strips`, the tests — refines over all views
+selection, `compare --strips`, the tests — refines over all views
 exactly as before. `embed_patches` sets `8` and applies it only to the
 refinement calls of rounds 2 and later; the round-1 refinement over the raw
 tracks is not capped. When the cap is active it logs one line saying so.

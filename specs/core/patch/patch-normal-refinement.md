@@ -495,8 +495,10 @@ pub fn track_views_from_reconstruction(
 `refine_patch_normal` composes `WarpMap::from_patch` + `remap` over the
 `ProjectedImage` pyramids.
 
-**Who consumes the representative.** `sfm inspect --strips` renders the
-per-patch textures through this flag. The `sfm embed-patches` pipeline does **not**: it takes
+**Who consumes the representative.** No command does: `sfm inspect --strips`,
+which rendered its reference patches through this flag, now runs the grown-plane
+normal ([inspect-command.md](../../cli/reconstruction/inspect-command.md) §
+"Feature source"). The `sfm embed-patches` pipeline does **not** either: it takes
 its stored bitmaps from the sub-pixel keypoint refiner instead
 (`refine_keypoints(render_bitmaps=True)`), because that renders each point's
 stored bitmap at the *final* per-view keypoints rather than one round stale,

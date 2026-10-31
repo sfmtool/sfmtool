@@ -129,10 +129,23 @@ reconstruction's point count is an error.
 
 - **`sift_files`** — first converted to `embedded_patches` (the minimal
   `--to-embedded-patches` bridge: mean-viewing patch frames, keypoints copied
-  from `.sift`), then a light normal refinement runs over **only the listed
-  finite points** (rendering their patch bitmaps, used as the reference patch).
-  The default keypoint-preserving conversion makes these good. Reads the
-  workspace `.sift` files and source images.
+  from `.sift`), then **only the listed finite points** are turned to their
+  grown-plane normals by `sfmtool.bench.refine_normals(recon, images,
+  point_indexes=...)`
+  ([core/bench/refine-normals.md](../../core/bench/refine-normals.md) §
+  "Python binding"), on its default settings. It prints `--strips: turned T of
+  N normals, mean agreement A`, with `A` the report's `mean_agreement` (`n/a`
+  when no turned point has one). The converted value stores no bitmaps, so
+  the run renders none, but it writes each turned point's reference
+  observation; the command then renders those points' bitmaps there, at the
+  turned frame (`PatchCloud.render_bitmaps(..., referenced_only=True)`), and
+  shows them as the reference patch. A listed point the run leaves unchanged
+  (no view joined the plane, a large turn on weak evidence, a refused point)
+  keeps its mean-viewing normal and shows the cross-view consensus. When the
+  run refuses the reconstruction as a whole, the command keeps the converted
+  normals, prints `--strips: kept the stored normals (<reason>)` and renders
+  them. The keypoint-preserving conversion gives the run the keypoints it
+  trusts. Reads the workspace `.sift` files and source images.
 - **`embedded_patches`** — rendered as stored (no conversion or refinement); the
   stored patch frames and bitmaps are used directly.
 
@@ -323,4 +336,7 @@ sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
   the point-or-bearing counts, and the argument errors.
 - [`tests/test_cli_inspect_strips.py`](../../../tests/test_cli_inspect_strips.py)
   — point-spec parsing, the `--strips` montage, the rejection of the strips
-  options without `--strips`, and the obliquity marker geometry.
+  options without `--strips`, the obliquity marker geometry, and on a
+  `sift_files` reconstruction the grown-plane refinement of the listed points
+  (their turned normals and bitmaps, the agreement line, and a refused run
+  keeping the stored normals).

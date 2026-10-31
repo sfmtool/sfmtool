@@ -104,8 +104,9 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
 
     With --strips, TARGET is a .sfmr and the remaining arguments are points to
     render as a patch-strip montage (see --strips). A ``sift_files``
-    reconstruction is converted to embedded patches with a light normal
-    refinement first; an ``embedded_patches`` one is rendered as stored.
+    reconstruction is converted to embedded patches first, and the listed
+    points are turned to their grown-plane normals; an ``embedded_patches``
+    one is rendered as stored.
 
     For deep-analysis reports on a reconstruction (covisibility, frustum,
     depth, per-image metrics), use `sfm analyze`.

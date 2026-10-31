@@ -16,6 +16,7 @@ source is prepared is described in ``specs/cli/reconstruction/inspect-command.md
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from ._montage import PointRow, assemble_point_strips
 _PATCH = 32  # surfel patch render resolution (px)
 _EXTENT_FACTOR = 2.5  # PatchCloud half-extent as a multiple of feature size
 _DISP = 72  # tile size shown when --context is 0
+_BITMAP_RESOLUTION = 24  # stored bitmap grid rendered for the refined points
 
 # A 3D point ID: pt3d_<8 hex chars of the .sfmr content hash>_<point index>.
 _POINT_ID_RE = re.compile(r"^pt3d_([0-9a-fA-F]{8})_(\d+)$")
@@ -91,48 +93,44 @@ def parse_point_specs(recon: SfmrReconstruction, specs: list[str]) -> list[int]:
 def _prepare_from_sift(
     recon: SfmrReconstruction, point_indexes: list[int], at_infinity: np.ndarray
 ) -> tuple[SfmrReconstruction, list[np.ndarray]]:
-    """Convert a ``sift_files`` recon to ``embedded_patches`` and refine the listed
-    finite points' normals (rendering their patch bitmaps). Returns the prepared
-    recon and the loaded workspace images (so the renderer can reuse them)."""
+    """Convert a ``sift_files`` recon to ``embedded_patches``, turn the listed
+    finite points' patches to their grown-plane normals and render the turned
+    points' patch bitmaps. Returns the prepared recon and the loaded workspace
+    images (so the renderer can reuse them)."""
+    from ..bench import refine_normals
     from .._workspace_image import read_workspace_image
     from ..xform import ToEmbeddedPatchesTransform
 
     emb = ToEmbeddedPatchesTransform().apply(recon)
     images = [read_workspace_image(emb.workspace_dir, name) for name in emb.image_names]
 
-    # Points at infinity have a fixed normal the refiner skips; refine only the
-    # listed finite points (keeping the work proportional to what is rendered).
+    # Points at infinity keep their fixed normal; refine only the listed finite
+    # points (keeping the work proportional to what is rendered).
     finite_listed = [int(p) for p in point_indexes if not at_infinity[p]]
-    cloud = emb.patches
-    if not finite_listed or cloud is None:
+    if not finite_listed or emb.patches is None:
         return emb, images
 
     print(f"  --strips: refining normals for {len(finite_listed)} listed point(s)...")
-    result = cloud.refine_normals(
-        emb,
-        images,
-        point_indexes=finite_listed,
-        resolution=24,
-        refine_levels=2,
-        use_stored_keypoints=True,
-        render_bitmaps=True,
+    try:
+        refined, report = refine_normals(emb, images, point_indexes=finite_listed)
+    except ValueError as e:
+        print(f"  --strips: kept the stored normals ({e})")
+        return emb, images
+    agreement = report["mean_agreement"]
+    agreement_text = "n/a" if math.isnan(agreement) else f"{agreement:.2f}"
+    print(
+        f"  --strips: turned {report['turned']} of {report['read']} normals, "
+        f"mean agreement {agreement_text}"
     )
-    # Scatter the refined normals back to finite points (non-refined points keep
-    # their seed, so the stored normals stay consistent with the cloud frames).
-    refined = np.asarray(result["normal"], dtype=np.float32)
-    point_ids = np.asarray(cloud.point_indexes)
-    finite = ~np.asarray(emb.point_is_at_infinity)[point_ids]
-    normals = np.asarray(emb.normals, dtype=np.float32).copy()
-    normals[point_ids[finite]] = refined[finite]
-    from .._patch_compaction import reference_observations_from_images
-
-    prepared = emb.clone_with_changes(
-        normals=normals,
-        patches=cloud,
-        patch_bitmaps=result["bitmaps"],
-        reference_observations=reference_observations_from_images(
-            emb, result["reference_images"]
-        ),
+    # The converted value stores no bitmaps, so the run wrote none; it did write
+    # each turned point's reference observation. Render just those points'
+    # bitmaps there, at the turned frames, for the reference patch; the other
+    # points get zero rows and fall back to the cross-view consensus.
+    bitmaps, references = refined.patches.render_bitmaps(
+        refined, images, resolution=_BITMAP_RESOLUTION, referenced_only=True
+    )
+    prepared = refined.clone_with_changes(
+        patch_bitmaps=bitmaps, reference_observations=references
     )
     return prepared, images
 

@@ -229,3 +229,59 @@ def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
     # A point at infinity has no finite camera-to-surface vector -> no markers.
     engine._w = lambda _pid: 0.0
     assert engine._normal_offsets(pid, patch, obs) == [None, None, None]
+
+
+class TestInspectStripsRefinement:
+    """A sift_files reconstruction's listed points get the grown-plane normal."""
+
+    def test_listed_points_turned_with_bitmaps(self, seoul_bull_workspace):
+        import numpy as np
+
+        from sfmtool.strips._inspect import _prepare_from_sift
+
+        recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+        at_infinity = np.asarray(recon.point_is_at_infinity)
+        listed = [3, 0, 7]
+        prepared, images = _prepare_from_sift(recon, listed, at_infinity)
+        assert len(images) == recon.image_count
+
+        seed = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+        before = np.asarray(seed.normals)
+        after = np.asarray(prepared.normals)
+        bitmaps = np.asarray(prepared.patch_bitmaps)
+        refs = np.asarray(prepared.reference_observations)
+        unlisted = np.setdiff1d(np.arange(recon.point_count), listed)
+        # A point not listed keeps its seed normal, no bitmap and no reference.
+        np.testing.assert_array_equal(after[unlisted], before[unlisted])
+        assert not bitmaps[unlisted].any()
+        assert (refs[unlisted] == -1).all()
+        # Each listed point here is turned, and gets the bitmap of the reference
+        # observation the run wrote.
+        for p in listed:
+            assert not np.allclose(after[p], before[p])
+            assert refs[p] >= 0
+            assert bitmaps[p].any()
+
+    def test_prints_mean_agreement(self, seoul_bull_workspace, tmp_path):
+        out = tmp_path / "strips.png"
+        result = _invoke([str(seoul_bull_workspace), "0-5", "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert "--strips: turned 6 of 6 normals, mean agreement 0." in result.output
+
+    def test_refused_run_keeps_stored_normals(
+        self, seoul_bull_workspace, tmp_path, monkeypatch
+    ):
+        import sfmtool.bench as bench
+
+        def refuse(recon, images, **kwargs):
+            raise ValueError("the reconstruction stores no keypoints")
+
+        monkeypatch.setattr(bench, "refine_normals", refuse)
+        out = tmp_path / "strips.png"
+        result = _invoke([str(seoul_bull_workspace), "0-2", "-o", str(out)])
+        assert result.exit_code == 0, result.output
+        assert (
+            "--strips: kept the stored normals "
+            "(the reconstruction stores no keypoints)" in result.output
+        )
+        assert out.exists()
