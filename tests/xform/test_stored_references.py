@@ -335,15 +335,25 @@ def test_embed_patches_rounds_keep_the_references_without_bitmaps(
 ):
     """With the self-similarity cull off, round 1's sub-pixel pass renders no
     bitmaps. The references its views were aligned to are still recorded in
-    the intermediate compaction, so round 2 refines against the same ones."""
+    the intermediate compaction, so round 2 refines against the same ones: a
+    point is left at ``-1`` only where its views were aligned to nothing,
+    because the reference-view rule found no eligible view."""
     import sfmtool._embed_patches as ep
 
     compacted: list[SfmrReconstruction] = []
+    aligned: list[int] = []
     real = ep.compact_to_embedded_patches
 
-    def spy(*args, **kwargs):
-        out = real(*args, **kwargs)
+    def spy(recon, cloud, localizations, *args, **kwargs):
+        out = real(recon, cloud, localizations, *args, **kwargs)
         compacted.append(out)
+        aligned.append(
+            sum(
+                1
+                for loc in localizations
+                if len(loc["views"]) and loc.get("reference_image") is not None
+            )
+        )
         return out
 
     monkeypatch.setattr(ep, "compact_to_embedded_patches", spy)
@@ -357,7 +367,8 @@ def test_embed_patches_rounds_keep_the_references_without_bitmaps(
     # The first compaction is round 2's input; the last is the final result.
     assert len(compacted) >= 2
     intermediate = np.asarray(compacted[0].reference_observations)
-    assert (intermediate >= 0).mean() > 0.9, (intermediate >= 0).mean()
+    assert int((intermediate >= 0).sum()) == aligned[0]
+    assert (intermediate >= 0).mean() > 0.8, (intermediate >= 0).mean()
 
 
 def test_localize_keypoints_remaps_stored_references(embedded):

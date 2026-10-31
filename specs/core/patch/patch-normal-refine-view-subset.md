@@ -11,13 +11,17 @@ every observation stays in the reconstruction, and the stored patch bitmap is
 the render of the reference view chosen from all of them, not from the subset
 (`refine_patch_normal` keeps the full view list for that pick).
 
-`sfm embed-patches` uses it in its second and later refinement rounds, where the
-patch views have been expanded by view selection
-([patch-view-selection.md](patch-view-selection.md)). On the 250-image
-reconstruction used for profiling, that expanded set averages about 36 views per
-point (from the localizer counters: 24,701,485 searches over 681,396 rounds),
-and the round-2 normal refinement is the most expensive pass in the pipeline
-(334 s, 38 % of wall time), with its per-view prerender at 49 % of the pass.
+No command uses it: it is reached only through
+`PatchCloud.refine_normals(max_refine_views=…)`. It was made for the second
+and later rounds of `sfm embed-patches`, whose normal step is now the
+grown-plane normal
+([embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md)).
+In those rounds the patch views have been expanded by view selection ([patch-view-selection.md](patch-view-selection.md)). On the
+250-image reconstruction used for profiling, that expanded set averaged about
+36 views per point (from the localizer counters: 24,701,485 searches over
+681,396 rounds), and the round-2 photometric normal refinement was the most
+expensive pass in that pipeline (334 s, 38 % of wall time), with its per-view
+prerender at 49 % of the pass.
 Five well-chosen views already over-determine a two-degree-of-freedom normal;
 the rest add render cost and pull the consensus toward oblique, smeared views.
 
@@ -32,10 +36,7 @@ which `refine_patch_normal_impl` in
 [normal_refine.rs](../../../crates/sfmtool-core/src/patch/normal_refine.rs) reads. It
 is bound as `PatchCloud.refine_normals(max_refine_views=…)` in
 [refine_normals.rs](../../../crates/sfmtool-py/src/patches/refine_normals.rs)
-(default `0`), used by `embed_patches(max_refine_views=8)` in
-[_embed_patches.py](../../../src/sfmtool/_embed_patches.py), and exposed as
-`sfm embed-patches --refine-max-views` (integer ≥ 0, default `8`; see
-[embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md)).
+(default `0`); no command sets it.
 
 ```rust
 pub struct NormalRefineParams {
@@ -62,9 +63,7 @@ camera centres, stored keypoints) with the same selection.
 
 The crate default is `0`, so every caller that does not ask for the cap — view
 selection and the tests — refines over all views
-exactly as before. `embed_patches` sets `8` and applies it only to the
-refinement calls of rounds 2 and later; the round-1 refinement over the raw
-tracks is not capped. When the cap is active it logs one line saying so.
+exactly as before.
 
 ```python
 cloud.refine_normals(emb, pyramids, resolution=12, max_refine_views=8)
@@ -164,12 +163,10 @@ a calibrated optimum.
   `max(max_refine_views, min_views)`, so a cap below the refinement's minimum
   view count cannot leave a patch with too few views to refine.
 - **Why the output loses nothing.** Refinement changes only the patch normal; it
-  does not touch the reconstruction's tracks. In `embed_patches` the stored
-  patch bitmaps are rendered by the sub-pixel keypoint pass of the final round,
-  with the reference-view rule choosing among all the patch views, not by the
-  normal refinement. And every view in the
-  round-2 set already passed view selection's ZNCC threshold, so the photometric
-  quality floor is enforced by membership; the subset only has to choose among
+  does not touch the reconstruction's tracks, and the reference view a bitmap
+  is rendered from is chosen from the full view list. Where the patch views
+  have already passed view selection's ZNCC threshold, the photometric quality
+  floor is enforced by membership, and the subset only has to choose among
   vetted views by geometry.
 - **Profiling.** The selection has its own `view_subset` phase in
   [prof.rs](../../../crates/sfmtool-core/src/patch/normal_refine/prof.rs), which
@@ -179,10 +176,13 @@ a calibrated optimum.
 
 ## Validation harness
 
-[validate_refine_subset.py](../../../scripts/validate_refine_subset.py) runs
+[validate_refine_subset.py](../../../scripts/validate_refine_subset.py) ran
 `sfm embed-patches` on a given `.sfmr` once per `--refine-max-views` value
-(`0` is the all-views baseline), each with `SFMTOOL_PROFILE=1`, and reports for
-each run:
+(`0` is the all-views baseline), each with `SFMTOOL_PROFILE=1`. The command no
+longer takes that option, so the script fails at its first run; it is deleted
+with the photometric search
+([retire-photometric-normal.md](../../drafts/retire-photometric-normal.md)
+§ "8. Delete the photometric search"). It reported for each run:
 
 - the wall time of each normal-refinement pass (from the profile output) and end
   to end, with the capped and no-anchor patch counters;
@@ -210,12 +210,6 @@ does not get worse.
   cap of 4 out of 6 views refines over at most 4 views and lands within 2° of
   the all-views normal, and a cap at or above the view count reproduces the
   uncapped result exactly.
-- [test_embed_patches_command.py](../../../tests/patch/test_embed_patches_command.py):
-  `test_embed_patches_refine_max_views_is_lossless` checks that a run with
-  `max_refine_views=5` keeps the point and observation counts of an all-views
-  run to within 1 %, and `test_embed_patches_cli_refine_max_views_forwards`
-  checks that `--refine-max-views` reaches `embed_patches` and that a negative
-  value is rejected.
 
 ## Non-goals
 

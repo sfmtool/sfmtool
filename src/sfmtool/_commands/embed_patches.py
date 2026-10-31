@@ -112,8 +112,8 @@ from ._sfmr_path import check_sfmr_path
     show_default=True,
     help=(
         "Number of (normal-refinement, keypoint-refinement) rounds, alternating "
-        "the two. Each round photometrically re-refines every patch normal, then "
-        "re-refines its keypoints (the LK sub-pixel pass, see --subpixel), feeding "
+        "the two. Each round fits every patch normal again by the grown plane, "
+        "then re-refines its keypoints (the LK sub-pixel pass, see --subpixel), feeding "
         "each result into the next. The discrete keypoint localizer runs once in "
         "the first round as the seed; later rounds refine from the previous "
         "round's normals and keypoints."
@@ -128,49 +128,8 @@ from ._sfmr_path import check_sfmr_path
         "In every round, before the sub-pixel keypoint refinement, drop each "
         "observation that views its surfel more than this many degrees off the "
         "(refined) patch normal, the reference observation included — a grazing "
-        "view renders as a cross-view-consistent but degenerate smear that biases "
-        "the consensus and pulls the normal toward grazing over subsequent rounds. "
-        "`90` keeps all views (disables the filter)."
-    ),
-)
-@click.option(
-    "--obliquity-weight-power",
-    type=click.FloatRange(min=0.0),
-    default=2.0,
-    show_default=True,
-    help=(
-        "Exponent p of the multiplicative obliquity view-weight |v̂·n|^p folded "
-        "into the robust normal-refinement consensus (use A). 0 disables it; 2 "
-        "(default) is the cos²θ foreshortening weight that softly down-weights "
-        "oblique views — a continuous complement to the hard --max-obliquity-deg "
-        "cut."
-    ),
-)
-@click.option(
-    "--fronto-prior-weight",
-    type=click.FloatRange(min=0.0),
-    default=0.05,
-    show_default=True,
-    help=(
-        "Weight λ of the additive fronto-parallel prior λ·mean(v̂·n)² on each "
-        "candidate normal during refinement (use B). 0 disables it; the small "
-        "default pulls a low-parallax (flat-Φ) normal toward facing the cameras "
-        "instead of drifting to a photometrically-equivalent tilt (a distorted "
-        "surfel), without overriding a normal that real parallax constrains."
-    ),
-)
-@click.option(
-    "--refine-max-views",
-    "refine_max_views",
-    type=click.IntRange(min=0),
-    default=8,
-    show_default=True,
-    help=(
-        "In rounds 2 and later, refine each point's normal against at most N "
-        "of its views, the ones that constrain the normal most. 0 uses all "
-        "views. Every observation stays in the output; only the views the "
-        "normal is refined against are limited. See "
-        "specs/core/patch/patch-normal-refine-view-subset.md."
+        "view renders as a degenerate smear that biases the keypoint fits and "
+        "the next round's normal. `90` keeps all views (disables the filter)."
     ),
 )
 @click.option(
@@ -212,9 +171,9 @@ from ._sfmr_path import check_sfmr_path
     default="per_view",
     show_default=True,
     help=(
-        "How every step that renders a patch from an image (normal "
-        "refinement, view selection, keypoint localization, sub-pixel "
-        "refinement and the stored bitmap) samples the image pyramid. "
+        "How view selection, keypoint localization, sub-pixel refinement "
+        "and the stored bitmap sample the image pyramid (the grown-plane "
+        "normal uses its own sampling). "
         "'per_view' chooses for each view: 'anisotropic' where 'bilinear_mip' "
         "would read the view's less compressed axis too coarsely, "
         "'bilinear_mip' otherwise. The other three use one sampler for every "
@@ -239,17 +198,14 @@ def embed_patches_command(
     subpixel,
     rounds,
     max_obliquity_deg,
-    obliquity_weight_power,
-    fronto_prior_weight,
-    refine_max_views,
     max_zncc_self_similarity_radius,
     localize_search_strategy,
     sampler,
 ):
     """Convert a sift_files reconstruction to embedded_patches.
 
-    Builds a patch frame for each point (mean-viewing normal, refined
-    photometrically), expands and vets each point's patch views, aligns the
+    Builds a patch frame for each point (mean-viewing normal, turned to its
+    grown-plane normal), expands and vets each point's patch views, aligns the
     per-view keypoints to each point's reference render and refines them to
     sub-pixel, then writes a NEW embedded_patches .sfmr that
     loads and verifies with no .sift companion. The input is never modified.
@@ -365,9 +321,6 @@ def embed_patches_command(
             subpixel=subpixel,
             rounds=rounds,
             max_obliquity_deg=max_obliquity_deg,
-            obliquity_weight_power=obliquity_weight_power,
-            fronto_prior_weight=fronto_prior_weight,
-            max_refine_views=refine_max_views,
             max_zncc_self_similarity_radius=max_zncc_self_similarity_radius,
             localize_search_strategy=localize_search_strategy,
             sampler=sampler,
@@ -396,9 +349,6 @@ def embed_patches_command(
                 "max_member_zncc_self_similarity_radius": max_member_zncc_self_similarity_radius,
                 "max_zncc_self_similarity_radius": max_zncc_self_similarity_radius,
                 "max_obliquity_deg": max_obliquity_deg,
-                "obliquity_weight_power": obliquity_weight_power,
-                "fronto_prior_weight": fronto_prior_weight,
-                "refine_max_views": refine_max_views,
                 "localize_search_strategy": localize_search_strategy,
                 "sampler": sampler,
                 # The sampler rule's threshold the renders were made under,
