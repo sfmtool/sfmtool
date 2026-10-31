@@ -17,12 +17,12 @@ repository calls it.
 The neighbours come from the
 [observation adjacency graph](observation-adjacency-graph.md), and the
 kernel estimates a surface normal at each selected point by fitting a plane
-**through the point itself** to the *directions* of its graph neighbours. Because the plane is
-anchored at the point (surfel semantics) and fitted on unit directions, each
-neighbour contributes its angular deviation once, rather than in proportion
-to its distance — distant neighbours supply the angular leverage the fit
-needs without dominating it, and the neighbours' own position noise enters
-only through angle. A Tukey-redescending IRLS loop makes the fit robust to
+**through the point itself** to the *directions* of its graph neighbours.
+Because the plane is anchored at the point (surfel semantics) and fitted on
+unit directions, each neighbour contributes its angular deviation once,
+rather than in proportion to its distance — distant neighbours supply the
+angular leverage the fit needs without dominating it, and the neighbours'
+own position noise enters only through angle. A Tukey-redescending IRLS loop makes the fit robust to
 neighbours that belong to other surfaces.
 
 Alongside each normal the kernel reports how well-determined it is —
