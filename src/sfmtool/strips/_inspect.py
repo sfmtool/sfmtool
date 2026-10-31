@@ -147,7 +147,7 @@ def render_inspect_strips(
     written to ``out_path``. Returns the written path, or ``None`` if no listed
     point could be rendered.
 
-    ``recon`` must be ``sift_files`` (converted + lightly refined here) or
+    ``recon`` must be ``sift_files`` (converted here, its listed points' normals refined) or
     ``embedded_patches`` (rendered as stored). ``max_views`` caps the observation
     tiles per point (0 = all). ``context`` pads each observation tile with that
     fraction of extra field of view around the patch (1.0 = +100%) and boxes the

@@ -8,9 +8,8 @@ alike. It searches a coarse grid of candidates first, then finer grids centered
 on the best one. A patch usually starts with its normal along the mean viewing
 direction, so it faces the cameras rather than lying along the surface. `sfm embed-patches`
 runs this refinement so that the patch stored with
-each point follows the surface, and the `--strips` views of `sfm compare` and
-`sfm inspect` can run it on the points they display before rendering their
-patches.
+each point follows the surface, and the `--strips` view of `sfm compare` can
+run it on the points it displays before rendering their patches.
 
 ## Problem
 
@@ -495,10 +494,11 @@ pub fn track_views_from_reconstruction(
 `refine_patch_normal` composes `WarpMap::from_patch` + `remap` over the
 `ProjectedImage` pyramids.
 
-**Who consumes the representative.** No command does: `sfm inspect --strips`,
-which rendered its reference patches through this flag, now runs the grown-plane
-normal ([inspect-command.md](../../cli/reconstruction/inspect-command.md) §
-"Feature source"). The `sfm embed-patches` pipeline does **not** either: it takes
+**Who consumes the representative.** No command does. `sfm inspect --strips`
+runs the grown-plane normal and renders its reference patches with
+`PatchCloud.render_bitmaps`
+([inspect-command.md](../../cli/reconstruction/inspect-command.md) §
+"Feature source"). The `sfm embed-patches` pipeline takes
 its stored bitmaps from the sub-pixel keypoint refiner instead
 (`refine_keypoints(render_bitmaps=True)`), because that renders each point's
 stored bitmap at the *final* per-view keypoints rather than one round stale,
@@ -691,9 +691,10 @@ which `refine_patch_cloud_normals` reports per batch.
 the depths of the patch's pieces and take the plane through them. A normal
 from gated grid pieces, which would replace this search for that caller and
 retire it, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
-`sfm xform --refine-normals` runs the grown-plane normal instead
-([refine-normals-command.md](../../cli/reconstruction/xform/refine-normals-command.md)),
-and moving the other callers to it is
+`sfm xform --refine-normals` and `sfm inspect --strips` run the grown-plane
+normal instead
+([refine-normals-command.md](../../cli/reconstruction/xform/refine-normals-command.md),
+[inspect-command.md](../../cli/reconstruction/inspect-command.md)), and moving the other callers to it is
 [retire-photometric-normal.md](../../drafts/retire-photometric-normal.md).
 
 ## Open questions
