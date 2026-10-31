@@ -1775,9 +1775,9 @@ evaluation reads it; the viewer
 reads a track again after every step and after a repaint (§ "An evaluation
 that only follows a repaint does not repaint again"), so what it shows settles
 on the next reading. An `out` row is therefore never named the reference view,
-and `stage_data.reference_view_observation` never points at one. The other readings
-are kept on the row as they are, and are as stale as they are after a step
-until the next evaluation.
+and `stage_data.reference_view_observation` never points at one. The other
+readings are kept on the row as they are, and are as stale as they are after a
+step until the next evaluation.
 
 ### The stored bitmap's reference
 
@@ -2117,8 +2117,8 @@ thresholds, whether one observation's reading passes it, fails it, or was not
 judged, and returns `None` for an observation nothing at the stage has
 measured: at the cluster stage one with no whole-patch ZNCC, and at the track
 stage one with no blur-matched score against the bitmap or no `seed_shift_px`
-(a row the keypoint localizer could not read, § "The reference view"). A bar does not judge a reading that is not
-there, and the middle bar at `0` judges nothing; a reading nobody judged clears
+(a row the keypoint localizer could not read, § "The reference view"). A bar
+does not judge a reading that is not there, and the middle bar at `0` judges nothing; a reading nobody judged clears
 its bar. A `NaN` reading fails. The thresholds propose `in` for an observation
 exactly when no bar fails it (`BarChecks::clears_every_bar`) and its image is
 free, so the painting, `unpin_verdicts`, an evaluation's repaint, and a
