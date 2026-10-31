@@ -820,7 +820,7 @@ Action Log row, names the cut it was made with: `Finite-difference normal of
 normal of <label> (3x3 pieces, 25% overlap)` for the grid.
 
 *Grown Plane Normal* runs `grown_plane_normal`
-([`../drafts/grown-plane-normal.md`](../drafts/grown-plane-normal.md)) at
+([`../core/bench/grown-plane-normal.md`](../core/bench/grown-plane-normal.md)) at
 its default options, and the boxes do not apply to it. It fits one plane to
 the photographs: for each of a few `in` views it picks, a window grows from
 the view's keypoint to the whole patch, the views' planes are combined, and

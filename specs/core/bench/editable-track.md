@@ -3182,9 +3182,9 @@ two of the four, 0.24 and 0.13 degrees off, and leaves the other two
 unchanged as unstable.
 
 **`grown_plane_normal` fits one plane shared by every view to the
-photographs.** It is the step
-[grown-plane-normal.md](../../drafts/grown-plane-normal.md) designs, still
-being evaluated. It is Track View's *Grown Plane Normal* and the wire's
+photographs.** [grown-plane-normal.md](grown-plane-normal.md) specifies it,
+with its options, its report, its theory and the measurements behind its
+defaults. It is Track View's *Grown Plane Normal* and the wire's
 `fit_bench_track_normal` with `method` `grown_plane`, both at its default
 options, and it has a Python binding (`sfmtool.bench.grown_plane_normal`).
 `bench::refine_normals` runs it, followed by the commit's record, on every

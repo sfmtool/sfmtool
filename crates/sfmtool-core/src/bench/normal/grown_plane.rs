@@ -38,7 +38,7 @@
 //! tilt fit's own unknowns and are reported, never written: the turn is made
 //! about the patch centre, so every keypoint stays as it was given.
 //!
-//! `specs/drafts/grown-plane-normal.md` is the design.
+//! `specs/core/bench/grown-plane-normal.md` specifies the step.
 
 use std::collections::BTreeSet;
 
@@ -370,7 +370,7 @@ pub struct GrownPlaneTry {
     pub outcome: GrownPlaneTryOutcome,
     /// The combined plane's outward normal after the try, world frame: the
     /// plane of the views picked so far, this one among them. `None` for a
-    /// try that left the view out and for a try made after the selection.
+    /// try that left the view out.
     pub combined_normal: Option<[f64; 3]>,
     /// `σ` along that plane's weakest direction after the try, degrees;
     /// `NaN` where `combined_normal` is `None`.

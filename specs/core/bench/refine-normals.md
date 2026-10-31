@@ -25,8 +25,8 @@ The commands that turn patch normals call that binding: `sfm xform
 ([`../../cli/reconstruction/embed-patches-command.md`](../../cli/reconstruction/embed-patches-command.md)
 § "Behaviour Notes").
 The per-point step is the bench's `grown_plane_normal`
-([`editable-track.md`](editable-track.md) § "Estimating the normal", designed
-in [`../../drafts/grown-plane-normal.md`](../../drafts/grown-plane-normal.md)),
+([`editable-track.md`](editable-track.md) § "Estimating the normal",
+specified in [`grown-plane-normal.md`](grown-plane-normal.md)),
 and the run is built as [`refit-points.md`](refit-points.md)'s refit of every
 point is, sharing its preconditions and its writer.
 
