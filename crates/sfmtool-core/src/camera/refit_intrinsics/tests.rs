@@ -644,3 +644,15 @@ fn an_unstated_count_keeps_a_spline_source_s_own() {
     assert_eq!(ten.coeff_count_for(&six), Some(10));
     assert_eq!(RefitTarget::EquidistantFisheye.coeff_count_for(&six), None);
 }
+
+#[test]
+fn spline_domain_deg_is_none_for_a_domain_end_the_kernels_ignore() {
+    let coeffs = vec![0.0, -0.01, -0.03, -0.05];
+    let own = spline_domain_deg(&sfmtool_fisheye(130.0, 2.0, coeffs.clone())).unwrap();
+    assert!((own - 2.0f64.to_degrees()).abs() < 1e-12, "{own}");
+    for end in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let camera = sfmtool_fisheye(130.0, end, coeffs.clone());
+        assert_eq!(spline_domain_deg(&camera), None, "domain end {end}");
+    }
+    assert_eq!(spline_domain_deg(&kerry_cam0()), None);
+}

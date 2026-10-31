@@ -53,8 +53,9 @@
 //! the camera's images, under the current camera.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
+use sfmtool_core::camera::refit_intrinsics::spline_domain_deg;
 use sfmtool_core::camera::report;
-use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
+use sfmtool_core::camera::CameraIntrinsics;
 
 use super::derived::{ChangeProfile, Derived, ProfileSample};
 
@@ -750,19 +751,6 @@ fn comparison_markers(compare: &Comparison<'_>, x_max: f64) -> Vec<Marker> {
     }
     markers.retain(|m| m.theta_deg > 0.0 && m.theta_deg <= x_max);
     markers
-}
-
-/// A spline model's domain end as an incidence angle in degrees, or `None`.
-fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64> {
-    match &camera.model {
-        CameraModel::SfmtoolFisheye {
-            bspline_theta_max, ..
-        } => Some(bspline_theta_max.to_degrees()),
-        CameraModel::SfmtoolPinhole {
-            bspline_rho_max, ..
-        } => Some(bspline_rho_max.atan().to_degrees()),
-        _ => None,
-    }
 }
 
 /// Where a label of `size` goes beside the rule at `px`: on the first of
