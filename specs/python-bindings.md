@@ -210,8 +210,10 @@ was asked for, `FileNotFoundError` for a missing SIFT source, and
 binding makes on its arguments before it calls the format crate raises
 `TypeError`, `KeyError` or `ValueError` as the binding says.
 [`test_format_errors_rust_bindings.py`](../tests/rust_bindings/fileio/test_format_errors_rust_bindings.py)
-triggers each variant through each format's readers, verifier and writer, and
-through `SfmrReconstruction`; the `.kdf` cases are in
+triggers each variant that can be reached through each format's readers,
+verifier and writer, and through `SfmrReconstruction`, `SphericalTileRig` and
+`NearbyTrackSources`; no test triggers a `Zip` or `Json` error on a write. The
+`.kdf` cases are in
 [`test_kdf_rust_bindings.py`](../tests/rust_bindings/spatial/test_kdf_rust_bindings.py).
 
 ## Submodules

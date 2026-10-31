@@ -9,8 +9,9 @@ an `OSError` of the subclass for its kind, a file that cannot be parsed is an
 `OSError`, data a writer was handed that breaks a rule of the format is a
 `ValueError`, and a `.sfmr` that holds something this build cannot apply is a
 `ValueError`. These tests trigger each variant through each format's readers,
-verifier and writer, and through `SfmrReconstruction`'s `load`, `from_data`
-and `save`. The `.kdf` cases are in `spatial/test_kdf_rust_bindings.py`.
+verifier and writer, through `SfmrReconstruction`'s `load`, `from_data` and
+`save`, through `SphericalTileRig`'s `.camrig` reader and writer, and through
+the `.sift` reads of `bench.NearbyTrackSources`. The `.kdf` cases are in `spatial/test_kdf_rust_bindings.py`.
 """
 
 import json
@@ -43,7 +44,9 @@ from sfmtool.fileio import (
     MatchesFile,
     SiftWriteQueue,
 )
-from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool import bench
+from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from sfmtool.spherical import SphericalTileRig
 
 from tests.rust_bindings.fileio.test_matches_file_rust_bindings import _pairwise_dict
 from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
@@ -278,3 +281,26 @@ def test_a_save_the_filesystem_refuses_is_an_os_error(tmp_path):
     recon = SfmrReconstruction.load(str(_SFMR))
     with pytest.raises(FileExistsError):
         recon.save(str(parent / "out.sfmr"))
+
+
+def test_a_tile_rig_camrig_error_goes_through_the_table(tmp_path):
+    with pytest.raises(FileNotFoundError, match="missing"):
+        SphericalTileRig.read_camrig(str(tmp_path / "missing.camrig"))
+    junk = tmp_path / "junk.camrig"
+    junk.write_bytes(b"definitely not a zip archive")
+    with pytest.raises(OSError, match="ZIP error") as info:
+        SphericalTileRig.read_camrig(str(junk))
+    assert type(info.value) is OSError
+
+    parent = tmp_path / "a_file"
+    parent.write_bytes(b"")
+    rig = SphericalTileRig(n=20, arc_per_pixel=2 * np.pi / 128, seed=1)
+    with pytest.raises(NotADirectoryError):
+        rig.write_camrig(str(parent / "out.camrig"))
+
+
+def test_a_missing_sift_for_the_nearby_sources_is_a_file_not_found_error(tmp_path):
+    edited = EditedReconstruction(SfmrReconstruction.load(str(_SFMR)))
+    missing = tmp_path / "missing.sift"
+    with pytest.raises(FileNotFoundError, match="missing.sift"):
+        bench.NearbyTrackSources(edited, sift=[str(missing)] * edited.image_count)
