@@ -326,7 +326,7 @@ description should say why; otherwise it should default like the rest.
 > the status line empty while its newest entry is an agent's; `hover
 > {"leave": true}` takes the pointer out of the window, the 3D view draws its
 > hover label only while the pointer is over it, and the hovered image and
-> point are cleared once egui has no pointer, branch `mcp-clean-screenshots`._
+> point are cleared once egui has no pointer, PR #1075._
 
 Every whole-window or `viewer_3d` screenshot shows the yellow status line of
 the last MCP call (`MCP: hover window 1270,700`, `MCP: Camera placed`) under
