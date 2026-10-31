@@ -37,7 +37,8 @@ pipeline),
 [`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)
 (the query the descriptor search is one of), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
-(the proposal for the searches and the pull-in),
+(the proposal for the pull-in and for showing the coherence matrix; the
+searches it proposed are built and specified here),
 [`../../gui/track-view.md`](../../gui/track-view.md) (the panel it is edited in), and
 [`track-at-pixel.md`](track-at-pixel.md) (the operation that builds a whole
 track from one pixel and hands it to the bench).
@@ -1774,7 +1775,7 @@ evaluation reads it; the viewer
 reads a track again after every step and after a repaint (§ "An evaluation
 that only follows a repaint does not repaint again"), so what it shows settles
 on the next reading. An `out` row is therefore never named the reference view,
-and `stage_data.reference_observation` never points at one. The other readings
+and `stage_data.reference_view_observation` never points at one. The other readings
 are kept on the row as they are, and are as stale as they are after a step
 until the next evaluation.
 
@@ -2113,8 +2114,10 @@ would pass, the best takes the `in` and the rest are turned `out`.
 
 **One function judges every bar.** `bar_checks` says, per bar of the
 thresholds, whether one observation's reading passes it, fails it, or was not
-judged, and returns `None` for an observation with no whole-patch ZNCC, which
-nothing at the stage has measured. A bar does not judge a reading that is not
+judged, and returns `None` for an observation nothing at the stage has
+measured: at the cluster stage one with no whole-patch ZNCC, and at the track
+stage one with no blur-matched score against the bitmap or no `seed_shift_px`
+(a row the keypoint localizer could not read, § "The reference view"). A bar does not judge a reading that is not
 there, and the middle bar at `0` judges nothing; a reading nobody judged clears
 its bar. A `NaN` reading fails. The thresholds propose `in` for an observation
 exactly when no bar fails it (`BarChecks::clears_every_bar`) and its image is
@@ -4579,14 +4582,19 @@ is a number the assertions can name.
 - **Building the descriptor index.** `search_descriptors` takes an open forest;
   making one out of a capture's `.sift` files is the viewer's
   ([`../../gui/track-view.md`](../../gui/track-view.md)) or a script's.
-- **The pairwise coherence matrix.** An evaluation scores each observation
-  against the stored bitmap; the `k x k` matrix that shows a track made of
-  two surfaces as two blocks is
-  [`member_zncc_matrix`](../patch/member-coherence-validation.md), and reading
-  it into the track is proposed in the same draft.
+- **Showing the pairwise coherence matrix.** An evaluation scores each
+  observation against the stored bitmap. At the track stage it also computes
+  member coherence's `k x k` matrix over the `in` rows
+  ([`member_zncc_matrix`](../patch/member-coherence-validation.md), read
+  through `read_track`) and keeps only each row's median, as
+  `TrackMeasurement::pair_zncc`. The track does not keep the matrix itself, so
+  nothing can show it as the heat grid on which a track made of two surfaces
+  shows as two blocks; that view is proposed in
+  [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md).
 - **Pulling observations in from another point or another item.** The
   `Provenance::Point` a commit absorbs is set by the caller today; the step that
-  reads a point's track and adds it is proposed in the same draft.
+  reads a point's track and adds it (`pull_into_bench_track`) is proposed in
+  [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md).
 - **Bundle adjustment after a commit.** The commit writes a record and nothing
   settles around it.
 - **Gating the grid's pieces.** `PieceLayout::Grid` fits every piece and weighs
