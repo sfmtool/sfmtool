@@ -56,7 +56,7 @@ impl NormalDeterminacy {
 pub enum CellPlaneStatus {
     InPlane = 0,        // triangulated and given weight in the plane fit
     PlaneOutlier = 1,   // triangulated, but the robust fit gave it no weight
-    Positioned = 2,     // triangulated, but too few cells were to fit a plane
+    Positioned = 2,     // triangulated, but too few cells triangulated to fit a plane
     TooFewRays = 3,     // fewer than min_rays posed rays
     NarrowBaseline = 4, // no ray pair subtends min_triangulation_angle_deg
     BehindCamera = 5,   // the rays' nearest point is behind one of their cameras
