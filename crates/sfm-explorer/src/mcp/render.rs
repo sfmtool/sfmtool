@@ -228,7 +228,7 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
 
     json!({
         "position": point(&position),
-        "orientation_wxyz": [orientation.w, orientation.i, orientation.j, orientation.k],
+        "quaternion_wxyz": [orientation.w, orientation.i, orientation.j, orientation.k],
         "target_distance": camera.camera.target_distance,
         "world_up": vector(&camera.world_up),
         "fov_short_axis_deg": camera.fov.to_degrees(),

@@ -591,14 +591,18 @@ fn set_view_schema() -> Value {
                 "The roll, where the orientation is being derived -- with forward, or with \
                  position and target. Defaults to the view's current world_up.",
             ),
-            "orientation_wxyz": {
+            "quaternion_wxyz": {
                 "type": "array",
                 "items": { "type": "number" },
                 "minItems": 4,
                 "maxItems": 4,
                 "description":
-                    "World-to-camera rotation. Present makes this the exact form, which restores \
-                     a view read from get_scene verbatim.",
+                    "World-to-camera rotation, WXYZ, in the .sfmr convention get_camera_image's \
+                     quaternion_wxyz uses: p_cam = R·(p_world - position), and the camera looks \
+                     down its -Z axis with +X right and +Y up in the image (OpenGL style, not \
+                     COLMAP's +Z forward and +Y down), so forward is R^T·(0,0,-1) and up is \
+                     R^T·(0,1,0). Present makes this the exact form, which restores a view read \
+                     from get_scene verbatim.",
             },
             "target_distance": {
                 "type": "number",

@@ -26,6 +26,82 @@ fn looking_through_a_camera_image_reports_which_one() {
     assert_eq!(out["view"]["looking_through"], Value::Null);
 }
 
+/// `quaternion_wxyz` means one mapping on the whole surface: looking through
+/// an image puts that image's world-to-camera quaternion, read from
+/// `get_camera_image`, into the view block unchanged, and the camera looks down
+/// that frame's -Z with +Y up. Building R from it and taking `R^T·(0,0,-1)`
+/// gives the view's own `derived.forward`, and `-R^T·t` its `position`.
+#[test]
+fn the_view_quaternion_is_the_camera_images_quaternion_in_camera_view() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let image = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_image",
+        json!({ "camera_image": 3 }),
+    );
+    let view = call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "look_through": { "camera_image": 3 } }),
+    )["view"]
+        .clone();
+
+    let vec_of = |value: &Value| -> Vec<f64> {
+        value
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|c| c.as_f64().expect("a number"))
+            .collect()
+    };
+    let q = vec_of(&image["quaternion_wxyz"]);
+    let t = vec_of(&image["translation_xyz"]);
+    let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+        q[0], q[1], q[2], q[3],
+    ));
+    // A ring camera, so the check is not passed by the identity.
+    assert!(rotation.angle() > 0.1, "image 3 is turned: {q:?}");
+
+    let view_q = vec_of(&view["quaternion_wxyz"]);
+    let view_rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+        view_q[0], view_q[1], view_q[2], view_q[3],
+    ));
+    assert!(
+        rotation.angle_to(&view_rotation) < 1e-9,
+        "view {view_q:?} is not image {q:?}"
+    );
+
+    let r_t = rotation.inverse();
+    let checks = [
+        (
+            "derived.forward",
+            r_t * nalgebra::Vector3::new(0.0, 0.0, -1.0),
+            &view["derived"]["forward"],
+        ),
+        (
+            "derived.up",
+            r_t * nalgebra::Vector3::new(0.0, 1.0, 0.0),
+            &view["derived"]["up"],
+        ),
+        (
+            "position",
+            -(r_t * nalgebra::Vector3::new(t[0], t[1], t[2])),
+            &view["position"],
+        ),
+    ];
+    for (field, expected, reported) in checks {
+        let reported = vec_of(reported);
+        for axis in 0..3 {
+            assert!(
+                (reported[axis] - expected[axis]).abs() < 1e-9,
+                "{field} {reported:?} is not {expected:?}"
+            );
+        }
+    }
+}
+
 /// `fit` is a statement about the free camera. The Z key's own fit ends its
 /// animated transition with the camera view dropped; the MCP form jumps past
 /// that transition, so it must land the same state directly.
@@ -197,7 +273,7 @@ fn a_target_alone_recentres_the_view() {
     )["view"]
         .clone();
 
-    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+    assert_eq!(after["quaternion_wxyz"], before["quaternion_wxyz"]);
     assert_eq!(after["target_distance"], before["target_distance"]);
     let (position, target, _) = placement_of(&after);
     assert_close(target, [1.0, 2.0, 3.0], "the target it was given");
@@ -240,7 +316,7 @@ fn a_position_alone_keeps_the_orientation() {
     )["view"]
         .clone();
 
-    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+    assert_eq!(after["quaternion_wxyz"], before["quaternion_wxyz"]);
     assert_eq!(after["position"], json!([10.0, 10.0, 10.0]));
 }
 
@@ -258,7 +334,7 @@ fn a_target_distance_alone_dollies() {
     )["view"]
         .clone();
 
-    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+    assert_eq!(after["quaternion_wxyz"], before["quaternion_wxyz"]);
     assert_eq!(after["target_distance"], json!(12.0));
     let (position, target, _) = placement_of(&after);
     assert_close(target, placement_of(&before).1, "the standing target");
@@ -334,7 +410,7 @@ fn an_overdetermined_placement_is_refused() {
         ),
         (
             json!({ "position": [1.0, 0.0, 0.0], "forward": [0.0, 0.0, -1.0],
-                    "orientation_wxyz": [1.0, 0.0, 0.0, 0.0], "target_distance": 4.0 }),
+                    "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0], "target_distance": 4.0 }),
             "there is no direction to derive one from",
         ),
     ];
@@ -363,7 +439,7 @@ fn a_placement_refuses_the_arguments_it_does_not_read() {
         ),
         // The exact form's roll is already in `world_up`.
         (
-            json!({ "position": [1.0, 0.0, 0.0], "orientation_wxyz": [1.0, 0.0, 0.0, 0.0],
+            json!({ "position": [1.0, 0.0, 0.0], "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
                     "target_distance": 4.0, "up": [0.0, 0.0, 1.0] }),
             "carries its roll in world_up",
         ),
@@ -625,7 +701,7 @@ fn a_move_goes_along_the_level_axes() {
     assert_close(position, [2.0, -4.0, 2.5], "the moved camera");
     assert_close(target, [2.0, 1.0, 0.5], "the target, carried along");
     assert_eq!(distance, placement_of(&before).2);
-    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+    assert_eq!(after["quaternion_wxyz"], before["quaternion_wxyz"]);
 }
 
 /// A positive yaw turns the camera left, counter-clockwise seen from above; a
@@ -1013,7 +1089,7 @@ fn a_physical_unit_on_a_view_in_scene_units_is_refused() {
     );
     let after = ok(&mut state, &mut viewer, Command::GetScene)["view"].clone();
     assert_eq!(after["position"], before["position"]);
-    assert_eq!(after["orientation_wxyz"], before["orientation_wxyz"]);
+    assert_eq!(after["quaternion_wxyz"], before["quaternion_wxyz"]);
 
     // Without a unit the same distance is in scene units, and moves.
     let after = call(

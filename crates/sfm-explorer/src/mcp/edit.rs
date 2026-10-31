@@ -322,7 +322,9 @@ pub(super) fn delete_camera_image(
 /// The pose is world-from-camera in the reconstruction's **own** frame -- the
 /// rotation carries camera axes onto world axes, the translation is the camera
 /// centre -- which is the frame every read on this surface reports poses in, so
-/// a pose read from `get_camera_image` can be adjusted and sent straight back.
+/// a pose read from `get_camera_image` can be adjusted and sent back: its
+/// `center` as the translation and the conjugate of its `quaternion_wxyz` as
+/// `rotation_wxyz`.
 ///
 /// The lock the human places a camera with ([`crate::camera_lock`]) is
 /// deliberately not on the wire: an agent has no viewport to steer, and the
@@ -333,13 +335,13 @@ pub(super) fn move_camera_image(
     state: &mut AppState,
     label: &str,
     selector: &CameraImageSel,
-    quaternion_wxyz: [f64; 4],
+    rotation_wxyz: [f64; 4],
     translation: [f64; 3],
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let image = resolve_camera_image(state, id, selector)?;
     let pose = sfmtool_core::Se3Transform::new(
-        sfmtool_core::RotQuaternion::from_wxyz_array(quaternion_wxyz),
+        sfmtool_core::RotQuaternion::from_wxyz_array(rotation_wxyz),
         nalgebra::Vector3::from_row_slice(&translation),
         1.0,
     );

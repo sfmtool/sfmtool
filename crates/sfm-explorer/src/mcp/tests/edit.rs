@@ -2508,7 +2508,7 @@ fn every_editing_tool_requires_its_reconstruction_label() {
         (
             "move_camera_image",
             json!({ "camera_image": 1, "world_from_camera": {
-                "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0] } }),
+                "rotation_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0] } }),
         ),
         ("resect_camera_image", json!({ "camera_image": 1 })),
         ("add_camera_image_to_tracks", json!({ "camera_image": 1 })),
@@ -2568,9 +2568,9 @@ fn the_editing_arguments_are_parsed_by_shape() {
         (
             "move_camera_image",
             json!({ "reconstruction_label": "run_a", "camera_image": 1,
-                    "world_from_camera": { "quaternion_wxyz": [1.0, 0.0, 0.0],
+                    "world_from_camera": { "rotation_wxyz": [1.0, 0.0, 0.0],
                                            "translation": [0.0, 0.0, 0.0] } }),
-            "quaternion_wxyz",
+            "rotation_wxyz",
         ),
         (
             "bundle_adjust",
@@ -2632,13 +2632,13 @@ fn the_editing_defaults_are_what_the_schemas_say() {
         parse(
             "move_camera_image",
             json!({ "reconstruction_label": "a", "camera_image": 1,
-                    "world_from_camera": { "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                    "world_from_camera": { "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
                                            "translation": [1.5, -2.0, 3.0] } })
         ),
         Command::MoveCameraImage {
             reconstruction_label: "a".to_string(),
             camera_image: super::super::CameraImageSel::Index(1),
-            quaternion_wxyz: [1.0, 0.0, 0.0, 0.0],
+            rotation_wxyz: [1.0, 0.0, 0.0, 0.0],
             translation: [1.5, -2.0, 3.0],
         }
     );
@@ -2786,7 +2786,7 @@ fn move_camera(
             "reconstruction_label": "run_a",
             "camera_image": index,
             "world_from_camera": {
-                "quaternion_wxyz": quaternion,
+                "rotation_wxyz": quaternion,
                 "translation": translation,
             },
         }),
@@ -2849,7 +2849,7 @@ fn move_camera_image_refuses_an_image_that_is_not_there() {
             "reconstruction_label": "run_a",
             "camera_image": 99,
             "world_from_camera": {
-                "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
                 "translation": [0.0, 0.0, 0.0],
             },
         }),

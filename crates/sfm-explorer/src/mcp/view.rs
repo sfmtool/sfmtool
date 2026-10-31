@@ -174,7 +174,7 @@ fn centre_on_point(
 /// form and a lone `forward` differ only in where the three unknowns come
 /// from. They are resolved in turn:
 ///
-/// - the **orientation**, from `orientation_wxyz`, from `forward`, from the
+/// - the **orientation**, from `quaternion_wxyz`, from `forward`, from the
 ///   direction `position` to `target`, or standing;
 /// - the **distance**, from `target_distance`, from the separation of
 ///   `position` and `target`, or standing;
@@ -216,11 +216,11 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
         world_up = normalized(up, "world_up")?;
     }
 
-    let facing = match (placement.orientation_wxyz, placement.forward, separation) {
+    let facing = match (placement.quaternion_wxyz, placement.forward, separation) {
         (Some(wxyz), _, _) => {
             if !wxyz.iter().all(|c| c.is_finite()) || nalgebra::Vector4::from(wxyz).norm() < 1e-9 {
                 return Err(ToolError::new(
-                    "orientation_wxyz is not a rotation — expected four finite numbers that are \
+                    "quaternion_wxyz is not a rotation — expected four finite numbers that are \
                      not all zero.",
                 ));
             }
@@ -286,7 +286,7 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
         }
     };
 
-    Ok(if placement.orientation_wxyz.is_some() {
+    Ok(if placement.quaternion_wxyz.is_some() {
         "Camera restored".to_string()
     } else {
         "Camera placed".to_string()

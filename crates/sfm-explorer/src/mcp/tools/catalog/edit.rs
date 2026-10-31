@@ -331,8 +331,11 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "move_camera_image",
             description: "Put one camera image at a pose, as one version of its reconstruction. \
                           The pose is world-from-camera in the reconstruction's own frame: \
-                          quaternion_wxyz carries camera axes onto world axes and translation is \
-                          the camera centre, which is what get_camera_image reports as center. \
+                          rotation_wxyz carries camera axes onto world axes, so it is the \
+                          inverse (conjugate) of the world-to-camera quaternion_wxyz \
+                          get_camera_image reports, in the same camera frame that looks down -Z \
+                          with +Y up; translation is the camera centre, which is what \
+                          get_camera_image reports as center. \
                           The tracks that image observes are re-triangulated around the new pose \
                           where two or more pixels see them; a bearing only it sees turns with \
                           it, and anything else keeps its position. The image set stays put and \
@@ -352,19 +355,22 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                             "description":
                                 "Where to put the camera, in the reconstruction's own frame.",
                             "properties": {
-                                "quaternion_wxyz": {
+                                "rotation_wxyz": {
                                     "type": "array",
                                     "items": { "type": "number" },
                                     "minItems": 4,
                                     "maxItems": 4,
                                     "description":
-                                        "Camera-to-world rotation, WXYZ. Normalised on arrival.",
+                                        "Camera-to-world rotation, WXYZ: R·(0,0,-1) is the \
+                                         direction the camera looks and R·(0,1,0) its up. The \
+                                         conjugate of get_camera_image's quaternion_wxyz. \
+                                         Normalised on arrival.",
                                 },
                                 "translation": vec3_schema(
                                     "The camera centre in world coordinates.",
                                 ),
                             },
-                            "required": ["quaternion_wxyz", "translation"],
+                            "required": ["rotation_wxyz", "translation"],
                             "additionalProperties": false,
                         }),
                     ),

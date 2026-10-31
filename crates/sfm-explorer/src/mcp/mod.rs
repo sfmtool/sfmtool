@@ -345,7 +345,7 @@ pub(crate) enum Command {
     MoveCameraImage {
         reconstruction_label: String,
         camera_image: CameraImageSel,
-        quaternion_wxyz: [f64; 4],
+        rotation_wxyz: [f64; 4],
         translation: [f64; 3],
     },
     ResectCameraImage {
@@ -1118,7 +1118,7 @@ pub(crate) struct Angles {
 ///
 /// Every field is optional and every absent one is preserved from the standing
 /// view, which is what makes the look-at form (`position` with `target`), the
-/// exact form (`orientation_wxyz` with its companions) and a single piece on
+/// exact form (`quaternion_wxyz` with its companions) and a single piece on
 /// its own the same command with different fields filled in, rather than three
 /// commands that would each need their own placement arithmetic.
 ///
@@ -1130,7 +1130,7 @@ pub(crate) struct Placement {
     pub(crate) position: Option<[f64; 3]>,
     pub(crate) target: Option<[f64; 3]>,
     pub(crate) forward: Option<[f64; 3]>,
-    pub(crate) orientation_wxyz: Option<[f64; 4]>,
+    pub(crate) quaternion_wxyz: Option<[f64; 4]>,
     pub(crate) target_distance: Option<f64>,
     pub(crate) up: Option<[f64; 3]>,
     pub(crate) world_up: Option<[f64; 3]>,
@@ -1584,13 +1584,13 @@ pub(crate) fn apply_with_window(
         Command::MoveCameraImage {
             reconstruction_label,
             camera_image,
-            quaternion_wxyz,
+            rotation_wxyz,
             translation,
         } => done(edit::move_camera_image(
             state,
             &reconstruction_label,
             &camera_image,
-            quaternion_wxyz,
+            rotation_wxyz,
             translation,
         )),
         Command::ResectCameraImage {

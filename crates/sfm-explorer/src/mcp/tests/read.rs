@@ -50,7 +50,7 @@ fn the_view_block_round_trips_through_set_view() {
         "set_view",
         json!({
             "position": before["position"],
-            "orientation_wxyz": before["orientation_wxyz"],
+            "quaternion_wxyz": before["quaternion_wxyz"],
             "target_distance": before["target_distance"],
             "world_up": before["world_up"],
             "fov_short_axis_deg": before["fov_short_axis_deg"],
@@ -60,7 +60,7 @@ fn the_view_block_round_trips_through_set_view() {
     let after = ok(&mut state, &mut viewer, Command::GetScene)["view"].clone();
     for field in [
         "position",
-        "orientation_wxyz",
+        "quaternion_wxyz",
         "target_distance",
         "world_up",
         "fov_short_axis_deg",

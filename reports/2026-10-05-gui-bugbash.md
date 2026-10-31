@@ -286,6 +286,16 @@ viewer's own Level Horizon (Home) could use the same estimate.
 
 ## 8. Quaternion field names and convention differ between tools (low)
 
+> _Status (2026-10-30): **Done** — `set_view` and `get_scene`'s view block now
+> name the viewport camera's rotation `quaternion_wxyz`, with no
+> `orientation_wxyz` alias, and `move_camera_image`'s camera-to-world rotation
+> is `world_from_camera.rotation_wxyz`. The two conventions never differed: the
+> view and the `.sfmr` pose are both world-to-camera into a camera frame that
+> looks down −Z with +Y up (OpenGL style), so forward is `R^T·(0,0,−1)`, not
+> `R^T·(0,0,1)` as for COLMAP. Each description now says so, a glossary row
+> settles the name, and a test pins that looking through an image reports that
+> image's quaternion. Branch mcp-quaternion-wxyz._
+
 `get_camera_image` reports a camera's rotation as `quaternion_wxyz` (with
 `translation_xyz`); `set_view` and `get_scene`'s view block call the same kind
 of value `orientation_wxyz`. Neither description states the camera-axis

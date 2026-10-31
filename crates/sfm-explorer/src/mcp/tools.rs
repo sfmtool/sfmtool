@@ -371,7 +371,7 @@ pub(crate) fn parse(
                 .and_then(Value::as_object)
                 .ok_or_else(|| {
                     args.error(
-                        "needs world_from_camera, an object carrying quaternion_wxyz and \
+                        "needs world_from_camera, an object carrying rotation_wxyz and \
                          translation.",
                     )
                 })?;
@@ -383,7 +383,7 @@ pub(crate) fn parse(
             Command::MoveCameraImage {
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 camera_image: args.camera_image("camera_image")?,
-                quaternion_wxyz: inner.required_vec4("quaternion_wxyz")?,
+                rotation_wxyz: inner.required_vec4("rotation_wxyz")?,
                 translation: inner.required_vec3("translation")?,
             }
         }
@@ -995,7 +995,7 @@ fn parse_view_command(args: &Args) -> Result<ViewCommand, ToolError> {
         None => Err(args.error(
             "was given nothing to do — pass fit, look_through, exit_camera_view, point, \
              bench_observation, a piece of the explicit camera (position, target, forward, \
-             target_distance or orientation_wxyz), a relative move, turn or orbit, or \
+             target_distance or quaternion_wxyz), a relative move, turn or orbit, or \
              fov_short_axis_deg alone.",
         )),
     }
@@ -1097,7 +1097,7 @@ const PLACEMENT_KEYS: [&str; 7] = [
     "position",
     "target",
     "forward",
-    "orientation_wxyz",
+    "quaternion_wxyz",
     "target_distance",
     "up",
     "world_up",
@@ -1113,30 +1113,30 @@ const PLACEMENT_KEYS: [&str; 7] = [
 /// the schemas are closed.
 fn parse_placement(args: &Args, fov: Option<f64>) -> Result<Placement, ToolError> {
     let present = |key: &str| args.map.contains_key(key);
-    if present("orientation_wxyz") {
+    if present("quaternion_wxyz") {
         // The exact form states the orientation outright, so nothing that
         // would derive one may ride along, and its roll travels in world_up.
         if present("target") {
             return Err(args.error(
-                "was given both target and orientation_wxyz — the look-at form and the exact \
+                "was given both target and quaternion_wxyz — the look-at form and the exact \
                  form are exclusive.",
             ));
         }
         if present("forward") {
             return Err(args.error(
-                "was given both forward and orientation_wxyz -- the exact form states the \
+                "was given both forward and quaternion_wxyz -- the exact form states the \
                  orientation, so there is no direction to derive one from.",
             ));
         }
         if present("up") {
             return Err(args.error(
-                "was given up with orientation_wxyz -- the exact form carries its roll in \
+                "was given up with quaternion_wxyz -- the exact form carries its roll in \
                  world_up.",
             ));
         }
         return Ok(Placement {
             position: Some(args.required_vec3("position")?),
-            orientation_wxyz: Some(args.required_vec4("orientation_wxyz")?),
+            quaternion_wxyz: Some(args.required_vec4("quaternion_wxyz")?),
             target_distance: Some(args.required_f64("target_distance")?),
             world_up: args.optional_vec3("world_up")?,
             fov_short_axis_deg: fov,

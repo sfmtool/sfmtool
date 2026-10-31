@@ -245,7 +245,7 @@ a lock, and until then the viewport is showing the pending pose.
 ### The wire
 
 `move_camera_image { reconstruction_label, camera_image, world_from_camera:
-{ quaternion_wxyz, translation } }` applies the commit directly, with no lock,
+{ rotation_wxyz, translation } }` applies the commit directly, with no lock,
 and answers as every edit tool there does: the version it pushed, its label, and
 the sentence the edit recorded. The lock itself is not on the wire: an agent has
 no hand, and the pose is the whole input. A lock held on the node an edit tool

@@ -18,6 +18,12 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           The view's unit is the selected reconstruction's, as its display \
                           transform draws it: null with no selection, for a selection that \
                           declares none, or for a display scale that lands between the units. \
+                          The view's quaternion_wxyz is world-to-camera in the .sfmr \
+                          convention get_camera_image uses (the camera looks down -Z with +X \
+                          right and +Y up), so in camera view it is the image's own \
+                          quaternion_wxyz wherever that reconstruction carries no display \
+                          transform; derived.forward and derived.up are the camera's -Z and +Y \
+                          axes in world coordinates. \
                           Counts only: \
                           no tool returns a whole column or a whole track table, and \
                           find_points returns at most a page of summary values, so read the \
@@ -59,8 +65,14 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "get_camera_image",
-            description: "One camera image: its pose (world-to-camera quaternion and translation, \
-                          plus the camera centre those imply), the intrinsics record it was shot \
+            description: "One camera image: its pose in the reconstruction's own frame \
+                          (quaternion_wxyz and translation_xyz, world-to-camera as the .sfmr \
+                          stores them: p_cam = R·p_world + t, in a camera frame that looks down \
+                          -Z with +X right and +Y up in the image, OpenGL style rather than \
+                          COLMAP's +Z forward and +Y down, so forward is R^T·(0,0,-1) and up is \
+                          R^T·(0,1,0); set_view and get_scene's view block use the same \
+                          quaternion_wxyz convention), plus the camera centre -R^T·t as center, \
+                          the intrinsics record it was shot \
                           through, its intrinsic_adjustment of that record (the focal scale as \
                           a fraction, the principal-point offset in fractions of the image's \
                           shorter side, the radial_bspline correction's two coefficients and \

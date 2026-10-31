@@ -451,6 +451,39 @@ nested object, is named only for a unit (`degrees`, `radians`, `pixels`, `px`,
 `meters`, `seconds`, `percent` and their other spellings, `units` and
 `scene_units`).
 
+#### `quaternion_wxyz` for a pose, `rotation_wxyz` for a transform
+
+A camera's rotation is **`quaternion_wxyz`** wherever the wire carries one:
+`get_camera_image`'s pose, the view block in `get_scene` and every `set_view`
+reply, and `set_view`'s exact form. It has one meaning in all of them, the
+`.sfmr` pose convention (the per-image field of the format's
+`images/quaternions_wxyz` column; see
+[Coordinate System Conventions](../formats/sfmr-file-format.md#coordinate-system-conventions)):
+
+- it is **world-to-camera**, `p_cam = R · p_world + t`, so the camera centre is
+  `−Rᵀ · t`;
+- the camera frame **looks down −Z**, with **+X right** and **+Y up** in the
+  image. That is the OpenGL convention, not COLMAP's, where the camera looks
+  down +Z with +Y down. So the direction a camera looks is `Rᵀ · (0, 0, −1)` and
+  its up is `Rᵀ · (0, 1, 0)`.
+
+The viewport camera keeps its attitude in the same convention
+(`sfmtool_core::Camera::orientation`; see
+[camera-views.md](camera-views.md)), and looking through a camera image copies
+the image's quaternion into it with no axis flip. So in camera view, on a
+reconstruction with no display transform, the view block's `quaternion_wxyz`
+is the image's own. `mcp::tests::view::the_view_quaternion_is_the_camera_images_quaternion_in_camera_view`
+pins that. A caller who builds `R` and takes `Rᵀ · (0, 0, 1)` as forward, as
+for a COLMAP pose, gets the direction behind the camera.
+
+The rotation of a named transform is **`rotation_wxyz`**: the display transform's
+`Se3Transform` (`transform` in `get_scene`, `set_reconstruction_transform`) and
+`move_camera_image`'s `world_from_camera`, whose object name states the
+direction. That one carries camera axes onto world axes, so it is the conjugate
+of the image's `quaternion_wxyz`. The two names keep a reader from sending one
+where the other is meant. The catalog test refuses any other argument name
+ending in `_wxyz`, `orientation_wxyz` among them.
+
 #### Where the GUI has no word, the code's word wins
 
 The rules above take their vocabulary from the Scene Graph panel, because those
@@ -459,9 +492,12 @@ the surface reports has no panel label at all — the viewport camera is interna
 state, not a named thing in the UI — and there the default is the **field name
 in the code**, not a term of art imported from elsewhere.
 
-So the view block reports `position`, `orientation`, `target_distance`,
-`world_up` and `near` — every one of them a `Camera` or `ViewportCamera` field,
-so every one of them greppable from the wire. The same default gives a camera
+So the view block reports `position`, `target_distance`, `world_up` and
+`near` — every one of them a `Camera` or `ViewportCamera` field, so every one
+of them greppable from the wire. Its attitude is the exception: `Camera::orientation`
+goes on the wire as `quaternion_wxyz`, because the format has a word for a
+camera's world-to-camera quaternion and the view's is the same quantity (the
+section above). The same default gives a camera
 image's `center` (`SfmrImage::camera_center`) and a point's `position`
 (`Point3D::position`): two words for two positions, because the code uses two,
 and each is unambiguous inside the object that carries it.
@@ -527,7 +563,7 @@ addressable. No arguments.
   "solo": null,                           // a reconstruction label, or null
   "view": {                               // see § "The view block"
     "position": [1.20, -4.40, 2.00],      // Camera::position
-    "orientation_wxyz": [0.92, 0.39, 0.00, 0.00],   // world→camera attitude
+    "quaternion_wxyz": [0.92, 0.39, 0.00, 0.00],   // world→camera, camera looks down −Z
     "target_distance": 4.60,              // along forward, i.e. camera −Z
     "world_up": [0.0, 0.0, 1.0],          // navigation up; carries roll
     "fov_short_axis_deg": 45.0,           // the *shorter* viewport dimension
@@ -812,6 +848,12 @@ caller to take as `u_axis × v_axis`: it is the outward normal
 where the point has no patch frame, which is every point of a `sift_files`
 value. For a point at infinity `center` is the bearing and the patch is tangent
 to the direction sphere, which the `at_infinity` beside it says.
+
+**The pose is `quaternion_wxyz` and `translation_xyz`, as the `.sfmr` stores
+it**: world-to-camera into a camera frame that looks down −Z with +Y up, so
+the camera looks along `Rᵀ · (0, 0, −1)` and `center` is `−Rᵀ · t`. It is in
+the reconstruction's own frame, not the displayed one. § "`quaternion_wxyz` for a
+pose, `rotation_wxyz` for a transform" gives the convention in full.
 
 **An image's own intrinsics.** An image may carry an intrinsic adjustment of
 its camera's focal and principal point, and on an `SFMTOOL_PINHOLE` camera a
@@ -1873,8 +1915,9 @@ The block reports the viewport camera's stored state, field for field, and puts
 everything computable from it under `derived`.
 
 `ViewportCamera` holds a `sfmtool_core::Camera` — a `position`, an `orientation`
-quaternion (world→camera), and a `target_distance` along the camera's forward
-(−Z) axis — plus `world_up`, `fov` and `near`. Those six are the state; `target`,
+quaternion (world→camera, on the wire as `quaternion_wxyz`; § "`quaternion_wxyz` for a
+pose, `rotation_wxyz` for a transform"), and a `target_distance` along the
+camera's forward (−Z) axis — plus `world_up`, `fov` and `near`. Those six are the state; `target`,
 `forward` and `up` all fall out of them, as `position + forward · target_distance`
 and two rotations of the quaternion's axes. Keeping the two groups apart tells a
 reader which fields to write back and which are there to save them the
@@ -1980,7 +2023,7 @@ where the hand left it.
 { "target_distance": 12.0 }                      // dolly: same target, new distance
 
 // exact form: the stored state, so a view read from get_scene round-trips
-{ "position": [2, -3, 1], "orientation_wxyz": [0.92, 0.39, 0, 0],
+{ "position": [2, -3, 1], "quaternion_wxyz": [0.92, 0.39, 0, 0],
   "target_distance": 4.0, "world_up": [0, 0, 1] }
 
 // either explicit form may carry it, and it may also be sent alone
@@ -2009,17 +2052,17 @@ bench observation entered from camera view, keep the current one), so a width
 sent with any of them would be dropped.
 The look-at form takes `up` as the roll, defaulting to the current
 `world_up`; a different one re-rolls the view exactly as `tilt` does. The exact
-form restores a view verbatim, which is what `orientation_wxyz` and
+form restores a view verbatim, which is what `quaternion_wxyz` and
 `target_distance` are reported for.
 
 The explicit camera is a position, an orientation and a target distance, and
 the explicit family apart from the exact form also takes them **a piece at a
 time**: what a call does not carry is preserved. The exact form does not:
-`orientation_wxyz` requires `position` and `target_distance` in the same call,
+`quaternion_wxyz` requires `position` and `target_distance` in the same call,
 since it is the form that restores a reported view verbatim. The orientation
 comes from `forward` (a view direction, named for the derived field the view
 block reports, with the roll taken from `up` defaulting to the current `world_up`), from `position` and `target`
-together (the look-at form), from `orientation_wxyz` (the exact form), or it
+together (the look-at form), from `quaternion_wxyz` (the exact form), or it
 stands. The distance comes from `target_distance`, from the separation of
 `position` and `target` when both are given, or it stands. The view is then
 anchored: at `target` where the call names one, else at `position` where the
@@ -2029,7 +2072,7 @@ the camera around what it is looking at rather than turning it in place, and
 the anchor, the orientation and the distance.
 
 A call that over- or under-determines the camera is refused rather than
-guessed at: `orientation_wxyz` accepts only its exact-form companions,
+guessed at: `quaternion_wxyz` accepts only its exact-form companions,
 `position` with `target` fixes the distance so `target_distance` may not ride
 along, `forward` may not accompany the pair, and `up` steers a roll only where
 the orientation is being derived (`forward`, or the look-at pair). Every form
@@ -3963,7 +4006,7 @@ Log line, the same undo, with the pose sent rather than steered.
 
 ```jsonc
 // { "reconstruction_label": "seoul_bull", "camera_image": 3,
-//   "world_from_camera": { "quaternion_wxyz": [0.71, 0, 0.71, 0],
+//   "world_from_camera": { "rotation_wxyz": [0.71, 0, 0.71, 0],
 //                          "translation": [1.5, -0.2, 0.9] } }
 {
   "reconstruction_label": "seoul_bull",
@@ -3977,10 +4020,12 @@ Log line, the same undo, with the pose sent rather than steered.
 ```
 
 **The pose is world-from-camera in the reconstruction's own frame.** The
-rotation carries camera axes onto world axes and the translation *is* the camera
+rotation, `rotation_wxyz`, carries camera axes onto world axes, so it is the
+conjugate of the world-to-camera `quaternion_wxyz` `get_camera_image` reports,
+in the same −Z-forward, +Y-up camera frame. The translation *is* the camera
 centre, which is the `center` field `get_camera_image` reports, so an agent
-reads a pose, adjusts the centre, and sends it straight back. The quaternion is
-normalised on arrival. Where the camera then stands is read back with
+reads a pose, adjusts the centre, and sends it back with the conjugated
+quaternion. The rotation is normalised on arrival. Where the camera then stands is read back with
 `get_camera_image` rather than restated here, so the reply is the version this
 edit pushed, like every other edit's.
 

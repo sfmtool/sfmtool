@@ -152,6 +152,16 @@ are strings, and the constants that hold them in `viewer_3d` are the single
 definition the menu and the tests that aim at it share. The wire's `mode`
 spells each one snake-cased.
 
+## Camera poses on the wire
+
+A rotation quaternion in the viewer's MCP tools, in
+`crates/sfm-explorer/src/mcp/` and [gui/mcp-server.md](gui/mcp-server.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **`quaternion_wxyz`** | a camera's world-to-camera rotation in the `.sfmr` convention, `p_cam = R · p_world + t`, into a camera frame that looks down −Z with +X right and +Y up, so the camera looks along `Rᵀ · (0, 0, −1)`: `get_camera_image`'s pose, and the view block's and `set_view`'s attitude of the viewport camera, which is in the same convention | `orientation_wxyz`; `quaternion_wxyz` for a camera-to-world rotation | the format stores the column as `images/quaternions_wxyz`, so one camera's value takes the singular. The viewport camera's quaternion is the same quantity in the same frame, so it takes the same name rather than its Rust field's (`Camera::orientation`), and an agent can compare the two without converting. The convention is OpenGL's, not COLMAP's (+Z forward, +Y down); the name alone does not say so, so every description that carries one states it |
+| **`rotation_wxyz`** | the rotation of a named transform: `Se3Transform::rotation` in `transform` and `set_reconstruction_transform`, and in `move_camera_image`'s `world_from_camera`, a camera-to-world rotation, the conjugate of the image's `quaternion_wxyz` | `quaternion_wxyz` | the object it sits in names the direction of the mapping, and a different field name keeps a camera-to-world rotation from being sent where a world-to-camera one is meant |
+
 ## Optional columns
 
 The verbs of the `sfm xform` step vocabulary and the binding keywords behind

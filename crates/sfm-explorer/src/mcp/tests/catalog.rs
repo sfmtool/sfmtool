@@ -183,7 +183,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
                 "reconstruction_label": "alpha",
                 "camera_image": 0,
                 "world_from_camera": {
-                    "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                    "rotation_wxyz": [1.0, 0.0, 0.0, 0.0],
                     "translation": [0.0, 0.0, 0.0],
                 },
             }),
@@ -858,7 +858,7 @@ fn schema_driven_unknown_argument_errors_remain_compatible() {
                 "world_from_camera": { "unknown_argument": true },
             }),
             "move_camera_image.world_from_camera has no argument \"unknown_argument\" — \
-             it takes quaternion_wxyz, translation.",
+             it takes rotation_wxyz, translation.",
         ),
     ] {
         assert_eq!(
@@ -1047,6 +1047,18 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
             assert!(
                 !BARE_UNIT_NAMES.contains(&argument.as_str()),
                 "{}: {argument:?} is a bare unit; name the quantity, as `angle_deg`",
+                spec.name
+            );
+            // A quaternion has two names: `quaternion_wxyz` for a
+            // world-to-camera pose rotation, as the .sfmr stores one, and
+            // `rotation_wxyz` for the rotation of a named transform
+            // (specs/GLOSSARY.md, `quaternion_wxyz`).
+            assert!(
+                !argument.ends_with("_wxyz")
+                    || argument == "quaternion_wxyz"
+                    || argument == "rotation_wxyz",
+                "{}: {argument:?} is a quaternion; a pose's is quaternion_wxyz and a \
+                 transform's rotation_wxyz",
                 spec.name
             );
         }
