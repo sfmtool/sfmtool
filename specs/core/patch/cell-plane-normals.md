@@ -48,6 +48,24 @@ pub enum NormalDeterminacy {
     None,
 }
 
+impl NormalDeterminacy {
+    pub fn code(&self) -> u8;            // 0 none, 1 one axis, 2 both axes
+}
+
+#[repr(u8)]
+pub enum CellPlaneStatus {
+    InPlane = 0,        // triangulated and given weight in the plane fit
+    PlaneOutlier = 1,   // triangulated, but the robust fit gave it no weight
+    Positioned = 2,     // triangulated, but too few cells were to fit a plane
+    TooFewRays = 3,     // fewer than min_rays posed rays
+    NarrowBaseline = 4, // no ray pair subtends min_triangulation_angle_deg
+    BehindCamera = 5,   // the rays' nearest point is behind one of their cameras
+}
+
+impl CellPlaneStatus {
+    pub const NAMES: [&'static str; 6]; // "in_plane", …, "behind_camera"
+}
+
 pub struct CellPlaneNormal {
     pub normal: [f64; 3],                // NaN under None
     pub determinacy: NormalDeterminacy,
@@ -69,7 +87,9 @@ pub fn cell_plane_normals(
 ) -> Vec<CellPlaneNormal>;
 ```
 
-**Why this shape.** The inputs are the cluster file's member-parallel arrays borrowed as they are, so a caller holding a `MatchesData` or the Python `MatchesFile` passes its columns without building per-cluster objects, and the cameras are the per-camera intrinsics, per-image camera index and per-image `cam_from_world` pose that the bundle adjustment and resection take. An image without a pose is `None`, so a partly posed seed passes the file's whole image list. The output keeps every cell's position, ray count and status, because a wrong normal is diagnosed by asking which cells were used and how each was seen.
+**Why this shape.** The inputs are the cluster file's member-parallel arrays borrowed as they are, so a caller holding a `MatchesData` or the Python `MatchesFile` passes its columns without building per-cluster objects, and the cameras are the per-camera intrinsics, per-image camera index and per-image `cam_from_world` pose that the bundle adjustment and resection take. An image without a pose is `None`, so a partly posed seed passes the file's whole image list. The output keeps every cell's position, ray count and status, because a wrong normal is diagnosed by asking which cells were used and how each was seen. The binding returns the statuses as their `u8` discriminants in `cell_status`, with `CellPlaneStatus::NAMES` as `cell_status_names`, and the verdict as `NormalDeterminacy::code()` in `determinacy`, with `determinacy_names`.
+
+Nothing returns a `Result`. A cluster or cell the kernel cannot use is data: `NormalDeterminacy::None` and a `CellPlaneStatus`. What remains are caller bugs, and `cell_plane_normals` panics on them: member-parallel slices of different lengths, a `cluster_starts` that is not `C + 1` long, decreases somewhere or runs past the member count, a member image or image camera index out of range, a `cam_from_world` not as long as `image_camera`, and `resolution < 3`. A reference member that is neither `CLUSTER_REFERENCE_UNREFINABLE` nor a valid member index panics on the slice index. The Python binding checks each of these, and also that `patch_size` is positive and finite, that each reference member lies in its own cluster's member range, and that every member and cell status code is a known one, and raises `ValueError` before calling the kernel.
 
 **The shared triangulation and plane fit.** `cell_plane_normals` builds each cell's rays from the cluster file's columns and each ray's noise floor from its member's shape, and hands the nine cells' rays to the crate-visible cell plane kernel in [cell_plane_fit.rs](../../../crates/sfmtool-core/src/patch/cell_plane_fit.rs), which does the rest: `PosedView` unpacks one image's camera and pose and turns a pixel into a `CellRay` with `ray_through(pixel, floor_px)`, the caller choosing the ray's floor, and `fit_cell_plane(&[Vec<CellRay>; 9], &CellPlaneParams) -> CellPlaneNormal` triangulates each cell, fits the plane and gives the verdict. The kernel reads none of the cluster file's types, so a caller can triangulate cells it places in each view some other way, with floors it computes some other way; the public types it fills, `CellPlaneNormal`, `CellPlaneStatus` and `NormalDeterminacy`, and the `CellPlaneParams` it reads, stay in `cell_plane_normals`. The bench's `grid_plane_normal` is the other caller: it places each cell by registering it on renders through a track's patch plane, and floors each ray by the render map's local Jacobian ([editable-track.md](../bench/editable-track.md#estimating-the-normal)). The kernel also has `normal_precision_deg(&CellPlaneNormal) -> [f64; 2]`, the precision the plane fit's weights predict for the normal along its weaker and its stronger in-plane axis, in degrees, as [the precision gate draft](../../drafts/cell-plane-normal-precision-gate.md) defines it (`NaN` where no axis is fixed); `grid_plane_normal` reports it and can gate on it, and `cell_plane_normals` does not yet return it.
 
@@ -85,11 +105,13 @@ pub(crate) fn fit_cell_plane(
 ) -> CellPlaneNormal;
 ```
 
-**Why `patch/`.** The kernel is a reading of the cluster-patches file's cell geometry: the grid split `[0, R/3, R − R/3, R]` and the map from a grid coordinate to a member's pixel. Both are defined in `patch/`, where `grid_bounds` is visible to the module without being widened. The binding is registered in the `analysis` submodule beside `estimate_adjacency_surfel_normals`, the other normal estimator a caller with poses chooses between.
+**Why `patch/`.** The kernel is a reading of the cluster-patches file's cell geometry: it casts its rays through the centres of the grid split `[0, R/3, R − R/3, R]`, which `grid_cell_centres` in `patch/normal_refine/support.rs` computes for the piecewise refinement too. That function is `pub(in crate::patch)`, so the module uses it from inside `patch/` without widening its visibility. The binding is registered in the `analysis` submodule beside `estimate_adjacency_surfel_normals`, the other normal estimator a caller with poses chooses between.
 
 **Example.** A caller holding a `--piecewise` cluster file opened as `mf` (a `MatchesFile`) and a posed reconstruction `gt`, with `image_camera`, `quaternions_wxyz` and `translations` laid out per image of the cluster file, calls
 
 ```python
+from sfmtool import analysis
+
 out = analysis.cell_plane_normals(
     mf.cluster_starts, mf.reference_members, mf.member_images, mf.member_status,
     mf.member_positions(), mf.member_affine_shapes(),

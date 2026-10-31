@@ -277,6 +277,9 @@ Non-goals/deferrals checked: 10; no longer hold: 0 (2 need a Part 9 link)
   - The panics (`resolution < 3`, mismatched lengths, out-of-range indices) and the binding's `ValueError` are undocumented, and "Why this shape" does not say why the kernel asserts rather than returning `Result`.
   - Opening: see check 4, row 4.
   - Mannered prose: "each ray pulls in pixels of its own image" (:97) → "each ray's distance to the point is measured in pixels of its own image"; "how hard each pulls on the plane" (:107) → "how much weight each has in the plane fit".
+
+> _Status (2026-10-31): **Partially done** — the `grid_bounds`, `CellPlaneStatus` and panics bullets, and the Unclear line's missing import: "Why `patch/`" now names `grid_cell_centres`, the one helper the kernel imports; the Rust block lists `NormalDeterminacy::code()` and `CellPlaneStatus` with `NAMES`, and says how the binding returns both; "Why this shape" says nothing returns a `Result` because the failures left are caller bugs, lists the kernel's panics and the binding's `ValueError` checks; the Python example imports `analysis`, branch `fix-1031-13-cell-plane-normals-spec`. Still open: the rename, the opening, the mannered prose and the module doc._
+
 **Third copies:** Module doc (:4-26) restates the weights, verdict and one-axis rule; the binding docstring (~15 lines) the ray and weight construction. Mild; the module doc should shrink.
 **Recommendation:** update spec and code (rename).
 **Unclear / incorrect / suspicious:** The Python example uses `analysis.` with no import; write `from sfmtool import analysis`. The "Why `<module dir>/`" paragraph is a pattern worth a TEMPLATE note.
