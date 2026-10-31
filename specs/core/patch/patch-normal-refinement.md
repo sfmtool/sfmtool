@@ -9,8 +9,7 @@ on the best one. A patch usually starts with its normal along the mean viewing
 direction, so it faces the cameras rather than lying along the surface. No
 command runs this refinement: every command that turns a patch normal runs the
 grown-plane normal ([refine-normals.md](../bench/refine-normals.md)) instead.
-It is reached through `PatchCloud.refine_normals` and the bench's
-`fit_normal`.
+It is reached only through `PatchCloud.refine_normals`.
 
 ## Problem
 

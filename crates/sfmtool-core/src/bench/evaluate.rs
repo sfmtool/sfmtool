@@ -643,8 +643,9 @@ fn evaluate_keeping_tiles(
 ///
 /// What a caller runs after a step that dropped the bitmap or unpinned the
 /// reference row: SfM Explorer's live evaluation after every step, Track at
-/// Pixel's reading after it moves the patch, and the end of
-/// [`fit_normal`](super::normal::fit_normal). The render reuses the tile the
+/// Pixel's reading after it moves the patch, and the end of every normal step
+/// ([`finite_difference_normal`](super::normal::finite_difference_normal) and
+/// the others). The render reuses the tile the
 /// reading already made of the row rendered from, where it is on the bitmap's
 /// grid with the render's sampler, and the scores are read off the reading's
 /// tiles; otherwise the render and the scoring run as their own calls.

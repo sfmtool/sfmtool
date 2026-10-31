@@ -261,7 +261,6 @@ fn normal_error_name(e: &NormalError) -> &'static str {
         NormalError::TooFewObservations(_) => "too_few_observations",
         NormalError::BadPieces(_) => "bad_pieces",
         NormalError::BadOverlap(_) => "bad_overlap",
-        NormalError::NotScored { .. } => "not_scored",
         NormalError::TooFewPieces { .. } => "too_few_pieces",
         NormalError::TooFewGridPieces { .. } => "too_few_grid_pieces",
         NormalError::BadGrownPlaneOption(_) => "bad_grown_plane_option",
