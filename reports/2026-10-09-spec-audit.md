@@ -143,6 +143,8 @@ No work-order headings remain. The wider phrase grep found:
 
 > _Status (2026-10-17): camrig row **Done** — sentence deleted, branch `fix-round-09-camrig-example-version`._
 
+> _Status (2026-10-31): scene-graph and resect-image rows **Done** — `gui/scene-graph.md` § "Performance" now says in the present tense that each node's thumbnail atlas holds all its thumbnails with no eviction (no LRU or async thumbnail loading exists or is drafted); the pointer to the never-written `seed-candidate-evaluation` spec is removed from `gui/edits/resect-image.md` (no spec or draft under another name describes an offline hold-out self-resection), branch `fix-1031-21-gui-spec-stale-lines`._
+
 Deferral language in standing specs: "not yet" 18 hits in 15 files, "future
 work" 2/2, "v2" 8/5, "planned" 4/4, "deferred" 45/13; 33 files in all, most of
 the "deferred" and "v2" hits technical (deferred screenshots, the "v2 model" of

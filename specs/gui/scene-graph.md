@@ -1380,9 +1380,10 @@ bundle from `retain_nodes` on the next frame.
   `length_scale`/frustum-size change (now per affected node).
 - **GPU memory**: linear in loaded data, same per-item budget as
   [architecture.md](architecture.md). Thumbnail atlases dominate
-  (~6.25 KB × 128² × … — 625 MB at 10K cameras); N large reconstructions
-  multiply that, so the already-planned LRU/async thumbnail loading becomes
-  more pressing but is not a prerequisite at the 2–8 file design point.
+  (~6.25 KB × 128² × … — 625 MB at 10K cameras). Each node has an atlas of
+  its own that holds all of its thumbnails while it is loaded, with no
+  eviction, so N large reconstructions multiply that figure; at the 2–8 file
+  design point that is acceptable.
 - **Scene panel**: camera lists are virtualized (`show_rows`); per-frame cost
   is proportional to visible rows, not camera count. Point listings are
   bounded (selection/hover rows only) by design.

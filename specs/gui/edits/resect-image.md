@@ -20,9 +20,7 @@ none / current / stale state),
 refinement schedule and 3 px bound the finite path shares),
 [../document-model.md](../document-model.md) and
 [../edit-history.md](../edit-history.md) (the version it pushes, and the map the
-selection follows), [README.md](README.md) (the other edit families),
-`seed-candidate-evaluation` (not yet written)
-(the hold-out self-resection channel; same mechanism, read offline).
+selection follows), and [README.md](README.md) (the other edit families).
 
 ---
 
