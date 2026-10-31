@@ -36,7 +36,8 @@ numpy, OpenCV, pycolmap and the command modules.
 A helper that several commands share is a `_`-named module in
 `sfmtool._commands`, so it has no row in `COMMANDS`.
 [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py) applies
-the `--range` option of `sfm to-colmap-bin` and `sfm to-nerfstudio`.
+the `--range` and `--filter-points` options of `sfm to-colmap-bin` and
+`sfm to-nerfstudio`.
 [`_sfmr_path.py`](../../src/sfmtool/_commands/_sfmr_path.py) provides
 `check_sfmr_path`, which raises a `click.UsageError` reading "<label> must be
 a .sfmr file, got: <path>" when a path argument does not end in `.sfmr`
