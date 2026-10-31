@@ -91,11 +91,11 @@ function indexes its slices without checking, so its Python binding checks the
 indexes first: it raises `ValueError` when the per-image or per-camera lists
 differ in length, when a pair names an image index out of range, or when a
 camera index is negative or out of range. It does not check array shapes. An
-intrinsic or rotation matrix that is not 3 × 3, a translation that is not of
-length 3, or a descriptor array with fewer rows than its image's positions
-panics, as does an affine-shape array with too few rows when the filter runs,
-and Python sees `pyo3_runtime.PanicException` rather than `ValueError`. The
-`match_image_pair` binding does not check shapes either.
+intrinsic or rotation matrix with other than nine elements, a translation that
+is not of length 3, or a descriptor array with fewer rows than its image's
+positions panics, as does an affine-shape array with too few rows when the
+filter runs, and Python sees `pyo3_runtime.PanicException` rather than
+`ValueError`. The `match_image_pair` binding does not check shapes either.
 
 The poses are `cam_from_world` in the COLMAP/OpenCV camera convention (+Z
 forward, Y down), because everything here is pixel-space algebra on `K`, `R`
