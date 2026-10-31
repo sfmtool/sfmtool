@@ -211,16 +211,6 @@ def _build_kdf(workspace: Path, names: list[str], config: dict, out: Path) -> No
     write_kdf(forest, str(out), sources=sources)
 
 
-# `sfm cluster-patches`' own defaults.
-CLUSTER_PATCH_DEFAULTS = {
-    "patch_size": 12.0,
-    "resolution": 25,
-    "min_zncc": 0.85,
-    "max_shift_scales": 2.0,
-    "max_member_zncc_self_similarity_radius": 2.5,
-}
-
-
 def _build_cluster_patches(
     workspace: Path,
     image_paths: list[Path],
@@ -233,16 +223,19 @@ def _build_cluster_patches(
 
     The clustering is ``sfm match --cluster``'s background-floor clustering run
     over the index rather than over a fresh forest; the file is written by that
-    command's own writer and refined by ``sfm cluster-patches``' own step. The
-    index's feature ids run image by image in ``names`` order, each image's
-    features in ``.sift`` row order, which is what makes a cluster member's
-    feature index a ``.sift`` row.
+    command's own writer and refined by running ``sfm cluster-patches`` on it
+    with its default options. The index's feature ids run image by image in
+    ``names`` order, each image's features in ``.sift`` row order, which is
+    what makes a cluster member's feature index a ``.sift`` row.
     """
+    import subprocess
     from types import SimpleNamespace
 
-    from sfmtool._cluster_patches import _run_cluster_patches
     from sfmtool.fileio import read_sift_metadata
     from sfmtool.matching import background_floor_clusters_kdf
+    # No public writer exists for a clusters `.matches` file, and `sfm match
+    # --cluster` builds its own forest rather than reading an index, so this
+    # uses the command's internal writer. See reports/2026-10-08-hygiene-audit.md.
     from sfmtool.feature_match._run import _write_clusters_matches
     from sfmtool.sift.file import get_sift_path_for_image
 
@@ -271,4 +264,7 @@ def _build_cluster_patches(
         matcher_options={**options, "index": kdf.name},
         max_feature_count=None,
     )
-    _run_cluster_patches(clusters_path, str(out), **CLUSTER_PATCH_DEFAULTS)
+    subprocess.run(
+        ["sfm", "cluster-patches", "-i", str(clusters_path), "-o", str(out)],
+        check=True,
+    )

@@ -95,7 +95,9 @@ fails on a path into the extension in `tests/` or `scripts/` outside its
 allowlist, which names the registration tests (their subject is what each
 extension submodule registers), the test of `run_explorer` (which has no
 public home) and two monkeypatches that replace a binding where `src/` looks
-it up.
+it up. The same test parses each script's imports and fails on one that names
+an internal `sfmtool` module or name, since a script, unlike a test, never has
+an internal name as its subject.
 [`test_reconstruction_patches_registration.py`](../tests/rust_bindings/reconstruction/test_reconstruction_patches_registration.py)
 checks that each public module exports exactly its submodule's `__all__`.
 

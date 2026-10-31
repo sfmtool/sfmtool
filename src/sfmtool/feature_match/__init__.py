@@ -12,12 +12,14 @@ accuracy and performance.
 """
 
 from ._core import match_image_pair, match_registered_images
+from ._flow_matching import flow_match_sequential
 from ._geometric_filter import GeometricFilterConfig
 from ._pairs import pairs_from_matches
 
 __all__ = [
     "match_image_pair",
     "match_registered_images",
+    "flow_match_sequential",
     "GeometricFilterConfig",
     "pairs_from_matches",
 ]
