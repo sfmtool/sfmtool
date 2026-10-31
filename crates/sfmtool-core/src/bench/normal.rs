@@ -1,9 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The four steps that estimate which way a track's patch faces and tilt it
-//! there: [`fit_normal`], from the photographs' agreement over the patch,
-//! [`finite_difference_normal`], from where smaller pieces of the patch fit,
+//! The three steps that estimate which way a track's patch faces and tilt it
+//! there: [`finite_difference_normal`], from where smaller pieces of the patch fit,
 //! [`grid_plane_normal`], from the plane through the patch's nine cells,
 //! each registered in every view, and [`grown_plane_normal`], from one plane
 //! fitted directly to the photographs, view by view.
@@ -19,14 +18,11 @@
 use nalgebra::{Point3, SymmetricEigen, Vector3};
 
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::normal_refine::{refine_patch_normal, NormalRefineParams, ProjectedImage};
+use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
-use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::evaluate::{
-    check_views, evaluate_rendering_bitmap, seed_of, EvaluateError, EvaluateReport,
-};
+use super::evaluate::{check_views, evaluate_rendering_bitmap, EvaluateError, EvaluateReport};
 use super::fit::{fit, FitError, FitOptions};
 use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackEditError};
 use super::track::{EditableTrack, Stage, StageKind};
@@ -64,33 +60,6 @@ pub const MAX_OVERLAP: f64 = 0.9;
 /// make and still be read as two directions. Below it the lines are one line,
 /// which fixes only the tilt about its perpendicular.
 const MIN_LINE_SINE: f64 = 0.17; // about 10 degrees
-
-/// How [`fit_normal`] reads the photographs.
-#[derive(Debug, Clone)]
-pub struct FitNormalOptions {
-    /// The photometric normal search. Its `min_views` defaults to two here,
-    /// where the refinement kernel's own default is three, because the bench
-    /// fits a track from two `in` sightings and a normal step should run on
-    /// any track the fit runs on.
-    pub refine: NormalRefineParams,
-    /// The side of the square grid the consensus is scored on, in samples.
-    pub resolution: u32,
-    /// The reading the step ends with, and the render of the patch bitmap.
-    pub fit: FitOptions,
-}
-
-impl Default for FitNormalOptions {
-    fn default() -> Self {
-        Self {
-            refine: NormalRefineParams {
-                min_views: 2,
-                ..NormalRefineParams::default()
-            },
-            resolution: 24,
-            fit: FitOptions::default(),
-        }
-    }
-}
 
 /// How [`finite_difference_normal`] cuts the patch into pieces.
 #[derive(Debug, Clone)]
@@ -167,12 +136,6 @@ pub enum NormalError {
     BadPieces(usize),
     /// [`FiniteDifferenceOptions::overlap`] is outside 0..=[`MAX_OVERLAP`].
     BadOverlap(f64),
-    /// The photometric search scored no normal: fewer views than it needs were
-    /// valid at the patch.
-    NotScored {
-        /// How many views its validity gates kept.
-        views: u32,
-    },
     /// Fewer than two pieces fitted along either axis, so no line through
     /// their centres exists.
     TooFewPieces {
@@ -227,10 +190,6 @@ impl std::fmt::Display for NormalError {
                 o * 100.0,
                 MAX_OVERLAP * 100.0
             ),
-            NormalError::NotScored { views } => write!(
-                f,
-                "the photographs scored no normal: {views} views were valid at the patch"
-            ),
             NormalError::TooFewPieces { u, v } => write!(
                 f,
                 "{u} pieces fitted along u and {v} along v, and a line needs two along one \
@@ -282,15 +241,6 @@ impl From<TrackEditError> for NormalError {
 /// Where the normal a step turned the patch to came from.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NormalEstimate {
-    /// [`fit_normal`]'s photometric search.
-    Photometric {
-        /// The consensus ZNCC at the normal the patch had.
-        before: f64,
-        /// The consensus ZNCC at the normal it found.
-        after: f64,
-        /// How many views the search scored.
-        views: u32,
-    },
     /// [`finite_difference_normal`]'s pieces, in a [`PieceLayout::Cross`].
     FiniteDifference {
         /// How many pieces were cut along each axis.
@@ -340,11 +290,6 @@ pub struct NormalReport {
 impl std::fmt::Display for NormalReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.estimate {
-            &NormalEstimate::Photometric {
-                before,
-                after,
-                views,
-            } => write!(f, "ZNCC {before:.3} \u{23f5} {after:.3} over {views} views")?,
             &NormalEstimate::FiniteDifference {
                 pieces,
                 u,
@@ -417,96 +362,6 @@ pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError> {
         return Err(NormalError::TooFewObservations(ins));
     }
     Ok(())
-}
-
-/// Turn the track's patch to the normal the photographs agree on most.
-///
-/// The search is the photometric normal refinement
-/// (`specs/core/patch/patch-normal-refinement.md`) over the `in` sightings,
-/// each view's tile anchored at the sighting's own keypoint. It is seeded from
-/// the normal the patch has and from the mean viewing direction and searches
-/// [`NormalRefineParams::angular_range_deg`] around each, so a normal further
-/// away than that is reached by pressing it again. The patch is then turned
-/// with [`tilt_patch`], its bitmap rendered again and read back, and its
-/// centre does not move.
-///
-/// `images` is one [`ProjectedImage`] per image of `edited`, as for every
-/// photometric step of the bench.
-///
-/// # Example
-///
-/// ```no_run
-/// # use sfmtool_core::bench::{fit_normal, FitNormalOptions};
-/// # use sfmtool_core::progress::Progress;
-/// # fn run(
-/// #     track: &sfmtool_core::bench::EditableTrack,
-/// #     edited: &sfmtool_core::EditedReconstruction,
-/// #     images: &[sfmtool_core::patch::normal_refine::ProjectedImage<'_>],
-/// # ) -> Result<(), Box<dyn std::error::Error>> {
-/// let (turned, report) =
-///     fit_normal(track, edited, images, &FitNormalOptions::default(), &Progress::none())?;
-/// println!("{report}");   // "ZNCC 0.712 ⏵ 0.845 over 6 views, turned 14.2°, …"
-/// # let _ = turned;
-/// # Ok(())
-/// # }
-/// ```
-pub fn fit_normal(
-    track: &EditableTrack,
-    edited: &EditedReconstruction,
-    images: &[ProjectedImage<'_>],
-    options: &FitNormalOptions,
-    progress: &Progress<'_>,
-) -> Result<(EditableTrack, NormalReport), NormalError> {
-    check_views(edited, images)?;
-    normal_preconditions(track)?;
-    let patch_frame = patch_frame_of(track);
-
-    let mut views: Vec<ProjectedImage<'_>> = Vec::new();
-    let mut keypoints: Vec<Option<[f64; 2]>> = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for &i in &track.in_observations() {
-        let observation = &track.observations[i];
-        let Some(view) = images.get(observation.image as usize) else {
-            continue;
-        };
-        if seen.insert(observation.image) {
-            views.push(*view);
-            keypoints.push(seed_of(observation));
-        }
-    }
-
-    progress.check_cancel()?;
-    let result = {
-        let mut phase = progress.phase("normal");
-        let result = refine_patch_normal(
-            &patch_frame,
-            &views,
-            options.resolution,
-            &options.refine,
-            Some(&keypoints),
-        );
-        progress_note!(phase, "{} views", views.len());
-        result
-    };
-    if !result.photoconsistency.is_finite() {
-        return Err(NormalError::NotScored {
-            views: result.valid_view_count,
-        });
-    }
-    let estimate = NormalEstimate::Photometric {
-        before: result.init_photoconsistency,
-        after: result.photoconsistency,
-        views: result.valid_view_count,
-    };
-    turn_and_read(
-        track,
-        edited,
-        images,
-        result.patch.normal(),
-        estimate,
-        &options.fit,
-        progress,
-    )
 }
 
 /// Turn the track's patch to the plane its pieces fit on.

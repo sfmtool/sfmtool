@@ -81,7 +81,6 @@ fn left_as_they_were(error: Option<&NormalError>) -> (usize, &'static str) {
             NormalError::BadGrownPlaneOption(_)
             | NormalError::BadPieces(_)
             | NormalError::BadOverlap(_)
-            | NormalError::NotScored { .. }
             | NormalError::TooFewPieces { .. }
             | NormalError::TooFewGridPieces { .. },
         ) => (7, "refused by the step's settings"),
