@@ -1402,10 +1402,10 @@ workspace, the timestamp, the image arrays and the `ClustersData` backbone with
 its member geometry), fills in the format version, the image, cluster and member
 counts and the `has_*` flags, and hands the result to `write_matches`, so the
 file it writes is the one `write_matches` would write and is checked by the same
-rules. The derived values are the ones a caller can get wrong without a
-second section to check them against, so the format crate computes them, and a
-caller such as `sfm match --cluster`, or a script that clusters over an existing
-`.kdf` index, does not restate the metadata rules. Reading the `.sift` files
+rules. The derived values follow from the arrays and the sections present, so
+the format crate computes them, and a caller such as `sfm match --cluster`, or
+a script that clusters over an existing `.kdf` index, does not restate the
+metadata rules. Reading the `.sift` files
 stays with the caller, since this crate does not open them.
 
 ```rust
