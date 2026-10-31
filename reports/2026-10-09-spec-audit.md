@@ -596,6 +596,7 @@ that need none.
 **What it does:** `shaders/common.wgsl` declares `ReconUniforms`, `PICK_TAG_*` and `INF_DEPTH`, and six pipelines prepend it.
 **Why it matters:** internal but load-bearing: a new shader that redeclares or omits it breaks picking, and the architecture spec's file tree is where a contributor looks first.
 **Recommendation:** add `common.wgsl` and `bench_track.wgsl` to the tree, with a one-line note linking `scene-graph.md:771`.
+> _Status (2026-10-31): **Done** — `gui/architecture.md`'s shader tree now lists `common.wgsl` and `bench_track.wgsl` (the only two `.wgsl` files it lacked), with a note under the tree naming the six pipelines that prepend the prelude and linking `scene-graph.md` § "Per-recon uniforms", branch `fix-1031-29-architecture-shader-tree`._
 
 ### src/sfmtool/_densify.py, src/sfmtool/_undistort_images.py (carried)
 **What it does:** The pipelines behind `sfm densify` (765 lines) and `sfm undistort` (613 lines).
