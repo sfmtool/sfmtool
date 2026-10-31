@@ -40,10 +40,10 @@ const BAND_VISIBLE_PX: f64 = 0.05;
 /// One camera's derived quantities, computed once per [`crate::scene::CameraRef`].
 pub(super) struct Derived {
     /// The angles the frame subtends, or `None` for a camera with no frame.
-    pub fov: Option<FieldOfView>,
+    pub(crate) fov: Option<FieldOfView>,
     /// 35 mm-equivalent focal length in millimetres; `None` for the fisheye and
     /// equirectangular models, whose focal length is pixels per radian.
-    pub equiv_35mm: Option<f64>,
+    pub(crate) equiv_35mm: Option<f64>,
     /// How far the lens displaces a pixel, and over what part of the frame
     /// that was measured. `None` when the model carries no distortion at all,
     /// which is the panel's cue to say so rather than to quote a zero.
@@ -51,13 +51,13 @@ pub(super) struct Derived {
     /// The grid the maximum was taken over comes back with it and is dropped:
     /// the panel quotes the number, the Image Detail overlay draws the arrows,
     /// and both take them from [`report::distortion_extent`].
-    pub max_distortion: Option<DistortionExtent>,
+    pub(crate) max_distortion: Option<DistortionExtent>,
     /// Where this model stops describing a lens, in degrees off-axis, or
     /// `None` when it describes one at every angle. The plot shades everything
     /// past it; see [`super::projection_plot`].
-    pub trustworthy_max_theta: Option<f64>,
+    pub(crate) trustworthy_max_theta: Option<f64>,
     /// The projection plot's curves.
-    pub profile: Profile,
+    pub(crate) profile: Profile,
 }
 
 /// The radial map the projection plot draws, sampled once per camera.
@@ -69,26 +69,26 @@ pub(super) struct Derived {
 /// where the curve stops is itself worth seeing.
 pub(super) struct Profile {
     /// One entry per angle, ascending from 0°.
-    pub samples: Vec<ProfileSample>,
+    pub(crate) samples: Vec<ProfileSample>,
     /// Whether the azimuth band is wide enough anywhere to be worth drawing.
     ///
     /// Measured rather than looked up: the spec's condition is "`fx ≠ fy`, or
     /// tangential/thin-prism terms present", and the width of the band *is*
     /// that condition evaluated, without a second per-model table to drift
     /// from the first.
-    pub band_visible: bool,
+    pub(crate) band_visible: bool,
 }
 
 /// One angle on the projection plot.
 pub(super) struct ProfileSample {
     /// Incidence angle in degrees.
-    pub theta_deg: f64,
+    pub(crate) theta_deg: f64,
     /// The model's radius at azimuth 0.
-    pub radius_px: f64,
+    pub(crate) radius_px: f64,
     /// The family's ideal radius at azimuth 0.
-    pub reference_px: f64,
+    pub(crate) reference_px: f64,
     /// Smallest and largest radius over the sampled azimuths.
-    pub band_px: (f64, f64),
+    pub(crate) band_px: (f64, f64),
 }
 
 impl Derived {
@@ -161,21 +161,21 @@ pub(super) struct ChangeProfile {
     /// One entry per angle, ascending from 0°, over the wider of the two
     /// cameras' frames. An angle neither camera projects at any azimuth is
     /// dropped.
-    pub samples: Vec<ChangeSample>,
+    pub(crate) samples: Vec<ChangeSample>,
 }
 
 /// One angle on the change plot.
 pub(super) struct ChangeSample {
     /// Incidence angle in degrees.
-    pub theta_deg: f64,
+    pub(crate) theta_deg: f64,
     /// The proposed radius minus the current one, averaged over the azimuths
     /// both cameras project: the change of the radial profile alone. A fitting
     /// error shows here, and a dropped `fx ≠ fy` does not, since the two
     /// focal lengths average out.
-    pub centre_px: f64,
+    pub(crate) centre_px: f64,
     /// The smallest and largest change over those azimuths: what varies with
     /// azimuth, such as a dropped aspect.
-    pub band_px: (f64, f64),
+    pub(crate) band_px: (f64, f64),
 }
 
 impl ChangeProfile {
@@ -239,9 +239,9 @@ impl ChangeProfile {
 /// computed together once per proposal generation.
 pub(super) struct ProposedReport {
     /// The proposed camera's own report.
-    pub derived: Derived,
+    pub(crate) derived: Derived,
     /// How far it moves each angle from where the current camera puts it.
-    pub change: ChangeProfile,
+    pub(crate) change: ChangeProfile,
 }
 
 impl ProposedReport {

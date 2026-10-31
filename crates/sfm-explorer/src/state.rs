@@ -33,11 +33,11 @@ mod photograph_requests;
 mod save;
 
 /// The window title with no file loaded, and the start of every other title.
-pub const WINDOW_TITLE_BASE: &str = "SfM Explorer";
+pub(crate) const WINDOW_TITLE_BASE: &str = "SfM Explorer";
 
 /// Which overlay to draw on the image detail panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OverlayMode {
+pub(crate) enum OverlayMode {
     /// No feature overlay — clean image only.
     #[default]
     None,
@@ -65,7 +65,7 @@ pub enum OverlayMode {
 }
 
 impl OverlayMode {
-    pub const ALL: [OverlayMode; 7] = [
+    pub(crate) const ALL: [OverlayMode; 7] = [
         OverlayMode::None,
         OverlayMode::Features,
         OverlayMode::ReprojError,
@@ -75,7 +75,7 @@ impl OverlayMode {
         OverlayMode::ConditionNumber,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             OverlayMode::None => "None",
             OverlayMode::Features => "Features",
@@ -99,7 +99,7 @@ impl OverlayMode {
     /// `--no-default-features` build nothing calls this trio — a property of
     /// that build rather than a loose end here, as in [`crate::action_log`].
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn wire_name(self) -> &'static str {
+    pub(crate) fn wire_name(self) -> &'static str {
         match self {
             OverlayMode::None => "none",
             OverlayMode::Features => "features",
@@ -113,7 +113,7 @@ impl OverlayMode {
 
     /// The mode `name` spells, or `None`. Exact: `"Features"` is not a mode.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn from_wire_name(name: &str) -> Option<OverlayMode> {
+    pub(crate) fn from_wire_name(name: &str) -> Option<OverlayMode> {
         OverlayMode::ALL
             .into_iter()
             .find(|mode| mode.wire_name() == name)
@@ -121,7 +121,7 @@ impl OverlayMode {
 
     /// Every mode name, as an error message lists them.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn all_wire_names() -> String {
+    pub(crate) fn all_wire_names() -> String {
         OverlayMode::ALL
             .iter()
             .map(|mode| mode.wire_name())
@@ -143,31 +143,31 @@ impl OverlayMode {
 /// *feature* display. See `specs/gui/camera-intrinsics.md` § "Image Detail:
 /// the Intrinsics overlay layer".
 #[derive(Debug, Clone, PartialEq)]
-pub struct IntrinsicsDisplaySettings {
+pub(crate) struct IntrinsicsDisplaySettings {
     /// Draw the layer at all. On by default: the layer is the reference
     /// frame the features sit in, and the first look at a photograph in this
     /// panel is a diagnostic one — where the principal point is, how the lens
     /// bends the rim — whether a human or an agent (via `screenshot`) is
     /// looking. `I` turns it off in one keystroke for the clean view.
-    pub enabled: bool,
+    pub(crate) enabled: bool,
     /// Draw the angular axes through the principal point.
-    pub axes: bool,
+    pub(crate) axes: bool,
     /// Draw iso-angle rings at the same angular ladder as the axis ticks.
-    pub rings: bool,
+    pub(crate) rings: bool,
     /// Draw the distortion displacement field. Ignored when the model has no
     /// distortion.
-    pub distortion: bool,
+    pub(crate) distortion: bool,
     /// Displacement arrow exaggeration. `None` = auto.
-    pub distortion_scale: Option<f32>,
+    pub(crate) distortion_scale: Option<f32>,
     /// Grid density of the arrow field, arrows across the image width.
-    pub grid_cols: usize,
+    pub(crate) grid_cols: usize,
     /// Which field the arrows draw. Selected automatically while a camera
     /// model proposal is open and restored afterwards
     /// ([`AppState::sync_proposal_field`]).
-    pub field: FieldMode,
+    pub(crate) field: FieldMode,
     /// Draw the axes and rings through the current camera while a proposal
     /// is open on the image's camera, rather than through the proposed one.
-    pub axes_on_current_model: bool,
+    pub(crate) axes_on_current_model: bool,
 }
 
 impl Default for IntrinsicsDisplaySettings {
@@ -187,7 +187,7 @@ impl Default for IntrinsicsDisplaySettings {
 
 /// The field the intrinsics layer's arrows draw.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FieldMode {
+pub(crate) enum FieldMode {
     /// The lens's displacement from its family's ideal map.
     #[default]
     Distortion,
@@ -200,10 +200,10 @@ pub enum FieldMode {
 
 impl FieldMode {
     /// Both modes, in the order the gear popup offers them.
-    pub const ALL: [FieldMode; 2] = [FieldMode::Distortion, FieldMode::ChangeToProposed];
+    pub(crate) const ALL: [FieldMode; 2] = [FieldMode::Distortion, FieldMode::ChangeToProposed];
 
     /// The popup's label, and the Action Log's word for the mode.
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             FieldMode::Distortion => "Distortion",
             FieldMode::ChangeToProposed => "Change to proposed",
@@ -212,7 +212,7 @@ impl FieldMode {
 
     /// The name the wire uses.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn wire_name(self) -> &'static str {
+    pub(crate) fn wire_name(self) -> &'static str {
         match self {
             FieldMode::Distortion => "distortion",
             FieldMode::ChangeToProposed => "change_to_proposed",
@@ -221,7 +221,7 @@ impl FieldMode {
 
     /// The mode a wire name names, or `None`.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn from_wire_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_wire_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|mode| mode.wire_name() == name)
     }
 }
@@ -229,30 +229,30 @@ impl FieldMode {
 impl IntrinsicsDisplaySettings {
     /// The exaggerations the auto scale chooses among, and the settings popup
     /// offers by hand.
-    pub const SCALE_LADDER: [f32; 7] = [1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0];
+    pub(crate) const SCALE_LADDER: [f32; 7] = [1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0];
 
     /// The grid densities the settings popup offers.
-    pub const GRID_LADDER: [usize; 5] = [8, 12, 16, 24, 32];
+    pub(crate) const GRID_LADDER: [usize; 5] = [8, 12, 16, 24, 32];
 }
 
 /// Scene-level settings controlling which features are displayed and how.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FeatureDisplaySettings {
+pub(crate) struct FeatureDisplaySettings {
     /// Which overlay mode is active.
-    pub overlay_mode: OverlayMode,
+    pub(crate) overlay_mode: OverlayMode,
     /// Maximum number of features to display per image. None = unlimited.
     /// Since features are sorted by decreasing size, this shows the N largest.
-    pub max_features: Option<usize>,
+    pub(crate) max_features: Option<usize>,
     /// Minimum feature size threshold in pixels. None = no threshold.
-    pub min_feature_size: Option<f32>,
+    pub(crate) min_feature_size: Option<f32>,
     /// Maximum feature size threshold in pixels. None = no threshold.
-    pub max_feature_size: Option<f32>,
+    pub(crate) max_feature_size: Option<f32>,
     /// Drag value for the min size slider (persists when checkbox is unchecked).
-    pub min_feature_size_value: f32,
+    pub(crate) min_feature_size_value: f32,
     /// Drag value for the max size slider (persists when checkbox is unchecked).
-    pub max_feature_size_value: f32,
+    pub(crate) max_feature_size_value: f32,
     /// If true, only show features that have an associated 3D point.
-    pub tracked_only: bool,
+    pub(crate) tracked_only: bool,
 }
 
 impl Default for FeatureDisplaySettings {
@@ -279,14 +279,14 @@ impl Default for FeatureDisplaySettings {
 /// a call changed is to have kept a copy of what it started from. Taking that
 /// copy is cheap: seven scalars and an enum.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ImageDetailDisplay {
-    pub feature: FeatureDisplaySettings,
-    pub intrinsics: IntrinsicsDisplaySettings,
+pub(crate) struct ImageDetailDisplay {
+    pub(crate) feature: FeatureDisplaySettings,
+    pub(crate) intrinsics: IntrinsicsDisplaySettings,
 }
 
 impl ImageDetailDisplay {
     /// Copy the two settings structs as they stand.
-    pub fn snapshot(
+    pub(crate) fn snapshot(
         feature: &FeatureDisplaySettings,
         intrinsics: &IntrinsicsDisplaySettings,
     ) -> Self {
@@ -316,7 +316,7 @@ impl ImageDetailDisplay {
 /// widget signal, which sidesteps the hazard `ActionLog::changed` documents:
 /// there is no frame here that announces a value nobody touched, because a
 /// value nobody touched is equal to the one before it.
-pub fn record_image_detail_changes(
+pub(crate) fn record_image_detail_changes(
     log: &mut ActionLog,
     before: &ImageDetailDisplay,
     after: &ImageDetailDisplay,
@@ -455,19 +455,19 @@ const TIMES: &str = "×";
 const EN_DASH: &str = "–";
 
 /// Global application state shared across all views.
-pub struct AppState {
+pub(crate) struct AppState {
     /// The loaded reconstructions, in load order — which is also tree order in
     /// the Scene Graph panel, and the order `[` / `]` step through.
     ///
     /// `File > Open`, the demo dialog and the CLI all *append* through
     /// [`AppState::append_node`]; nodes leave one at a time through
     /// [`AppState::close_node`] or wholesale through [`AppState::close_all`].
-    pub scene: Vec<SceneNode>,
+    pub(crate) scene: Vec<SceneNode>,
 
     /// The reconstruction that file- and sequence-shaped UI follows (Image
     /// Browser strip, animation, `,`/`.` stepping). `Some` whenever `scene` is
     /// non-empty.
-    pub selected_recon: Option<ReconId>,
+    pub(crate) selected_recon: Option<ReconId>,
 
     /// The soloed reconstruction: while `Some`, only that node is drawn.
     ///
@@ -482,13 +482,13 @@ pub struct AppState {
     ///
     /// At most one node at a time, so soloing B while A is soloed simply moves
     /// the solo to B. Composed with the eyes by [`crate::scene::is_visible`].
-    pub solo: Option<ReconId>,
+    pub(crate) solo: Option<ReconId>,
 
     /// Currently selected image.
     ///
     /// Set only through [`AppState::select_image`], which is what keeps
     /// `selected_camera` in step with it.
-    pub selected_image: Option<ImageRef>,
+    pub(crate) selected_image: Option<ImageRef>,
 
     /// The selected camera intrinsics, or `None`.
     ///
@@ -501,10 +501,10 @@ pub struct AppState {
     /// tree — so deriving it from `selected_image` would blank it the moment
     /// the user clicked anything else. What is derived is the *constraint*
     /// between the two, and that lives in the two setters.
-    pub selected_camera: Option<CameraRef>,
+    pub(crate) selected_camera: Option<CameraRef>,
 
     /// Currently selected 3D point.
-    pub selected_point: Option<PointRef>,
+    pub(crate) selected_point: Option<PointRef>,
 
     /// Where the Image Detail panel is being asked to look: the image, and the
     /// request in that image's own source coordinates.
@@ -557,46 +557,46 @@ pub struct AppState {
 
     /// Transient hover state: image under cursor (from GPU pick or browser).
     /// Updated every frame; cleared when pointer leaves the source panel.
-    pub hovered_image: Option<ImageRef>,
+    pub(crate) hovered_image: Option<ImageRef>,
 
     /// Transient hover state: 3D point under cursor (from GPU pick or detail).
     /// Updated every frame; cleared when pointer leaves the source panel.
-    pub hovered_point: Option<PointRef>,
+    pub(crate) hovered_point: Option<PointRef>,
 
     /// Feature overlay display settings (shared across images).
-    pub feature_display: FeatureDisplaySettings,
+    pub(crate) feature_display: FeatureDisplaySettings,
 
     /// Intrinsics overlay layer settings (shared across images). A sibling of
     /// `feature_display`, not part of it: the two layers compose rather than
     /// excluding one another.
-    pub intrinsics_display: IntrinsicsDisplaySettings,
+    pub(crate) intrinsics_display: IntrinsicsDisplaySettings,
 
     /// Whether to show 3D points.
-    pub show_points: bool,
+    pub(crate) show_points: bool,
 
     /// Whether to show camera frustums.
-    pub show_camera_images: bool,
+    pub(crate) show_camera_images: bool,
 
     /// Whether to show the ground plane grid.
-    pub show_grid: bool,
+    pub(crate) show_grid: bool,
 
     /// Whether to show patch surfels (textured oriented quads). Only has an
     /// effect when the loaded reconstruction carries patch frames + bitmaps.
-    pub show_patches: bool,
+    pub(crate) show_patches: bool,
 
     /// Global opacity multiplier for patch surfel color.
-    pub patch_opacity: f32,
+    pub(crate) patch_opacity: f32,
 
     /// Log2 multiplier on the stored patch half-extents, mirroring
     /// `point_size_log2`. Actual multiplier = 2^patch_size_log2.
-    pub patch_size_log2: f32,
+    pub(crate) patch_size_log2: f32,
 
     /// Coverage cutoff on the patch bitmap alpha (per-pixel cross-view
     /// confidence): fragments below this are discarded so ragged patch edges
     /// drop out. Defaults to `0.0` — render every texel opaque, discarding
     /// nothing — since the alpha look reads better fully filled; raise it to
     /// carve ragged edges away.
-    pub patch_alpha_cutoff: f32,
+    pub(crate) patch_alpha_cutoff: f32,
 
     /// Every action taken in this session, by whoever took it.
     ///
@@ -605,67 +605,67 @@ pub struct AppState {
     /// viewport status line can be a one-row window onto the log
     /// ([`AppState::status_message`]) instead of a second piece of state that
     /// can disagree with it. See [`crate::action_log`].
-    pub action_log: ActionLog,
+    pub(crate) action_log: ActionLog,
 
     /// Log2 multiplier on the auto-computed point size.
     /// 0.0 = use auto size, positive = larger, negative = smaller.
     /// Actual multiplier = 2^point_size_log2.
-    pub point_size_log2: f32,
+    pub(crate) point_size_log2: f32,
 
     /// Whether to draw points at infinity (`w = 0`). Independent of
     /// `show_points`, because a skyline of directions is often exactly the part
     /// of a reconstruction you want to look at without — or only without.
-    pub show_points_at_infinity: bool,
+    pub(crate) show_points_at_infinity: bool,
 
     /// Whether the orbit target's indicator is drawn all the time, rather than
     /// only while Alt is held and for a moment after the target moves: the
     /// HUD's **Target indicator** checkbox. Off at launch.
-    pub show_target_indicator: bool,
+    pub(crate) show_target_indicator: bool,
 
     /// On-screen splat radius (pixels) for points at infinity. A direction has
     /// no distance, so infinity points are sized in pixels rather than world
     /// units like finite points.
-    pub infinity_point_px: f32,
+    pub(crate) infinity_point_px: f32,
 
     /// Whether the bottom-right navigation cheat sheet is painted.
-    pub show_controls_help: bool,
+    pub(crate) show_controls_help: bool,
 
     /// Whether the top-left scene stats include the frame rate.
-    pub show_fps: bool,
+    pub(crate) show_fps: bool,
 
     /// Whether the viewport status line shows an entry an agent took over
     /// MCP: the HUD's **MCP status line** checkbox. On at launch. Off, the
     /// line is empty while the newest entry it would show is an agent's, so a
     /// screenshot an agent takes does not carry the agent's own calls; an
     /// entry a person took still shows. See [`AppState::status_message`].
-    pub show_mcp_status_line: bool,
+    pub(crate) show_mcp_status_line: bool,
 
     /// EDL line thickness in pixels. Controls how far the neighbor samples
     /// reach, which determines the width of depth-discontinuity edges.
-    pub edl_line_thickness: f32,
+    pub(crate) edl_line_thickness: f32,
 
     /// Target indicator size multiplier (radius = multiplier * length_scale).
-    pub target_size_multiplier: f32,
+    pub(crate) target_size_multiplier: f32,
 
     /// Target indicator fog multiplier. The fog distance is the reversed-Z NDC
     /// depth difference `0.1 * multiplier / DEFAULT_TARGET_FOG_MULTIPLIER`.
-    pub target_fog_multiplier: f32,
+    pub(crate) target_fog_multiplier: f32,
 
     /// World-space length scale. Represents characteristic scene size.
     /// Initialized to `DEFAULT_LENGTH_SCALE_MULTIPLIER * auto_point_size` on
     /// point upload, held to the HUD slider's range and decimals
     /// (`viewer_3d::display::seed_length_scale`), then independently adjustable
     /// via UI.
-    pub length_scale: f32,
+    pub(crate) length_scale: f32,
 
     /// Frustum stub depth as a fraction of `length_scale`.
-    pub frustum_size_multiplier: f32,
+    pub(crate) frustum_size_multiplier: f32,
 
     /// Cached SIFT feature positions and affine shapes per image.
     /// Shared by ImageDetail (for drawing features) and track ray upload
     /// (for computing true observation ray directions).
     /// Cleared when the scene changes.
-    pub sift_cache: HashMap<ImageRef, CachedSiftFeatures>,
+    pub(crate) sift_cache: HashMap<ImageRef, CachedSiftFeatures>,
 
     /// The SIFT index open beside each node, which a bench search queries
     /// ([`crate::sift_index`]).
@@ -704,7 +704,7 @@ pub struct AppState {
     /// clear it: reopening the same file then reuses the pixels, and the byte
     /// budget the cache was made with ([`default_budget_bytes`]) bounds the
     /// memory, dropping the least recently used photographs first.
-    pub photographs: Arc<PhotographCache>,
+    pub(crate) photographs: Arc<PhotographCache>,
 
     /// The photographs a panel has asked to have decoded on the rayon pool and
     /// that are still decoding, so each is asked for once. The panels read
@@ -713,22 +713,22 @@ pub struct AppState {
     pub(crate) photograph_requests: PhotographRequests,
 
     /// Whether the "Load Demo Data" dialog is currently open.
-    pub show_demo_dialog: bool,
+    pub(crate) show_demo_dialog: bool,
 
     /// Number of points configured in the demo-data dialog (preserved across opens).
-    pub demo_num_points: usize,
+    pub(crate) demo_num_points: usize,
 
     /// The "Go to Point" dialog: the typed query, its last error, and whether
     /// it is showing. See [`crate::goto_point`].
-    pub goto_point: GotoPointDialog,
+    pub(crate) goto_point: GotoPointDialog,
 
     /// The prompt that stands between an unsaved edit and losing it, and what
     /// is waiting on it. See [`crate::close_prompt`].
-    pub close_prompt: crate::close_prompt::ClosePrompt,
+    pub(crate) close_prompt: crate::close_prompt::ClosePrompt,
 
     /// The dialog `Bundle Adjust...` opens, and the one decision it takes. See
     /// [`crate::bundle_adjust_prompt`].
-    pub bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt,
+    pub(crate) bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt,
 
     /// The camera model proposal open on one camera, or `None`. Viewer state,
     /// like the Move Camera lock's pending pose: nothing of it is in a version
@@ -750,12 +750,12 @@ pub struct AppState {
 
     /// The workspace path `Save As Minimal...` asks about once its file dialog
     /// has named a file. See [`crate::save_minimal_prompt`].
-    pub save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
+    pub(crate) save_minimal_prompt: crate::save_minimal_prompt::SaveMinimalPrompt,
 
     /// The live MCP endpoint, or `None` when the viewer was started without
     /// `--mcp`. See [`crate::mcp`].
     #[cfg(feature = "mcp")]
-    pub mcp: Option<McpStatus>,
+    pub(crate) mcp: Option<McpStatus>,
 
     /// The window as it was last observed, or `None` before there is a window
     /// to observe.
@@ -958,33 +958,33 @@ pub struct AppState {
 /// It lives on `AppState` rather than beside the server so both of those can
 /// read it without knowing the transport exists.
 #[cfg(feature = "mcp")]
-pub struct McpStatus {
+pub(crate) struct McpStatus {
     /// The port actually bound, which is not necessarily the one asked for:
     /// `--mcp 0` takes an ephemeral one.
-    pub port: u16,
+    pub(crate) port: u16,
     /// How many tool calls have been applied. Shown live, so a human can see
     /// the agent working.
-    pub requests: u64,
+    pub(crate) requests: u64,
 }
 
 #[cfg(feature = "mcp")]
 impl McpStatus {
-    pub fn new(port: u16) -> Self {
+    pub(crate) fn new(port: u16) -> Self {
         Self { port, requests: 0 }
     }
 
     /// The URL a human pastes into a client config.
-    pub fn endpoint(&self) -> String {
+    pub(crate) fn endpoint(&self) -> String {
         format!("http://127.0.0.1:{}/mcp", self.port)
     }
 }
 
 /// Cached SIFT positions and affine shapes for one image (no descriptors).
-pub struct CachedSiftFeatures {
+pub(crate) struct CachedSiftFeatures {
     /// Feature positions (x, y) in image pixel coordinates. Length = read_count.
-    pub positions_xy: Vec<[f32; 2]>,
+    pub(crate) positions_xy: Vec<[f32; 2]>,
     /// Affine shape matrices [[a11, a12], [a21, a22]]. Length = read_count.
-    pub affine_shapes: Vec<[[f32; 2]; 2]>,
+    pub(crate) affine_shapes: Vec<[[f32; 2]; 2]>,
     /// How many features a request may ask for and still be answered from
     /// here.
     ///
@@ -993,11 +993,11 @@ pub struct CachedSiftFeatures {
     /// request up to that number is satisfiable without opening it again. A
     /// caller that wants every keypoint asks for `usize::MAX` and is answered
     /// from the cache on its second call.
-    pub read_count: usize,
+    pub(crate) read_count: usize,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             scene: Vec::new(),
             selected_recon: None,
@@ -1088,7 +1088,7 @@ impl AppState {
     /// a selection change. Selecting the new node clears the image and point
     /// selection per the finer-selection invariant — you opened this file to
     /// look at it, and no panel should be left showing another file's row.
-    pub fn append_node(&mut self, mut node: SceneNode) -> ReconId {
+    pub(crate) fn append_node(&mut self, mut node: SceneNode) -> ReconId {
         node.label = unique_label(&self.scene, &node.label);
         let id = node.id;
         self.scene.push(node);
@@ -1125,7 +1125,7 @@ impl AppState {
     /// Refused while a background operation is running on the node: its answer
     /// would have nowhere to land, and the refusal says so rather than leaving
     /// a worker computing a version for a node that is gone.
-    pub fn close_node(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn close_node(&mut self, id: ReconId) -> Result<(), String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
         }
@@ -1158,7 +1158,7 @@ impl AppState {
     /// Refused as a whole while a background operation locks a node, since
     /// that node is one of the ones this would close. An open locks no node,
     /// and the files it lands are appended to the empty scene.
-    pub fn close_all(&mut self) -> Result<(), String> {
+    pub(crate) fn close_all(&mut self) -> Result<(), String> {
         if let Some((_, why)) = self.locked_nodes().into_iter().next() {
             return Err(why);
         }
@@ -1254,7 +1254,7 @@ impl AppState {
     ///
     /// A focused item on another node is unfocused, since the selected node
     /// is the focused item's while one is focused.
-    pub fn select_recon(&mut self, id: ReconId) {
+    pub(crate) fn select_recon(&mut self, id: ReconId) {
         self.unfocus_off_node(id);
         let moved = self.selected_recon != Some(id);
         self.selected_recon = Some(id);
@@ -1277,7 +1277,7 @@ impl AppState {
     /// this leaves `selected_recon` and every finer selection exactly as they
     /// were. Soloing a second node moves the solo rather than adding to it —
     /// "show only this one" has one answer.
-    pub fn toggle_solo(&mut self, id: ReconId) {
+    pub(crate) fn toggle_solo(&mut self, id: ReconId) {
         self.set_solo((self.solo != Some(id)).then_some(id));
     }
 
@@ -1289,7 +1289,7 @@ impl AppState {
     /// [`AppState::toggle_solo`] resolves the click into a request and comes
     /// through here, so the two cannot disagree about what soloing does or
     /// about what the log says it did.
-    pub fn set_solo(&mut self, solo: Option<ReconId>) {
+    pub(crate) fn set_solo(&mut self, solo: Option<ReconId>) {
         if self.solo == solo {
             return;
         }
@@ -1303,7 +1303,7 @@ impl AppState {
 
     /// The camera an image uses, when the image ref still resolves: which
     /// shared camera it belongs to, not the intrinsics it was taken with.
-    pub fn camera_of(&self, image: ImageRef) -> Option<CameraRef> {
+    pub(crate) fn camera_of(&self, image: ImageRef) -> Option<CameraRef> {
         let node = self.node(image.recon)?;
         let camera = node
             .recon()
@@ -1329,7 +1329,7 @@ impl AppState {
     /// An image of another node than the focused item's unfocuses the item;
     /// an image of its own node keeps it focused, which is how a person moves
     /// between the photographs an item is being worked on in.
-    pub fn select_image(&mut self, image: Option<ImageRef>) {
+    pub(crate) fn select_image(&mut self, image: Option<ImageRef>) {
         if let Some(image) = image {
             self.unfocus_off_node(image.recon);
         }
@@ -1370,7 +1370,7 @@ impl AppState {
     /// is [`AppState::select_image`]'s, so the coupling rules and the Action
     /// Log row are the ones every other selection gets; what is added is the
     /// pixel, which the dock hands the panel on the frame it shows that image.
-    pub fn reveal_in_image(&mut self, image: ImageRef, pixel: [f32; 2]) {
+    pub(crate) fn reveal_in_image(&mut self, image: ImageRef, pixel: [f32; 2]) {
         self.look_at_in_image(image, Look::Reveal { pixel });
     }
 
@@ -1428,7 +1428,7 @@ impl AppState {
     ///
     /// A camera of another node than the focused item's unfocuses the item,
     /// as [`AppState::select_image`] does.
-    pub fn select_camera(&mut self, camera: Option<CameraRef>) {
+    pub(crate) fn select_camera(&mut self, camera: Option<CameraRef>) {
         if let Some(camera) = camera {
             self.unfocus_off_node(camera.recon);
         }
@@ -1475,7 +1475,7 @@ impl AppState {
     /// Only `mcp::write` calls this and [`Self::deselect_point`]; the UI clears
     /// a selection by selecting something else.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn clear_selection(&mut self) {
+    pub(crate) fn clear_selection(&mut self) {
         if self.selected_image.is_none()
             && self.selected_camera.is_none()
             && self.selected_point.is_none()
@@ -1493,7 +1493,7 @@ impl AppState {
 
     /// Drop the point selection alone.
     #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
-    pub fn deselect_point(&mut self) {
+    pub(crate) fn deselect_point(&mut self) {
         if self.selected_point.take().is_some() {
             self.action_log.record(Kind::Selection, "Deselected point");
         }
@@ -1505,7 +1505,7 @@ impl AppState {
     /// Track View's button), so none of them can forget the prefill —
     /// which is what makes the dialog double as a place to read or copy the
     /// current point's ID rather than only to type a new one.
-    pub fn open_goto_point(&mut self) {
+    pub(crate) fn open_goto_point(&mut self) {
         let prefill = goto_point::selected_point_id(&self.scene, self.selected_point);
         self.goto_point.open(prefill);
     }
@@ -1517,7 +1517,7 @@ impl AppState {
     ///
     /// The one entry point, so whatever opens the dialog asks the same question
     /// about the same node.
-    pub fn open_bundle_adjust(&mut self, id: ReconId) {
+    pub(crate) fn open_bundle_adjust(&mut self, id: ReconId) {
         let Some(node) = self.node(id) else { return };
         let label = node.label.clone();
         let gates = crate::bundle_adjust_prompt::BundleAdjustGates::of(node.edited());
@@ -1534,7 +1534,7 @@ impl AppState {
     /// point it wrote before selecting it and so keeps the item focused. The
     /// selection that follows the point maps after an edit assigns
     /// `selected_point` directly, and does not unfocus.
-    pub fn select_point(&mut self, point: PointRef) {
+    pub(crate) fn select_point(&mut self, point: PointRef) {
         if self.focused_item().is_some() && self.focused_origin() != Some(point) {
             self.leave_focused_item();
         }
@@ -1554,7 +1554,7 @@ impl AppState {
     }
 
     /// Look up a loaded node by id.
-    pub fn node(&self, id: ReconId) -> Option<&SceneNode> {
+    pub(crate) fn node(&self, id: ReconId) -> Option<&SceneNode> {
         node_by_id(&self.scene, id)
     }
 
@@ -1576,7 +1576,7 @@ impl AppState {
     /// and record what they wrote in the same breath — the Scene panel's eyes
     /// and tint, and the MCP `set_reconstruction_display` tool. Going through
     /// `&mut self` twice would borrow the whole state twice.
-    pub fn scene_and_log(&mut self) -> (&mut [SceneNode], &mut ActionLog) {
+    pub(crate) fn scene_and_log(&mut self) -> (&mut [SceneNode], &mut ActionLog) {
         (&mut self.scene, &mut self.action_log)
     }
 
@@ -1588,17 +1588,17 @@ impl AppState {
     /// Derived rather than stored, so a successful action cannot leave a stale
     /// error on screen and a refusal cannot go unreported. See
     /// [`crate::action_log::ActionLog::status_line`].
-    pub fn status_message(&self) -> Option<String> {
+    pub(crate) fn status_message(&self) -> Option<String> {
         self.action_log.status_line(self.show_mcp_status_line)
     }
 
     /// The selected image's local index, when it belongs to `recon`.
-    pub fn selected_image_in(&self, recon: ReconId) -> Option<usize> {
+    pub(crate) fn selected_image_in(&self, recon: ReconId) -> Option<usize> {
         self.selected_image?.index_in(recon)
     }
 
     /// The selected point's local index, when it belongs to `recon`.
-    pub fn selected_point_in(&self, recon: ReconId) -> Option<usize> {
+    pub(crate) fn selected_point_in(&self, recon: ReconId) -> Option<usize> {
         self.selected_point?.index_in(recon)
     }
 
@@ -1617,12 +1617,12 @@ impl AppState {
     }
 
     /// The hovered image's local index, when it belongs to `recon`.
-    pub fn hovered_image_in(&self, recon: ReconId) -> Option<usize> {
+    pub(crate) fn hovered_image_in(&self, recon: ReconId) -> Option<usize> {
         self.hovered_image?.index_in(recon)
     }
 
     /// The hovered point's local index, when it belongs to `recon`.
-    pub fn hovered_point_in(&self, recon: ReconId) -> Option<usize> {
+    pub(crate) fn hovered_point_in(&self, recon: ReconId) -> Option<usize> {
         self.hovered_point?.index_in(recon)
     }
 
@@ -1637,7 +1637,7 @@ impl AppState {
     /// The file name carries a leading `*` while the node showing it is not at
     /// the version its file holds. The marker sits on the *name*, and the MCP
     /// port is a suffix, so every title starts with the application's name.
-    pub fn window_title(&self) -> String {
+    pub(crate) fn window_title(&self) -> String {
         let extra = self.scene.len().saturating_sub(1);
         let marker = match self.scene.first() {
             Some(node) if self.is_dirty(node.id) => "*",
@@ -1681,7 +1681,7 @@ impl Default for AppState {
 /// row under every entry the panel's frames settle.
 /// `&Progress::none()` reports nothing, which is what a caller outside a frame
 /// passes.
-pub fn ensure_sift_cached<'a>(
+pub(crate) fn ensure_sift_cached<'a>(
     cache: &'a mut HashMap<ImageRef, CachedSiftFeatures>,
     recon: &SfmrReconstruction,
     image: ImageRef,

@@ -21,7 +21,7 @@ mod tests;
 
 /// What the user was about to do when the prompt appeared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PendingClose {
+pub(crate) enum PendingClose {
     /// Close one node.
     Node(ReconId),
     /// Close every loaded node.
@@ -32,7 +32,7 @@ pub enum PendingClose {
 
 /// What the user answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseAnswer {
+pub(crate) enum CloseAnswer {
     /// Write the dirty nodes first, then go ahead.
     Save(PendingClose),
     /// Go ahead and lose the edits.
@@ -41,7 +41,7 @@ pub enum CloseAnswer {
 
 /// The modal, and the one thing it remembers: what is waiting on it.
 #[derive(Default)]
-pub struct ClosePrompt {
+pub(crate) struct ClosePrompt {
     pending: Option<PendingClose>,
 }
 
@@ -51,7 +51,7 @@ impl ClosePrompt {
     /// Idempotent while the prompt is already up, so a menu item racing a
     /// shortcut cannot stack two of them; the first question is the one that
     /// gets answered.
-    pub fn ask(&mut self, pending: PendingClose) {
+    pub(crate) fn ask(&mut self, pending: PendingClose) {
         if self.pending.is_none() {
             self.pending = Some(pending);
         }
@@ -62,7 +62,7 @@ impl ClosePrompt {
     /// `dirty` is what the sentence names, so the user is told which
     /// reconstructions are at stake rather than that "there are unsaved
     /// changes".
-    pub fn show(&mut self, ctx: &egui::Context, dirty: &[String]) -> Option<CloseAnswer> {
+    pub(crate) fn show(&mut self, ctx: &egui::Context, dirty: &[String]) -> Option<CloseAnswer> {
         let pending = self.pending?;
         let mut answer = None;
         let mut cancelled = false;

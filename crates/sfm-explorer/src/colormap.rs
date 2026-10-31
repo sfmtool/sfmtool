@@ -18,7 +18,7 @@
 
 /// A colormap defined by control points (position, r, g, b).
 /// Positions are in [0, 1], colors are in [0, 255].
-pub struct Colormap {
+pub(crate) struct Colormap {
     stops: &'static [(f32, u8, u8, u8)],
 }
 
@@ -51,7 +51,7 @@ impl Colormap {
 }
 
 /// Error colormap: green (good, low error) -> yellow -> red (bad, high error).
-pub const ERROR_COLORMAP: Colormap = Colormap {
+pub(crate) const ERROR_COLORMAP: Colormap = Colormap {
     stops: &[(0.0, 0, 200, 0), (0.5, 255, 255, 0), (1.0, 255, 0, 0)],
 };
 
@@ -59,7 +59,7 @@ pub const ERROR_COLORMAP: Colormap = Colormap {
 /// Inverse of ERROR_COLORMAP — used for metrics where higher is better
 /// (track length, max track angle). Shared so visually comparable metrics
 /// use the same encoding.
-pub const QUALITY_COLORMAP: Colormap = Colormap {
+pub(crate) const QUALITY_COLORMAP: Colormap = Colormap {
     stops: &[(0.0, 255, 0, 0), (0.5, 255, 255, 0), (1.0, 0, 200, 0)],
 };
 
@@ -68,7 +68,7 @@ pub const QUALITY_COLORMAP: Colormap = Colormap {
 /// Values outside the range are clamped by [`Colormap::sample`], and a
 /// degenerate range — every feature in the image carrying the same number —
 /// samples the middle of the ramp rather than dividing by zero.
-pub fn ramp(value: f32, vmin: f32, vmax: f32, map: &Colormap) -> egui::Color32 {
+pub(crate) fn ramp(value: f32, vmin: f32, vmax: f32, map: &Colormap) -> egui::Color32 {
     let t = if (vmax - vmin).abs() < 1e-9 {
         0.5
     } else {
@@ -81,7 +81,7 @@ pub fn ramp(value: f32, vmin: f32, vmax: f32, map: &Colormap) -> egui::Color32 {
 ///
 /// Renders a gradient bar with min/max labels in the bottom-right corner
 /// of the given rect.
-pub fn draw_colorbar(
+pub(crate) fn draw_colorbar(
     painter: &egui::Painter,
     panel_rect: egui::Rect,
     label: &str,

@@ -56,7 +56,11 @@ run them in full on the last commit:
 In `sfm-explorer`, keep an item private when only its module and descendants use
 it. Use `pub(crate)` when sibling modules need it, including methods and fields
 of types declared in private modules. Reserve bare `pub` for an item exposed
-through the crate's public interface.
+through the crate's public interface, which is `run`, `run_with_args` and
+`RunError` in `lib.rs`. The crate sets `#![warn(unreachable_pub)]` in
+`lib.rs`, so CI's clippy job (`-D warnings`) rejects a bare `pub` function,
+type, constant or `use` that the crate does not export. rustc does not apply
+that lint to struct fields, so a bare `pub` field is caught only in review.
 
 ### Python names and privacy
 

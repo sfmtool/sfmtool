@@ -27,7 +27,7 @@ use super::AppState;
 
 impl AppState {
     /// Append a node of generated demo data.
-    pub fn load_demo(&mut self, num_points: usize) {
+    pub(crate) fn load_demo(&mut self, num_points: usize) {
         self.append_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
         self.action_log.record(Kind::File, "Loaded demo data");
     }
@@ -48,7 +48,7 @@ impl AppState {
     ///
     /// The fit runs synchronously. By-cameras is trivially small; by-points is a
     /// bounded RANSAC over the correspondences (see [`crate::align`]).
-    pub fn align_node(&mut self, source: ReconId, target: ReconId, options: AlignOptions) {
+    pub(crate) fn align_node(&mut self, source: ReconId, target: ReconId, options: AlignOptions) {
         if source == target {
             return;
         }

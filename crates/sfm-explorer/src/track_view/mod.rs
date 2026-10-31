@@ -69,12 +69,12 @@ pub(crate) fn infinity_mark(ui: &mut egui::Ui) {
 pub(crate) struct TrackViewResponse {
     /// The box was ticked (`true`, from Viewed mode or the empty state) or
     /// cleared (`false`, from Edited mode).
-    pub set_edit: Option<bool>,
+    pub(crate) set_edit: Option<bool>,
     /// What the body, or the empty state in its place, reported.
-    pub body: Option<TrackBodyResponse>,
+    pub(crate) body: Option<TrackBodyResponse>,
     /// A chip in the recent items strip was clicked: the item to focus, as
     /// its node and its label, for `AppState::focus_bench_item`.
-    pub focus_item: Option<(crate::scene::ReconId, String)>,
+    pub(crate) focus_item: Option<(crate::scene::ReconId, String)>,
 }
 
 /// Track View panel state: the body it draws, and the recent items strip.

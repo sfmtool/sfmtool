@@ -24,16 +24,16 @@ const SAMPLES_PER_PIXEL: usize = 16;
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SurfacePlot {
     /// Interpolated ZNCC, row-major, `n × n`, over the whole square.
-    pub values: Vec<f64>,
+    pub(crate) values: Vec<f64>,
     /// Samples across the picture.
-    pub n: usize,
+    pub(crate) n: usize,
     /// How far the searched shifts reach along each axis, `r`.
-    pub r: usize,
+    pub(crate) r: usize,
     /// The ZNCC level of the contour, `1 - τ`.
-    pub level: f64,
+    pub(crate) level: f64,
     /// The indistinguishable shifts, `(dx, dy)` with `|dx|, |dy| ≤ r`, the
     /// centre left out.
-    pub inside: Vec<[i32; 2]>,
+    pub(crate) inside: Vec<[i32; 2]>,
 }
 
 impl SurfacePlot {
@@ -249,9 +249,9 @@ pub(super) fn contour_segments(values: &[f64], n: usize, level: f64) -> Vec<[[f3
 /// A plot with its picture uploaded and its contour traced, ready to paint
 /// every frame without recomputing either.
 pub(super) struct DrawnPlot {
-    pub plot: SurfacePlot,
-    pub contour: Vec<[[f32; 2]; 2]>,
-    pub texture: egui::TextureHandle,
+    pub(crate) plot: SurfacePlot,
+    pub(crate) contour: Vec<[[f32; 2]; 2]>,
+    pub(crate) texture: egui::TextureHandle,
 }
 
 impl DrawnPlot {

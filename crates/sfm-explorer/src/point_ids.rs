@@ -38,13 +38,13 @@ use crate::scene::SceneNode;
 mod tests;
 
 /// How many hex digits of a hash a displayed id carries.
-pub const HASH_PREFIX_LEN: usize = 8;
+pub(crate) const HASH_PREFIX_LEN: usize = 8;
 
 /// How many hex digits a whole content hash has.
 ///
 /// An XXH128 digest written as lowercase hex, which is what `content_xxh128` is
 /// and the only length a hash this module will work from.
-pub const HASH_LEN: usize = 32;
+pub(crate) const HASH_LEN: usize = 32;
 
 /// The first [`HASH_PREFIX_LEN`] hex digits of `edited`'s base content hash.
 ///
@@ -52,7 +52,7 @@ pub const HASH_LEN: usize = 32;
 /// base writes and it costs one pass over the columns per base rather than one
 /// per call. `None` only when the value cannot be hashed at all, which is a
 /// reconstruction the writer would refuse.
-pub fn base_hash_prefix(edited: &EditedReconstruction) -> Option<String> {
+pub(crate) fn base_hash_prefix(edited: &EditedReconstruction) -> Option<String> {
     Some(full_base_hash(edited)?[..HASH_PREFIX_LEN].to_string())
 }
 
@@ -85,7 +85,7 @@ fn full_base_hash(edited: &EditedReconstruction) -> Option<&str> {
 ///
 /// `None` when `index` names no live point of the value at the cursor, or when
 /// no content the point reaches can still be hashed.
-pub fn mint(node: &SceneNode, index: u32) -> Option<String> {
+pub(crate) fn mint(node: &SceneNode, index: u32) -> Option<String> {
     let Reached { chain, created } = walk_back(node, index)?;
 
     let disk = node.history.disk_serial();
@@ -202,7 +202,7 @@ fn value_at(node: &SceneNode, serial: VersionSerial) -> Option<&EditedReconstruc
 /// failing happened: the hash names nothing this node has been, or it does and
 /// the point it named is not in the value at the cursor -- in which case it
 /// names the version the walk stopped at, since that is where the point went.
-pub fn resolve(node: &SceneNode, hash: &str, index: u32) -> Result<u32, String> {
+pub(crate) fn resolve(node: &SceneNode, hash: &str, index: u32) -> Result<u32, String> {
     let cursor = node.history.current_version().serial;
     let Some((from, index)) = locate(node, hash, index)? else {
         return Err(format!(
@@ -225,7 +225,7 @@ pub fn resolve(node: &SceneNode, hash: &str, index: u32) -> Result<u32, String> 
 /// asks about the hash alone, so a node that held the content but not the row is
 /// still the node the query belongs to and gets to say what happened to the row,
 /// rather than the search silently moving on to another node.
-pub fn holds_hash(node: &SceneNode, hash: &str) -> bool {
+pub(crate) fn holds_hash(node: &SceneNode, hash: &str) -> bool {
     let history = &node.history;
     if history
         .all_serials()

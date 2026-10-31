@@ -7,9 +7,9 @@ const SHADER: &str = include_str!("../../shaders/track_ray.wgsl");
 
 /// Resources created by the track ray pipeline.
 pub(in crate::scene_renderer) struct TrackRayPipelineResources {
-    pub pipeline: wgpu::RenderPipeline,
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TrackRayPipelineResources {

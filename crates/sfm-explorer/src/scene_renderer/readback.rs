@@ -7,12 +7,12 @@ use super::picking::{PickTarget, PICK_TAG_MASK, PICK_TAG_NONE};
 use super::SceneRenderer;
 
 /// Result of a 5×5 readback from both depth and pick buffers.
-pub struct ReadbackResult {
+pub(crate) struct ReadbackResult {
     /// Nearest valid depth in the 5×5 region, or `None` if background.
-    pub depth: Option<f32>,
+    pub(crate) depth: Option<f32>,
     /// The picked entity, already decoded to a typed ref, or `None` if
     /// background (or a stale id from a node that has since been released).
-    pub pick: Option<PickTarget>,
+    pub(crate) pick: Option<PickTarget>,
 }
 
 /// Read a 5x5 grid of f32 values from a 256-byte-aligned staging buffer.
@@ -119,7 +119,12 @@ impl SceneRenderer {
     /// Enqueue copies of a 5×5 pixel region from both the linear depth and
     /// pick buffer textures to their staging buffers. Used for both hover
     /// (every frame) and click (on demand) — same buffers, same logic.
-    pub fn copy_readback_region(&mut self, encoder: &mut wgpu::CommandEncoder, cx: u32, cy: u32) {
+    pub(crate) fn copy_readback_region(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        cx: u32,
+        cy: u32,
+    ) {
         let (w, h) = self.current_size;
         if w == 0 || h == 0 {
             return;
@@ -178,7 +183,7 @@ impl SceneRenderer {
 
     /// Map both staging buffers and read the 5×5 depth + pick results.
     /// Updates the cached hover result and returns the full result for click handling.
-    pub fn read_readback_result(&mut self, device: &wgpu::Device) -> Option<ReadbackResult> {
+    pub(crate) fn read_readback_result(&mut self, device: &wgpu::Device) -> Option<ReadbackResult> {
         if !self.readback_pending {
             return None;
         }
@@ -209,12 +214,12 @@ impl SceneRenderer {
     }
 
     /// Returns the most recently read-back hover depth value.
-    pub fn hover_depth(&self) -> Option<f32> {
+    pub(crate) fn hover_depth(&self) -> Option<f32> {
         self.hover_depth
     }
 
     /// Returns the entity under the cursor at the most recent readback.
-    pub fn hover_pick(&self) -> Option<PickTarget> {
+    pub(crate) fn hover_pick(&self) -> Option<PickTarget> {
         self.hover_pick
     }
 

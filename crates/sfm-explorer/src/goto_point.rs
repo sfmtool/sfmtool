@@ -22,12 +22,12 @@ use crate::scene::{node_by_id, selected_node, PointRef, ReconId, SceneNode};
 ///
 /// `COMMAND` rather than `CTRL` so it follows the platform's own convention,
 /// the same way egui's own built-in shortcuts do.
-pub const SHORTCUT: egui::KeyboardShortcut =
+pub(crate) const SHORTCUT: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::G);
 
 /// What the user typed, once it has been recognized as a point reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PointQuery {
+pub(crate) enum PointQuery {
     /// A bare index, which names a point but not a file — so it resolves
     /// against whichever reconstruction is currently selected.
     Index(usize),
@@ -47,7 +47,7 @@ pub enum PointQuery {
 /// prints `Point3D #12345`, and that `#12345` is a natural thing to retype) and
 /// a Point ID in any case. Anything else is rejected with a message that shows
 /// both accepted shapes rather than trying to guess what was meant.
-pub fn parse_point_query(input: &str) -> Result<PointQuery, String> {
+pub(crate) fn parse_point_query(input: &str) -> Result<PointQuery, String> {
     let text = input.trim();
     let bare = text.strip_prefix('#').unwrap_or(text).trim();
 
@@ -101,7 +101,7 @@ pub fn parse_point_query(input: &str) -> Result<PointQuery, String> {
 /// indexes above it where they were and a replacement hands out one past the
 /// end, so a live point's index can sit above that count and an index below it
 /// can name nothing. What is refused is an index that names no live point.
-pub fn resolve_point_query(
+pub(crate) fn resolve_point_query(
     scene: &[SceneNode],
     selected: Option<ReconId>,
     query: &PointQuery,
@@ -185,7 +185,10 @@ fn plural(count: usize) -> String {
 /// `None` when nothing is selected, or when the selection has gone stale
 /// against a different reconstruction; prefilling an ID that no longer resolves
 /// would hand the user a query that fails the moment they press Enter.
-pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) -> Option<String> {
+pub(crate) fn selected_point_id(
+    scene: &[SceneNode],
+    selected_point: Option<PointRef>,
+) -> Option<String> {
     let point = selected_point?;
     let node = node_by_id(scene, point.recon)?;
     let index = u32::try_from(point.index()).ok()?;
@@ -199,7 +202,7 @@ pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) 
 /// own button; it stays open on a bad query so the message sits right
 /// under the text that caused it and can be corrected in place.
 #[derive(Default)]
-pub struct GotoPointDialog {
+pub(crate) struct GotoPointDialog {
     /// Whether the window is showing.
     open: bool,
     /// The text field's contents. Replaced on open by the selected point's ID
@@ -228,7 +231,7 @@ impl GotoPointDialog {
     /// panel header. Re-opening an already-open dialog only re-focuses: the
     /// text there may be half-typed, and the menu item racing the shortcut must
     /// not throw it away.
-    pub fn open(&mut self, prefill: Option<String>) {
+    pub(crate) fn open(&mut self, prefill: Option<String>) {
         if !self.open {
             if let Some(text) = prefill {
                 self.input = text;
@@ -253,7 +256,7 @@ impl GotoPointDialog {
     /// Returning the [`PointRef`] rather than applying it keeps this free of
     /// `AppState`: the caller owns what "go there" means (select the point,
     /// and raise Track View so the result is visible).
-    pub fn show(
+    pub(crate) fn show(
         &mut self,
         ctx: &egui::Context,
         scene: &[SceneNode],

@@ -203,14 +203,14 @@ fn ink(alpha: u8) -> Color32 {
 #[derive(Clone, Copy)]
 pub(super) struct View {
     /// Image pixel `(0, 0)` in panel coordinates.
-    pub origin: Pos2,
+    pub(crate) origin: Pos2,
     /// Panel pixels per image pixel.
-    pub scale: f32,
+    pub(crate) scale: f32,
     /// Panel pixels per image pixel with the image *fitted* to the panel — the
     /// scale at zoom 1. The arrow exaggeration is fitted to this rather than to
     /// `scale`, so that zooming does not step it up and down the ladder; see
     /// [`distortion_field::auto_scale`].
-    pub fit: f32,
+    pub(crate) fit: f32,
 }
 
 impl View {
@@ -237,11 +237,11 @@ impl View {
 pub(crate) struct CameraLayer {
     /// The grid the displacement field was sampled on, `(cols, rows)`. Part of
     /// the cache's validity: changing the density rebuilds the field.
-    pub grid: (usize, usize),
+    pub(crate) grid: (usize, usize),
     /// Where this model stops describing a lens, in degrees off-axis, or `None`
     /// when it describes one at every angle
     /// ([`report::trustworthy_max_theta_deg`]).
-    pub limit_deg: Option<f64>,
+    pub(crate) limit_deg: Option<f64>,
     /// The largest displacement over the grid nodes **inside**
     /// [`Self::limit_deg`], in image pixels.
     ///
@@ -252,19 +252,19 @@ pub(crate) struct CameraLayer {
     /// displaces anything. An unfiltered maximum is a true statement about two
     /// forward maps and a false one about a camera, so it is what neither the
     /// legend quotes nor the arrow scale is fitted to.
-    pub max_px: f64,
+    pub(crate) max_px: f64,
     /// Grid nodes outside [`Self::limit_deg`], and the total the grid produced.
-    pub extrapolated: (usize, usize),
+    pub(crate) extrapolated: (usize, usize),
     /// The displacement field itself, one entry per surviving grid node. Empty
     /// for a model that is its own ideal map.
-    pub arrows: Vec<Arrow>,
+    pub(crate) arrows: Vec<Arrow>,
     /// The exaggeration the auto scale last resolved to.
     ///
     /// Written by the draw pass and read by the settings popup, which is laid
     /// out above the image and so quotes the previous frame's value. The
     /// alternative is laying the panel out twice to tell the user a number that
     /// the on-image legend restates every frame anyway.
-    pub auto_scale: f32,
+    pub(crate) auto_scale: f32,
     /// The angular reference grid, resampled when the zoom crosses a
     /// half-octave bucket or the rings are switched on.
     geometry: Option<AxisGeometry>,
@@ -315,14 +315,14 @@ impl CameraLayer {
 pub(crate) struct Arrow {
     /// The ideal map's pixel — the arrow's head at `×1`, i.e. where the content
     /// under [`Self::pixel`] belongs.
-    pub reference: [f64; 2],
+    pub(crate) reference: [f64; 2],
     /// The model's pixel, and the grid node itself — the arrow's tail. The tail
     /// is the real pixel because the field is drawn on the real image; see
     /// [`mod@distortion_field`].
-    pub pixel: [f64; 2],
+    pub(crate) pixel: [f64; 2],
     /// Whether the sampled ray is inside [`CameraLayer::limit_deg`], and so
     /// whether this node is a measurement at all. See [`mod@distortion_field`].
-    pub trusted: bool,
+    pub(crate) trusted: bool,
 }
 
 /// How much wider than its stroke a halo is drawn.

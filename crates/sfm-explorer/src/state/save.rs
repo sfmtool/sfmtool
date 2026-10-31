@@ -70,18 +70,18 @@ impl AppState {
     /// The one question the dirty marker and the close prompt ask. A node that
     /// came from no file is dirty from the moment it is made: there is no file
     /// holding it, so leaving it loses it.
-    pub fn is_dirty(&self, id: ReconId) -> bool {
+    pub(crate) fn is_dirty(&self, id: ReconId) -> bool {
         self.node(id).is_some_and(SceneNode::is_dirty)
     }
 
     /// Whether any loaded node is dirty, which is what closing the window asks.
-    pub fn any_dirty(&self) -> bool {
+    pub(crate) fn any_dirty(&self) -> bool {
         self.scene.iter().any(SceneNode::is_dirty)
     }
 
     /// The labels of the dirty nodes, for the close prompt's sentence: it names
     /// what is at stake rather than saying that something is.
-    pub fn dirty_labels(&self) -> Vec<String> {
+    pub(crate) fn dirty_labels(&self) -> Vec<String> {
         self.scene
             .iter()
             .filter(|node| node.is_dirty())
@@ -90,7 +90,7 @@ impl AppState {
     }
 
     /// The ids of the dirty nodes, for the close prompt's Save.
-    pub fn dirty_ids(&self) -> Vec<ReconId> {
+    pub(crate) fn dirty_ids(&self) -> Vec<ReconId> {
         self.scene
             .iter()
             .filter(|node| node.is_dirty())
@@ -102,7 +102,7 @@ impl AppState {
     ///
     /// `Err` when the node came from no file -- which is Save As's case, not
     /// this one -- or when the write itself failed.
-    pub fn save_node(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn save_node(&mut self, id: ReconId) -> Result<(), String> {
         let path = self
             .node(id)
             .ok_or_else(|| crate::state::NOT_LOADED.to_string())?
@@ -126,7 +126,7 @@ impl AppState {
     /// (see [`Self::save_minimal_copy`] for the copy that states it without
     /// touching the node). `None` writes the path the value has, which is right
     /// for the dialog's save: nobody typed a workspace path into it.
-    pub fn save_node_as(
+    pub(crate) fn save_node_as(
         &mut self,
         id: ReconId,
         path: &Path,
@@ -158,7 +158,7 @@ impl AppState {
     /// The refusals are [`Self::minimal_copy_refusal`], which the File menu asks
     /// first so that its workspace-path prompt does not stand in front of a save
     /// that cannot happen.
-    pub fn save_minimal_copy(
+    pub(crate) fn save_minimal_copy(
         &mut self,
         id: ReconId,
         path: &Path,
@@ -224,7 +224,7 @@ impl AppState {
     /// [`Self::save_minimal_copy`] asks this itself, and the File menu asks it as
     /// soon as the save dialog names a path, so a user is not made to fill in a
     /// workspace path for a save that is going to be refused.
-    pub fn minimal_copy_refusal(&self, id: ReconId, path: &Path) -> Option<String> {
+    pub(crate) fn minimal_copy_refusal(&self, id: ReconId, path: &Path) -> Option<String> {
         let Some(node) = self.node(id) else {
             return Some(crate::state::NOT_LOADED.to_string());
         };
@@ -256,7 +256,7 @@ impl AppState {
     /// the value already records, which is what the file it came from said; and
     /// where that is empty too, empty, since an empty value is the format's "none
     /// recorded" and a path invented here would claim a workspace nobody named.
-    pub fn minimal_copy_workspace_path(&self, id: ReconId, path: &Path) -> String {
+    pub(crate) fn minimal_copy_workspace_path(&self, id: ReconId, path: &Path) -> String {
         let Some(node) = self.node(id) else {
             return String::new();
         };

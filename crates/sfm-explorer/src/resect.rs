@@ -18,7 +18,7 @@
 //! (reading the file, materialising the current value, pushing the version,
 //! following the selection) is [`crate::state::AppState::resect_image`]'s job.
 
-pub use sfmtool_core::geometry::{
+pub(crate) use sfmtool_core::geometry::{
     resect_image_in_place, ResectImageOptions, ResectImageReport, ResectSource,
 };
 
@@ -36,7 +36,7 @@ use crate::state::AppState;
 /// The translation is reported in scene-scale units when the reconstruction has
 /// a camera-to-structure distance to divide by, and in its own units when it
 /// does not (a rotation-only reconstruction has no such distance).
-pub fn outcome_summary(report: &ResectImageReport) -> String {
+pub(crate) fn outcome_summary(report: &ResectImageReport) -> String {
     let translation = match report.translation_scene {
         Some(scaled) => format!("{scaled:.3} (scene-scale)"),
         None => format!("{:.3}", report.translation),
@@ -71,13 +71,13 @@ pub fn outcome_summary(report: &ResectImageReport) -> String {
 /// Covers every refusal: an estimate that missed its acceptance gate, one that
 /// could not be attempted at all, and a node whose cluster-patches file is
 /// missing or out of date. None pushes a version.
-pub fn failure_message(image: &str, node: &str, reason: &str) -> String {
+pub(crate) fn failure_message(image: &str, node: &str, reason: &str) -> String {
     format!("Resect {image} in {node} refused: {reason}")
 }
 
 /// The last component of a workspace-relative image name — what the version's
 /// label is written with and what the status line says.
-pub fn basename(name: &str) -> &str {
+pub(crate) fn basename(name: &str) -> &str {
     name.rsplit(['/', '\\']).next().unwrap_or(name)
 }
 

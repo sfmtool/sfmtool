@@ -34,7 +34,7 @@ impl SceneRenderer {
     ///
     /// `None` -- a cluster-stage item, a track with no frame, or no focused
     /// item at all -- uploads nothing and draws nothing.
-    pub fn upload_bench_track(&mut self, device: &wgpu::Device, figure: Option<&Figure>) {
+    pub(crate) fn upload_bench_track(&mut self, device: &wgpu::Device, figure: Option<&Figure>) {
         let Some(figure) = figure else {
             self.clear_bench_track();
             return;
@@ -81,7 +81,7 @@ impl SceneRenderer {
     }
 
     /// Drop the figure's geometry: nothing on the bench to draw.
-    pub fn clear_bench_track(&mut self) {
+    pub(crate) fn clear_bench_track(&mut self) {
         self.bench_track_edge_buffer = None;
         self.bench_track_edge_count = 0;
         self.bench_track_disc_buffer = None;
@@ -90,7 +90,7 @@ impl SceneRenderer {
     }
 
     /// Update the bench track pass's camera block.
-    pub fn update_bench_track_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
+    pub(crate) fn update_bench_track_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
         let (w, h) = self.current_size;
         if w == 0 || h == 0 || self.bench_track_edge_count + self.bench_track_disc_count == 0 {
             return;
@@ -120,7 +120,7 @@ impl SceneRenderer {
     /// The disc first and the edges over it, as the target indicator draws its
     /// star under its wireframe: the outline is what says where the frame's
     /// boundary is, so nothing fills over it.
-    pub fn render_bench_track(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn render_bench_track(&self, encoder: &mut wgpu::CommandEncoder) {
         if self.bench_track_edge_count + self.bench_track_disc_count == 0 {
             return;
         }

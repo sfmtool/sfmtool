@@ -64,7 +64,7 @@ impl SceneRenderer {
     /// changed, so a version that gives the image other intrinsics or another
     /// pose redraws the photograph where its rays now point without decoding it
     /// again.
-    pub fn upload_bg_image(
+    pub(crate) fn upload_bg_image(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -204,7 +204,7 @@ impl SceneRenderer {
     }
 
     /// Clear the background image when leaving camera view mode.
-    pub fn clear_bg_image(&mut self) {
+    pub(crate) fn clear_bg_image(&mut self) {
         self.bg_image_bind_group = None;
         self.bg_image_texture = None;
         self.bg_image_loaded = None;

@@ -15,15 +15,15 @@ const SHADER: &str = concat!(
 /// `ReconUniforms` slice, so one is built per loaded reconstruction (see
 /// [`ReconResources::new`](crate::scene_renderer::recon::ReconResources::new)).
 pub(in crate::scene_renderer) struct PointPipelineResources {
-    pub pipeline: wgpu::RenderPipeline,
+    pub(crate) pipeline: wgpu::RenderPipeline,
     /// The same splats, read through the camera model proposal's preview
     /// buffer, blended toward each point's target by the node's `preview_s`.
-    pub preview_pipeline: wgpu::RenderPipeline,
-    pub quad_vertex_buffer: wgpu::Buffer,
+    pub(crate) preview_pipeline: wgpu::RenderPipeline,
+    pub(crate) quad_vertex_buffer: wgpu::Buffer,
     /// The point and patch pipelines' slot 0: [`SPLAT_CORNERS`].
-    pub splat_corner_buffer: wgpu::Buffer,
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) splat_corner_buffer: wgpu::Buffer,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineResources {

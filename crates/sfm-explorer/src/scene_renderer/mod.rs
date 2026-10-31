@@ -47,13 +47,13 @@ use recon::ReconResources;
 use upload::BgMeshKey;
 
 // Re-export public constants so external modules can use `crate::scene_renderer::*`.
-pub use gpu_types::{
+pub(crate) use gpu_types::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
 pub(crate) use pick_region::{points_in_capsule, PickRegion, PixelRect};
-pub use picking::PickTarget;
-pub use recon::NodeDisplay;
+pub(crate) use picking::PickTarget;
+pub(crate) use recon::NodeDisplay;
 /// The viewport's marks on a node's points, which [`SceneRenderer::update_point_mask`] draws.
 pub(crate) use upload::PointMarks;
 /// What an upload did, which is what the frame's phase note beside it says.
@@ -65,7 +65,7 @@ pub(crate) use upload::Uploaded;
 ///
 /// The final EDL-shaded texture is registered with egui for display as a
 /// background image in the 3D viewport panel.
-pub struct SceneRenderer {
+pub(crate) struct SceneRenderer {
     // ── Pass 1 render targets (recreated on resize) ──
     splat_color_view: Option<wgpu::TextureView>,
     linear_depth_view: Option<wgpu::TextureView>,
@@ -212,7 +212,7 @@ pub struct SceneRenderer {
 }
 
 impl SceneRenderer {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             splat_color_view: None,
             linear_depth_view: None,
@@ -297,7 +297,7 @@ impl SceneRenderer {
     }
 
     /// Returns the egui texture ID for the rendered scene, if available.
-    pub fn texture_id(&self) -> Option<egui::TextureId> {
+    pub(crate) fn texture_id(&self) -> Option<egui::TextureId> {
         self.egui_texture_id
     }
 
@@ -308,7 +308,7 @@ impl SceneRenderer {
     /// One global value for the whole scene is a known compromise of the
     /// multi-reconstruction design — two nodes at wildly different scales share
     /// one frustum size until they are aligned.
-    pub fn length_scale_seed(&self) -> Option<f32> {
+    pub(crate) fn length_scale_seed(&self) -> Option<f32> {
         self.recons
             .values()
             .map(|r| r.length_scale_seed())
@@ -331,7 +331,7 @@ impl SceneRenderer {
     ///
     /// Hidden nodes drop out so switching a reference reconstruction off also
     /// stops it dragging the clip planes and the grid scale around.
-    pub fn scene_bounds(&self) -> (Point3<f64>, f64) {
+    pub(crate) fn scene_bounds(&self) -> (Point3<f64>, f64) {
         self.visible_bounds()
             .unwrap_or_else(|| self.any_bounds().unwrap_or((Point3::origin(), 1.0)))
     }
@@ -377,7 +377,7 @@ impl SceneRenderer {
     /// A no-op for a node with no bundle yet: the bundle is created by its
     /// first upload and starts from [`NodeDisplay::default`], and the next
     /// frame's sync lands before it is ever drawn.
-    pub fn set_node_display(&mut self, id: ReconId, display: NodeDisplay) {
+    pub(crate) fn set_node_display(&mut self, id: ReconId, display: NodeDisplay) {
         if let Some(bundle) = self.recons.get_mut(&id) {
             bundle.display = display;
         }
@@ -394,7 +394,7 @@ impl SceneRenderer {
     /// the derived world-space state (the global `length_scale`, the frustum
     /// geometry, the CPU-space track rays) is rebuilt exactly when a node's
     /// transform moved, compared rather than announced through a counter.
-    pub fn set_node_transform(&mut self, id: ReconId, transform: Se3Transform) -> bool {
+    pub(crate) fn set_node_transform(&mut self, id: ReconId, transform: Se3Transform) -> bool {
         let Some(bundle) = self.recons.get_mut(&id) else {
             return false;
         };
@@ -404,7 +404,7 @@ impl SceneRenderer {
     }
 
     /// Decode a pick id read back from the GPU into the entity it addresses.
-    pub fn decode_pick(&self, pick_id: u32) -> Option<PickTarget> {
+    pub(crate) fn decode_pick(&self, pick_id: u32) -> Option<PickTarget> {
         self.pick_tables.resolve(pick_id)
     }
 
@@ -466,7 +466,7 @@ impl SceneRenderer {
     /// The single release path: closing one node and replacing the whole scene
     /// are the same operation seen from the renderer, and both have to reassign
     /// pick bases afterwards.
-    pub fn retain_nodes(&mut self, alive: impl Fn(ReconId) -> bool) {
+    pub(crate) fn retain_nodes(&mut self, alive: impl Fn(ReconId) -> bool) {
         let before = self.recons.len();
         self.recons.retain(|id, _| alive(*id));
         if self.recons.len() != before {

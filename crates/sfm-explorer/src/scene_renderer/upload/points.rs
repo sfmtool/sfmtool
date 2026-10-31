@@ -28,7 +28,7 @@ impl SceneRenderer {
     /// instances, handing them to the GPU, and the three per-node statistics
     /// read off the cloud, and those are three different kinds of answer to
     /// "why was the upload slow".
-    pub fn upload_points(
+    pub(crate) fn upload_points(
         &mut self,
         device: &wgpu::Device,
         id: ReconId,

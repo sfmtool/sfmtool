@@ -140,7 +140,7 @@ impl SceneRenderer {
     ///
     /// This is Pass 2.5: renders after the EDL pass using additive blending,
     /// with depth-aware transparency from sampling the linear depth texture.
-    pub fn render_target_indicator(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn render_target_indicator(&self, encoder: &mut wgpu::CommandEncoder) {
         let Some(edl_output_view) = &self.edl_output_view else {
             return;
         };
@@ -192,7 +192,7 @@ impl SceneRenderer {
     ///
     /// Pass 2.75: renders after the target indicator using alpha blending,
     /// with depth-aware occlusion from sampling the hardware depth buffer.
-    pub fn render_track_rays(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn render_track_rays(&self, encoder: &mut wgpu::CommandEncoder) {
         if self.track_ray_count == 0 {
             return;
         }
@@ -235,7 +235,7 @@ impl SceneRenderer {
     /// Pass 0:  Background image (camera view only) → edl_output
     /// Pass 1:  Point splats + frustums → color + linear depth textures
     /// Pass 2:  EDL post-process → edl_output (Load or Clear depending on Pass 0)
-    pub fn render(
+    pub(crate) fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         show_points: bool,

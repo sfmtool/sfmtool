@@ -42,7 +42,7 @@ pub(crate) use sfmtool_core::reconstruction::thumbnail::PLACEHOLDER_GREY;
 const ROW_BYTES: usize = THUMBNAIL_SIZE * THUMBNAIL_SIZE * 3;
 
 /// One node's display thumbnails.
-pub struct DisplayThumbnails {
+pub(crate) struct DisplayThumbnails {
     /// Row of each image name the column was built for.
     rows_by_name: HashMap<String, usize>,
     /// The rows: the file's own column, or the one [`Self::build`] filled in.

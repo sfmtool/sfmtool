@@ -10,14 +10,14 @@ use nalgebra::{Matrix4, Vector3};
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct QuadVertex {
-    pub position: [f32; 2],
+    pub(crate) position: [f32; 2],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct PointInstance {
-    pub position: [f32; 3],
-    pub color: u32, // packed R8G8B8A8
+    pub(crate) position: [f32; 3],
+    pub(crate) color: u32, // packed R8G8B8A8
 }
 
 /// Per-reconstruction uniform block — one buffer per loaded node.
@@ -31,35 +31,35 @@ pub(super) struct ReconUniforms {
     /// The node's similarity transform (`SceneNode::transform`), applied before
     /// `view_proj` in every scene vertex shader. Identity until the Scene
     /// panel's `Align to…` fits one.
-    pub model: [[f32; 4]; 4],
+    pub(crate) model: [[f32; 4]; 4],
     /// This node's auto point size × the global `2^point_size_log2`.
-    pub point_size: f32,
+    pub(crate) point_size: f32,
     /// Start of this node's slice of the global point index space.
-    pub point_pick_base: u32,
+    pub(crate) point_pick_base: u32,
     /// Start of this node's slice of the global image index space.
-    pub image_pick_base: u32,
+    pub(crate) image_pick_base: u32,
     /// 0 → emit `PICK_TAG_NONE` instead of a pick id (a display-only node,
     /// i.e. the Scene panel's interaction cursor switched off).
-    pub pickable: u32,
+    pub(crate) pickable: u32,
     /// The node's comparison tint: the palette color in `rgb`, the strength it
     /// is mixed in at in `a`. Every scene shader composites the same way —
     /// `mix(color, tint_color.rgb, tint_color.a)` — so `a == 0` draws the
     /// node's original colors. Highlight colors are exempt; see the shaders.
-    pub tint_color: [f32; 4],
+    pub(crate) tint_color: [f32; 4],
     /// 1.0 to draw this node's points at infinity, 0.0 to cull them in the
     /// vertex shader — the global HUD toggle AND the node's ∞ mini-toggle.
     /// A uniform rather than a filtered upload because `instance_index` has to
     /// stay equal to the local `recon.points` index for picking to work.
-    pub show_infinity: f32,
+    pub(crate) show_infinity: f32,
     /// The camera model proposal's preview blend on this node: 0 draws the
     /// stored positions, 1 the targets. Read only by the preview variants of
     /// the point and patch pipelines, so 0 on every other node.
-    pub preview_s: f32,
+    pub(crate) preview_s: f32,
     /// How a point whose mask word carries `MASK_REJECTED` is drawn:
     /// `FILTER_DIM` or `FILTER_HIDE` (`shaders/common.wgsl`). Only read where a
     /// word carries the bit, which is only on the node the Track Table filters.
-    pub filter_mode: u32,
-    pub _pad: f32,
+    pub(crate) filter_mode: u32,
+    pub(crate) _pad: f32,
 }
 
 /// [`ReconUniforms::filter_mode`] for a node whose rejected points are dimmed:
@@ -74,30 +74,30 @@ pub(super) const FILTER_HIDE: u32 = 1;
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct PointUniforms {
-    pub view_proj: [[f32; 4]; 4], // column-major
-    pub view: [[f32; 4]; 4],      // view matrix for linear depth
-    pub camera_right: [f32; 3],
+    pub(crate) view_proj: [[f32; 4]; 4], // column-major
+    pub(crate) view: [[f32; 4]; 4],      // view matrix for linear depth
+    pub(crate) camera_right: [f32; 3],
     /// Padding where the point size used to live: splat size is per-recon now
     /// and travels in [`ReconUniforms`].
-    pub _pad0: f32,
-    pub camera_up: [f32; 3],
+    pub(crate) _pad0: f32,
+    pub(crate) camera_up: [f32; 3],
     /// Global pick index of the selected point (0xFFFFFFFF = no selection).
-    pub selected_point_index: u32,
+    pub(crate) selected_point_index: u32,
     /// Global pick index of the hovered point (0xFFFFFFFF = no hover).
-    pub hovered_point_index: u32,
+    pub(crate) hovered_point_index: u32,
     /// Viewport size in pixels — converts the infinity splat pixel radius to NDC.
-    pub screen_width: f32,
-    pub screen_height: f32,
+    pub(crate) screen_width: f32,
+    pub(crate) screen_height: f32,
     /// On-screen splat radius (pixels) for points at infinity.
-    pub infinity_point_px: f32,
-    pub _pad: [f32; 4],
+    pub(crate) infinity_point_px: f32,
+    pub(crate) _pad: [f32; 4],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct EdgeInstance {
-    pub endpoint_a: [f32; 3],
-    pub endpoint_b: [f32; 3],
+    pub(crate) endpoint_a: [f32; 3],
+    pub(crate) endpoint_b: [f32; 3],
 }
 
 /// Edge instance with per-endpoint width for tapered compass spikes.
@@ -105,8 +105,8 @@ pub(super) struct EdgeInstance {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct CompassEdgeInstance {
-    pub endpoint_a: [f32; 4],
-    pub endpoint_b: [f32; 4],
+    pub(crate) endpoint_a: [f32; 4],
+    pub(crate) endpoint_b: [f32; 4],
 }
 
 /// One edge of the bench figure: two homogeneous world endpoints and its own
@@ -119,17 +119,17 @@ pub(super) struct CompassEdgeInstance {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchEdgeInstance {
-    pub endpoint_a: [f32; 4],
-    pub endpoint_b: [f32; 4],
-    pub color: [f32; 4],
+    pub(crate) endpoint_a: [f32; 4],
+    pub(crate) endpoint_b: [f32; 4],
+    pub(crate) color: [f32; 4],
 }
 
 /// One vertex of the bench figure's filled centre disc.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchDiscVertex {
-    pub position: [f32; 4],
-    pub color: [f32; 4],
+    pub(crate) position: [f32; 4],
+    pub(crate) color: [f32; 4],
 }
 
 /// Uniforms for the bench track pass.
@@ -140,38 +140,38 @@ pub(super) struct BenchDiscVertex {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BenchTrackUniforms {
-    pub view_proj: [[f32; 4]; 4],
-    pub view: [[f32; 4]; 4],
-    pub screen_size: [f32; 2],
-    pub line_half_width: f32,
+    pub(crate) view_proj: [[f32; 4]; 4],
+    pub(crate) view: [[f32; 4]; 4],
+    pub(crate) screen_size: [f32; 2],
+    pub(crate) line_half_width: f32,
     /// Near clip distance, which the shader clips segments against and reads
     /// the scene's own view-space depth back out of the reversed-Z buffer with.
-    pub near: f32,
+    pub(crate) near: f32,
     /// World units, the figure's own `4h`.
-    pub fog_distance: f32,
-    pub _pad: [f32; 3],
+    pub(crate) fog_distance: f32,
+    pub(crate) _pad: [f32; 3],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct FrustumEdge {
-    pub endpoint_a: [f32; 3],
-    pub _pad0: u32,
-    pub endpoint_b: [f32; 3],
-    pub frustum_index: u32, // image index for pick buffer
+    pub(crate) endpoint_a: [f32; 3],
+    pub(crate) _pad0: u32,
+    pub(crate) endpoint_b: [f32; 3],
+    pub(crate) frustum_index: u32, // image index for pick buffer
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ImageQuadInstance {
-    pub corner_tl: [f32; 3],
-    pub frustum_index: u32,
-    pub corner_tr: [f32; 3],
-    pub _pad0: u32,
-    pub corner_bl: [f32; 3],
-    pub _pad1: u32,
-    pub corner_br: [f32; 3],
-    pub _pad2: u32,
+    pub(crate) corner_tl: [f32; 3],
+    pub(crate) frustum_index: u32,
+    pub(crate) corner_tr: [f32; 3],
+    pub(crate) _pad0: u32,
+    pub(crate) corner_bl: [f32; 3],
+    pub(crate) _pad1: u32,
+    pub(crate) corner_br: [f32; 3],
+    pub(crate) _pad2: u32,
 }
 
 /// Per-instance data for one patch surfel (an oriented, textured quad).
@@ -185,18 +185,18 @@ pub(super) struct ImageQuadInstance {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct PatchInstance {
     /// World position (unit direction when `w == 0`).
-    pub center: [f32; 3],
+    pub(crate) center: [f32; 3],
     /// Homogeneous flag: 1.0 finite, 0.0 at infinity.
-    pub w: f32,
+    pub(crate) w: f32,
     /// World-space u axis × half-extent.
-    pub u_halfvec: [f32; 3],
-    pub _pad0: f32,
+    pub(crate) u_halfvec: [f32; 3],
+    pub(crate) _pad0: f32,
     /// World-space v axis × half-extent.
-    pub v_halfvec: [f32; 3],
+    pub(crate) v_halfvec: [f32; 3],
     /// Compacted cell index into the patch atlas (page decoded in the shader).
-    pub atlas_layer: u32,
+    pub(crate) atlas_layer: u32,
     /// Global `recon.points` index, for the pick buffer.
-    pub point_index: u32,
+    pub(crate) point_index: u32,
 }
 
 /// One surfel slot's row of the camera model proposal's preview: the target
@@ -206,8 +206,8 @@ pub(super) struct PatchInstance {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct SurfelPreview {
-    pub target: [f32; 4],
-    pub size_factor: f32,
+    pub(crate) target: [f32; 4],
+    pub(crate) size_factor: f32,
 }
 
 /// Uniforms for patch surfel rendering: view-projection plus the atlas grid
@@ -215,24 +215,24 @@ pub(crate) struct SurfelPreview {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct PatchUniforms {
-    pub view_proj: [[f32; 4]; 4],
-    pub atlas_cols: u32,
-    pub atlas_rows: u32,
-    pub patches_per_page: u32,
+    pub(crate) view_proj: [[f32; 4]; 4],
+    pub(crate) atlas_cols: u32,
+    pub(crate) atlas_rows: u32,
+    pub(crate) patches_per_page: u32,
     /// User scale multiplier on the stored half-vecs (`2^patch_size_log2`).
-    pub patch_scale: f32,
+    pub(crate) patch_scale: f32,
     /// Global opacity multiplier for patch color.
-    pub patch_opacity: f32,
+    pub(crate) patch_opacity: f32,
     /// Coverage discard threshold on the bitmap alpha (per-pixel confidence).
-    pub alpha_cutoff: f32,
+    pub(crate) alpha_cutoff: f32,
     /// The selected and hovered points' global pick indexes, as in
     /// `PointUniforms`: a surfel of either is drawn whatever the Track Table's
     /// filter says of its point.
-    pub selected_point_index: u32,
-    pub hovered_point_index: u32,
+    pub(crate) selected_point_index: u32,
+    pub(crate) hovered_point_index: u32,
     /// Camera world position, for front-face culling of patch surfels.
-    pub camera_pos: [f32; 3],
-    pub _pad1: f32,
+    pub(crate) camera_pos: [f32; 3],
+    pub(crate) _pad1: f32,
 }
 
 /// Vertex for a tessellated (distorted) image quad.
@@ -242,10 +242,10 @@ pub(super) struct PatchUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct DistortedQuadVertex {
-    pub position: [f32; 3],
-    pub frustum_index: u32,
-    pub uv: [f32; 2],
-    pub _pad: [f32; 2],
+    pub(crate) position: [f32; 3],
+    pub(crate) frustum_index: u32,
+    pub(crate) uv: [f32; 2],
+    pub(crate) _pad: [f32; 2],
 }
 
 /// Vertex for the tessellated (distorted) background image mesh.
@@ -255,66 +255,66 @@ pub(super) struct DistortedQuadVertex {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BgDistortedVertex {
-    pub position: [f32; 3],
-    pub uv: [f32; 2],
+    pub(crate) position: [f32; 3],
+    pub(crate) uv: [f32; 2],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct FrustumUniforms {
-    pub view_proj: [[f32; 4]; 4],
-    pub view: [[f32; 4]; 4],
-    pub screen_size: [f32; 2],
-    pub line_half_width: f32,
+    pub(crate) view_proj: [[f32; 4]; 4],
+    pub(crate) view: [[f32; 4]; 4],
+    pub(crate) screen_size: [f32; 2],
+    pub(crate) line_half_width: f32,
     /// Global pick index of the hovered image (0xFFFFFFFF = no hover).
-    pub hovered_image_index: u32,
+    pub(crate) hovered_image_index: u32,
     /// Near clip plane distance. Used by the shader to clip line segments
     /// in view space before the manual perspective divide, so endpoints
     /// behind the camera don't flip sign and launch ribbons across the screen.
-    pub near: f32,
-    pub _pad: [f32; 3],
+    pub(crate) near: f32,
+    pub(crate) _pad: [f32; 3],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct TargetIndicatorUniforms {
-    pub view_proj: [[f32; 4]; 4],
-    pub view: [[f32; 4]; 4],
-    pub target_pos_radius: [f32; 4], // xyz = target pos, w = radius
-    pub indicator_rot_0: [f32; 4],   // rotation matrix column 0 (xyz), w = alpha_scale
-    pub indicator_rot_1: [f32; 4],   // rotation matrix column 1 (xyz), w = fog_distance
-    pub indicator_rot_2: [f32; 4],   // rotation matrix column 2 (xyz), w = unused
-    pub screen_size_ps: [f32; 4],    // xy = screen_size, z = point_size, w = line_half_width
+    pub(crate) view_proj: [[f32; 4]; 4],
+    pub(crate) view: [[f32; 4]; 4],
+    pub(crate) target_pos_radius: [f32; 4], // xyz = target pos, w = radius
+    pub(crate) indicator_rot_0: [f32; 4],   // rotation matrix column 0 (xyz), w = alpha_scale
+    pub(crate) indicator_rot_1: [f32; 4],   // rotation matrix column 1 (xyz), w = fog_distance
+    pub(crate) indicator_rot_2: [f32; 4],   // rotation matrix column 2 (xyz), w = unused
+    pub(crate) screen_size_ps: [f32; 4],    // xy = screen_size, z = point_size, w = line_half_width
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct EdlUniforms {
-    pub screen_size: [f32; 2],
-    pub radius: f32,
-    pub strength: f32,
-    pub opacity: f32,
-    pub point_size: f32,
-    pub target_view_pos: [f32; 2], // xy of target in view space
-    pub target_view_z: f32,        // z of target in view space (positive = in front)
-    pub target_active: f32,
-    pub tan_half_fov: f32,
-    pub aspect: f32,
-    pub target_radius: f32,
-    pub time: f32,
-    pub _pad: [f32; 2],
+    pub(crate) screen_size: [f32; 2],
+    pub(crate) radius: f32,
+    pub(crate) strength: f32,
+    pub(crate) opacity: f32,
+    pub(crate) point_size: f32,
+    pub(crate) target_view_pos: [f32; 2], // xy of target in view space
+    pub(crate) target_view_z: f32,        // z of target in view space (positive = in front)
+    pub(crate) target_active: f32,
+    pub(crate) tan_half_fov: f32,
+    pub(crate) aspect: f32,
+    pub(crate) target_radius: f32,
+    pub(crate) time: f32,
+    pub(crate) _pad: [f32; 2],
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct BgImageUniforms {
     /// Projection matrix for the BG mesh (camera-space → clip-space).
-    pub view_proj: [[f32; 4]; 4],
+    pub(crate) view_proj: [[f32; 4]; 4],
     /// The owning node's transform, as the same `model` matrix every other
     /// pass gets. The mesh's ray directions are in the node's own coordinates,
     /// so an aligned node's background image only faces the way its cameras do
     /// once this has been applied.
-    pub model: [[f32; 4]; 4],
+    pub(crate) model: [[f32; 4]; 4],
 }
 
 // ── Related constants ────────────────────────────────────────────────────
@@ -324,18 +324,18 @@ pub(super) use sfmtool_core::analysis::scene_scale::FALLBACK_POINT_SIZE;
 
 /// Default length scale multiplier (length_scale = multiplier * point_size),
 /// the one `sfmtool-core` measures a node's length scale with.
-pub const DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 =
+pub(crate) const DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 =
     sfmtool_core::analysis::scene_scale::LENGTH_SCALE_MULTIPLIER;
 
 /// Default target indicator size multiplier (radius = multiplier * length_scale).
-pub const DEFAULT_TARGET_SIZE_MULTIPLIER: f32 = 0.3;
+pub(crate) const DEFAULT_TARGET_SIZE_MULTIPLIER: f32 = 0.3;
 
 /// Default target indicator fog multiplier. The fog distance is the reversed-Z
 /// NDC depth difference `0.1 * multiplier / DEFAULT_TARGET_FOG_MULTIPLIER`.
-pub const DEFAULT_TARGET_FOG_MULTIPLIER: f32 = 10.0;
+pub(crate) const DEFAULT_TARGET_FOG_MULTIPLIER: f32 = 10.0;
 
 /// Default frustum stub depth as a fraction of `length_scale`.
-pub const DEFAULT_FRUSTUM_SIZE_MULTIPLIER: f32 = 0.5;
+pub(crate) const DEFAULT_FRUSTUM_SIZE_MULTIPLIER: f32 = 0.5;
 
 /// Half-width of indicator lines in pixels.
 pub(super) const INDICATOR_LINE_HALF_WIDTH: f32 = 2.0;
@@ -357,11 +357,11 @@ pub(super) const BENCH_LINE_HALF_WIDTH: f32 = 1.25;
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct ImageQuadUniforms {
-    pub view_proj: [[f32; 4]; 4],
-    pub atlas_cols: u32,
-    pub atlas_rows: u32,
-    pub images_per_page: u32,
-    pub _pad: u32,
+    pub(crate) view_proj: [[f32; 4]; 4],
+    pub(crate) atlas_cols: u32,
+    pub(crate) atlas_rows: u32,
+    pub(crate) images_per_page: u32,
+    pub(crate) _pad: u32,
 }
 
 /// Thumbnail dimensions for the texture atlas (square, non-square pixels).
@@ -509,8 +509,8 @@ pub(super) const fn gbuffer_targets(
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct SplatCorner {
-    pub position: [f32; 2],
-    pub dimmed: u32,
+    pub(crate) position: [f32; 2],
+    pub(crate) dimmed: u32,
 }
 
 /// The splat corner buffer's contents: the unit quad's four corners as a

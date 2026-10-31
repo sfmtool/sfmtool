@@ -8,9 +8,9 @@ use super::super::gpu_types::*;
 /// The bind group layout, uniform buffer, and sampler are shared between
 /// the BG mesh pipeline and the texture upload path.
 pub(in crate::scene_renderer) struct BgImageResources {
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniform_buffer: wgpu::Buffer,
-    pub sampler: wgpu::Sampler,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) sampler: wgpu::Sampler,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BgImageResources {

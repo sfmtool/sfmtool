@@ -110,23 +110,23 @@ pub(crate) enum Detail {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Count {
     /// How many are behind it.
-    pub done: u64,
+    pub(crate) done: u64,
     /// How many there are in total, when the operation knows.
-    pub total: Option<u64>,
+    pub(crate) total: Option<u64>,
     /// What is being counted, singular: `"image"`, `"iteration"`.
-    pub unit: &'static str,
+    pub(crate) unit: &'static str,
 }
 
 /// One stage's newest count, as [`Collector::counts`] lists it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StageCount {
     /// The count as the stage reported it.
-    pub count: Count,
+    pub(crate) count: Count,
     /// Whether a stage is open inside the one that reported it: a solve
     /// that has counted four rounds done and has its fifth round open is
     /// under way on the fifth. False between rounds, and for the newest count
     /// standing in for a stage that has closed.
-    pub under_way: bool,
+    pub(crate) under_way: bool,
 }
 
 /// What an operation has reported so far, as a panel draws it mid-flight.

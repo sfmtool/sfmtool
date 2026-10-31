@@ -175,7 +175,7 @@ impl SceneRenderer {
     /// Upload track ray edge geometry for the selected point's observations.
     ///
     /// See [`track_ray_edges`] for how each ray is built.
-    pub fn upload_track_rays(
+    pub(crate) fn upload_track_rays(
         &mut self,
         device: &wgpu::Device,
         edited: &EditedReconstruction,
@@ -201,7 +201,7 @@ impl SceneRenderer {
     }
 
     /// Clear track ray geometry (no point selected).
-    pub fn clear_track_rays(&mut self) {
+    pub(crate) fn clear_track_rays(&mut self) {
         self.track_ray_edge_buffer = None;
         self.track_ray_count = 0;
     }

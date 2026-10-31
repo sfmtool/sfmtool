@@ -7,10 +7,10 @@ const SHADER: &str = include_str!("../../shaders/edl.wgsl");
 
 /// Resources created by the EDL post-process pipeline.
 pub(in crate::scene_renderer) struct EdlPipelineResources {
-    pub pipeline: wgpu::RenderPipeline,
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniform_buffer: wgpu::Buffer,
-    pub sampler: wgpu::Sampler,
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) sampler: wgpu::Sampler,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> EdlPipelineResources {

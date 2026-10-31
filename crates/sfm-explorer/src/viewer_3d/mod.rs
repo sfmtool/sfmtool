@@ -28,7 +28,7 @@ mod righting;
 #[cfg(test)]
 mod tests;
 
-pub use camera::{best_fit_fov, ViewportCamera};
+pub(crate) use camera::{best_fit_fov, ViewportCamera};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense};
 use nalgebra::{Point3, UnitQuaternion, Vector3};
@@ -257,35 +257,35 @@ struct EnterCameraViewState {
 /// Stores the SfM camera's world-from-camera rotation so the background mesh
 /// can be rendered with the correct relative rotation during free-look navigation.
 #[derive(Clone)]
-pub struct CameraViewMode {
+pub(crate) struct CameraViewMode {
     /// The image being viewed through (stable across selection changes). A ref
     /// rather than an index: the background image and the hidden-frustum test
     /// both key off it, and a bare index would follow a file replacement onto
     /// whatever now sits at that position.
-    pub image: ImageRef,
+    pub(crate) image: ImageRef,
     /// World-from-camera rotation of the SfM camera being viewed.
     /// Used to compute the relative view rotation for the BG mesh.
-    pub r_world_from_cam: UnitQuaternion<f64>,
+    pub(crate) r_world_from_cam: UnitQuaternion<f64>,
 }
 
 /// 3D viewer state and rendering.
-pub struct Viewer3D {
+pub(crate) struct Viewer3D {
     /// Viewport camera.
-    pub camera: ViewportCamera,
+    pub(crate) camera: ViewportCamera,
     /// Whether the view has been initialized to frame the data.
-    pub view_initialized: bool,
+    pub(crate) view_initialized: bool,
     /// Camera view mode — active when viewing through a selected camera.
-    pub camera_view: Option<CameraViewMode>,
+    pub(crate) camera_view: Option<CameraViewMode>,
     /// The camera being moved by hand, when one is: camera view with the camera
     /// coming along. Held beside [`Viewer3D::camera_view`] because it is the
     /// same mode with one bit flipped, and it is only ever entered from it.
     /// See [`crate::camera_lock`].
-    pub camera_lock: Option<crate::camera_lock::CameraLock>,
+    pub(crate) camera_lock: Option<crate::camera_lock::CameraLock>,
     /// Last known panel size in physical pixels, used by SceneRenderer
     /// to create offscreen textures at the correct resolution.
-    pub panel_size: [u32; 2],
+    pub(crate) panel_size: [u32; 2],
     /// Mouse position in texture pixels (set each frame from hover pos).
-    pub hover_pixel: Option<[u32; 2]>,
+    pub(crate) hover_pixel: Option<[u32; 2]>,
     /// A rectangle of the pick buffer to read on the next frame, in texture
     /// pixels, in place of the 5×5 hover read. Taken when the copy is encoded,
     /// so a frame that wants one sets it again.
@@ -294,30 +294,30 @@ pub struct Viewer3D {
     /// request is read, and kept until then.
     pub(crate) pick_region: Option<crate::scene_renderer::PickRegion>,
     /// Whether the Alt key is currently held.
-    pub alt_held: bool,
+    pub(crate) alt_held: bool,
     /// Supernova effect activation level (0.0 = off, 1.0 = fully on).
-    pub supernova_active: f32,
+    pub(crate) supernova_active: f32,
     /// Target's view-space position [x, y, z] for the supernova effect (z is positive = in front).
-    pub supernova_view_pos: [f32; 3],
+    pub(crate) supernova_view_pos: [f32; 3],
     /// Elapsed time for supernova wave animation (seconds).
-    pub supernova_time: f32,
+    pub(crate) supernova_time: f32,
     /// Current rotation angle of the target indicator (radians).
-    pub target_indicator_rotation: f64,
+    pub(crate) target_indicator_rotation: f64,
     /// Timestamp of the last target change for the flash animation.
-    pub target_flash_start: Option<f64>,
+    pub(crate) target_flash_start: Option<f64>,
     /// Whether the target indicator should be visible this frame.
-    pub target_indicator_visible: bool,
+    pub(crate) target_indicator_visible: bool,
     /// Flash animation radius scale (1.0 = normal, >1.0 during flash).
-    pub target_indicator_radius_scale: f32,
+    pub(crate) target_indicator_radius_scale: f32,
     /// Flash animation alpha scale (1.0 = normal, >1.0 during flash).
-    pub target_indicator_alpha_scale: f32,
+    pub(crate) target_indicator_alpha_scale: f32,
     /// Pending click request: screen pixel position [x, y] in texture pixels.
     /// Both depth and entity pick are read back from this single click.
-    pub pending_click: Option<[u32; 2]>,
+    pub(crate) pending_click: Option<[u32; 2]>,
     /// Whether the pending click was Alt+Click (sets orbit target from depth).
-    pub pending_click_is_alt: bool,
+    pub(crate) pending_click_is_alt: bool,
     /// Whether the pending click was a double-click (enters camera view mode).
-    pub pending_click_is_double: bool,
+    pub(crate) pending_click_is_double: bool,
     /// Pixels per point at the time of the click request.
     pick_ppp: f32,
     /// Screen rect at the time of the click request.
@@ -331,7 +331,7 @@ pub struct Viewer3D {
     /// Whether the viewport HUD is expanded. Open at launch — the controls are
     /// the point of the panel, and a viewport that starts by hiding them just
     /// trades a menu round-trip for a click. Never persisted across runs.
-    pub hud_open: bool,
+    pub(crate) hud_open: bool,
     /// Whether the HUD was opened by a click on the gear while the viewport
     /// was too small for the expanded panel. The size rule decides only
     /// whether the HUD opens on its own; an explicit click opens it at any
@@ -342,7 +342,7 @@ pub struct Viewer3D {
     /// through a camera: the HUD's **Maintain Z-up**. On at launch; Q and E
     /// turn it off, since rolling the view is a request for a view that is not
     /// level. Never persisted across runs. See [`Self::right_toward_z_up`].
-    pub maintain_z_up: bool,
+    pub(crate) maintain_z_up: bool,
     /// How fast [`Self::right_toward_z_up`] turned `world_up` on the last
     /// frame, in radians per second, and zero when it did not turn it. The only
     /// state the turn carries between frames.
@@ -351,7 +351,7 @@ pub struct Viewer3D {
     /// when collapsed, gear plus panel when expanded. Every viewport input path
     /// that cannot rely on egui's layer arbitration (scroll, gestures, pinch)
     /// excludes it geometrically. `None` until the HUD has been built once.
-    pub hud_rect: Option<Rect>,
+    pub(crate) hud_rect: Option<Rect>,
     /// What the viewport's context menu stands on, recorded on the frame the
     /// secondary click landed and read on every later frame the menu is laid
     /// out over -- by which time the pointer has moved off whatever the user
@@ -363,7 +363,7 @@ pub struct Viewer3D {
     /// A single slot, because the two things it carries happen on different
     /// frames: a menu opens on the frame of the click and an entry is chosen on
     /// a later one.
-    pub point_menu: Option<PointGesture>,
+    pub(crate) point_menu: Option<PointGesture>,
     /// Which reframe the patch menu asked for, and on which node, drained by
     /// `app.rs` after the frame for the reason [`Self::point_menu`] is.
     pub(crate) patch_menu: Option<(ReconId, crate::display_transform::PatchReframe)>,
@@ -426,32 +426,32 @@ pub struct Viewer3D {
 ///
 /// The Image Detail panel's feature menu offers the same entry under the same
 /// name ([`crate::image_detail`]), so the two cannot drift.
-pub const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";
+pub(crate) const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";
 
 /// What the HUD's checkbox for [`Viewer3D::maintain_z_up`] is called, and the
 /// word its Action Log entries open with, whether the checkbox or Q and E
 /// changed it.
-pub const MAINTAIN_Z_UP_LABEL: &str = "Maintain Z-up";
+pub(crate) const MAINTAIN_Z_UP_LABEL: &str = "Maintain Z-up";
 
 /// What the entry that re-solves one point is called, in the menu and in the
 /// tests that aim at it.
-pub const RETRIANGULATE_POINT_LABEL: &str = "Retriangulate Point";
+pub(crate) const RETRIANGULATE_POINT_LABEL: &str = "Retriangulate Point";
 
 /// What the patch menu's entry that adopts the patch's whole frame is called,
 /// in the menu and in the tests that aim at it.
-pub const SET_TO_ORIGIN_LABEL: &str = "Set to Origin";
+pub(crate) const SET_TO_ORIGIN_LABEL: &str = "Set to Origin";
 
 /// What the patch menu's entry that tips the patch's normal onto `+Z` is
 /// called.
-pub const ALIGN_NORMAL_TO_Z_LABEL: &str = "Align Normal to Z";
+pub(crate) const ALIGN_NORMAL_TO_Z_LABEL: &str = "Align Normal to Z";
 
 /// What the patch menu's entry that moves the patch's centre to the origin is
 /// called.
-pub const TRANSLATE_TO_ORIGIN_LABEL: &str = "Translate to Origin";
+pub(crate) const TRANSLATE_TO_ORIGIN_LABEL: &str = "Translate to Origin";
 
 /// What the patch menu's entry that drops the patch's centre onto `z = 0` is
 /// called.
-pub const TRANSLATE_TO_XY_PLANE_LABEL: &str = "Translate to XY Plane";
+pub(crate) const TRANSLATE_TO_XY_PLANE_LABEL: &str = "Translate to XY Plane";
 
 /// Why the patch menu's entries are greyed on a track at infinity.
 const PATCH_AT_INFINITY_HINT: &str =
@@ -474,7 +474,7 @@ impl Default for Viewer3D {
 
 impl Viewer3D {
     /// Creates a new 3D viewer.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             camera: ViewportCamera::default(),
             view_initialized: false,
@@ -677,7 +677,7 @@ impl Viewer3D {
 
     /// Shows the 3D viewer UI and renders the reconstruction.
     #[allow(clippy::too_many_arguments)]
-    pub fn show(
+    pub(crate) fn show(
         &mut self,
         ui: &mut egui::Ui,
         // The selected node: its reconstruction is what the viewport's own
@@ -1077,7 +1077,12 @@ impl Viewer3D {
     /// Called from `main.rs` after the depth readback completes. Instead of
     /// snapping instantly, starts an animated transition (slerp + lerp with
     /// smoothstep easing over ~200ms).
-    pub fn apply_pick_result(&mut self, depth: f32, click_pixel: [u32; 2], current_time: f64) {
+    pub(crate) fn apply_pick_result(
+        &mut self,
+        depth: f32,
+        click_pixel: [u32; 2],
+        current_time: f64,
+    ) {
         if depth <= 0.0 {
             return;
         }
@@ -1414,7 +1419,7 @@ impl Viewer3D {
 
     /// The aspect ratio of the viewport as last laid out, or `None` before the
     /// 3D panel has been shown once.
-    pub fn panel_aspect(&self) -> Option<f64> {
+    pub(crate) fn panel_aspect(&self) -> Option<f64> {
         let [w, h] = self.panel_size;
         (w > 0 && h > 0).then(|| w as f64 / h as f64)
     }
@@ -1429,7 +1434,7 @@ impl Viewer3D {
     /// Composing the transform is what makes "look through this camera" show the
     /// transformed scene from the transformed camera: an aligned node's cameras
     /// are drawn where its points are, so the viewpoint has to move with them.
-    pub fn enter_camera_view(
+    pub(crate) fn enter_camera_view(
         &mut self,
         image_ref: ImageRef,
         node: &SceneNode,
@@ -1461,7 +1466,7 @@ impl Viewer3D {
     /// view and screenshots straight afterward would otherwise photograph the
     /// middle of the ease -- and what `Move Camera` on a Scene Graph image row
     /// uses, the lock being entered *from* camera view rather than towards it.
-    pub fn jump_to_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode) {
+    pub(crate) fn jump_to_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode) {
         let end = self.compute_camera_view(image_ref, node);
         self.cancel_transition();
         self.camera.camera.position = end.position;
@@ -1587,7 +1592,7 @@ impl Viewer3D {
     /// this one follows a selection step, whose own `Selected image …` entry
     /// already says which image — and a `Looking through …` between every two
     /// of those would break the coalescing that keeps a scrub to one line.
-    pub fn switch_camera_view(&mut self, new_image: ImageRef, node: &SceneNode) {
+    pub(crate) fn switch_camera_view(&mut self, new_image: ImageRef, node: &SceneNode) {
         let Some(state) = self.compute_switch_camera_view(new_image, node) else {
             return;
         };
@@ -1601,7 +1606,7 @@ impl Viewer3D {
     /// Switch from one camera view to another with a smooth animated transition.
     ///
     /// Used by double-click on frustum/image strip when already in camera view.
-    pub fn animated_switch_camera_view(
+    pub(crate) fn animated_switch_camera_view(
         &mut self,
         new_image: ImageRef,
         node: &SceneNode,

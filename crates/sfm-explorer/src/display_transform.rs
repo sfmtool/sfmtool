@@ -377,7 +377,7 @@ impl AppState {
     /// refused on a node already at the identity, which is the rule that greys
     /// the menu entry. Records its own outcome; the `Err` carries the refusal for a caller
     /// that answers someone.
-    pub fn set_node_transform(
+    pub(crate) fn set_node_transform(
         &mut self,
         id: ReconId,
         transform: Se3Transform,
@@ -402,7 +402,7 @@ impl AppState {
     }
 
     /// Return `id` to its own frame, as one version: `Reset Transform`.
-    pub fn reset_node_transform(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn reset_node_transform(&mut self, id: ReconId) -> Result<(), String> {
         self.set_node_transform(id, Se3Transform::identity())
     }
 
@@ -534,7 +534,7 @@ impl AppState {
     ///
     /// Recorded as an `Edit` from the instant below, so the row carries the
     /// cost of the transform rather than of writing the row.
-    pub fn bake_node_transform(&mut self, id: ReconId) -> Result<(), String> {
+    pub(crate) fn bake_node_transform(&mut self, id: ReconId) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
         match self.bake_node_transform_inner(id, &collector) {

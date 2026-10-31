@@ -85,14 +85,14 @@ pub(crate) fn panel_body_points(
 
 /// Holds mutable references to all state needed to render any tab.
 pub(crate) struct TabContext<'a> {
-    pub state: &'a mut AppState,
-    pub viewer_3d: &'a mut Viewer3D,
-    pub scene_graph: &'a mut SceneGraphPanel,
-    pub image_browser: &'a mut ImageBrowser,
-    pub image_detail: &'a mut ImageDetail,
-    pub track_view: &'a mut TrackView,
-    pub track_table: &'a mut TrackTablePanel,
-    pub intrinsics_detail: &'a mut IntrinsicsDetail,
+    pub(crate) state: &'a mut AppState,
+    pub(crate) viewer_3d: &'a mut Viewer3D,
+    pub(crate) scene_graph: &'a mut SceneGraphPanel,
+    pub(crate) image_browser: &'a mut ImageBrowser,
+    pub(crate) image_detail: &'a mut ImageDetail,
+    pub(crate) track_view: &'a mut TrackView,
+    pub(crate) track_table: &'a mut TrackTablePanel,
+    pub(crate) intrinsics_detail: &'a mut IntrinsicsDetail,
     /// Where the panel work that can outlast a frame reports: the `.sift`
     /// reads the overlays ask for.
     ///
@@ -102,17 +102,17 @@ pub(crate) struct TabContext<'a> {
     /// rather than its child -- which would leave the pass's own row unclosed.
     /// A panel body runs inside the pass, so what it opens nests under it and
     /// reaches the entry the frame settles.
-    pub frame: Progress<'a>,
+    pub(crate) frame: Progress<'a>,
     // Per-frame values needed by viewer_3d.show():
-    pub scene_texture_id: Option<egui::TextureId>,
-    pub hover_depth: Option<f32>,
+    pub(crate) scene_texture_id: Option<egui::TextureId>,
+    pub(crate) hover_depth: Option<f32>,
     /// The entity under the cursor in the 3D viewport, decoded from the pick
     /// buffer — a ref, so the overlay knows which reconstruction it names.
-    pub hover_pick: Option<crate::scene_renderer::PickTarget>,
-    pub gesture_events: &'a [platform::GestureEvent],
-    pub scroll_input: &'a platform::ScrollInput,
-    pub diagnostics: Option<(u32, u32, u32, u32)>,
-    pub handler_ok: bool,
+    pub(crate) hover_pick: Option<crate::scene_renderer::PickTarget>,
+    pub(crate) gesture_events: &'a [platform::GestureEvent],
+    pub(crate) scroll_input: &'a platform::ScrollInput,
+    pub(crate) diagnostics: Option<(u32, u32, u32, u32)>,
+    pub(crate) handler_ok: bool,
 }
 
 impl TabViewer for TabContext<'_> {

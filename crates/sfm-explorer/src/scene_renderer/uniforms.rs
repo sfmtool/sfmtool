@@ -122,7 +122,7 @@ pub(super) fn recon_uniforms(
 
 impl SceneRenderer {
     #[allow(clippy::too_many_arguments)]
-    pub fn update_uniforms(
+    pub(crate) fn update_uniforms(
         &self,
         queue: &wgpu::Queue,
         camera: &ViewportCamera,
@@ -289,7 +289,7 @@ impl SceneRenderer {
     }
 
     /// Update track ray uniforms.
-    pub fn update_track_ray_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
+    pub(crate) fn update_track_ray_uniforms(&self, queue: &wgpu::Queue, camera: &ViewportCamera) {
         let (w, h) = self.current_size;
         if w == 0 || h == 0 {
             return;
@@ -321,7 +321,7 @@ impl SceneRenderer {
     ///
     /// `transform` is the transform of the node the viewed camera belongs to —
     /// see [`bg_image_uniforms`] for why the BG mesh needs it.
-    pub fn update_bg_image_uniforms(
+    pub(crate) fn update_bg_image_uniforms(
         &self,
         queue: &wgpu::Queue,
         camera: &ViewportCamera,
@@ -341,7 +341,7 @@ impl SceneRenderer {
 
     /// Update target indicator uniforms.
     #[allow(clippy::too_many_arguments)]
-    pub fn update_target_uniforms(
+    pub(crate) fn update_target_uniforms(
         &self,
         queue: &wgpu::Queue,
         camera: &ViewportCamera,

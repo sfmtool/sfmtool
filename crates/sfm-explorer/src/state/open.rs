@@ -95,7 +95,7 @@ impl AppState {
     /// failure knowable before the read. **Nothing is logged here**: the
     /// caller phrases a refusal in its own vocabulary, and the task's own row
     /// is written when it lands.
-    pub fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<u64, String> {
+    pub(crate) fn start_open(&mut self, paths: Vec<PathBuf>) -> Result<u64, String> {
         if paths.is_empty() {
             return Err("There is no file to open.".to_string());
         }
@@ -120,7 +120,7 @@ impl AppState {
     /// The difference from [`Self::start_open`] is only who writes the
     /// refusals. A person who picked five files, one of them since deleted,
     /// asked for the other four as well.
-    pub fn open_files(&mut self, paths: Vec<PathBuf>) {
+    pub(crate) fn open_files(&mut self, paths: Vec<PathBuf>) {
         let (found, missing): (Vec<PathBuf>, Vec<PathBuf>) =
             paths.into_iter().partition(|path| path.is_file());
         for path in &missing {

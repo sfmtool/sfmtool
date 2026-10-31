@@ -6,7 +6,7 @@
 //! Provides cross-platform abstractions for precision touchpad gestures.
 
 #[cfg(target_os = "windows")]
-pub mod windows;
+pub(crate) mod windows;
 
 /// Cross-platform gesture event.
 ///
@@ -14,7 +14,7 @@ pub mod windows;
 /// input, providing pixel-level deltas for smooth viewport navigation.
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
-pub enum GestureEvent {
+pub(crate) enum GestureEvent {
     /// Pan/scroll gesture with pixel deltas.
     ///
     /// Positive dx means panning right, positive dy means panning up.
@@ -48,7 +48,7 @@ pub enum GestureEvent {
 /// A pan with Ctrl (or Cmd) held is dropped. Those frames are already claimed
 /// as a zoom gesture by the panels that handle DM, and egui reads a Ctrl+wheel
 /// as a request to zoom the whole UI — the two together would zoom twice over.
-pub fn gesture_scroll_events(
+pub(crate) fn gesture_scroll_events(
     gestures: &[GestureEvent],
     modifiers: egui::Modifiers,
 ) -> Vec<egui::Event> {
@@ -87,14 +87,14 @@ pub fn gesture_scroll_events(
 /// Built once per frame in the main UI loop and shared across all panels,
 /// so that each panel applies the same DirectManipulation-aware suppression
 /// without duplicating event-reading logic.
-pub struct ScrollInput {
+pub(crate) struct ScrollInput {
     /// Total scroll delta accumulated from all `MouseWheel` events this frame.
-    pub delta: egui::Vec2,
+    pub(crate) delta: egui::Vec2,
     /// Unit type of the scroll events.
     /// `Point` = trackpad two-finger scroll, `Line` = discrete mouse wheel.
-    pub unit: egui::MouseWheelUnit,
+    pub(crate) unit: egui::MouseWheelUnit,
     /// Modifiers held during the scroll events.
-    pub modifiers: egui::Modifiers,
+    pub(crate) modifiers: egui::Modifiers,
     /// Whether DirectManipulation is actively providing gesture data this frame.
     /// When true, trackpad-style scroll events are suppressed to avoid
     /// double-handling (DM gesture events provide higher-quality input).
@@ -117,7 +117,7 @@ impl ScrollInput {
     ///
     /// `dm_active` should be true when the DirectManipulation gesture handler
     /// is operational and produced gesture events this frame.
-    pub fn from_ctx(ctx: &egui::Context, dm_active: bool) -> Self {
+    pub(crate) fn from_ctx(ctx: &egui::Context, dm_active: bool) -> Self {
         let mut delta = egui::Vec2::ZERO;
         let mut unit = egui::MouseWheelUnit::Line;
         let mut modifiers = egui::Modifiers::default();
@@ -152,14 +152,14 @@ impl ScrollInput {
     /// and DirectManipulation is NOT actively handling gestures. When DM is
     /// active, its gesture events provide higher-quality input and trackpad
     /// scroll would be double-handling.
-    pub fn has_trackpad_scroll(&self) -> bool {
+    pub(crate) fn has_trackpad_scroll(&self) -> bool {
         matches!(self.unit, egui::MouseWheelUnit::Point)
             && !self.dm_active
             && self.delta != egui::Vec2::ZERO
     }
 
     /// Whether discrete mouse-wheel scroll should be used.
-    pub fn has_mouse_wheel(&self) -> bool {
+    pub(crate) fn has_mouse_wheel(&self) -> bool {
         !matches!(self.unit, egui::MouseWheelUnit::Point) && self.delta != egui::Vec2::ZERO
     }
 }
@@ -193,7 +193,7 @@ pub(crate) fn pinch_zoom_delta(ctx: &egui::Context) -> f32 {
 /// which remains valid even when egui's hover state goes stale (e.g. after a
 /// double-click with no subsequent mouse movement). Falls back to egui's
 /// `latest_pos` on non-Windows platforms.
-pub fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
+pub(crate) fn pointer_in_rect(ctx: &egui::Context, rect: egui::Rect) -> bool {
     #[cfg(test)]
     if let Some(pos) = TEST_POINTER_POS.with(|p| p.get()) {
         return rect.contains(pos);
@@ -251,7 +251,7 @@ pub(crate) fn move_tracked_pointer(pos: egui::Pos2, window_px: [f32; 2]) {
 /// press is a panel's right-drag and its context menu and a middle press is its
 /// pan, and none of those is a handle being grabbed. Elsewhere there is nothing
 /// to disambiguate.
-pub fn other_mouse_button_down() -> bool {
+pub(crate) fn other_mouse_button_down() -> bool {
     #[cfg(test)]
     if TEST_OTHER_BUTTON_DOWN.with(|down| down.get()) {
         return true;
@@ -288,14 +288,14 @@ thread_local! {
 /// Test-only: say that a button other than the primary one is down, as the
 /// Windows button state would, for the current thread.
 #[cfg(test)]
-pub fn set_test_other_button_down(down: bool) {
+pub(crate) fn set_test_other_button_down(down: bool) {
     TEST_OTHER_BUTTON_DOWN.with(|d| d.set(down));
 }
 
 /// Test-only: place the platform's tracked pointer at `pos` (logical points),
 /// or clear the override with `None`, for the current thread.
 #[cfg(test)]
-pub fn set_test_pointer_pos(pos: Option<egui::Pos2>) {
+pub(crate) fn set_test_pointer_pos(pos: Option<egui::Pos2>) {
     TEST_POINTER_POS.with(|p| p.set(pos));
 }
 
@@ -307,7 +307,7 @@ pub fn set_test_pointer_pos(pos: Option<egui::Pos2>) {
 /// Note: This trait does not require `Send` because gesture handlers typically
 /// wrap platform-specific COM objects that must be accessed from the UI thread.
 #[allow(dead_code)]
-pub trait GestureHandler {
+pub(crate) trait GestureHandler {
     /// Poll all pending gesture events.
     ///
     /// Returns a vector of events that have occurred since the last poll.

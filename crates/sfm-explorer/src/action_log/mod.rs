@@ -244,22 +244,22 @@ pub(crate) struct Entry {
     /// newest entry with one. That ordering is what lets
     /// [`ActionLog::since`] stop as soon as it reaches an entry the caller has
     /// already seen.
-    pub revision: u64,
+    pub(crate) revision: u64,
     /// When it was recorded. Wall clock, because the log's job is to be read
     /// next to something else — an agent's transcript, a CI log, a screen
     /// recording — and only wall-clock time lines those up.
-    pub at: Timestamp,
-    pub actor: Actor,
-    pub kind: Kind,
+    pub(crate) at: Timestamp,
+    pub(crate) actor: Actor,
+    pub(crate) kind: Kind,
     /// What this entry folds with, or `None` for a discrete act.
     ///
     /// Not on the wire: an agent reads rows, and which rows folded is already
     /// visible in the revisions it did not see.
-    pub run: Run,
+    pub(crate) run: Run,
     /// Whether the action was refused or failed. A failed entry never
     /// coalesces, in either direction.
-    pub failed: bool,
-    pub text: String,
+    pub(crate) failed: bool,
+    pub(crate) text: String,
     /// How long the viewer took to show this action's result, or `None` while
     /// it has not been shown yet.
     ///
@@ -274,7 +274,7 @@ pub(crate) struct Entry {
     /// `None` also for an entry whose run folded before a frame could settle
     /// it: the fold gives the row a new revision, and the timing follows the
     /// row that survived.
-    pub took: Option<Duration>,
+    pub(crate) took: Option<Duration>,
     /// What the operation reported, in the order it reported it.
     ///
     /// Empty for the great majority of entries, which are a state change too
@@ -282,7 +282,7 @@ pub(crate) struct Entry {
     /// breaking down hands over the [`crate::progress::Collector`] it reported
     /// into, and these are its rows, already folded and capped at
     /// [`ActionLog::DETAIL_EVENTS`].
-    pub detail: Vec<Detail>,
+    pub(crate) detail: Vec<Detail>,
 }
 
 /// The buffer, the recording rules, and the local zone the panel formats in.

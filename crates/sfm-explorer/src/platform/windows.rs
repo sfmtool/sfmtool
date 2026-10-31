@@ -52,9 +52,9 @@ const POINTER_FLAG_SECONDBUTTON: u32 = 0x00000020; // right
 const POINTER_FLAG_THIRDBUTTON: u32 = 0x00000040; // middle
 
 /// Bit flags for tracked mouse button state.
-pub const BUTTON_LEFT: u8 = 0x01;
-pub const BUTTON_RIGHT: u8 = 0x02;
-pub const BUTTON_MIDDLE: u8 = 0x04;
+pub(crate) const BUTTON_LEFT: u8 = 0x01;
+pub(crate) const BUTTON_RIGHT: u8 = 0x02;
+pub(crate) const BUTTON_MIDDLE: u8 = 0x04;
 
 /// Global mouse button state, updated from the subclass window procedure.
 /// Stores a bitmask of BUTTON_LEFT | BUTTON_RIGHT | BUTTON_MIDDLE.
@@ -82,7 +82,7 @@ static POINTER_CLIENT_Y: AtomicI32 = AtomicI32::new(0);
 static POINTER_CLIENT_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// Returns the current mouse button state as a bitmask.
-pub fn mouse_button_state() -> u8 {
+pub(crate) fn mouse_button_state() -> u8 {
     MOUSE_BUTTON_STATE.load(Ordering::Relaxed)
 }
 
@@ -173,7 +173,7 @@ fn restore_mouse_button_from(event: &WindowEvent, down_button: u8) -> Option<[Wi
 
 /// [`restore_mouse_button_from`] against the button the window procedure
 /// recorded for the press this event belongs to.
-pub fn restore_mouse_button(event: &WindowEvent) -> Option<[WindowEvent; 2]> {
+pub(crate) fn restore_mouse_button(event: &WindowEvent) -> Option<[WindowEvent; 2]> {
     restore_mouse_button_from(event, LAST_MOUSE_DOWN_BUTTON.load(Ordering::Relaxed))
 }
 
@@ -181,7 +181,7 @@ pub fn restore_mouse_button(event: &WindowEvent) -> Option<[WindowEvent; 2]> {
 ///
 /// Only mouse movement moves it; a touch or touchpad contact leaves it where
 /// the cursor really is. See [`mouse_buttons_from`].
-pub fn pointer_client_pos() -> (i32, i32) {
+pub(crate) fn pointer_client_pos() -> (i32, i32) {
     (
         POINTER_CLIENT_X.load(Ordering::Relaxed),
         POINTER_CLIENT_Y.load(Ordering::Relaxed),
@@ -253,7 +253,7 @@ fn restore_pointer_after_click_at(
 
 /// [`restore_pointer_after_click_at`] against the cursor position the window
 /// procedure has tracked.
-pub fn restore_pointer_after_click(event: &WindowEvent) -> Option<WindowEvent> {
+pub(crate) fn restore_pointer_after_click(event: &WindowEvent) -> Option<WindowEvent> {
     restore_pointer_after_click_at(event, tracked_cursor_pos())
 }
 
@@ -297,7 +297,7 @@ fn get_inverted_scroll() -> bool {
 /// so that `DM_POINTERHITTEST` messages are generated. This struct holds
 /// them until the window is created and `WinGestureHandler::new()` can
 /// attach a viewport.
-pub struct EarlyDmState {
+pub(crate) struct EarlyDmState {
     manager: IDirectManipulationManager,
     update_manager: IDirectManipulationUpdateManager,
 }
@@ -309,7 +309,7 @@ unsafe impl Send for EarlyDmState {}
 /// Creates the DirectManipulation manager and update manager early, before
 /// the winit EventLoop is created. This is required so that Windows generates
 /// `DM_POINTERHITTEST` messages for precision touchpad contacts.
-pub fn create_manager() -> Result<EarlyDmState, windows::core::Error> {
+pub(crate) fn create_manager() -> Result<EarlyDmState, windows::core::Error> {
     let ole_result = unsafe { OleInitialize(None) };
     if let Err(ref e) = ole_result {
         log::warn!("OleInitialize failed: {:?}", e);
@@ -338,7 +338,7 @@ pub fn create_manager() -> Result<EarlyDmState, windows::core::Error> {
 /// This handler uses the same approach as Blender for precision touchpad
 /// navigation, providing hardware-accelerated gesture recognition with
 /// automatic pan/pinch detection, inertia, and smoothing.
-pub struct WinGestureHandler {
+pub(crate) struct WinGestureHandler {
     /// Receiver for gesture events produced by the callback.
     rx: Receiver<GestureEvent>,
     /// Shared state that needs to be kept alive.
@@ -368,13 +368,13 @@ struct DirectManipulationState {
     /// Whether scroll direction is inverted (Natural Scrolling).
     inverted_scroll: bool,
     /// Diagnostic: number of hit tests received.
-    pub hit_test_count: u32,
+    pub(crate) hit_test_count: u32,
     /// Diagnostic: number of touchpad contacts registered.
-    pub contact_count: u32,
+    pub(crate) contact_count: u32,
     /// Diagnostic: number of content updates received.
-    pub update_count: u32,
+    pub(crate) update_count: u32,
     /// Diagnostic: current viewport status.
-    pub status: String,
+    pub(crate) status: String,
 }
 
 // Safety: State is protected by Mutex
@@ -594,7 +594,7 @@ impl WinGestureHandler {
     /// **before** the winit EventLoop was started. This function attaches a
     /// viewport to the HWND and subclasses the window to intercept
     /// `DM_POINTERHITTEST` messages.
-    pub fn new(hwnd: HWND, early: &EarlyDmState) -> Result<Self, windows::core::Error> {
+    pub(crate) fn new(hwnd: HWND, early: &EarlyDmState) -> Result<Self, windows::core::Error> {
         let manager = early.manager.clone();
         let update_manager = early.update_manager.clone();
 
@@ -691,14 +691,14 @@ impl WinGestureHandler {
     /// Drives DirectManipulation updates. Call this once per frame.
     ///
     /// This processes any pending gesture state and triggers callbacks.
-    pub fn update(&self) {
+    pub(crate) fn update(&self) {
         unsafe {
             let _ = self.update_manager.Update(None);
         }
     }
 
     /// Polls all pending gesture events, coalescing multiple updates into a single frame delta.
-    pub fn poll_events(&self) -> Vec<GestureEvent> {
+    pub(crate) fn poll_events(&self) -> Vec<GestureEvent> {
         // Drive update before polling
         self.update();
 
@@ -738,7 +738,7 @@ impl WinGestureHandler {
     }
 
     /// Returns diagnostic information about the handler state.
-    pub fn get_diagnostics(&self) -> (u32, u32, u32, u32) {
+    pub(crate) fn get_diagnostics(&self) -> (u32, u32, u32, u32) {
         if let Ok(state) = self.state.lock() {
             (
                 state.hit_test_count,

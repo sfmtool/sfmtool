@@ -21,7 +21,7 @@ mod tests;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EditHistoryResponse {
     /// The version a click asked for, and the node it belongs to.
-    pub jump: Option<(ReconId, VersionSerial)>,
+    pub(crate) jump: Option<(ReconId, VersionSerial)>,
 }
 
 /// The mark on the row the cursor is on.

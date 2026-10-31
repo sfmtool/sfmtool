@@ -12,6 +12,12 @@
 //! and window management layers, but works when we own the event loop
 //! and window creation directly.
 
+// AGENTS.md § "Rust visibility in the viewer": an item reachable only inside
+// the crate is `pub(crate)` or narrower, and bare `pub` is kept for the crate's
+// public interface. Set here rather than in the manifest because `[lints]
+// workspace = true` cannot be combined with crate-local entries.
+#![warn(unreachable_pub)]
+
 mod action_log;
 mod add_image_to_tracks;
 mod align;

@@ -102,7 +102,7 @@ struct FeatureOverlayState {
 }
 
 /// Image detail panel state.
-pub struct ImageDetail {
+pub(crate) struct ImageDetail {
     /// Currently loaded full-res image and the texture built from it.
     loaded_image: Option<(ImageRef, egui::TextureHandle)>,
     /// Prepared feature overlay for the current image.
@@ -202,27 +202,27 @@ const UNTRACKED: u32 = u32::MAX;
 ///
 /// Point indices are local to the reconstruction the panel was shown with;
 /// `dock.rs` pairs them back into [`crate::scene::PointRef`]s.
-pub struct ImageDetailResponse {
+pub(crate) struct ImageDetailResponse {
     /// If Some, the user clicked a feature — select this 3D point.
-    pub select_point: Option<usize>,
+    pub(crate) select_point: Option<usize>,
     /// Point index currently under the pointer (for cross-panel hover).
-    pub hovered_point: Option<usize>,
+    pub(crate) hovered_point: Option<usize>,
     /// Whether the pointer is currently inside the detail panel.
-    pub has_pointer: bool,
+    pub(crate) has_pointer: bool,
     /// The pixel a right-click just opened the context menu at, in
     /// source-image coordinates. Set on the frame the menu opens and kept by
     /// the panel, because the menu's entries are drawn a frame later, by which
     /// time the pointer has moved.
-    pub context_menu_pixel: Option<[f32; 2]>,
+    pub(crate) context_menu_pixel: Option<[f32; 2]>,
     /// The pixel the context menu's `Start cluster on the bench here` was
     /// clicked for: a cluster-stage track starts there, on the node's bench.
     ///
     /// Read by the panel itself, like `edit_on_bench`: the gesture raises
     /// Track View, so `show` keeps it for [`ImageDetail::take_cluster_start`].
-    pub start_bench_cluster: Option<[f32; 2]>,
+    pub(crate) start_bench_cluster: Option<[f32; 2]>,
     /// The pixel the context menu's `Add observation to bench track here` was
     /// clicked for: a candidate joins the focused item there.
-    pub add_bench_observation: Option<[f32; 2]>,
+    pub(crate) add_bench_observation: Option<[f32; 2]>,
     /// The pixel *Create Track Here* was asked for at, in source-image
     /// coordinates: the context menu's entry, at the pixel the menu was opened
     /// at, or a Control+Shift click, at the pixel clicked. A track is built
@@ -230,14 +230,14 @@ pub struct ImageDetailResponse {
     ///
     /// Applied by the dock, since the step raises no panel: the point it
     /// commits becomes the selection, which Track View already follows.
-    pub create_track_here: Option<[f32; 2]>,
+    pub(crate) create_track_here: Option<[f32; 2]>,
     /// `Edit on Bench` was chosen on a feature, or one was double-clicked:
     /// put the point it observes on the bench and raise Track View.
     ///
     /// Read by the panel itself rather than by the dock, because the gesture
     /// ends in a layout operation and so has to outlive the tab body: `show`
     /// turns it into the [`PointGesture`] `app.rs` drains after the frame.
-    pub edit_on_bench: Option<usize>,
+    pub(crate) edit_on_bench: Option<usize>,
     /// The pixel *Find Nearby Tracks* was chosen at, in source-image
     /// coordinates: the pixel the context menu was opened at. The tracks the
     /// photographs agree on near it are put on the node's bench and the new
@@ -246,16 +246,16 @@ pub struct ImageDetailResponse {
     /// Applied by the dock, as `create_track_here` is: the step raises no
     /// panel, and the focused item's point becomes the selection, which Track
     /// View already follows.
-    pub find_nearby_tracks: Option<[f32; 2]>,
+    pub(crate) find_nearby_tracks: Option<[f32; 2]>,
     /// A mark of the bench layer was clicked: select this observation's row of
     /// the focused item in Track View. The layer is on top, so a click it
     /// catches leaves `select_point` alone.
-    pub select_bench_row: Option<usize>,
+    pub(crate) select_bench_row: Option<usize>,
     /// The edit a drag of one of the bench layer's handles just finished, in
     /// the form the core steps take. The dock applies it through
     /// `AppState::edit_bench_patch`, which is the call the wire's eight patch
     /// tools make: one version, one Action Log row, one undo.
-    pub bench_edit: Option<crate::bench::PatchEdit>,
+    pub(crate) bench_edit: Option<crate::bench::PatchEdit>,
     /// What the panel ended this frame looking at, or `None` on a frame that
     /// drew no image.
     ///
@@ -263,11 +263,11 @@ pub struct ImageDetailResponse {
     /// how big its body is, and it knows that only while it is drawing. The
     /// dock puts it on `AppState`, where the wire's view tools read it
     /// ([`mod@view`]).
-    pub view: Option<ViewGeometry>,
+    pub(crate) view: Option<ViewGeometry>,
 }
 
 impl ImageDetail {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             loaded_image: None,
             feature_overlay: None,
@@ -314,7 +314,7 @@ impl ImageDetail {
     /// A [`ReconId`] is never reused, so these entries could only ever go stale
     /// rather than alias — this is about the GPU texture they hold, not about
     /// correctness.
-    pub fn forget_recon(&mut self, id: ReconId) {
+    pub(crate) fn forget_recon(&mut self, id: ReconId) {
         if self
             .loaded_image
             .as_ref()
@@ -671,7 +671,7 @@ impl ImageDetail {
 
     /// Show the image detail panel.
     #[allow(clippy::too_many_arguments)]
-    pub fn show(
+    pub(crate) fn show(
         &mut self,
         ui: &mut egui::Ui,
         edited: &EditedReconstruction,
@@ -1296,7 +1296,7 @@ impl ImageDetail {
 
     /// Clear the cached image (e.g., when reconstruction changes).
     #[allow(dead_code)]
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.loaded_image = None;
         self.feature_overlay = None;
         self.intrinsics.clear();
