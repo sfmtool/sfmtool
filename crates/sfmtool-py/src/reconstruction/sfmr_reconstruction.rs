@@ -205,7 +205,7 @@ impl PySfmrReconstruction {
     #[staticmethod]
     fn load(path: PathBuf) -> PyResult<Self> {
         let inner = SfmrReconstruction::load(&path, &Progress::none())
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            .map_err(crate::format_errors::read_err)?;
         Ok(Self::new(inner))
     }
 
@@ -239,7 +239,7 @@ impl PySfmrReconstruction {
         let mut sfmr_data = parse_sfmr_data_from_dict(py, data, false)?;
         sfmr_data.workspace_dir = Some(workspace_dir.clone());
         let mut inner = SfmrReconstruction::from_sfmr_data(sfmr_data)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            .map_err(crate::format_errors::write_err)?;
         inner.workspace_dir = workspace_dir;
         // Every `sift_files` value carries its observations' pixels inline, as
         // one read from a file does (`SfmrReconstruction::load`), when the
@@ -356,7 +356,7 @@ impl PySfmrReconstruction {
         let record = self
             .inner
             .save(&path)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            .map_err(crate::format_errors::write_err)?;
         // The value is untouched by the save; the in-memory metadata echoes the
         // write record so a caller reading it back sees what the file carries.
         self.inner.metadata.timestamp = record.timestamp;

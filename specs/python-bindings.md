@@ -184,7 +184,10 @@ a writeable view would let a Python write reach every sharer at once.
 
 The readers, writers and verifiers of the `.sfmr`, `.sift`, `.matches`,
 `.camrig` and `.kdf` formats raise one exception class for each error variant,
-whichever format it came from. Each format crate's error enum has the same
+whichever format it came from. That covers the `fileio` functions, the
+`MatchesFile` handle, `SfmrReconstruction.load`, `from_data` and `save`,
+`SphericalTileRig.read_camrig` and `write_camrig`, and the `.sift` reads of
+`bench.NearbyTrackSources`. Each format crate's error enum has the same
 shared variants, and
 [`format_errors.rs`](../crates/sfmtool-py/src/format_errors.rs) maps them; the
 `.kdf` bindings map the variants only `.kdf` has in
@@ -207,7 +210,9 @@ was asked for, `FileNotFoundError` for a missing SIFT source, and
 binding makes on its arguments before it calls the format crate raises
 `TypeError`, `KeyError` or `ValueError` as the binding says.
 [`test_format_errors_rust_bindings.py`](../tests/rust_bindings/fileio/test_format_errors_rust_bindings.py)
-triggers each variant through each format's readers, verifier and writer.
+triggers each variant through each format's readers, verifier and writer, and
+through `SfmrReconstruction`; the `.kdf` cases are in
+[`test_kdf_rust_bindings.py`](../tests/rust_bindings/spatial/test_kdf_rust_bindings.py).
 
 ## Submodules
 
