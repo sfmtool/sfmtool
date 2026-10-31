@@ -69,7 +69,8 @@ beyond conditioning.
       rounds numbered from 0) onward: the kept set becomes the
       observations whose residual norm is
       strictly below the `(1 − trim_fraction)` quantile of the
-      currently-kept residual norms. The quantile uses linear
+      currently-kept residual norms. The quantile is
+      [`numeric`](../README.md#median-and-quantile)'s `quantile_of_sorted`, linear
       interpolation between order statistics (numpy's default), which is
       contractual — the numpy reference implementation in the binding test
       computes it the same way, and parity with that reference depends on it.
