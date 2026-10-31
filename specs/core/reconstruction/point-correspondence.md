@@ -138,7 +138,7 @@ reverse_image_mapping)` produces the merged point set and track columns:
    not the merged track's RMS, so `sfm merge` scores every point again once it
    has refined the poses), and the union of the
    members' observations remapped into merged-image indices via
-   `reverse_image_mapping`.
+   `reverse_image_mapping`. An empty group is skipped.
 2. **Unique points:** every point not in any group is carried over as its
    own temp point.
 3. **Union-find over observations:** temp points that share an observation
