@@ -25,8 +25,8 @@ The conversion:
 
 1. **Build a patch frame.** A keypoint anchors the point's surfel, so each point
    needs a `(u, v)` frame. The command initializes each frame (normal from the
-   mean viewing direction, via `to_embedded_patches`) and refines that normal
-   photometrically (the `refine_normals` kernel, which re-persists the frame).
+   mean viewing direction, via `to_embedded_patches`) and turns it to its
+   grown-plane normal (`sfmtool.bench.refine_normals`; see Behaviour Notes).
 2. **Derive the keypoints over expanded, vetted patch views.** For each point,
    expand the track with the other views that geometrically see the surfel,
    photometrically vet them against a track-seeded template, and align each
@@ -68,14 +68,11 @@ as `OUTPUT`.
 | `--min-views` | int | 2 | Drop a point left with fewer surviving observations after discards. |
 | `--patch-size` | float | `11.0` | Surfel size — the full patch edge length (in feature-size multiples) used to render the patch. Halved to the library half-extent and passed to `to_embedded_patches` (`extent="feature_size"`), the step that builds the frame. The default sits at SIFT's ~12× descriptor window — the patch carries roughly the texture context the detector itself deems characteristic of the feature. Smaller patches starve the normal/keypoint refiners (weaker normals, more self-similarity culls); larger ones trade observation yield away to the grazing cull for marginal accuracy gains. |
 | `--subpixel` / `--no-subpixel` | flag | on | Run the photometric sub-pixel keypoint refinement (LK / ECC Gauss–Newton against the point's reference render, one pass) once per round. `--no-subpixel` moves no keypoint: the localizer's keypoints are used as they are, and the final round still runs the stage render-only to render each point's stored bitmap and validity at those keypoints. See [`specs/core/patch/keypoint-subpixel-refinement.md`](../../core/patch/keypoint-subpixel-refinement.md). |
-| `--rounds` | int ≥ 1 | `2` | Number of (normal-refinement, keypoint-refinement) rounds, alternating the two. Round 1 runs the SIFT-anchored normal refine, the discrete localizer (the seed), then the sub-pixel keypoint refine; each subsequent round re-refines every normal against the previous round's keypoints, then re-refines the keypoints against the new normals — a fixed-point alternation. The default `2` runs one refinement pass on top of the seed round (most of the normal/keypoint convergence gain lands in the first extra round); raise it for the tail. The per-point patch views (membership) are fixed after round 1 (and per-round grazing drops only shrink them). With a `progress` sink (the CLI wires `click.echo`) each round prints its mean normal change (deg) and mean keypoint shift (px). |
-| `--max-obliquity-deg` | float 0–90 | `80` | In every round, after the normal refinement and before the sub-pixel keypoint refinement, drop every observation viewing its surfel more than this many degrees off the refined normal (`\|v̂·n\| < cos θ`), the reference observation included; the sub-pixel pass's reference-view rule then picks a new reference from the views left, and the output records it. A grazing view renders as a cross-view-consistent but **degenerate smear** that satisfies the consensus yet erases surface texture, so over multiple rounds it drags the normal toward grazing (a self-reinforcing failure). Dropping those views keeps the round alternation on the well-observed, near-frontal views. `90` disables the filter. The obliquity is exactly the `inspect --strips` magenta-dot radius (`sin θ`). (With the fronto prior on by default, surfels stay near-frontal, so this cut fires far less often — it is the backstop for the residual grazing observations.) |
-| `--obliquity-weight-power` | float ≥ 0 | `2` | Exponent `p` of the multiplicative **obliquity view-weight** `\|v̂·n\|^p` folded into the robust normal-refinement consensus (use A). `0` disables it — the consensus runs as before. `2` (default) is the `cos²θ` foreshortening weight: it softly down-weights a view the more obliquely it sees the surfel — a continuous complement to the hard `--max-obliquity-deg` cut, on points whose views span a range of obliquities. On a low-parallax point (all views near-collinear, hence near-equal obliquity) it renormalizes away; that case is what `--fronto-prior-weight` addresses. See [`specs/core/patch/patch-normal-refinement.md`](../../core/patch/patch-normal-refinement.md). |
-| `--fronto-prior-weight` | float ≥ 0 | `0.05` | Weight `λ` of the additive **fronto-parallel prior** `λ·mean_v (v̂·n)²` on each candidate normal during refinement (use B). `0` disables it. It rewards normals that face the observing cameras, supplying the constraint the data can't when `Φ` is flat — the narrow-baseline degeneracy where every candidate tilt shifts all views' patches identically, so a low-parallax surfel drifts to a photometrically-equivalent tilt and renders distorted (a stop sign's octagon shears into a smear). The prior lands it fronto-parallel instead; wherever real parallax curves `Φ` the small prior is overruled, so well-constrained normals are unaffected. The `0.05` default (with `--obliquity-weight-power 2`) straightens low-parallax surfels at negligible photoconsistency cost. See [`specs/core/patch/patch-normal-refinement.md`](../../core/patch/patch-normal-refinement.md). |
-| `--refine-max-views` | int ≥ 0 | `8` | Cap the **round-2+ normal-refinement basis** at the `N` most normal-informative views per point — the D-optimal geometric pick of [`specs/core/patch/patch-normal-refine-view-subset.md`](../../core/patch/patch-normal-refine-view-subset.md) (a least-oblique appearance anchor plus a greedy information-determinant fill; always the best `N`, no fall-back-to-all). `0` disables the cap (use all views). Applies only to the fine-tuning rounds, whose patch views are the `select_views`-expanded ones; the round-1 (raw-track) refine is untouched. **Lossless for the output**: only the refinement basis shrinks — every observation stays, and the reference view each stored bitmap is rendered from is picked from all the patch views. The default `8` cuts end-to-end time by about a third against all views on points with many views (29–37 % on the Spain Soapmaker sweep, with the round-2 refinement itself 3.4–16.8× faster for `K` from 10 down to 3; see that spec § "Choice of `K`"). |
+| `--rounds` | int ≥ 1 | `2` | Number of (normal-refinement, keypoint-refinement) rounds, alternating the two. Round 1 fits the grown-plane normal at the SIFT keypoints, then runs the discrete localizer (the seed) and the sub-pixel keypoint refine; each subsequent round fits every normal again at the previous round's keypoints, over the point's current views, then re-refines the keypoints against the new normals — a fixed-point alternation. The default `2` runs one refinement pass on top of the seed round (most of the normal/keypoint convergence gain lands in the first extra round); raise it for the tail. The per-point patch views (membership) are fixed after round 1 (and per-round grazing drops only shrink them). With a `progress` sink (the CLI wires `click.echo`) each round prints its mean normal change (deg) and mean keypoint shift (px). |
+| `--max-obliquity-deg` | float 0–90 | `80` | In every round, after the normal refinement and before the sub-pixel keypoint refinement, drop every observation viewing its surfel more than this many degrees off the refined normal (`\|v̂·n\| < cos θ`), the reference observation included; the sub-pixel pass's reference-view rule then picks a new reference from the views left, and the output records it. A grazing view renders as a **degenerate smear** that erases surface texture, which biases the keypoint fits against it and the next round's normal. Dropping those views keeps the round alternation on the well-observed, near-frontal views. `90` disables the filter. The obliquity is exactly the `inspect --strips` magenta-dot radius (`sin θ`). |
 | `--max-zncc-self-similarity-radius` | float ≥ 0 | `2.5` | Drop a **point** whose round-1 stored bitmap (the render the sub-pixel stage makes after round 1) fixes no 2D position: its [ZNCC self-similarity radius](../../core/patch/zncc-self-similarity-radius.md), how far the bitmap can slide over itself and still match itself, is above this, in **patch-grid** pixels. Read right after round 1's sub-pixel refine, before the multi-round refinement, so the points it drops cost nothing further. It is read [the overlap way](../../core/patch/zncc-self-similarity-radius.md#the-overlap-reading), as the member gates read their tiles: each shift is correlated over the samples the bitmap holds, with alpha above 0, on both sides. It drops points on a straight edge or a flat patch, which the agreement gates let through. A point with no bitmap has no reading and is left to the track thresholds. The radius reads at most `3`, so `3` or more turns nothing out; `0` disables it and skips the round-1 bitmap render on a multi-round run. The default is `2.5`, the member gate's bar. |
 | `--localize-search-strategy` | choice | `exhaustive` | How the keypoint localizer searches each view's shift window for the best match to the reference render. `exhaustive` (default) scores the full `(2·margin+1)²` grid via the SIMD SAXPY accumulator and takes the highest peak. `plus_descent` is steepest ascent on the 4 axis neighbours from the starting keypoint, scoring about a dozen cells per view via an AVX2 gather kernel; it stops at the peak nearest the start, which from a start 2 px or more off is often a side peak. The measurements, accuracy and time, are in [`patch-keypoint-localization.md`](../../core/patch/patch-keypoint-localization.md#how-the-alignment-was-measured). See [`specs/core/patch/keypoint-localization-search-cache.md`](../../core/patch/keypoint-localization-search-cache.md). |
-| `--sampler` | choice | `per_view` | Pyramid sampler for every photometric kernel in the pipeline (normal refinement, view selection, keypoint localization, sub-pixel refinement, the stored bitmap's render): `per_view` applies the sampler rule to each view, rendering it with `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and with `bilinear_mip` otherwise, so every kernel reads the same view through the same sampler (see [`specs/core/camera/image-warping.md`](../../core/camera/image-warping.md) § "Choosing the sampler per view"). The other three render every view with one sampler: `bilinear_mip` taps the mip level nearest the warp's compression, bounding aliasing on cross-scale views at ~bilinear cost; `anisotropic` also resolves oblique footprints, with the AVX2 kernel at 0.65–1.55× the cost of `bilinear_mip` per tile (the most on views compressed 10 times or more along one axis) and 1.8–4× it on a CPU without AVX2 (the value+gradient render the sub-pixel refinement reads has no AVX2 kernel and costs 2.8–7×); `bilinear` taps the full-resolution level only. |
+| `--sampler` | choice | `per_view` | Pyramid sampler for the photometric kernels of the pipeline (view selection, keypoint localization, sub-pixel refinement, the stored bitmap's render and the observation readings; the grown-plane normal step renders with its own defaults and takes neither `--sampler` nor the grid resolution): `per_view` applies the sampler rule to each view, rendering it with `anisotropic` where `bilinear_mip` would read its less compressed axis at least 1.5× too coarsely and with `bilinear_mip` otherwise, so every kernel reads the same view through the same sampler (see [`specs/core/camera/image-warping.md`](../../core/camera/image-warping.md) § "Choosing the sampler per view"). The other three render every view with one sampler: `bilinear_mip` taps the mip level nearest the warp's compression, bounding aliasing on cross-scale views at ~bilinear cost; `anisotropic` also resolves oblique footprints, with the AVX2 kernel at 0.65–1.55× the cost of `bilinear_mip` per tile (the most on views compressed 10 times or more along one axis) and 1.8–4× it on a CPU without AVX2 (the value+gradient render the sub-pixel refinement reads has no AVX2 kernel and costs 2.8–7×); `bilinear` taps the full-resolution level only. |
 
 The two `--search` / `--max-shift-px` budgets are in different units on purpose:
 `--search` bounds the alignment in the patch's own grid (the localizer's
@@ -88,6 +85,30 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
 
 ## Behaviour Notes
 
+- **Normal step.** Each round turns every finite point's patch to its
+  grown-plane normal: `sfmtool.bench.refine_normals` on its default settings,
+  which does for each point what Track View's *Grown Plane Normal* does to a
+  track put on the bench from it with every observation `in`
+  ([refine-normals.md](../../core/bench/refine-normals.md)). The plane is
+  fitted over the point's track at the keypoints the round starts from: in
+  round 1 the SIFT detections, and in later rounds the previous round's
+  keypoints over the views the localizer kept, the views the vetting added
+  included, since the compaction between rounds writes them as the point's
+  track. No keypoint moves. A point at infinity, a point the step leaves
+  unchanged (no view joined, or a large turn on weak evidence) and a point it
+  refuses (fewer than two observations, among others) keep their frames. Only
+  the turned frames are carried on: the reference, the bitmap, the colour and
+  the readings the output stores are chosen and written by the later steps, as
+  below. With a `progress` sink each round prints how many normals it turned
+  and their mean agreement. The photometric normal search's options
+  (`--obliquity-weight-power`, `--fronto-prior-weight`, `--refine-max-views`)
+  are not options of this command. The grown plane was compared with the
+  photometric search it replaced on the seoul_bull and kerry_park ground
+  truths in
+  [retire-photometric-normal.md](../../drafts/retire-photometric-normal.md#measurement-2026-10-30):
+  lower median normal error on both, a higher mean, about one percentage
+  point fewer observations passing the `0.70` blur-matched bar, and three to
+  five times the run time.
 - **Patch views.** Each point is localized over its track **plus** the other views
   that geometrically see the surfel and pass photometric vetting (based on
   `--min-relative-zncc`).
@@ -235,12 +256,12 @@ which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
   `image_names` order.
 - `src/sfmtool/_embed_patches.py::embed_patches` — the orchestration: a single
   `SfmrReconstruction.to_embedded_patches` bridge (the only `.sift` read) followed
-  by the Rust patch kernels exposed on `PatchCloud`, run over the embedded recon
-  (`refine_normals(use_stored_keypoints=True)` → `select_views` →
-  `localize_keypoints`) and the `compact_to_embedded_patches` write tail. The
-  cloud is read from the embedded recon's stored frames (`recon.patches`) and the
-  image hashes from `recon.image_file_hashes`, both set by the bridge — no second
-  `.sift` read. See the [pipeline
+  by each round's normal step (`sfmtool.bench.refine_normals`), the Rust patch
+  kernels exposed on `PatchCloud`, run over the embedded recon
+  (`select_views` → `localize_keypoints` → `refine_keypoints`), and the
+  `compact_to_embedded_patches` write tail. The kernels' cloud is the patch
+  frames of the normal step's output (`.patches`), and the image hashes are
+  `recon.image_file_hashes`, set by the bridge — no second `.sift` read. See the [pipeline
   spec](../../core/patch/sift-to-patch-reconstruction.md) for where the hot loops live in
   `sfmtool-core`.
 - `src/sfmtool/_patch_compaction.py` — the write/compaction tail
@@ -254,7 +275,7 @@ which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
 ## Non-goals
 
 - **A normal from the patch's pieces.** Each round's normal step is the
-  photometric search; the command does not fit the depths of the patch's
+  grown plane; the command does not fit the depths of the patch's
   pieces and take the plane through them. A normal from gated grid pieces is
   proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
 - **Two patch resolutions.** Every round renders every patch at one grid

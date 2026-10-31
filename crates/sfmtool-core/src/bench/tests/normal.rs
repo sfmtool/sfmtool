@@ -1,8 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The two normal steps, decided against the textured plane: a patch turned
-//! off the plane is turned back toward it.
+//! The finite-difference normal step, in both its piece layouts, decided
+//! against the textured plane: a patch turned off the plane is turned back
+//! toward it.
 
 use super::scene::{fixture_of, Scene, WORLD};
 use super::*;
@@ -46,41 +47,6 @@ fn tilted_track(edited: &EditedReconstruction, by: f64) -> EditableTrack {
     let (tilted, report) = tilt_patch(&track, edited, aim).expect("a finite track");
     assert!(report.changed && report.stopped.is_none());
     tilted
-}
-
-#[test]
-fn fit_normal_turns_a_tilted_patch_back_toward_the_plane() {
-    let scene = Scene::new();
-    let edited = three_view_edited(&scene);
-    let track = tilted_track(&edited, 20.0);
-    let before = degrees(patch_frame_of(&track).normal(), truth());
-
-    let (turned, report) = fit_normal(
-        &track,
-        &edited,
-        &scene.views(),
-        &FitNormalOptions::default(),
-        &Progress::none(),
-    )
-    .expect("three views score a normal");
-    let after = degrees(patch_frame_of(&turned).normal(), truth());
-    assert!(after < before / 2.0, "{before:.1} -> {after:.1}: {report}");
-    let NormalEstimate::Photometric {
-        before: z0,
-        after: z1,
-        views,
-    } = report.estimate
-    else {
-        panic!("a photometric estimate");
-    };
-    assert!(z1 >= z0, "{z0} -> {z1}");
-    assert_eq!(views, 3);
-    // The centre does not move, and the result is read back, its bitmap
-    // rendered, and every row scored against that bitmap.
-    assert!((patch_frame_of(&turned).center - WORLD).norm() < 1e-9);
-    assert!(turned.track().expect("track stage").bitmap.is_some());
-    assert_eq!(report.evaluate.measured, 3);
-    assert_rows_scored_against_the_bitmap(&turned);
 }
 
 /// Every row that has a pixel carries a score against the track's bitmap,

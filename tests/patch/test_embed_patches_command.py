@@ -4,7 +4,7 @@
 """End-to-end tests for the ``sfm embed-patches`` command and the ``embed_patches``
 orchestration (steps 1-7 of the sift_files -> embedded_patches pipeline).
 
-Runs the real photometric kernels on the ``seoul_bull_workspace`` fixture (which
+Runs the real kernels on the ``seoul_bull_workspace`` fixture (which
 carries the ``.sift`` files + source images) at a low patch resolution to keep the
 end-to-end cost reasonable. See ``specs/cli/reconstruction/embed-patches-command.md`` and
 ``specs/core/patch/sift-to-patch-reconstruction.md``.
@@ -183,30 +183,72 @@ def test_embed_patches_sources_hashes_from_embedded_not_sift(
     assert [bytes(h) for h in out.image_file_hashes] == [bytes(h) for h in expected]
 
 
-def test_embed_patches_refine_anchors_on_stored_keypoints(
+def _normals(cloud) -> list[np.ndarray]:
+    return [np.asarray(cloud[i].normal, np.float64) for i in range(len(cloud))]
+
+
+def test_embed_patches_normal_step_is_the_grown_plane(
     monkeypatch, seoul_bull_workspace
 ):
-    """The re-layer's intent: normal refinement runs with use_stored_keypoints=True
-    (anchoring on the carried-in SIFT detections), not the reprojected center.
-    Spy on PatchCloud.refine_normals to capture the flag the pipeline passes."""
+    """Each round's normal step is the grown plane (``sfmtool.bench.refine_normals``)
+    run over an embedded_patches value whose tracks carry keypoints, and the
+    photometric ``PatchCloud.refine_normals`` is never called. From round 2 the
+    tracks it reads hold the views view selection added. The turned frames are
+    the ones view selection reads."""
     from sfmtool.fileio import read_image_rgb
 
     from sfmtool.patches import PatchCloud
 
-    captured: dict = {}
-    orig = PatchCloud.refine_normals
+    def photometric(*args, **kwargs):
+        raise AssertionError("embed_patches ran the photometric normal refinement")
 
-    def spy(self, recon, images, **kwargs):
-        captured["use_stored_keypoints"] = kwargs.get("use_stored_keypoints")
-        return orig(self, recon, images, **kwargs)
+    monkeypatch.setattr(PatchCloud, "refine_normals", photometric)
 
-    monkeypatch.setattr(PatchCloud, "refine_normals", spy)
+    calls: list[dict] = []
+    real_refine = ep.refine_normals
+
+    def spy_refine(recon, images, **kwargs):
+        out, report = real_refine(recon, images, **kwargs)
+        calls.append(
+            {
+                "recon": recon,
+                "kwargs": kwargs,
+                "turned": report["turned"],
+                "normals": _normals(out.patches),
+            }
+        )
+        return out, report
+
+    monkeypatch.setattr(ep, "refine_normals", spy_refine)
+
+    selected_normals: list = []
+    real_select = PatchCloud.select_views
+
+    def spy_select(self, recon, images, **kwargs):
+        selected_normals.extend(_normals(self))
+        return real_select(self, recon, images, **kwargs)
+
+    monkeypatch.setattr(PatchCloud, "select_views", spy_select)
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
     images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
-    ep.embed_patches(recon, images, resolution=12)
-    assert captured.get("use_stored_keypoints") is True
+    out = ep.embed_patches(recon, images, resolution=12, rounds=2)
+    assert out.feature_source == "embedded_patches"
+
+    assert len(calls) == 2, "one grown-plane normal step per round"
+    for call in calls:
+        assert call["recon"].feature_source == "embedded_patches"
+        assert call["recon"].keypoints_xy is not None
+        assert call["kwargs"].keys() <= {"progress"}, "the step runs on its defaults"
+        assert call["turned"] > 0
+    # Round 2 reads the compacted tracks, which hold the views view selection
+    # added, so they carry more observations than round 1's SIFT tracks.
+    assert calls[1]["recon"].observation_count > calls[0]["recon"].observation_count
+    # View selection reads the frames round 1's normal step turned.
+    np.testing.assert_allclose(
+        np.asarray(selected_normals), np.asarray(calls[0]["normals"])
+    )
 
 
 def test_embed_patches_cli_subpixel_and_rounds_forward(
@@ -222,8 +264,6 @@ def test_embed_patches_cli_subpixel_and_rounds_forward(
     def spy(recon, images, **kwargs):
         captured["subpixel"] = kwargs.get("subpixel")
         captured["rounds"] = kwargs.get("rounds")
-        captured["obliquity_weight_power"] = kwargs.get("obliquity_weight_power")
-        captured["fronto_prior_weight"] = kwargs.get("fronto_prior_weight")
         return real(recon, images, **{**kwargs, "resolution": 12})
 
     monkeypatch.setattr(ep, "embed_patches", spy)
@@ -236,92 +276,12 @@ def test_embed_patches_cli_subpixel_and_rounds_forward(
         "--no-subpixel",
         "--rounds",
         "3",
-        "--obliquity-weight-power",
-        "2",
-        "--fronto-prior-weight",
-        "0.05",
     ]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
     assert captured["subpixel"] is False
     assert captured["rounds"] == 3
-    assert captured["obliquity_weight_power"] == 2.0
-    assert captured["fronto_prior_weight"] == 0.05
-
-
-def test_embed_patches_refine_max_views_is_lossless(seoul_bull_workspace):
-    """`--refine-max-views` caps only the round-2+ normal-refinement *basis*
-    (see specs/core/patch/patch-normal-refine-view-subset.md): every observation stays
-    in the output and each stored bitmap's reference view is still picked from
-    all the patch views, so a capped run must produce the same output shape (point and
-    observation counts) as the all-views default — within a hair's tolerance:
-    the cap never drops an observation itself, but the slightly different
-    round-2 normal can flip a borderline grazing-drop / sub-pixel-cull decision
-    (observed: 10 observations in ~10000 on this fixture)."""
-    from sfmtool.fileio import read_image_rgb
-
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    ws = recon.workspace_dir
-    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
-
-    # Pin the baseline to all-views (max_refine_views=0) so this stays a
-    # capped-vs-uncapped comparison independent of the pipeline default (8).
-    baseline = ep.embed_patches(recon, images, resolution=12, max_refine_views=0)
-    capped = ep.embed_patches(recon, images, resolution=12, max_refine_views=5)
-
-    assert capped.feature_source == "embedded_patches"
-    assert abs(capped.point_count - baseline.point_count) <= max(
-        1, baseline.point_count // 100
-    ), f"points: capped {capped.point_count} vs baseline {baseline.point_count}"
-    assert abs(capped.observation_count - baseline.observation_count) <= max(
-        1, baseline.observation_count // 100
-    ), (
-        f"observations: capped {capped.observation_count} "
-        f"vs baseline {baseline.observation_count}"
-    )
-
-
-def test_embed_patches_cli_refine_max_views_forwards(
-    monkeypatch, seoul_bull_workspace, tmp_path
-):
-    """`--refine-max-views` parses (IntRange >= 0) and reaches `embed_patches` as
-    the `max_refine_views` kwarg; the capped end-to-end run succeeds."""
-    captured: dict = {}
-    real = ep.embed_patches
-
-    def spy(recon, images, **kwargs):
-        captured["max_refine_views"] = kwargs.get("max_refine_views")
-        return real(recon, images, **{**kwargs, "resolution": 12})
-
-    monkeypatch.setattr(ep, "embed_patches", spy)
-
-    out = tmp_path / "out.sfmr"
-    args = [
-        "embed-patches",
-        str(seoul_bull_workspace),
-        str(out),
-        "--refine-max-views",
-        "5",
-    ]
-    with mock_patch("sys.argv", ["sfm"] + args):
-        result = CliRunner().invoke(main, args)
-    assert result.exit_code == 0, result.output
-    assert captured["max_refine_views"] == 5
-    assert out.exists()
-
-    # A negative cap is rejected up front by the IntRange.
-    args = [
-        "embed-patches",
-        str(seoul_bull_workspace),
-        str(tmp_path / "out2.sfmr"),
-        "--refine-max-views",
-        "-1",
-    ]
-    with mock_patch("sys.argv", ["sfm"] + args):
-        result = CliRunner().invoke(main, args)
-    assert result.exit_code != 0
-    assert "refine-max-views" in result.output.lower()
 
 
 @pytest.mark.parametrize(
@@ -331,6 +291,9 @@ def test_embed_patches_cli_refine_max_views_forwards(
         ["--search-resolution-multiplier", "2.0"],
         ["--localize-basis-views", "4"],
         ["--subpixel", "2"],
+        ["--obliquity-weight-power", "2"],
+        ["--fronto-prior-weight", "0.05"],
+        ["--refine-max-views", "8"],
     ],
 )
 def test_embed_patches_cli_rejects_removed_options(
@@ -339,7 +302,9 @@ def test_embed_patches_cli_rejects_removed_options(
     """The congealing options are gone: the localizer aligns every view to the
     reference render in one pass, so there are no rounds, no supersampled
     search and no consensus basis to set, and ``--subpixel`` is a flag that
-    takes no count. Each errors out before any work happens."""
+    takes no count. The photometric normal search's options are gone too: the
+    normal step is the grown plane on its defaults. Each errors out before any
+    work happens."""
     args = [
         "embed-patches",
         str(seoul_bull_workspace),

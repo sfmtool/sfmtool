@@ -647,7 +647,12 @@ bitmaps are attached separately via
 present, so pass `patches=` in the same call unless one is already attached); the
 patch-normal refinement pipeline emits them when asked (see
 `PatchCloud.refine_normals(render_bitmaps=True)` and
-`specs/core/patch/patch-normal-refinement.md`).
+`specs/core/patch/patch-normal-refinement.md`). No command runs that
+photometric refinement: the commands that turn patch normals (`sfm
+embed-patches`, `sfm xform --refine-normals`, `inspect --strips` and `compare
+--strips`) run the grown-plane normal, `sfmtool.bench.refine_normals`, which
+returns a new reconstruction carrying the turned frames
+([refine-normals.md](../bench/refine-normals.md)).
 
 The per-point patch frame rides along with the reconstruction's editing
 operations rather than being discarded: image subsetting and point-mask filtering

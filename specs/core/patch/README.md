@@ -20,7 +20,7 @@ across views, and everything refined on top of it. Implemented in
 
 | Document | Description |
 |----------|-------------|
-| [patch-normal-refinement.md](patch-normal-refinement.md) | Photometric refinement of a patch's surface normal. |
+| [patch-normal-refinement.md](patch-normal-refinement.md) | Photometric refinement of a patch's surface normal. No command runs it; the commands that turn normals run the grown-plane normal ([refine-normals.md](../bench/refine-normals.md)). |
 | [patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md) | The D-optimal view subset that makes that refinement cheap without losing conditioning. |
 | [fronto-parallel-patch-cache.md](fronto-parallel-patch-cache.md) | The render-once fronto-parallel cache backing normal refinement, and when it is exact enough. |
 

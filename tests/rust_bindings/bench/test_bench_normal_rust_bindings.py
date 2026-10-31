@@ -3,7 +3,7 @@
 
 """Tests for the bindings of the bench's normal steps.
 
-``fit_normal``, ``finite_difference_normal``, ``grid_plane_normal`` and
+``finite_difference_normal``, ``grid_plane_normal`` and
 ``grown_plane_normal`` are proved in Rust on synthetic planes; what is checked
 here is that each binding hands back a new track and a report that carries the
 step's numbers in the documented words, and that the settings reach the step.
@@ -18,7 +18,6 @@ from sfmtool.bench import (
     create_track,
     finite_difference_normal,
     fit,
-    fit_normal,
     grid_plane_normal,
     grown_plane_normal,
 )
@@ -649,13 +648,3 @@ class TestFiniteDifferenceNormal:
             finite_difference_normal(fitted, edited, images, pieces=1)
         with pytest.raises(ValueError, match="overlap"):
             finite_difference_normal(fitted, edited, images, overlap=0.95)
-
-
-class TestFitNormal:
-    def test_the_photometric_search_reports_its_scores(self, fitted, edited, images):
-        turned, report = fit_normal(fitted, edited, images)
-        _check_common(report, fitted, turned)
-        estimate = report["estimate"]
-        assert estimate["kind"] == "photometric"
-        assert estimate["views"] >= 2
-        assert np.isfinite(estimate["before"]) and np.isfinite(estimate["after"])

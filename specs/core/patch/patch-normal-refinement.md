@@ -6,9 +6,10 @@ the point as a small flat patch, renders that patch from each of those images
 for a range of candidate normals, and keeps the normal whose renderings look most
 alike. It searches a coarse grid of candidates first, then finer grids centered
 on the best one. A patch usually starts with its normal along the mean viewing
-direction, so it faces the cameras rather than lying along the surface. `sfm embed-patches`
-runs this refinement so that the patch stored with
-each point follows the surface. It is the only command that runs it.
+direction, so it faces the cameras rather than lying along the surface. No
+command runs this refinement: every command that turns a patch normal runs the
+grown-plane normal ([refine-normals.md](../bench/refine-normals.md)) instead.
+It is reached only through `PatchCloud.refine_normals`.
 
 ## Problem
 
@@ -498,10 +499,10 @@ runs the grown-plane normal and renders its reference patches with
 `PatchCloud.render_bitmaps`
 ([inspect-command.md](../../cli/reconstruction/inspect-command.md) §
 "Feature source"). The `sfm embed-patches` pipeline takes
-its stored bitmaps from the sub-pixel keypoint refiner instead
-(`refine_keypoints(render_bitmaps=True)`), because that renders each point's
-stored bitmap at the *final* per-view keypoints rather than one round stale,
-and covers the points at infinity this refinement skips.
+its stored bitmaps from the sub-pixel keypoint refiner
+(`refine_keypoints(render_bitmaps=True)`), which renders each point's
+stored bitmap at the *final* per-view keypoints and covers the points at
+infinity.
 
 ## Improvements to discuss
 
@@ -686,16 +687,14 @@ which `refine_patch_cloud_normals` reports per batch.
 
 ## Non-goals
 
-`sfm embed-patches` estimates a normal with this search only; it does not fit
-the depths of the patch's pieces and take the plane through them. A normal
-from gated grid pieces, which would replace this search for that caller and
-retire it, is proposed in [piece-gated-grid-normal.md](../../drafts/piece-gated-grid-normal.md).
-`sfm xform --refine-normals`, `sfm inspect --strips` and `sfm compare --strips`
-run the grown-plane normal instead
-([refine-normals-command.md](../../cli/reconstruction/xform/refine-normals-command.md),
+No command runs this search. `sfm embed-patches`, `sfm xform
+--refine-normals`, `sfm inspect --strips` and `sfm compare --strips` run the
+grown-plane normal
+([embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md),
+[refine-normals-command.md](../../cli/reconstruction/xform/refine-normals-command.md),
 [inspect-command.md](../../cli/reconstruction/inspect-command.md),
-[compare-command.md](../../cli/reconstruction/compare-command.md)), and moving
-`sfm embed-patches` and the other callers to it is
+[compare-command.md](../../cli/reconstruction/compare-command.md)), and deleting
+this search is
 [retire-photometric-normal.md](../../drafts/retire-photometric-normal.md).
 
 ## Open questions
