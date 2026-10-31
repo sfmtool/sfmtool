@@ -725,7 +725,7 @@ the world, and a plane through the nine positions is the patch normal
 The cells are the three-by-three split of the template's `R × R` grid that the
 ZNCC grid uses: rows and columns cut at `R/3` and `R − R/3`, `[row][col]` from
 the top-left cell. A cell's centre is the mean of its grid positions
-(`grid_cell_centres`, shared with the normal refinement and with
+(`grid_cell_centres` in `patch/normal_refine/support.rs`, shared with
 [cell-plane-normals.md](cell-plane-normals.md)). The template is the cluster's
 reference member, so the displacements are relative to that member's frame and
 the reference's own cells displace by zero by construction; only kept members

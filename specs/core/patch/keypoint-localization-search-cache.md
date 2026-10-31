@@ -9,8 +9,7 @@ every shift the search tries, and hand-written AVX2 kernels that score shifts
 from it, either the whole shift grid at once or one cell at a time along a
 local descent. The algorithm they serve is specified in
 [patch-keypoint-localization.md](patch-keypoint-localization.md); the structure
-follows the [fronto-parallel patch cache](fronto-parallel-patch-cache.md):
-render once, score many.
+is to render once and score many times.
 
 Its scope is the **integer** search: putting each keypoint in the right integer
 cell, with a quadratic estimate of the sub-pixel step. Getting from there to an

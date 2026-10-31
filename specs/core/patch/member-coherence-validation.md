@@ -208,7 +208,7 @@ reason (nothing about it can be correlated). The rest of the members score
 normally, and the channels the flat member would have killed survive for them.
 
 This is done locally in this module rather than in the shared helpers, which keep
-their behaviour for view selection and normal refinement.
+their behaviour for view selection.
 
 ### The support floor, and what the matrix is not
 

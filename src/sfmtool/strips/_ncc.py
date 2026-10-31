@@ -6,9 +6,9 @@
 Pure helpers for the ``compare --strips`` engine: a Gaussian patch window,
 weighted normalized cross-correlation between two patches, and rendering a
 point's per-view patches into a single horizontal strip annotated with each
-view's image index. This is a Python, per-pair scorer distinct from the Rust
-``PatchCloud.refine_normals`` path (which scores a single reconstruction's
-surfels, not cross-reconstruction pairs).
+view's image index. This is a Python, per-pair scorer: it scores a pair of
+reconstructions' renders of one point against each other, where the Rust patch
+kernels score the views of a single reconstruction's points.
 """
 
 from __future__ import annotations

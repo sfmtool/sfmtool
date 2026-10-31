@@ -294,10 +294,9 @@ impl PyPatchCloud {
 
         // Build the (point_index, image_index) -> stored keypoint lookup once
         // for embedded_patches recons; sift-files recons return None and the
-        // per-patch loop just falls through to the projection-seed path. The
-        // map is keyed identically to the one in `refine_normals`'s
-        // `use_stored_keypoints` path; duplicate observations of the same
-        // (point, image) all hash to the same slot (last write wins, harmless).
+        // per-patch loop just falls through to the projection-seed path.
+        // Duplicate observations of the same (point, image) all hash to the
+        // same slot (last write wins, harmless).
         let stored_kp_map: Option<std::collections::HashMap<(u32, u32), [f64; 2]>> = recon_opt
             .and_then(|recon| {
                 recon.keypoints_xy().map(|keypoints_xy| {

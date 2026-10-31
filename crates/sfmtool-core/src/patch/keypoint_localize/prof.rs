@@ -8,7 +8,7 @@
 //! [`localize_patch_cloud_keypoints`](super::localize_patch_cloud_keypoints); a
 //! summary is printed to stderr when the batch finishes. With the variable unset
 //! the timers compile to a single branch on a cached flag, so the hot path is
-//! unaffected. Mirrors `normal_refine::prof`.
+//! unaffected. Mirrors `view_selection::prof`.
 //!
 //! Phase times are *thread-summed* (CPU-seconds, not wall-clock): with N rayon
 //! threads busy, one wall second accumulates up to N phase-seconds. Shares of the

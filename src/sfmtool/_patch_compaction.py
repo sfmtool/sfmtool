@@ -191,8 +191,8 @@ def compact_to_embedded_patches(
         patch_bitmaps: Optional ``(point_count, R, R, 4)`` uint8 stored bitmaps
             scattered per source point (the pipeline sources these from
             ``refine_keypoints(render_bitmaps=True)``, each the reference view's
-            tile at the final keypoints; ``refine_normals(render_bitmaps=True)``'s
-            ``bitmaps`` fit too); culled to the survivors and stored as the patch
+            tile at the final keypoints; ``PatchCloud.render_bitmaps``'
+            bitmaps fit too); culled to the survivors and stored as the patch
             bitmaps.
         valid: Optional bool mask per source point (parallel to ``recon``'s
             points): ``True`` where the keypoint refiner produced a valid

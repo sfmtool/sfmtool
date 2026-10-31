@@ -8,7 +8,7 @@
 //! [`refine_patch_cloud_keypoints`](super::refine_patch_cloud_keypoints); a
 //! summary is printed to stderr when the batch finishes. With the variable
 //! unset the timers compile to a single branch on a cached flag, so the hot
-//! path is unaffected. Mirrors `keypoint_localize::prof` / `normal_refine::prof`.
+//! path is unaffected. Mirrors `keypoint_localize::prof`.
 //!
 //! Phase times are *thread-summed* (CPU-seconds, not wall-clock): with N rayon
 //! threads busy, one wall second accumulates up to N phase-seconds. Shares of

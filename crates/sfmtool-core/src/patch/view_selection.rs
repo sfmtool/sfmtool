@@ -56,9 +56,10 @@ pub mod prof;
 
 /// Tunables for [`select_patch_views`].
 ///
-/// The render/window/validity knobs mirror
-/// [`NormalRefineParams`](super::normal_refine::NormalRefineParams) so the
-/// reference appearance is built on the same conventions as refinement.
+/// The render, window and validity knobs (`resolution`, `window`, `sampler`,
+/// `min_valid_fraction`) take the same defaults as
+/// [`MemberCoherenceParams`](super::member_coherence::MemberCoherenceParams),
+/// whose matrix renders a track's members over the same shared support.
 #[derive(Debug, Clone)]
 pub struct ViewSelectParams {
     /// Admit a candidate whose windowed ZNCC to the reference clears this
@@ -173,20 +174,18 @@ fn build_reference(
     params: &ViewSelectParams,
     renders: &Progress<'_>,
 ) -> Option<(Reference, f64)> {
-    let n_normal = patch.normal();
-    // Restrict to the track views, preserving order; build the frozen support at
-    // the point's own normal exactly as refinement does.
+    // Restrict to the track views, preserving order; build the frozen common
+    // support of the patch over them.
     let track_proj: Vec<ProjectedImage<'_>> =
         track_views.iter().map(|&i| views[i as usize]).collect();
 
     let ctx = prof::REF_SUPPORT.time(|| {
         build_level_context(
             patch,
-            &n_normal,
             &track_proj,
             params.resolution,
             w_full,
-            &normal_refine_shim(params),
+            params.min_valid_fraction,
             track_keypoints,
         )
     })?;
@@ -236,7 +235,7 @@ fn build_reference(
 
         // Robust per-view weights for the reference consensus (same IRLS as Φ).
         let mut sc = ConsensusScratch::default();
-        irls_view_weights(&xs, views_kept, kept, n, params.robust_iters, None, &mut sc);
+        irls_view_weights(&xs, views_kept, kept, n, params.robust_iters, &mut sc);
         let weights = &sc.w;
 
         // Weighted consensus template per channel, then unit-normalize per channel so
@@ -871,23 +870,6 @@ fn score_raw_against_reference(
         // convention (channels absent / flat in the candidate score 0 in the mean).
         Some(s / reference.channels as f64)
     })
-}
-
-/// A `NormalRefineParams` shim carrying just the gating knobs
-/// [`build_level_context`] and [`normalized_stack`] read, so view selection
-/// drives the shared support/render machinery without re-deriving it.
-fn normal_refine_shim(params: &ViewSelectParams) -> super::normal_refine::NormalRefineParams {
-    super::normal_refine::NormalRefineParams {
-        window: params.window,
-        sampler: params.sampler,
-        min_valid_fraction: params.min_valid_fraction,
-        // `build_level_context` floors the kept-view count at `min_views.max(2)`;
-        // we want it to keep every track view that passes the per-view fraction
-        // gate (the `min_track_views` check happens in `build_reference`), so set
-        // the floor to 2 (its minimum) here.
-        min_views: 2,
-        ..super::normal_refine::NormalRefineParams::default()
-    }
 }
 
 /// Select the patch's views `G` for one oriented patch.
