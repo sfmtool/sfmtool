@@ -258,21 +258,23 @@ directions when the rig is built:
 - `measured_max_nn_angle` is the largest angle from a tile direction to its
   nearest other tile direction, the worst-case gap between neighbouring
   tiles. It is a diagnostic: `SphericalTileRig::from_camrig` requires it
-  and reports it, but no algorithm uses its value.
+  and the rig exposes it through `measured_max_nn_angle()`, but no
+  algorithm uses its value.
 - `measured_max_coverage_angle` is the largest angle from any direction on
   the sphere to its nearest tile direction, the worst-case Voronoi-cell
   radius. `sfmtool` estimates it from 50 000 uniformly random probe
   directions, so it can fall slightly short of the exact maximum. The tile
   half-FOV is this angle times `overlap_factor`, and resampling the atlas
-  back to an equirectangular image uses it as the cell radius inside which a
-  direction belongs to a single tile. `from_camrig` requires both angles to
+  into a destination camera (`resample_atlas`) uses it as the cell radius
+  inside which a direction belongs to a single tile. `from_camrig` requires both angles to
   be finite numbers.
 
 `rig_attributes` also stores `half_fov_rad` and `patch_size`, but those are
 informational copies of values already implied by the shared camera and are
-not consumed when the rig is reloaded. The construction inputs (`n`, `arc_per_pixel`, `overlap_factor`,
-relaxation seed) are not stored: `n` is `sensor_count`, and the rest only
-feed the construction, which reloading bypasses.
+not consumed when the rig is reloaded. The construction inputs (`n`,
+`arc_per_pixel`, `overlap_factor`, relaxation seed) are not stored: `n` is
+`sensor_count`, and the rest only feed the construction, which reloading
+bypasses.
 
 ## How `.camrig` files fit into workspaces
 
