@@ -418,7 +418,7 @@ affordable to leave the call sites in place.
 **The level rides on the `Progress`**, not in a global. The viewer sets it from
 the checkbox when it builds the `Progress` for an operation, so two callers in
 one process can legitimately differ and nothing has to be reset. It is not read
-from the environment: `SFMTOOL_PROFILE` still means what it has always meant,
+from the environment: [`SFMTOOL_PROFILE`](../core/README.md#phase-timing-with-sfmtool_profile) still means what it has always meant,
 which is the `prof` modules below.
 
 The existing `prof` modules and their stderr batch summaries are untouched and

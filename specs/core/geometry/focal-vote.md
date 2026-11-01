@@ -732,7 +732,7 @@ production run sets none of them.
   set too to print anything. The vote still scores from the `f32`
   residuals, so output is unchanged; the extra work roughly triples the
   cost of the audited loops.
-- `SFMTOOL_PROFILE` (set to anything but empty or `0`) times each phase of
+- [`SFMTOOL_PROFILE`](../README.md#phase-timing-with-sfmtool_profile) (set to anything but empty or `0`) times each phase of
   the vote and prints a summary to stderr when it finishes. Output is
   unchanged. Other `sfmtool-core` kernels read the same variable for their
   own phase timing.
