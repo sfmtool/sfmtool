@@ -2567,7 +2567,8 @@ describes. Other parts of this spec are implemented by:
   is set, since that flag chooses only where the depth statistics come from:
   an array is written as given, apart from that fill of its zero rows; an
   explicit `None` writes no normals; and a missing key stands for an all-zero
-  array, so every point gets a mean-viewing normal. A dict from `read_sfmr`
+  array, so every finite point gets a mean-viewing normal (a point at
+  infinity has none, so its row stays zero). A dict from `read_sfmr`
   therefore writes back the normals it was read with. A caller that moves or
   rotates the points in the dict updates `normals_xyz` with them, or deletes
   the key to have them computed again.

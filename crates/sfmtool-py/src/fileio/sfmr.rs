@@ -638,8 +638,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// free, since an all-free set is the same statement as none at all), and the
 /// per-point patch frame
 /// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` and the optional
-/// `patch_bitmaps_y_x_rgba`). A missing or `None` value means the column is
-/// absent — which is what a `sift_files` dict carries for the patch frame,
+/// `patch_bitmaps_y_x_rgba`). Apart from `normals_xyz` (see below), a missing
+/// or `None` value means the column is absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
 /// anything per image, and a missing `rolling_shutter_scanlines` that no
@@ -651,8 +651,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// written as given. The normals are handled the same way in both modes. A
 /// `normals_xyz` array is written as given, except that each zero row is
 /// filled with the point's mean-viewing normal; an explicit `None` writes no
-/// normals; and a missing key writes a mean-viewing normal for every point. A
-/// caller that moves or rotates the points in the dict updates `normals_xyz`
+/// normals; and a missing key writes a mean-viewing normal for every finite
+/// point. A point at infinity has no mean-viewing normal, so its row stays
+/// zero. A caller that moves or rotates the points in the dict updates `normals_xyz`
 /// to match, or deletes the key to have them computed again.
 ///
 /// KNOWN LIMITATION: this always writes the current
