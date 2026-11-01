@@ -263,7 +263,7 @@ def test_data_a_writer_cannot_store_is_a_value_error(tmp_path):
     with pytest.raises(ValueError, match="Shape mismatch"):
         write_matches(str(tmp_path / "bad.matches"), matches)
 
-    # Shape mismatch: a cluster member past its image's feature count.
+    # Invalid format: a cluster member past its image's feature count.
     clusters = _clusters_kwargs()
     clusters["member_features"][1] = 150
     with pytest.raises(ValueError, match="Invalid format"):
