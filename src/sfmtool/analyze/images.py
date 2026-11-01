@@ -105,6 +105,8 @@ def _print_motion_analysis(
     discontinuity_threshold_sigma,
 ):
     """Print motion discontinuity analysis results."""
+    # The getter builds a new list on every access, so read it once.
+    image_names = recon.image_names
     trans_mean = successive_translations.mean()
     trans_std = successive_translations.std()
     rot_mean = successive_rotations.mean()
@@ -156,7 +158,7 @@ def _print_motion_analysis(
                 flags.append(f"ROTATION: {rot:.1f}\u00b0 (>{rot_threshold:.1f}\u00b0)")
 
             flag_str = ", ".join(flags)
-            click.echo(f"  {recon.image_names[i]} \u2192 {recon.image_names[j]}")
+            click.echo(f"  {image_names[i]} \u2192 {image_names[j]}")
             click.echo(f"    {flag_str}")
             click.echo(f"    Translation: {trans:.3f}, Rotation: {rot:.1f}\u00b0")
             click.echo("")
@@ -183,14 +185,14 @@ def _print_motion_analysis(
         flag_str = " ".join(flags) if flags else ""
 
         from_name = (
-            recon.image_names[i]
-            if len(recon.image_names[i]) <= 28
-            else "..." + recon.image_names[i][-25:]
+            image_names[i]
+            if len(image_names[i]) <= 28
+            else "..." + image_names[i][-25:]
         )
         to_name = (
-            recon.image_names[i + 1]
-            if len(recon.image_names[i + 1]) <= 28
-            else "..." + recon.image_names[i + 1][-25:]
+            image_names[i + 1]
+            if len(image_names[i + 1]) <= 28
+            else "..." + image_names[i + 1][-25:]
         )
 
         click.echo(
@@ -214,9 +216,9 @@ def _print_motion_analysis(
             rot_diff = interpolation_rot_diffs[idx]
 
             img_name = (
-                recon.image_names[i]
-                if len(recon.image_names[i]) <= 48
-                else "..." + recon.image_names[i][-45:]
+                image_names[i]
+                if len(image_names[i]) <= 48
+                else "..." + image_names[i][-45:]
             )
 
             click.echo(f"{img_name:<50} {trans_diff:>12.3f} {rot_diff:>12.1f}\u00b0")
@@ -242,6 +244,7 @@ def print_images_table(recon: SfmrReconstruction, recon_name: str | None = None)
     translations = recon.translations
     image_indexes = recon.track_image_indexes
     points3d_indexes = recon.track_point_indexes
+    image_names = recon.image_names
     click.echo(f"Loading data: {time.perf_counter() - step_start:.2f}s")
 
     click.echo(f"\nPer-image connectivity table for: {recon_name}")
@@ -434,7 +437,7 @@ def print_images_table(recon: SfmrReconstruction, recon_name: str | None = None)
     click.echo("")
 
     for i in range(num_images):
-        img_name = recon.image_names[i]
+        img_name = image_names[i]
         obs_count = obs_per_image[i]
         dist1_str = f"{closest_dist[i]:.3f}" if not np.isnan(closest_dist[i]) else "N/A"
         dist10_str = (
@@ -445,7 +448,7 @@ def print_images_table(recon: SfmrReconstruction, recon_name: str | None = None)
 
         if i in closest_by_shared:
             closest_idx, shared_count = closest_by_shared[i]
-            closest_name = recon.image_names[closest_idx]
+            closest_name = image_names[closest_idx]
             closest_3d_dist = dist_matrix[i, closest_idx]
             closest_angle = compute_view_angle(i, closest_idx)
             closest_shared_str = closest_name
@@ -458,7 +461,7 @@ def print_images_table(recon: SfmrReconstruction, recon_name: str | None = None)
 
         if i in closest_far_graph:
             far_graph_idx, graph_dist = closest_far_graph[i]
-            far_graph_name = recon.image_names[far_graph_idx]
+            far_graph_name = image_names[far_graph_idx]
             far_graph_3d_dist = dist_matrix[i, far_graph_idx]
             far_graph_angle = compute_view_angle(i, far_graph_idx)
             closest_far_graph_str = far_graph_name
