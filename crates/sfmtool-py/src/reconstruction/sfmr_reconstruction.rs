@@ -68,10 +68,10 @@ impl PySfmrReconstruction {
     /// normals; and a missing key gives every finite point a mean-viewing
     /// normal. A point at infinity has no mean-viewing normal, so its row stays
     /// zero. A dict from `read_sfmr` therefore keeps the normals it was read
-    /// with, beside the patch frame it was read with. A caller that moves or rotates the points in the
-    /// dict updates ``normals_xyz`` with them, or deletes the key to have them
-    /// computed again. A ``sift_files``
-    /// dict without ``keypoints_xy`` gets the column from the ``.sift`` files
+    /// with, beside the patch frame it was read with. A caller that moves or
+    /// rotates the points in the dict updates ``normals_xyz`` with them, or
+    /// deletes the key to have them computed again. A ``sift_files`` dict
+    /// without ``keypoints_xy`` gets the column from the ``.sift`` files
     /// when every one it needs is present and matches ``sift_content_hashes``.
     ///
     /// Args:

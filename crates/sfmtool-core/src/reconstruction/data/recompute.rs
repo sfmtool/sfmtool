@@ -431,7 +431,8 @@ impl SfmrReconstruction {
     /// The normals follow the writer's rule: when the reconstruction carries
     /// normals, a point's normal is kept where it is set and replaced by the
     /// point's mean-viewing normal where it is missing
-    /// ([`sfmtool_sfmr_format::is_missing_normal`], the zero vector). A point at
+    /// ([`sfmtool_sfmr_format::is_missing_normal`]: the zero vector, or within
+    /// `1e-6` of it in squared norm). A point at
     /// infinity has no mean-viewing normal, so a missing one stays zero. A
     /// reconstruction without normals gets none. A caller that wants every
     /// normal computed again from the geometry zeroes them first.
