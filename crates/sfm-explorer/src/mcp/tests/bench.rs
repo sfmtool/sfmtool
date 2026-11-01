@@ -4850,6 +4850,9 @@ fn a_running_live_evaluation_is_not_reported_or_cancelled_on_the_wire() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let id = state.scene[0].id;
+    // Held, so the evaluation is still running when the cancel below is
+    // checked not to have stopped it.
+    let open = state.hold_next_evaluation();
     state.drive_bench_evaluation();
     assert!(state.bench_evaluation_running(id, &item));
 
@@ -4870,6 +4873,7 @@ fn a_running_live_evaluation_is_not_reported_or_cancelled_on_the_wire() {
         "a cancel of everything someone asked for stopped the evaluation"
     );
 
+    open.send(()).expect("the evaluation is held");
     state.settle_bench_evaluation();
     assert_eq!(
         state.bench_evaluation(id, &item),
