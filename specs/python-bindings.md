@@ -84,12 +84,12 @@ this way, where a flat root surface would hold the binding
 `match_image_pair` and `sfmtool.feature_match` the Python
 `match_image_pair` that takes different arguments, and the bench's steps
 (`commit`, `split`, `fit`) would read as something else beside the rest. The
-eleven public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
+twelve public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
 and bound on the root on first use by the root's module `__getattr__`, so
 `import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and
 `import sfmtool` still loads nothing but the extension. The root also holds
-Python names, none of them a binding: `_LAZY_NAMES` maps each Python submodule
-to the names the root reads from it on first use, such as `SiftReader` and
+Python names, none of them a binding: `_LAZY_NAMES` maps six Python submodules
+to the names the root reads from each on first use, such as `SiftReader` and
 `write_sift` from `sfmtool.sift.file`, `extract_sift_with_colmap` from
 `sfmtool.sift.extract_colmap` and `init_workspace` from `sfmtool._workspace`.
 The root's `__all__` is the three extension names, the `_LAZY_NAMES` names and
