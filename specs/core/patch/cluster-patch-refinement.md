@@ -127,6 +127,18 @@ pub fn refine_cluster_patches(
     progress: Option<&AtomicUsize>,     // one tick per finished cluster
 ) -> ClusterRefineResult;
 
+/// The same kernel over borrowed pyramids, for a caller that holds each
+/// image's pyramid behind a reference rather than in a table of its own.
+pub fn refine_cluster_patches_borrowed(
+    pyramids: &[&ImageU8Pyramid],
+    features: &[FeatureGeometry<'_>],   // parallel to `pyramids`
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_features: &[u32],
+    params: &ClusterRefineParams,
+    progress: Option<&AtomicUsize>,
+) -> ClusterRefineResult;
+
 /// One member's own `R×R` grid at a position and affine shape: what the
 /// member gate reads.
 pub fn sample_member_grid(
@@ -185,9 +197,15 @@ already holds both — the separation `ProjectedImage` gives the other patch
 kernels. Three flat CSR arrays in and member-parallel vectors out, rather than
 anything nested, because that is the shape the clusters have on disk, in the
 matcher's in-memory cluster set and in numpy; nesting would be repacked at every
-boundary. Nothing returns a `Result` — a member that cannot be evaluated is
-*data* (`NotEvaluated`, `RejectedUnlocalizable`, …), and the failures that
-remain are caller bugs (non-parallel inputs, malformed CSR), which assert.
+boundary. `refine_cluster_patches_borrowed` takes `&[&ImageU8Pyramid]` because
+cloning a pyramid copies every pixel of a decoded image: the bench's evaluation
+registers an in-memory cluster over the pyramids of the `ProjectedImage`s the
+patch kernels already read, and would otherwise have to copy them into a table
+it owns. `refine_cluster_patches` calls it, so the two return the same result
+and panic on the same inputs. Nothing returns a `Result` — a member that
+cannot be evaluated is *data* (`NotEvaluated`, `RejectedUnlocalizable`, …), and
+the failures that remain are caller bugs (non-parallel inputs, malformed CSR),
+which assert.
 `warp_consistency_residuals` stands apart from the result because it is a fit
 over a whole refined cluster set, and a caller that only wants warps should not
 pay for it. The member-grid sampler and the radius are public so the bench
@@ -1179,7 +1197,8 @@ template edge length while the kernel's `radius` is a half-width;
 | `SIGMA_CLAMP` | `1.5` | Log-scale clamp of the similarity stage (`cluster_refine.rs`) |
 
 The piecewise stage is `ClusterRefineParams::piecewise`, `None` by default (CLI
-`--no-piecewise`). Its settings are `PiecewiseParams::default()` in
+`--piecewise/--no-piecewise`, default `--no-piecewise`). Its settings are
+`PiecewiseParams::default()` in
 `crates/sfmtool-core/src/patch/cluster_refine/piecewise.rs`, with
 `ACCEPT_ZNCC_TOLERANCE`; the other module constants the table marks are the
 robust fit's, in `crates/sfmtool-core/src/patch/cell_registration.rs`. The defaults of
@@ -1253,7 +1272,11 @@ refined shape, `member_refined_zncc_self_similarity_radius` `(M,)` float32 and
 `member_refined_zncc_self_similarity_radius_grid` `(M, 3, 3)` float32, which the
 file does not store. `regate_at_refined_shape=None`, `max_capped_cells=None`
 and `rotation_starts=None` take the Rust defaults, and the dict reports the
-values the call ran with under the same three keys.
+values the call ran with under the same three keys, with one difference:
+`regate_at_refined_shape` reports whether the whole grid's gate ran
+(`ClusterRefineParams::refined_shape_gate_is_on`), so it is `False` whenever
+`max_member_zncc_self_similarity_radius` is `0`, since that gate shares the
+member gate's bar and does not run without it.
 
 `piecewise=True` runs the piecewise stage; the six `PiecewiseParams` settings
 are keyword arguments under their field names, each `None` for the Rust default,
@@ -1402,8 +1425,13 @@ at least one member, and that statuses stay inside the enum; with
   [cell-plane-normal-precision-gate.md](../../drafts/cell-plane-normal-precision-gate.md).
 - **No normal in the cluster-patches file.** The file is pose-free; a normal is
   derived by whoever holds poses.
-- **No affine fit per cell.** A cell's search is a shift search; a cell that
-  needs more is over another surface and is refused.
+- **No fit beyond a shift per cell.** A cell's search is a shift search; a
+  cell that needs more is over another surface and is refused. That includes
+  a scale per cell, which would read the perspective term's radial component at
+  the cost of a larger search per cell: the calibration found perspective terms
+  only overfit at the scale of the whole patch
+  ([The warp and the cascade](#the-warp-and-the-cascade)), and a cell is a
+  ninth of the patch.
 
 ## Open questions
 
@@ -1418,9 +1446,6 @@ at least one member, and that statuses stay inside the enum; with
   freely tunable, one knob moves another gate's strength. Re-expressing the bar
   in a resolution-independent unit (keypoint-frame or source px) would fix it,
   and would change the meaning of the current default.
-- **Shift only, or shift and scale, per cell.** A scale per cell would read the
-  perspective term's radial component, at the cost of a two-dimensional search
-  per cell. The cells are fitted as pure shifts.
 - **Reference-selection policy.** Largest SIFT scale is the shipped policy and a
   known weakness on rig captures, where the largest-scale member is often an
   untracked feature. The format is policy-agnostic; the alternatives (template

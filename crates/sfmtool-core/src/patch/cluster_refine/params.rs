@@ -256,7 +256,7 @@ impl Default for ClusterRefineParams {
             // for a +0.03% kept-set delta and a slightly better
             // warp-consistency profile, and they keep the synthetic
             // warp-recovery suite green. See
-            // specs/core/patch/cluster-patch-refinement.md ("Performance").
+            // specs/core/patch/cluster-patch-refinement.md ("Measured cost").
             intermediate_convergence: 1e-4,
             stall_iters: 20,
             stall_tol: 1e-4,
