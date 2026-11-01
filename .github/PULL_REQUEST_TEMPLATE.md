@@ -32,10 +32,11 @@ change alters something that already existed, show a before/after pair. Write
 Check that a screenshot shows no sensitive data. Prefer screenshots of the
 checked-in test data under `test-data/images/`, such as
 `seoul_bull_sculpture_ground_truth_v01.sfmr`,
-`seoul_bull_sculpture_ground_truth_v02.sfmr` or
-`kerry_park_ground_truth_v01.sfmr`. Make sure no local paths, usernames,
-private images or other personal data are visible, for example in a window
-title or a file dialog. Screenshot one panel rather than the whole desktop.
+`seoul_bull_sculpture_ground_truth_v02.sfmr`,
+`kerry_park_ground_truth_v01.sfmr` or `dino_dog_toy_ground_truth_v01.sfmr`.
+Make sure no local paths, usernames, private images or other personal data
+are visible, for example in a window title or a file dialog. Screenshot one
+panel rather than the whole desktop.
 The viewer's MCP endpoint (`pixi run gui-mcp`, see `specs/gui/mcp-server.md`)
 can screenshot a single panel.
 -->

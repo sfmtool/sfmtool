@@ -88,7 +88,7 @@ Four datasets are checked in under `test-data/images/`:
 Bootstrap a workspace with `scripts/init_dataset_*.sh`. Reuse these in bug
 reports and reproductions where possible.
 
-Two datasets also carry reference reconstructions, in metres:
+Three datasets also carry reference reconstructions, in metres:
 
 - `seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr` — all 17
   images; the scale comes from three GPS fixes.
@@ -97,11 +97,14 @@ Two datasets also carry reference reconstructions, in metres:
   camera adjustments and refined normals.
 - `kerry_park/kerry_park_ground_truth_v01.sfmr` — all 48 images, with the
   rig; the scale and orientation come from eight GPS fixes (X east, Y north).
+- `dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr` — all 85 images, with an
+  `SFMTOOL_PINHOLE` camera, per-image camera adjustments and refined normals;
+  the scale comes from four tape-measured distances between points on the toy.
 
 The `_v01` suffix is a version, so a file name always means the same content:
 a later correction, such as one found with SfM Explorer, goes into a new
 version (`_v02`, …) rather than overwriting an earlier one. The tests and
-scripts still use the `_v01` files.
+scripts still use the `_v01` files, and none uses the dino file.
 
 Each directory has a `.sfm-workspace.json`, so the file opens in place:
 
@@ -109,13 +112,15 @@ Each directory has a `.sfm-workspace.json`, so the file opens in place:
 pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr
 pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr
 pixi run gui -- test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr
+pixi run gui -- test-data/images/dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr
 ```
 
 They are minimal files with embedded patches and need no `.sift` files. The
-test fixtures for these datasets triangulate at the reference poses rather than
-solving, so they build the same reconstruction every time. Work in a
-bootstrapped workspace rather than running `sfm sift` or a solve in either
-directory, which would write their output into `test-data`.
+test fixtures for `seoul_bull_sculpture` and `kerry_park` triangulate at the
+reference poses rather than solving, so they build the same reconstruction
+every time. Work in a bootstrapped workspace rather than running `sfm sift` or
+a solve in any of these directories, which would write their output into
+`test-data`.
 
 ## Commit style
 
