@@ -120,13 +120,27 @@ The format additionally embeds six float32 geometry values per SIFT feature:
 thumbnails remain external. The geometry's compressed size was not part of this
 version-1 measurement.
 
+Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON
+with ZIP + zstd; sum descriptor entry shapes and stored frame sizes. Recursively
+calculate `nodes(n)=1` for n <= 16, otherwise `1+nodes(floor(n/2))+nodes(ceil(n/2))`;
+accept maximal subtrees satisfying `41*nodes(n)+132*n <= target`. Compress the
+two little-endian origin columns in blocks of 131,072 rows. The SHA-256 of the
+concatenation of `filename + space + stored content_xxh128 + newline` for the
+sorted source files is
+`2411cdb97d9c93912449ab767d296aa49710c1ad081016d0611b5722e2a409cd`.
+This identifies the inspected inventory, not independent verification of all
+source payload hashes. The study, added in PR #416, read the source files only:
+it modified none and built no `.kdf`. The build in the next section came later.
+
 ## The file this projected: measured
 
 Building the projected file confirms the decoded arithmetic exactly and lands at
 the bottom of the projected range. Four trees over 9,701,948 of these descriptors
-at a 1 MiB chunk target and zstd level 3, via the version-1 revision of
+at a 1 MiB chunk target and zstd level 3, via the revision of
 [`scripts/benchmark_kdf_layouts.py`](../../../scripts/benchmark_kdf_layouts.py)
-(the current script measures version 3):
+added in PR #421 and that PR's version-1 writer (the current script measures
+version 3). PR #421 added these numbers and was squash-merged as `95cb784b`; it
+does not record which of its branch commits the run used. The sizes:
 
 | Section | Decoded | Stored | Ratio |
 |---------|---------|--------|-------|
@@ -160,17 +174,6 @@ offsets array, against four copies. That is 2.816 GB saved, against the
 which is what makes the comparison a measurement of storage rather than of two
 different forests. What the layout costs in query time is measured in
 [lazy-kdforest-query-measurements.md](lazy-kdforest-query-measurements.md#shared-corpus-versus-per-tree-copies).
-
-Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON
-with ZIP + zstd; sum descriptor entry shapes and stored frame sizes. Recursively
-calculate `nodes(n)=1` for n <= 16, otherwise `1+nodes(floor(n/2))+nodes(ceil(n/2))`;
-accept maximal subtrees satisfying `41*nodes(n)+132*n <= target`. Compress the
-two little-endian origin columns in blocks of 131,072 rows. The SHA-256 of the
-concatenation of `filename + space + stored content_xxh128 + newline` for the
-sorted source files is
-`2411cdb97d9c93912449ab767d296aa49710c1ad081016d0611b5722e2a409cd`.
-This identifies the inspected inventory, not independent verification of all
-source payload hashes. No source files were modified and no `.kdf` was built.
 
 ## Format tradeoffs
 
