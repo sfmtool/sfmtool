@@ -1111,11 +1111,9 @@ pub const BENCH_CLUSTER_MIN_ZNCC_MIDDLE: f64 = 0.7;
 /// patch-grid px.
 ///
 /// `2.5`, the same bar as the keypoint localizer's member gate
-/// ([`DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`](crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS)),
-/// which the user chose from a sweep on seoul_bull and kerry_park. It sits
-/// under the largest shift the reading searches (`3`), so a tile that still
-/// matches itself at the edge of the search, such as a straight edge or a flat
-/// area, is turned out; a corner or a busy texture reads under `1`.
+/// ([`DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS`](crate::patch::keypoint_localize::DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS)).
+/// What the bar rejects, and why it sits there, are in § "The ZNCC
+/// self-similarity radius" of `specs/core/bench/editable-track.md`.
 pub const BENCH_MAX_ZNCC_SELF_SIMILARITY_RADIUS: f64 = 2.5;
 
 // The bench and the localizer start from the same bar.
