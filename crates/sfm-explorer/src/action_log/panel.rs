@@ -450,20 +450,20 @@ fn show_detail_row(ui: &mut egui::Ui, entry: &Entry, within: usize, row_height: 
 pub(crate) struct DetailRow {
     /// The cost column: `412 ms`, or `--` for a stage that cost nothing worth
     /// printing.
-    pub cost: String,
+    pub(crate) cost: String,
     /// The CPU column, empty unless the stage reported thread-summed time.
-    pub cpu: String,
+    pub(crate) cpu: String,
     /// Spaces before the marker: two per level of nesting.
-    pub indent: usize,
+    pub(crate) indent: usize,
     /// What marks a message, empty for a phase.
-    pub marker: &'static str,
+    pub(crate) marker: &'static str,
     /// Whether the marker is a warning's, and so wants the error colour.
-    pub warn: bool,
+    pub(crate) warn: bool,
     /// Whether a rule is drawn above this row, which divides what the
     /// operation accounted for from the overhead of showing its result.
-    pub rules_above: bool,
+    pub(crate) rules_above: bool,
     /// The row's text, with neither the indent nor the marker in it.
-    pub text: String,
+    pub(crate) text: String,
 }
 
 /// Where an entry's own account ends and the frame's overhead begins, as an

@@ -20,29 +20,29 @@
 use crate::scene::{ImageRef, PointRef, ReconId};
 
 /// Bit position of the 2-bit entity tag.
-pub const PICK_TAG_SHIFT: u32 = 30;
+pub(super) const PICK_TAG_SHIFT: u32 = 30;
 
 /// Pick ID for "nothing" (background / no entity).
-pub const PICK_TAG_NONE: u32 = 0;
+pub(super) const PICK_TAG_NONE: u32 = 0;
 /// Pick ID tag for frustum / camera image entities.
-pub const PICK_TAG_FRUSTUM: u32 = 1 << PICK_TAG_SHIFT;
+pub(super) const PICK_TAG_FRUSTUM: u32 = 1 << PICK_TAG_SHIFT;
 /// Pick ID tag for 3D point entities.
-pub const PICK_TAG_POINT: u32 = 2 << PICK_TAG_SHIFT;
+pub(super) const PICK_TAG_POINT: u32 = 2 << PICK_TAG_SHIFT;
 /// Mask to extract the entity type tag (top 2 bits).
-pub const PICK_TAG_MASK: u32 = 0b11 << PICK_TAG_SHIFT;
+pub(super) const PICK_TAG_MASK: u32 = 0b11 << PICK_TAG_SHIFT;
 /// Mask to extract the global entity index (bottom 30 bits).
-pub const PICK_INDEX_MASK: u32 = !PICK_TAG_MASK;
+pub(super) const PICK_INDEX_MASK: u32 = !PICK_TAG_MASK;
 
 /// One past the largest addressable global index, per entity kind.
-pub const PICK_INDEX_CAPACITY: u32 = PICK_INDEX_MASK + 1;
+pub(super) const PICK_INDEX_CAPACITY: u32 = PICK_INDEX_MASK + 1;
 
 /// Uniform sentinel for "no selection / no hover". Outside the 30-bit index
 /// space, so it can never equal a real global index.
-pub const PICK_INDEX_NONE: u32 = u32::MAX;
+pub(super) const PICK_INDEX_NONE: u32 = u32::MAX;
 
 /// What a pick id resolved to: an entity in a specific reconstruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PickTarget {
+pub(crate) enum PickTarget {
     Image(ImageRef),
     Point(PointRef),
 }
@@ -54,7 +54,7 @@ pub enum PickTarget {
 /// [`PickTables::resolve`]. This exists so a round-trip is assertable from the
 /// CPU without a render pass.
 #[cfg(test)]
-pub fn encode(tag: u32, global_index: u32) -> u32 {
+pub(super) fn encode(tag: u32, global_index: u32) -> u32 {
     (tag & PICK_TAG_MASK) | (global_index & PICK_INDEX_MASK)
 }
 

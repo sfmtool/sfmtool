@@ -10,16 +10,16 @@ const SHADER: &str = include_str!("../../shaders/target_indicator.wgsl");
 /// Resources created by the target indicator pipeline.
 pub(in crate::scene_renderer) struct TargetPipelineResources {
     /// Wireframe edge pipeline (vertical axis + circular ring).
-    pub edge_pipeline: wgpu::RenderPipeline,
-    pub edge_buffer: wgpu::Buffer,
-    pub edge_count: u32,
+    pub(crate) edge_pipeline: wgpu::RenderPipeline,
+    pub(crate) edge_buffer: wgpu::Buffer,
+    pub(crate) edge_count: u32,
     /// Filled star polygon pipeline.
-    pub star_pipeline: wgpu::RenderPipeline,
-    pub star_buffer: wgpu::Buffer,
-    pub star_vertex_count: u32,
+    pub(crate) star_pipeline: wgpu::RenderPipeline,
+    pub(crate) star_buffer: wgpu::Buffer,
+    pub(crate) star_vertex_count: u32,
     /// Shared resources.
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 /// Additive blend state shared by both edge and star pipelines.

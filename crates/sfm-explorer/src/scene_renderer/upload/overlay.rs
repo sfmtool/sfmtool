@@ -148,7 +148,7 @@ impl SceneRenderer {
     ///
     /// True for a node with no bundle yet, which is how a first upload is
     /// asked for.
-    pub fn base_changed(&self, id: ReconId, base: &Arc<SfmrReconstruction>) -> bool {
+    pub(crate) fn base_changed(&self, id: ReconId, base: &Arc<SfmrReconstruction>) -> bool {
         match self.recons.get(&id) {
             Some(bundle) => !bundle
                 .uploaded_base
@@ -167,7 +167,7 @@ impl SceneRenderer {
     /// yet and gets one derived from its data; a node the viewer has been looking
     /// at already has whatever scale the viewer chose, and an edit is not a reason
     /// to take it away.
-    pub fn has_uploaded_base(&self, id: ReconId) -> bool {
+    pub(crate) fn has_uploaded_base(&self, id: ReconId) -> bool {
         self.recons
             .get(&id)
             .is_some_and(|bundle| bundle.uploaded_base.is_some())
@@ -175,7 +175,7 @@ impl SceneRenderer {
 
     /// Record which base `id`'s buffers now hold. Called by the upload phase
     /// once the three per-node uploads have run.
-    pub fn set_uploaded_base(&mut self, id: ReconId, base: Arc<SfmrReconstruction>) {
+    pub(crate) fn set_uploaded_base(&mut self, id: ReconId, base: Arc<SfmrReconstruction>) {
         if let Some(bundle) = self.recons.get_mut(&id) {
             bundle.uploaded_base = Some(base);
         }
@@ -210,7 +210,7 @@ impl SceneRenderer {
     /// Returns how many indexes it wrote, which is what the frame's phase note
     /// says beside the time: this runs on every frame for every node, so zero
     /// is the usual answer and is the one that means nothing happened.
-    pub fn update_point_mask(
+    pub(crate) fn update_point_mask(
         &mut self,
         queue: &wgpu::Queue,
         id: ReconId,

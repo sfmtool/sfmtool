@@ -13,10 +13,10 @@ const SHADER: &str = concat!(
 /// No uniform buffer: `PatchUniforms` carries the atlas grid, which is
 /// per-recon, so each bundle allocates its own alongside its atlas.
 pub(in crate::scene_renderer) struct PatchPipelineResources {
-    pub pipeline: wgpu::RenderPipeline,
+    pub(crate) pipeline: wgpu::RenderPipeline,
     /// The same surfels, moved toward the camera model proposal's targets.
-    pub preview_pipeline: wgpu::RenderPipeline,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) preview_pipeline: wgpu::RenderPipeline,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineResources {

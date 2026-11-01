@@ -12,11 +12,11 @@ const SHADER: &str = concat!(
 pub(in crate::scene_renderer) struct BenchTrackPipelineResources {
     /// Instanced ribbon-quad edges: the frame, the normal, the barbs and the
     /// marks.
-    pub edge_pipeline: wgpu::RenderPipeline,
+    pub(crate) edge_pipeline: wgpu::RenderPipeline,
     /// The filled centre disc, a triangle list.
-    pub disc_pipeline: wgpu::RenderPipeline,
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) disc_pipeline: wgpu::RenderPipeline,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> BenchTrackPipelineResources {

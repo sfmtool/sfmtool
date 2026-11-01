@@ -35,21 +35,21 @@ fn optical_flip() -> Matrix3<f64> {
 /// One image's pose, resolved in the frame the panel is showing it in.
 pub(super) struct Pose {
     /// The image's name, as the reconstruction stores it.
-    pub name: String,
+    pub(crate) name: String,
     /// World-to-camera rotation `R`.
-    pub rotation: Matrix3<f64>,
+    pub(crate) rotation: Matrix3<f64>,
     /// World-to-camera translation `t`.
-    pub translation: Vector3<f64>,
+    pub(crate) translation: Vector3<f64>,
     /// `(w, x, y, z)` of the same rotation.
-    pub quaternion_wxyz: [f64; 4],
+    pub(crate) quaternion_wxyz: [f64; 4],
     /// Camera centre in world coordinates, `C = −Rᵀt`.
-    pub centre: Point3<f64>,
+    pub(crate) centre: Point3<f64>,
     /// `P = K · S · [R|t]`, with `K` the image's own (its camera's with its
     /// intrinsic adjustment applied), or `None` for a model that is not a
     /// linear projection.
-    pub projection: Option<Matrix3x4<f64>>,
+    pub(crate) projection: Option<Matrix3x4<f64>>,
     /// Whether this is the stored pose put through the node's transform.
-    pub transformed: bool,
+    pub(crate) transformed: bool,
 }
 
 impl Pose {

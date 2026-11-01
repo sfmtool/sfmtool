@@ -314,7 +314,7 @@ impl SceneRenderer {
     /// geometry.
     /// Hidden cameras are handled by setting alpha=0 in the color buffer (the
     /// shader discards those fragments), so geometry includes all cameras.
-    pub fn upload_frustums(
+    pub(crate) fn upload_frustums(
         &mut self,
         device: &wgpu::Device,
         id: ReconId,
@@ -402,7 +402,7 @@ impl SceneRenderer {
     /// Hidden images (e.g. the camera being viewed through) get alpha=0, which
     /// the shader discards so they don't render or participate in picking.
     #[allow(clippy::too_many_arguments)]
-    pub fn update_frustum_colors(
+    pub(crate) fn update_frustum_colors(
         &self,
         queue: &wgpu::Queue,
         id: ReconId,

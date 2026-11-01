@@ -66,7 +66,7 @@ pub(crate) enum PoseFrame {
 }
 
 /// Camera Intrinsics panel state.
-pub struct IntrinsicsDetail {
+pub(crate) struct IntrinsicsDetail {
     /// The derived report per camera. Keyed by [`CameraRef`], so a second
     /// reconstruction reusing camera index 0 gets its own entry; dropped
     /// wholesale by [`IntrinsicsDetail::forget_recon`] when a node leaves.
@@ -96,19 +96,19 @@ pub struct IntrinsicsDetail {
 /// the extrinsics header, and the one edit it offers: `Switch Model…`, which
 /// the dock turns into a camera model proposal, and the proposal's Apply and
 /// Cancel. A change of a proposal's controls is made on the proposal in place.
-pub struct IntrinsicsDetailResponse {
+pub(crate) struct IntrinsicsDetailResponse {
     /// The user clicked the image name in the extrinsics header.
-    pub select_image: Option<ImageRef>,
+    pub(crate) select_image: Option<ImageRef>,
     /// The user clicked `Switch Model…` for this camera.
     pub(crate) switch_model: Option<CameraRef>,
     /// The user ended the proposal shown: Apply, or Cancel or `Escape`.
     pub(crate) proposal: Option<(CameraRef, ProposalAction)>,
     /// Whether the pointer is currently inside the panel.
-    pub has_pointer: bool,
+    pub(crate) has_pointer: bool,
 }
 
 impl IntrinsicsDetail {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             derived: HashMap::new(),
             proposed_derived: None,
@@ -309,7 +309,7 @@ impl IntrinsicsDetail {
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
-    pub fn forget_recon(&mut self, id: crate::scene::ReconId) {
+    pub(crate) fn forget_recon(&mut self, id: crate::scene::ReconId) {
         self.derived.retain(|camera, _| camera.recon != id);
         if self
             .proposed_derived

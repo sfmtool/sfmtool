@@ -14,23 +14,23 @@ use sfmtool_core::Camera;
 ///
 /// Wraps a [`Camera`] with viewport-specific settings (FOV, clip planes) and
 /// provides navigation methods (orbit, pan, zoom).
-pub struct ViewportCamera {
+pub(crate) struct ViewportCamera {
     /// The underlying camera with position and orientation.
-    pub camera: Camera,
+    pub(crate) camera: Camera,
     /// World up direction for navigation (typically Z-up).
-    pub world_up: Vector3<f64>,
+    pub(crate) world_up: Vector3<f64>,
     /// Field of view of the shorter viewport dimension, in radians.
     ///
     /// In landscape windows, this is the vertical FOV. In portrait windows,
     /// this is the horizontal FOV and the vertical FOV is derived as
     /// `fov / aspect`. This keeps the perceived "how much you can see"
     /// consistent regardless of window shape.
-    pub fov: f64,
+    pub(crate) fov: f64,
     /// Near clip plane distance.
     ///
     /// With reversed-Z infinite far projection, this is the only clip plane.
     /// Objects closer than `near` are clipped; there is no far-plane clipping.
-    pub near: f64,
+    pub(crate) near: f64,
 }
 
 impl Default for ViewportCamera {
@@ -51,17 +51,17 @@ impl Default for ViewportCamera {
 impl ViewportCamera {
     /// Returns the vertical FOV for the given aspect ratio: [`vertical_fov`]
     /// of `self.fov`, the FOV of the shorter viewport dimension.
-    pub fn vertical_fov(&self, aspect: f64) -> f64 {
+    pub(crate) fn vertical_fov(&self, aspect: f64) -> f64 {
         vertical_fov(self.fov, aspect)
     }
 
     /// Returns the camera position in world space.
-    pub fn position(&self) -> Point3<f64> {
+    pub(crate) fn position(&self) -> Point3<f64> {
         self.camera.position
     }
 
     /// Returns the target point the camera is looking at.
-    pub fn target(&self) -> Point3<f64> {
+    pub(crate) fn target(&self) -> Point3<f64> {
         self.camera.target()
     }
 
@@ -70,7 +70,7 @@ impl ViewportCamera {
     /// The orbit pivot is the point `target_distance` in front of the camera.
     /// Uses spherical coordinates relative to `world_up`: horizontal drag
     /// rotates around the up axis, vertical drag tilts toward/away from it.
-    pub fn orbit(&mut self, delta_x: f64, delta_y: f64) {
+    pub(crate) fn orbit(&mut self, delta_x: f64, delta_y: f64) {
         self.orbit_by(
             -delta_x * RADIANS_PER_DRAG_PX,
             delta_y * RADIANS_PER_DRAG_PX,
@@ -98,7 +98,13 @@ impl ViewportCamera {
     }
 
     /// Pan the camera parallel to the view plane.
-    pub fn pan(&mut self, delta_x: f64, delta_y: f64, viewport_width: f64, viewport_height: f64) {
+    pub(crate) fn pan(
+        &mut self,
+        delta_x: f64,
+        delta_y: f64,
+        viewport_width: f64,
+        viewport_height: f64,
+    ) {
         let right = self.camera.right();
         let up = self.camera.up();
 
@@ -111,7 +117,7 @@ impl ViewportCamera {
     }
 
     /// Zoom the camera (move closer/further from target).
-    pub fn zoom(&mut self, delta: f64) {
+    pub(crate) fn zoom(&mut self, delta: f64) {
         let new_distance = (self.camera.target_distance * (1.0 - delta * 0.1)).max(0.1);
         // Move camera along forward direction to maintain the same target point
         let target = self.camera.target();
@@ -123,7 +129,7 @@ impl ViewportCamera {
     ///
     /// Positive delta zooms in (narrows FOV), negative zooms out (widens FOV).
     /// Clamps to 5°–160° range.
-    pub fn zoom_fov(&mut self, delta: f64) {
+    pub(crate) fn zoom_fov(&mut self, delta: f64) {
         let min_fov: f64 = 5.0_f64.to_radians();
         let max_fov: f64 = 160.0_f64.to_radians();
         self.fov = (self.fov * (1.0 - delta * 0.1)).clamp(min_fov, max_fov);
@@ -134,7 +140,7 @@ impl ViewportCamera {
     /// The target slides to the new look-at point at the current distance.
     /// This is the dual of [`Self::orbit`]: orbit moves the camera around a
     /// fixed target, while nodal pan moves the target around a fixed camera.
-    pub fn nodal_pan(&mut self, delta_x: f64, delta_y: f64) {
+    pub(crate) fn nodal_pan(&mut self, delta_x: f64, delta_y: f64) {
         self.nodal_pan_by(
             -delta_x * RADIANS_PER_DRAG_PX,
             -delta_y * RADIANS_PER_DRAG_PX,
@@ -159,7 +165,7 @@ impl ViewportCamera {
     /// Push/pull the target point closer or further from the camera.
     ///
     /// Camera position and orientation remain unchanged; only target_distance is adjusted.
-    pub fn target_push_pull(&mut self, delta: f64) {
+    pub(crate) fn target_push_pull(&mut self, delta: f64) {
         self.camera.target_distance = (self.camera.target_distance * (1.0 + delta * 0.1)).max(0.1);
     }
 
@@ -196,7 +202,7 @@ impl ViewportCamera {
     /// `world_up × forward`, and `up` moves along the camera's visual up (the
     /// component of `world_up` perpendicular to forward). The target point moves
     /// with the camera (target_distance preserved).
-    pub fn fly_move(&mut self, forward: f64, right: f64, up: f64) {
+    pub(crate) fn fly_move(&mut self, forward: f64, right: f64, up: f64) {
         // Use camera's actual forward and derive right/up perpendicular to it.
         // This makes R/F move up/down relative to the camera view rather than
         // along the world up axis.
@@ -218,7 +224,7 @@ impl ViewportCamera {
     ///
     /// This tilts the horizon — subsequent orbit and pan operations will use
     /// the new up direction. Use Home key to level the horizon.
-    pub fn tilt(&mut self, angle: f64) {
+    pub(crate) fn tilt(&mut self, angle: f64) {
         let forward = self.camera.forward();
         let rotation = UnitQuaternion::from_scaled_axis(forward * angle);
         self.world_up = (rotation * self.world_up).normalize();
@@ -228,7 +234,7 @@ impl ViewportCamera {
     /// Computes the end state for zoom-to-fit without applying it.
     ///
     /// Returns `(position, target_distance)` or `None` if points is empty.
-    pub fn compute_zoom_to_fit(
+    pub(crate) fn compute_zoom_to_fit(
         &self,
         points: &[Point3<f64>],
         aspect: f64,
@@ -298,7 +304,12 @@ impl ViewportCamera {
     /// The near plane is set to a fraction of the camera-to-scene distance so
     /// that close-up inspection still works. Uses time-based exponential decay
     /// so the transition speed is independent of frame rate.
-    pub fn update_clip_planes(&mut self, scene_center: Point3<f64>, scene_radius: f64, dt: f64) {
+    pub(crate) fn update_clip_planes(
+        &mut self,
+        scene_center: Point3<f64>,
+        scene_radius: f64,
+        dt: f64,
+    ) {
         let d = (self.position() - scene_center).norm();
         // Near = 1/1000th of distance to the far edge of the scene, floor at 0.0001
         let target_near = ((d + scene_radius) / 1000.0).max(0.0001);
@@ -314,7 +325,7 @@ impl ViewportCamera {
     }
 
     /// Returns the view matrix (world to camera transform).
-    pub fn view_matrix(&self) -> Matrix4<f64> {
+    pub(crate) fn view_matrix(&self) -> Matrix4<f64> {
         self.camera.view_matrix()
     }
 
@@ -324,7 +335,7 @@ impl ViewportCamera {
     /// infinity maps to depth 0.0. This eliminates far-plane clipping entirely
     /// and gives optimal depth precision across all distances when used with a
     /// `Depth32Float` buffer and `CompareFunction::Greater`.
-    pub fn projection_matrix(&self, aspect: f64) -> Matrix4<f64> {
+    pub(crate) fn projection_matrix(&self, aspect: f64) -> Matrix4<f64> {
         let vfov = self.vertical_fov(aspect);
         let f = 1.0 / (vfov / 2.0).tan();
 
@@ -351,7 +362,7 @@ impl ViewportCamera {
     }
 
     /// Transforms a point from world space to view (camera) space.
-    pub fn world_to_view(&self, point: &Point3<f64>) -> Point3<f64> {
+    pub(crate) fn world_to_view(&self, point: &Point3<f64>) -> Point3<f64> {
         self.camera.world_to_camera(point)
     }
 
@@ -359,7 +370,7 @@ impl ViewportCamera {
     ///
     /// Returns None if the entire line is behind the camera.
     /// If one endpoint is behind the near plane, the line is clipped to the near plane.
-    pub fn project_line_clipped(
+    pub(crate) fn project_line_clipped(
         &self,
         p1: &Point3<f64>,
         p2: &Point3<f64>,
@@ -451,7 +462,12 @@ impl ViewportCamera {
     /// the rotation-only reading needs nothing added to them: the view matrix's
     /// translation lives in its fourth column, which a `w` of zero multiplies
     /// away.
-    pub fn project_homogeneous(&self, xyz: Vector3<f64>, w: f64, rect: Rect) -> Option<Pos2> {
+    pub(crate) fn project_homogeneous(
+        &self,
+        xyz: Vector3<f64>,
+        w: f64,
+        rect: Rect,
+    ) -> Option<Pos2> {
         let aspect = rect.width() as f64 / rect.height() as f64;
         let mvp = self.projection_matrix(aspect) * self.view_matrix();
         let clip = mvp * Vector4::new(xyz.x, xyz.y, xyz.z, w);
@@ -471,7 +487,7 @@ impl ViewportCamera {
     ///
     /// The direction is not normalized: what reads it meets it with a plane or a
     /// sphere, and both of those divide it out.
-    pub fn ray_through(&self, pos: Pos2, rect: Rect) -> (Point3<f64>, Vector3<f64>) {
+    pub(crate) fn ray_through(&self, pos: Pos2, rect: Rect) -> (Point3<f64>, Vector3<f64>) {
         let origin = self.position();
         (origin, self.unproject(pos.x, pos.y, 1.0, rect) - origin)
     }
@@ -480,7 +496,7 @@ impl ViewportCamera {
     ///
     /// Given a screen pixel `(sx, sy)` within `rect` and a positive linear
     /// view-space depth `d`, returns the corresponding world-space point.
-    pub fn unproject(&self, sx: f32, sy: f32, depth: f64, rect: Rect) -> Point3<f64> {
+    pub(crate) fn unproject(&self, sx: f32, sy: f32, depth: f64, rect: Rect) -> Point3<f64> {
         let aspect = rect.width() as f64 / rect.height() as f64;
         let vfov = self.vertical_fov(aspect);
         let half_vfov_tan = (vfov / 2.0).tan();
@@ -591,7 +607,7 @@ pub(crate) fn vertical_fov(fov: f64, aspect: f64) -> f64 {
 ///
 /// `vfov_cam` and `hfov_cam` are the camera's intrinsic vertical and horizontal
 /// fields of view in radians.
-pub fn best_fit_fov(vfov_cam: f64, hfov_cam: f64, viewport_aspect: f64) -> f64 {
+pub(crate) fn best_fit_fov(vfov_cam: f64, hfov_cam: f64, viewport_aspect: f64) -> f64 {
     // Try fitting by vertical FOV: check if horizontal FOV fits
     let hfov_at_vfov = ((vfov_cam / 2.0).tan() * viewport_aspect).atan() * 2.0;
     let vfov = if hfov_at_vfov >= hfov_cam {

@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, a Progress argument on long-running work, no with/without-progress variants, no panics on caller input, no Python wrappers over bindings, one I/O shape for every file format, no documented exceptions to a convention, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, a Progress argument on long-running work, no with/without-progress variants, no panics on caller input, no Python wrappers over bindings, one I/O shape for every file format, no documented exceptions to a convention, tests that can fail, viewer items no more visible than their users need). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -166,7 +166,7 @@ how this audit runs them.
 
 - **Check per function, not per convention split.** A breach is a finding
   even where the whole module is consistent with itself. Run the
-  mechanical checks 9–15 below first, then read each hit against the
+  mechanical checks 9–16 below first, then read each hit against the
   standard it feeds.
 - **Cite the standard.** Each finding names the standard by its heading
   and links it (`specs/STANDARDS.md#caller-input-never-panics`).
@@ -281,6 +281,15 @@ worth more than a paragraph.
     and "the one … that does not" (``the one [a-z_` ]* that (does|is) not``;
     a bare "the one" matches over a thousand lines).
     Feeds STANDARDS.md § "A convention has no documented exceptions".
+16. **Viewer visibility** — the `unreachable_pub` lint checks every bare
+    `pub` item in `sfm-explorer` except struct fields and code compiled only
+    on Windows. Grep `crates/sfm-explorer/src/` for bare `pub` fields
+    (`^\s*pub [a-z_][a-z0-9_]*\s*:` and tuple fields `(pub `), leaving out
+    `CatalogTool`'s fields, which the crate's public interface exports, and
+    grep the Windows-only code (`platform/windows.rs` and
+    `#[cfg(target_os = "windows")]` blocks) for any bare `pub`. Report the
+    count even when it is zero. Feeds STANDARDS.md § "Viewer items are no
+    more visible than their users need".
 
 ## Output
 

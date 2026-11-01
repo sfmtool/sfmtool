@@ -99,9 +99,9 @@ impl Axis {
 
 /// One tick on an axis: where it lands and what it says.
 pub(super) struct Tick {
-    pub at: [f64; 2],
-    pub axis: Axis,
-    pub label: String,
+    pub(crate) at: [f64; 2],
+    pub(crate) axis: Axis,
+    pub(crate) label: String,
 }
 
 /// A closed iso-angle contour, broken into the runs that stayed on the frame.
@@ -109,35 +109,35 @@ pub(super) struct Contour {
     /// Runs of consecutive in-frame samples. A circular fisheye's wide rings
     /// leave the frame at the corners and come back, so one contour is several
     /// polylines rather than one.
-    pub runs: Vec<Vec<[f64; 2]>>,
-    pub label: String,
+    pub(crate) runs: Vec<Vec<[f64; 2]>>,
+    pub(crate) label: String,
     /// Where the one label goes, in image pixels.
     ///
     /// On the up-and-left diagonal rather than at the top, which is where the
     /// spec puts it: the top of a `30°` ring is exactly where the vertical
     /// axis's own `+30°` tick lands, and the two labels come out on top of each
     /// other saying the same thing twice.
-    pub label_at: [f64; 2],
+    pub(crate) label_at: [f64; 2],
 }
 
 /// The whole reference grid for one camera at one zoom bucket.
 pub(super) struct AxisGeometry {
     /// The half-octave scale bucket this was sampled at, and whether the rings
     /// were built — together, the cache key.
-    pub bucket: i32,
-    pub has_rings: bool,
+    pub(crate) bucket: i32,
+    pub(crate) has_rings: bool,
     /// The two axes, each sample flagged with whether the model still describes
     /// a lens at that angle — solid where it does, dashed where it does not.
-    pub horizontal: Vec<([f64; 2], bool)>,
-    pub vertical: Vec<([f64; 2], bool)>,
-    pub ticks: Vec<Tick>,
-    pub rings: Vec<Contour>,
+    pub(crate) horizontal: Vec<([f64; 2], bool)>,
+    pub(crate) vertical: Vec<([f64; 2], bool)>,
+    pub(crate) ticks: Vec<Tick>,
+    pub(crate) rings: Vec<Contour>,
     /// The contour at [`super::CameraLayer::limit_deg`], past which the model
     /// is extrapolating rather than describing a lens.
-    pub trustworthy_edge: Option<Contour>,
+    pub(crate) trustworthy_edge: Option<Contour>,
     /// The contour at a spline model's domain end, past which its correction
     /// continues along its end tangent and the radial map continues linearly.
-    pub spline_domain: Option<Contour>,
+    pub(crate) spline_domain: Option<Contour>,
 }
 
 /// The scale bucket a view falls in: half-octaves, so a pinch gesture crosses a

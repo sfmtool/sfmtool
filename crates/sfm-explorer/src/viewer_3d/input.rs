@@ -40,7 +40,7 @@ impl Viewer3D {
     /// Stepping stays inside the selected reconstruction: an image or camera
     /// view belonging to another node is not a position in this sequence, so it
     /// reads as "nothing selected" and stepping starts from the top.
-    pub fn handle_image_step(&mut self, ui: &egui::Ui, state: &mut AppState) {
+    pub(crate) fn handle_image_step(&mut self, ui: &egui::Ui, state: &mut AppState) {
         let Some(recon_id) = state.selected_recon else {
             return;
         };
@@ -108,7 +108,7 @@ impl Viewer3D {
     /// Called from `dock.rs` rather than from [`Viewer3D::show`]: stepping is
     /// the one viewport binding that needs the whole scene, not just the node
     /// being drawn.
-    pub fn handle_recon_step(&mut self, ui: &egui::Ui, state: &mut AppState) {
+    pub(crate) fn handle_recon_step(&mut self, ui: &egui::Ui, state: &mut AppState) {
         if state.scene.len() < 2 {
             return; // nothing to step to
         }

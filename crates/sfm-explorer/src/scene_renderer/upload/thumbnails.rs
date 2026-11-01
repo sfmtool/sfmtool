@@ -19,7 +19,7 @@ use wgpu::util::DeviceExt;
 
 /// What a node's thumbnail atlas was written from, which is what says whether
 /// it is still the right one.
-pub struct UploadedThumbnails {
+pub(crate) struct UploadedThumbnails {
     /// The node's display column, by pointer.
     display: Option<Arc<DisplayThumbnails>>,
     /// The value's own thumbnail column, by pointer: the fallback for an image
@@ -95,7 +95,7 @@ impl SceneRenderer {
     /// `progress` is the frame's `thumbnails` phase; the stages under it are
     /// [`Progress::detail_phase`]s, and divide the cost into allocating the
     /// atlas and filling it one thumbnail at a time.
-    pub fn upload_thumbnails(
+    pub(crate) fn upload_thumbnails(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

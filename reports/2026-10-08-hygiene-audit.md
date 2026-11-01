@@ -126,6 +126,8 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
   - Point the AGENTS.md rule at the lint, so the CI clippy job enforces it.
 - Effort: low. Risk: low, because rustc rejects any wrong change.
 
+> _Status (2026-10-31): **Done** — `sfm-explorer/src/lib.rs` sets `#![warn(unreachable_pub)]` (a crate attribute, because `[lints] workspace = true` cannot take crate-local entries); `cargo fix` turned 295 bare `pub` items into `pub(crate)` (9 of them, in `scene_renderer/picking.rs`, into `pub(super)`), and the 528 bare `pub` struct fields, which rustc's lint does not check, plus the 14 Windows-only items in `platform/windows.rs` and its `pub mod windows` line, which a Linux `cargo fix` does not compile, were converted by a script and by hand in the same commit (838 in all). Bare `pub` is left only on the crate's public interface: `run`, `run_with_args` and `RunError` in `lib.rs`, and the `mcp` items `lib.rs` re-exports for `sfmtool-py` (`tool_catalog`, `validate_tool_call`, `CatalogTool`). The rule and its enforcement now live in `specs/STANDARDS.md` § "Viewer items are no more visible than their users need", which names the lint and says fields and Windows-only code are checked by review and by `audit-hygiene` check 16; AGENTS.md keeps a one-clause summary. PR #1122._
+
 **Replace the core's copy of the `.matches` member-status enum**
 - Location: `crates/sfmtool-core/src/patch/cluster_refine/params.rs:13-47`.
 - Problem:

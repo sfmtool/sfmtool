@@ -151,7 +151,7 @@ impl Viewer3D {
     /// `show` allocates `ui.available_size()`, so the rect it ends up painting
     /// into is exactly the space still available here. The HUD itself consumes
     /// no layout space — it lives on its own `Area` layer.
-    pub fn show_hud(
+    pub(crate) fn show_hud(
         &mut self,
         ui: &mut egui::Ui,
         state: &mut AppState,

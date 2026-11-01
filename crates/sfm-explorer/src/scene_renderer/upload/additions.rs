@@ -26,7 +26,7 @@ impl SceneRenderer {
     /// that history is linear: a new edit discards the redo tail, so two
     /// versions of one base whose addition sets agree on both counts hold the
     /// same additions.
-    pub fn additions_changed(&self, id: ReconId, edited: &EditedReconstruction) -> bool {
+    pub(crate) fn additions_changed(&self, id: ReconId, edited: &EditedReconstruction) -> bool {
         let signature = addition_signature(edited);
         match self.recons.get(&id) {
             Some(bundle) => bundle.uploaded_additions != signature,
@@ -39,7 +39,7 @@ impl SceneRenderer {
     /// Leaves the base's buffers, its atlas and its deleted mask untouched: this
     /// is the half of the node's GPU state the overlay owns. A version with no
     /// additions clears them.
-    pub fn upload_additions(
+    pub(crate) fn upload_additions(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

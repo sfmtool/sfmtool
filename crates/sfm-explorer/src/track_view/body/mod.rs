@@ -223,7 +223,7 @@ pub(crate) struct TrackBodyResponse {
 }
 
 /// Track View's body state.
-pub struct TrackBody {
+pub(crate) struct TrackBody {
     /// Where the threshold boxes stand.
     ///
     /// In Edited mode, the **focused item's own bars**, copied from it on
@@ -400,7 +400,7 @@ impl Default for TrackBody {
 }
 
 impl TrackBody {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             thresholds: Thresholds::default(),
             sliding: false,
@@ -488,7 +488,7 @@ impl TrackBody {
     }
 
     /// Drop everything cached for a reconstruction that has left the scene.
-    pub fn forget_recon(&mut self, id: ReconId) {
+    pub(crate) fn forget_recon(&mut self, id: ReconId) {
         self.tiles.clear();
         self.jacobians.clear();
         self.tiles_for = None;
@@ -525,7 +525,7 @@ impl TrackBody {
     /// the focused item in Edited mode when one is focused on the selected
     /// node, and otherwise the viewed track in Viewed mode. With neither, or
     /// with no node selected, it draws nothing and forgets the rows it drew.
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackBodyResponse {
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, state: &AppState) -> TrackBodyResponse {
         let mut response = TrackBodyResponse::default();
         let panel_rect = ui.available_rect_before_wrap();
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
@@ -1748,9 +1748,9 @@ fn radius_number(value: f64) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Judgement {
     /// What each bar says about the reading it judges.
-    pub checks: BarChecks,
+    pub(crate) checks: BarChecks,
     /// The verdict the bars propose, with one `in` per image kept.
-    pub proposal: Verdict,
+    pub(crate) proposal: Verdict,
 }
 
 /// The two three-by-three grids a row draws: the ZNCC grid and the
@@ -1758,11 +1758,11 @@ pub(crate) struct Judgement {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct RowGrids {
     /// The ZNCC of each cell, `grid[row][col]` from the top-left cell.
-    pub zncc: Option<[[f64; 3]; 3]>,
+    pub(crate) zncc: Option<[[f64; 3]; 3]>,
     /// The ZNCC self-similarity radius of each cell, in grid px.
-    pub radius: Option<[[f64; 3]; 3]>,
+    pub(crate) radius: Option<[[f64; 3]; 3]>,
     /// The ellipse of each cell's self-similarity region, in grid px.
-    pub radius_ellipse: Option<[[SelfSimilarityEllipse; 3]; 3]>,
+    pub(crate) radius_ellipse: Option<[[SelfSimilarityEllipse; 3]; 3]>,
 }
 
 /// The whole tile's self-similarity radius of `observation` at `stage`.

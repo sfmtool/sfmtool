@@ -10,8 +10,8 @@ const SHADER: &str = concat!(
 
 /// Resources created by the image quad pipeline.
 pub(in crate::scene_renderer) struct ImageQuadPipelineResources {
-    pub pipeline: wgpu::RenderPipeline,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> ImageQuadPipelineResources {

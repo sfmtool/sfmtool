@@ -35,7 +35,7 @@ impl SceneRenderer {
     /// on a node carrying embedded patches, and the one row cannot say whether
     /// that went on finding the patches, allocating the atlas, or filling it a
     /// tile at a time, which are three answers with three different remedies.
-    pub fn upload_patches(
+    pub(crate) fn upload_patches(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,

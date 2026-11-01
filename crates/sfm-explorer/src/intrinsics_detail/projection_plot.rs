@@ -187,16 +187,16 @@ fn plate(visuals: &egui::Visuals) -> Color32 {
 /// fitted camera is open on it.
 pub(super) struct Comparison<'a> {
     /// The proposed camera.
-    pub proposed: &'a CameraIntrinsics,
+    pub(crate) proposed: &'a CameraIntrinsics,
     /// Its derived report, cached by the proposal's generation.
-    pub derived: &'a Derived,
+    pub(crate) derived: &'a Derived,
     /// The change from the current camera to it, cached with the report.
-    pub change: &'a ChangeProfile,
+    pub(crate) change: &'a ChangeProfile,
     /// The largest angle the fit sampled, in degrees.
-    pub theta_fit_deg: f64,
+    pub(crate) theta_fit_deg: f64,
     /// The smallest and largest angle at which the monotonicity constraint
     /// held the fit's slope at its floor, or `None` when it did not bind.
-    pub monotone_deg: Option<[f64; 2]>,
+    pub(crate) monotone_deg: Option<[f64; 2]>,
 }
 
 /// A labelled vertical rule shared by every plot.

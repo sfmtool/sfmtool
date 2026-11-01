@@ -10,9 +10,9 @@ const SHADER: &str = concat!(
 
 /// Resources created by the frustum wireframe pipeline.
 pub(in crate::scene_renderer) struct FrustumPipelineResources {
-    pub pipeline: wgpu::RenderPipeline,
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) pipeline: wgpu::RenderPipeline,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) bind_group_layout: wgpu::BindGroupLayout,
 }
 
 pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> FrustumPipelineResources {

@@ -129,108 +129,108 @@ pub(crate) fn row_id(recon: ReconId, key: &str) -> egui::Id {
 
 /// What the Scene panel reports back to `dock.rs`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct SceneGraphResponse {
+pub(crate) struct SceneGraphResponse {
     /// An image row was clicked.
-    pub select_image: Option<ImageRef>,
+    pub(crate) select_image: Option<ImageRef>,
     /// A Camera Intrinsics row was clicked.
-    pub select_camera: Option<CameraRef>,
+    pub(crate) select_camera: Option<CameraRef>,
     /// A Camera Intrinsics row was double-clicked — frame every image taken
     /// through it in the 3D viewport.
-    pub zoom_to_camera: Option<CameraRef>,
+    pub(crate) zoom_to_camera: Option<CameraRef>,
     /// The Points group's `selected:` row was clicked.
-    pub select_point: Option<PointRef>,
+    pub(crate) select_point: Option<PointRef>,
     /// An image row was double-clicked — enter/switch camera view.
-    pub request_camera_view: Option<ImageRef>,
+    pub(crate) request_camera_view: Option<ImageRef>,
     /// Image under the pointer, for cross-panel hover.
-    pub hovered_image: Option<ImageRef>,
+    pub(crate) hovered_image: Option<ImageRef>,
     /// Point under the pointer, for cross-panel hover.
-    pub hovered_point: Option<PointRef>,
+    pub(crate) hovered_point: Option<PointRef>,
     /// Whether the pointer is inside this panel — which makes it the owner of
     /// both hover fields for the frame.
-    pub has_pointer: bool,
+    pub(crate) has_pointer: bool,
     /// A reconstruction row was clicked, or `Select` chosen from its menu.
-    pub select_recon: Option<ReconId>,
+    pub(crate) select_recon: Option<ReconId>,
     /// A reconstruction row was double-clicked, or `Zoom to Fit` chosen.
-    pub zoom_to_node: Option<ReconId>,
+    pub(crate) zoom_to_node: Option<ReconId>,
     /// The row's `S` was clicked: solo this node, or end the solo if it is
     /// already the soloed one. A view mode rather than node state, so unlike
     /// the eyes it travels through the response to `AppState::toggle_solo`
     /// instead of being written into the node.
-    pub toggle_solo: Option<ReconId>,
+    pub(crate) toggle_solo: Option<ReconId>,
     /// `Align to ▸ <node>` chosen: `(source, target, options)`. The source is
     /// the row the menu was opened on; the target is the node picked from the
     /// submenu, and is never itself modified.
-    pub align_node: Option<(ReconId, ReconId, AlignOptions)>,
+    pub(crate) align_node: Option<(ReconId, ReconId, AlignOptions)>,
     /// `Reset Transform` chosen — return this node to its own frame.
-    pub reset_transform: Option<ReconId>,
+    pub(crate) reset_transform: Option<ReconId>,
     /// `Bake Transform` chosen: write this node's display transform into its
     /// reconstruction and return it to its own frame, as one version.
-    pub bake_transform: Option<ReconId>,
+    pub(crate) bake_transform: Option<ReconId>,
     /// `Convert to Embedded Patches` chosen from a reconstruction's context
     /// menu: give every point a patch frame and carry each observation's
     /// keypoint inline, as the node's next version. A bulk edit, and a long
     /// one, so `AppState::start_convert_to_embedded_patches` sends it to a
     /// worker after the frame.
-    pub convert_to_embedded_patches: Option<ReconId>,
+    pub(crate) convert_to_embedded_patches: Option<ReconId>,
     /// `Bundle Adjust...` chosen from a reconstruction's context menu: ask,
     /// through `AppState::open_bundle_adjust`, whether the focal lengths are
     /// released, and on `Run` refine every pose and point of this node as its
     /// next version.
-    pub bundle_adjust: Option<ReconId>,
+    pub(crate) bundle_adjust: Option<ReconId>,
     /// `Retriangulate All Points` chosen from a reconstruction's context menu:
     /// re-solve every point from its own observations at the poses and the
     /// lenses the value already holds, as the node's next version. A bulk edit,
     /// and a long one, so `AppState::start_retriangulate_all_points` sends it to
     /// a worker after the frame.
-    pub retriangulate_all_points: Option<ReconId>,
+    pub(crate) retriangulate_all_points: Option<ReconId>,
     /// `Refit All Points` chosen from a reconstruction's context menu: fit
     /// every point to the render of its reference observation and commit it,
     /// as the node's next version. A bulk edit that reads every photograph the
     /// points observe, so `AppState::start_refit_all_points` sends it to a
     /// worker after the frame.
-    pub refit_all_points: Option<ReconId>,
+    pub(crate) refit_all_points: Option<ReconId>,
     /// `Refine All Normals` chosen from a reconstruction's context menu: turn
     /// every finite point's patch to its grown-plane normal and commit it, as
     /// the node's next version. A bulk edit that reads every photograph the
     /// points observe, so `AppState::start_refine_all_normals` sends it to a
     /// worker after the frame.
-    pub refine_all_normals: Option<ReconId>,
+    pub(crate) refine_all_normals: Option<ReconId>,
     /// `Prune Covered Observations` chosen from a reconstruction's context
     /// menu: retire every observation a finer tracked one covers, as the node's
     /// next version. A bulk edit, and a long one, so
     /// `AppState::start_prune_covered_observations` sends it to a worker after
     /// the frame.
-    pub prune_covered_observations: Option<ReconId>,
+    pub(crate) prune_covered_observations: Option<ReconId>,
     /// `Build SIFT Files` / `Switch SIFT Extraction to sfmtool and Build SIFT
     /// Files` chosen, from any Scene tree menu that offers the index-files
     /// build. Extracts features from every photograph of the node, so
     /// `AppState::start_build_sift_files` sends it to a worker after the frame.
-    pub build_sift_files: Option<ReconId>,
+    pub(crate) build_sift_files: Option<ReconId>,
     /// `Build Index Files` / `Rebuild Index Files` chosen, from a Search
     /// Files row's menu or from the reconstruction row's. Reads every `.sift`
     /// file and photograph of the node, so `AppState::start_build_index_files`
     /// sends it to a worker after the frame.
-    pub build_index_files: Option<ReconId>,
+    pub(crate) build_index_files: Option<ReconId>,
     /// `Open...` chosen on the SIFT Index row, which asks the dock for a `.kdf`
     /// chooser. The panel names no path: a chooser is not an egui widget, so it
     /// lives where the other file questions do.
-    pub open_sift_index: Option<ReconId>,
+    pub(crate) open_sift_index: Option<ReconId>,
     /// `Open...` chosen on the Cluster Patches row, which asks the dock for a
     /// `.matches` chooser.
-    pub open_cluster_patches: Option<ReconId>,
+    pub(crate) open_cluster_patches: Option<ReconId>,
     /// `Close Index Files` chosen on a Index Files row.
-    pub close_index_files: Option<ReconId>,
+    pub(crate) close_index_files: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
-    pub close_node: Option<ReconId>,
+    pub(crate) close_node: Option<ReconId>,
     /// A Bench row was double-clicked: focus that item, select
     /// its node and raise Track View on it. The item is named by its position
     /// on the bench rather than by its label, so this response stays a `Copy`
     /// value. The raise is a layout operation, so the panel also keeps the
     /// request for [`SceneGraphPanel::take_bench_edit`], which `app.rs` drains
     /// once the dock is back in the state; the dock applies nothing of it.
-    pub edit_bench_item: Option<(ReconId, usize)>,
+    pub(crate) edit_bench_item: Option<(ReconId, usize)>,
     /// `Discard` chosen on a Bench row, the item named the same way.
-    pub discard_bench_item: Option<(ReconId, usize)>,
+    pub(crate) discard_bench_item: Option<(ReconId, usize)>,
     /// `Switch Camera Model…` chosen on a Camera Intrinsics row: open a camera
     /// model proposal on that camera. It raises the Camera Intrinsics panel,
     /// a layout operation, so the panel keeps the request for
@@ -238,11 +238,11 @@ pub struct SceneGraphResponse {
     /// once the dock is back in the state; the dock applies nothing of it.
     pub(crate) switch_camera_model: Option<CameraRef>,
     /// `Clear the Bench` chosen on either bench group's header row.
-    pub clear_bench: Option<ReconId>,
+    pub(crate) clear_bench: Option<ReconId>,
     /// An entry of the image menu chosen on an image row: the image and the
     /// entry. The dock carries it out after the frame, through the same path
     /// as the Image Browser strip's menu (`crate::image_menu`).
-    pub image_menu: Option<(ImageRef, crate::image_menu::ImageMenuAction)>,
+    pub(crate) image_menu: Option<(ImageRef, crate::image_menu::ImageMenuAction)>,
 }
 
 /// Scene Graph panel state.
@@ -250,7 +250,7 @@ pub struct SceneGraphResponse {
 /// Only what the tree has to remember between frames; expansion lives in egui's
 /// own memory under [`row_id`], and everything else is read from `AppState`.
 #[derive(Default)]
-pub struct SceneGraphPanel {
+pub(crate) struct SceneGraphPanel {
     /// The image selection as of the previous frame. An image list scrolls its
     /// selected row into view only when this *changes*, so the panel does not
     /// fight the user's own scrolling.
@@ -274,7 +274,7 @@ pub struct SceneGraphPanel {
 }
 
 impl SceneGraphPanel {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -303,12 +303,12 @@ impl SceneGraphPanel {
     /// the tests aim at is the very layout the app produces, with no
     /// test-specific code path to drift out of step.
     #[cfg(test)]
-    pub fn hit_rect(&self, id: egui::Id) -> Option<egui::Rect> {
+    pub(crate) fn hit_rect(&self, id: egui::Id) -> Option<egui::Rect> {
         self.hits.get(&id).copied()
     }
 
     /// Draw the tree and report what the user did with it.
-    pub fn show(&mut self, ui: &mut egui::Ui, state: &mut AppState) -> SceneGraphResponse {
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, state: &mut AppState) -> SceneGraphResponse {
         let panel_rect = ui.available_rect_before_wrap();
         // What every *other* node offers as an alignment target, taken before
         // the mutable walk below: the tree holds one node at a time, and the

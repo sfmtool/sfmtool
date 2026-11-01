@@ -55,31 +55,31 @@ pub(crate) const ADD_BENCH_OBSERVATION_LABEL: &str = "Add observation to bench t
 /// Track View's *Lock*, which is not bench state but belongs beside it: the
 /// drag it decides the meaning of is a drag of the focused item.
 #[derive(Debug, Clone, Copy)]
-pub struct BenchMenu<'a> {
+pub(crate) struct BenchMenu<'a> {
     /// Why no step on this node can run -- a background task is holding it --
     /// or `None` when one can.
-    pub busy: Option<&'a str>,
+    pub(crate) busy: Option<&'a str>,
     /// Why nothing on this node's bench can be edited -- it is a `sift_files`
     /// reconstruction, whose bench is view-only -- or `None` when it can
     /// (`AppState::bench_view_only_refusal`). Greys the entries that edit the
     /// bench and takes the bench layer's handles away; Edit on Bench, which
     /// only shows a point, is not affected.
-    pub view_only: Option<&'a str>,
+    pub(crate) view_only: Option<&'a str>,
     /// The focused item, or `None` when no item on this node's bench is
     /// focused. A gesture that names no item means the focused one.
-    pub focused_track: Option<&'a EditableTrack>,
+    pub(crate) focused_track: Option<&'a EditableTrack>,
     /// Track View's *Lock*: at the track stage, whether the dot slides the
     /// patch with every sighting following (`true`) or moves that one
     /// sighting's keypoint alone (`false`), in which case the outline's edges
     /// and corners take no drag. Read at the cluster stage not at all, where
     /// every handle is already one sighting's.
-    pub lock: bool,
+    pub(crate) lock: bool,
     /// Why *Create Track Here* cannot run on the image shown, or `None` when
     /// it can: the node busy, the image not posed, or a reconstruction a
     /// commit cannot write ([`crate::state::AppState::create_track_here_refusal`]).
     /// *Find Nearby Tracks* is greyed by the same answer, since it ends in the
     /// same commit.
-    pub create_track: Option<&'a str>,
+    pub(crate) create_track: Option<&'a str>,
 }
 
 impl Default for BenchMenu<'_> {

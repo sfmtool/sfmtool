@@ -30,17 +30,17 @@ use crate::scene::NodeTint;
 /// carries patch frames *and* bitmaps, so its fields need no individual
 /// `Option`s.
 pub(super) struct PatchResources {
-    pub instance_buffer: wgpu::Buffer,
+    pub(crate) instance_buffer: wgpu::Buffer,
     /// Per-patch mask word, the same word the point buffer holds for the
     /// patch's point, as a second instance buffer stepping with
     /// `instance_buffer`. Rewritten where the overlay's deleted set or the
     /// viewport's marks change; never rebuilt for a point edit.
-    pub alive_buffer: wgpu::Buffer,
+    pub(crate) alive_buffer: wgpu::Buffer,
     /// Which instance slot each point that carries a patch was packed into.
     /// The atlas and the instance buffer are compacted, so a patch's slot is
     /// not its point index, and this is what turns a deleted point index into
     /// the entry of `alive_buffer` to clear.
-    pub slot_of_point: HashMap<u32, u32>,
+    pub(crate) slot_of_point: HashMap<u32, u32>,
     /// The bitmap column these tiles were written from, held by pointer.
     ///
     /// What decides whether the atlas survives a new base. A bulk edit rewrites
@@ -48,27 +48,27 @@ pub(super) struct PatchResources {
     /// materialisation keeps the column's `Arc` when no edit touched a patch --
     /// so pointer equality here is an exact answer to "are these the same
     /// tiles", and the answer is yes for every edit the viewer has.
-    pub uploaded_bitmaps: Arc<Array4<u8>>,
+    pub(crate) uploaded_bitmaps: Arc<Array4<u8>>,
     /// The point each instance slot was packed from, in slot order.
     ///
     /// The other half of that question. The atlas is compacted over the points
     /// that carry a patch, so it is only reusable if the same points pack into
     /// the same slots; this is what that comparison reads. `slot_of_point` is
     /// this inverted, and is what the mask writer reads instead.
-    pub packed_points: Vec<u32>,
+    pub(crate) packed_points: Vec<u32>,
     /// The atlas itself. Nothing reads it after the bind group is built — it is
     /// held so the node *owns* its atlas: dropping the bundle is what returns
     /// that GPU memory, which is the whole point of per-node resources.
     #[allow(dead_code)]
-    pub atlas_texture: wgpu::Texture,
+    pub(crate) atlas_texture: wgpu::Texture,
     /// Per-recon `PatchUniforms` — the atlas grid it carries is per-recon, so
     /// the buffer is too, even though the camera half of it is global.
-    pub uniform_buffer: wgpu::Buffer,
-    pub bind_group: wgpu::BindGroup,
-    pub count: u32,
-    pub atlas_cols: u32,
-    pub atlas_rows: u32,
-    pub patches_per_page: u32,
+    pub(crate) uniform_buffer: wgpu::Buffer,
+    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) count: u32,
+    pub(crate) atlas_cols: u32,
+    pub(crate) atlas_rows: u32,
+    pub(crate) patches_per_page: u32,
     /// The liveness vector `alive_buffer` was created from, in slot order.
     ///
     /// What reached the GPU before any mask write, which is the half a headless
@@ -76,7 +76,7 @@ pub(super) struct PatchResources {
     /// copy source. Kept only under `cfg(test)`, so the shipped bundle carries
     /// nothing it does not draw from.
     #[cfg(test)]
-    pub built_liveness: Vec<u32>,
+    pub(crate) built_liveness: Vec<u32>,
 }
 
 /// The overlay's **additions** as GPU state: a second set of instance buffers
@@ -97,16 +97,16 @@ pub(super) struct PatchResources {
 /// pass; nothing about the shader distinguishes them.
 pub(super) struct AdditionResources {
     /// This node's `ReconUniforms` with the additions' pick base.
-    pub uniform_buffer: wgpu::Buffer,
+    pub(crate) uniform_buffer: wgpu::Buffer,
     /// The point bind group over `uniform_buffer`.
-    pub bind_group: wgpu::BindGroup,
-    pub point_instance_buffer: wgpu::Buffer,
+    pub(crate) bind_group: wgpu::BindGroup,
+    pub(crate) point_instance_buffer: wgpu::Buffer,
     /// Per-addition liveness, as for the base's.
-    pub point_alive_buffer: wgpu::Buffer,
-    pub point_count: u32,
+    pub(crate) point_alive_buffer: wgpu::Buffer,
+    pub(crate) point_count: u32,
     /// The additions' surfels and their own atlas, when any addition carries a
     /// patch bitmap.
-    pub patch: Option<PatchResources>,
+    pub(crate) patch: Option<PatchResources>,
 }
 
 /// The camera model proposal's preview on one node: a target per row of each
@@ -120,23 +120,23 @@ pub(super) struct AdditionResources {
 pub(super) struct PreviewResources {
     /// The proposal generation the rows were written for. A new one is one
     /// upload of each buffer.
-    pub generation: u64,
+    pub(crate) generation: u64,
     /// The blend, mirrored into the node's `ReconUniforms::preview_s`.
-    pub s: f32,
+    pub(crate) s: f32,
     /// One `vec4` per row of the base's point buffer.
-    pub points: wgpu::Buffer,
+    pub(crate) points: wgpu::Buffer,
     /// One `vec4` per row of the additions' point buffer, when there are
     /// additions.
-    pub additions: Option<wgpu::Buffer>,
+    pub(crate) additions: Option<wgpu::Buffer>,
     /// One `SurfelPreview` per slot of the base's surfel buffer, when the node
     /// has surfels.
-    pub patches: Option<wgpu::Buffer>,
+    pub(crate) patches: Option<wgpu::Buffer>,
     /// One per slot of the additions' surfel buffer.
-    pub addition_patches: Option<wgpu::Buffer>,
+    pub(crate) addition_patches: Option<wgpu::Buffer>,
     /// The surfel rows as they were written, slot by slot: the half a headless
     /// test cannot read back from a `VERTEX | COPY_DST` buffer.
     #[cfg(test)]
-    pub built_patches: Vec<super::gpu_types::SurfelPreview>,
+    pub(crate) built_patches: Vec<super::gpu_types::SurfelPreview>,
 }
 
 /// One node's display state as the renderer needs it: which layers to draw,
@@ -146,7 +146,7 @@ pub(super) struct PreviewResources {
 /// than looked up per draw, so the draw loop and the uniform write — which see
 /// only bundles — need no access to the scene.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NodeDisplay {
+pub(crate) struct NodeDisplay {
     /// **Effective** whole-node visibility: the node's master eye composed with
     /// the scene's solo override (`crate::scene::is_visible`). Off = the node
     /// contributes nothing to any pass, and nothing to the scene bounds.
@@ -154,19 +154,19 @@ pub struct NodeDisplay {
     /// Composed once, by `app.rs`'s per-frame mirror, so the draw loop, the
     /// bounds union and the per-recon uniform write cannot disagree about what
     /// "visible" means.
-    pub visible: bool,
-    pub show_points: bool,
+    pub(crate) visible: bool,
+    pub(crate) show_points: bool,
     /// Group eye: the node's camera frustums and image quads.
-    pub show_camera_images: bool,
-    pub show_patches: bool,
+    pub(crate) show_camera_images: bool,
+    pub(crate) show_patches: bool,
     /// Sub-toggle of `show_points`, applied in the point shader so instance
     /// indices (and therefore pick ids) stay unfiltered.
-    pub show_points_at_infinity: bool,
+    pub(crate) show_points_at_infinity: bool,
     /// Off → the node's shaders emit `PICK_TAG_NONE`. It still renders, still
     /// occludes, and still answers the depth readback.
-    pub interactive: bool,
+    pub(crate) interactive: bool,
     /// The node's comparison tint, mixed into its colors by every scene shader.
-    pub tint: NodeTint,
+    pub(crate) tint: NodeTint,
 }
 
 impl Default for NodeDisplay {
@@ -188,7 +188,7 @@ impl Default for NodeDisplay {
 /// One loaded reconstruction's GPU resources and derived scalars.
 pub(super) struct ReconResources {
     /// This node's display state, refreshed every frame from its scene node.
-    pub display: NodeDisplay,
+    pub(crate) display: NodeDisplay,
 
     /// This node's similarity transform into the shared world space, mirrored
     /// from its scene node alongside `display`.
@@ -197,11 +197,11 @@ pub(super) struct ReconResources {
     /// because two CPU-side consumers need the pieces: the bounding sphere
     /// (centre through the transform, radius times the scale) and the splat
     /// size (scaled with the node).
-    pub transform: Se3Transform,
+    pub(crate) transform: Se3Transform,
 
     /// This node's `ReconUniforms` slice: model matrix, point size, pick bases,
     /// pickable flag, tint. Written every frame by `update_uniforms`.
-    pub uniform_buffer: wgpu::Buffer,
+    pub(crate) uniform_buffer: wgpu::Buffer,
 
     /// The base this bundle's buffers were built from, or `None` before the
     /// first upload.
@@ -210,60 +210,60 @@ pub(super) struct ReconResources {
     /// node's base is a different `Arc` from this one, and a run of point edits
     /// -- which never writes through the base -- leaves it alone and re-uploads
     /// nothing. See `specs/gui/document-model.md`.
-    pub uploaded_base: Option<Arc<SfmrReconstruction>>,
+    pub(crate) uploaded_base: Option<Arc<SfmrReconstruction>>,
 
     /// Which base indexes the deleted mask below currently marks as gone. What
     /// a mask update diffs against, so the write is the size of the change.
-    pub masked_deleted: HashSet<u32>,
+    pub(crate) masked_deleted: HashSet<u32>,
 
     /// Which indexes the mask currently marks as highlighted -- the viewport
     /// calling a set of points out, which today is the points a camera being
     /// moved observes. Diffed the same way, and for the same reason.
-    pub masked_highlighted: HashSet<u32>,
+    pub(crate) masked_highlighted: HashSet<u32>,
     /// Which indexes the mask currently marks as painted by the eraser brush.
     /// Diffed the same way.
-    pub masked_painted: HashSet<u32>,
+    pub(crate) masked_painted: HashSet<u32>,
     /// Which indexes the mask currently marks as under the eraser brush's
     /// circle. Diffed the same way.
-    pub masked_under_brush: HashSet<u32>,
+    pub(crate) masked_under_brush: HashSet<u32>,
     /// The Track Table's kept set the mask's filter bit was last written
     /// from, or `None` while no filter is on this node. Compared by pointer:
     /// the panel builds a new set only when its matched rows change, so the
     /// same `Arc` means the same bits, and a different one is a rewrite of
     /// every word.
-    pub masked_kept: Option<Arc<KeptPoints>>,
+    pub(crate) masked_kept: Option<Arc<KeptPoints>>,
     /// Whether the filter on this node hides the points it rejects rather
     /// than dims them, mirrored into `ReconUniforms::filter_mode`. Read only
     /// while `masked_kept` is set.
-    pub filter_hides: bool,
+    pub(crate) filter_hides: bool,
 
     // ── points ──
-    pub point_instance_buffer: Option<wgpu::Buffer>,
+    pub(crate) point_instance_buffer: Option<wgpu::Buffer>,
     /// Per-point mask word (`0` deleted, `1` alive, `2` to `4` alive and
     /// marked; see `upload::overlay`), as a second instance buffer stepping
     /// with `point_instance_buffer`. The overlay's deleted set and the
     /// viewport's marks reach the point shader through this and nothing else.
-    pub point_alive_buffer: Option<wgpu::Buffer>,
-    pub point_count: u32,
+    pub(crate) point_alive_buffer: Option<wgpu::Buffer>,
+    pub(crate) point_count: u32,
     /// Global point uniforms + this node's `ReconUniforms`.
-    pub point_bind_group: wgpu::BindGroup,
+    pub(crate) point_bind_group: wgpu::BindGroup,
 
     // ── frustums + image quads ──
-    pub frustum_edge_buffer: Option<wgpu::Buffer>,
-    pub frustum_edge_count: u32,
-    pub frustum_image_count: u32,
+    pub(crate) frustum_edge_buffer: Option<wgpu::Buffer>,
+    pub(crate) frustum_edge_count: u32,
+    pub(crate) frustum_image_count: u32,
     /// Per-image ABGR, cheap write path for selection/hover recolouring.
-    pub frustum_color_buffer: Option<wgpu::Buffer>,
-    pub frustum_bind_group: Option<wgpu::BindGroup>,
-    pub image_quad_instance_buffer: Option<wgpu::Buffer>,
-    pub image_quad_count: u32,
-    pub distorted_quad_vertex_buffer: Option<wgpu::Buffer>,
-    pub distorted_quad_index_buffer: Option<wgpu::Buffer>,
-    pub distorted_quad_index_count: u32,
+    pub(crate) frustum_color_buffer: Option<wgpu::Buffer>,
+    pub(crate) frustum_bind_group: Option<wgpu::BindGroup>,
+    pub(crate) image_quad_instance_buffer: Option<wgpu::Buffer>,
+    pub(crate) image_quad_count: u32,
+    pub(crate) distorted_quad_vertex_buffer: Option<wgpu::Buffer>,
+    pub(crate) distorted_quad_index_buffer: Option<wgpu::Buffer>,
+    pub(crate) distorted_quad_index_count: u32,
 
     // ── thumbnails: per-recon atlas + bind group ──
-    pub thumbnail_texture: Option<wgpu::Texture>,
-    pub thumbnail_view: Option<wgpu::TextureView>,
+    pub(crate) thumbnail_texture: Option<wgpu::Texture>,
+    pub(crate) thumbnail_view: Option<wgpu::TextureView>,
     /// What this atlas was written from: the node's display column and the
     /// value's own column, by pointer, and the image list.
     ///
@@ -271,22 +271,22 @@ pub(super) struct ReconResources {
     /// leaves the atlas correct, and every edit that is not about the image
     /// set does. See [`PatchResources::uploaded_bitmaps`], which is the same
     /// reuse key for the other atlas.
-    pub uploaded_thumbnails: Option<super::upload::UploadedThumbnails>,
+    pub(crate) uploaded_thumbnails: Option<super::upload::UploadedThumbnails>,
     /// Per-recon `ImageQuadUniforms` (view-projection + this atlas's grid).
-    pub image_quad_uniform_buffer: Option<wgpu::Buffer>,
+    pub(crate) image_quad_uniform_buffer: Option<wgpu::Buffer>,
     /// Shared by the pinhole and distorted image-quad pipelines.
-    pub image_quad_bind_group: Option<wgpu::BindGroup>,
-    pub atlas_cols: u32,
-    pub atlas_rows: u32,
-    pub images_per_page: u32,
+    pub(crate) image_quad_bind_group: Option<wgpu::BindGroup>,
+    pub(crate) atlas_cols: u32,
+    pub(crate) atlas_rows: u32,
+    pub(crate) images_per_page: u32,
 
     // ── patches (optional) ──
-    pub patch: Option<PatchResources>,
+    pub(crate) patch: Option<PatchResources>,
 
     // ── the overlay's additions (optional) ──
     /// The additions' instance buffers and their own patch atlas, when this
     /// version holds any.
-    pub additions: Option<AdditionResources>,
+    pub(crate) additions: Option<AdditionResources>,
     /// The addition set those buffers were built from, as `(points, tracks)`.
     ///
     /// A complete change signal, and O(1): additions are append-only along a
@@ -294,26 +294,26 @@ pub(super) struct ReconResources {
     /// the redo tail. So two versions of one base whose addition sets have the
     /// same point and observation counts hold the same additions, and a count
     /// that moved is the only way the set can differ.
-    pub uploaded_additions: (usize, usize),
+    pub(crate) uploaded_additions: (usize, usize),
 
     // ── the camera model proposal's preview (optional) ──
     /// The preview buffers and blend, on the node a proposal's preview is on.
-    pub preview: Option<PreviewResources>,
+    pub(crate) preview: Option<PreviewResources>,
 
     // ── per-recon derived scalars (formerly singletons on SceneRenderer) ──
     /// Auto-computed splat size (world space, before the global user scaling).
-    pub auto_point_size: f32,
+    pub(crate) auto_point_size: f32,
     /// Characteristic inter-camera distance (p90 of camera-centre NN
     /// distances), or `None` with fewer than 2 cameras.
-    pub camera_nn_scale: Option<f32>,
+    pub(crate) camera_nn_scale: Option<f32>,
     /// Bounding sphere (centre, radius) of this node's finite points, in the
     /// node's own coordinates. `None` until points have been uploaded, so an
     /// empty bundle cannot drag the union bounds toward the origin.
-    pub bounds: Option<(Point3<f64>, f64)>,
+    pub(crate) bounds: Option<(Point3<f64>, f64)>,
 
     // ── pick bases (see `super::picking`) ──
-    pub point_pick_base: u32,
-    pub image_pick_base: u32,
+    pub(crate) point_pick_base: u32,
+    pub(crate) image_pick_base: u32,
 }
 
 impl ReconResources {

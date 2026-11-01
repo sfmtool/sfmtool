@@ -273,25 +273,25 @@ impl BundleAdjustGates {
 
 /// What the user asked for, once they pressed `Run`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BundleAdjustAnswer {
+pub(crate) struct BundleAdjustAnswer {
     /// The node to adjust.
-    pub recon: ReconId,
+    pub(crate) recon: ReconId,
     /// What each camera releases, one entry per camera in the node's image
     /// set: held for a camera the dialog showed no row for, and never a
     /// release the camera's row had greyed. A distortion release only ever
     /// comes with the focal of the same camera.
-    pub releases: Vec<CameraRelease>,
+    pub(crate) releases: Vec<CameraRelease>,
     /// Whether the free points cross between a position and a direction: the
     /// core function's default unless the user cleared the checkbox.
-    pub free_points: FreePointPolicy,
+    pub(crate) free_points: FreePointPolicy,
     /// The trim schedule the text box stated, already checked by
     /// [`check_schedule`].
-    pub schedule: Vec<BaSchedule>,
+    pub(crate) schedule: Vec<BaSchedule>,
     /// The scanlines each camera's rolling-shutter rates are solved on, one
     /// entry per camera in the node's image set: the row's Scanlines choice
     /// for a camera whose rates the row releases, and `None` for every other
     /// camera.
-    pub rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
+    pub(crate) rolling_shutter_scanlines: Vec<Option<RollingShutterScanlinesChoice>>,
 }
 
 impl BundleAdjustAnswer {
@@ -312,7 +312,7 @@ impl BundleAdjustAnswer {
 /// The dialog, what it remembers while it is up, and the schedule last run on
 /// each node.
 #[derive(Default)]
-pub struct BundleAdjustPrompt {
+pub(crate) struct BundleAdjustPrompt {
     pending: Option<Pending>,
     /// The schedule of the last adjustment started on each node this session,
     /// from the dialog or the wire, which the dialog opens with on that node.
@@ -492,7 +492,7 @@ impl BundleAdjustPrompt {
     /// Enter runs and Escape cancels, which is the create-point prompt's
     /// vocabulary: this is a step in a gesture rather than a window to leave
     /// lying open.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<BundleAdjustAnswer> {
+    pub(crate) fn show(&mut self, ctx: &egui::Context) -> Option<BundleAdjustAnswer> {
         let pending = self.pending.as_mut()?;
         let mut run = false;
         let mut cancel = false;

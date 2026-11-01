@@ -30,22 +30,22 @@ use crate::texture::thumbnail_color_image;
 /// (`recon_id`); `dock.rs` pairs them back into [`crate::scene::ImageRef`]s.
 /// The strip is bound to exactly one reconstruction — the selected one — so
 /// there is nothing for a ref to disambiguate inside the panel.
-pub struct ImageBrowserResponse {
+pub(crate) struct ImageBrowserResponse {
     /// If Some, the user clicked a thumbnail to select it.
-    pub selection_changed: Option<Option<usize>>,
+    pub(crate) selection_changed: Option<Option<usize>>,
     /// If Some, user double-clicked a thumbnail — request camera view mode.
-    pub request_camera_view: Option<usize>,
+    pub(crate) request_camera_view: Option<usize>,
     /// If Some, animation advanced to this image — request instant camera switch
     /// (only meaningful when camera view mode is already active).
-    pub request_camera_switch: Option<usize>,
+    pub(crate) request_camera_switch: Option<usize>,
     /// Image index currently under the pointer (for cross-panel hover).
-    pub hovered_image: Option<usize>,
+    pub(crate) hovered_image: Option<usize>,
     /// Whether the pointer is currently inside the browser panel.
-    pub has_pointer: bool,
+    pub(crate) has_pointer: bool,
     /// An entry of the image menu chosen on a thumbnail: the image and the
     /// entry. Carried out by the dock through the same path as the Scene
     /// tree's image-row menu.
-    pub menu_action: Option<(usize, ImageMenuAction)>,
+    pub(crate) menu_action: Option<(usize, ImageMenuAction)>,
 }
 
 /// Where the image menu's entry `key` (one of [`crate::image_menu::ENTRIES`])
@@ -73,7 +73,7 @@ fn image_name(recon: &SfmrReconstruction, index: Option<usize>) -> String {
 /// Playback direction for image animation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub enum PlayDirection {
+pub(crate) enum PlayDirection {
     Forward,
     Backward,
 }
@@ -136,7 +136,7 @@ impl NavigationMinibar {
 }
 
 /// Image browser panel state.
-pub struct ImageBrowser {
+pub(crate) struct ImageBrowser {
     /// Cached egui textures for thumbnails, keyed by image index within
     /// `cached_recon`.
     thumbnail_cache: HashMap<usize, egui::TextureHandle>,
@@ -171,7 +171,7 @@ pub struct ImageBrowser {
 
 impl ImageBrowser {
     /// Creates a new image browser with empty cache.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             thumbnail_cache: HashMap::new(),
             cached_recon: None,
@@ -200,7 +200,7 @@ impl ImageBrowser {
     /// handled by the `cached_recon` check in [`ImageBrowser::show`]; closing
     /// the node it was showing returns the textures without waiting for the
     /// next frame's switch.
-    pub fn forget_recon(&mut self, id: ReconId) {
+    pub(crate) fn forget_recon(&mut self, id: ReconId) {
         if self.cached_recon == Some(id) {
             self.thumbnail_cache.clear();
             self.cached_recon = None;
@@ -218,7 +218,7 @@ impl ImageBrowser {
     ///
     /// Returns an [`ImageBrowserResponse`] indicating any selection changes.
     #[allow(clippy::too_many_arguments)]
-    pub fn show(
+    pub(crate) fn show(
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,

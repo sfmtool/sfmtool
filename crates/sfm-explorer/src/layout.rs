@@ -57,8 +57,8 @@ const PLACEHOLDER: Tab = Tab::Viewer3D;
 /// the main surface — and `windows` the floating surfaces.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Layout {
-    pub main: Option<LayoutNode>,
-    pub windows: Vec<LayoutWindow>,
+    pub(crate) main: Option<LayoutNode>,
+    pub(crate) windows: Vec<LayoutWindow>,
 }
 
 /// One node of a layout tree: a split of two children, or a leaf of tabs.
@@ -108,19 +108,19 @@ impl SplitDirection {
 /// A floating surface: its tree, and where it sits when it has been laid out.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LayoutWindow {
-    pub tree: LayoutNode,
+    pub(crate) tree: LayoutNode,
     /// Screen-anchored, in logical points. `None` for a window that has never
     /// been drawn and so has no rect to report.
-    pub rect: Option<LayoutRect>,
+    pub(crate) rect: Option<LayoutRect>,
 }
 
 /// A window's rectangle in logical points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct LayoutRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
 }
 
 /// One violation, with the path to the node it was found at.
@@ -131,8 +131,8 @@ pub(crate) struct LayoutRect {
 /// `WindowLayout::from_value` passes in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LayoutError {
-    pub path: String,
-    pub message: String,
+    pub(crate) path: String,
+    pub(crate) message: String,
 }
 
 impl LayoutError {

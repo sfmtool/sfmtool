@@ -11,7 +11,7 @@ impl SceneRenderer {
     /// Ensure the offscreen textures match the requested size.
     ///
     /// Also creates the render pipelines on first call.
-    pub fn ensure_size(
+    pub(crate) fn ensure_size(
         &mut self,
         device: &wgpu::Device,
         egui_renderer: &mut eframe::egui_wgpu::Renderer,

@@ -27,19 +27,19 @@ mod tests;
 
 /// What the user asked for once they pressed Save.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveMinimalAnswer {
+pub(crate) struct SaveMinimalAnswer {
     /// The node to write a minimal copy of.
-    pub recon: ReconId,
+    pub(crate) recon: ReconId,
     /// Where to write it, as the save dialog named it.
-    pub path: PathBuf,
+    pub(crate) path: PathBuf,
     /// The `workspace.relative_path` to record, as the field left it. Empty is
     /// an answer: it records no path, which is what the format reads as none.
-    pub workspace_path: String,
+    pub(crate) workspace_path: String,
 }
 
 /// The dialog, and what it remembers while it is up.
 #[derive(Default)]
-pub struct SaveMinimalPrompt {
+pub(crate) struct SaveMinimalPrompt {
     pending: Option<Pending>,
 }
 
@@ -63,7 +63,13 @@ impl SaveMinimalPrompt {
     /// menu cannot stack two of them and cannot throw away a half-typed path.
     /// The caller has already chosen the file and already checked that the copy
     /// can be written there, so there is nothing left for this to refuse.
-    pub fn ask(&mut self, recon: ReconId, label: String, path: PathBuf, workspace_path: String) {
+    pub(crate) fn ask(
+        &mut self,
+        recon: ReconId,
+        label: String,
+        path: PathBuf,
+        workspace_path: String,
+    ) {
         if self.pending.is_none() {
             self.pending = Some(Pending {
                 recon,
@@ -81,7 +87,7 @@ impl SaveMinimalPrompt {
     /// prompts use. Cancelling writes nothing: the file dialog named a path but
     /// the save has not happened yet, and backing out here is backing out of the
     /// whole save rather than accepting a path nobody confirmed.
-    pub fn show(&mut self, ctx: &egui::Context) -> Option<SaveMinimalAnswer> {
+    pub(crate) fn show(&mut self, ctx: &egui::Context) -> Option<SaveMinimalAnswer> {
         let pending = self.pending.as_mut()?;
         let mut save = false;
         let mut cancel = false;

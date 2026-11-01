@@ -190,6 +190,42 @@ scope: a function that only one format needs, such as `read_sift_partial`, and
 formats sfmtool reads or writes but does not define (COLMAP's binary model and
 database, image files).
 
+## Viewer items are no more visible than their users need
+
+In `sfm-explorer`, an item is private when only its module and that module's
+descendants use it, and `pub(crate)` (or `pub(super)`) when sibling modules
+need it. That includes the methods and fields of types declared in private
+modules. Bare `pub` is kept for the crate's public interface, which is what
+the `sfm-explorer` binary and `sfmtool-py` call: `run`, `run_with_args` and
+`RunError` with its methods in `lib.rs`, and, with the `mcp` feature,
+`tool_catalog`, `validate_tool_call` and `CatalogTool` with its fields, which
+`lib.rs` re-exports from `mcp/call_check.rs`. This exists because a
+declaration's visibility is how a reader learns an item's reach. Every module
+of the crate is private, so a bare `pub` inside one claims a reach the item
+does not have: it reads as part of the interface the binding uses, and the
+reader has to trace the module tree to find out that nothing outside the crate
+can name it. The rule is not about dead code: rustc's `dead_code` lint warns
+about an unused item in a private module whether it is `pub` or `pub(crate)`.
+
+`lib.rs` sets `#![warn(unreachable_pub)]`, so rustc warns on a bare `pub`
+function, method, type, constant, module or `use` that the crate does not
+export, and the `lint` job's clippy run in CI (`-D warnings`) fails on it.
+Two gaps remain, and they are what to look for:
+
+- **Struct fields.** rustc does not apply `unreachable_pub` to fields, so a
+  bare `pub` field in a `pub(crate)` struct passes every build. Grep
+  `crates/sfm-explorer/src/` for `^\s*pub [a-z_][a-z0-9_]*\s*:` and for
+  tuple fields (`(pub `), and leave out `CatalogTool`'s fields.
+- **Windows-only code.** The `lint` job runs on Linux, so code compiled only
+  on Windows, such as `platform/windows.rs`, is not checked there; the lint
+  only warns in the Windows builds. Grep that code for bare `pub` by hand.
+
+Confirm before reporting: check that the item is not part of the public
+interface above and not re-exported by a bare `pub use` on the way to it. Out
+of scope: the other crates, whose `pub` items are their public API, and the
+integration tests in `crates/sfm-explorer/tests/`, each of which is its own
+crate.
+
 ## A convention has no documented exceptions
 
 Code that departs from a stated rule is changed to follow it, or the rule is
