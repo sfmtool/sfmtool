@@ -118,18 +118,18 @@ state, not function arguments. 25 public settings structs in `sfmtool-core` stil
 `*Params` or `*Config`; new ones use `*Options`. See `specs/GLOSSARY.md` §
 "Rust type names".
 
-### Library interface contracts
+### Quality standards
 
-- Every function that handles a reconstruction's points accepts points at
-  infinity (`w = 0` rows of `positions_xyzw`) and handles them correctly: no
-  unguarded division by `w`, rotation only for a direction, and a finite-only
-  function says so and skips `w = 0` rows visibly.
-- A function that can run longer than about a second takes a `&Progress` and
-  passes it down. There is one interface: a caller that wants no reporting
-  passes `&Progress::none()`, so no `foo` / `foo_with_progress` pairs and no
-  `Option<&Progress>`.
-
-`audit-hygiene` § E checks these in detail.
+Every change is held to [`specs/STANDARDS.md`](specs/STANDARDS.md); read it
+before making or reviewing one. In short: points at infinity (`w = 0` rows)
+are supported; a function that can run longer than about a second takes a
+`&Progress`, with no `foo` / `foo_with_progress` pair; input to a binding or
+a library crate's public API never panics (it returns an error, which a
+binding raises as a Python exception); logic lives in Rust, with no Python
+wrapper that repeats what a binding does; every file format has the same I/O
+shape in `sfmtool.fileio`, validated in its format crate; a convention has no
+documented exceptions; a test asserts something that can fail. If code breaks
+a standard, fix the code; fix a spec or doc only where the code is right.
 
 ### Implementing a change
 

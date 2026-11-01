@@ -135,8 +135,15 @@ Do not open pull requests unless the user asks.
 >   in the status line, for example `**Declined** — the spec is right that
 >   <fact>; clarified <where>, branch \`<branch>\``.
 >
-> **If you fix it**, a report's proposed sentence is a draft claim like any
-> other. Annotate the finding in its report in place, below it:
+> **If you fix it**, read `specs/STANDARDS.md` with `AGENTS.md`. Before fixing
+> a finding by editing a spec or doc, check whether the behaviour the new text
+> would describe breaks one of those standards (a panic on caller input, an
+> exception to a rule, a Python wrapper over a binding). If it does, fix the
+> code to meet the standard, even when the report proposed a text edit; if the
+> code fix is a large design change, record **Needs decision** naming that
+> code fix. Never commit text that documents the breach. A report's proposed
+> sentence is a draft claim like any other. Annotate the finding in its report
+> in place, below it:
 > `> _Status (<today>): **Done** — <what changed>, branch \`<branch>\`._` (or
 > **Partially done**, naming what is still open).
 >
@@ -150,4 +157,7 @@ Do not open pull requests unless the user asks.
 > decline of a wrong finding, check that the clarification addresses what
 > misled the report and that the related specs and docs the implementer
 > checked now agree with the code. Check that the change resolves the finding
-> and that the report's status line is present and accurate.
+> and that the report's status line is present and accurate. Read
+> `specs/STANDARDS.md`: a spec or doc edit that describes code breaking one of
+> its standards, instead of fixing the code, is SUBSTANTIVE, whatever the
+> report proposed.

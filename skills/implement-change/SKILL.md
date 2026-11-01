@@ -277,7 +277,7 @@ and hosts the pictures:
 > checked out. You are the only agent running, so building and testing are
 > allowed. Do not invoke the `implement-change` skill; you are the
 > implementer it launched. Read `AGENTS.md` first (writing style, spec rules,
-> library interface contracts, "Quality reports"); read `specs/GLOSSARY.md`
+> "Quality reports") and `specs/STANDARDS.md`; read `specs/GLOSSARY.md`
 > before naming anything; read the specs for the area you change; read
 > `specs/TEMPLATE.md` when changing a spec's opening or adding a spec.
 >
@@ -290,18 +290,27 @@ and hosts the pictures:
 > approach fits the code around it. Decide DONE or DECLINE. Decline when the
 > change is wrong, already made, needs a maintainer's design decision (a
 > public API or wire rename, a format change, a large refactor nobody asked
-> for), or would cost more than it is worth, and explain why. Record a decline
-> as the task-specific instructions say; when they say nothing, commit nothing
-> and explain.
+> for), or would cost more than it is worth, and explain why. Where a spec and
+> the code disagree because the code breaks a standard in
+> `specs/STANDARDS.md` or a rule in `AGENTS.md`, the change is to the code,
+> even when it was asked for as a spec or doc edit; name the standard. Record
+> a decline as the task-specific instructions say; when they say nothing,
+> commit nothing and explain.
 >
 > **If implementing:** make a minimal change, for this change only. A proposed
 > sentence or code snippet you were given is a draft: verify every word
 > against the code before using it. Update the spec for the area when
-> behaviour diverges from it. Before shrinking a comment that repeats a spec,
-> move any fact found only in the comment into the spec. When moving or
+> behaviour diverges from it, but never write a spec or doc sentence that
+> describes a breach of a standard (a panic on caller input, an exception to a
+> rule, a Python wrapper over a binding); fix the code instead. Before
+> shrinking a comment that repeats a spec, move any fact found only in the
+> comment into the spec. When moving or
 > renaming a section, fix every link and `#anchor` that pointed at it, in
 > specs, docs and code comments (the spec-link test does not check anchors).
-> Add a test when code behaviour changes, and check every writer and
+> Add a test when code behaviour changes. Every assertion in an added or
+> changed test must be able to fail: for a fix to a flaky or weak test, show
+> it by a temporary change to the guarded code that makes the test fail,
+> reverted before committing, and say what you changed. Check every writer and
 > checked-in file before making a reader stricter. Commit with a
 > plain-language message, signed off (`git commit -s`), with no attribution
 > lines. Do not push.
@@ -354,7 +363,7 @@ and hosts the pictures:
 > out. You did not write it. You are the only agent running, so building and
 > testing are allowed. Do not invoke the `implement-change` skill; you are the
 > auditor it launched. Read `AGENTS.md` first (writing style, spec rules,
-> library interface contracts, "Quality reports").
+> "Quality reports") and `specs/STANDARDS.md`.
 >
 > **The change that was asked for:** <the change>
 >
@@ -371,7 +380,15 @@ and hosts the pictures:
 >    fact that is still true was lost. Check that the change does what was
 >    asked, stays in scope, has tests for changed behaviour, keeps the specs
 >    in step with the code, and follows the writing style (plain, literal,
->    present tense). Check the implementer's VISIBLE claim against the diff:
+>    present tense). A spec or doc edit that describes code breaking a
+>    standard in `specs/STANDARDS.md` (a panic on caller input, an exception
+>    to a rule, a Python wrapper over a binding), where the code should have
+>    been fixed, is SUBSTANTIVE; name the standard. Every assertion in an
+>    added or changed test must be able to fail: check that the implementer
+>    showed it for a fix to a flaky or weak test, and where it is cheap,
+>    repeat the check with a temporary change to the guarded code, reverted
+>    afterwards. An assertion that cannot fail is SUBSTANTIVE. Check the
+>    implementer's VISIBLE claim against the diff:
 >    a change to anything the viewer draws, an image a CLI command writes, or
 >    a docs page is visible however small, such as a new menu entry or a
 >    renamed label.
