@@ -287,17 +287,23 @@ empty-handed". Name the thing and say what it does.
   radial B-spline and per-image focal, principal-point, B-spline and
   rolling-shutter adjustments, and refined normals. `kerry_park` likewise holds
   `kerry_park_ground_truth_v01.sfmr`, all 48 images with the rig, in metres
-  with X east and Y north from eight GPS fixes, and its own marker. The `_v01`
-  suffix is a version, so a file name always means the same content: a later
-  correction, such as one found with SfM Explorer, goes into a new version
-  (`_v02`, …) rather than overwriting an earlier one, as seoul_bull's `_v02`
-  sits beside its `_v01`. The tests and scripts still use the `_v01` files. The
+  with X east and Y north from eight GPS fixes, and its own marker.
+  `dino_dog_toy` holds `dino_dog_toy_ground_truth_v01.sfmr`, all 85 images,
+  minimal and in metres, with an `SFMTOOL_PINHOLE` camera, per-image camera
+  adjustments and refined normals; its scale comes from four tape-measured
+  distances between points on the toy. Its marker caps SIFT at 2500 features,
+  as `scripts/init_dataset_dino_dog_toy.sh` does, so its `feature_prefix_dir`
+  differs from the other two. The `_v01` suffix is a version, so a file name
+  always means the same content: a later correction, such as one found with SfM
+  Explorer, goes into a new version (`_v02`, …) rather than overwriting an
+  earlier one, as seoul_bull's `_v02` sits beside its `_v01`. The tests and
+  scripts still use the `_v01` files, and none uses the dino file. The
   `seoul_bull_workspace` and `kerry_park_workspace` fixtures triangulate at
   these poses rather than solving; only the tests of a solve itself use
   `kerry_park_solve_once` / `kerry_park_camrig_workspace`, which run COLMAP in a
   child process so an abort is a retried attempt rather than a dead pytest
-  worker. Don't run `sfm sift` or a solve in either directory: the marker would
-  put their output in `test-data`.
+  worker. Don't run `sfm sift` or a solve in any of these three directories: the
+  marker would put their output in `test-data`.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `gui-bug-bash`, `suggest-next-steps`). See "Quality reports"
   below.
