@@ -45,8 +45,8 @@ At least two reconstructions are required.
    point merged into it is finite, and at infinity otherwise
    ([point-correspondence.md](../../core/reconstruction/point-correspondence.md#merging-points-and-tracks-merge_points_and_tracks)
    gives the rule).
-6. **Refine poses** — Run parallel PnP+RANSAC to refine camera poses in the merged
-   reconstruction, each image through its own intrinsics: its merged camera with
+6. **Refine poses** — Run PnP+RANSAC on a pool of threads, one per CPU, to refine
+   camera poses in the merged reconstruction, each image through its own intrinsics: its merged camera with
    its adjustment applied. Points at infinity are left out of PnP, which takes
    Euclidean positions only. pycolmap has no model for an `SFMTOOL_PINHOLE`
    camera, the only one whose images carry a radial correction or rates, so
