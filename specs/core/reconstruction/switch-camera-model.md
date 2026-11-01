@@ -246,7 +246,8 @@ project gets `0.0`. Points only other cameras see keep their stored error.
 For each camera, the **fixed set** is its observations with a finite
 reprojection error under both models. Every figure is over that set, so the
 change it shows is the lens and nothing else: `before` and `after` are the
-median, 90th percentile (linear interpolation) and maximum error;
+median, 90th percentile (linear interpolation, both from
+[`numeric`](../README.md#median-and-quantile)) and maximum error;
 `changed_over_1px` counts observations whose error moved by more than a pixel;
 and `past_trusted` and its two summaries cover the observations whose incidence
 angle is past the source's trusted bound, which are the observations the switch

@@ -295,7 +295,7 @@ the operation applies to any model the projection supports.
 |---|---|---|
 | `sat_px` | 2.0 px | the pipeline's shared inlier threshold (same constant as the BA inlier accounting); candidates for a resolution-relative form should change it everywhere together |
 | `hi_parallax_deg` | 5° | well under the parallax of genuine cross-group bridges (tens of degrees) and above the regime where residuals stop responding to gauge error |
-| `warp_percentile` | P95 | tail width of the eligibility threshold; the threshold itself is data-derived, the tail is fixed |
+| `warp_percentile` | P95 | tail width of the eligibility threshold; the threshold itself is data-derived, the tail is fixed; the percentile is the linear quantile of [`numeric`](../README.md#median-and-quantile) |
 | `wilson_z` | 1.96 | standard 95 % bound |
 | `compute_group_consistency` | false | opt-in for § 6; it costs a solve and answers a different question from the score |
 | § 6 robust scale | 3.0 px | soft-L1 transition of the group-consistency cost; above `sat_px`, so a satisfied bridge sits in the quadratic regime and a false match cannot drag the solve |
