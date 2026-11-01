@@ -39,17 +39,10 @@ pub(super) struct DisplacementTables {
 /// [`ClusterCovisibility::pair_displacement_magnitude`](super::ClusterCovisibility::pair_displacement_magnitude)).
 ///
 /// **Orientation contract (the vector statistic).** A pair is keyed by its
-/// ascending image indexes `(lo, hi)` and its mean vector is oriented to that
-/// key: each member pair contributes *(position in image `hi`) − (position in
-/// image `lo`)*, so a member pair that arrives in the other order contributes
-/// the negated delta. Without that normalization the same physical flow would
-/// enter the sum with either sign depending on member order and coherent
-/// motion would cancel itself. The accessors report in the key's orientation
-/// whatever order their arguments arrive in — [`Self::pair_vector`] answers
-/// `(i, j)` and `(j, i)` with the same vector, pointing from the
-/// lower-indexed image's keypoint to the higher-indexed image's — and
-/// [`Self::neighbors_vector`] reports a row's entries in that same key
-/// orientation, *not* relative to the row's own image.
+/// ascending image indexes `(lo, hi)`, and its mean vector always points from
+/// the keypoint in image `lo` to the one in image `hi`, whatever order the
+/// member pairs or the accessors' arguments arrive in. The spec's § Substrate
+/// says why.
 ///
 /// Serialize with [`Self::to_arrays`] / reload with [`Self::from_arrays`], so
 /// one computation serves a multi-stage pipeline.

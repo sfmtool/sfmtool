@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Bindings for displacement-neighborhood pose verification and repair
-//! (``sfmtool._sfmtool.geometry.verify_poses`` / ``repair_poses``; see
+//! (``sfmtool.geometry.verify_poses`` / ``repair_poses``; see
 //! ``specs/core/geometry/pose-verification.md``).
 //!
 //! The substrate travels as its compact serialization — the parallel per-pair
@@ -124,18 +124,11 @@ fn verification_dict<'py>(py: Python<'py>, out: &PoseVerification) -> PyResult<B
 /// Verify the registered cameras' poses against the displacement
 /// neighborhood (see ``specs/core/geometry/pose-verification.md``).
 ///
-/// Screen A re-resects every registered camera's own observations against
-/// the shared structure (``resect_images_batch``); a camera whose pose
-/// cannot be re-derived — no acceptable consensus — is flagged. Screen B
-/// compares, per camera, the relative rotation measured from its
-/// lowest-displacement registered neighbours' shared-cluster correspondences
-/// (conjugate homography, ``R = K^-1 H K`` orthonormalized and conjugated to
-/// the canonical frame) with the pose-implied one; the per-image score is
-/// the median discrepancy over its neighbours, flagged at or above the
-/// threshold. Only low-displacement neighbours are measured (parallax breaks
-/// the homography model) and the median makes a single discrepant pair
-/// harmless. Read-only; cameras run in parallel; identical inputs and seed
-/// reproduce identical output bit for bit.
+/// Screen A flags a camera whose pose cannot be re-derived by re-resecting
+/// its own observations. Screen B flags a camera whose median discrepancy
+/// between the relative rotation measured from its low-displacement
+/// registered neighbours and the pose-implied one reaches the threshold.
+/// Identical inputs and seed reproduce identical output bit for bit.
 ///
 /// Args:
 ///     cluster_indexes: (n_obs,) uint32 cluster id per observation,
@@ -253,14 +246,11 @@ pub fn verify_poses<'py>(
 /// Verify, then repair the flagged cameras (see
 /// ``specs/core/geometry/pose-verification.md``).
 ///
-/// Runs the two verification screens (see ``verify_poses``), then walks the
-/// flagged cameras in ascending image order: re-initialize from the top-2
-/// nearest registered neighbours (chordal mean of their rotations, mean of
-/// their centres, ``t = -R @ c``), trimmed pose-only refinement against the
-/// current structure, and accept only when the all-observation inlier
-/// fraction reaches ``max(inlier_floor, before + inlier_margin)``. Accepted
-/// repairs update the working poses (later repairs see them); rejected
-/// repairs leave the pose untouched — bit for bit — and the flag standing.
+/// Runs ``verify_poses``, then attempts a pose-only repair of each flagged
+/// camera in ascending image order, initialized from its two nearest
+/// registered neighbours. A repair is accepted only when the inlier fraction
+/// reaches ``max(inlier_floor, before + inlier_margin)``; a camera that is
+/// not repaired keeps its input pose bit for bit.
 ///
 /// Args:
 ///     (all ``verify_poses`` arguments, plus:)
