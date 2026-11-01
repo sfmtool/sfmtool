@@ -343,6 +343,7 @@ class BundleAdjustTransform:
             print(f"    {line}")
         if report["points_deleted"]:
             print(f"    Deleted {report['points_deleted']} unsupported point(s)")
+        lenses = recon.cameras
         for camera in report["cameras"]:
             released = [
                 name
@@ -380,7 +381,7 @@ class BundleAdjustTransform:
                 f"{camera['focal_before']:.3f} -> {camera['focal_after']:.3f}"
                 f"{principal_point}; released: {', '.join(released) or 'none'}"
             )
-            lens = recon.cameras[camera["camera"]]
+            lens = lenses[camera["camera"]]
             for line in (
                 format_image_prior_widths(
                     camera, camera["focal_after"], min(lens.width, lens.height)
