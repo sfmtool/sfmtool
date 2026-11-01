@@ -708,6 +708,35 @@ impl AppState {
         open
     }
 
+    /// Wait until the queued evaluation's worker has sent its answer, and
+    /// leave that answer for the next drive to land, as a frame that comes
+    /// after the worker finished finds it. For the tests that make a step
+    /// after the evaluation has answered and before its answer lands. Returns
+    /// whether the answer is a measured track, as against cancelled, failed
+    /// or dropped.
+    ///
+    /// Panics when no evaluation is queued, or when none answers within two
+    /// minutes.
+    #[cfg(test)]
+    pub(crate) fn wait_for_evaluation_answer(&mut self) -> bool {
+        const PATIENCE: std::time::Duration = std::time::Duration::from_secs(120);
+        let queued = self
+            .bench_evaluations
+            .queued
+            .as_mut()
+            .expect("an evaluation is queued");
+        let answer = queued
+            .answers
+            .recv_timeout(PATIENCE)
+            .unwrap_or_else(|e| panic!("the evaluation did not answer within {PATIENCE:?}: {e}"));
+        let measured = matches!(answer, Answer::Measured(Measured::Track(..)));
+        // Put the answer back where the drive's poll reads it.
+        let (sender, answers) = std::sync::mpsc::channel();
+        sender.send(answer).expect("the receiver is held here");
+        queued.answers = answers;
+        measured
+    }
+
     /// Whether the running evaluation has been asked to stop, for the tests
     /// that move its inputs while it runs.
     #[cfg(test)]

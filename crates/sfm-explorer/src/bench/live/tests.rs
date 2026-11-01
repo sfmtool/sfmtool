@@ -156,19 +156,21 @@ fn a_step_that_changes_an_input_starts_a_new_evaluation() {
     );
 }
 
+/// A step lands while the evaluation is still running: the stale evaluation
+/// is asked to stop, nothing starts beside it, its cancelled answer is dropped,
+/// and the edited track is evaluated after it.
 #[test]
-fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
+fn a_step_while_the_evaluation_runs_stops_it_and_evaluates_the_step() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
-    // Held, so the worker cannot answer before the next frame's drive, which
-    // would land the stale answer and queue the next evaluation in turn.
+    // Held, so the evaluation is still running when the next frame's drive
+    // sees the step.
     let open = state.hold_next_evaluation();
     state.drive_bench_evaluation();
     let read = state
         .running_evaluation_track()
         .expect("the evaluation started");
 
-    // A step lands while the worker is reading the track as it was.
     state
         .set_bench_verdict(id, &label, 1, Verdict::Out)
         .expect("observation 1 exists");
@@ -193,8 +195,9 @@ fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
     );
     assert!(!state.bench_evaluation_running(id, &label));
 
-    // Whatever it answers -- cancelled, or measured before it saw the flag --
-    // is dropped, and the track stays as the step left it.
+    // Let go after the stop request, it answers that it was cancelled, which
+    // is dropped: the track stays as the step left it. A measured answer that
+    // comes back for moved inputs is the next test's case.
     open.send(()).expect("the evaluation is held");
     state.land_running_evaluation();
     assert!(
@@ -204,6 +207,69 @@ fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
     assert_eq!(
         state.bench_evaluation(id, &label),
         Some(Evaluation::Evaluating)
+    );
+
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Current)
+    );
+    assert_eq!(
+        track(&state, id, &label).observations[1].verdict,
+        Verdict::Out
+    );
+}
+
+/// A step lands after the evaluation has answered with a measured track and
+/// before that answer lands: the answer is of inputs the track has moved on
+/// from, so it is dropped rather than installed, and the edited track is
+/// evaluated next.
+#[test]
+fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.drive_bench_evaluation();
+    let read = state
+        .running_evaluation_track()
+        .expect("the evaluation started");
+    let stale_task = state.queued_evaluation_task().expect("queued");
+    assert!(
+        state.wait_for_evaluation_answer(),
+        "the evaluation did not answer with a measured track"
+    );
+
+    state
+        .set_bench_verdict(id, &label, 1, Verdict::Out)
+        .expect("observation 1 exists");
+    let edited = track(&state, id, &label);
+    assert!(!Arc::ptr_eq(&read, &edited));
+
+    // The next frame reads the stale answer, drops it, and queues the edited
+    // track's evaluation, which waits until the stale one's worker is done.
+    state.drive_bench_evaluation();
+    assert!(
+        Arc::ptr_eq(&track(&state, id, &label), &edited),
+        "the stale answer was installed over the step"
+    );
+    assert_eq!(
+        state.bench_evaluation(id, &label),
+        Some(Evaluation::Evaluating),
+        "the track reads as evaluated with inputs it has moved on from"
+    );
+    let next_task = state
+        .queued_evaluation_task()
+        .expect("the edited track's evaluation was not queued");
+    assert_ne!(next_task, stale_task);
+    assert!(
+        Arc::ptr_eq(
+            &state.running_evaluation_track().expect("just checked"),
+            &edited
+        ),
+        "the evaluation queued is not of the edited track"
+    );
+    assert!(
+        !(state.quiet_task_running(stale_task) && state.quiet_task_running(next_task)),
+        "two evaluations ran at once"
     );
 
     state.settle_bench_evaluation();
