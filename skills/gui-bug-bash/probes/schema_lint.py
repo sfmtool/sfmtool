@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Check the viewer's advertised tool schemas against their own descriptions.
 
-    python probes/schema_lint.py --port P
+    python probes/schema_lint.py
     python probes/schema_lint.py --tools-json saved-tools-list.json
+
+With no argument it lints the catalog compiled into the sfmtool extension
+(`sfmtool.explorer.tool_catalog`), which needs no running viewer. It is the
+running viewer's own list when both were built from the same sources;
+`viewer.py launch` reports whether they were.
 
 A client that validates arguments against `inputSchema` can only form the
 calls the schema allows, so a schema that disagrees with what the server
@@ -25,9 +30,6 @@ import json
 import re
 import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mcp import Client  # noqa: E402
 
 ALTERNATIVE = re.compile(
     r"in place of|not both|exactly one|give this or|instead of|"
@@ -65,12 +67,12 @@ def lint(tools: list[dict]) -> list[str]:
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    src = p.add_mutually_exclusive_group(required=True)
-    src.add_argument("--port", type=int)
-    src.add_argument("--tools-json", help="a saved tools/list reply or its result")
+    p.add_argument("--tools-json", help="a saved tools/list reply or its result")
     a = p.parse_args()
-    if a.port:
-        tools = Client(a.port).tools()
+    if a.tools_json is None:
+        from sfmtool.explorer import tool_catalog
+
+        tools = [entry["advertised"] for entry in tool_catalog()]
     else:
         d = json.loads(Path(a.tools_json).read_text(encoding="utf-8"))
         tools = d.get("result", d)["tools"]

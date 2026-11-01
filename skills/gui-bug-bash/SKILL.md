@@ -21,22 +21,35 @@ What makes this work, from the first run (2026-09-29):
   first run's candidates were specified behaviour. Each candidate is checked
   against `specs/gui/` and the tool's own description before it is reported.
 
-## Tools in this directory
+## Tools
 
-Run them with `pixi run python skills/gui-bug-bash/<script>` from the repo root.
-They use only the standard library.
+The viewer is called with `pixi run sfm explorer-call`
+(`specs/cli/visualization/explorer-call-command.md`); the scripts in this
+directory start and stop it. Run the scripts with
+`pixi run python skills/gui-bug-bash/<script>` from the repo root.
 
-| script | what it does |
+| tool | what it does |
 |---|---|
-| `viewer.py launch` | Picks a **random free port**, copies each `--copy` source into a `bugbash-<date>-<port>/` folder beside it, copies the viewer binary into a session directory, starts it detached with `--mcp <port> --no-default-layout`, waits for the endpoint, prints the session (port, pid, copies, labels) and saves it as `session.json` |
+| `viewer.py launch` | Picks a **random free port**, copies each `--copy` source into a `bugbash-<date>-<port>/` folder beside it, copies the viewer binary into a session directory, starts it detached with `--mcp <port> --no-default-layout`, waits for the endpoint, prints the session (port, pid, copies, labels, and `catalog`: whether `sfm explorer-call` can check calls to this viewer) and saves it as `session.json` |
 | `viewer.py status` / `stop` | Read or end the session a `--session <dir>` names |
-| `mcp.py` | Call one tool: `mcp.py --port P TOOL '{json}'`. Prints text whole as UTF-8, writes images to `--out-dir` as `--name`.png, `--print EXPR` evaluates a Python expression over the parsed reply `d`. `mcp.py --port P wait` polls until the background task ends. `mcp.py --port P tools [--schema NAME]` lists tools. Exit status 2 is a refusal, 3 is no endpoint |
-| `mcp.Client` | The same from Python, for loops: `Client(port).call(tool, args)` returns the parsed reply or raises `McpError` |
-| `probes/schema_lint.py` | Checks `tools/list` for schemas that contradict their descriptions (alternatives marked required, required names that are not properties) |
-| `probes/sample.py` | Calls one read tool over a range or a random sample of indexes into a JSON-lines file, and groups the errors |
+| `sfm explorer-call --mcp P TOOL ARGS` | Call one tool. ARGS is a JSON object inline, `@file.json`, or `-` for standard input. Prints the reply's text whole, writes images to `--out-dir` as `--name`.png, and `--field a.0.b` prints one field of the reply. `--list-tools` and `--schema TOOL` read the catalog without a viewer. `get_background_tasks --wait-until-finished` waits until no task runs. Exit status 1 is a call refused before sending, 3 is the viewer's refusal, 4 is no endpoint |
+| `sfm explorer-call --mcp P TOOL --batch FILE` | Many calls in one process, one JSON line of arguments in and one JSON line of reply or error out per call |
+| `probes/schema_lint.py` | Checks the tool catalog for schemas that contradict their descriptions (alternatives marked required, required names that are not properties) |
+| `probes/sample.py` | Calls one read tool over a range or a random sample of indexes into a JSON-lines file, through one `--batch`, and groups the errors |
 
-**Always pass `--port`.** Shell state does not carry between commands, and the
-default (8787) is the port a person's own viewer uses.
+**Always pass `--mcp P`.** Shell state does not carry between commands, and
+the default (8787) is the port a person's own viewer uses.
+
+**The extension's catalog must be the viewer's.** `sfm explorer-call` checks
+every call against the tool catalog and argument parser compiled into the
+`sfmtool` extension, and refuses a viewer whose `tools/list` differs, naming
+the tools that differ. This skill runs the `cargo build --release` binary, so
+after a change to the MCP tools (yours, or one pulled in) also run
+`pixi run maturin develop --release`, and the two agree. When they cannot
+agree, for example when shooting a "before" build, pass
+`--validate-tool-names-only` to each call: it checks only that the tool is in
+the viewer's own list and lets the viewer check the arguments. `viewer.py
+launch` reports which case a session is in.
 
 The endpoint is plain JSON-RPC over HTTP, so none of this needs the
 `sfm-explorer` MCP server to be registered in the session. If it is, its tools
@@ -50,9 +63,11 @@ starts.
    or directory may not be on this machine. A recursive `find` over a large
    collection can run for minutes, so run it in the background, bound it with
    `-maxdepth`, or list the `sfmr/` directories you need.
-2. **Build.** `pixi run cargo build --release -p sfm-explorer`. The launcher
-   runs a copy of the binary, so a viewer that is running does not block the
-   build, and several sessions can run side by side.
+2. **Build.** `pixi run cargo build --release -p sfm-explorer`, and
+   `pixi run maturin develop --release` so `sfm explorer-call` checks calls
+   against the same tool catalog. The launcher runs a copy of the binary, so
+   a viewer that is running does not block the build, and several sessions
+   can run side by side.
 3. **Launch** one viewer with the first files of the dataset matrix (section 3):
 
    ```bash
@@ -67,7 +82,7 @@ starts.
    Make those with the same folder name (`bugbash-<date>-<port>/`) so the
    report can list every copy in one place.
 4. **Save the tool list** for the report and the probes:
-   `mcp.py --port P tools` and `probes/schema_lint.py --port P`. Schema lint
+   `sfm explorer-call --list-tools` and `probes/schema_lint.py`. Schema lint
    findings go through the gate like any other.
 
 On Linux the viewer needs a display and a Vulkan driver
@@ -100,7 +115,7 @@ Two pools, as in `audit-specs`:
    These get the most attention.
 2. **Least recently exercised.** Every earlier `reports/*-gui-bugbash.md` ends
    with a "Checked and found working" list and a bug table. Compare them with
-   `mcp.py tools` and give some of the budget to tools and panels no report
+   `sfm explorer-call --list-tools` and give some of the budget to tools and panels no report
    mentions. Prior coverage is read from the reports, so there is no state
    file.
 
@@ -187,8 +202,8 @@ Each of these cost the first run a wrong conclusion or a repeated step.
   *selected* reconstruction, and opening a file selects it. Use
   `pt3d_<hash>_<index>` ids or `select_reconstruction` first. A run of "no live
   point" errors from `sample.py` usually means this.
-- **Long operations return `{"running": true}`.** Run `mcp.py wait` before
-  reading the result. Read a task's own outcome with
+- **Long operations return `{"running": true}`.** Run `sfm explorer-call --mcp P
+  get_background_tasks --wait-until-finished` before reading the result. Read a task's own outcome with
   `get_background_tasks {"operation_id": <id from the handle>}`: each queue's
   `last_finished` is the last task of that queue, which may be an older one
   when the new call was refused or ran synchronously.
@@ -212,7 +227,7 @@ A candidate becomes a finding only when all of these hold:
 
 1. **It reproduces** from a fresh state with the steps you will write down.
 2. **It is not specified behaviour.** Search the tool's description
-   (`mcp.py tools --schema NAME`) and `specs/gui/` (`grep -rn -i` for the
+   (`sfm explorer-call --schema NAME`) and `specs/gui/` (`grep -rn -i` for the
    gesture, tool or word) for the behaviour. If a spec says it is intended,
    list it under "Ruled out as by design" instead. Ruled out in the first run:
    the Points size slider reading 0.0 (it is log2), point ids that do not

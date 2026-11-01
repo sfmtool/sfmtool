@@ -210,9 +210,11 @@ and hosts the pictures:
    `pixi run python skills/gui-bug-bash/viewer.py launch --session
    <scratchpad>/shots-after --copy <copy>.sfmr`. It picks a random free port
    and prints it. Drive the viewer with
-   `pixi run python skills/gui-bug-bash/mcp.py --port P TOOL '{json}'`
-   (`skills/gui-bug-bash/SKILL.md` lists the tools) to the state to show, and
-   take each picture with `screenshot` and `--out-dir`/`--name`. Before a
+   `pixi run sfm explorer-call --mcp P TOOL '{json}'`
+   (`sfm explorer-call --list-tools` lists the tools) to the state to show, and
+   take each picture with `screenshot` and `--out-dir`/`--name`. Run
+   `pixi run maturin develop --release` after the `cargo build` when the
+   change touches the MCP tools, so the command's catalog is the viewer's. Before a
    picture of the 3D view or the whole window, send `set_viewer_3d_display
    {"show_mcp_status_line": false}` and `hover {"leave": true}`, so the
    picture carries neither your calls in the status line nor a hover label.
@@ -224,7 +226,9 @@ and hosts the pictures:
    Launch the worktree's copy of the launcher
    (`pixi run python <scratchpad>/before/skills/gui-bug-bash/viewer.py
    launch …`), which runs the binary built beside it, and shoot the same state
-   as the after picture. Stop that viewer and `git worktree remove` the
+   as the after picture, passing `--validate-tool-names-only` to each
+   `sfm explorer-call` when the change touched the MCP tools, since the
+   extension's catalog is then the after build's. Stop that viewer and `git worktree remove` the
    worktree afterwards.
 4. **Privacy.** Crop each picture to what changed: a panel (`panel_name`), and
    with `crop_px` the menu, row or widget inside it; for a menu that reaches
