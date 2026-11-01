@@ -51,19 +51,6 @@ run them in full on the last commit:
   run, not as a pass. That failure alone does not block a push or a PR, since
   CI's `ui-test-windows` job runs it, but the rest of `ui_basic` must pass.
 
-### Rust visibility in the viewer
-
-In `sfm-explorer`, keep an item private when only its module and descendants use
-it. Use `pub(crate)` when sibling modules need it, including methods and fields
-of types declared in private modules. Reserve bare `pub` for an item exposed
-through the crate's public interface, which is `run`, `run_with_args` and
-`RunError` in `lib.rs`. The crate sets `#![warn(unreachable_pub)]` in
-`lib.rs`, so CI's clippy job (`-D warnings`) rejects a bare `pub` item, such
-as a function, method, type, constant, module or `use`, that the crate does not
-export. That job runs on Linux, so in Windows-only code such as
-`platform/windows.rs` the lint only warns, in the Windows builds. rustc does not
-apply the lint to struct fields, so a bare `pub` field is caught only in review.
-
 ### Python names and privacy
 
 A leading `_` on a Python module, function, class, constant or attribute name
@@ -134,8 +121,11 @@ a library crate's public API never panics (it returns an error, which a
 binding raises as a Python exception); logic lives in Rust, with no Python
 wrapper that repeats what a binding does; every file format has the same I/O
 shape in `sfmtool.fileio`, validated in its format crate; a convention has no
-documented exceptions; a test asserts something that can fail. If code breaks
-a standard, fix the code; fix a spec or doc only where the code is right.
+documented exceptions; a test asserts something that can fail; an
+`sfm-explorer` item is private or `pub(crate)` unless the crate's public
+interface exports it, which the `unreachable_pub` lint checks for every item
+but struct fields. If code breaks a standard, fix the code; fix a spec or doc
+only where the code is right.
 
 ### Implementing a change
 
