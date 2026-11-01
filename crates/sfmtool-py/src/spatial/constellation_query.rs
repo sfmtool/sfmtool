@@ -193,7 +193,7 @@ pub(crate) fn parse_resident_sources(sources: &Bound<'_, PyAny>) -> PyResult<Res
             ]
         })
         .collect();
-    ResidentSources::new(origins, geometry).map_err(to_py_err)
+    ResidentSources::new(origins, geometry).map_err(super::kdf::write_to_py_err)
 }
 
 /// Body of both classes' `constellation_query`.

@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
-use sfmtool_archive_io::ArchiveIoError;
-
 /// Edge length, in pixels, of the square RGB thumbnails a `.sfmr` carries, one
 /// per image.
 ///
@@ -55,9 +53,6 @@ pub enum SfmrError {
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
 
-    #[error("Hash verification failed: {0}")]
-    HashMismatch(String),
-
     /// The data holds something the format allows but a reader of it cannot
     /// apply: `SfmrReconstruction::from_sfmr_data` in `sfmtool-core` returns
     /// it for an image whose adjustment its camera cannot take, such as
@@ -66,17 +61,7 @@ pub enum SfmrError {
     Unsupported(String),
 }
 
-impl From<ArchiveIoError> for SfmrError {
-    fn from(e: ArchiveIoError) -> Self {
-        match e {
-            ArchiveIoError::Io(e) => SfmrError::Io(e),
-            ArchiveIoError::Zip(e) => SfmrError::Zip(e),
-            ArchiveIoError::Json(e) => SfmrError::Json(e),
-            ArchiveIoError::InvalidFormat(s) => SfmrError::InvalidFormat(s),
-            ArchiveIoError::ShapeMismatch(s) => SfmrError::ShapeMismatch(s),
-        }
-    }
-}
+sfmtool_archive_io::impl_from_archive_io_error!(SfmrError);
 
 /// Camera intrinsics as stored in the `.sfmr` JSON format.
 ///

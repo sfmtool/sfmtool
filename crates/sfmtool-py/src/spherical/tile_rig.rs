@@ -14,14 +14,20 @@ use sfmtool_core::spherical::tile_rig::{
 };
 
 use crate::flow::warp::PyWarpMap;
+use crate::format_errors::{read_err, write_err, Direction};
 use crate::geometry::camera_intrinsics::PyCameraIntrinsics;
 use crate::geometry::rot_quaternion::PyRotQuaternion;
 use crate::geometry::se3_transform::PySe3Transform;
-use crate::helpers::{os_err, value_err};
+use crate::helpers::value_err;
 
-fn camrig_err_to_py(e: CamRigConversionError) -> PyErr {
+/// A `.camrig` file error goes through the format table, in the direction
+/// the data was going; the rest say the rig is not a `spherical_tiles` one.
+fn camrig_err_to_py(e: CamRigConversionError, direction: Direction) -> PyErr {
     match e {
-        CamRigConversionError::File(_) => os_err(e),
+        CamRigConversionError::File(e) => match direction {
+            Direction::Read => read_err(e),
+            Direction::Write => write_err(e),
+        },
         _ => value_err(e),
     }
 }
@@ -365,7 +371,7 @@ impl PySphericalTileRig {
                 .to_string()
         });
         py.detach(|| self.inner.write_camrig(&path, &name))
-            .map_err(camrig_err_to_py)
+            .map_err(|e| camrig_err_to_py(e, Direction::Write))
     }
 
     /// Read a ``spherical_tiles`` rig from a ``.camrig`` file.
@@ -379,7 +385,7 @@ impl PySphericalTileRig {
     fn read_camrig(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         let inner = py
             .detach(|| SphericalTileRig::read_camrig(&path))
-            .map_err(camrig_err_to_py)?;
+            .map_err(|e| camrig_err_to_py(e, Direction::Read))?;
         Ok(Self { inner })
     }
 }

@@ -12,6 +12,7 @@ use sfmtool_sfmr_format::{
     self, ContentHash, DepthStatistics, SfmrData, SfmrMetadata, WriteOptions,
 };
 
+use crate::format_errors::{read_err, write_err};
 use crate::helpers::{
     dtype_name, extract_cameras_as_sfmr, extract_rig_frame_data, get_item, get_optional_item,
     py_to_serde, py_to_u128_bytes, rig_frame_data_to_py, serde_to_py, u128_bytes_to_py,
@@ -121,8 +122,7 @@ where
 /// the patch frame.
 #[pyfunction]
 pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = sfmtool_sfmr_format::read_sfmr(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let data = sfmtool_sfmr_format::read_sfmr(&path).map_err(read_err)?;
 
     let dict = PyDict::new(py);
 
@@ -308,8 +308,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
 /// Read only the top-level metadata from a .sfmr file (fast, no binary data).
 #[pyfunction]
 pub fn read_sfmr_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).map_err(read_err)?;
     serde_to_py(py, &metadata)
 }
 
@@ -319,8 +318,7 @@ pub fn read_sfmr_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> 
 /// directory of `.sfmr` files to resolve a `pt3d_<hash>_<index>` Point ID.
 #[pyfunction]
 pub fn read_sfmr_content_hash(path: PathBuf) -> PyResult<String> {
-    let content_hash = sfmtool_sfmr_format::read_sfmr_content_hash(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let content_hash = sfmtool_sfmr_format::read_sfmr_content_hash(&path).map_err(read_err)?;
     Ok(content_hash.content_xxh128)
 }
 
@@ -677,8 +675,7 @@ pub fn write_sfmr(
         zstd_level,
         skip_recompute_depth_stats,
     };
-    sfmtool_sfmr_format::write_sfmr_with_options(&path, &mut sfmr_data, &options)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_sfmr_format::write_sfmr_with_options(&path, &mut sfmr_data, &options).map_err(write_err)
 }
 
 /// Verify integrity of a .sfmr file.
@@ -686,8 +683,7 @@ pub fn write_sfmr(
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
 pub fn verify_sfmr(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    sfmtool_sfmr_format::verify_sfmr(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_sfmr_format::verify_sfmr(&path).map_err(read_err)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

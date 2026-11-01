@@ -17,6 +17,8 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 use rayon::prelude::*;
 use sfmtool_sift_format::read_sift_features;
 
+use crate::format_errors::{fault_to_py, Direction, FormatError};
+
 use sfmtool_core::bench::{
     constellation_seeds as core_constellation_seeds, guided_matches as core_guided_matches,
     nearby_cluster_tracks as core_nearby_cluster_tracks, nearby_points as core_nearby_points,
@@ -115,12 +117,16 @@ impl PyNearbyTrackSources {
                 .detach(|| {
                     paths
                         .par_iter()
-                        .map(|path| {
-                            read_sift_features(path).map_err(|e| format!("{}: {e}", path.display()))
-                        })
-                        .collect::<Result<Vec<_>, String>>()
+                        .map(|path| read_sift_features(path).map_err(|e| (path, e)))
+                        .collect::<Result<Vec<_>, _>>()
                 })
-                .map_err(PyValueError::new_err)?;
+                .map_err(|(path, e)| {
+                    fault_to_py(
+                        e.fault(),
+                        format!("{}: {e}", path.display()),
+                        Direction::Read,
+                    )
+                })?;
             if keypoints.is_none() {
                 keypoints = Some(
                     read.iter()

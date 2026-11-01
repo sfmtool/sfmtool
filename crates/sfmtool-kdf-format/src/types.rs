@@ -55,18 +55,7 @@ pub enum KdfError {
     Cancelled(#[from] sfmtool_progress::Cancelled),
 }
 
-impl From<sfmtool_archive_io::ArchiveIoError> for KdfError {
-    fn from(value: sfmtool_archive_io::ArchiveIoError) -> Self {
-        use sfmtool_archive_io::ArchiveIoError;
-        match value {
-            ArchiveIoError::Io(e) => Self::Io(e),
-            ArchiveIoError::Zip(e) => Self::Zip(e),
-            ArchiveIoError::Json(e) => Self::Json(e),
-            ArchiveIoError::InvalidFormat(e) => Self::InvalidFormat(e),
-            ArchiveIoError::ShapeMismatch(e) => Self::ShapeMismatch(e),
-        }
-    }
-}
+sfmtool_archive_io::impl_from_archive_io_error!(KdfError);
 
 impl From<sfmtool_archive_io::HashParseError> for KdfError {
     fn from(value: sfmtool_archive_io::HashParseError) -> Self {

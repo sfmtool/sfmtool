@@ -12,8 +12,6 @@ use ndarray::{Array1, Array2, Array3};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use sfmtool_archive_io::ArchiveIoError;
-
 use crate::cells::MemberCellData;
 
 /// Errors that can occur when reading or writing `.matches` files.
@@ -40,22 +38,9 @@ pub enum MatchesError {
 
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
-
-    #[error("Hash verification failed: {0}")]
-    HashMismatch(String),
 }
 
-impl From<ArchiveIoError> for MatchesError {
-    fn from(e: ArchiveIoError) -> Self {
-        match e {
-            ArchiveIoError::Io(e) => MatchesError::Io(e),
-            ArchiveIoError::Zip(e) => MatchesError::Zip(e),
-            ArchiveIoError::Json(e) => MatchesError::Json(e),
-            ArchiveIoError::InvalidFormat(s) => MatchesError::InvalidFormat(s),
-            ArchiveIoError::ShapeMismatch(s) => MatchesError::ShapeMismatch(s),
-        }
-    }
-}
+sfmtool_archive_io::impl_from_archive_io_error!(MatchesError);
 
 /// Workspace contents configuration (mirrors `.sfm-workspace.json`).
 pub use sfmtool_archive_io::WorkspaceContents;

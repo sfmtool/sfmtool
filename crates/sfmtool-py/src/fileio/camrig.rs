@@ -9,6 +9,7 @@ use numpy::IntoPyArray;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use crate::format_errors::{read_err, write_err};
 use crate::helpers::{py_to_serde, serde_to_py};
 
 /// Read only the metadata from a `.camrig` file (fast, no binary data).
@@ -16,8 +17,8 @@ use crate::helpers::{py_to_serde, serde_to_py};
 /// Returns a dict with keys `metadata` and `content_hash`.
 #[pyfunction]
 pub fn read_camrig_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let (metadata, content_hash) = sfmtool_camrig_format::read_camrig_metadata(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let (metadata, content_hash) =
+        sfmtool_camrig_format::read_camrig_metadata(&path).map_err(read_err)?;
     let dict = PyDict::new(py);
     dict.set_item("metadata", serde_to_py(py, &metadata)?)?;
     dict.set_item("content_hash", serde_to_py(py, &content_hash)?)?;
@@ -29,8 +30,7 @@ pub fn read_camrig_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>
 /// Returns a tuple `(is_valid, error_messages)`.
 #[pyfunction]
 pub fn verify_camrig(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    sfmtool_camrig_format::verify_camrig(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_camrig_format::verify_camrig(&path).map_err(read_err)
 }
 
 /// Read a complete `.camrig` file into a dict.
@@ -38,10 +38,10 @@ pub fn verify_camrig(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
 /// Returns a dict with keys `metadata`, `content_hash`, `cameras`,
 /// `sensor_image_patterns`, `camera_indexes`, `quaternions_wxyz`, and
 /// `translations_xyz`. Structural constraints are enforced; an invalid file
-/// raises `ValueError`.
+/// raises `OSError`.
 #[pyfunction]
 pub fn read_camrig(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = sfmtool_camrig_format::read_camrig(&path).map_err(camrig_err_to_py)?;
+    let data = sfmtool_camrig_format::read_camrig(&path).map_err(read_err)?;
     let dict = PyDict::new(py);
     dict.set_item("metadata", serde_to_py(py, &data.metadata)?)?;
     dict.set_item("content_hash", serde_to_py(py, &data.content_hash)?)?;
@@ -51,18 +51,6 @@ pub fn read_camrig(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     dict.set_item("quaternions_wxyz", data.quaternions_wxyz.into_pyarray(py))?;
     dict.set_item("translations_xyz", data.translations_xyz.into_pyarray(py))?;
     Ok(dict.into())
-}
-
-/// Map a `CamRigError` to an appropriate Python exception: I/O failures
-/// become `IOError`, structural problems become `ValueError`.
-fn camrig_err_to_py(e: sfmtool_camrig_format::CamRigError) -> PyErr {
-    use sfmtool_camrig_format::CamRigError;
-    match e {
-        CamRigError::Io(_) | CamRigError::IoPath { .. } => {
-            pyo3::exceptions::PyIOError::new_err(e.to_string())
-        }
-        _ => pyo3::exceptions::PyValueError::new_err(e.to_string()),
-    }
 }
 
 /// Write a `.camrig` file from columnar rig data.
@@ -145,7 +133,7 @@ pub fn write_camrig<'py>(
     };
 
     py.detach(|| sfmtool_camrig_format::write_camrig(&path, &data, zstd_level))
-        .map_err(camrig_err_to_py)
+        .map_err(write_err)
 }
 
 /// Validate a `.camrig` image pattern's structure.

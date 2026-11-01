@@ -262,9 +262,15 @@ The code that reads, writes and verifies `.sift` files is:
   `write_sift(path, data, zstd_level=5)` and `SiftWriteQueue.submit` parse
   and check `data` with the Rust functions above and raise `ValueError` for
   what they refuse, `TypeError` for an array of the wrong dtype and `KeyError`
-  for a missing key, all before anything is written. A missing file raises
-  `FileNotFoundError` and any other failed read or write `OSError`. There is
-  no Python wrapper over these bindings; the helpers in
+  for a missing key, all before anything is written. Every `SiftError` raises
+  through the shared table in
+  [python-bindings.md § Format errors](../python-bindings.md#format-errors):
+  a failed filesystem call is the `OSError` subclass for its kind
+  (`FileNotFoundError` for a missing file), and a file that cannot be parsed
+  or breaks a rule of the format is an `OSError`. A failed save in a
+  `SiftWriteQueue` raises from the call that waits for it: `join`,
+  `join_oldest`, or a `submit` that waits for room.
+  There is no Python wrapper over these bindings; the helpers in
   [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py) find an image's
   `.sift` path and compute the feature-cache hash and affine-shape sizes.
 

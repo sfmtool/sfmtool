@@ -38,40 +38,56 @@ use sfmtool_core::progress::Progress;
 
 use super::constellation_query::{DEFAULTS, DEFAULT_REFIT, DEFAULT_REFIT_SIGMA};
 use super::kdforest::extract_u8_2d;
+use crate::format_errors::{fault_to_py, Direction, FormatFault};
 use crate::helpers::py_to_u128_bytes;
 
-/// Map a format error onto the closest Python exception.
+/// Map a `.kdf` error raised while reading, verifying or querying a file onto
+/// the closest Python exception.
 ///
-/// The variants split cleanly by who is at fault: a bad argument is a
-/// `ValueError`, a budget that cannot hold what was asked for is a
-/// `MemoryError`, a damaged or malformed file is an `OSError`, and a missing
-/// source file is a `FileNotFoundError`. Collapsing all of them into one
-/// exception type would make a benchmark sweep unable to tell "this cache
-/// budget is too small" (retry smaller) from "this file is corrupt" (stop).
+/// The variants split by who is at fault: a bad argument is a `ValueError`, a
+/// budget that cannot hold what was asked for is a `MemoryError`, a damaged or
+/// malformed file is an `OSError`, and a missing source file is a
+/// `FileNotFoundError`. Collapsing all of them into one exception type would
+/// make a benchmark sweep unable to tell "this cache budget is too small"
+/// (retry smaller) from "this file is corrupt" (stop). The variants every
+/// format shares go through the table in [`crate::format_errors`].
 ///
 /// A cancelled write is the one variant nothing here can produce: these
 /// bindings attach no cancel flag to the writes they call. It is mapped all the
 /// same, rather than folded into a group it does not belong to, so that
 /// attaching one later says the right thing in Python.
 pub(crate) fn to_py_err(err: KdfError) -> PyErr {
+    kdf_err_to_py(err, Direction::Read)
+}
+
+/// [`to_py_err`] for a `.kdf` error raised while writing the caller's data, or
+/// building a value from it: a structural or shape error there is the
+/// caller's, so it is a `ValueError` rather than an `OSError`.
+pub(crate) fn write_to_py_err(err: KdfError) -> PyErr {
+    kdf_err_to_py(err, Direction::Write)
+}
+
+fn kdf_err_to_py(err: KdfError, direction: Direction) -> PyErr {
     let message = err.to_string();
-    match err {
-        KdfError::Io(e) => PyErr::from(e),
-        KdfError::Cancelled(_) => pyo3::exceptions::PyInterruptedError::new_err(message),
-        KdfError::MissingSource(path) => pyo3::exceptions::PyFileNotFoundError::new_err(format!(
-            "SIFT source is missing: {}",
-            path.display()
-        )),
-        KdfError::ResourceLimit(_) => pyo3::exceptions::PyMemoryError::new_err(message),
-        KdfError::InvalidQuery(_) | KdfError::ScalarType { .. } => {
-            pyo3::exceptions::PyValueError::new_err(message)
+    let fault = match err {
+        KdfError::Cancelled(_) => {
+            return pyo3::exceptions::PyInterruptedError::new_err(message);
         }
-        KdfError::InvalidFormat(_)
-        | KdfError::ShapeMismatch(_)
-        | KdfError::Integrity(_)
-        | KdfError::Zip(_)
-        | KdfError::Json(_) => pyo3::exceptions::PyOSError::new_err(message),
-    }
+        KdfError::MissingSource(path) => {
+            return pyo3::exceptions::PyFileNotFoundError::new_err(format!(
+                "SIFT source is missing: {}",
+                path.display()
+            ));
+        }
+        KdfError::ResourceLimit(_) => return pyo3::exceptions::PyMemoryError::new_err(message),
+        KdfError::Io(e) => FormatFault::Io(e.kind()),
+        KdfError::Zip(_) | KdfError::Json(_) => FormatFault::Container,
+        KdfError::InvalidFormat(_) | KdfError::ShapeMismatch(_) | KdfError::Integrity(_) => {
+            FormatFault::Content
+        }
+        KdfError::InvalidQuery(_) | KdfError::ScalarType { .. } => FormatFault::Request,
+    };
+    fault_to_py(fault, message, direction)
 }
 
 /// Build [`KdfSiftSources`] from the plain Python mapping the bindings accept.
@@ -794,7 +810,7 @@ fn write_kdf(
             &Progress::none(),
         )
     })
-    .map_err(to_py_err)
+    .map_err(write_to_py_err)
 }
 
 /// Load a `.kdf` fully into memory as a `KdForest`.
