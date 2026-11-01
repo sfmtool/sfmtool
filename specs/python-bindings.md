@@ -180,6 +180,7 @@ The blocks behind `patch_bitmaps` and `thumbnails_y_x_rgb` sit in an `Arc` that
 every reconstruction made from this one without replacing them shares
 ([edited-reconstruction.md](core/reconstruction/edited-reconstruction.md)), so
 a writeable view would let a Python write reach every sharer at once.
+
 ## Format errors
 
 The readers, writers and verifiers of the `.sfmr`, `.sift`, `.matches`,
