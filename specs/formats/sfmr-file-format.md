@@ -2571,7 +2571,12 @@ describes. Other parts of this spec are implemented by:
   infinity has none, so its row stays zero). A dict from `read_sfmr`
   therefore writes back the normals it was read with. A caller that moves or
   rotates the points in the dict updates `normals_xyz` with them, or deletes
-  the key to have them computed again.
+  the key to have them computed again. `SfmrReconstruction.from_data` builds
+  its normals from the same dict by the same rule, since the in-memory
+  `SfmrReconstruction::recompute_depth_statistics` it runs fills only the
+  missing rows too
+  ([source](../../crates/sfmtool-core/src/reconstruction/data/recompute.rs)),
+  with the writer's test for a missing row, `is_missing_normal`.
 - World orientation: `sfm xform --rotate` and `--align-to` refine it after a
   solve.
 - `world_space_unit`: `sfm xform --scale-by-measurements` scales a

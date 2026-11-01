@@ -423,10 +423,19 @@ impl SfmrReconstruction {
         Ok(())
     }
 
-    /// Recompute depth statistics, histograms, and estimated normals from the
-    /// current poses, points, and tracks. Uses the same
+    /// Recompute the per-image depth statistics and histograms from the current
+    /// poses, points, and tracks, and fill each missing normal. Uses the same
     /// [`sfmtool_sfmr_format::compute_depth_statistics`] function that `.sfmr` file
     /// writing uses.
+    ///
+    /// The normals follow the writer's rule: when the reconstruction carries
+    /// normals, a point's normal is kept where it is set and replaced by the
+    /// point's mean-viewing normal where it is missing
+    /// ([`sfmtool_sfmr_format::is_missing_normal`]: the zero vector, or within
+    /// `1e-6` of it in squared norm). A point at
+    /// infinity has no mean-viewing normal, so a missing one stays zero. A
+    /// reconstruction without normals gets none. A caller that wants every
+    /// normal computed again from the geometry zeroes them first.
     pub fn recompute_depth_statistics(&mut self) -> Result<(), SfmrError> {
         use ndarray::Array1;
 
@@ -481,9 +490,13 @@ impl SfmrReconstruction {
                     .collect()
             })
             .collect();
-        // Only materialize normals when this reconstruction carries them.
+        // Only materialize normals when this reconstruction carries them, and
+        // only where one is missing, as a write does.
         if self.point_set.has_normals {
             for (i, pt) in self.point_set.points.iter_mut().enumerate() {
+                if !sfmtool_sfmr_format::is_missing_normal(pt.normal.x, pt.normal.y, pt.normal.z) {
+                    continue;
+                }
                 pt.normal = Vector3::new(
                     result.mean_viewing_normals_xyz[[i, 0]],
                     result.mean_viewing_normals_xyz[[i, 1]],

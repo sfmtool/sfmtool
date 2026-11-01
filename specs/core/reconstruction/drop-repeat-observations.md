@@ -90,9 +90,10 @@ rotation alone. The lowest error is kept.
   stores `0.0`. A point that lost nothing keeps its stored error.
 - **The depth statistics follow the tracks.** The per-image depth statistics
   and histograms count one entry per observation, so they are derived again
-  from the shortened tracks. The derivation also writes every point's mean
-  viewing normal; the operation keeps the normals the value had instead, since
-  a normal may have been refined and this operation is about tracks.
+  from the shortened tracks. The derivation also fills each missing normal
+  with the point's mean viewing normal; the operation keeps every normal the
+  value had instead, missing ones included, since this operation is about
+  tracks.
 - **A value with no repeat comes back as it is**, content hashes included, and
   no file is read.
 

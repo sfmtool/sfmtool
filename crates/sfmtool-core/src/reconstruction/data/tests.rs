@@ -2307,3 +2307,50 @@ fn test_recompute_point_errors_with_nothing_projecting_is_zero() {
     assert_eq!(recon.point_set.points[0].rms_reprojection_error, 0.0);
     assert!((recon.point_set.points[1].rms_reprojection_error - 5f32.sqrt()).abs() < 1e-3);
 }
+
+/// `recompute_depth_statistics` keeps every set normal and fills only the
+/// missing (zero) ones with mean viewing normals, as a write does; a point at
+/// infinity has none, so its missing normal stays zero, and a reconstruction
+/// without normals gets none.
+#[test]
+fn recompute_depth_statistics_fills_only_missing_normals() {
+    let mut mean_viewing = SfmrReconstruction::demo(16);
+    for point in mean_viewing.point_set.points.iter_mut() {
+        point.normal = Vector3::zeros();
+    }
+    mean_viewing.recompute_depth_statistics().unwrap();
+    let odd = Vector3::new(0.48f32, -0.6, 0.64);
+    assert!(mean_viewing
+        .point_set
+        .points
+        .iter()
+        .all(|p| (p.normal.norm() - 1.0).abs() < 1e-5 && p.normal != odd));
+
+    let mut recon = SfmrReconstruction::demo(16);
+    for point in recon.point_set.points.iter_mut() {
+        point.normal = odd;
+    }
+    recon.point_set.points[1].normal = Vector3::zeros();
+    recon.point_set.points[2].normal = Vector3::zeros();
+    recon.point_set.points[2].w = 0.0;
+    recon.recompute_depth_statistics().unwrap();
+    for (i, point) in recon.point_set.points.iter().enumerate() {
+        match i {
+            1 => assert_eq!(point.normal, mean_viewing.point_set.points[1].normal),
+            2 => assert_eq!(point.normal, Vector3::zeros()),
+            _ => assert_eq!(point.normal, odd, "point {i}"),
+        }
+    }
+
+    let mut without = SfmrReconstruction::demo(16);
+    without.point_set.has_normals = false;
+    for point in without.point_set.points.iter_mut() {
+        point.normal = Vector3::zeros();
+    }
+    without.recompute_depth_statistics().unwrap();
+    assert!(without
+        .point_set
+        .points
+        .iter()
+        .all(|p| p.normal == Vector3::zeros()));
+}

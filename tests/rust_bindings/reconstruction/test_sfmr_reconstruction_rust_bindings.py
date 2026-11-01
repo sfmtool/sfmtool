@@ -950,3 +950,66 @@ class TestSubsetByImageIndices:
             assert out_images[out_offsets[p] + out_refs[p]] == new_of[image]
             checked += 1
         assert checked > 0
+
+
+class TestFromDataNormals:
+    """``from_data`` keeps the dict's ``normals_xyz`` as ``write_sfmr`` does:
+    set rows are kept, zero rows get mean-viewing normals, a missing key fills
+    every row and an explicit ``None`` gives no normals."""
+
+    @staticmethod
+    def _build(data: dict) -> SfmrReconstruction:
+        return SfmrReconstruction.from_data(SEOUL_BULL_GROUND_TRUTH.parent, data)
+
+    def _mean_viewing(self, data: dict) -> np.ndarray:
+        data = dict(data)
+        del data["normals_xyz"]
+        return np.asarray(self._build(data).normals)
+
+    def test_a_read_dict_keeps_its_normals(self):
+        from sfmtool.fileio import read_sfmr
+
+        data = read_sfmr(SEOUL_BULL_GROUND_TRUTH)
+        normals = data["normals_xyz"]
+        # The ground truth's normals are not its mean-viewing ones, so a build
+        # that replaced them would be seen.
+        assert not np.array_equal(normals, self._mean_viewing(data))
+
+        built = self._build(data)
+        assert built.has_normals
+        assert np.asarray(built.normals).tobytes() == normals.tobytes()
+
+    def test_a_missing_key_and_zero_rows_get_mean_viewing_normals(self):
+        from sfmtool.fileio import read_sfmr
+
+        data = read_sfmr(SEOUL_BULL_GROUND_TRUTH)
+        mean_viewing = self._mean_viewing(data)
+        assert mean_viewing.shape == data["normals_xyz"].shape
+        finite = data["positions_xyzw"][:, 3] != 0.0
+        np.testing.assert_allclose(
+            np.linalg.norm(mean_viewing[finite], axis=1), 1.0, atol=1e-5
+        )
+        assert not mean_viewing[~finite].any()
+
+        zeros = dict(data, normals_xyz=np.zeros_like(data["normals_xyz"]))
+        assert np.asarray(self._build(zeros).normals).tobytes() == (
+            mean_viewing.tobytes()
+        )
+
+        # Only the zero rows are filled; the others are kept.
+        partial = data["normals_xyz"].copy()
+        partial[::2] = 0.0
+        built = np.asarray(self._build(dict(data, normals_xyz=partial)).normals)
+        assert built[1::2].tobytes() == data["normals_xyz"][1::2].tobytes()
+        assert built[::2].tobytes() == mean_viewing[::2].tobytes()
+
+    def test_none_gives_no_normals(self):
+        from sfmtool.fileio import read_sfmr
+
+        data = read_sfmr(SEOUL_BULL_GROUND_TRUTH)
+        data["normals_xyz"] = None
+        # A confidence rates the stored normals, so it goes with them.
+        data["normal_confidence"] = None
+        built = self._build(data)
+        assert not built.has_normals
+        assert not np.asarray(built.normals).any()
