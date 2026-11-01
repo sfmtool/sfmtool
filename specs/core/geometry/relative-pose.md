@@ -2,16 +2,26 @@
 
 ## Overview
 
-The setting: **two images of the same scene, taken with the same known
-camera intrinsics, differing only in camera pose** — and a set of
-point correspondences between them. Because the intrinsics are known,
-each observed pixel converts to the unit ray the camera saw it along,
-and the only unknown left is the motion between the two poses: a
-rotation, plus a translation recoverable only up to scale (nothing in
-two views says how far apart they are, only in which direction). This
-module estimates that motion robustly from the ray correspondences —
-the 2D–2D sibling of the absolute-pose module, which solves the
-complementary problem of one camera against known 3D points.
+Relative pose estimation takes two images whose camera intrinsics are
+known, and a set of points matched between them, and robustly estimates
+how the camera moved from the first image to the second. It offers one
+estimator for a camera that moved to a new position and one for a
+camera that only turned. The first returns an epipolar matrix that
+encodes the rotation and the direction of the translation; the second
+returns the rotation. Both also return which matches agree with the
+answer and the angle by which each match misses it. They work on
+viewing rays rather than pixels, so they handle fisheye images wider
+than 180°. They are offered to Rust callers and, through
+`sfmtool.geometry`, to Python; no pipeline or command in this
+repository calls them.
+
+Because the intrinsics are known, each observed pixel converts to the
+unit ray the camera saw it along, and the only unknown left is the
+motion between the two poses: a rotation, plus a translation
+recoverable only up to scale (nothing in two views says how far apart
+they are, only in which direction). The module is the 2D–2D sibling of
+the absolute-pose module ([absolute-pose.md](absolute-pose.md)), which
+solves the complementary problem of one camera against known 3D points.
 
 Such a pair has two motion models, and the module exposes one estimator
 per model:
