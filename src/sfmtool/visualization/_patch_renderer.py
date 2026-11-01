@@ -32,7 +32,7 @@ import numpy as np
 
 from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._sfmtool.geometry import RotQuaternion
+from .._sfmtool.geometry import CameraIntrinsics, RotQuaternion
 
 MODES = ("texture", "normal", "flat", "wire")
 
@@ -108,8 +108,10 @@ def _normal_to_rgb(normals: np.ndarray) -> np.ndarray:
 
 
 def _render_image(
-    recon: SfmrReconstruction,
-    img_idx: int,
+    cam: CameraIntrinsics,
+    quaternion_wxyz: np.ndarray,
+    translation: np.ndarray,
+    img_path: Path,
     quads_world: np.ndarray,
     centers: np.ndarray,
     normals: np.ndarray,
@@ -132,16 +134,14 @@ def _render_image(
 
     ``quads_world`` and ``normal_rgb`` are precomputed once by the caller (they
     do not depend on the image), so this only does the per-image projection.
+    ``cam`` is the image's intrinsics, and ``quaternion_wxyz`` and
+    ``translation`` its world-to-camera pose.
     """
-    cam = recon.image_intrinsics(img_idx)
     rot = np.asarray(
-        RotQuaternion.from_wxyz_array(
-            recon.quaternions_wxyz[img_idx]
-        ).to_rotation_matrix()
+        RotQuaternion.from_wxyz_array(quaternion_wxyz).to_rotation_matrix()
     )
-    trans = np.asarray(recon.translations[img_idx])
+    trans = np.asarray(translation)
 
-    img_path = Path(recon.workspace_dir) / recon.image_names[img_idx]
     # The canvas is RGB, as read, and so are the colours drawn on it.
     canvas = read_image_rgb(img_path)
     if upscale != 1.0:
@@ -310,13 +310,20 @@ def render_patches(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Each getter builds a new array on every access, so read each once.
+    workspace_dir = Path(recon.workspace_dir)
+    quaternions = recon.quaternions_wxyz
+    translations = recon.translations
+
     results: list[tuple[str, int, Path]] = []
     for idx, name in enumerate(recon.image_names):
         if image_filter and not any(s in name for s in image_filter):
             continue
         canvas, n_drawn = _render_image(
-            recon,
-            idx,
+            recon.image_intrinsics(idx),
+            quaternions[idx],
+            translations[idx],
+            workspace_dir / name,
             quads_world,
             centers,
             normals,
