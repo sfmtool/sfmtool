@@ -123,8 +123,7 @@ _SUBMODULES = (
 
 def test_each_submodule_has_a_public_module_with_the_same_names():
     """Each `_sfmtool` submodule has a public module `sfmtool.<name>` that
-    exports exactly the submodule's `__all__`, as the same objects. `sfmtool.sift`
-    also holds the Python SIFT code, so only its binding names are compared."""
+    exports exactly the submodule's `__all__`, as the same objects."""
     registered = {
         name
         for name in vars(_sfmtool)
@@ -134,8 +133,7 @@ def test_each_submodule_has_a_public_module_with_the_same_names():
     for name in _SUBMODULES:
         extension = getattr(_sfmtool, name)
         public = importlib.import_module(f"sfmtool.{name}")
-        if name != "sift":
-            assert list(public.__all__) == list(extension.__all__), name
+        assert list(public.__all__) == list(extension.__all__), name
         for binding in extension.__all__:
             assert getattr(public, binding) is getattr(extension, binding), (
                 name,
