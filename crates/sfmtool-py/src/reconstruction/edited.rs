@@ -415,7 +415,7 @@ impl PyEditedReconstruction {
     #[new]
     fn new(recon: &PySfmrReconstruction) -> Self {
         Self {
-            inner: EditedReconstruction::new(Arc::new(recon.inner.clone())),
+            inner: EditedReconstruction::new(Arc::new(recon.inner().clone())),
         }
     }
 
@@ -1114,7 +1114,7 @@ impl PyEditedReconstruction {
             .map(|v| v as i64)
             .collect();
         (
-            PySfmrReconstruction { inner: recon },
+            PySfmrReconstruction::new(recon),
             PyArray1::from_vec(py, forward),
             PyArray1::from_vec(py, inverse),
         )

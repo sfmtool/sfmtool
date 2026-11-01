@@ -789,15 +789,15 @@ the index rule above. The consequence is visible in
 `PointSet::validate_observation_columns`, which takes the image count as an
 argument in order to check the hash vectors' lengths.
 
-**The Python side sees the sharing rule as read-only views.** Every column
-getter on the `SfmrReconstruction` binding hands Python its own copy, so a
-write to the returned array never reaches the value. The one zero-copy getter,
-`thumbnails_y_x_rgb`, is a view of the shared buffer (or `None` for a value
-without thumbnails), and it is returned with numpy's writeable flag cleared: a
-write raises, and a caller that wants to edit takes `.copy()`.
- Without that flag a Python write would land in every
-reconstruction sharing the buffer at once, which is the one thing the rule
-forbids.
+**The Python side sees the sharing rule as read-only views.** Every array
+getter on the `SfmrReconstruction` binding returns an array with numpy's
+writeable flag cleared, so a write raises, and a caller that wants to edit
+takes `.copy()`. `thumbnails_y_x_rgb` and `patch_bitmaps` are views of the
+shared buffers (or `None` for a value without them). Without that flag a Python
+write would land in every reconstruction sharing the buffer at once, which is
+the one thing the rule forbids. [python-bindings.md](../../python-bindings.md)
+§ "Reconstruction array getters" says which getters are views and which are
+arrays gathered once.
 
 **The row map's inversion has a run, not a point.** For base points the forward
 map is `slot - holes_below(slot)`, and inverting it means solving

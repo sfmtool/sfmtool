@@ -100,7 +100,7 @@ impl PyPatchCloud {
         }
         let (posed, recon_guard, _) =
             resolve_patch_scene(recon, &self.inner, false, "patch_views", "per-patch views")?;
-        let recon = recon_guard.as_ref().map(|r| &r.inner).ok_or_else(|| {
+        let recon = recon_guard.as_ref().map(|r| r.inner()).ok_or_else(|| {
             PyValueError::new_err("render_bitmaps needs a reconstruction, not a CameraViews")
         })?;
         if recon.keypoints_xy().is_none() {
@@ -198,7 +198,7 @@ impl PyPatchCloud {
         }
         let (posed, recon_guard, _) =
             resolve_patch_scene(recon, &self.inner, false, "patch_views", "per-patch views")?;
-        let recon = recon_guard.as_ref().map(|r| &r.inner).ok_or_else(|| {
+        let recon = recon_guard.as_ref().map(|r| r.inner()).ok_or_else(|| {
             PyValueError::new_err("read_observations needs a reconstruction, not a CameraViews")
         })?;
         if recon.keypoints_xy().is_none() {

@@ -413,7 +413,7 @@ pub fn merge_points_and_tracks_py(
         })
         .collect::<PyResult<Vec<_>>>()?;
     let inner_refs: Vec<&sfmtool_core::SfmrReconstruction> =
-        recon_refs.iter().map(|r| &r.inner).collect();
+        recon_refs.iter().map(|r| r.inner()).collect();
 
     // Parse correspondence groups: list[list[tuple[int, int]]].
     let groups: Vec<Vec<(usize, u32)>> = correspondence_groups

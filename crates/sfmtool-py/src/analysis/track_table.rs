@@ -96,7 +96,7 @@ fn track_table<'py>(
         edited_ref = e.borrow();
         &edited_ref.inner
     } else if let Ok(r) = recon.cast::<PySfmrReconstruction>() {
-        wrapped = EditedReconstruction::new(Arc::new(r.borrow().inner.clone()));
+        wrapped = EditedReconstruction::new(Arc::new(r.borrow().inner().clone()));
         &wrapped
     } else {
         return Err(PyTypeError::new_err(

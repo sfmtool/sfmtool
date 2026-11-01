@@ -4,9 +4,11 @@
 //! Python wrapper for the sfmtool-core SfmrReconstruction type.
 
 use nalgebra::Point3;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray4, PyReadonlyArray1};
+use numpy::ndarray::{Array, Array2, ArrayView, ArrayView1, Dimension};
+use numpy::{Element, IntoPyArray, PyArray, PyArray1, PyArray2, PyArray4, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
@@ -18,7 +20,7 @@ use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, trian
 use sfmtool_core::SfmrReconstruction;
 
 use crate::fileio::sfmr::parse_sfmr_data_from_dict;
-use crate::helpers::{serde_to_py, u128_bytes_to_py};
+use crate::helpers::{read_only, serde_to_py, u128_bytes_to_py};
 use crate::PyCameraIntrinsics;
 
 /// Parse a per-view reduce policy name into a [`ViewReduce`].
@@ -38,9 +40,160 @@ fn parse_view_reduce(s: &str) -> PyResult<ViewReduce> {
 ///
 /// Wraps the Rust `SfmrReconstruction` and exposes scalar properties,
 /// metadata, cameras, and image names to Python.
+///
+/// Every numpy array a getter returns is read-only: writing into it raises,
+/// and a caller that wants to edit one takes ``.copy()``. No getter copies a
+/// column again on a later read, so reading one inside a loop costs almost
+/// nothing after the first read. A column the reconstruction keeps as a list
+/// of per-point or per-image records (``positions``, ``colors``,
+/// ``quaternions_wxyz``, ``track_image_indexes``, …) is gathered into an
+/// array on the first read, and every later read returns that same array. A
+/// column it already keeps as one block (``observation_counts``,
+/// ``keypoints_xy``, ``patch_bitmaps``, ``thumbnails_y_x_rgb``, …) is
+/// returned as a view of that block: each read is a new view object of the
+/// same memory, which copies nothing and keeps this object alive while the
+/// view is. Either way the array holds the values the object holds. The one
+/// getter whose values a method changes, ``rms_reprojection_errors``, is
+/// gathered again after :meth:`recompute_point_errors` or
+/// :meth:`recompute_infinity_point_errors`, and an array read before that
+/// call keeps the errors it was read with.
 #[pyclass(name = "SfmrReconstruction", module = "sfmtool.reconstruction")]
 pub struct PySfmrReconstruction {
-    pub(crate) inner: SfmrReconstruction,
+    // Private, so that the only code that can reach the reconstruction mutably
+    // is this module's `&mut self` methods: the views the block-column getters
+    // return point into it (see `view`).
+    inner: SfmrReconstruction,
+    cache: ArrayCache,
+}
+
+/// The arrays the record-backed getters have gathered, each built on its
+/// getter's first read and returned on every later one.
+///
+/// An entry is cleared by any `&mut self` method that changes the values it
+/// was gathered from; today that is `rms_reprojection_errors`, by the two
+/// recompute methods.
+struct ArrayCache {
+    camera_indexes: PyOnceLock<Py<PyArray1<u32>>>,
+    quaternions_wxyz: PyOnceLock<Py<PyArray2<f64>>>,
+    translations: PyOnceLock<Py<PyArray2<f64>>>,
+    focal_adjustments: PyOnceLock<Option<Py<PyArray1<f64>>>>,
+    principal_point_adjustments_xy: PyOnceLock<Option<Py<PyArray2<f64>>>>,
+    radial_bspline_adjustments: PyOnceLock<Option<Py<PyArray2<f64>>>>,
+    rolling_shutter_rates_xyz: PyOnceLock<Option<Py<PyArray2<f64>>>>,
+    positions: PyOnceLock<Py<PyArray2<f64>>>,
+    positions_xyzw: PyOnceLock<Py<PyArray2<f64>>>,
+    point_is_at_infinity: PyOnceLock<Py<PyArray1<bool>>>,
+    colors: PyOnceLock<Py<PyArray2<u8>>>,
+    rms_reprojection_errors: PyOnceLock<Py<PyArray1<f32>>>,
+    normals: PyOnceLock<Py<PyArray2<f32>>>,
+    track_image_indexes: PyOnceLock<Py<PyArray1<u32>>>,
+    track_point_indexes: PyOnceLock<Py<PyArray1<u32>>>,
+    depth_histogram_counts: PyOnceLock<Py<PyArray2<u32>>>,
+}
+
+// Written out because `#[derive(Default)]` would ask `Py<T>: Default`, which
+// it is not, although an empty `PyOnceLock` needs no value.
+impl Default for ArrayCache {
+    fn default() -> Self {
+        Self {
+            camera_indexes: PyOnceLock::new(),
+            quaternions_wxyz: PyOnceLock::new(),
+            translations: PyOnceLock::new(),
+            focal_adjustments: PyOnceLock::new(),
+            principal_point_adjustments_xy: PyOnceLock::new(),
+            radial_bspline_adjustments: PyOnceLock::new(),
+            rolling_shutter_rates_xyz: PyOnceLock::new(),
+            positions: PyOnceLock::new(),
+            positions_xyzw: PyOnceLock::new(),
+            point_is_at_infinity: PyOnceLock::new(),
+            colors: PyOnceLock::new(),
+            rms_reprojection_errors: PyOnceLock::new(),
+            normals: PyOnceLock::new(),
+            track_image_indexes: PyOnceLock::new(),
+            track_point_indexes: PyOnceLock::new(),
+            depth_histogram_counts: PyOnceLock::new(),
+        }
+    }
+}
+
+/// The array in `cell`, gathered by `build` and made read-only on the first
+/// call.
+fn cached<'py, T: Element, D: Dimension>(
+    py: Python<'py>,
+    cell: &PyOnceLock<Py<PyArray<T, D>>>,
+    build: impl FnOnce() -> Array<T, D>,
+) -> Bound<'py, PyArray<T, D>> {
+    cell.get_or_init(py, || read_only(build().into_pyarray(py)).unbind())
+        .bind(py)
+        .clone()
+}
+
+/// [`cached`] for a getter that returns `None` when the reconstruction
+/// carries no such column; the `None` is kept too.
+fn cached_optional<'py, T: Element, D: Dimension>(
+    py: Python<'py>,
+    cell: &PyOnceLock<Option<Py<PyArray<T, D>>>>,
+    build: impl FnOnce() -> Option<Array<T, D>>,
+) -> Option<Bound<'py, PyArray<T, D>>> {
+    cell.get_or_init(py, || {
+        build().map(|a| read_only(a.into_pyarray(py)).unbind())
+    })
+    .as_ref()
+    .map(|a| a.bind(py).clone())
+}
+
+/// An `(n, C)` array of `rows`, gathered into one buffer that becomes the
+/// array's own, so the values are copied once.
+fn array_from_rows<T, const C: usize>(rows: impl ExactSizeIterator<Item = [T; C]>) -> Array2<T> {
+    let n = rows.len();
+    let mut flat = Vec::with_capacity(n * C);
+    for row in rows {
+        flat.extend(row);
+    }
+    Array2::from_shape_vec((n, C), flat).expect("n rows of C values fill an (n, C) array")
+}
+
+/// A read-only numpy view of the block `select` picks out of `owner`'s
+/// reconstruction, or `None` when `select` finds none; the view copies
+/// nothing and holds a reference to `owner` as its base.
+///
+/// The invariant that makes this sound: a field a view is taken of is never
+/// replaced, reallocated or written after the reconstruction is wrapped.
+/// `inner` is private to this module, and its `&mut self` methods change only
+/// the metadata (`save`) and each point's `rms_reprojection_error`
+/// (`recompute_point_errors`, `recompute_infinity_point_errors`), neither of
+/// which is a block a view is taken of. Every other method builds a new
+/// reconstruction. A new `&mut self` method that touches one of these blocks
+/// must stop handing out views of it. The Python test
+/// `test_views_survive_every_mutating_method` holds a view of each across all
+/// of them.
+fn view<'py, T: Element, D: Dimension>(
+    owner: &Bound<'py, PySfmrReconstruction>,
+    select: impl for<'a> FnOnce(&'a SfmrReconstruction) -> Option<ArrayView<'a, T, D>>,
+) -> Option<Bound<'py, PyArray<T, D>>> {
+    let borrow = owner.borrow();
+    let block = select(&borrow.inner)?;
+    // SAFETY: the base of the view is `owner`, which owns the block (directly,
+    // or through a share of the `Arc` it sits in) for as long as the view keeps
+    // it alive, and by the invariant above the block is not moved, reallocated
+    // or written while `owner` lives.
+    let array = unsafe { PyArray::borrow_from_array(&block, owner.clone().into_any()) };
+    Some(read_only(array))
+}
+
+impl PySfmrReconstruction {
+    /// Wrap `inner` for Python, with no array gathered yet.
+    pub(crate) fn new(inner: SfmrReconstruction) -> Self {
+        Self {
+            inner,
+            cache: ArrayCache::default(),
+        }
+    }
+
+    /// The wrapped reconstruction, for the other bindings that read it.
+    pub(crate) fn inner(&self) -> &SfmrReconstruction {
+        &self.inner
+    }
 }
 
 #[pymethods]
@@ -53,7 +206,7 @@ impl PySfmrReconstruction {
     fn load(path: PathBuf) -> PyResult<Self> {
         let inner = SfmrReconstruction::load(&path, &Progress::none())
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self::new(inner))
     }
 
     /// Build a reconstruction from a data dict (same format as `write_sfmr`).
@@ -98,7 +251,7 @@ impl PySfmrReconstruction {
         inner
             .recompute_point_errors()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self::new(inner))
     }
 
     /// Save this reconstruction to a `.sfmr` file path.
@@ -294,39 +447,46 @@ impl PySfmrReconstruction {
     /// Each image's focal scale `s`, shape `(N,)` float64: its focal is its
     /// camera's times `1 + s`. `None` when no camera varies the focal per
     /// image and every image's scale is zero, as `read_sfmr` gives the column.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn focal_adjustments<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
-        let image_set = &self.inner.image_set;
-        let listed = image_set.per_image_adjustments.iter().any(|f| f.focal);
-        let values: Vec<f64> = image_set
-            .images
-            .iter()
-            .map(|im| im.intrinsic_adjustment.focal)
-            .collect();
-        (listed || values.iter().any(|&v| v != 0.0)).then(|| PyArray1::from_vec(py, values))
+        cached_optional(py, &self.cache.focal_adjustments, || {
+            let image_set = &self.inner.image_set;
+            let listed = image_set.per_image_adjustments.iter().any(|f| f.focal);
+            let values: Vec<f64> = image_set
+                .images
+                .iter()
+                .map(|im| im.intrinsic_adjustment.focal)
+                .collect();
+            (listed || values.iter().any(|&v| v != 0.0)).then(|| Array::from_vec(values))
+        })
     }
 
     /// Each image's principal-point offset, shape `(N, 2)` float64, in the
     /// short-side unit `min(width, height)` of its camera. `None` when no
     /// camera varies the principal point per image and every image's offset
     /// is zero, as `read_sfmr` gives the column.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn principal_point_adjustments_xy<'py>(
         &self,
         py: Python<'py>,
     ) -> Option<Bound<'py, PyArray2<f64>>> {
-        let image_set = &self.inner.image_set;
-        let listed = image_set
-            .per_image_adjustments
-            .iter()
-            .any(|f| f.principal_point);
-        let rows: Vec<[f64; 2]> = image_set
-            .images
-            .iter()
-            .map(|im| im.intrinsic_adjustment.principal_point)
-            .collect();
-        (listed || rows.iter().any(|r| *r != [0.0, 0.0])).then(|| {
-            ndarray::Array2::from_shape_fn((rows.len(), 2), |(i, k)| rows[i][k]).into_pyarray(py)
+        cached_optional(py, &self.cache.principal_point_adjustments_xy, || {
+            let image_set = &self.inner.image_set;
+            let listed = image_set
+                .per_image_adjustments
+                .iter()
+                .any(|f| f.principal_point);
+            let values = || {
+                image_set
+                    .images
+                    .iter()
+                    .map(|im| im.intrinsic_adjustment.principal_point)
+            };
+            (listed || values().any(|r| r != [0.0, 0.0])).then(|| array_from_rows(values()))
         })
     }
 
@@ -335,23 +495,26 @@ impl PySfmrReconstruction {
     /// domain, added to the camera's spline. `None` when no camera varies it
     /// per image and every image's correction is zero, as `read_sfmr` gives
     /// the column.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn radial_bspline_adjustments<'py>(
         &self,
         py: Python<'py>,
     ) -> Option<Bound<'py, PyArray2<f64>>> {
-        let image_set = &self.inner.image_set;
-        let listed = image_set
-            .per_image_adjustments
-            .iter()
-            .any(|f| f.radial_bspline);
-        let rows: Vec<[f64; 2]> = image_set
-            .images
-            .iter()
-            .map(|im| im.intrinsic_adjustment.radial_bspline)
-            .collect();
-        (listed || rows.iter().any(|r| *r != [0.0, 0.0])).then(|| {
-            ndarray::Array2::from_shape_fn((rows.len(), 2), |(i, k)| rows[i][k]).into_pyarray(py)
+        cached_optional(py, &self.cache.radial_bspline_adjustments, || {
+            let image_set = &self.inner.image_set;
+            let listed = image_set
+                .per_image_adjustments
+                .iter()
+                .any(|f| f.radial_bspline);
+            let values = || {
+                image_set
+                    .images
+                    .iter()
+                    .map(|im| im.intrinsic_adjustment.radial_bspline)
+            };
+            (listed || values().any(|r| r != [0.0, 0.0])).then(|| array_from_rows(values()))
         })
     }
 
@@ -360,20 +523,23 @@ impl PySfmrReconstruction {
     /// :attr:`rolling_shutter_scanlines`. `None` when no camera varies them
     /// per image and every image's rates are zero, as `read_sfmr` gives the
     /// column.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn rolling_shutter_rates_xyz<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray2<f64>>> {
-        let image_set = &self.inner.image_set;
-        let listed = image_set
-            .per_image_adjustments
-            .iter()
-            .any(|f| f.rolling_shutter);
-        let rows: Vec<[f64; 3]> = image_set
-            .images
-            .iter()
-            .map(|im| im.intrinsic_adjustment.rolling_shutter)
-            .collect();
-        (listed || rows.iter().any(|r| *r != [0.0; 3])).then(|| {
-            ndarray::Array2::from_shape_fn((rows.len(), 3), |(i, k)| rows[i][k]).into_pyarray(py)
+        cached_optional(py, &self.cache.rolling_shutter_rates_xyz, || {
+            let image_set = &self.inner.image_set;
+            let listed = image_set
+                .per_image_adjustments
+                .iter()
+                .any(|f| f.rolling_shutter);
+            let values = || {
+                image_set
+                    .images
+                    .iter()
+                    .map(|im| im.intrinsic_adjustment.rolling_shutter)
+            };
+            (listed || values().any(|r| r != [0.0; 3])).then(|| array_from_rows(values()))
         })
     }
 
@@ -413,52 +579,45 @@ impl PySfmrReconstruction {
 
     // ── Image data array getters ─────────────────────────────────────
 
-    /// Camera index for each image, shape `(N,)`.
+    /// Camera index for each image, shape `(N,)`. Read-only, and the same
+    /// array on each read.
     #[getter]
     fn camera_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self
-            .inner
-            .image_set
-            .images
-            .iter()
-            .map(|im| im.camera_index)
-            .collect();
-        PyArray1::from_vec(py, vec)
+        cached(py, &self.cache.camera_indexes, || {
+            self.inner
+                .image_set
+                .images
+                .iter()
+                .map(|im| im.camera_index)
+                .collect()
+        })
     }
 
-    /// WXYZ quaternions for each image pose, shape `(N, 4)`.
+    /// WXYZ quaternions for each image pose, shape `(N, 4)`. Read-only, and
+    /// the same array on each read.
     #[getter]
     fn quaternions_wxyz<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
-        let vec2: Vec<Vec<f64>> = self
-            .inner
-            .image_set
-            .images
-            .iter()
-            .map(|im| {
+        cached(py, &self.cache.quaternions_wxyz, || {
+            array_from_rows(self.inner.image_set.images.iter().map(|im| {
                 let q = im.quaternion_wxyz.quaternion();
-                vec![q.w, q.i, q.j, q.k]
-            })
-            .collect();
-        PyArray2::from_vec2(py, &vec2).unwrap()
+                [q.w, q.i, q.j, q.k]
+            }))
+        })
     }
 
-    /// Translation vectors for each image pose, shape `(N, 3)`.
+    /// Translation vectors for each image pose, shape `(N, 3)`. Read-only,
+    /// and the same array on each read.
     #[getter]
     fn translations<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
-        let vec2: Vec<Vec<f64>> = self
-            .inner
-            .image_set
-            .images
-            .iter()
-            .map(|im| {
-                vec![
+        cached(py, &self.cache.translations, || {
+            array_from_rows(self.inner.image_set.images.iter().map(|im| {
+                [
                     im.translation_xyz.x,
                     im.translation_xyz.y,
                     im.translation_xyz.z,
                 ]
-            })
-            .collect();
-        PyArray2::from_vec2(py, &vec2).unwrap()
+            }))
+        })
     }
 
     /// Per-image feature tool hashes as ``list[bytes]`` (16 bytes each), or
@@ -498,11 +657,12 @@ impl PySfmrReconstruction {
     /// ``.sift`` features: :meth:`load` and :meth:`from_data` build it from the
     /// ``.sift`` files when the data lacks it, so it is ``None`` only when
     /// those files are missing or do not match the reconstruction.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn keypoints_xy<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray2<f32>>> {
-        self.inner
-            .keypoints_xy()
-            .map(|kp| kp.clone().into_pyarray(py))
+    fn keypoints_xy<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray2<f32>>> {
+        view(self_, |r| r.keypoints_xy().map(|kp| kp.view()))
     }
 
     /// Per-observation confidence in that observation's **photometric sharpness
@@ -517,10 +677,17 @@ impl PySfmrReconstruction {
     /// ``clone_with_changes(observation_confidence=...)``; it is stored and
     /// written untouched, and every pass that drops or reorders observations
     /// selects its rows in lockstep.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn observation_confidence<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
-        let confidence = self.inner.point_set.observation_confidence.as_ref()?;
-        Some(PyArray1::from_slice(py, confidence))
+    fn observation_confidence<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray1<u8>>> {
+        view(self_, |r| {
+            r.point_set
+                .observation_confidence
+                .as_deref()
+                .map(ArrayView1::from)
+        })
     }
 
     /// Each observation's readings on its own ``R×R`` render, as the ``.sfmr``
@@ -588,10 +755,17 @@ impl PySfmrReconstruction {
     /// ``reference_observations`` (or the input names none). A point left with
     /// a zero patch frame keeps its reference: the observation is still in its
     /// track.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn reference_observations<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<i32>>> {
-        let references = self.inner.point_set.reference_observations.as_ref()?;
-        Some(PyArray1::from_slice(py, references))
+    fn reference_observations<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray1<i32>>> {
+        view(self_, |r| {
+            r.point_set
+                .reference_observations
+                .as_deref()
+                .map(ArrayView1::from)
+        })
     }
 
     /// Per-image source-image hashes as ``list[bytes]`` (16-byte XXH128 each), or
@@ -628,16 +802,19 @@ impl PySfmrReconstruction {
     /// infinity (`w == 0`) it is a unit-length direction. Use
     /// `point_is_at_infinity` to disambiguate the two, or `positions_xyzw` for
     /// the unambiguous homogeneous form.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
-        let vec2: Vec<Vec<f64>> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|pt| vec![pt.position.x, pt.position.y, pt.position.z])
-            .collect();
-        PyArray2::from_vec2(py, &vec2).unwrap()
+        cached(py, &self.cache.positions, || {
+            array_from_rows(
+                self.inner
+                    .point_set
+                    .points
+                    .iter()
+                    .map(|pt| [pt.position.x, pt.position.y, pt.position.z]),
+            )
+        })
     }
 
     /// Homogeneous 3D point positions, shape `(M, 4)`.
@@ -647,16 +824,19 @@ impl PySfmrReconstruction {
     /// unit-length direction `(x, y, z)`. This is the canonical form: it is
     /// what `clone_with_changes(positions=...)` accepts and what `.sfmr`
     /// version 2 files store.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn positions_xyzw<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
-        let vec2: Vec<Vec<f64>> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|pt| vec![pt.position.x, pt.position.y, pt.position.z, pt.w])
-            .collect();
-        PyArray2::from_vec2(py, &vec2).unwrap()
+        cached(py, &self.cache.positions_xyzw, || {
+            array_from_rows(
+                self.inner
+                    .point_set
+                    .points
+                    .iter()
+                    .map(|pt| [pt.position.x, pt.position.y, pt.position.z, pt.w]),
+            )
+        })
     }
 
     /// Boolean mask of points at infinity (`w == 0`), shape `(M,)`.
@@ -664,58 +844,63 @@ impl PySfmrReconstruction {
     /// Pairs with `positions` for finite-only handling, e.g.
     /// ``recon.positions[~recon.point_is_at_infinity]`` selects the Euclidean
     /// positions of just the finite points.
+    ///
+    /// Read-only, and the same array on each read.
     #[getter]
     fn point_is_at_infinity<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<bool>> {
-        let vec: Vec<bool> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|pt| pt.is_at_infinity())
-            .collect();
-        PyArray1::from_vec(py, vec)
+        cached(py, &self.cache.point_is_at_infinity, || {
+            self.inner
+                .point_set
+                .points
+                .iter()
+                .map(|pt| pt.is_at_infinity())
+                .collect()
+        })
     }
 
-    /// RGB colors for 3D points, shape `(M, 3)`.
+    /// RGB colors for 3D points, shape `(M, 3)`. Read-only, and the same
+    /// array on each read.
     #[getter]
     fn colors<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u8>> {
-        let vec2: Vec<Vec<u8>> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|pt| vec![pt.color[0], pt.color[1], pt.color[2]])
-            .collect();
-        PyArray2::from_vec2(py, &vec2).unwrap()
+        cached(py, &self.cache.colors, || {
+            array_from_rows(self.inner.point_set.points.iter().map(|pt| pt.color))
+        })
     }
 
     /// Root-mean-square reprojection error of each 3D point in pixels, shape `(M,)`.
+    ///
+    /// Read-only, and the same array on each read until
+    /// :meth:`recompute_point_errors` or :meth:`recompute_infinity_point_errors`
+    /// changes the errors; the next read after either returns a new array, and
+    /// an array read before keeps the errors it was read with.
     #[getter]
     fn rms_reprojection_errors<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
-        let vec: Vec<f32> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|pt| pt.rms_reprojection_error)
-            .collect();
-        PyArray1::from_vec(py, vec)
+        cached(py, &self.cache.rms_reprojection_errors, || {
+            self.inner
+                .point_set
+                .points
+                .iter()
+                .map(|pt| pt.rms_reprojection_error)
+                .collect()
+        })
     }
 
     /// Surface normals for 3D points, shape `(M, 3)`.
     ///
     /// Always returns an array; when :attr:`has_normals` is ``False`` every row
-    /// is ``(0, 0, 0)`` (the reconstruction carries no normals).
+    /// is ``(0, 0, 0)`` (the reconstruction carries no normals). Read-only, and
+    /// the same array on each read.
     #[getter]
     fn normals<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
-        let vec2: Vec<Vec<f32>> = self
-            .inner
-            .point_set
-            .points
-            .iter()
-            .map(|pt| vec![pt.normal.x, pt.normal.y, pt.normal.z])
-            .collect();
-        PyArray2::from_vec2(py, &vec2).unwrap()
+        cached(py, &self.cache.normals, || {
+            array_from_rows(
+                self.inner
+                    .point_set
+                    .points
+                    .iter()
+                    .map(|pt| [pt.normal.x, pt.normal.y, pt.normal.z]),
+            )
+        })
     }
 
     /// Whether this reconstruction carries per-point normals. When ``False``,
@@ -735,10 +920,17 @@ impl PySfmrReconstruction {
     /// the value monotonically rather than switching on exact codes. Set it with
     /// ``clone_with_changes(normal_confidence=...)``; it is stored and written
     /// untouched.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn normal_confidence<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
-        let confidence = self.inner.point_set.normal_confidence.as_ref()?;
-        Some(PyArray1::from_slice(py, confidence))
+    fn normal_confidence<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray1<u8>>> {
+        view(self_, |r| {
+            r.point_set
+                .normal_confidence
+                .as_deref()
+                .map(ArrayView1::from)
+        })
     }
 
     /// What the solve owns of each point, shape ``(N,)`` ``uint8``, or ``None``
@@ -753,10 +945,17 @@ impl PySfmrReconstruction {
     /// The three constraint columns travel as a set: set them with
     /// ``clone_with_changes(point_constraints=..., constraint_distances=...,
     /// constraint_reference_images=...)``, and they are stored and written untouched.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is. So are the other two.
     #[getter]
-    fn point_constraints<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
-        let constraints = self.inner.point_set.point_constraints.as_ref()?;
-        Some(PyArray1::from_slice(py, &constraints.point_constraints))
+    fn point_constraints<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray1<u8>>> {
+        view(self_, |r| {
+            r.point_set
+                .point_constraints
+                .as_ref()
+                .map(|c| ArrayView1::from(&c.point_constraints))
+        })
     }
 
     /// The distance each ranged point sits at from its reference, shape
@@ -765,10 +964,17 @@ impl PySfmrReconstruction {
     ///
     /// A strictly positive world-unit distance, or ``+inf`` where the point is
     /// a direction; ``NaN`` on every free and held row. See :attr:`point_constraints`.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn constraint_distances<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
-        let constraints = self.inner.point_set.point_constraints.as_ref()?;
-        Some(PyArray1::from_slice(py, &constraints.constraint_distances))
+    fn constraint_distances<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray1<f64>>> {
+        view(self_, |r| {
+            r.point_set
+                .point_constraints
+                .as_ref()
+                .map(|c| ArrayView1::from(&c.constraint_distances))
+        })
     }
 
     /// The image each finite distance is measured from, shape ``(N,)``
@@ -778,16 +984,19 @@ impl PySfmrReconstruction {
     /// reader holds. ``0xFFFFFFFF`` marks a row that names no image: every free
     /// and held point, and a ranged point at an infinite distance. See
     /// :attr:`point_constraints`.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
     fn constraint_reference_images<'py>(
-        &self,
-        py: Python<'py>,
+        self_: &Bound<'py, Self>,
     ) -> Option<Bound<'py, PyArray1<u32>>> {
-        let constraints = self.inner.point_set.point_constraints.as_ref()?;
-        Some(PyArray1::from_slice(
-            py,
-            &constraints.constraint_reference_images,
-        ))
+        view(self_, |r| {
+            r.point_set
+                .point_constraints
+                .as_ref()
+                .map(|c| ArrayView1::from(&c.constraint_reference_images))
+        })
     }
 
     /// The attached oriented-patch cloud, or ``None`` when this reconstruction
@@ -803,15 +1012,22 @@ impl PySfmrReconstruction {
     /// ``None`` when none are stored. Rows for points with no patch are zero; the
     /// alpha channel holds a per-pixel cross-view agreement confidence. Attach via
     /// ``clone_with_changes(patch_bitmaps=…)`` (the patch frame must be present).
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is. The column is shared with every
+    /// reconstruction made from this one that kept its bitmaps.
     #[getter]
-    fn patch_bitmaps<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray4<u8>>> {
-        let b = self.inner.point_set.patch_bitmaps_y_x_rgba.as_deref()?;
-        Some(b.clone().into_pyarray(py))
+    fn patch_bitmaps<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray4<u8>>> {
+        view(self_, |r| {
+            r.point_set
+                .patch_bitmaps_y_x_rgba
+                .as_deref()
+                .map(|b| b.view())
+        })
     }
 
     /// The edge ``R`` of the stored ``(P, R, R, 4)`` patch bitmaps, or ``None``
-    /// when the reconstruction carries none. Reads no pixels, unlike
-    /// :attr:`patch_bitmaps`, which copies the column.
+    /// when the reconstruction carries none.
     #[getter]
     fn patch_bitmap_resolution(&self) -> Option<usize> {
         self.inner
@@ -823,84 +1039,72 @@ impl PySfmrReconstruction {
 
     // ── Track data array getters ─────────────────────────────────────
 
-    /// Image indexes for track observations, shape `(K,)`.
+    /// Image indexes for track observations, shape `(K,)`. Read-only, and the
+    /// same array on each read.
     #[getter]
     fn track_image_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self
-            .inner
-            .point_set
-            .tracks
-            .iter()
-            .map(|t| t.image_index)
-            .collect();
-        PyArray1::from_vec(py, vec)
+        cached(py, &self.cache.track_image_indexes, || {
+            self.inner
+                .point_set
+                .tracks
+                .iter()
+                .map(|t| t.image_index)
+                .collect()
+        })
     }
 
     /// Feature indexes for track observations, shape `(K,)`, or ``None`` unless
     /// :attr:`feature_source` is ``"sift_files"`` (an ``embedded_patches``
     /// reconstruction has none; use :attr:`keypoints_xy` instead).
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn track_feature_indexes<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u32>>> {
-        self.inner
-            .feature_indexes()
-            .map(|f| PyArray1::from_vec(py, f.to_vec()))
+    fn track_feature_indexes<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray1<u32>>> {
+        view(self_, |r| r.feature_indexes().map(ArrayView1::from))
     }
 
-    /// 3D point indexes for track observations, shape `(K,)`.
+    /// 3D point indexes for track observations, shape `(K,)`. Read-only, and
+    /// the same array on each read.
     #[getter]
     fn track_point_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self
-            .inner
-            .point_set
-            .tracks
-            .iter()
-            .map(|t| t.point_index)
-            .collect();
-        PyArray1::from_vec(py, vec)
+        cached(py, &self.cache.track_point_indexes, || {
+            self.inner
+                .point_set
+                .tracks
+                .iter()
+                .map(|t| t.point_index)
+                .collect()
+        })
     }
 
     /// Observation counts per 3D point, shape `(M,)`.
+    ///
+    /// A read-only view of the column this object holds: it copies nothing,
+    /// and keeps the object alive while it is.
     #[getter]
-    fn observation_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        PyArray1::from_vec(py, self.inner.point_set.observation_counts.clone())
+    fn observation_counts<'py>(self_: &Bound<'py, Self>) -> Bound<'py, PyArray1<u32>> {
+        view(self_, |r| {
+            Some(ArrayView1::from(&r.point_set.observation_counts))
+        })
+        .expect("the observation counts are always present")
     }
 
     /// RGB thumbnails for each image, shape
     /// `(N, THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)`, or ``None`` for a
     /// reconstruction without them (a load never fills them in).
     ///
-    /// Returns a read-only numpy view into the Rust-owned data (zero-copy).
+    /// A read-only view of the thumbnails this object holds: it copies
+    /// nothing, and keeps the object alive while it is. The buffer is shared
+    /// with every reconstruction made from this one that did not replace its
+    /// thumbnails.
     #[getter]
     fn thumbnails_y_x_rgb<'py>(self_: &Bound<'py, Self>) -> Option<Bound<'py, PyArray4<u8>>> {
-        // Get a raw pointer to the thumbnail array. This is safe because:
-        // 1. #[pyclass] objects are heap-allocated and pinned — the data won't move.
-        //    The array is behind an `Arc`, so its buffer sits in an allocation of
-        //    its own that this object owns a share of, which is at least as
-        //    stable as holding the array inline.
-        // 2. The returned numpy array holds a reference to `self_` (via the base/container
-        //    object), preventing garbage collection while the view is alive.
-        let ptr = {
-            let borrow = self_.borrow();
-            // Through the `Arc`: the view must point at the array itself, not
-            // at the pointer that owns it.
-            borrow.inner.image_set.thumbnails_y_x_rgb.as_deref()? as *const ndarray::Array4<u8>
-        };
-        let view = unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) };
-        // The buffer is shared: every clone of this reconstruction that did not
-        // replace its thumbnails points at the same allocation, and nothing on
-        // the Rust side ever writes through that pointer. A writeable numpy
-        // view would let Python do exactly that, into every sharer at once, so
-        // the view is handed out read-only. A caller that wants to edit takes
-        // `.copy()`.
-        let py = self_.py();
-        let kwargs = pyo3::types::PyDict::new(py);
-        kwargs
-            .set_item("write", false)
-            .expect("setting a bool item on a fresh dict cannot fail");
-        view.call_method("setflags", (), Some(&kwargs)).expect(
-            "numpy refuses write=False only on a view of a writeable base, which this is not",
-        );
-        Some(view)
+        // Through the `Arc`: the view must point at the array itself, not at
+        // the pointer that owns it.
+        view(self_, |r| {
+            r.image_set.thumbnails_y_x_rgb.as_deref().map(|t| t.view())
+        })
     }
 
     // ── Depth data getters ───────────────────────────────────────────
@@ -911,10 +1115,28 @@ impl PySfmrReconstruction {
         serde_to_py(py, &self.inner.image_set.depth_statistics)
     }
 
-    /// Depth histogram counts, shape `(N, num_buckets)`.
+    /// Depth histogram counts, shape `(N, num_buckets)`. Read-only, and the
+    /// same array on each read.
     #[getter]
-    fn depth_histogram_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u32>> {
-        PyArray2::from_vec2(py, &self.inner.image_set.depth_histogram_counts).unwrap()
+    fn depth_histogram_counts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray2<u32>>> {
+        let array = self
+            .cache
+            .depth_histogram_counts
+            .get_or_try_init(py, || -> PyResult<_> {
+                let rows = &self.inner.image_set.depth_histogram_counts;
+                let buckets = rows.first().map_or(0, Vec::len);
+                if let Some(row) = rows.iter().find(|row| row.len() != buckets) {
+                    return Err(PyValueError::new_err(format!(
+                        "depth histograms of {} and {buckets} buckets in one reconstruction",
+                        row.len()
+                    )));
+                }
+                let flat = rows.concat();
+                let array = Array2::from_shape_vec((rows.len(), buckets), flat)
+                    .expect("every row has the first row's bucket count");
+                Ok(read_only(array.into_pyarray(py)).unbind())
+            })?;
+        Ok(array.bind(py).clone())
     }
 
     /// Return a new reconstruction containing only the images at
@@ -951,7 +1173,7 @@ impl PySfmrReconstruction {
             .inner
             .subset_by_image_indices(slice, drop_orphaned_points)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        Ok(Self { inner: filtered })
+        Ok(Self::new(filtered))
     }
 
     /// Filter 3D points by a boolean mask, returning a new reconstruction.
@@ -972,7 +1194,7 @@ impl PySfmrReconstruction {
             )));
         }
         let filtered = self.inner.filter_points_by_mask(mask_slice);
-        Ok(Self { inner: filtered })
+        Ok(Self::new(filtered))
     }
 
     /// Compute per-observation reprojection errors for a single image.
@@ -1030,6 +1252,9 @@ impl PySfmrReconstruction {
     /// a reconstruction's keypoints, tracks, cameras, poses or positions
     /// through :meth:`clone_with_changes` calls this on the result.
     fn recompute_point_errors(&mut self) -> PyResult<()> {
+        // Cleared first: a call that fails part way may have changed some of
+        // the errors.
+        self.cache.rms_reprojection_errors = PyOnceLock::new();
         self.inner
             .recompute_point_errors()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
@@ -1043,6 +1268,7 @@ impl PySfmrReconstruction {
     /// errors as they were; ``classify_points_at_infinity`` recomputes the
     /// errors of the points it changes itself.
     fn recompute_infinity_point_errors(&mut self) -> PyResult<()> {
+        self.cache.rms_reprojection_errors = PyOnceLock::new();
         self.inner
             .recompute_infinity_point_errors()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
@@ -1053,9 +1279,7 @@ impl PySfmrReconstruction {
     /// Transforms all 3D point positions and camera poses. Returns a new
     /// reconstruction; the original is unchanged.
     fn apply_transform(&self, transform: &crate::PySe3Transform) -> Self {
-        Self {
-            inner: self.inner.apply_se3_transform(&transform.inner),
-        }
+        Self::new(self.inner.apply_se3_transform(&transform.inner))
     }
 
     /// Convert this ``sift_files`` reconstruction into an ``embedded_patches`` one
@@ -1138,7 +1362,7 @@ impl PySfmrReconstruction {
             .inner
             .to_embedded_patches(normal, extent, &Progress::none())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self::new(inner))
     }
 
     /// Decide every point with the point-or-bearing test and store it the way
@@ -1210,7 +1434,7 @@ impl PySfmrReconstruction {
         dict.set_item("no_usable_point", summary.no_usable_point)?;
         dict.set_item("left_unusable", summary.left_unusable)?;
         dict.set_item("unscored", summary.unscored)?;
-        Ok((Self { inner }, dict.into_any().unbind()))
+        Ok((Self::new(inner), dict.into_any().unbind()))
     }
 
     /// Drop every repeat observation, returning a new reconstruction and what
@@ -1243,7 +1467,7 @@ impl PySfmrReconstruction {
         let dict = PyDict::new(py);
         dict.set_item("observations_dropped", report.observations_dropped)?;
         dict.set_item("points_changed", report.points_changed)?;
-        Ok((Self { inner }, dict.into_any().unbind()))
+        Ok((Self::new(inner), dict.into_any().unbind()))
     }
 
     /// Triangulation observability diagnostics for the stored finite points.
@@ -1574,9 +1798,7 @@ impl PySfmrReconstruction {
     /// its parallax falls below one pixel. This does not triangulate — a point
     /// at infinity has no depth to recover. Finite points are unchanged.
     fn materialize_points_at_infinity(&self) -> Self {
-        Self {
-            inner: self.inner.materialize_points_at_infinity(),
-        }
+        Self::new(self.inner.materialize_points_at_infinity())
     }
 
     /// Discover points at infinity and append them as new points/tracks,
@@ -1662,7 +1884,7 @@ impl PySfmrReconstruction {
         dict.set_item("short_baseline", summary.short_baseline)?;
         dict.set_item("bearing_behind_camera", summary.bearing_behind_camera)?;
         dict.set_item("unscored", summary.unscored)?;
-        Ok((Self { inner }, dict.into_any().unbind()))
+        Ok((Self::new(inner), dict.into_any().unbind()))
     }
 
     /// Source metadata as a Python dict.
@@ -1757,9 +1979,11 @@ impl PySfmrReconstruction {
         py: Python<'_>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
-        Ok(Self {
-            inner: super::clone::clone_with_changes(&self.inner, py, kwargs)?,
-        })
+        Ok(Self::new(super::clone::clone_with_changes(
+            &self.inner,
+            py,
+            kwargs,
+        )?))
     }
 
     fn __repr__(&self) -> String {

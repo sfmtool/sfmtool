@@ -125,6 +125,62 @@ name. A Python wrapper of the same name in `src/sfmtool/` imports the binding
 under an alias, for example `match_image_pair as _rust_match_image_pair` in
 [`feature_match/_core.py`](../src/sfmtool/feature_match/_core.py).
 
+## Reconstruction array getters
+
+Every numpy array a getter of `SfmrReconstruction`
+([sfmr_reconstruction.rs](../crates/sfmtool-py/src/reconstruction/sfmr_reconstruction.rs))
+returns is read-only: numpy's writeable flag is cleared, so a write raises
+`ValueError`, and a caller that wants to edit the values takes `.copy()` and
+passes the copy back through `clone_with_changes`. Where the array comes from
+depends on how `sfmtool-core` stores the column:
+
+- **Gathered once.** A column stored as one field of each point, image or
+  observation record (`positions`, `positions_xyzw`, `point_is_at_infinity`,
+  `colors`, `normals`, `rms_reprojection_errors`, `camera_indexes`,
+  `quaternions_wxyz`, `translations`, the four per-image adjustment columns,
+  `track_image_indexes`, `track_point_indexes`, and `depth_histogram_counts`,
+  stored as one `Vec` per image) is copied into one flat buffer on its
+  getter's first read, which becomes the numpy array's own without a second
+  copy. The object keeps that array, in a `PyOnceLock` per getter, and every
+  later read returns the same object. A getter that returns `None` keeps the
+  `None`.
+- **A view.** A column already stored as one contiguous block
+  (`observation_counts`, `track_feature_indexes`, `keypoints_xy`,
+  `observation_confidence`, `normal_confidence`, `reference_observations`, the
+  three point-constraint columns, `patch_bitmaps` and `thumbnails_y_x_rgb`) is
+  returned as a numpy view of that block, whose base is the reconstruction
+  object. It copies nothing, and the view keeps the object alive. Each read
+  makes a new view object of the same memory: the object does not keep its
+  views, since a kept view would hold a reference back to the object and the
+  pair could then only be freed by the cycle collector.
+
+`observation_readings` returns a dict of arrays built on each read, and the
+list getters (`cameras`, `image_names`, the hash lists, …) build a new list on
+each read.
+
+A view is sound only while the block it points into stays where it is, so the
+binding keeps one invariant: **no method replaces, reallocates or writes a
+block a view is taken of, once the reconstruction is wrapped.** The wrapped
+`SfmrReconstruction` is a private field, so the only code that can reach it
+mutably is the class's own `&mut self` methods, and the bindings in other
+modules read it through `PySfmrReconstruction::inner()`, which hands out a
+shared reference. Those methods are `save`, which changes only the metadata,
+and `recompute_point_errors` and `recompute_infinity_point_errors`, which
+rewrite each point's `rms_reprojection_error` in place. Every other method
+returns a new reconstruction, with no array gathered yet. A new `&mut self`
+method that changes a block must stop handing out views of it, and one that
+changes a gathered column must clear that column's entry, as the two
+recompute methods clear `rms_reprojection_errors`'s, so the next read gathers
+the new values and an array read before keeps the values it was read with.
+[`test_sfmr_reconstruction_getters_rust_bindings.py`](../tests/rust_bindings/reconstruction/test_sfmr_reconstruction_getters_rust_bindings.py)
+holds a view of every block across each of the three methods and checks that
+the views still read the same values from the same memory.
+
+The blocks behind `patch_bitmaps` and `thumbnails_y_x_rgb` sit in an `Arc` that
+every reconstruction made from this one without replacing them shares
+([edited-reconstruction.md](core/reconstruction/edited-reconstruction.md)), so
+a writeable view would let a Python write reach every sharer at once.
+
 ## Submodules
 
 Paths in the *Source* column are relative to

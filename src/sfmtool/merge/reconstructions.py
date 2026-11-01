@@ -37,7 +37,7 @@ def merge_reconstructions(
     click.echo("\n[1/7] Building image-to-camera mapping...")
     step_start = time.perf_counter()
     image_name_to_camera = {}
-    # Each getter builds a new array or list on every access, so read it once.
+    # The list getters build a new list on every read, so read each once.
     first_camera_indexes = reconstructions[0].camera_indexes
     first_cameras = reconstructions[0].cameras
     for img_idx, img_name in enumerate(reconstructions[0].image_names):
@@ -519,7 +519,7 @@ def _merged_readings(source_reconstructions, image_names, tracks):
     indexes (``embedded_patches``) has no observation to match, so it gives no
     rows. ``None`` when no source carries readings.
     """
-    # Each getter builds its value again on every access, so read each once.
+    # `observation_readings` builds its dict again on every read, so read it once.
     carrying = []
     for r in source_reconstructions:
         readings = r.observation_readings

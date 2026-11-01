@@ -68,7 +68,7 @@ def _attach_patches_with_infinity(sfmr_path):
     point at infinity, so the saved cloud carries a ``w == 0`` tangent-sphere
     patch alongside the finite ones. Returns ``(path, infinity_point_id)``."""
     recon = SfmrReconstruction.load(str(sfmr_path))
-    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count
     )

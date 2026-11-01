@@ -165,7 +165,7 @@ impl PyPatchCloud {
             "patch_views",
             "per-patch views",
         )?;
-        let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
+        let recon_opt = recon_guard.as_ref().map(|r| r.inner());
         // `refine_keypoints` is a *local* refiner: it needs a starting keypoint in
         // the basin of the true optimum, and the projection alone isn't a "real"
         // keypoint for that purpose. Require either an embedded_patches recon (which

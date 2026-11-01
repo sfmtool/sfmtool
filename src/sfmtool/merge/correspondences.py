@@ -72,7 +72,6 @@ def find_point_correspondences(
     )
 
     if group_count > 0:
-        # Read each array once: the getter builds a new array on every access.
         positions_xyzw = [np.asarray(r.positions_xyzw) for r in reconstructions]
         group_max_distances = _group_max_distances(
             positions_xyzw, member_recon, member_point, group_starts

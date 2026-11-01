@@ -127,7 +127,7 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     # Turn one well-observed point into a point at infinity, in the direction the
     # cameras see it: from the centroid of the camera centres, so the direction
     # lands in some image whatever the frame's origin.
-    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count
     )
