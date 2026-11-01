@@ -338,9 +338,7 @@ pub fn write_matches(
             .iter()
             .map(|s| {
                 s.parse()
-                    .map_err(|e: sfmtool_matches_format::MatchesError| {
-                        pyo3::exceptions::PyValueError::new_err(e.to_string())
-                    })
+                    .map_err(write_err::<sfmtool_matches_format::MatchesError>)
             })
             .collect::<PyResult<_>>()?;
         let config_indexes: PyReadonlyArray1<u8> = get_item(data, "config_indexes")?.extract()?;
@@ -416,8 +414,9 @@ pub fn write_matches(
 /// `feature_tool_hashes` and `sift_content_hashes` take the forms
 /// `write_matches` takes. `member_positions` `(M, 2)` and
 /// `member_affine_shapes` `(M, 2, 2)` are float32, and the other arrays are
-/// uint32. Raises `IOError` with the writer's message when the arrays
-/// disagree, such as a member index past its image's feature count.
+/// uint32. Raises `ValueError` with the writer's message when the arrays
+/// disagree, such as a member index past its image's feature count, and the
+/// `OSError` subclass for its kind when the write itself fails.
 #[pyfunction]
 #[pyo3(signature = (
     path,
@@ -495,8 +494,7 @@ pub fn write_clusters_matches(
             matcher_options: py_to_serde(py, matcher_options)?,
         },
     };
-    sfmtool_matches_format::write_clusters_matches(&path, data, zstd_level)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_matches_format::write_clusters_matches(&path, data, zstd_level).map_err(write_err)
 }
 
 /// Verify integrity of a .matches file.

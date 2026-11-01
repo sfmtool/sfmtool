@@ -8,10 +8,13 @@ through one table (`crates/sfmtool-py/src/format_errors.rs`): an I/O failure is
 an `OSError` of the subclass for its kind, a file that cannot be parsed is an
 `OSError`, data a writer was handed that breaks a rule of the format is a
 `ValueError`, and a `.sfmr` that holds something this build cannot apply is a
-`ValueError`. These tests trigger each variant through each format's readers,
-verifier and writer, through `SfmrReconstruction`'s `load`, `from_data` and
+`ValueError`. These tests trigger each variant through each format's readers
+(`SiftFile` and `MatchesFile` among them), verifier and writers (`write_sift`,
+`SiftWriteQueue`, `write_matches`, `write_clusters_matches`, `write_sfmr`,
+`write_camrig`), through `SfmrReconstruction`'s `load`, `from_data` and
 `save`, through `SphericalTileRig`'s `.camrig` reader and writer, and through
-the `.sift` reads of `bench.NearbyTrackSources`. The `.kdf` cases are in `spatial/test_kdf_rust_bindings.py`.
+the `.sift` reads of `bench.NearbyTrackSources`. The `.kdf` cases are in
+`spatial/test_kdf_rust_bindings.py`.
 """
 
 import json
@@ -38,10 +41,12 @@ from sfmtool.fileio import (
     verify_sfmr,
     verify_sift,
     write_camrig,
+    write_clusters_matches,
     write_matches,
     write_sfmr,
     write_sift,
     MatchesFile,
+    SiftFile,
     SiftWriteQueue,
 )
 from sfmtool import bench
@@ -49,6 +54,9 @@ from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 from sfmtool.spherical import SphericalTileRig
 
 from tests.rust_bindings.fileio.test_matches_file_rust_bindings import _pairwise_dict
+from tests.rust_bindings.fileio.test_write_clusters_matches_rust_bindings import (
+    _clusters_kwargs,
+)
 from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
 
 _SFMR = SEOUL_BULL_GROUND_TRUTH
@@ -141,7 +149,12 @@ def _bump_json(field, value):
 # its result where it can, so it is only checked for the failures it raises on.
 _READERS = {
     "sfmr": [read_sfmr, read_sfmr_metadata, read_sfmr_content_hash],
-    "sift": [read_sift, read_sift_metadata, lambda p: read_sift_partial(p, 1)],
+    "sift": [
+        read_sift,
+        read_sift_metadata,
+        lambda p: read_sift_partial(p, 1),
+        SiftFile,
+    ],
     "matches": [read_matches, read_matches_metadata, MatchesFile],
     "camrig": [read_camrig, read_camrig_metadata],
 }
@@ -159,6 +172,11 @@ _INVALID_METADATA = {
     "camrig": _bump_json("camera_count", 3),
 }
 _FORMATS = sorted(_READERS)
+# What creating a file under a path whose parent is a file raises: the
+# operating system names it NotADirectoryError on Linux and macOS and
+# FileNotFoundError ("path not found") on Windows. Either is the OSError
+# subclass for the kind, which a plain OSError is not.
+_NO_DIRECTORY = (NotADirectoryError, FileNotFoundError)
 
 
 @pytest.mark.parametrize("fmt", _FORMATS)
@@ -210,11 +228,30 @@ def test_data_a_writer_cannot_store_is_a_value_error(tmp_path):
     with pytest.raises(ValueError, match="Shape mismatch"):
         write_sift(str(tmp_path / "bad.sift"), sift, 3)
 
-    # The batch writer raises the same exception from its join.
+    # The batch writer checks the data in submit and raises the same
+    # exception there, before anything is spawned.
     queue = SiftWriteQueue()
-    queue.submit(str(tmp_path / "queued.sift"), sift)
     with pytest.raises(ValueError, match="Shape mismatch"):
-        queue.join()
+        queue.submit(str(tmp_path / "queued.sift"), sift)
+    assert queue.pending_count == 0
+
+    # Invalid metadata: `feature_options` that is not a JSON object, and a
+    # metadata key the format does not define.
+    sift = _sift_dict()
+    sift["feature_tool_metadata"]["feature_options"] = []
+    with pytest.raises(ValueError, match="Invalid metadata"):
+        write_sift(str(tmp_path / "bad.sift"), sift, 3)
+    sift = _sift_dict()
+    sift["metadata"]["extra_field"] = 1
+    with pytest.raises(ValueError, match="Invalid metadata"):
+        SiftWriteQueue().submit(str(tmp_path / "bad.sift"), sift)
+
+    # Invalid format: a `.sift` version this build does not write.
+    sift = _sift_dict()
+    sift["metadata"]["version"] = 999
+    with pytest.raises(ValueError, match="Invalid format"):
+        write_sift(str(tmp_path / "bad.sift"), sift, 3)
+    assert not (tmp_path / "bad.sift").exists()
 
     # Invalid format: a rig with no cameras.
     with pytest.raises(ValueError, match="Invalid format"):
@@ -225,6 +262,12 @@ def test_data_a_writer_cannot_store_is_a_value_error(tmp_path):
     matches["metadata"]["match_count"] = 7
     with pytest.raises(ValueError, match="Shape mismatch"):
         write_matches(str(tmp_path / "bad.matches"), matches)
+
+    # Shape mismatch: a cluster member past its image's feature count.
+    clusters = _clusters_kwargs()
+    clusters["member_features"][1] = 150
+    with pytest.raises(ValueError, match="Invalid format"):
+        write_clusters_matches(tmp_path / "bad_clusters.matches", **clusters)
 
     # Shape mismatch: a points table shorter than its metadata says.
     sfmr = read_sfmr(str(_SFMR))
@@ -238,18 +281,42 @@ def test_a_write_the_filesystem_refuses_is_an_os_error(tmp_path):
     # the parent directory for writers that create it, fails.
     parent = tmp_path / "a_file"
     parent.write_bytes(b"")
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(_NO_DIRECTORY):
         write_sift(str(parent / "out.sift"), _sift_dict(), 3)
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(_NO_DIRECTORY):
         _write_camrig(parent / "out.camrig")
     with pytest.raises(FileExistsError):
         write_matches(str(parent / "out.matches"), _pairwise_dict())
+    with pytest.raises(FileExistsError):
+        write_clusters_matches(parent / "out_clusters.matches", **_clusters_kwargs())
     with pytest.raises(FileExistsError):
         write_sfmr(
             str(parent / "out.sfmr"),
             read_sfmr(str(_SFMR)),
             skip_recompute_depth_stats=True,
         )
+
+    # The batch writer raises the failed save's error from the wait for it.
+    queue = SiftWriteQueue()
+    queue.submit(str(parent / "queued.sift"), _sift_dict())
+    with pytest.raises(_NO_DIRECTORY):
+        queue.join()
+
+
+def test_a_sift_file_whose_columns_cannot_be_read_is_an_os_error(tmp_path):
+    # The metadata reads, so the file opens, but its feature count names
+    # column entries the archive does not hold, so the first column read
+    # fails.
+    bad = _rewrite_metadata(
+        _make_file("sift", tmp_path),
+        tmp_path / "bad.sift",
+        _bump_json("feature_count", 11),
+    )
+    sift = SiftFile(str(bad))
+    for read in [sift.read_positions, lambda: sift.read_descriptors(count=1)]:
+        with pytest.raises(OSError) as info:
+            read()
+        assert type(info.value) is OSError
 
 
 def test_a_missing_reconstruction_is_a_file_not_found_error(tmp_path):
@@ -295,7 +362,7 @@ def test_a_tile_rig_camrig_error_goes_through_the_table(tmp_path):
     parent = tmp_path / "a_file"
     parent.write_bytes(b"")
     rig = SphericalTileRig(n=20, arc_per_pixel=2 * np.pi / 128, seed=1)
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(_NO_DIRECTORY):
         rig.write_camrig(str(parent / "out.camrig"))
 
 

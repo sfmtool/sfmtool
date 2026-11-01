@@ -185,11 +185,13 @@ a writeable view would let a Python write reach every sharer at once.
 The readers, writers and verifiers of the `.sfmr`, `.sift`, `.matches`,
 `.camrig` and `.kdf` formats raise one exception class for each error variant,
 whichever format it came from. That covers the `fileio` functions, the
-`MatchesFile` handle, `SfmrReconstruction.load`, `from_data` and `save`,
+`SiftFile` and `MatchesFile` handles, `SiftWriteQueue`,
+`SfmrReconstruction.load`, `from_data` and `save`,
 `SphericalTileRig.read_camrig` and `write_camrig`, and the `.sift` reads of
 `bench.NearbyTrackSources`. Each format crate's error enum has the same
 shared variants, and
-[`format_errors.rs`](../crates/sfmtool-py/src/format_errors.rs) maps them; the
+[`format_errors.rs`](../crates/sfmtool-py/src/format_errors.rs) maps them, with
+the variants one format adds, such as `.sift`'s `InvalidMetadata`; the
 `.kdf` bindings map the variants only `.kdf` has in
 [`spatial/kdf.rs`](../crates/sfmtool-py/src/spatial/kdf.rs) and hand the
 shared ones to the same table. The split is by who is at fault:
@@ -198,22 +200,28 @@ shared ones to the same table. The split is by who is at fault:
 |-------|---------------------|------------|
 | A filesystem call failed (`Io`, `IoPath`) | `OSError`, as the subclass for its kind: `FileNotFoundError` for a missing file, `PermissionError`, `FileExistsError`, `NotADirectoryError`, … | the same |
 | The ZIP container or a JSON entry could not be parsed or written (`Zip`, `Json`) | `OSError` | `OSError` |
-| The data breaks a rule of the format (`InvalidFormat`, `ShapeMismatch`, `.kdf`'s `Integrity`) | `OSError`: the file is damaged | `ValueError`: the caller's data cannot be stored |
+| The data breaks a rule of the format (`InvalidFormat`, `ShapeMismatch`, `.sift`'s `InvalidMetadata`, `.kdf`'s `Integrity`) | `OSError`: the file is damaged | `ValueError`: the caller's data cannot be stored |
 | The call asks for something the data cannot give (`.sfmr`'s `Unsupported`, `.kdf`'s `InvalidQuery` and `ScalarType`) | `ValueError` | `ValueError` |
 
-A write here also covers building an in-memory value from the caller's arrays,
-such as the constellation query's resident sources. The `.kdf` bindings add
-three classes of their own: `MemoryError` for a budget that cannot hold what
-was asked for, `FileNotFoundError` for a missing SIFT source, and
-`InterruptedError` for a cancelled write
+A write here also covers building an in-memory value from the caller's data,
+such as the constellation query's resident sources, and checking it before a
+write, as `write_sift` and `SiftWriteQueue.submit` do with
+`validate_sift_data` and the strict metadata parses, so that a rejected
+`.sift` write raises `ValueError` before anything is written. No `.sift`
+reader raises `InvalidMetadata`, since the readers ignore a metadata key the
+format does not define, but the table maps it on a read as well, to `OSError`,
+as it maps `InvalidFormat`. The `.kdf`
+bindings add three classes of their own: `MemoryError` for a budget that
+cannot hold what was asked for, `FileNotFoundError` for a missing SIFT source,
+and `InterruptedError` for a cancelled write
 ([lazy-kdforest-query.md](core/features/lazy-kdforest-query.md)). A check a
 binding makes on its arguments before it calls the format crate raises
 `TypeError`, `KeyError` or `ValueError` as the binding says.
 [`test_format_errors_rust_bindings.py`](../tests/rust_bindings/fileio/test_format_errors_rust_bindings.py)
 triggers each variant that can be reached through each format's readers,
-verifier and writer, and through `SfmrReconstruction`, `SphericalTileRig` and
-`NearbyTrackSources`; no test triggers a `Zip` or `Json` error on a write. The
-`.kdf` cases are in
+verifier and writers, and through `SiftWriteQueue`, `SfmrReconstruction`,
+`SphericalTileRig` and `NearbyTrackSources`; no test triggers a `Zip` or
+`Json` error on a write. The `.kdf` cases are in
 [`test_kdf_rust_bindings.py`](../tests/rust_bindings/spatial/test_kdf_rust_bindings.py).
 
 ## Submodules
