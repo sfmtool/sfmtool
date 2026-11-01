@@ -7,6 +7,7 @@
 pub mod add_image_to_tracks;
 pub mod bundle_adjust;
 pub(crate) mod data;
+pub mod drop_image_adjustments;
 mod edit;
 pub mod edited;
 mod embed;

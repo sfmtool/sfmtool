@@ -439,7 +439,9 @@ camera whose model has some the solve can release: the spline, and `k1` on a
 `SIMPLE_RADIAL_FISHEYE` camera beside it. The shared principal point is held on
 both paths: `--bundle-adjust` has no key for it, though the transform behind it,
 `BundleAdjustTransform`, takes `release_principal_point` and passes it to
-either solver; `image_principal_point=on` moves it to its images' mean. That path needs inline keypoints (an
+either solver; `image_principal_point=on` moves it to its images' mean. A key
+for it is proposed in
+[per-image-adjustments-ui.md](../../../drafts/per-image-adjustments-ui.md). That path needs inline keypoints (an
 `embedded_patches` reconstruction) and a camera model whose focal it can release
 for every posed image whose camera is released, and stops with the adjustment's
 own refusal, naming the camera, otherwise; a rig with one spline camera and one

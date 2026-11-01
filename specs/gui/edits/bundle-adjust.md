@@ -77,6 +77,9 @@ observations the solve keeps.
   default. A camera only unposed images use is not in the solve and has no row.
   A lens that moves is a different claim about the capture than a pose that
   does, so the smaller claim is the default, and a camera left clear is held.
+  The per-image boxes open clear even for a camera that already varies the
+  parameter; opening those ticked is proposed in
+  [per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
   - **Release focal length** releases that camera's focal. It is **disabled**
     when the camera's model is not one the adjustment's focal column is exact
     for, with a hover explanation naming the camera by its camera index and its

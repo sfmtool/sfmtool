@@ -1780,7 +1780,9 @@ parameters as if it were one of them; its pose block does read the image's own
 only for a camera that lists per-image parameters keeps every existing file's
 panel unchanged, and stating a zero adjustment as zero, rather than leaving the
 line out, says that the parameter is varied and this image's happens to be zero.
-MCP's `get_camera_image` reports the same numbers.
+MCP's `get_camera_image` reports the same numbers. A revision that shows the
+statistics of a camera's per-image values in the panel is proposed in
+[per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md).
 
 **The lens corrections are stated in the same legend** (2026-10-29). An
 image's radial correction and rolling-shutter rates are two more lines of that
