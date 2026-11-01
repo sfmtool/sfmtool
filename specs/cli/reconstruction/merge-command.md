@@ -36,7 +36,8 @@ At least two reconstructions are required.
    its focal scale, its principal-point offset, its radial correction and its
    rolling-shutter rates.
 3. **Find correspondences** — Match 3D points across reconstructions via shared feature
-   observations using union-find.
+   observations, then group the matched pairs transitively: each group is a
+   connected component of the graph whose edges are the pairs.
 4. **Filter by percentile** — Reject point correspondences with distances above the
    percentile-based threshold.
 5. **Merge points and tracks** — Average corresponding point positions, combine observation
@@ -44,8 +45,8 @@ At least two reconstructions are required.
    point merged into it is finite, and at infinity otherwise
    ([point-correspondence.md](../../core/reconstruction/point-correspondence.md#merging-points-and-tracks-merge_points_and_tracks)
    gives the rule).
-6. **Refine poses** — Run parallel PnP+RANSAC to refine camera poses in the merged
-   reconstruction, each image through its own intrinsics: its merged camera with
+6. **Refine poses** — Run PnP+RANSAC on a pool of threads, one per CPU, to refine
+   camera poses in the merged reconstruction, each image through its own intrinsics: its merged camera with
    its adjustment applied. Points at infinity are left out of PnP, which takes
    Euclidean positions only. pycolmap has no model for an `SFMTOOL_PINHOLE`
    camera, the only one whose images carry a radial correction or rates, so

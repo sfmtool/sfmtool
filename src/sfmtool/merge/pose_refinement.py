@@ -4,14 +4,17 @@
 """Refine camera poses after merging reconstructions.
 
 Uses pycolmap's absolute pose estimation (PnP + RANSAC) to re-estimate camera
-poses against the merged 3D point cloud, running in parallel across all images.
+poses against the merged 3D point cloud, running in parallel across all images
+on a pool of threads: pycolmap releases the GIL while it estimates, and threads
+share one copy of the modules and the points, where worker processes would
+each import pycolmap.
 Points at infinity are left out: PnP takes Euclidean positions, and such a
 point has none.
 """
 
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import click
@@ -51,8 +54,8 @@ def _refine_single_camera_pose(
     img_idx,
     img_name,
     cam_dict,
-    observations,
-    merged_points_positions,
+    feature_indexes,
+    points3d,
     workspace_dir,
     feature_tool,
     feature_options,
@@ -64,6 +67,8 @@ def _refine_single_camera_pose(
 
     Args:
         cam_dict: Serializable camera dict with model/width/height/parameters keys.
+        feature_indexes: The feature index of each of the image's observations.
+        points3d: The position of the point each observation sees, ``(N, 3)``.
 
     Returns:
         Tuple of (img_idx, refined_quat, refined_trans, status, io_time,
@@ -74,7 +79,7 @@ def _refine_single_camera_pose(
     from ..sift.file import get_sift_path_for_image
     from ..fileio import SiftFile
 
-    if len(observations) < 4:
+    if len(feature_indexes) < 4:
         return img_idx, original_quat, original_trans, "no_observations", 0.0, 0.0, 0, 0
 
     try:
@@ -90,12 +95,9 @@ def _refine_single_camera_pose(
         sift_reader.close()
         io_time = time.perf_counter() - io_start
 
-        points2d = []
-        points3d = []
-        for feat_idx, point_id in observations:
-            if feat_idx < len(positions_2d):
-                points2d.append(positions_2d[feat_idx])
-                points3d.append(merged_points_positions[point_id])
+        in_file = feature_indexes < len(positions_2d)
+        points2d = positions_2d[feature_indexes[in_file]]
+        points3d = points3d[in_file]
 
         num_correspondences = len(points2d)
 
@@ -110,9 +112,6 @@ def _refine_single_camera_pose(
                 num_correspondences,
                 0,
             )
-
-        points2d = np.array(points2d)
-        points3d = np.array(points3d)
 
         camera = _camera_dict_to_pycolmap(cam_dict)
 
@@ -191,7 +190,7 @@ def refine_camera_poses(
 ):
     """Refine camera poses using merged 3D points and pycolmap's absolute pose estimation.
 
-    Uses parallel processing to refine poses for all images concurrently. Each
+    Refines the poses of all images concurrently, on one thread per CPU. Each
     image is read through its own intrinsics: its merged camera with its
     intrinsic adjustment (``merged_images["focal_adjustments"]``,
     ``["principal_point_adjustments_xy"]``, ``["radial_bspline_adjustments"]``
@@ -203,8 +202,8 @@ def refine_camera_poses(
     """
     click.echo("  Refining camera poses using merged 3D points...")
 
-    # Each image's intrinsics, pre-serialized to dicts for pickling across
-    # processes; every image without an adjustment shares its camera's dict.
+    # Each image's intrinsics as a camera dict; every image without an
+    # adjustment shares its camera's dict.
     camera_dicts = [cam.to_dict() for cam in merged_cameras]
     focal_adjustments = merged_images["focal_adjustments"]
     principal_point_adjustments = merged_images["principal_point_adjustments_xy"]
@@ -217,20 +216,26 @@ def refine_camera_poses(
     point_positions = positions_xyzw[:, :3]
     point_is_finite = positions_xyzw[:, 3] != 0.0
 
-    # Build image_idx -> [(feat_idx, point_id), ...] over the finite points
-    image_observations = {}
-    for img_idx, feat_idx, point_id in zip(
-        merged_tracks["image_indexes"],
-        merged_tracks["feature_indexes"],
-        merged_tracks["point_indexes"],
-    ):
-        if not point_is_finite[point_id]:
-            continue
-        if img_idx not in image_observations:
-            image_observations[img_idx] = []
-        image_observations[img_idx].append((feat_idx, point_id))
-
+    # Each image's observations of the finite points, in track order: the
+    # feature indexes and the positions of the points they observe. Each task
+    # carries only its own image's points, not the whole point array.
     num_images = len(merged_images["names"])
+    track_images = np.asarray(merged_tracks["image_indexes"])
+    track_features = np.asarray(merged_tracks["feature_indexes"])
+    track_points = np.asarray(merged_tracks["point_indexes"])
+    finite_observation = point_is_finite[track_points]
+    track_images = track_images[finite_observation]
+    track_features = track_features[finite_observation]
+    track_points = track_points[finite_observation]
+    by_image = np.argsort(track_images, kind="stable")
+    image_starts = np.searchsorted(
+        track_images[by_image], np.arange(num_images + 1), side="left"
+    )
+
+    def image_observations(img_idx):
+        rows = by_image[image_starts[img_idx] : image_starts[img_idx + 1]]
+        return track_features[rows], point_positions[track_points[rows]]
+
     refined_quaternions = [None] * num_images
     refined_translations = [None] * num_images
     refinement_stats = {"success": 0, "failed": 0, "no_observations": 0}
@@ -262,15 +267,15 @@ def refine_camera_poses(
                 )
                 .to_dict()
             )
-        observations = image_observations.get(img_idx, [])
+        feature_indexes, points3d = image_observations(img_idx)
 
         tasks.append(
             (
                 img_idx,
                 img_name,
                 cam_dict,
-                observations,
-                point_positions,
+                feature_indexes,
+                points3d,
                 workspace_dir,
                 feature_tool,
                 feature_options,
@@ -282,7 +287,7 @@ def refine_camera_poses(
 
     max_workers = os.cpu_count()
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {
             executor.submit(_refine_single_camera_pose, *task): task[0]
             for task in tasks

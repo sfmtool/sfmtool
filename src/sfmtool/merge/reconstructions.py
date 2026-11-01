@@ -37,11 +37,14 @@ def merge_reconstructions(
     click.echo("\n[1/7] Building image-to-camera mapping...")
     step_start = time.perf_counter()
     image_name_to_camera = {}
+    # Each getter builds a new array or list on every access, so read it once.
+    first_camera_indexes = reconstructions[0].camera_indexes
+    first_cameras = reconstructions[0].cameras
     for img_idx, img_name in enumerate(reconstructions[0].image_names):
         img_key = Path(img_name).as_posix()
         # The shared camera: this step counts the cameras, not the lenses.
-        cam_idx = reconstructions[0].camera_indexes[img_idx]
-        camera = reconstructions[0].cameras[cam_idx]
+        cam_idx = first_camera_indexes[img_idx]
+        camera = first_cameras[cam_idx]
         image_name_to_camera[img_key] = camera
     unique_cameras = set(_camera_to_tuple(cam) for cam in image_name_to_camera.values())
     click.echo(f"  Reference cameras from first reconstruction: {len(unique_cameras)}")
@@ -160,6 +163,7 @@ def _merge_cameras(
     """
     flags = [recon.per_image_adjustments for recon in reconstructions]
     scanlines = [recon.rolling_shutter_scanlines for recon in reconstructions]
+    cameras = [recon.cameras for recon in reconstructions]
     union_find_data = {}
 
     def find(cam):
@@ -181,9 +185,10 @@ def _merge_cameras(
     # Build image -> [(recon_idx, cam_idx)] mapping
     image_to_cameras = {}
     for recon_idx, recon in enumerate(reconstructions):
+        camera_indexes = recon.camera_indexes
         for img_idx, img_name in enumerate(recon.image_names):
             img_key = Path(img_name).as_posix()
-            cam_idx = recon.camera_indexes[img_idx]
+            cam_idx = camera_indexes[img_idx]
 
             if img_key not in image_to_cameras:
                 image_to_cameras[img_key] = []
@@ -220,14 +225,14 @@ def _merge_cameras(
     merged_flags = []
     merged_scanlines = []
 
-    for recon_idx, recon in enumerate(reconstructions):
-        for cam_idx in range(len(recon.cameras)):
+    for recon_idx in range(len(reconstructions)):
+        for cam_idx in range(len(cameras[recon_idx])):
             camera_id = (recon_idx, cam_idx)
             root = find(camera_id)
 
             if root not in root_to_merged_idx:
                 root_recon_idx, root_cam_idx = root
-                camera = reconstructions[root_recon_idx].cameras[root_cam_idx]
+                camera = cameras[root_recon_idx][root_cam_idx]
                 root_to_merged_idx[root] = len(merged_cameras)
                 merged_cameras.append(camera)
                 merged_flags.append(list(flags[root_recon_idx][root_cam_idx]))
@@ -235,9 +240,9 @@ def _merge_cameras(
 
     # Build camera mapping for each reconstruction
     camera_mapping = []
-    for recon_idx, recon in enumerate(reconstructions):
+    for recon_idx in range(len(reconstructions)):
         mapping = {}
-        for cam_idx in range(len(recon.cameras)):
+        for cam_idx in range(len(cameras[recon_idx])):
             camera_id = (recon_idx, cam_idx)
             root = find(camera_id)
             mapping[cam_idx] = root_to_merged_idx[root]
@@ -514,44 +519,73 @@ def _merged_readings(source_reconstructions, image_names, tracks):
     indexes (``embedded_patches``) has no observation to match, so it gives no
     rows. ``None`` when no source carries readings.
     """
-    carrying = [
-        r
-        for r in source_reconstructions
-        if r.observation_readings is not None and r.track_feature_indexes is not None
-    ]
+    # Each getter builds its value again on every access, so read each once.
+    carrying = []
+    for r in source_reconstructions:
+        readings = r.observation_readings
+        feature_indexes = r.track_feature_indexes
+        if readings is not None and feature_indexes is not None:
+            carrying.append((r, readings, feature_indexes))
     if not carrying:
         return None
-    first = carrying[0].observation_readings
+    first = carrying[0][1]
     options = first["options"]
     keys = [k for k in first if k != "options"]
-    rows = {}
-    for recon in carrying:
-        readings = recon.observation_readings
+
+    # An observation is keyed by its image name's number in `name_ids` and
+    # its feature index.
+    name_ids = {}
+
+    def image_ids(names):
+        return np.array(
+            [name_ids.setdefault(Path(n).as_posix(), len(name_ids)) for n in names],
+            dtype=np.int64,
+        )
+
+    source_names = []
+    source_features = []
+    source_columns = {k: [] for k in keys}
+    for recon, readings, feature_indexes in carrying:
         if readings["options"] != options:
             continue
-        names = [Path(n).as_posix() for n in recon.image_names]
-        img = np.asarray(recon.track_image_indexes)
-        feat = np.asarray(recon.track_feature_indexes)
-        for j in range(len(img)):
-            rows.setdefault(
-                (names[int(img[j])], int(feat[j])),
-                {k: readings[k][j] for k in keys},
-            )
-    names = [Path(n).as_posix() for n in image_names]
-    merged_img = np.asarray(tracks["image_indexes"])
-    merged_feat = np.asarray(tracks["feature_indexes"])
-    m = len(merged_img)
+        ids = image_ids(recon.image_names)
+        source_names.append(ids[np.asarray(recon.track_image_indexes, dtype=np.int64)])
+        source_features.append(np.asarray(feature_indexes, dtype=np.int64))
+        for k in keys:
+            source_columns[k].append(np.asarray(readings[k]))
+    merged_names = image_ids(image_names)[
+        np.asarray(tracks["image_indexes"], dtype=np.int64)
+    ]
+    merged_features = np.asarray(tracks["feature_indexes"], dtype=np.int64)
+    source_names = np.concatenate(source_names)
+    source_features = np.concatenate(source_features)
+    stride = 1 + max(
+        int(source_features.max(initial=0)), int(merged_features.max(initial=0))
+    )
+    # The first source observation of each key gives its row.
+    source_keys, first_row = np.unique(
+        source_names * stride + source_features, return_index=True
+    )
+    merged_keys = merged_names * stride + merged_features
+    at = np.minimum(
+        np.searchsorted(source_keys, merged_keys), max(len(source_keys) - 1, 0)
+    )
+    found = (
+        source_keys[at] == merged_keys
+        if len(source_keys)
+        else np.zeros(len(merged_keys), dtype=bool)
+    )
+    rows = first_row[at[found]]
+
+    m = len(merged_keys)
     out = {
         k: np.full((m,) + first[k].shape[1:], np.nan, dtype=first[k].dtype)
         if first[k].dtype != np.uint8
         else np.zeros((m,) + first[k].shape[1:], dtype=np.uint8)
         for k in keys
     }
-    for j in range(m):
-        row = rows.get((names[int(merged_img[j])], int(merged_feat[j])))
-        if row is not None:
-            for k in keys:
-                out[k][j] = row[k]
+    for k in keys:
+        out[k][found] = np.concatenate(source_columns[k])[rows]
     out["plain_bitmap_zncc"][:] = np.nan
     out["blur_matched_bitmap_zncc"][:] = np.nan
     out["options"] = options
