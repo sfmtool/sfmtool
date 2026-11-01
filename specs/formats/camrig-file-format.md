@@ -240,7 +240,7 @@ camera tables. Defined values so far:
 | `stereo_pair` | Two side-by-side sensors with near-parallel optical axes, in a stereo-vision configuration. | `{ "baseline_m": <float> }` |
 | `fisheye_360` | Two fisheye sensors facing opposite directions for full 360° coverage (e.g. `sfm insv2rig`). | `{ "baseline_m": <float> }` |
 | `cubemap` | Six co-centric pinhole faces (e.g. `sfm pano2rig`). | `{}` |
-| `spherical_tiles` | Co-centric pinhole tiles discretising the sphere (see `specs/core/spherical/spherical-tiles-rig.md`). | `centre` (`[x,y,z]` world placement), `measured_max_nn_angle`, `measured_max_coverage_angle`, `atlas_cols`, plus informational `half_fov_rad` and `patch_size` |
+| `spherical_tiles` | Co-centric pinhole tiles discretising the sphere (see [spherical-tiles-rig.md](../core/spherical/spherical-tiles-rig.md)). | `centre` (`[x,y,z]` world placement), `measured_max_nn_angle`, `measured_max_coverage_angle`, `atlas_cols`, plus informational `half_fov_rad` and `patch_size` |
 
 For a `spherical_tiles` rig, the generic tables already capture every tile's
 intrinsics (one shared pinhole camera) and rotation (per-tile quaternion,
@@ -248,13 +248,33 @@ zero translation) — the per-tile rotations *are* the tile look directions and
 tangent bases, and the shared pinhole camera *is* the authoritative tile
 intrinsics, from which `patch_size` and `half_fov_rad` are recovered on read.
 `rig_attributes` records the remaining derived scalars (world placement, the
-measured coverage angles, and atlas packing) so the exact rig can be
-reconstructed without re-running the sphere-point relaxer. It also stores
-`half_fov_rad` and `patch_size`, but those are informational copies of values
-already implied by the shared camera and are not consumed when the rig is
-reloaded. The construction inputs (`n`, `arc_per_pixel`, `overlap_factor`,
-relaxer seed) are not stored: `n` is `sensor_count`, and the rest only feed
-the relaxer, which the reconstruction bypasses.
+two measured angles, and atlas packing) so the exact rig can be
+reconstructed without re-running `evenly_distributed_sphere_points`, the
+repulsion relaxation that places the tile directions
+([spherical-tiles-rig.md § Tile layout](../core/spherical/spherical-tiles-rig.md#tile-layout)).
+Both angles are in radians, measured on the unit sphere between unit
+directions when the rig is built:
+
+- `measured_max_nn_angle` is the largest angle from a tile direction to its
+  nearest other tile direction, the worst-case gap between neighbouring
+  tiles. It is a diagnostic: `SphericalTileRig::from_camrig` requires it
+  and the rig exposes it through `measured_max_nn_angle()`, but no
+  algorithm uses its value.
+- `measured_max_coverage_angle` is the largest angle from any direction on
+  the sphere to its nearest tile direction, the worst-case Voronoi-cell
+  radius. `sfmtool` estimates it from 50 000 uniformly random probe
+  directions, so it can fall slightly short of the exact maximum. The tile
+  half-FOV is this angle times `overlap_factor`, and resampling the atlas
+  into a destination camera (`resample_atlas`) uses it as the cell radius
+  inside which a direction belongs to a single tile. `from_camrig` requires both angles to
+  be finite numbers.
+
+`rig_attributes` also stores `half_fov_rad` and `patch_size`, but those are
+informational copies of values already implied by the shared camera and are
+not consumed when the rig is reloaded. The construction inputs (`n`,
+`arc_per_pixel`, `overlap_factor`, relaxation seed) are not stored: `n` is
+`sensor_count`, and the rest only feed the construction, which reloading
+bypasses.
 
 ## How `.camrig` files fit into workspaces
 
