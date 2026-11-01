@@ -227,6 +227,9 @@ fn a_selection_change_cancels_the_viewed_evaluation_and_a_revisit_evaluates_noth
     let (mut state, id) = state();
     let other = other_point(&state, id);
     view(&mut state, id, POINT);
+    // Held, so the evaluation is still running when the next frame's drive
+    // sees the selection change.
+    let open = state.hold_next_evaluation();
     state.drive_bench_evaluation();
     let read = state
         .running_evaluation_track()
@@ -236,10 +239,23 @@ fn a_selection_change_cancels_the_viewed_evaluation_and_a_revisit_evaluates_noth
     view(&mut state, id, other);
     state.drive_bench_evaluation();
     assert!(
+        Arc::ptr_eq(
+            &state
+                .running_evaluation_track()
+                .expect("still running until it answers"),
+            &read
+        ),
+        "a second evaluation started beside the stale one"
+    );
+    assert!(
         state.running_evaluation_cancelled(),
         "the selection change did not cancel the evaluation"
     );
     assert!(!state.viewed_evaluation_running());
+    // Let go after the stop request, it answers that it was cancelled, which
+    // is dropped. A measured answer for a point no longer viewed is the next
+    // test's case.
+    open.send(()).expect("the evaluation is held");
     state.land_running_evaluation();
     state.settle_bench_evaluation();
     assert_eq!(
@@ -265,6 +281,72 @@ fn a_selection_change_cancels_the_viewed_evaluation_and_a_revisit_evaluates_noth
     assert!(
         state.running_evaluation_track().is_none(),
         "a cached current evaluation was run again"
+    );
+}
+
+/// The viewed evaluation answers with a measured track, and the selection
+/// moves to another point before that answer lands: the answer is for a point
+/// no longer viewed, so it is dropped rather than installed into that point's
+/// cached track, and the newly viewed point is evaluated next.
+#[test]
+fn a_measured_answer_for_a_point_no_longer_viewed_is_dropped() {
+    let (mut state, id) = state();
+    let other = other_point(&state, id);
+    view(&mut state, id, POINT);
+    state.drive_bench_evaluation();
+    let read = state
+        .running_evaluation_track()
+        .expect("the evaluation started");
+    assert!(Arc::ptr_eq(&read, &viewed(&state)));
+    let stale_task = state.queued_evaluation_task().expect("queued");
+    assert!(
+        state.wait_for_evaluation_answer(),
+        "the evaluation did not answer with a measured track"
+    );
+
+    view(&mut state, id, other);
+    let now_viewed = viewed(&state);
+    // The next frame reads the stale answer, drops it, and queues the newly
+    // viewed point's evaluation, which waits until the stale one's worker is
+    // done.
+    state.drive_bench_evaluation();
+    let next_task = state
+        .queued_evaluation_task()
+        .expect("the newly viewed point's evaluation was not queued");
+    assert_ne!(next_task, stale_task);
+    assert!(
+        Arc::ptr_eq(
+            &state.running_evaluation_track().expect("just checked"),
+            &now_viewed
+        ),
+        "the evaluation queued is not of the newly viewed point"
+    );
+    assert!(
+        !(state.quiet_task_running(stale_task) && state.quiet_task_running(next_task)),
+        "two evaluations ran at once"
+    );
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.viewed_track().expect("viewed").evaluation,
+        Evaluation::Current
+    );
+
+    // Back on the first point, its cached track is the one the stale
+    // evaluation read, still unevaluated.
+    view(&mut state, id, POINT);
+    assert!(
+        Arc::ptr_eq(&viewed(&state), &read),
+        "the stale answer was installed into the first point's cached track"
+    );
+    assert_eq!(
+        state.viewed_track().expect("viewed").evaluation,
+        Evaluation::Evaluating,
+        "the first point reads as evaluated by an answer that came back after it was left"
+    );
+    state.settle_bench_evaluation();
+    assert_eq!(
+        state.viewed_track().expect("viewed").evaluation,
+        Evaluation::Current
     );
 }
 
