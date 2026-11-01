@@ -427,43 +427,42 @@ pub(crate) fn parse_sfmr_data_from_dict(
         None => None,
     };
 
-    // Depth-related fields are only required when skipping recomputation.
-    // Normals are optional: a missing or `None` `normals_xyz` means no normals.
-    let (depth_statistics, normals_xyz, observed_depth_histogram_counts) =
-        if skip_recompute_depth_stats {
-            let ds: DepthStatistics = py_to_serde(py, &get_item(data, "depth_statistics")?)?;
-            let normals: Option<ndarray::Array2<f32>> = match data.get_item("normals_xyz")? {
-                Some(v) if !v.is_none() => {
-                    let en: PyReadonlyArray2<f32> = v.extract()?;
-                    Some(en.as_array().as_standard_layout().into_owned())
-                }
-                _ => None,
-            };
-            let ohc: PyReadonlyArray2<u32> =
-                get_item(data, "observed_depth_histogram_counts")?.extract()?;
-            (
-                ds,
-                normals,
-                ohc.as_array().as_standard_layout().into_owned(),
-            )
-        } else {
-            let image_count = metadata.image_count as usize;
-            let point_count = metadata.point_count as usize;
-            // Default to an all-zero set so the write-time mean-viewing recompute
-            // fills them; pass `normals_xyz=None` explicitly to opt out.
-            let normals = match data.get_item("normals_xyz")? {
-                Some(v) if v.is_none() => None,
-                _ => Some(ndarray::Array2::<f32>::zeros((point_count, 3))),
-            };
-            (
-                DepthStatistics {
-                    num_histogram_buckets: 128,
-                    images: Vec::new(),
-                },
-                normals,
-                ndarray::Array2::<u32>::zeros((image_count, 128)),
-            )
-        };
+    // The normals do not depend on whether the depth statistics are recomputed:
+    // an array is written as given, an explicit `None` means no normals, and a
+    // missing key is an all-zero set, every row of which the writer fills with
+    // a mean-viewing normal (it fills zero rows in both modes).
+    let point_count = positions_xyzw.as_array().nrows();
+    let normals_xyz = if data.contains("normals_xyz")? {
+        optional_array::<f32, ndarray::Ix2>(data, "normals_xyz", "a 2D float32 array")?
+    } else {
+        Some(ndarray::Array2::<f32>::zeros((point_count, 3)))
+    };
+    if let Some(normals) = &normals_xyz {
+        if normals.shape() != [point_count, 3] {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "'normals_xyz' must have shape ({point_count}, 3), got shape {:?}",
+                normals.shape()
+            )));
+        }
+    }
+
+    // The depth statistics are read from the dict only when the write keeps
+    // them; otherwise the write recomputes them and these are placeholders.
+    let (depth_statistics, observed_depth_histogram_counts) = if skip_recompute_depth_stats {
+        let ds: DepthStatistics = py_to_serde(py, &get_item(data, "depth_statistics")?)?;
+        let ohc: PyReadonlyArray2<u32> =
+            get_item(data, "observed_depth_histogram_counts")?.extract()?;
+        (ds, ohc.as_array().as_standard_layout().into_owned())
+    } else {
+        let image_count = metadata.image_count as usize;
+        (
+            DepthStatistics {
+                num_histogram_buckets: 128,
+                images: Vec::new(),
+            },
+            ndarray::Array2::<u32>::zeros((image_count, 128)),
+        )
+    };
 
     // Per-point confidence in the normal, and the per-observation photometric
     // confidence: independent optional columns, passed through untouched.
@@ -639,12 +638,23 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// free, since an all-free set is the same statement as none at all), and the
 /// per-point patch frame
 /// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` and the optional
-/// `patch_bitmaps_y_x_rgba`). A missing or `None` value means the column is
-/// absent — which is what a `sift_files` dict carries for the patch frame,
+/// `patch_bitmaps_y_x_rgba`). Apart from `normals_xyz` (see below), a missing
+/// or `None` value means the column is absent — which is what a `sift_files` dict carries for the patch frame,
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
 /// anything per image, and a missing `rolling_shutter_scanlines` that no
 /// camera has a scanlines setting.
+///
+/// `skip_recompute_depth_stats` decides only where the depth statistics come
+/// from: by default they are recomputed from the geometry, and with `True`
+/// the dict's `depth_statistics` and `observed_depth_histogram_counts` are
+/// written as given. The normals are handled the same way in both modes. A
+/// `normals_xyz` array is written as given, except that each zero row is
+/// filled with the point's mean-viewing normal; an explicit `None` writes no
+/// normals; and a missing key writes a mean-viewing normal for every finite
+/// point. A point at infinity has no mean-viewing normal, so its row stays
+/// zero. A caller that moves or rotates the points in the dict updates `normals_xyz`
+/// to match, or deletes the key to have them computed again.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`

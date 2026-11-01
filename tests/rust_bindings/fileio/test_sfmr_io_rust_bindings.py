@@ -705,6 +705,68 @@ class TestSharedColumnsAreReadOnly:
         assert np.array_equal(np.asarray(clone.thumbnails_y_x_rgb), before)
 
 
+class TestNormals:
+    """``write_sfmr`` writes the dict's ``normals_xyz`` as given in both modes
+    of ``skip_recompute_depth_stats``; a missing key gets mean-viewing normals
+    and an explicit ``None`` gets none."""
+
+    def _mean_viewing(self, data: dict, tmp_path, skip: bool = False) -> np.ndarray:
+        data = dict(data)
+        del data["normals_xyz"]
+        out = tmp_path / f"keyless_{skip}.sfmr"
+        write_sfmr(out, data, skip_recompute_depth_stats=skip)
+        return read_sfmr(out)["normals_xyz"]
+
+    @pytest.mark.parametrize("skip", [False, True])
+    def test_a_read_dict_writes_back_its_normals(
+        self, seoul_bull_ground_truth_sfmr, tmp_path, skip
+    ):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        normals = data["normals_xyz"]
+        # The ground truth's normals are not its mean-viewing ones, so a write
+        # that replaced them would be seen.
+        assert not np.array_equal(normals, self._mean_viewing(data, tmp_path))
+
+        out = tmp_path / "roundtrip.sfmr"
+        write_sfmr(out, data, skip_recompute_depth_stats=skip)
+        assert read_sfmr(out)["normals_xyz"].tobytes() == normals.tobytes()
+
+    def test_a_missing_key_gets_mean_viewing_normals(
+        self, seoul_bull_ground_truth_sfmr, tmp_path
+    ):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        mean_viewing = self._mean_viewing(data, tmp_path)
+        assert mean_viewing.shape == data["normals_xyz"].shape
+        finite = data["positions_xyzw"][:, 3] != 0.0
+        np.testing.assert_allclose(
+            np.linalg.norm(mean_viewing[finite], axis=1), 1.0, atol=1e-5
+        )
+        # Every row is filled, as an all-zero array is, whichever mode writes it.
+        zeros = dict(data, normals_xyz=np.zeros_like(data["normals_xyz"]))
+        out = tmp_path / "zeros.sfmr"
+        write_sfmr(out, zeros)
+        assert read_sfmr(out)["normals_xyz"].tobytes() == mean_viewing.tobytes()
+        assert (
+            self._mean_viewing(data, tmp_path, skip=True).tobytes()
+            == mean_viewing.tobytes()
+        )
+
+    def test_none_writes_no_normals(self, seoul_bull_ground_truth_sfmr, tmp_path):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data["normals_xyz"] = None
+        # A confidence rates the stored normals, so it goes with them.
+        data["normal_confidence"] = None
+        out = tmp_path / "no_normals.sfmr"
+        write_sfmr(out, data)
+        assert read_sfmr(out)["normals_xyz"] is None
+
+    def test_a_wrong_shape_is_refused(self, seoul_bull_ground_truth_sfmr, tmp_path):
+        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data["normals_xyz"] = data["normals_xyz"][:-1]
+        with pytest.raises(ValueError, match="normals_xyz"):
+            write_sfmr(tmp_path / "bad.sfmr", data)
+
+
 class TestRetiredLineage:
     """Versions 9 to 11 of the format defined an optional top-level ``lineage``
     key. The format no longer defines it: a file that carries one reads with
