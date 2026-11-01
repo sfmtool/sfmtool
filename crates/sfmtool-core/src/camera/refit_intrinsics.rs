@@ -68,16 +68,8 @@ const LM_MAX_ITERS: usize = 200;
 
 /// The smallest slope a fitted spline's radial map may have, as a fraction of
 /// its focal: the fit requires `r′(d) ≥ MIN_SLOPE · f` over the whole domain
-/// and along the linear tail.
-///
-/// A positive floor rather than zero, so the fitted camera is invertible with
-/// a margin rather than only just: the inverse's Newton step is `Δr / r′`, and
-/// at this floor a pixel of radius is never more than twenty times the angle
-/// it is at the centre. It is below what a real lens reaches inside its field:
-/// the orthographic projection `r = f·sin θ`, the most compressive of the
-/// classical fisheye projections, falls to it only at 87°, and the equisolid
-/// projection only at 174°, so the floor binds on a curve with a fold or a
-/// near-flat dip, not on an optical design.
+/// and along the linear tail. The spec's § "Spline targets: the monotonicity
+/// constraint" says why the floor is positive and why at this value.
 pub const MIN_SLOPE: f64 = 0.05;
 
 /// Constraint grid points per knot span. The same density as the dense test in
@@ -667,21 +659,11 @@ pub(crate) fn refit_camera_intrinsics_over(
 
 /// Refit a spline camera as the same spline model with `coeff_count`
 /// coefficients, and with its domain ending at `spline_domain_deg` where that
-/// is given, or where the source's ends otherwise.
-///
-/// The fit samples the source over the **whole** new domain, `θ ∈ (0, θ_max]`
-/// with `θ_max` the domain end as an incidence angle, rather than over a
-/// trusted bound or the observations: a spline model is defined everywhere on
-/// its domain and along its linear tail past it, so the source states the
-/// curve at every angle the new spline covers, whether the new domain is
-/// shorter or longer than the old. The result is the best least-squares
-/// description of the source's curve on the new coefficient scheme, focal
-/// included. A domain end that is not given is copied exactly
-/// (`SFMTOOL_PINHOLE`'s `tan θ` is not taken through degrees and back). Like
-/// every spline fit it is constrained to be monotone, which makes it the best
-/// description with an inverse; the report's
-/// [`monotone_constraint`](CameraIntrinsicsRefit::monotone_constraint) says
-/// where that departed from the source.
+/// is given, or where the source's ends otherwise (copied exactly). The fit
+/// samples the whole new domain and is constrained to be monotone, and the
+/// report's [`monotone_constraint`](CameraIntrinsicsRefit::monotone_constraint)
+/// says where that departed from the source; the spec's § "A spline source
+/// refitted as a spline" says why.
 ///
 /// Refused for a source without a spline (`NotSplineSource`), a count the
 /// model does not allow, and a domain end the model cannot have.
@@ -761,13 +743,14 @@ pub fn refit_spline(
 /// Where a spline camera's domain ends, as an incidence angle in degrees:
 /// `bspline_theta_max` itself for `SFMTOOL_FISHEYE`, and the angle whose
 /// tangent is `bspline_rho_max` for `SFMTOOL_PINHOLE`. `None` for a camera with
-/// no spline. A caller showing the domain as an editable value reads it here,
-/// in the unit [`refit_spline`] and [`RefitOptions::spline_domain_deg`] take.
+/// no spline, and for one whose domain end is not positive and finite: the
+/// kernels evaluate such a camera as its base model, so it has no domain. A
+/// caller showing the domain as an editable value or as a marker reads it
+/// here, in the unit [`refit_spline`] and [`RefitOptions::spline_domain_deg`]
+/// take.
 pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64> {
-    camera
-        .model
-        .radial_spline()
-        .map(|(_, d_max, radial)| incidence_angle(radial, d_max).to_degrees())
+    let (_, d_max, radial) = camera.model.radial_spline()?;
+    (d_max > 0.0 && d_max.is_finite()).then(|| incidence_angle(radial, d_max).to_degrees())
 }
 
 /// The report of a fitted `camera` against its `source` over `samples`.

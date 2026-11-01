@@ -110,7 +110,8 @@ pub fn refit_spline(
 ) -> Result<CameraIntrinsicsRefit, RefitError>;
 
 /// A spline camera's domain end as an incidence angle in degrees, the unit
-/// `spline_domain_deg` takes; `None` for a camera with no spline.
+/// `spline_domain_deg` takes; `None` for a camera with no spline or with a
+/// domain end that is not positive and finite.
 pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64>;
 
 /// The counts a spline with a curve takes, 2 to 32: what a count field is

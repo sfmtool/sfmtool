@@ -38,7 +38,7 @@
 //! resample two polylines sixty times a second.
 
 use egui::{Align2, Color32, Pos2, Rect, Shape, Stroke};
-use sfmtool_core::camera::intrinsics::SplineRadial;
+use sfmtool_core::camera::refit_intrinsics::spline_domain_deg;
 use sfmtool_core::camera::CameraIntrinsics;
 
 use super::{haloed_line, haloed_text, ink, View, DEGREE, MINUS, REFERENCE_ALPHA};
@@ -653,23 +653,4 @@ fn draw_tick(
         tick.label.clone(),
         ink(255),
     ))
-}
-
-/// The incidence angle at which a spline model's basis ends, in degrees.
-///
-/// The two spline models differ only in the radial coordinate the basis acts
-/// on, so the conversion is per-coordinate: an incidence angle is already the
-/// answer, and a normalized image-plane radius is `tan θ`. `None` for every
-/// other model, and for a spline whose domain end is degenerate — the kernels
-/// short-circuit those to the exact base arithmetic, so there is no domain to
-/// mark.
-fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64> {
-    let (_, domain_end, coordinate) = camera.model.radial_spline()?;
-    if !(domain_end.is_finite() && domain_end > 0.0) {
-        return None;
-    }
-    Some(match coordinate {
-        SplineRadial::IncidenceAngle => domain_end.to_degrees(),
-        SplineRadial::ImagePlaneRadius => domain_end.atan().to_degrees(),
-    })
 }
