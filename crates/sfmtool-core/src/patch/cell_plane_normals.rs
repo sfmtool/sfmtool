@@ -247,6 +247,231 @@ impl CellPlaneNormal {
     }
 }
 
+/// Why [`cell_plane_normals`] refused its input. Each is a property of the
+/// caller's arrays, found before any cluster is fitted.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CellPlaneNormalsError {
+    /// A member-parallel slice's length differs from that of
+    /// `member_images`. `array` is the field name in [`CellPlaneClusters`].
+    MemberArrayLength {
+        array: &'static str,
+        len: usize,
+        num_members: usize,
+    },
+    /// `cluster_starts` does not have `C + 1` entries, `C` being the length of
+    /// `reference_members`.
+    ClusterStartsLength { len: usize, num_clusters: usize },
+    /// An entry of `cluster_starts` is past the member count.
+    ClusterStartsPastMembers {
+        index: usize,
+        start: u32,
+        num_members: usize,
+    },
+    /// `cluster_starts[cluster + 1]` is less than `cluster_starts[cluster]`.
+    ClusterStartsDecrease { cluster: usize },
+    /// A reference member is neither [`CLUSTER_REFERENCE_UNREFINABLE`] nor in
+    /// its own cluster's member range `start..end`.
+    ReferenceOutsideCluster {
+        cluster: usize,
+        reference: u32,
+        start: u32,
+        end: u32,
+    },
+    /// `resolution` is less than 3, too few samples for three cells per side.
+    ResolutionTooSmall { resolution: u32 },
+    /// `patch_size` is not positive and finite.
+    InvalidPatchSize { patch_size: f64 },
+    /// `cam_from_world` and `image_camera`, both per image, differ in length.
+    PoseListLength { len: usize, num_images: usize },
+    /// A member's image index is past the end of the per-image lists.
+    ImageIndexOutOfRange {
+        member: usize,
+        image: u32,
+        num_images: usize,
+    },
+    /// An image's camera index is past the end of `cameras`.
+    CameraIndexOutOfRange {
+        image: usize,
+        camera: u32,
+        num_cameras: usize,
+    },
+}
+
+impl std::fmt::Display for CellPlaneNormalsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MemberArrayLength {
+                array,
+                len,
+                num_members,
+            } => write!(
+                f,
+                "{array} has {len} entries but member_images has {num_members}"
+            ),
+            Self::ClusterStartsLength { len, num_clusters } => write!(
+                f,
+                "cluster_starts has {len} entries but {num_clusters} clusters need {}",
+                num_clusters + 1
+            ),
+            Self::ClusterStartsPastMembers {
+                index,
+                start,
+                num_members,
+            } => write!(
+                f,
+                "cluster_starts[{index}] = {start} is past the member count {num_members}"
+            ),
+            Self::ClusterStartsDecrease { cluster } => write!(
+                f,
+                "cluster_starts decreases from entry {cluster} to entry {}",
+                cluster + 1
+            ),
+            Self::ReferenceOutsideCluster {
+                cluster,
+                reference,
+                start,
+                end,
+            } => write!(
+                f,
+                "reference_members[{cluster}] = {reference} is not in cluster {cluster}'s \
+                 member range {start}..{end}"
+            ),
+            Self::ResolutionTooSmall { resolution } => {
+                write!(f, "resolution is {resolution} but must be at least 3")
+            }
+            Self::InvalidPatchSize { patch_size } => {
+                write!(
+                    f,
+                    "patch_size is {patch_size} but must be positive and finite"
+                )
+            }
+            Self::PoseListLength { len, num_images } => write!(
+                f,
+                "cam_from_world has {len} entries but image_camera has {num_images}"
+            ),
+            Self::ImageIndexOutOfRange {
+                member,
+                image,
+                num_images,
+            } => write!(
+                f,
+                "member_images[{member}] = {image} is out of range for {num_images} images"
+            ),
+            Self::CameraIndexOutOfRange {
+                image,
+                camera,
+                num_cameras,
+            } => write!(
+                f,
+                "image_camera[{image}] = {camera} is out of range for {num_cameras} cameras"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CellPlaneNormalsError {}
+
+/// `Err` on the first input [`cell_plane_normals`] refuses, in the order its
+/// `# Errors` section lists them.
+fn validate(
+    clusters: &CellPlaneClusters<'_>,
+    cameras: &CellPlaneCameras<'_>,
+) -> Result<(), CellPlaneNormalsError> {
+    use CellPlaneNormalsError as E;
+    let num_members = clusters.member_images.len();
+    for (array, len) in [
+        ("member_status", clusters.member_status.len()),
+        ("member_positions", clusters.member_positions.len()),
+        ("member_shapes", clusters.member_shapes.len()),
+        ("cell_shift_px", clusters.cell_shift_px.len()),
+        ("cell_status", clusters.cell_status.len()),
+    ] {
+        if len != num_members {
+            return Err(E::MemberArrayLength {
+                array,
+                len,
+                num_members,
+            });
+        }
+    }
+    let starts = clusters.cluster_starts;
+    let num_clusters = clusters.reference_members.len();
+    if starts.len() != num_clusters + 1 {
+        return Err(E::ClusterStartsLength {
+            len: starts.len(),
+            num_clusters,
+        });
+    }
+    if let Some((index, &start)) = starts
+        .iter()
+        .enumerate()
+        .find(|&(_, &s)| s as usize > num_members)
+    {
+        return Err(E::ClusterStartsPastMembers {
+            index,
+            start,
+            num_members,
+        });
+    }
+    if let Some(cluster) = starts.windows(2).position(|w| w[0] > w[1]) {
+        return Err(E::ClusterStartsDecrease { cluster });
+    }
+    for (cluster, &reference) in clusters.reference_members.iter().enumerate() {
+        let (start, end) = (starts[cluster], starts[cluster + 1]);
+        if reference != CLUSTER_REFERENCE_UNREFINABLE && !(start <= reference && reference < end) {
+            return Err(E::ReferenceOutsideCluster {
+                cluster,
+                reference,
+                start,
+                end,
+            });
+        }
+    }
+    if clusters.resolution < 3 {
+        return Err(E::ResolutionTooSmall {
+            resolution: clusters.resolution,
+        });
+    }
+    if !(clusters.patch_size.is_finite() && clusters.patch_size > 0.0) {
+        return Err(E::InvalidPatchSize {
+            patch_size: clusters.patch_size,
+        });
+    }
+    let num_images = cameras.image_camera.len();
+    if cameras.cam_from_world.len() != num_images {
+        return Err(E::PoseListLength {
+            len: cameras.cam_from_world.len(),
+            num_images,
+        });
+    }
+    if let Some((member, &image)) = clusters
+        .member_images
+        .iter()
+        .enumerate()
+        .find(|&(_, &i)| i as usize >= num_images)
+    {
+        return Err(E::ImageIndexOutOfRange {
+            member,
+            image,
+            num_images,
+        });
+    }
+    let num_cameras = cameras.cameras.len();
+    if let Some((image, &camera)) = cameras
+        .image_camera
+        .iter()
+        .enumerate()
+        .find(|&(_, &c)| c as usize >= num_cameras)
+    {
+        return Err(E::CameraIndexOutOfRange {
+            image,
+            camera,
+            num_cameras,
+        });
+    }
+    Ok(())
+}
+
 /// Estimate a patch normal for every cluster from its stored cell
 /// displacements and the images' poses.
 ///
@@ -264,51 +489,22 @@ impl CellPlaneNormal {
 /// randomness and a fixed pass count, so the result does not depend on the
 /// thread count.
 ///
-/// # Panics
-/// If the member-parallel slices disagree on length, `cluster_starts` is not
-/// `C + 1` long or not a valid range partition of the members, a member image
-/// or camera index is out of range, or `resolution < 3`.
+/// # Errors
+/// A [`CellPlaneNormalsError`], before any cluster is fitted, when a
+/// member-parallel slice's length differs from `member_images`',
+/// `cluster_starts` is not `C + 1` long, runs past the member count or
+/// decreases, a reference member is neither [`CLUSTER_REFERENCE_UNREFINABLE`]
+/// nor in its own cluster's member range, `resolution < 3`, `patch_size` is
+/// not positive and finite, `cam_from_world` and `image_camera` differ in
+/// length, or a member image or image camera index is out of range.
 pub fn cell_plane_normals(
     clusters: &CellPlaneClusters<'_>,
     cameras: &CellPlaneCameras<'_>,
     params: &CellPlaneParams,
-) -> Vec<CellPlaneNormal> {
-    let n_members = clusters.member_images.len();
-    assert_eq!(clusters.member_status.len(), n_members);
-    assert_eq!(clusters.member_positions.len(), n_members);
-    assert_eq!(clusters.member_shapes.len(), n_members);
-    assert_eq!(clusters.cell_shift_px.len(), n_members);
-    assert_eq!(clusters.cell_status.len(), n_members);
+) -> Result<Vec<CellPlaneNormal>, CellPlaneNormalsError> {
+    validate(clusters, cameras)?;
     let n_clusters = clusters.reference_members.len();
-    assert_eq!(
-        clusters.cluster_starts.len(),
-        n_clusters + 1,
-        "cluster_starts must have C + 1 entries"
-    );
-    assert!(
-        clusters
-            .cluster_starts
-            .windows(2)
-            .all(|w| w[0] <= w[1] && w[1] as usize <= n_members),
-        "cluster_starts must be non-decreasing and within the member count"
-    );
-    assert!(clusters.resolution >= 3, "resolution must be at least 3");
     let n_images = cameras.image_camera.len();
-    assert_eq!(cameras.cam_from_world.len(), n_images);
-    assert!(
-        clusters
-            .member_images
-            .iter()
-            .all(|&i| (i as usize) < n_images),
-        "member image index out of range"
-    );
-    assert!(
-        cameras
-            .image_camera
-            .iter()
-            .all(|&c| (c as usize) < cameras.cameras.len()),
-        "image camera index out of range"
-    );
 
     let views: Vec<Option<PosedView<'_>>> = (0..n_images)
         .map(|i| {
@@ -321,10 +517,10 @@ pub fn cell_plane_normals(
     let centres = cell_centres(clusters.resolution);
     let step = clusters.patch_size / clusters.resolution as f64;
 
-    (0..n_clusters)
+    Ok((0..n_clusters)
         .into_par_iter()
         .map(|c| fit_cluster(c, clusters, &views, &centres, step, params))
-        .collect()
+        .collect())
 }
 
 /// Cell centres in grid coordinates centred on the grid, `[x, y]`, row-major:

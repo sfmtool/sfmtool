@@ -18,10 +18,9 @@ use sfmtool_core::patch::cell_plane_normals::{
     CellPlaneParams, CellPlaneStatus, NormalDeterminacy,
 };
 use sfmtool_core::RigidTransform;
-use sfmtool_matches_format::{
-    ClusterCellStatus, ClusterMemberStatus, CLUSTER_REFERENCE_UNREFINABLE,
-};
+use sfmtool_matches_format::{ClusterCellStatus, ClusterMemberStatus};
 
+use crate::helpers::value_err;
 use crate::PyCameraIntrinsics;
 
 /// The names of the `determinacy` codes, in code order.
@@ -89,6 +88,14 @@ const DETERMINACY_NAMES: [&str; 3] = ["none", "one_axis", "both_axes"];
 ///     ``cell_weight`` and ``cell_residual_px`` ``(C, 3, 3)`` float64, and
 ///     ``plane_rms``, ``anisotropy``, ``n_eff`` ``(C,)`` float64; plus the two
 ///     name lists.
+///
+/// Raises:
+///     ValueError: an array of the wrong shape, an unknown member or cell
+///         status code, or an input the kernel refuses: ``cluster_starts``
+///         that decreases or runs past the member count, a reference member
+///         that is neither ``0xFFFFFFFF`` nor in its own cluster's range, a
+///         member image or image camera index out of range,
+///         ``resolution < 3``, or a ``patch_size`` not positive and finite.
 #[pyfunction]
 #[pyo3(signature = (
     cluster_starts,
@@ -176,11 +183,6 @@ pub fn cell_plane_normals<'py>(
         cluster_starts.shape()[0] == c + 1,
         "cluster_starts must have shape (C + 1,)",
     )?;
-    check(resolution >= 3, "resolution must be at least 3")?;
-    check(
-        patch_size.is_finite() && patch_size > 0.0,
-        "patch_size must be positive and finite",
-    )?;
     let n_img = image_camera.shape()[0];
     check(
         quaternions_wxyz.shape() == [n_img, 4],
@@ -193,31 +195,9 @@ pub fn cell_plane_normals<'py>(
     let cams: Vec<CameraIntrinsics> = cameras.iter().map(|c| c.inner.clone()).collect();
 
     let starts = to_contiguous!(cluster_starts).into_owned();
-    check(
-        starts.windows(2).all(|w| w[0] <= w[1]) && starts.last().is_none_or(|&s| s as usize <= k),
-        "cluster_starts must be non-decreasing and end within the member count",
-    )?;
     let references = to_contiguous!(reference_members).into_owned();
-    for (ci, &r) in references.iter().enumerate() {
-        if r != CLUSTER_REFERENCE_UNREFINABLE && !(starts[ci] <= r && r < starts[ci + 1]) {
-            return Err(PyValueError::new_err(format!(
-                "reference_members[{ci}] = {r} is not in cluster {ci}'s member range"
-            )));
-        }
-    }
     let images = to_contiguous!(member_images).into_owned();
-    if let Some(&bad) = images.iter().find(|&&i| i as usize >= n_img) {
-        return Err(PyValueError::new_err(format!(
-            "member_images contains {bad}, out of range for {n_img} images"
-        )));
-    }
     let image_camera = to_contiguous!(image_camera).into_owned();
-    if let Some(&bad) = image_camera.iter().find(|&&j| j as usize >= cams.len()) {
-        return Err(PyValueError::new_err(format!(
-            "image_camera contains {bad}, out of range for {} cameras",
-            cams.len()
-        )));
-    }
     let status: Vec<ClusterMemberStatus> = to_contiguous!(member_status)
         .iter()
         .map(|&s| {
@@ -277,28 +257,30 @@ pub fn cell_plane_normals<'py>(
         min_cells,
         det_aniso,
     };
-    let out = py.detach(|| {
-        core_cell_plane_normals(
-            &CellPlaneClusters {
-                cluster_starts: &starts,
-                reference_members: &references,
-                member_images: &images,
-                member_status: &status,
-                member_positions: &positions,
-                member_shapes: &shapes,
-                cell_shift_px: &shifts,
-                cell_status: &cells,
-                patch_size,
-                resolution,
-            },
-            &CellPlaneCameras {
-                cameras: &cams,
-                image_camera: &image_camera,
-                cam_from_world: &poses,
-            },
-            &params,
-        )
-    });
+    let out = py
+        .detach(|| {
+            core_cell_plane_normals(
+                &CellPlaneClusters {
+                    cluster_starts: &starts,
+                    reference_members: &references,
+                    member_images: &images,
+                    member_status: &status,
+                    member_positions: &positions,
+                    member_shapes: &shapes,
+                    cell_shift_px: &shifts,
+                    cell_status: &cells,
+                    patch_size,
+                    resolution,
+                },
+                &CellPlaneCameras {
+                    cameras: &cams,
+                    image_camera: &image_camera,
+                    cam_from_world: &poses,
+                },
+                &params,
+            )
+        })
+        .map_err(value_err)?;
 
     let flat3 = |f: &dyn Fn(usize) -> [f64; 3]| -> Vec<f64> { (0..c).flat_map(f).collect() };
     let normal = flat3(&|i| out[i].normal);

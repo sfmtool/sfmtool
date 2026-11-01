@@ -222,6 +222,7 @@ fn run(
         },
         params,
     )
+    .expect("valid input")
 }
 
 fn angle_deg(a: [f64; 3], b: Vector3<f64>) -> f64 {
@@ -583,4 +584,245 @@ fn the_ray_floor_follows_the_shape_and_the_grid_step() {
     assert!((shape_gain(&shape) - 4.0).abs() < 1e-12);
     let rotated = [[0.0f32, -2.0], [2.0, 0.0]];
     assert!((shape_gain(&rotated) - 2.0).abs() < 1e-6);
+}
+
+/// Owned inputs of one valid two-cluster call, for the tests that break one
+/// of them.
+struct Inputs {
+    starts: Vec<u32>,
+    references: Vec<u32>,
+    members: Members,
+    patch_size: f64,
+    resolution: u32,
+    cameras: Vec<CameraIntrinsics>,
+    image_camera: Vec<u32>,
+    poses: Vec<Option<RigidTransform>>,
+}
+
+impl Inputs {
+    fn valid() -> Inputs {
+        let scene = Scene::new(tilted_normal(), &ring_centres());
+        let one = planar_members(&scene);
+        let n = one.images.len() as u32;
+        fn twice<T: Clone>(v: &[T]) -> Vec<T> {
+            v.iter().chain(v).cloned().collect()
+        }
+        let members = Members {
+            images: twice(&one.images),
+            status: twice(&one.status),
+            positions: twice(&one.positions),
+            shapes: twice(&one.shapes),
+            shifts: twice(&one.shifts),
+            cells: twice(&one.cells),
+        };
+        Inputs {
+            starts: vec![0, n, 2 * n],
+            references: vec![0, n],
+            members,
+            patch_size: PATCH_SIZE,
+            resolution: RESOLUTION,
+            cameras: vec![scene.cam.clone()],
+            image_camera: vec![0; scene.poses.len()],
+            poses: scene.cam_from_world(),
+        }
+    }
+
+    fn call(&self) -> Result<Vec<CellPlaneNormal>, CellPlaneNormalsError> {
+        let m = &self.members;
+        cell_plane_normals(
+            &CellPlaneClusters {
+                cluster_starts: &self.starts,
+                reference_members: &self.references,
+                member_images: &m.images,
+                member_status: &m.status,
+                member_positions: &m.positions,
+                member_shapes: &m.shapes,
+                cell_shift_px: &m.shifts,
+                cell_status: &m.cells,
+                patch_size: self.patch_size,
+                resolution: self.resolution,
+            },
+            &CellPlaneCameras {
+                cameras: &self.cameras,
+                image_camera: &self.image_camera,
+                cam_from_world: &self.poses,
+            },
+            &CellPlaneParams::default(),
+        )
+    }
+}
+
+/// The error `break_it` makes [`Inputs::valid`] return.
+fn error_of(break_it: impl FnOnce(&mut Inputs)) -> CellPlaneNormalsError {
+    let mut inputs = Inputs::valid();
+    break_it(&mut inputs);
+    inputs.call().expect_err("broken input accepted")
+}
+
+#[test]
+fn valid_input_gives_both_clusters_the_same_normal() {
+    let out = Inputs::valid().call().unwrap();
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].determinacy, NormalDeterminacy::BothAxes);
+    assert_eq!(out[0], out[1]);
+}
+
+#[test]
+fn a_member_array_of_another_length_is_refused() {
+    use CellPlaneNormalsError as E;
+    let n = Inputs::valid().members.images.len();
+    let expect = |array| E::MemberArrayLength {
+        array,
+        len: n - 1,
+        num_members: n,
+    };
+    assert_eq!(
+        error_of(|i| {
+            i.members.status.pop();
+        }),
+        expect("member_status")
+    );
+    assert_eq!(
+        error_of(|i| {
+            i.members.positions.pop();
+        }),
+        expect("member_positions")
+    );
+    assert_eq!(
+        error_of(|i| {
+            i.members.shapes.pop();
+        }),
+        expect("member_shapes")
+    );
+    assert_eq!(
+        error_of(|i| {
+            i.members.shifts.pop();
+        }),
+        expect("cell_shift_px")
+    );
+    assert_eq!(
+        error_of(|i| {
+            i.members.cells.pop();
+        }),
+        expect("cell_status")
+    );
+}
+
+#[test]
+fn cluster_starts_of_the_wrong_length_are_refused() {
+    let e = error_of(|i| {
+        i.starts.pop();
+    });
+    assert_eq!(
+        e,
+        CellPlaneNormalsError::ClusterStartsLength {
+            len: 2,
+            num_clusters: 2
+        }
+    );
+    assert!(e.to_string().contains("cluster_starts has 2 entries"));
+}
+
+#[test]
+fn cluster_starts_past_the_members_are_refused() {
+    let n = Inputs::valid().members.images.len();
+    assert_eq!(
+        error_of(|i| i.starts[2] += 1),
+        CellPlaneNormalsError::ClusterStartsPastMembers {
+            index: 2,
+            start: n as u32 + 1,
+            num_members: n,
+        }
+    );
+}
+
+#[test]
+fn decreasing_cluster_starts_are_refused() {
+    assert_eq!(
+        error_of(|i| i.starts[0] = i.starts[1] + 1),
+        CellPlaneNormalsError::ClusterStartsDecrease { cluster: 0 }
+    );
+}
+
+#[test]
+fn a_reference_outside_its_cluster_is_refused() {
+    let n = Inputs::valid().starts[1];
+    // In the other cluster's range, and past every member.
+    for reference in [0, 10 * n] {
+        assert_eq!(
+            error_of(|i| i.references[1] = reference),
+            CellPlaneNormalsError::ReferenceOutsideCluster {
+                cluster: 1,
+                reference,
+                start: n,
+                end: 2 * n,
+            }
+        );
+    }
+    // The unrefinable marker is not an index and is accepted.
+    let mut inputs = Inputs::valid();
+    inputs.references[1] = CLUSTER_REFERENCE_UNREFINABLE;
+    let out = inputs.call().unwrap();
+    assert_eq!(out[1].determinacy, NormalDeterminacy::None);
+}
+
+#[test]
+fn a_resolution_below_three_is_refused() {
+    assert_eq!(
+        error_of(|i| i.resolution = 2),
+        CellPlaneNormalsError::ResolutionTooSmall { resolution: 2 }
+    );
+}
+
+#[test]
+fn a_patch_size_not_positive_and_finite_is_refused() {
+    for bad in [0.0, -1.0, f64::INFINITY] {
+        assert_eq!(
+            error_of(|i| i.patch_size = bad),
+            CellPlaneNormalsError::InvalidPatchSize { patch_size: bad }
+        );
+    }
+    let e = error_of(|i| i.patch_size = f64::NAN);
+    assert!(
+        matches!(e, CellPlaneNormalsError::InvalidPatchSize { patch_size } if patch_size.is_nan())
+    );
+}
+
+#[test]
+fn a_pose_list_of_another_length_is_refused() {
+    let n_img = Inputs::valid().image_camera.len();
+    assert_eq!(
+        error_of(|i| {
+            i.poses.pop();
+        }),
+        CellPlaneNormalsError::PoseListLength {
+            len: n_img - 1,
+            num_images: n_img,
+        }
+    );
+}
+
+#[test]
+fn a_member_image_out_of_range_is_refused() {
+    let n_img = Inputs::valid().image_camera.len();
+    assert_eq!(
+        error_of(|i| i.members.images[3] = n_img as u32),
+        CellPlaneNormalsError::ImageIndexOutOfRange {
+            member: 3,
+            image: n_img as u32,
+            num_images: n_img,
+        }
+    );
+}
+
+#[test]
+fn an_image_camera_out_of_range_is_refused() {
+    assert_eq!(
+        error_of(|i| i.image_camera[2] = 1),
+        CellPlaneNormalsError::CameraIndexOutOfRange {
+            image: 2,
+            camera: 1,
+            num_cameras: 1,
+        }
+    );
 }
