@@ -491,8 +491,11 @@ pairs whose viewing directions differ by more than 90°, so such a pair shares 0
 the nearby count reads the tracks directly and has no such filter.
 
 Only listed discontinuities are classified. Clustering keeps one edge of each run of
-adjacent flagged edges, so a break inside a run whose kept edge is another break is
-not named separately.
+adjacent flagged edges, so a break on another edge of the run is not classified: when
+the kept edge is itself a break the run is still named, by that edge, and when it is
+not, the verdict does not report the break. In the 77 reconstructions this happened
+once, in a broken Daegu stride-7 solve whose run from 2507 to 2591 holds breaks at
+2514->2521 and 2563->2570 and is named by 2563->2570.
 
 ### Output
 
@@ -518,7 +521,8 @@ not named separately.
 - Verdict, the last line before the timing: `Verdict: no breaks`, or
   `Verdict: N breaks: A->B, ...` naming each break by its frame numbers (`1 break`
   for one), with the sequence name before each edge when the reconstruction has more
-  than one sequence. For example `Verdict: 1 break: 2225->2229`.
+  than one sequence. For example `Verdict: 1 break: 2225->2229`. A reconstruction with
+  no numbered sequence prints the no-sequences message and no verdict.
 
 The command exits 0 whatever the verdict, as it does for every finding; a script reads
 the verdict from `break_count` in the `--json` report.

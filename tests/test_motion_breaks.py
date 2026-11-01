@@ -351,6 +351,7 @@ def test_points_at_infinity_count_as_shared_points(seoul_bull_ground_truth_sfmr)
 
     before = analyze_reconstruction(planted)
     after = analyze_reconstruction(directions)
+    assert [(a, b) for _, a, b in _break_edges(before)] == [(10, 11)]
     assert before[0]["break_reference"] == after[0]["break_reference"]
     assert _break_edges(before) == _break_edges(after)
 
