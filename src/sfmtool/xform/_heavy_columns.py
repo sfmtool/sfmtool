@@ -199,7 +199,8 @@ def _verified_sift_thumbnail(
     ``.sift``'s recorded ``image_file_xxh128`` must equal the image's
     ``image_file_hashes`` entry. ``None`` when there is no such ``.sift``.
     """
-    from ..sift.file import SiftReader, get_sift_path_from_recon
+    from ..sift.file import get_sift_path_from_recon
+    from ..fileio import SiftFile
 
     try:
         sift_path = get_sift_path_from_recon(recon, name)
@@ -208,7 +209,7 @@ def _verified_sift_thumbnail(
     if not sift_path.is_file():
         return None
     try:
-        reader = SiftReader(sift_path)
+        reader = SiftFile(sift_path)
     except OSError:
         return None
     if recon.feature_source == "embedded_patches":

@@ -24,7 +24,7 @@ from .._sfmtool.matching import (
     background_floor_clusters as _rust_background_floor_clusters,
     clusters_to_pair_matches as _rust_clusters_to_pair_matches,
 )
-from ..sift.file import SiftReader
+from ..fileio import SiftFile
 
 
 class ClusterSet(NamedTuple):
@@ -68,7 +68,7 @@ def cluster_match(
     assert len(image_paths) == len(sift_paths)
 
     def read_one(sift_path):
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             return reader.read_descriptors(count=max_feature_count)
 
     # Decode the .sift descriptor blocks through a thread pool (the reader

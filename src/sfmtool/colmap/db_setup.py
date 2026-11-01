@@ -15,7 +15,7 @@ import pycolmap
 from ..camera.config import CameraConfigResolver
 from ..camrig.resolver import resolve_camrig_for_solve
 from ..rig.frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
-from ..sift.file import image_files_to_sift_files
+from ..sift.extract import image_files_to_sift_files
 from .db_builders import (
     _setup_db_single_camera,
     _setup_db_with_camrig,

@@ -141,7 +141,8 @@ def prepare(
 
 
 def _extract_sift(image_paths: list[Path], config: dict, *, quiet: bool) -> None:
-    from sfmtool.sift.file import get_sift_path_for_image, image_files_to_sift_files
+    from sfmtool.sift.file import get_sift_path_for_image
+    from sfmtool.sift.extract import image_files_to_sift_files
 
     missing = [p for p in image_paths if not get_sift_path_for_image(p).exists()]
     if not missing:
@@ -158,10 +159,11 @@ def _extract_sift(image_paths: list[Path], config: dict, *, quiet: bool) -> None
 
 def read_keypoints(workspace: Path, image_name: str):
     """``(positions (N,2) f32, affine_shapes (N,2,2) f32, sift_path)`` for one image."""
-    from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+    from sfmtool.sift.file import get_sift_path_for_image
+    from sfmtool.fileio import SiftFile
 
     path = get_sift_path_for_image(workspace / image_name)
-    reader = SiftReader(path)
+    reader = SiftFile(path)
     xy, affine = reader.read_positions_and_shapes()
     reader.close()
     return (
@@ -174,11 +176,12 @@ def read_keypoints(workspace: Path, image_name: str):
 def _build_kdf(workspace: Path, names: list[str], config: dict, out: Path) -> None:
     """One corpus image per reconstruction image, in the reconstruction's order."""
     from sfmtool.spatial import KdForest, write_kdf
-    from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+    from sfmtool.sift.file import get_sift_path_for_image
+    from sfmtool.fileio import SiftFile
 
     descriptors, positions, shapes, image_of, feature_of = [], [], [], [], []
     for index, image_name in enumerate(names):
-        reader = SiftReader(get_sift_path_for_image(workspace / image_name))
+        reader = SiftFile(get_sift_path_for_image(workspace / image_name))
         rows = np.asarray(reader.read_descriptors())
         xy, affine = reader.read_positions_and_shapes()
         reader.close()

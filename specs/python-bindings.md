@@ -67,14 +67,17 @@ the same objects:
 `sfmtool.sift` is the one package among them, so the file is its
 [`__init__.py`](../src/sfmtool/sift/__init__.py), which imports from
 `sfmtool._sfmtool.sift`: beside the bindings, `sfmtool/sift/` holds the Python
-SIFT file I/O and the OpenCV and COLMAP extractors, imported by module path
-(`sfmtool.sift.file`). `sfmtool.analysis` holds the analysis bindings and is a
-different module from `sfmtool.analyze`, the Python reconstruction analysis
-that calls some of them; each keeps its name, the one from the extension and
-the one from the code it holds. `sfmtool.fileio` is named `fileio` rather than
-`io` because `from sfmtool import *` binds it with the other public modules
-(see below), and a module named `io` would replace the standard library's `io`
-in the importing namespace.
+SIFT extraction pipeline, the OpenCV and COLMAP extractors, and the helpers
+that find an image's `.sift` path, imported by module path
+(`sfmtool.sift.extract`). Reading and writing a `.sift` file is
+`sfmtool.fileio`'s, as it is for every other format. `sfmtool.analysis` holds
+the analysis bindings and is a different module from `sfmtool.analyze`, the
+Python reconstruction analysis that calls some of them; each keeps its name,
+the one from the extension and the one from the code it holds.
+`sfmtool.fileio` is named `fileio` rather than `io` because
+`from sfmtool import *` binds it with the other public modules (see below),
+and a module named `io` would replace the standard library's `io` in the
+importing namespace.
 
 The package root [`sfmtool/__init__.py`](../src/sfmtool/__init__.py) imports
 the three root names of the extension and no binding from a submodule, so a
@@ -88,18 +91,19 @@ twelve public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
 and bound on the root on first use by the root's module `__getattr__`, so
 `import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and
 `import sfmtool` still loads nothing but the extension. The root also holds
-Python names, none of them a binding: `_LAZY_NAMES` maps six Python submodules
-to the names the root reads from each on first use, such as `SiftReader` and
-`write_sift` from `sfmtool.sift.file`, `extract_sift_with_colmap` from
-`sfmtool.sift.extract_colmap` and `init_workspace` from `sfmtool._workspace`.
-The root's `__all__` is the three extension names, the `_LAZY_NAMES` names and
-the `_LAZY_SUBPACKAGES` modules, so `from sfmtool import *` imports and binds
-exactly those, and no other subpackage: not `sfmtool.align`,
-`sfmtool.analyze` or `sfmtool.camera`. Since each binding's `__module__` is
-its public module, a class with a `__reduce__`, such as `CameraIntrinsics`,
-pickles and unpickles through that path. `sfmtool.write_sift` on the root is
-the Python function in `sfmtool.sift.file`, which checks its arguments and then
-calls `sfmtool.fileio.write_sift`.
+Python names, none of them a binding: `_LAZY_NAMES` maps eight Python
+submodules to the names the root reads from each on first use, such as
+`get_sift_path_for_image` from `sfmtool.sift.file`, `extract_sift_with_colmap`
+from `sfmtool.sift.extract_colmap` and `init_workspace` from
+`sfmtool._workspace`. The root's `__all__` is the three extension names, the
+`_LAZY_NAMES` names and the `_LAZY_SUBPACKAGES` modules, so
+`from sfmtool import *` imports and binds exactly those, and no other
+subpackage: not `sfmtool.align`, `sfmtool.analyze` or `sfmtool.camera`. Since
+each binding's `__module__` is its public module, a class with a `__reduce__`,
+such as `CameraIntrinsics`, pickles and unpickles through that path. A file
+format has no Python wrapper over its bindings: `sfmtool.fileio.write_sift`
+checks its own arguments, in Rust, and `sfmtool.fileio.SiftFile` is the
+`.sift` reader the package uses, as `MatchesFile` is the `.matches` one.
 
 Code inside `src/sfmtool/` may import from `._sfmtool` directly, as it may
 import any internal name. Tests, scripts, the docs and spec examples import
@@ -153,7 +157,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [fileio/sfmr.rs](../crates/sfmtool-py/src/fileio/sfmr.rs) | `read_sfmr`, `read_sfmr_metadata`, `read_sfmr_content_hash`, `write_sfmr`, `verify_sfmr`, `POINT_CONSTRAINT_NAMES` | [sfmr-file-format.md](formats/sfmr-file-format.md); `POINT_CONSTRAINT_NAMES` in [bundle-adjustment.md](core/geometry/bundle-adjustment.md) |
-| [fileio/sift.rs](../crates/sfmtool-py/src/fileio/sift.rs) | `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`, `verify_sift`, `SiftWriteQueue` | [sift-file-format.md](formats/sift-file-format.md); `SiftWriteQueue` in [sift.md](core/features/sift.md) |
+| [fileio/sift.rs](../crates/sfmtool-py/src/fileio/sift.rs) | `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`, `verify_sift`, `SiftFile`, `SiftWriteQueue` | [sift-file-format.md](formats/sift-file-format.md); `SiftWriteQueue` in [sift-command.md](cli/image-feature/sift-command.md#extraction-orchestration-pipelining) |
 | [fileio/matches.rs](../crates/sfmtool-py/src/fileio/matches.rs), [matches_file.rs](../crates/sfmtool-py/src/fileio/matches_file.rs) | `read_matches`, `read_matches_metadata`, `write_matches`, `write_clusters_matches`, `verify_matches`, `MatchesFile` | [matches-file-format.md](formats/matches-file-format.md) |
 | [fileio/camrig.rs](../crates/sfmtool-py/src/fileio/camrig.rs) | `read_camrig`, `read_camrig_metadata`, `write_camrig`, `verify_camrig`, and the image-pattern helpers `validate_camrig_pattern`, `camrig_pattern_to_glob`, `camrig_pattern_matches`, `camrig_pattern_frame_index` | [camrig-file-format.md](formats/camrig-file-format.md) |
 | [fileio/colmap_binary.rs](../crates/sfmtool-py/src/fileio/colmap_binary.rs), [colmap_db.rs](../crates/sfmtool-py/src/fileio/colmap_db.rs) | `read_colmap_binary`, `write_colmap_binary`, `write_colmap_db`, `read_colmap_db_matches` | [colmap-interop.md](formats/colmap-interop.md) |

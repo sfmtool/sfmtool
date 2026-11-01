@@ -10,7 +10,7 @@ from click.testing import CliRunner
 
 from sfmtool.cli import main
 from sfmtool.feature_match._cluster_matching import cluster_match
-from sfmtool.sift.file import write_sift
+from sfmtool.fileio import write_sift
 
 
 N_IMAGES = 4
@@ -44,12 +44,14 @@ def _write_synthetic_sift(path: Path, descriptors: np.ndarray, image_name: str):
     thumbnail = np.zeros((128, 128, 3), dtype=np.uint8)
     write_sift(
         path,
-        feature_tool_metadata,
-        metadata,
-        position,
-        affine_shape,
-        descriptors,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": position,
+            "affine_shapes": affine_shape,
+            "descriptors": descriptors,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
 

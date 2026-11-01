@@ -41,8 +41,8 @@ def draw_sift_features(
     """
     import cv2
 
-    from ..fileio import read_image_rgb, write_image_rgb
-    from .file import SiftReader, get_sift_path_for_image
+    from ..fileio import SiftFile, read_image_rgb, write_image_rgb
+    from .file import get_sift_path_for_image
 
     image_path = Path(image_path)
     output_path = Path(output_path)
@@ -62,7 +62,7 @@ def draw_sift_features(
         ignore_workspace=ignore_workspace,
     )
     try:
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             positions, affine_shapes = reader.read_positions_and_shapes(
                 count=max_features
             )

@@ -25,7 +25,8 @@ from sfmtool.spatial import (
     write_kdf,
 )
 from sfmtool.cli import main
-from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+from sfmtool.sift.file import get_sift_path_for_image
+from sfmtool.fileio import SiftFile
 
 # Small enough to stay fast, wide enough that a few-hundred-byte chunk target
 # still splits each tree into many chunks — a traversal that never crosses a
@@ -387,7 +388,7 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
 
     config = json.loads((workspace / ".sfm-workspace.json").read_text())
     sift_path = get_sift_path_for_image(isolated_seoul_bull_image)
-    sift = SiftReader(sift_path)
+    sift = SiftFile(sift_path)
     all_descriptors = sift.read_descriptors()
     all_positions, all_affine_shapes = sift.read_positions_and_shapes()
     from scripts.benchmark_kdf_layouts import load_corpus

@@ -177,12 +177,12 @@ def test_the_sources_can_read_their_keypoints_from_the_sift_files(
     sources,
 ):
     edited, image, pixel = query
-    from sfmtool.sift.file import SiftReader
+    from sfmtool.fileio import SiftFile
 
     paths = sift_paths(embedded)
     keypoints = []
     for path in paths:
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         xy, affine = reader.read_positions_and_shapes()
         reader.close()
         keypoints.append((np.asarray(xy, np.float32), np.asarray(affine, np.float32)))

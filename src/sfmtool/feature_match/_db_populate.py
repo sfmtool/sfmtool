@@ -76,7 +76,7 @@ def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    from ..sift.file import SiftReader
+    from ..fileio import SiftFile
 
     pair_count = matches_data["metadata"]["image_pair_count"]
     if pair_count == 0:
@@ -88,7 +88,7 @@ def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):
     distances = matches_data["match_descriptor_distances"]
 
     def read_one(img_idx):
-        with SiftReader(sift_paths[img_idx]) as reader:
+        with SiftFile(sift_paths[img_idx]) as reader:
             # Cached as u8 (the f32 upcast happens per gathered batch below):
             # a whole-corpus f32 cache would be 4x the descriptor bytes.
             return img_idx, reader.read_descriptors(count=max_feature_count)

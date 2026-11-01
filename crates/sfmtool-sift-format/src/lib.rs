@@ -25,7 +25,7 @@ pub use read::{
 };
 pub use types::*;
 pub use verify::verify_sift;
-pub use write::write_sift;
+pub use write::{validate_sift_data, write_sift};
 
 #[cfg(test)]
 mod tests;

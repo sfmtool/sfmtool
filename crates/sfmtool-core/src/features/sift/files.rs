@@ -40,8 +40,7 @@ pub const WORKSPACE_CONFIG_FILE: &str = ".sfm-workspace.json";
 /// `sfm sift` reads the same variable.
 pub const CONCURRENT_IMAGES_ENV_VAR: &str = "SFMTOOL_SIFT_EXTRACT_WORKERS";
 
-/// The zstd level `.sift` files are written at, the one `sfm sift` uses.
-pub const SIFT_ZSTD_LEVEL: i32 = 5;
+pub use sfmtool_sift_format::SIFT_ZSTD_LEVEL;
 
 /// About how many bytes one image in flight holds per source pixel: the decoded
 /// RGB frame plus the `f32` Gaussian pyramid of the doubled image the extraction

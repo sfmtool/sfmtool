@@ -14,12 +14,9 @@ from .._path_summary import summarize_path_list
 from .._filenames import expand_paths
 from .._sfmtool.reconstruction import RangeExpr
 from .._workspace import find_workspace_for_path, load_workspace_config
-from ..sift.file import (
-    SiftExtractionError,
-    draw_sift_features,
-    get_used_features_from_reconstruction,
-    image_files_to_sift_files,
-)
+from ..sift.file import get_used_features_from_reconstruction
+from ..sift.extract import SiftExtractionError, image_files_to_sift_files
+from ..sift.draw import draw_sift_features
 
 
 @click.command("sift")

@@ -13,6 +13,18 @@ class SiftExtractionError(Exception):
     """Exception raised when SIFT feature extraction fails."""
 
 
+# The `write_sift` dict keys of the six values each extraction backend returns
+# for an image, in the order it returns them.
+_SIFT_DATA_KEYS = (
+    "feature_tool_metadata",
+    "metadata",
+    "positions_xy",
+    "affine_shapes",
+    "descriptors",
+    "thumbnail_y_x_rgb",
+)
+
+
 # ---------------------------------------------------------------------------
 # Extraction pipeline
 # ---------------------------------------------------------------------------
@@ -49,13 +61,8 @@ def image_files_to_sift_files(
     Raises:
         SiftExtractionError: If feature extraction fails for any image
     """
-    from sfmtool.sift.file import (
-        _SIFT_ZSTD_LEVEL,
-        _SiftWriteStream,
-        _validate_sift_write,
-        get_feature_tool_xxh128,
-        get_feature_type_for_tool,
-    )
+    from sfmtool._sfmtool.fileio import SiftWriteQueue
+    from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
     from sfmtool.sift.extract_colmap import (
         extract_sift_with_colmap,
         get_colmap_feature_options,
@@ -146,14 +153,11 @@ def image_files_to_sift_files(
 
     if image_filename_filtered_list:
         chunk_size = 500
-        # Compress + write each .sift on the shared rayon pool via SiftWriteQueue
-        # (write_sift releases the GIL for the zstd/ZIP work). Because the save
-        # is a pool *task* rather than a separate OS thread, it never
-        # oversubscribes the cores: one worker runs the save while the extract's
-        # par_iter proceeds on the rest, so the save of image i overlaps the
-        # extract of image i+1 without the barrier busy-spin a contending
-        # external thread would cause. See specs/core/features/sift.md.
-        with _SiftWriteStream() as writer:
+        # Compress + write each .sift on the shared rayon pool via
+        # SiftWriteQueue, which bounds the saves in flight and joins them at the
+        # end of the block (draining instead if an exception leaves it). See
+        # specs/core/features/sift.md.
+        with SiftWriteQueue() as writer:
             for index_start in range(0, len(image_filename_filtered_list), chunk_size):
                 # extraction_fn may return a list (COLMAP/OpenCV, which shell out
                 # to batch binaries) or an in-order generator (the sfmtool
@@ -170,11 +174,7 @@ def image_files_to_sift_files(
                     sift_list,
                     sift_filename_filtered_list[index_start : index_start + chunk_size],
                 ):
-                    writer.submit(
-                        str(sift_filename),
-                        _validate_sift_write(*sift),
-                        _SIFT_ZSTD_LEVEL,
-                    )
+                    writer.submit(sift_filename, dict(zip(_SIFT_DATA_KEYS, sift)))
 
     print()
     if len(sift_filename_filtered_list) != len(sift_filename_list):

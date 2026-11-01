@@ -36,7 +36,7 @@ import numpy as np
 
 from sfmtool import build_profile
 from sfmtool.spatial import KdForest, LazyKdForest, read_kdf, write_kdf
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 KIB = 1 << 10
 MIB = 1 << 20
@@ -48,7 +48,7 @@ def load_images(
     """Descriptors per image, in filename order."""
     blocks, names, total = [], [], 0
     for path in sorted(features.glob("*.sift")):
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         desc = reader.read_descriptors()
         reader.close()
         blocks.append(desc)

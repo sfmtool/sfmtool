@@ -124,7 +124,7 @@ unrelated keypoints into runaway mega-clusters — measured below.
 ## Algorithm
 
 1. **Un-project.** For every image, load its keypoints from the `.sift` file
-   (`get_sift_path_for_image` + `SiftReader`), optionally capped to the largest
+   (`get_sift_path_for_image` + `sfmtool.fileio.SiftFile`), optionally capped to the largest
    `--max-features` per image, **skipping any keypoint already assigned to an
    existing 3D point** — discovery operates only on the features the solve left
    untracked. Batch-un-project the rest with `pixel_to_ray_batch` and rotate to
@@ -445,7 +445,7 @@ What the numbers say:
 | camera → world rotation | `quaternion_wxyz`, `R_iᵀ` (`camera_to_world_rotation_flat`) |
 | direction KD-tree, radius query | `KdTree3d` (PyO3) / `spatial.rs` `PointCloud3` |
 | descriptor L2 / best-match | `features/feature_match/descriptor.rs` |
-| all keypoints + descriptors per image | `get_sift_path_for_image` + `SiftReader` |
+| all keypoints + descriptors per image | `get_sift_path_for_image` + `sfmtool.fileio.SiftFile` |
 | a candidate's rays and weights | `analysis/point_or_bearing.rs` (`observation_ray`) |
 | the verdict and the bearing | `bearing_score_batch`, `is_finite` |
 | the noise level | `SfmrReconstruction::reprojection_noise` |

@@ -82,7 +82,7 @@ from kdf_constellation_eval import (
 from sfmtool import build_profile
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.spatial import LazyKdForest
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 KIB = 1 << 10
 MIB = 1 << 20
@@ -397,7 +397,7 @@ def open_corpus(workspace: Path, kdf: str, features: Path | None, cache_mib: int
     positions = load_keypoints(sift_paths)
     sizes = []
     for path in sift_paths:
-        meta = SiftReader(path).metadata
+        meta = SiftFile(path).metadata
         sizes.append((meta["image_width"], meta["image_height"]))
     return lazy, positions, corpus_offsets(lazy, positions), sift_paths, names, sizes
 
@@ -1042,7 +1042,7 @@ def build_corpus_sources(workspace: Path, paths, names):
     """The `write_kdf` sources mapping for a list of `.sift` files."""
     descriptors, positions, shapes = [], [], []
     for path in paths:
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         descriptors.append(np.asarray(reader.read_descriptors(), dtype=np.uint8))
         xy, shape = reader.read_positions_and_shapes()
         positions.append(np.asarray(xy, dtype=np.float32))

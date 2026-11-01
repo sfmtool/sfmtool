@@ -258,12 +258,11 @@ def undistort_reconstruction_images(
         materialize_infinity_for_export,
     )
     from .sift.file import (
-        SiftReader,
         get_feature_tool_xxh128,
         get_sift_path_from_recon,
-        write_sift,
         xxh128_of_file,
     )
+    from .fileio import SiftFile, write_sift
 
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
@@ -400,7 +399,7 @@ def undistort_reconstruction_images(
 
         # Step 4: Read source .sift file and transform features
         source_sift_path = get_sift_path_from_recon(recon, image_name)
-        with SiftReader(source_sift_path) as reader:
+        with SiftFile(source_sift_path) as reader:
             src_positions = reader.read_positions()  # Nx2 float32
             src_affine_shapes = reader.read_affine_shapes()  # Nx2x2 float32
             src_descriptors = reader.read_descriptors()  # Nx128 uint8
@@ -472,16 +471,18 @@ def undistort_reconstruction_images(
 
         write_sift(
             sift_path,
-            feature_tool_metadata,
-            sift_metadata,
-            new_positions,
-            new_affine,
-            new_descriptors,
-            thumbnail_rgb,
+            {
+                "feature_tool_metadata": feature_tool_metadata,
+                "metadata": sift_metadata,
+                "positions_xy": new_positions,
+                "affine_shapes": new_affine,
+                "descriptors": new_descriptors,
+                "thumbnail_y_x_rgb": thumbnail_rgb,
+            },
         )
 
         # Step 6: Read back hashes from written .sift
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             ft_hash = reader.content_hash["feature_tool_xxh128"]
             sc_hash = reader.content_hash["content_xxh128"]
             feature_tool_hashes.append(bytes.fromhex(ft_hash))

@@ -22,7 +22,8 @@ from sfmtool.spatial import (
     write_kdf,
 )
 from sfmtool.cli import main
-from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+from sfmtool.sift.file import get_sift_path_for_image
+from sfmtool.fileio import SiftFile
 
 # The warp planted between image 0 and image 1, as a 2x3 row-major affine.
 _WARP = np.array([[0.95, -0.2, 60.0], [0.2, 0.95, -25.0]], dtype=np.float64)
@@ -64,7 +65,7 @@ def duplicated_capture(tmp_path_factory):
     assert result.exit_code == 0, result.output
 
     sift_path = get_sift_path_for_image(image)
-    reader = SiftReader(sift_path)
+    reader = SiftFile(sift_path)
     descriptors = np.asarray(reader.read_descriptors())
     positions, affine_shapes = reader.read_positions_and_shapes()
     reader.close()
@@ -224,7 +225,7 @@ def test_the_two_forests_answer_identically(duplicated_capture):
         positions,
         duplicated_capture["sources"],
         descriptors=np.asarray(
-            SiftReader(duplicated_capture["sift_path"]).read_descriptors()
+            SiftFile(duplicated_capture["sift_path"]).read_descriptors()
         )[inside],
         image_index=0,
         center=at,
@@ -375,7 +376,7 @@ def test_a_wrong_dtype_and_a_missing_source_key_follow_python_conventions(
 def test_the_radius_rule_sizes_a_constellation(duplicated_capture):
     """The radius helper picks a disc that holds about the features asked for."""
     positions = duplicated_capture["positions"]
-    metadata = SiftReader(duplicated_capture["sift_path"]).metadata
+    metadata = SiftFile(duplicated_capture["sift_path"]).metadata
     width, height = metadata["image_width"], metadata["image_height"]
 
     radius = radius_for_feature_count(width, height, len(positions), 50)

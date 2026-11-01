@@ -1,10 +1,11 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""SIFT feature file I/O and utilities.
+"""Helpers for `.sift` files: where an image's file lives, the feature-cache
+hash that names its directory, and arithmetic on the affine shapes it stores.
 
-Provides SiftReader for reading .sift files, write_sift for writing them,
-and helper functions for path resolution and feature analysis.
+Reading and writing a `.sift` file is `sfmtool.fileio`'s: `SiftFile` opens
+one, and `write_sift` and `SiftWriteQueue` write them.
 """
 
 import json
@@ -14,37 +15,14 @@ from typing import TYPE_CHECKING
 import numpy as np
 import xxhash
 
-from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool._sfmtool.fileio import (
-    SiftWriteQueue as _SiftWriteQueue,
-    read_sift as _core_read_sift,
-    read_sift_metadata,
-    read_sift_partial,
-    write_sift as _core_write_sift,
-)
-
-# Keep historical imports available while extraction and drawing live in
-# their own modules. They resolve file I/O helpers when called.
-from .draw import draw_sift_features
-from .extract import (
-    SiftExtractionError,
-    image_files_to_sift_files,
-    image_files_to_sift_files_opencv,
-)
-
 if TYPE_CHECKING:
     from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 __all__ = [
-    "SiftExtractionError",
-    "SiftReader",
-    "write_sift",
     "get_feature_type_for_tool",
     "get_sift_path_for_image",
+    "get_sift_path_from_recon",
     "get_used_features_from_reconstruction",
-    "image_files_to_sift_files",
-    "image_files_to_sift_files_opencv",
-    "draw_sift_features",
     "xxh128_of_file",
     "get_feature_tool_xxh128",
     "compute_orientation",
@@ -202,260 +180,6 @@ def get_feature_type_for_tool(feature_tool: str, feature_options: dict) -> str:
         return "-".join(parts)
     else:
         return f"sift-{feature_tool}"
-
-
-# ---------------------------------------------------------------------------
-# Validation schemas
-# ---------------------------------------------------------------------------
-
-_FEATURE_TOOL_METADATA_SCHEMA = {
-    "feature_tool": str,
-    "feature_type": str,
-    "feature_options": dict,
-}
-_FEATURE_TOOL_METADATA_KEYS = set(_FEATURE_TOOL_METADATA_SCHEMA.keys())
-
-_SIFT_METADATA_SCHEMA = {
-    "version": int,
-    "image_name": str,
-    "image_file_xxh128": str,
-    "image_file_size": int,
-    "image_width": int,
-    "image_height": int,
-    "feature_count": int,
-}
-_SIFT_METADATA_KEYS = set(_SIFT_METADATA_SCHEMA.keys())
-
-
-def _validate_input(metadata, keys, schema):
-    """Validate metadata against a schema."""
-    metadata_keys = set(metadata.keys())
-    if metadata_keys != keys:
-        extra_keys = ", ".join(sorted(metadata_keys.difference(keys)))
-        missing_keys = ", ".join(sorted(keys.difference(metadata_keys)))
-        raise ValueError(
-            f"The metadata has incorrect keys.\nExtra: {extra_keys}\nMissing: {missing_keys}"
-        )
-
-    for field_name, field_type in schema.items():
-        if not isinstance(metadata[field_name], field_type):
-            raise ValueError(
-                f"The metadata field {field_name} has type {type(metadata[field_name])}, expected {field_type}"
-            )
-
-
-# ---------------------------------------------------------------------------
-# SiftReader
-# ---------------------------------------------------------------------------
-
-
-class SiftReader:
-    """Reader for .sift feature files, delegating I/O to Rust bindings."""
-
-    def __init__(self, filename: str | Path):
-        self.filename = Path(filename)
-        try:
-            meta = read_sift_metadata(str(self.filename))
-        except OSError as e:
-            if not self.filename.exists():
-                raise FileNotFoundError(str(e)) from e
-            raise
-        self.feature_tool_metadata = meta["feature_tool_metadata"]
-        self.metadata = meta["metadata"]
-        self.content_hash = meta["content_hash"]
-        self._data = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
-
-    def close(self):
-        self._data = None
-
-    def _ensure_data(self, count=None):
-        if count is not None:
-            return read_sift_partial(str(self.filename), count)
-        if self._data is None:
-            self._data = _core_read_sift(self.filename)
-        return self._data
-
-    def read_positions(self, count=None):
-        return self._ensure_data(count)["positions_xy"]
-
-    def read_affine_shapes(self, count=None):
-        return self._ensure_data(count)["affine_shapes"]
-
-    def read_descriptors(self, count=None):
-        return self._ensure_data(count)["descriptors"]
-
-    def read_positions_and_shapes(self, count=None):
-        data = self._ensure_data(count)
-        return data["positions_xy"], data["affine_shapes"]
-
-    def read_thumbnail(self):
-        """Read the square RGB thumbnail from the .sift file.
-
-        Its edge is `THUMBNAIL_SIZE`, pinned by the format.
-        """
-        return self._ensure_data()["thumbnail_y_x_rgb"]
-
-
-# ---------------------------------------------------------------------------
-# write_sift
-# ---------------------------------------------------------------------------
-
-
-def _validate_sift_write(
-    feature_tool_metadata,
-    metadata,
-    position,
-    affine_shape,
-    descriptor,
-    thumbnail,
-) -> dict:
-    """Validate fields/shapes and assemble the dict the Rust writer expects.
-
-    Returns the ``data`` dict (numpy arrays + metadata) ready for either the
-    synchronous ``_core_write_sift`` or the rayon-pool ``SiftWriteQueue``.
-    """
-    _validate_input(
-        feature_tool_metadata,
-        _FEATURE_TOOL_METADATA_KEYS,
-        _FEATURE_TOOL_METADATA_SCHEMA,
-    )
-    _validate_input(metadata, _SIFT_METADATA_KEYS, _SIFT_METADATA_SCHEMA)
-
-    if not (
-        metadata["feature_count"]
-        == len(position)
-        == len(affine_shape)
-        == len(descriptor)
-    ):
-        raise ValueError(
-            f"Lengths of input arrays don't match feature count {metadata['feature_count']}: "
-            f"{len(position)}, {len(affine_shape)}, {len(descriptor)}"
-        )
-
-    feature_count = metadata["feature_count"]
-    position = np.asarray(position)
-    affine_shape = np.asarray(affine_shape)
-    descriptor = np.asarray(descriptor)
-
-    if position.dtype != np.float32:
-        raise ValueError(
-            f"Data dtype {position.dtype} does not match required element dtype float32"
-        )
-    if affine_shape.dtype != np.float32:
-        raise ValueError(
-            f"Data dtype {affine_shape.dtype} does not match required element dtype float32"
-        )
-    if descriptor.dtype != np.uint8:
-        raise ValueError(
-            f"Data dtype {descriptor.dtype} does not match required element dtype uint8"
-        )
-
-    if position.shape != (feature_count, 2):
-        raise ValueError(
-            f"Data shape {position.shape} does not match required feature count "
-            f"and element shape ({feature_count}, 2)"
-        )
-    if affine_shape.shape != (feature_count, 2, 2):
-        raise ValueError(
-            f"Data shape {affine_shape.shape} does not match required feature count "
-            f"and element shape ({feature_count}, 2, 2)"
-        )
-    if descriptor.shape != (feature_count, 128):
-        raise ValueError(
-            f"Data shape {descriptor.shape} does not match required feature count "
-            f"and element shape ({feature_count}, 128)"
-        )
-
-    thumbnail = np.asarray(thumbnail)
-    if thumbnail.shape != (THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3):
-        raise ValueError(
-            f"Thumbnail shape {thumbnail.shape} does not match required shape "
-            f"({THUMBNAIL_SIZE}, {THUMBNAIL_SIZE}, 3)"
-        )
-    if thumbnail.dtype != np.uint8:
-        raise ValueError(
-            f"Thumbnail dtype {thumbnail.dtype} does not match required dtype uint8"
-        )
-
-    return {
-        "feature_tool_metadata": feature_tool_metadata,
-        "metadata": metadata,
-        "positions_xy": position,
-        "affine_shapes": affine_shape,
-        "descriptors": descriptor,
-        "thumbnail_y_x_rgb": thumbnail,
-    }
-
-
-# Default zstd level for .sift writes. Chosen as a size/speed balance; shared by
-# the synchronous `write_sift` and the pipelined `SiftWriteQueue` path so they
-# stay in sync.
-_SIFT_ZSTD_LEVEL = 5
-
-# How many compressed saves may be in flight at once. 2 lets the save of image i
-# overlap the extract of image i+1 (one ahead) while still bounding buffered
-# memory; a deeper queue buys no more overlap. See specs/core/features/sift.md.
-_SIFT_WRITE_LOOKAHEAD = 2
-
-
-class _SiftWriteStream:
-    """Context manager over the rayon-pool ``SiftWriteQueue``.
-
-    ``submit`` applies backpressure at the look-ahead bound; the ``with`` block
-    makes the cleanup guarantee structural: a clean exit ``join``s (surfacing
-    write errors in order), while an exception ``drain``s instead (best effort,
-    never raises, so it can't mask the in-flight exception). Either way no
-    spawned save outlives the block.
-    """
-
-    def __init__(self, lookahead: int = _SIFT_WRITE_LOOKAHEAD):
-        self._queue = _SiftWriteQueue()
-        self._lookahead = lookahead
-
-    def submit(self, path: str, data, zstd_level: int) -> None:
-        if self._queue.pending_count >= self._lookahead:
-            self._queue.join_oldest()
-        self._queue.submit(path, data, zstd_level)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        # join() already empties the queue, so drain() on a clean exit is a
-        # no-op; the split only matters so an exception path never raises.
-        if exc_type is None:
-            self._queue.join()
-        else:
-            self._queue.drain()
-
-
-def write_sift(
-    filename: str | Path,
-    feature_tool_metadata,
-    metadata,
-    position,
-    affine_shape,
-    descriptor,
-    thumbnail,
-    *,
-    zstd_level=_SIFT_ZSTD_LEVEL,
-):
-    """Write a .sift file with SIFT feature data.
-
-    Validates metadata and array shapes/dtypes in Python, then delegates
-    ZIP/zstd I/O to the Rust backend.
-    """
-    filename = Path(filename)
-    data = _validate_sift_write(
-        feature_tool_metadata, metadata, position, affine_shape, descriptor, thumbnail
-    )
-    _core_write_sift(filename, data, zstd_level)
 
 
 # ---------------------------------------------------------------------------

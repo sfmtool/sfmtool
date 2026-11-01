@@ -520,14 +520,15 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
 
 def _sift_keypoints_for_observations(recon, rows: np.ndarray) -> np.ndarray:
     """The stored SIFT keypoints for the given observation rows (source px)."""
-    from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+    from sfmtool.sift.file import get_sift_path_from_recon
+    from sfmtool.fileio import SiftFile
 
     timgs = np.asarray(recon.track_image_indexes)
     tfeats = np.asarray(recon.track_feature_indexes)
     kpts = np.empty((len(rows), 2), dtype=np.float64)
     for k, j in enumerate(rows.tolist()):
         name = recon.image_names[int(timgs[j])]
-        positions = SiftReader(get_sift_path_from_recon(recon, name)).read_positions()
+        positions = SiftFile(get_sift_path_from_recon(recon, name)).read_positions()
         kpts[k] = np.asarray(positions, dtype=np.float64)[int(tfeats[j])]
     return kpts
 

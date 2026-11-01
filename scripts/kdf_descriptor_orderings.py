@@ -42,7 +42,7 @@ import numpy as np
 
 from sfmtool import build_profile
 from sfmtool.spatial import KdForest, LazyKdForest, kdf_file_summary, write_kdf
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 KIB = 1 << 10
 GIB = 1 << 30
@@ -54,7 +54,7 @@ def load_corpus(features: Path) -> np.ndarray:
         raise SystemExit(f"no .sift files in {features}")
     blocks = []
     for path in files:
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         blocks.append(reader.read_descriptors())
         reader.close()
     return np.vstack(blocks)

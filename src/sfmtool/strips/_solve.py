@@ -335,15 +335,12 @@ class _SolveStrips:
         """Per-keypoint image-plane feature size (pixels) for image ``i``,
         loaded from its .sift file and cached."""
         if i not in self._feat_sizes:
-            from sfmtool.sift.file import (
-                SiftReader,
-                feature_size,
-                get_sift_path_from_recon,
-            )
+            from sfmtool.sift.file import feature_size, get_sift_path_from_recon
+            from sfmtool.fileio import SiftFile
 
             path = get_sift_path_from_recon(self.recon, self.names[i])
             try:
-                shapes = np.asarray(SiftReader(path).read_affine_shapes())
+                shapes = np.asarray(SiftFile(path).read_affine_shapes())
             except (FileNotFoundError, OSError) as e:
                 raise FileNotFoundError(
                     f"Cannot read SIFT features for '{self.names[i]}' at {path}. "

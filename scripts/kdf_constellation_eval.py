@@ -62,7 +62,7 @@ import numpy as np
 from sfmtool import build_profile
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.spatial import LazyKdForest
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 MIB = 1 << 20
 DEFAULT_SIZES = (10, 25, 50, 100, 200, 400, 800)
@@ -103,7 +103,7 @@ def load_keypoints(sift_paths):
     """Per-image `(K, 2)` float32 keypoint positions."""
     positions = []
     for path in sift_paths:
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         xy, _ = reader.read_positions_and_shapes()
         reader.close()
         positions.append(np.asarray(xy, dtype=np.float32))
@@ -126,7 +126,7 @@ class ImageDescriptors:
 
     def rows(self, image: int, rows: np.ndarray) -> np.ndarray:
         if image != self._image:
-            reader = SiftReader(self._paths[image])
+            reader = SiftFile(self._paths[image])
             self._descriptors = np.asarray(reader.read_descriptors(), dtype=np.uint8)
             reader.close()
             self._image = image

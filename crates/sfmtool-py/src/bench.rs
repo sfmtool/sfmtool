@@ -2168,7 +2168,7 @@ fn commit(
 ///     observation: Which of its observations, by position in the list.
 ///     positions: `(N, 2)` float32 keypoint centres of the **searched image**,
 ///         in its own `.sift` row order, as
-///         :meth:`SiftReader.read_positions_and_shapes` returns them. Nothing
+///         :meth:`SiftFile.read_positions_and_shapes` returns them. Nothing
 ///         here opens a `.sift` file.
 ///     affine_shapes: `(N, 2, 2)` float32 shapes for those same keypoints.
 ///     forest: An open :class:`LazyKdForest` whose corpus indexes this

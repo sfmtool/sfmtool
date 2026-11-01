@@ -325,7 +325,8 @@ def _retake(recon, i, adjusted):
     describes the image exactly."""
     from sfmtool.fileio import read_image_rgb, write_image_rgb
     from sfmtool.flow import WarpMap
-    from sfmtool.sift.file import SiftReader, get_sift_path_from_recon, write_sift
+    from sfmtool.sift.file import get_sift_path_from_recon
+    from sfmtool.fileio import SiftFile, write_sift
 
     camera = recon.cameras[int(recon.camera_indexes[i])]
     name = recon.image_names[i]
@@ -336,7 +337,7 @@ def _retake(recon, i, adjusted):
     write_image_rgb(image_path, warp.remap_bilinear(image))
 
     sift_path = get_sift_path_from_recon(recon, name)
-    with SiftReader(sift_path) as reader:
+    with SiftFile(sift_path) as reader:
         feature_tool_metadata = reader.feature_tool_metadata
         metadata = reader.metadata
         positions = reader.read_positions().astype(np.float64)
@@ -346,12 +347,14 @@ def _retake(recon, i, adjusted):
     positions = adjusted.project_batch(camera.unproject_batch(positions))
     write_sift(
         sift_path,
-        feature_tool_metadata,
-        metadata,
-        positions.astype(np.float32),
-        affine_shapes,
-        descriptors,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": positions.astype(np.float32),
+            "affine_shapes": affine_shapes,
+            "descriptors": descriptors,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
 
@@ -377,7 +380,8 @@ class TestUndistort:
     ):
         from sfmtool.fileio import read_image_rgb
         from sfmtool.flow import WarpMap
-        from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+        from sfmtool.sift.file import get_sift_path_from_recon
+        from sfmtool.fileio import SiftFile
 
         plain = _refit(SfmrReconstruction.load(seoul_bull_workspace))
         plain_out = _undistort(plain, tmp_path / "plain")
@@ -395,9 +399,9 @@ class TestUndistort:
 
         # Each keypoint of image 2 lands where the plain run put it.
         name = recon.image_names[2]
-        with SiftReader(get_sift_path_from_recon(out, name)) as reader:
+        with SiftFile(get_sift_path_from_recon(out, name)) as reader:
             positions = reader.read_positions()
-        with SiftReader(get_sift_path_from_recon(plain_out, name)) as reader:
+        with SiftFile(get_sift_path_from_recon(plain_out, name)) as reader:
             plain_positions = reader.read_positions()
         assert positions.shape == plain_positions.shape
         np.testing.assert_allclose(positions, plain_positions, atol=1e-3)

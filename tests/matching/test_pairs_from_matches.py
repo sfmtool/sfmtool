@@ -12,7 +12,7 @@ import pytest
 
 from sfmtool.feature_match import pairs_from_matches
 from sfmtool.feature_match._cluster_matching import cluster_match
-from sfmtool.sift.file import SiftReader, write_sift
+from sfmtool.fileio import SiftFile, write_sift
 
 N_IMAGES = 4
 N_POINTS = 5
@@ -44,12 +44,14 @@ def _write_synthetic_sift(path: Path, descriptors: np.ndarray, image_name: str):
     thumbnail = np.zeros((128, 128, 3), dtype=np.uint8)
     write_sift(
         path,
-        feature_tool_metadata,
-        metadata,
-        position,
-        affine_shape,
-        descriptors,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": position,
+            "affine_shapes": affine_shape,
+            "descriptors": descriptors,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
 
@@ -93,7 +95,7 @@ def _canonical_expansion(clusters, sift_paths, feature_counts):
 
     descriptors = []
     for sp, count in zip(sift_paths, feature_counts):
-        with SiftReader(sp) as reader:
+        with SiftFile(sp) as reader:
             descriptors.append(reader.read_descriptors(count=int(count)))
     corpus = np.ascontiguousarray(np.concatenate(descriptors, axis=0))
     image_starts = np.zeros(len(feature_counts) + 1, dtype=np.uint32)

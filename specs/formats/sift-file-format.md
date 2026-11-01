@@ -241,13 +241,32 @@ The code that reads, writes and verifies `.sift` files is:
   feature columns only) and `read_sift_thumbnail`. Every reader rejects an
   unsupported `metadata.version`; `write_sift` refuses to write one; and
   `verify_sift`, which returns `(is_valid, error_messages)`, reports it as an
-  error. None of them checks the feature order.
-- Python: `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift`
-  and `verify_sift` in `sfmtool.fileio`, which take and return a dict of
-  NumPy arrays and metadata ([bindings](../../crates/sfmtool-py/src/fileio/sift.rs)),
-  and `SiftReader` and `write_sift` in
-  [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py), which most of the
-  Python package uses.
+  error. None of them checks the feature order. The readers ignore a metadata
+  key the format does not define, as the entries above ask. A writer is
+  stricter: `validate_sift_data`, which `write_sift` calls first, refuses an
+  unsupported version, `feature_options` that is not an object and an array
+  whose shape disagrees with `feature_count` or the thumbnail edge, and
+  `SiftMetadata::from_json_for_write` and
+  `FeatureToolMetadata::from_json_for_write` parse metadata given as JSON,
+  refusing an unknown, missing or mistyped key. The zstd level a `.sift` is
+  written at unless a caller asks otherwise is `SIFT_ZSTD_LEVEL`, 5.
+- Python: in `sfmtool.fileio` ([bindings](../../crates/sfmtool-py/src/fileio/sift.rs)),
+  `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift` and
+  `verify_sift`, which take and return a dict of NumPy arrays and metadata;
+  `SiftFile`, an open file that reads the metadata when it is opened and the
+  columns and thumbnail on request, the whole file or its first `count`
+  features, and is what most of the Python package reads through; and
+  `SiftWriteQueue`, which writes files on the rayon pool for `sfm sift`
+  ([`sfm sift` § Extraction-orchestration
+  pipelining](../cli/image-feature/sift-command.md#extraction-orchestration-pipelining)).
+  `write_sift(path, data, zstd_level=5)` and `SiftWriteQueue.submit` parse
+  and check `data` with the Rust functions above and raise `ValueError` for
+  what they refuse, `TypeError` for an array of the wrong dtype and `KeyError`
+  for a missing key, all before anything is written. A missing file raises
+  `FileNotFoundError` and any other failed read or write `OSError`. There is
+  no Python wrapper over these bindings; the helpers in
+  [`sfmtool.sift.file`](../../src/sfmtool/sift/file.py) find an image's
+  `.sift` path and compute the feature-cache hash and affine-shape sizes.
 
 `SIFT_FORMAT_VERSION` in
 [`types.rs`](../../crates/sfmtool-sift-format/src/types.rs) is the newest

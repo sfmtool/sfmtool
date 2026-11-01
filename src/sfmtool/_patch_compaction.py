@@ -63,13 +63,14 @@ def image_file_hashes_from_sift(recon: SfmrReconstruction) -> list[bytes]:
         FileNotFoundError: naming the image whose ``.sift`` cannot be resolved (the
             hash source the format requires for an ``embedded_patches`` file).
     """
-    from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+    from sfmtool.sift.file import get_sift_path_from_recon
+    from sfmtool.fileio import SiftFile
 
     hashes: list[bytes] = []
     for name in recon.image_names:
         sift_path = get_sift_path_from_recon(recon, name)
         try:
-            meta = SiftReader(sift_path).metadata
+            meta = SiftFile(sift_path).metadata
         except FileNotFoundError as e:
             raise FileNotFoundError(
                 f"no resolvable .sift for image {name!r} (needed for "

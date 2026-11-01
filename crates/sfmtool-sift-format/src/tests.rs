@@ -383,3 +383,128 @@ fn test_archive_uses_stored_compression() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn test_validate_rejects_wrong_thumbnail_shape() {
+    let mut data = make_test_data();
+    data.thumbnail_y_x_rgb = Array3::zeros((64, 64, 3));
+    let err = validate_sift_data(&data).expect_err("a 64x64 thumbnail must be rejected");
+    assert!(matches!(err, SiftError::ShapeMismatch(_)), "{err}");
+    assert!(err.to_string().contains("thumbnail_y_x_rgb"), "{err}");
+}
+
+#[test]
+fn test_validate_rejects_shape_count_mismatch() {
+    let mut data = make_test_data();
+    data.metadata.feature_count = 5;
+    let err = validate_sift_data(&data).expect_err("feature_count 5 with 4 rows must fail");
+    assert!(matches!(err, SiftError::ShapeMismatch(_)), "{err}");
+    assert!(err.to_string().contains("positions_xy"), "{err}");
+}
+
+#[test]
+fn test_validate_rejects_non_object_feature_options() {
+    let mut data = make_test_data();
+    data.feature_tool_metadata.feature_options = serde_json::json!([1, 2]);
+    let err = validate_sift_data(&data).expect_err("a list of options must be rejected");
+    assert!(matches!(err, SiftError::InvalidMetadata(_)), "{err}");
+    assert!(err.to_string().contains("feature_options"), "{err}");
+
+    let dir = std::env::temp_dir().join("sift_test_bad_feature_options");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    assert!(write_sift(&path, &data, 3).is_err());
+    assert!(!path.exists(), "a rejected write must leave no file");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_validate_accepts_valid_data() {
+    validate_sift_data(&make_test_data()).unwrap();
+}
+
+fn valid_metadata_json() -> serde_json::Value {
+    serde_json::to_value(make_test_data().metadata).unwrap()
+}
+
+#[test]
+fn test_metadata_for_write_rejects_unknown_missing_and_mistyped_keys() {
+    SiftMetadata::from_json_for_write(valid_metadata_json()).unwrap();
+
+    let mut extra = valid_metadata_json();
+    extra["colour"] = serde_json::json!("blue");
+    let err = SiftMetadata::from_json_for_write(extra).unwrap_err();
+    assert!(matches!(err, SiftError::InvalidMetadata(_)), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("metadata: unknown field `colour`"), "{msg}");
+    assert!(msg.contains("image_width"), "names the defined keys: {msg}");
+
+    let mut missing = valid_metadata_json();
+    missing.as_object_mut().unwrap().remove("image_width");
+    let err = SiftMetadata::from_json_for_write(missing).unwrap_err();
+    assert!(
+        err.to_string().contains("missing field `image_width`"),
+        "{err}"
+    );
+
+    let mut mistyped = valid_metadata_json();
+    mistyped["feature_count"] = serde_json::json!("4");
+    let err = SiftMetadata::from_json_for_write(mistyped).unwrap_err();
+    assert!(err.to_string().contains("invalid type: string"), "{err}");
+
+    let err = SiftMetadata::from_json_for_write(serde_json::json!([1])).unwrap_err();
+    assert!(err.to_string().contains("must be a JSON object"), "{err}");
+
+    let tool = serde_json::json!({
+        "feature_tool": "colmap",
+        "feature_type": "sift-colmap",
+        "feature_options": {},
+        "feature_version": 2,
+    });
+    let err = FeatureToolMetadata::from_json_for_write(tool).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("feature_tool_metadata: unknown field `feature_version`"),
+        "{err}"
+    );
+}
+
+/// Write a `.sift` archive holding just the three JSON entries, with
+/// `metadata.json` taken as given, for the readers that stop after them.
+fn write_raw_metadata_archive(name: &str, metadata: &serde_json::Value) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    let file = std::fs::File::create(&path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let data = make_test_data();
+    sfmtool_archive_io::write_json_entry(
+        &mut zip,
+        "feature_tool_metadata.json.zst",
+        &data.feature_tool_metadata,
+        3,
+    )
+    .unwrap();
+    sfmtool_archive_io::write_json_entry(&mut zip, "metadata.json.zst", metadata, 3).unwrap();
+    sfmtool_archive_io::write_json_entry(
+        &mut zip,
+        "content_hash.json.zst",
+        &SiftContentHash::default(),
+        3,
+    )
+    .unwrap();
+    zip.finish().unwrap();
+    path
+}
+
+/// The format asks a reader to ignore a metadata key it does not know, so a
+/// later version can add one; only a writer is strict.
+#[test]
+fn test_read_ignores_unknown_metadata_keys() {
+    let mut metadata = valid_metadata_json();
+    metadata["added_in_a_later_version"] = serde_json::json!(true);
+    let path = write_raw_metadata_archive("sift_test_read_extra_key", &metadata);
+    let (_, read, _) = read_sift_metadata(&path).unwrap();
+    assert_eq!(read.image_name, "test_image.jpg");
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}

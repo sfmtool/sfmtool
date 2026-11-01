@@ -492,10 +492,11 @@ def _cache(ctx) -> dict:
 def _descriptors(ctx, image) -> np.ndarray:
     c = _cache(ctx)["desc"]
     if image not in c:
-        from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+        from sfmtool.sift.file import get_sift_path_for_image
+        from sfmtool.fileio import SiftFile
 
         ds = ctx.dataset
-        reader = SiftReader(
+        reader = SiftFile(
             get_sift_path_for_image(ds.prepared.workspace / ds.image_names[image])
         )
         c[image] = np.asarray(reader.read_descriptors(), np.float32)

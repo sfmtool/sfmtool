@@ -1316,14 +1316,15 @@ def sift_index(embedded, tmp_path_factory):
     from pathlib import Path
 
     from sfmtool.spatial import KdForest, LazyKdForest, write_kdf
-    from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+    from sfmtool.sift.file import get_sift_path_for_image
+    from sfmtool.fileio import SiftFile
 
     workspace = Path(embedded.workspace_dir)
     names = list(embedded.image_names)
     descriptors, positions, shapes, image_of, feature_of = [], [], [], [], []
     keypoints = {}
     for index, name in enumerate(names):
-        reader = SiftReader(get_sift_path_for_image(workspace / name))
+        reader = SiftFile(get_sift_path_for_image(workspace / name))
         rows = np.asarray(reader.read_descriptors())
         xy, affine = reader.read_positions_and_shapes()
         reader.close()

@@ -24,7 +24,7 @@ from ..rig.config import (
     _match_image_to_sensor,
     _sensor_from_rig_pose,
 )
-from ..sift.file import SiftReader
+from ..fileio import SiftFile
 
 
 def _setup_db_single_camera(
@@ -69,7 +69,7 @@ def _setup_db_single_camera(
         rig_id = db.write_rig(rig)
 
         for image_path, sift_path in zip(image_paths, sift_paths):
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 image = pycolmap.Image(
                     name=os.path.relpath(image_path, image_dir).replace("\\", "/"),
                     camera_id=camera_id,
@@ -222,7 +222,7 @@ def _setup_db_with_rigs(
             image_entries = []
             for rel_path, sift_path, r_idx, s_idx in group:
                 camera_id = sensor_camera_ids[(r_idx, s_idx)]
-                with SiftReader(sift_path) as reader:
+                with SiftFile(sift_path) as reader:
                     image = pycolmap.Image(name=rel_path, camera_id=camera_id)
                     image_id = db.write_image(image)
                     image_entries.append((image_id, camera_id, sift_path, image))
@@ -266,7 +266,7 @@ def _setup_db_with_rigs(
             fallback_rig_id = db.write_rig(fallback_rig)
 
             for rel_path, sift_path in unmatched_images:
-                with SiftReader(sift_path) as reader:
+                with SiftFile(sift_path) as reader:
                     image = pycolmap.Image(name=rel_path, camera_id=camera_id)
                     image_id = db.write_image(image)
 
@@ -400,7 +400,7 @@ def _setup_db_with_camrig(
             image_entries = []
             for rel_path, sift_path, sensor_idx in group:
                 camera_id = sensor_camera_ids[sensor_idx]
-                with SiftReader(sift_path) as reader:
+                with SiftFile(sift_path) as reader:
                     image = pycolmap.Image(name=rel_path, camera_id=camera_id)
                     image_id = db.write_image(image)
                     image_entries.append((image_id, image))

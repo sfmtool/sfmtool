@@ -49,7 +49,7 @@ create_exception!(
 ///         images in the reconstruction's order.
 ///     keypoints: One ``(positions, affine_shapes)`` pair per image of the
 ///         reconstruction, in its order: ``(N, 2)`` and ``(N, 2, 2)`` float32
-///         arrays, as :meth:`SiftReader.read_positions_and_shapes` returns them.
+///         arrays, as :meth:`SiftFile.read_positions_and_shapes` returns them.
 ///     matches: A cluster-patches :class:`MatchesFile`. Its images are matched
 ///         to the reconstruction's by name.
 #[pyclass(name = "TrackAtPixelSources", module = "sfmtool.bench", frozen)]

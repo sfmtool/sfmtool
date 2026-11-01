@@ -20,7 +20,8 @@ from sfmtool.fileio import (
     write_sfmr,
 )
 from sfmtool.reconstruction import SfmrReconstruction
-from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+from sfmtool.sift.file import get_sift_path_for_image
+from sfmtool.fileio import SiftFile
 from sfmtool._undistort_images import (
     _features_in_frame,
     undistort_reconstruction_images,
@@ -414,7 +415,7 @@ class TestUndistortWorkspace:
             )
             assert sift_path.exists(), f"Missing .sift file: {sift_path}"
 
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 positions = reader.read_positions()
                 assert positions.dtype == np.float32
                 assert positions.ndim == 2
@@ -441,7 +442,7 @@ class TestUndistortWorkspace:
                 / (image_basename + ".sift")
             )
 
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 positions = reader.read_positions()
 
             if len(positions) > 0:
@@ -472,7 +473,7 @@ class TestUndistortWorkspace:
             feature_tool=source_config["feature_tool"],
             feature_options=source_config["feature_options"],
         )
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             src_shapes = reader.read_affine_shapes()
 
         image_basename = Path(image_name).name
@@ -482,7 +483,7 @@ class TestUndistortWorkspace:
             / undist_config["feature_prefix_dir"]
             / (image_basename + ".sift")
         )
-        with SiftReader(undist_sift_path) as reader:
+        with SiftFile(undist_sift_path) as reader:
             undist_shapes = reader.read_affine_shapes()
 
         # If distortion exists, shapes should differ
@@ -518,7 +519,7 @@ class TestUndistortWorkspace:
                 feature_tool=source_config["feature_tool"],
                 feature_options=source_config["feature_options"],
             )
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 src_count = reader.metadata["feature_count"]
 
             image_basename = Path(image_name).name
@@ -528,7 +529,7 @@ class TestUndistortWorkspace:
                 / undist_config["feature_prefix_dir"]
                 / (image_basename + ".sift")
             )
-            with SiftReader(undist_sift_path) as reader:
+            with SiftFile(undist_sift_path) as reader:
                 undist_count = reader.metadata["feature_count"]
 
             assert undist_count <= src_count
@@ -555,7 +556,7 @@ class TestUndistortWorkspace:
             feature_tool=source_config["feature_tool"],
             feature_options=source_config["feature_options"],
         )
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             src_descriptors = reader.read_descriptors()
 
         image_basename = Path(image_name).name
@@ -565,7 +566,7 @@ class TestUndistortWorkspace:
             / undist_config["feature_prefix_dir"]
             / (image_basename + ".sift")
         )
-        with SiftReader(undist_sift_path) as reader:
+        with SiftFile(undist_sift_path) as reader:
             undist_descriptors = reader.read_descriptors()
 
         # Undistorted descriptors should be a subset of source
@@ -660,7 +661,7 @@ class TestUndistortWorkspace:
             / (image_basename + ".sift")
         )
 
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             thumbnail = reader.read_thumbnail()
 
         assert thumbnail.shape == (128, 128, 3)

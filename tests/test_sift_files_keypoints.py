@@ -15,7 +15,8 @@ import numpy as np
 from sfmtool.reconstruction import RangeExpr
 from sfmtool.fileio import read_sfmr, write_sfmr
 from sfmtool.reconstruction import SfmrReconstruction
-from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+from sfmtool.sift.file import get_sift_path_for_image
+from sfmtool.fileio import SiftFile
 from sfmtool.xform import IncludeRangeFilter, apply_transforms
 
 
@@ -28,7 +29,7 @@ def _sift_pixels(recon) -> np.ndarray:
     for image in np.unique(images):
         rows = np.nonzero(images == image)[0]
         path = get_sift_path_for_image(workspace / recon.image_names[image])
-        with SiftReader(path) as reader:
+        with SiftFile(path) as reader:
             positions = np.asarray(reader.read_positions(), dtype=np.float32)
         out[rows] = positions[features[rows]]
     return out

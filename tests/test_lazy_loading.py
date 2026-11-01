@@ -69,7 +69,7 @@ def test_running_a_command_imports_only_its_module():
 
 
 def test_reading_a_name_imports_its_submodule():
-    assert "numpy" in _imported_after("from sfmtool import SiftReader")
+    assert "numpy" in _imported_after("from sfmtool import get_sift_path_for_image")
 
 
 def test_star_import_and_sample_public_names():
@@ -81,8 +81,8 @@ def test_star_import_and_sample_public_names():
         "build_profile",
         "expand_paths",
         "find_workspace_for_path",
-        "SiftReader",
-        "write_sift",
+        "get_sift_path_for_image",
+        "image_files_to_sift_files",
         "extract_sift_with_colmap",
         "extract_sift_with_opencv",
         "resample_atlas_to_equirect",
@@ -111,7 +111,14 @@ def test_root_binds_no_binding_flat():
     assert set(sfmtool.__all__) == (
         set(bound) | set(sfmtool._LAZY) | set(sfmtool._LAZY_SUBPACKAGES)
     )
-    for name in ("SfmrReconstruction", "RangeExpr", "read_sfmr", "match_image_pair"):
+    for name in (
+        "SfmrReconstruction",
+        "RangeExpr",
+        "read_sfmr",
+        "match_image_pair",
+        "SiftFile",
+        "write_sift",
+    ):
         assert not hasattr(sfmtool, name), name
 
 
@@ -129,14 +136,13 @@ def test_binding_modules_are_package_attributes():
 
 
 def test_lazy_names_resolve_to_their_submodules():
-    from sfmtool.sift.file import SiftReader, write_sift
     from sfmtool._workspace import init_workspace
+    from sfmtool.sift.extract import image_files_to_sift_files
+    from sfmtool.sift.file import get_sift_path_for_image
 
-    assert sfmtool.SiftReader is SiftReader
+    assert sfmtool.get_sift_path_for_image is get_sift_path_for_image
+    assert sfmtool.image_files_to_sift_files is image_files_to_sift_files
     assert sfmtool.init_workspace is init_workspace
-    # The Python `write_sift`, not the `sfmtool.fileio` binding it calls.
-    assert sfmtool.write_sift is write_sift
-    assert sfmtool.write_sift is not sfmtool.fileio.write_sift
     assert sfmtool.sift.__name__ == "sfmtool.sift"
     assert sfmtool.rig.__name__ == "sfmtool.rig"
 
@@ -144,7 +150,12 @@ def test_lazy_names_resolve_to_their_submodules():
 def test_dir_lists_every_public_name():
     listed = set(dir(sfmtool))
     assert set(sfmtool.__all__) <= listed
-    assert {"SiftReader", "extract_sift_with_opencv", "sift", "rig", "fileio"} <= listed
+    assert {
+        "draw_sift_features",
+        "extract_sift_with_opencv",
+        "sift",
+        "fileio",
+    } <= listed
 
 
 def test_unknown_name_raises_attribute_error():

@@ -195,8 +195,9 @@ empty-handed". Name the thing and say what it does.
   - `merge/` — merge aligned reconstructions (point correspondences + pose refinement)
   - `motion/` — camera-motion discontinuity analysis (image sequences + reconstructions)
   - `rig/` — multi-sensor rig ingestion/rendering: `rig_config.json`, frame grouping, insv2rig/pano2rig, equirect render
-  - `sift/` — SIFT feature file I/O and extraction (COLMAP, OpenCV, and
-    `sfmtool` Rust backends)
+  - `sift/` — SIFT feature extraction (COLMAP, OpenCV, and `sfmtool` Rust
+    backends) and `.sift` path helpers; the file I/O itself is
+    `sfmtool.fileio`'s `SiftFile`, `write_sift` and `SiftWriteQueue`
   - `strips/` — patch-strip montages behind `compare --strips` and
     `inspect --strips` (surfel strip rendering, NCC scoring, montage layout)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
@@ -439,7 +440,7 @@ backlog and keep them honest as findings get addressed:
   impl need `Self::`; sibling private modules need `super::`.
 - **`sfmtool` and `sfm` load their Python modules lazily.** `import sfmtool`
   binds the extension's names and nothing else; the names from its Python
-  submodules (`SiftReader`, `extract_sift_with_colmap`, …) are bound on first
+  submodules (`get_sift_path_for_image`, `extract_sift_with_colmap`, …) are bound on first
   use through the `__getattr__` in `sfmtool/__init__.py`, so a new public
   name from a Python submodule goes in its `_LAZY_NAMES` table, not in an
   import line. `sfm` imports a command's module only when that command runs, and
