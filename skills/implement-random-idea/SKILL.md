@@ -61,7 +61,7 @@ Break the spec into small, individually testable steps. For each step:
    - `sfm-explorer`: also `pixi run -e ui ui-test`
 4. Review the diff (or have a subagent review it): tests present and meaningful? Code readable? Matches spec? No dead code, no unjustified comments, no premature abstractions?
 
-Between steps, re-check against the spec. If something doesn't fit, pause and decide: adjust the code, or adjust the spec (and record why). Do not paper over a spec mismatch.
+Between steps, re-check against the spec. If something doesn't fit, pause and decide: adjust the code, or adjust the spec (and record why). Do not paper over a spec mismatch. Where the code would break a standard in `specs/STANDARDS.md`, adjust the code, not the spec.
 
 ## Stage 4 — Wrap
 

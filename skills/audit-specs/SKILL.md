@@ -320,6 +320,12 @@ Then one section per **sampled** spec, in this shape:
 **Unclear / incorrect / suspicious:** <anything that doesn't make sense, is ambiguous, or is wrong>
 ```
 
+When the code breaks a standard in `specs/STANDARDS.md` or another rule in
+`AGENTS.md`, the Recommendation is **update code**, and it names the standard
+by its heading. It is never a spec edit that describes the breach, such as a
+panic on bad input, a module that is "the exception" to a rule, or a Python
+wrapper over a binding.
+
 Then a **Code without specs** section. Lead with a one-line-per-surface table
 (surface | user-facing? | spec) covering everything, then expand only the entries
 worth arguing about:
@@ -356,6 +362,11 @@ exactly: the sampler greps prior reports for it to know what has been covered.
 ## Guidelines
 
 - Inconsistencies must be concrete — cite line numbers or symbol names, not vague "the spec is out of date."
+- Read [`specs/STANDARDS.md`](../../specs/STANDARDS.md) before judging a
+  divergence. A spec that disagrees with the code is not settled by making the
+  spec describe the code: where the code breaks a standard, recommend **update
+  code** and name the standard (STANDARDS.md § "Direction of a fix"). Recommend
+  **update spec** only where the code is right and the text is wrong.
 - Rank a divergence by what a reader would *do* differently believing it. A wrong
   default in a parameter table outranks a paragraph of stale narrative, however
   much longer the paragraph is.

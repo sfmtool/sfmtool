@@ -21,6 +21,12 @@ spelling is currently more common, which is the whole reason it is written down:
 a majority cannot tell a word that won on merit from one that won by being
 written first, nor a migration in progress from drift.
 
+[STANDARDS.md](STANDARDS.md) holds the quality standards every library
+function, binding, test and spec is held to: the rule, its reason, how to check
+code against it and what is out of scope. Every audit skill checks against it,
+and an implementer or auditor of a change reads it. When code breaks a
+standard, the fix is in the code, not in a spec that describes the breach.
+
 Location encodes lifecycle, so a standing spec carries no `**Status:**` line: a
 draft in `drafts/` opens with `**Status:** Draft`, and everything else opens with
 its purpose paragraph. A part that is specified but unbuilt is a present-tense

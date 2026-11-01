@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for library functions that break the interface contracts (support for points at infinity, a Progress argument on long-running work, no with/without-progress variants). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, a Progress argument on long-running work, no with/without-progress variants, no panics on caller input, no Python wrappers over bindings, one I/O shape for every file format, no documented exceptions to a convention, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -157,66 +157,24 @@ Do not flag ordinary API reference prose. A long `Args:` block on a
 Python-visible binding is doing a job — a REPL user cannot click into `specs/`.
 The finding is rationale where reference belongs, not length by itself.
 
-### E. Library-wide interface contracts
+### E. Quality standards
 
-These are rules every library function in `sfmtool` (the Rust crates, the
-`sfmtool-py` bindings and the Python package) is held to, whatever module it is
-in. A violation is a finding even where the whole module is consistent with
-itself, so check them per function, not per convention split.
+Check every standard in [`specs/STANDARDS.md`](../../specs/STANDARDS.md).
+That file holds each rule, its reason, what to look for, how to confirm a
+finding before reporting it and what is out of scope; this section adds only
+how this audit runs them.
 
-14. **Points at infinity are supported.** A reconstruction's points are
-    homogeneous (`positions_xyzw`, a `w = 0` row is a unit direction; see
-    [`specs/formats/sfmr-file-format.md`](../../specs/formats/sfmr-file-format.md)),
-    and every library function that takes, returns or iterates over a
-    reconstruction's points must accept points at infinity in its interface and
-    handle them correctly. Look for:
-    - An interface that can only express finite points: a `positions_xyz` /
-      `[f64; 3]` / `Vec3` parameter or return value where the data can hold
-      `w = 0` rows, or a Python wrapper that slices `[:, :3]` off an xyzw array.
-    - A division by `w` with no `w = 0` branch, which turns a direction into
-      `inf`/`NaN` and then propagates it.
-    - Wrong geometry for a direction: translation or scale applied to a `w = 0`
-      row (only the rotation acts on it), a depth, distance, centroid, bounding
-      box or spatial index computed over directions as if they were positions,
-      or a reprojection or triangulation path that assumes a finite point.
-    - Points at infinity dropped silently. A function that has a real reason to
-      work on finite points only must say so in its contract and must skip or
-      reject `w = 0` rows visibly (a count in its result, an error), not filter
-      them out unreported. Converting directions to finite points is
-      `materialize_points_at_infinity`'s job, for a consumer that cannot store
-      `w = 0`, and should not be reinvented inline.
-    Confirm the bug before reporting it: read the function and, where cheap,
-    say what input shows it (for example a reconstruction with one `w = 0`
-    point passed to the transform). A function that never sees reconstruction
-    points (image warping, SIFT, descriptor matching) is out of scope.
-
-15. **Long-running functions take a `Progress`.** A library function whose
-    running time can exceed roughly a second on realistic input must take a
-    `&Progress` (`sfmtool_progress::Progress`, re-exported as
-    `sfmtool_core::progress::Progress`) and report and check cancellation
-    through it. Treat as above the threshold: a loop over every image, image
-    pair, track or point of a reconstruction; an iterative solver or RANSAC run;
-    reading or writing a whole `.sfmr`, `.sift`, `.matches` or `.camrig` file;
-    and any function that calls one that takes a `Progress`. Also report:
-    - A function that takes a `Progress` and then calls a long-running callee
-      with `&Progress::none()` instead of passing its own down (or a `phase` or
-      `split` of it). The caller's bar stalls and cancellation stops working
-      for that stage.
-    - A Python-facing binding of such a function that offers no way to pass
-      progress in (`ProgressCounter`, see `crates/sfmtool-py/src/py_progress.rs`).
-    Do not report short functions (a single reprojection, a per-point kernel
-    called from inside a loop that already reports): the threshold is about the
-    whole call, and a `Progress` on every helper is noise.
-
-16. **One interface, not a with-progress and a without-progress variant.** A
-    caller that wants no reporting passes `&Progress::none()`. A pair such as
-    `foo` / `foo_with_progress`, `foo` / `foo_silent`, or `foo` that only
-    forwards to `foo_inner(…, &Progress::none())` while both are public, is a
-    finding: merge them into one function that takes `&Progress` and update
-    the callers. The same applies to `Option<&Progress>` parameters and to a
-    `verbose: bool` or `show_progress: bool` flag next to or instead of a
-    `Progress`, which are a second interface in a different form. A private
-    helper that takes no `Progress` because it is short is not a variant.
+- **Check per function, not per convention split.** A breach is a finding
+  even where the whole module is consistent with itself. Run the
+  mechanical checks 9–15 below first, then read each hit against the
+  standard it feeds.
+- **Cite the standard.** Each finding names the standard by its heading
+  and links it (`specs/STANDARDS.md#caller-input-never-panics`).
+- **Propose the code fix.** Per STANDARDS.md § "Direction of a fix", the
+  proposed fix for a breach changes the code to meet the standard. It is
+  never a spec or doc edit that describes the breach. When the code fix is a
+  large design change, say so under Effort and Risk and leave the choice to
+  the maintainer, rather than proposing the doc edit instead.
 
 ## How to work
 
@@ -230,8 +188,8 @@ itself, so check them per function, not per convention split.
    assessments. Give each one `specs/GLOSSARY.md` and the convention majorities
    from step 2, in that order of authority, so their naming findings are
    comparable and none of them recommends converging onto a word the glossary
-   has already retired. Give each one the three contracts in section E as
-   well, so every subtree is checked against them.
+   has already retired. Give each one `specs/STANDARDS.md` as well, so every
+   subtree is checked against the same standards.
 5. Consolidate findings, removing duplicates and ranking.
 
 ### Mechanical checks
@@ -280,16 +238,37 @@ worth more than a paragraph.
    `[f64; 3]` / `Vec3` slices of reconstruction points. Report the hit count
    per pattern, then read each hit and keep only those with no `w = 0`
    handling (`is_at_infinity`, an explicit branch, a documented finite-only
-   contract with a visible skip count). Feeds check 14.
+   contract with a visible skip count). Feeds STANDARDS.md § "Points at
+   infinity are supported".
 10. **Progress coverage** — list public functions that loop over a whole
     reconstruction, run a solver or read or write a whole file, and report how
     many take a `&Progress`. Separately count `Progress::none()` in non-test
     library code and read each one inside a function that itself has a
-    `Progress` in scope. Feeds check 15.
+    `Progress` in scope. Feeds STANDARDS.md § "Long-running functions
+    take a Progress".
 11. **Progress variants** — grep for `_with_progress`, `_without_progress`,
     `_no_progress`, `_silent`, `_quiet`, `Option<&Progress`, and
     `verbose: bool` / `show_progress` parameters in library code. Each hit is a
-    candidate for check 16; report the count even when it is zero.
+    candidate for STANDARDS.md § "One interface, no progress variants";
+    report the count even when it is zero.
+12. **Caller-input panics** — in the library crates and `sfmtool-py`, count
+    `assert!`, `.expect(`, `.unwrap()`, `panic!` and `from_row_slice` per
+    crate in non-test code, then read the hits in public functions and
+    bindings that take caller data, and keep those a caller's argument can
+    reach. Also grep specs and doc comments for "panics". Feeds STANDARDS.md
+    § "Caller input never panics".
+13. **Python over bindings** — list the Python functions and classes in
+    `src/sfmtool/` that call a `_sfmtool` name, and the root `_LAZY_NAMES`
+    entries, and read each for re-checked arguments, re-read files or a body
+    that only forwards. Feeds STANDARDS.md § "Logic lives in Rust, not in
+    Python wrappers".
+14. **Format I/O table** — one row per on-disk format, one column per
+    function that STANDARDS.md § "Every file format has the same I/O shape"
+    lists, and the module each lives in. Report the table even when every
+    row is full.
+15. **Documented exceptions** — grep `AGENTS.md`, `specs/` and doc comments
+    for "the exception", "except for", "unlike the others" and "the one".
+    Feeds STANDARDS.md § "A convention has no documented exceptions".
 
 ## Output
 
@@ -303,6 +282,10 @@ One section per recommendation:
 - Effort: <low | medium | high>
 - Risk: <low | medium | high> — <what could break>
 ```
+
+For a breach of a standard in `specs/STANDARDS.md` or another rule in
+`AGENTS.md`, the proposed fix changes the code and names the standard; it is
+never a spec or doc edit that records the breach as how the code works.
 
 End with a **Top 3** section: the fixes with the best effort-to-value ratio.
 
