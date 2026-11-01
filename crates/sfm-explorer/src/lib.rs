@@ -14,8 +14,9 @@
 
 // specs/STANDARDS.md § "Viewer items are no more visible than their users
 // need": an item reachable only inside the crate is `pub(crate)` or narrower,
-// and bare `pub` is kept for the crate's public interface. Set here rather than in the manifest because `[lints]
-// workspace = true` cannot be combined with crate-local entries.
+// and bare `pub` is kept for the crate's public interface. Set here rather
+// than in the manifest because `[lints] workspace = true` cannot be combined
+// with crate-local entries.
 #![warn(unreachable_pub)]
 
 mod action_log;
