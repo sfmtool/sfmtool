@@ -174,6 +174,8 @@ the subject should check it as a claim about the code, one at a time.
 
 > _Status (2026-10-31): row 2 **Done** — `relative-pose.md` now opens with what the module estimates, what its two estimators return, that it is offered to Rust and, through `sfmtool.geometry`, to Python and that no pipeline calls it; the old "The setting:" facts moved to the paragraph below it, branch `fix-1031-25-relative-pose-opening`._
 
+> _Status (2026-10-31): row 3 **Done** — `adjacency-surfel-normals.md` opens with a Purpose paragraph saying what the kernel computes (a normal and a determinacy verdict per selected point, from the positions of its image-space neighbours, reading no image), how the neighbours are chosen, what it returns, that it is bound as `sfmtool.analysis.estimate_adjacency_surfel_normals` and that no pipeline calls it; the old opening follows it, branch `fix-1031-26-adjacency-surfel-normals-opening`._
+
 ### 5. Coverage both ways
 
 **Specs never cited from `crates/`, `src/`, `tests/` or `scripts/`: 63 of 202**
