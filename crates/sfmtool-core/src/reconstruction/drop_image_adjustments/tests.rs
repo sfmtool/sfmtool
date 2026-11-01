@@ -417,7 +417,8 @@ fn a_folded_lens_that_is_not_valid_is_refused() {
         err,
         Some(DropImageAdjustmentsError::FoldedSplineNotMonotone { camera: 0 })
     );
-    // A mean focal scale at or below −1 leaves the camera no focal.
+    // A focal scale at or below −1 has no `ln(1 + s)`, so the mean is NaN and
+    // leaves the camera no focal.
     let mut recon = scene();
     for image in &mut recon.image_set.images[..4] {
         image.intrinsic_adjustment.focal = -1.5;
