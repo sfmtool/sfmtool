@@ -86,6 +86,11 @@ pub enum SiftError {
     #[error("Shape mismatch: {0}")]
     ShapeMismatch(String),
 
+    /// Metadata a writer was handed that the format does not allow, such as
+    /// `feature_options` that is not a JSON object.
+    #[error("Invalid metadata: {0}")]
+    InvalidMetadata(String),
+
     #[error("Hash verification failed: {0}")]
     HashMismatch(String),
 }
@@ -103,20 +108,32 @@ impl From<ArchiveIoError> for SiftError {
 }
 
 /// Feature tool metadata from `feature_tool_metadata.json.zst`.
+///
+/// Deserializing ignores a key the format does not define, as the format asks
+/// a reader to; [`FeatureToolMetadata::from_json_for_write`] is the strict
+/// parse for a writer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureToolMetadata {
     /// Tool name, e.g. "colmap" or "opencv".
     pub feature_tool: String,
     /// Feature type, e.g. "sift".
     pub feature_type: String,
-    /// Tool-specific options as a JSON object.
+    /// Tool-specific options, a JSON object. [`crate::write_sift`] refuses
+    /// any other JSON value.
     pub feature_options: serde_json::Value,
 }
 
 /// Newest `.sift` format version this build understands.
 pub const SIFT_FORMAT_VERSION: u32 = 1;
 
+/// The zstd level `.sift` files are written at unless a caller asks for
+/// another: the level `sfm sift` writes at and the Python bindings default to.
+pub const SIFT_ZSTD_LEVEL: i32 = 5;
+
 /// Image and feature metadata from `metadata.json.zst`.
+///
+/// Like [`FeatureToolMetadata`], deserializing ignores a key the format does
+/// not define, and [`SiftMetadata::from_json_for_write`] is the strict parse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiftMetadata {
     /// Format version number.
@@ -133,6 +150,58 @@ pub struct SiftMetadata {
     pub image_height: u32,
     /// Number of SIFT features.
     pub feature_count: u32,
+}
+
+impl FeatureToolMetadata {
+    /// Parse the metadata a writer was handed, refusing what a reader would
+    /// let pass: a key the format does not define, as well as a missing or
+    /// mistyped one ([`SiftError::InvalidMetadata`]). A reader ignores extra
+    /// keys so that a later version can add some; a writer of this version
+    /// has no such key to write, so one is a caller's mistake.
+    pub fn from_json_for_write(value: serde_json::Value) -> Result<Self, SiftError> {
+        from_json_for_write("feature_tool_metadata", value)
+    }
+}
+
+impl SiftMetadata {
+    /// The strict parse for a writer, as
+    /// [`FeatureToolMetadata::from_json_for_write`] is.
+    pub fn from_json_for_write(value: serde_json::Value) -> Result<Self, SiftError> {
+        from_json_for_write("metadata", value)
+    }
+}
+
+/// Parse `value` as a `T`, then refuse any key of it that `T` does not
+/// serialize back, which is a key `T` does not define. `entry` names the
+/// metadata in the error.
+fn from_json_for_write<T: Serialize + serde::de::DeserializeOwned>(
+    entry: &str,
+    value: serde_json::Value,
+) -> Result<T, SiftError> {
+    let invalid = |message: String| SiftError::InvalidMetadata(format!("{entry}: {message}"));
+    let given: Vec<String> = match value.as_object() {
+        Some(object) => object.keys().cloned().collect(),
+        None => return Err(invalid(format!("must be a JSON object, got {value}"))),
+    };
+    let parsed: T = serde_json::from_value(value).map_err(|e| invalid(e.to_string()))?;
+    let defined = serde_json::to_value(&parsed)?;
+    let defined = defined
+        .as_object()
+        .expect("a metadata struct serializes to a JSON object");
+    let unknown: Vec<String> = given
+        .iter()
+        .filter(|key| !defined.contains_key(*key))
+        .map(|key| format!("`{key}`"))
+        .collect();
+    if !unknown.is_empty() {
+        let defined: Vec<&str> = defined.keys().map(String::as_str).collect();
+        return Err(invalid(format!(
+            "unknown field {}, the format defines {}",
+            unknown.join(", "),
+            defined.join(", ")
+        )));
+    }
+    Ok(parsed)
 }
 
 /// Content integrity hashes from `content_hash.json.zst`.

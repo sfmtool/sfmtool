@@ -14,12 +14,38 @@ use crate::types::*;
 /// Write columnar data to a `.sift` file.
 ///
 /// Computes content hashes automatically. The `content_hash` field in `data`
-/// is ignored on write (recomputed from the actual data). Rejects a
-/// `metadata.version` that [`crate::read_sift`] would reject, so a write never
-/// produces a file this crate cannot read back.
+/// is ignored on write (recomputed from the actual data). Checks `data` with
+/// [`validate_sift_data`] first, so a write never produces a file this crate
+/// cannot read back, and a rejected write leaves no file behind.
 pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), SiftError> {
-    crate::read::check_version(&data.metadata)?;
+    validate_sift_data(data)?;
     write_sift_any_version(path, data, zstd_level)
+}
+
+/// Check that `data` is a `.sift` file's content, without writing anything.
+///
+/// Rejects a `metadata.version` that [`crate::read_sift`] would reject
+/// ([`SiftError::InvalidFormat`]), `feature_options` that is not a JSON
+/// object ([`SiftError::InvalidMetadata`]), and an array whose shape does not
+/// match `metadata.feature_count` or, for the thumbnail, the
+/// [`THUMBNAIL_SIZE`] square ([`SiftError::ShapeMismatch`]). A writer that
+/// parses its metadata from JSON parses it with
+/// [`SiftMetadata::from_json_for_write`] and
+/// [`FeatureToolMetadata::from_json_for_write`], which refuse a key the
+/// format does not define.
+///
+/// [`write_sift`] calls it; a caller that must tell a caller's mistake from a
+/// failed write, such as the Python binding, which raises `ValueError` for
+/// one and `OSError` for the other, calls it first.
+pub fn validate_sift_data(data: &SiftData) -> Result<(), SiftError> {
+    crate::read::check_version(&data.metadata)?;
+    if !data.feature_tool_metadata.feature_options.is_object() {
+        return Err(SiftError::InvalidMetadata(format!(
+            "feature_options must be a JSON object, got {}",
+            data.feature_tool_metadata.feature_options
+        )));
+    }
+    validate_dimensions(data, data.metadata.feature_count as usize)
 }
 
 /// [`write_sift`] without the version check, so the tests can produce the
