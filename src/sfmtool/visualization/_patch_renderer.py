@@ -310,7 +310,7 @@ def render_patches(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Each getter builds a new array on every access, so read each once.
+    # Read each getter once, outside the loop.
     workspace_dir = Path(recon.workspace_dir)
     quaternions = recon.quaternions_wxyz
     translations = recon.translations

@@ -370,8 +370,8 @@ def _oriented_patch(patch_frame):
 def _camera_poses(recon):
     """Each image's ``(camera, world-to-camera pose)``.
 
-    Each getter builds a new array on every access, so they are read once here
-    rather than for each row."""
+    The ``cameras`` getter builds a new list on every access, so the getters
+    are read once here rather than for each row."""
     from sfmtool.geometry import RigidTransform
 
     cameras = recon.cameras

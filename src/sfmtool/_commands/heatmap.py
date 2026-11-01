@@ -206,7 +206,7 @@ def heatmap(
                 "reconstruction has no feature indexes (its features are "
                 "embedded patches)"
             )
-        # Each getter builds a new array on every access, so read each once.
+        # Read each getter once, outside the loop.
         image_features = _observations_by_image(
             recon.track_image_indexes,
             track_feature_indexes,

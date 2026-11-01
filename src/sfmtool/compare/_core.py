@@ -126,7 +126,7 @@ def compare_reconstructions(
 
     # Perform alignment
     print("\n[4/7] Performing alignment...")
-    # Each getter builds a new array on every access, so read each once.
+    # Read each getter once, outside the loop.
     quaternions1 = recon1.quaternions_wxyz
     translations1 = recon1.translations
     quaternions2 = recon2.quaternions_wxyz
@@ -546,7 +546,7 @@ def _compare_image_extrinsics(
     position_errors = []
     rotation_errors = []
 
-    # Each getter builds a new array on every access, so read each once.
+    # Read each getter once, outside the loop.
     quaternions1 = recon1.quaternions_wxyz
     translations1 = recon1.translations
     quaternions2 = recon2.quaternions_wxyz
