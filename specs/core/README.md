@@ -43,8 +43,8 @@ prints a summary to stderr when it ends, every line prefixed
 wall or total time and, in all but `focal_vote`, its size), one row per phase
 (its seconds, its share of the
 batch total and, in most modules, its call count and mean microseconds per
-call), an `other/overhead` row for the time no leaf phase covers, and the
-module's own event counters. In the parallel kernels the phase times are summed
+call), an `other/overhead` row for the time no leaf phase covers, and, in the
+four `patch` modules, rows of event counts. In the parallel kernels the phase times are summed
 over threads, so they can add up to more than the wall time.
 
 Six `prof` modules print a batch summary:
