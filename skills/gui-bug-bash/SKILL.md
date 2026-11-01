@@ -24,7 +24,7 @@ What makes this work, from the first run (2026-09-29):
 ## Tools
 
 The viewer is called with `pixi run sfm explorer-call`
-(`specs/cli/visualization/explorer-call-command.md`); the scripts in this
+(`specs/cli/automation/explorer-call-command.md`); the scripts in this
 directory start and stop it. Run the scripts with
 `pixi run python skills/gui-bug-bash/<script>` from the repo root.
 

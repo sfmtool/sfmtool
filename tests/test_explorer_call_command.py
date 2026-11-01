@@ -8,7 +8,7 @@ connecting) run against no endpoint at all. The HTTP side runs against a small
 JSON-RPC server in this process that serves this sfmtool's own catalog, or a
 changed copy of it, as its ``tools/list`` and answers ``tools/call`` with
 canned results. A live call to a real viewer is described in
-``specs/cli/visualization/explorer-call-command.md`` § "Testing".
+``specs/cli/automation/explorer-call-command.md`` § "Testing".
 """
 
 import base64

@@ -154,13 +154,6 @@ COMMANDS = (
         "Launch the SfM Explorer 3D viewer.",
     ),
     (
-        "explorer-call",
-        "Visualization",
-        "explorer_call",
-        "explorer_call",
-        "Call one tool on a running SfM Explorer's MCP endpoint.",
-    ),
-    (
         "epipolar",
         "Visualization",
         "epipolar",
@@ -194,6 +187,14 @@ COMMANDS = (
         "web_export",
         "web_export",
         "Write a reconstruction as a web page that draws it in 3D.",
+    ),
+    # Automation
+    (
+        "explorer-call",
+        "Automation",
+        "explorer_call",
+        "explorer_call",
+        "Call one tool on a running SfM Explorer's MCP endpoint.",
     ),
     # Image Processing
     (

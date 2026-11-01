@@ -153,7 +153,7 @@ def explorer_call(
     --out-dir as STEM.png (STEM_1.png and on for more) and its path printed.
     The exit status is 0 when the viewer answered, 1 when the command refused
     the call, 2 for a usage error, 3 when the viewer refused the call, and 4
-    when no endpoint answered. See specs/cli/visualization/explorer-call-command.md.
+    when no endpoint answered. See specs/cli/automation/explorer-call-command.md.
     """
     catalog = tool_catalog()
 

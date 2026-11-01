@@ -20,6 +20,7 @@ CATEGORY_ORDER = (
     "Image Feature",
     "Reconstruction",
     "Visualization",
+    "Automation",
     "Image Processing",
     "COLMAP Interop",
     "Other",

@@ -254,7 +254,7 @@ What `get_widgets` and the input tools report about the viewer's window, in
 
 The list of tools the viewer's MCP endpoint offers, in
 `crates/sfm-explorer/src/mcp/` and
-[cli/visualization/explorer-call-command.md](cli/visualization/explorer-call-command.md).
+[cli/automation/explorer-call-command.md](cli/automation/explorer-call-command.md).
 
 | Word | Means | Not | Why |
 |------|-------|-----|-----|

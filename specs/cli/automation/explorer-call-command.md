@@ -33,8 +33,9 @@ sfm explorer-call --schema TOOL                       # one tool's entry, offlin
 
 The command is implemented in
 [explorer_call.py](../../../src/sfmtool/_commands/explorer_call.py) and
-registered under the Visualization category in
-[cli.py](../../../src/sfmtool/cli.py), after `explorer`. The catalog and the
+registered under the Automation category in
+[cli.py](../../../src/sfmtool/cli.py), the category for commands that drive
+another program. The catalog and the
 parse it checks against are the bindings `sfmtool.explorer.tool_catalog` and
 `sfmtool.explorer.validate_tool_call`, in
 [explorer.rs](../../../crates/sfmtool-py/src/explorer.rs) of `sfmtool-py`,

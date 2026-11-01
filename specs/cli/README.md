@@ -84,11 +84,18 @@ numpy, OpenCV, pycolmap and the command modules.
 |---------|------|
 | `sfm epipolar` | [epipolar-command.md](visualization/epipolar-command.md) |
 | `sfm explorer` | [explorer-command.md](visualization/explorer-command.md) — launches the viewer specced under [../gui/](../gui/README.md) |
-| `sfm explorer-call` | [explorer-call-command.md](visualization/explorer-call-command.md) — calls one tool on a running viewer's MCP endpoint |
 | `sfm heatmap` | [heatmap-command.md](visualization/heatmap-command.md) |
 | `sfm render-patches` | [render-patches-command.md](visualization/render-patches-command.md) |
 | `sfm panorama` | [panorama-command.md](visualization/panorama-command.md) |
 | `sfm web-export` | [web-export-command.md](visualization/web-export-command.md) |
+
+## Automation
+
+Commands that let a script or agent drive a running program.
+
+| Command | Spec |
+|---------|------|
+| `sfm explorer-call` | [explorer-call-command.md](automation/explorer-call-command.md) — calls one tool on a running SfM Explorer's MCP endpoint |
 
 ## Image Processing
 

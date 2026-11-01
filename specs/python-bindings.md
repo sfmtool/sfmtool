@@ -263,7 +263,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [explorer.rs](../crates/sfmtool-py/src/explorer.rs) | `tool_catalog`, `validate_tool_call`: the SfM Explorer's MCP tool catalog and the parse its `tools/call` runs | [explorer-call-command.md](cli/visualization/explorer-call-command.md) |
+| [explorer.rs](../crates/sfmtool-py/src/explorer.rs) | `tool_catalog`, `validate_tool_call`: the SfM Explorer's MCP tool catalog and the parse its `tools/call` runs | [explorer-call-command.md](cli/automation/explorer-call-command.md) |
 
 ## Keeping the index current
 

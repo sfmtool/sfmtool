@@ -113,7 +113,7 @@ place.
 
 **Without a registered client**, `sfm explorer-call TOOL ARGS` calls one tool
 from the command line
-([explorer-call-command.md](../cli/visualization/explorer-call-command.md)).
+([explorer-call-command.md](../cli/automation/explorer-call-command.md)).
 It checks the call against this catalog and the parse in
 [tools.rs](../../crates/sfm-explorer/src/mcp/tools.rs) before it sends it,
 through the crate's two public MCP functions, `tool_catalog` and
