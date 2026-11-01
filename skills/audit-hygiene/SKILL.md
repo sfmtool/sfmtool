@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, a Progress argument on long-running work, no with/without-progress variants, no panics on caller input, no Python wrappers over bindings, one I/O shape for every file format, viewer items no more visible than their users need, Python names that mark what is public, lazy loading of sfmtool and sfm, Rust modules as foo.rs beside foo/, *Options for settings structs, the license header on every source file, rustdoc without warnings, builds at the MSRV and without the viewer's mcp feature, no documented exceptions to a convention, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -311,7 +311,7 @@ worth more than a paragraph.
     builds at the MSRV and without the viewer's MCP feature");
     `tests/test_lazy_loading.py` and `tests/test_module_layout.py` pass
     (§ "Importing sfmtool and sfm loads only what is used", § "Python names
-    mark what is public"); and `cargo test -p sfmtool-core --test
+    mark what is public"); and `pixi run cargo test -p sfmtool-core --test
     license_headers` passes (§ "Every source file carries the license
     header"). Then grep the examples in `specs/` for imports of
     `_`-prefixed `sfmtool` names, which no test scans, and the command

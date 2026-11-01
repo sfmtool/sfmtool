@@ -63,31 +63,28 @@ wrapper that repeats what a binding does; every file format has the same I/O
 shape in `sfmtool.fileio`, validated in its format crate; an `sfm-explorer`
 item is private or `pub(crate)` unless the crate's public interface exports
 it, which the `unreachable_pub` lint checks for every item but struct fields;
-a leading `_` marks a Python name internal, and code outside `src/sfmtool/`
-imports only public names (a test also imports the internal name it tests);
-`import sfmtool` and `sfm --help` load no Python submodule and no command
-module; a Rust module with submodules is `foo.rs` beside `foo/`; a settings struct the caller fills is `*Options`; every source
-file carries the license header; rustdoc builds without warnings; the
-workspace builds at its MSRV, and the viewer without its `mcp` feature; a
-convention has no documented exceptions; a test asserts something that can
+a convention has no documented exceptions; a test asserts something that can
 fail. If code breaks a standard, fix the code; fix a spec or doc only where
 the code is right.
 
-The ones easiest to miss while editing:
+The standards on names, layout and builds are the easiest to miss while
+editing:
 
-- A new public name from a Python submodule goes in `_LAZY_NAMES` in
-  `sfmtool/__init__.py` and in its `if TYPE_CHECKING:` imports, not in a
-  top-level import; a new command is a row in `cli.COMMANDS`, its one-line
-  help the first sentence of its docstring. A Python module that is not
-  public API takes a `_` name.
-- A new Rust module with submodules starts as `foo.rs` beside `foo/`, never
-  `foo/mod.rs`; a new settings struct is `*Options` (`specs/GLOSSARY.md` §
+- A leading `_` marks a Python name internal, and code outside `src/sfmtool/`
+  imports only public names.
+- `import sfmtool` and `sfm --help` load no Python submodule and no command
+  module: a new public name from a Python submodule goes in `_LAZY_NAMES` and
+  the `if TYPE_CHECKING:` imports in `sfmtool/__init__.py`, and a new command
+  is a row in `cli.COMMANDS`, its help the first sentence of its docstring.
+- A Rust module with submodules is `foo.rs` beside `foo/`, never
+  `foo/mod.rs`; a settings struct is `*Options` (`specs/GLOSSARY.md` §
   "Rust type names").
-- Every new `.rs` or `.py` file starts with the two-line `Copyright The SfM
-  Tool Authors` / `SPDX-License-Identifier: Apache-2.0` header.
-- A doc link from a public item to a private one is a plain code span, not a
-  reason to widen the item's visibility.
-- An item that only the viewer's MCP code uses is gated on the `mcp` feature.
+- Every `.rs` and `.py` file opens with the two-line `Copyright The SfM Tool
+  Authors` / `SPDX-License-Identifier: Apache-2.0` header.
+- Rustdoc builds without warnings: a doc link from a public item to a private
+  one is a plain code span, not a reason to widen the item's visibility.
+- The workspace builds at its MSRV, and the viewer without its `mcp`
+  feature, so an item that only the MCP code uses is gated on `mcp`.
 
 ### Implementing a change
 

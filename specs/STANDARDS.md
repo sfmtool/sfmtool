@@ -432,14 +432,15 @@ turns `mcp` on for every workspace build, so an ungated item looks used in
 every local build and becomes a dead-code warning only in the build without
 the feature.
 
-The `msrv` job checks both: it builds the workspace with exactly the MSRV
-rustc, runs `cargo check -p sfm-explorer --no-default-features` and builds the
-viewer's library that way with `-D warnings`. Look for a standard-library API
+The `msrv` job checks both: it runs `cargo check --workspace` with exactly the
+MSRV rustc, then `cargo check -p sfm-explorer --no-default-features`, and
+checks the viewer's library that way again with `-D warnings`. Look for a standard-library API
 or language feature stabilized after the MSRV, and for an item that only
 `mcp/` uses with no `cfg` gate. Confirm the first against the version the
 standard-library docs give as "since", and the second with
 `cargo check -p sfm-explorer --no-default-features`. Out of
-scope: a dependency's declared `rust-version`, which can be lower than what it
+scope: test and bench targets, which the sdist does not compile and the job
+does not check at the MSRV; and a dependency's declared `rust-version`, which can be lower than what it
 needs (`libsqlite3-sys` needed 1.95 while declaring none), so the job's build
 is what counts, not dependency metadata.
 
