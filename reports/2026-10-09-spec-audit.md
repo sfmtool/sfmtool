@@ -531,6 +531,8 @@ Non-goals/deferrals checked: 3; no longer hold: 0
 
 > _Status (2026-10-17): **Partially done** — the first bullet (current version stated as 9): the top-level metadata example now shows `"version": 10` and the `version` field description says "`1` through `10`; writers emit `10`", matching `MATCHES_FORMAT_VERSION`; the section's other bullets are still open, branch `fix-round-06-matches-version`._
 
+> _Status (2026-10-31): **Partially done** — the "verifier", Verification step 6 and `refine_options.piecewise` bullets: the three places that used "verifier" for geometric verification (the cluster-file paragraph, the `--derive-pairs` writer line and "Writing a verified .matches file") now say "a writer that performs geometric verification"; step 6 now lists the per-cell checks and the rejection of legend names newer than the file's version, as `verify.rs` checks them; the `refine_options` description now says a missing `piecewise` means the per-cell refinement did not run (the SfM Explorer writer omits the key and never runs it, and files from before the refinement lack it). The mannered-prose bullet and the third copy are still open, branch `fix-1031-23-matches-format-spec`._
+
 **Third copies:** `MATCHES_FORMAT_VERSION` doc (`types.rs:68-101`, 34 lines) re-tells versions 7-10; shrink to contract plus link, as it already does below 7.
 **Recommendation:** update spec — the version line first.
 **Unclear / incorrect / suspicious:** none beyond the above. All five outbound links are background.

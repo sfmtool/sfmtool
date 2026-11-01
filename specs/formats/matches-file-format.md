@@ -449,7 +449,7 @@ file is still written once. Pair descriptor distances, which the stored
 pairwise form carries, are recomputed from the referenced `.sift` files when a
 consumer needs them.
 
-A verifier that needs two-view geometries for a cluster file reads it,
+A writer that performs geometric verification on a cluster file reads it,
 expands its clusters into pairs, verifies them, and writes the result as that
 pairwise file. See
 [`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the design
@@ -669,7 +669,10 @@ refinement measured and which members stand.
   `cell_shift_bound_px`, `min_cell_zncc`, `min_cell_curvature`,
   `update_tolerance_px` and `max_iterations`. A file written before
   `move_shape` was recorded lacks the key; its refinement could change the
-  shape
+  shape. A `refine_options` without `piecewise` means the per-cell refinement
+  did not run, and the section carries no per-cell entries: the SfM
+  Explorer's cluster-patches never runs it and omits the key, as does every
+  file written before the per-cell refinement existed
 
   Which keys `refine_options` holds is not tied to the format version, since
   the object is a record of settings rather than a stored layout. `radius` was
@@ -1369,7 +1372,14 @@ cluster_patches, two_view_geometries.
 5. Check every raw array a structural check indexes against the byte length its
    declared count calls for
 6. Validate structural constraints (feature index bounds, count sums, pair ordering;
-   cluster CSR, member bounds, patch statuses and reference invariants)
+   cluster CSR, member bounds, patch statuses and reference invariants; the
+   per-cell entries paired with their legend, their codes within it and no
+   reading on a member that is not `kept`; see
+   [Cluster Constraints](#cluster-constraints)), and reject a legend newer
+   than the file's version: `member_status_names` below version 7,
+   `member_cell_status_names` below version 8, `refused_outlier` below
+   version 9, and `rejected_unlocalizable_refined` or
+   `rejected_unlocalizable_cells` below version 10
 
 Step 6 walks the raw arrays by index, so a section's structural checks are skipped
 once one of its arrays fails step 5 — and the pairwise feature-bounds walk is
@@ -1477,8 +1487,9 @@ The writers in this repository and the `matching_method` they record:
   writes a refinement-stage file with `"cluster"`.
 - `sfm match --merge` writes `"merged"` files.
 - [`sfm match --derive-pairs`](../cli/image-feature/match-command.md#derive-pairs)
-  is the verifier that reads a cluster file and writes its verified pairwise
-  file with two-view geometries, keeping the source's `matching_method`.
+  is the writer that performs geometric verification: it reads a cluster file
+  and writes its verified pairwise file with two-view geometries, keeping the
+  source's `matching_method`.
 - `sfm to-colmap-db` (in `src/sfmtool/colmap/db_setup.py`) is the consumer that
   writes stored two-view geometries into a COLMAP database; it conjugates each
   relative pose by `S` when it builds the `pycolmap.Rigid3d`.
@@ -1524,9 +1535,10 @@ modifying an existing file.
 
 ### Writing a verified .matches file
 
-Geometric verification does not modify the file it reads. A verifier
-reads a clusters-bearing file, expands its clusters into image pairs, verifies
-those pairs, and writes a new pairwise file at a separate path. The new file holds
+Geometric verification does not modify the file it reads. A writer that
+performs geometric verification reads a clusters-bearing file, expands its
+clusters into image pairs, verifies those pairs, and writes a new pairwise file
+at a separate path. The new file holds
 the pairs that pass verification, their matches and the
 [two-view geometries section](#7-two-view-geometries-optional-section), with
 `has_two_view_geometries` set to `true` in its metadata and its own content hash.
