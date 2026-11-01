@@ -56,7 +56,8 @@ fn test_match_image_pair_forward_motion_asymmetric_dimensions() {
         None,
         None,
         None,
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         matches.len(),
@@ -218,9 +219,315 @@ fn test_match_image_pair_rectified_geometric_filter_reads_raw_positions() {
         Some(&affines1),
         Some(&affines2),
         Some(&config),
-    );
+    )
+    .unwrap();
     matches.sort_by_key(|m| m.0);
     let pairs: Vec<(usize, usize)> = matches.iter().map(|m| (m.0, m.1)).collect();
     let expected: Vec<(usize, usize)> = (0..n).map(|i| (i, i)).collect();
     assert_eq!(pairs, expected);
+}
+
+/// Four features whose descriptors differ, for the input-checking tests.
+fn four_features() -> (Vec<f64>, Vec<u8>) {
+    let positions = vec![100.0, 80.0, 500.0, 80.0, 100.0, 400.0, 500.0, 400.0];
+    let mut descriptors = vec![0u8; 4 * 128];
+    for i in 0..4 {
+        descriptors[i * 128] = (i * 50) as u8;
+    }
+    (positions, descriptors)
+}
+
+/// `match_image_pair` between two images of [`four_features`] with sideways
+/// motion, taking image 1's positions, image 2's descriptors and, when
+/// `affines` is `Some`, both images' affine shapes and the default filter.
+fn pair_with(
+    positions1: &[f64],
+    descriptors2: &[u8],
+    affines: Option<(&[f64], &[f64])>,
+) -> Result<PairMatches, MatchImagePairError> {
+    let (positions, descriptors) = four_features();
+    let k = test_intrinsics();
+    let r = Matrix3::identity();
+    let config = GeometricFilterConfig::default();
+    match_image_pair(
+        &k,
+        &k,
+        &r,
+        &Vector3::zeros(),
+        &r,
+        &Vector3::new(1.0, 0.0, 0.0),
+        640,
+        480,
+        640,
+        480,
+        positions1,
+        &descriptors,
+        4,
+        &positions,
+        descriptors2,
+        4,
+        128,
+        5,
+        None,
+        50,
+        affines.map(|a| a.0),
+        affines.map(|a| a.1),
+        affines.map(|_| &config),
+    )
+}
+
+#[test]
+fn match_image_pair_refuses_short_feature_arrays() {
+    let (positions, descriptors) = four_features();
+    assert_eq!(pair_with(&positions, &descriptors, None).unwrap().len(), 4);
+
+    assert_eq!(
+        pair_with(&positions[..6], &descriptors, None),
+        Err(MatchImagePairError::FeatureArrayLength {
+            array: "positions1",
+            image: None,
+            rows: 4,
+            width: 2,
+            len: 6,
+        })
+    );
+    assert_eq!(
+        pair_with(&positions, &descriptors[..3 * 128], None),
+        Err(MatchImagePairError::FeatureArrayLength {
+            array: "descriptors2",
+            image: None,
+            rows: 4,
+            width: 128,
+            len: 3 * 128,
+        })
+    );
+    let affines = [1.0, 0.0, 0.0, 1.0].repeat(4);
+    assert!(pair_with(&positions, &descriptors, Some((&affines, &affines))).is_ok());
+    assert_eq!(
+        pair_with(&positions, &descriptors, Some((&affines, &affines[..12]))),
+        Err(MatchImagePairError::FeatureArrayLength {
+            array: "affines2",
+            image: None,
+            rows: 4,
+            width: 4,
+            len: 12,
+        })
+    );
+}
+
+/// The arguments of a two-image, one-camera `match_image_pairs_batch` call
+/// over [`four_features`], which a test changes before [`BatchArgs::run`].
+struct BatchArgs {
+    pairs: Vec<(usize, usize)>,
+    intrinsics: Vec<Matrix3<f64>>,
+    rotations: Vec<Matrix3<f64>>,
+    translations: Vec<Vector3<f64>>,
+    camera_indices: Vec<usize>,
+    positions: Vec<Vec<f64>>,
+    descriptors: Vec<Vec<u8>>,
+    num_features: Vec<usize>,
+    widths: Vec<u32>,
+    heights: Vec<u32>,
+    affines: Option<Vec<Vec<f64>>>,
+}
+
+impl BatchArgs {
+    fn new() -> Self {
+        let (positions, descriptors) = four_features();
+        Self {
+            pairs: vec![(0, 1)],
+            intrinsics: vec![test_intrinsics()],
+            rotations: vec![Matrix3::identity(); 2],
+            translations: vec![Vector3::zeros(), Vector3::new(1.0, 0.0, 0.0)],
+            camera_indices: vec![0, 0],
+            positions: vec![positions.clone(), positions],
+            descriptors: vec![descriptors.clone(), descriptors],
+            num_features: vec![4, 4],
+            widths: vec![640],
+            heights: vec![480],
+            affines: None,
+        }
+    }
+
+    fn run(&self) -> Result<Vec<PairMatches>, MatchImagePairError> {
+        let positions: Vec<&[f64]> = self.positions.iter().map(Vec::as_slice).collect();
+        let descriptors: Vec<&[u8]> = self.descriptors.iter().map(Vec::as_slice).collect();
+        let affines: Option<Vec<&[f64]>> = self
+            .affines
+            .as_ref()
+            .map(|a| a.iter().map(Vec::as_slice).collect());
+        let config = GeometricFilterConfig::default();
+        match_image_pairs_batch(
+            &self.pairs,
+            &self.intrinsics,
+            &self.rotations,
+            &self.translations,
+            &self.camera_indices,
+            &positions,
+            &descriptors,
+            &self.num_features,
+            &self.widths,
+            &self.heights,
+            128,
+            5,
+            None,
+            50,
+            affines.as_deref(),
+            affines.as_ref().map(|_| &config),
+        )
+    }
+}
+
+#[test]
+fn match_image_pairs_batch_matches_valid_input() {
+    let result = BatchArgs::new().run().unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].len(), 4);
+
+    let mut args = BatchArgs::new();
+    args.affines = Some(vec![[1.0, 0.0, 0.0, 1.0].repeat(4); 2]);
+    assert_eq!(args.run().unwrap().len(), 1);
+}
+
+#[test]
+fn match_image_pairs_batch_refuses_mismatched_lists() {
+    let mut args = BatchArgs::new();
+    args.rotations.pop();
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::ListLength {
+            list: "rotations",
+            len: 1,
+            reference: "camera_indices",
+            expected: 2,
+        })
+    );
+
+    let mut args = BatchArgs::new();
+    args.num_features.push(0);
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::ListLength {
+            list: "num_features",
+            len: 3,
+            reference: "camera_indices",
+            expected: 2,
+        })
+    );
+
+    let mut args = BatchArgs::new();
+    args.widths.push(640);
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::ListLength {
+            list: "widths",
+            len: 2,
+            reference: "intrinsics",
+            expected: 1,
+        })
+    );
+
+    let mut args = BatchArgs::new();
+    args.affines = Some(vec![[1.0, 0.0, 0.0, 1.0].repeat(4)]);
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::ListLength {
+            list: "affines",
+            len: 1,
+            reference: "camera_indices",
+            expected: 2,
+        })
+    );
+}
+
+#[test]
+fn match_image_pairs_batch_refuses_out_of_range_indexes() {
+    let mut args = BatchArgs::new();
+    args.camera_indices[1] = 1;
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::CameraIndexOutOfRange {
+            image: 1,
+            camera: 1,
+            num_cameras: 1,
+        })
+    );
+
+    let mut args = BatchArgs::new();
+    args.pairs.push((1, 2));
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::ImageIndexOutOfRange {
+            pair: (1, 2),
+            num_images: 2,
+        })
+    );
+}
+
+#[test]
+fn match_image_pairs_batch_refuses_short_feature_arrays() {
+    let mut args = BatchArgs::new();
+    args.descriptors[1].truncate(3 * 128);
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::FeatureArrayLength {
+            array: "descriptors",
+            image: Some(1),
+            rows: 4,
+            width: 128,
+            len: 3 * 128,
+        })
+    );
+
+    let mut args = BatchArgs::new();
+    args.positions[0].push(0.0);
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::FeatureArrayLength {
+            array: "positions",
+            image: Some(0),
+            rows: 4,
+            width: 2,
+            len: 9,
+        })
+    );
+
+    // An image no pair names is checked too.
+    let mut args = BatchArgs::new();
+    args.pairs.clear();
+    args.affines = Some(vec![[1.0, 0.0, 0.0, 1.0].repeat(4), vec![1.0; 3]]);
+    assert_eq!(
+        args.run(),
+        Err(MatchImagePairError::FeatureArrayLength {
+            array: "affines",
+            image: Some(1),
+            rows: 4,
+            width: 4,
+            len: 3,
+        })
+    );
+}
+
+#[test]
+fn match_image_pair_error_messages_name_the_input() {
+    let err = MatchImagePairError::FeatureArrayLength {
+        array: "descriptors",
+        image: Some(3),
+        rows: 4,
+        width: 128,
+        len: 384,
+    };
+    assert_eq!(
+        err.to_string(),
+        "descriptors[3] has 384 elements but 4 features of 128 elements each need 512"
+    );
+    let err = MatchImagePairError::CameraIndexOutOfRange {
+        image: 1,
+        camera: 2,
+        num_cameras: 1,
+    };
+    assert_eq!(
+        err.to_string(),
+        "image 1 has camera index 2, out of range for 1 cameras"
+    );
 }
