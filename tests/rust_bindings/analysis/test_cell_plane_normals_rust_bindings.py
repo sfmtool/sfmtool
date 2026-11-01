@@ -118,6 +118,67 @@ def test_cell_plane_normals_rejects_an_unknown_cell_status():
         cell_plane_normals(**args)
 
 
+def _set(key, value):
+    def apply(args):
+        args[key] = value
+
+    return apply
+
+
+def _set_item(key, index, value):
+    def apply(args):
+        args[key][index] = value
+
+    return apply
+
+
+@pytest.mark.parametrize(
+    "break_it, match",
+    [
+        (_set("cluster_starts", np.array([0, 5], np.uint32)), "cluster_starts"),
+        (
+            _set("cluster_starts", np.array([0, 6, 5], np.uint32)),
+            "cluster_starts decreases",
+        ),
+        (
+            _set("cluster_starts", np.array([0, 5, 11], np.uint32)),
+            "past the member count",
+        ),
+        (
+            _set("reference_members", np.array([0, 2], np.uint32)),
+            "reference_members\\[1\\]",
+        ),
+        (
+            _set("reference_members", np.array([0, 99], np.uint32)),
+            "reference_members\\[1\\]",
+        ),
+        (_set_item("member_images", 3, 5), "member_images\\[3\\]"),
+        (_set_item("image_camera", 2, 1), "image_camera\\[2\\]"),
+        (_set("resolution", 2), "resolution"),
+        (_set("patch_size", 0.0), "patch_size"),
+        (_set("patch_size", -1.0), "patch_size"),
+        (_set("patch_size", float("nan")), "patch_size"),
+        (_set("patch_size", float("inf")), "patch_size"),
+        (_set_item("member_status", 1, 200), "member status"),
+        (_set("member_status", np.zeros(9, np.uint8)), "member_status"),
+        (_set("quaternions_wxyz", np.zeros((4, 4))), "quaternions_wxyz"),
+    ],
+)
+def test_cell_plane_normals_rejects_invalid_input(break_it, match):
+    args = _scene(2)
+    break_it(args)
+    with pytest.raises(ValueError, match=match):
+        cell_plane_normals(**args)
+
+
+def test_cell_plane_normals_accepts_an_unrefinable_reference():
+    args = _scene(2)
+    args["reference_members"][1] = 0xFFFFFFFF
+    out = cell_plane_normals(**args)
+    assert out["determinacy"][1] == 0
+    assert out["determinacy"][0] == 2
+
+
 def test_cell_plane_normals_floors_the_residual_at_the_cell_shift_precision():
     # The rays meet exactly, so the cell weight is set by the floor alone:
     # 0.1 grid px times patch_size / resolution times the shape's gain of 3.
