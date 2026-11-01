@@ -48,7 +48,7 @@ build with its `mcp` feature, which `sfmtool-py` always turns on.
 | Argument / option | Type | Default | Meaning |
 |-------------------|------|---------|---------|
 | `TOOL` | tool name | none | The tool to call, as `tools/list` names it. Required except with `--list-tools`. |
-| `ARGS` | JSON object | `{}` | The tool's arguments: inline, `@FILE` to read them from a file, or `-` to read them from standard input. A file or standard input avoids quoting JSON for a shell, which in Windows PowerShell 5.1 strips the double quotes from an argument passed to a program. |
+| `ARGS` | JSON object | `{}` | The tool's arguments: inline, `@FILE` to read them from a file, or `-` to read them from standard input. A file or standard input avoids quoting JSON for a shell, which in Windows PowerShell 5.1 strips the double quotes from an argument passed to a program. A file is read as UTF-8 or, with a byte order mark, as UTF-16, and a leading byte order mark is dropped from a file or from standard input, as PowerShell 5.1 writes one; in PowerShell, quote `'@FILE'`, since a bare `@name` is splatting. |
 | `--mcp PORT` | int, 1 to 65535 | `8787` | The port of the endpoint on `127.0.0.1`. The default is `DEFAULT_MCP_PORT` from [explorer.py](../../../src/sfmtool/_commands/explorer.py), the port `sfm explorer --mcp` takes when given no number. |
 | `--list-tools` | flag | off | Print each tool of this sfmtool's catalog as `name (kind): first sentence of its description`, then the count. Connects to nothing. |
 | `--schema` | flag | off | Print `TOOL`'s `tools/list` entry from this sfmtool's catalog as indented JSON: its name, description, `inputSchema` and annotations. Connects to nothing. |
@@ -159,7 +159,7 @@ With `--batch` the command prints one JSON line per argument line, in order:
 `{"arguments": {...}, "reply": ...}` for an answer, with the first text block
 parsed as JSON where it is JSON and `--field` applied, and
 `{"arguments": {...}, "error": "..."}` for a call refused by the parser here
-(which is not sent) or by the viewer. A line whose reply carries images also
+(which is not sent) or by the viewer, or for a reply that lacks the `--field`. A line whose reply carries images also
 has `"images"`, the paths written, with the stem `STEM_<line>` where `<line>`
 counts argument lines from 1. The tool name and the catalog are checked once,
 before the first call, and stop the whole batch as they stop a single call;

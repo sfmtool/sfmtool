@@ -189,6 +189,24 @@ def test_args_are_read_inline_from_a_file_or_from_stdin(form, tmp_path):
     assert json.loads(result.output) == arguments
 
 
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16"])
+def test_args_written_by_windows_powershell_are_read(encoding, tmp_path):
+    """Windows PowerShell 5.1 writes files as UTF-8 or UTF-16 with a byte order
+    mark, and puts one before what it pipes to a program."""
+    arguments = {"point": 12}
+    text = json.dumps(arguments)
+    path = tmp_path / "args.json"
+    path.write_text(text, encoding=encoding)
+    with _FakeViewer() as viewer:
+        from_file = _run(["--mcp", str(viewer.port), "get_point", f"@{path}"])
+        from_stdin = _run(
+            ["--mcp", str(viewer.port), "get_point", "-"], input="\ufeff" + text
+        )
+    assert from_file.exit_code == 0, from_file.output
+    assert from_stdin.exit_code == 0, from_stdin.output
+    assert viewer.calls == [("get_point", arguments)] * 2
+
+
 def test_no_args_sends_an_empty_object():
     with _FakeViewer() as viewer:
         result = _run(["--mcp", str(viewer.port), "get_scene"])
@@ -400,3 +418,27 @@ def test_batch_calls_once_per_line_and_reports_each(tmp_path):
     # Refused here, so never sent.
     assert records[2]["error"] == validate_tool_call("get_point", {"point": "a b c"})
     assert [c[1] for c in viewer.calls] == [{"point": 1}, {"point": 2}]
+
+
+def test_batch_reports_a_missing_field_on_its_line():
+    def answer(name, arguments):
+        reply = {"index": 1} if arguments["point"] == 1 else {"other": 0}
+        return {"content": [{"type": "text", "text": json.dumps(reply)}]}
+
+    with _FakeViewer(answer=answer) as viewer:
+        result = _run(
+            [
+                "--mcp",
+                str(viewer.port),
+                "get_point",
+                "--batch",
+                "-",
+                "--field",
+                "index",
+            ],
+            input='{"point": 1}\n{"point": 2}\n',
+        )
+    assert result.exit_code == 0, result.output
+    records = [json.loads(line) for line in result.output.splitlines()]
+    assert records[0] == {"arguments": {"point": 1}, "reply": 1}
+    assert records[1]["error"] == "The reply has no field 'index': no 'index'."

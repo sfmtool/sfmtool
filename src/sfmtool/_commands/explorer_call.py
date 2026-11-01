@@ -246,7 +246,10 @@ def explorer_call(
                     if result.get("isError"):
                         record["error"] = "\n".join(text)
                     else:
-                        record["reply"] = _field(_parse_reply(text), field_path)
+                        try:
+                            record["reply"] = _field(_parse_reply(text), field_path)
+                        except click.ClickException as error:
+                            record["error"] = error.message
             click.echo(json.dumps(record, ensure_ascii=False))
         return
 
@@ -281,12 +284,12 @@ def _read_arguments(arguments):
     if arguments is None:
         return {}
     if arguments == "-":
-        text, source = sys.stdin.read(), "standard input"
+        text, source = _read_stdin(), "standard input"
     elif arguments.startswith("@"):
         path = Path(arguments[1:])
         try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as error:
+            text = _read_file(path)
+        except (OSError, UnicodeDecodeError) as error:
             raise click.ClickException(f"Could not read ARGS from {path}: {error}")
         source = str(path)
     else:
@@ -297,11 +300,11 @@ def _read_arguments(arguments):
 def _read_batch(batch_path):
     """Each non-blank line of the --batch file as a dict."""
     if batch_path == "-":
-        text, source = sys.stdin.read(), "standard input"
+        text, source = _read_stdin(), "standard input"
     else:
         try:
-            text = Path(batch_path).read_text(encoding="utf-8")
-        except OSError as error:
+            text = _read_file(Path(batch_path))
+        except (OSError, UnicodeDecodeError) as error:
             raise click.ClickException(f"Could not read {batch_path}: {error}")
         source = batch_path
     return [
@@ -309,6 +312,21 @@ def _read_batch(batch_path):
         for number, line in enumerate(text.splitlines(), 1)
         if line.strip()
     ]
+
+
+def _read_file(path):
+    """A file's text. Windows PowerShell 5.1 writes UTF-8 with a byte order
+    mark, or UTF-16 with one from `Out-File` and `>`, so either is read."""
+    data = path.read_bytes()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16")
+    return data.decode("utf-8-sig")
+
+
+def _read_stdin():
+    """Standard input's text, without the byte order mark Windows PowerShell
+    5.1 puts before what it pipes to a program."""
+    return sys.stdin.read().removeprefix("\ufeff")
 
 
 def _parse_object(text, source):
