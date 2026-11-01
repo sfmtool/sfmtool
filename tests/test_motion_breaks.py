@@ -223,18 +223,19 @@ class _Tracks:
         self.image_count = image_count
 
 
-def _nearby_by_sets(tracks, seq_frames, image_frames, window):
-    """The count by its definition, with sets."""
-    n = len(seq_frames)
+def _nearby_by_sets(tracks, positions, n, window):
+    """The count by its definition, with sets.
+
+    ``positions`` maps each counted image to the sequence position it counts
+    at; images missing from it are not counted.
+    """
     out = []
     for k in range(n - 1):
-        lo = seq_frames[max(0, k - window + 1)]
-        hi = seq_frames[min(n - 1, k + window)]
         count = 0
         for t in tracks:
-            frames = [image_frames[i] for i in t]
-            before = any(lo <= f <= seq_frames[k] for f in frames)
-            after = any(seq_frames[k + 1] <= f <= hi for f in frames)
+            pos = [positions[i] for i in t if i in positions]
+            before = any(k - window < q <= k for q in pos)
+            after = any(k < q <= k + window for q in pos)
             count += before and after
         out.append(count)
     return out
@@ -242,8 +243,6 @@ def _nearby_by_sets(tracks, seq_frames, image_frames, window):
 
 def test_nearby_counts_match_their_definition():
     rng = np.random.default_rng(2)
-    seq_frames = sorted(rng.choice(np.arange(1, 200), size=40, replace=False))
-    image_frames = np.array(seq_frames)
     tracks = []
     for _ in range(300):
         start = int(rng.integers(0, 40))
@@ -252,34 +251,70 @@ def test_nearby_counts_match_their_definition():
         if len(members) >= 2:
             tracks.append(members)
     recon = _Tracks(tracks, 40)
+    # The sequence lists the images out of index order.
+    seq = [int(i) for i in rng.permutation(40)]
+    positions = {img: k for k, img in enumerate(seq)}
     for window in (1, 3, BREAK_WINDOW):
-        assert _nearby_shared_point_counts(
-            recon, seq_frames, image_frames, window
-        ) == _nearby_by_sets(tracks, seq_frames, image_frames, window)
+        assert _nearby_shared_point_counts(recon, seq, None, window) == _nearby_by_sets(
+            tracks, positions, 40, window
+        )
 
 
 def test_nearby_counts_include_the_other_sensors_of_a_rig():
-    """Images 0-9 are one sensor at frames 1-10, images 10-19 another at the
-    same frames.  A track seen by the second sensor at frame 4 and the first at
-    frame 7 counts for the first sensor's edges 4->5, 5->6 and 6->7, and a
-    track seen only by the second sensor, at frames 2 and 9, counts for the
-    one edge whose windows of 4 frames reach both, 5->6."""
-    image_frames = np.array(list(range(1, 11)) * 2)
-    seq_frames = list(range(1, 11))
+    """Images 0-9 are one sensor at rig frames 0-9, images 10-19 another at
+    the same frames.  A track seen by the second sensor at frame 3 and the
+    first at frame 6 counts for the first sensor's edges 3, 4 and 5, and a
+    track seen only by the second sensor, at frames 1 and 8, counts for the
+    one edge whose windows of 4 images reach both, edge 4."""
+    rig_frames = np.array(list(range(10)) * 2)
+    seq = list(range(10))
     tracks = [[13, 6], [11, 18]]
-    counts = _nearby_shared_point_counts(
-        _Tracks(tracks, 20), seq_frames, image_frames, 4
-    )
-    assert counts == _nearby_by_sets(tracks, seq_frames, image_frames, 4)
+    counts = _nearby_shared_point_counts(_Tracks(tracks, 20), seq, rig_frames, 4)
+    positions = {i: int(rig_frames[i]) for i in range(20)}
+    assert counts == _nearby_by_sets(tracks, positions, 10, 4)
     assert counts == [0, 0, 0, 1, 2, 1, 0, 0, 0]
 
 
-def test_nearby_counts_skip_images_without_a_frame_number():
-    image_frames = np.array([1, 2, 3, 4, -1])
+def test_nearby_counts_ignore_other_sequences_without_a_rig():
+    """Two walks numbered alike, ``walk1_%04d`` (images 0-9) and
+    ``walk2_%04d`` (images 10-19), with no rig data: tracks tying walk1's
+    images to walk2's add nothing to walk1's counts."""
+    seq = list(range(10))
+    tracks = [[13, 6], [11, 18], [2, 5]]
+    counts = _nearby_shared_point_counts(_Tracks(tracks, 20), seq, None, 4)
+    assert counts == [0, 0, 1, 1, 1, 0, 0, 0, 0]
+
+
+def test_nearby_counts_skip_images_outside_any_counted_frame():
+    """An image in no rig frame, or in a frame the sequence has no image in,
+    is not counted."""
+    rig_frames = np.array([0, 1, 2, 3, -1, 7])
     counts = _nearby_shared_point_counts(
-        _Tracks([[0, 4], [1, 2]], 5), [1, 2, 3, 4], image_frames, 2
+        _Tracks([[0, 4], [1, 2], [3, 5]], 6), [0, 1, 2, 3], rig_frames, 2
     )
     assert counts == [0, 1, 0]
+
+
+def test_rig_frames_come_from_rig_frame_data(
+    kerry_park_ground_truth_sfmr, seoul_bull_ground_truth_sfmr
+):
+    """The kerry rig's two sensors share each of its 24 frames; the Seoul bull
+    photos have no rig data, so only a sequence's own images count."""
+    from sfmtool.motion.recon_discontinuity import _image_rig_frames
+    from sfmtool.reconstruction import SfmrReconstruction
+
+    kerry = SfmrReconstruction.load(kerry_park_ground_truth_sfmr)
+    frames = _image_rig_frames(kerry)
+    assert frames is not None and len(frames) == kerry.image_count == 48
+    by_frame = {}
+    for name, f in zip(kerry.image_names, frames):
+        by_frame.setdefault(int(f), set()).add(name.rsplit("/", 1)[-1])
+    assert len(by_frame) == 24
+    assert all(len(names) == 1 for names in by_frame.values())
+
+    assert (
+        _image_rig_frames(SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)) is None
+    )
 
 
 # --- On reconstructions ---

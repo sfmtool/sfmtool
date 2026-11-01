@@ -574,48 +574,66 @@ def _select_core_edges(
 # ---------------------------------------------------------------------------
 
 
+def _image_rig_frames(recon) -> np.ndarray | None:
+    """Each image's rig frame index from ``recon.rig_frame_data``, or None.
+
+    None when the reconstruction stores no rig frames, so the break verdict
+    then counts no image outside a sequence's own.
+    """
+    rig = recon.rig_frame_data
+    if rig is None or rig.get("image_frame_indexes") is None:
+        return None
+    return np.asarray(rig["image_frame_indexes"], dtype=np.int64)
+
+
 def _nearby_shared_point_counts(
     recon,
-    seq_frame_numbers: list[int],
-    image_frame_numbers: np.ndarray,
+    seq_image_indexes: list[int],
+    image_rig_frames: np.ndarray | None,
     window: int = BREAK_WINDOW,
 ) -> list[int]:
     """Per edge, the 3D points seen on both sides of it near it.
 
     For the sequence's edge ``(k, k+1)``, counts the tracks observed both in an
-    image before the edge and in an image after it, near it.  An image is near
-    on the before side when its frame number lies from
-    ``seq_frame_numbers[k - window + 1]`` to ``seq_frame_numbers[k]``, and on
-    the after side from ``seq_frame_numbers[k + 1]`` to
-    ``seq_frame_numbers[k + window]``, so the window is the sequence's own
-    ``window`` images on each side.  ``image_frame_numbers`` gives every
-    reconstruction image's frame number, or -1 for an image with none, and any
-    image with a frame number in range counts, not only the sequence's own:
-    the other sensors of a rig, whose images carry the same frame numbers, tie
-    a sensor's path together across a frame where that sensor alone sees
-    nothing in common.  Only track membership is read, so a point at infinity
-    counts like any other.
+    image before the edge and in an image after it, near it: on the before side
+    the sequence's images ``k - window + 1 .. k``, on the after side its images
+    ``k + 1 .. k + window``.  When ``image_rig_frames`` gives each
+    reconstruction image's rig frame (from `_image_rig_frames`), every image in
+    the same rig frame as one of those sequence images counts with it: the
+    other sensors of a rig tie a sensor's path together across a frame where
+    that sensor alone sees nothing in common.  Without rig frames only the
+    sequence's own images count, so another sequence that merely shares the
+    numbering adds nothing.  Only track membership is read, so a point at
+    infinity counts like any other.
 
-    Each image is given the position of the last sequence image whose frame
-    number is not above its own.  A track then counts for edge ``k`` exactly
-    when two of its observations that are consecutive in position, at
-    positions ``p < q``, satisfy ``p <= k < q``, ``p > k - window`` and
-    ``q <= k + window``.  For each such pair that is the run of edges
-    ``max(p, q - window) .. min(q - 1, p + window - 1)``, and the runs of one
-    track's pairs do not overlap, so adding them up counts each track once per
-    edge.
+    Each counted image takes the position of its sequence image.  A track then
+    counts for edge ``k`` exactly when two of its observations that are
+    consecutive in position, at positions ``p < q``, satisfy ``p <= k < q``,
+    ``p > k - window`` and ``q <= k + window``.  For each such pair that is the
+    run of edges ``max(p, q - window) .. min(q - 1, p + window - 1)``, and the
+    runs of one track's pairs do not overlap, so adding them up counts each
+    track once per edge.
     """
-    n = len(seq_frame_numbers)
+    n = len(seq_image_indexes)
     if n < 2:
         return []
-    frames = np.asarray(seq_frame_numbers, dtype=np.int64)
+    seq = np.asarray(seq_image_indexes, dtype=np.int64)
+    position = np.full(recon.image_count, -1, dtype=np.int64)
+    if image_rig_frames is not None:
+        rig_frames = np.asarray(image_rig_frames, dtype=np.int64)
+        seq_frames = rig_frames[seq]
+        framed = seq_frames >= 0
+        frame_position = np.full(int(rig_frames.max(initial=-1)) + 1, -1, np.int64)
+        frame_position[seq_frames[framed]] = np.arange(n)[framed]
+        in_frame = rig_frames >= 0
+        position[in_frame] = frame_position[rig_frames[in_frame]]
+    position[seq] = np.arange(n)
     counts = np.asarray(recon.observation_counts, dtype=np.int64)
     images = np.asarray(recon.track_image_indexes, dtype=np.int64)
     points = np.repeat(np.arange(len(counts), dtype=np.int64), counts)
-    obs_frames = np.asarray(image_frame_numbers, dtype=np.int64)[images]
-    in_range = (obs_frames >= frames[0]) & (obs_frames <= frames[-1])
-    points = points[in_range]
-    pos = np.searchsorted(frames, obs_frames[in_range], side="right") - 1
+    pos = position[images]
+    counted = pos >= 0
+    points, pos = points[counted], pos[counted]
     order = np.lexsort((pos, points))
     points, pos = points[order], pos[order]
     pair = (points[1:] == points[:-1]) & (pos[1:] > pos[:-1])
@@ -784,13 +802,9 @@ def analyze_reconstruction(
     per_image_points = _build_per_image_point_sets(recon)
     covisibility = _covisibility_lookup(recon)
 
-    # Frame number of every image in the analysis, -1 for the rest, so the
-    # break verdict can count the other sensors of a rig at the same frames.
-    image_frame_numbers = np.full(num_images, -1, dtype=np.int64)
-    for name, img_idx in name_to_idx.items():
-        file_number = number_from_filename(name)
-        if file_number is not None:
-            image_frame_numbers[img_idx] = file_number
+    # Rig frame of every image, so the break verdict can count the other
+    # sensors of a rig at the same frames; None without rig data.
+    image_rig_frames = _image_rig_frames(recon)
 
     all_sequence_results = []
 
@@ -856,7 +870,7 @@ def analyze_reconstruction(
             covisibility, seq_image_indexes
         )
         nearby_shared = _nearby_shared_point_counts(
-            recon, seq_frame_numbers, image_frame_numbers
+            recon, seq_image_indexes, image_rig_frames
         )
         break_reference = _break_reference(
             [float(r) for r in successive_rots],

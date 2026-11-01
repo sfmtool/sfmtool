@@ -412,12 +412,13 @@ with `BREAK_ROTATION_FACTOR = 4`, `BREAK_SHARED_FRACTION = 0.2` and
 
 The **nearby shared count** of edge (a, a+1) is the number of 3D points observed both
 in an image on the before side and in an image on the after side, where the before
-side is every registered image whose frame number lies from that of image
-a − `BREAK_WINDOW` + 1 to that of image a, and the after side every one from image
-a + 1 to image a + `BREAK_WINDOW` (the sides stop at the ends of the sequence). The
-sides are the sequence's own `BREAK_WINDOW` images on each side of the edge, plus the
-images of any other sequence of the reconstruction that carry those frame numbers,
-which in a rig are the other sensors' images of the same frames.
+side is the sequence's images a − `BREAK_WINDOW` + 1 to a and the after side its
+images a + 1 to a + `BREAK_WINDOW` (the sides stop at the ends of the sequence). When
+the reconstruction stores rig frames (`rig_frame_data`), each side also holds every
+image in the same rig frame as one of its sequence images, which are the rig's other
+sensors' images of those frames. Without rig frames only the sequence's own images
+count: another sequence in the reconstruction that merely shares the numbering, such
+as `walk2_0193` beside `walk1_0193`, is not tied to it and adds nothing.
 
 **Why the expected rotation comes from the frame-number gap.** The frame list a solve
 used can skip frames (a run that failed to register, or frames left out) and can have
@@ -641,7 +642,7 @@ Each entry in `discontinuities` (one per `core_edge` after clustering):
 | `frame_gap` | `frame_b - frame_a`. |
 | `expected_rotation_deg` | `rotation_per_frame_deg × max(frame_gap, median_frame_gap)`. |
 | `rotation_ratio` | `rotation_deg / expected_rotation_deg`, or `null` when the expected rotation is 0 and the edge turns (an infinite ratio). |
-| `nearby_shared_points` | The edge's nearby shared count: 3D points seen both in the `break_window` images up to the edge and in the `break_window` images after it, counting other sequences' images at those frame numbers. |
+| `nearby_shared_points` | The edge's nearby shared count: 3D points seen both in the `break_window` images up to the edge and in the `break_window` images after it, counting the images in the same rig frames when the reconstruction stores rig frames. |
 | `is_break` | Whether the break verdict calls this edge a break: `rotation_ratio > break_rotation_factor`, `shared_points < break_shared_points_threshold` and `nearby_shared_points < break_nearby_shared_points_threshold`. |
 
 `segments` — partition of `[0..frame_count-1]` at each discontinuity edge.
@@ -838,9 +839,12 @@ verdict:
   order has no breaks; and cameras that never turn give an infinite ratio to the one
   pair that does.
 - **Nearby shared count.** `_nearby_shared_point_counts` matches a count made with
-  sets from its definition on random tracks over an irregularly numbered sequence at
-  three window sizes, counts a rig's other sensor at the same frame numbers, and
-  skips images without a frame number.
+  sets from its definition on random tracks over a sequence that lists its images out
+  of index order, at three window sizes; counts a rig's other sensor at the same rig
+  frames; ignores a second sequence that shares the numbering when there is no rig
+  data; and skips images outside any counted frame. The kerry ground truth's rig
+  frames are read from `rig_frame_data` (24 frames of two images), and the Seoul bull
+  ground truth has none.
 - **Reconstructions.** The Seoul bull ground truth, which has points at infinity, has
   no breaks. A planted break at 10->11 (frames 11-17 turned 90° and the points the two
   images share removed) gives the same references and breaks after every point is
