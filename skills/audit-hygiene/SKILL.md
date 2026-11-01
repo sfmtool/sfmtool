@@ -253,9 +253,12 @@ worth more than a paragraph.
     report the count even when it is zero.
 12. **Caller-input panics** — apply the scope in STANDARDS.md § "Caller
     input never panics". Count `assert!`, `.expect(`, `.unwrap()`, `panic!`
-    and `from_row_slice` per crate, leaving out `tests/` directories, inline
-    `#[cfg(test)]` modules and `debug_assert!`, and in `sfm-explorer` leaving
-    out everything except the code that reads files and serves MCP requests.
+    and `from_row_slice` per crate, leaving out test code (`tests/`
+    directories, `tests.rs` files, inline `#[cfg(test)]` modules) and
+    `debug_assert!`. In `sfm-explorer` count only `cli/`, `mcp/` and the
+    code that parses what it reads from a file: find that code by grepping
+    non-test files for `File::open`, `fs::read`, `serde_json::from` and the
+    `read_*` format readers, and follow the parsed data from each hit.
     Count `# Panics` doc sections the same way. Then read the hits in
     bindings and in public functions of the library crates that take caller
     data, and keep those a caller's argument can reach. Also grep specs for

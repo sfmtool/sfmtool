@@ -122,7 +122,9 @@ The standard covers three kinds of code:
   `sfmtool-sfmr-format`, `sfmtool-camrig-format`, `sfmtool-kdf-format`). A
   public function returns an error for bad caller input.
 - **The parts of `sfm-explorer` that handle data from outside the process**:
-  the files it reads and the MCP requests it serves. The rest of the viewer,
+  its command-line arguments (which `sfm explorer` passes in through a
+  binding), the files it reads and the MCP requests it serves. The rest of the
+  viewer,
   its `pub(crate)` and private code that only the viewer calls, is outside
   this standard.
 
