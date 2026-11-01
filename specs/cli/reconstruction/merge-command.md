@@ -36,7 +36,8 @@ At least two reconstructions are required.
    its focal scale, its principal-point offset, its radial correction and its
    rolling-shutter rates.
 3. **Find correspondences** — Match 3D points across reconstructions via shared feature
-   observations using union-find.
+   observations, then group the matched pairs transitively: each group is a
+   connected component of the graph whose edges are the pairs.
 4. **Filter by percentile** — Reject point correspondences with distances above the
    percentile-based threshold.
 5. **Merge points and tracks** — Average corresponding point positions, combine observation
