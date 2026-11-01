@@ -484,7 +484,7 @@ reconstruction. What it does is covered headlessly.
   than a longer one, so the busy node refuses every edit until it lands
   ([../background-tasks.md](../background-tasks.md)).
 - Releasing the distortion of the multi-coefficient models (`RADIAL`,
-  `OPENCV_FISHEYE`, …). The adjustment has no exact rung for them; a camera is
+  `OPENCV_FISHEYE`, …). The adjustment has no exact release for them; a camera is
   switched to a spline model first.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
   whole node.

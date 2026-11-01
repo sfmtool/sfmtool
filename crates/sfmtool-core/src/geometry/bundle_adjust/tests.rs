@@ -2433,13 +2433,13 @@ fn polynomial_fisheye_still_holds_its_focal_under_opt_f() {
     );
 }
 
-// ── The curvature rung: `opt_k1` under SIMPLE_RADIAL_FISHEYE ───────────────
+// ── The `k1` release: `opt_k1` under SIMPLE_RADIAL_FISHEYE ─────────────────
 //
 // A real fisheye's `r(θ)` is not exactly `f·θ`. Held to the equidistant map,
 // the adjustment buys the leftover θ³ curvature back with GEOMETRY — a finite
 // dome that pulls sky and horizon off infinity. Releasing the one radial
 // coefficient gives that residual field a parameter to land on. These tests
-// pin the rung's claims: the `∂/∂k1` column is exact, a planted curvature
+// pin the release's claims: the `∂/∂k1` column is exact, a planted curvature
 // comes back (focal fixed and co-released), a truly equidistant scene stays
 // at `k1 = 0`, direction rows carry the column too, and every other model
 // degrades instead of taking a half-modeled step.
@@ -2617,7 +2617,10 @@ fn opt_k1_recovers_a_planted_curvature() {
             ba_k1(&out)
         );
         let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
-        assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+        assert!(
+            worst < 0.5,
+            "worst reprojection {worst} px after the release"
+        );
     }
 }
 
@@ -2701,7 +2704,7 @@ fn opt_k1_holds_at_zero_on_an_equidistant_scene() {
     }
 }
 
-/// Every other model degrades: `opt_k1` is the radial model's rung alone, and
+/// Every other model degrades: `opt_k1` is the radial model's release alone, and
 /// the core never takes a half-modeled step (the binding rejects these loudly
 /// before they get here).
 #[test]
@@ -2723,7 +2726,7 @@ fn opt_k1_is_gated_on_the_radial_fisheye_model() {
     let out = run_k1(&mut s, true, true, &DEFAULT_SCHEDULE);
     assert_eq!(ba_focal(&out).to_bits(), off.to_bits());
     assert_eq!(ba_k1(&out).to_bits(), 0.0f64.to_bits());
-    // A pinhole scene the same way (the rung is a fisheye one).
+    // A pinhole scene the same way (the release is a fisheye one).
     let mut ph = make_scene(6, 60);
     let out_ph = run_k1(&mut ph, true, true, &DEFAULT_SCHEDULE);
     assert_eq!(ba_k1(&out_ph).to_bits(), 0.0f64.to_bits());
@@ -2779,12 +2782,12 @@ fn released_k1_stays_admissible() {
     );
 }
 
-/// Direction rows carry the rung. A point at infinity projects through the
-/// very same map, so `∂/∂k1` applies to it unchanged — and where the finite
+/// Direction rows carry the `k1` release. A point at infinity projects through
+/// the very same map, so `∂/∂k1` applies to it unchanged — and where the finite
 /// cloud sits near the axis (no θ³ signal), the far field is the only thing
 /// that can recover the curvature.
 #[test]
-fn directions_participate_in_the_curvature_rung() {
+fn directions_participate_in_the_k1_release() {
     let f = 130.0;
     let k1_true = 0.03;
     let cam_true = radial_fisheye(f, k1_true);
@@ -2854,7 +2857,7 @@ fn directions_participate_in_the_curvature_rung() {
     };
     let mask = dir_mask(&scene, &dir_ids);
 
-    // With the directions in the solve, the rung recovers the curvature.
+    // With the directions in the solve, the release recovers the curvature.
     let mut with_dirs = scene.clone();
     let out = run_k1_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
     let err = (ba_k1(&out) - k1_true).abs() / k1_true;
@@ -2884,13 +2887,13 @@ fn directions_participate_in_the_curvature_rung() {
     );
 }
 
-// ── The spline rung: opt_bspline under SFMTOOL_FISHEYE ──────────────────────
+// ── The spline release: opt_bspline under SFMTOOL_FISHEYE ───────────────────
 
 use crate::camera::distortion::bspline::{
     delta as bspline_delta, delta_and_deriv as bspline_delta_deriv,
 };
 
-/// Spline-domain end used by the spline-rung scenes: slightly beyond the
+/// Spline-domain end used by the spline-release scenes: slightly beyond the
 /// 105° image circle, so the outermost observations sit inside the basis.
 const THETA_MAX: f64 = 2.0;
 
@@ -3109,7 +3112,10 @@ fn opt_bspline_recovers_a_planted_spline() {
         );
     }
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
-    assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+    assert!(
+        worst < 0.5,
+        "worst reprojection {worst} px after the release"
+    );
 }
 
 /// The staged release the callers actually run: focal and spline together,
@@ -3191,7 +3197,7 @@ fn opt_bspline_holds_at_zero_on_an_equidistant_scene() {
     }
 }
 
-/// Every other model degrades: `opt_bspline` is the spline model's rung
+/// Every other model degrades: `opt_bspline` is the spline model's release
 /// alone, and the core never takes a half-modeled step (the binding rejects
 /// these loudly before they get here) — nor does it release a spline too
 /// short to define the spline.
@@ -3422,12 +3428,12 @@ fn a_spline_moves_only_with_two_supported_coefficients() {
     assert!(spline_anchored(&[2.0, 5.0, 0.0, 0.0, 0.0, 0.0]));
 }
 
-/// Direction rows carry the rung. A point at infinity projects through the
-/// very same map, so `∂/∂cᵢ` applies to it unchanged — and where the finite
-/// cloud sits near the axis (no basis signal), the far field is the only
-/// thing that can recover the spline.
+/// Direction rows carry the spline release. A point at infinity projects
+/// through the very same map, so `∂/∂cᵢ` applies to it unchanged — and where
+/// the finite cloud sits near the axis (no basis signal), the far field is the
+/// only thing that can recover the spline.
 #[test]
-fn directions_participate_in_the_bspline_rung() {
+fn directions_participate_in_the_bspline_release() {
     let f = 130.0;
     let cam_true = sfmtool_fisheye(f, &PLANTED_BSPLINE);
 
@@ -3496,7 +3502,7 @@ fn directions_participate_in_the_bspline_rung() {
     };
     let mask = dir_mask(&scene, &dir_ids);
 
-    // With the directions in the solve, the rung recovers the composite map.
+    // With the directions in the solve, the release recovers the composite map.
     let mut with_dirs = scene.clone();
     let out = run_bspline_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
     let err = worst_map_err_px(f, &ba_bspline(&out), &PLANTED_BSPLINE, 0.5, 1.7);
@@ -3524,9 +3530,9 @@ fn directions_participate_in_the_bspline_rung() {
     );
 }
 
-// ── The spline rung on SFMTOOL_PINHOLE ──────────────────────────────────────
+// ── The spline release on SFMTOOL_PINHOLE ───────────────────────────────────
 
-/// Spline-domain end used by the pinhole spline-rung scenes: just beyond the
+/// Spline-domain end used by the pinhole spline-release scenes: just beyond the
 /// image circle the scene generator keeps, so the outermost observations sit
 /// inside the basis.
 const RHO_MAX: f64 = 0.85;
@@ -3754,7 +3760,10 @@ fn opt_bspline_recovers_a_planted_pinhole_spline() {
         );
     }
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
-    assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+    assert!(
+        worst < 0.5,
+        "worst reprojection {worst} px after the release"
+    );
 }
 
 /// The staged release the callers actually run: focal and spline together,
@@ -3879,10 +3888,10 @@ fn opt_f_is_admitted_on_the_spline_pinhole() {
 
 /// The gates on the pinhole model: `opt_k1` has nothing to move on it, a
 /// spline too short to define carries nothing to release, and SIMPLE_PINHOLE
-/// has no spline at all. All three degrade to the solve without the rung, bit
+/// has no spline at all. All three degrade to the solve without the release, bit
 /// for bit.
 #[test]
-fn the_rungs_are_gated_on_the_spline_pinhole_too() {
+fn the_releases_are_gated_on_the_spline_pinhole_too() {
     let f = 250.0;
     let (mut k1_r, _) =
         make_pinhole_scene_for(sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE), 6, 250);
@@ -4074,12 +4083,12 @@ fn an_unsupported_tail_that_would_fold_is_held() {
     assert!(off_linear_continuation(&c, 4) > 0.01, "{c:?}");
 }
 
-/// Direction rows carry the pinhole's spline rung. A point at infinity
+/// Direction rows carry the pinhole's spline release. A point at infinity
 /// projects through the very same map, so `∂/∂cᵢ` applies to it unchanged, and
 /// where the finite cloud sits near the axis (no basis signal) the far field
 /// is the only thing that can recover the spline.
 #[test]
-fn directions_participate_in_the_pinhole_bspline_rung() {
+fn directions_participate_in_the_pinhole_bspline_release() {
     let f = 250.0;
     let cam_true = sfmtool_pinhole(f, &PLANTED_PINHOLE_BSPLINE);
 
@@ -4150,7 +4159,7 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
     };
     let mask = dir_mask(&scene, &dir_ids);
 
-    // With the directions in the solve, the rung recovers the composite map.
+    // With the directions in the solve, the release recovers the composite map.
     let mut with_dirs = scene.clone();
     let out = run_bspline_masked(&mut with_dirs, &mask, false, true, &DEFAULT_SCHEDULE);
     let err = pinhole_map_err_px(
@@ -4160,7 +4169,7 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
         0.15,
         RHO_LIMIT,
     );
-    eprintln!("[pinhole-dir-rung] direction rows recovered to {err:.3e} px");
+    eprintln!("[pinhole-dir-release] direction rows recovered to {err:.3e} px");
     assert!(
         err < 1.0,
         "composite map off by {err} px from the direction rows ({:?})",
@@ -4184,7 +4193,7 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
         0.15,
         RHO_LIMIT,
     );
-    eprintln!("[pinhole-dir-rung] the finite-only control landed at {err_finite:.3e} px");
+    eprintln!("[pinhole-dir-release] the finite-only control landed at {err_finite:.3e} px");
     assert!(
         err_finite > 3.0 * err,
         "the near-axis control recovered the spline too well ({err_finite} \
@@ -8573,7 +8582,10 @@ fn a_spline_is_recovered_under_held_image_adjustments() {
         );
     }
     let worst = out.residual_norms.iter().cloned().fold(0.0f64, f64::max);
-    assert!(worst < 0.5, "worst reprojection {worst} px after the rung");
+    assert!(
+        worst < 0.5,
+        "worst reprojection {worst} px after the release"
+    );
 }
 
 /// The pinhole spline's scene, its observations made through each image's own

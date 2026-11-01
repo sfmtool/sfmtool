@@ -51,60 +51,13 @@ const DEFAULT_MIN_OBS: usize = 12;
 #[derive(Debug, Clone)]
 pub struct BundleAdjustOptions {
     /// What each camera may release, one entry per camera in the
-    /// reconstruction's image set, in camera index order. A camera no posed image
-    /// uses is not in the solve, and its entry is ignored. An empty list, the
-    /// default, holds every camera; any other length than the camera count is
-    /// refused ([`BundleAdjustError::ReleaseCount`]). Nothing is released by
-    /// default, because a lens that moves is a different claim about the
-    /// capture than a pose that does, and the caller should be the one making
-    /// it.
-    ///
-    /// Each camera's entry is checked against its own model, and a release the
-    /// model cannot take is refused naming the camera rather than silently
-    /// dropped: a caller that asked for a focal solve and got a fixed-focal one
-    /// back would have no way to tell.
-    ///
-    /// - [`CameraRelease::focal`] is accepted on the models the kernel's
-    ///   analytic focal column is exact for -- `SIMPLE_PINHOLE`,
-    ///   `EQUIDISTANT_FISHEYE`, `SIMPLE_RADIAL_FISHEYE`, `SFMTOOL_FISHEYE` and
-    ///   `SFMTOOL_PINHOLE` ([`focal_is_releasable`]).
-    /// - [`CameraRelease::distortion`] is accepted where
-    ///   [`distortion_is_releasable`] says the model has some: `k1` on
-    ///   `SIMPLE_RADIAL_FISHEYE`, the radial spline on `SFMTOOL_FISHEYE` and
-    ///   `SFMTOOL_PINHOLE`. It is released only together with that camera's
-    ///   focal: neither `k1` nor the spline can change the scale at the centre
-    ///   of the image (both leave the slope of the radial map on the axis at
-    ///   one), and a distortion released against a held focal could only bend
-    ///   the periphery around a scale it cannot fix.
-    /// - [`CameraRelease::principal_point`] is accepted on every model, with or
-    ///   without the focal: every model projects as `u = fx·x_d + cx` with a
-    ///   distorted coordinate that does not read the principal point, so the
-    ///   kernel's columns for it are exact everywhere. A step that would put
-    ///   it off the image is rejected. It carries no prior: one pair of
-    ///   numbers fitted from every image of the camera.
-    /// - [`CameraRelease::image_focal`] releases each image's focal scale, on
-    ///   the models the focal itself is accepted on, and
-    ///   [`CameraRelease::image_principal_point`] each image's principal-point
-    ///   offset, on every model. Either holds the camera's shared value of its
-    ///   kind in the solve and moves it to the images' mean after every round,
-    ///   so it is the same release with or without the shared one beside it,
-    ///   and a per-image focal satisfies the distortion's need for a focal.
-    ///   Each image is held toward that mean by the prior
-    ///   [`Self::image_prior`] chooses.
-    /// - [`CameraRelease::image_radial_bspline`] releases each image's radial
-    ///   correction and [`CameraRelease::image_rolling_shutter`] each image's
-    ///   rolling-shutter rates, on `SFMTOOL_PINHOLE` alone, the radial
-    ///   correction only where the spline domain end is positive and finite
-    ///   ([`image_radial_bspline_is_releasable`],
-    ///   [`image_rolling_shutter_is_releasable`]). The mean of each over the
-    ///   camera's images is held, and the mean radial correction moves into
-    ///   the camera's spline after every round. The rates are read on the
-    ///   scanlines [`Self::rolling_shutter_scanlines`] chooses.
-    ///
-    /// A camera with none of the seven is held, so a rig can release some
-    /// cameras and hold the rest.
-    /// With every camera held the solve still runs, and refines the poses and
-    /// the points alone.
+    /// reconstruction's image set, in camera index order; an entry for a
+    /// camera no posed image uses is ignored. An empty list, the default,
+    /// holds every camera, and any other length than the camera count is
+    /// refused ([`BundleAdjustError::ReleaseCount`]). A release a camera's
+    /// model cannot take is refused naming the camera. Which model takes which
+    /// release, and why, is in `specs/core/reconstruction/bundle-adjust.md`
+    /// § "Why it is shaped this way".
     pub releases: Vec<CameraRelease>,
     /// The staged trim schedule, `(trim_px, loss_scale)` per round. Each
     /// round's `trim_px` is a positive number of pixels or `f64::INFINITY`,
