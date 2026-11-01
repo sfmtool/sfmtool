@@ -193,8 +193,8 @@ fn se3_transform_scales_a_distance_with_the_scene() {
 
 /// A demo reconstruction whose depth statistics are real rather than the
 /// demo's empty placeholders, with every normal then set to one direction the
-/// statistics pass would never produce, so a transform that re-derived them
-/// would be caught overwriting it.
+/// statistics pass would never produce, so a transform that rotated anything
+/// else into the normals would be caught.
 fn demo_with_depth_statistics() -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(64);
     recon.recompute_depth_statistics().unwrap();
@@ -273,8 +273,7 @@ fn se3_transform_scales_the_depth_statistics_and_keeps_the_counts() {
         }
     }
 
-    // The normals were rotated and nothing else: the statistics pass would
-    // have replaced them with mean viewing directions.
+    // The normals were rotated and nothing else.
     let want = rot.rotate_vector(&V3::new(0.48, -0.6, 0.64));
     for point in &out.point_set.points {
         approx(point.normal.x as f64, want.x);

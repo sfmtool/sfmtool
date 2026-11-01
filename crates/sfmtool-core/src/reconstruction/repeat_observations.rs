@@ -205,9 +205,9 @@ impl SfmrReconstruction {
             out.point_set.points[point].rms_reprojection_error = error;
         }
         // The histograms count one entry per observation. The derivation also
-        // writes the mean viewing normal of every point when the value carries
-        // normals, which would replace normals this call does not mean to
-        // touch, so it runs with them switched off.
+        // fills each missing normal with the point's mean viewing normal when
+        // the value carries normals, and this call does not mean to touch any
+        // normal, so it runs with them switched off.
         let has_normals = std::mem::replace(&mut out.point_set.has_normals, false);
         let derived = out.recompute_depth_statistics();
         out.point_set.has_normals = has_normals;

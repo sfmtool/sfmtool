@@ -158,9 +158,11 @@ impl Default for WriteOptions {
 /// absent and filled from the recomputed mean-viewing normals.
 const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 
-/// Whether a stored normal row counts as missing: within
-/// [`MISSING_NORMAL_NORM_SQ`] of the zero vector.
-fn is_missing_normal(x: f32, y: f32, z: f32) -> bool {
+/// Whether a stored normal row counts as missing: its squared norm is at most
+/// `1e-6` (`MISSING_NORMAL_NORM_SQ`), so it is the zero vector or near it. A
+/// write fills such a row with the point's mean-viewing normal, and so does
+/// `SfmrReconstruction::recompute_depth_statistics` in `sfmtool-core`.
+pub fn is_missing_normal(x: f32, y: f32, z: f32) -> bool {
     x * x + y * y + z * z <= MISSING_NORMAL_NORM_SQ
 }
 

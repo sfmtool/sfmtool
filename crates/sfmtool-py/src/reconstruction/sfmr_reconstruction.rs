@@ -61,7 +61,16 @@ impl PySfmrReconstruction {
     /// The dict must contain metadata, cameras, image data, point data,
     /// and track data. Depth statistics and reprojection errors are
     /// recomputed from scratch (using camera models and `.sift` files),
-    /// so the values passed in for those fields are ignored. A ``sift_files``
+    /// so the values passed in for those fields are ignored. The normals are
+    /// handled as `write_sfmr` handles them: a ``normals_xyz`` array is kept as
+    /// given, except that each zero row is filled with the point's
+    /// mean-viewing normal; an explicit ``None`` gives a reconstruction without
+    /// normals; and a missing key gives every finite point a mean-viewing
+    /// normal. A point at infinity has no mean-viewing normal, so its row stays
+    /// zero. A dict from `read_sfmr` therefore keeps the normals it was read
+    /// with, beside the patch frame it was read with. A caller that moves or rotates the points in the
+    /// dict updates ``normals_xyz`` with them, or deletes the key to have them
+    /// computed again. A ``sift_files``
     /// dict without ``keypoints_xy`` gets the column from the ``.sift`` files
     /// when every one it needs is present and matches ``sift_content_hashes``.
     ///
