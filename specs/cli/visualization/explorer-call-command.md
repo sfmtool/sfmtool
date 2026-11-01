@@ -40,7 +40,7 @@ parse it checks against are the bindings `sfmtool.explorer.tool_catalog` and
 [explorer.rs](../../../crates/sfmtool-py/src/explorer.rs) of `sfmtool-py`,
 which call `sfm_explorer::tool_catalog` and `sfm_explorer::validate_tool_call`
 in [call_check.rs](../../../crates/sfm-explorer/src/mcp/call_check.rs). Those
-two are the viewer crate's only public MCP items, and they exist only in a
+two, with the `CatalogTool` the first returns, are the viewer crate's only public MCP items, and they exist only in a
 build with its `mcp` feature, which `sfmtool-py` always turns on.
 
 ## Arguments and options

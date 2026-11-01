@@ -116,7 +116,7 @@ from the command line
 ([explorer-call-command.md](../cli/visualization/explorer-call-command.md)).
 It checks the call against this catalog and the parse in
 [tools.rs](../../crates/sfm-explorer/src/mcp/tools.rs) before it sends it,
-through the crate's two public MCP items, `tool_catalog` and
+through the crate's two public MCP functions, `tool_catalog` and
 `validate_tool_call` in
 [call_check.rs](../../crates/sfm-explorer/src/mcp/call_check.rs), and
 refuses a call to a viewer whose `tools/list` differs from that catalog unless
