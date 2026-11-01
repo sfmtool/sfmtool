@@ -174,7 +174,7 @@ fn refine_normals(
         normal,
         point_indexes,
     };
-    let posed = PosedViews::from_reconstruction(&recon.inner);
+    let posed = PosedViews::from_reconstruction(recon.inner());
     let pyramids = resolve_pyramids(&posed, images)?;
     let views = views_of(&posed, &pyramids);
     // The run's only count is its points, reported from parallel workers, so
@@ -186,10 +186,10 @@ fn refine_normals(
         }
     };
     let (next, report) = py
-        .detach(|| core_refine_normals(&recon.inner, &views, &options, &Progress::to(&sink)))
+        .detach(|| core_refine_normals(recon.inner(), &views, &options, &Progress::to(&sink)))
         .map_err(refused)?;
     let d = report_dict(py, &report)?;
-    Ok((PySfmrReconstruction { inner: next }, d.unbind()))
+    Ok((PySfmrReconstruction::new(next), d.unbind()))
 }
 
 /// The dict form of a refinement's report: the counts, and one dict per point.

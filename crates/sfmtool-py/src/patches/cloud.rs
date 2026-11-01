@@ -84,7 +84,7 @@ impl PyPatchCloud {
         // build reports into the null sink: the Python signature is the same
         // one it has always had.
         let inner = PatchCloud::from_reconstruction(
-            &recon.inner,
+            recon.inner(),
             normal,
             extent,
             exclude_points_at_infinity,

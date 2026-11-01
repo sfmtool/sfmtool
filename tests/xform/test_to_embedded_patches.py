@@ -88,7 +88,7 @@ def test_to_embedded_patches_frames_points_at_infinity(
     """Points at infinity are kept and get a tangent-sphere frame (normal -d)."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     # Turn one point into a point at infinity: keep its direction, set w = 0.
-    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count
     )

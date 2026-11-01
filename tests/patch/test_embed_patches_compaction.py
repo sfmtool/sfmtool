@@ -431,7 +431,7 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
     # cameras see it: from the centroid of the camera centres. (The direction
     # from the world origin depends on where the frame happens to put its
     # origin, and need not land in any image.)
-    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count
     )

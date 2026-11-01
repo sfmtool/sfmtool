@@ -458,10 +458,15 @@ backlog and keep them honest as findings get addressed:
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.
-- A reconstruction's array and list getters (`positions_xyzw`,
-  `track_point_indexes`, `camera_indexes`, `cameras`, …) build a new copy from
-  Rust on every access, so read each into a local once, outside any loop:
-  `recon.positions[point_id]` in a loop copies every point for each lookup.
+- A reconstruction's array getters (`positions_xyzw`, `track_point_indexes`,
+  `keypoints_xy`, …) return **read-only** arrays, so write into a `.copy()`
+  (and pass that to `clone_with_changes`), never into the getter's result. Each
+  copies nothing after its first read on an object: a column held as per-point
+  or per-image records is gathered once and the same array returned after
+  that, and a column held as one block is a view of it. The list getters
+  (`cameras`, `image_names`, …) still build a new list on every read, so read
+  those into a local outside any loop. See `specs/python-bindings.md` §
+  "Reconstruction array getters".
 - `sfm explorer` does not run the same build of the viewer as `pixi run gui`.
   The viewer is compiled into the `sfmtool._sfmtool` extension
   (`run_explorer`), and `sfm explorer` calls it in the `sfm` process;

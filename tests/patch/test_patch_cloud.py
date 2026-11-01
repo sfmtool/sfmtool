@@ -60,7 +60,7 @@ def test_from_reconstruction_excludes_or_includes_points_at_infinity(
 ):
     """exclude_points_at_infinity gates whether infinity points get a frame."""
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    pos = np.asarray(recon.positions_xyzw, dtype=np.float64)
+    pos = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
     counts = np.bincount(
         np.asarray(recon.track_point_indexes), minlength=recon.point_count
     )

@@ -218,7 +218,7 @@ impl PyPatchCloud {
             "patch_views",
             "per-patch member views",
         )?;
-        let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
+        let recon_opt = recon_guard.as_ref().map(|r| r.inner());
 
         let window = parse_patch_window(window, window_sigma)?;
         let sampler = parse_sampler(sampler)?;

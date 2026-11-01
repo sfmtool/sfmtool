@@ -92,7 +92,7 @@ fn refit_points(
     depth_likelihood_ratio_threshold: Option<f64>,
     max_shift_px: f64,
 ) -> PyResult<(PySfmrReconstruction, Py<PyDict>)> {
-    let posed = PosedViews::from_reconstruction(&recon.inner);
+    let posed = PosedViews::from_reconstruction(recon.inner());
     let pyramids = resolve_pyramids(&posed, images)?;
     let views = views_of(&posed, &pyramids);
     let options = RefitPointsOptions {
@@ -105,10 +105,10 @@ fn refit_points(
         max_shift_px,
     };
     let (next, report) = py
-        .detach(|| core_refit_points(&recon.inner, &views, &options, &Progress::none()))
+        .detach(|| core_refit_points(recon.inner(), &views, &options, &Progress::none()))
         .map_err(refused)?;
     let d = report_dict(py, &report)?;
-    Ok((PySfmrReconstruction { inner: next }, d.unbind()))
+    Ok((PySfmrReconstruction::new(next), d.unbind()))
 }
 
 /// The dict form of a refit's report: the counts, and one dict per point.

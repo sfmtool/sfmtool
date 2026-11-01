@@ -183,7 +183,7 @@ pub fn resect_images<'py>(
         .iter()
         .map(|name| {
             reconstruction
-                .inner
+                .inner()
                 .image_set
                 .images
                 .iter()
@@ -191,7 +191,7 @@ pub fn resect_images<'py>(
                 .ok_or_else(|| {
                     pyo3::exceptions::PyValueError::new_err(format!(
                         "no image named {name:?} in this reconstruction ({} images)",
-                        reconstruction.inner.image_set.images.len()
+                        reconstruction.inner().image_set.images.len()
                     ))
                 })
         })
@@ -211,7 +211,7 @@ pub fn resect_images<'py>(
     let out = py
         .detach(|| {
             core_resect_images(
-                &reconstruction.inner,
+                reconstruction.inner(),
                 &image_indexes,
                 source(clusters.as_ref()),
                 &options,
@@ -220,12 +220,7 @@ pub fn resect_images<'py>(
         .map_err(err_to_py)?;
 
     let report = totals_to_py(py, &out.reports, &out.totals)?;
-    Ok((
-        PySfmrReconstruction {
-            inner: out.reconstruction,
-        },
-        report,
-    ))
+    Ok((PySfmrReconstruction::new(out.reconstruction), report))
 }
 
 /// Read the optional cluster-patches file a resection is given, raising

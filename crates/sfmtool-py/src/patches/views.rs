@@ -165,7 +165,7 @@ pub(super) fn resolve_scene<'py>(
     if let Ok(views) = scene.cast::<PyCameraViews>() {
         Ok((views.get().to_posed_views(), None))
     } else if let Ok(recon) = scene.extract::<PyRef<'py, PySfmrReconstruction>>() {
-        let posed = PosedViews::from_reconstruction(&recon.inner);
+        let posed = PosedViews::from_reconstruction(recon.inner());
         Ok((posed, Some(recon)))
     } else {
         Err(PyTypeError::new_err(
@@ -195,7 +195,7 @@ pub(super) fn resolve_patch_scene<'py>(
         if cloud
             .point_indexes
             .iter()
-            .any(|&p| p as usize >= recon.inner.point_set.points.len())
+            .any(|&p| p as usize >= recon.inner().point_set.points.len())
         {
             return Err(PyValueError::new_err(
                 "patch cloud point_indexes are out of range for this reconstruction \

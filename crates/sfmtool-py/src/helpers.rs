@@ -3,7 +3,8 @@
 
 //! Shared helper functions for Python ↔ Rust conversions.
 
-use numpy::PyReadonlyArray1;
+use numpy::ndarray::Dimension;
+use numpy::{Element, PyArray, PyReadonlyArray1};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
@@ -21,6 +22,27 @@ pub(crate) fn value_err(e: impl std::fmt::Display) -> PyErr {
 /// `.map_err(os_err)` on a failed read or write.
 pub(crate) fn os_err(e: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyIOError::new_err(e.to_string())
+}
+
+/// `array` with numpy's writeable flag cleared, so a write from Python raises
+/// and a caller that wants to edit takes `.copy()`.
+///
+/// For an array that more than one Python caller is handed, either because the
+/// binding keeps it and returns the same object again, or because it is a view
+/// of Rust-owned data. The flag is cleared through numpy's own `setflags`
+/// rather than through `numpy`'s borrow tracking, which would refuse a second
+/// thread taking a view of the same block at the same moment.
+pub(crate) fn read_only<'py, T: Element, D: Dimension>(
+    array: Bound<'py, PyArray<T, D>>,
+) -> Bound<'py, PyArray<T, D>> {
+    let kwargs = PyDict::new(array.py());
+    kwargs
+        .set_item("write", false)
+        .expect("setting a bool item on a fresh dict cannot fail");
+    array
+        .call_method("setflags", (), Some(&kwargs))
+        .expect("numpy can always clear the writeable flag");
+    array
 }
 
 /// Serialize a serde-compatible value to a Python object via JSON round-trip.

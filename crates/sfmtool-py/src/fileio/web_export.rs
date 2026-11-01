@@ -81,7 +81,7 @@ pub fn write_web_export<'py>(
     if let Some(generator) = generator {
         options.generator = generator;
     }
-    let inner = &recon.inner;
+    let inner = recon.inner();
     let report = py
         .detach(|| core_write(inner, &out_dir, &options, &Progress::none()))
         .map_err(|e| match e {

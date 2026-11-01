@@ -397,8 +397,8 @@ impl PySe3Transform {
         // Try SfmrReconstruction
         if let Ok(recon) = other.cast::<crate::PySfmrReconstruction>() {
             let recon_ref = recon.borrow();
-            let transformed = recon_ref.inner.apply_se3_transform(&self.inner);
-            return Ok(crate::PySfmrReconstruction { inner: transformed }
+            let transformed = recon_ref.inner().apply_se3_transform(&self.inner);
+            return Ok(crate::PySfmrReconstruction::new(transformed)
                 .into_pyobject(py)?
                 .into_any()
                 .unbind());
