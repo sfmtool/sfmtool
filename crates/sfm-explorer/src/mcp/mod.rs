@@ -32,6 +32,10 @@
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
+//! Beside them, [`call_check`] gives a caller outside the viewer the catalog
+//! and the parse of [`tools`], for `sfm explorer-call` to check a call with
+//! before it sends one. Its items are the crate's only public MCP interface.
+//!
 //! [mcp]: https://modelcontextprotocol.io/
 
 use std::path::PathBuf;
@@ -43,6 +47,7 @@ use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
 mod bench;
+mod call_check;
 mod display;
 mod edit;
 mod find_points;
@@ -66,6 +71,7 @@ pub(crate) mod render;
 #[cfg(test)]
 mod tests;
 
+pub use call_check::{tool_catalog, validate_tool_call, CatalogTool};
 pub(crate) use input::InputQueue;
 pub(crate) use server::serve;
 

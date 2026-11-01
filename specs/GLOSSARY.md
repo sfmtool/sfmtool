@@ -250,6 +250,16 @@ What `get_widgets` and the input tools report about the viewer's window, in
 |------|-------|-----|-----|
 | **dialog** / **menu** | what is drawn above the dock and its panels, reported in the `dialogs` and `menus` blocks: a **dialog** is one of the viewer's own egui windows (`Go to Point`, `Bundle Adjust`, …), and a **menu** an egui popup, of kind `menu`, `context_menu`, `submenu` or `dropdown` | `overlay`, `layer` | *overlay* already names the Image Detail panel's drawing layers and the viewport HUD, and *layer* names those and a **depth layer**, so by the wire vocabulary rule neither can name these as well |
 
+## The MCP tool catalog
+
+The list of tools the viewer's MCP endpoint offers, in
+`crates/sfm-explorer/src/mcp/` and
+[cli/visualization/explorer-call-command.md](cli/visualization/explorer-call-command.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **tool catalog** | every tool a build of the viewer advertises, each with its name, kind, description, input schema and annotations: `tools::catalog()` inside the viewer, `sfm_explorer::tool_catalog` (`CatalogTool`) and `sfmtool.explorer.tool_catalog` outside it, what a `tools/list` reply carries, and what `sfm explorer-call` compares between the extension and a running viewer. Checking a call against it and the viewer's parse is **validating** it (`validate_tool_call`, `--validate-tool-names-only`) | `tool list` for the thing compared, `schema` for the whole entry | *tools/list* is the protocol method that fetches it, and one tool's *schema* is only its `inputSchema`; the catalog is what both builds hold and what differs between them. *Validate* is the word the user chose for the option, and the functions take it so one check has one verb |
+
 ## Viewer tools
 
 The tools on the 3D viewport's tool strip, in

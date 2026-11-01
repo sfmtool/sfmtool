@@ -299,8 +299,8 @@ empty-handed". Name the thing and say what it does.
 - `skills/` — the seven project skills (`audit-hygiene`, `audit-specs`,
   `fix-report-findings`, `gui-bug-bash`, `implement-change`,
   `implement-random-idea`, `suggest-next-steps`), checked in here and
-  symlinked into `.claude/skills/`. `gui-bug-bash` carries scripts that launch
-  a viewer on a random port and call its MCP endpoint over HTTP.
+  symlinked into `.claude/skills/`. `gui-bug-bash` carries a script that
+  launches a viewer on a random port, and drives it with `sfm explorer-call`.
   `implement-change` makes one change on a branch with an implementer agent
   and an independent auditor agent. `fix-report-findings` picks and orders
   open report findings and runs `implement-change` for each, one branch per
@@ -478,6 +478,15 @@ backlog and keep them honest as findings get addressed:
   still there for the next one. Kill it **before** rebuilding: a running
   `.exe` is locked on Windows and `cargo build` fails with `Access is denied
   (os error 5)`.
+
+  **Without the registration**, or on another port, `pixi run sfm
+  explorer-call --mcp PORT TOOL ARGS` calls one tool from the shell and writes
+  a screenshot to a file (`specs/cli/visualization/explorer-call-command.md`).
+  It checks the call against the tool catalog and argument parser compiled into
+  the extension, so after changing MCP tools run `pixi run maturin develop
+  --release` before calling a `cargo build` viewer, or pass
+  `--validate-tool-names-only`; it refuses a viewer whose tool list differs and
+  says so.
 
   Keep the registration at the default `local` scope. A `.mcp.json` committed
   with `--scope project` would point every contributor's session at a loopback

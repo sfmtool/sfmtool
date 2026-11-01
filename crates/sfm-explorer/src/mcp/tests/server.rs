@@ -322,3 +322,51 @@ fn the_tool_list_is_not_cacheable() {
     );
     assert_eq!(rpc_result(&body)["ttlMs"], json!(0));
 }
+
+/// `sfm explorer-call` reads the catalog and runs the parse in its own process,
+/// through [`crate::tool_catalog`] and [`crate::validate_tool_call`], and
+/// compares that catalog with the running viewer's `tools/list`. So what those
+/// two give has to be what the endpoint serves: the same entries in the same
+/// order, and the same refusal message for arguments that do not parse.
+#[test]
+fn the_exported_catalog_and_validation_match_what_the_endpoint_serves() {
+    let server = running_server();
+    let (status, body) = post(
+        &server,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        &[],
+    );
+    assert_eq!(status, 200, "{body}");
+    let listed = rpc_result(&body)["tools"]
+        .as_array()
+        .expect("a tool array")
+        .clone();
+    let exported = crate::tool_catalog();
+    assert_eq!(listed.len(), exported.len());
+    for (served, local) in listed.iter().zip(&exported) {
+        assert_eq!(served["name"], json!(local.name));
+        for key in ["name", "description", "inputSchema", "annotations"] {
+            assert_eq!(served[key], local.advertised[key], "{} {key}", local.name);
+        }
+    }
+
+    let arguments = json!({"offset": "soon"});
+    let local = crate::validate_tool_call("list_camera_images", arguments.as_object())
+        .expect_err("a string offset does not parse");
+    let (_, body) = post(
+        &server,
+        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_camera_images","arguments":{"offset":"soon"}}}"#,
+        &[],
+    );
+    assert_eq!(rpc_body(&body)["error"]["message"], json!(local));
+
+    let local = crate::validate_tool_call("get_scen", None).expect_err("no such tool");
+    let (_, body) = post(
+        &server,
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_scen","arguments":{}}}"#,
+        &[],
+    );
+    assert_eq!(rpc_body(&body)["error"]["message"], json!(local));
+
+    assert_eq!(crate::validate_tool_call("get_scene", None), Ok(()));
+}

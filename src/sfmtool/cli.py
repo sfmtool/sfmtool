@@ -154,6 +154,13 @@ COMMANDS = (
         "Launch the SfM Explorer 3D viewer.",
     ),
     (
+        "explorer-call",
+        "Visualization",
+        "explorer_call",
+        "explorer_call",
+        "Call one tool on a running SfM Explorer's MCP endpoint.",
+    ),
+    (
         "epipolar",
         "Visualization",
         "epipolar",

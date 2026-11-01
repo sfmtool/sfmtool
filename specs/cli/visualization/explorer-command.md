@@ -29,7 +29,7 @@ the Visualization category in [cli.py](../../../src/sfmtool/cli.py).
 | Argument / option | Type | Default | Meaning |
 |-------------------|------|---------|---------|
 | `FILE ...` | paths, zero or more | none | Files to load. Each must exist, or Click refuses the command before the viewer starts. Each file becomes its own node in the viewer's scene graph, in the order given, so several reconstructions can be compared in one 3D space ([scene-graph.md](../../gui/scene-graph.md)). With no files the viewer opens empty. |
-| `--mcp [PORT]` | int, 0 to 65535 | off; `8787` when given without a number | Host a Model Context Protocol endpoint on `127.0.0.1:PORT`, so an agent can drive the viewer. `0` takes an ephemeral port, which the viewer prints at startup. See [mcp-server.md](../../gui/mcp-server.md). |
+| `--mcp [PORT]` | int, 0 to 65535 | off; `8787` when given without a number | Host a Model Context Protocol endpoint on `127.0.0.1:PORT`, so an agent can drive the viewer. `0` takes an ephemeral port, which the viewer prints at startup. See [mcp-server.md](../../gui/mcp-server.md). [`sfm explorer-call`](explorer-call-command.md) calls one of its tools from the command line. |
 | `--no-default-layout` | flag | off | Start with the stock panel grid, ignoring a layout saved at `~/.sfm-explorer-default-layout.json` ([panel-layout.md](../../gui/panel-layout.md) § "The default layout file"). |
 
 The default port is the constant `DEFAULT_MCP_PORT` in `explorer.py`. It
@@ -160,6 +160,9 @@ sfm explorer sfmr/solve-a.sfmr sfmr/solve-b.sfmr
 
 # Let an agent drive the viewer on port 9000
 sfm explorer --mcp 9000 sfmr/solve.sfmr
+
+# Call one of its tools from another shell
+sfm explorer-call --mcp 9000 get_scene
 
 # Start from the stock panel grid
 sfm explorer --no-default-layout sfmr/solve.sfmr
