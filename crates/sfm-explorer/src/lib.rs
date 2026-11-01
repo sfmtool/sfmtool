@@ -67,6 +67,9 @@ mod viewer_3d;
 mod widget_name;
 mod window;
 
+#[cfg(feature = "mcp")]
+pub use mcp::{tool_catalog, validate_tool_call, CatalogTool};
+
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::{Duration, Instant};

@@ -79,6 +79,7 @@ _LAZY = {name: module for module, names in _LAZY_NAMES.items() for name in names
 _LAZY_SUBPACKAGES = (
     "analysis",
     "bench",
+    "explorer",
     "fileio",
     "flow",
     "geometry",
@@ -98,6 +99,7 @@ if TYPE_CHECKING:
     from sfmtool import (  # noqa: F401
         analysis,
         bench,
+        explorer,
         fileio,
         flow,
         geometry,

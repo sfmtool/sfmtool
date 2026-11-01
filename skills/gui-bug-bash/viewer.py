@@ -13,6 +13,12 @@ rebuild or a second run is not blocked by a locked executable, starts the
 viewer detached with `--mcp <port> --no-default-layout` on the copies, waits
 for the endpoint to answer, and prints the session as JSON. Every later call
 names the port; nothing is kept in shell state.
+
+The session's `catalog` says whether `sfm explorer-call` can check calls to
+this viewer: "matches" when the extension's tool catalog is the viewer's, or
+the refusal that names the difference, in which case rebuild the extension
+with `pixi run maturin develop --release` or pass `--validate-tool-names-only`
+to each call.
 """
 
 import argparse
@@ -24,13 +30,9 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mcp import Client, McpError  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 EXE_NAME = "sfm-explorer.exe" if os.name == "nt" else "sfm-explorer"
@@ -88,19 +90,46 @@ def start(exe: Path, port: int, files: list[str], log: Path) -> int:
     return proc.pid
 
 
+def explorer_call(port: int, tool: str, *options: str) -> subprocess.CompletedProcess:
+    """Run `sfm explorer-call` on the viewer at `port`."""
+    sfm = shutil.which("sfm")
+    if sfm is None:
+        raise SystemExit("`sfm` is not on PATH: run this with `pixi run python`")
+    return subprocess.run(
+        [sfm, "explorer-call", "--mcp", str(port), tool, *options],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+
+def get_scene(port: int) -> dict:
+    """The viewer's get_scene reply. Only the tool name is checked, so this
+    works whether or not the extension's catalog is the viewer's."""
+    done = explorer_call(port, "get_scene", "--validate-tool-names-only")
+    if done.returncode != 0:
+        raise OSError(done.stderr.strip() or f"status {done.returncode}")
+    return json.loads(done.stdout)
+
+
+def catalog_state(port: int) -> str:
+    """ "matches", or the refusal naming how the viewer's catalog differs."""
+    done = explorer_call(port, "get_scene")
+    return "matches" if done.returncode == 0 else done.stderr.strip()
+
+
 def wait_ready(port: int, pid: int, timeout_s: float) -> dict:
     """Wait until the endpoint answers get_scene from the viewer we started."""
-    client = Client(port, timeout_s=5)
     deadline = time.time() + timeout_s
     last = None
     while time.time() < deadline:
         if not alive(pid):
             raise SystemExit(f"viewer {pid} exited before its endpoint answered")
         try:
-            scene = client.call("get_scene")
+            scene = get_scene(port)
             if f":{port}]" in scene.get("window_title", ""):
                 return scene
-        except (OSError, McpError) as e:
+        except OSError as e:
             last = e
         time.sleep(0.5)
     raise SystemExit(f"endpoint on {port} did not answer in {timeout_s}s: {last}")
@@ -149,6 +178,7 @@ def launch(a: argparse.Namespace) -> None:
         "copies": copies,
         "opened": files,
         "labels": [n["label"] for n in scene.get("scene", [])],
+        "catalog": catalog_state(port),
         "started": datetime.datetime.now().isoformat(timespec="seconds"),
     }
     (session / "session.json").write_text(json.dumps(info, indent=2))
@@ -164,9 +194,10 @@ def status(a: argparse.Namespace) -> None:
     info["alive"] = alive(info["pid"])
     if info["alive"]:
         try:
-            scene = Client(info["port"], timeout_s=5).call("get_scene")
+            scene = get_scene(info["port"])
             info["labels"] = [n["label"] for n in scene.get("scene", [])]
-        except (OSError, McpError) as e:
+            info["catalog"] = catalog_state(info["port"])
+        except OSError as e:
             info["endpoint_error"] = str(e)
     print(json.dumps(info, indent=2))
 

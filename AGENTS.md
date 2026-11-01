@@ -261,8 +261,8 @@ empty-handed". Name the thing and say what it does.
   conformance. Subdirs mirror the code they describe:
   - `cli/` — one file per command, grouped by the `--help` category the command
     is registered under in `cli.py` (`workspace/`, `image-feature/`,
-    `reconstruction/`, `visualization/`, `image-processing/`,
-    `colmap-interop/`); the `xform` sub-commands nest in
+    `reconstruction/`, `visualization/`, `automation/`,
+    `image-processing/`, `colmap-interop/`); the `xform` sub-commands nest in
     `cli/reconstruction/xform/`
   - `core/` — algorithm design, one subdir per `sfmtool-core` module
     (`analysis/`, `camera/`, `features/`, `geometry/`, `patch/`,
@@ -299,8 +299,8 @@ empty-handed". Name the thing and say what it does.
 - `skills/` — the seven project skills (`audit-hygiene`, `audit-specs`,
   `fix-report-findings`, `gui-bug-bash`, `implement-change`,
   `implement-random-idea`, `suggest-next-steps`), checked in here and
-  symlinked into `.claude/skills/`. `gui-bug-bash` carries scripts that launch
-  a viewer on a random port and call its MCP endpoint over HTTP.
+  symlinked into `.claude/skills/`. `gui-bug-bash` carries a script that
+  launches a viewer on a random port, and drives it with `sfm explorer-call`.
   `implement-change` makes one change on a branch with an implementer agent
   and an independent auditor agent. `fix-report-findings` picks and orders
   open report findings and runs `implement-change` for each, one branch per
@@ -332,8 +332,9 @@ empty-handed". Name the thing and say what it does.
 ## CLI
 
 Run `pixi run sfm --help` to list all subcommands grouped by category
-(Workspace / Image Feature / Reconstruction / Visualization / Image Processing
-/ COLMAP Interop). Source in `src/sfmtool/_commands/<name>.py`; specs in
+(Workspace / Image Feature / Reconstruction / Visualization / Automation /
+Image Processing / COLMAP Interop). Source in
+`src/sfmtool/_commands/<name>.py`; specs in
 `specs/cli/<category>/<name>-command.md`. `sfm ws` and `sfm camrig` are command **groups**
 (`ws` has one subcommand, `ws init`; `camrig` has three: `camrig create`,
 `camrig cp`, `camrig spherical-tiles`); every other top-level command is flat.
@@ -478,6 +479,15 @@ backlog and keep them honest as findings get addressed:
   still there for the next one. Kill it **before** rebuilding: a running
   `.exe` is locked on Windows and `cargo build` fails with `Access is denied
   (os error 5)`.
+
+  **Without the registration**, or on another port, `pixi run sfm
+  explorer-call --mcp PORT TOOL ARGS` calls one tool from the shell and writes
+  a screenshot to a file (`specs/cli/automation/explorer-call-command.md`).
+  It checks the call against the tool catalog and argument parser compiled into
+  the extension, so after changing MCP tools run `pixi run maturin develop
+  --release` before calling a `cargo build` viewer, or pass
+  `--validate-tool-names-only`; it refuses a viewer whose tool list differs and
+  says so.
 
   Keep the registration at the default `local` scope. A `.mcp.json` committed
   with `--scope project` would point every contributor's session at a loopback

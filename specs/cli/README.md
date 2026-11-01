@@ -89,6 +89,14 @@ numpy, OpenCV, pycolmap and the command modules.
 | `sfm panorama` | [panorama-command.md](visualization/panorama-command.md) |
 | `sfm web-export` | [web-export-command.md](visualization/web-export-command.md) |
 
+## Automation
+
+Commands that let a script or agent drive a running program.
+
+| Command | Spec |
+|---------|------|
+| `sfm explorer-call` | [explorer-call-command.md](automation/explorer-call-command.md) — calls one tool on a running SfM Explorer's MCP endpoint |
+
 ## Image Processing
 
 | Command | Spec |

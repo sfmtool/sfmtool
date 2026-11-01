@@ -15,7 +15,7 @@ column reads *none* is a binding that no spec describes.
 
 ## How the module is assembled
 
-[`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers eleven submodules, each
+[`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers twelve submodules, each
 through the `register` function of its source module, and sets each
 submodule's `__name__` to the public `sfmtool.<name>`, so tracebacks and help
 text name the public location. Three names are registered at the root for
@@ -53,6 +53,7 @@ the same objects:
 |---------------|---------------------|
 | [`sfmtool.analysis`](../src/sfmtool/analysis.py) | `_sfmtool.analysis` |
 | [`sfmtool.bench`](../src/sfmtool/bench.py) | `_sfmtool.bench` |
+| [`sfmtool.explorer`](../src/sfmtool/explorer.py) | `_sfmtool.explorer` |
 | [`sfmtool.fileio`](../src/sfmtool/fileio.py) | `_sfmtool.fileio` |
 | [`sfmtool.flow`](../src/sfmtool/flow.py) | `_sfmtool.flow` |
 | [`sfmtool.geometry`](../src/sfmtool/geometry.py) | `_sfmtool.geometry` |
@@ -257,6 +258,12 @@ Paths in the *Source* column are relative to
 |--------|---------|------|
 | [spherical/tile_rig.rs](../crates/sfmtool-py/src/spherical/tile_rig.rs), [sphere_points.rs](../crates/sfmtool-py/src/spherical/sphere_points.rs) | `SphericalTileRig`, `evenly_distributed_sphere_points` | [spherical-tiles-rig.md](core/spherical/spherical-tiles-rig.md) |
 | [spherical/tile_source_stack.rs](../crates/sfmtool-py/src/spherical/tile_source_stack.rs) | `PerSphericalTileSourceStack` | [per-spherical-tile-source-stack.md](core/spherical/per-spherical-tile-source-stack.md) |
+
+### `explorer`
+
+| Source | Exposes | Spec |
+|--------|---------|------|
+| [explorer.rs](../crates/sfmtool-py/src/explorer.rs) | `tool_catalog`, `validate_tool_call`: the SfM Explorer's MCP tool catalog and the parse its `tools/call` runs | [explorer-call-command.md](cli/automation/explorer-call-command.md) |
 
 ## Keeping the index current
 

@@ -356,7 +356,7 @@ impl ServerHandler for Viewer {
 /// `destructiveHint: true`: `save_reconstruction`, which can overwrite a file,
 /// and the input tools, which can press the menu items that save, quit or open
 /// a file chooser.
-fn advertise(spec: &tools::ToolSpec) -> Tool {
+pub(super) fn advertise(spec: &tools::ToolSpec) -> Tool {
     let read_only = spec.kind == ToolKind::Read;
     let mut annotations = ToolAnnotations::new()
         .read_only(read_only)

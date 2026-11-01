@@ -188,6 +188,14 @@ COMMANDS = (
         "web_export",
         "Write a reconstruction as a web page that draws it in 3D.",
     ),
+    # Automation
+    (
+        "explorer-call",
+        "Automation",
+        "explorer_call",
+        "explorer_call",
+        "Call one tool on a running SfM Explorer's MCP endpoint.",
+    ),
     # Image Processing
     (
         "flow",
