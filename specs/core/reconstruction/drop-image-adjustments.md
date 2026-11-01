@@ -97,7 +97,7 @@ is folded into the camera:
 
 | Parameter | The camera after |
 |-----------|------------------|
-| `focal` | each focal (both on a two-focal model) times the mean of `1 + s` |
+| `focal` | each focal (both on a two-focal model) times the geometric mean of `1 + s`, `exp(mean ln(1 + s))` |
 | `principal_point` | the principal point moved by the mean offset `ā` times the short side, `min(width, height)` |
 | `radial_bspline` | the spline coefficients `c` replaced by `c + K·ē`, or `ē` on an empty spline (`SFMTOOL_PINHOLE` only) |
 | `rolling_shutter` | unchanged: a mean rate describes no photograph, so nothing is folded |
@@ -105,9 +105,20 @@ is folded into the camera:
 The fold is `CameraIntrinsics::with_adjustment` with the mean adjustment, so it
 is the same arithmetic an image holding the mean was read through: such an
 image's intrinsics are identical before and after, to the last bit for the
-focal and the principal point. Each part of the adjustment is linear in the
-camera's parameters, so the mean is the one shared value whose change sums to
-zero over the images.
+principal point and the radial correction and to rounding for the focal, whose
+mean is taken through `ln(1 + s)` and back.
+
+The means are the ones the bundle adjustment re-centres a camera to after each
+round of a per-image release
+([bundle-adjust.md § Why it is shaped this way](bundle-adjust.md#why-it-is-shaped-this-way)), so a drop straight
+after such a solve folds nothing and leaves the shared camera as it was. The
+principal point and the radial correction are linear in the camera's
+parameters, and their mean is the shared value whose change sums to zero over
+the images. The focal is the exception: the scale `1 + s` multiplies the
+camera's focal, so its mean is taken in log space, where the images'
+`ln(1 + s)` sum to zero about the folded camera. An arithmetic mean of
+`1 + s` would sit above the geometric one by about half the variance of
+`ln(1 + s)`, and would move a freshly solved camera's focal by that much.
 
 **The mean is over the camera's posed images**, the ones whose observations the
 drop changes. An unposed image's adjustment is bookkeeping that keeps its
@@ -165,12 +176,13 @@ raise `ValueError` with the error's message.
 
 [`drop_image_adjustments/tests.rs`](../../../crates/sfmtool-core/src/reconstruction/drop_image_adjustments/tests.rs)
 builds two `SFMTOOL_PINHOLE` cameras with every parameter varying, and checks
-that an image holding the mean is read identically after each fold, that the
-folded camera is the mean over the posed images exactly, that dropping the
-rates keeps the camera and its scanlines setting, that the other camera and
-every pose and point are untouched, that dropping what a camera does not vary
-changes nothing, that the stored errors match a full rescoring, and each
-refusal.
+that an image holding the mean is read as before after each fold, that the
+folded camera is the mean over the posed images (the geometric one for the
+focal), that a drop of the focal right after re-centring leaves the camera's
+focal bit-identical, that dropping the rates keeps the camera and its
+scanlines setting, that the other camera and every pose and point are
+untouched, that dropping what a camera does not vary changes nothing, that
+the stored errors match a full rescoring, and each refusal.
 [`test_drop_image_adjustments_rust_bindings.py`](../../../tests/rust_bindings/reconstruction/test_drop_image_adjustments_rust_bindings.py)
 drops from the seoul_bull ground truth's camera, which varies all four, and
 saves and reloads the result.

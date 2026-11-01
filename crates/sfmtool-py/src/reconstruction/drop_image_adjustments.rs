@@ -35,8 +35,10 @@ impl PySfmrReconstruction {
     /// The camera stops varying each parameter named, every image of the
     /// camera has that part of its adjustment set to zero, and the mean over
     /// the camera's posed images (all its images where none is posed) is
-    /// folded into the camera: the focal is multiplied by the mean of
-    /// ``1 + s``, the principal point moved by the mean offset, and the mean
+    /// folded into the camera: the focal is multiplied by the geometric mean
+    /// of ``1 + s``, ``exp(mean(log1p(s)))``, the value the bundle adjustment
+    /// re-centres it to, the principal point moved by the mean offset, and the
+    /// mean
     /// radial correction added to the spline. Rolling-shutter rates are
     /// dropped with nothing folded, and the camera keeps its scanlines
     /// setting. A parameter the camera does not vary, with no non-zero value

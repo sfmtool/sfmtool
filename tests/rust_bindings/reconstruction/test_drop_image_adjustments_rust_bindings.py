@@ -47,7 +47,7 @@ def test_dropping_every_parameter_folds_the_mean_into_the_camera(recon, tmp_path
     assert dropped.rolling_shutter_scanlines == ["COLUMNS"]
     after = parameters(dropped.cameras[0])
     assert after["focal_length"] == pytest.approx(
-        before["focal_length"] * np.mean(1.0 + s), rel=1e-12
+        before["focal_length"] * np.exp(np.mean(np.log1p(s))), rel=1e-12
     )
     short_side = min(recon.cameras[0].width, recon.cameras[0].height)
     mean_a = a.mean(axis=0)

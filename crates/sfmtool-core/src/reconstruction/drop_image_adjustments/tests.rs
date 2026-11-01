@@ -9,8 +9,9 @@
 //! cameras, images 0 to 3 through camera 0 and 4 to 7 through camera 1, with
 //! inline keypoints at the exact projections through each image's intrinsics.
 //! Camera 0's posed images 0 to 2 carry `m + d`, `m − d` and `m` of each
-//! parameter, so image 2 holds their mean exactly in binary; image 3 is
-//! unposed and carries a value far from the others.
+//! parameter, so image 2 holds their mean exactly in binary, with the focal
+//! scale's `m ± d` and `m` in log space, `ln(1 + s)`, the space its mean is
+//! taken in; image 3 is unposed and carries a value far from the others.
 
 use ndarray::Array2;
 
@@ -59,7 +60,7 @@ fn adjustment(i: usize) -> IntrinsicAdjustment {
     // Camera 1's images get values of their own, to show they are left alone.
     let (slot, k) = if i < 4 { (i, 1.0) } else { (i - 4, -0.5) };
     IntrinsicAdjustment {
-        focal: k * spread(slot, 0.03125, 0.015625, 0.5),
+        focal: (k * spread(slot, 0.03125, 0.015625, 0.5)).exp_m1(),
         principal_point: [
             k * spread(slot, 0.0078125, 0.00390625, 0.25),
             k * spread(slot, -0.00390625, 0.001953125, -0.25),
@@ -108,9 +109,11 @@ fn scene() -> SfmrReconstruction {
 #[test]
 fn each_fold_keeps_the_mean_image_as_it_was() {
     // The fold is the mean adjustment applied to the camera, so the image that
-    // held the mean is read through the same arithmetic before and after, and
-    // its intrinsics agree exactly. The rates are not folded, so they are
-    // dropped in their own test.
+    // held the mean is read through the same arithmetic before and after. The
+    // principal point and the radial correction are linear means of values
+    // exact in binary, so those intrinsics agree exactly; the focal's mean is
+    // taken through `ln(1 + s)` and back, so it agrees to rounding. The rates
+    // are not folded, so they are dropped in their own test.
     let recon = scene();
     let before = recon.image_intrinsics(MEAN_IMAGE).into_owned();
     for parameters in [
@@ -120,11 +123,18 @@ fn each_fold_keeps_the_mean_image_as_it_was() {
         &[Focal, PrincipalPoint, RadialBspline],
     ] {
         let out = drop_image_adjustments(&recon, 0, parameters).unwrap();
-        assert_eq!(
-            out.image_intrinsics(MEAN_IMAGE).into_owned(),
-            before,
-            "{parameters:?}"
-        );
+        let after = out.image_intrinsics(MEAN_IMAGE).into_owned();
+        if parameters.contains(&Focal) {
+            let (f_after, f_before) = (after.focal_lengths().0, before.focal_lengths().0);
+            assert!(
+                (f_after - f_before).abs() <= 1e-12 * f_before,
+                "{parameters:?}: {f_after} against {f_before}"
+            );
+            assert_eq!(after.principal_point(), before.principal_point());
+            assert_eq!(after.model.radial_spline(), before.model.radial_spline());
+        } else {
+            assert_eq!(after, before, "{parameters:?}");
+        }
         // The other posed images move: their values were not the mean.
         assert_ne!(
             out.image_intrinsics(0).into_owned(),
@@ -180,7 +190,22 @@ fn the_fold_is_the_mean_over_the_posed_images() {
     else {
         panic!("still an SFMTOOL_PINHOLE");
     };
-    assert_eq!(*focal_length, 1000.0 * (1.0 + 0.03125));
+    // The focal takes the geometric mean of `1 + s`, `exp(m)`, not the
+    // arithmetic one, which the spread of the scales puts measurably above it.
+    let geometric = 1000.0 * 0.03125f64.exp();
+    assert!(
+        (*focal_length - geometric).abs() <= 1e-12 * geometric,
+        "{focal_length} against {geometric}"
+    );
+    let arithmetic = 1000.0
+        * (0..3)
+            .map(|i| 1.0 + recon.image_set.images[i].intrinsic_adjustment.focal)
+            .sum::<f64>()
+        / 3.0;
+    assert!(
+        (arithmetic - geometric).abs() > 1e-6 * geometric,
+        "{arithmetic} against {geometric}"
+    );
     assert_eq!(*principal_point_x, 960.0 + 0.0078125 * 1080.0);
     assert_eq!(*principal_point_y, 540.0 - 0.00390625 * 1080.0);
     let k = crate::camera::distortion::bspline::radial_bspline_insertion(4);
@@ -197,6 +222,33 @@ fn the_fold_is_the_mean_over_the_posed_images() {
     assert_eq!(
         out.image_set.images[UNPOSED].intrinsic_adjustment.focal,
         0.0
+    );
+}
+
+#[test]
+fn a_drop_after_a_focal_solve_leaves_the_camera_focal_as_it_was() {
+    // The bundle adjustment re-centres a per-image focal so that its images'
+    // `ln(1 + s)` sum to zero. Their geometric mean is then 1, and the drop
+    // folds nothing into the focal.
+    let mut recon = scene();
+    for (i, t) in [0.02, -0.02, 0.0].into_iter().enumerate() {
+        recon.image_set.images[i].intrinsic_adjustment.focal = f64::exp_m1(t);
+    }
+    let sum: f64 = (0..3)
+        .map(|i| recon.image_set.images[i].intrinsic_adjustment.focal.ln_1p())
+        .sum();
+    assert!(sum.abs() < 1e-15, "{sum}");
+    // The arithmetic mean of `1 + s` is not 1 for these images.
+    let arithmetic: f64 = (0..3)
+        .map(|i| recon.image_set.images[i].intrinsic_adjustment.focal)
+        .sum::<f64>()
+        / 3.0;
+    assert!(arithmetic > 1e-6, "{arithmetic}");
+
+    let out = drop_image_adjustments(&recon, 0, &[Focal]).unwrap();
+    assert_eq!(
+        out.image_set.cameras[0].focal_lengths(),
+        recon.image_set.cameras[0].focal_lengths()
     );
 }
 

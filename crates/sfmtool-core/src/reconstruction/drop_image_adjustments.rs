@@ -80,7 +80,9 @@ impl std::error::Error for DropImageAdjustmentsError {}
 /// For each parameter named:
 ///
 /// - **focal**: the camera's focal (both focals on a two-focal model) is
-///   multiplied by the mean of `1 + s`;
+///   multiplied by the geometric mean of `1 + s`, `exp(mean ln(1 + s))`, the
+///   value the bundle adjustment re-centres the camera to, so a drop straight
+///   after a per-image focal solve leaves the camera's focal as it was;
 /// - **principal point**: the camera's principal point moves by the mean
 ///   offset times the short side, `min(width, height)`;
 /// - **radial correction**: the camera's spline coefficients `c` become
@@ -184,7 +186,8 @@ pub fn drop_image_adjustments(
             .map(|&i| &image_set.images[i].intrinsic_adjustment);
         for a in adjustments {
             if drop_focal {
-                mean.focal += a.focal;
+                // In log space, as the bundle adjustment re-centres it.
+                mean.focal += a.focal.ln_1p();
             }
             if drop_pp {
                 mean.principal_point[0] += a.principal_point[0];
@@ -195,7 +198,8 @@ pub fn drop_image_adjustments(
                 mean.radial_bspline[1] += a.radial_bspline[1];
             }
         }
-        mean.focal /= n;
+        // The geometric mean of `1 + s`, as a scale `s̄`.
+        mean.focal = (mean.focal / n).exp_m1();
         mean.principal_point = mean.principal_point.map(|v| v / n);
         mean.radial_bspline = mean.radial_bspline.map(|v| v / n);
     }
