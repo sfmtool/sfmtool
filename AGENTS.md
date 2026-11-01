@@ -285,8 +285,7 @@ empty-handed". Name the thing and say what it does.
   `seoul_bull_sculpture_ground_truth_v02.sfmr`, a newer version of the same
   17 images, also minimal and in metres: an `SFMTOOL_PINHOLE` camera with a
   radial B-spline and per-image focal, principal-point, B-spline and
-  rolling-shutter adjustments, and refined normals. Its scale is 1.104 times
-  v01's. `kerry_park` likewise holds
+  rolling-shutter adjustments, and refined normals. `kerry_park` likewise holds
   `kerry_park_ground_truth_v01.sfmr`, all 48 images with the rig, in metres
   with X east and Y north from eight GPS fixes, and its own marker. The `_v01`
   suffix is a version, so a file name always means the same content: a later

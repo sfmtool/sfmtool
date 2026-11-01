@@ -94,7 +94,7 @@ Two datasets also carry reference reconstructions, in metres:
   images; the scale comes from three GPS fixes.
 - `seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr` — a newer
   version of the same 17 images, with an `SFMTOOL_PINHOLE` camera, per-image
-  camera adjustments and refined normals. Its scale is 1.104 times v01's.
+  camera adjustments and refined normals.
 - `kerry_park/kerry_park_ground_truth_v01.sfmr` — all 48 images, with the
   rig; the scale and orientation come from eight GPS fixes (X east, Y north).
 
