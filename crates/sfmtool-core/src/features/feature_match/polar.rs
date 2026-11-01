@@ -160,9 +160,9 @@ impl Wraparound {
     /// Decide the copy counts for an angle-sorted array.
     ///
     /// Features within `angular_threshold` of either end of (−π, π] are the
-    /// ones a window at the opposite end needs to see. The threshold matches
-    /// the Python implementation's approach: a quarter turn, or the angular
-    /// span the window covers on average, whichever is smaller.
+    /// ones a window at the opposite end needs to see. The threshold is π/4,
+    /// or the angular span the window covers on average, whichever is
+    /// smaller.
     fn plan(sorted_theta: &[f64], window_size: usize) -> Self {
         let n = sorted_theta.len();
         if n == 0 {

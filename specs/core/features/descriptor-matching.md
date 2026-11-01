@@ -69,16 +69,17 @@ pub fn match_image_pair(
     rectification_margin: u32,
     affines1: Option<&[f64]>, affines2: Option<&[f64]>,
     geometric_config: Option<&GeometricFilterConfig>,
-) -> Vec<(usize, usize, f64)>;
+) -> Result<PairMatches, MatchImagePairError>;
 
 pub fn match_image_pairs_batch(/* per-image arrays, indexed by pair */)
-    -> Vec<Vec<(usize, usize, f64)>>;
+    -> Result<Vec<PairMatches>, MatchImagePairError>;
 ```
 
 `match_image_pair` is what callers use. It computes the fundamental matrix from
 the two poses, picks the polar sweep when either epipole lies inside its image
 grown by `rectification_margin` pixels on every side, and the rectified sweep
-otherwise. It returns `(index1, index2, distance)` for every mutual match, in
+otherwise. It returns `PairMatches`, an alias for `Vec<(usize, usize, f64)>`
+holding `(index1, index2, distance)` for every mutual match, in
 the caller's original feature indices, sorted by `index1`; each `index1`
 appears at most once, so the order is the same from run to run. A pair whose
 intrinsic matrix is singular has no fundamental matrix and returns no matches.
@@ -86,11 +87,39 @@ The geometric filter runs only when `affines1`, `affines2` and
 `geometric_config` are all `Some`.
 `match_image_pairs_batch` runs `match_image_pair` over a list of pairs in
 parallel with Rayon, taking per-camera intrinsics and image sizes and per-image
-poses and features, and returns one result per pair in input order. The core
-function indexes its slices without checking, so its Python binding checks
-first: it raises `ValueError` when the per-image or per-camera lists differ in
-length, when a pair names an image index out of range, or when a camera index
-is negative or out of range.
+poses and features, and returns one result per pair in input order.
+
+Both functions check every length and index they read before matching
+anything, and return a `MatchImagePairError` rather than panic on a caller's
+mistake. `match_image_pair` returns `FeatureArrayLength` when a positions
+array does not hold `2 × n` values, a descriptor array `desc_len × n` bytes, or
+an affine-shape array that is `Some` `4 × n` values. `match_image_pairs_batch`
+also returns `ListLength` when a per-image list is not as long as
+`camera_indices` or a per-camera list not as long as `intrinsics`,
+`CameraIndexOutOfRange` and `ImageIndexOutOfRange` for an index past the end of
+its list, and `FeatureArrayLength` for any image's arrays, whether or not a
+pair names that image. The intrinsics and poses arrive as `Matrix3` and
+`Vector3`, so their sizes need no check here.
+
+The Python bindings check shapes as well, so no input from Python ends in a
+panic. PyO3's argument conversion raises `TypeError` for an array with the
+wrong number of dimensions or the wrong dtype, and `OverflowError` for a
+negative width, height or window size; the bindings raise `ValueError` for the
+rest. Before converting anything, they check that each
+intrinsic and rotation matrix has shape (3, 3) and each translation shape
+(3,); a (1, 9) matrix is refused rather than reshaped. They check that
+each positions array has shape (N, 2), each descriptor array has N rows and as
+many columns as the first descriptor array (`descriptors1`, or the first entry
+of `descriptors_list`), and each affine-shape array that is given has shape
+(N, 4), N being that image's position count. The batch binding first checks,
+under its own argument names, that the per-image lists (`rotations`,
+`translations`, `camera_indices`, `positions_list`, `descriptors_list`, and
+`affines_list` when given) share one length and the per-camera lists
+(`intrinsics`, `widths`, `heights`) another, that every pair's image indexes are
+in range, and that no camera index is negative or out of range. The core's own
+checks run after these, and the binding raises any error they return as
+`ValueError` with the core's message. The implementation is
+[`matching/image.rs`](../../../crates/sfmtool-py/src/matching/image.rs).
 
 The poses are `cam_from_world` in the COLMAP/OpenCV camera convention (+Z
 forward, Y down), because everything here is pixel-space algebra on `K`, `R`
@@ -182,7 +211,7 @@ let matches = match_image_pair(
     &positions1, &descriptors1, n1, &positions2, &descriptors2, n2,
     128, 30, None, 50,
     Some(&affines1), Some(&affines2), Some(&config),
-);
+)?;
 for (i1, i2, dist) in matches { /* feature i1 in image 1 matches i2 in image 2 */ }
 ```
 
@@ -303,10 +332,12 @@ rotation.
 | `min_triangulation_angle` | `5.0` | Degrees; below it the size stage is skipped. |
 | `geometric_size_ratio_min` | `0.8` | Size stage lower bound. `sfm densify` sets it to `1 / --geometric-size-ratio-max`. |
 | `geometric_size_ratio_max` | `1.25` | Size stage upper bound. |
+| `enable_geometric_filtering` | `True` | Python dataclass only. When `False`, `feature_match.match_image_pair` passes no filter settings to the binding and `sfm densify` reads no affine shapes, so the pair is matched without the filter. `sfm densify` builds the dataclass only under `--enable-geometric-filtering`, which is off by default. |
 
 The four filter defaults are `GeometricFilterConfig::default()` in
 `geometric_filter.rs` and the matching Python dataclass in
-[`_geometric_filter.py`](../../../src/sfmtool/feature_match/_geometric_filter.py).
+[`_geometric_filter.py`](../../../src/sfmtool/feature_match/_geometric_filter.py),
+which adds `enable_geometric_filtering`.
 
 ## Python bindings
 
@@ -332,11 +363,13 @@ Rust unit tests are beside each file:
 [`geometric_filter/tests.rs`](../../../crates/sfmtool-core/src/features/feature_match/geometric_filter/tests.rs),
 [`gather/tests.rs`](../../../crates/sfmtool-core/src/features/feature_match/gather/tests.rs)
 and, for `match_image_pair` with forward motion between images of different
-sizes, [`tests.rs`](../../../crates/sfmtool-core/src/features/feature_match/tests.rs).
+sizes and for the errors both entry points return on bad input,
+[`tests.rs`](../../../crates/sfmtool-core/src/features/feature_match/tests.rs).
 The Python side is
-[`tests/matching/test_sweep_matching.py`](../../../tests/matching/test_sweep_matching.py)
-and
-[`tests/rust_bindings/matching/test_descriptor_rust_bindings.py`](../../../tests/rust_bindings/matching/test_descriptor_rust_bindings.py).
+[`tests/matching/test_sweep_matching.py`](../../../tests/matching/test_sweep_matching.py),
+[`tests/rust_bindings/matching/test_descriptor_rust_bindings.py`](../../../tests/rust_bindings/matching/test_descriptor_rust_bindings.py)
+and, for the exceptions the two bindings raise,
+[`tests/rust_bindings/matching/test_image_pairs_batch_rust_bindings.py`](../../../tests/rust_bindings/matching/test_image_pairs_batch_rust_bindings.py).
 
 ## Non-goals
 

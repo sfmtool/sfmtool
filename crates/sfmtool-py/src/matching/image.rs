@@ -5,16 +5,26 @@
 
 use nalgebra::{Matrix3, Vector3};
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::borrow::Cow;
 
 use sfmtool_core::features::feature_match;
+
+use crate::helpers::value_err;
 
 /// Unified image pair matching: automatically selects rectified sweep or polar matching.
 ///
 /// Computes fundamental matrix, checks rectification safety, and dispatches
 /// to the appropriate matching algorithm. Optionally applies geometric filtering.
 /// Returns list of (idx1, idx2, distance) tuples.
+///
+/// Raises:
+///     ValueError: ``k1``, ``k2``, ``r1`` or ``r2`` is not of shape (3, 3),
+///         ``t1`` or ``t2`` is not of shape (3,), ``positions1`` or
+///         ``positions2`` is not of shape (N, 2), a descriptor array does not
+///         have one row per position or is not as wide as ``descriptors1``,
+///         or an affine-shape array is not of shape (N, 4) for its image's N.
 #[pyfunction]
 #[pyo3(name = "match_image_pair")]
 #[pyo3(signature = (k1, k2, r1, r2, t1, t2, width1, height1, width2, height2,
@@ -49,6 +59,25 @@ pub fn match_image_pair_py(
     geometric_size_ratio_min: Option<f64>,
     geometric_size_ratio_max: Option<f64>,
 ) -> PyResult<Vec<(usize, usize, f64)>> {
+    for (name, m) in [("k1", &k1), ("k2", &k2), ("r1", &r1), ("r2", &r2)] {
+        check_shape(name, m.shape(), &[3, 3])?;
+    }
+    check_shape("t1", t1.shape(), &[3])?;
+    check_shape("t2", t2.shape(), &[3])?;
+    let n1 = positions1.shape()[0];
+    let n2 = positions2.shape()[0];
+    let desc_len = descriptors1.shape()[1];
+    check_shape("positions1", positions1.shape(), &[n1, 2])?;
+    check_shape("positions2", positions2.shape(), &[n2, 2])?;
+    check_shape("descriptors1", descriptors1.shape(), &[n1, desc_len])?;
+    check_shape("descriptors2", descriptors2.shape(), &[n2, desc_len])?;
+    if let Some(a) = &affines1 {
+        check_shape("affines1", a.shape(), &[n1, 4])?;
+    }
+    if let Some(a) = &affines2 {
+        check_shape("affines2", a.shape(), &[n2, 4])?;
+    }
+
     let k1_data = to_contiguous!(k1);
     let k2_data = to_contiguous!(k2);
     let r1_data = to_contiguous!(r1);
@@ -67,10 +96,6 @@ pub fn match_image_pair_py(
     let d1_data = to_contiguous!(descriptors1);
     let p2_data = to_contiguous!(positions2);
     let d2_data = to_contiguous!(descriptors2);
-
-    let n1 = positions1.shape()[0];
-    let n2 = positions2.shape()[0];
-    let desc_len = descriptors1.shape()[1];
 
     // Extract optional affine data
     let a1_cow = affines1.as_ref().map(|a| to_contiguous!(a));
@@ -96,7 +121,7 @@ pub fn match_image_pair_py(
         _ => None,
     };
 
-    Ok(feature_match::match_image_pair(
+    feature_match::match_image_pair(
         &k1_mat,
         &k2_mat,
         &r1_mat,
@@ -120,7 +145,8 @@ pub fn match_image_pair_py(
         a1_ref,
         a2_ref,
         geo_config.as_ref(),
-    ))
+    )
+    .map_err(value_err)
 }
 
 /// Match features across multiple image pairs in parallel using Rayon.
@@ -133,8 +159,12 @@ pub fn match_image_pair_py(
 ///         ``camera_indices``, ``positions_list``, ``descriptors_list`` and
 ///         ``affines_list`` when given) differ in length, the per-camera lists
 ///         (``intrinsics``, ``widths``, ``heights``) differ in length, a pair
-///         names an image index out of range, or a camera index is negative
-///         or out of range.
+///         names an image index out of range, a camera index is negative
+///         or out of range, an intrinsic or rotation matrix is not of shape
+///         (3, 3), a translation is not of shape (3,), a positions array is
+///         not of shape (N, 2), a descriptor array does not have one row per
+///         position or is not as wide as the first, or an affine-shape array
+///         is not of shape (N, 4) for its image's N.
 #[pyfunction]
 #[pyo3(name = "match_image_pairs_batch")]
 #[pyo3(signature = (pairs, intrinsics, rotations, translations, camera_indices,
@@ -164,6 +194,50 @@ pub fn match_image_pairs_batch_py(
     geometric_size_ratio_min: Option<f64>,
     geometric_size_ratio_max: Option<f64>,
 ) -> PyResult<Vec<Vec<(usize, usize, f64)>>> {
+    let cam_idx_data = to_contiguous!(camera_indices);
+    let mut per_image_lens = vec![
+        ("rotations", rotations.len()),
+        ("translations", translations.len()),
+        ("positions_list", positions_list.len()),
+        ("descriptors_list", descriptors_list.len()),
+    ];
+    if let Some(affines) = &affines_list {
+        per_image_lens.push(("affines_list", affines.len()));
+    }
+    let cam_idx = check_batch_indexes(
+        &pairs,
+        &cam_idx_data,
+        &per_image_lens,
+        &[
+            ("intrinsics", intrinsics.len()),
+            ("widths", widths.len()),
+            ("heights", heights.len()),
+        ],
+    )?;
+
+    let desc_len = descriptors_list.first().map_or(128, |d| d.shape()[1]);
+    for (i, k) in intrinsics.iter().enumerate() {
+        check_shape(&format!("intrinsics[{i}]"), k.shape(), &[3, 3])?;
+    }
+    for i in 0..rotations.len() {
+        check_shape(&format!("rotations[{i}]"), rotations[i].shape(), &[3, 3])?;
+        check_shape(&format!("translations[{i}]"), translations[i].shape(), &[3])?;
+        let n = positions_list[i].shape()[0];
+        check_shape(
+            &format!("positions_list[{i}]"),
+            positions_list[i].shape(),
+            &[n, 2],
+        )?;
+        check_shape(
+            &format!("descriptors_list[{i}]"),
+            descriptors_list[i].shape(),
+            &[n, desc_len],
+        )?;
+        if let Some(affines) = &affines_list {
+            check_shape(&format!("affines_list[{i}]"), affines[i].shape(), &[n, 4])?;
+        }
+    }
+
     // Convert numpy arrays to nalgebra types
     let k_mats: Vec<Matrix3<f64>> = intrinsics
         .iter()
@@ -189,38 +263,12 @@ pub fn match_image_pairs_batch_py(
         })
         .collect();
 
-    let cam_idx_data = to_contiguous!(camera_indices);
-    let mut per_image_lens = vec![
-        ("rotations", rotations.len()),
-        ("translations", translations.len()),
-        ("positions_list", positions_list.len()),
-        ("descriptors_list", descriptors_list.len()),
-    ];
-    if let Some(affines) = &affines_list {
-        per_image_lens.push(("affines_list", affines.len()));
-    }
-    let cam_idx = check_batch_indexes(
-        &pairs,
-        &cam_idx_data,
-        &per_image_lens,
-        &[
-            ("intrinsics", intrinsics.len()),
-            ("widths", widths.len()),
-            ("heights", heights.len()),
-        ],
-    )?;
-
     // Get contiguous data for positions and descriptors
     let pos_cows: Vec<Cow<[f64]>> = positions_list.iter().map(|p| to_contiguous!(p)).collect();
     let desc_cows: Vec<Cow<[u8]>> = descriptors_list.iter().map(|d| to_contiguous!(d)).collect();
     let pos_slices: Vec<&[f64]> = pos_cows.iter().map(|c| c.as_ref()).collect();
     let desc_slices: Vec<&[u8]> = desc_cows.iter().map(|c| c.as_ref()).collect();
     let num_feats: Vec<usize> = positions_list.iter().map(|p| p.shape()[0]).collect();
-    let desc_len = if descriptors_list.is_empty() {
-        128
-    } else {
-        descriptors_list[0].shape()[1]
-    };
 
     // Handle optional affines
     let aff_cows: Option<Vec<Cow<[f64]>>> = affines_list
@@ -251,7 +299,7 @@ pub fn match_image_pairs_batch_py(
 
     // Release the GIL so Rayon threads can run in parallel
     py.detach(|| {
-        Ok(feature_match::match_image_pairs_batch(
+        feature_match::match_image_pairs_batch(
             &pairs,
             &k_mats,
             &r_mats,
@@ -268,12 +316,35 @@ pub fn match_image_pairs_batch_py(
             rectification_margin,
             aff_ref,
             geo_config.as_ref(),
-        ))
+        )
     })
+    .map_err(value_err)
 }
 
-/// Checks the index arguments of `match_image_pairs_batch` before the core
-/// indexes with them, and returns the camera indexes as `usize`.
+/// `Err(ValueError)` naming `name` unless `shape` is `expected`.
+fn check_shape(name: &str, shape: &[usize], expected: &[usize]) -> PyResult<()> {
+    if shape == expected {
+        return Ok(());
+    }
+    let show = |s: &[usize]| match s {
+        [n] => format!("({n},)"),
+        _ => format!(
+            "({})",
+            s.iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    Err(PyValueError::new_err(format!(
+        "{name} has shape {} but must have shape {}",
+        show(shape),
+        show(expected)
+    )))
+}
+
+/// Checks the index arguments of `match_image_pairs_batch` with the
+/// binding's argument names, and returns the camera indexes as `usize`.
 ///
 /// `per_image` and `per_camera` are `(argument name, length)` lists whose
 /// lengths must agree with `camera_indices` and with each other.
@@ -283,8 +354,6 @@ fn check_batch_indexes(
     per_image: &[(&str, usize)],
     per_camera: &[(&str, usize)],
 ) -> PyResult<Vec<usize>> {
-    use pyo3::exceptions::PyValueError;
-
     let n_images = camera_indices.len();
     for &(name, len) in per_image {
         if len != n_images {
