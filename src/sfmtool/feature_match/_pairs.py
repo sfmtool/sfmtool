@@ -62,12 +62,12 @@ def pairs_from_matches(data: dict, sift_paths: list[Path] | None = None) -> dict
                 f"sift_paths has {len(sift_paths)} entries for "
                 f"{len(feature_counts)} images"
             )
-        from ..sift.file import SiftReader
+        from ..fileio import SiftFile
 
         descriptors = []
         for i, sift_path in enumerate(sift_paths):
             count = int(feature_counts[i])
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 desc = reader.read_descriptors(count=count)
             if len(desc) < count:
                 raise ValueError(

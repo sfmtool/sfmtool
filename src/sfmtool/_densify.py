@@ -24,7 +24,8 @@ from ._image_pair_graph import (
     build_covisibility_pairs,
     build_frustum_intersection_pairs,
 )
-from .sift.file import SiftReader, get_sift_path_for_image
+from .sift.file import get_sift_path_for_image
+from .fileio import SiftFile
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
 from ._sfmtool.spatial import KdTree3d
@@ -108,14 +109,14 @@ def _match_single_pair(
     sift_path_i = get_sift_path_for_image(image_path_i)
     sift_path_j = get_sift_path_for_image(image_path_j)
 
-    with SiftReader(sift_path_i) as reader_i:
+    with SiftFile(sift_path_i) as reader_i:
         pos_i = reader_i.read_positions(count=max_features)
         desc_i = reader_i.read_descriptors(count=max_features)
         if geometric_config is not None and geometric_config.enable_geometric_filtering:
             affine_i = reader_i.read_affine_shapes(count=max_features)
         else:
             affine_i = None
-    with SiftReader(sift_path_j) as reader_j:
+    with SiftFile(sift_path_j) as reader_j:
         pos_j = reader_j.read_positions(count=max_features)
         desc_j = reader_j.read_descriptors(count=max_features)
         if geometric_config is not None and geometric_config.enable_geometric_filtering:
@@ -254,7 +255,7 @@ def triangulate_new_tracks(
             image_path = workspace_dir / img.name
             sift_path = get_sift_path_for_image(image_path)
 
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 keypoints = reader.read_positions(count=max_features)
                 descriptors = reader.read_descriptors(count=max_features)
 

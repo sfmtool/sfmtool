@@ -41,7 +41,7 @@ from sfmtool.matching import (
     background_floor_clusters_kdf,
 )
 from sfmtool.spatial import KdForest, write_kdf
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 KIB = 1 << 10
 MIB = 1 << 20
@@ -119,7 +119,7 @@ def load_corpus(features: Path, limit: int | None) -> tuple[np.ndarray, np.ndarr
     files = sorted(features.glob("*.sift"))
     blocks, starts = [], [0]
     for path in files:
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         desc = reader.read_descriptors()
         reader.close()
         blocks.append(desc)

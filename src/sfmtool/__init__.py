@@ -42,11 +42,14 @@ _LAZY_NAMES = {
         "init_workspace",
         "load_workspace_config",
     ),
-    "sfmtool.sift.file": (
+    "sfmtool.sift.draw": ("draw_sift_features",),
+    "sfmtool.sift.extract": (
         "SiftExtractionError",
-        "SiftReader",
+        "image_files_to_sift_files",
+        "image_files_to_sift_files_opencv",
+    ),
+    "sfmtool.sift.file": (
         "compute_orientation",
-        "draw_sift_features",
         "feature_size",
         "feature_size_x",
         "feature_size_y",
@@ -54,9 +57,6 @@ _LAZY_NAMES = {
         "get_feature_type_for_tool",
         "get_sift_path_for_image",
         "get_used_features_from_reconstruction",
-        "image_files_to_sift_files",
-        "image_files_to_sift_files_opencv",
-        "write_sift",
         "xxh128_of_file",
     ),
     "sfmtool.sift.extract_colmap": (
@@ -132,11 +132,14 @@ if TYPE_CHECKING:
         get_default_opencv_feature_options,
         opencv_keypoint_to_affine_shape,
     )
-    from sfmtool.sift.file import (  # noqa: F401
+    from sfmtool.sift.draw import draw_sift_features  # noqa: F401
+    from sfmtool.sift.extract import (  # noqa: F401
         SiftExtractionError,
-        SiftReader,
+        image_files_to_sift_files,
+        image_files_to_sift_files_opencv,
+    )
+    from sfmtool.sift.file import (  # noqa: F401
         compute_orientation,
-        draw_sift_features,
         feature_size,
         feature_size_x,
         feature_size_y,
@@ -144,9 +147,6 @@ if TYPE_CHECKING:
         get_feature_type_for_tool,
         get_sift_path_for_image,
         get_used_features_from_reconstruction,
-        image_files_to_sift_files,
-        image_files_to_sift_files_opencv,
-        write_sift,
         xxh128_of_file,
     )
 del TYPE_CHECKING

@@ -12,9 +12,10 @@ header reads `image_dimensions` and `image_has_alpha`, and
 
 This module is the public home of the `sfmtool._sfmtool.fileio` bindings. It
 is named `fileio` rather than `io` so that `from sfmtool import *` does not
-replace the standard library's `io` in the importing namespace. Its
-`write_sift` writes the dict it is given; `sfmtool.write_sift` checks its
-arguments first and then calls it.
+replace the standard library's `io` in the importing namespace. Each format is
+read and written through these bindings directly, with no Python wrapper:
+`SiftFile` and `MatchesFile` open a `.sift` and a `.matches` file, and the
+writers check their own arguments.
 """
 
 from ._sfmtool.fileio import *  # noqa: F401, F403

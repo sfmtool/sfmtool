@@ -71,7 +71,8 @@ def _refine_single_camera_pose(
     """
     import pycolmap
 
-    from ..sift.file import SiftReader, get_sift_path_for_image
+    from ..sift.file import get_sift_path_for_image
+    from ..fileio import SiftFile
 
     if len(observations) < 4:
         return img_idx, original_quat, original_trans, "no_observations", 0.0, 0.0, 0, 0
@@ -84,7 +85,7 @@ def _refine_single_camera_pose(
             feature_tool=feature_tool,
             feature_options=feature_options,
         )
-        sift_reader = SiftReader(sift_path)
+        sift_reader = SiftFile(sift_path)
         positions_2d = sift_reader.read_positions()
         sift_reader.close()
         io_time = time.perf_counter() - io_start

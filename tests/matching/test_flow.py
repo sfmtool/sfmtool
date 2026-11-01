@@ -471,7 +471,7 @@ class TestFlowE2E:
         workspace_dir = image_paths[0].parent
 
         from sfmtool import init_workspace
-        from sfmtool.sift.file import image_files_to_sift_files
+        from sfmtool.sift.extract import image_files_to_sift_files
 
         init_workspace(workspace_dir, domain_size_pooling=True)
         sift_paths = image_files_to_sift_files(image_paths, feature_tool="colmap")

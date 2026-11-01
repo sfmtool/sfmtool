@@ -10,7 +10,7 @@ from sfmtool.matching import (
     descriptor_distance as rust_descriptor_distance,
     find_best_descriptor_match as rust_find_best_match,
 )
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 
 class TestDescriptorDistance:
@@ -139,7 +139,7 @@ class TestDescriptorMatchingOnRealData:
 
         features = []
         for sf in sift_files[:2]:
-            with SiftReader(sf) as r:
+            with SiftFile(sf) as r:
                 features.append(
                     {
                         "positions": r.read_positions(),

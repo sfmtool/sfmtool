@@ -42,7 +42,7 @@ from sfmtool.spatial import (
     kdf_file_summary,
     write_kdf,
 )
-from sfmtool.sift.file import SiftReader
+from sfmtool.fileio import SiftFile
 
 KIB = 1 << 10
 MIB = 1 << 20
@@ -101,7 +101,7 @@ def load_corpus(features: Path):
     position_blocks = []
     affine_blocks = []
     for path in files:
-        reader = SiftReader(path)
+        reader = SiftFile(path)
         blocks.append(reader.read_descriptors())
         positions, affines = reader.read_positions_and_shapes()
         position_blocks.append(positions)

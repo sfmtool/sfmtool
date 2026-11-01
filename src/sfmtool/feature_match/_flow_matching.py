@@ -33,7 +33,7 @@ from .._sfmtool.flow import (
 from .._sfmtool.matching import (
     match_candidates_by_descriptor as _rust_match_candidates,
 )
-from ..sift.file import SiftReader
+from ..fileio import SiftFile
 
 
 _SPATIAL_CANDIDATES_K = 5
@@ -154,7 +154,7 @@ def _load_features(
     sift_path: Path, max_feature_count: int | None
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load SIFT positions and descriptors from a .sift file."""
-    with SiftReader(sift_path) as reader:
+    with SiftFile(sift_path) as reader:
         positions = reader.read_positions(count=max_feature_count)
         descriptors = reader.read_descriptors(count=max_feature_count)
     return positions, descriptors

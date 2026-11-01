@@ -154,7 +154,8 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
 def print_sift_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sift` feature file."""
     from .._sfmtool.fileio import read_sift_metadata, verify_sift
-    from ..sift.file import SiftReader, feature_size_x, feature_size_y
+    from ..sift.file import feature_size_x, feature_size_y
+    from ..fileio import SiftFile
 
     valid, errors = verify_sift(str(path))
     info = read_sift_metadata(str(path))
@@ -187,7 +188,7 @@ def print_sift_summary(path: Path, verbose: bool = False) -> None:
             ]
         )
         click.echo("\nTop 5 features (by size):")
-        with SiftReader(path) as reader:
+        with SiftFile(path) as reader:
             positions = reader.read_positions(count=5)
             affine_shapes = reader.read_affine_shapes(count=5)
         sizes_x = feature_size_x(affine_shapes)

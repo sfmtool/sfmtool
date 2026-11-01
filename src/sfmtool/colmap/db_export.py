@@ -11,7 +11,8 @@ from pathlib import Path
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._filenames import normalize_workspace_path
 from .._image_pair_graph import build_covisibility_pairs
-from ..sift.file import SiftReader, image_files_to_sift_files
+from ..fileio import SiftFile
+from ..sift.extract import image_files_to_sift_files
 from .._sfmtool.geometry import RotQuaternion
 from .._sfmtool.fileio import write_colmap_db
 
@@ -172,7 +173,7 @@ def create_colmap_db_from_reconstruction(
     keypoints_per_image = []
     descriptors_per_image = []
     for i, sift_path in enumerate(sift_paths):
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             keypoints = reader.read_positions(count=max_feature_count)
             descriptors = reader.read_descriptors(count=max_feature_count)
             keypoints_per_image.append(keypoints.astype(np.float64))

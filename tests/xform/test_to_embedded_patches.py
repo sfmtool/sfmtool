@@ -20,7 +20,8 @@ from click.testing import CliRunner
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.fileio import verify_sfmr
 from sfmtool.cli import main
-from sfmtool.sift.file import SiftReader, get_sift_path_from_recon
+from sfmtool.sift.file import get_sift_path_from_recon
+from sfmtool.fileio import SiftFile
 from sfmtool.xform import ToEmbeddedPatchesTransform
 
 from .conftest import apply_transforms_to_file
@@ -57,13 +58,13 @@ def test_to_embedded_patches_copies_sift_keypoints(
     for j in sample.tolist():
         img, feat = int(rec_img[j]), int(rec_feat[j])
         if img not in pos_cache:
-            sr = SiftReader(get_sift_path_from_recon(recon, recon.image_names[img]))
+            sr = SiftFile(get_sift_path_from_recon(recon, recon.image_names[img]))
             pos_cache[img] = np.asarray(sr.read_positions(), dtype=np.float32)
         np.testing.assert_allclose(kxy[j], pos_cache[img][feat], atol=1e-4)
 
     # Each image hash is the .sift's recorded image_file_xxh128 (no re-hashing).
     for i, name in enumerate(recon.image_names):
-        sr = SiftReader(get_sift_path_from_recon(recon, name))
+        sr = SiftFile(get_sift_path_from_recon(recon, name))
         expected = bytes.fromhex(sr.metadata["image_file_xxh128"])
         assert bytes(emb.image_file_hashes[i]) == expected
 

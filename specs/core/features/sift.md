@@ -747,7 +747,9 @@ comparing the content hashes of the files the two write for the same images:
   photograph at least 128 pixels on each side. A smaller photograph is enlarged
   on its short axis, which OpenCV does by bilinear interpolation, and its
   thumbnail can differ from the Python one by a few levels.
-- The file is written by `sfmtool_sift_format::write_sift` at zstd level 5.
+- The file is written by `sfmtool_sift_format::write_sift` at
+  `SIFT_ZSTD_LEVEL`, 5, the level the format crate declares and the Python
+  bindings default to.
 
 It runs images concurrently in the way the Python backend does (see
 [`sfm sift` § Extraction-orchestration

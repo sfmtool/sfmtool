@@ -9,21 +9,22 @@ import pytest
 
 from sfmtool.fileio import read_image_rgb, write_image_rgb
 from sfmtool.sift.file import (
-    SiftExtractionError,
-    SiftReader,
     compute_orientation,
-    draw_sift_features,
     feature_size,
     feature_size_x,
     feature_size_y,
     get_feature_tool_xxh128,
     get_feature_type_for_tool,
     get_sift_path_for_image,
-    image_files_to_sift_files,
-    image_files_to_sift_files_opencv,
-    write_sift,
     xxh128_of_file,
 )
+from sfmtool.sift.extract import (
+    SiftExtractionError,
+    image_files_to_sift_files,
+    image_files_to_sift_files_opencv,
+)
+from sfmtool.fileio import SiftFile, write_sift
+from sfmtool.sift.draw import draw_sift_features
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
 from sfmtool.sift.extract_opencv import (
     get_default_opencv_feature_options,
@@ -46,15 +47,17 @@ def test_sift_write_read_roundtrip(sample_sift_data, tmp_path):
 
     write_sift(
         sift_filename,
-        feature_tool_metadata,
-        metadata,
-        position,
-        affine_shape,
-        descriptor,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": position,
+            "affine_shapes": affine_shape,
+            "descriptors": descriptor,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
-    with SiftReader(sift_filename) as reader:
+    with SiftFile(sift_filename) as reader:
         assert reader.metadata == metadata
 
         read_position, read_affine_shape = reader.read_positions_and_shapes()
@@ -78,15 +81,17 @@ def test_sift_reader_partial_read(sample_sift_data, tmp_path):
     sift_filename = tmp_path / "test.sift"
     write_sift(
         sift_filename,
-        feature_tool_metadata,
-        metadata,
-        position,
-        affine_shape,
-        descriptor,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": position,
+            "affine_shapes": affine_shape,
+            "descriptors": descriptor,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
-    with SiftReader(sift_filename) as reader:
+    with SiftFile(sift_filename) as reader:
         read_position, read_affine_shape = reader.read_positions_and_shapes(
             count=read_count
         )
@@ -111,15 +116,17 @@ def test_sift_reader_partial_read_oversize(sample_sift_data, tmp_path):
     sift_filename = tmp_path / "test.sift"
     write_sift(
         sift_filename,
-        feature_tool_metadata,
-        metadata,
-        position,
-        affine_shape,
-        descriptor,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": position,
+            "affine_shapes": affine_shape,
+            "descriptors": descriptor,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
-    with SiftReader(sift_filename) as reader:
+    with SiftFile(sift_filename) as reader:
         read_position = reader.read_positions(count=read_count)
         assert read_position.shape[0] == metadata["feature_count"]
         np.testing.assert_array_equal(position, read_position)
@@ -130,99 +137,116 @@ def test_sift_reader_partial_read_oversize(sample_sift_data, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_write_sift_validation(sample_sift_data, tmp_path):
-    """write_sift raises ValueErrors for invalid inputs."""
+def _sift_data_dict(sample_sift_data):
     feature_tool_metadata, metadata, position, affine_shape, descriptor, thumbnail = (
         sample_sift_data
     )
+    return {
+        "feature_tool_metadata": dict(feature_tool_metadata),
+        "metadata": dict(metadata),
+        "positions_xy": position,
+        "affine_shapes": affine_shape,
+        "descriptors": descriptor,
+        "thumbnail_y_x_rgb": thumbnail,
+    }
 
-    tmp_sift_filename = tmp_path / "test.sift"
 
-    # Missing metadata key
-    bad_metadata = metadata.copy()
-    del bad_metadata["image_width"]
-    with pytest.raises(ValueError, match="Missing: image_width"):
-        write_sift(
-            tmp_sift_filename,
-            feature_tool_metadata,
-            bad_metadata,
-            position,
-            affine_shape,
-            descriptor,
-            thumbnail,
-        )
+def _drop_image_width(data):
+    del data["metadata"]["image_width"]
 
-    # Extra metadata key
-    bad_metadata = metadata.copy()
-    bad_metadata["extra_field"] = "bad"
-    with pytest.raises(ValueError, match="Extra: extra_field"):
-        write_sift(
-            tmp_sift_filename,
-            feature_tool_metadata,
-            bad_metadata,
-            position,
-            affine_shape,
-            descriptor,
-            thumbnail,
-        )
 
-    # Wrong metadata type
-    bad_metadata = metadata.copy()
-    bad_metadata["feature_count"] = "100"
+def _add_metadata_key(data):
+    data["metadata"]["extra_field"] = "bad"
+
+
+def _add_feature_tool_key(data):
+    data["feature_tool_metadata"]["feature_version"] = 2
+
+
+def _feature_count_as_str(data):
+    data["metadata"]["feature_count"] = "100"
+
+
+def _negative_image_width(data):
+    data["metadata"]["image_width"] = -1
+
+
+def _unsupported_version(data):
+    data["metadata"]["version"] = 2
+
+
+def _feature_options_list(data):
+    data["feature_tool_metadata"]["feature_options"] = ["a"]
+
+
+def _fewer_positions(data):
+    data["positions_xy"] = data["positions_xy"][:10]
+
+
+def _one_column_positions(data):
+    data["positions_xy"] = np.zeros(
+        (data["metadata"]["feature_count"], 1), dtype=np.float32
+    )
+
+
+def _count_above_rows(data):
+    data["metadata"]["feature_count"] += 1
+
+
+@pytest.mark.parametrize(
+    "corrupt, message",
+    [
+        (_drop_image_width, "metadata: missing field `image_width`"),
+        (_add_metadata_key, "metadata: unknown field `extra_field`"),
+        (_add_feature_tool_key, "feature_tool_metadata: unknown field"),
+        (_feature_count_as_str, "metadata: invalid type: string"),
+        (_negative_image_width, "metadata: invalid value: integer `-1`"),
+        (_unsupported_version, "unsupported .sift format version 2"),
+        (_feature_options_list, "feature_options must be a JSON object"),
+        (_fewer_positions, r"positions_xy shape \[10, 2\] != \[100, 2\]"),
+        (_one_column_positions, r"positions_xy shape \[100, 1\] != \[100, 2\]"),
+        (_count_above_rows, r"positions_xy shape \[100, 2\] != \[101, 2\]"),
+    ],
+)
+def test_write_sift_validation(sample_sift_data, tmp_path, corrupt, message):
+    """write_sift raises ValueError, and writes nothing, for data the format
+    does not allow."""
+    data = _sift_data_dict(sample_sift_data)
+    corrupt(data)
+    path = tmp_path / "test.sift"
+    with pytest.raises(ValueError, match=message):
+        write_sift(path, data)
+    assert not path.exists()
+
+
+def test_write_sift_wrong_dtype_is_a_type_error(sample_sift_data, tmp_path):
+    """An array of the wrong dtype raises TypeError naming its key."""
+    data = _sift_data_dict(sample_sift_data)
+    data["descriptors"] = data["descriptors"].astype(np.float32)
     with pytest.raises(
-        ValueError, match="has type <class 'str'>, expected <class 'int'>"
+        TypeError, match=r"descriptors must be a \(N, 128\) uint8 .*float32"
     ):
-        write_sift(
-            tmp_sift_filename,
-            feature_tool_metadata,
-            bad_metadata,
-            position,
-            affine_shape,
-            descriptor,
-            thumbnail,
-        )
+        write_sift(tmp_path / "test.sift", data)
 
-    # Mismatched feature counts
-    with pytest.raises(ValueError, match="Lengths of input arrays don't match"):
-        write_sift(
-            tmp_sift_filename,
-            feature_tool_metadata,
-            metadata,
-            position[:10],
-            affine_shape,
-            descriptor,
-            thumbnail,
-        )
+    data = _sift_data_dict(sample_sift_data)
+    data["positions_xy"] = data["positions_xy"].tolist()
+    with pytest.raises(TypeError, match="positions_xy must be a"):
+        write_sift(tmp_path / "test.sift", data)
 
-    # Wrong position shape
-    bad_position = np.zeros((metadata["feature_count"], 1), dtype=np.float32)
-    with pytest.raises(
-        ValueError,
-        match="Data shape .* does not match required feature count and element shape",
-    ):
-        write_sift(
-            tmp_sift_filename,
-            feature_tool_metadata,
-            metadata,
-            bad_position,
-            affine_shape,
-            descriptor,
-            thumbnail,
-        )
 
-    # Wrong descriptor dtype
-    with pytest.raises(
-        ValueError, match="Data dtype .* does not match required element dtype"
-    ):
-        write_sift(
-            tmp_sift_filename,
-            feature_tool_metadata,
-            metadata,
-            position,
-            affine_shape,
-            descriptor.astype(np.float32),
-            thumbnail,
-        )
+def test_write_sift_missing_key_is_a_key_error(sample_sift_data, tmp_path):
+    data = _sift_data_dict(sample_sift_data)
+    del data["affine_shapes"]
+    with pytest.raises(KeyError, match="affine_shapes"):
+        write_sift(tmp_path / "test.sift", data)
+
+
+def test_write_sift_io_failure_is_an_os_error(sample_sift_data, tmp_path):
+    """A write that fails for want of a directory is an OSError, not a
+    ValueError."""
+    data = _sift_data_dict(sample_sift_data)
+    with pytest.raises(OSError):
+        write_sift(tmp_path / "no_such_dir" / "test.sift", data)
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +600,7 @@ def test_opencv_features_sorted_by_size(tmp_path):
 
 
 def test_opencv_extraction_roundtrip(tmp_path):
-    """OpenCV extraction → write_sift → SiftReader roundtrip."""
+    """OpenCV extraction → write_sift → SiftFile roundtrip."""
     from sfmtool.sift.extract_opencv import extract_sift_with_opencv
 
     image_path = tmp_path / "test_image.jpg"
@@ -596,15 +620,17 @@ def test_opencv_extraction_roundtrip(tmp_path):
     sift_filename = tmp_path / "opencv_test.sift"
     write_sift(
         sift_filename,
-        feature_tool_metadata,
-        metadata,
-        positions,
-        affine_shapes,
-        descriptors,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": positions,
+            "affine_shapes": affine_shapes,
+            "descriptors": descriptors,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
-    with SiftReader(sift_filename) as reader:
+    with SiftFile(sift_filename) as reader:
         assert reader.metadata == metadata
         assert reader.feature_tool_metadata["feature_tool"] == "opencv"
         read_positions, read_affine_shapes = reader.read_positions_and_shapes()
@@ -629,7 +655,7 @@ def test_image_files_to_sift_files_opencv(tmp_path):
     assert sift_files[0].suffix == ".sift"
     assert "sift-opencv" in str(sift_files[0].parent)
 
-    with SiftReader(sift_files[0]) as reader:
+    with SiftFile(sift_files[0]) as reader:
         assert reader.feature_tool_metadata["feature_tool"] == "opencv"
         assert reader.metadata["feature_count"] > 0
 
@@ -739,15 +765,17 @@ def test_thumbnail_size_is_what_the_format_stores(sample_sift_data, tmp_path):
     sift_filename = tmp_path / "thumb.sift"
     write_sift(
         sift_filename,
-        feature_tool_metadata,
-        metadata,
-        position,
-        affine_shape,
-        descriptor,
-        thumbnail,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": position,
+            "affine_shapes": affine_shape,
+            "descriptors": descriptor,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
     )
 
-    with SiftReader(sift_filename) as reader:
+    with SiftFile(sift_filename) as reader:
         assert reader.read_thumbnail().shape == (THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)
 
 
@@ -760,13 +788,15 @@ def test_thumbnail_rejects_a_size_other_than_the_constant(sample_sift_data, tmp_
     )
     wrong = np.zeros((THUMBNAIL_SIZE // 2, THUMBNAIL_SIZE, 3), dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="Thumbnail shape"):
+    with pytest.raises(ValueError, match="thumbnail_y_x_rgb shape"):
         write_sift(
             tmp_path / "wrong.sift",
-            feature_tool_metadata,
-            metadata,
-            position,
-            affine_shape,
-            descriptor,
-            wrong,
+            {
+                "feature_tool_metadata": feature_tool_metadata,
+                "metadata": metadata,
+                "positions_xy": position,
+                "affine_shapes": affine_shape,
+                "descriptors": descriptor,
+                "thumbnail_y_x_rgb": wrong,
+            },
         )

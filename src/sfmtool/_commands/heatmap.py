@@ -11,7 +11,8 @@ import numpy as np
 
 from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
-from ..sift.file import SiftReader, get_sift_path_for_image
+from ..sift.file import get_sift_path_for_image
+from ..fileio import SiftFile
 from ..visualization import render_heatmap_overlay
 from ..visualization._heatmap_renderer import compute_triangulation_angles
 
@@ -202,7 +203,7 @@ def heatmap(
             if not sift_path.exists():
                 raise FileNotFoundError(f"SIFT file not found: {sift_path}")
 
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 all_positions = reader.read_positions()
 
             # Get tracked features for this image

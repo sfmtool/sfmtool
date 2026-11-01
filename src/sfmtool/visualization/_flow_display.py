@@ -22,7 +22,8 @@ from .._sfmtool.flow import (
 )
 from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from .._histogram_utils import print_histogram
-from ..sift.file import SiftReader, get_sift_path_for_image
+from ..sift.file import get_sift_path_for_image
+from ..fileio import SiftFile
 from ._common import get_color_palette
 
 if TYPE_CHECKING:
@@ -236,9 +237,9 @@ def draw_flow_visualization(
     if not sift2_path.exists():
         raise FileNotFoundError(f"SIFT file not found: {sift2_path}")
 
-    with SiftReader(sift1_path) as reader:
+    with SiftFile(sift1_path) as reader:
         positions1 = reader.read_positions()
-    with SiftReader(sift2_path) as reader:
+    with SiftFile(sift2_path) as reader:
         positions2 = reader.read_positions()
 
     print(f"  Image 1: {len(positions1)} keypoints")
@@ -283,9 +284,9 @@ def draw_flow_visualization(
         print_histogram(hit_dist_arr, "Advection hit distance (px)")
 
         # Compute descriptor distances for hit pairs
-        with SiftReader(sift1_path) as reader:
+        with SiftFile(sift1_path) as reader:
             descriptors1 = reader.read_descriptors()
-        with SiftReader(sift2_path) as reader:
+        with SiftFile(sift2_path) as reader:
             descriptors2 = reader.read_descriptors()
 
         idx1 = np.array([p[0] for p in hit_pairs])

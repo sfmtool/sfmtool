@@ -13,7 +13,8 @@ import pycolmap
 
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._sfmtool.fileio import read_image_rgb, write_image_rgb
-from ..sift.file import SiftReader, get_sift_path_for_image
+from ..sift.file import get_sift_path_for_image
+from ..fileio import SiftFile
 from .._sfmtool.analysis import epipolar_curves
 from .._sfmtool.geometry import RotQuaternion
 from ._common import get_color_palette
@@ -359,11 +360,11 @@ def _sweep_matches(
     max_features: int | None,
 ) -> _SweepResult:
     """Match the first `sweep_max_features` features of each image by sort-and-sweep."""
-    with SiftReader(sift1_path) as reader:
+    with SiftFile(sift1_path) as reader:
         positions1 = reader.read_positions(count=sweep_max_features)
         descriptors1 = reader.read_descriptors(count=sweep_max_features)
 
-    with SiftReader(sift2_path) as reader:
+    with SiftFile(sift2_path) as reader:
         positions2 = reader.read_positions(count=sweep_max_features)
         descriptors2 = reader.read_descriptors(count=sweep_max_features)
 
@@ -733,9 +734,9 @@ def draw_epipolar_visualization(
         feature_pairs, track_point_indexes = _shared_track_pairs(
             recon, image1_idx, image2_idx, image1_name, image2_name, max_features
         )
-        with SiftReader(sift1_path) as reader:
+        with SiftFile(sift1_path) as reader:
             positions1 = reader.read_positions()
-        with SiftReader(sift2_path) as reader:
+        with SiftFile(sift2_path) as reader:
             positions2 = reader.read_positions()
 
     colors = get_color_palette(len(feature_pairs))

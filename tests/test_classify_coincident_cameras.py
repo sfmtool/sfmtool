@@ -27,7 +27,8 @@ import pytest
 
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.geometry import RigidTransform
-from sfmtool.sift.file import get_sift_path_from_recon, read_sift_partial
+from sfmtool.sift.file import get_sift_path_from_recon
+from sfmtool.fileio import read_sift_partial
 
 
 def _world_to_camera_rotation(quaternion_wxyz: np.ndarray) -> np.ndarray:

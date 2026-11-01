@@ -9,11 +9,8 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
-from sfmtool.sift.file import (
-    SiftReader,
-    get_feature_tool_xxh128,
-    get_feature_type_for_tool,
-)
+from sfmtool.sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
+from sfmtool.fileio import SiftFile
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
 
 # Compute the hash of the default feature tool metadata (COLMAP without DSP)
@@ -75,7 +72,7 @@ def test_sift_cli_with_file(isolated_seoul_bull_image: Path, provide_dir: bool):
 
     assert expected_sift_path.exists()
     assert expected_sift_path.is_file()
-    with SiftReader(expected_sift_path) as reader:
+    with SiftFile(expected_sift_path) as reader:
         assert reader.metadata["image_name"] == isolated_seoul_bull_image.name
 
     # Run the command a second time, and it should leave the .sift file untouched
@@ -131,7 +128,7 @@ def test_sift_cli_sfmtool_backend(isolated_seoul_bull_image: Path):
     assert "New SIFT feature extraction (SFMTOOL): 1 / 1 image(s)" in result.output
 
     assert expected_sift_path.is_file()
-    with SiftReader(expected_sift_path) as reader:
+    with SiftFile(expected_sift_path) as reader:
         assert reader.metadata["image_name"] == isolated_seoul_bull_image.name
         assert reader.metadata["feature_count"] > 0
         assert reader.feature_tool_metadata["feature_tool"] == "sfmtool"
@@ -177,7 +174,7 @@ def test_sfmtool_backend_propagates_decode_error(isolated_seoul_bull_image: Path
         extract_sift_with_sfmtool,
         get_default_sfmtool_feature_options,
     )
-    from sfmtool.sift.file import SiftExtractionError
+    from sfmtool.sift.extract import SiftExtractionError
 
     bad_path = isolated_seoul_bull_image.parent / "not_an_image.jpg"
     bad_path.write_bytes(b"this is not a valid image")
@@ -282,7 +279,7 @@ def test_stream_raises_error_in_input_order_not_completion_order(monkeypatch):
     1 before raising, and must never reach image 3 past the failure.
     """
     from sfmtool.sift import extract_sfmtool
-    from sfmtool.sift.file import SiftExtractionError
+    from sfmtool.sift.extract import SiftExtractionError
 
     count = 4
     monkeypatch.setenv("SFMTOOL_SIFT_EXTRACT_WORKERS", str(count))
@@ -322,14 +319,15 @@ def test_sift_write_queue_writes_and_propagates_errors(
     This is the mechanism that overlaps a save with the next image's extract:
     submit() spawns the compression onto the shared rayon pool, join() awaits
     it. A good path produces a readable .sift; a save into a missing directory
-    surfaces as an IOError from join().
+    surfaces as an OSError from join(), and from the end of a `with` block;
+    data the format refuses is a ValueError from submit() itself.
     """
     from sfmtool.fileio import SiftWriteQueue
     from sfmtool.sift.extract_sfmtool import (
         extract_sift_with_sfmtool,
         get_default_sfmtool_feature_options,
     )
-    from sfmtool.sift.file import _validate_sift_write
+    from sfmtool.sift.extract import _SIFT_DATA_KEYS
 
     result = next(
         iter(
@@ -338,16 +336,16 @@ def test_sift_write_queue_writes_and_propagates_errors(
             )
         )
     )
-    data = _validate_sift_write(*result)
+    data = dict(zip(_SIFT_DATA_KEYS, result))
 
     # Good path: the save lands on the pool, join() waits, file is readable.
     queue = SiftWriteQueue()
     good = tmp_path / "ok.sift"
-    queue.submit(str(good), data, 5)
+    queue.submit(good, data)
     assert queue.pending_count == 1
     queue.join()
     assert queue.pending_count == 0
-    with SiftReader(good) as reader:
+    with SiftFile(good) as reader:
         assert reader.metadata["image_name"] == isolated_seoul_bull_image.name
 
     # A save into a nonexistent directory fails; join() reports it in order.
@@ -355,6 +353,40 @@ def test_sift_write_queue_writes_and_propagates_errors(
     bad_queue.submit(str(tmp_path / "missing_dir" / "bad.sift"), data, 5)
     with pytest.raises(OSError):
         bad_queue.join()
+
+    # Refused data raises at submit, before anything is spawned.
+    refused = dict(data, metadata=dict(data["metadata"], extra_field=1))
+    with pytest.raises(ValueError, match="unknown field `extra_field`"):
+        SiftWriteQueue().submit(tmp_path / "refused.sift", refused)
+    assert not (tmp_path / "refused.sift").exists()
+
+    # As a context manager: the lookahead bounds the saves in flight, and a
+    # clean exit joins them.
+    with SiftWriteQueue(lookahead=1) as writer:
+        assert writer.lookahead == 1
+        for i in range(3):
+            writer.submit(tmp_path / f"ctx_{i}.sift", data)
+            assert writer.pending_count == 1
+    assert writer.pending_count == 0
+    for i in range(3):
+        assert SiftFile(tmp_path / f"ctx_{i}.sift").feature_count == len(
+            data["descriptors"]
+        )
+
+    # A clean exit raises the first save error.
+    with pytest.raises(OSError):
+        with SiftWriteQueue() as writer:
+            writer.submit(tmp_path / "missing_dir" / "bad.sift", data)
+
+    # An exit by exception drains instead, and the exception is the one raised.
+    with pytest.raises(RuntimeError, match="extraction failed"):
+        with SiftWriteQueue() as writer:
+            writer.submit(tmp_path / "missing_dir" / "bad.sift", data)
+            raise RuntimeError("extraction failed")
+    assert writer.pending_count == 0
+
+    with pytest.raises(ValueError, match="lookahead"):
+        SiftWriteQueue(lookahead=0)
 
 
 def test_sift_cli_with_empty_directory(tmp_path):

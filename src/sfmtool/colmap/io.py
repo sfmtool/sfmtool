@@ -8,7 +8,8 @@ from pathlib import Path
 import numpy as np
 
 from ..camera.cameras import pycolmap_camera_to_intrinsics
-from ..sift.file import SiftReader, get_sift_path_for_image
+from ..sift.file import get_sift_path_for_image
+from ..fileio import SiftFile
 from .._workspace import find_workspace_for_path, load_workspace_config
 
 
@@ -83,7 +84,7 @@ def _resolve_workspace_and_sift(
         resolved_names.append(posix_path)
 
         sift_path = get_sift_path_for_image(img_abs_path)
-        with SiftReader(sift_path) as reader:
+        with SiftFile(sift_path) as reader:
             ft_hash = reader.content_hash["feature_tool_xxh128"]
             sc_hash = reader.content_hash["content_xxh128"]
             feature_tool_hashes.append(bytes.fromhex(ft_hash))
@@ -925,7 +926,7 @@ def save_colmap_binary(
         for img_name in recon.image_names:
             image_path = Path(workspace_dir) / img_name
             sift_path = get_sift_path_for_image(image_path)
-            with SiftReader(sift_path) as reader:
+            with SiftFile(sift_path) as reader:
                 positions = reader.read_positions(count=max_features)
             keypoints_per_image.append(np.asarray(positions, dtype=np.float64))
         track_feature_indexes = recon.track_feature_indexes

@@ -169,20 +169,24 @@ low-risk overlaps:
   Rust work.
 - **Overlap the save with the next extract — on the rayon pool, not a thread.**
   `image_files_to_sift_files` drains results into a `SiftWriteQueue` (the
-  `_sfmtool.fileio` PyO3 class): `submit` copies the data (GIL held) and `rayon::spawn`s
-  the compression+write onto the **same global pool the extract uses**, then
-  returns; `join_oldest` (bounded look-ahead for backpressure) and `join` await
-  saves and surface their errors in order. The save of image *i* thus overlaps
-  the extract of image *i+1*. This is **unconditional** — no spare-core gate.
-  Backpressure bounds the queue at a **two-save look-ahead** (`write_lookahead`):
-  before each `submit`, if two saves are already in flight the oldest is joined
-  first, so at most ~2 compressed images are buffered. (Distinct from the
-  *extract* concurrency's *K*-image look-ahead above.)
-  The drain is guaranteed on every exit: the write loop's `finally` calls
-  `drain` (a non-raising await of in-flight saves, so it can't mask an
-  exception already unwinding), and `SiftWriteQueue::Drop` awaits any stragglers
-  as a structural backstop — a spawned save never outlives the queue, so an
-  error mid-stream can't leave a half-written `.sift` racing the next step.
+  `sfmtool.fileio` PyO3 class, in
+  [`fileio/sift.rs`](../../../crates/sfmtool-py/src/fileio/sift.rs)): `submit`
+  checks and copies the data (GIL held) and `rayon::spawn`s the
+  compression+write onto the **same global pool the extract uses**, then
+  returns; `join_oldest` and `join` await saves and surface their errors in
+  order. The save of image *i* thus overlaps the extract of image *i+1*. This
+  is **unconditional** — no spare-core gate. Backpressure bounds the queue at a
+  **two-save look-ahead** (the queue's `lookahead`, default 2): `submit` first
+  joins the oldest save when two are already in flight, so at most ~2
+  compressed images are buffered. (Distinct from the *extract* concurrency's
+  *K*-image look-ahead above.)
+  The drain is guaranteed on every exit: the write loop is a `with
+  SiftWriteQueue()` block, whose clean exit calls `join` and whose exit by
+  exception calls `drain` (a non-raising await of in-flight saves, so it can't
+  mask an exception already unwinding), and `SiftWriteQueue::Drop` awaits any
+  stragglers as a structural backstop — a spawned save never outlives the
+  queue, so an error mid-stream can't leave a half-written `.sift` racing the
+  next step.
 
 Why both the decode and the save are worth hiding: they are **fixed per-image
 costs that do not shrink with core count**, while the rayon extract does.
