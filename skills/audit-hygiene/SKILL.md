@@ -267,7 +267,9 @@ worth more than a paragraph.
     lists, and the module each lives in. Report the table even when every
     row is full.
 15. **Documented exceptions** — grep `AGENTS.md`, `specs/` and doc comments
-    for "the exception", "except for", "unlike the others" and "the one".
+    for "the exception", "exception to", "except for", "unlike the others"
+    and "the one … that does not" (``the one [a-z_` ]* that (does|is) not``;
+    a bare "the one" matches over a thousand lines).
     Feeds STANDARDS.md § "A convention has no documented exceptions".
 
 ## Output

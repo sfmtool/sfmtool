@@ -302,8 +302,9 @@ and hosts the pictures:
 > against the code before using it. Update the spec for the area when
 > behaviour diverges from it, but never write a spec or doc sentence that
 > describes a breach of a standard (a panic on caller input, an exception to a
-> rule, a Python wrapper over a binding); fix the code instead. Before shrinking a comment that repeats a spec,
-> move any fact found only in the comment into the spec. When moving or
+> rule, a Python wrapper over a binding); fix the code instead. Before
+> shrinking a comment that repeats a spec, move any fact found only in the
+> comment into the spec. When moving or
 > renaming a section, fix every link and `#anchor` that pointed at it, in
 > specs, docs and code comments (the spec-link test does not check anchors).
 > Add a test when code behaviour changes. Every assertion in an added or

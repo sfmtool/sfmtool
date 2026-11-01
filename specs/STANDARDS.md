@@ -3,9 +3,10 @@
 The rules every library function, binding, Python module, test and spec in
 sfmtool is held to, whatever module it is in. Each section states one standard:
 the rule, why it exists, how to check code against it and what is out of scope.
-Every audit skill checks against this file, and every implementer and auditor
-agent that makes or reviews a change reads it, so the audit that writes a
-finding and the agents that fix it work from the same text. A finding or a fix
+The `audit-hygiene` and `audit-specs` skills check against this file, and
+every implementer and auditor agent that makes or reviews a change reads it,
+so the audit that writes a finding and the agents that fix it work from the
+same text. A finding or a fix
 names the standard it concerns by its heading, as a link such as
 `specs/STANDARDS.md#caller-input-never-panics`; keep the headings stable for
 that reason.
@@ -151,7 +152,9 @@ steps into a pipeline, such as an extraction run or a solve.
 
 ## Every file format has the same I/O shape
 
-Every on-disk format's I/O is in `sfmtool.fileio` and has the same shape:
+Every sfmtool on-disk format, one per format crate (`.sfmr`, `.sift`,
+`.matches`, `.camrig`, `.kdf`), has its I/O in `sfmtool.fileio` in the same
+shape:
 `read_<fmt>`, `read_<fmt>_metadata`, `write_<fmt>` and `verify_<fmt>`, plus a
 Rust file class where a reader needs one (`MatchesFile`, `SiftFile`). The
 format crate validates what is read and written; the binding converts types
@@ -162,7 +165,9 @@ caller of it.
 Tabulate the functions per format and report a format whose I/O lacks one of
 them, lives in another module, has a Python reader or writer class, or
 validates in Python or in the binding rather than in the format crate. Out of
-scope: a function that only one format needs, such as `read_sift_partial`.
+scope: a function that only one format needs, such as `read_sift_partial`, and
+formats sfmtool reads or writes but does not define (COLMAP's binary model and
+database, image files).
 
 ## A convention has no documented exceptions
 
@@ -172,8 +177,8 @@ one module is "the exception" to a rule. This exists because a written
 exception is read as permission: the next module copies it, and the rule stops
 meaning anything.
 
-Look for "the exception", "except for", "the one … that does not" and "unlike
-the others" next to a stated rule. Each hit where code departs from the rule
+Look for "the exception", "exception to", "except for", "the one … that does
+not" and "unlike the others" next to a stated rule. Each hit where code departs from the rule
 is a finding against the code: change the code to follow the rule, or change
 the rule for all code, and delete the exception sentence. Out of scope: a
 structural fact the rule already allows, such as a binding module being a

@@ -120,25 +120,16 @@ state, not function arguments. 25 public settings structs in `sfmtool-core` stil
 
 ### Quality standards
 
-[`specs/STANDARDS.md`](specs/STANDARDS.md) states the standards every change
-is held to, with the reason for each and how to check code against it. Read it
-before making or reviewing a change. In short:
-
-- Every function that handles a reconstruction's points supports points at
-  infinity (`w = 0` rows).
-- A function that can run longer than about a second takes a `&Progress`, and
-  there is one interface: no `foo` / `foo_with_progress` pairs.
-- Caller input never panics: a library function returns an error, and its
-  binding raises a Python exception.
-- Logic lives in Rust, in core or in the bindings, with no Python wrapper that
-  repeats what a binding does.
-- Every file format has the same I/O shape in `sfmtool.fileio`, and its format
-  crate does the validation.
-- A convention has no documented exceptions.
-- A test asserts something that can fail.
-
-When the code breaks a standard, fix the code; correct a spec or doc only where
-the code is right and the text is wrong.
+Every change is held to [`specs/STANDARDS.md`](specs/STANDARDS.md); read it
+before making or reviewing one. In short: points at infinity (`w = 0` rows)
+are supported; a function that can run longer than about a second takes a
+`&Progress`, with no `foo` / `foo_with_progress` pair; caller input never
+panics (a library function returns an error, its binding raises a Python
+exception); logic lives in Rust, with no Python wrapper that repeats what a
+binding does; every file format has the same I/O shape in `sfmtool.fileio`,
+validated in its format crate; a convention has no documented exceptions; a
+test asserts something that can fail. When the code breaks a standard, fix the
+code; correct a spec or doc only where the code is right and the text is wrong.
 
 ### Implementing a change
 

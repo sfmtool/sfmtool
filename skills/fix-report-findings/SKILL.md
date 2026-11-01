@@ -142,7 +142,8 @@ Do not open pull requests unless the user asks.
 > code to meet the standard, even when the report proposed a text edit; if the
 > code fix is a large design change, record **Needs decision** naming that
 > code fix. Never commit text that documents the breach. A report's proposed
-> sentence is a draft claim like any other. Annotate the finding in its report in place, below it:
+> sentence is a draft claim like any other. Annotate the finding in its report
+> in place, below it:
 > `> _Status (<today>): **Done** — <what changed>, branch \`<branch>\`._` (or
 > **Partially done**, naming what is still open).
 >
