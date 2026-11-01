@@ -211,7 +211,7 @@ let matches = match_image_pair(
     &positions1, &descriptors1, n1, &positions2, &descriptors2, n2,
     128, 30, None, 50,
     Some(&affines1), Some(&affines2), Some(&config),
-);
+)?;
 for (i1, i2, dist) in matches { /* feature i1 in image 1 matches i2 in image 2 */ }
 ```
 
