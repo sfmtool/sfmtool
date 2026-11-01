@@ -44,10 +44,10 @@ def _characteristic_scene_scale(recon: SfmrReconstruction) -> float:
 
     centers = np.array(
         [
-            RotQuaternion.from_wxyz_array(recon.quaternions_wxyz[i]).camera_center(
-                recon.translations[i]
+            RotQuaternion.from_wxyz_array(quaternion).camera_center(translation)
+            for quaternion, translation in zip(
+                recon.quaternions_wxyz, recon.translations
             )
-            for i in range(recon.image_count)
         ]
     )
     scale = _rms_radius(centers)
@@ -126,12 +126,18 @@ def compare_reconstructions(
 
     # Perform alignment
     print("\n[4/7] Performing alignment...")
+    # Each getter builds a new array on every access, so read each once.
+    quaternions1 = recon1.quaternions_wxyz
+    translations1 = recon1.translations
+    quaternions2 = recon2.quaternions_wxyz
+    translations2 = recon2.translations
+    image_names1 = recon1.image_names
     image_matches = []
     for idx1, idx2 in matches:
-        quat1_wxyz = recon1.quaternions_wxyz[idx1]
-        trans1 = recon1.translations[idx1]
-        quat2_wxyz = recon2.quaternions_wxyz[idx2]
-        trans2 = recon2.translations[idx2]
+        quat1_wxyz = quaternions1[idx1]
+        trans1 = translations1[idx1]
+        quat2_wxyz = quaternions2[idx2]
+        trans2 = translations2[idx2]
 
         quat1 = RotQuaternion.from_wxyz_array(quat1_wxyz)
         center1 = quat1.camera_center(trans1)
@@ -140,7 +146,7 @@ def compare_reconstructions(
         center2 = quat2.camera_center(trans2)
 
         # source = recon2 (target), target = recon1 (reference)
-        image_name = Path(recon1.image_names[idx1]).name
+        image_name = Path(image_names1[idx1]).name
         match = ImageMatch(
             image_name=image_name,
             source_index=idx2,
@@ -269,13 +275,13 @@ def compare_reconstructions(
                     np.linalg.norm(
                         alignment_result.transform.apply_to_point(
                             RotQuaternion.from_wxyz_array(
-                                recon2.quaternions_wxyz[idx2]
-                            ).camera_center(recon2.translations[idx2])
+                                quaternions2[idx2]
+                            ).camera_center(translations2[idx2])
                         )
                         - (
                             RotQuaternion.from_wxyz_array(
-                                recon1.quaternions_wxyz[idx1]
-                            ).camera_center(recon1.translations[idx1])
+                                quaternions1[idx1]
+                            ).camera_center(translations1[idx1])
                         )
                     )
                     for idx1, idx2 in matches
@@ -540,11 +546,16 @@ def _compare_image_extrinsics(
     position_errors = []
     rotation_errors = []
 
+    # Each getter builds a new array on every access, so read each once.
+    quaternions1 = recon1.quaternions_wxyz
+    translations1 = recon1.translations
+    quaternions2 = recon2.quaternions_wxyz
+    translations2 = recon2.translations
     for idx1, idx2 in matches:
-        quat1_wxyz = recon1.quaternions_wxyz[idx1]
-        trans1 = recon1.translations[idx1]
-        quat2_wxyz = recon2.quaternions_wxyz[idx2]
-        trans2 = recon2.translations[idx2]
+        quat1_wxyz = quaternions1[idx1]
+        trans1 = translations1[idx1]
+        quat2_wxyz = quaternions2[idx2]
+        trans2 = translations2[idx2]
 
         quat1 = RotQuaternion.from_wxyz_array(quat1_wxyz)
         center1 = quat1.camera_center(trans1)
@@ -656,9 +667,12 @@ def _compare_feature_indexes(
     only_in_ref_stats = []
     only_in_target_stats = []
 
+    # Each getter builds a new list on every access, so read each once.
+    hashes1 = recon1.sift_content_hashes
+    hashes2 = recon2.sift_content_hashes
     for idx1, idx2 in matches:
-        sift_hash1 = recon1.sift_content_hashes[idx1]
-        sift_hash2 = recon2.sift_content_hashes[idx2]
+        sift_hash1 = hashes1[idx1]
+        sift_hash2 = hashes2[idx2]
 
         if sift_hash1 != sift_hash2:
             continue
