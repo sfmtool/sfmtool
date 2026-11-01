@@ -11,8 +11,6 @@ Covers the two behaviors that were previously documented-but-broken:
     ``find_sfmr_by_content_hash``).
 """
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -22,23 +20,24 @@ from sfmtool._workspace import find_sfmr_by_content_hash
 from sfmtool.xform import ToEmbeddedPatchesTransform
 from sfmtool.xform._scale_by_measurements import (
     ScaleByMeasurementsTransform,
+    _SourceTracks,
+    _build_observation_index,
     _resolve_point_cross_recon,
 )
 
 
 def _fake_source(image_names, tracks):
-    """Build a stand-in source reconstruction for the cross-recon resolver.
+    """Build the source track arrays the cross-recon resolver reads.
 
     ``tracks`` is a list of (point_index, image_index, feature_index) tuples.
-    Only the four attributes the resolver reads are populated.
     """
     pt = np.array([t[0] for t in tracks], dtype=np.uint32)
     img = np.array([t[1] for t in tracks], dtype=np.uint32)
     feat = np.array([t[2] for t in tracks], dtype=np.uint32)
-    return SimpleNamespace(
-        track_point_indexes=pt,
-        track_image_indexes=img,
-        track_feature_indexes=feat,
+    return _SourceTracks(
+        point_indexes=pt,
+        image_indexes=img,
+        feature_indexes=feat,
         image_names=list(image_names),
     )
 
@@ -78,6 +77,30 @@ class TestResolvePointCrossRecon:
         source = _fake_source(["a.jpg"], [(5, 0, 10)])
         with pytest.raises(ValueError, match="Could not resolve"):
             _resolve_point_cross_recon("pt3d_deadbeef_5", 5, source, {"a.jpg": 0}, {})
+
+
+class TestBuildObservationIndex:
+    def test_maps_each_observation_to_its_point(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        name_to_idx, obs_index = _build_observation_index(recon)
+
+        assert name_to_idx == {n: i for i, n in enumerate(recon.image_names)}
+        images = recon.track_image_indexes
+        features = recon.track_feature_indexes
+        points = recon.track_point_indexes
+        assert len(obs_index) == len(images)
+        for image, feature, point in zip(images, features, points):
+            assert obs_index[(int(image), int(feature))] == int(point)
+
+    def test_source_tracks_read_from_recon(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        source = _SourceTracks.from_recon(recon)
+        np.testing.assert_array_equal(source.point_indexes, recon.track_point_indexes)
+        np.testing.assert_array_equal(source.image_indexes, recon.track_image_indexes)
+        np.testing.assert_array_equal(
+            source.feature_indexes, recon.track_feature_indexes
+        )
+        assert source.image_names == recon.image_names
 
 
 def _pick_separated_pair(positions):

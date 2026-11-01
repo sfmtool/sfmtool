@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 import statistics
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -82,7 +83,8 @@ def _build_observation_index(
 ) -> tuple[dict[str, int], dict[tuple[int, int], int]]:
     # Matching goes through SIFT feature indexes, which a reconstruction whose
     # features are embedded patches does not carry.
-    if recon.track_feature_indexes is None:
+    feature_indexes = recon.track_feature_indexes
+    if feature_indexes is None:
         raise ValueError(
             "Point IDs from another reconstruction are matched through shared "
             "feature observations, and this reconstruction has no feature "
@@ -91,24 +93,50 @@ def _build_observation_index(
         )
     name_to_idx = {name: i for i, name in enumerate(recon.image_names)}
 
-    obs_index: dict[tuple[int, int], int] = {}
-    for i in range(len(recon.track_image_indexes)):
-        key = (int(recon.track_image_indexes[i]), int(recon.track_feature_indexes[i]))
-        obs_index[key] = int(recon.track_point_indexes[i])
+    # Each getter builds a new array on every access, so read each once.
+    obs_index: dict[tuple[int, int], int] = dict(
+        zip(
+            zip(recon.track_image_indexes.tolist(), feature_indexes.tolist()),
+            recon.track_point_indexes.tolist(),
+        )
+    )
 
     return name_to_idx, obs_index
+
+
+@dataclass(frozen=True)
+class _SourceTracks:
+    """The track arrays and image names of a source reconstruction, read once.
+
+    Each getter on a reconstruction builds a new array on every access, so the
+    resolver, which runs once per Point ID, reads them from here instead.
+    """
+
+    point_indexes: np.ndarray
+    image_indexes: np.ndarray
+    feature_indexes: np.ndarray
+    image_names: list[str]
+
+    @classmethod
+    def from_recon(cls, recon: SfmrReconstruction) -> "_SourceTracks":
+        return cls(
+            point_indexes=recon.track_point_indexes,
+            image_indexes=recon.track_image_indexes,
+            feature_indexes=recon.track_feature_indexes,
+            image_names=recon.image_names,
+        )
 
 
 def _resolve_point_cross_recon(
     point_id: str,
     point_index: int,
-    source_recon: SfmrReconstruction,
+    source: _SourceTracks,
     input_name_to_idx: dict[str, int],
     input_obs_index: dict[tuple[int, int], int],
 ) -> tuple[int, str]:
-    obs_mask = source_recon.track_point_indexes == point_index
-    src_image_idxs = source_recon.track_image_indexes[obs_mask]
-    src_feat_idxs = source_recon.track_feature_indexes[obs_mask]
+    obs_mask = source.point_indexes == point_index
+    src_image_idxs = source.image_indexes[obs_mask]
+    src_feat_idxs = source.feature_indexes[obs_mask]
 
     # Count how many source observations map to each candidate input point.
     # A feature belongs to at most one track, so all observations should agree;
@@ -116,7 +144,7 @@ def _resolve_point_cross_recon(
     counts: Counter[int] = Counter()
     descriptions: dict[int, str] = {}
     for src_img_idx, src_feat_idx in zip(src_image_idxs, src_feat_idxs):
-        src_img_name = source_recon.image_names[int(src_img_idx)]
+        src_img_name = source.image_names[int(src_img_idx)]
         input_img_idx = input_name_to_idx.get(src_img_name)
         if input_img_idx is None:
             continue
@@ -129,9 +157,7 @@ def _resolve_point_cross_recon(
                 descriptions[input_pt_idx] = f"{img_basename} feat #{src_feat_idx}"
 
     if not counts:
-        obs_images = [
-            Path(source_recon.image_names[int(i)]).name for i in src_image_idxs
-        ]
+        obs_images = [Path(source.image_names[int(i)]).name for i in src_image_idxs]
         raise ValueError(
             f"Could not resolve {point_id} in input reconstruction. "
             f"Source point observed in: {', '.join(obs_images)}. "
@@ -278,6 +304,7 @@ class ScaleByMeasurementsTransform:
                     f"Resolving Point IDs from source ({prefix}...) -> input ({input_hash_prefix}...):"
                 )
 
+                source_tracks = _SourceTracks.from_recon(source)
                 for pm in group:
                     for pt_id, idx in [
                         (pm["point_id_a"], pm["idx_a"]),
@@ -291,20 +318,25 @@ class ScaleByMeasurementsTransform:
                                 f"(has {source.point_count} points)"
                             )
                         input_idx, via = _resolve_point_cross_recon(
-                            pt_id, idx, source, input_name_to_idx, input_obs_index
+                            pt_id,
+                            idx,
+                            source_tracks,
+                            input_name_to_idx,
+                            input_obs_index,
                         )
                         resolved[pt_id] = input_idx
                         click.echo(f"  {pt_id} -> point {input_idx} (via {via})")
 
-                del source
+                del source, source_tracks
 
         click.echo(f"\nScale by measurements (target unit: {target_unit}):")
         scale_factors = []
+        positions = recon.positions
         for i, pm in enumerate(parsed_measurements):
             idx_a = resolved[pm["point_id_a"]]
             idx_b = resolved[pm["point_id_b"]]
-            pos_a = recon.positions[idx_a]
-            pos_b = recon.positions[idx_b]
+            pos_a = positions[idx_a]
+            pos_b = positions[idx_b]
             recon_dist = float(np.linalg.norm(pos_a - pos_b))
             if recon_dist < 1e-12:
                 raise ValueError(
