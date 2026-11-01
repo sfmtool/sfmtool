@@ -88,7 +88,7 @@ Four datasets are checked in under `test-data/images/`:
 Bootstrap a workspace with `scripts/init_dataset_*.sh`. Reuse these in bug
 reports and reproductions where possible.
 
-Two datasets also carry a reference reconstruction, in metres:
+Two datasets also carry reference reconstructions, in metres:
 
 - `seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr` — all 17
   images; the scale comes from three GPS fixes.
