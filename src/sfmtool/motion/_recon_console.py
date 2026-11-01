@@ -14,6 +14,9 @@ import click
 import numpy as np
 
 from .constants import (
+    BREAK_ROTATION_FACTOR,
+    BREAK_SHARED_FRACTION,
+    BREAK_WINDOW,
     OBS_WINDOW,
     OBS_Z_THRESHOLD,
     OVERLAP_DROP_THRESHOLD,
@@ -22,7 +25,7 @@ from .constants import (
     STEP_RATIO_WINDOW,
 )
 from .._pose_math import rotation_angle_deg
-from .recon_discontinuity import _flag_frame
+from .recon_discontinuity import _break_edges, _flag_frame
 
 
 def print_frame_table(seq_result: dict) -> None:
@@ -213,12 +216,31 @@ def _print_summary_edge_row(
         signals_parts.append("O")
     signals_str = " ".join(signals_parts)
 
+    verdict = seq_result["breaks"][edge]
+    ratio = verdict["rotation_ratio"]
+    ratio_s = "inf" if ratio == float("inf") else f"{ratio:.2f}"
+    break_s = "BREAK" if verdict["is_break"] else "-"
+
     edge_str = f"{frame_a}->{frame_b}"
     click.echo(
         f"    {edge_str:>14}  {dist_s:>10}  {rot_s:>9}  "
         f"{step_r_s:>8}  {cov_r_s:>8}  {obs_pair:>11}  "
-        f"{shared:>9}  {err_a_s:>8}  {err_b_s:>8}  {signals_str}"
+        f"{shared:>9}  {err_a_s:>8}  {err_b_s:>8}  {signals_str:<7}  "
+        f"{verdict['nearby_shared_points']:>7}  {ratio_s:>6}  {break_s}"
     )
+
+
+def verdict_line(all_sequence_results: list[dict]) -> str:
+    """The one-line break verdict printed at the end of the summary."""
+    found = _break_edges(all_sequence_results)
+    if not found:
+        return "Verdict: no breaks"
+    several = len(all_sequence_results) > 1
+    edges = ", ".join(
+        f"{name} {a}->{b}" if several else f"{a}->{b}" for name, a, b in found
+    )
+    noun = "break" if len(found) == 1 else "breaks"
+    return f"Verdict: {len(found)} {noun}: {edges}"
 
 
 def print_summary(all_sequence_results: list[dict]) -> None:
@@ -232,21 +254,32 @@ def print_summary(all_sequence_results: list[dict]) -> None:
 
     for s in all_sequence_results:
         core_edges = s["core_edges"]
+        n_breaks = sum(v["is_break"] for v in s["breaks"].values())
         click.echo(
             f"\n  {s['sequence_name']}: {s['frame_count']} frames, "
-            f"{len(core_edges)} discontinuity(s)"
+            f"{len(core_edges)} discontinuity(s), {n_breaks} break(s)"
         )
 
         if not core_edges:
             click.echo("    No pose discontinuities detected.")
             continue
 
+        ref = s["break_reference"]
+        click.echo(
+            f"    Break rule: RotR > {BREAK_ROTATION_FACTOR:g}, where expected "
+            f"rotation = {ref['rotation_per_frame_deg']:.3f}° per frame number "
+            f"x max(gap, {ref['median_frame_gap']:g}); SharedPts < "
+            f"{BREAK_SHARED_FRACTION * ref['median_shared_points']:.1f}; "
+            f"NearPts < "
+            f"{BREAK_SHARED_FRACTION * ref['median_nearby_shared_points']:.1f}"
+        )
         click.echo(
             f"    {'Edge':>14}  {'Dist':>8}  {'Rot':>7}  "
             f"{'StepR':>6}  {'CovR':>6}  {'ObsZ(A/B)':>11}  "
-            f"{'SharedPts':>9}  {'Err(A)':>8}  {'Err(B)':>8}  {'Signals'}"
+            f"{'SharedPts':>9}  {'Err(A)':>8}  {'Err(B)':>8}  {'Signals':<7}  "
+            f"{'NearPts':>7}  {'RotR':>6}  {'Break'}"
         )
-        click.echo("    " + "-" * 105)
+        click.echo("    " + "-" * 131)
 
         for edge, evidence in sorted(core_edges.items()):
             _print_summary_edge_row(s, edge, evidence)
@@ -289,3 +322,11 @@ def print_summary(all_sequence_results: list[dict]) -> None:
             "  Legend: P=pose residual, S=step-size ratio, "
             "C=coviz drop, O=obs-count outlier."
         )
+        click.echo(
+            f"  NearPts = points seen both in the {BREAK_WINDOW} images up to "
+            f"the edge and the {BREAK_WINDOW} after it. RotR = rotation / "
+            "expected rotation. BREAK = RotR, SharedPts and NearPts all past "
+            "the break rule."
+        )
+
+    click.echo(verdict_line(all_sequence_results))
