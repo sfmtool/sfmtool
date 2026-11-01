@@ -9,9 +9,12 @@ single `.sfmr` reconstruction, it orders the cameras by frame number and flags
 the transitions where a camera's pose departs from what its neighbours predict,
 where the typical step between cameras changes across the transition, or where
 the cameras on either side share far fewer 3D points than they do at the
-transitions around it. It is for finding cuts and occlusions in the input
-before solving, and places where a solve went wrong after. It prints a report of
-the flagged transitions and can also write it as JSON.
+transitions around it. For a reconstruction it also gives a verdict: which of
+the flagged transitions are breaks, places where the solve put two parts of the
+camera path in inconsistent places, and it ends its report with one line naming
+them. It is for finding cuts and occlusions in the input before solving, and
+places where a solve went wrong after. It prints a report of the flagged
+transitions and can also write it as JSON.
 
 ## Motivation
 
@@ -39,7 +42,8 @@ with a corresponding SfM solution:
 2. **Reconstruction analysis** — Starts from a `.sfmr` file and combines four signals
    to catch discontinuities: pose extrapolation errors, local step-size ratio,
    covisibility drop across the edge, and per-image observation-count outliers.
-   Reprojection error and shared 3D point context are reported for each flagged edge.
+   Reprojection error and shared 3D point context are reported for each flagged edge,
+   and each flagged edge is classified as a break in the solve or not.
 
 ## Definitions
 
@@ -261,8 +265,14 @@ removed to limit memory usage for long sequences.
 
 ### Input
 
-A `.sfmr` reconstruction file and the corresponding image files. As with image sequence
-analysis, `summarize_paths_by_sequence` is used to detect numbered sequences among the
+A single `.sfmr` reconstruction file. The analysis reads the reconstruction's camera
+poses, tracks and reprojection errors and never opens an image file, so the images
+need not be present. Loading the file does need the workspace it belongs to:
+`SfmrReconstruction.load` looks for it at the workspace path recorded in the file,
+relative and then absolute, and then searches upward from the file for a
+`.sfm-workspace.json` marker, and fails with "Could not resolve workspace directory"
+when none of these finds one. As with image sequence analysis,
+`summarize_paths_by_sequence` is used to detect numbered sequences among the
 reconstruction's image names. Each detected sequence is analyzed independently.
 
 ### Step 1: Pose Discontinuity Detection
@@ -351,6 +361,11 @@ A scale-shift discontinuity that the pose test misses changes both the step leng
 and the set of tracks seen across the edge, so it usually fires Step and Cov together
 and is reported as a high-confidence hit.
 
+The confidence partition says how many signals agree, not whether the solve is wrong:
+a sound solve of a video lists many discontinuities, several of them on two or more
+signals. Whether a listed discontinuity is an error in the solve is decided by the
+break verdict of Step 4.
+
 ### Step 3: Reprojection Error Context
 
 For each flagged discontinuity, also report:
@@ -365,6 +380,124 @@ For each flagged discontinuity, also report:
 High reprojection error and low covisibility strengthen the case that a pose
 discontinuity is an SfM error.
 
+### Step 4: Break Verdict
+
+Each listed discontinuity, an edge (a, a+1) between consecutive registered images, is
+classified as a **break** or not. A break is a place where the solve put the parts of
+the camera path on either side in inconsistent places, as a global solve of a video
+can while its registered count, points per image and reprojection error all look
+normal. The rule compares the edge with four references taken over every consecutive
+pair of registered images in the sequence, each a median so that the few breaks it is
+used to find do not raise it:
+
+- `rotation_per_frame_deg`: the median of `rotation / frame-number gap`, the camera's
+  typical rotation per unit of frame number.
+- `median_frame_gap`: the median frame-number gap between consecutive images.
+- `median_shared_points`: the median number of 3D points two consecutive images share.
+- `median_nearby_shared_points`: the median of the nearby shared count defined below.
+
+For an edge with frame-number gap `g`, relative rotation `θ`, `s` shared 3D points and
+`c` nearby shared points:
+
+```
+expected_rotation = rotation_per_frame_deg × max(g, median_frame_gap)
+rotation_ratio    = θ / expected_rotation
+break             = rotation_ratio > BREAK_ROTATION_FACTOR
+                    and s < BREAK_SHARED_FRACTION × median_shared_points
+                    and c < BREAK_SHARED_FRACTION × median_nearby_shared_points
+```
+
+with `BREAK_ROTATION_FACTOR = 4`, `BREAK_SHARED_FRACTION = 0.2` and
+`BREAK_WINDOW = 8`, in [`motion/constants.py`](../../../src/sfmtool/motion/constants.py).
+
+The **nearby shared count** of edge (a, a+1) is the number of 3D points observed both
+in an image on the before side and in an image on the after side, where the before
+side is the sequence's images a − `BREAK_WINDOW` + 1 to a and the after side its
+images a + 1 to a + `BREAK_WINDOW` (the sides stop at the ends of the sequence). When
+the reconstruction stores rig frames (`rig_frame_data`), each side also holds every
+image in the same rig frame as one of its sequence images, which are the rig's other
+sensors' images of those frames. Without rig frames only the sequence's own images
+count: another sequence in the reconstruction that merely shares the numbering, such
+as `walk2_0193` beside `walk1_0193`, is not tied to it and adds nothing.
+
+**Why the expected rotation comes from the frame-number gap.** The frame list a solve
+used can skip frames (a run that failed to register, or frames left out) and can have
+blurred frames swapped for a neighbour, so the gap between consecutive registered
+images varies around the stride. The command does not know that frame list. Taking the
+rate per unit of frame number, and multiplying it by each edge's own gap, allows an
+edge across dropped frames the rotation of every frame it skips, with no need to know
+which frames were dropped or what the stride was. The `max` with the median gap allows
+an edge that is closer in frame number than the typical pair a typical pair's
+rotation, so in an irregularly numbered photo set one closely numbered pair is not
+judged against a fraction of a step. When the expected rotation is 0, in a sequence
+whose cameras do not turn, any rotation counts as exceeding it.
+
+**Why each condition is needed.** The rule was measured on 77 reconstructions: sound
+and broken global and incremental solves of three videos at strides 2 to 13, with 24
+to 383 registered images each, and sound solves and ground truths of the checked-in
+photo datasets (`seoul_bull_sculpture`, `dino_dog_toy`, `seattle_backyard`,
+`kerry_park`). Its 30 breaks were in eight broken video solves; no condition can be
+dropped without misclassifying pairs from the others.
+
+- Rotation is needed because a video's pairs that share few points mostly turn no
+  more than usual. A sound DinoLedge solve that dropped frames 1081-1099 has a pair
+  1072->1108 that fires three signals and shares no points, but turns 20.7° over 36
+  frame numbers, 1.2 times its expected rotation, and other sound pairs that share
+  under 0.02 of the median turn 1.5 to 2.7 times theirs.
+- The pair's shared points are needed because sound video pairs can turn sharply. A
+  sound Daegu stride-7 solve has a listed pair that turns 4.5 times its expected
+  rotation (5.0 times in a solve of 30 of its images), but its images share 136 to 183
+  points, 0.32 to 0.69 of the median. Without this condition the closest pair the
+  rotation factor would have to clear is one that turns 3.7 times its expected
+  rotation, shares 0.27 of the median pair count and 0.16 of the median nearby count,
+  rather than one at 3.4 times.
+- The nearby shared count is needed because in a photo set a large move between two
+  consecutive photos is often real. `dino_dog_toy` photographs a toy in rings, and the
+  first photo of a ring turns 5.4 to 6.5 times the usual rotation from the last photo
+  of the ring before and shares under 0.2 of the median pair count with it; the `kerry_park` rig turns
+  179° between frames 17 and 18, 6.8 times the usual rotation, and those two images
+  share no points. The photos a few steps either side of such a move still see the
+  same points, so its nearby shared count is 0.77 to 1.44 of the median. Across a
+  break in a video solve the parts on either side are not tied together near it at
+  all, and the breaks' nearby counts were at most 0.10 of the median. The window of 8
+  is wide enough to reach the photos that see the same points again: with 2 images a
+  side some `dino_dog_toy` ring starts fall to 0.01 of the median. The other
+  sensors of a rig are counted because a solve can leave one sensor's images on either
+  side of a turn with almost nothing in common while the other sensor's images, at the
+  same frames, tie the rig together: in three `kerry_park` solves the right sensor's
+  own images give frames 17 and 18 a nearby count under 0.2 of the median (0.04 in
+  one, whose relative rotation there is within 0.5° of the ground truth's), and with
+  the left sensor's images counted it is 1.0 to 1.1 of the median.
+
+The breaks turned 5.5 to 32 times their expected rotation and shared 0 to 66 points
+(at most 0.13 of the median pair count, and at most 0.10 of the median nearby count).
+Among the pairs that are not breaks, those that pass both shared-points conditions
+turned at most 3.4 times their expected rotation, and those that turned over 4 times
+shared at least 0.31 of the median pair count or at least 0.77 of the median nearby
+count. The factor 4 sits between 3.4 and 5.5, nearer the 3.4, so that a break turning
+less than the ones measured is still called one; the fraction 0.2 sits between the
+breaks' 0.13 and 0.10 and the other pairs' 0.31 and 0.77. The thresholds on points are
+fractions of the sequence's own medians rather than fixed counts because point density
+differs between captures: the 17 Seoul bull photos share a median of 58 points per
+consecutive pair and at most 93, so a fixed count of 100 would call every one of their
+pairs poorly connected.
+
+**Photo sets and points at infinity.** Numbered photos that are not a sequence give
+large consecutive rotations, so their median rotation is large, and once it exceeds 45°
+no rotation (at most 180°) reaches 4 times it. The verdict reads camera rotations and
+track membership only, never point positions, so a point at infinity (`w = 0`) counts
+as a shared point like any other track: its direction ties the two cameras' rotations
+together. The pair's shared count is the covisibility count of Step 3, which leaves out
+pairs whose viewing directions differ by more than 90°, so such a pair shares 0 points;
+the nearby count reads the tracks directly and has no such filter.
+
+Only listed discontinuities are classified. Clustering keeps one edge of each run of
+adjacent flagged edges, so a break on another edge of the run is not classified: when
+the kept edge is itself a break the run is still named, by that edge, and when it is
+not, the verdict does not report the break. In the 77 reconstructions this happened
+once, in a broken Daegu stride-7 solve whose run from 2507 to 2591 holds breaks at
+2514->2521 and 2563->2570 and is named by 2563->2570.
+
 ### Output
 
 - Header: threshold values for all four signals.
@@ -375,13 +508,25 @@ discontinuity is an SfM error.
   and a `Flag` column listing fired codes (`L.t`, `L.r`, `R.t`, `R.r`, `Step`, `Cov`,
   `Obs`). StepR and CovR attach to the landing frame of each edge so row i shows the
   metrics for edge (i−1, i).
-- Summary table (one row per detected discontinuity): edge, raw edge translation and
-  rotation, StepR, CovR, endpoint obs z-scores, shared 3D point count, per-endpoint
-  mean reprojection errors, and a `Signals` column listing fired codes
-  (e.g. `P S C O`). Values that exceeded their signal's threshold are wrapped in
-  `< >` brackets.
+- Summary, per sequence: a line with the frame, discontinuity and break counts, a
+  `Break rule:` line giving the sequence's references (rotation per frame number,
+  median gap, and the two shared-points thresholds), and a table with one row per
+  detected discontinuity: edge, raw edge translation and rotation, StepR, CovR,
+  endpoint obs z-scores, shared 3D point count, per-endpoint mean reprojection errors,
+  a `Signals` column listing fired codes (e.g. `P S C O`), `NearPts` (the nearby shared
+  count of Step 4), `RotR` (its rotation ratio) and `Break` (`BREAK` or `-`). Values
+  that exceeded their signal's threshold are wrapped in `< >` brackets.
 - Footer: total count, plus a partition into single-signal (low-confidence) vs
-  multi-signal (high-confidence) hits, and a legend for the signal codes.
+  multi-signal (high-confidence) hits, and a legend for the signal codes and the
+  break columns.
+- Verdict, the last line before the timing: `Verdict: no breaks`, or
+  `Verdict: N breaks: A->B, ...` naming each break by its frame numbers (`1 break`
+  for one), with the sequence name before each edge when the reconstruction has more
+  than one sequence. For example `Verdict: 1 break: 2225->2229`. A reconstruction with
+  no numbered sequence prints the no-sequences message and no verdict.
+
+The command exits 0 whatever the verdict, as it does for every finding; a script reads
+the verdict from `break_count` in the `--json` report.
 
 
 ## JSON Output
@@ -427,6 +572,16 @@ histograms, tile grids) are **not** emitted.
 | `step_ratio` | `STEP_RATIO_THRESHOLD` (default `1.5`). |
 | `overlap_drop` | `OVERLAP_DROP_THRESHOLD` (default `1.8`). |
 | `obs_z` | `OBS_Z_THRESHOLD` (default `2.5`). |
+| `break_rotation_factor` | `BREAK_ROTATION_FACTOR` (`4.0`), the break verdict's rotation-ratio threshold. |
+| `break_shared_fraction` | `BREAK_SHARED_FRACTION` (`0.2`), the break verdict's fraction of the median shared and nearby shared counts. |
+| `break_window` | `BREAK_WINDOW` (`8`), the images on each side of an edge that its nearby shared count reads. |
+
+Top-level fields in reconstruction mode, beside `thresholds` and `sequences`:
+
+| Field | Description |
+|-------|-------------|
+| `break_count` | Number of discontinuities classified as breaks, over all sequences. `0` is the verdict "no breaks". |
+| `breaks` | One `{"sequence": name, "frame_a": A, "frame_b": B}` object per break, in sequence and frame order. |
 
 Each entry in `sequences`:
 
@@ -439,6 +594,13 @@ Each entry in `sequences`:
 | `median_rot_deg` | Median rotation (degrees) between successive frames. |
 | `pose_trans_threshold` | Resolved translation threshold = `pose_trans_factor × median_trans`. |
 | `pose_rot_threshold` | Resolved rotation threshold (degrees) — currently equal to `thresholds.pose_rot_deg`. |
+| `rotation_per_frame_deg` | Median of rotation / frame-number gap over consecutive images (Step 4). |
+| `median_frame_gap` | Median frame-number gap between consecutive images. |
+| `median_shared_points` | Median shared 3D point count between consecutive images. |
+| `break_shared_points_threshold` | `break_shared_fraction × median_shared_points`; an edge needs fewer shared points than this to be a break. |
+| `median_nearby_shared_points` | Median nearby shared count over the sequence's edges (Step 4). |
+| `break_nearby_shared_points_threshold` | `break_shared_fraction × median_nearby_shared_points`; an edge needs a lower nearby shared count than this to be a break. |
+| `break_count` | Number of this sequence's discontinuities classified as breaks. |
 | `frames` | Per-frame array (length = `frame_count`). |
 | `discontinuities` | Per-clustered-edge array (one entry per `core_edge`). |
 | `segments` | Segment partition derived from `discontinuities`. |
@@ -477,6 +639,11 @@ Each entry in `discontinuities` (one per `core_edge` after clustering):
 | `reproj_error_a`, `reproj_error_b` | Mean reprojection error (pixels) for each endpoint image, or `null` if not available. |
 | `signals` | Array of fired primary codes (subset of `["P", "S", "C", "O"]`, sorted). `P` aggregates the four pose-residual flags. |
 | `confidence` | `"high"` if `len(signals) >= 2`, else `"low"`. Matches the footer partition rule. |
+| `frame_gap` | `frame_b - frame_a`. |
+| `expected_rotation_deg` | `rotation_per_frame_deg × max(frame_gap, median_frame_gap)`. |
+| `rotation_ratio` | `rotation_deg / expected_rotation_deg`, or `null` when the expected rotation is 0 and the edge turns (an infinite ratio). |
+| `nearby_shared_points` | The edge's nearby shared count: 3D points seen both in the `break_window` images up to the edge and in the `break_window` images after it, counting the images in the same rig frames when the reconstruction stores rig frames. |
+| `is_break` | Whether the break verdict calls this edge a break: `rotation_ratio > break_rotation_factor`, `shared_points < break_shared_points_threshold` and `nearby_shared_points < break_nearby_shared_points_threshold`. |
 
 `segments` — partition of `[0..frame_count-1]` at each discontinuity edge.
 Frame `a` of edge `(a, b)` ends the preceding segment; frame `b` starts the
@@ -536,7 +703,7 @@ specs/core/ for the discontinuity-detection design notes.
 
 ### Examples
 
-Reconstruction mode, two discontinuities clustered to single edges:
+Reconstruction mode, one discontinuity, classified as a break:
 
 ```jsonc
 {
@@ -547,8 +714,13 @@ Reconstruction mode, two discontinuities clustered to single edges:
     "pose_rot_deg": 15.0,
     "step_ratio": 1.5,
     "overlap_drop": 1.8,
-    "obs_z": 2.5
+    "obs_z": 2.5,
+    "break_rotation_factor": 4.0,
+    "break_shared_fraction": 0.2,
+    "break_window": 8
   },
+  "break_count": 1,
+  "breaks": [{"sequence": "frame", "frame_a": 101, "frame_b": 102}],
   "sequences": [
     {
       "pattern": "frame_%04d.jpg",
@@ -558,6 +730,13 @@ Reconstruction mode, two discontinuities clustered to single edges:
       "median_rot_deg": 0.31,
       "pose_trans_threshold": 0.156,
       "pose_rot_threshold": 15.0,
+      "rotation_per_frame_deg": 0.3,
+      "median_frame_gap": 1.0,
+      "median_shared_points": 410.0,
+      "break_shared_points_threshold": 82.0,
+      "median_nearby_shared_points": 900.0,
+      "break_nearby_shared_points_threshold": 180.0,
+      "break_count": 1,
       "frames": [
         {"seq_index": 0, "frame_number": 100, "image_name": "frame_0100.jpg",
          "left_trans_err": null, "left_rot_err": null,
@@ -576,12 +755,14 @@ Reconstruction mode, two discontinuities clustered to single edges:
       "discontinuities": [
         {"edge": [1, 2], "frame_a": 101, "frame_b": 102,
          "image_a": "frame_0101.jpg", "image_b": "frame_0102.jpg",
-         "translation": 0.45, "rotation_deg": 0.5,
+         "translation": 0.45, "rotation_deg": 9.0,
          "step_ratio": 3.2, "overlap_drop": 8.1,
          "obs_z_a": -0.2, "obs_z_b": -3.1,
          "shared_points": 12,
          "reproj_error_a": 0.78, "reproj_error_b": 0.93,
-         "signals": ["C", "O", "S"], "confidence": "high"}
+         "signals": ["C", "O", "S"], "confidence": "high",
+         "frame_gap": 1, "expected_rotation_deg": 0.3, "rotation_ratio": 30.0,
+         "nearby_shared_points": 20, "is_break": true}
       ],
       "segments": [
         {"start_index": 0, "end_index": 1, "start_frame": 100, "end_frame": 101, "frame_count": 2},
@@ -643,6 +824,37 @@ of the 17 `seoul_bull_sculpture` images built at the ground-truth poses:
 The console output and option handling of both modes are tested in
 [`tests/test_motion.py`](../../../tests/test_motion.py).
 
+[`tests/test_motion_breaks.py`](../../../tests/test_motion_breaks.py) covers the break
+verdict:
+
+- **Constructed sequences.** `_break_reference` and `_classify_break` are run on
+  per-edge rotations, frame numbers and shared counts: a clean loop has no breaks; one
+  pair that turns 12 times the usual rotation and shares 3 points is the only break; a
+  large turn that keeps its points and a pair that shares nothing but turns as usual
+  are not breaks; a photo set's large move whose nearby shared count is normal is not
+  a break, and is one once that count is low; a gap of dropped frames crossed with a
+  smooth turn is not a break;
+  swapped frames with uneven gaps give no breaks and still find a real break among
+  them; a closely numbered pair is allowed a typical pair's rotation; a photo set in no
+  order has no breaks; and cameras that never turn give an infinite ratio to the one
+  pair that does.
+- **Nearby shared count.** `_nearby_shared_point_counts` matches a count made with
+  sets from its definition on random tracks over a sequence that lists its images out
+  of index order, at three window sizes; counts a rig's other sensor at the same rig
+  frames; ignores a second sequence that shares the numbering when there is no rig
+  data; and skips images outside any counted frame. The kerry ground truth's rig
+  frames are read from `rig_frame_data` (24 frames of two images), and the Seoul bull
+  ground truth has none.
+- **Reconstructions.** The Seoul bull ground truth, which has points at infinity, has
+  no breaks. A planted break at 10->11 (frames 11-17 turned 90° and the points the two
+  images share removed) gives the same references and breaks after every point is
+  stored as a direction (`w = 0`).
+- **CLI.** On the ground truth the output has `Verdict: no breaks` and the report has
+  `break_count == 0` and the break fields on the sequence; on the planted break it
+  prints `Verdict: 1 break: 10->11` and a `BREAK` row, and the report lists that edge
+  in `breaks`, with `is_break`, `frame_gap`, `expected_rotation_deg`,
+  `rotation_ratio` and `nearby_shared_points` on its row.
+
 ## Implementation
 
 | Part | Location |
@@ -650,7 +862,7 @@ The console output and option handling of both modes are tested in
 | CLI command and option parsing | [`_commands/motion.py`](../../../src/sfmtool/_commands/motion.py) |
 | Image-sequence analysis (adaptive stride, DIS flow via `compute_optical_flow` and `compute_optical_flow_with_init`) | [`motion/image_sequence.py`](../../../src/sfmtool/motion/image_sequence.py), [`motion/flow_stats.py`](../../../src/sfmtool/motion/flow_stats.py), [`motion/ratio_band.py`](../../../src/sfmtool/motion/ratio_band.py) |
 | Image-sequence console output and flow images | [`visualization/_discontinuity_display.py`](../../../src/sfmtool/visualization/_discontinuity_display.py) |
-| Reconstruction analysis (pose extrapolation, step ratio, overlap drop, obs z-score, edge clustering) | [`motion/recon_discontinuity.py`](../../../src/sfmtool/motion/recon_discontinuity.py), [`motion/constants.py`](../../../src/sfmtool/motion/constants.py) |
+| Reconstruction analysis (pose extrapolation, step ratio, overlap drop, obs z-score, edge clustering, break verdict) | [`motion/recon_discontinuity.py`](../../../src/sfmtool/motion/recon_discontinuity.py), [`motion/constants.py`](../../../src/sfmtool/motion/constants.py) |
 | Reconstruction console output | [`motion/_recon_console.py`](../../../src/sfmtool/motion/_recon_console.py) |
 | `--json` report | [`motion/report.py`](../../../src/sfmtool/motion/report.py) |
 | Sequence detection | [`_path_summary.py`](../../../src/sfmtool/_path_summary.py) (`summarize_paths_by_sequence`) |

@@ -42,3 +42,27 @@ POSE_TRANS_FACTOR = 3.0
 # rate: a quadratic extrapolation from 3 smooth neighbours should predict within
 # a few degrees however fast the camera rotates.
 POSE_ROT_DEG = 15.0
+
+# Break verdict.
+#
+# A listed discontinuity is a break, a place where the solve put two parts of
+# the camera path in inconsistent places, when all three of these hold:
+#
+# - its relative rotation exceeds BREAK_ROTATION_FACTOR × the rotation expected
+#   for its frame-number gap, where the expected rotation is the sequence's
+#   median rotation per unit of frame number between consecutive images times
+#   max(this gap, the median gap);
+# - its two images share fewer than BREAK_SHARED_FRACTION × the sequence's
+#   median shared 3D point count between consecutive images;
+# - the BREAK_WINDOW images up to it and the BREAK_WINDOW images after it share
+#   fewer than BREAK_SHARED_FRACTION × the median of that count over all edges.
+#
+# `specs/cli/reconstruction/motion-command.md` § "Step 4: Break Verdict" gives
+# the measurements behind each constant and why each condition is needed: the
+# rotation and pair conditions separate breaks in video solves from sound
+# pairs that turn sharply or share few points, and the window condition keeps
+# a photo set's legitimate large move, whose neighbours a few images away still
+# share points, from being called a break.
+BREAK_ROTATION_FACTOR = 4.0
+BREAK_SHARED_FRACTION = 0.2
+BREAK_WINDOW = 8

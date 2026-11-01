@@ -229,6 +229,13 @@ def test_recon_json_flags_cov_on_infinite_overlap_drop():
         "trans_threshold": 3.0,
         "rot_threshold": 15.0,
         "core_edge_reproj_errors": {},
+        "break_reference": {
+            "rotation_per_frame_deg": 0.0,
+            "median_frame_gap": 1.0,
+            "median_shared_points": 0.0,
+            "median_nearby_shared_points": 0.0,
+        },
+        "breaks": {},
     }
 
     report = reconstruction_results_to_json([seq])

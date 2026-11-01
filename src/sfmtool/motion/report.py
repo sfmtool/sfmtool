@@ -17,6 +17,9 @@ import click
 import numpy as np
 
 from .constants import (
+    BREAK_ROTATION_FACTOR,
+    BREAK_SHARED_FRACTION,
+    BREAK_WINDOW,
     OBS_Z_THRESHOLD,
     OVERLAP_DROP_THRESHOLD,
     POSE_ROT_DEG,
@@ -25,7 +28,7 @@ from .constants import (
 )
 from .._pose_math import rotation_angle_deg
 from .ratio_band import RATIO_LOWER, RATIO_UPPER, classify_ratio
-from .recon_discontinuity import _flag_frame
+from .recon_discontinuity import _break_edges, _flag_frame
 
 
 SCHEMA_VERSION = 1
@@ -188,6 +191,7 @@ def reconstruction_results_to_json(all_sequence_results: list[dict]) -> dict:
             sr = step_ratios[a] if a < len(step_ratios) else None
             cv = overlap_drops[a] if a < len(overlap_drops) else None
             signals = _signals_from_evidence(evidence)
+            verdict = s["breaks"][(a, b)]
             discontinuities.append(
                 {
                     "edge": [a, b],
@@ -206,10 +210,16 @@ def reconstruction_results_to_json(all_sequence_results: list[dict]) -> dict:
                     "reproj_error_b": _f(reproj_errors.get(img_b)),
                     "signals": signals,
                     "confidence": "high" if len(signals) >= 2 else "low",
+                    "frame_gap": verdict["frame_gap"],
+                    "expected_rotation_deg": _f(verdict["expected_rotation_deg"]),
+                    "rotation_ratio": _f(verdict["rotation_ratio"]),
+                    "nearby_shared_points": verdict["nearby_shared_points"],
+                    "is_break": verdict["is_break"],
                 }
             )
 
         segments = _segments_from_core_edges(core_edges, frame_count, seq_frame_numbers)
+        ref = s["break_reference"]
 
         sequences.append(
             {
@@ -220,12 +230,24 @@ def reconstruction_results_to_json(all_sequence_results: list[dict]) -> dict:
                 "median_rot_deg": _f(s["median_rot"]),
                 "pose_trans_threshold": _f(s["trans_threshold"]),
                 "pose_rot_threshold": _f(s["rot_threshold"]),
+                "rotation_per_frame_deg": _f(ref["rotation_per_frame_deg"]),
+                "median_frame_gap": _f(ref["median_frame_gap"]),
+                "median_shared_points": _f(ref["median_shared_points"]),
+                "break_shared_points_threshold": _f(
+                    BREAK_SHARED_FRACTION * ref["median_shared_points"]
+                ),
+                "median_nearby_shared_points": _f(ref["median_nearby_shared_points"]),
+                "break_nearby_shared_points_threshold": _f(
+                    BREAK_SHARED_FRACTION * ref["median_nearby_shared_points"]
+                ),
+                "break_count": sum(d["is_break"] for d in discontinuities),
                 "frames": frames,
                 "discontinuities": discontinuities,
                 "segments": segments,
             }
         )
 
+    breaks = _break_edges(all_sequence_results)
     return {
         "schema_version": SCHEMA_VERSION,
         "mode": "reconstruction",
@@ -235,7 +257,14 @@ def reconstruction_results_to_json(all_sequence_results: list[dict]) -> dict:
             "step_ratio": STEP_RATIO_THRESHOLD,
             "overlap_drop": OVERLAP_DROP_THRESHOLD,
             "obs_z": OBS_Z_THRESHOLD,
+            "break_rotation_factor": BREAK_ROTATION_FACTOR,
+            "break_shared_fraction": BREAK_SHARED_FRACTION,
+            "break_window": BREAK_WINDOW,
         },
+        "break_count": len(breaks),
+        "breaks": [
+            {"sequence": name, "frame_a": a, "frame_b": b} for name, a, b in breaks
+        ],
         "sequences": sequences,
     }
 

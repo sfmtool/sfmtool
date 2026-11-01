@@ -7,6 +7,9 @@ import click
 import numpy as np
 
 from .constants import (
+    BREAK_ROTATION_FACTOR,
+    BREAK_SHARED_FRACTION,
+    BREAK_WINDOW,
     OBS_WINDOW,
     OBS_Z_THRESHOLD,
     OVERLAP_BASELINE_WINDOW,
@@ -227,24 +230,41 @@ def _compute_extrapolation_errors(
     return results
 
 
-def _compute_shared_point_counts(
-    recon,
-    image_indexes: list[int],
-) -> dict[tuple[int, int], int]:
-    """Build a lookup of shared 3D point counts for adjacent image pairs.
+def _covisibility_lookup(recon) -> dict[tuple[int, int], int]:
+    """Shared 3D point count of every covisible image pair, keyed both ways.
 
-    Returns a dict mapping (img_idx_a, img_idx_b) → shared_count.
+    The counts come from `build_covisibility_pairs`, which counts every track
+    the two images both observe, points at infinity included, and leaves out
+    pairs whose viewing directions differ by more than 90°.
     """
     from .._image_pair_graph import build_covisibility_pairs
 
-    all_pairs = build_covisibility_pairs(recon)
-    pair_counts = {}
-    idx_set = set(image_indexes)
-    for i, j, count in all_pairs:
-        if i in idx_set and j in idx_set:
-            pair_counts[(i, j)] = count
-            pair_counts[(j, i)] = count
-    return pair_counts
+    lookup: dict[tuple[int, int], int] = {}
+    for i, j, count in build_covisibility_pairs(recon):
+        lookup[(i, j)] = count
+        lookup[(j, i)] = count
+    return lookup
+
+
+def _consecutive_shared_point_counts(
+    covisibility: dict[tuple[int, int], int],
+    seq_image_indexes: list[int],
+) -> tuple[list[int], dict[tuple[int, int], int]]:
+    """Shared 3D point counts of a sequence's consecutive image pairs.
+
+    Returns ``(per_edge, pair_counts)``: ``per_edge[k]`` is the count for the
+    sequence's edge ``(k, k+1)``, and ``pair_counts`` maps each consecutive
+    ``(img_a, img_b)`` pair of reconstruction image indexes, in both orders, to
+    its count.  A pair `build_covisibility_pairs` left out counts 0.
+    """
+    per_edge: list[int] = []
+    pair_counts: dict[tuple[int, int], int] = {}
+    for img_a, img_b in zip(seq_image_indexes, seq_image_indexes[1:]):
+        count = covisibility.get((img_a, img_b), 0)
+        per_edge.append(count)
+        pair_counts[(img_a, img_b)] = count
+        pair_counts[(img_b, img_a)] = count
+    return per_edge, pair_counts
 
 
 def _compute_per_image_mean_errors(
@@ -502,32 +522,21 @@ def _aggregate_flagged_edges(
 def _select_core_edges(
     flagged_edges: dict[tuple[int, int], list[str]],
     seq_image_indexes: list[int],
-    recon,
-) -> tuple[dict[tuple[int, int], list[str]], dict[tuple[int, int], int]]:
+    pair_counts: dict[tuple[int, int], int],
+) -> dict[tuple[int, int], list[str]]:
     """Cluster adjacent flagged edges and keep only the core edge per cluster.
 
     A single discontinuity at edge (A, A+1) causes the neighboring edges to
     also get flagged because even the nearest 2 extrapolation points straddle
     the break.  Consecutive flagged edges are clustered and the one with the
     most evidence (flag count) is kept, breaking ties by lowest shared 3D
-    point count.
+    point count, read from `pair_counts` (``(img_a, img_b)`` → count).
 
-    Returns `(core_edges, pair_counts)` where `core_edges` maps the kept edge
-    → its evidence, and `pair_counts` maps `(img_a, img_b)` → shared 3D point
-    count for every flagged edge (used both here for tie-breaking and by the
-    summary report).
+    Returns `core_edges`, mapping the kept edge → its evidence.
     """
     core_edges: dict[tuple[int, int], list[str]] = {}
-    pair_counts: dict[tuple[int, int], int] = {}
     if not flagged_edges:
-        return core_edges, pair_counts
-
-    # Compute shared point counts for all flagged edges up front.
-    context_indexes = set()
-    for a, b in flagged_edges:
-        context_indexes.add(seq_image_indexes[a])
-        context_indexes.add(seq_image_indexes[b])
-    pair_counts = _compute_shared_point_counts(recon, list(context_indexes))
+        return core_edges
 
     # Build clusters of adjacent edges.
     sorted_edges = sorted(flagged_edges.keys())
@@ -556,7 +565,182 @@ def _select_core_edges(
         )
         core_edges[best_edge] = flagged_edges[best_edge]
 
-    return core_edges, pair_counts
+    return core_edges
+
+
+# ---------------------------------------------------------------------------
+# Break verdict: which listed discontinuities are breaks in the solve.
+# See `constants.py` for the rule and the evidence behind its constants.
+# ---------------------------------------------------------------------------
+
+
+def _image_rig_frames(recon) -> np.ndarray | None:
+    """Each image's rig frame index from ``recon.rig_frame_data``, or None.
+
+    None when the reconstruction stores no rig frames, so the break verdict
+    then counts no image outside a sequence's own.
+    """
+    rig = recon.rig_frame_data
+    if rig is None or rig.get("image_frame_indexes") is None:
+        return None
+    return np.asarray(rig["image_frame_indexes"], dtype=np.int64)
+
+
+def _nearby_shared_point_counts(
+    recon,
+    seq_image_indexes: list[int],
+    image_rig_frames: np.ndarray | None,
+    window: int = BREAK_WINDOW,
+) -> list[int]:
+    """Per edge, the 3D points seen on both sides of it near it.
+
+    For the sequence's edge ``(k, k+1)``, counts the tracks observed both in an
+    image before the edge and in an image after it, near it: on the before side
+    the sequence's images ``k - window + 1 .. k``, on the after side its images
+    ``k + 1 .. k + window``.  When ``image_rig_frames`` gives each
+    reconstruction image's rig frame (from `_image_rig_frames`), every image in
+    the same rig frame as one of those sequence images counts with it: the
+    other sensors of a rig tie a sensor's path together across a frame where
+    that sensor alone sees nothing in common.  Without rig frames only the
+    sequence's own images count, so another sequence that merely shares the
+    numbering adds nothing.  Only track membership is read, so a point at
+    infinity counts like any other.
+
+    Each counted image takes the position of its sequence image.  A track then
+    counts for edge ``k`` exactly when two of its observations that are
+    consecutive in position, at positions ``p < q``, satisfy ``p <= k < q``,
+    ``p > k - window`` and ``q <= k + window``.  For each such pair that is the
+    run of edges ``max(p, q - window) .. min(q - 1, p + window - 1)``, and the
+    runs of one track's pairs do not overlap, so adding them up counts each
+    track once per edge.
+    """
+    n = len(seq_image_indexes)
+    if n < 2:
+        return []
+    seq = np.asarray(seq_image_indexes, dtype=np.int64)
+    position = np.full(recon.image_count, -1, dtype=np.int64)
+    if image_rig_frames is not None:
+        rig_frames = np.asarray(image_rig_frames, dtype=np.int64)
+        seq_frames = rig_frames[seq]
+        framed = seq_frames >= 0
+        frame_position = np.full(int(rig_frames.max(initial=-1)) + 1, -1, np.int64)
+        frame_position[seq_frames[framed]] = np.arange(n)[framed]
+        in_frame = rig_frames >= 0
+        position[in_frame] = frame_position[rig_frames[in_frame]]
+    position[seq] = np.arange(n)
+    counts = np.asarray(recon.observation_counts, dtype=np.int64)
+    images = np.asarray(recon.track_image_indexes, dtype=np.int64)
+    points = np.repeat(np.arange(len(counts), dtype=np.int64), counts)
+    pos = position[images]
+    counted = pos >= 0
+    points, pos = points[counted], pos[counted]
+    order = np.lexsort((pos, points))
+    points, pos = points[order], pos[order]
+    pair = (points[1:] == points[:-1]) & (pos[1:] > pos[:-1])
+    p, q = pos[:-1][pair], pos[1:][pair]
+    start = np.maximum(p, q - window)
+    end = np.minimum(q - 1, p + window - 1)
+    valid = start <= end
+    diff = np.zeros(n, dtype=np.int64)
+    np.add.at(diff, start[valid], 1)
+    np.add.at(diff, end[valid] + 1, -1)
+    return [int(c) for c in np.cumsum(diff)[: n - 1]]
+
+
+def _break_reference(
+    successive_rots: list[float],
+    frame_gaps: list[int],
+    successive_shared: list[int],
+    nearby_shared: list[int],
+) -> dict:
+    """Sequence-wide references the break verdict compares each edge against.
+
+    All four are medians over the consecutive pairs of registered images, so
+    the few breaks they are used to find do not raise them:
+
+    - ``rotation_per_frame_deg``: median of ``rotation / frame-number gap``.
+      Dividing by the gap before taking the median keeps the rate right when
+      the frame list has dropped or swapped frames, so the gaps vary.
+    - ``median_frame_gap``: median frame-number gap.
+    - ``median_shared_points``: median shared 3D point count of the pair.
+    - ``median_nearby_shared_points``: median count from
+      `_nearby_shared_point_counts`.
+    """
+    if not successive_rots:
+        return {
+            "rotation_per_frame_deg": 0.0,
+            "median_frame_gap": 1.0,
+            "median_shared_points": 0.0,
+            "median_nearby_shared_points": 0.0,
+        }
+    rates = [r / g for r, g in zip(successive_rots, frame_gaps)]
+    return {
+        "rotation_per_frame_deg": float(np.median(rates)),
+        "median_frame_gap": float(np.median(frame_gaps)),
+        "median_shared_points": float(np.median(successive_shared)),
+        "median_nearby_shared_points": float(np.median(nearby_shared)),
+    }
+
+
+def _classify_break(
+    *,
+    rotation_deg: float,
+    frame_gap: int,
+    shared_points: int,
+    nearby_shared_points: int,
+    reference: dict,
+) -> dict:
+    """Decide whether one edge is a break, and return the quantities it used.
+
+    The expected rotation is the sequence's rotation per unit of frame number
+    times ``max(frame_gap, median_frame_gap)``: an edge across dropped frames is
+    allowed the rotation of the frames it skips, and an edge closer in frame
+    number than the typical pair is still allowed a typical pair's rotation.
+    The edge is a break when its rotation exceeds `BREAK_ROTATION_FACTOR` times
+    that, its two images share fewer than `BREAK_SHARED_FRACTION` times the
+    sequence's median shared points, and the images near it on either side
+    share fewer than `BREAK_SHARED_FRACTION` times the median of that count.
+    When the expected rotation is 0 (a sequence whose cameras do not turn), any
+    rotation counts as exceeding it.
+    """
+    expected = reference["rotation_per_frame_deg"] * max(
+        float(frame_gap), reference["median_frame_gap"]
+    )
+    if expected > 0:
+        ratio = rotation_deg / expected
+    else:
+        ratio = float("inf") if rotation_deg > 0 else 0.0
+    shared_threshold = BREAK_SHARED_FRACTION * reference["median_shared_points"]
+    nearby_threshold = BREAK_SHARED_FRACTION * reference["median_nearby_shared_points"]
+    return {
+        "frame_gap": int(frame_gap),
+        "expected_rotation_deg": expected,
+        "rotation_ratio": ratio,
+        "shared_points": int(shared_points),
+        "shared_points_threshold": shared_threshold,
+        "nearby_shared_points": int(nearby_shared_points),
+        "nearby_shared_points_threshold": nearby_threshold,
+        "is_break": bool(
+            ratio > BREAK_ROTATION_FACTOR
+            and shared_points < shared_threshold
+            and nearby_shared_points < nearby_threshold
+        ),
+    }
+
+
+def _break_edges(all_sequence_results: list[dict]) -> list[tuple[str, int, int]]:
+    """Every listed discontinuity the break verdict calls a break.
+
+    Returns ``(sequence_name, frame_a, frame_b)`` per break, in sequence order
+    and then frame order.
+    """
+    found = []
+    for s in all_sequence_results:
+        frames = s["seq_frame_numbers"]
+        for (a, b), verdict in sorted(s["breaks"].items()):
+            if verdict["is_break"]:
+                found.append((s["sequence_name"], frames[a], frames[b]))
+    return found
 
 
 def analyze_reconstruction(
@@ -616,6 +800,11 @@ def analyze_reconstruction(
     # Per-image point sets drive the overlap-drop and obs-outlier signals.
     # Built once up front; reused across sequences.
     per_image_points = _build_per_image_point_sets(recon)
+    covisibility = _covisibility_lookup(recon)
+
+    # Rig frame of every image, so the break verdict can count the other
+    # sensors of a rig at the same frames; None without rig data.
+    image_rig_frames = _image_rig_frames(recon)
 
     all_sequence_results = []
 
@@ -672,6 +861,23 @@ def analyze_reconstruction(
         # Compute median successive motion as scale reference
         median_trans = float(np.median(successive_trans))
         median_rot = float(np.median(successive_rots))
+
+        # References for the break verdict, from every consecutive pair.
+        frame_gaps = [
+            seq_frame_numbers[i + 1] - seq_frame_numbers[i] for i in range(n - 1)
+        ]
+        successive_shared, pair_counts = _consecutive_shared_point_counts(
+            covisibility, seq_image_indexes
+        )
+        nearby_shared = _nearby_shared_point_counts(
+            recon, seq_image_indexes, image_rig_frames
+        )
+        break_reference = _break_reference(
+            [float(r) for r in successive_rots],
+            frame_gaps,
+            successive_shared,
+            nearby_shared,
+        )
 
         # Step 2: Secondary signals.  These are complementary to pose
         # extrapolation — polynomial fits can absorb smooth scale/slope
@@ -734,9 +940,20 @@ def analyze_reconstruction(
         # Aggregate per-frame flags into per-edge discontinuities, then
         # cluster adjacent edges down to one core edge per break.
         flagged_edges = _aggregate_flagged_edges(flagged_frames, n)
-        core_edges, pair_counts = _select_core_edges(
-            flagged_edges, seq_image_indexes, recon
-        )
+        core_edges = _select_core_edges(flagged_edges, seq_image_indexes, pair_counts)
+
+        # Break verdict for each listed discontinuity.  Core edges join
+        # consecutive images, so edge (a, b) is the sequence's edge index a.
+        breaks = {
+            (a, b): _classify_break(
+                rotation_deg=float(successive_rots[a]),
+                frame_gap=frame_gaps[a],
+                shared_points=successive_shared[a],
+                nearby_shared_points=nearby_shared[a],
+                reference=break_reference,
+            )
+            for a, b in core_edges
+        }
 
         # Mean reprojection error per endpoint of each core edge (context for
         # the summary report).
@@ -772,6 +989,8 @@ def analyze_reconstruction(
             "trans_threshold": trans_threshold,
             "rot_threshold": rot_threshold,
             "core_edge_reproj_errors": reproj_errors,
+            "break_reference": break_reference,
+            "breaks": breaks,
         }
         all_sequence_results.append(seq_result)
 
