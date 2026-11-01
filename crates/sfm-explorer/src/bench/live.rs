@@ -219,6 +219,10 @@ pub(crate) struct Evaluations {
     /// value that was installed, so a track that has not moved since compares
     /// equal.
     settled: HashMap<(ReconId, ItemId), (Inputs, Result<(), String>)>,
+    /// The gate the next evaluation queued waits on before it reads anything,
+    /// set by [`AppState::hold_next_evaluation`].
+    #[cfg(test)]
+    held: Option<std::sync::mpsc::Receiver<()>>,
 }
 
 impl AppState {
@@ -315,6 +319,14 @@ impl AppState {
     /// the fast queue, replacing the one the driver has waiting there, if any.
     fn queue_evaluation(&mut self, inputs: Inputs, rank: QuietRank) -> Result<(), String> {
         let job = self.evaluate_job(inputs.subject)?;
+        #[cfg(test)]
+        let job: EvaluationJob = match self.bench_evaluations.held.take() {
+            Some(gate) => Box::new(move |progress: &Progress<'_>| {
+                let _ = gate.recv();
+                job(progress)
+            }),
+            None => job,
+        };
         let label = self.subject_label(inputs.subject);
         let (sender, answers) = std::sync::mpsc::channel();
         let dropped = sender.clone();
@@ -683,6 +695,17 @@ impl AppState {
             .queued
             .as_ref()
             .map(|queued| Arc::clone(&queued.inputs.track))
+    }
+
+    /// Make the next evaluation queued wait, once it starts, until the
+    /// returned sender sends or is dropped, for the tests that move its inputs
+    /// while it runs: without the hold, a worker that has already answered by
+    /// the next drive has its answer landed and the next evaluation queued.
+    #[cfg(test)]
+    pub(crate) fn hold_next_evaluation(&mut self) -> std::sync::mpsc::Sender<()> {
+        let (open, gate) = std::sync::mpsc::channel();
+        self.bench_evaluations.held = Some(gate);
+        open
     }
 
     /// Whether the running evaluation has been asked to stop, for the tests

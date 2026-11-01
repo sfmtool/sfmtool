@@ -227,6 +227,9 @@ fn a_selection_change_cancels_the_viewed_evaluation_and_a_revisit_evaluates_noth
     let (mut state, id) = state();
     let other = other_point(&state, id);
     view(&mut state, id, POINT);
+    // Held, so the worker cannot answer before the next frame's drive, which
+    // would land the stale answer and queue the next evaluation in turn.
+    let open = state.hold_next_evaluation();
     state.drive_bench_evaluation();
     let read = state
         .running_evaluation_track()
@@ -240,6 +243,7 @@ fn a_selection_change_cancels_the_viewed_evaluation_and_a_revisit_evaluates_noth
         "the selection change did not cancel the evaluation"
     );
     assert!(!state.viewed_evaluation_running());
+    open.send(()).expect("the evaluation is held");
     state.land_running_evaluation();
     state.settle_bench_evaluation();
     assert_eq!(

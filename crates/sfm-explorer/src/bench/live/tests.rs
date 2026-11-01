@@ -160,6 +160,9 @@ fn a_step_that_changes_an_input_starts_a_new_evaluation() {
 fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
+    // Held, so the worker cannot answer before the next frame's drive, which
+    // would land the stale answer and queue the next evaluation in turn.
+    let open = state.hold_next_evaluation();
     state.drive_bench_evaluation();
     let read = state
         .running_evaluation_track()
@@ -184,10 +187,15 @@ fn an_answer_for_inputs_that_have_moved_on_is_not_shown_as_current() {
         ),
         "a second evaluation started beside the stale one"
     );
+    assert!(
+        state.running_evaluation_cancelled(),
+        "the stale evaluation was not asked to stop"
+    );
     assert!(!state.bench_evaluation_running(id, &label));
 
     // Whatever it answers -- cancelled, or measured before it saw the flag --
     // is dropped, and the track stays as the step left it.
+    open.send(()).expect("the evaluation is held");
     state.land_running_evaluation();
     assert!(
         Arc::ptr_eq(&track(&state, id, &label), &edited),
