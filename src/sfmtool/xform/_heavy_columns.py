@@ -134,12 +134,16 @@ class AddThumbnailsTransform:
 
         workspace = Path(recon.workspace_dir)
         embedded = recon.feature_source == "embedded_patches"
+        # Each getter builds a new list on every access, so read each once.
         image_hashes = recon.image_file_hashes if embedded else None
+        # The hash a verified .sift copy carries: the photograph's in an
+        # embedded_patches file, the .sift content's in a sift_files one.
+        sift_hashes = image_hashes if embedded else recon.sift_content_hashes
         rows: list[np.ndarray] = []
         failures: list[str] = []
         from_sift = 0
         for index, name in enumerate(recon.image_names):
-            row = _verified_sift_thumbnail(recon, index, name)
+            row = _verified_sift_thumbnail(recon, index, name, embedded, sift_hashes)
             if row is not None:
                 from_sift += 1
                 rows.append(np.ascontiguousarray(row, dtype=np.uint8))
@@ -190,14 +194,20 @@ class AddThumbnailsTransform:
 
 
 def _verified_sift_thumbnail(
-    recon: SfmrReconstruction, index: int, name: str
+    recon: SfmrReconstruction,
+    index: int,
+    name: str,
+    embedded: bool,
+    hashes: list[bytes] | None,
 ) -> np.ndarray | None:
     """The image's ``.sift`` thumbnail when the ``.sift`` verifiably belongs to it.
 
     In a ``sift_files`` file the ``.sift`` content hash must equal the image's
     ``sift_content_hashes`` entry; in an ``embedded_patches`` file the
     ``.sift``'s recorded ``image_file_xxh128`` must equal the image's
-    ``image_file_hashes`` entry. ``None`` when there is no such ``.sift``.
+    ``image_file_hashes`` entry. ``embedded`` says which kind ``recon`` is, and
+    ``hashes`` is that column, read once by the caller. ``None`` when there is
+    no such ``.sift``.
     """
     from ..sift.file import get_sift_path_from_recon
     from ..fileio import SiftFile
@@ -212,12 +222,11 @@ def _verified_sift_thumbnail(
         reader = SiftFile(sift_path)
     except OSError:
         return None
-    if recon.feature_source == "embedded_patches":
+    if embedded:
         recorded = reader.metadata.get("image_file_xxh128")
-        expected = bytes(recon.image_file_hashes[index]).hex()
     else:
         recorded = reader.content_hash.get("content_xxh128")
-        expected = bytes(recon.sift_content_hashes[index]).hex()
+    expected = bytes(hashes[index]).hex()
     if recorded != expected:
         return None
     return np.asarray(reader.read_thumbnail(), dtype=np.uint8)
