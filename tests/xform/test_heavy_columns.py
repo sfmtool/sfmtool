@@ -387,6 +387,8 @@ def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
     offsets = np.concatenate([[0], np.cumsum(added.observation_counts)[:-1]]).astype(
         int
     )
+    bare_keypoints = np.asarray(bare.keypoints_xy)
+    bare_points = np.asarray(bare.track_point_indexes)
     for entry in unmoved:
         point = int(entry["point_index"])
         reference_image = entry["reference_image"]
@@ -398,9 +400,7 @@ def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
             )
         np.testing.assert_array_equal(
             np.asarray(entry["keypoints"], dtype=np.float32).reshape(-1, 2),
-            np.asarray(bare.keypoints_xy)[
-                np.asarray(bare.track_point_indexes) == entry["point_index"]
-            ],
+            bare_keypoints[bare_points == entry["point_index"]],
         )
         if entry["bitmap"] is not None:
             expected[int(entry["point_index"])] = entry["bitmap"]

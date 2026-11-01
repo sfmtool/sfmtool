@@ -95,7 +95,8 @@ def run(name: str, sfmr: Path, n_tracks: int, seed: int, out_dir: Path) -> None:
     n_images = len(imgs)
     rot = [_quat_matrix(q) for q in np.asarray(r.quaternions_wxyz)]
     trans = np.asarray(r.translations)
-    cams = [r.cameras[int(c)] for c in np.asarray(r.camera_indexes)]
+    cameras = r.cameras
+    cams = [cameras[int(c)] for c in np.asarray(r.camera_indexes)]
     # Points in front of a pinhole camera sit at z < 0 in this convention
     # (checked against keypoints on every dataset); a fisheye accepts both.
     fisheye = ["FISHEYE" in str(c.model) for c in cams]
