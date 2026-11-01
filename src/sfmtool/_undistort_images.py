@@ -523,6 +523,29 @@ def undistort_reconstruction_images(
         _surviving_mask,
     ) = _remap_tracks(recon, per_image_remap)
 
+    # === Pinholes for rig-sensor cameras no image uses ===
+    # A subset of a rig reconstruction can keep a sensor whose images were all
+    # dropped. Its camera has no image to read a size from, so its pinhole is
+    # fitted at the camera's own width and height, and the sensor keeps a camera.
+    if recon.rig_frame_data is not None:
+        for ci in recon.rig_frame_data["sensor_camera_indexes"]:
+            ci = int(ci)
+            if ci in pinhole_cameras:
+                continue
+            shared_cam = cameras_meta[ci]
+            if fit == "outside":
+                pinhole = shared_cam.best_fit_outside_pinhole(
+                    shared_cam.width, shared_cam.height
+                )
+            else:
+                pinhole = shared_cam.best_fit_inside_pinhole(
+                    shared_cam.width, shared_cam.height
+                )
+            pinhole_cameras[ci] = pinhole
+            print(f"\nCamera {ci} (rig sensor, no images):")
+            _print_camera_params("Original", shared_cam)
+            _print_camera_params("Undistorted", pinhole)
+
     # === Build contiguous pinhole camera list ===
     sorted_cam_idxs = sorted(pinhole_cameras)
     cam_idx_to_new_idx = {idx: j for j, idx in enumerate(sorted_cam_idxs)}
