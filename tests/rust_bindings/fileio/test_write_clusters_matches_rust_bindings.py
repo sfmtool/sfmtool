@@ -87,7 +87,9 @@ def test_member_feature_past_feature_count_is_refused(tmp_path):
     kwargs = _clusters_kwargs()
     kwargs["member_features"][1] = 150  # feature_counts[1] = 150
     path = tmp_path / "clusters.matches"
-    with pytest.raises(IOError, match=r"member_features\[1\] = 150 >= feature_counts"):
+    with pytest.raises(
+        ValueError, match=r"member_features\[1\] = 150 >= feature_counts"
+    ):
         write_clusters_matches(path, **kwargs)
     assert not path.exists()
 
@@ -95,7 +97,7 @@ def test_member_feature_past_feature_count_is_refused(tmp_path):
 def test_member_image_past_image_list_is_refused(tmp_path):
     kwargs = _clusters_kwargs()
     kwargs["member_images"][0] = 3
-    with pytest.raises(IOError, match=r"member_images\[0\] = 3 >= image_count 3"):
+    with pytest.raises(ValueError, match=r"member_images\[0\] = 3 >= image_count 3"):
         write_clusters_matches(tmp_path / "clusters.matches", **kwargs)
 
 
