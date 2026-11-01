@@ -6,6 +6,7 @@ column held as per-point or per-image records is gathered once and returned as
 the same array on each read; a column held as one block is a view of it."""
 
 import gc
+import sys
 
 import numpy as np
 import pytest
@@ -119,6 +120,10 @@ def every_column(seoul_bull_ground_truth_sfmr):
 
 def _assert_read_only(array):
     assert not array.flags.writeable
+    # Nor can a caller turn writing back on: numpy refuses for an array whose
+    # base is not a writeable buffer.
+    with pytest.raises(ValueError, match="WRITEABLE"):
+        array.setflags(write=True)
     if array.size:
         with pytest.raises(ValueError, match="read-only"):
             array[(0,) * array.ndim] = array[(0,) * array.ndim]
@@ -166,12 +171,20 @@ class TestEveryGetter:
         assert np.shares_memory(first, second)
         assert first.base is recon
 
-    def test_a_view_keeps_its_reconstruction_alive(self, every_column):
-        recon, expected = every_column
+    def test_a_view_keeps_its_reconstruction_alive(self, seoul_bull_ground_truth_sfmr):
+        # Loaded here rather than taken from a fixture, which pytest would keep
+        # alive itself.
+        recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        expected = read_sfmr(seoul_bull_ground_truth_sfmr)["keypoints_xy"]
         view = recon.keypoints_xy
-        del recon, every_column
+        del recon
         gc.collect()
-        np.testing.assert_array_equal(view, expected["keypoints_xy"])
+        # The view's base is now the only reference to the reconstruction.
+        assert sys.getrefcount(view.base) == 2
+        # Allocate and free memory so that a freed block would be reused.
+        junk = [np.ones(len(expected) * 2, dtype=np.float32) for _ in range(8)]
+        del junk
+        np.testing.assert_array_equal(view, expected)
 
     def test_a_copy_is_writeable_and_reaches_nothing(self, every_column):
         recon, expected = every_column
