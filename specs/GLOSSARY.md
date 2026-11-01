@@ -320,7 +320,7 @@ Python keep their own names and are not covered here.
 | **`*Options`** | a struct the caller fills with its choices of how a function or algorithm runs, usually with an `impl Default`: RANSAC thresholds, iteration caps, seeds, gates, sizes, and nested settings structs. `HomographyOptions`, `BundleAdjustOptions`, `TrackAtPixelOptions`, `WriteOptions` | `*Params`, `*Config`, `*Settings` for the same thing | the tree had no boundary between the two suffixes. `HomographyOptions` and `RansacPhotometricParams` hold the same RANSAC knobs, `EvaluateOptions` nests `ClusterRefineParams`, and `ClusterTracksOptions` and `ClusterRefineParams` are both a cluster step's thresholds; the split followed the module a type was written in (`geometry/` and `bench/` chose *Options*, `patch/` and `spherical/` *Params*). *Options* wins because *parameters* already has a meaning here that a settings struct would collide with: a camera model's parameters, the values COLMAP and the `.sfmr` camera store. It is also the word the files already use when they record these settings, `tool_options` in an `.sfmr` and `refine_options` in a `.matches` file |
 | **`*Params`** | the values a model or kernel is evaluated with, computed for each call rather than chosen: a camera's `K`, `R` and `t` (`CameraParams`), a GPU uniform block that mirrors a WGSL `struct Params`, the per-keypoint window geometry SIFT's histogram fills share (`DescParams`, `HistParams`), the variational flow settings derived for each pyramid level (`VariationalParams`) | a settings struct | these have no meaningful default and nobody chooses them, which is the line between them and *Options* |
 
-*Direction of travel:* 23 settings structs in `sfmtool-core` still end in
+*Direction of travel:* 25 settings structs in `sfmtool-core` still end in
 `Params` (among them `SiftParams`, `DisFlowParams`, `KdForestParams`,
 `ConstellationParams` and the `patch` module's `ClusterRefineParams`,
 `KeypointLocalizeParams`, `KeypointSubpixelParams`,
@@ -368,7 +368,7 @@ tests. A name with no `_`, reached by a path with no `_`-prefixed component, is
 public. A re-exporting subpackage (`compare/`, `feature_match/`, `strips/`,
 `visualization/`, `xform/`) has `_`-named modules because its public names are
 the ones its `__init__.py` re-exports. The full rule is in
-[AGENTS.md](../AGENTS.md) § "Python names and privacy".
+[STANDARDS.md](STANDARDS.md) § "Python names mark what is public".
 
 ## Contrast pairs that are not synonyms
 

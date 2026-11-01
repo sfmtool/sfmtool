@@ -51,66 +51,6 @@ run them in full on the last commit:
   run, not as a pass. That failure alone does not block a push or a PR, since
   CI's `ui-test-windows` job runs it, but the rest of `ui_basic` must pass.
 
-### Python names and privacy
-
-A leading `_` on a Python module, function, class, constant or attribute name
-means the name is internal to `sfmtool`: it is not public API. Code inside
-`src/sfmtool/` may import an internal name from any other subpackage
-(`_commands/match.py` imports `feature_match._run`, and `analyze/summary.py`
-imports `camera.cameras._CAMERA_PARAM_NAMES`). Code outside the package, such
-as `scripts/`, the docs, spec examples and users' code, does not import
-internal names. A test may import an internal name when that name is what it
-tests, and otherwise uses public names. A name with no `_`, reached by a path
-with no `_`-prefixed component, is public API. The compiled extension
-`sfmtool._sfmtool` is internal by this rule; the public home of its bindings is
-the module of the same name on the package, `sfmtool.<submodule>`
-(`from sfmtool.fileio import read_sfmr`), and `tests/test_module_layout.py` fails
-on a path into the extension from `tests/` or `scripts/`. See
-`specs/python-bindings.md`.
-
-- **Re-exporting subpackage.** Its `__init__.py` imports names from its own
-  modules and lists them in `__all__` (`compare/`, `feature_match/`, `strips/`,
-  `visualization/`, `xform/`). Its modules are `_`-named, and its public names
-  are the ones the `__init__.py` re-exports. Import a re-exported name from the
-  subpackage (`from ..visualization import render_heatmap_overlay`), not from
-  the `_`-named module that defines it.
-- **Module-path subpackage.** Its `__init__.py` re-exports nothing from its own
-  modules, and callers import `sfmtool.<subpackage>.<module>` (`align/`,
-  `analyze/`, `camera/`, `camrig/`, `colmap/`, `merge/`, `motion/`, `rig/`,
-  `sift/`). A plain module name there is public; a module that is not meant as
-  API, such as a helper for one sibling, takes `_` (`motion/_recon_console.py`).
-- **The `sfmtool` package root** binds the public names of its Python
-  submodules through `_LAZY_NAMES` in `__init__.py`, and the binding modules
-  and `rig` through `_LAZY_SUBPACKAGES`, so its own modules are `_`-named,
-  except `cli.py`, the `sfm` entry point named in `pyproject.toml`, and the
-  binding modules (`analysis.py`, `geometry.py`, `fileio.py`, …), each of which
-  re-exports one extension submodule. The root re-exports no binding flat.
-- **`_commands/`** is internal as a whole, because of its underscore. Inside
-  it, a plain name is a command module, one per row in `cli.COMMANDS`, and a
-  helper shared by several commands takes `_` (`_range_options.py`) so it is
-  not mistaken for a command.
-
-### Rust module files and settings structs
-
-A module with submodules is a `foo.rs` file beside a `foo/` directory, not
-`foo/mod.rs`. Do not add a new `mod.rs`. About 190 modules in the workspace
-already use this form and 44 `mod.rs` files remain; convert one when you are
-restructuring that module anyway.
-
-A struct the caller fills with its choices of how a function or algorithm
-runs is named `*Options`, usually with an `impl Default`. That holds for RANSAC
-thresholds, iteration caps, seeds, gates, sizes and nested settings alike.
-`*Params` names the values a model or kernel is evaluated with, computed for
-each call rather than chosen: a camera's `K`, `R` and `t`
-(`CameraParams`), a GPU uniform block that mirrors a WGSL `struct Params`, the
-per-keypoint window geometry SIFT's histogram fills share, the variational
-flow settings derived for each pyramid level. `*Config` is not a
-settings suffix (`TwoViewGeometryConfig` keeps COLMAP's name for a pair's
-geometry type), and the viewer's `*DisplaySettings` and `SplitSettings` are UI
-state, not function arguments. 25 public settings structs in `sfmtool-core` still carry
-`*Params` or `*Config`; new ones use `*Options`. See `specs/GLOSSARY.md` §
-"Rust type names".
-
 ### Quality standards
 
 Every change is held to [`specs/STANDARDS.md`](specs/STANDARDS.md); read it
@@ -120,12 +60,34 @@ are supported; a function that can run longer than about a second takes a
 a library crate's public API never panics (it returns an error, which a
 binding raises as a Python exception); logic lives in Rust, with no Python
 wrapper that repeats what a binding does; every file format has the same I/O
-shape in `sfmtool.fileio`, validated in its format crate; a convention has no
-documented exceptions; a test asserts something that can fail; an
-`sfm-explorer` item is private or `pub(crate)` unless the crate's public
-interface exports it, which the `unreachable_pub` lint checks for every item
-but struct fields. If code breaks a standard, fix the code; fix a spec or doc
-only where the code is right.
+shape in `sfmtool.fileio`, validated in its format crate; an `sfm-explorer`
+item is private or `pub(crate)` unless the crate's public interface exports
+it, which the `unreachable_pub` lint checks for every item but struct fields;
+a leading `_` marks a Python name internal, and code outside `src/sfmtool/`
+imports only public names (a test also imports the internal name it tests);
+`import sfmtool` and `sfm --help` load no Python submodule and no command
+module; a Rust module with submodules is `foo.rs` beside `foo/`; a settings struct the caller fills is `*Options`; every source
+file carries the license header; rustdoc builds without warnings; the
+workspace builds at its MSRV, and the viewer without its `mcp` feature; a
+convention has no documented exceptions; a test asserts something that can
+fail. If code breaks a standard, fix the code; fix a spec or doc only where
+the code is right.
+
+The ones easiest to miss while editing:
+
+- A new public name from a Python submodule goes in `_LAZY_NAMES` in
+  `sfmtool/__init__.py` and in its `if TYPE_CHECKING:` imports, not in a
+  top-level import; a new command is a row in `cli.COMMANDS`, its one-line
+  help the first sentence of its docstring. A Python module that is not
+  public API takes a `_` name.
+- A new Rust module with submodules starts as `foo.rs` beside `foo/`, never
+  `foo/mod.rs`; a new settings struct is `*Options` (`specs/GLOSSARY.md` §
+  "Rust type names").
+- Every new `.rs` or `.py` file starts with the two-line `Copyright The SfM
+  Tool Authors` / `SPDX-License-Identifier: Apache-2.0` header.
+- A doc link from a public item to a private one is a plain code span, not a
+  reason to widen the item's visibility.
+- An item that only the viewer's MCP code uses is gated on the `mcp` feature.
 
 ### Implementing a change
 
@@ -426,31 +388,16 @@ backlog and keep them honest as findings get addressed:
   one it exits with status 1 and an error saying it could not create the
   window's GPU surface (or find a GPU adapter). See `specs/gui/architecture.md` §
   "Testing".
-- Rustdoc warnings are **errors**, via `[workspace.lints.rustdoc]` in the root
-  `Cargo.toml` (each crate opts in with `[lints] workspace = true`). That means
-  a plain `cargo doc` fails on a broken intra-doc link, not just `pixi run doc`.
-  The gate documents private items, so links written inside private modules are
-  checked too. A link to a genuinely private item from a **public** item's doc
-  is an error (`private_intra_doc_links`) — write those as a plain code span
-  (`` `foo` ``) rather than widening visibility. Method refs inside an inherent
-  impl need `Self::`; sibling private modules need `super::`.
-- **`sfmtool` and `sfm` load their Python modules lazily.** `import sfmtool`
-  binds the extension's names and nothing else; the names from its Python
-  submodules (`get_sift_path_for_image`, `extract_sift_with_colmap`, …) are bound on first
-  use through the `__getattr__` in `sfmtool/__init__.py`, so a new public
-  name from a Python submodule goes in its `_LAZY_NAMES` table, not in an
-  import line. `sfm` imports a command's module only when that command runs, and
-  lists the commands in `--help` from `COMMANDS` in `cli.py`, so a new command
-  is a row there, its one-line help the first sentence of its docstring, and a
-  command module does no work at import time beyond defining the command.
-  `tests/test_lazy_loading.py` checks both, including that `import sfmtool`
-  and `sfm --help` import none of numpy, OpenCV and pycolmap. See
-  `specs/cli/README.md` § "How `sfm` loads its commands".
-- Every `.rs` under `crates/` and every `.py` under `src/`, `tests/` and
-  `scripts/` opens with the two-line `Copyright The SfM Tool Authors` /
-  `SPDX-License-Identifier: Apache-2.0` header (after the shebang, where there
-  is one), and a new file without it fails
-  `crates/sfmtool-core/tests/license_headers.rs`.
+- Rustdoc warnings are **errors** in a plain `cargo doc` too, not just in
+  `pixi run doc`, and the gate documents private items, so a broken link inside
+  a private module fails the build. See
+  [`specs/STANDARDS.md`](specs/STANDARDS.md#rustdoc-builds-without-warnings)
+  for how to write links that build.
+- **`sfmtool` and `sfm` load their Python modules lazily.** A public name
+  added by a top-level import in `sfmtool/__init__.py` makes `import
+  sfmtool` load its submodule, and a command module with no row in
+  `cli.COMMANDS` fails `tests/test_lazy_loading.py`. See
+  [`specs/STANDARDS.md`](specs/STANDARDS.md#importing-sfmtool-and-sfm-loads-only-what-is-used).
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.
@@ -513,26 +460,16 @@ backlog and keep them honest as findings get addressed:
   start.
 - The `xform` sub-commands are specced under
   `specs/cli/reconstruction/xform/` rather than as top-level commands.
-- Python 3.14 and Rust 1.99 are pinned in `pixi.toml`. That is the *development*
-  toolchain, and it is deliberately not the same thing as the MSRV: the workspace
-  declares `rust-version = "1.98"` in `[workspace.package]` (inherited by every
-  crate in the workspace), because the PyPI sdist compiles this workspace on the
-  user's own rustc. Wheels are published for x86-64 Linux, x86-64 Windows and
-  Apple-silicon macOS, so everyone else (for example Intel Macs, other Linux
-  architectures and musl Linux) builds from the sdist with the rustc they
-  have. The `msrv` job in `ci.yml` builds against that floor; it reads the
-  version out of `Cargo.toml`, so raise
-  the MSRV there and nowhere else. The same job also checks `sfm-explorer`
-  with `--no-default-features`, the only build that compiles the viewer
-  without its `mcp` feature, since `sfmtool-py` turns it on for every
-  workspace build, and re-checks the viewer's library there with `-D
-  warnings`, so an item only the MCP code uses has to be gated on the
-  feature. The floor is deliberately kept one release
-  behind the dev toolchain rather than pinned to whatever the dependency tree
-  needs today, so a routine dependency bump does not immediately force an MSRV
-  bump with it. Bumping a dependency can raise the floor silently —
-  `libsqlite3-sys` forced 1.95 while declaring no `rust-version` — so trust that
-  job over dependency metadata.
+- Python 3.14 and Rust 1.99 are pinned in `pixi.toml`. That is the
+  *development* toolchain, not the MSRV: the workspace declares the lower
+  `rust-version = "1.98"` in `[workspace.package]`, and the code must build
+  with it ([`specs/STANDARDS.md`](specs/STANDARDS.md#code-builds-at-the-msrv-and-without-the-viewers-mcp-feature)
+  says why). The `msrv` job in `ci.yml` builds against that floor, reading the
+  version out of `Cargo.toml`, and also checks `sfm-explorer` with
+  `--no-default-features`, the only build that compiles the viewer without its
+  `mcp` feature, since `sfmtool-py` turns it on for every workspace build. A
+  local build passes code that only that job fails. Bumping a dependency can
+  raise the floor silently, so trust that job over dependency metadata.
 - A workspace can supply per-directory camera intrinsics via
   `camera_config.json` files; resolution is closest-ancestor-wins, capped at
   the workspace root. See `src/sfmtool/camera/config.py` and

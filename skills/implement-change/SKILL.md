@@ -277,7 +277,9 @@ and hosts the pictures:
 > checked out. You are the only agent running, so building and testing are
 > allowed. Do not invoke the `implement-change` skill; you are the
 > implementer it launched. Read `AGENTS.md` first (writing style, spec rules,
-> "Quality reports") and `specs/STANDARDS.md`; read `specs/GLOSSARY.md`
+> "Quality reports") and `specs/STANDARDS.md` (interface contracts, Python
+> and Rust names and module layout, the license header, the rustdoc and MSRV
+> builds); read `specs/GLOSSARY.md`
 > before naming anything; read the specs for the area you change; read
 > `specs/TEMPLATE.md` when changing a spec's opening or adding a spec.
 >
@@ -363,7 +365,9 @@ and hosts the pictures:
 > out. You did not write it. You are the only agent running, so building and
 > testing are allowed. Do not invoke the `implement-change` skill; you are the
 > auditor it launched. Read `AGENTS.md` first (writing style, spec rules,
-> "Quality reports") and `specs/STANDARDS.md`.
+> "Quality reports") and `specs/STANDARDS.md` (interface contracts, Python
+> and Rust names and module layout, the license header, the rustdoc and MSRV
+> builds).
 >
 > **The change that was asked for:** <the change>
 >

@@ -1,7 +1,9 @@
 # Quality Standards
 
-The rules every library function, binding, Python module, test and spec in
-sfmtool is held to, whatever module it is in. Each section states one standard:
+The rules every library function, binding, Python module, source file, test
+and spec in sfmtool is held to, whatever module it is in: the contracts of its
+interfaces, how its names and modules are laid out, and what every build must
+pass. Each section states one standard:
 the rule, why it exists, how to check code against it and what is out of scope.
 The `audit-hygiene` and `audit-specs` skills check against this file, and
 every implementer and auditor agent that makes or reviews a change reads it,
@@ -163,7 +165,7 @@ arguments a binding already checks, re-reads a file a binding already reads,
 converts a binding's result into another container for no caller-visible
 reason, or only forwards to a `_sfmtool` binding under another name. Also look
 at the package root's `_LAZY_NAMES`, which binds Python names only
-(`AGENTS.md` § "Python names and privacy" and
+(§ [Python names mark what is public](#python-names-mark-what-is-public) and
 [python-bindings.md](python-bindings.md) state the root's rules). Confirm by
 reading the binding and its Rust code, and cite the duplicated check or read
 on both sides.
@@ -225,6 +227,221 @@ interface above and not re-exported by a bare `pub use` on the way to it. Out
 of scope: the other crates, whose `pub` items are their public API, and the
 integration tests in `crates/sfm-explorer/tests/`, each of which is its own
 crate.
+
+## Python names mark what is public
+
+A leading `_` on a Python module, function, class, constant or attribute name
+means the name is internal to `sfmtool`: it is not public API. A name with no
+`_`, reached by a path with no `_`-prefixed component, is public API. Code
+inside `src/sfmtool/` may import an internal name from any other subpackage
+(`_commands/match.py` imports `feature_match._run`, and `analyze/summary.py`
+imports `camera.cameras._CAMERA_PARAM_NAMES`). Code outside the package, such
+as `scripts/`, the docs, spec examples and users' code, does not import
+internal names. A test may import an internal name when that name is what it
+tests, and otherwise uses public names. This exists so that a name says by
+itself whether callers outside the package depend on it, and so whether it
+can change without a compatibility cost.
+
+The compiled extension `sfmtool._sfmtool` is internal by this rule. The public
+home of its bindings is the module of the same name on the package,
+`sfmtool.<submodule>` (`from sfmtool.fileio import read_sfmr`); see
+[python-bindings.md](python-bindings.md). Each part of the package has one of
+these shapes:
+
+- **Re-exporting subpackage.** Its `__init__.py` imports names from its own
+  modules and lists them in `__all__` (`compare/`, `feature_match/`, `strips/`,
+  `visualization/`, `xform/`). Its modules are `_`-named, and its public names
+  are the ones the `__init__.py` re-exports. A caller imports a re-exported
+  name from the subpackage (`from ..visualization import
+  render_heatmap_overlay`), not from the `_`-named module that defines it.
+- **Module-path subpackage.** Its `__init__.py` re-exports nothing from its own
+  modules, and callers import `sfmtool.<subpackage>.<module>` (`align/`,
+  `analyze/`, `camera/`, `camrig/`, `colmap/`, `merge/`, `motion/`, `rig/`,
+  `sift/`). A plain module name there is public; a module that is not meant as
+  API, such as a helper for one sibling, takes `_` (`motion/_recon_console.py`).
+- **The `sfmtool` package root** binds the public names of its Python
+  submodules through `_LAZY_NAMES` in `__init__.py`, and the binding modules
+  and `rig` through `_LAZY_SUBPACKAGES`, so its own modules are `_`-named,
+  except `cli.py`, the `sfm` entry point named in `pyproject.toml`, and the
+  binding modules (`analysis.py`, `geometry.py`, `fileio.py`, …), each of which
+  re-exports one extension submodule. The root re-exports no binding flat.
+- **`_commands/`** is internal as a whole, because of its underscore. Inside
+  it, a plain name is a command module, one per row in `cli.COMMANDS`, and a
+  helper shared by several commands takes `_` (`_range_options.py`) so it is
+  not mistaken for a command.
+
+Tests already check part of this: `tests/test_module_layout.py` fails on a
+path into the extension from `tests/` or `scripts/` outside its allowlist, and
+on a script import that names an internal module or name;
+`tests/test_lazy_loading.py` fails when the root binds a binding flat and when
+a command module's command has no row in `cli.COMMANDS`. Look for what they do
+not check:
+
+- An internal name imported in a spec example, a page of the docs site
+  (`sfmtool/sfmtool.github.io`) or a test that does not test that name.
+- A plain-named module in a re-exporting subpackage, or a caller that imports
+  a re-exported name from the `_`-named module that defines it.
+- A plain-named module in a module-path subpackage that only one sibling uses,
+  or a plain-named helper in `_commands/` that defines no command.
+- A public name of a Python submodule that the package root binds by an import
+  line rather than through `_LAZY_NAMES`.
+
+Out of scope: local names inside a function body, and the Rust crates, whose
+visibility is declared by the language.
+
+## Importing sfmtool and sfm loads only what is used
+
+`import sfmtool` binds the extension's names and nothing else. The public names
+of its Python submodules are bound on first use through the `__getattr__` in
+`sfmtool/__init__.py`, from its `_LAZY_NAMES` table. A new public name from a
+Python submodule is an entry in that table and in the `if TYPE_CHECKING:`
+imports beside it, which type checkers read, not a top-level import. `sfm`
+imports a command's module only when that command runs, and lists the commands
+in `--help` from `COMMANDS` in `cli.py`. A new command is a row there, its
+one-line help is the first sentence of its docstring, and a command module does
+no work at import time beyond defining the command. This exists so that
+`import sfmtool` and `sfm --help` stay fast: neither imports numpy, OpenCV or
+pycolmap, and a command that needs none of them, such as `sfm explorer`, does
+not wait for them. [cli/README.md](cli/README.md) § "How `sfm` loads its
+commands" describes the mechanism.
+
+`tests/test_lazy_loading.py` checks this: that `import sfmtool` and
+`sfm --help` import none of numpy, OpenCV and pycolmap, that running a command
+imports only its own module, that each `_LAZY_NAMES` entry resolves to its
+submodule and matches the `TYPE_CHECKING` imports, and that `COMMANDS` and the
+command modules match. Look for what it does not check: a command module that
+reads files, builds large tables or calls into the extension at module level,
+and a top-level import of a Python submodule in `sfmtool/__init__.py`, which
+the tests notice only when that submodule imports one of the three libraries.
+Out of scope: imports inside a command's function body, which run only when
+the command does.
+
+## A Rust module with submodules is a file beside its directory
+
+A Rust module that has submodules is a `foo.rs` file beside a `foo/` directory,
+not `foo/mod.rs`. A new module uses that form, and no change adds a `mod.rs`.
+An existing `mod.rs` is converted when a change restructures its module
+anyway. This exists so a module's file
+is named after the module, which is what an editor's tab and a search result
+show; a tree of files all named `mod.rs` cannot be told apart that way.
+
+Count the two forms with, from the checkout root:
+
+```bash
+# modules in the foo.rs-beside-foo/ form
+find crates -path '*/target' -prune -o -type d -print |
+  while read -r d; do [ -f "$d.rs" ] && echo "$d"; done | wc -l
+# remaining mod.rs files
+find crates -path '*/target' -prune -o -name mod.rs -print | wc -l
+```
+
+This file gives no counts because each conversion changes them; the hygiene
+audit reports them with each snapshot. Look for a `mod.rs` added since the
+last snapshot (`git log --diff-filter=A -- '*mod.rs'`). Out of scope: a
+module without submodules, which is a plain `foo.rs`.
+
+## A settings struct is named *Options
+
+A struct the caller fills with its choices of how a function or algorithm runs
+is named `*Options`, usually with an `impl Default`. That holds for RANSAC
+thresholds, iteration caps, seeds, gates, sizes and nested settings alike.
+`*Params` names the values a model or kernel is evaluated with, computed for
+each call rather than chosen: a camera's `K`, `R` and `t` (`CameraParams`), a
+GPU uniform block that mirrors a WGSL `struct Params`, the per-keypoint window
+geometry SIFT's histogram fills share, the variational flow settings derived
+for each pyramid level. `*Config` is not a settings suffix
+(`TwoViewGeometryConfig` keeps COLMAP's name for a pair's geometry type), and
+the viewer's `*DisplaySettings` and `SplitSettings` are UI state, not function
+arguments. The words and the reasons for them are
+[GLOSSARY.md](GLOSSARY.md) § "Rust type names", which is the authority on these
+suffixes; this standard is the rule that new code follows it. It exists
+because a suffix that tells a caller-chosen setting from a computed value
+tells a reader which structs to fill and which to leave to the code.
+
+Public settings structs in `sfmtool-core` that still carry `*Params` or
+`*Config` are backlog from before the ruling, listed in the glossary entry's
+"Direction of travel"; a new settings struct uses `*Options`. Count them with
+`grep -rnE 'pub struct \w+(Params|Config)\b' crates/sfmtool-core/src` and
+remove from the hits the per-call values the glossary names (`CameraParams`).
+Look for a new `*Params` or `*Config` struct holding caller choices, in any
+crate. Out of scope: the bindings
+and Python, which keep their own names.
+
+## Every source file carries the license header
+
+Every `.rs` file under `crates/` and every `.py` file under `src/`, `tests/`
+and `scripts/` opens with the two-line header
+
+```text
+Copyright The SfM Tool Authors
+SPDX-License-Identifier: Apache-2.0
+```
+
+behind the language's comment marker (`//` or `#`), after the shebang where
+there is one. This exists so each file states its license where it is read,
+including when it is copied out of the repository on its own.
+[`crates/sfmtool-core/tests/license_headers.rs`](../crates/sfmtool-core/tests/license_headers.rs)
+reads the header back out of every such file and fails with the list of files
+that lack it, so there is nothing to look for by hand beyond running it. Out
+of scope: other file types, such as WGSL shaders, shell scripts and specs.
+
+## Rustdoc builds without warnings
+
+Every doc comment in the workspace builds under `pixi run doc`
+(`cargo doc --workspace --no-deps --document-private-items`) with no
+warnings. `[workspace.lints.rustdoc]` in the root `Cargo.toml` denies each
+warn-by-default rustdoc lint, and each crate opts in with
+`[lints] workspace = true`, so a plain `cargo doc` fails the same way. This
+exists because doc comments here carry invariants and links to the specs, and
+a link that stops resolving is otherwise noticed by no one.
+
+The gate documents private items, so links written inside private modules are
+checked too. Three ways of writing a link keep it building:
+
+- A link to a private item from a **public** item's doc is an error
+  (`private_intra_doc_links`). Write it as a plain code span (`` `foo` ``)
+  rather than widening the item's visibility.
+- A method reference inside an inherent `impl` is written with `Self::`.
+- A reference to a sibling private module is written with `super::`.
+
+Look for a crate whose `Cargo.toml` lacks `[lints] workspace = true`, and for
+an item made more visible than its users need only so a doc link resolves.
+Out of scope: the allow-by-default rustdoc lints the workspace does not turn
+on (`missing_crate_level_docs`, `private_doc_tests`, `unescaped_backticks`),
+and an `#[allow(rustdoc::invalid_rust_codeblocks)]` on a binding whose doc
+comment is a Python docstring, whose indented `Args:` paragraphs rustdoc would
+otherwise parse as Rust.
+
+## Code builds at the MSRV and without the viewer's MCP feature
+
+Every crate builds with the minimum supported Rust version, the
+`rust-version` in `[workspace.package]` of the root `Cargo.toml`, which every
+crate inherits, and not only with the development toolchain that `pixi.toml`
+pins. This exists because the PyPI sdist compiles the workspace with the
+user's own rustc: wheels are published for x86-64 Linux, x86-64 Windows and
+Apple-silicon macOS, and everyone else builds from the sdist. The floor is
+kept one release behind the development toolchain, rather than at the highest
+version the dependency tree needs today, so a routine dependency bump does not
+force an MSRV bump with it. The version is raised in `Cargo.toml` and nowhere
+else: the `msrv` job in `.github/workflows/ci.yml` reads it from there.
+
+`sfm-explorer` also builds without warnings with `--no-default-features`, that
+is without its `mcp` feature, so an item that only the MCP code uses is gated
+on the feature (`#[cfg(feature = "mcp")]`). This exists because `sfmtool-py`
+turns `mcp` on for every workspace build, so an ungated item looks used in
+every local build and becomes a dead-code warning only in the build without
+the feature.
+
+The `msrv` job checks both: it builds the workspace with exactly the MSRV
+rustc, runs `cargo check -p sfm-explorer --no-default-features` and builds the
+viewer's library that way with `-D warnings`. Look for a standard-library API
+or language feature stabilized after the MSRV, and for an item that only
+`mcp/` uses with no `cfg` gate. Confirm the first against the version the
+standard-library docs give as "since", and the second with
+`cargo check -p sfm-explorer --no-default-features`. Out of
+scope: a dependency's declared `rust-version`, which can be lower than what it
+needs (`libsqlite3-sys` needed 1.95 while declaring none), so the job's build
+is what counts, not dependency metadata.
 
 ## A convention has no documented exceptions
 
