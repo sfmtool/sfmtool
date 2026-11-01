@@ -7,8 +7,13 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._commands.heatmap import _insert_metric_before_number, _output_stem
+from sfmtool._commands.heatmap import (
+    _insert_metric_before_number,
+    _observations_by_image,
+    _output_stem,
+)
 from sfmtool.cli import main
+from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.fileio import read_image_rgb, write_image_rgb
 from sfmtool.visualization import (
     COLORMAPS,
@@ -119,6 +124,61 @@ class TestInsertMetricBeforeNumber:
 
     def test_dash_separator(self):
         assert _insert_metric_before_number("img-03", "tracks") == "img_tracks-03"
+
+
+def _observations_by_image_one_at_a_time(images, features, points):
+    """The grouping read one observation at a time, as the reference."""
+    grouped: dict[int, list[tuple[int, int]]] = {}
+    for image, feature, point in zip(images, features, points):
+        grouped.setdefault(int(image), []).append((int(feature), int(point)))
+    return {
+        image: (
+            np.array([f for f, _ in grouped[image]], dtype=np.int32),
+            np.array([p for _, p in grouped[image]], dtype=np.int32),
+        )
+        for image in sorted(grouped)
+    }
+
+
+def _assert_same_grouping(actual, expected):
+    assert list(actual) == list(expected)
+    for image, (features, points) in expected.items():
+        assert actual[image][0].dtype == np.int32
+        assert actual[image][1].dtype == np.int32
+        np.testing.assert_array_equal(actual[image][0], features)
+        np.testing.assert_array_equal(actual[image][1], points)
+
+
+class TestObservationsByImage:
+    def test_groups_in_track_order(self):
+        # Point-major track arrays visit images out of order; each image keeps
+        # its observations in track order, and image 1, with none, is absent.
+        images = np.array([2, 0, 3, 0, 2, 3, 0], dtype=np.uint32)
+        features = np.array([5, 9, 1, 4, 7, 2, 8], dtype=np.uint32)
+        points = np.array([0, 0, 0, 1, 1, 2, 2], dtype=np.uint32)
+        grouped = _observations_by_image(images, features, points)
+        assert list(grouped) == [0, 2, 3]
+        np.testing.assert_array_equal(grouped[0][0], [9, 4, 8])
+        np.testing.assert_array_equal(grouped[0][1], [0, 1, 2])
+        _assert_same_grouping(
+            grouped, _observations_by_image_one_at_a_time(images, features, points)
+        )
+
+    def test_empty(self):
+        empty = np.zeros(0, dtype=np.uint32)
+        assert _observations_by_image(empty, empty, empty) == {}
+
+    def test_matches_one_at_a_time_on_a_reconstruction(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        arrays = (
+            recon.track_image_indexes,
+            recon.track_feature_indexes,
+            recon.track_point_indexes,
+        )
+        _assert_same_grouping(
+            _observations_by_image(*arrays),
+            _observations_by_image_one_at_a_time(*arrays),
+        )
 
 
 class TestOutputStem:
@@ -396,6 +456,40 @@ class TestHeatmapCLI:
         runner = CliRunner()
         result = runner.invoke(main, ["heatmap", "dummy.sfmr"])
         assert result.exit_code != 0
+
+    def test_writes_one_image_per_observing_image(self, seoul_bull_workspace, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        out = tmp_path / "out"
+        result = CliRunner().invoke(
+            main,
+            [
+                "heatmap",
+                str(seoul_bull_workspace),
+                "-o",
+                str(out),
+                "--metric",
+                "tracks",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        observed = np.unique(recon.track_image_indexes)
+        names = recon.image_names
+        expected = {f"{_output_stem(names[i], 'tracks')}.png" for i in observed}
+        assert {p.name for p in out.iterdir()} == expected
+
+    def test_embedded_patches_rejected(self, seoul_bull_workspace, tmp_path):
+        from sfmtool.xform import ToEmbeddedPatchesTransform
+
+        embedded = ToEmbeddedPatchesTransform().apply(
+            SfmrReconstruction.load(seoul_bull_workspace)
+        )
+        path = seoul_bull_workspace.parent / "embedded.sfmr"
+        embedded.save(path, operation="test")
+        result = CliRunner().invoke(
+            main, ["heatmap", str(path), "-o", str(tmp_path / "out")]
+        )
+        assert result.exit_code != 0
+        assert "no feature indexes" in result.output
 
 
 class TestHeatmapE2E:
