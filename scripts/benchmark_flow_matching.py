@@ -112,7 +112,7 @@ def main():
     import cv2
     from sfmtool.fileio import read_image_rgb
     from sfmtool.flow import compute_optical_flow, gpu_available
-    from sfmtool.feature_match._flow_matching import flow_match_sequential
+    from sfmtool.feature_match import flow_match_sequential
 
     # Print setup info
     img = read_image_rgb(images[0])

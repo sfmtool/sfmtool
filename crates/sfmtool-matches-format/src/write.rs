@@ -57,6 +57,84 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
     sfmtool_archive_io::write_atomically(path, |file| write_matches_into(file, data, zstd_level))
 }
 
+/// Write a clusters file: a `.matches` file with the cluster backbone and no
+/// pairs, cluster patches or two-view geometries.
+///
+/// This is [`write_matches`] for a cluster matcher's output. It takes only the
+/// values the caller supplies ([`ClustersMatchesData`]) and fills in the rest
+/// of the top-level metadata: the image count from `image_names`, the cluster
+/// count from `cluster_starts`, the member count from `member_images`, and the
+/// `has_*` flags. [`write_matches`] then checks the result as it checks any
+/// file, so the same errors reach the caller: a `cluster_starts` that is not a
+/// CSR offset array over the members, a `member_images` entry at or past the
+/// image count, a `member_features` entry at or past its image's
+/// `feature_counts` entry, and image or member arrays whose lengths disagree.
+///
+/// ```no_run
+/// # fn example(data: sfmtool_matches_format::ClustersMatchesData) {
+/// let path = std::path::Path::new("matches/clusters.matches");
+/// sfmtool_matches_format::write_clusters_matches(path, data, 3).unwrap();
+/// # }
+/// ```
+pub fn write_clusters_matches(
+    path: &Path,
+    data: ClustersMatchesData,
+    zstd_level: i32,
+) -> Result<(), MatchesError> {
+    let count = |what: &str, n: usize| {
+        u32::try_from(n)
+            .map_err(|_| MatchesError::ShapeMismatch(format!("{what} {n} does not fit in a u32")))
+    };
+    let image_count = count("image count", data.image_names.len())?;
+    // An empty `cluster_starts` reads as zero clusters, which `write_matches`
+    // then refuses because the array lacks its leading 0.
+    let cluster_count = count(
+        "cluster count",
+        data.clusters.cluster_starts.len().saturating_sub(1),
+    )?;
+    let member_count = count("member count", data.clusters.member_images.len())?;
+
+    let matches = MatchesData {
+        metadata: MatchesMetadata {
+            version: MATCHES_FORMAT_VERSION,
+            matching_method: data.matching_method,
+            matching_tool: data.matching_tool,
+            matching_tool_version: data.matching_tool_version,
+            matching_options: data.matching_options,
+            workspace: data.workspace,
+            timestamp: data.timestamp,
+            image_count,
+            image_pair_count: None,
+            match_count: None,
+            cluster_count: Some(cluster_count),
+            cluster_member_count: Some(member_count),
+            has_two_view_geometries: false,
+            has_clusters: true,
+            has_cluster_patches: false,
+        },
+        // Recomputed by the write.
+        content_hash: MatchesContentHash {
+            metadata_xxh128: String::new(),
+            images_xxh128: String::new(),
+            image_pairs_xxh128: None,
+            clusters_xxh128: None,
+            cluster_patches_xxh128: None,
+            two_view_geometries_xxh128: None,
+            content_xxh128: String::new(),
+        },
+        image_names: data.image_names,
+        feature_tool_hashes: data.feature_tool_hashes,
+        sift_content_hashes: data.sift_content_hashes,
+        feature_counts: data.feature_counts,
+        image_dims: Some(data.image_dims),
+        image_pairs: None,
+        clusters: Some(data.clusters),
+        cluster_patches: None,
+        two_view_geometries: None,
+    };
+    write_matches(path, &matches, zstd_level)
+}
+
 /// Stream the archive into `writer`. The whole of the write but the choosing of
 /// where it lands.
 fn write_matches_into<W: std::io::Write + std::io::Seek>(

@@ -1,15 +1,22 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Code outside the package reads the bindings from their public modules.
+"""Code outside the package uses public names only.
 
 The compiled extension `sfmtool._sfmtool` is internal. Each of its submodules
 has a public module of the same name (`sfmtool.fileio`, `sfmtool.geometry`, ...),
-and the tests and the scripts import from those. This test scans them as
+and the tests and the scripts import from those. The first test scans them as
 text for a path into the extension and fails on any it finds outside
 the allowlist below.
+
+A leading `_` on any part of a name means the name is internal to `sfmtool`
+(AGENTS.md § "Python names and privacy"). A test may import an internal name
+when that name is what it tests, which a scan cannot tell, but a script never
+does. The second test parses every script's imports and fails on one that
+names an internal module or an internal name.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -86,3 +93,45 @@ def test_allowlist_has_no_stale_entries():
         text = (ROOT / relative).read_text(encoding="utf-8")
         count = sum(1 for line in text.splitlines() if EXTENSION_PATH.search(line))
         assert count == allowed, (relative, count, allowed)
+
+
+def _internal_imports(path):
+    """`line: dotted.name` for each import in `path` of an `sfmtool` module or
+    name with a `_`-prefixed component."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [f"{node.module}.{alias.name}" for alias in node.names]
+        else:
+            continue
+        for name in names:
+            parts = name.split(".")
+            if parts[0] == "sfmtool" and any(p.startswith("_") for p in parts[1:]):
+                hits.append(f"{node.lineno}: {name}")
+    return hits
+
+
+def _script_files():
+    for path in sorted((ROOT / "scripts").rglob("*.py")):
+        if "__pycache__" not in path.parts:
+            yield path
+
+
+def test_scripts_import_no_internal_name():
+    found = {}
+    for path in _script_files():
+        relative = path.relative_to(ROOT).as_posix()
+        hits = _internal_imports(path)
+        if hits:
+            found[relative] = hits
+    assert not found, (
+        "These scripts import a name internal to `sfmtool` (a `_`-prefixed "
+        "module or name). Use its public name, such as "
+        "`from sfmtool.feature_match import match_image_pair`:\n"
+        + "\n".join(
+            f"{relative}:{hit}" for relative, hits in found.items() for hit in hits
+        )
+    )

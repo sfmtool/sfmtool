@@ -88,9 +88,10 @@ flow preset unless they name the high-quality preset.
 
 The matcher is
 [_flow_matching.py](../../../src/sfmtool/feature_match/_flow_matching.py)
-(`flow_match_sequential`), built on the Rust optical-flow module and driven by
-`sfm match --flow` and `sfm solve --flow-match`; `sfm flow` provides the
-diagnostics described here.
+(`flow_match_sequential`, re-exported as
+`sfmtool.feature_match.flow_match_sequential`), built on the Rust optical-flow
+module and driven by `sfm match --flow` and `sfm solve --flow-match`; `sfm
+flow` provides the diagnostics described here.
 
 ```python
 flow_match_sequential(

@@ -1384,14 +1384,53 @@ reported, not a crash.
 
 The code that reads, writes and verifies `.matches` files is:
 
-- Rust: `read_matches`, `read_matches_metadata`, `write_matches` and
-  `verify_matches` in
+- Rust: `read_matches`, `read_matches_metadata`, `write_matches`,
+  `write_clusters_matches` and `verify_matches` in
   [`sfmtool-matches-format`](../../crates/sfmtool-matches-format/src/lib.rs).
-- Python: the same four functions in `sfmtool.fileio`, which take and
-  return a dict of NumPy arrays and metadata
-  ([bindings](../../crates/sfmtool-py/src/fileio/matches.rs)), and
-  `sfmtool.fileio.MatchesFile`, which opens a file for the cluster
-  queries ([bindings](../../crates/sfmtool-py/src/fileio/matches_file.rs)).
+- Python: the same five functions in `sfmtool.fileio`
+  ([bindings](../../crates/sfmtool-py/src/fileio/matches.rs)). The readers
+  and `write_matches` take and return a dict of NumPy arrays and metadata;
+  `write_clusters_matches` takes those values as keyword arguments.
+  `sfmtool.fileio.MatchesFile` opens a file for the cluster queries
+  ([bindings](../../crates/sfmtool-py/src/fileio/matches_file.rs)).
+
+`write_clusters_matches` writes a clusters file, the cluster matcher's output:
+the cluster backbone with no pairs, cluster patches or two-view geometries. It
+takes a `ClustersMatchesData` holding the values the caller chooses or reads
+from the `.sift` files (the matcher's name, tool, version and options, the
+workspace, the timestamp, the image arrays and the `ClustersData` backbone with
+its member geometry), fills in the format version, the image, cluster and member
+counts and the `has_*` flags, and hands the result to `write_matches`, so the
+file it writes is the one `write_matches` would write and is checked by the same
+rules. The derived values follow from the arrays and the sections present, so
+the format crate computes them, and a caller such as `sfm match --cluster`, or
+a script that clusters over an existing `.kdf` index, does not restate the
+metadata rules. Reading the `.sift` files
+stays with the caller, since this crate does not open them.
+
+```rust
+pub fn write_clusters_matches(
+    path: &Path,
+    data: ClustersMatchesData,
+    zstd_level: i32,
+) -> Result<(), MatchesError>;
+```
+
+```python
+from sfmtool.fileio import write_clusters_matches
+
+write_clusters_matches(
+    "matches/clusters.matches",
+    matching_method="cluster", matching_tool="sfmtool",
+    matching_tool_version="0.3", matching_options={"d": 10},
+    workspace=workspace, timestamp="2026-10-31T10:00:00+00:00",
+    image_names=names, feature_tool_hashes=tool_hashes,
+    sift_content_hashes=sift_hashes, feature_counts=counts, image_dims=dims,
+    cluster_starts=starts, member_images=images, member_features=features,
+    member_positions=positions, member_affine_shapes=shapes,
+    matcher_options={"d": 10},
+)
+```
 
 The member statuses are the `ClusterMemberStatus` enum, whose discriminants
 are the canonical codes and whose `NAMES` is the canonical
