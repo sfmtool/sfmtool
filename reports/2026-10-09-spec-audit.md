@@ -497,6 +497,8 @@ Non-goals/deferrals checked: 10; no longer hold: 2
 **Unclear / incorrect / suspicious:** none.
 Non-goals/deferrals checked: 6; no longer hold: 0
 
+> _Status (2026-11-01): **Partially done** — covers the first three bullets. `sfmtool.sift` now follows the rule instead of being an exception: its `__init__.py` takes `__all__` from `sfmtool._sfmtool.sift`, the registration test compares its `__all__` like the others, and § "Where Python code reads a binding" says only that its re-export is in a package's `__init__.py` beside the Python SIFT modules. The section also says `from sfmtool import *` binds the root's `__all__` (the three extension names, the `_LAZY_NAMES` names and the `_LAZY_SUBPACKAGES` modules, checked by running it: 44 names, no `align`, `analyze` or `camera`), and describes `_LAZY_NAMES`; AGENTS.md now says the binding modules and `rig` go through `_LAZY_SUBPACKAGES`. PR #1097. Still open: the array-layout gap, the :68 wording and the `lib.rs` module doc._
+
 ### specs/formats/sfmr-file-format.md
 **Summary:** The `.sfmr` reconstruction archive, versions 1-12. #857 added version 12's `tracks/reference_observations` column; its entry name, `int32` type, shape, slot in the tracks hash, presence tied to `has_uv_frames`, range rule, `-1` fill for older files and migration statement all match `crates/sfmtool-sfmr-format` (`types.rs:672-684`, `read.rs:723-740`, `write.rs:939, 1109, 1386-1401`, `verify.rs:704-772`).
 **Implementing code:** `crates/sfmtool-sfmr-format/src/{types,read,write,verify}.rs`.
