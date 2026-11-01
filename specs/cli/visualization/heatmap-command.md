@@ -5,6 +5,10 @@
 Visualizes reconstruction quality metrics as colored overlays on images. Each observed feature
 is drawn as a colored circle, with color encoding the metric value.
 
+The feature positions are read from each image's `.sift` file, so the input is a
+`sift_files` reconstruction. One whose features are embedded patches has no
+feature indexes into those files, and the command fails with an error saying so.
+
 ## Command Syntax
 
 ```bash

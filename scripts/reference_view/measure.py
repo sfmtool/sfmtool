@@ -126,6 +126,7 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
     kxy = np.asarray(recon.keypoints_xy, float)
     image_of = {n: i for i, n in enumerate(names)}
     centres = _camera_centres(recon)
+    poses = _camera_poses(recon)
 
     jobs: list[tuple[str, int, dict | None]] = []
     case_points: set[int] = set()
@@ -185,14 +186,14 @@ def run(args, sfmr: Path, tolerance: float, out_dir: Path) -> None:
                 patch_frame=_patch_frame(track.patch_frame),
                 rows=_rows(track, names, centres),
             )
-            _cell_readings(record, track, recon, pyramids, resolution)
+            _cell_readings(record, track, poses, pyramids, resolution)
             if args.blur_matched:
-                _blur_matched_pairs(record, recon, pyramids, resolution)
+                _blur_matched_pairs(record, poses, pyramids, resolution)
             tracks.append(record)
             if not args.localize:
                 out.write(json.dumps(record) + "\n")
         if args.localize:
-            _localize(recon, pyramids, tracks, resolution)
+            _localize(recon, poses, pyramids, tracks, resolution)
             for record in tracks:
                 out.write(json.dumps(record) + "\n")
     print(
@@ -305,7 +306,7 @@ def _rows(track, names, centres):
     return rows
 
 
-def _cell_readings(record, track, recon, pyramids, resolution):
+def _cell_readings(record, track, poses, pyramids, resolution):
     """Each rule row's readings per cell of the ZNCC grid's split, which the
     cell check reads: ``pair_zncc_grid``, ``cell_axes`` (the semi-axes of each
     cell's self-similarity ellipse, grid px, ``[row][col][major, minor]``) and
@@ -324,7 +325,7 @@ def _cell_readings(record, track, recon, pyramids, resolution):
             r["cell_axes"] = _nan_to_none(np.asarray(ellipses["axes"], float))
         if patch is None or r["rule"] is None or r["keypoint"] is None:
             continue
-        camera, pose = _camera_pose(recon, r["image"])
+        camera, pose = poses[r["image"]]
         tile = patch.render_view_tile(
             camera,
             pose,
@@ -366,18 +367,28 @@ def _oriented_patch(patch_frame):
     )
 
 
-def _camera_pose(recon, image):
+def _camera_poses(recon):
+    """Each image's ``(camera, world-to-camera pose)``.
+
+    Each getter builds a new array on every access, so they are read once here
+    rather than for each row."""
     from sfmtool.geometry import RigidTransform
 
-    camera = recon.cameras[int(np.asarray(recon.camera_indexes)[image])]
-    pose = RigidTransform.from_wxyz_translation(
-        np.asarray(recon.quaternions_wxyz)[image].tolist(),
-        np.asarray(recon.translations)[image].tolist(),
-    )
-    return camera, pose
+    cameras = recon.cameras
+    return [
+        (
+            cameras[int(c)],
+            RigidTransform.from_wxyz_translation(q.tolist(), t.tolist()),
+        )
+        for c, q, t in zip(
+            np.asarray(recon.camera_indexes),
+            np.asarray(recon.quaternions_wxyz),
+            np.asarray(recon.translations),
+        )
+    ]
 
 
-def _blur_matched_pairs(record, recon, pyramids, resolution):
+def _blur_matched_pairs(record, poses, pyramids, resolution):
     """Each rule row's pair ZNCC from the rows' own tiles, plain and
     blur-matched, as ``py_pair_zncc`` and ``bm_pair_zncc``.
 
@@ -395,7 +406,7 @@ def _blur_matched_pairs(record, recon, pyramids, resolution):
         return
     tiles, valid = [], []
     for r in rows:
-        camera, pose = _camera_pose(recon, r["image"])
+        camera, pose = poses[r["image"]]
         tile = patch.render_view_tile(
             camera,
             pose,
@@ -446,10 +457,7 @@ def _median(values):
     return float(np.median(v)) if v else None
 
 
-def _project(recon, image, xyzw):
-    camera, _ = _camera_pose(recon, image)
-    q = np.asarray(recon.quaternions_wxyz)[image]
-    t = np.asarray(recon.translations)[image]
+def _project(camera, q, t, xyzw):
     rot = _rotation(q)
     xc = rot @ xyzw[:3] + xyzw[3] * t
     px = camera.ray_to_pixel_batch((xc / np.linalg.norm(xc))[None])[0]
@@ -468,7 +476,7 @@ def _rotation(q):
     )
 
 
-def _localize(recon, pyramids, tracks, resolution):
+def _localize(recon, poses, pyramids, tracks, resolution):
     """For each track, align its views to each eligible row's tile in turn and
     record each view's distance from the point's projection, as
     ``record["localized"][reference image] = {image: error px}``.
@@ -479,6 +487,8 @@ def _localize(recon, pyramids, tracks, resolution):
     kept; the views start at the rows' keypoints."""
     cloud = recon.patches
     positions = np.asarray(recon.positions_xyzw, float)
+    quaternions = np.asarray(recon.quaternions_wxyz)
+    translations = np.asarray(recon.translations)
     plans = {}
     for record in tracks:
         rows = [
@@ -498,9 +508,7 @@ def _localize(recon, pyramids, tracks, resolution):
             recon,
             pyramids,
             patch_views={p: [r["image"] for r in plans[p][1]] for p in points},
-            patch_keypoints={
-                p: [r["keypoint"] for r in plans[p][1]] for p in points
-            },
+            patch_keypoints={p: [r["keypoint"] for r in plans[p][1]] for p in points},
             reference_images={p: plans[p][2][k] for p in points},
             point_indexes=points,
             max_shift_px=1e9,
@@ -519,7 +527,13 @@ def _localize(recon, pyramids, tracks, resolution):
                 continue
             errors = {}
             for image, keypoint in zip(res["views"], res["keypoints"]):
-                gt = _project(recon, int(image), positions[p])
+                image = int(image)
+                gt = _project(
+                    poses[image][0],
+                    quaternions[image],
+                    translations[image],
+                    positions[p],
+                )
                 if gt is not None:
                     errors[str(int(image))] = float(
                         np.linalg.norm(np.asarray(keypoint) - gt)

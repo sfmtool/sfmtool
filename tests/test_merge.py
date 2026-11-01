@@ -255,12 +255,13 @@ class TestMergeQuality:
 
         def build_feature_point_map(recon):
             result = {}
+            image_names = recon.image_names
             for img_idx, feat_idx, pt_id in zip(
                 recon.track_image_indexes,
                 recon.track_feature_indexes,
                 recon.track_point_indexes,
             ):
-                img_name = Path(recon.image_names[img_idx]).name
+                img_name = Path(image_names[img_idx]).name
                 result[(img_name, int(feat_idx))] = int(pt_id)
             return result
 
@@ -276,9 +277,11 @@ class TestMergeQuality:
 
         assert len(original_to_merged) == original.point_count
 
+        original_positions = original.positions
+        merged_positions = merged.positions
         for orig_pt_id, merged_pt_id in original_to_merged.items():
-            orig_pos = original.positions[orig_pt_id]
-            merged_pos = merged.positions[merged_pt_id]
+            orig_pos = original_positions[orig_pt_id]
+            merged_pos = merged_positions[merged_pt_id]
             assert np.allclose(orig_pos, merged_pos, atol=1e-5)
 
     def test_merge_camera_poses_close(self, seoul_bull_workspace, tmp_path):
@@ -619,8 +622,10 @@ def _subsets_with_points_at_infinity(original_path, tmp_path):
 def _merged_point_ids(original, merged, point_ids):
     """Map each original point id to the merged point that holds its
     observations, keyed on (image name, feature index)."""
+    merged_names = merged.image_names
+    original_names = original.image_names
     merged_by_obs = {
-        (Path(merged.image_names[i]).name, int(f)): int(p)
+        (Path(merged_names[i]).name, int(f)): int(p)
         for i, f, p in zip(
             merged.track_image_indexes,
             merged.track_feature_indexes,
@@ -634,7 +639,7 @@ def _merged_point_ids(original, merged, point_ids):
         original.track_point_indexes,
     ):
         if int(p) in point_ids and int(p) not in result:
-            result[int(p)] = merged_by_obs[(Path(original.image_names[i]).name, int(f))]
+            result[int(p)] = merged_by_obs[(Path(original_names[i]).name, int(f))]
     return result
 
 

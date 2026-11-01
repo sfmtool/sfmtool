@@ -54,9 +54,10 @@ def print_covisibility_graph(recon: SfmrReconstruction, recon_name: str | None =
         click.echo("")
 
         click.echo("Image pairs (sorted by shared point count):")
+        image_names = recon.image_names
         for img_i, img_j, count in pairs:
-            name_i = recon.image_names[img_i]
-            name_j = recon.image_names[img_j]
+            name_i = image_names[img_i]
+            name_j = image_names[img_j]
             click.echo(f"  {name_i} <-> {name_j}: {count} points")
 
     click.echo("")
@@ -93,10 +94,11 @@ def print_frustum_intersection_graph(
     click.echo("")
 
     images_data = depth_stats["images"]
+    image_names = recon.image_names
     click.echo("Image frustum Z ranges:")
     for img_idx in range(recon.image_count):
         img_data = images_data[img_idx]
-        name = recon.image_names[img_idx]
+        name = image_names[img_idx]
 
         if img_data["histogram_min_z"] is None:
             click.echo(f"  {name}: no depth data, skipping")
@@ -152,8 +154,8 @@ def print_frustum_intersection_graph(
 
         click.echo("Image pairs (sorted by intersection volume):")
         for img_i, img_j, volume in pairs:
-            name_i = recon.image_names[img_i]
-            name_j = recon.image_names[img_j]
+            name_i = image_names[img_i]
+            name_j = image_names[img_j]
             click.echo(f"  {name_i} <-> {name_j}: {volume:.3f} cu")
 
     click.echo("")

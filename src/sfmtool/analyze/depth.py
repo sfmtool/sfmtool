@@ -74,8 +74,9 @@ def print_z_range(recon: SfmrReconstruction, recon_name: str | None = None):
         return render_histogram_string(hist_counts)
 
     click.echo("Per-image Z ranges:")
+    image_names = recon.image_names
     for img_idx, img_data in enumerate(images_data):
-        name = recon.image_names[img_idx]
+        name = image_names[img_idx]
         if img_data["histogram_min_z"] is not None:
             min_z = img_data["histogram_min_z"]
             max_z = img_data["histogram_max_z"]

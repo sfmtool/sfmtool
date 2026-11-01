@@ -17,6 +17,28 @@ from ..visualization import render_heatmap_overlay
 from ..visualization._heatmap_renderer import compute_triangulation_angles
 
 
+def _observations_by_image(
+    track_image_indexes: np.ndarray,
+    track_feature_indexes: np.ndarray,
+    track_point_indexes: np.ndarray,
+) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    """Each observing image's ``(feature_indexes, point_indexes)``, as int32.
+
+    The keys are the image indexes that have at least one observation, in
+    ascending order, and each image's observations keep their order in the
+    track arrays.
+    """
+    order = np.argsort(track_image_indexes, kind="stable")
+    images, starts = np.unique(track_image_indexes[order], return_index=True)
+    ends = np.append(starts[1:], len(order))
+    features = np.asarray(track_feature_indexes)[order].astype(np.int32)
+    points = np.asarray(track_point_indexes)[order].astype(np.int32)
+    return {
+        int(image): (features[start:end], points[start:end])
+        for image, start, end in zip(images, starts, ends)
+    }
+
+
 def _insert_metric_before_number(stem: str, metric: str) -> str:
     """Insert metric name before trailing number in filename stem.
 
@@ -172,27 +194,35 @@ def heatmap(
         else:
             tri_angles = None
 
-        # Build index from (image_idx, feature_idx) -> point3d_idx
+        # Group the observations by image.
         click.echo("Building feature-to-point mapping...")
 
-        # Create mapping from image_idx to list of (feature_idx, point3d_idx)
-        image_features: dict[int, list[tuple[int, int]]] = {}
-        for obs_idx in range(len(recon.track_image_indexes)):
-            img_idx = recon.track_image_indexes[obs_idx]
-            feat_idx = recon.track_feature_indexes[obs_idx]
-            point_idx = recon.track_point_indexes[obs_idx]
-
-            if img_idx not in image_features:
-                image_features[img_idx] = []
-            image_features[img_idx].append((feat_idx, point_idx))
+        # The feature positions come from each image's .sift file, which a
+        # reconstruction whose features are embedded patches does not index.
+        track_feature_indexes = recon.track_feature_indexes
+        if track_feature_indexes is None:
+            raise ValueError(
+                "heatmap reads feature positions from .sift files, and this "
+                "reconstruction has no feature indexes (its features are "
+                "embedded patches)"
+            )
+        # Each getter builds a new array on every access, so read each once.
+        image_features = _observations_by_image(
+            recon.track_image_indexes,
+            track_feature_indexes,
+            recon.track_point_indexes,
+        )
+        image_names = recon.image_names
+        rms_reprojection_errors = recon.rms_reprojection_errors
+        observation_counts = recon.observation_counts
 
         # Process each image
         output_dir.mkdir(parents=True, exist_ok=True)
         total_images = len(image_features)
         processed = 0
 
-        for img_idx in sorted(image_features.keys()):
-            image_name = recon.image_names[img_idx]
+        for img_idx, (feat_indices, point_indices) in image_features.items():
+            image_name = image_names[img_idx]
             image_path = Path(recon.workspace_dir) / image_name
 
             if not image_path.exists():
@@ -206,11 +236,6 @@ def heatmap(
             with SiftFile(sift_path) as reader:
                 all_positions = reader.read_positions()
 
-            # Get tracked features for this image
-            features = image_features[img_idx]
-            feat_indices = np.array([f[0] for f in features], dtype=np.int32)
-            point_indices = np.array([f[1] for f in features], dtype=np.int32)
-
             # Get positions of tracked features only
             tracked_positions = all_positions[feat_indices]
 
@@ -218,10 +243,10 @@ def heatmap(
             for m in metrics:
                 # Get metric values for tracked points
                 if m == "reproj":
-                    values = recon.rms_reprojection_errors[point_indices]
+                    values = rms_reprojection_errors[point_indices]
                     metric_label = "Reproj Error (px)"
                 elif m == "tracks":
-                    values = recon.observation_counts[point_indices].astype(np.float64)
+                    values = observation_counts[point_indices].astype(np.float64)
                     metric_label = "Track Length"
                 elif m == "angle":
                     values = tri_angles[point_indices]
