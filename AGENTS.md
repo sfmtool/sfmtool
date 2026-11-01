@@ -123,13 +123,13 @@ state, not function arguments. 25 public settings structs in `sfmtool-core` stil
 Every change is held to [`specs/STANDARDS.md`](specs/STANDARDS.md); read it
 before making or reviewing one. In short: points at infinity (`w = 0` rows)
 are supported; a function that can run longer than about a second takes a
-`&Progress`, with no `foo` / `foo_with_progress` pair; caller input never
-panics (a library function returns an error, its binding raises a Python
-exception); logic lives in Rust, with no Python wrapper that repeats what a
-binding does; every file format has the same I/O shape in `sfmtool.fileio`,
-validated in its format crate; a convention has no documented exceptions; a
-test asserts something that can fail. When the code breaks a standard, fix the
-code; correct a spec or doc only where the code is right and the text is wrong.
+`&Progress`, with no `foo` / `foo_with_progress` pair; input to a binding or
+a library crate's public API never panics (it returns an error, which a
+binding raises as a Python exception); logic lives in Rust, with no Python
+wrapper that repeats what a binding does; every file format has the same I/O
+shape in `sfmtool.fileio`, validated in its format crate; a convention has no
+documented exceptions; a test asserts something that can fail. If code breaks
+a standard, fix the code; fix a spec or doc only where the code is right.
 
 ### Implementing a change
 

@@ -112,11 +112,30 @@ gives a Python caller no exception type to catch and no message about which
 argument was wrong, and because validation in the binding alone leaves a Rust
 caller of the same function to panic.
 
+The standard covers three kinds of code:
+
+- **Code Python can reach.** No input that reaches a function through a
+  binding in `sfmtool-py` may panic, whichever crate the function is in.
+- **The public Rust API of the library crates**: `sfmtool-core`,
+  `sfmtool-progress`, `sfmtool-archive-io`, `sfmtool-colmap` and the five
+  format crates (`sfmtool-sift-format`, `sfmtool-matches-format`,
+  `sfmtool-sfmr-format`, `sfmtool-camrig-format`, `sfmtool-kdf-format`). A
+  public function returns an error for bad caller input.
+- **The parts of `sfm-explorer` that handle data from outside the process**:
+  the files it reads and the MCP requests it serves. The rest of the viewer,
+  its `pub(crate)` and private code that only the viewer calls, is outside
+  this standard.
+
+The code does not yet meet this standard everywhere. Existing public
+functions whose doc comment has a `# Panics` section about caller input are
+backlog to fix: the hygiene audit lists and ranks them, and new code adds no
+more. An existing panic on caller input is a defect, not a precedent.
+
 Look for:
 
 - `assert!`, `expect`, `unwrap`, `panic!` or unchecked indexing on argument
-  data in a public function: lengths that must match, indices that must be in
-  range, a shape that must hold.
+  data in a function the scope above covers: lengths that must match, indices
+  that must be in range, a shape that must hold.
 - A binding that passes unchecked arrays or lengths into code that panics on a
   mismatch (`from_row_slice`, slicing, `chunks_exact` with an assumed length,
   indexing by a caller's index).
@@ -183,7 +202,9 @@ is a finding against the code: change the code to follow the rule, or change
 the rule for all code, and delete the exception sentence. Out of scope: a
 structural fact the rule already allows, such as a binding module being a
 package's `__init__.py`, and a boundary that [GLOSSARY.md](GLOSSARY.md)
-declares deliberate.
+declares deliberate. A standard's stated scope is not an exception, and
+neither is code that breaks a standard and is listed as backlog by an audit:
+that code is still a finding, and the fix is still to change it.
 
 ## Tests assert something that can fail
 

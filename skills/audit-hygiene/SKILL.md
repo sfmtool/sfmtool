@@ -251,12 +251,19 @@ worth more than a paragraph.
     `verbose: bool` / `show_progress` parameters in library code. Each hit is a
     candidate for STANDARDS.md § "One interface, no progress variants";
     report the count even when it is zero.
-12. **Caller-input panics** — in the library crates and `sfmtool-py`, count
-    `assert!`, `.expect(`, `.unwrap()`, `panic!` and `from_row_slice` per
-    crate in non-test code, then read the hits in public functions and
-    bindings that take caller data, and keep those a caller's argument can
-    reach. Also grep specs and doc comments for "panics". Feeds STANDARDS.md
-    § "Caller input never panics".
+12. **Caller-input panics** — apply the scope in STANDARDS.md § "Caller
+    input never panics". Count `assert!`, `.expect(`, `.unwrap()`, `panic!`
+    and `from_row_slice` per crate, leaving out `tests/` directories, inline
+    `#[cfg(test)]` modules and `debug_assert!`, and in `sfm-explorer` leaving
+    out everything except the code that reads files and serves MCP requests.
+    Count `# Panics` doc sections the same way. Then read the hits in
+    bindings and in public functions of the library crates that take caller
+    data, and keep those a caller's argument can reach. Also grep specs for
+    "panics". Report the kept hits as one ranked finding that lists the
+    functions, those Python can reach through a binding first, then the rest
+    of the public Rust API, each with the argument that reaches the panic.
+    Report the raw counts beside it so the next snapshot can measure the
+    backlog shrinking.
 13. **Python over bindings** — list the Python functions and classes in
     `src/sfmtool/` that call a `_sfmtool` name, and the root `_LAZY_NAMES`
     entries, and read each for re-checked arguments, re-read files or a body
