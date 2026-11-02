@@ -394,8 +394,9 @@ carrying `gray_formula` forward beside the object.
 has to compute it: every command, the viewer and every `.sfmr` use the recorded
 name as it is, and `load_workspace_config` returns it without recomputing it. A
 folder name is computed only when a folder is created: by `sfm ws init`,
-`sfm ws upgrade`, `sfm undistort` and the viewer's conversion of a version 1
-record. It must differ for different options, and the existing name,
+`sfm ws upgrade`, `sfm undistort`, `sfm sift --extract --tool` outside a
+workspace, and the viewer's conversion of a version 1 record or switch of
+another tool's record to the `sfmtool` defaults. It must differ for different options, and the existing name,
 `features/{feature_type}-{hash}` with the XXH3-128 hash of the compact JSON of
 `feature_tool`, `feature_type` and `feature_options` (without `use_gpu`) that
 `get_feature_tool_xxh128` computes, does that. It need not be the same in
@@ -457,7 +458,7 @@ each, not in one command:
 
 | Writer | Reached from | Reads its settings from | Writes into | Refuses when |
 |--------|--------------|-------------------------|-------------|--------------|
-| `image_files_to_sift_files` (`src/sfmtool/sift/extract.py`), which writes each `.sift` that is missing or older than its image | `sfm sift --extract`, and implicitly `sfm solve` (`colmap/db_setup.py`), `sfm match` (`feature_match/_run.py`), `sfm to-colmap-db` (`colmap/db_export.py`), the `image_files_to_sift_files_opencv` wrapper | the workspace file, through `load_workspace_config` | the recorded `feature_prefix_dir` | the workspace file is version 1; a `.sift` already in the folder is version 1; a `colmap` or `opencv` object differs from its tool's row |
+| `image_files_to_sift_files` (`src/sfmtool/sift/extract.py`), which writes each `.sift` that is missing or older than its image | `sfm sift --extract`, and implicitly `sfm solve` (`colmap/db_setup.py`), `sfm match` (`feature_match/_run.py`), `sfm to-colmap-db` (`colmap/db_export.py`), the `image_files_to_sift_files_opencv` wrapper | the options and folder its caller passes: the workspace file's, read through `load_workspace_config`, or with `sfm sift --extract --tool` outside a workspace, the tool's defaults | the recorded `feature_prefix_dir`; with `--tool`, a folder named from the tool's defaults | the options carry no `image_to_gray` (as a version 1 workspace file's do); a `.sift` already in the folder is version 1; a `colmap` or `opencv` object differs from its tool's row |
 | core's `build_sift_files` (`crates/sfmtool-core/src/features/sift/files.rs`) | its Python binding (`crates/sfmtool-py/src/sift/files.rs`) and the viewer | the options and folder it is handed; it never reads the workspace file | the folder it is handed | the options carry no `image_to_gray`; a `.sift` already in the folder is version 1 |
 | the viewer's *Build SIFT Files* (`crates/sfm-explorer/src/sift_files.rs`), through `build_sift_files` | the scene tree and the wire | the node's `.sfmr` record, not the workspace file, so the files go where the node looks for them | a version 2 `sfmtool` record: its recorded folder. A version 1 `sfmtool` record of an embedded-patches node: a new folder named from the record converted in memory by the conversion `sfm ws upgrade` makes. A record naming another tool: the `sfmtool` defaults' folder, as today's switch | a version 1 record on a `sift_files` node |
 | `sfm undistort` (`src/sfmtool/_undistort_images.py`), with `write_sift` | `sfm undistort` | the input `.sfmr`'s record and the undistorted images | a new folder in its output | never, for version reasons |
@@ -784,7 +785,8 @@ repository; when this draft is filed, the measurements go into a sibling
   480 and 0.16/0.13 at 1920.
 - **The choice within the plateau.** 480 is the middle of 360 to 640; it divides
   3840 and 1920 by whole numbers, so area averaging is exact there; at 7 ms it
-  is cheap; and it jitters less than 640.
+  is cheap; and it jitters less than 640 in the first video (0.096 against
+  0.108) and about as much in the second (0.114 against 0.113).
 - **One reading image for both values.** The coherence is slightly better at
   960: with the Laplacian at 480, the combined recall was 42% and 49% with the
   coherence at 960 against 35% and 44% at 480. That is two or three frames of
@@ -798,8 +800,8 @@ and resized to 1920 pixels, and the sfmtool SIFT matches that survive geometric
 verification against the unblurred neighbour were counted against the same
 pair unblurred. In pixels of the 1920-pixel images SIFT ran on, the pooled
 median loss reached 20% at a Gaussian σ of 1.43 px and 50% at 2.39 px, and 20%
-at a linear motion of 5.5 px and 50% at 9.4 px. Blur of σ ≤ 1 cost at most
-about 6%, so the mild blur that small reading sizes miss mostly does not
+at a linear motion of 5.5 px and 50% at 9.4 px. Blur of σ ≤ 1 cost a pooled
+median of at most about 6% (16% in the first video at σ = 1), so the mild blur that small reading sizes miss mostly does not
 matter for the solve.
 
 ### Measured and not chosen
@@ -837,15 +839,17 @@ Named once here, as the format specs' Implementations sections will name them:
   for Python beside `extract_sift`. It takes no `Progress`: on a 1920-pixel
   frame it runs in a few milliseconds. OpenCV's `INTER_AREA` applied to the
   double-precision grey image equals the exact area average to about 1e-15 at
-  whole-number factors, but differs by about 7e-9 grey (about 1e-8 relative in
-  the readings) at other factors (3, 6 or 10.64, say), so it is not bit-exact
+  power-of-two factors (2, 4, 8 and 16 were measured), but differs by about
+  7e-9 grey (about 1e-8 relative in the readings) at other factors (3, 6 or
+  10.64, say), so it is not bit-exact
   with the definition there and the implementation does not use it.
 - **The workspace file** is written by `init_workspace` in
   `src/sfmtool/_workspace.py`, and the options it writes come from
   `get_default_sfmtool_feature_options`, `get_colmap_feature_options` and
   `get_default_opencv_feature_options`, which gain the `image_to_gray` object
   (the first losing `gray_formula`); new folder names come from
-  `get_feature_tool_xxh128` in `src/sfmtool/sift/file.py`, unchanged. `SiftParams::from_feature_options`
+  `get_feature_tool_xxh128` in `src/sfmtool/sift/file.py`, unchanged, and the
+  viewer's from the same rule computed in Rust, as `sfmtool_defaults()` computes its prefix today. `SiftParams::from_feature_options`
   in `sfmtool-core` reads the object instead of `gray_formula`, keeping
   `gray_formula` only for reading version 1 records.
 - **The Rust defaults.** `BuildSiftFilesOptions::sfmtool_defaults()` in
