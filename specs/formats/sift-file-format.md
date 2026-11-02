@@ -104,8 +104,9 @@ JSON. It contains the following fields (ignore additional fields for future back
   thresholds. The format does not prescribe how it is spelled; files whose `feature_tool` is
   `"sfmtool"` record it as a `gray_formula` string (`"0.2126*R + 0.7152*G + 0.0722*B"`, BT.709 luma, matching
   COLMAP's `Bitmap::CloneAsGrey`). A structured, reader-evaluable `image_to_gray` object with
-  its own formula grammar and an optional bit depth, required for every feature tool, is
-  part of the proposed version 2; see
+  its own formula grammar and an optional bit depth, required for every feature tool and
+  carried in the same form in the workspace's `feature_options`, is part of the proposed
+  version 2; see
   [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md).
 
 ### `metadata.json.zst`

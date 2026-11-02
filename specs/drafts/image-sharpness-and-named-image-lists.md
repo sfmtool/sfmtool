@@ -5,7 +5,8 @@
 sharpness and a per-image gradient structure tensor; `.sfmr` version 15 with
 both as required per-image columns; named image lists in their own file in the
 workspace root, which no `.sfmr` references; `-r/--range` accepting a list's
-name; each feature tool recording the formula closest to its own grey
+name; `.sfm-workspace.json` carrying the same `image_to_gray` object as the
+`.sift` file; each feature tool recording the formula closest to its own grey
 conversion. The choices this draft makes inside those decisions (entry names,
 data types, where the values live in a `.sift` file, the list file's name, the
 resize and border rules, the CLI's workspace discovery with a list) are listed in [Choices made here](#choices-made-here)
@@ -30,8 +31,9 @@ It amends these standing specs, each of which links back here:
   (Part 1).
 - [`../formats/sfmr-file-format.md`](../formats/sfmr-file-format.md): version 15
   (Part 2).
-- [`../workspace/workspace.md`](../workspace/workspace.md): the
-  `.sfm-named-image-lists.json` file beside `.sfm-workspace.json` (Part 3).
+- [`../workspace/workspace.md`](../workspace/workspace.md): `.sfm-workspace.json`
+  version 2, whose `feature_options` carry the `image_to_gray` object (Part 1),
+  and the `.sfm-named-image-lists.json` file beside it (Part 3).
 - [`../cli/README.md`](../cli/README.md): the `-r/--range` option that eight
   commands share (Part 4).
 - [`../core/features/sift.md`](../core/features/sift.md) § "Image-to-gray
@@ -51,8 +53,11 @@ lists of the sharp ones, is the intended producer; it is not designed here.
 
 `metadata.version` becomes `2`. Version 1 files stay valid and readable; a
 reader of a version 1 file finds no `image_to_gray`, sharpness or tensor in it.
-A conforming writer writes version 2. Extraction does not rewrite a version 1
-file whose image is unchanged; a `.sfmr` writer that meets one handles it as
+A conforming writer writes version 2. Extraction never writes a version 2 file
+into a directory that holds version 1 files: a version 2 file goes in the new
+features directory of a version 2 workspace
+([below](#the-workspace-records-the-same-object-sfm-workspacejson-version-2)).
+A `.sfmr` writer that meets a version 1 file handles it as
 [Part 2](#where-a-writer-gets-the-values) says.
 
 ### Summary of differences
@@ -330,7 +335,7 @@ section will.
 
 | `feature_tool` | `image_to_gray.formula` | `quantize_bits` | Status |
 |----------------|-------------------------|-----------------|--------|
-| `sfmtool` | the workspace's `gray_formula`, by default `0.2126*R + 0.7152*G + 0.0722*B` | absent | from the code: `gray_from_rgb` in `sfmtool-core` divides each 8-bit channel by 255, evaluates the formula in double precision and stores the result unclamped as `f32` for the detector, with no rounding to a bit depth |
+| `sfmtool` | the workspace's `image_to_gray.formula`, by default `0.2126*R + 0.7152*G + 0.0722*B` | the workspace's, absent by default | from the code: `gray_from_rgb` in `sfmtool-core` divides each 8-bit channel by 255, evaluates the formula in double precision and stores the result unclamped as `f32` for the detector, with no rounding to a bit depth |
 | `colmap` | `0.2126*R + 0.7152*G + 0.0722*B` | `8` | measured with pycolmap 4.2.1: `Bitmap.read(path, as_rgb=False)` gives an 8-bit grey bitmap equal to `clone_as_grey()` of the RGB read, whose value is the BT.709 weights applied in single precision to the 0 to 255 samples and rounded to nearest with half up; that matched all 262,144 pixels of a random RGB image, and `q` of the double-precision formula differs from it by one grey level on 18 of them. A JPEG carrying EXIF orientation 6 read back at its stored width and height, so the tag is not applied. **To verify**: that COLMAP's feature extractor reads through this same `Bitmap` path, and whether the conversion happens before or after its `max_image_size` resize |
 | `opencv` | `0.299*R + 0.587*G + 0.114*B` | `8` | from the code: `extract_opencv.py` makes the detector's input with `cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)` on the 8-bit decode, which gives 8-bit grey. Measured with OpenCV 5.0.0: the 8-bit conversion is `(9798·R + 19235·G + 3735·B + 16384) >> 15` on the 0 to 255 samples, which matched all 262,144 pixels of a random RGB image; `q` of the exact BT.601 formula differs from it by one grey level on 346 of them (0.13%) |
 
@@ -359,15 +364,99 @@ all see 8-bit samples rather than the 16-bit samples divided by 65535 that
 **Inputs** defines. For 8-bit images the code follows the definition. Decoding
 16-bit sources at full depth is future work.
 
-The workspace keeps its own spelling: a `sfmtool` workspace's `feature_options`
-keeps its `gray_formula` key, and `colmap` and `opencv` workspaces carry no
-grey key. The `.sift` writer writes `image_to_gray` into each file's
-`feature_options`, replacing `gray_formula` for `sfmtool` and adding the fixed
-object for `colmap` and `opencv`. Existing workspaces therefore keep their
-`feature_prefix_dir` and their cached features, and a version 2 file's
-`feature_tool_xxh128` differs from a version 1 file's of the same
-configuration, as it would for any change to the bytes of
-`feature_tool_metadata.json`.
+### The workspace records the same object: `.sfm-workspace.json` version 2
+
+A workspace's `.sfm-workspace.json` defines the directory its `.sift` files go
+in, through `feature_options` and `feature_prefix_dir`, and its
+`feature_options` are what the extractor writes into each `.sift` file. So the
+workspace spells the conversion the way the `.sift` file does: a version 2
+workspace file's `feature_options` carries the same `image_to_gray` object,
+`formula` and optional `quantize_bits`, for every feature tool, and the `.sift`
+file's `feature_options` are a copy of it.
+
+| `feature_tool` | `feature_options.image_to_gray` in a version 2 workspace |
+|----------------|----------------------------------------------------------|
+| `sfmtool` | `{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}` by default; a setting, which the `sfmtool` extractor honours for any formula and any `quantize_bits` |
+| `colmap` | `{"formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8}`, fixed by the tool |
+| `opencv` | `{"formula": "0.299*R + 0.587*G + 0.114*B", "quantize_bits": 8}`, fixed by the tool |
+
+The `gray_formula` key is gone from version 2: the object replaces it, and a
+version 2 file that carries `gray_formula` is invalid. For `colmap` and
+`opencv` the object records what the tool does rather than choosing it, so
+extraction refuses a workspace whose object differs from the tool's row above,
+saying the tool converts only that way.
+
+**The version number.** `.sfm-workspace.json` becomes version 2. The change is
+to what `feature_options` must hold, and a reader has to tell an old file,
+whose conversion is a `gray_formula` string or unstated, from a new one, whose
+conversion is the object; the version says which without guessing from the
+keys, and keeps one spelling per version instead of carrying `gray_formula`
+forward beside the object. The file's other fields are unchanged.
+
+**The features directory changes.** `feature_prefix_dir` is
+`features/{feature_type}-{feature_cache_hash}`, and the hash is computed from
+the options, so a workspace written under the new rules gets a new features
+directory, for every tool, even with otherwise identical settings. The hash is
+the XXH3-128 digest, as 32 lowercase hex digits, of the UTF-8 bytes of the
+JSON text of one object with three keys: `feature_tool` (the tool name in lower
+case), `feature_type` (the directory's type, such as `sift-sfmtool`,
+`sift-colmap`, `sift-colmap-dsp` or `sift-opencv`) and `feature_options` with
+the `use_gpu` key removed, serialised with sorted keys, no whitespace (`,` and
+`:` as separators) and non-ASCII characters escaped. `image_to_gray` is inside
+`feature_options`, so it enters the hash, and since no version 1 workspace's
+options hold that object, no version 2 workspace's directory can equal a
+version 1 workspace's. That is what keeps version 1 and version 2 `.sift` files
+out of the same directory. The same holds for extraction outside a workspace,
+which computes the directory from the tool's default options, now including the
+object.
+
+The relation the workspace spec states still holds: this cache hash is a
+different value from the `.sift` file's `feature_tool_xxh128`, which is the
+XXH128 of the stored bytes of the file's `feature_tool_metadata.json` (with
+`feature_type` `"sift"`, `use_gpu` included where the options have it, and the
+writer's own serialisation). Under the new shape both inputs contain the same
+`image_to_gray` object, but the two hashes are still computed from different
+bytes and still do not agree; a reader must not compare one with the other.
+
+**Migration.** No file is rewritten behind the user's back:
+
+- **Reading a version 1 workspace keeps working.** A command that reads `.sift`
+  files or `.sfmr` files in it (`sfm solve`, `sfm match`, `sfm inspect`, the
+  viewer, a `.sfmr` save) reads its version 1 `.sift` files in its existing
+  `feature_prefix_dir` as today, and a `.sfmr` written there takes its readings
+  from the image files ([Part 2](#where-a-writer-gets-the-values)). A
+  `gray_formula` in a version 1 `sfmtool` workspace reads as
+  `{"formula": <gray_formula>}`, and a version 1 `colmap` or `opencv` workspace,
+  which states no conversion, reads as that tool's row above.
+- **`sfm sift --extract` refuses in a version 1 workspace**, before extracting
+  anything, with a message that says the workspace file is version 1, that its
+  features directory holds version 1 `.sift` files, and to run
+  `sfm ws init --force` with the same options to move it to version 2 and a new
+  features directory; the message spells out the `sfm ws init` flags that
+  reproduce the file's settings, and for an `sfmtool` workspace whose
+  `gray_formula` is not the default it says that formula must be carried into
+  `image_to_gray` by hand. It never writes a version 2 `.sift` file into a
+  directory that holds version 1 files, and it does not upgrade the workspace
+  file itself: the upgrade moves every later extraction to a new directory,
+  which is the user's choice to make.
+- **`sfm ws init` and `sfm ws init --force` write version 2**: `version: 2`,
+  the tool's `feature_options` with its `image_to_gray` from the table above,
+  and the `feature_prefix_dir` hashed from them. `--force` over a version 1 file
+  therefore changes `feature_prefix_dir`; the old features directory stays on
+  disk, as every features directory does, and the `.sfmr` files that name it
+  still resolve their `.sift` files through their own record. Neither form
+  touches the named image lists file.
+
+**`.sfmr` files.** `workspace.contents` in a `.sfmr` copies the workspace's
+`feature_tool`, `feature_type`, `feature_options` and `feature_prefix_dir`, so a
+`.sfmr` written from a version 2 workspace holds the `image_to_gray` object in
+`workspace.contents.feature_options`, and one written from a version 1
+workspace holds what that file held. The `.sfmr` format treats
+`feature_options` as tool-defined, as it does today, so this needs no format
+change of its own; the `.sfmr` spec's example of `workspace.contents` gains the
+object when version 15 is filed. In a version 15 file written from a version 2
+workspace, `images/metadata.json`'s `image_to_gray` equals
+`workspace.contents.feature_options.image_to_gray`.
 
 ## Part 2: `.sfmr` version 15
 
@@ -479,7 +568,8 @@ a required column asserts that the image looks that sharp. Converters such as
 step 2 where the `.sift` files are version 2 and step 3 otherwise.
 
 The file's `image_to_gray` is the input reconstruction's when it records one;
-otherwise the one the `.sift` files record (the first image's version 2 `.sift`,
+otherwise `workspace.contents.feature_options.image_to_gray` when the workspace
+record holds one; otherwise the one the `.sift` files record (the first image's version 2 `.sift`,
 or, for version 1 files, the object Part 1's table gives for the workspace's
 feature tool); and otherwise, in an `embedded_patches` file with no `.sift`
 files, `{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}`.
@@ -620,8 +710,9 @@ is never used. If the workspace has no
 lists file, it has no named image lists, so giving a list name is an error that
 says so.
 
-**Outside the workspace record and every `.sfmr`.** `.sfm-workspace.json` is
-unchanged and stays version 1. The lists file is not part of
+**Outside the workspace record and every `.sfmr`.** The lists file adds
+nothing to `.sfm-workspace.json`, whose version 2 is about the grey conversion
+alone (Part 1). The lists file is not part of
 `workspace.contents`, and a `.sfmr` never embeds it, records a list's name or
 entries, or refers to it in any other way; a reconstruction made from a list is
 the same file it would be if its images had been given by path. `sfm ws init`,
@@ -731,6 +822,15 @@ Named once here, as the format specs' Implementations sections will name them:
   `reconstruction::thumbnail::resize_area`, in double precision. It is bound
   for Python beside `extract_sift`. It takes no `Progress`: on a 1920-pixel
   frame it runs in a few milliseconds.
+- **The workspace file** is written by `init_workspace` in
+  `src/sfmtool/_workspace.py`, and the options it writes come from
+  `get_default_sfmtool_feature_options`, `get_colmap_feature_options` and
+  `get_default_opencv_feature_options`, which gain the `image_to_gray` object
+  (the first losing `gray_formula`); the cache hash is `get_feature_tool_xxh128`
+  in `src/sfmtool/sift/file.py`, unchanged. `SiftParams::from_feature_options`
+  in `sfmtool-core` reads the object instead of `gray_formula`, keeping
+  `gray_formula` only for reading version 1 records. `sfm sift --extract` checks
+  the workspace version before extracting.
 - **The three Python backends** (`extract_sfmtool.py`, `extract_colmap.py`,
   `extract_opencv.py` in `src/sfmtool/sift/`) call it on the decode they make
   the thumbnail from, beside `thumbnail_of_rgb` or `cv2.resize`, and put the
@@ -802,8 +902,12 @@ review should check:
 8. **The `.sfmr` records one `image_to_gray`** in `images/metadata.json`, and a
    writer recomputes rows recorded under another conversion; for an
    `embedded_patches` file with no `.sift` files it uses unquantised BT.709.
-9. **Workspace `feature_options` keep their spelling**; only the `.sift` file
-   carries `image_to_gray`, so existing feature directories stay valid.
+9. **The workspace and the `.sift` file spell the conversion the same way**:
+   `.sfm-workspace.json` version 2 carries the `image_to_gray` object in
+   `feature_options` for every tool, replacing `gray_formula`, and the `.sift`
+   file copies it. A workspace written under the new rules gets a new features
+   directory; `sfm sift --extract` refuses in a version 1 workspace and says to
+   run `sfm ws init --force`, rather than upgrading the file itself.
 10. **The lists file is named `.sfm-named-image-lists.json`**, after the glossary
     word and the form of `.sfm-workspace.json`, with its own `version` of `1`.
     A key the file does not define, at the top level or in an entry, is an
@@ -811,8 +915,8 @@ review should check:
 11. **With a list, the image-directory commands take no image paths** and find
     the workspace from the current directory; narrowing a list that has an entry
     with no frame field is an error.
-12. **`.sfm-workspace.json` is unchanged and stays version 1**, and
-    `sfm ws init`, with or without `--force`, never touches the lists file.
+12. **`sfm ws init`, with or without `--force`, writes a version 2
+    `.sfm-workspace.json`** and never touches the lists file.
 
 ## Not in this draft
 
