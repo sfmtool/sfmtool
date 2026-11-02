@@ -403,7 +403,23 @@ pub(super) fn camera_model_proposal(
             "coeff_count": inputs.coeff_count,
             "theta_fit_deg": inputs.theta_fit_deg,
             "spline_domain_deg": inputs.spline_domain_deg,
+            "drop_per_image_adjustments": inputs
+                .drop_image_adjustments
+                .iter()
+                .map(|p| p.name())
+                .collect::<Vec<_>>(),
         },
+        // The strip's Drop per image row: one entry per parameter the camera
+        // varies.
+        "per_image_adjustments": proposal
+            .drop_choices(inputs)
+            .iter()
+            .map(|choice| json!({
+                "parameter": choice.parameter.name(),
+                "drop": inputs.drop_image_adjustments.contains(&choice.parameter),
+                "required": !choice.carried,
+            }))
+            .collect::<Vec<_>>(),
         "generation": proposal.generation,
         "camera": camera,
         "fit": fit,

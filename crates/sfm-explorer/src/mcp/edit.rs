@@ -521,6 +521,11 @@ fn insert_fit(
         "camera_intrinsics_index": entry.camera,
         "camera_model_before": entry.source.model_name(),
         "camera_model_after": refit.camera.model_name(),
+        "dropped_per_image_adjustments": entry
+            .dropped_image_adjustments
+            .iter()
+            .map(|p| p.name())
+            .collect::<Vec<_>>(),
         "theta_fit_deg": refit.theta_fit_deg,
         "theta_fit_source": refit.theta_fit_source.as_str(),
         "spline_domain_deg": refit.spline_domain_deg,
@@ -579,11 +584,21 @@ pub(super) fn propose_camera_model(
         .unwrap_or(source.model_name());
     let target = RefitTarget::from_name(named, request.coeff_count)
         .map_err(|e| ToolError::new(format!("camera {}: {e}", request.camera)))?;
+    if let Some(why) = crate::state::edits::drop_refusal(
+        node.recon(),
+        request.camera,
+        &request.drop_image_adjustments,
+    ) {
+        return Err(ToolError::new(format!(
+            "propose_camera_model drop_per_image_adjustments refused: {why}."
+        )));
+    }
     let inputs = crate::camera_model_proposal::ProposalInputs {
         camera_model: target.model_name(),
         coeff_count: target.coeff_count_for(source),
         theta_fit_deg: request.theta_fit_deg,
         spline_domain_deg: request.spline_domain_deg,
+        drop_image_adjustments: request.drop_image_adjustments.clone(),
     };
     let camera = crate::scene::CameraRef::new(id, request.camera);
     state

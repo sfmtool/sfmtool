@@ -430,6 +430,7 @@ pub(crate) fn parse(
                 "coeff_count",
                 "spline_domain_deg",
                 "theta_fit_deg",
+                "drop_per_image_adjustments",
             ] {
                 if args.map.get(key).is_some_and(|value| !value.is_null()) {
                     return Err(ToolError::new(format!(
@@ -451,6 +452,7 @@ pub(crate) fn parse(
                 coeff_count: args.optional_usize("coeff_count")?,
                 spline_domain_deg: args.optional_f64("spline_domain_deg")?,
                 theta_fit_deg: args.optional_f64("theta_fit_deg")?,
+                drop_image_adjustments: args.per_image_drops("drop_per_image_adjustments")?,
             },
         },
         "propose_camera_model" => Command::ProposeCameraModel {
@@ -461,6 +463,7 @@ pub(crate) fn parse(
                 coeff_count: args.optional_usize("coeff_count")?,
                 spline_domain_deg: args.optional_f64("spline_domain_deg")?,
                 theta_fit_deg: args.optional_f64("theta_fit_deg")?,
+                drop_image_adjustments: args.per_image_drops("drop_per_image_adjustments")?,
             },
             preview_retriangulation: args.optional_bool("preview_retriangulation")?,
             animate: args.optional_bool("animate")?,
@@ -1761,6 +1764,39 @@ impl Args<'_> {
                 })
             })
             .transpose()
+    }
+
+    /// The per-image parameters a camera model switch drops, by the names a
+    /// camera's `per_image_adjustments` lists; empty when absent or `null`.
+    /// An unknown name or one named twice is refused.
+    fn per_image_drops(
+        &self,
+        key: &str,
+    ) -> Result<Vec<sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter>, ToolError>
+    {
+        use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
+        let expected = "an array of \"focal\", \"principal_point\", \"radial_bspline\" and \
+                        \"rolling_shutter\"";
+        let Some(value) = self.map.get(key).filter(|v| !v.is_null()) else {
+            return Ok(Vec::new());
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        let mut drops = Vec::with_capacity(array.len());
+        for element in array {
+            let name = element
+                .as_str()
+                .ok_or_else(|| self.wrong_type(key, expected, value))?;
+            let parameter = ImageAdjustmentParameter::from_name(name).ok_or_else(|| {
+                self.error(format!("wants {key} to be {expected} — got {name:?}."))
+            })?;
+            if drops.contains(&parameter) {
+                return Err(self.error(format!("names {name:?} twice in {key}.")));
+            }
+            drops.push(parameter);
+        }
+        Ok(drops)
     }
 
     /// `bundle_adjust`'s per-camera release overrides; empty when absent.

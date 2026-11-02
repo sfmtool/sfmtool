@@ -136,7 +136,10 @@ camera as it was when it opened, the value the fits read (the version's base,
 or its materialisation, made once, when the version carries point edits), the
 outermost keypoint of the camera's images and the keypoints of the camera's
 observations (the inline column, or the image's `.sift` file), and the inputs of
-the current fit with the fit itself. The outermost keypoint and the keypoints
+the current fit with the fit itself. The inputs include the per-image
+parameters the proposal drops (§ "Dropping per-image parameters"); the value
+the fit reads is then the proposal's value with those drops made, made again
+only when the drops change. The outermost keypoint and the keypoints
 come from one pass over the camera's images on the GUI thread when the proposal
 opens, which reads each image's `.sift` file once for both
 (`observations::read_camera_keypoints`); the outermost keypoint is the one
@@ -180,6 +183,12 @@ The panel shows a strip of controls under the header
   keypoint's, and the observed one's where no `.sift` file could be read. The
   default domain is not changed by it: a circular fisheye is trimmed to its
   image circle by choice.
+- **Drop per image**, for a camera that varies parameters per image: one
+  checkbox per parameter it varies, in the panel's words (`focal`, `principal
+  point`, `radial correction`, `rolling-shutter rates`), cleared when the
+  proposal opens. A parameter the target cannot carry is ticked and greyed,
+  its hover text saying why the switch drops it (§ "Dropping per-image
+  parameters").
 - The fit's **report** in one line, for example `rms 0.130 px, radial 0.013 px,
   max 0.292 px over θ ≤ 84.5°; aspect fy/fx 0.9978 dropped (single focal)`,
   with `; monotone constraint bound at 1 angle, 113.2°` added where the
@@ -248,6 +257,52 @@ not greyed for such a camera, since its other targets are offered. The wire's
 fit angle on a spline camera's own model; the panel shows a proposal the wire
 opened as it was opened, its Model list holding the target named and Fit to θ
 the angle given.
+
+### Dropping per-image parameters
+
+A camera can vary its focal, principal point, radial correction and
+rolling-shutter rates per image
+([../../core/reconstruction/drop-image-adjustments.md](../../core/reconstruction/drop-image-adjustments.md)).
+The proposal can drop any of them before the fit: the strip's Drop per image
+row has one box per parameter the camera varies (its flag, or a non-zero value
+on one of its images: `varied_image_adjustments`), and a ticked box asks the
+switch to drop that parameter first with `drop_image_adjustments`, which sets
+the images' values to zero and folds their mean into the camera. The fit is
+then of the folded camera, and the proposal's job switches the same request
+(`SwitchCameraModelOptions::drop_image_adjustments`), so the observation
+comparison's `before` is the camera as it is and its `after` the dropped and
+switched one, and `median error a → b` is the cost of the drop and the switch
+together. The preview, the Image Detail reprojections and Apply follow the same
+drops: the proposed camera reads each image through what the drops leave of
+its adjustment.
+
+Every box opens cleared, keeping every image's own values, except where the
+target cannot carry the parameter
+([../../core/reconstruction/switch-camera-model.md](../../core/reconstruction/switch-camera-model.md)
+§ "What a switch carries"): the rolling-shutter rates on any target other than
+`SFMTOOL_PINHOLE`, and the radial correction on any switch other than a refit of
+an `SFMTOOL_PINHOLE` spline that keeps its domain end. Those boxes are ticked
+and greyed, with hover text naming the target and the reason, and the proposal
+drops them whatever was ticked, so a camera whose images carry a radial
+correction or rates opens a proposal for any target rather than a refused fit.
+A drop the target requires is worked out again for each change of the
+controls, so it lasts only as long as the target that requires it, while a box
+the person ticked stays ticked across a change of model.
+
+A same-model refit whose only change is a drop runs like any other: on Kerry
+Park's `SFMTOOL_FISHEYE` cameras, `SFMTOOL_FISHEYE (refit spline)` at the
+camera's own count and domain with `principal point` ticked refits the spline
+to the folded camera and drops the per-image principal point, and on an
+`SFMTOOL_PINHOLE` camera the same refit keeps the radial correction and the
+rates while dropping what is ticked.
+
+The **Proposed** table states which per-image parameters the proposal keeps
+and which it drops, in the line under its Parameters heading: `Per image,
+unchanged from Current: focal and principal point. Dropped per image: radial
+correction and rolling-shutter rates.` A kept parameter's values are the
+images' own and do not change with the switch, so the Current table's
+statistics and histograms stand for them, and the Proposed table does not
+repeat them.
 
 ### The proposal's job
 
@@ -586,6 +641,7 @@ the proposal both make:
 | `coeff_count` | the camera's own count when the target is its own spline model, else the core default, 8 |
 | `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner |
 | `theta_fit_deg` | the core default; given, even a refit is an ordinary fit over that angle |
+| `drop_image_adjustments` | none: every image keeps its own values; each one named has to be a parameter the camera varies, or the request is refused |
 
 It runs **on the GUI thread**: a fit is a few milliseconds, and the only files
 read are `.sift` positions, on a `sift_files` node without the inline keypoint
@@ -616,7 +672,15 @@ with a part that did not move named as kept (`8 coefficients kept`, `domain
 
 `Switched camera 0 of kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE`.
 
-Apply's version adds ` and retriangulated its tracks` to either.
+A switch that dropped per-image parameters names them at the end, in the
+panel's words: `Refit spline of camera 0 of kerry_park: 8 coefficients kept,
+domain 150.1° kept, dropped per-image principal point`, or `Switched camera 0
+of seoul_bull from SFMTOOL_PINHOLE to SFMTOOL_FISHEYE, dropped per-image radial
+correction and rolling-shutter rates`.
+
+Apply's version adds ` and retriangulated its tracks` to either, after a comma
+where the label names a drop (`…, dropped per-image principal point, and
+retriangulated its tracks`), so the tracks do not read as something dropped.
 
 ### The Action Log
 
@@ -639,7 +703,8 @@ retriangulation's report.
 A refusal is one **failed** entry, `Switch camera model of <node> refused:
 camera 0: <reason>`, carrying the core function's sentence: a camera the image set
 does not have, a count on a model without a spline, a domain end the model
-cannot have. Nothing is pushed. A perspective target refused because a point
+cannot have, a kept radial correction or kept rates the target cannot carry,
+and a drop of a parameter the camera does not vary. Nothing is pushed. A perspective target refused because a point
 lies 90° or more off the camera's axis names that point, by the index the
 version on screen gives it, and says the angle is the ray to the point's
 position rather than a keypoint read through the lens, since that angle can
@@ -702,10 +767,22 @@ Explorer (`sfm-explorer` lib tests, headless):
   no header line starting with a `·`; and a
   refused proposal showing its default fit angle and source, keeping a
   wire-given value the field's range does not hold, and the current tables
-  alone.
+  alone. With per-image parameters, on the seoul_bull ground truth that
+  varies all four: an `SFMTOOL_FISHEYE` target's Drop per image row with the
+  focal and principal point cleared and enabled and the radial correction and
+  rates ticked and greyed, the request and the job's switch carrying those
+  drops, and the Proposed table's line naming what is kept and what is dropped;
+  the camera's own refit offering all four cleared, a click on a box's label
+  ticking it and advancing the generation, and the ticked drop kept across a
+  change of model while the required ones go with their target; the row and
+  the line inside the panel and apart from the rest at 341, 482 and 1800 px;
+  and no row for a camera that varies nothing per image.
 - `scene_graph/tests.rs`: a camera row's menu offering `Switch Camera Model…`,
   greyed on another camera while a proposal is open, with the node's
   retriangulation greyed too.
+- `state/edits/switch_camera_model.rs`: the label naming the drops at its end,
+  Apply's label putting a comma before the retriangulation, and a drop of a
+  parameter the camera does not vary refused.
 - `state/edits/tests.rs`: a refit pushing one version with the label naming
   both changes, only the named camera changing, the log row carrying the fit's
   numbers, and undo bringing the old camera back; a domain end past 90° on
@@ -735,6 +812,14 @@ Explorer (`sfm-explorer` lib tests, headless):
   form with the answer in hand replying with the version at once; and a
   running proposal's job absent from `get_scene`'s `background_tasks` and
   `get_background_tasks`, and left running by `cancel_background_tasks`.
+  `drop_per_image_adjustments`: an unknown name, one named twice, a value that
+  is not an array, the argument beside `proposal: true` and a parameter the
+  camera does not vary refused, pushing nothing; a kept radial correction
+  refused naming the rates still kept, and both dropped switching with the
+  drops in the label and in `fit`; and `propose_camera_model`'s
+  `per_image_adjustments` block marking the corrections required on an
+  `SFMTOOL_FISHEYE` target and nothing required on the camera's own refit,
+  which drops what the call names.
 - `camera_model_proposal/job/tests.rs`: without the preview the job sending
   the comparison alone, pushing nothing and writing no row; Apply with the
   answer in hand installing it with no background task, and pushing the
@@ -796,9 +881,6 @@ Explorer (`sfm-explorer` lib tests, headless):
   one by one, each its own version.
 - Typing a camera's parameters. A lens changes through a fit or a solve.
 - Freeing the principal point in the fit (§ "The strip").
-- Dropping a camera's per-image parameters. The proposal keeps every image's
-  adjustment; dropping them before the fit is proposed in
-  [per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
 
 ---
 

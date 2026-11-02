@@ -5,7 +5,8 @@
 //!
 //! `specs/core/reconstruction/switch-camera-model.md` is the design. The
 //! function here is pure: an [`SfmrReconstruction`] goes in, a new one and a
-//! report come out. Each chosen camera is replaced by the camera
+//! report come out. Each chosen camera drops the per-image parameters the
+//! caller names, and is then replaced by the camera
 //! [`refit_camera_intrinsics`](crate::camera::refit_intrinsics::refit_camera_intrinsics) fits to it, and every
 //! observation of an image that uses the camera is measured before and after,
 //! on the same set of observations. Poses, points, keypoints, patches and
@@ -16,7 +17,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 
-use super::data::{observation_reprojection_error, SfmrReconstruction};
+use super::bundle_adjust::ImageAdjustmentParameter;
+use super::data::{observation_reprojection_error, ImageSet, SfmrReconstruction};
+use super::drop_image_adjustments::{drop_image_adjustments, DropImageAdjustmentsError};
 use super::outermost_keypoint::{outermost_keypoints, OutermostKeypoints};
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::refit_intrinsics::{
@@ -49,15 +52,25 @@ pub enum SwitchCameraModelError {
     /// The observation pixels could not be read: a `sift_files`
     /// reconstruction without inline keypoints whose `.sift` files are missing.
     Observations(String),
-    /// The camera's images carry a per-image radial correction or
-    /// rolling-shutter rates, or the camera lists either as varying per image.
-    /// The radial correction is written in the camera's own spline basis and
-    /// the rates are defined on `SFMTOOL_PINHOLE` alone, so a refitted camera
-    /// would read them as something else.
+    /// The camera keeps a per-image parameter the switch cannot carry over
+    /// ([`image_adjustments_carried`]): a radial correction outside a refit of
+    /// an `SFMTOOL_PINHOLE` spline that keeps its domain end, or
+    /// rolling-shutter rates on a target other than `SFMTOOL_PINHOLE`. The
+    /// radial correction is written on the camera's own spline domain and the
+    /// rates are defined on `SFMTOOL_PINHOLE` alone, so the switched camera
+    /// would read them as something else. Dropping them
+    /// ([`SwitchCameraModelOptions::drop_image_adjustments`]) lifts it.
     LensCorrections {
         /// The camera's index among the reconstruction's cameras.
         camera: usize,
+        /// The target model's name.
+        target: &'static str,
+        /// The parameters kept that the switch cannot carry, in
+        /// [`ImageAdjustmentParameter::ALL`] order.
+        kept: Vec<ImageAdjustmentParameter>,
     },
+    /// Dropping the named per-image parameters refused, before any fit.
+    Drop(DropImageAdjustmentsError),
 }
 
 impl fmt::Display for SwitchCameraModelError {
@@ -75,16 +88,133 @@ impl fmt::Display for SwitchCameraModelError {
                 f,
                 "the observations' pixels could not be read to compare the models: {e}"
             ),
-            SwitchCameraModelError::LensCorrections { camera } => write!(
-                f,
-                "camera {camera}'s images carry a per-image radial correction or \
-                 rolling-shutter rates, which a model switch does not carry over"
-            ),
+            SwitchCameraModelError::LensCorrections {
+                camera,
+                target,
+                kept,
+            } => {
+                let names: Vec<&str> = kept.iter().map(|&p| correction_words(p)).collect();
+                write!(
+                    f,
+                    "camera {camera} keeps its images' own {}, which a switch to {target} \
+                     does not carry over (an SFMTOOL_PINHOLE target carries the rates, and \
+                     only a refit of an SFMTOOL_PINHOLE spline that keeps its domain end \
+                     carries the radial correction); drop them per image to switch",
+                    names.join(" and ")
+                )
+            }
+            SwitchCameraModelError::Drop(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for SwitchCameraModelError {}
+
+/// What a refusal calls a per-image parameter an image keeps.
+fn correction_words(parameter: ImageAdjustmentParameter) -> &'static str {
+    match parameter {
+        ImageAdjustmentParameter::Focal => "focal scale",
+        ImageAdjustmentParameter::PrincipalPoint => "principal-point offset",
+        ImageAdjustmentParameter::RadialBspline => "radial correction",
+        ImageAdjustmentParameter::RollingShutter => "rolling-shutter rates",
+    }
+}
+
+/// One per-image parameter a camera varies, and whether a switch carries it
+/// over; [`image_adjustments_carried`] lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CarriedImageAdjustment {
+    /// The parameter.
+    pub parameter: ImageAdjustmentParameter,
+    /// Whether the switch keeps it as it is. `false` is a parameter the
+    /// switch refuses to keep ([`SwitchCameraModelError::LensCorrections`]),
+    /// which has to be dropped for the switch to run.
+    pub carried: bool,
+}
+
+/// The per-image parameters camera `camera` of `image_set` varies: those its
+/// `per_image_adjustments` flags list, and any other one of its images holds a
+/// non-zero value of, in [`ImageAdjustmentParameter::ALL`] order. These are
+/// the parameters [`drop_image_adjustments`] changes something for.
+pub fn varied_image_adjustments(
+    image_set: &ImageSet,
+    camera: usize,
+) -> Vec<ImageAdjustmentParameter> {
+    let flags = image_set.camera_per_image_adjustments(camera);
+    let images = || {
+        image_set
+            .images
+            .iter()
+            .filter(move |im| im.camera_index as usize == camera)
+            .map(|im| &im.intrinsic_adjustment)
+    };
+    ImageAdjustmentParameter::ALL
+        .into_iter()
+        .filter(|&p| match p {
+            ImageAdjustmentParameter::Focal => flags.focal || images().any(|a| a.focal != 0.0),
+            ImageAdjustmentParameter::PrincipalPoint => {
+                flags.principal_point || images().any(|a| a.principal_point != [0.0; 2])
+            }
+            ImageAdjustmentParameter::RadialBspline => {
+                flags.radial_bspline || images().any(|a| a.radial_bspline != [0.0; 2])
+            }
+            ImageAdjustmentParameter::RollingShutter => {
+                flags.rolling_shutter || images().any(|a| a.rolling_shutter != [0.0; 3])
+            }
+        })
+        .collect()
+}
+
+/// Each per-image parameter camera `camera` of `recon` varies
+/// ([`varied_image_adjustments`]), and whether a switch to `target` with
+/// `options` carries it over as it is.
+///
+/// The focal scale and the principal-point offset are relative to whatever
+/// the camera becomes, so every switch carries them. The rolling-shutter rates
+/// are defined on `SFMTOOL_PINHOLE` alone, so only an `SFMTOOL_PINHOLE` target
+/// carries them. The radial correction is a curve on the camera's own spline
+/// domain, `τ = ρ/ρ_max`, added to the camera's spline, so it is carried only
+/// where the domain end stays put and the model stays `SFMTOOL_PINHOLE`: a
+/// refit of an `SFMTOOL_PINHOLE` spline as itself with neither
+/// [`RefitOptions::theta_fit_deg`] nor [`RefitOptions::spline_domain_deg`]
+/// given. A parameter that is not carried has to be dropped
+/// ([`SwitchCameraModelOptions::drop_image_adjustments`]); kept, the switch
+/// refuses ([`SwitchCameraModelError::LensCorrections`]). A caller offering
+/// the choice, such as the viewer's camera model proposal, reads here which
+/// drops a target forces.
+///
+/// # Errors
+///
+/// [`SwitchCameraModelError::UnknownCamera`] for an index past the image set's
+/// cameras.
+pub fn image_adjustments_carried(
+    recon: &SfmrReconstruction,
+    camera: usize,
+    target: &RefitTarget,
+    options: &RefitOptions,
+) -> Result<Vec<CarriedImageAdjustment>, SwitchCameraModelError> {
+    let image_set = &recon.image_set;
+    let count = image_set.cameras.len();
+    let Some(source) = image_set.cameras.get(camera) else {
+        return Err(SwitchCameraModelError::UnknownCamera { camera, count });
+    };
+    let pinhole_target = matches!(target, RefitTarget::SfmtoolPinhole { .. });
+    let domain_kept = pinhole_target
+        && spline_refit_count(source, target).is_some()
+        && options.theta_fit_deg.is_none()
+        && options.spline_domain_deg.is_none();
+    Ok(varied_image_adjustments(image_set, camera)
+        .into_iter()
+        .map(|parameter| CarriedImageAdjustment {
+            parameter,
+            carried: match parameter {
+                ImageAdjustmentParameter::Focal | ImageAdjustmentParameter::PrincipalPoint => true,
+                ImageAdjustmentParameter::RadialBspline => domain_kept,
+                ImageAdjustmentParameter::RollingShutter => pinhole_target,
+            },
+        })
+        .collect())
+}
 
 /// The median, 90th percentile and maximum of a set of reprojection errors,
 /// in pixels. All `NaN` over an empty set.
@@ -146,10 +276,16 @@ pub struct ObservationComparison {
     pub past_trusted_after: ErrorSummary,
 }
 
-/// How a switch runs: the lens fit's options, and what the report carries
-/// beside the fit.
+/// How a switch runs: the per-image parameters dropped first, the lens fit's
+/// options, and what the report carries beside the fit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwitchCameraModelOptions {
+    /// The per-image parameters each switched camera drops before its fit, by
+    /// [`drop_image_adjustments`]: the flags cleared, the images' values zeroed
+    /// and their mean folded into the camera, which is then the camera the
+    /// target is fitted to. A parameter a camera does not vary is passed over.
+    /// Empty by default, which keeps every image's adjustment.
+    pub drop_image_adjustments: Vec<ImageAdjustmentParameter>,
     /// The fit's largest angle and the spline domain end, as the lens fit
     /// takes them.
     pub refit: RefitOptions,
@@ -166,6 +302,7 @@ pub struct SwitchCameraModelOptions {
 impl Default for SwitchCameraModelOptions {
     fn default() -> Self {
         Self {
+            drop_image_adjustments: Vec::new(),
             refit: RefitOptions::default(),
             outermost_keypoint: true,
         }
@@ -177,9 +314,14 @@ impl Default for SwitchCameraModelOptions {
 pub struct CameraSwitch {
     /// The camera's index among the reconstruction's cameras.
     pub camera: usize,
-    /// The camera before the switch.
+    /// The camera before the switch, before any drop.
     pub source: CameraIntrinsics,
-    /// The fit, carrying the camera after the switch.
+    /// The per-image parameters the camera dropped before the fit: those of
+    /// [`SwitchCameraModelOptions::drop_image_adjustments`] it varied, in
+    /// [`ImageAdjustmentParameter::ALL`] order.
+    pub dropped_image_adjustments: Vec<ImageAdjustmentParameter>,
+    /// The fit, carrying the camera after the switch. It is fitted to the
+    /// camera the drops left, so its distances are from that camera.
     pub refit: CameraIntrinsicsRefit,
     /// Posed or not, the images that use the camera.
     pub images: usize,
@@ -223,6 +365,15 @@ pub struct SwitchCameraModelReport {
 /// of whose points lies 90° or more off its axis, naming the point
 /// ([`RefitError::ObservationsPast90`]). The first camera refused refuses the
 /// whole switch, and nothing changes.
+///
+/// Before any fit, each camera drops the per-image parameters
+/// [`SwitchCameraModelOptions::drop_image_adjustments`] names that it varies,
+/// by [`drop_image_adjustments`], and the target is fitted to the camera that
+/// leaves. A camera that keeps a per-image parameter the switch cannot carry
+/// ([`image_adjustments_carried`]) is refused
+/// ([`SwitchCameraModelError::LensCorrections`]). The comparison's `before` is
+/// measured on `recon` as it was handed in, so it covers the drops and the
+/// switch together.
 ///
 /// Poses, points, keypoints, patches and tracks are carried over unchanged. The
 /// stored error of every point observed in an image that uses a switched
@@ -306,11 +457,34 @@ pub fn switch_camera_model(
     let touched_rows: Vec<usize> = (0..tracks.len())
         .filter(|&row| touched[tracks[row].point_index as usize])
         .collect();
-    // The fits first: each is a few milliseconds, and a refused one refuses
+    // The drops first, camera by camera: each camera's fit is of the camera
+    // its drops leave, and the value they leave is the one written back.
+    let drops = &options.drop_image_adjustments;
+    let dropped: Vec<Vec<ImageAdjustmentParameter>> = chosen
+        .iter()
+        .map(|&c| {
+            varied_image_adjustments(image_set, c)
+                .into_iter()
+                .filter(|p| drops.contains(p))
+                .collect()
+        })
+        .collect();
+    let mut after_drops: Option<SfmrReconstruction> = None;
+    for (&c, parameters) in chosen.iter().zip(&dropped) {
+        if !parameters.is_empty() {
+            let from = after_drops.as_ref().unwrap_or(recon);
+            after_drops = Some(
+                drop_image_adjustments(from, c, parameters)
+                    .map_err(SwitchCameraModelError::Drop)?,
+            );
+        }
+    }
+    let working = after_drops.as_ref().unwrap_or(recon);
+    // The fits next: each is a few milliseconds, and a refused one refuses
     // the switch before any `.sift` file is read for the pixels below.
     let mut refits: Vec<CameraIntrinsicsRefit> = Vec::with_capacity(chosen.len());
     for &c in &chosen {
-        refits.push(fit_camera_switch(recon, c, target, refit_options)?);
+        refits.push(fit_camera_switch(working, c, target, refit_options)?);
     }
     let pixels = observation_pixels(recon, &touched_rows)?;
     let theta: Vec<f64> = switched_rows
@@ -319,13 +493,18 @@ pub fn switch_camera_model(
         .collect();
 
     // ── The switched value ─────────────────────────────────────────────────
-    let mut out = recon.clone_for_edit();
+    let mut out = match after_drops {
+        Some(value) => value,
+        None => recon.clone_for_edit(),
+    };
     for (&c, refit) in chosen.iter().zip(&refits) {
         out.image_set.cameras[c] = refit.camera.clone();
     }
-    // Only the shared cameras are refitted: every image keeps its intrinsic
-    // adjustment as it is, since the adjustment is relative to whatever its
-    // camera is. The errors below are read through each image's intrinsics.
+    // Only the shared cameras are refitted: every image keeps what the drops
+    // left of its intrinsic adjustment as it is, since the adjustment is
+    // relative to whatever its camera is. The errors below are read through
+    // each image's intrinsics, before against the value as it was handed in,
+    // so the comparison covers the drops and the switch together.
     let before_intrinsics = recon.image_set.all_image_intrinsics();
     let after_intrinsics = out.image_set.all_image_intrinsics();
 
@@ -371,7 +550,13 @@ pub fn switch_camera_model(
         vec![None; chosen.len()]
     };
     let mut entries = Vec::with_capacity(chosen.len());
-    for (((&c, refit), rows), outermost) in chosen.iter().zip(refits).zip(rows_of).zip(outermost) {
+    for ((((&c, refit), rows), outermost), dropped) in chosen
+        .iter()
+        .zip(refits)
+        .zip(rows_of)
+        .zip(outermost)
+        .zip(dropped)
+    {
         let images = image_set
             .images
             .iter()
@@ -381,6 +566,7 @@ pub fn switch_camera_model(
         entries.push(CameraSwitch {
             camera: c,
             source: image_set.cameras[c].clone(),
+            dropped_image_adjustments: dropped,
             refit,
             images,
             observations,
@@ -405,10 +591,18 @@ pub fn switch_camera_model(
 /// fit before applying it, such as the viewer's camera model proposal, gets the
 /// camera the switch would install for the same request.
 ///
+/// It fits the camera as `recon` holds it, so a caller dropping per-image
+/// parameters first ([`SwitchCameraModelOptions::drop_image_adjustments`])
+/// calls [`drop_image_adjustments`] and hands this the value that returns, as
+/// [`switch_camera_model`] does.
+///
 /// # Errors
 ///
 /// [`SwitchCameraModelError::UnknownCamera`] for an index past the image set's
-/// cameras, and [`SwitchCameraModelError::Refit`] where the fit refuses.
+/// cameras, [`SwitchCameraModelError::LensCorrections`] for a camera that
+/// keeps a per-image parameter the switch cannot carry
+/// ([`image_adjustments_carried`]), and [`SwitchCameraModelError::Refit`]
+/// where the fit refuses.
 pub fn fit_camera_switch(
     recon: &SfmrReconstruction,
     camera: usize,
@@ -422,17 +616,21 @@ pub fn fit_camera_switch(
     let Some(source) = image_set.cameras.get(camera) else {
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
-    // The radial correction is a spline in the camera's own basis on its own
-    // domain and the rates are defined on its model, so neither rides on a
-    // refitted camera unchanged.
-    let flags = image_set.camera_per_image_adjustments(camera);
-    let corrected = image_set.images.iter().any(|im| {
-        im.camera_index as usize == camera
-            && (im.intrinsic_adjustment.radial_bspline != [0.0, 0.0]
-                || im.intrinsic_adjustment.rolling_shutter != [0.0; 3])
-    });
-    if corrected || flags.radial_bspline || flags.rolling_shutter {
-        return Err(SwitchCameraModelError::LensCorrections { camera });
+    // The radial correction is a curve on the camera's own spline domain and
+    // the rates are defined on `SFMTOOL_PINHOLE`, so each rides on the
+    // switched camera only where that stays as it was.
+    let kept: Vec<ImageAdjustmentParameter> =
+        image_adjustments_carried(recon, camera, target, options)?
+            .into_iter()
+            .filter(|p| !p.carried)
+            .map(|p| p.parameter)
+            .collect();
+    if !kept.is_empty() {
+        return Err(SwitchCameraModelError::LensCorrections {
+            camera,
+            target: target.model_name(),
+            kept,
+        });
     }
     let tracks = &recon.point_set.tracks;
     let widest = widest_ray(recon, camera);

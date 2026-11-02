@@ -8,8 +8,12 @@ and steps 2 and 3 in [gui/camera-intrinsics.md § 2.
 Parameters](../gui/camera-intrinsics.md#2-parameters), whose Decisions record
 that the rates are shown in milliradians per short side, the unit of Image
 Detail's legend, rather than per frame of readout, and that a click on a
-histogram's bin selects one of its images at a time; this draft proposes steps
-4 and 5. Open: whether `sfm xform` gets an option to drop per-image
+histogram's bin selects one of its images at a time, and step 4 in
+[gui/edits/switch-camera-model.md § Dropping per-image
+parameters](../gui/edits/switch-camera-model.md#dropping-per-image-parameters)
+and [core/reconstruction/switch-camera-model.md § The
+drops](../core/reconstruction/switch-camera-model.md#the-drops); this draft
+proposes step 5. Open: whether `sfm xform` gets an option to drop per-image
 parameters.
 
 A camera in a `.sfmr` file can vary its focal, principal point, radial
@@ -46,21 +50,23 @@ Parameters](../gui/camera-intrinsics.md#2-parameters) and
 
 ## Step 4: dropping a parameter in Switch Camera Model
 
-Switch Camera Model's proposal
-([gui/edits/switch-camera-model.md § The proposal](../gui/edits/switch-camera-model.md#the-proposal)),
-and other camera operations where it applies, offers one checkbox per
-per-image parameter the camera varies: *drop per-image focal*, and so on. A
-ticked box drops the parameter with step 1's `drop_image_adjustments` before
-the fit, so the fit is of the folded camera, and the strip's existing
-observation comparison shows what the drop costs together with the switch.
-Dropping the radial correction and the rates lifts the refusal Switch Camera
-Model makes today for a camera that carries them (`LensCorrections`); with
-either kept, the refusal stands.
-
-MCP `propose_camera_model` and `switch_camera_model` take the same choice as
-an argument, the Action Log line names the parameters dropped, `ui_basic`
-covers the checkboxes, and the pull request carries before and after
-screenshots of the strip.
+Built. Switch Camera Model's proposal has a Drop per image row, one checkbox
+per per-image parameter the camera varies, cleared by default; a ticked box
+drops the parameter with step 1's `drop_image_adjustments` before the fit, and
+the observation comparison shows what the drop costs together with the switch.
+A parameter the target cannot carry (the rolling-shutter rates off
+`SFMTOOL_PINHOLE`, the radial correction outside a refit of an
+`SFMTOOL_PINHOLE` spline that keeps its domain end) is ticked and greyed, so a
+camera carrying them opens a fitted proposal rather than the `LensCorrections`
+refusal; kept on such a target, the core switch still refuses. MCP
+`propose_camera_model` and `switch_camera_model` take
+`drop_per_image_adjustments`, and the version label and the Action Log line
+name the parameters dropped:
+[gui/edits/switch-camera-model.md § Dropping per-image
+parameters](../gui/edits/switch-camera-model.md#dropping-per-image-parameters),
+[core/reconstruction/switch-camera-model.md § The
+drops](../core/reconstruction/switch-camera-model.md#the-drops) and
+[gui/mcp-server.md](../gui/mcp-server.md#switch_camera_model).
 
 ## Step 5: the CLI and the Bundle Adjust dialog
 

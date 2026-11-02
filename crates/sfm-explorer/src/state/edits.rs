@@ -841,13 +841,16 @@ mod switch_camera_model;
 pub(crate) use refine_all_normals::refine_refusal;
 pub(crate) use refit_all_points::refit_refusal;
 
+#[cfg(feature = "mcp")]
+pub(crate) use switch_camera_model::drop_refusal;
 #[cfg(test)]
 pub(crate) use switch_camera_model::tracks_of_camera;
 #[cfg(any(test, feature = "mcp"))]
 pub(crate) use switch_camera_model::ProposalApplied;
 pub(crate) use switch_camera_model::{
-    monotone_clause, refit_change, switch_and_retriangulate, switch_refusal_in_version_numbering,
-    ResolvedSwitch, SwitchCameraModelRequest, SwitchEnd,
+    monotone_clause, per_image_parameter_list, per_image_parameter_words, refit_change,
+    switch_and_retriangulate, switch_refusal_in_version_numbering, ResolvedSwitch,
+    SwitchCameraModelRequest, SwitchEnd,
 };
 
 #[cfg(test)]

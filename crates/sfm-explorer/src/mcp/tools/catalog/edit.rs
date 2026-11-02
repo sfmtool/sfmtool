@@ -682,7 +682,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           domain end: fitted over the whole new domain and kept monotone, the \
                           domain end kept exactly unless spline_domain_deg is given. This is \
                           how a spline's count or domain changes; bundle_adjust then refines \
-                          the coefficients it has. The direct form's reply carries the \
+                          the coefficients it has. drop_per_image_adjustments drops per-image \
+                          parameters first, and the new model is fitted to the camera that \
+                          leaves; a kept radial correction or kept rolling-shutter rates the \
+                          target cannot carry are refused. The direct form's reply carries the \
                           version, the Action Log sentence, and fit: the fit's rms and max \
                           pixel distance from the old camera, theta_fit_deg and its source, the \
                           spline domain, the range of incidence angles where the monotonicity \
@@ -767,6 +770,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                  angle alone.",
                         }),
                     ),
+                    ("drop_per_image_adjustments", drop_per_image_adjustments_schema()),
                     (
                         "proposal",
                         flag(
@@ -797,7 +801,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           open on another camera of the same reconstruction. A proposal open \
                           on another reconstruction is applied first, as selecting another \
                           reconstruction applies it. The reply is the proposed block \
-                          get_camera_intrinsics also reports, which carries the observation \
+                          get_camera_intrinsics also reports, which carries the per-image \
+                          parameters the camera varies, each with whether it is dropped and \
+                          whether the target requires the drop, the observation \
                           comparison once the proposal's job has switched the camera, and a \
                           triangulation block whose state is off, pending, ready (with the \
                           preview's counts and lost_points, the points that lose their \
@@ -856,6 +862,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                                  angle alone.",
                         }),
                     ),
+                    ("drop_per_image_adjustments", drop_per_image_adjustments_schema()),
                     (
                         "preview_retriangulation",
                         json!({
@@ -922,4 +929,29 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
     ]
+}
+
+/// The `drop_per_image_adjustments` argument `switch_camera_model` and
+/// `propose_camera_model` share.
+fn drop_per_image_adjustments_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "string",
+            "enum": ["focal", "principal_point", "radial_bspline", "rolling_shutter"],
+        },
+        "uniqueItems": true,
+        "description":
+            "The per-image parameters the camera drops before the fit, by the names \
+             get_camera_intrinsics lists in per_image_adjustments: each image's own value \
+             is set to zero and their mean is folded into the camera (rolling-shutter \
+             rates fold nothing), and the new model is fitted to the camera that leaves, \
+             so the observation comparison covers what the drop costs. Each has to be one \
+             the camera varies. Omit to keep every image's own values. A switch keeps the \
+             focal and the principal point on any target; an SFMTOOL_PINHOLE target keeps \
+             the rolling-shutter rates, and only a refit of an SFMTOOL_PINHOLE spline that \
+             keeps its domain end keeps the radial correction. A kept parameter the target \
+             cannot carry is refused by switch_camera_model, and dropped by \
+             propose_camera_model, whose per_image_adjustments block marks it required.",
+    })
 }

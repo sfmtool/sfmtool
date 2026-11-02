@@ -16,7 +16,7 @@
 //! adjustment on top of whichever camera it ends up with, as the switch
 //! itself does. So every reading here is through an image's own intrinsics:
 //! the current camera with the image's adjustment applied, and the proposed
-//! camera with the same adjustment applied.
+//! camera with what the proposal's drops leave of the same adjustment.
 
 use std::path::Path;
 
@@ -193,8 +193,9 @@ impl CameraModelProposal {
 
     /// Each observation of `image`, with the keypoint and the observed
     /// point's reprojection under the current and the proposed camera, each
-    /// with the image's intrinsic adjustment applied, through the image's
-    /// stored pose. A point at infinity is reprojected as the direction it is.
+    /// with the image's intrinsic adjustment applied (the proposed one with
+    /// what the drops leave of it), through the image's stored pose. A point
+    /// at infinity is reprojected as the direction it is.
     /// Empty for an image the proposal's camera did not take.
     pub(crate) fn image_reprojections(&self, image: usize) -> Vec<ObservationReprojection> {
         let Some(row) = self.value.image_set.images.get(image) else {
@@ -217,10 +218,18 @@ impl CameraModelProposal {
         else {
             return Vec::new();
         };
-        // A proposed camera that cannot take the image's adjustment gives no
-        // proposed reprojection rather than one without the correction.
+        // The proposed camera takes what the drops leave of the image's
+        // adjustment. One that cannot take it gives no proposed reprojection
+        // rather than one without the correction.
+        let proposed_adjustment = self
+            .dropped
+            .1
+            .image_set
+            .images
+            .get(image)
+            .map_or(adjustment, |row| &row.intrinsic_adjustment);
         let proposed = self.fit.as_ref().ok().and_then(|refit| {
-            crate::scene::adjusted_intrinsics(&refit.camera, adjustment, scanlines)
+            crate::scene::adjusted_intrinsics(&refit.camera, proposed_adjustment, scanlines)
         });
         let start = self.observations.partition_point(|o| o.image < image);
         self.observations[start..]
