@@ -54,18 +54,18 @@ run them in full on the last commit:
 ### Quality standards
 
 Every change is held to [`specs/STANDARDS.md`](specs/STANDARDS.md); read it
-before making or reviewing one. In short: points at infinity (`w = 0` rows)
-are supported; a function that can run longer than about a second takes a
-`&Progress`, with no `foo` / `foo_with_progress` pair; input to a binding or
-a library crate's public API never panics (it returns an error, which a
-binding raises as a Python exception); logic lives in Rust, with no Python
-wrapper that repeats what a binding does; every file format has the same I/O
-shape in `sfmtool.fileio`, validated in its format crate; an `sfm-explorer`
-item is private or `pub(crate)` unless the crate's public interface exports
-it, which the `unreachable_pub` lint checks for every item but struct fields;
-a convention has no documented exceptions; a test asserts something that can
-fail. If code breaks a standard, fix the code; fix a spec or doc only where
-the code is right.
+before making or reviewing one. In short: points at infinity (`w = 0` rows) are
+supported; a function that can run longer than about a second takes a
+`&Progress`, with no `foo` / `foo_with_progress` pair; input to a binding or a
+library crate's public API never panics (it returns an error, which a binding
+raises as a Python exception); logic lives in Rust, with no Python wrapper that
+repeats what a binding does; medians and quantiles use `sfmtool_core::numeric`;
+every file format has the same I/O shape in `sfmtool.fileio`, validated in its
+format crate; an `sfm-explorer` item is private or `pub(crate)` unless the
+crate's public interface exports it, which the `unreachable_pub` lint checks
+for every item but struct fields; a convention has no documented exceptions; a
+test asserts something that can fail. If code breaks a standard, fix the code;
+fix a spec or doc only where the code is right.
 
 The standards on names, layout and builds are the easiest to miss while
 editing:
