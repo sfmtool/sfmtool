@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, a Progress argument on long-running work, no with/without-progress variants, no panics on caller input, no Python wrappers over bindings, one I/O shape for every file format, no documented exceptions to a convention, tests that can fail, viewer items no more visible than their users need). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -127,7 +127,13 @@ than just the bigger pile. Add the ruling to the glossary as part of the fix.
    side is newer, and recommend on the argument rather than the count alone.
    A boundary the glossary declares **deliberate** -- `patch` in the bench and
    `surfel` in the renderer -- is not a finding, and eroding it from either side
-   is.
+   is. Where `specs/STANDARDS.md` already states the convention, the minority
+   is a breach of that standard, not a split to decide: settings-struct
+   suffixes (§ "A settings struct is named *Options"), `mod.rs` against
+   `foo.rs` (§ "A Rust module with submodules is a file beside its
+   directory"), `_`-prefixed Python names (§ "Python names mark what is
+   public") and license headers (§ "Every source file carries the license
+   header").
 9. **Names in a parallel family that don't parallel.** Sibling commands, sibling
    transforms, sibling bindings methods: check that the family's entry point,
    suffix, and argument names follow one rule, and name the exceptions.
@@ -166,8 +172,8 @@ how this audit runs them.
 
 - **Check per function, not per convention split.** A breach is a finding
   even where the whole module is consistent with itself. Run the
-  mechanical checks 9–16 below first, then read each hit against the
-  standard it feeds.
+  mechanical checks 9–17 below, and the standards' tallies in check 5,
+  first, then read each hit against the standard it feeds.
 - **Cite the standard.** Each finding names the standard by its heading
   and links it (`specs/STANDARDS.md#caller-input-never-panics`).
 - **Propose the code fix.** Per STANDARDS.md § "Direction of a fix", the
@@ -215,7 +221,14 @@ worth more than a paragraph.
    license headers, error message capitalization, CLI flag shapes. Report the
    minority's **age** beside its size -- if the newer files hold it, the split is
    a migration and the majority is the thing to fix. Check each split against
-   `specs/GLOSSARY.md` before recommending either way.
+   `specs/GLOSSARY.md` before recommending either way. Always report three
+   tallies with the commands STANDARDS.md gives for them: `mod.rs` files
+   against modules in the `foo.rs`-beside-`foo/` form, feeding § "A Rust
+   module with submodules is a file beside its directory"; public settings
+   structs in `sfmtool-core` still ending in `Params` or `Config`, feeding
+   § "A settings struct is named *Options"; and plain-named modules in the
+   re-exporting subpackages and in `_commands/` that define no command,
+   feeding § "Python names mark what is public".
 6. **Public-name leak scan** — every name reachable from Python or the CLI,
    checked for implementation-detail suffixes and for a spelling that disagrees
    with its siblings.
@@ -290,6 +303,20 @@ worth more than a paragraph.
     `#[cfg(target_os = "windows")]` blocks) for any bare `pub`. Report the
     count even when it is zero. Feeds STANDARDS.md § "Viewer items are no
     more visible than their users need".
+17. **Build and import gates** — tests and CI check four standards, so this
+    check confirms the gates are still in place rather than re-deriving
+    them: every `crates/*/Cargo.toml` has `[lints] workspace = true`
+    (§ "Rustdoc builds without warnings"); `pixi run cargo check -p
+    sfm-explorer --no-default-features` passes with no warning (§ "Code
+    builds at the MSRV and without the viewer's MCP feature");
+    `tests/test_lazy_loading.py` and `tests/test_module_layout.py` pass
+    (§ "Importing sfmtool and sfm loads only what is used", § "Python names
+    mark what is public"); and `pixi run cargo test -p sfmtool-core --test
+    license_headers` passes (§ "Every source file carries the license
+    header"). Then grep the examples in `specs/` for imports of
+    `_`-prefixed `sfmtool` names, which no test scans, and the command
+    modules for module-level work beyond imports and defining the command.
+    Report each gate as passed or failed.
 
 ## Output
 

@@ -22,8 +22,10 @@ a majority cannot tell a word that won on merit from one that won by being
 written first, nor a migration in progress from drift.
 
 [STANDARDS.md](STANDARDS.md) holds the quality standards every library
-function, binding, test and spec is held to: the rule, its reason, how to check
-code against it and what is out of scope. `audit-hygiene` and `audit-specs`
+function, binding, Python module, source file, test and spec is held to,
+from interface contracts to how names and modules are laid out and what every
+build must pass: the rule, its reason, how to check code against it and what
+is out of scope. `audit-hygiene` and `audit-specs`
 check against it, and an implementer or auditor of a change reads it. When
 code breaks a standard, the fix is in the code, not in a spec that describes the breach.
 

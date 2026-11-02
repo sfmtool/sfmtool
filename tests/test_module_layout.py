@@ -10,10 +10,10 @@ text for a path into the extension and fails on any it finds outside
 the allowlist below.
 
 A leading `_` on any part of a name means the name is internal to `sfmtool`
-(AGENTS.md § "Python names and privacy"). A test may import an internal name
-when that name is what it tests, which a scan cannot tell, but a script never
-does. The second test parses every script's imports and fails on one that
-names an internal module or an internal name.
+(specs/STANDARDS.md § "Python names mark what is public"). A test may import
+an internal name when that name is what it tests, which a scan cannot tell,
+but a script never does. The second test parses every script's imports and
+fails on one that names an internal module or an internal name.
 """
 
 import ast
