@@ -74,7 +74,7 @@ COLMAP-shaped one shown in the File Format example below.
 {
   "version": 1,
   "feature_tool": "colmap",
-  "feature_type": "sift",
+  "feature_type": "sift-colmap",
   "feature_options": {
     "max_image_size": 4096,
     "max_num_features": 8192,
