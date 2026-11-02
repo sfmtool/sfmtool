@@ -410,13 +410,12 @@ is version 1: its source is only read, and its own directory is new.
 The nested `source_feature_options` is a record of the source copied as it was,
 so it may hold a version 1 `gray_formula`; the version 2 rules about
 `gray_formula` and `image_to_gray` apply to the top level of `feature_options`
-only. Undistort's directory is `features/sift-sfmtool-undistort-{hash}`, the
-hash computed by the same rule as every workspace's (below) over
-`feature_tool` `sfmtool-undistort`, `feature_type` `sift-sfmtool-undistort` and
-the whole `feature_options`, the new top-level `image_to_gray` and the nested
-source record included. The added object changes the hash, so undistorting the
-same reconstruction again under the new rules writes a new directory beside any
-older output. `sfm ws upgrade` refuses an undistort workspace, whose `.sift`
+only. Undistort names its directory `features/sift-sfmtool-undistort-{hash}`
+when it creates it, the hash taken as `sfm ws init` takes it (below) over its
+tool, its type and the whole `feature_options`, the new top-level
+`image_to_gray` and the nested source record included. The added object changes
+the name, so undistorting the same reconstruction again under the new rules
+writes a new directory beside any older output. `sfm ws upgrade` refuses an undistort workspace, whose `.sift`
 files come from undistortion and cannot be re-extracted into a new directory;
 running `sfm undistort` again is the way to a version 2 one.
 
@@ -427,77 +426,38 @@ conversion is the object; the version says which without guessing from the
 keys, and keeps one spelling per version instead of carrying `gray_formula`
 forward beside the object. The file's other fields are unchanged.
 
-**The features directory changes.** `feature_prefix_dir` is
-`features/{feature_type}-{feature_cache_hash}`, and the hash is computed from
-the options, so a workspace written under the new rules gets a new features
-directory, for every tool, even with otherwise identical settings. The hash is
-the XXH3-128 digest, as 32 lowercase hex digits, of the UTF-8 bytes of the
-JSON text of one object with three keys: `feature_tool` (the tool name in lower
-case), `feature_type` (the directory's type, such as `sift-sfmtool`,
-`sift-colmap`, `sift-colmap-dsp` or `sift-opencv`) and `feature_options` with
-the top-level `use_gpu` key removed, serialised with sorted keys, no whitespace
-(`,` and `:` as separators). The bytes are the ones Python's
-`json.dumps(obj, sort_keys=True, separators=(",", ":"))` produces, spelled out
-here so that a second implementation can produce them:
+**The recorded folder name is authoritative.** `feature_prefix_dir` is stored
+in the workspace file so that nothing downstream has to compute it: every
+command, the viewer and every `.sfmr` use the recorded name as it is and never
+recompute it. A folder name is computed only when a folder is created, by
+`sfm ws init`, `sfm ws upgrade`, `sfm undistort` and the viewer's conversion of
+a version 1 record (below). It must differ for different options, and the
+existing name, `features/{feature_type}-{hash}` with the XXH3-128 hash of the
+compact JSON of `feature_tool`, `feature_type` and `feature_options` (without
+`use_gpu`) that `get_feature_tool_xxh128` computes, does that. It need not be
+the same in Python and Rust: two writers that name the same options
+differently cache the features twice, never wrongly. The Rust test that keeps
+the default `sfmtool` folder name equal in both languages stays as a
+convenience, not as a rule of the format.
 
-- **Strings** are ASCII; loading refuses a version 2 workspace whose options
-  hold a non-ASCII key or string, so no escape of a non-ASCII character is ever
-  needed. The formula is ASCII by its grammar. `"` and `\` are escaped with a
-  backslash, and U+0000 to U+001F and U+007F as `\uXXXX` with lowercase
-  hex, except that `\n`, `\r`, `\t`, `\b` and `\f` are written that way.
-- **Objects** are written `{`, then each member as its key, `:` and its value,
-  separated by `,`, then `}`, with the keys in code point order at every level,
-  so a nested object such as `sfmtool-undistort`'s `source_feature_options` is
-  sorted too. **Arrays** are written `[`, the values in order separated by `,`,
-  then `]`.
-- **`true`, `false` and `null`** are written as those words.
-- **Integers** (a JSON number with no `.` or exponent in the file) are written
-  in decimal with no decimal point, and must fit in a signed 64-bit integer;
-  loading refuses one that does not.
-- **Floats** (a JSON number with a `.` or an exponent) are written as Python's
-  `repr(float)` writes them: the shortest digit string that reads back as the
-  same double. With `d` the decimal exponent of the first significant digit,
-  a float with `−4 ≤ d < 16` is written in positional form with at least one
-  digit after the point (`0.0001`, `10.0`, `123456789012345.0`,
-  `0.006666666666666667`), and any other in exponent form: the first digit,
-  a `.` and the other digits when there are any, then `e`, a sign and at least
-  two exponent digits (`1e-05`, `1e-07`, `1e+16`,
-  `1.5e+300`). `-0.0` is written `-0.0`. NaN and the infinities are refused at
-  load in a version 2 workspace.
+Because `image_to_gray` is part of the options a new folder is named from,
+`sfm ws init` and `sfm ws upgrade` give a workspace written under the new rules
+a new features directory, for every tool, even with otherwise identical
+settings, and so do extraction outside a workspace and `sfm undistort`.
 
-The Rust formatter (below) returns an error, and so hashes nothing, for a
-non-ASCII key or string, a NaN or an infinity, and an integer outside the
-signed 64-bit range. Options that did not come through `load_workspace_config`,
-such as a `.sfmr`'s record that the viewer converts or the source record that
-`sfm undistort` copies, are therefore refused on the same terms as a loaded
-workspace.
-
-A Rust writer cannot take these bytes from `serde_json`. Measured with
-`serde_json` 1.0.154, the workspace's version, which formats floats with the
-`zmij` crate: `1e-05` is written `0.00001` and `1e-07` is written `1e-7`, where
-Python writes `1e-05` and `1e-07`; `1e+16`, `0.0001`, `10.0`,
-`123456789012345.0`, `0.006666666666666667` and `-0.0` come out the same; NaN
-becomes `null`, where Python writes `NaN`; and a non-ASCII character is written
-as it is, where Python escapes it. The Rust side therefore writes the hash input
-through a small formatter of its own (see
-[Implementation](#implementation)), and both sides are held to these rules by
-test vectors. The test that holds `BuildSiftFilesOptions::sfmtool_defaults()`
-to the prefix `sfm ws init` writes stays as a check that the two agree on the
-defaults. `image_to_gray` is inside
-`feature_options`, so it enters the hash, and since no version 1 workspace's
-options hold that object, no version 2 workspace's directory can equal a
-version 1 workspace's. That is what keeps version 1 and version 2 `.sift` files
-out of the same directory. The same holds for extraction outside a workspace,
-which computes the directory from the tool's default options, now including the
-object.
+What this gives up: a hand edit of `feature_options` does not move the folder,
+so it can put `.sift` files made under different settings into one folder. Each
+`.sift` file records its own `feature_tool_metadata`, so that is detectable
+afterwards from the files. To change the options, run `sfm ws init --force` or
+`sfm ws upgrade`, which choose a new folder.
 
 The relation the workspace spec states still holds: this cache hash is a
 different value from the `.sift` file's `feature_tool_xxh128`, which is the
 XXH128 of the stored bytes of the file's `feature_tool_metadata.json` (with
 `feature_type` `"sift"`, `use_gpu` included where the options have it, and the
 writer's own serialisation). Under the new shape both inputs contain the same
-`image_to_gray` object, but the two hashes are still computed from different
-bytes and still do not agree; a reader must not compare one with the other.
+`image_to_gray` object, but the two are computed from different bytes, and a
+reader must not compare one with the other.
 
 **Loading checks the version.** `load_workspace_config` in
 `src/sfmtool/_workspace.py`, the one reader of `.sfm-workspace.json` that every
@@ -511,23 +471,12 @@ command goes through, gains these checks, each an error naming the file:
   error naming the file and the version it found.
 - A version 2 file whose `feature_options` carry `gray_formula` at the top
   level, or carry no top-level `image_to_gray`, or whose `image_to_gray` does
-  not parse, is rejected at load, not later at extraction. So is a version 2
-  file whose `feature_options` hold a non-ASCII key or string, a NaN or an
-  infinity, or an integer outside the signed 64-bit range.
+  not parse, is rejected at load, not later at extraction.
 - A version 1 file whose `feature_options` carry `image_to_gray` is invalid
-  too: the object belongs to version 2, and a file holding it under version 1
-  would hash to a directory no version 1 reader expects.
+  too: the object belongs to version 2.
 
 `load_workspace_config` never recomputes `feature_prefix_dir`; it returns the
-stored one, so editing `image_to_gray` (or any option) by hand does not move the
-features directory. A hand edit is detected, not trusted: the extraction check
-below recomputes the prefix from the options with `get_feature_tool_xxh128`, and
-when it differs from the stored `feature_prefix_dir` it refuses to write, saying
-the options no longer match the directory and to run `sfm ws upgrade`, which
-brings the directory back in line with the options. That comparison runs in
-both `image_files_to_sift_files` and core's `build_sift_files`, so the viewer's
-build is covered too. Reading is not affected, since each `.sift` file records
-the options it was made with.
+stored one.
 
 `load_workspace_config` is also the only reader of the file. Core's
 `BuildSiftFilesOptions::from_workspace`, which reads `.sfm-workspace.json` on
@@ -558,12 +507,10 @@ directory of its own that is new under the new rules, as a version 2 workspace
 
 The check refuses, before writing anything, when the workspace file is version
 1 (in `image_files_to_sift_files`, which reads it; `build_sift_files` is handed
-its options and never reads the file), when the feature options it is given carry no `image_to_gray` object (a
-version 1 record, such as a `.sfmr` made from a version 1 workspace), when the
-`feature_prefix_dir` it is given differs from the one the options hash to, or
-when any `.sift` file already in the target directory is version 1. The
-prefix refusal says the options no longer match the directory, as above. Every
-other refusal carries the same message: it names the workspace file or the directory, says it
+its options and never reads the file), when the feature options it is given
+carry no `image_to_gray` object (a version 1 record, such as a `.sfmr` made
+from a version 1 workspace), or when any `.sift` file already in the target
+directory is version 1. Every refusal carries the same message: it names the workspace file or the directory, says it
 holds version 1 settings or version 1 `.sift` files, and says to run
 `sfm ws upgrade` (below), which moves the workspace to version 2 and a new
 features directory. A command that only needed to read features that are
@@ -579,13 +526,12 @@ succeeds and undone by Undo. The version 2 rule extends that mechanism rather
 than reading the workspace file:
 
 - A node whose record is a version 2 `sfmtool` record (a top-level
-  `image_to_gray`, a `feature_prefix_dir` that its options hash to) builds into
-  its recorded directory, as today.
+  `image_to_gray`) builds into its recorded directory, as today.
 - A node whose record is a version 1 `sfmtool` record (`gray_formula`, or no
   conversion) and whose observations are embedded patches has its record
   converted in memory by the same conversion `sfm ws upgrade` makes, one core
-  function that both call, and builds into the directory the converted options
-  hash to. When every file is built, the conversion is pushed as a version, like
+  function that both call, and builds into a new directory named from the
+  converted options. When every file is built, the conversion is pushed as a version, like
   today's switch, so the node then looks in the new directory; Undo puts the old
   record back, and a save writes the new one into the `.sfmr`.
 - A node with `sift_files` observations and a version 1 record is refused, for
@@ -599,8 +545,7 @@ than reading the workspace file:
 
 The workspace's own `.sfm-workspace.json` is neither read nor changed, so it can
 still be version 1 after a build, and the command-line extractors keep refusing
-there until `sfm ws upgrade` is run; the two then name the same directory only
-if the workspace's options match the node's converted ones. The old directory and
+there until `sfm ws upgrade` is run, which names its own new directory. The old directory and
 its `.sift` files stay on disk, and any other reconstruction whose record names
 them still finds them through its own record. The Background panel's line and
 the Action Log entry for the build name the directory the files were written to,
@@ -630,27 +575,25 @@ row above.
   `opencv` workspace its tool's row from the table above. It recomputes
   `feature_prefix_dir` from the new options and writes it, prints the old and
   the new directory, and leaves the old features directory, its `.sift` files
-  and the named image lists file on disk. On a version 2 file whose stored
-  `feature_prefix_dir` no longer matches its options, it recomputes the
-  directory the same way; on a version 2 file that already matches, it changes
-  nothing and says so. The `.sfmr` files that name the old directory still
+  and the named image lists file on disk. On a version 2 file it changes
+  nothing and says "nothing to do: already version 2", whatever its options
+  hold. The `.sfmr` files that name the old directory still
   resolve their `.sift` files through their own record. It refuses, changing
   nothing and naming the file, when there is no workspace file, when the file
   has no `version` or a version above 2, when its `feature_tool` is not
   `sfmtool`, `colmap` or `opencv` (an `sfmtool-undistort` workspace gets its
   own message saying to run `sfm undistort` again), when a `gray_formula` does
-  not parse under the formula grammar, and when its options hold a non-ASCII key
-  or string, a NaN, an infinity or an integer outside the signed 64-bit range.
+  not parse under the formula grammar.
 - **`sfm ws init` and `sfm ws init --force` write version 2 with fresh
   defaults**: `version: 2`, the tool's default `feature_options` with its
-  `image_to_gray` from the table above, and the `feature_prefix_dir` hashed from
+  `image_to_gray` from the table above, and a `feature_prefix_dir` named from
   them. `--force` over a version 1 file therefore changes `feature_prefix_dir`
   and drops any hand-edited option, which is why the refusal message points at
   `sfm ws upgrade` instead. The old features directory stays on disk, as every
   features directory does. Neither form touches the named image lists file.
 - **`sfm ws init` sets the grey conversion** for the `sfmtool` tool with
   `--image-to-gray FORMULA` and `--quantize-bits B`, written into
-  `image_to_gray` before `feature_prefix_dir` is hashed, so the directory
+  `image_to_gray` before `feature_prefix_dir` is named, so the directory
   follows the conversion. The formula is checked against the grammar and `B`
   must be an integer from 1 to 16. With `--feature-tool colmap` or `opencv`
   either option is an error, since those tools convert only one way.
@@ -1057,17 +1000,16 @@ Named once here, as the format specs' Implementations sections will name them:
   `src/sfmtool/_workspace.py`, and the options it writes come from
   `get_default_sfmtool_feature_options`, `get_colmap_feature_options` and
   `get_default_opencv_feature_options`, which gain the `image_to_gray` object
-  (the first losing `gray_formula`); the cache hash is `get_feature_tool_xxh128`
-  in `src/sfmtool/sift/file.py`, which calls the core formatter's binding
-  (below). `SiftParams::from_feature_options`
+  (the first losing `gray_formula`); new folder names come from
+  `get_feature_tool_xxh128` in `src/sfmtool/sift/file.py`, unchanged. `SiftParams::from_feature_options`
   in `sfmtool-core` reads the object instead of `gray_formula`, keeping
   `gray_formula` only for reading version 1 records.
 - **The Rust defaults.** `BuildSiftFilesOptions::sfmtool_defaults()` in
   `crates/sfmtool-core/src/features/sift/files.rs` repeats the `sfmtool` default
   options, with `gray_formula`, and the prefix hash computed from them, and a
   test pins it to the prefix `sfm ws init` writes. It gains the `image_to_gray`
-  object in place of `gray_formula`, so the test keeps the Rust and Python
-  defaults, and their directories, the same.
+  object in place of `gray_formula`; the test stays as a convenience that keeps
+  the two default folder names equal, not as a format rule.
 - **The version and extraction checks**: `load_workspace_config` in
   `src/sfmtool/_workspace.py` checks the workspace version at load; the
   refusal to mix versions is in `image_files_to_sift_files`
@@ -1080,19 +1022,7 @@ Named once here, as the format specs' Implementations sections will name them:
   (`crates/sfmtool-py/src/sift/files.rs`). `sfm ws upgrade`
   is a new subcommand of the `ws` group in `src/sfmtool/_commands/ws.py`, and
   `sfm ws init` gains `--image-to-gray` and `--quantize-bits` there.
-- **The cache hash** has one implementation, a Rust function in `sfmtool-core`
-  beside `build_sift_files` that writes the hash input with a small formatter
-  following the spelling rules above (Python's `repr` for floats, decimal
-  integers, `true` / `false` / `null`, ASCII strings) rather than through
-  `serde_json`, and hashes it. `get_feature_tool_xxh128` in
-  `src/sfmtool/sift/file.py` calls its binding instead of `json.dumps`; the
-  binding takes a Python `bool` as a boolean before it tests for an integer,
-  since `bool` is a subclass of `int`. Its
-  tests hold the formatter to fixed vectors: `0.006666666666666667`, `1e-05`,
-  `1e-07`, `1e+16`, `0.0001`, `10.0`, `123456789012345.0`, `-0.0`, the integers
-  `0`, `8192` and `-3`, and `true` and `false`, and a Python test compares the
-  binding with `json.dumps` over the same values and the default options of
-  every tool. `BuildSiftFilesOptions::from_workspace` is removed.
+- `BuildSiftFilesOptions::from_workspace` is removed.
 - **The viewer's build** (`crates/sfm-explorer/src/sift_files.rs`) converts a
   version 1 `sfmtool` record through the same core conversion function that
   `sfm ws upgrade` binds, and pushes it as a version the way it pushes today's
@@ -1198,21 +1128,15 @@ review should check:
     grey conversion, recomputes `feature_prefix_dir`, and leaves the old
     features directory and the lists file on disk; the refusal message points at
     it rather than at `sfm ws init --force` with reconstructed flags, which
-    cannot reproduce hand-edited options. It also re-derives the directory after
-    a hand edit of a version 2 file's options.
+    cannot reproduce hand-edited options. On a version 2 file it does nothing.
 14. **Proposed for review: `sfm ws init --image-to-gray FORMULA` and
     `--quantize-bits B`** for the `sfmtool` tool, so the conversion can be set
-    and the directory is hashed from it; a hand edit of `image_to_gray` is
-    detected as a mismatch with `feature_prefix_dir` when `.sift` files are
-    written, not silently honoured.
+    and the directory is named from it. A hand edit of the options does not move
+    the folder; the recorded folder name is authoritative.
 15. **The workspace file's version is checked at load**: a missing `version`,
     a version other than 1 or 2, a version 2 file with `gray_formula`, without
-    `image_to_gray` or with a non-ASCII option string, and a version 1 file with
-    `image_to_gray` are all errors there, as are non-finite numbers and
-    integers outside 64 bits. The cache hash's JSON bytes are defined as
-    Python's `json.dumps` output, spelled out (floats as `repr` writes them),
-    and the Rust side writes them through its own formatter, since
-    `serde_json` spells some floats differently.
+    `image_to_gray`, and a version 1 file with `image_to_gray` are all errors
+    there.
 16. **`sfm undistort` writes a version 2 workspace**, with a top-level
     `image_to_gray` converted from its source as `sfm ws upgrade` converts it
     and readings computed from the undistorted images, so it never refuses a
