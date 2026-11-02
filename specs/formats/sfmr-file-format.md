@@ -2800,7 +2800,8 @@ it. This section is the one place the versions and their changes are
 described; [Version History](#version-history) is an index into it. A version
 15 is proposed in
 [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md): it adds
-required per-image sharpness and gradient structure tensor columns.
+required per-image sharpness and gradient structure tensor columns, stored as
+`float32`.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals

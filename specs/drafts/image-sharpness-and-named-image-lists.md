@@ -469,20 +469,20 @@ list file (Part 3). When this ships, the `.sfmr` spec defines the
 the sharpness and the tensor in its own words, repeating Part 1, because a
 format spec does not send its reader to another spec for what a field means.
 
-### `images/sharpness.{N}.float64.zst`
+### `images/sharpness.{N}.float32.zst`
 
 - **Shape**: `(N,)` where N = image_count.
-- **Data type**: `float64` (little-endian).
+- **Data type**: `float32` (little-endian).
 - **Format**: image `i`'s sharpness, the population variance over the interior
   of the 3 × 3 Laplacian of its reading image (Part 1's definition, with the
   conversion recorded in `images/metadata.json`'s `image_to_gray`). Finite and
   not negative.
 - **Required** from version 15 in both feature sources.
 
-### `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float64.zst`
+### `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst`
 
 - **Shape**: `(N, 3)` where N = image_count.
-- **Data type**: `float64` (little-endian).
+- **Data type**: `float32` (little-endian).
 - **Format**: `[Exx, Eyy, Exy]` for image `i`, the means over the interior of
   `Gx²`, `Gy²` and `Gx·Gy`, with `Gx` and `Gy` the 3 × 3 Sobel derivatives
   divided by 8 of its reading image, `x` to the right and `y` down. Not
@@ -492,6 +492,12 @@ format spec does not send its reader to another spec for what a field means.
 Both columns are for comparing the images of one reconstruction with each other,
 and a reader is told so in the format text: they depend on scene content and are
 not comparable across scenes.
+
+The values are computed in double precision, as Part 1 defines them, and a
+writer stores each one rounded to the nearest `float32` (ties to even). A value
+copied from a `.sift` file's `metadata.json`, where it is a JSON number holding
+the double, is rounded the same way, so a row copied from a `.sift` and a row
+computed from the image file by the same arithmetic are the same bytes.
 
 ### `images/metadata.json`: `image_to_gray`
 
@@ -519,14 +525,31 @@ file's other sections, and these are recomputable only from files outside it.
 Two writers whose resize or arithmetic differs in the last bits therefore write
 files with different content hashes, as two thumbnail implementations would.
 
-### Why `float64`, and these names
+### Why `float32`, and these names
 
-`float64` because the values are defined in double precision, so a stored value
-is the computed value with no rounding step, and a verifier that recomputes it
-with the same arithmetic can compare exactly; the cost is 32 bytes per image for
-the two columns. `float32` would carry far more precision than a relative
-reading needs, but it would add a second rounding rule to the definition and
-save 16 bytes per image.
+The data type follows from what the values are used for and the range they
+take:
+
+- **Use.** They are only compared within one capture: ranks, ratios to the
+  capture's median (a frame below 0.6 × the median sharpness, say), z-scores,
+  and the coherence and direction derived from the tensor. About three
+  significant digits is enough for all of these.
+- **Range.** With grey samples in `[0, 1]`, the Laplacian lies in `[−4, 4]`, so
+  its variance is at most 16, and under the 1/8 Sobel scale each derivative is
+  at most 1 in magnitude, so each tensor term is at most about 1. The measured
+  Laplacian variance on `[0, 1]` grey was about 0.05 for a median frame and
+  about 0.01 for a blurred one; dark or low-texture captures can be 10 to 100
+  times lower, and nearly flat images lower still. `Exy` is signed and can be
+  near 0.
+- **Not `float16`.** It has about 3.3 significant digits, enough for the use,
+  but its normal values stop at about 6.1e-5, so the readings of a very flat or
+  dark capture would fall into subnormals, with fewer digits, or underflow to 0,
+  and lose their ranking exactly where blur detection matters.
+- **`float32`** keeps about 7 significant digits and its normal range reaches
+  about 1.2e-38, so no realistic reading loses precision or underflows.
+- **Size does not decide it.** Four values per image are negligible next to the
+  thumbnails, so the narrower type is chosen for being enough, not for the
+  bytes it saves.
 
 `sharpness` names what the column is for and has no natural plural, like
 `normal_confidence` and `observation_confidence`. The tensor column takes the
@@ -594,8 +617,8 @@ version 15 that carries either column or key fails as well.
 
 | Change | Detail |
 |---|---|
-| `images/sharpness.{N}.float64.zst` | New **required** column: each image's sharpness. Folded into `images_xxh128` after `rolling_shutter_rates_xyz` and before `sift_content_hashes` (`thumbnails_y_x_rgb` in an `embedded_patches` file). |
-| `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float64.zst` | New **required** column: each image's `[Exx, Eyy, Exy]`. Folded into `images_xxh128` after `focal_adjustments` (or `feature_tool_hashes`, or `camera_indexes`) and before `image_file_hashes` and `metadata.json`. |
+| `images/sharpness.{N}.float32.zst` | New **required** column: each image's sharpness. Folded into `images_xxh128` after `rolling_shutter_rates_xyz` and before `sift_content_hashes` (`thumbnails_y_x_rgb` in an `embedded_patches` file). |
+| `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst` | New **required** column: each image's `[Exx, Eyy, Exy]`. Folded into `images_xxh128` after `focal_adjustments` (or `feature_tool_hashes`, or `camera_indexes`) and before `image_file_hashes` and `metadata.json`. |
 | `images/metadata.json` `image_to_gray` | New required key: the conversion both columns were computed with. |
 
 Migration is not mechanical. A version 14 file reads with no readings; saving it
@@ -615,7 +638,7 @@ A version 15 file maps back to version 14 by dropping both columns and the
   can no longer be written until readings are supplied. In-memory constructors
   that build a reconstruction from arrays need a way to pass them in.
 - `--minimal` keeps both columns: a minimal file holds the whole
-  reconstruction, and the columns are 32 bytes per image of its identity, where
+  reconstruction, and the columns are 16 bytes per image of its identity, where
   thumbnails are optional and 49,152 bytes per image.
 
 ## Part 3: Named image lists in the workspace
@@ -892,7 +915,10 @@ review should check:
    normalised form is one division away while the energy cannot be recovered
    from it, and the energy is itself a contrast reading a reader can use (for
    example to skip near-flat frames, where coherence is unstable).
-4. **`float64`** for both `.sfmr` columns; reasons above.
+4. **`float32`** for both `.sfmr` columns, the values computed in double
+   precision and rounded to the nearest `float32` when stored: the use needs
+   about three significant digits, `float16` would underflow on flat or dark
+   captures, and `float32` does not for any realistic value.
 5. **The resize rule**: long side to 480, short side rounded to nearest with
    half up, never enlarged; the grey conversion and quantisation happen at full
    resolution before the resize.
