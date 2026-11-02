@@ -104,7 +104,7 @@ feature-cache hash since it does not affect feature output.
 |-------|------|-------------|
 | `version` | integer | Format version of the workspace config file. Must be `1` |
 | `feature_tool` | string | Feature extraction tool: `"colmap"`, `"opencv"`, or `"sfmtool"` (the Rust SIFT in `sfmtool-core`; the default when `--feature-tool` is omitted) |
-| `feature_type` | string | Feature type: `"sift"` (future: `"surf"`, `"superpoint"`, etc.) |
+| `feature_type` | string | Feature type, which names the tool and any option that changes the output: `"sift-sfmtool"`, `"sift-opencv"`, or `"sift-colmap"` with `-dsp` for domain-size pooling and `-max<N>` for a feature cap other than 8192, as in `"sift-colmap-dsp-max4096"`; a workspace `sfm undistort` writes has `"sift-sfmtool-undistort"`. It is the start of the last component of `feature_prefix_dir` |
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
@@ -279,7 +279,7 @@ key:
     "relative_path": "../..",
     "contents": {
       "feature_tool": "colmap",
-      "feature_type": "sift",
+      "feature_type": "sift-colmap",
       "feature_options": { ... },
       "feature_prefix_dir": "features/sift-colmap-d1245b460906df27ee4730273e0aba41"
     }

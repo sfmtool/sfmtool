@@ -448,7 +448,7 @@ command goes through, gains these checks, each an error naming the file:
 `load_workspace_config` never recomputes `feature_prefix_dir`; it returns the
 stored one, so editing `image_to_gray` (or any option) by hand does not move the
 features directory. A hand edit is detected, not trusted: the extraction check
-above recomputes the prefix from the options with `get_feature_tool_xxh128`, and
+below recomputes the prefix from the options with `get_feature_tool_xxh128`, and
 when it differs from the stored `feature_prefix_dir` it refuses to write, saying
 the options no longer match the directory and to run `sfm ws upgrade`, which
 brings the directory back in line with the options. Reading is not affected,
