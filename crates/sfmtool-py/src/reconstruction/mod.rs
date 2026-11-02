@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 pub mod add_image_to_tracks;
 pub mod bundle_adjust;
 pub mod clone;
+pub mod drop_image_adjustments;
 pub mod edited;
 pub mod range_expr;
 pub mod sfmr_reconstruction;

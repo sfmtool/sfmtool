@@ -796,6 +796,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   one by one, each its own version.
 - Typing a camera's parameters. A lens changes through a fit or a solve.
 - Freeing the principal point in the fit (§ "The strip").
+- Dropping a camera's per-image parameters. The proposal keeps every image's
+  adjustment; dropping them before the fit is proposed in
+  [per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
 
 ---
 

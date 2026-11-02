@@ -1003,6 +1003,13 @@ a reader refuses a file that breaks any of these rules:
   listing `"radial_bspline"` or `"rolling_shutter"`, and no
   `rolling_shutter_scanlines` key.
 
+Among the reconstruction edits, the bundle adjustment sets a camera's flag,
+since it solves the parameter
+([../core/reconstruction/bundle-adjust.md](../core/reconstruction/bundle-adjust.md)),
+and `drop_image_adjustments` clears one, folding the images' mean into the
+camera and keeping its scanlines setting
+([../core/reconstruction/drop-image-adjustments.md](../core/reconstruction/drop-image-adjustments.md)).
+
 `read_sfmr` and `write_sfmr_with_options` read and write all four columns
 and the scanlines settings as stored, bit for bit. Every consumer that reads
 one image's camera reads it with the image's adjustment applied, through
