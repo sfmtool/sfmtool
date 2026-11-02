@@ -109,6 +109,11 @@ def test_resolve_narrowed_by_a_range(workspace):
     assert [m.frame for m in narrowed] == [2, 3, 18, 19]
     with pytest.raises(ValueError, match="entry 1 cannot be narrowed"):
         lists.resolve("hero_shots", narrow=RangeExpr("1"))
+    with pytest.raises(
+        ValueError,
+        match="the range '500' left no members of named image list 'walk1_sharp'",
+    ):
+        lists.resolve("walk1_sharp", narrow=RangeExpr("500"))
 
 
 def test_resolve_in_names(workspace):

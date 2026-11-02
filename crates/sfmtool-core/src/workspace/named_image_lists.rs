@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use openjd_expr::RangeExpr;
-use sfmtool_camrig_format::{count_frame_fields, pattern_frame_index, pattern_matches};
+use sfmtool_camrig_format::{
+    count_frame_fields, pattern_frame_index, pattern_literal, pattern_matches,
+};
 use sfmtool_progress::Progress;
 
 use json::Json;
@@ -202,6 +204,14 @@ pub enum NamedImageListsError {
     },
     /// The list matched no file.
     NoMatch { path: PathBuf, list: String },
+    /// The list matched files, and the narrowing range held the frame number
+    /// of none of them. `range` is the narrowing range as written by
+    /// `RangeExpr`'s `Display`.
+    NarrowedToNothing {
+        path: PathBuf,
+        list: String,
+        range: String,
+    },
     /// The caller's progress asked the resolution to stop.
     Cancelled,
 }
@@ -327,6 +337,11 @@ impl fmt::Display for NamedImageListsError {
             Self::NoMatch { path, list } => write!(
                 f,
                 "{}: named image list '{list}' matches no image",
+                path.display()
+            ),
+            Self::NarrowedToNothing { path, list, range } => write!(
+                f,
+                "{}: the range '{range}' left no members of named image list '{list}'",
                 path.display()
             ),
             Self::Cancelled => write!(f, "resolving the named image list was cancelled"),
@@ -498,7 +513,19 @@ impl NamedImageLists {
         let list = self.list(name)?;
         self.check_narrowing(list, narrow)?;
         let names: BTreeSet<&str> = image_names.iter().map(AsRef::as_ref).collect();
-        self.members(list, narrow, |_| names.iter().copied())
+        // An entry with no wildcard and no frame field names one image, which
+        // is looked up in the set rather than compared with every name.
+        let literals: Vec<Option<String>> = list
+            .entries
+            .iter()
+            .map(|entry| pattern_literal(&entry.pattern))
+            .collect();
+        self.members(list, narrow, |index| -> Box<dyn Iterator<Item = &str>> {
+            match &literals[index] {
+                Some(literal) => Box::new(names.get(literal.as_str()).copied().into_iter()),
+                None => Box::new(names.iter().copied()),
+            }
+        })
     }
 
     fn check_narrowing(
@@ -536,6 +563,7 @@ impl NamedImageLists {
         candidates: impl Fn(usize) -> I,
     ) -> Result<Vec<NamedImageListMember>, NamedImageListsError> {
         let mut members = Vec::new();
+        let mut narrowed_away = false;
         let mut first_entry: BTreeMap<String, usize> = BTreeMap::new();
         let mut duplicates = Vec::new();
         for (index, entry) in list.entries.iter().enumerate() {
@@ -567,6 +595,7 @@ impl NamedImageLists {
                 first_entry.insert(file.to_string(), index);
                 if let (Some(narrow), Some(frame)) = (narrow, frame) {
                     if !narrow.contains(frame) {
+                        narrowed_away = true;
                         continue;
                     }
                 }
@@ -582,6 +611,13 @@ impl NamedImageLists {
                 path: self.path.clone(),
                 list: list.name.clone(),
                 duplicates,
+            });
+        }
+        if members.is_empty() && narrowed_away {
+            return Err(NamedImageListsError::NarrowedToNothing {
+                path: self.path.clone(),
+                list: list.name.clone(),
+                range: narrow.map(ToString::to_string).unwrap_or_default(),
             });
         }
         if members.is_empty() {

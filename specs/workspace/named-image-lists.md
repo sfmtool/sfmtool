@@ -89,8 +89,10 @@ with no frame field has no frame number to narrow, so narrowing a list that
 has such an entry is an error naming the entry.
 
 **An empty list.** A list that matches no file, after any narrowing, is an
-error when it is resolved. A list with no entries is valid in the file and
-is that error when used.
+error when it is resolved, naming the list. When the list matches files and
+the narrowing range holds the frame number of none of them, the error says
+instead that the range left no members, naming the list and the range. A list
+with no entries is valid in the file and is the first error when used.
 
 ## Validation
 
@@ -206,7 +208,8 @@ lists file: `NotAWorkspace`, `Io`, `InvalidJson` (with `line` and `column`),
 `UnsupportedVersion`, `Invalid` (with every problem), `UnknownList` (with the
 names the file defines), `NarrowedEntryWithoutFrameField`, `DuplicateMatches`
 (with every file two entries match), `FrameNumberTooLarge` (a frame field
-that captured a number beyond `i64`), `NoMatch` and `Cancelled`.
+that captured a number beyond `i64`), `NoMatch`, `NarrowedToNothing` (with
+the narrowing range) and `Cancelled`.
 
 `resolve` reports through `progress` the number of directory entries it has
 read, and stops with `Cancelled` when `progress` is cancelled, since a `**`
@@ -264,12 +267,20 @@ paths = [m.path for m in members]
   directory below a `**`, and compares each segment with the camrig matcher
   against the names a directory lists. It never asks the filesystem whether a
   literal name exists, which on Windows and macOS would answer for a name in
-  another case. Each directory's listing is read once per resolve, so a list
-  of many single-file entries in one folder reads that folder once. A `**`
+  another case. Each directory's listing is read once per resolve and kept
+  with a map from each name to its entry, so a list of many single-file
+  entries in one folder reads that folder once, and a segment with no
+  wildcard and no frame field is one exact lookup in that map rather than a
+  comparison with every name the folder holds. A `**`
   does not descend through a symbolic link to a directory, so a link back up
   the tree cannot make the walk endless; a named or `*` segment does follow
   one. Names that are not UTF-8 cannot match a pattern and are skipped. Every
   candidate is confirmed against the whole pattern before it is a member.
+- **Literal entries in `resolve_in_names`.** An entry whose whole pattern has
+  no wildcard and no frame field (`sfmtool_camrig_format::pattern_literal`
+  gives its text) is looked up in a set of the reconstruction's names built
+  once per call, rather than compared with every name; other entries are
+  compared with every name.
 - **Duplicates are found before narrowing.** Two entries that match one file
   are an error whether or not a narrowing range would keep that file, since
   the list itself is ambiguous.

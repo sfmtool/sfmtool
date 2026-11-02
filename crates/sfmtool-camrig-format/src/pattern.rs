@@ -88,6 +88,31 @@ pub fn pattern_to_glob(pattern: &str) -> String {
     String::from_utf8(out).expect("pattern_to_glob produced invalid UTF-8")
 }
 
+/// The one path `pattern` matches, when it has no wildcard (`*`, `**`) and no
+/// frame field: its text with each `%%` read as a literal `%`. `None` when the
+/// pattern has a wildcard or a frame field.
+///
+/// A caller holding a set of candidate names can look such a pattern up in
+/// the set rather than test every candidate against it.
+pub fn pattern_literal(pattern: &str) -> Option<String> {
+    let bytes = pattern.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && bytes.get(i + 1) == Some(&b'%') {
+            out.push(b'%');
+            i += 2;
+        } else if bytes[i] == b'*' || frame_field_at(bytes, i).is_some() {
+            return None;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    // Every byte written is copied from `pattern` or is an ASCII `%`.
+    Some(String::from_utf8(out).expect("pattern_literal produced invalid UTF-8"))
+}
+
 /// Check that `pattern` is a structurally valid `.camrig` image pattern.
 ///
 /// Enforces the grammar from the format spec independent of sensor count: a

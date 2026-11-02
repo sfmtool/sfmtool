@@ -574,9 +574,12 @@ fn narrowing_keeps_the_members_the_range_also_holds() {
             "rig/cam0/frame_00010.jpg",
         ]
     );
-    // A narrowing that leaves nothing is an empty match.
+    // A narrowing that leaves nothing says the range did it.
     let e = resolve(&lists, "a", Some("50")).unwrap_err();
-    assert!(matches!(e, NamedImageListsError::NoMatch { .. }), "{e}");
+    assert!(
+        matches!(e, NamedImageListsError::NarrowedToNothing { .. }),
+        "{e}"
+    );
 }
 
 #[test]
@@ -753,4 +756,87 @@ fn resolving_reports_progress_and_stops_when_cancelled() {
         .resolve("a", None, &Progress::none().cancelled_by(&stop))
         .unwrap_err();
     assert!(matches!(e, NamedImageListsError::Cancelled), "{e}");
+}
+
+#[test]
+fn literal_entries_are_looked_up_by_their_exact_name() {
+    let dir = workspace();
+    for name in [
+        "photos/DSC_0042.JPG",
+        "photos/dsc_0057.jpg",
+        "p%/a.jpg",
+        "photos/x/y.jpg",
+    ] {
+        touch(dir.path(), name);
+    }
+    for i in 0..50 {
+        touch(dir.path(), &format!("photos/other_{i}.jpg"));
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"picked": [
+            {"pattern": "photos/DSC_0042.JPG"},
+            {"pattern": "photos/DSC_0057.JPG"},
+            {"pattern": "p%%/a.jpg"},
+            {"pattern": "photos/x"},
+            {"pattern": "photos/*/y.jpg"}
+        ]}"#,
+    );
+    let expected = vec!["photos/DSC_0042.JPG", "p%/a.jpg", "photos/x/y.jpg"];
+    let members = resolve(&lists, "picked", None).unwrap();
+    assert_eq!(paths(&members), expected);
+    assert_eq!(
+        members.iter().map(|m| m.entry).collect::<Vec<_>>(),
+        vec![0, 2, 4]
+    );
+
+    let mut names: Vec<String> = (0..50).map(|i| format!("photos/other_{i}.jpg")).collect();
+    names.extend(
+        [
+            "photos/x/y.jpg",
+            "p%/a.jpg",
+            "photos/dsc_0057.jpg",
+            "photos/DSC_0042.JPG",
+        ]
+        .map(String::from),
+    );
+    let members = lists.resolve_in_names("picked", &names, None).unwrap();
+    assert_eq!(paths(&members), expected);
+}
+
+#[test]
+fn a_narrowing_range_that_leaves_nothing_names_the_list_and_the_range() {
+    let dir = workspace();
+    for i in 1..=5 {
+        touch(dir.path(), &format!("frames/walk_{i:04}.jpg"));
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"walk": [{"pattern": "frames/walk_%04d.jpg"}]}"#,
+    );
+    let e = resolve(&lists, "walk", Some("100-200")).unwrap_err();
+    assert!(
+        matches!(e, NamedImageListsError::NarrowedToNothing { .. }),
+        "{e}"
+    );
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{}: the range '100-200' left no members of named image list 'walk'",
+            lists.path().display()
+        )
+    );
+    let names = ["frames/walk_0001.jpg"];
+    let e = lists
+        .resolve_in_names("walk", &names, Some(&range("7")))
+        .unwrap_err();
+    assert!(
+        matches!(e, NamedImageListsError::NarrowedToNothing { .. }),
+        "{e}"
+    );
+    // A list that matches nothing before narrowing is still that error.
+    let e = lists
+        .resolve_in_names("walk", &["other.jpg"], Some(&range("1")))
+        .unwrap_err();
+    assert!(matches!(e, NamedImageListsError::NoMatch { .. }), "{e}");
 }

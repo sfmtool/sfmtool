@@ -12,15 +12,17 @@
 //! case-sensitively on a case-insensitive filesystem too. The caller confirms
 //! every candidate against the whole pattern.
 //!
-//! A directory's listing is kept for the rest of the walk, so a list of many
-//! entries in one folder (hand-picked photographs, one entry each) reads that
-//! folder once.
+//! A directory's listing is kept for the rest of the walk, with a map from
+//! each name to its entry, so a list of many entries in one folder
+//! (hand-picked photographs, one entry each) reads that folder once, and a
+//! segment with no wildcard and no frame field is one lookup in that map
+//! rather than a comparison with every name in the folder.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use sfmtool_camrig_format::pattern_matches;
+use sfmtool_camrig_format::{pattern_literal, pattern_matches};
 use sfmtool_progress::{Cancelled, Progress};
 
 /// What a directory entry is, with a symbolic link classified by its target.
@@ -39,6 +41,12 @@ enum Kind {
 struct Item {
     name: String,
     kind: Kind,
+}
+
+/// One directory's entries, and each name's index among them.
+struct Listing {
+    items: Vec<Item>,
+    by_name: HashMap<String, usize>,
 }
 
 /// Why a walk stopped.
@@ -62,7 +70,7 @@ impl From<Cancelled> for WalkError {
 pub(super) struct Walker<'a> {
     root: &'a Path,
     progress: &'a Progress<'a>,
-    listings: HashMap<String, Rc<Vec<Item>>>,
+    listings: HashMap<String, Rc<Listing>>,
     entries_read: u64,
 }
 
@@ -87,7 +95,7 @@ impl<'a> Walker<'a> {
     /// The listing of the workspace-relative directory `dir` (`""` is the
     /// root), read once per walk. Names that are not UTF-8 are left out, since
     /// no pattern, which is UTF-8, can match them.
-    fn list(&mut self, dir: &str) -> Result<Rc<Vec<Item>>, WalkError> {
+    fn list(&mut self, dir: &str) -> Result<Rc<Listing>, WalkError> {
         if let Some(items) = self.listings.get(dir) {
             return Ok(Rc::clone(items));
         }
@@ -121,17 +129,22 @@ impl<'a> Walker<'a> {
         }
         self.entries_read += items.len() as u64;
         self.progress.count(self.entries_read, None, "entries");
-        let items = Rc::new(items);
-        self.listings.insert(dir.to_string(), Rc::clone(&items));
-        Ok(items)
+        let by_name = items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (item.name.clone(), index))
+            .collect();
+        let listing = Rc::new(Listing { items, by_name });
+        self.listings.insert(dir.to_string(), Rc::clone(&listing));
+        Ok(listing)
     }
 
     /// Every directory at or below `dir`, `dir` first, not descending
     /// through a link to a directory.
     fn dirs_below(&mut self, dir: &str, out: &mut Vec<String>) -> Result<(), WalkError> {
         out.push(dir.to_string());
-        let items = self.list(dir)?;
-        for item in items.iter().filter(|item| item.kind == Kind::Dir) {
+        let listing = self.list(dir)?;
+        for item in listing.items.iter().filter(|item| item.kind == Kind::Dir) {
             self.dirs_below(&join(dir, &item.name), out)?;
         }
         Ok(())
@@ -154,8 +167,8 @@ impl<'a> Walker<'a> {
                 }
                 if last {
                     for dir in &below {
-                        let items = self.list(dir)?;
-                        for item in items.iter().filter(|item| item.kind == Kind::File) {
+                        let listing = self.list(dir)?;
+                        for item in listing.items.iter().filter(|item| item.kind == Kind::File) {
                             files.insert(join(dir, &item.name));
                         }
                     }
@@ -163,21 +176,32 @@ impl<'a> Walker<'a> {
                     next = below;
                 }
             } else {
+                // A segment with no wildcard and no frame field names one
+                // entry, found in the listing's map; the map compares names
+                // exactly, as the matcher does.
+                let literal = pattern_literal(segment);
                 for dir in &dirs {
-                    let items = self.list(dir)?;
-                    for item in items.iter() {
-                        if !pattern_matches(segment, &item.name, false) {
-                            continue;
+                    let listing = self.list(dir)?;
+                    let mut take = |item: &Item| match item.kind {
+                        Kind::File if last => {
+                            files.insert(join(dir, &item.name));
                         }
-                        match item.kind {
-                            Kind::File if last => {
-                                files.insert(join(dir, &item.name));
-                            }
-                            Kind::Dir | Kind::LinkedDir if !last => {
-                                next.push(join(dir, &item.name));
-                            }
-                            _ => {}
+                        Kind::Dir | Kind::LinkedDir if !last => {
+                            next.push(join(dir, &item.name));
                         }
+                        _ => {}
+                    };
+                    match &literal {
+                        Some(name) => {
+                            if let Some(&index) = listing.by_name.get(name) {
+                                take(&listing.items[index]);
+                            }
+                        }
+                        None => listing
+                            .items
+                            .iter()
+                            .filter(|item| pattern_matches(segment, &item.name, false))
+                            .for_each(take),
                     }
                 }
             }

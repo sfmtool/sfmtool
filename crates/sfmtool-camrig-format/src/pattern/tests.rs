@@ -114,3 +114,22 @@ fn validate_pattern_rejects_malformed_patterns() {
         .unwrap_err()
         .contains("whole path segment"));
 }
+
+#[test]
+fn pattern_literal_is_the_text_of_a_pattern_without_wildcards_or_frame_fields() {
+    assert_eq!(
+        pattern_literal("photos/DSC_0042.JPG").as_deref(),
+        Some("photos/DSC_0042.JPG")
+    );
+    assert_eq!(pattern_literal("f%%.jpg").as_deref(), Some("f%.jpg"));
+    assert_eq!(pattern_literal("%%d.jpg").as_deref(), Some("%d.jpg"));
+    assert_eq!(pattern_literal("a%b.jpg").as_deref(), Some("a%b.jpg"));
+    assert_eq!(pattern_literal("cam_%04d.jpg"), None);
+    assert_eq!(pattern_literal("cam_%d.jpg"), None);
+    assert_eq!(pattern_literal("imgs/*.jpg"), None);
+    assert_eq!(pattern_literal("imgs/**/a.jpg"), None);
+    for literal in ["photos/DSC_0042.JPG", "f%%.jpg", "%%d.jpg", "a%b.jpg"] {
+        let text = pattern_literal(literal).unwrap();
+        assert!(pattern_matches(literal, &text, false));
+    }
+}
