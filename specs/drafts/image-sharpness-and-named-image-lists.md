@@ -377,8 +377,8 @@ columns and a required `image_to_gray` record for them in
 it records no list name and no list entries, and never embeds the workspace's
 list file (Part 3). When this ships, the `.sfmr` spec defines the
 `image_to_gray` object (its inputs, grammar and rounding), the reading image,
-the sharpness and the tensor in its own words, repeating Part 1, because a format spec does not send its reader to another spec for what
-a field means.
+the sharpness and the tensor in its own words, repeating Part 1, because a
+format spec does not send its reader to another spec for what a field means.
 
 ### `images/sharpness.{N}.float64.zst`
 
@@ -600,13 +600,23 @@ as it receives a directory's sorted files today.
 **Validation.** A command that resolves a list checks the whole file (its
 version, names, patterns and ranges) and reports every
 problem it finds, then matches only the list it was asked for. A list that
-matches no file is an error when used.
+matches no file is an error when used. Every error names the lists file's path.
+A file that is not valid JSON is reported with the line and column where
+parsing failed, and nothing else in it is checked. A `version` other than `1`
+is reported as "<path>: named image lists version <n> is not supported; this
+sfmtool reads version 1", and nothing else in the file is checked, since its
+layout is unknown. A missing `version` or `named_image_lists`, a value of the
+wrong JSON type, a top-level key other than those two, and an entry key other
+than `pattern` and `range` are each an error naming the key and, inside
+`named_image_lists`, the list and the entry's position in it.
 
 **Finding it.** A command first finds the workspace by the existing workspace
 discovery, then reads the image lists file that sits beside that workspace's
 `.sfm-workspace.json` in the workspace root. The lists file is never searched
-for on its own. A command that has no workspace has no lists, and a lists file
-with no `.sfm-workspace.json` beside it is never used. If the workspace has no
+for on its own. A command that has no workspace has no lists, so a list name
+given to it is an error saying that no workspace was found and so no named
+image lists are defined; a lists file with no `.sfm-workspace.json` beside it
+is never used. If the workspace has no
 lists file, it has no named image lists, so giving a list name is an error that
 says so.
 
@@ -796,6 +806,8 @@ review should check:
    carries `image_to_gray`, so existing feature directories stay valid.
 10. **The lists file is named `.sfm-named-image-lists.json`**, after the glossary
     word and the form of `.sfm-workspace.json`, with its own `version` of `1`.
+    A key the file does not define, at the top level or in an entry, is an
+    error rather than ignored, as `.sfm-workspace.json` has no other keys.
 11. **With a list, the image-directory commands take no image paths** and find
     the workspace from the current directory; narrowing a list that has an entry
     with no frame field is an error.
