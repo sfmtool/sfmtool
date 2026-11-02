@@ -594,7 +594,7 @@ that need none.
 **Why it matters:** internal but load-bearing: thresholds across geometry, analysis, patch and features depend on it, and specs such as `affine-factorization.md:71` and `absolute-pose.md:280` state quantile rules without naming it.
 **Recommendation:** add a paragraph to `specs/core/README.md` naming `numeric` as the home of median and quantile and its NaN policy; have the specs that state a quantile rule link to it.
 
-> _Status (2026-10-31): **Done** — `specs/core/README.md` § "Median and quantile" names `sfmtool_core::numeric` and states its ordering, NaN and empty-input rules, even-count median and linear quantile; affine-factorization, absolute-pose, switch-camera-model, move-camera, cluster-census, focal-vote and member-coherence-validation link to it where they state a median or quantile those helpers compute, branch `fix-1031-32-numeric-module-note`._
+> _Status (2026-11-01): **Done** — `specs/STANDARDS.md` § "Medians and quantiles come from one module" makes `sfmtool_core::numeric` the only median and quantile and states its ordering, NaN and empty-input rules, even-count median and linear quantile, with the `numeric/tests.rs` scan that enforces it; `specs/core/README.md` points at the module and that section, and affine-factorization, absolute-pose, switch-camera-model, move-camera, cluster-census, focal-vote and member-coherence-validation link to the section where they state a median or quantile those helpers compute, PR #1125._
 
 ### crates/sfmtool-core/src/profiling.rs (`SFMTOOL_PROFILE`)
 **What it does:** The shared phase timers and report rows that the per-algorithm `prof` modules use, switched on by `SFMTOOL_PROFILE`.

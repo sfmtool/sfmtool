@@ -78,7 +78,7 @@ arithmetic against the call's.
 
 **The residual pair is the median and 90th percentile** of this image's own
 reprojection residuals, in pixels, before and after, computed by
-[`numeric`](../README.md#median-and-quantile) — over the image's
+[`numeric`](../../STANDARDS.md#medians-and-quantiles-come-from-one-module) — over the image's
 observations rather than over the whole value, because it is this image that
 moved. `None` where the value carries no inline keypoints, since there is then
 no pixel to reproject against. Half a photograph agreeing is not the same claim

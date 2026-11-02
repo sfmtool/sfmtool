@@ -171,6 +171,95 @@ on both sides.
 Out of scope: a Python function that combines several bindings and other
 steps into a pipeline, such as an extraction run or a solve.
 
+## Medians and quantiles come from one module
+
+There is one implementation of the median and one of the quantile, in
+[`sfmtool_core::numeric`](../crates/sfmtool-core/src/numeric.rs), and every
+crate that depends on `sfmtool-core`, `sfm-explorer` and `sfmtool-py`
+included, gets its medians and quantiles there. No other function computes a
+median, a quantile or a percentile. Code that needs one calls these:
+
+- `median(values)` and `median_in_place(values)` give the median.
+- `quantile(values, q)`, `quantile_in_place(values, q)` and
+  `quantile_of_sorted(sorted, q)` give the `q`-quantile for `q` in `[0, 1]`.
+
+The plain forms copy the caller's slice. The `_in_place` forms are for a
+caller that owns a scratch buffer: `median_in_place` leaves it permuted in no
+particular order and `quantile_in_place` leaves it sorted. `quantile_of_sorted`
+takes a slice already sorted ascending by `f64::total_cmp`. All five follow
+the same rules, which are the contract callers rely on:
+
+- **Ordering is `f64::total_cmp`.** NaN sorts above every finite value (and
+  `−NaN` below), so no comparison panics and a minority of NaNs leaves the
+  answer finite. A NaN result means a NaN reached that rank of the population.
+- **Empty input gives NaN**, never a number, so the caller's "no answer"
+  path handles it.
+- **The median of an even count is the mean of the two middle values**, as in
+  `numpy.median`.
+- **The quantile interpolates linearly between order statistics**, numpy's
+  default `linear` method: the position is `q·(n − 1)`, and the interpolation
+  uses numpy's own arithmetic, so whenever the gap between the two order
+  statistics is finite the result equals `numpy.quantile` bit for bit. When one
+  of the two is infinite the result is that infinity for any non-zero
+  fraction, and only `−∞` against `+∞`, or a NaN input, gives NaN.
+
+This exists because separate copies agreed only on clean data. Six median
+copies used three NaN policies: three sorted with `f64::total_cmp`, two with
+`partial_cmp().unwrap_or(Ordering::Equal)`, which is not a total order when a
+NaN is present and so left the result unspecified, and one with
+`partial_cmp().unwrap()`, which panicked on a NaN. For empty input they
+returned `0.0`, `None` or NaN, or indexed out of bounds in a release build.
+Five private quantile copies and the shared one used three different
+interpolation arithmetics, and one of them returned `0.0` for an empty slice.
+The same residual population was summarized differently depending on which
+module computed it, and none of the differences failed to compile.
+
+The rule is enforced by
+[`numeric/tests.rs`](../crates/sfmtool-core/src/numeric/tests.rs).
+`the_workspace_has_one_median` and `the_workspace_has_one_quantile` read every
+`.rs` file under `crates/`, skipping `target` and `tests` directories and files
+named `tests.rs`, and fail on any `fn` whose name contains `median`, or
+`quantile` or `percentile`, that is not listed by path and name in
+`MEDIAN_ALLOWLIST` or `QUANTILE_ALLOWLIST`. Each entry states why it is not a
+second copy. Most entries are helpers named for the statistic they report that
+call the shared function, such as `residual_quantiles_px` in `move_camera.rs`.
+The fix for a failure is to call `numeric`; an entry is added only for a
+genuinely different operation, with the reason.
+
+The test reads function names only, so look for what it cannot see:
+
+- An inline median: a sort or `select_nth_unstable` followed by indexing the
+  middle (`v[n / 2]`), in a function not named for a median.
+- A hand-written percentile: an index computed from a fraction
+  (`sorted[(0.9 * n as f64) as usize]`) or an interpolation between two order
+  statistics.
+- A call to a crate's own copy, or a closure or local helper that computes
+  one.
+- An allowlist entry whose reason says it delegates but whose body computes
+  the statistic itself.
+
+Confirm before reporting: show that the code computes an order statistic of a
+population, name the `numeric` function that replaces it, and say for which
+input the two differ (a NaN, an empty population, an even count, a fraction
+between two ranks) or that they agree on every input.
+
+Out of scope:
+
+- The different operations on the allowlists, all in
+  `crates/sfmtool-core/src/`: a weighted median
+  (`weighted_median` in `geometry/bundle_adjust.rs`), the KD-forest split pivot
+  (`median_value` in `features/kdforest/build.rs`, generic over the descriptor
+  scalar type, which takes the upper middle and never averages), and
+  `iteratively_trimmed_median` in `analysis/scene_scale.rs`, which trims a
+  sorted prefix repeatedly and keeps an actual sample on each pass.
+- The crates `sfmtool-core` depends on, such as the format crates, which
+  cannot call it. `median_sorted` in `sfmtool-sfmr-format/src/depth_stats.rs`
+  is listed for that reason.
+- Independent reference implementations inside tests, which check the shared
+  functions or other code against a plain sort.
+- Python code, which uses numpy; the shared functions match `numpy.median`
+  and `numpy.quantile`.
+
 ## Every file format has the same I/O shape
 
 Every sfmtool on-disk format, one per format crate (`.sfmr`, `.sift`,

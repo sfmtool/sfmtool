@@ -313,7 +313,7 @@ counted once.
 - **Scatter** `σ` is the **upper** semi-interquartile distance, made
   normal-consistent the way a MAD is: `1.4826 · (Q₇₅ − median)`, floored at
   `0.005`. Both the median and `Q₇₅` are the linear quantiles of
-  [`numeric`](../README.md#median-and-quantile).
+  [`numeric`](../../STANDARDS.md#medians-and-quantiles-come-from-one-module).
 
 The one-sidedness is the point. The pass-1 block is the very thing under
 suspicion — on a track with an occluding member it still contains it, and that
