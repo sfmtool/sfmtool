@@ -42,12 +42,16 @@ conforming writer writes `1`. A reader rejects a file whose version is `0`, whic
 no version of the format has used, or is newer than the newest version it reads,
 because it cannot know that layout. Everything below describes version 1.
 
-A version 2 layout is proposed but not implemented: it would store descriptors as
-append-only range chunks so a keypoint pool can be detected once and described
-incrementally across several commands, add a `described_count` coverage entry, and
-split the whole-file hash into a stable `feature_set_xxh128` plus a
-`descriptor_prefix_xxh128` that survives an append. See
-[`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).
+A version 2 is proposed in
+[`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md): it makes a
+structured `feature_options.image_to_gray` object required for every feature
+tool and adds two readings of each image to `metadata.json`, its sharpness and
+its gradient structure tensor. A version 3 built on it is proposed in
+[`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md):
+it would store descriptors as append-only range chunks so a keypoint pool can be
+detected once and described incrementally across several commands, add a
+`described_count` coverage entry, and split the whole-file hash into a stable
+`feature_set_xxh128` plus a `descriptor_prefix_xxh128` that survives an append.
 
 ## File naming and path convention
 
@@ -100,8 +104,9 @@ JSON. It contains the following fields (ignore additional fields for future back
   thresholds. The format does not prescribe how it is spelled; files whose `feature_tool` is
   `"sfmtool"` record it as a `gray_formula` string (`"0.2126*R + 0.7152*G + 0.0722*B"`, BT.709 luma, matching
   COLMAP's `Bitmap::CloneAsGrey`). A structured, reader-evaluable `image_to_gray` object with
-  its own formula grammar is part of the proposed version 2; see
-  [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).
+  its own formula grammar and an optional bit depth, required for every feature tool, is
+  part of the proposed version 2; see
+  [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md).
 
 ### `metadata.json.zst`
 
@@ -357,6 +362,9 @@ $ od -Ax --endian=little -tf4 -w8 features/positions_xy.*.2.float32 | head -5
 ## Version History
 
 - **Version 1**: the current and only format version, written as the integer `1` in
-  `metadata.version`. A proposed version 2 — incremental chunked descriptors and the
-  identity hashes that go with them — is drafted in
+  `metadata.version`. A proposed version 2, with the required `image_to_gray` object and
+  each image's sharpness and gradient structure tensor, is drafted in
+  [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md), and a proposed
+  version 3, with incremental chunked descriptors and the identity hashes that go with
+  them, in
   [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).

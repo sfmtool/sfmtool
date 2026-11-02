@@ -6,7 +6,11 @@ Amends two standing specs, which describe the shipped behaviour:
 [`../core/features/sift.md`](../core/features/sift.md) (the SIFT detector and
 its split detect/describe interface) and
 [`../formats/sift-file-format.md`](../formats/sift-file-format.md) (the `.sift`
-container, which today has exactly one version). Both point back here.
+container, which today has one version). Both point back here. It builds on
+the `.sift` version 2 proposed in
+[`image-sharpness-and-named-image-lists.md`](image-sharpness-and-named-image-lists.md),
+which adds the required `image_to_gray` object and the per-image sharpness and
+gradient structure tensor; the growable layout here is version 3.
 
 Today a `.sift` file is written once, in full: every keypoint in it carries a
 descriptor. The in-memory interface is already lazy — `detect_keypoints` hands
@@ -14,7 +18,7 @@ the caller a keypoint pool plus the retained `ScaleSpace`, and
 `compute_descriptor` realizes any one of them on demand — but nothing survives
 the end of the process, so a *detect-many, describe-few* workflow cannot span
 two CLI invocations. This draft proposes making the archive itself growable, and
-the `.sift` format version 2 that expresses it on disk.
+the `.sift` format version 3 that expresses it on disk.
 
 Two things ship together or not at all, because neither is useful alone: the
 lifecycle (`sfm sift --detect` / `--describe`, and describe-on-demand inside
@@ -91,7 +95,7 @@ needed, and amortizes when a batch describes many keypoints at once.
 
 **External consumers.** Tools that need a complete dense block (COLMAP export, bulk
 matching) require `described_count == feature_count`, i.e. describe-all. Once fully
-described, a v2 file can simply be written in the v1 layout (a single descriptors array) for
+described, a version 3 file can simply be written in the version 2 layout (a single descriptors array) for
 those consumers — that is an ordinary format conversion, not a special operation.
 
 **Referential stability.** Appending descriptors changes the file's whole-file
@@ -125,18 +129,21 @@ critical section. Wrap describe-and-append in an advisory file lock on the `.sif
 
 ## Part 2 — the on-disk layout (amends `formats/sift-file-format.md`)
 
-Version 2 of the `.sift` format. `metadata.version` becomes `2`; version 1 files
-stay valid and readable, and a fully described version 2 file may be written back
-in the version 1 layout for consumers that want the plain single-array form. The
+Version 3 of the `.sift` format. `metadata.version` becomes `3`; version 1 and 2
+files stay valid and readable, and a fully described version 3 file may be written
+back in the version 2 layout for consumers that want the plain single-array form.
+Everything version 2 adds (`feature_options.image_to_gray` and the `sharpness` and
+`gradient_structure_tensor_xx_yy_xy` fields of `metadata.json`) is unchanged in
+version 3; see
+[`image-sharpness-and-named-image-lists.md`](image-sharpness-and-named-image-lists.md). The
 reader handles both (legacy = one implicit `0-(N-1)` chunk with
 `described_count = N`).
 
 ### Summary of differences
 
-| Aspect | version 1 | version 2 |
+| Aspect | version 2 | version 3 |
 |--------|----------|----------|
-| `metadata.version` | `1` | `2` |
-| `feature_options.image_to_gray` | absent (conversion implicit/tool-defined) | **required**; the image-to-gray conversion formula |
+| `metadata.version` | `2` | `3` |
 | `features/descriptors_metadata.json` | absent (all keypoints described) | present; records `described_count` (prefix length `[0, described_count)`) |
 | Descriptor entries | single `features/descriptors.{feature_count}.128.uint8` | append-only chunks `features/descriptors.{start}-{end}.128.uint8` |
 | Mutability | write-once, immutable | only descriptors (appended) and `content_hash.json` (rewritten) change; `metadata.json` stays immutable |
@@ -147,24 +154,22 @@ reader handles both (legacy = one implicit `0-(N-1)` chunk with
 
 ### Entry changes
 
-`feature_tool_metadata.json.zst` — `feature_options` MUST include an
-`image_to_gray` object (see [Image-to-gray conversion](#image-to-gray-conversion)
-below). Version 1 files do not carry it; the `sfmtool` backend records the same
-information today as a plain `feature_options.gray_formula` string, which this
-supersedes.
+`feature_tool_metadata.json.zst` is unchanged from version 2, including its
+required `feature_options.image_to_gray`.
 
-`metadata.json.zst` — `version` is `2`. The entry is written once and never
+`metadata.json.zst` — `version` is `3`, and the entry carries version 2's
+`sharpness` and `gradient_structure_tensor_xx_yy_xy` readings. It is written once and never
 changes, including across descriptor appends: the mutable descriptor-coverage
 count lives in `features/descriptors_metadata.json`, not here, so `metadata.json`
 and `metadata_xxh128` stay constant as descriptors are appended.
 
-`content_hash.json.zst` — version 2 splits identity into a part that is stable
+`content_hash.json.zst` — version 3 splits identity into a part that is stable
 across descriptor appends and a part that grows, so that references survive
 expansion (see [Stable identity](#stable-identity) below). Alongside
 `metadata_xxh128` and `feature_tool_xxh128` it defines:
 
 * `feature_set_xxh128`: **Stable across the file's entire life.** XXH128 of the
-    concatenation of these 16-byte digests, in order — the version 1
+    concatenation of these 16-byte digests, in order — the version 2
     `content_xxh128` inputs minus the descriptors:
     1. xxh128 of `feature_tool_metadata.json` (uncompressed)
     2. xxh128 of `metadata.json` (uncompressed)
@@ -195,7 +200,7 @@ expansion (see [Stable identity](#stable-identity) below). Alongside
     hashes above without re-reading the large `positions_xy`, `affine_shapes`, or
     pre-existing descriptor chunks.
 
-`features/descriptors.{start}-{end}.128.uint8.zst` replaces version 1's single
+`features/descriptors.{start}-{end}.128.uint8.zst` replaces version 2's single
 `features/descriptors.{feature_count}.128.uint8.zst`: one or more append-only
 *chunk* entries that tile the described prefix `[0, described_count)`.
 
@@ -210,12 +215,12 @@ A descriptor append rewrites this entry (together with `content_hash.json`).
 `described_count` is also derivable from the descriptor chunk entries
 (`last_chunk.end + 1`, or `0` when there are none); a verifier cross-checks the
 two. The value is folded into `content_xxh128` as a `u64`, so its integrity is
-covered there. Version 1 files do not have this entry (all keypoints are
+covered there. Version 1 and 2 files do not have this entry (all keypoints are
 described).
 
 ### Incremental descriptor extraction
 
-Version 2 makes a `.sift` file **growable**: a keypoint pool can be detected once and its
+Version 3 makes a `.sift` file **growable**: a keypoint pool can be detected once and its
 descriptors filled in incrementally, across multiple invocations, without re-reading or
 rewriting the bulk data already on disk. This supports a *detect-many, describe-few*
 workflow and coarse-to-fine matching (describe the largest keypoints first, finer ones only
@@ -280,7 +285,7 @@ consistent one.
 
 #### Stable identity
 
-A version 2 file's `content_xxh128` changes on every descriptor append, so other files that
+A version 3 file's `content_xxh128` changes on every descriptor append, so other files that
 pin a `.sift` by its whole-file hash (`.sfmr`, `.matches`, workspace caches) would see their
 reference "break" the moment the file is expanded — even though the new file is a strict
 superset of what they referenced. Reference `feature_set_xxh128` instead:
@@ -288,7 +293,7 @@ superset of what they referenced. Reference `feature_set_xxh128` instead:
 **Reference the stable id.** `feature_set_xxh128` is invariant for the file's entire life
 and is recomputable from the immutable entries, so it is the correct value to record when a
 consumer cares about *which keypoints* (the common case). It never breaks under descriptor
-expansion or conversion to the version 1 layout. New and updated references SHOULD use it;
+expansion or conversion to the version 2 layout. New and updated references SHOULD use it;
 the `.sfmr`/`.matches`/workspace specs that currently store a `.sift` `content_xxh128` should
 be updated to store `feature_set_xxh128`.
 
@@ -302,76 +307,21 @@ verified against the immutable prefix.)
 
 ### Image-to-gray conversion
 
-`feature_options.image_to_gray` is a version 2 addition. Version 1 files do not record it;
-the `sfmtool` backend pins the same information today as a plain
-`feature_options.gray_formula` string, which the structured object supersedes.
-
-SIFT operates on a single-channel floating-point image, and several of its parameters are
-defined in that value domain — most importantly the contrast threshold (Lowe discards
-extrema with `|D(x̂)| < 0.03`, *"assuming image pixel values in the range [0, 1]"*). The
-mapping from the stored source image to those float samples therefore changes both the
-features produced and the meaning of those thresholds, so it must be pinned for
-reproducibility and for cache identity. It is recorded as `feature_options.image_to_gray`,
-so it participates in `feature_tool_xxh128` — two conversions yield different features and a
-different `features/` subdirectory.
-
-The conversion is a single arithmetic **formula** over the colour channels:
-
-```json
-"image_to_gray": { "formula": "0.2126*R + 0.7152*G + 0.0722*B" }
-```
-
-**Inputs.** `R`, `G`, `B` are the decoded source image's red, green, and blue channel
-values, each normalized to `[0, 1]` (the raw sample divided by its full-scale value — e.g.
-255 for 8-bit, 65535 for 16-bit — so the formula is independent of bit depth). For a
-single-channel source, `R == G == B`. The source is decoded with its EXIF orientation
-applied and any alpha channel ignored.
-
-**Output.** The formula's value is the single-channel sample the detector operates on, used
-as-is (not clamped). Value-domain parameters (the `0.03` contrast threshold, the standard
-SIFT defaults) assume inputs on a `[0, 1]` scale, so formulas should keep typical values in
-that range.
-
-**Grammar.** The formula is an arithmetic expression over the variables `R`, `G`, `B` and
-decimal numeric literals, using three operators plus parentheses for grouping:
-
-| Operator | Meaning | Precedence | Associativity |
-|----------|---------|------------|---------------|
-| `**`     | power   | highest    | right         |
-| `*`      | multiply| middle     | left          |
-| `+`      | add     | lowest     | left          |
-
-Whitespace is insignificant; evaluation is in IEEE-754 double precision. (A leading `-` on a
-numeric literal expresses a negative coefficient; there is no subtraction or division
-operator — use negative literals and fractional coefficients.)
-
-Examples:
-
-| `formula` | Effect |
-|-----------|--------|
-| `0.2126*R + 0.7152*G + 0.0722*B` | BT.709 luma (equals COLMAP `CloneAsGrey`) |
-| `0.299*R + 0.587*G + 0.114*B` | BT.601 luma (equals OpenCV `BGR2GRAY`) |
-| `0.3333*R + 0.3334*G + 0.3333*B` | equal-weight average |
-| `G` | green channel only |
-| `0.2126*R**2.2 + 0.7152*G**2.2 + 0.0722*B**2.2` | weighting with a gamma-style exponent |
-
-This single formula subsumes channel weighting, channel selection, and any
-gamma/linearization (via `**`); there is no separate notion of "encoded vs linear" —
-whatever the expression computes is what the detector sees.
-
-Geometric pre-resizing (e.g. COLMAP's `max_image_size` downscale) also affects features but
-is a separate concern, represented by its own `feature_options` keys; it is not part of
-`image_to_gray`.
+`feature_options.image_to_gray` arrives in version 2 and is unchanged here. Its
+definition (inputs, formula grammar, the optional `quantize_bits` and what each
+feature tool records) is in
+[`image-sharpness-and-named-image-lists.md`](image-sharpness-and-named-image-lists.md).
 
 ### Example
 
 Against the version 1 example in
 [`../formats/sift-file-format.md`](../formats/sift-file-format.md#using-cli-commands-to-pull-apart-a-sift-file),
-a version 2 file of the same image, detected with 2464 keypoints
+a version 3 file of the same image, detected with 2464 keypoints
 but only the first 1000 described so far, differs as follows — note `version`, the descriptor
 *chunk* entries, the `features/descriptors_metadata.json` coverage file, and the extra
-`content_hash.json` hash fields. The `metadata.json` is identical to the version 1 file
-except for `version`:
+`content_hash.json` hash fields. The `metadata.json` is the version 1 file's with
+`version` changed and version 2's two readings added (their values here are
+illustrative):
 
 ```bash
 $ unzip -l myimage.jpg.sift
@@ -388,13 +338,15 @@ $ unzip -l myimage.jpg.sift
 
 $ jq . metadata.json
 {
-  "version": 2,
+  "version": 3,
   "image_name": "myimage.jpg",
   "image_file_xxh128": "3748f9341bfdcc712beb2c5392664982",
   "image_file_size": 21584,
   "image_width": 270,
   "image_height": 480,
-  "feature_count": 2464
+  "feature_count": 2464,
+  "sharpness": 0.0041206,
+  "gradient_structure_tensor_xx_yy_xy": [0.00093114, 0.00071402, -0.00008351]
 }
 
 $ jq . features/descriptors_metadata.json
