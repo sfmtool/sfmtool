@@ -1176,9 +1176,9 @@ bspline_c3                  0.024083
   per image e0        mean +0.000000  sd 0.002650  min −0.003076  max +0.005934  1 of 17 past 2 sd
   per image e1        mean +0.000000  sd 0.001552  min −0.002522  max +0.004300  1 of 17 past 2 sd
   scanlines           columns
-  per image ωx        mean +0.000000  sd 0.001791  min −0.003188  max +0.004218  rad per short side  1 of 17 past 2 sd
-  per image ωy        mean +0.000000  sd 0.002112  min −0.003319  max +0.003809  rad per short side  0 of 17 past 2 sd
-  per image ωz        mean +0.000000  sd 0.001201  min −0.001913  max +0.002062  rad per short side  0 of 17 past 2 sd
+  per image ωx        mean +0.000  sd 1.791  min −3.188  max +4.218  mrad per short side  1 of 17 past 2 sd
+  per image ωy        mean +0.000  sd 2.112  min −3.319  max +3.809  mrad per short side  0 of 17 past 2 sd
+  per image ωz        mean +0.000  sd 1.201  min −1.913  max +2.062  mrad per short side  0 of 17 past 2 sd
 ```
 
 - **Where each row sits.** The focal's row follows the last focal length, since
@@ -1191,10 +1191,12 @@ bspline_c3                  0.024083
 - **Units.** The focal scale is a percentage of the camera's focal; the
   principal-point offsets are in pixels, the stored offset times the short side
   `min(width, height)`; the radial correction's coefficients are the stored
-  numbers, in units of the normalized radius; and the rates are in radians per
-  short side of readout, the stored unit, named in a cell of their own. The
-  percentages and pixels are shown to three decimals and the stored numbers to
-  six, each with its sign, and a value that rounds to zero reads `+`.
+  numbers, in units of the normalized radius; and the rates are in
+  milliradians per short side of readout, the stored radians per short side
+  times 1000, the unit Image Detail's legend states one image's rates in, named
+  in a cell of their own. The percentages, pixels and milliradians are shown to
+  three decimals and the radial coefficients to six, each with its sign, and a
+  value that rounds to zero reads `+`.
 - **The focal is taken in log space**, as the bundle adjustment re-centres it
   and a drop folds it: the mean is the geometric mean of `1 + s` less one,
   `exp(mean ln(1 + s)) − 1`, as a percentage, so right after a solve it reads
@@ -1894,10 +1896,12 @@ the camera, not about one image, and each row is marked `per image` and its
 label drawn weak, so it does not read as a shared parameter; the line under
 the heading names what varies, what does not and what the model cannot carry,
 so a parameter left out is not mistaken for one that varies with all its
-values zero. The rates are shown in radians per short side of readout, the
-unit the file stores, rather than per frame of readout, which would need a
-scanline count the file does not hold, or in Image Detail's milliradians,
-which would put a second scaling of the stored number beside the first. The
+values zero. The rates are shown in milliradians per short side of readout,
+the unit Image Detail's legend states one image's rates in, so the panel and
+the legend never show one quantity in two units; the file stores radians per
+short side, and MCP reports that stored unit with the display unit and its
+factor of 1000 beside it. They are not shown per frame of readout, which would
+need a scanline count the file does not hold. The
 focal's mean is the geometric mean of `1 + s`, the value the bundle
 adjustment re-centres to and a drop folds, so the panel's mean is the one an
 operation acts on. A camera that varies nothing per image keeps the table it

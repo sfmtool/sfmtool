@@ -6,7 +6,8 @@ while every other operation only drops one. Step 1 is built and specified in
 [core/reconstruction/drop-image-adjustments.md](../core/reconstruction/drop-image-adjustments.md),
 and step 2 in [gui/camera-intrinsics.md § 2.
 Parameters](../gui/camera-intrinsics.md#2-parameters), whose Decisions record
-that the rates are shown in their stored unit; this draft proposes steps 3 to
+that the rates are shown in milliradians per short side, the unit of Image
+Detail's legend, rather than per frame of readout; this draft proposes steps 3 to
 5. Open: the exact layout of the histograms, and whether `sfm xform` gets an
 option to drop per-image parameters.
 

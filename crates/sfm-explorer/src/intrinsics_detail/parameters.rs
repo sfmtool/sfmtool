@@ -266,10 +266,11 @@ pub(super) fn statistics_rows(
                       setting its images' rolling-shutter rates are read on."
                 .to_string(),
         });
-        let what = "Each image's rolling-shutter rate, in radians per short side of readout, the \
-                    unit the file stores it in";
+        let what = "Each image's rolling-shutter rate, in milliradians per short side of \
+                    readout: the stored rate, in radians per short side, times 1000, as Image \
+                    Detail's legend states one image's";
         for (label, s) in ["ωx", "ωy", "ωz"].iter().zip(rates) {
-            rows.push(row(None, label, s, Unit::RadiansPerShortSide, what));
+            rows.push(row(None, label, s, Unit::MilliradiansPerShortSide, what));
         }
     }
     rows
@@ -284,9 +285,9 @@ enum Unit {
     Pixels(f64),
     /// A number as stored.
     Number,
-    /// Radians per short side of readout, as stored, the unit named in a
-    /// cell of its own.
-    RadiansPerShortSide,
+    /// Radians per short side of readout, as stored, shown in milliradians,
+    /// the unit Image Detail's legend uses, named in a cell of its own.
+    MilliradiansPerShortSide,
 }
 
 /// `mean +0.120%`, `sd 0.400%`, `min −0.700%`, `max +0.950%`, the unit where
@@ -295,7 +296,8 @@ fn cells(s: &ComponentStatistics, unit: Unit, images: usize) -> Vec<String> {
     let (scale, decimals, suffix) = match unit {
         Unit::Percent => (100.0, 3, "%"),
         Unit::Pixels(short_side) => (short_side, 3, " px"),
-        Unit::Number | Unit::RadiansPerShortSide => (1.0, 6, ""),
+        Unit::MilliradiansPerShortSide => (1000.0, 3, ""),
+        Unit::Number => (1.0, 6, ""),
     };
     let signed = |v: f64| format!("{}{suffix}", format::signed(scale * v, decimals));
     let mut cells = vec![
@@ -304,8 +306,8 @@ fn cells(s: &ComponentStatistics, unit: Unit, images: usize) -> Vec<String> {
         format!("min {}", signed(s.min)),
         format!("max {}", signed(s.max)),
     ];
-    if let Unit::RadiansPerShortSide = unit {
-        cells.push("rad per short side".to_string());
+    if let Unit::MilliradiansPerShortSide = unit {
+        cells.push("mrad per short side".to_string());
     }
     cells.push(format!("{} of {images} past 2 sd", s.beyond_two_std));
     cells

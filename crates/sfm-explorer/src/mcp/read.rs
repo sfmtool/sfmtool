@@ -652,8 +652,8 @@ fn per_image_statistics(recon: &sfmtool_core::SfmrReconstruction, index: usize) 
         "rolling_shutter": block(
             statistics.rolling_shutter.as_ref().map(|c| &c[..]),
             "rad per short side",
-            "rad per short side",
-            1.0,
+            "mrad per short side",
+            1000.0,
         ),
     })
 }

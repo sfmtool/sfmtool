@@ -949,8 +949,9 @@ values are all zero has statistics of zero, not `null`. The numbers are in the
 unit the file stores (`unit`: the focal scale as a fraction, the short side,
 the normalized radius, radians per short side of readout), and `display_unit`
 and `display_scale` give the panel's unit and the factor to it: `%` and 100,
-`px` and the camera's short side, and 1 for the radial correction and the
-rates, which the panel shows as stored. The focal is taken in log space, as
+`px` and the camera's short side, `mrad per short side` and 1000 for the
+rates, which the panel shows in Image Detail's unit, and 1 for the radial
+correction, which it shows as stored. The focal is taken in log space, as
 the bundle adjustment re-centres it and a drop folds it: its `mean` is the
 geometric mean of `1 + s` less one, `exp(mean ln(1 + s)) − 1`, its
 `standard_deviation` that of `ln(1 + s)`, and its `min` and `max` the smallest and largest `s`.

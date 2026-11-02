@@ -1606,14 +1606,15 @@ fn every_per_image_parameter_sits_beside_what_it_adjusts() {
     assert!(at("  per image ωx") < at("  per image ωy"));
     assert!(at("  per image ωy") < at("  per image ωz"));
     assert!(at("  per image ωz") < at("Derived"));
-    assert!(says(&painted, "rad per short side"), "{painted:?}");
+    assert!(says(&painted, "mrad per short side"), "{painted:?}");
     assert!(says(&painted, "of 17 past 2 sd"), "{painted:?}");
 }
 
 /// The numbers are the file's, in the panel's units, worked out here from the
 /// images directly: the focal's mean is the geometric mean of `1 + s` as a
 /// percentage, the principal-point offsets are in pixels of the 270 px short
-/// side, and the radial correction and rates are as stored.
+/// side, the radial correction is as stored and the rates are in milliradians
+/// per short side, as Image Detail's legend states them.
 #[test]
 fn the_statistics_are_the_images_values_in_readable_units() {
     let node = seoul_bull_v02();
@@ -1684,8 +1685,8 @@ fn the_statistics_are_the_images_values_in_readable_units() {
         .map(|a| a.rolling_shutter[2])
         .fold(f64::MIN, f64::max);
     let rates = cells_of(&rows, "  per image ωz");
-    assert_eq!(rates[3], format!("max {}", signed(rate_z_max, 6)));
-    assert_eq!(rates[4], "rad per short side");
+    assert_eq!(rates[3], format!("max {}", signed(1000.0 * rate_z_max, 3)));
+    assert_eq!(rates[4], "mrad per short side");
     assert_eq!(cells_of(&rows, "  scanlines"), ["columns"]);
 }
 

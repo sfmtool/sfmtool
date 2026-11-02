@@ -567,6 +567,13 @@ fn get_camera_image_reports_the_image_s_lens_corrections() {
         ])
     );
     assert_eq!(lens["rolling_shutter_scanlines"], "COLUMNS");
+    // The rates' statistics are stored in radians per short side and shown,
+    // as Image Detail's legend shows them, in milliradians.
+    let rates = &lens["per_image_statistics"]["rolling_shutter"];
+    assert_eq!(rates["unit"], "rad per short side");
+    assert_eq!(rates["display_unit"], "mrad per short side");
+    assert_eq!(rates["display_scale"], 1000.0);
+    assert_eq!(rates["components"][0]["max"], 0.02);
 }
 
 /// `get_camera_intrinsics` states the statistics of the camera's per-image
