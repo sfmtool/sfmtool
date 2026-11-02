@@ -73,13 +73,22 @@ sfm motion [OPTIONS] PATHS...
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--range`, `-r` | | Range expression of file numbers to use from input directories. |
+| `--range`, `-r` | | Range expression of file numbers to use from input directories, or a named image list's name (see below). |
+| `--named-image-list NAME` | | Use the images of this named image list of the workspace in place of `PATHS`; with `-r RANGE`, only its members whose frame number is in `RANGE`. |
 | `--initial-stride N` | 1 | Starting stride for adaptive sampling. Must be at least 1. |
 | `--min-stride N` | 1 | Minimum stride (floor for adaptive shrinking). Must be at least 1. |
 | `--max-stride N` | 32 | Maximum stride (ceiling for adaptive growing). Must be at least 2; Click rejects a smaller value. |
 | `--no-adaptive` | false | Disable adaptive stride adjustment; keep stride fixed. |
 | `--save-flow-dir PATH` | | Directory to save optical flow color images (hue encodes direction, saturation magnitude). |
 | `--json PATH` | | Write a machine-readable JSON report of the analysis to this path. Human-readable output is unchanged. |
+
+`-r/--range` also accepts the name of one of the workspace's named image
+lists: a value with a letter in it is a name, and one name with one range
+narrows the list. A list replaces `PATHS` (images or a `.sfmr`), and giving both is an error; the
+workspace is the one found from the current directory, and only the
+list's members that are image files are used, in the list's order. They are then sorted into
+sequences as image paths are.
+The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
 ### Examples
 
@@ -89,6 +98,9 @@ sfm motion images/
 
 # Start with a larger stride to skip smooth regions faster
 sfm motion images/ --initial-stride 16
+
+# Analyze the images of a named image list
+sfm motion -r walk1_sharp
 
 # Analyze a subset of frames
 sfm motion images/ -r 1-100

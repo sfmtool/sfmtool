@@ -35,14 +35,10 @@ numpy, OpenCV, pycolmap and the command modules.
 
 A helper that several commands share is a `_`-named module in
 `sfmtool._commands`, so it has no row in `COMMANDS`.
-[`_range_options.py`](../../src/sfmtool/_commands/_range_options.py) applies
-the `--range` and `--filter-points` options of `sfm to-colmap-bin` and
-`sfm to-nerfstudio`. Eight commands take `-r/--range` (`sift`, `match`,
-`motion`, `solve`, `analyze`, `panorama`, `to-colmap-bin` and
-`to-nerfstudio`), and each accepts only a range expression of file numbers.
-Accepting the name of a workspace's named image list there as well, with a
-`--named-image-list` long form, is proposed in
-[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
+[`_range_options.py`](../../src/sfmtool/_commands/_range_options.py) holds
+the `-r/--range` and `--named-image-list` options that eight commands share
+([below](#the-shared--r--range-option)), and the `--filter-points` option of
+`sfm to-colmap-bin` and `sfm to-nerfstudio`.
 [`_sfmr_path.py`](../../src/sfmtool/_commands/_sfmr_path.py) provides
 `check_sfmr_path`, which raises a `click.UsageError` reading "<label> must be
 a .sfmr file, got: <path>" when a path argument does not end in `.sfmr`
@@ -53,6 +49,79 @@ rather than inside a reader or writer.
 `merge`, `panorama`, `render-patches`, `to-colmap-bin`, `to-nerfstudio`,
 `undistort`, `web-export` and `xform` call it on their `.sfmr` arguments, so
 they all report that mistake in the same words.
+
+## The shared `-r/--range` option
+
+Eight commands take `-r/--range`:
+
+- On image directories, matched against each file's number by
+  `number_from_filename`: `sfm sift`, `sfm match`, `sfm motion` and
+  `sfm solve`.
+- On a reconstruction's images: `sfm analyze` (with `--metrics`),
+  `sfm panorama`, `sfm to-colmap-bin` and `sfm to-nerfstudio`.
+
+Its value is either a range expression of file numbers or the name of one of
+the workspace's named image lists
+([`../workspace/named-image-lists.md`](../workspace/named-image-lists.md)).
+Each of the eight commands handles it the same way:
+
+- **A value with a letter in it is a list name; any other value is a range.**
+  A range expression contains only digits, `-`, `:` and `,` (and whitespace),
+  so the two cannot be confused. A value with a letter that is not a valid
+  name (`walk 1`, say) is an error saying what a name may contain. A range
+  given alone reaches the command as before, so each command's handling of a
+  range is its own.
+- **`--named-image-list NAME`** is the long form for a list, for scripts that
+  want to say which they mean. Its value must be a valid name.
+- **One name and one range may be given together**, as two `-r` options or as
+  `--named-image-list` with one `-r`. The images are then the list's members
+  whose frame number the range also selects: the range narrows every entry of
+  the list, by the number the entry's frame field captures. An entry with no
+  frame field has no frame number to narrow, so narrowing a list with such an
+  entry is an error naming the entry, and a range that leaves no members is
+  an error naming the list and the range. Two names, or two ranges, are an
+  error.
+- **An unknown name** is an error that names the lists file and lists the
+  names it defines, or says the workspace has no lists file, and says: "A
+  --range value with a letter in it is read as a named image list; a range
+  contains only digits, '-', ':' and ','." A list name given where no
+  workspace is found is an error saying that no workspace was found and so no
+  named image lists are defined, with the same sentence.
+
+**The image-directory commands.** For `sift`, `match`, `motion` and `solve`, a
+list replaces the image path arguments: the command takes either paths (or,
+for `motion` and `solve`, a `.sfmr` or `.matches` file) or a list, and giving
+both is an error. The workspace is the one the upward search from the current
+directory finds, and the images are the list's members, in the list's order,
+as absolute paths. Only the members that are image files are used, by the
+same extension test the command's own directory expansion applies
+(`.png`, `.jpg` and `.jpeg` for `sift`, `match` and `solve`; those and `.tif`,
+`.tiff` and `.bmp` for `motion`; compared without regard to case), so a
+pattern such as `images/**` does not hand a command a `.sift` or `.json`
+file. The others are skipped without a message, as a directory listing skips
+them, and a list none of whose members is an image file is an error naming
+the list. `match` and `solve` use the list's workspace as theirs.
+
+**The reconstruction commands.** For `analyze --metrics`, `panorama`,
+`to-colmap-bin` and `to-nerfstudio`, the list is resolved in the
+reconstruction's workspace (the one its `.sfmr` resolves to on load),
+matched against the reconstruction's image names rather than the filesystem,
+so it works where the image files are absent. It selects the reconstruction's
+images that are members, in the reconstruction's order; members the
+reconstruction does not hold are ignored, and it is an error, naming the list,
+when none are left. `--filter-points` keeps its meaning, and accepts a list in
+place of a range. `analyze --metrics` reports which list it used and how many
+images it kept, and takes its reconstruction-wide figures and flag thresholds
+over every image, as it does for a range.
+
+A `.sfmr` that `sfm solve` writes from a list records nothing about the list,
+as it records nothing about a range.
+
+```bash
+sfm solve -i -r walk1_sharp            # the list's images
+sfm sift --extract -r rig_sharp -r 10-20   # the list, narrowed to frames 10-20
+sfm to-colmap-bin result.sfmr out/ --named-image-list hero_shots
+```
 
 ## Workspace
 

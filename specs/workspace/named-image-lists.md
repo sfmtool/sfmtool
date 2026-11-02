@@ -9,9 +9,10 @@ and how one list resolves to the workspace's image files or to the image names
 a reconstruction records. The set is called a **named image list**
 ([GLOSSARY.md](../GLOSSARY.md)).
 
-The command-line side, `-r/--range` accepting a list's name on the eight
-commands that take a range, is proposed in
-[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
+The eight commands that take `-r/--range` accept a list's name there, with
+`--named-image-list` as the long form; how they reach a list and which of its
+members they use is in [the commands](#the-commands) below and in
+[`../cli/README.md`](../cli/README.md#the-shared--r--range-option).
 
 ## The file
 
@@ -134,6 +135,19 @@ The lists file is not part of `.sfm-workspace.json` or of the snapshot of it a
 `.sfmr` embeds (`workspace.contents`). A `.sfmr` never embeds it, records a
 list's name or entries, or refers to it in any other way, and `sfm ws init`
 leaves it untouched.
+
+## The commands
+
+`sfm sift`, `sfm match`, `sfm motion` and `sfm solve` resolve a list with
+`resolve`, in the workspace the upward search from the current directory
+finds, and use the list's members in place of image paths. They use only the
+members that are image files, by the same extension test their directory
+expansion applies, and skip the rest. `sfm analyze --metrics`, `sfm panorama`,
+`sfm to-colmap-bin` and `sfm to-nerfstudio` resolve a list with
+`resolve_in_names` against the reconstruction's image names, in the
+reconstruction's workspace. A name given with a range is resolved with the
+range as `narrow`. The rules for telling a name from a range and the errors
+are in [`../cli/README.md`](../cli/README.md#the-shared--r--range-option).
 
 ## Rust API
 

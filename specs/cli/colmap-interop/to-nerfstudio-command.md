@@ -38,8 +38,18 @@ sfm to-nerfstudio <INPUT.sfmr> [<OUTPUT_DIR>] [OPTIONS...]
 | `--num-downscales` | int ≥ 0 | 3 | Number of downsampled image pyramid levels (0 disables the pyramid) |
 | `--jpeg-quality` | int 1–100 | 95 | JPEG quality for downsampled pyramid images |
 | `--include-colmap` | flag | off | Also emit a `sparse/` directory with COLMAP `.bin` files |
-| `--range / -r` | range expr | none | Export only images whose file number matches the range (e.g. `10-50` or `0-9,20-29`). Observations on excluded images are dropped. |
-| `--filter-points` | flag | off | With `--range`, also drop 3D points that have no remaining observations. Requires `--range`. |
+| `--range / -r` | range expr or name | none | Export only images whose file number matches the range (e.g. `10-50` or `0-9,20-29`), or the members of the named image list it names. Observations on excluded images are dropped. |
+| `--named-image-list` | name | none | Export only the reconstruction's images that are members of this named image list; with `-r RANGE`, only its members whose frame number is in `RANGE`. |
+| `--filter-points` | flag | off | With `--range` or `--named-image-list`, also drop 3D points that have no remaining observations. Requires one of them. |
+
+`-r/--range` also accepts the name of one of the named image lists of the
+reconstruction's workspace: a value with a letter in it is a name, and one
+name with one range narrows the list. The list is matched against the
+reconstruction's image names, so the image files need not exist; it keeps
+the reconstruction's images that are members, in the reconstruction's
+order, ignores members the reconstruction does not hold, and is an error
+naming the list when none are left. The subsetting is shared with `sfm to-colmap-bin`. The rules and errors are
+in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
 Input cameras must all be pinhole (zero distortion). The command rejects any
 reconstruction with a distorted camera and tells the user to run

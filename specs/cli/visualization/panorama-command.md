@@ -27,7 +27,8 @@ sfm panorama <RECONSTRUCTION.sfmr> --output <PANO.png> [OPTIONS...]
 |--------|------|---------|-------------|
 | `--output / -o` | path | required | Output panorama image path (e.g. `pano.png`) |
 | `--image-dir` | path | reconstruction's workspace dir | Directory the reconstruction's image names are relative to |
-| `--range / -r` | string | all | Composite only images whose file number matches this range expression (e.g. `10-50` or `0-9,20-29`) |
+| `--range / -r` | string | all | Composite only images whose file number matches this range expression (e.g. `10-50` or `0-9,20-29`), or the members of the named image list it names |
+| `--named-image-list` | name | none | Composite only the reconstruction's images that are members of this named image list; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--near-image` | string | none | Composite only images spatially near this reference image (matched by exact name or path suffix). Requires `--near-count` and/or `--near-radius` |
 | `--near-count` | int | none | With `--near-image`, keep the N images whose cameras are closest to the reference (reference always included) |
 | `--near-radius` | float | none | With `--near-image`, keep images whose cameras are within this world-space distance of the reference |
@@ -103,8 +104,19 @@ photometric RANSAC only partly hides the resulting parallax:
   rig pass the sensor-qualified path (`fisheye_left/frame_000500.jpg`) to
   disambiguate frames shared across sensors.
 
-When both filters are given, `--range` is applied first and `--near-image` then
-operates on the survivors (it errors if the reference falls outside the range).
+When both filters are given, `--range` (or the list) is applied first and
+`--near-image` then operates on the survivors (it errors if the reference falls
+outside the range or the list).
+
+`-r/--range` also accepts the name of one of the named image lists of the
+reconstruction's workspace: a value with a letter in it is a name, and one
+name with one range narrows the list. The list is matched against the
+reconstruction's image names, so the image files need not exist; it keeps
+the reconstruction's images that are members, in the reconstruction's
+order, ignores members the reconstruction does not hold, and is an error
+naming the list when none are left. The rules and errors are
+in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+
 The camera center for image *i* is `C = -R(qᵢ)ᵀ · tᵢ` from the stored pose; the
 filters touch only which images contribute, never the geometry.
 
@@ -130,6 +142,9 @@ sfm panorama result.sfmr -o local.png \
 
 # Restrict to a contiguous slice of a sequential capture
 sfm panorama result.sfmr -o slice.png --range 400-600
+
+# Restrict to the images of a named image list
+sfm panorama result.sfmr -o walk.png -r walk1_sharp
 ```
 
 ## Implementation

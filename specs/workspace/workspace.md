@@ -116,9 +116,9 @@ object the `.sift` file records, in place of the `sfmtool` tool's
 An optional second file beside it in the workspace
 root, `.sfm-named-image-lists.json`, names sets of the workspace's images by
 pattern and frame range; it is described in
-[`named-image-lists.md`](named-image-lists.md). Pointing a command at one of
-those sets by name is proposed in
-[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
+[`named-image-lists.md`](named-image-lists.md). The commands that take
+`-r/--range` accept a set's name there
+([`../cli/README.md`](../cli/README.md#the-shared--r--range-option)).
 
 ### Feature Prefix Directory
 
