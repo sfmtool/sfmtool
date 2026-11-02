@@ -136,6 +136,11 @@ pub(crate) enum Command {
         reconstruction_label: Option<String>,
         camera_intrinsics_index: usize,
     },
+    /// Every image of one camera with its intrinsic adjustment.
+    GetIntrinsicAdjustments {
+        reconstruction_label: Option<String>,
+        camera_intrinsics_index: usize,
+    },
     /// The track table query: the points that pass the bounds, a page at a
     /// time, with the values asked for.
     FindPoints {
@@ -1413,6 +1418,14 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             camera_intrinsics_index,
         } => done(read::get_camera_intrinsics(
+            state,
+            reconstruction_label.as_deref(),
+            camera_intrinsics_index,
+        )),
+        Command::GetIntrinsicAdjustments {
+            reconstruction_label,
+            camera_intrinsics_index,
+        } => done(read::get_intrinsic_adjustments(
             state,
             reconstruction_label.as_deref(),
             camera_intrinsics_index,

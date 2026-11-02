@@ -123,6 +123,10 @@ fn each_read_only_command_records_a_query_the_status_line_ignores() {
             reconstruction_label: None,
             camera_intrinsics_index: 0,
         },
+        Command::GetIntrinsicAdjustments {
+            reconstruction_label: None,
+            camera_intrinsics_index: 0,
+        },
         Command::GetPoint {
             point: crate::goto_point::PointQuery::Index(1),
         },

@@ -1454,3 +1454,390 @@ fn the_comparison_lines_name_both_models_and_the_trusted_bound() {
         ]
     );
 }
+
+// ── Per-image statistics ────────────────────────────────────────────────
+
+/// The seoul_bull ground truth whose `SFMTOOL_PINHOLE` camera varies all four
+/// per-image parameters, read on columns, over its 17 posed images.
+const SEOUL_BULL_V02: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr"
+);
+
+fn seoul_bull_v02() -> SceneNode {
+    let path = std::path::Path::new(SEOUL_BULL_V02);
+    let recon = SfmrReconstruction::load(path, &sfmtool_core::progress::Progress::none())
+        .expect("the ground truth loads");
+    let mut node = SceneNode::from_path(path, recon);
+    // The file's own name is longer than the header can fit beside its
+    // buttons at the narrowest width, which is the header's business.
+    node.label = "seoul_bull".to_string();
+    node
+}
+
+/// The same camera with its radial correction and rates dropped, so it varies
+/// the focal and the principal point alone.
+fn seoul_bull_focal_and_principal_point() -> SceneNode {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
+    let mut node = seoul_bull_v02();
+    let dropped = sfmtool_core::reconstruction::drop_image_adjustments::drop_image_adjustments(
+        node.recon(),
+        0,
+        &[
+            ImageAdjustmentParameter::RadialBspline,
+            ImageAdjustmentParameter::RollingShutter,
+        ],
+    )
+    .expect("drops");
+    *node.recon_mut() = dropped;
+    node
+}
+
+/// The painted strings of one frame of the panel on camera 0 of `node`,
+/// `width` pixels wide, with their rects, after the frames a wrapped row
+/// needs to settle.
+fn frame_at(node: &SceneNode, width: f32) -> Vec<crate::test_support::PaintedText> {
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(width, VIEWPORT.y),
+        )),
+        ..Default::default()
+    };
+    for _ in 0..4 {
+        crate::test_support::painted_text_rects(&ctx, input(), |ui| {
+            panel.show(ui, node, Some(0), None, None, None);
+        });
+    }
+    crate::test_support::painted_text_rects(&ctx, input(), |ui| {
+        panel.show(ui, node, Some(0), None, None, None);
+    })
+}
+
+/// The painted strings with each `per image` row's statistics split back
+/// into their cells, its non-breaking spaces read as spaces.
+fn plain(painted: &[String]) -> Vec<String> {
+    painted
+        .iter()
+        .flat_map(|t| {
+            if t.contains('\u{a0}') {
+                t.split("  ").map(|c| c.replace('\u{a0}', " ")).collect()
+            } else {
+                vec![t.clone()]
+            }
+        })
+        .collect()
+}
+
+/// Where in the painted strings `text` first appears exactly.
+fn position_of(painted: &[String], text: &str) -> usize {
+    painted
+        .iter()
+        .position(|t| t == text)
+        .unwrap_or_else(|| panic!("{text:?} was not painted: {painted:?}"))
+}
+
+/// The cells of the `per image` row labelled `label`, read off `rows`.
+fn cells_of<'a>(rows: &'a [super::parameters::StatisticsRow], label: &str) -> &'a [String] {
+    &rows
+        .iter()
+        .find(|r| r.label == label)
+        .unwrap_or_else(|| panic!("no row {label:?}"))
+        .cells
+}
+
+#[test]
+fn a_camera_with_no_per_image_parameters_has_no_per_image_rows() {
+    for node in [pinhole_node(), fisheye_node()] {
+        let painted = plain(&show(&node, Some(0), None));
+        assert!(says(&painted, "Parameters"), "{painted:?}");
+        assert!(!says(&painted, "per image"), "{painted:?}");
+        assert!(!says(&painted, "Per image"), "{painted:?}");
+    }
+    // A scanlines setting alone varies nothing.
+    let mut node = pinhole_node();
+    node.recon_mut().image_set.per_image_adjustments =
+        vec![sfmtool_core::reconstruction::PerImageAdjustments {
+            rolling_shutter_scanlines: Some(sfmtool_core::camera::RollingShutterScanlines::Rows),
+            ..Default::default()
+        }];
+    let painted = plain(&show(&node, Some(0), None));
+    assert!(!says(&painted, "per image"), "{painted:?}");
+}
+
+/// The seoul_bull camera varies all four parameters: each row sits beside the
+/// shared parameter it adjusts, the radial correction after the spline and
+/// the rates with their scanlines at the end.
+#[test]
+fn every_per_image_parameter_sits_beside_what_it_adjusts() {
+    let node = seoul_bull_v02();
+    let painted = plain(&show(&node, Some(0), None));
+    assert!(
+        says(
+            &painted,
+            "Per image, over 17 images: focal, principal point, radial correction, \
+             rolling-shutter rates."
+        ),
+        "{painted:?}"
+    );
+    assert!(!says(&painted, "Not varied"), "{painted:?}");
+    assert!(!says(&painted, "Not on"), "{painted:?}");
+
+    let at = |text: &str| position_of(&painted, text);
+    let last_coefficient = node.recon().image_set.cameras[0]
+        .model
+        .parameter_names()
+        .last()
+        .unwrap()
+        .to_string();
+    assert!(at("focal_length") < at("  per image focal"));
+    assert!(at("  per image focal") < at("principal_point_x"));
+    assert!(at("principal_point_x") < at("  per image Δcx"));
+    assert!(at("  per image Δcx") < at("principal_point_y"));
+    assert!(at("principal_point_y") < at("  per image Δcy"));
+    assert!(at("  per image Δcy") < at("bspline_rho_max"));
+    assert!(at(&last_coefficient) < at("  per image e0"));
+    assert!(at("  per image e0") < at("  per image e1"));
+    assert!(at("  per image e1") < at("  scanlines"));
+    assert!(at("  scanlines") < at("columns"));
+    assert!(at("columns") < at("  per image ωx"));
+    assert!(at("  per image ωx") < at("  per image ωy"));
+    assert!(at("  per image ωy") < at("  per image ωz"));
+    assert!(at("  per image ωz") < at("Derived"));
+    assert!(says(&painted, "rad per short side"), "{painted:?}");
+    assert!(says(&painted, "of 17 past 2 sd"), "{painted:?}");
+}
+
+/// The numbers are the file's, in the panel's units, worked out here from the
+/// images directly: the focal's mean is the geometric mean of `1 + s` as a
+/// percentage, the principal-point offsets are in pixels of the 270 px short
+/// side, and the radial correction and rates are as stored.
+#[test]
+fn the_statistics_are_the_images_values_in_readable_units() {
+    let node = seoul_bull_v02();
+    let recon = node.recon();
+    let camera = &recon.image_set.cameras[0];
+    let per_image = super::parameters::PerImage {
+        flags: recon.image_set.camera_per_image_adjustments(0),
+        statistics:
+            sfmtool_core::reconstruction::image_adjustment_statistics::image_adjustment_statistics(
+                &recon.image_set,
+                0,
+            )
+            .unwrap(),
+    };
+    let rows = super::parameters::statistics_rows(camera, &per_image);
+    let adjustments: Vec<_> = recon
+        .image_set
+        .images
+        .iter()
+        .map(|image| image.intrinsic_adjustment)
+        .collect();
+    assert_eq!(adjustments.len(), 17);
+    let n = 17.0;
+    let signed = |v: f64, d: usize| super::format::signed(v, d);
+
+    let log_mean = adjustments.iter().map(|a| a.focal.ln_1p()).sum::<f64>() / n;
+    let log_std = (adjustments
+        .iter()
+        .map(|a| (a.focal.ln_1p() - log_mean).powi(2))
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    let focal_max = adjustments.iter().map(|a| a.focal).fold(f64::MIN, f64::max);
+    let focal = cells_of(&rows, "  per image focal");
+    assert_eq!(
+        focal[0],
+        format!("mean {}%", signed(100.0 * log_mean.exp_m1(), 3))
+    );
+    assert_eq!(focal[1], format!("sd {:.3}%", 100.0 * log_std));
+    assert_eq!(focal[3], format!("max {}%", signed(100.0 * focal_max, 3)));
+    assert!(focal[4].ends_with(" of 17 past 2 sd"), "{focal:?}");
+
+    let short_side = 270.0;
+    let x_min = adjustments
+        .iter()
+        .map(|a| a.principal_point[0])
+        .fold(f64::MAX, f64::min);
+    let y_max = adjustments
+        .iter()
+        .map(|a| a.principal_point[1])
+        .fold(f64::MIN, f64::max);
+    assert_eq!(
+        cells_of(&rows, "  per image Δcx")[2],
+        format!("min {} px", signed(short_side * x_min, 3))
+    );
+    assert_eq!(
+        cells_of(&rows, "  per image Δcy")[3],
+        format!("max {} px", signed(short_side * y_max, 3))
+    );
+
+    let e_1_mean = adjustments.iter().map(|a| a.radial_bspline[1]).sum::<f64>() / n;
+    assert_eq!(
+        cells_of(&rows, "  per image e1")[0],
+        format!("mean {}", signed(e_1_mean, 6))
+    );
+    let rate_z_max = adjustments
+        .iter()
+        .map(|a| a.rolling_shutter[2])
+        .fold(f64::MIN, f64::max);
+    let rates = cells_of(&rows, "  per image ωz");
+    assert_eq!(rates[3], format!("max {}", signed(rate_z_max, 6)));
+    assert_eq!(rates[4], "rad per short side");
+    assert_eq!(cells_of(&rows, "  scanlines"), ["columns"]);
+}
+
+/// A camera that varies the focal and the principal point names what it does
+/// not vary, and on a model that cannot carry a radial correction or rates,
+/// that the model cannot.
+#[test]
+fn what_a_camera_does_not_vary_and_what_its_model_cannot_carry_are_named() {
+    let painted = plain(&show(
+        &seoul_bull_focal_and_principal_point(),
+        Some(0),
+        None,
+    ));
+    assert!(
+        says(
+            &painted,
+            "Per image, over 17 images: focal, principal point. Not varied: radial correction, \
+             rolling-shutter rates."
+        ),
+        "{painted:?}"
+    );
+    assert!(says(&painted, "  per image Δcy"), "{painted:?}");
+    assert!(!says(&painted, "  per image e0"), "{painted:?}");
+    assert!(!says(&painted, "  scanlines"), "{painted:?}");
+
+    let mut node = fisheye_node();
+    *node.recon_mut() = crate::test_support::with_adjustment(
+        node.recon().clone(),
+        0,
+        crate::test_support::ADJUSTMENT,
+    );
+    let painted = plain(&show(&node, Some(0), None));
+    assert!(
+        says(
+            &painted,
+            "Per image, over 8 images: focal, principal point. Not on OPENCV_FISHEYE: radial \
+             correction, rolling-shutter rates."
+        ),
+        "{painted:?}"
+    );
+    assert!(says(&painted, "  per image focal"), "{painted:?}");
+    // On a two-focal model the focal's row follows the second focal length.
+    let at = |text: &str| position_of(&painted, text);
+    assert!(at("focal_length_y") < at("  per image focal"));
+    assert!(at("  per image focal") < at("principal_point_x"));
+}
+
+/// A parameter the camera varies whose values are all zero reads as zero
+/// statistics, not as a parameter it does not vary.
+#[test]
+fn a_varied_parameter_whose_values_are_all_zero_reads_as_zero() {
+    let mut node = pinhole_node();
+    *node.recon_mut() = crate::test_support::with_adjustment(
+        node.recon().clone(),
+        0,
+        sfmtool_core::IntrinsicAdjustment::default(),
+    );
+    let painted = plain(&show(&node, Some(0), None));
+    assert!(says(
+        &painted,
+        "Per image, over 8 images: focal, principal point."
+    ));
+    for cell in [
+        "mean +0.000%",
+        "sd 0.000%",
+        "max +0.000 px",
+        "0 of 8 past 2 sd",
+    ] {
+        assert!(
+            painted.iter().any(|t| t == cell),
+            "{cell} missing: {painted:?}"
+        );
+    }
+}
+
+/// The per-image rows stay inside the panel and apart from everything else
+/// from the stock window's width to a wide one.
+#[test]
+fn the_per_image_rows_stay_inside_the_panel_at_any_width() {
+    let node = seoul_bull_v02();
+    for width in [341.0, 482.0, 1800.0] {
+        let painted = frame_at(&node, width);
+        let until = top_of(&painted, "K");
+        assert!(
+            says(&plain(&texts_of(&painted)), "  per image ωz"),
+            "at {width} px"
+        );
+        assert_eq!(overlapping(&painted, until), Vec::new(), "at {width} px");
+        assert_eq!(
+            past_the_edge(&painted, until, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
+    }
+}
+
+/// With a proposal open the statistics, which are the images' and not either
+/// lens's, are stated once, in the current camera's table, and the two tables
+/// still keep apart.
+#[test]
+fn a_proposal_states_the_statistics_in_the_current_table_only() {
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(seoul_bull_focal_and_principal_point());
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for width in [341.0, 482.0, 1800.0] {
+        for _ in 0..4 {
+            proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+        }
+        let (painted, _) = proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+        let texts = plain(&texts_of(&painted));
+        assert!(says(&texts, "Proposed"), "at {width} px: {texts:?}");
+        assert_eq!(
+            texts.iter().filter(|t| *t == "  per image focal").count(),
+            1,
+            "at {width} px"
+        );
+        let until = top_of(&painted, "K");
+        assert_eq!(overlapping(&painted, until), Vec::new(), "at {width} px");
+        assert_eq!(
+            past_the_edge(&painted, until, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
+    }
+}
+
+/// Every glyph the per-image rows write is in egui's bundled fonts. Checked
+/// in the proportional family, whose fonts the monospace family falls back to
+/// after its own, as `scene_graph`'s and the intrinsics layer's glyph tests
+/// check theirs.
+#[test]
+fn the_per_image_glyphs_are_in_the_bundled_fonts() {
+    let ctx = egui::Context::default();
+    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
+        ui.label("warm the font atlas");
+    });
+    let font = egui::FontId::proportional(14.0);
+    for glyph in ["Δ", "ω", "\u{2212}", "\u{a0}"] {
+        assert!(
+            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
+            "{glyph:?} is not in egui's bundled fonts and would render as a box"
+        );
+    }
+}
+
+#[test]
+fn a_signed_number_never_reads_minus_zero() {
+    assert_eq!(super::format::signed(-0.0004, 3), "+0.000");
+    assert_eq!(super::format::signed(-0.0006, 3), "\u{2212}0.001");
+    assert_eq!(super::format::signed(0.25, 2), "+0.25");
+}

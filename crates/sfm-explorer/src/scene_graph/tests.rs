@@ -2654,6 +2654,38 @@ fn the_intrinsics_group_is_open_at_a_handful_of_cameras_and_collapsed_beyond() {
     );
 }
 
+/// A camera that varies parameters per image carries the tag naming them on
+/// its row, and the other camera's row is as it was.
+#[test]
+fn a_camera_row_carries_the_tag_of_its_per_image_parameters() {
+    let mut node = two_camera_node("/runs/rig.sfmr");
+    node.recon_mut().image_set.per_image_adjustments = vec![
+        sfmtool_core::reconstruction::PerImageAdjustments {
+            focal: true,
+            principal_point: true,
+            ..Default::default()
+        },
+        Default::default(),
+    ];
+    let mut state = AppState::new();
+    state.append_node(node);
+    let (mut panel, ctx) = settled(&mut state);
+
+    let texts = painted_at_width(&mut panel, &ctx, &mut state, VIEWPORT.x);
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "#0  PINHOLE  1920×1080  f 1000.0  4 images  per image: f, pp"),
+        "the first camera row does not name its per-image parameters; got {texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "#1  PINHOLE  1920×1080  f 1000.0  4 images"),
+        "the second camera row changed; got {texts:?}"
+    );
+}
+
 #[test]
 fn a_camera_no_image_references_reads_zero_images() {
     let mut state = AppState::new();

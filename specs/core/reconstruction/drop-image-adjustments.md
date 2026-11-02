@@ -123,7 +123,16 @@ camera's focal, so its mean is taken in log space, where the images'
 **The mean is over the camera's posed images**, the ones whose observations the
 drop changes. An unposed image's adjustment is bookkeeping that keeps its
 intrinsics where they were, and is left out. A camera with no posed image takes
-the mean over all its images, and a camera with no image folds nothing.
+the mean over all its images, and a camera with no image folds nothing. The
+choice of images is one crate function, `adjustment_images`, which
+`image_adjustment_statistics`
+([image_adjustment_statistics.rs](../../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics.rs))
+shares: the statistics the viewer's Camera Intrinsics panel and MCP
+`get_camera_intrinsics` state of a camera's per-image values
+([gui/camera-intrinsics.md § 2. Parameters](../../gui/camera-intrinsics.md#2-parameters))
+are over the same images, and the focal's mean there is the geometric one
+folded here, so the mean a person reads is the one a drop moves into the
+camera.
 
 **The folded camera must be a valid lens.** The camera must take the mean as
 an adjustment (`check_adjustment`), the folded focal must be positive and

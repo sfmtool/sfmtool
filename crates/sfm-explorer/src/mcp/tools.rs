@@ -112,6 +112,10 @@ pub(crate) fn parse(
             reconstruction_label: args.optional_string("reconstruction_label")?,
             camera_intrinsics_index: args.required_usize("camera_intrinsics_index")?,
         },
+        "get_intrinsic_adjustments" => Command::GetIntrinsicAdjustments {
+            reconstruction_label: args.optional_string("reconstruction_label")?,
+            camera_intrinsics_index: args.required_usize("camera_intrinsics_index")?,
+        },
         "get_point" => Command::GetPoint {
             point: args.point("point")?,
         },

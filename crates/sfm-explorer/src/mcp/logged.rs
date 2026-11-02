@@ -30,6 +30,7 @@ impl Command {
             Command::ListCameraImages { .. } => "list_camera_images",
             Command::GetCameraImage { .. } => "get_camera_image",
             Command::GetCameraIntrinsics { .. } => "get_camera_intrinsics",
+            Command::GetIntrinsicAdjustments { .. } => "get_intrinsic_adjustments",
             Command::GetPoint { .. } => "get_point",
             Command::FindPoints { .. } => "find_points",
             Command::GetActionLog { .. } => "get_action_log",
@@ -356,6 +357,7 @@ impl Command {
             | Command::ListCameraImages { .. }
             | Command::GetCameraImage { .. }
             | Command::GetCameraIntrinsics { .. }
+            | Command::GetIntrinsicAdjustments { .. }
             | Command::GetPoint { .. }
             | Command::FindPoints { .. }
             | Command::GetActionLog { .. }
@@ -531,6 +533,13 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             camera_intrinsics_index,
         } => format!(
             "get_camera_intrinsics {} #{camera_intrinsics_index}",
+            named(reconstruction_label)
+        ),
+        Command::GetIntrinsicAdjustments {
+            reconstruction_label,
+            camera_intrinsics_index,
+        } => format!(
+            "get_intrinsic_adjustments {} #{camera_intrinsics_index}",
             named(reconstruction_label)
         ),
         Command::GetPoint { point } => format!("get_point {}", point_text(point)),

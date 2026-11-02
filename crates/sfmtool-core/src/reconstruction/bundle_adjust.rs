@@ -16,6 +16,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use super::data::{ImageSet, PerImageAdjustments, SfmrReconstruction};
 
+use super::image_adjustment_statistics::ComponentStatistics;
 use super::outermost_keypoint::{outermost_keypoints, KeypointReach};
 use crate::analysis::reprojection_noise::{
     camera_keypoint_resolution_px, gated_reprojection_noise, ObservationResidual, OUTLIER_GATE,
@@ -1709,15 +1710,11 @@ fn image_adjustment_spread(
         .iter()
         .map(|&i| image_set.images[i].intrinsic_adjustment)
         .collect();
-    let n = adjustments.len().max(1) as f64;
+    // The statistics `image_adjustment_statistics` states of a camera's
+    // per-image values, and zero for a camera with no posed image.
     let mean_std = |value: &dyn Fn(&IntrinsicAdjustment) -> f64| {
-        let mean = adjustments.iter().map(value).sum::<f64>() / n;
-        let var = adjustments
-            .iter()
-            .map(|a| (value(a) - mean).powi(2))
-            .sum::<f64>()
-            / n;
-        (mean, var.sqrt())
+        let values: Vec<f64> = adjustments.iter().map(value).collect();
+        ComponentStatistics::of(&values).map_or((0.0, 0.0), |s| (s.mean, s.std))
     };
     let (focal_mean, focal_std) = mean_std(&|a| a.focal.ln_1p());
     let (x_mean, x_std) = mean_std(&|a| a.principal_point[0]);

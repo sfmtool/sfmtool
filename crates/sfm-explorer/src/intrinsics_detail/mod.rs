@@ -22,7 +22,9 @@
 //!   fit's report, Apply and Cancel. While a proposal is open on the camera
 //!   shown, the parameter and derived tables show the current camera and the
 //!   proposed one side by side.
-//! - [`parameters`] — the parameter table, the derived table and `K`.
+//! - [`parameters`] — the parameter table, with the statistics of the
+//!   camera's per-image values beside the parameters they adjust, the derived
+//!   table and `K`.
 //! - [`mod@projection_plot`] — the radial map, the residual and the domain
 //!   the model can be held to; while a proposal is open, both cameras drawn
 //!   against each other, the change plot and the observation rug.
@@ -193,6 +195,19 @@ impl IntrinsicsDetail {
             (None, None) => None,
         };
         let proposed_derived = &mut self.proposed_derived;
+        // The statistics of the camera's per-image values, for the table to
+        // state beside the shared parameters they adjust. One pass over the
+        // camera's images, cheap enough to take every frame.
+        let per_image =
+            sfmtool_core::reconstruction::image_adjustment_statistics::image_adjustment_statistics(
+                &node.recon().image_set,
+                index,
+            )
+            .ok()
+            .map(|statistics| parameters::PerImage {
+                flags: node.recon().image_set.camera_per_image_adjustments(index),
+                statistics,
+            });
 
         egui::ScrollArea::vertical()
             .id_salt("intrinsics_detail")
@@ -246,11 +261,12 @@ impl IntrinsicsDetail {
                         compare_tables(
                             ui,
                             [(camera, derived), (proposed, &proposed_report.derived)],
+                            per_image.as_ref(),
                             aspect_row,
                         );
                     }
                     _ => {
-                        parameters::show_parameters(ui, camera, "current");
+                        parameters::show_parameters(ui, camera, per_image.as_ref(), "current");
                         ui.separator();
                         parameters::show_derived(ui, camera, derived, "current", false);
                     }
@@ -327,25 +343,30 @@ impl IntrinsicsDetail {
 /// other.
 ///
 /// The width each needs is measured in an invisible sizing pass, since a
-/// table's widest row depends on the model and its numbers.
+/// table's widest row depends on the model and its numbers. The statistics of
+/// the camera's per-image values, `per_image`, are the images' and not either
+/// lens's, and are stated once, in the current camera's table.
 fn compare_tables(
     ui: &mut egui::Ui,
     cameras: [(&sfmtool_core::camera::CameraIntrinsics, &Derived); 2],
+    per_image: Option<&parameters::PerImage>,
     aspect_row: bool,
 ) {
+    let per_image_of = |k: usize| if k == 0 { per_image } else { None };
     const SALTS: [&str; 2] = ["current", "proposed"];
     const HEADINGS: [&str; 2] = ["Current", "Proposed"];
     let needed = cameras
         .iter()
         .zip(SALTS)
-        .map(|((camera, derived), salt)| {
+        .enumerate()
+        .map(|(k, ((camera, derived), salt))| {
             let mut sizing = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt(("intrinsics_measure", salt))
                     .sizing_pass()
                     .invisible(),
             );
-            parameters::show_parameters(&mut sizing, camera, salt);
+            parameters::show_parameters(&mut sizing, camera, per_image_of(k), salt);
             parameters::show_derived(&mut sizing, camera, derived, salt, aspect_row);
             sizing.min_rect().width()
         })
@@ -355,7 +376,7 @@ fn compare_tables(
         ui.columns(2, |columns| {
             for (k, (camera, _)) in cameras.iter().enumerate() {
                 columns[k].label(egui::RichText::new(HEADINGS[k]).weak());
-                parameters::show_parameters(&mut columns[k], camera, SALTS[k]);
+                parameters::show_parameters(&mut columns[k], camera, per_image_of(k), SALTS[k]);
             }
         });
         ui.separator();
@@ -370,7 +391,7 @@ fn compare_tables(
                 ui.separator();
             }
             ui.label(egui::RichText::new(HEADINGS[k]).weak());
-            parameters::show_parameters(ui, camera, SALTS[k]);
+            parameters::show_parameters(ui, camera, per_image_of(k), SALTS[k]);
             ui.separator();
             parameters::show_derived(ui, camera, derived, SALTS[k], aspect_row);
         }

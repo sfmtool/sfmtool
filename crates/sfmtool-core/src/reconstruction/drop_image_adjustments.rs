@@ -11,8 +11,9 @@
 
 use std::fmt;
 
-use super::bundle_adjust::{is_posed, ImageAdjustmentParameter};
+use super::bundle_adjust::ImageAdjustmentParameter;
 use super::data::SfmrReconstruction;
+use super::image_adjustment_statistics::adjustment_images;
 use crate::camera::distortion::bspline::bspline_is_monotone;
 use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
 
@@ -168,16 +169,9 @@ pub fn drop_image_adjustments(
     }
 
     // The mean over the posed images, whose observations the fold is for, or
-    // over every image of the camera where none is posed.
-    let posed: Vec<usize> = members
-        .iter()
-        .copied()
-        .filter(|&i| {
-            let image = &image_set.images[i];
-            is_posed(&image.quaternion_wxyz, &image.translation_xyz)
-        })
-        .collect();
-    let over = if posed.is_empty() { &members } else { &posed };
+    // over every image of the camera where none is posed: the images the
+    // viewer's statistics are over, so the mean it states is the one folded.
+    let over = &adjustment_images(image_set, camera);
     let mut mean = IntrinsicAdjustment::default();
     if !over.is_empty() {
         let n = over.len() as f64;

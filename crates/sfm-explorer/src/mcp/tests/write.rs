@@ -88,6 +88,13 @@ fn every_ref_taking_tool_refuses_an_index_that_names_nothing() {
             "out of range",
         ),
         (
+            Command::GetIntrinsicAdjustments {
+                reconstruction_label: None,
+                camera_intrinsics_index: 99,
+            },
+            "out of range",
+        ),
+        (
             Command::GetPoint {
                 point: crate::goto_point::PointQuery::Index(9_999),
             },

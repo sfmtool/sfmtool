@@ -12,28 +12,303 @@
 //! a count prints as an integer and an angle in degrees
 //! ([`format::parameter`]).
 
-use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::camera::{CameraIntrinsics, CameraModel, RollingShutterScanlines};
+use sfmtool_core::reconstruction::image_adjustment_statistics::{
+    ComponentStatistics, ImageAdjustmentStatistics,
+};
+use sfmtool_core::reconstruction::PerImageAdjustments;
 
 use super::derived::Derived;
 use super::format;
 
-/// Table 1: the model's parameters, in declaration order.
+/// What the parameter table states of a camera's per-image parameters: which
+/// it varies, with its scanlines setting, and their statistics over its
+/// images.
+pub(super) struct PerImage {
+    pub(super) flags: PerImageAdjustments,
+    pub(super) statistics: ImageAdjustmentStatistics,
+}
+
+/// Table 1: the model's parameters, in declaration order, and beside each
+/// shared parameter the camera also varies per image the statistics of its
+/// images' values (`per_image`).
+///
+/// A camera that varies nothing per image, or a table given no `per_image`
+/// (the proposed camera's), is the parameters alone. Otherwise a line under
+/// the heading names what varies per image, what does not and what the model
+/// cannot carry ([`per_image_summary`]), and each component the camera varies
+/// gets a `per image` row of its own ([`statistics_rows`]).
 ///
 /// `id_salt` tells two tables in one frame apart: the current camera's and,
 /// while a proposal is open, the proposed one's beside it.
-pub(super) fn show_parameters(ui: &mut egui::Ui, camera: &CameraIntrinsics, id_salt: &str) {
+pub(super) fn show_parameters(
+    ui: &mut egui::Ui,
+    camera: &CameraIntrinsics,
+    per_image: Option<&PerImage>,
+    id_salt: &str,
+) {
     ui.label(egui::RichText::new("Parameters").strong());
+    let per_image = per_image.filter(|p| p.flags.any());
+    if let Some(per_image) = per_image {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(per_image_summary(camera, per_image))
+                    .weak()
+                    .small(),
+            )
+            .wrap(),
+        );
+    }
+    let rows = per_image
+        .map(|p| statistics_rows(camera, p))
+        .unwrap_or_default();
+    let parameters = camera.parameters();
+    let anchors = anchors(&parameters);
     egui::Grid::new(("intrinsics_parameters", id_salt))
         .num_columns(2)
         .spacing([12.0, 2.0])
         .striped(true)
         .show(ui, |ui| {
-            for (name, value) in camera.parameters() {
+            for (k, (name, value)) in parameters.iter().enumerate() {
                 ui.monospace(name.as_ref());
-                ui.monospace(format::parameter(name.as_ref(), value));
+                ui.monospace(format::parameter(name.as_ref(), *value));
                 ui.end_row();
+                for row in rows.iter().filter(|r| anchors.row_of(r.anchor) == Some(k)) {
+                    show_statistics_row(ui, row);
+                }
+            }
+            // The rows with no shared parameter of their own to sit under.
+            for row in rows.iter().filter(|r| anchors.row_of(r.anchor).is_none()) {
+                show_statistics_row(ui, row);
             }
         });
+}
+
+/// The shared parameter a `per image` row sits under, or `None` for a row
+/// drawn after the table's last parameter: the radial correction, which
+/// adjusts the whole spline, and the rates, which no shared parameter is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Anchor {
+    Focal,
+    PrincipalPointX,
+    PrincipalPointY,
+}
+
+/// The table rows the anchors sit under: the last focal length (the scale
+/// applies to both on a two-focal model) and each principal-point coordinate.
+struct Anchors {
+    focal: Option<usize>,
+    principal_point_x: Option<usize>,
+    principal_point_y: Option<usize>,
+}
+
+impl Anchors {
+    fn row_of(&self, anchor: Option<Anchor>) -> Option<usize> {
+        match anchor? {
+            Anchor::Focal => self.focal,
+            Anchor::PrincipalPointX => self.principal_point_x,
+            Anchor::PrincipalPointY => self.principal_point_y,
+        }
+    }
+}
+
+fn anchors(parameters: &[(std::borrow::Cow<'static, str>, f64)]) -> Anchors {
+    let position = |name: &str| parameters.iter().position(|(n, _)| n == name);
+    Anchors {
+        focal: parameters
+            .iter()
+            .rposition(|(name, _)| name.starts_with("focal_length")),
+        principal_point_x: position("principal_point_x"),
+        principal_point_y: position("principal_point_y"),
+    }
+}
+
+/// One `per image` row: what it sits under, its label, its cells and its
+/// tooltip.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct StatisticsRow {
+    anchor: Option<Anchor>,
+    pub(super) label: String,
+    pub(super) cells: Vec<String>,
+    tooltip: String,
+}
+
+fn show_statistics_row(ui: &mut egui::Ui, row: &StatisticsRow) {
+    ui.add(egui::Label::new(egui::RichText::new(&row.label).monospace().weak()).extend())
+        .on_hover_text(&row.tooltip);
+    // One label that wraps between the cells and never inside one, its
+    // spaces within a cell non-breaking, so at a narrow panel a row takes more
+    // lines rather than running past the edge. A label rather than a wrapping
+    // layout of one widget per cell, because a grid row centres its cells on
+    // the last frame's height, and only a widget laid out at its full height
+    // is placed where that height says.
+    let text = row
+        .cells
+        .iter()
+        .map(|cell| cell.replace(' ', "\u{a0}"))
+        .collect::<Vec<_>>()
+        .join("  ");
+    ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap());
+    ui.end_row();
+}
+
+/// Whether the model can carry a radial correction and rolling-shutter rates
+/// per image: only `SFMTOOL_PINHOLE` can.
+fn carries_lens_corrections(camera: &CameraIntrinsics) -> bool {
+    matches!(camera.model, CameraModel::SfmtoolPinhole { .. })
+}
+
+/// The line under the heading, `Per image, over 17 images: focal, principal
+/// point. Not varied: radial correction. Not on OPENCV: …`, which tells a
+/// parameter the camera does not vary, and one its model cannot carry, apart
+/// from one it varies whose values are all zero.
+pub(super) fn per_image_summary(camera: &CameraIntrinsics, per_image: &PerImage) -> String {
+    let flags = per_image.flags;
+    let lens = carries_lens_corrections(camera);
+    let mut varied = Vec::new();
+    let mut shared = Vec::new();
+    let mut absent = Vec::new();
+    for (name, on, carried) in [
+        ("focal", flags.focal, true),
+        ("principal point", flags.principal_point, true),
+        ("radial correction", flags.radial_bspline, lens),
+        ("rolling-shutter rates", flags.rolling_shutter, lens),
+    ] {
+        if on {
+            varied.push(name);
+        } else if carried {
+            shared.push(name);
+        } else {
+            absent.push(name);
+        }
+    }
+    let n = per_image.statistics.images.len();
+    let images = if n == 1 {
+        "1 image".to_string()
+    } else {
+        format!("{n} images")
+    };
+    let mut text = format!("Per image, over {images}: {}.", varied.join(", "));
+    if !shared.is_empty() {
+        text.push_str(&format!(" Not varied: {}.", shared.join(", ")));
+    }
+    if !absent.is_empty() {
+        text.push_str(&format!(
+            " Not on {}: {}.",
+            camera.model.model_name(),
+            absent.join(", ")
+        ));
+    }
+    text
+}
+
+/// The `per image` rows of a camera, in the order the table draws them: the
+/// focal's, the two principal-point offsets', the radial correction's two
+/// coefficients and the scanlines setting with the three rates.
+pub(super) fn statistics_rows(
+    camera: &CameraIntrinsics,
+    per_image: &PerImage,
+) -> Vec<StatisticsRow> {
+    let statistics = &per_image.statistics;
+    let n = statistics.images.len();
+    let short_side = f64::from(camera.width.min(camera.height));
+    let over = format!(
+        "Over the camera's {n} posed image(s), or all its images where none is posed: the \
+         mean, the standard deviation, the smallest and the largest value, and how many \
+         images lie more than two standard deviations from the mean."
+    );
+    let mut rows = Vec::new();
+    let row =
+        |anchor: Option<Anchor>, label: &str, s: &ComponentStatistics, unit: Unit, what: &str| {
+            StatisticsRow {
+                anchor,
+                label: format!("  per image {label}"),
+                cells: cells(s, unit, n),
+                tooltip: format!("{what}. {over}"),
+            }
+        };
+    if let Some(focal) = &statistics.focal {
+        rows.push(row(
+            Some(Anchor::Focal),
+            "focal",
+            focal,
+            Unit::Percent,
+            "Each image's focal scale s, in percent: the image's focal is the camera's times \
+             1 + s. The mean is the geometric mean of 1 + s, less one, the scale a drop of the \
+             per-image focal folds into the camera, and the standard deviation is that of \
+             ln(1 + s)",
+        ));
+    }
+    if let Some([x, y]) = &statistics.principal_point {
+        let unit = Unit::Pixels(short_side);
+        let what = "Each image's principal-point offset from the camera's, in pixels: the stored \
+                    offset times the short side, min(width, height)";
+        rows.push(row(Some(Anchor::PrincipalPointX), "Δcx", x, unit, what));
+        rows.push(row(Some(Anchor::PrincipalPointY), "Δcy", y, unit, what));
+    }
+    if let Some([e_0, e_1]) = &statistics.radial_bspline {
+        let what = "Each image's radial correction coefficient, as stored, in units of the \
+                    normalized radius, added to the camera's spline";
+        rows.push(row(None, "e0", e_0, Unit::Number, what));
+        rows.push(row(None, "e1", e_1, Unit::Number, what));
+    }
+    if let Some(rates) = &statistics.rolling_shutter {
+        let scanlines = match per_image.flags.rolling_shutter_scanlines {
+            Some(RollingShutterScanlines::Rows) => "rows",
+            Some(RollingShutterScanlines::Columns) => "columns",
+            None => "not known",
+        };
+        rows.push(StatisticsRow {
+            anchor: None,
+            label: "  scanlines".to_string(),
+            cells: vec![scanlines.to_string()],
+            tooltip: "Whether the sensor reads out one row or one column at a time: the camera \
+                      setting its images' rolling-shutter rates are read on."
+                .to_string(),
+        });
+        let what = "Each image's rolling-shutter rate, in radians per short side of readout, the \
+                    unit the file stores it in";
+        for (label, s) in ["ωx", "ωy", "ωz"].iter().zip(rates) {
+            rows.push(row(None, label, s, Unit::RadiansPerShortSide, what));
+        }
+    }
+    rows
+}
+
+/// How a `per image` row's numbers read.
+#[derive(Debug, Clone, Copy)]
+enum Unit {
+    /// A fraction, shown as a percentage.
+    Percent,
+    /// A fraction of a short side of this many pixels, shown in pixels.
+    Pixels(f64),
+    /// A number as stored.
+    Number,
+    /// Radians per short side of readout, as stored, the unit named in a
+    /// cell of its own.
+    RadiansPerShortSide,
+}
+
+/// `mean +0.120%`, `sd 0.400%`, `min −0.700%`, `max +0.950%`, the unit where
+/// it is a cell of its own, and `1 of 17 past 2 sd`.
+fn cells(s: &ComponentStatistics, unit: Unit, images: usize) -> Vec<String> {
+    let (scale, decimals, suffix) = match unit {
+        Unit::Percent => (100.0, 3, "%"),
+        Unit::Pixels(short_side) => (short_side, 3, " px"),
+        Unit::Number | Unit::RadiansPerShortSide => (1.0, 6, ""),
+    };
+    let signed = |v: f64| format!("{}{suffix}", format::signed(scale * v, decimals));
+    let mut cells = vec![
+        format!("mean {}", signed(s.mean)),
+        format!("sd {:.decimals$}{suffix}", scale * s.std),
+        format!("min {}", signed(s.min)),
+        format!("max {}", signed(s.max)),
+    ];
+    if let Unit::RadiansPerShortSide = unit {
+        cells.push("rad per short side".to_string());
+    }
+    cells.push(format!("{} of {images} past 2 sd", s.beyond_two_std));
+    cells
 }
 
 /// Table 2: what the parameters *mean*.

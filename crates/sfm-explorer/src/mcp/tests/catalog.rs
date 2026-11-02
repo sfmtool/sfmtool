@@ -45,6 +45,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "get_camera_intrinsics",
             json!({ "camera_intrinsics_index": 0 }),
         ),
+        (
+            "get_intrinsic_adjustments",
+            json!({ "camera_intrinsics_index": 0 }),
+        ),
         ("get_point", json!({ "point": 0 })),
         (
             "find_points",
@@ -1246,6 +1250,7 @@ fn only_the_reads_are_annotated_read_only() {
             "list_camera_images",
             "get_camera_image",
             "get_camera_intrinsics",
+            "get_intrinsic_adjustments",
             "get_point",
             "find_points",
             "get_action_log",
@@ -1263,9 +1268,9 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Eighteen JSON reads, the one read that hands back a picture, seventy-six
+    // Nineteen JSON reads, the one read that hands back a picture, seventy-six
     // writes, six input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 102, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 103, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
