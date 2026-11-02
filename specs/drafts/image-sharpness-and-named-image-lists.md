@@ -536,11 +536,11 @@ take:
   significant digits is enough for all of these.
 - **Range.** With grey samples in `[0, 1]`, the Laplacian lies in `[−4, 4]`, so
   its variance is at most 16, and under the 1/8 Sobel scale each derivative is
-  at most 1 in magnitude, so each tensor term is at most about 1. The measured
-  Laplacian variance on `[0, 1]` grey was about 0.05 for a median frame and
-  about 0.01 for a blurred one; dark or low-texture captures can be 10 to 100
-  times lower, and nearly flat images lower still. `Exy` is signed and can be
-  near 0.
+  at most 1 in magnitude, so each tensor term is at most about 1. In two phone
+  videos the Laplacian variance on `[0, 1]` grey, at long side 480, had a
+  median of 0.008 in one and 0.049 in the other, with 5th percentiles of 0.003
+  and 0.019; dark or low-texture captures can be 10 to 100 times lower, and
+  nearly flat images lower still. `Exy` is signed and can be near 0.
 - **Not `float16`.** It has about 3.3 significant digits, enough for the use,
   but its normal values stop at about 6.1e-5, so the readings of a very flat or
   dark capture would fall into subnormals, with fewer digits, or underflow to 0,
