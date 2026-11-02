@@ -176,6 +176,8 @@ the subject should check it as a claim about the code, one at a time.
 
 > _Status (2026-10-31): row 3 **Done** — `adjacency-surfel-normals.md` opens with a Purpose paragraph saying what the kernel computes (a normal and a determinacy verdict per selected point, from the positions of its image-space neighbours, reading no image), how the neighbours are chosen, what it returns, that it is bound as `sfmtool.analysis.estimate_adjacency_surfel_normals` and that no pipeline calls it; the old opening follows it, branch `fix-1031-26-adjacency-surfel-normals-opening`._
 
+> _Status (2026-10-31): row 4 **Done** — `cell-plane-normals.md` now opens with a paragraph saying what the kernel computes (a patch normal and a three-way verdict per cluster), from what (camera poses and the per-cell displacements `sfm cluster-patches --piecewise` stores), that it reads no image, that it is offered as `sfmtool.analysis.cell_plane_normals` and that no pipeline stage calls it; the old opening's facts follow it, branch `fix-1031-27-cell-plane-normals-opening`._
+
 ### 5. Coverage both ways
 
 **Specs never cited from `crates/`, `src/`, `tests/` or `scripts/`: 63 of 202**
