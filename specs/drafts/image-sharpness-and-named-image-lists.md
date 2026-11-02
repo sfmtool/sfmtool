@@ -3,7 +3,7 @@
 **Status:** Draft. Decided by the maintainer: `.sift` version 2 with a required
 `image_to_gray` object (with an optional `quantize_bits`), a per-image
 sharpness and a per-image gradient structure tensor; `.sfmr` version 15 with
-both as required per-image columns; named image lists in their own file in the
+both as required per-image columns, stored as `float32`; named image lists in their own file in the
 workspace root, which no `.sfmr` references; `-r/--range` accepting a list's
 name; `.sfm-workspace.json` carrying the same `image_to_gray` object as the
 `.sift` file; each feature tool recording the formula closest to its own grey
@@ -418,7 +418,8 @@ writer's own serialisation). Under the new shape both inputs contain the same
 `image_to_gray` object, but the two hashes are still computed from different
 bytes and still do not agree; a reader must not compare one with the other.
 
-**Migration.** No file is rewritten behind the user's back:
+**Migration.** No command rewrites the workspace file unless the user runs
+`sfm ws init`:
 
 - **Reading a version 1 workspace keeps working.** A command that reads `.sift`
   files or `.sfmr` files in it (`sfm solve`, `sfm match`, `sfm inspect`, the
@@ -522,8 +523,8 @@ an `embedded_patches` file, before `thumbnails_y_x_rgb` and
 They are part of `content_xxh128`, not of the unidentifying `derived/` section,
 for the reason thumbnails are: `derived/` holds values recomputable from the
 file's other sections, and these are recomputable only from files outside it.
-Two writers whose resize or arithmetic differs in the last bits therefore write
-files with different content hashes, as two thumbnail implementations would.
+Two writers whose resize or arithmetic differs in the last bits can therefore
+write files with different content hashes, as two thumbnail implementations would.
 
 ### Why `float32`, and these names
 
@@ -536,7 +537,7 @@ take:
   significant digits is enough for all of these.
 - **Range.** With grey samples in `[0, 1]`, the Laplacian lies in `[−4, 4]`, so
   its variance is at most 16, and under the 1/8 Sobel scale each derivative is
-  at most 1 in magnitude, so each tensor term is at most about 1. In two phone
+  at most 1/2 in magnitude, so each tensor term is at most 1/4 in magnitude. In two phone
   videos the Laplacian variance on `[0, 1]` grey, at long side 480, had a
   median of 0.008 in one and 0.049 in the other, with 5th percentiles of 0.003
   and 0.019; dark or low-texture captures can be 10 to 100 times lower, and
