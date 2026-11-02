@@ -1,15 +1,13 @@
-# Image sharpness readings and named image lists
+# Image sharpness readings
 
 **Status:** Draft. Decided by the maintainer: `.sift` version 2 with a required
 `image_to_gray` object (with an optional `quantize_bits`), a per-image
 sharpness and a per-image gradient structure tensor; `.sfmr` version 15 with
-both as required per-image columns, stored as `float32`; named image lists in their own file in the
-workspace root, which no `.sfmr` references; `-r/--range` accepting a list's
-name; `.sfm-workspace.json` carrying the same `image_to_gray` object as the
-`.sift` file; each feature tool recording the formula closest to its own grey
-conversion. The choices this draft makes inside those decisions (entry names,
-data types, where the values live in a `.sift` file, the list file's name, the
-resize and border rules, the CLI's workspace discovery with a list) are listed in [Choices made here](#choices-made-here)
+both as required per-image columns, stored as `float32`; `.sfm-workspace.json`
+version 2 carrying the same `image_to_gray` object as the `.sift` file, with
+the recorded features folder name authoritative; each feature tool recording
+the formula closest to its own grey conversion. The choices this draft makes
+inside those decisions are listed in [Choices made here](#choices-made-here)
 for review. Nothing here is implemented.
 
 Some frames of a hand-held capture are blurred, by focus or by the camera
@@ -22,8 +20,8 @@ gradients favour one direction and which direction that is. Neither number
 means anything across scenes; both are read against the other frames of the
 same capture, where a frame much less sharp than the capture's median, or whose
 gradients favour one direction more than the median frame's do, is a blurred
-frame. The second half of the draft lets a workspace name a set of images, such
-as the sharp frames of one walk, so that commands can be pointed at it by name.
+frame. Choosing images by these readings, and naming the set chosen, is the
+subject of [named-image-lists.md](named-image-lists.md).
 
 It amends these standing specs, each of which links back here:
 
@@ -32,10 +30,7 @@ It amends these standing specs, each of which links back here:
 - [`../formats/sfmr-file-format.md`](../formats/sfmr-file-format.md): version 15
   (Part 2).
 - [`../workspace/workspace.md`](../workspace/workspace.md): `.sfm-workspace.json`
-  version 2, whose `feature_options` carry the `image_to_gray` object (Part 1),
-  and the `.sfm-named-image-lists.json` file beside it (Part 3).
-- [`../cli/README.md`](../cli/README.md): the `-r/--range` option that eight
-  commands share (Part 4).
+  version 2, whose `feature_options` carry the `image_to_gray` object (Part 1).
 - [`../core/features/sift.md`](../core/features/sift.md) § "Image-to-gray
   conversion", which points here for the structured `image_to_gray` object.
 
@@ -44,10 +39,6 @@ archive in
 [`sift-incremental-extraction-amendment.md`](sift-incremental-extraction-amendment.md)
 becomes version 3, built on version 2 as defined here, and the `image_to_gray`
 object it used to carry is defined here instead.
-
-The command that will write named image lists, a later `sfm survey`-style
-command that reads the sharpness and tensor of a capture's frames and proposes
-lists of the sharp ones, is the intended producer; it is not designed here.
 
 ## Part 1: `.sift` version 2
 
@@ -575,7 +566,8 @@ row above.
   `opencv` workspace its tool's row from the table above. It recomputes
   `feature_prefix_dir` from the new options and writes it, prints the old and
   the new directory, and leaves the old features directory, its `.sift` files
-  and the named image lists file on disk. On a version 2 file it changes
+  and the named image lists file
+  ([named-image-lists.md](named-image-lists.md)) on disk. On a version 2 file it changes
   nothing and says "nothing to do: already version 2", whatever its options
   hold. The `.sfmr` files that name the old directory still
   resolve their `.sift` files through their own record. It refuses, changing
@@ -615,7 +607,7 @@ workspace, `images/metadata.json`'s `image_to_gray` equals
 columns and a required `image_to_gray` record for them in
 `images/metadata.json`. A `.sfmr` does not reference named image lists at all:
 it records no list name and no list entries, and never embeds the workspace's
-list file (Part 3). When this ships, the `.sfmr` spec defines the
+list file ([named-image-lists.md](named-image-lists.md)). When this ships, the `.sfmr` spec defines the
 `image_to_gray` object (its inputs, grammar and rounding), the reading image,
 the sharpness and the tensor in its own words, repeating Part 1, because a
 format spec does not send its reader to another spec for what a field means.
@@ -792,148 +784,6 @@ A version 15 file maps back to version 14 by dropping both columns and the
   reconstruction, and the columns are 16 bytes per image of its identity, where
   thumbnails are optional and 49,152 bytes per image.
 
-## Part 3: Named image lists in the workspace
-
-### The `.sfm-named-image-lists.json` file
-
-A workspace's named image lists live in their own file, `.sfm-named-image-lists.json`,
-in the workspace root beside `.sfm-workspace.json`. The file is optional. Its
-name takes the `.sfm-` prefix and the dotfile form of `.sfm-workspace.json`, so
-the two sort together and stay out of an image listing, and the rest of it is
-the glossary's word for what it holds, *named image list*, which is also its
-key; `.sfm-image-lists.json` would drop the *named* that separates these lists
-from any other list of images.
-
-```json
-{
-  "version": 1,
-  "named_image_lists": {
-    "walk1_sharp": [
-      { "pattern": "frames/walk1_%04d.jpg", "range": "1-120,131-400" }
-    ],
-    "rig_sharp": [
-      { "pattern": "rig/*/frame_%05d.jpg", "range": "10-900:2" }
-    ],
-    "hero_shots": [
-      { "pattern": "photos/DSC_0042.JPG" },
-      { "pattern": "photos/DSC_0057.JPG" }
-    ]
-  }
-}
-```
-
-- **`version`** (integer, required): the file's format version, `1`. A reader
-  rejects a version it does not know.
-- **`named_image_lists`** (object, required): from a list's name to its list of
-  entries, each an object with a `pattern` and an optional `range`.
-
-- **Name.** One or more of the ASCII letters, the digits, `-`, `_` and `.`, with
-  at least one letter. Names are compared exactly, case included. The letter is
-  what tells a name from a range on the command line (Part 4).
-- **`pattern`** (string, required): an image pattern in the `.camrig` syntax,
-  relative to the workspace root: a forward-slash path with no leading `/` and
-  no `..`, literal text, the glob wildcards `*` (within one path segment) and
-  `**` (whole segments), and at most one frame field, `%d` or `%0Nd`, with `%%`
-  for a literal `%`. One entry with a wildcard can cover every sensor of a rig,
-  as `rig/*/frame_%05d.jpg` does above.
-- **`range`** (string, optional): a range expression in the grammar `-r` takes
-  (comma-separated integers, `a-b` spans and `a-b:s` stepped spans), applied to
-  the number the pattern's frame field captures. An entry whose pattern has no
-  frame field takes no `range`; one that gives one is an error. An entry with a
-  frame field and no `range` takes every frame number.
-
-**Membership.** A list's members are the union of its entries' matches: the
-files under the workspace root whose workspace-relative path matches the
-pattern, with the captured frame number in the entry's range. A file that two
-entries of one list match is an error naming the file and both entries, since
-it would leave the list's order ambiguous. Entries match files, not
-directories.
-
-**Case.** A pattern matches case-sensitively, against the paths as the
-filesystem lists them or as a reconstruction records them, the same on every
-platform. `photos/dsc_0042.jpg` does not match a file listed as
-`photos/DSC_0042.JPG`, on Windows and macOS as on Linux, so a list selects the
-same images wherever it is resolved.
-
-**Order.** Entry order, then within an entry by frame number, then by
-workspace-relative path among files of the same frame number (the sensors of
-one rig frame). An entry with no frame field orders its files by
-workspace-relative path. This is the order a command receives the images in,
-as it receives a directory's sorted files today.
-
-**Validation.** A command that resolves a list checks the whole file (its
-version, names, patterns and ranges) and reports every
-problem it finds, then matches only the list it was asked for. A list that
-matches no file is an error when used. Every error names the lists file's path.
-A file that is not valid JSON is reported with the line and column where
-parsing failed, and nothing else in it is checked. A `version` other than `1`
-is reported as "<path>: named image lists version <n> is not supported; this
-sfmtool reads version 1", and nothing else in the file is checked, since its
-layout is unknown. A missing `version` or `named_image_lists`, a value of the
-wrong JSON type, a top-level key other than those two, and an entry key other
-than `pattern` and `range` are each an error naming the key and, inside
-`named_image_lists`, the list and the entry's position in it.
-
-**Finding it.** A command first finds the workspace by the existing workspace
-discovery, then reads the image lists file that sits beside that workspace's
-`.sfm-workspace.json` in the workspace root. The lists file is never searched
-for on its own. A command that has no workspace has no lists, so a list name
-given to it is an error saying that no workspace was found and so no named
-image lists are defined; a lists file with no `.sfm-workspace.json` beside it
-is never used. If the workspace has no
-lists file, it has no named image lists, so giving a list name is an error that
-says so.
-
-**Outside the workspace record and every `.sfmr`.** The lists file adds
-nothing to `.sfm-workspace.json`, whose version 2 is about the grey conversion
-alone (Part 1). The lists file is not part of
-`workspace.contents`, and a `.sfmr` never embeds it, records a list's name or
-entries, or refers to it in any other way; a reconstruction made from a list is
-the same file it would be if its images had been given by path. `sfm ws init`,
-with or without `--force`, writes only `.sfm-workspace.json` and leaves the
-lists file untouched.
-
-## Part 4: The CLI's `-r/--range`
-
-Eight commands take `-r/--range` today:
-
-- On image directories, matched against each file's number by
-  `number_from_filename`: `sfm sift`, `sfm match`, `sfm motion` and `sfm solve`.
-- On a reconstruction's images: `sfm analyze` (with `--metrics`),
-  `sfm panorama`, `sfm to-colmap-bin` and `sfm to-nerfstudio`.
-
-Each of them gains the same handling:
-
-- **A value with a letter in it is a list name; any other value is a range.** A
-  range expression contains only digits, `-`, `:` and `,` (and whitespace), so
-  the two cannot be confused. A value with a letter that is not a valid name
-  (`walk 1`, say) is an error saying what a name may contain.
-- **`--named-image-list NAME`** is the long form for a list, for scripts that
-  want to say which they mean. Its value must be a valid name.
-- **One name and one range may be given together**, as two `-r` options or as
-  `--named-image-list` with one `-r`. The images are the list's members whose
-  frame number the range also selects: the range narrows every entry of the
-  list. An entry with no frame field has no frame number to narrow, so narrowing
-  a list with such an entry is an error naming the entry. Two names, or two
-  ranges, are an error.
-- **An unknown name** is an error that names the lists file (or says the
-  workspace has none), lists the names it does define, and says: "A --range value with a letter in it is read as a
-  named image list; a range contains only digits, '-', ':' and ','."
-
-**Which workspace, and which images.** For the four commands on image
-directories, a list replaces the image path arguments: the command takes either
-paths or a list, and giving both is an error. The workspace is the one found by
-the upward search from the current directory, and the images are the list's
-members, in the list's order. For the four commands on a reconstruction, the
-list is resolved in the reconstruction's workspace, matched against the
-reconstruction's image names rather than the filesystem (so it works where the
-image files are absent), and selects the reconstruction's images that are
-members, in the reconstruction's order; members the reconstruction does not hold
-are ignored, and it is an error, naming the list, when none are left. `--filter-points` keeps its meaning.
-
-A `.sfmr` that `sfm solve` writes from a list records nothing about the list,
-as it records nothing about a range today.
-
 ## Evidence for the two readings
 
 The definitions come from a measurement on two hand-held phone videos (4K
@@ -1046,12 +896,6 @@ Named once here, as the format specs' Implementations sections will name them:
   (`src/sfmtool/colmap/io.py`) copies the readings beside them, and the Rust
   save path gains a lookup like `verified_sift_thumbnail` with the photograph
   as the fallback.
-- **The named lists** resolve through the `.camrig` pattern matcher in
-  `sfmtool-camrig-format` (`pattern_matches`, `pattern_frame_index`) and the
-  range type the CLI already parses with (`RangeExpr`, from `openjd-expr`).
-  The `-r` handling moves into one shared option in
-  `src/sfmtool/_commands/_range_options.py` that all eight commands use.
-
 ## Words for the glossary
 
 To add to [`../GLOSSARY.md`](../GLOSSARY.md) when this lands:
@@ -1070,10 +914,6 @@ To add to [`../GLOSSARY.md`](../GLOSSARY.md) when this lands:
   mean per image.
 - **reading image**: the 480-pixel area-averaged grey image both readings are
   taken on.
-- **named image list**: a named set of workspace images defined in
-  `.sfm-named-image-lists.json` by pattern and range entries. Chosen over `image set`,
-  which already names the image half of a reconstruction's data, and over
-  `selection`, which the viewer uses for what is picked on screen.
 
 ## Choices made here
 
@@ -1113,51 +953,44 @@ review should check:
    workspace file, or a record with no `image_to_gray`) and a directory of
    version 1 files, and points at `sfm ws upgrade`; reading
    version 1 files stays allowed.
-10. **The lists file is named `.sfm-named-image-lists.json`**, after the glossary
-    word and the form of `.sfm-workspace.json`, with its own `version` of `1`.
-    A key the file does not define, at the top level or in an entry, is an
-    error rather than ignored, as `.sfm-workspace.json` has no other keys.
-11. **With a list, the image-directory commands take no image paths** and find
-    the workspace from the current directory; narrowing a list that has an entry
-    with no frame field is an error.
-12. **`sfm ws init`, with or without `--force`, writes a version 2
+10. **`sfm ws init`, with or without `--force`, writes a version 2
     `.sfm-workspace.json`** with fresh options from its defaults and flags, and
     never touches the lists file.
-13. **Proposed for review: `sfm ws upgrade`**, a migration command that rewrites
+11. **Proposed for review: `sfm ws upgrade`**, a migration command that rewrites
     a version 1 workspace file as version 2 keeping every option, converts the
     grey conversion, recomputes `feature_prefix_dir`, and leaves the old
     features directory and the lists file on disk; the refusal message points at
     it rather than at `sfm ws init --force` with reconstructed flags, which
     cannot reproduce hand-edited options. On a version 2 file it does nothing.
-14. **Proposed for review: `sfm ws init --image-to-gray FORMULA` and
+12. **Proposed for review: `sfm ws init --image-to-gray FORMULA` and
     `--quantize-bits B`** for the `sfmtool` tool, so the conversion can be set
     and the directory is named from it. A hand edit of the options does not move
     the folder; the recorded folder name is authoritative.
-15. **The workspace file's version is checked at load**: a missing `version`,
+13. **The workspace file's version is checked at load**: a missing `version`,
     a version other than 1 or 2, a version 2 file with `gray_formula`, without
     `image_to_gray`, and a version 1 file with `image_to_gray` are all errors
     there.
-16. **`sfm undistort` writes a version 2 workspace**, with a top-level
+14. **`sfm undistort` writes a version 2 workspace**, with a top-level
     `image_to_gray` converted from its source as `sfm ws upgrade` converts it
     and readings computed from the undistorted images, so it never refuses a
     version 1 source; `sfmtool-undistort` records its source's conversion and is
     not settable, and `sfm ws upgrade` refuses an undistort workspace.
-17. **The viewer's *Build SIFT Files* converts a version 1 `sfmtool` record in
+15. **The viewer's *Build SIFT Files* converts a version 1 `sfmtool` record in
     memory** and pushes the conversion as an undoable version, extending
     today's switch to the `sfmtool` defaults, rather than reading the
     workspace's `.sfm-workspace.json`: the viewer builds where the node looks
     for its files, and reading the workspace file would build where the node
     does not look. A `sift_files` node with a version 1 record is refused, as
     today's switch is for such a node.
-18. **`BuildSiftFilesOptions::from_workspace` is removed**, leaving
+16. **`BuildSiftFilesOptions::from_workspace` is removed**, leaving
     `load_workspace_config` as the one reader of the workspace file and its
     checks in one place.
 
 ## Not in this draft
 
-The command that writes named image lists from the readings, and any rule for
-which frames count as blurred: the readings are recorded so that such a command
-can be written, and it will be designed separately.
+Any rule for which frames count as blurred: the readings are recorded so that
+such a rule can be written, and it will be designed with the command that
+writes named image lists ([named-image-lists.md](named-image-lists.md)).
 
 Decoding 16-bit sources at full depth, so that a 16-bit image's readings and
 features follow the **Inputs** definition rather than an 8-bit reduction of it,

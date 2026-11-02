@@ -43,7 +43,7 @@ no version of the format has used, or is newer than the newest version it reads,
 because it cannot know that layout. Everything below describes version 1.
 
 A version 2 is proposed in
-[`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md): it makes a
+[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md): it makes a
 structured `feature_options.image_to_gray` object required for every feature
 tool and adds two readings of each image to `metadata.json`, its sharpness and
 its gradient structure tensor. A version 3 built on it is proposed in
@@ -107,7 +107,7 @@ JSON. It contains the following fields (ignore additional fields for future back
   its own formula grammar and an optional bit depth, required for every feature tool and
   carried in the same form in the workspace's `feature_options`, is part of the proposed
   version 2; see
-  [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md).
+  [`../drafts/image-sharpness.md`](../drafts/image-sharpness.md).
 
 ### `metadata.json.zst`
 
@@ -365,7 +365,7 @@ $ od -Ax --endian=little -tf4 -w8 features/positions_xy.*.2.float32 | head -5
 - **Version 1**: the current and only format version, written as the integer `1` in
   `metadata.version`. A proposed version 2, with the required `image_to_gray` object and
   each image's sharpness and gradient structure tensor, is drafted in
-  [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md), and a proposed
+  [`../drafts/image-sharpness.md`](../drafts/image-sharpness.md), and a proposed
   version 3, with incremental chunked descriptors and the identity hashes that go with
   them, in
   [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).

@@ -64,7 +64,7 @@ the `.sift` field `feature_tool_xxh128` and the feature-cache hash in the `featu
 directory name, and two conversions land in different `features/` subdirectories. The structured `image_to_gray` object that would replace the
 plain string, with a formula grammar the reader can evaluate and an optional bit
 depth, is part of the proposed `.sift` version 2; see
-[`../../drafts/image-sharpness-and-named-image-lists.md`](../../drafts/image-sharpness-and-named-image-lists.md).
+[`../../drafts/image-sharpness.md`](../../drafts/image-sharpness.md).
 
 ### 1. Scale-space pyramid
 

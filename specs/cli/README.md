@@ -42,7 +42,7 @@ the `--range` and `--filter-points` options of `sfm to-colmap-bin` and
 `to-nerfstudio`), and each accepts only a range expression of file numbers.
 Accepting the name of a workspace's named image list there as well, with a
 `--named-image-list` long form, is proposed in
-[`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md).
+[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
 [`_sfmr_path.py`](../../src/sfmtool/_commands/_sfmr_path.py) provides
 `check_sfmr_path`, which raises a `click.UsageError` reading "<label> must be
 a .sfmr file, got: <path>" when a path argument does not end in `.sfmr`

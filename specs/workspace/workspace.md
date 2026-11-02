@@ -109,14 +109,14 @@ feature-cache hash since it does not affect feature output.
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
 The file has no other keys. A version 2 of the file is proposed in
-[`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md): its
+[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md): its
 `feature_options` carry, for every feature tool, the structured `image_to_gray`
 object the `.sift` file records, in place of the `sfmtool` tool's
 `gray_formula`, so a workspace written under it gets a new features directory.
 An optional second file beside it in the workspace
 root, `.sfm-named-image-lists.json`, naming sets of the workspace's images by pattern
 and frame range so that commands can be pointed at one by name, is proposed in
-[`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md).
+[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
 
 ### Feature Prefix Directory
 
