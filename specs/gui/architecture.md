@@ -175,6 +175,7 @@ sfmtool/
 │   │       │   ├── mod.rs
 │   │       │   └── windows.rs    # DirectManipulation touchpad integration
 │   │       └── shaders/
+│   │           ├── common.wgsl         # Prelude prepended to six scene shaders: ReconUniforms, PICK_TAG_*, INF_DEPTH, MASK_*
 │   │           ├── points.wgsl         # Point splat rendering
 │   │           ├── edl.wgsl            # Eye-Dome Lighting post-process
 │   │           ├── frustum.wgsl        # Frustum wireframe rendering
@@ -183,6 +184,7 @@ sfmtool/
 │   │           ├── bg_image_distorted.wgsl # Background image rendering (distorted)
 │   │           ├── patch.wgsl           # Patch/surfel rendering
 │   │           ├── target_indicator.wgsl # Rotating 3D compass / world-up indicator at target
+│   │           ├── bench_track.wgsl     # Bench's focused item in the world: frame, normal, observation marks (post-EDL)
 │   │           └── track_ray.wgsl       # Track ray visualization
 │   │
 │   ├── sfmtool-colmap/           # COLMAP format read/write
@@ -192,6 +194,12 @@ sfmtool/
 │       └── src/
 │           └── lib.rs            # Python module (sfmtool._sfmtool)
 ```
+
+The points, frustum, image quad, distorted quad, patch and bench track
+pipelines build their shader source as `common.wgsl` followed by their own
+file, so a new scene shader that reads the per-recon block or writes a pick ID
+is prepended the same way rather than declaring those values again. See
+[scene-graph.md](scene-graph.md#per-recon-uniforms) § "Per-recon uniforms".
 
 ### Module Responsibilities
 
