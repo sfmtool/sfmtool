@@ -4256,7 +4256,12 @@ release_image_radial_bspline?, release_image_rolling_shutter?,
 rolling_shutter_scanlines? }`, one entry per camera that differs, each naming
 its camera by the index `get_camera_intrinsics` and `get_camera_image` report,
 and a field it leaves out taking the call's default. A camera with none of the
-seven releases is held.
+seven releases is held. A per-image release left out is `false` even on a
+camera that already varies that parameter, where the dialog opens the box
+ticked ([edits/bundle-adjust.md](edits/bundle-adjust.md) § "The dialog"): a
+call says the same thing whatever the reconstruction it runs on varies, as an
+omitted `schedule` does, so a caller that wants the second solve to keep
+solving what the first turned on names those releases again.
 
 A per-image release solves each image's focal scale or principal-point offset,
 the dialog's **Release focal length per image** and **Release principal point

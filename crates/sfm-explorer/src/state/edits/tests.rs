@@ -3333,6 +3333,32 @@ fn the_correction_gates_open_on_an_sfmtool_pinhole_and_name_the_camera_elsewhere
 }
 
 #[test]
+fn a_camera_gate_lists_the_per_image_parameters_its_camera_varies() {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
+    let (mut state, _) = sfmtool_pinhole_state();
+    let gate = &crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited())[0];
+    assert!(gate.varied.is_empty(), "the demo varies nothing per image");
+    {
+        // A flag alone and a non-zero value alone each count as varying.
+        let recon = state.scene[0].recon_mut();
+        let mut flags = recon.image_set.camera_per_image_adjustments(0);
+        flags.rolling_shutter = true;
+        recon.image_set.per_image_adjustments = vec![flags];
+        recon.image_set.images[1]
+            .intrinsic_adjustment
+            .principal_point = [0.001, 0.0];
+    }
+    let gate = &crate::bundle_adjust_prompt::camera_gates(state.scene[0].edited())[0];
+    assert_eq!(
+        gate.varied,
+        vec![
+            ImageAdjustmentParameter::PrincipalPoint,
+            ImageAdjustmentParameter::RollingShutter
+        ]
+    );
+}
+
+#[test]
 fn a_rolling_shutter_with_unknown_scanlines_runs_both_solves_and_names_both_costs() {
     let (mut state, id) = sfmtool_pinhole_state();
     let options = sfmtool_core::BundleAdjustOptions {

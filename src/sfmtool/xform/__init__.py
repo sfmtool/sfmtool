@@ -8,6 +8,7 @@ from ._align_to import AlignToTransform
 from ._align_to_input import AlignToInputTransform
 from ._apply import apply_transforms
 from ._bundle_adjust import BundleAdjustTransform
+from ._drop_image_adjustments import DropImageAdjustmentsTransform
 from ._filter_by_image_range import (
     ExcludeGlobFilter,
     ExcludeRangeFilter,
@@ -71,6 +72,7 @@ __all__ = [
     "ExcludeGlobFilter",
     "SelectByDistributionFilter",
     "BundleAdjustTransform",
+    "DropImageAdjustmentsTransform",
     "LocalizeKeypointsTransform",
     "RefineKeypointsTransform",
     "RefineNormalsTransform",

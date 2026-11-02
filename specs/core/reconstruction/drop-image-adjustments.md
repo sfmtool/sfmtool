@@ -35,8 +35,9 @@ which is how the viewer's Switch Camera Model proposal and MCP
 `switch_camera_model` drop them
 ([../../gui/edits/switch-camera-model.md § Dropping per-image
 parameters](../../gui/edits/switch-camera-model.md#dropping-per-image-parameters)).
-The CLI does not call it yet; how it will is proposed in
-[per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
+`sfm xform --drop-image-adjustments` calls the binding once for each camera
+it names
+([../../cli/reconstruction/xform/xform-command.md](../../cli/reconstruction/xform/xform-command.md#--drop-image-adjustments-parametersnamename-camerasij)).
 
 ```rust
 pub fn drop_image_adjustments(

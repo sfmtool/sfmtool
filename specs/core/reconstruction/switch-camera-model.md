@@ -357,9 +357,10 @@ arguments and returns `(SfmrReconstruction, report)`; it is what `sfm xform
 ([`../../cli/reconstruction/xform/xform-command.md`](../../cli/reconstruction/xform/xform-command.md)).
 The bindings drop nothing; a caller drops first with
 `SfmrReconstruction.drop_image_adjustments`
-([drop-image-adjustments.md](drop-image-adjustments.md)). Whether the CLI gets
-an option that drops per-image parameters is open in
-[per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
+([drop-image-adjustments.md](drop-image-adjustments.md)), which `sfm xform
+--drop-image-adjustments` does before a `--camera-model` later in the same
+command
+([../../cli/reconstruction/xform/xform-command.md](../../cli/reconstruction/xform/xform-command.md#--drop-image-adjustments-parametersnamename-camerasij)).
 
 The report's `cameras` is a list with one dict per switched camera: `camera`,
 `images`, `source` and `target` (the two `CameraIntrinsics`), `fit` (the dict

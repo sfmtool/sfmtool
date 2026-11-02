@@ -34,6 +34,7 @@ from . import (
     AlignToTransform,
     BundleAdjustTransform,
     ClassifyPointsAtInfinityTransform,
+    DropImageAdjustmentsTransform,
     DropPatchBitmapsTransform,
     DropThumbnailsTransform,
     ExcludeGlobFilter,
@@ -287,12 +288,14 @@ def parse_localize_keypoints_params(param: str) -> LocalizeKeypointsTransform:
 
 
 # Each --bundle-adjust key maps to a caster; the transform and the adjustment
-# own the range checks. The four per-image keys are the `CameraRelease` field
-# names, and `scanlines` abbreviates the binding's `rolling_shutter_scanlines`,
-# as `wspath` abbreviates `workspace_path` inside a comma-separated value.
+# own the range checks. `principal_point` and the four per-image keys are the
+# `CameraRelease` field names, and `scanlines` abbreviates the binding's
+# `rolling_shutter_scanlines`, as `wspath` abbreviates `workspace_path` inside
+# a comma-separated value.
 _BUNDLE_ADJUST_KEYS: dict[str, Callable[[str], object]] = {
     "cameras": _parse_camera_list,
     "cross": _parse_bool,
+    "principal_point": _parse_bool,
     "image_focal": _parse_bool,
     "image_principal_point": _parse_bool,
     "image_radial_bspline": _parse_bool,
@@ -307,7 +310,8 @@ def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
     An empty string is the bare option. ``cameras=0+1`` releases the lens of
     those cameras only and holds the rest. ``cross=off`` keeps every point in
     the representation it has rather than letting the storage decision move it
-    between a position and a direction. ``image_focal=on``,
+    between a position and a direction. ``principal_point=on`` releases the
+    shared principal point of each released camera. ``image_focal=on``,
     ``image_principal_point=on``, ``image_radial_bspline=on`` and
     ``image_rolling_shutter=on`` release that field of each image on the
     released cameras, and ``scanlines=rows``, ``columns`` or ``unknown`` (any
@@ -323,6 +327,7 @@ def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
                 f"'{kwargs['scanlines']}' is not rows, columns or unknown"
             )
     return BundleAdjustTransform(
+        release_principal_point=kwargs.get("principal_point", False),
         cameras=kwargs.get("cameras"),
         cross=kwargs.get("cross", True),
         image_focal=kwargs.get("image_focal", False),
@@ -331,6 +336,44 @@ def parse_bundle_adjust_params(param: str) -> BundleAdjustTransform:
         image_rolling_shutter=kwargs.get("image_rolling_shutter", False),
         scanlines=scanlines,
     )
+
+
+def _parse_parameter_list(value: str) -> list[str]:
+    """Parse ``principal_point+focal`` into per-image parameter names."""
+    return [v.strip() for v in value.split("+") if v.strip()]
+
+
+_VALUE_NAMES[_parse_parameter_list] = "parameter list (names joined by '+')"
+
+# The --drop-image-adjustments keys: the cameras, as --camera-model takes them,
+# and the parameters, by the names a camera's `per_image_adjustments` lists.
+_DROP_IMAGE_ADJUSTMENTS_KEYS: dict[str, Callable[[str], object]] = {
+    "parameters": _parse_parameter_list,
+    "cameras": _parse_camera_list,
+}
+
+
+def parse_drop_image_adjustments_params(param: str) -> DropImageAdjustmentsTransform:
+    """Parse ``parameters=principal_point+focal[,cameras=0+1]``.
+
+    ``parameters=`` is required. Unknown keys, malformed tokens, a missing
+    ``parameters=`` and a name that is not a per-image parameter raise
+    ``click.UsageError``.
+    """
+    option = "--drop-image-adjustments"
+    kwargs = _parse_kv_params(param, option, _DROP_IMAGE_ADJUSTMENTS_KEYS)
+    if "parameters" not in kwargs:
+        raise click.UsageError(
+            f"{option} needs parameters=, the per-image parameters to drop "
+            "joined by '+' (focal, principal_point, radial_bspline, "
+            "rolling_shutter)"
+        )
+    try:
+        return DropImageAdjustmentsTransform(
+            kwargs["parameters"], cameras=kwargs.get("cameras")
+        )
+    except ValueError as e:
+        raise click.UsageError(f"Invalid {option} parameter '{param}': {e}")
 
 
 # Each --to-embedded-patches key maps to a caster; the transform constructor owns
@@ -661,6 +704,10 @@ _TRANSFORM_OPTIONS: dict[str, tuple[str, Callable[[str, int | None], object]]] =
     "--exclude-glob": ("required", lambda p, _: ExcludeGlobFilter(p)),
     "--include-by-distribution": ("required", _parse_include_by_distribution),
     "--camera-model": ("required", lambda p, _: parse_camera_model_params(p)),
+    "--drop-image-adjustments": (
+        "required",
+        lambda p, _: parse_drop_image_adjustments_params(p),
+    ),
     "--find-points-at-infinity": ("required", _parse_find_points_at_infinity),
     "--classify-points-at-infinity": ("optional", _parse_classify_points_at_infinity),
 }

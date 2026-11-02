@@ -73,13 +73,26 @@ observations the solve keeps.
 - **One row per camera** the posed images use, in camera index order, on two
   lines: `Camera 0 SFMTOOL_FISHEYE  24 images` and the three shared releases on
   the first, and under them the four per-image releases and, while the rolling
-  shutter is ticked, the **Scanlines** choice. Every checkbox is clear by
-  default. A camera only unposed images use is not in the solve and has no row.
-  A lens that moves is a different claim about the capture than a pose that
-  does, so the smaller claim is the default, and a camera left clear is held.
-  The per-image boxes open clear even for a camera that already varies the
-  parameter; opening those ticked is proposed in
-  [per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
+  shutter is ticked, the **Scanlines** choice. The shared checkboxes are clear
+  by default. A camera only unposed images use is not in the solve and has no
+  row. A lens that moves is a different claim about the capture than a pose
+  that does, so the smaller claim is the default, and a camera left clear is
+  held. A per-image box opens **ticked** where the camera already varies that
+  parameter, by its `per_image_adjustments` flag or a non-zero value on one of
+  its images (`varied_image_adjustments`, the test Switch Camera Model's Drop
+  per image row and the Camera Intrinsics panel's statistics use;
+  [`switch-camera-model.md`](switch-camera-model.md#dropping-per-image-parameters)),
+  and the camera's model can take the release, and clear otherwise. The
+  reconstruction already makes that claim about the capture, so a second
+  adjustment keeps solving what the first one turned on unless the person
+  clears the box; a cleared box holds each image's value where it is, and
+  dropping the parameter is Switch Camera Model's Drop per image row or `sfm
+  xform --drop-image-adjustments`
+  ([`../../cli/reconstruction/xform/xform-command.md`](../../cli/reconstruction/xform/xform-command.md#--drop-image-adjustments-parametersnamename-camerasij)).
+  A box the model cannot take stays disabled and clear, whatever the camera
+  varies. MCP `bundle_adjust` keeps its own defaults, every release `false`
+  unless the call names it
+  ([`../mcp-server.md`](../mcp-server.md#resect_camera_image--bundle_adjust)).
   - **Release focal length** releases that camera's focal. It is **disabled**
     when the camera's model is not one the adjustment's focal column is exact
     for, with a hover explanation naming the camera by its camera index and its
@@ -415,7 +428,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   was stopped, over several cameras and with no rates released; the correction gates greyed on the demo's `PINHOLE`
   naming the camera and its model, open on an `SFMTOOL_PINHOLE`, the radial
   one closed alone with a reason on a domain end that is not positive, and
-  the stored scanlines read into the gate; and a run on the demo switched to
+  the stored scanlines read into the gate, and the gate listing the per-image
+  parameters its camera varies, by a flag alone or a non-zero value alone;
+  and a run on the demo switched to
   `SFMTOOL_PINHOLE` releasing both corrections under `Unknown`, its label, the
   entry's both costs and that both solves ran to the end, the breakdown's
   `solve with rows` and `solve with columns`, and the camera marked as
@@ -434,7 +449,11 @@ Explorer (`sfm-explorer` lib tests, headless):
   their kind and the per-image focal refused where the shared one is, a
   per-image focal carrying the distortion, a drawn row keeping its distortion
   beside a per-image focal and leaving its shared boxes as the user set them,
-  the Scanlines choice opening on the stored setting or on `Unknown`, the
+  the Scanlines choice opening on the stored setting or on `Unknown`, a
+  camera's per-image boxes opening ticked for the parameters it varies and
+  clear for one varying nothing, with its shared boxes clear and `Enter`
+  answering the per-image releases they opened with, a varied parameter whose
+  box the model greys opening clear, the
   corrections answered with the scanlines of each camera that releases its
   rates and never on a camera that cannot take them, the options the answer
   runs with, a Scanlines choice answered only beside a released rolling

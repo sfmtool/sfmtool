@@ -102,6 +102,7 @@ fn gate(camera: usize, camera_model: &'static str) -> CameraGate {
             .then(|| format!("camera {camera} cannot release a radial correction")),
         image_rolling_shutter_refusal: (!pinhole)
             .then(|| format!("camera {camera} cannot release a rolling shutter")),
+        varied: Vec::new(),
         scanlines: None,
     }
 }
@@ -474,6 +475,102 @@ fn drawing_a_row_keeps_its_distortion_beside_a_per_image_focal_and_its_own_boxes
     assert!(
         !row.focal && !row.principal_point,
         "the shared boxes were set"
+    );
+}
+
+#[test]
+fn a_camera_that_varies_a_parameter_opens_with_its_per_image_box_ticked() {
+    // Camera 0 varies its focal and principal point per image, camera 1 varies
+    // nothing, and camera 3, a SIMPLE_PINHOLE, varies every parameter, two of
+    // which its model cannot take.
+    use ImageAdjustmentParameter::*;
+    let gates = BundleAdjustGates {
+        camera_count: 4,
+        cameras: vec![
+            CameraGate {
+                varied: vec![Focal, PrincipalPoint],
+                ..gate(0, "SFMTOOL_PINHOLE")
+            },
+            gate(1, "SFMTOOL_PINHOLE"),
+            CameraGate {
+                varied: ImageAdjustmentParameter::ALL.to_vec(),
+                ..gate(3, "SIMPLE_PINHOLE")
+            },
+        ],
+    };
+    let mut prompt = BundleAdjustPrompt::default();
+    let id = ReconId::next();
+    prompt.ask(id, "dino".to_string(), gates);
+    let rows = prompt.pending.as_ref().unwrap().rows.clone();
+    assert_eq!(
+        rows[0],
+        RowState {
+            image_focal: true,
+            image_principal_point: true,
+            ..RowState::default()
+        },
+        "the shared boxes open clear and the varied per-image ones ticked"
+    );
+    assert_eq!(
+        rows[1],
+        RowState::default(),
+        "a camera varying nothing opens clear"
+    );
+    assert_eq!(
+        rows[2],
+        RowState {
+            image_focal: true,
+            image_principal_point: true,
+            ..RowState::default()
+        },
+        "a box the model cannot take opens clear, whatever the camera varies"
+    );
+
+    // Enter answers the per-image releases the rows opened with, and the
+    // shared box of a ticked per-image kind is drawn ticked and greyed
+    // without being set.
+    let answer = frame(&mut prompt, press(egui::Key::Enter)).expect("one answer");
+    let focal_and_pp = CameraRelease {
+        image_focal: true,
+        image_principal_point: true,
+        ..HELD
+    };
+    assert_eq!(
+        answer.releases,
+        vec![focal_and_pp, HELD, HELD, focal_and_pp]
+    );
+}
+
+#[test]
+fn a_varied_parameter_whose_box_is_greyed_opens_clear() {
+    // An OPENCV_FISHEYE varying its focal cannot release it per image, and an
+    // SFMTOOL_PINHOLE whose radial correction is refused (a domain end that
+    // is not positive) keeps that box clear while its rates open ticked.
+    use ImageAdjustmentParameter::*;
+    let gates = BundleAdjustGates {
+        camera_count: 2,
+        cameras: vec![
+            CameraGate {
+                varied: vec![Focal],
+                ..gate(0, "OPENCV_FISHEYE")
+            },
+            CameraGate {
+                varied: vec![RadialBspline, RollingShutter],
+                image_radial_bspline_refusal: Some("no domain".to_string()),
+                ..gate(1, "SFMTOOL_PINHOLE")
+            },
+        ],
+    };
+    let mut prompt = BundleAdjustPrompt::default();
+    prompt.ask(ReconId::next(), "rig".to_string(), gates);
+    let rows = &prompt.pending.as_ref().unwrap().rows;
+    assert_eq!(rows[0], RowState::default());
+    assert_eq!(
+        rows[1],
+        RowState {
+            image_rolling_shutter: true,
+            ..RowState::default()
+        }
     );
 }
 
