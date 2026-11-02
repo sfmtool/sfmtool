@@ -198,6 +198,8 @@ pub(crate) struct CameraModelProposal {
     /// the proposed reprojections read, and the drops it was made with; the
     /// very `value` while nothing is dropped.
     dropped: (Vec<ImageAdjustmentParameter>, Arc<SfmrReconstruction>),
+    /// The drops chosen rather than required ([`Self::chosen_drops`]).
+    ticked_drops: Vec<ImageAdjustmentParameter>,
     /// The materialisation's row map, so a refusal naming a point names it by
     /// the index the version on screen gives it; `None` for the base itself.
     rows: Option<RowMap>,
@@ -424,15 +426,13 @@ impl CameraModelProposal {
         })
     }
 
-    /// The drops of the current inputs that were chosen rather than
-    /// required: what the strip's ticked boxes say, and what a change of
-    /// model carries over.
+    /// The drops chosen rather than required: the boxes the person ticked,
+    /// or the wire named, kept apart from the ones a target forces, so a
+    /// tick survives a target that forces the same drop and is there again
+    /// once a target that carries the parameter is chosen. What the strip's
+    /// boxes start from each frame, and what a change of model carries over.
     pub(crate) fn chosen_drops(&self) -> Vec<ImageAdjustmentParameter> {
-        self.drop_choices(&self.inputs)
-            .into_iter()
-            .filter(|c| c.carried && self.inputs.drop_image_adjustments.contains(&c.parameter))
-            .map(|c| c.parameter)
-            .collect()
+        self.ticked_drops.clone()
     }
 
     /// The value the current inputs' fit reads: `value` with their drops
@@ -462,6 +462,13 @@ impl CameraModelProposal {
     /// changed. Returns whether they did, which is when the generation
     /// advances.
     pub(crate) fn set_inputs(&mut self, inputs: ProposalInputs) -> bool {
+        // The ticks are the drops asked for, before the target's forced ones
+        // are added, in `ALL` order and among the parameters the camera varies.
+        let varied = varied_image_adjustments(&self.value.image_set, self.camera);
+        self.ticked_drops = varied
+            .into_iter()
+            .filter(|p| inputs.drop_image_adjustments.contains(p))
+            .collect();
         let inputs = self.normalised(inputs);
         if inputs == self.inputs {
             return false;
@@ -769,6 +776,7 @@ impl AppState {
             opened_on: node.history.current_version().document_serial,
             source,
             dropped: (Vec::new(), Arc::clone(&value)),
+            ticked_drops: Vec::new(),
             value,
             rows,
             keypoint_extent,

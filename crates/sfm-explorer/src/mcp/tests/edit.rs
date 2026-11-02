@@ -1244,7 +1244,7 @@ fn propose_camera_model_reports_and_takes_its_drops() {
     let (mut state, mut viewer) = editable();
     with_lens_corrections_on_camera_0(&mut state);
     let entries = |proposed: &Value| -> Vec<(String, bool, bool)> {
-        proposed["per_image_adjustments"]
+        proposed["per_image_adjustment_drops"]
             .as_array()
             .expect("a list")
             .iter()

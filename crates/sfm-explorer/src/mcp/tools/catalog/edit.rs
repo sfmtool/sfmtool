@@ -952,6 +952,6 @@ fn drop_per_image_adjustments_schema() -> Value {
              the rolling-shutter rates, and only a refit of an SFMTOOL_PINHOLE spline that \
              keeps its domain end keeps the radial correction. A kept parameter the target \
              cannot carry is refused by switch_camera_model, and dropped by \
-             propose_camera_model, whose per_image_adjustments block marks it required.",
+             propose_camera_model, whose per_image_adjustment_drops list marks it required.",
     })
 }

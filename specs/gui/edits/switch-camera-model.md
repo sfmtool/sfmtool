@@ -287,7 +287,9 @@ drops them whatever was ticked, so a camera whose images carry a radial
 correction or rates opens a proposal for any target rather than a refused fit.
 A drop the target requires is worked out again for each change of the
 controls, so it lasts only as long as the target that requires it, while a box
-the person ticked stays ticked across a change of model.
+the person ticked stays ticked across a change of model: the proposal keeps
+the ticks apart from the forced drops, so a tick under a target that forces the
+same drop is there again once a target that carries the parameter is chosen.
 
 A same-model refit whose only change is a drop runs like any other: on Kerry
 Park's `SFMTOOL_FISHEYE` cameras, `SFMTOOL_FISHEYE (refit spline)` at the
@@ -776,7 +778,8 @@ Explorer (`sfm-explorer` lib tests, headless):
   drops, and the Proposed table's line naming what is kept and what is dropped;
   the camera's own refit offering all four cleared, a click on a box's label
   ticking it and advancing the generation, and the ticked drop kept across a
-  change of model while the required ones go with their target; the row and
+  change of model while the required ones go with their target, and a tick
+  surviving a target that forces the same drop and back, then cleared; the row and
   the line inside the panel and apart from the rest at 341, 482 and 1800 px;
   and no row for a camera that varies nothing per image.
 - `scene_graph/tests.rs`: a camera row's menu offering `Switch Camera Model…`,
@@ -819,7 +822,7 @@ Explorer (`sfm-explorer` lib tests, headless):
   camera does not vary refused, pushing nothing; a kept radial correction
   refused naming the rates still kept, and both dropped switching with the
   drops in the label and in `fit`; and `propose_camera_model`'s
-  `per_image_adjustments` block marking the corrections required on an
+  `per_image_adjustment_drops` list marking the corrections required on an
   `SFMTOOL_FISHEYE` target and nothing required on the camera's own refit,
   which drops what the call names.
 - `camera_model_proposal/job/tests.rs`: without the preview the job sending

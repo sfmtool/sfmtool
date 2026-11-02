@@ -2492,6 +2492,135 @@ fn a_refit_offers_every_drop_and_keeps_a_ticked_one_across_targets() {
     assert_eq!(proposal.inputs.drop_image_adjustments, vec![PrincipalPoint]);
 }
 
+/// A box ticked on a target that carries the parameter stays ticked through a
+/// target that forces the same drop, and is ticked again, and can be cleared,
+/// once a target that carries it is chosen once more: the strip keeps the
+/// person's ticks apart from the drops a target requires.
+#[test]
+fn a_tick_survives_a_target_that_forces_the_same_drop() {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(seoul_bull_v02());
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, _) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    // Tick `radial correction` on the camera's own refit, which carries it.
+    let pos = painted
+        .iter()
+        .find(|p| p.text == "radial correction")
+        .expect("the box's label")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    drop_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        482.0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(true)]);
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(false)]);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(proposal.inputs.drop_image_adjustments, vec![RadialBspline]);
+    assert_eq!(proposal.chosen_drops(), vec![RadialBspline]);
+
+    // A change of model as the strip makes it: the new target's defaults,
+    // with the ticks carried over.
+    let change = |state: &mut crate::state::AppState, model| {
+        let proposal = state.camera_model_proposal.as_mut().unwrap();
+        let mut inputs = proposal.default_inputs(model);
+        inputs.drop_image_adjustments = proposal.chosen_drops();
+        proposal.set_inputs(inputs);
+    };
+    change(&mut state, "SFMTOOL_FISHEYE");
+    for _ in 0..2 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (_, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", true, true),
+            ("rolling-shutter rates", true, true),
+        ])
+    );
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(
+        proposal.inputs.drop_image_adjustments,
+        vec![RadialBspline, RollingShutter]
+    );
+    assert_eq!(
+        proposal.chosen_drops(),
+        vec![RadialBspline],
+        "the tick is kept"
+    );
+
+    // Back on the refit the tick is there again, and the forced rates are
+    // not.
+    change(&mut state, "SFMTOOL_PINHOLE");
+    for _ in 0..2 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", true, false),
+            ("rolling-shutter rates", false, false),
+        ])
+    );
+    assert_eq!(
+        state
+            .camera_model_proposal
+            .as_ref()
+            .unwrap()
+            .inputs
+            .drop_image_adjustments,
+        vec![RadialBspline]
+    );
+    // And it can be cleared.
+    let pos = painted
+        .iter()
+        .find(|p| p.text == "radial correction")
+        .expect("the box's label")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    drop_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        482.0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(true)]);
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(false)]);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert!(proposal.inputs.drop_image_adjustments.is_empty());
+    assert!(proposal.chosen_drops().is_empty());
+}
+
 /// The Drop per image row, with greyed boxes, and the Proposed table's line
 /// stay inside the panel and apart from everything else from the narrowest
 /// width to a wide one.

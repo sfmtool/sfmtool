@@ -411,7 +411,7 @@ pub(super) fn camera_model_proposal(
         },
         // The strip's Drop per image row: one entry per parameter the camera
         // varies.
-        "per_image_adjustments": proposal
+        "per_image_adjustment_drops": proposal
             .drop_choices(inputs)
             .iter()
             .map(|choice| json!({

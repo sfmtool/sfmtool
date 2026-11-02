@@ -4581,7 +4581,7 @@ a fit the core refused, a busy node or viewer, and a switch refused because a
     "request": { "camera_model": "SFMTOOL_FISHEYE", "coeff_count": 8,
                  "theta_fit_deg": null, "spline_domain_deg": null,
                  "drop_per_image_adjustments": [] },
-    "per_image_adjustments": [],
+    "per_image_adjustment_drops": [],
     "generation": 1,
     "camera": { "camera_model": "SFMTOOL_FISHEYE", "width": 480, "height": 480,
                 "params": { … } },
@@ -4653,7 +4653,7 @@ ended first (§ "The editing family").
 The `proposed` block, which `get_camera_intrinsics` also carries for the
 camera, holds what the proposal was fitted from (`request`, `null` where the
 default holds, with `drop_per_image_adjustments` the drops the proposal makes,
-those asked for and those the target requires), `per_image_adjustments`, the
+those asked for and those the target requires), `per_image_adjustment_drops`, the
 panel's Drop per image row (one `{ "parameter", "drop", "required" }` per
 per-image parameter the camera varies, `required` where the target cannot
 carry it, so the proposal drops it whatever the call asked), `refit_spline`
