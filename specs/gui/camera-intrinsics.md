@@ -1259,8 +1259,8 @@ wide from −6 to 6 px:
   and the upper bound, so both bounds and every value are on the axis; a bin
   holds the values from its lower edge up to, and not including, its upper
   edge. Values that are all equal, one image's among them, make one bin
-  centred on the value, a ladder step of about a fifth of it wide, or one unit
-  wide for zero. A bar's height is its count over the fullest bin's.
+  centred on the value, as wide as the smallest ladder step of at least a
+  fifth of it, or one unit wide for zero. A bar's height is its count over the fullest bin's.
 - **The marks.** The mean is a solid line and the bounds two standard
   deviations either side of it dashed lines, in the colour of the projection
   plot's ideal map, so the images past the dashed lines are the ones the row

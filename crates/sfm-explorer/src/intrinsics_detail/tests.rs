@@ -1902,6 +1902,15 @@ fn few_and_equal_values_still_bin() {
         "{one:?}"
     );
 
+    // Values whose spread is a hundred-millionth of their size, where
+    // rounding puts the edges a hair inside them, are still all binned.
+    let close = Histogram::new(
+        vec![(0, 0.99999999), (1, 1.00000001)],
+        1.0,
+        [0.99999999, 1.00000001],
+    );
+    assert_eq!(close.counts().iter().sum::<usize>(), 2, "{close:?}");
+
     // A value that is not a number is in no bin.
     let gap = Histogram::new(vec![(0, 1.0), (1, f64::NAN), (2, 2.0)], 1.5, [0.5, 2.5]);
     assert_eq!(gap.counts().iter().sum::<usize>(), 2);

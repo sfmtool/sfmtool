@@ -23,8 +23,9 @@
 //! the larger of the largest value and the upper bound, so both bounds and
 //! every value are on the axis. A bin holds the values from its lower edge up
 //! to, and not including, its upper edge. Values that are all equal, a single
-//! image's among them, make one bin centred on the value, a ladder step of
-//! about a fifth of it wide, or one unit wide for a value of zero.
+//! image's among them, make one bin centred on the value, as wide as the
+//! smallest ladder step of at least a fifth of it, or one unit wide for a
+//! value of zero.
 
 use egui::{FontId, Pos2, Rect, Sense, Shape, Stroke, Vec2};
 use sfmtool_core::reconstruction::image_adjustment_statistics::ComponentStatistics;
@@ -192,13 +193,19 @@ pub(crate) fn nearest_step(rough: f64) -> f64 {
         .unwrap_or(decade)
 }
 
-/// The bin of `edges` that holds `value`: from its lower edge up to, and not
-/// including, its upper one.
+/// The bin of `edges` that holds `value`, one of the values the edges were
+/// made for: from its lower edge up to, and not including, its upper one.
+///
+/// The edges cover every such value, so a value that rounding puts a hair
+/// past the first or last edge, as it can where the values' spread is a
+/// hundred-millionth of their size, is held in the end bin rather than
+/// dropped.
 fn bin_of(edges: &[f64], value: f64) -> Option<usize> {
     let bins = edges.len().checked_sub(1).filter(|&n| n > 0)?;
     let step = (edges[bins] - edges[0]) / bins as f64;
     let k = ((value - edges[0]) / step + 1e-9).floor();
-    (k >= 0.0 && k < bins as f64).then_some(k as usize)
+    k.is_finite()
+        .then(|| k.clamp(0.0, (bins - 1) as f64) as usize)
 }
 
 /// Decimals that tell two edges `step` apart, and no more.
