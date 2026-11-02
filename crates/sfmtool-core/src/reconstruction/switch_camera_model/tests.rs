@@ -696,7 +696,10 @@ fn a_camera_whose_images_carry_lens_corrections_is_refused() {
         .err()
         .expect("refused");
         assert!(
-            matches!(err, SwitchCameraModelError::LensCorrections { camera: 0 }),
+            matches!(
+                err,
+                SwitchCameraModelError::LensCorrections { camera: 0, .. }
+            ),
             "{err}"
         );
         assert!(err.to_string().contains("does not carry over"), "{err}");
@@ -714,6 +717,344 @@ fn a_camera_whose_images_carry_lens_corrections_is_refused() {
             &target("SFMTOOL_FISHEYE"),
             &RefitOptions::default()
         ),
-        Err(SwitchCameraModelError::LensCorrections { camera: 0 })
+        Err(SwitchCameraModelError::LensCorrections { camera: 0, .. })
     ));
+}
+
+use crate::camera::{IntrinsicAdjustment, RollingShutterScanlines};
+use crate::reconstruction::PerImageAdjustments;
+use ImageAdjustmentParameter::{Focal, PrincipalPoint, RadialBspline, RollingShutter};
+
+/// The scene with every image carrying its own focal scale and
+/// principal-point offset, flagged on the camera, and its keypoints made
+/// through them.
+fn varied_scene(camera: CameraIntrinsics) -> SfmrReconstruction {
+    use crate::reconstruction::data::adjusted_fixture::{adjust_and_reproject, varied_adjustment};
+    let mut recon = scene(vec![camera], |_| 0);
+    recon.image_set.per_image_adjustments = vec![PerImageAdjustments {
+        focal: true,
+        principal_point: true,
+        ..Default::default()
+    }];
+    adjust_and_reproject(&mut recon, varied_adjustment);
+    recon
+}
+
+/// A four-coefficient `SFMTOOL_PINHOLE` on a 60° domain whose images vary all
+/// four per-image parameters, read on rows, with their keypoints made through
+/// them. The fixture's 95° point has no pixel under it, so it has no
+/// observation.
+fn pinhole_corrected_scene() -> SfmrReconstruction {
+    use crate::reconstruction::data::adjusted_fixture::adjust_and_reproject;
+    let camera = CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 300.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 60f64.to_radians().tan(),
+            bspline: vec![0.0, 0.002, -0.004, 0.003],
+        },
+        width: 480,
+        height: 480,
+        rolling_shutter: None,
+    };
+    let mut recon = scene(vec![camera], |_| 0);
+    recon.image_set.per_image_adjustments = vec![PerImageAdjustments {
+        focal: true,
+        principal_point: true,
+        radial_bspline: true,
+        rolling_shutter: true,
+        rolling_shutter_scanlines: Some(RollingShutterScanlines::Rows),
+    }];
+    adjust_and_reproject(&mut recon, |i| {
+        let t = i as f64;
+        IntrinsicAdjustment {
+            focal: 0.01 * (0.9 * t + 0.3).sin(),
+            principal_point: [0.004 * (1.3 * t).cos(), 0.004 * (0.7 * t).sin()],
+            radial_bspline: [0.001 * (t - 2.0), -0.0005 * (t - 2.0)],
+            rolling_shutter: [1e-3 * (t - 2.0), 0.0, 5e-4],
+        }
+    });
+    recon.recompute_point_errors().unwrap();
+    recon
+}
+
+fn drops(parameters: &[ImageAdjustmentParameter]) -> SwitchCameraModelOptions {
+    SwitchCameraModelOptions {
+        drop_image_adjustments: parameters.to_vec(),
+        ..SwitchCameraModelOptions::default()
+    }
+}
+
+#[test]
+fn each_dropped_parameter_is_dropped_before_the_fit() {
+    let recon = varied_scene(kerry_cam0());
+    let fisheye = target("SFMTOOL_FISHEYE");
+    for parameter in [Focal, PrincipalPoint] {
+        let (out, report) =
+            switch_camera_model(&recon, &[0], &fisheye, &drops(&[parameter])).unwrap();
+        let entry = &report.cameras[0];
+        assert_eq!(entry.dropped_image_adjustments, vec![parameter]);
+        assert_eq!(entry.source, recon.image_set.cameras[0]);
+        // The camera installed is the fit of the camera the drop leaves.
+        let folded = drop_image_adjustments(&recon, 0, &[parameter]).unwrap();
+        let expected = fit_camera_switch(&folded, 0, &fisheye, &RefitOptions::default()).unwrap();
+        assert_eq!(out.image_set.cameras[0], expected.camera);
+        assert_eq!(entry.refit, expected);
+        let flags = out.image_set.camera_per_image_adjustments(0);
+        assert_eq!(
+            (flags.focal, flags.principal_point),
+            (parameter != Focal, parameter != PrincipalPoint)
+        );
+        for (a, b) in out.image_set.images.iter().zip(&recon.image_set.images) {
+            let (a, b) = (&a.intrinsic_adjustment, &b.intrinsic_adjustment);
+            if parameter == Focal {
+                assert_eq!((a.focal, a.principal_point), (0.0, b.principal_point));
+            } else {
+                assert_eq!((a.focal, a.principal_point), (b.focal, [0.0; 2]));
+            }
+        }
+        // `before` is the value as it was handed in, the exact projections.
+        let o = &entry.observations;
+        assert!(o.before.median_px < 1e-3, "{:?}", o.before);
+        assert!(o.after.median_px > o.before.median_px, "{o:?}");
+    }
+}
+
+#[test]
+fn nothing_dropped_leaves_the_switch_as_it_was() {
+    let recon = varied_scene(kerry_cam0());
+    let fisheye = target("SFMTOOL_FISHEYE");
+    let plain = switch_camera_model(&recon, &[0], &fisheye, &drops(&[])).unwrap();
+    assert!(plain.1.cameras[0].dropped_image_adjustments.is_empty());
+    assert_eq!(
+        plain.1.cameras[0].refit,
+        fit_camera_switch(&recon, 0, &fisheye, &RefitOptions::default()).unwrap()
+    );
+    // A parameter the camera does not vary is passed over.
+    let passed_over = switch_camera_model(
+        &recon,
+        &[0],
+        &fisheye,
+        &drops(&[RadialBspline, RollingShutter]),
+    )
+    .unwrap();
+    assert!(passed_over.1.cameras[0]
+        .dropped_image_adjustments
+        .is_empty());
+    assert_eq!(passed_over.1, plain.1);
+    for (a, b) in passed_over
+        .0
+        .image_set
+        .images
+        .iter()
+        .zip(&plain.0.image_set.images)
+    {
+        assert_eq!(
+            a.intrinsic_adjustment, b.intrinsic_adjustment,
+            "every adjustment kept"
+        );
+    }
+    assert_eq!(passed_over.0.image_set.cameras, plain.0.image_set.cameras);
+}
+
+#[test]
+fn what_a_switch_carries_depends_on_the_target_and_the_domain() {
+    let recon = pinhole_corrected_scene();
+    let carried = |name: &str, options: &RefitOptions| -> Vec<(ImageAdjustmentParameter, bool)> {
+        image_adjustments_carried(&recon, 0, &target(name), options)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.parameter, c.carried))
+            .collect()
+    };
+    let default = RefitOptions::default();
+    assert_eq!(
+        carried("SFMTOOL_FISHEYE", &default),
+        vec![
+            (Focal, true),
+            (PrincipalPoint, true),
+            (RadialBspline, false),
+            (RollingShutter, false)
+        ]
+    );
+    // A refit of the spline that keeps its domain end carries all four.
+    assert!(carried("SFMTOOL_PINHOLE", &default).iter().all(|&(_, c)| c));
+    // A new domain end, or a fit over a given angle, moves the domain the
+    // radial correction is written on; the rates still ride on the model.
+    for options in [
+        RefitOptions {
+            spline_domain_deg: Some(50.0),
+            ..default.clone()
+        },
+        RefitOptions {
+            theta_fit_deg: Some(40.0),
+            ..default.clone()
+        },
+    ] {
+        assert_eq!(
+            carried("SFMTOOL_PINHOLE", &options),
+            vec![
+                (Focal, true),
+                (PrincipalPoint, true),
+                (RadialBspline, false),
+                (RollingShutter, true)
+            ],
+            "{options:?}"
+        );
+    }
+    // A camera varying nothing lists nothing, and a stale index is refused.
+    let bare = scene(vec![kerry_cam0()], |_| 0);
+    assert!(
+        image_adjustments_carried(&bare, 0, &target("SFMTOOL_FISHEYE"), &default)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        image_adjustments_carried(&bare, 3, &target("SFMTOOL_FISHEYE"), &default),
+        Err(SwitchCameraModelError::UnknownCamera {
+            camera: 3,
+            count: 1
+        })
+    ));
+}
+
+#[test]
+fn lens_corrections_kept_on_a_target_that_cannot_carry_them_are_refused() {
+    let recon = pinhole_corrected_scene();
+    let fisheye = target("SFMTOOL_FISHEYE");
+    let err = switch_camera_model(&recon, &[0], &fisheye, &drops(&[Focal]))
+        .err()
+        .expect("refused");
+    assert_eq!(
+        err,
+        SwitchCameraModelError::LensCorrections {
+            camera: 0,
+            target: "SFMTOOL_FISHEYE",
+            kept: vec![RadialBspline, RollingShutter],
+        }
+    );
+    let sentence = err.to_string();
+    assert!(
+        sentence.contains("radial correction and rolling-shutter rates")
+            && sentence.contains("SFMTOOL_FISHEYE")
+            && sentence.contains("drop them per image"),
+        "{sentence}"
+    );
+    // Dropping one still refuses for the other.
+    let err = switch_camera_model(&recon, &[0], &fisheye, &drops(&[RadialBspline]))
+        .err()
+        .expect("refused");
+    assert!(
+        matches!(&err, SwitchCameraModelError::LensCorrections { kept, .. } if *kept == vec![RollingShutter]),
+        "{err}"
+    );
+    // A refit over a new domain end keeps the rates and refuses the radial
+    // correction.
+    let pinhole = target("SFMTOOL_PINHOLE");
+    let moved = SwitchCameraModelOptions {
+        refit: RefitOptions {
+            spline_domain_deg: Some(50.0),
+            ..RefitOptions::default()
+        },
+        ..SwitchCameraModelOptions::default()
+    };
+    assert!(matches!(
+        switch_camera_model(&recon, &[0], &pinhole, &moved),
+        Err(SwitchCameraModelError::LensCorrections { kept, .. }) if kept == vec![RadialBspline]
+    ));
+}
+
+#[test]
+fn dropping_the_lens_corrections_lifts_the_refusal() {
+    let recon = pinhole_corrected_scene();
+    let fisheye = target("SFMTOOL_FISHEYE");
+    let (out, report) = switch_camera_model(
+        &recon,
+        &[0],
+        &fisheye,
+        &drops(&[RollingShutter, RadialBspline]),
+    )
+    .unwrap();
+    let entry = &report.cameras[0];
+    assert_eq!(
+        entry.dropped_image_adjustments,
+        vec![RadialBspline, RollingShutter]
+    );
+    assert_eq!(out.image_set.cameras[0].model_name(), "SFMTOOL_FISHEYE");
+    let flags = out.image_set.camera_per_image_adjustments(0);
+    assert!(flags.focal && flags.principal_point);
+    assert!(!flags.radial_bspline && !flags.rolling_shutter);
+    assert_eq!(
+        flags.rolling_shutter_scanlines,
+        Some(RollingShutterScanlines::Rows),
+        "the scanlines setting is kept"
+    );
+    for (a, b) in out.image_set.images.iter().zip(&recon.image_set.images) {
+        let (a, b) = (&a.intrinsic_adjustment, &b.intrinsic_adjustment);
+        assert_eq!((a.focal, a.principal_point), (b.focal, b.principal_point));
+        assert_eq!((a.radial_bspline, a.rolling_shutter), ([0.0; 2], [0.0; 3]));
+    }
+    out.image_set.check_image_intrinsics().unwrap();
+    let o = &entry.observations;
+    assert_eq!(o.unmeasured, 0);
+    assert!(o.before.median_px < 1e-3, "{:?}", o.before);
+    // What the drops cost is in the comparison: the keypoints were made
+    // through the rates and the radial correction.
+    assert!(o.after.median_px > 1e-3, "{:?}", o.after);
+}
+
+#[test]
+fn a_refit_that_only_drops_a_parameter_runs() {
+    // An `SFMTOOL_PINHOLE` refit as itself carries its corrections and drops
+    // what it is asked to.
+    let recon = pinhole_corrected_scene();
+    let pinhole = target("SFMTOOL_PINHOLE");
+    let (out, report) =
+        switch_camera_model(&recon, &[0], &pinhole, &drops(&[PrincipalPoint])).unwrap();
+    let entry = &report.cameras[0];
+    assert_eq!(entry.dropped_image_adjustments, vec![PrincipalPoint]);
+    assert_eq!(
+        entry.refit.theta_fit_source,
+        crate::camera::refit_intrinsics::ThetaFitSource::SplineDomain
+    );
+    let flags = out.image_set.camera_per_image_adjustments(0);
+    assert!(flags.focal && !flags.principal_point && flags.radial_bspline && flags.rolling_shutter);
+    for (a, b) in out.image_set.images.iter().zip(&recon.image_set.images) {
+        let (a, b) = (&a.intrinsic_adjustment, &b.intrinsic_adjustment);
+        assert_eq!(a.principal_point, [0.0; 2]);
+        assert_eq!(
+            (a.focal, a.radial_bspline, a.rolling_shutter),
+            (b.focal, b.radial_bspline, b.rolling_shutter)
+        );
+    }
+    // The shared principal point moved to the images' mean, and the spline
+    // kept its domain end.
+    let folded = drop_image_adjustments(&recon, 0, &[PrincipalPoint]).unwrap();
+    let (cx, cy) = out.image_set.cameras[0].principal_point();
+    let (fx, fy) = folded.image_set.cameras[0].principal_point();
+    assert!((cx - fx).abs() < 1e-6 && (cy - fy).abs() < 1e-6);
+    assert_eq!(
+        crate::camera::refit_intrinsics::spline_domain_deg(&out.image_set.cameras[0]),
+        crate::camera::refit_intrinsics::spline_domain_deg(&recon.image_set.cameras[0])
+    );
+    // A spline fisheye refit as itself drops its principal point the same way.
+    let recon = varied_scene(kerry_spline());
+    let (out, report) = switch_camera_model(
+        &recon,
+        &[0],
+        &target("SFMTOOL_FISHEYE"),
+        &drops(&[PrincipalPoint]),
+    )
+    .unwrap();
+    assert_eq!(
+        report.cameras[0].dropped_image_adjustments,
+        vec![PrincipalPoint]
+    );
+    assert_eq!(out.image_set.cameras[0].model_name(), "SFMTOOL_FISHEYE");
+    assert!(
+        !out.image_set
+            .camera_per_image_adjustments(0)
+            .principal_point
+    );
 }

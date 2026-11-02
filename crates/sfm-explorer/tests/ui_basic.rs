@@ -2199,3 +2199,94 @@ fn a_brush_stroke_deletes_the_points_it_passes_over() {
         "the entry's count is not the points lost"
     );
 }
+
+/// The camera model proposal's Drop per image row in a real window: on the
+/// seoul bull ground truth whose `SFMTOOL_PINHOLE` camera varies all four
+/// per-image parameters, a proposal of `SFMTOOL_FISHEYE` lists one check box
+/// per parameter, the radial correction and the rolling-shutter rates ticked
+/// and greyed since the target cannot carry them, the focal and the principal
+/// point cleared and enabled; a click on `principal point` ticks it, and the
+/// proposal then drops it too. Which boxes appear and when they are greyed is
+/// covered headlessly in `intrinsics_detail/tests.rs`.
+#[test]
+fn the_proposals_drop_row_ticks_and_greys_what_the_target_cannot_carry() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr"
+    );
+    let viewer = McpViewer::launched(ui_test_lock(), None, &["--no-default-layout", path]);
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    let label = loop {
+        let scene = viewer.call("get_scene", json!({}));
+        if let Some(label) = scene["structuredContent"]["scene"][0]["label"].as_str() {
+            break label.to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the reconstruction never appeared: {scene}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    viewer.ok(
+        "set_window_layout",
+        json!({
+            "layout": {
+                "main": { "tabs": ["camera_intrinsics"], "active": "camera_intrinsics" },
+                "windows": [],
+            },
+        }),
+    );
+    viewer.ok(
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": label,
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_FISHEYE",
+        }),
+    );
+    let names = [
+        "focal",
+        "principal point",
+        "radial correction",
+        "rolling-shutter rates",
+    ];
+    let boxes = |listing: &Value| -> Option<Vec<Value>> {
+        names
+            .iter()
+            .map(|name| find_widget(listing, "check_box", name).cloned())
+            .collect()
+    };
+    let panel = json!({ "panel_name": "camera_intrinsics" });
+    let found = viewer.wait_for(
+        panel.clone(),
+        "the proposal's Drop per image row never appeared",
+        boxes,
+    );
+    let states: Vec<(bool, bool)> = found
+        .iter()
+        .map(|w| (w["toggled"] == true, w["enabled"] == true))
+        .collect();
+    assert_eq!(
+        states,
+        vec![(false, true), (false, true), (true, false), (true, false)],
+        "{found:?}"
+    );
+
+    viewer.click(json!({ "widget": found[1]["widget"] }));
+    let deadline = Instant::now() + CONTENT_TIMEOUT;
+    loop {
+        let intrinsics = viewer.ok(
+            "get_camera_intrinsics",
+            json!({ "reconstruction_label": label, "camera_intrinsics_index": 0 }),
+        );
+        let drops = &intrinsics["proposed"]["request"]["drop_per_image_adjustments"];
+        if *drops == json!(["principal_point", "radial_bspline", "rolling_shutter"]) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the click did not tick principal point: {drops}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

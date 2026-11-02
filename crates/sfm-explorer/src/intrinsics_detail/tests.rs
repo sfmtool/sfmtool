@@ -1135,6 +1135,7 @@ fn a_refused_proposal_shows_its_default_fit_angle_and_the_current_tables() {
         coeff_count: Some(8),
         theta_fit_deg: None,
         spline_domain_deg: Some(95.0),
+        drop_image_adjustments: Vec::new(),
     };
     state
         .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), Some(inputs))
@@ -1190,6 +1191,7 @@ fn the_default_button_stays_inside_a_narrow_panel() {
         coeff_count: Some(8),
         theta_fit_deg: Some(10.0),
         spline_domain_deg: None,
+        drop_image_adjustments: Vec::new(),
     };
     state
         .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), Some(inputs))
@@ -2257,4 +2259,403 @@ fn a_bins_tooltip_lists_its_images_and_a_click_selects_them() {
         click(Some(first)),
         Some(crate::scene::ImageRef::new(node.id, images[1].0))
     );
+}
+
+// ── Dropping per-image parameters in the proposal ──────────────────────────
+
+/// A state holding `node` with a proposal open on its camera 0 targeting
+/// `camera_model` at that target's defaults.
+fn drop_proposal_state(
+    node: SceneNode,
+    camera_model: &'static str,
+) -> (crate::state::AppState, crate::scene::ReconId) {
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(node);
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_mut().unwrap();
+    let inputs = proposal.default_inputs(camera_model);
+    proposal.set_inputs(inputs);
+    (state, id)
+}
+
+/// The strip's Drop per image row as the frame's AccessKit tree states it:
+/// each checkbox by its label, whether it is ticked and whether it is greyed.
+fn drop_boxes(nodes: &[egui::accesskit::Node]) -> Vec<(String, bool, bool)> {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
+    let words: Vec<&str> = ImageAdjustmentParameter::ALL
+        .into_iter()
+        .map(crate::state::edits::per_image_parameter_words)
+        .collect();
+    let mut boxes: Vec<(String, bool, bool)> = nodes
+        .iter()
+        .filter(|node| {
+            node.role() == egui::accesskit::Role::CheckBox
+                && node.label().is_some_and(|l| words.contains(&l))
+        })
+        .map(|node| {
+            (
+                node.label().unwrap().to_string(),
+                node.toggled() == Some(egui::accesskit::Toggled::True),
+                node.is_disabled(),
+            )
+        })
+        .collect();
+    // The tree is not in drawing order; the row is in `ALL` order.
+    boxes.sort_by_key(|(label, _, _)| words.iter().position(|w| w == label));
+    boxes
+}
+
+/// One frame of the panel on `state`'s camera 0 with its proposal, `width`
+/// wide, with AccessKit on: what it painted and the tree.
+fn drop_frame(
+    panel: &mut IntrinsicsDetail,
+    ctx: &egui::Context,
+    state: &mut crate::state::AppState,
+    width: f32,
+    events: Vec<egui::Event>,
+) -> (
+    Vec<crate::test_support::PaintedText>,
+    Vec<egui::accesskit::Node>,
+) {
+    ctx.enable_accesskit();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(width, VIEWPORT.y),
+        )),
+        events,
+        ..Default::default()
+    };
+    let node = &state.scene[0];
+    let mut proposal = state.camera_model_proposal.as_mut();
+    let mut output = ctx.run_ui(input, |ui| {
+        panel.show(ui, node, Some(0), None, proposal.as_deref_mut(), None);
+    });
+    output.textures_delta.clear();
+    let painted = crate::test_support::output_text_rects(&output);
+    let nodes = output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .into_iter()
+        .map(|(_, node)| node)
+        .collect();
+    (painted, nodes)
+}
+
+fn owned(rows: &[(&str, bool, bool)]) -> Vec<(String, bool, bool)> {
+    rows.iter()
+        .map(|&(l, t, g)| (l.to_string(), t, g))
+        .collect()
+}
+
+/// On the seoul_bull camera, which varies all four, a switch to
+/// `SFMTOOL_FISHEYE` drops the radial correction and the rates, ticked and
+/// greyed, and keeps the focal and the principal point, cleared; the request
+/// carries the drops, the fit succeeds where it used to be refused, and the
+/// Proposed table names what it keeps and what it drops.
+#[test]
+fn a_target_that_cannot_carry_the_corrections_ticks_and_greys_them() {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+    let (mut state, _) = drop_proposal_state(seoul_bull_v02(), "SFMTOOL_FISHEYE");
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(
+        proposal.inputs.drop_image_adjustments,
+        vec![RadialBspline, RollingShutter]
+    );
+    assert_eq!(
+        proposal.request().drop_image_adjustments,
+        vec![RadialBspline, RollingShutter]
+    );
+    assert!(proposal.chosen_drops().is_empty());
+    assert!(proposal.fit.is_ok(), "{}", proposal.fit_line());
+    // The job's switch makes the same drops, so its comparison is of the
+    // camera as it is against the dropped and switched one.
+    state.settle_camera_model_proposal_job();
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    let entry = proposal
+        .current_comparison()
+        .expect("the job answered")
+        .expect("the switch ran");
+    assert_eq!(
+        entry.dropped_image_adjustments,
+        vec![RadialBspline, RollingShutter]
+    );
+    assert!(entry.observations.observations > 0);
+
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", true, true),
+            ("rolling-shutter rates", true, true),
+        ])
+    );
+    let texts = texts_of(&painted);
+    assert!(says(&texts, super::proposal::DROP_PER_IMAGE), "{texts:?}");
+    assert!(
+        says(
+            &texts,
+            "Per image, unchanged from Current: focal and principal point. Dropped per image: \
+             radial correction and rolling-shutter rates."
+        ),
+        "{texts:?}"
+    );
+}
+
+/// The camera's own `SFMTOOL_PINHOLE` refit carries all four, so every box
+/// opens cleared and can be ticked; ticking the principal point drops it, and
+/// the drop the person ticked stays across a change of model, while the
+/// required ones go with the target that required them.
+#[test]
+fn a_refit_offers_every_drop_and_keeps_a_ticked_one_across_targets() {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(seoul_bull_v02());
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert!(proposal.is_spline_refit(proposal.inputs.camera_model));
+    assert!(proposal.inputs.drop_image_adjustments.is_empty());
+    assert!(proposal.fit.is_ok(), "{}", proposal.fit_line());
+
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", false, false),
+            ("rolling-shutter rates", false, false),
+        ])
+    );
+    // Tick `principal point` by its label.
+    let pos = painted
+        .iter()
+        .find(|p| p.text == "principal point")
+        .expect("the box's label")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    let generation = state.camera_model_proposal.as_ref().unwrap().generation;
+    drop_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        482.0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(true)]);
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(false)]);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(proposal.inputs.drop_image_adjustments, vec![PrincipalPoint]);
+    assert_ne!(proposal.generation, generation, "a drop is a new fit");
+    assert!(proposal.fit.is_ok(), "{}", proposal.fit_line());
+
+    // A change of model, as the strip makes it, keeps the tick and adds the
+    // drops the new target requires; going back leaves the tick alone.
+    let proposal = state.camera_model_proposal.as_mut().unwrap();
+    let carry = |proposal: &crate::camera_model_proposal::CameraModelProposal, model| {
+        let mut inputs = proposal.default_inputs(model);
+        inputs.drop_image_adjustments = proposal.chosen_drops();
+        inputs
+    };
+    let fisheye = carry(proposal, "SFMTOOL_FISHEYE");
+    proposal.set_inputs(fisheye);
+    assert_eq!(
+        proposal.inputs.drop_image_adjustments,
+        vec![PrincipalPoint, RadialBspline, RollingShutter]
+    );
+    let back = carry(proposal, "SFMTOOL_PINHOLE");
+    proposal.set_inputs(back);
+    assert_eq!(proposal.inputs.drop_image_adjustments, vec![PrincipalPoint]);
+}
+
+/// A box ticked on a target that carries the parameter stays ticked through a
+/// target that forces the same drop, and is ticked again, and can be cleared,
+/// once a target that carries it is chosen once more: the strip keeps the
+/// person's ticks apart from the drops a target requires.
+#[test]
+fn a_tick_survives_a_target_that_forces_the_same_drop() {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(seoul_bull_v02());
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, _) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    // Tick `radial correction` on the camera's own refit, which carries it.
+    let pos = painted
+        .iter()
+        .find(|p| p.text == "radial correction")
+        .expect("the box's label")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    drop_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        482.0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(true)]);
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(false)]);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(proposal.inputs.drop_image_adjustments, vec![RadialBspline]);
+    assert_eq!(proposal.chosen_drops(), vec![RadialBspline]);
+
+    // A change of model as the strip makes it: the new target's defaults,
+    // with the ticks carried over.
+    let change = |state: &mut crate::state::AppState, model| {
+        let proposal = state.camera_model_proposal.as_mut().unwrap();
+        let mut inputs = proposal.default_inputs(model);
+        inputs.drop_image_adjustments = proposal.chosen_drops();
+        proposal.set_inputs(inputs);
+    };
+    change(&mut state, "SFMTOOL_FISHEYE");
+    for _ in 0..2 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (_, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", true, true),
+            ("rolling-shutter rates", true, true),
+        ])
+    );
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(
+        proposal.inputs.drop_image_adjustments,
+        vec![RadialBspline, RollingShutter]
+    );
+    assert_eq!(
+        proposal.chosen_drops(),
+        vec![RadialBspline],
+        "the tick is kept"
+    );
+
+    // Back on the refit the tick is there again, and the forced rates are
+    // not.
+    change(&mut state, "SFMTOOL_PINHOLE");
+    for _ in 0..2 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", true, false),
+            ("rolling-shutter rates", false, false),
+        ])
+    );
+    assert_eq!(
+        state
+            .camera_model_proposal
+            .as_ref()
+            .unwrap()
+            .inputs
+            .drop_image_adjustments,
+        vec![RadialBspline]
+    );
+    // And it can be cleared.
+    let pos = painted
+        .iter()
+        .find(|p| p.text == "radial correction")
+        .expect("the box's label")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    drop_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        482.0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(true)]);
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(false)]);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert!(proposal.inputs.drop_image_adjustments.is_empty());
+    assert!(proposal.chosen_drops().is_empty());
+}
+
+/// The Drop per image row, with greyed boxes, and the Proposed table's line
+/// stay inside the panel and apart from everything else from the narrowest
+/// width to a wide one.
+#[test]
+fn the_drop_row_stays_inside_the_panel_at_any_width() {
+    let (mut state, _) = drop_proposal_state(seoul_bull_v02(), "SFMTOOL_FISHEYE");
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for width in [341.0, 482.0, 1800.0] {
+        for _ in 0..4 {
+            proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+        }
+        let (painted, _) = proposal_frame_at(&mut panel, &ctx, &mut state, 0, width, Vec::new());
+        let texts = texts_of(&painted);
+        for needle in [
+            super::proposal::DROP_PER_IMAGE,
+            "rolling-shutter rates",
+            "Dropped per image",
+        ] {
+            assert!(says(&texts, needle), "{needle} at {width} px: {texts:?}");
+        }
+        let until = top_of(&painted, "K");
+        assert_eq!(overlapping(&painted, until), Vec::new(), "at {width} px");
+        assert_eq!(
+            past_the_edge(&painted, until, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
+    }
+}
+
+/// A camera that varies nothing per image gets no Drop per image row.
+#[test]
+fn a_camera_varying_nothing_has_no_drop_row() {
+    let (mut state, _) = crate::camera_model_proposal::tests::fisheye_proposal_state();
+    let painted = fisheye_frames(&mut state, 482.0);
+    assert!(!says(&texts_of(&painted), super::proposal::DROP_PER_IMAGE));
 }

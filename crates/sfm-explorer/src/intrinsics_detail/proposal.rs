@@ -11,12 +11,17 @@
 //! refit, carries the controls a refit takes: Coefficients and Spline domain,
 //! each with the camera's own value beside it, and the outermost keypoint with
 //! the button that sets the domain to its angle. Fit to θ is not shown for it,
-//! because a given angle makes the core fit the camera like any other source.
+//! because a given angle makes the core fit the camera like any other source. A
+//! camera that varies parameters per image gets a Drop per image row, one
+//! checkbox per parameter, with those the target cannot carry ticked and
+//! greyed.
 
 use sfmtool_core::camera::refit_intrinsics::SPLINE_COEFF_COUNT_RANGE;
+use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
 use sfmtool_core::reconstruction::switch_camera_model::{ErrorSummary, ObservationComparison};
 
 use crate::camera_model_proposal::{CameraModelProposal, ProposalInputs};
+use crate::state::edits::per_image_parameter_words;
 
 /// How the person ended the proposal from the strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +46,10 @@ pub(super) fn show_proposal(
 ) -> Option<ProposalAction> {
     ui.label(egui::RichText::new("Proposal").strong());
     let mut inputs = proposal.inputs.clone();
+    // The drops the boxes state: those ticked. The ones the target cannot
+    // carry are added back when the inputs are set, for whatever target they
+    // then name, so a required drop never outlasts the target that required it.
+    inputs.drop_image_adjustments = proposal.chosen_drops();
     let refit = proposal.is_spline_refit(inputs.camera_model);
 
     // One wrapping row per control: at a narrow width what follows a control
@@ -60,8 +69,11 @@ pub(super) fn show_proposal(
             .labelled_by(label);
         if chosen != inputs.camera_model {
             // A new target starts at its own defaults: the count it takes
-            // from this camera, and the default angle and domain.
+            // from this camera, and the default angle and domain. The drops
+            // ticked are the person's, and stay.
+            let ticked = std::mem::take(&mut inputs.drop_image_adjustments);
             inputs = proposal.default_inputs(chosen);
+            inputs.drop_image_adjustments = ticked;
         }
     });
 
@@ -183,6 +195,8 @@ pub(super) fn show_proposal(
         }
     }
 
+    show_drop_row(ui, proposal, &mut inputs);
+
     proposal.set_inputs(inputs);
 
     match &proposal.fit {
@@ -256,6 +270,81 @@ pub(super) fn show_proposal(
         }
     });
     action
+}
+
+/// What the strip's row of per-image drops is called.
+pub(crate) const DROP_PER_IMAGE: &str = "Drop per image";
+
+/// The Drop per image row: one checkbox per per-image parameter the camera
+/// varies, in the panel's words, for `inputs`' target. A box is ticked where
+/// `inputs` drops the parameter, and cleared by default, which keeps it. A
+/// parameter the target cannot carry is ticked and greyed, its hover text
+/// saying why the switch drops it. No row for a camera that varies nothing
+/// per image.
+fn show_drop_row(ui: &mut egui::Ui, proposal: &CameraModelProposal, inputs: &mut ProposalInputs) {
+    let choices = proposal.drop_choices(inputs);
+    if choices.is_empty() {
+        return;
+    }
+    let target = inputs.camera_model;
+    row(ui, DROP_PER_IMAGE, |ui, _| {
+        for choice in choices {
+            let parameter = choice.parameter;
+            let words = per_image_parameter_words(parameter);
+            let mut ticked = !choice.carried || inputs.drop_image_adjustments.contains(&parameter);
+            let response = ui.add_enabled(choice.carried, egui::Checkbox::new(&mut ticked, words));
+            if choice.carried {
+                response.on_hover_text(drop_hover_text(parameter));
+                let listed = inputs.drop_image_adjustments.contains(&parameter);
+                if ticked && !listed {
+                    inputs.drop_image_adjustments.push(parameter);
+                } else if !ticked && listed {
+                    inputs.drop_image_adjustments.retain(|&p| p != parameter);
+                }
+            } else {
+                response.on_disabled_hover_text(required_drop_text(parameter, target));
+            }
+        }
+    });
+}
+
+/// The hover text of a Drop per image box the person can tick.
+fn drop_hover_text(parameter: ImageAdjustmentParameter) -> String {
+    let words = per_image_parameter_words(parameter);
+    let fold = if parameter == ImageAdjustmentParameter::RollingShutter {
+        "every image's rates are set to zero; nothing is folded into the camera, since a mean \
+         rate describes no photograph"
+    } else {
+        "every image's value is set to zero and their mean is folded into the camera"
+    };
+    format!(
+        "Drop each image's own {words} before the fit: {fold}. The comparison below then \
+         includes what the drop costs. Cleared, every image keeps its own {words}."
+    )
+}
+
+/// The hover text of a Drop per image box the target makes the switch tick.
+fn required_drop_text(parameter: ImageAdjustmentParameter, target: &str) -> String {
+    let why = match parameter {
+        ImageAdjustmentParameter::RollingShutter => {
+            "the rates are defined on SFMTOOL_PINHOLE alone".to_string()
+        }
+        _ if target == "SFMTOOL_PINHOLE" => {
+            "the correction is a curve on the spline's own domain, which this fit moves; only \
+             a refit of the spline that keeps its domain end carries it"
+                .to_string()
+        }
+        _ => "the correction is a curve added to an SFMTOOL_PINHOLE camera's spline".to_string(),
+    };
+    let them = if parameter == ImageAdjustmentParameter::RollingShutter {
+        "them"
+    } else {
+        "it"
+    };
+    format!(
+        "{target} cannot carry each image's own {}, since {why}, so the switch drops {them}.",
+        per_image_parameter_words(parameter)
+    )
 }
 
 /// What the button that puts Fit to θ back to its default is called.

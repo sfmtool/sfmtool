@@ -4515,10 +4515,23 @@ agent that wants the direct switch alone cancels the proposal first.
 - `theta_fit_deg` is the largest angle the fit samples. Omitted, it is the
   core switch's default; given, even a refit of a spline is fitted over that
   angle alone.
+- `drop_per_image_adjustments` lists the per-image parameters the camera drops
+  before the fit, by the names `get_camera_intrinsics`' `per_image_adjustments`
+  uses (`focal`, `principal_point`, `radial_bspline`, `rolling_shutter`): each
+  image's own value is set to zero and their mean folded into the camera, and
+  the new model is fitted to the camera that leaves
+  ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Dropping
+  per-image parameters"). Omitted, every image keeps its own values. A name
+  outside the four, one named twice, and one the camera does not vary are
+  refused. A kept radial correction or kept rates the target cannot carry
+  refuse the switch, naming them: only an `SFMTOOL_PINHOLE` target carries the
+  rates, and only a refit of an `SFMTOOL_PINHOLE` spline that keeps its domain
+  end the radial correction.
 
 The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
 `fit` object beside it: `camera_intrinsics_index`, `camera_model_before`,
-`camera_model_after`, `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
+`camera_model_after`, `dropped_per_image_adjustments` (the parameters dropped,
+by the same names), `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
 refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
 distance from the old over the fit), `monotone_constraint` (`active`,
 `active_angles`, `range_deg`), `observations`, the number of the camera's
@@ -4527,7 +4540,9 @@ observations with an error under both models, and beside it
 observations' errors under the old camera and the new. The label reads
 `Refit spline of camera 0 of kerry_park: 8 → 12 coefficients, domain 150.2° →
 108.8°` for a refit, naming a part it kept as kept, and `Switched camera 0 of
-kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model. A
+kerry_park from OPENCV_FISHEYE to SFMTOOL_FISHEYE` for a change of model, with
+`, dropped per-image principal point` at the end of either for a switch that
+dropped. A
 camera the node does not have, a count on a model without a spline, and a
 domain end the model cannot have are refused naming the camera, and push
 nothing. It runs on the GUI thread: a fit takes milliseconds.
@@ -4536,8 +4551,8 @@ nothing. It runs on the GUI thread: a fit takes milliseconds.
 on the node, as the panel's Apply does: the switch with the proposal's request,
 followed by the retriangulation of every track the camera's images observe, in
 one version labelled as the direct switch with `and retriangulated its tracks`
-added. It takes none of the fit's arguments, which the proposal already states,
-and refuses them; a `camera_intrinsics_index`, when given, has to be the
+added. It takes none of the fit's arguments, `drop_per_image_adjustments`
+among them, which the proposal already states, and refuses them; a `camera_intrinsics_index`, when given, has to be the
 proposal's camera. Where the proposal's job already holds that version for the
 current generation (its `triangulation.state` is `ready`), it is installed at
 once on the GUI thread and the reply is an edit's, with the `fit` object.
@@ -4564,7 +4579,9 @@ a fit the core refused, a busy node or viewer, and a switch refused because a
     "camera_intrinsics_index": 0, "camera_model": "SFMTOOL_FISHEYE",
     "refit_spline": false,
     "request": { "camera_model": "SFMTOOL_FISHEYE", "coeff_count": 8,
-                 "theta_fit_deg": null, "spline_domain_deg": null },
+                 "theta_fit_deg": null, "spline_domain_deg": null,
+                 "drop_per_image_adjustments": [] },
+    "per_image_adjustment_drops": [],
     "generation": 1,
     "camera": { "camera_model": "SFMTOOL_FISHEYE", "width": 480, "height": 480,
                 "params": { … } },
@@ -4616,7 +4633,11 @@ its spline, and an omitted `coeff_count` is the camera's own count for its own
 spline model and 8 otherwise. Unlike the panel's Model list, the call takes a
 camera's own polynomial model, and `theta_fit_deg` on a spline camera's own
 model; the proposal it opens is the core's answer to that request, and the
-panel shows it as it was opened.
+panel shows it as it was opened. `drop_per_image_adjustments` ticks the
+panel's Drop per image boxes it names, each a parameter the camera varies;
+the drops the target requires are made whether it names them or not, so a
+camera whose images carry a radial correction or rates opens a fitted proposal
+for any target rather than a refused one.
 
 A call whose fit arguments equal the open proposal's keeps it and its
 `generation`; any other change refits and advances the generation. An unknown
@@ -4631,7 +4652,12 @@ ended first (§ "The editing family").
 
 The `proposed` block, which `get_camera_intrinsics` also carries for the
 camera, holds what the proposal was fitted from (`request`, `null` where the
-default holds), `refit_spline` for a spline camera's own model, its
+default holds, with `drop_per_image_adjustments` the drops the proposal makes,
+those asked for and those the target requires), `per_image_adjustment_drops`, the
+panel's Drop per image row (one `{ "parameter", "drop", "required" }` per
+per-image parameter the camera varies, `required` where the target cannot
+carry it, so the proposal drops it whatever the call asked), `refit_spline`
+for a spline camera's own model, its
 `generation`, the proposed `camera` as `get_camera_intrinsics` spells one, the
 `fit` report (`camera_model_before`, `camera_model_after`, `theta_fit_deg` and
 `theta_fit_source`, `spline_domain_deg`, `rms_px`, `radial_rms_px`, `max_px`,
@@ -7061,6 +7087,7 @@ Other candidates, in rough order of value:
 | `switch_camera_model` `camera_model` | the camera's own model | Which makes the call a refit of a spline camera's spline. |
 | `switch_camera_model` `coeff_count` | the camera's own count for its own spline model, else `8` (`DEFAULT_COEFF_COUNT`) | A refit changes only what it names. |
 | `switch_camera_model` `spline_domain_deg` | the camera's own domain end in a refit, else the far image corner | Kept exactly, not taken through degrees and back. |
+| `switch_camera_model` `drop_per_image_adjustments` | empty, every image keeps its own values | `propose_camera_model` adds the drops its target requires; the direct form refuses a kept parameter the target cannot carry. |
 | `propose_camera_model` arguments | as `switch_camera_model`'s | The proposal is the fit the direct form would make for the same arguments. |
 
 ## Open questions

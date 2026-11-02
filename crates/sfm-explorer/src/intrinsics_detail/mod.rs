@@ -239,6 +239,9 @@ impl IntrinsicsDetail {
                 }
                 ui.separator();
                 let mut proposed_camera = None;
+                // Which per-image parameters the proposed camera keeps and
+                // which it drops, for its table.
+                let mut proposed_note = None;
                 // The fit's largest angle and where its monotonicity
                 // constraint bound, for the change plot.
                 let mut fit_angles = None;
@@ -261,6 +264,13 @@ impl IntrinsicsDetail {
                             ));
                         }
                         proposed_camera = Some(refit.camera.clone());
+                        proposed_note = parameters::proposed_per_image_note(
+                            &sfmtool_core::reconstruction::switch_camera_model::varied_image_adjustments(
+                                &node.recon().image_set,
+                                index,
+                            ),
+                            &proposal.inputs.drop_image_adjustments,
+                        );
                         let monotone = refit.monotone_constraint;
                         fit_angles = Some((
                             refit.theta_fit_deg,
@@ -276,6 +286,7 @@ impl IntrinsicsDetail {
                             ui,
                             [(camera, derived), (proposed, &proposed_report.derived)],
                             per_image.as_ref(),
+                            proposed_note.as_deref(),
                             image,
                             aspect_row,
                         );
@@ -285,6 +296,7 @@ impl IntrinsicsDetail {
                             ui,
                             camera,
                             per_image.as_ref(),
+                            None,
                             image,
                             "current",
                         );
@@ -374,16 +386,20 @@ impl IntrinsicsDetail {
 /// table's widest row depends on the model and its numbers. The statistics of
 /// the camera's per-image values, `per_image`, are the images' and not either
 /// lens's, and are stated once, in the current camera's table, with their
-/// histograms, whose response is returned; `selected_image` as for
-/// [`parameters::show_parameters`].
+/// histograms, whose response is returned; the proposed camera's table says
+/// instead which of them the proposal keeps and which it drops,
+/// `proposed_note` ([`parameters::proposed_per_image_note`]).
+/// `selected_image` as for [`parameters::show_parameters`].
 fn compare_tables(
     ui: &mut egui::Ui,
     cameras: [(&sfmtool_core::camera::CameraIntrinsics, &Derived); 2],
     per_image: Option<&parameters::PerImage<'_>>,
+    proposed_note: Option<&str>,
     selected_image: Option<usize>,
     aspect_row: bool,
 ) -> histogram::HistogramResponse {
     let per_image_of = |k: usize| if k == 0 { per_image } else { None };
+    let note_of = |k: usize| if k == 0 { None } else { proposed_note };
     const SALTS: [&str; 2] = ["current", "proposed"];
     const HEADINGS: [&str; 2] = ["Current", "Proposed"];
     let needed = cameras
@@ -397,7 +413,14 @@ fn compare_tables(
                     .sizing_pass()
                     .invisible(),
             );
-            parameters::show_parameters(&mut sizing, camera, per_image_of(k), None, salt);
+            parameters::show_parameters(
+                &mut sizing,
+                camera,
+                per_image_of(k),
+                note_of(k),
+                None,
+                salt,
+            );
             parameters::show_derived(&mut sizing, camera, derived, salt, aspect_row);
             sizing.min_rect().width()
         })
@@ -416,6 +439,7 @@ fn compare_tables(
                     &mut columns[k],
                     camera,
                     per_image_of(k),
+                    note_of(k),
                     selected_image,
                     SALTS[k],
                 ));
@@ -437,6 +461,7 @@ fn compare_tables(
                 ui,
                 camera,
                 per_image_of(k),
+                note_of(k),
                 selected_image,
                 SALTS[k],
             ));

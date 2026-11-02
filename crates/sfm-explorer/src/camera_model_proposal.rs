@@ -13,7 +13,10 @@
 //! refits on the GUI thread with
 //! [`sfmtool_core::reconstruction::switch_camera_model::fit_camera_switch`],
 //! the fit the switch itself makes, so the camera the panel shows is the one
-//! Apply installs for the same request.
+//! Apply installs for the same request. A proposal can drop per-image
+//! parameters first, and must drop those its target cannot carry
+//! ([`CameraModelProposal::drop_choices`]); the fit is then of the camera the
+//! drops leave.
 //!
 //! The endings are the lock's: Apply and Cancel; selecting another node, closing
 //! the node or an MCP edit tool naming it apply the proposal when its fit
@@ -26,9 +29,12 @@ use sfmtool_core::camera::refit_intrinsics::{
     spline_domain_deg, CameraIntrinsicsRefit, RefitOptions, RefitTarget, ThetaFitSource,
 };
 use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
+use sfmtool_core::reconstruction::drop_image_adjustments::drop_image_adjustments;
 use sfmtool_core::reconstruction::outermost_keypoint::KeypointReach;
 use sfmtool_core::reconstruction::switch_camera_model::{
-    default_fit_angle, fit_camera_switch, CameraSwitch,
+    default_fit_angle, fit_camera_switch, image_adjustments_carried, varied_image_adjustments,
+    CameraSwitch, CarriedImageAdjustment,
 };
 use sfmtool_core::{RowMap, SfmrReconstruction};
 
@@ -123,6 +129,11 @@ pub(crate) struct ProposalInputs {
     /// camera's own domain end for its own spline model, the far image corner
     /// otherwise.
     pub(crate) spline_domain_deg: Option<f64>,
+    /// The per-image parameters the camera drops before the fit, in
+    /// [`ImageAdjustmentParameter::ALL`] order: those ticked in the strip's
+    /// Drop per image row, and those the target cannot carry, which every
+    /// proposal drops ([`CameraModelProposal::drop_choices`]).
+    pub(crate) drop_image_adjustments: Vec<ImageAdjustmentParameter>,
 }
 
 /// Where the preview's triangulation stands for a proposal's current
@@ -183,6 +194,12 @@ pub(crate) struct CameraModelProposal {
     /// The value the fits read: the version's base, or its materialisation
     /// when it carries point edits, made once.
     value: Arc<SfmrReconstruction>,
+    /// `value` with the drops of the current inputs made, which the fit and
+    /// the proposed reprojections read, and the drops it was made with; the
+    /// very `value` while nothing is dropped.
+    dropped: (Vec<ImageAdjustmentParameter>, Arc<SfmrReconstruction>),
+    /// The drops chosen rather than required ([`Self::chosen_drops`]).
+    ticked_drops: Vec<ImageAdjustmentParameter>,
     /// The materialisation's row map, so a refusal naming a point names it by
     /// the index the version on screen gives it; `None` for the base itself.
     rows: Option<RowMap>,
@@ -346,13 +363,14 @@ impl CameraModelProposal {
             coeff_count,
             theta_fit_deg: None,
             spline_domain_deg: None,
+            drop_image_adjustments: Vec::new(),
         }
     }
 
-    /// `inputs` as the core is asked for them: a domain equal to the camera's
-    /// own in a refit of its spline is the default, so an untouched field keeps
-    /// the domain bit for bit.
-    fn normalised(&self, mut inputs: ProposalInputs) -> ProposalInputs {
+    /// `inputs`' fit as the core is asked for it: a domain equal to the
+    /// camera's own in a refit of its spline is the default, so an untouched
+    /// field keeps the domain bit for bit.
+    fn normalised_fit(&self, mut inputs: ProposalInputs) -> ProposalInputs {
         if self.is_spline_refit(inputs.camera_model) {
             if let (Some(given), Some(own)) = (inputs.spline_domain_deg, self.source_domain_deg()) {
                 if (given - own).abs() <= 1e-9 {
@@ -366,17 +384,98 @@ impl CameraModelProposal {
         inputs
     }
 
+    /// `inputs` as the core is asked for them: the fit's normalised, and the
+    /// drops those the camera varies, with those the target cannot carry
+    /// added, in [`ImageAdjustmentParameter::ALL`] order.
+    fn normalised(&self, inputs: ProposalInputs) -> ProposalInputs {
+        let mut inputs = self.normalised_fit(inputs);
+        let choices = self.drop_choices(&inputs);
+        inputs.drop_image_adjustments = choices
+            .iter()
+            .filter(|c| !c.carried || inputs.drop_image_adjustments.contains(&c.parameter))
+            .map(|c| c.parameter)
+            .collect();
+        inputs
+    }
+
+    /// The strip's Drop per image row for `inputs`: each per-image parameter
+    /// the camera varies, in [`ImageAdjustmentParameter::ALL`] order, and
+    /// whether the switch `inputs` asks for carries it. One it does not
+    /// carry is dropped whatever the row says. Empty for a camera that varies
+    /// nothing per image. A target the core does not know carries
+    /// everything, since its fit is refused before anything is dropped.
+    pub(crate) fn drop_choices(&self, inputs: &ProposalInputs) -> Vec<CarriedImageAdjustment> {
+        let inputs = self.normalised_fit(inputs.clone());
+        let carried = RefitTarget::from_name(inputs.camera_model, inputs.coeff_count)
+            .ok()
+            .and_then(|target| {
+                let options = RefitOptions {
+                    theta_fit_deg: inputs.theta_fit_deg,
+                    spline_domain_deg: inputs.spline_domain_deg,
+                };
+                image_adjustments_carried(&self.value, self.camera, &target, &options).ok()
+            });
+        carried.unwrap_or_else(|| {
+            varied_image_adjustments(&self.value.image_set, self.camera)
+                .into_iter()
+                .map(|parameter| CarriedImageAdjustment {
+                    parameter,
+                    carried: true,
+                })
+                .collect()
+        })
+    }
+
+    /// The drops chosen rather than required: the boxes the person ticked,
+    /// or the wire named, kept apart from the ones a target forces, so a
+    /// tick survives a target that forces the same drop and is there again
+    /// once a target that carries the parameter is chosen. What the strip's
+    /// boxes start from each frame, and what a change of model carries over.
+    pub(crate) fn chosen_drops(&self) -> Vec<ImageAdjustmentParameter> {
+        self.ticked_drops.clone()
+    }
+
+    /// The value the current inputs' fit reads: `value` with their drops
+    /// made, made again only when the drops change. `Err` is the drop's
+    /// refusal sentence.
+    fn refresh_dropped(&mut self) -> Result<(), String> {
+        let drops = &self.inputs.drop_image_adjustments;
+        if self.dropped.0 == *drops {
+            return Ok(());
+        }
+        let value = if drops.is_empty() {
+            Arc::clone(&self.value)
+        } else {
+            match drop_image_adjustments(&self.value, self.camera, drops) {
+                Ok(value) => Arc::new(value),
+                Err(e) => {
+                    self.dropped = (Vec::new(), Arc::clone(&self.value));
+                    return Err(e.to_string());
+                }
+            }
+        };
+        self.dropped = (drops.clone(), value);
+        Ok(())
+    }
+
     /// Change what the proposal is fitted from, refitting when the inputs
     /// changed. Returns whether they did, which is when the generation
     /// advances.
     pub(crate) fn set_inputs(&mut self, inputs: ProposalInputs) -> bool {
+        // The ticks are the drops asked for, before the target's forced ones
+        // are added, in `ALL` order and among the parameters the camera varies.
+        let varied = varied_image_adjustments(&self.value.image_set, self.camera);
+        self.ticked_drops = varied
+            .into_iter()
+            .filter(|p| inputs.drop_image_adjustments.contains(p))
+            .collect();
         let inputs = self.normalised(inputs);
         if inputs == self.inputs {
             return false;
         }
         self.inputs = inputs;
         self.generation = next_generation();
-        self.fit = self.compute_fit();
+        self.fit = self.refresh_dropped().and_then(|()| self.compute_fit());
         if let Ok(refit) = &self.fit {
             if self.inputs.spline_domain_deg.is_none()
                 && !self.is_spline_refit(self.inputs.camera_model)
@@ -407,7 +506,8 @@ impl CameraModelProposal {
             .or(self.theta_fit_default.map(|(deg, _)| deg))
     }
 
-    /// The fit the current inputs ask for, as the switch would make it.
+    /// The fit the current inputs ask for, as the switch would make it: of
+    /// the camera the drops leave.
     fn compute_fit(&self) -> Result<CameraIntrinsicsRefit, String> {
         let target = RefitTarget::from_name(self.inputs.camera_model, self.inputs.coeff_count)
             .map_err(|e| format!("camera {}: {e}", self.camera))?;
@@ -415,7 +515,7 @@ impl CameraModelProposal {
             theta_fit_deg: self.inputs.theta_fit_deg,
             spline_domain_deg: self.inputs.spline_domain_deg,
         };
-        fit_camera_switch(&self.value, self.camera, &target, &options).map_err(|e| {
+        fit_camera_switch(&self.dropped.1, self.camera, &target, &options).map_err(|e| {
             crate::state::edits::switch_refusal_in_version_numbering(e, self.rows.as_ref())
                 .to_string()
         })
@@ -434,6 +534,7 @@ impl CameraModelProposal {
             coeff_count: self.inputs.coeff_count,
             spline_domain_deg: self.inputs.spline_domain_deg,
             theta_fit_deg: self.inputs.theta_fit_deg,
+            drop_image_adjustments: self.inputs.drop_image_adjustments.clone(),
         }
     }
 
@@ -674,6 +775,8 @@ impl AppState {
             label: node.label.clone(),
             opened_on: node.history.current_version().document_serial,
             source,
+            dropped: (Vec::new(), Arc::clone(&value)),
+            ticked_drops: Vec::new(),
             value,
             rows,
             keypoint_extent,
@@ -685,6 +788,7 @@ impl AppState {
                 coeff_count: None,
                 theta_fit_deg: None,
                 spline_domain_deg: None,
+                drop_image_adjustments: Vec::new(),
             },
             generation: 0,
             fit: Err(String::new()),
@@ -898,8 +1002,17 @@ fn opened_text(proposal: &CameraModelProposal) -> String {
         Ok(refit) => fit_report_line(refit),
         Err(why) => format!("refused: {why}"),
     };
+    let drops = &proposal.inputs.drop_image_adjustments;
+    let dropping = if drops.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", dropping per-image {}",
+            crate::state::edits::per_image_parameter_list(drops)
+        )
+    };
     format!(
-        "Proposed {target} for camera {} of {}: {fit}",
+        "Proposed {target} for camera {} of {}{dropping}: {fit}",
         proposal.camera, proposal.label
     )
 }

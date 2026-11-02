@@ -959,6 +959,7 @@ fn switch_camera_model_parses_its_request() {
                 coeff_count: Some(10),
                 spline_domain_deg: Some(108.0),
                 theta_fit_deg: Some(80.0),
+                drop_image_adjustments: Vec::new(),
             },
         }
     );
@@ -1087,6 +1088,230 @@ fn switch_camera_model_refuses_naming_the_camera() {
     );
     assert!(error.0.contains("camera 0"), "{error}");
     assert!(error.0.contains("spline domain"), "{error}");
+    assert_eq!(version_count(&state), 1);
+}
+
+/// `run_a`'s camera 0 made `SFMTOOL_PINHOLE`, with image 2 carrying a radial
+/// correction and rolling-shutter rates and the camera varying all four
+/// per-image parameters.
+fn with_lens_corrections_on_camera_0(state: &mut AppState) {
+    use crate::test_support::{as_sfmtool_pinhole, with_lens_corrections, LENS_CORRECTIONS};
+    let recon = state.scene[0].recon_mut();
+    let pinhole = as_sfmtool_pinhole(recon.clone());
+    *recon = with_lens_corrections(
+        pinhole,
+        2,
+        LENS_CORRECTIONS,
+        sfmtool_core::camera::RollingShutterScanlines::Rows,
+    );
+}
+
+/// `drop_per_image_adjustments` names per-image parameters by the camera's
+/// `per_image_adjustments` words; an unknown word, one named twice, one the
+/// camera does not vary, a value that is not an array, and the argument in the
+/// proposal form are refused, and push nothing.
+#[test]
+fn switch_camera_model_checks_its_drops() {
+    let (mut state, mut viewer) = editable();
+    with_lens_corrections_on_camera_0(&mut state);
+    let switch = |drops: Value| {
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_FISHEYE",
+            "drop_per_image_adjustments": drops,
+        })
+    };
+    for (drops, needle) in [
+        (json!(["shutter"]), "got \"shutter\""),
+        (json!(["focal", "focal"]), "names \"focal\" twice"),
+        (json!("focal"), "an array of"),
+        (json!([3]), "an array of"),
+    ] {
+        let error = refused_call(
+            &mut state,
+            &mut viewer,
+            "switch_camera_model",
+            switch(drops),
+        );
+        assert!(error.0.contains(needle), "{needle}: {error}");
+    }
+    let map = json!({
+        "reconstruction_label": "run_a",
+        "proposal": true,
+        "drop_per_image_adjustments": ["focal"],
+    })
+    .as_object()
+    .cloned()
+    .expect("an object");
+    let error = tools::parse("switch_camera_model", Some(&map)).expect_err("the proposal form");
+    assert!(
+        error.0.contains("takes no drop_per_image_adjustments"),
+        "{error}"
+    );
+    assert_eq!(version_count(&state), 1);
+
+    // A camera that varies nothing per image has nothing to drop.
+    let (mut state, mut viewer) = editable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "drop_per_image_adjustments": ["principal_point"],
+        }),
+    );
+    assert!(
+        error
+            .0
+            .contains("camera 0 does not vary its principal point per image"),
+        "{error}"
+    );
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "drop_per_image_adjustments": ["focal"],
+        }),
+    );
+    assert!(error.0.contains("does not vary its focal"), "{error}");
+    assert!(state.camera_model_proposal.is_none());
+    assert_eq!(version_count(&state), 1);
+}
+
+/// A switch to a model that cannot carry the radial correction and the
+/// rates is refused while they are kept, and with them dropped it switches,
+/// naming the drops in the label and the fit.
+#[test]
+fn switch_camera_model_drops_what_it_is_asked_to() {
+    let (mut state, mut viewer) = editable();
+    with_lens_corrections_on_camera_0(&mut state);
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_FISHEYE",
+            "drop_per_image_adjustments": ["radial_bspline"],
+        }),
+    );
+    assert!(error.0.contains("rolling-shutter rates"), "{error}");
+    assert!(error.0.contains("drop them per image"), "{error}");
+    assert_eq!(version_count(&state), 1);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_FISHEYE",
+            "drop_per_image_adjustments": ["rolling_shutter", "radial_bspline"],
+        }),
+    );
+    assert_eq!(
+        reply["label"],
+        "Switched camera 0 of run_a from SFMTOOL_PINHOLE to SFMTOOL_FISHEYE, dropped \
+         per-image radial correction and rolling-shutter rates"
+    );
+    assert_eq!(
+        reply["fit"]["dropped_per_image_adjustments"],
+        json!(["radial_bspline", "rolling_shutter"])
+    );
+    let flags = state.scene[0]
+        .recon()
+        .image_set
+        .camera_per_image_adjustments(0);
+    assert!(flags.focal && flags.principal_point);
+    assert!(!flags.radial_bspline && !flags.rolling_shutter);
+    assert_eq!(version_count(&state), 2);
+}
+
+/// The proposed block lists each per-image parameter the camera varies with
+/// whether the proposal drops it and whether the target requires it; a target
+/// that cannot carry the corrections drops them on its own, and a refit that
+/// can keeps them unless asked.
+#[test]
+fn propose_camera_model_reports_and_takes_its_drops() {
+    let (mut state, mut viewer) = editable();
+    with_lens_corrections_on_camera_0(&mut state);
+    let entries = |proposed: &Value| -> Vec<(String, bool, bool)> {
+        proposed["per_image_adjustment_drops"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|e| {
+                (
+                    e["parameter"].as_str().unwrap().to_string(),
+                    e["drop"].as_bool().unwrap(),
+                    e["required"].as_bool().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let owned = |rows: &[(&str, bool, bool)]| -> Vec<(String, bool, bool)> {
+        rows.iter()
+            .map(|&(p, d, r)| (p.to_string(), d, r))
+            .collect()
+    };
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "camera_model": "SFMTOOL_FISHEYE",
+        }),
+    );
+    let proposed = &reply["proposed"];
+    assert_eq!(
+        entries(proposed),
+        owned(&[
+            ("focal", false, false),
+            ("principal_point", false, false),
+            ("radial_bspline", true, true),
+            ("rolling_shutter", true, true),
+        ])
+    );
+    assert_eq!(
+        proposed["request"]["drop_per_image_adjustments"],
+        json!(["radial_bspline", "rolling_shutter"])
+    );
+    assert_eq!(proposed["refusal"], Value::Null, "{proposed}");
+
+    // The camera's own spline model keeps the corrections, and drops what
+    // the call names.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "drop_per_image_adjustments": ["principal_point"],
+        }),
+    );
+    let proposed = &reply["proposed"];
+    assert_eq!(proposed["refit_spline"], true);
+    assert_eq!(
+        entries(proposed),
+        owned(&[
+            ("focal", false, false),
+            ("principal_point", true, false),
+            ("radial_bspline", false, false),
+            ("rolling_shutter", false, false),
+        ])
+    );
+    assert_eq!(proposed["refusal"], Value::Null, "{proposed}");
     assert_eq!(version_count(&state), 1);
 }
 

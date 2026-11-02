@@ -656,6 +656,21 @@ pub enum ImageAdjustmentParameter {
 }
 
 impl ImageAdjustmentParameter {
+    /// Every parameter, in the order a camera's `per_image_adjustments` lists
+    /// them.
+    pub const ALL: [ImageAdjustmentParameter; 4] = [
+        ImageAdjustmentParameter::Focal,
+        ImageAdjustmentParameter::PrincipalPoint,
+        ImageAdjustmentParameter::RadialBspline,
+        ImageAdjustmentParameter::RollingShutter,
+    ];
+
+    /// The parameter [`Self::name`] calls `name`, or `None` for any other
+    /// word.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
+    }
+
     /// The parameter's name on every surface: `"focal"`,
     /// `"principal_point"`, `"radial_bspline"` or `"rolling_shutter"`, the
     /// words a camera's `per_image_adjustments` list.

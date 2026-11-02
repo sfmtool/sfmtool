@@ -1066,13 +1066,21 @@ field is read off the last frame because egui drops the keyboard focus on an
 `Escape` as the next frame begins, before the panel draws. Each control is a
 row of its own that wraps, so at a narrow panel what follows a control (the
 camera's own value, the default and its `Default` button) moves to the next
-line and stays on screen. The panel showing another
+line and stays on screen. A camera that varies parameters per image gets a
+**Drop per image** row of checkboxes, one per parameter, in the words of the
+`per image` summary; one the target cannot carry is ticked and greyed
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Dropping
+per-image parameters"). The panel showing another
 camera of the node shows no strip.
 
 While the strip is shown and the fit succeeded, the **Parameters** and
 **Derived** tables are drawn twice, under `Current` and `Proposed`: the current
 camera's and the proposed one's, the per-image statistics in the current one's
-alone (§ "2. Parameters"). They are side by side when the panel is wide
+alone (§ "2. Parameters"). The proposed one's Parameters heading carries a line
+naming the per-image parameters the proposal keeps, whose values the switch
+leaves as they are, and those it drops: `Per image, unchanged from Current:
+focal and principal point. Dropped per image: radial correction and
+rolling-shutter rates.` They are side by side when the panel is wide
 enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
 The two derived tables both carry the aspect row when either camera has two
@@ -1997,9 +2005,9 @@ need a scanline count the file does not hold. The
 focal's mean is the geometric mean of `1 + s`, the value the bundle
 adjustment re-centres to and a drop folds, so the panel's mean is the one an
 operation acts on. A camera that varies nothing per image keeps the table it
-always had. Step 4 of
-[per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md) offers to
-drop each parameter in operations such as Switch Camera Model.
+always had. Switch Camera Model's proposal offers to drop each parameter
+([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Dropping
+per-image parameters").
 
 **A per-image histogram's bin selects one image per click** (2026-11-01). Each
 `per image` row draws a histogram of its values (§ "2. Parameters"), and a

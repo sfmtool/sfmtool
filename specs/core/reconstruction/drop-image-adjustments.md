@@ -28,7 +28,14 @@ The function lives in
 as `sfmtool_core::reconstruction::drop_image_adjustments`, and is bound as
 `SfmrReconstruction.drop_image_adjustments`
 ([drop_image_adjustments.rs](../../../crates/sfmtool-py/src/reconstruction/drop_image_adjustments.rs)).
-The viewer and the CLI do not call it yet; how they will is proposed in
+`switch_camera_model` calls it for the per-image parameters its
+`drop_image_adjustments` option names
+([switch-camera-model.md § The drops](switch-camera-model.md#the-drops)),
+which is how the viewer's Switch Camera Model proposal and MCP
+`switch_camera_model` drop them
+([../../gui/edits/switch-camera-model.md § Dropping per-image
+parameters](../../gui/edits/switch-camera-model.md#dropping-per-image-parameters)).
+The CLI does not call it yet; how it will is proposed in
 [per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
 
 ```rust

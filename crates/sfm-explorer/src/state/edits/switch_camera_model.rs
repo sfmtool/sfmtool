@@ -24,8 +24,10 @@ use std::time::Instant;
 use sfmtool_core::camera::refit_intrinsics::{
     spline_domain_deg, MonotoneConstraint, RefitError, RefitOptions, RefitTarget,
 };
+use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
 use sfmtool_core::reconstruction::switch_camera_model::{
-    switch_camera_model, CameraSwitch, SwitchCameraModelError, SwitchCameraModelOptions,
+    switch_camera_model, varied_image_adjustments, CameraSwitch, SwitchCameraModelError,
+    SwitchCameraModelOptions,
 };
 use sfmtool_core::reconstruction::{
     retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateWhich,
@@ -62,6 +64,76 @@ pub(crate) struct SwitchCameraModelRequest {
     /// default. Given, it makes even a refit of a spline an ordinary fit over
     /// that angle.
     pub(crate) theta_fit_deg: Option<f64>,
+    /// The per-image parameters the camera drops before the fit, each one it
+    /// varies; empty keeps every image's adjustment.
+    pub(crate) drop_image_adjustments: Vec<ImageAdjustmentParameter>,
+}
+
+/// What the panel calls a per-image parameter: `focal`, `principal point`,
+/// `radial correction` and `rolling-shutter rates`, the words its `per image`
+/// summary uses.
+pub(crate) fn per_image_parameter_words(parameter: ImageAdjustmentParameter) -> &'static str {
+    match parameter {
+        ImageAdjustmentParameter::Focal => "focal",
+        ImageAdjustmentParameter::PrincipalPoint => "principal point",
+        ImageAdjustmentParameter::RadialBspline => "radial correction",
+        ImageAdjustmentParameter::RollingShutter => "rolling-shutter rates",
+    }
+}
+
+/// `principal point`, `focal and principal point`, `focal, principal point and
+/// radial correction`: the parameters in the panel's words, as a list.
+pub(crate) fn per_image_parameter_list(parameters: &[ImageAdjustmentParameter]) -> String {
+    let words: Vec<&str> = parameters
+        .iter()
+        .map(|&p| per_image_parameter_words(p))
+        .collect();
+    match words.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.to_string(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// Why `drops` cannot be asked of camera `camera` of `recon`, or `None`: each
+/// parameter named has to be one the camera varies, so a request never names
+/// a drop that would do nothing.
+pub(crate) fn drop_refusal(
+    recon: &SfmrReconstruction,
+    camera: usize,
+    drops: &[ImageAdjustmentParameter],
+) -> Option<String> {
+    let varied = varied_image_adjustments(&recon.image_set, camera);
+    let missing: Vec<ImageAdjustmentParameter> = drops
+        .iter()
+        .copied()
+        .filter(|p| !varied.contains(p))
+        .collect();
+    (!missing.is_empty()).then(|| {
+        let varies = if varied.is_empty() {
+            "nothing per image".to_string()
+        } else {
+            format!("only its {} per image", per_image_parameter_list(&varied))
+        };
+        format!(
+            "camera {camera} does not vary its {} per image, so there is nothing to drop; it \
+             varies {varies}",
+            per_image_parameter_list(&missing)
+        )
+    })
+}
+
+/// The version label's clause naming what the switch dropped,
+/// `, dropped per-image principal point`, or nothing.
+fn dropped_clause(entry: &CameraSwitch) -> String {
+    if entry.dropped_image_adjustments.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", dropped per-image {}",
+            per_image_parameter_list(&entry.dropped_image_adjustments)
+        )
+    }
 }
 
 /// The monotonicity constraint's clause of a log row: empty when it did not
@@ -122,17 +194,35 @@ pub(crate) fn switch_refusal_in_version_numbering(
 /// A refit of a spline reads `Refit spline of camera 0 of kerry: 8 → 10
 /// coefficients, domain 150.0° → 108.0°`, naming each of the two only as
 /// "kept" where it did not move; a change of model reads `Switched camera 0 of
-/// kerry from OPENCV_FISHEYE to SFMTOOL_FISHEYE`.
+/// kerry from OPENCV_FISHEYE to SFMTOOL_FISHEYE`. A switch that dropped
+/// per-image parameters first names them at the end, `…, dropped per-image
+/// principal point`.
 pub(crate) fn switch_label(label: &str, entry: &CameraSwitch) -> String {
     let (source, target, c) = (&entry.source, &entry.refit.camera, entry.camera);
+    let dropped = dropped_clause(entry);
     match refit_change(source, target) {
-        Some(change) => format!("Refit spline of camera {c} of {label}: {change}"),
+        Some(change) => format!("Refit spline of camera {c} of {label}: {change}{dropped}"),
         None => format!(
-            "Switched camera {c} of {label} from {} to {}",
+            "Switched camera {c} of {label} from {} to {}{dropped}",
             source.model_name(),
             target.model_name()
         ),
     }
+}
+
+/// The proposal's version label: [`switch_label`] with `and retriangulated
+/// its tracks` added, after a comma where the label already lists a drop, so
+/// the tracks do not read as one of the parameters dropped.
+fn switch_and_retriangulate_label(label: &str, entry: &CameraSwitch) -> String {
+    let joint = if entry.dropped_image_adjustments.is_empty() {
+        " and"
+    } else {
+        ", and"
+    };
+    format!(
+        "{}{joint} retriangulated its tracks",
+        switch_label(label, entry)
+    )
 }
 
 /// What a refit of a spline changes, `8 → 10 coefficients, domain 150.0° →
@@ -270,7 +360,11 @@ impl AppState {
         };
         let target = RefitTarget::from_name(&camera_model, coeff_count)
             .map_err(|e| refuse(format!("camera {c}: {e}")))?;
+        if let Some(why) = drop_refusal(node.recon(), c, &request.drop_image_adjustments) {
+            return Err(refuse(why));
+        }
         let options = SwitchCameraModelOptions {
+            drop_image_adjustments: request.drop_image_adjustments.clone(),
             refit: RefitOptions {
                 theta_fit_deg: request.theta_fit_deg,
                 spline_domain_deg: request.spline_domain_deg,
@@ -596,10 +690,7 @@ pub(crate) fn switch_and_retriangulate(
         Err(RetriangulateError::Cancelled) => return Err(SwitchEnd::Cancelled),
         Err(e) => return Err(refuse(e.to_string())),
     };
-    let version_label = format!(
-        "{} and retriangulated its tracks",
-        switch_label(label, &entry)
-    );
+    let version_label = switch_and_retriangulate_label(label, &entry);
     let text = format!(
         "{version_label}: {}; {}",
         switch_report_text(&entry),
@@ -675,6 +766,95 @@ pub(crate) fn tracks_of_camera(recon: &SfmrReconstruction, camera: usize) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A switch that dropped per-image parameters names them at the end of
+    /// its label, in the panel's words, and Apply's label puts a comma before
+    /// the retriangulation so the tracks do not read as one of them; a switch
+    /// that dropped nothing reads as before.
+    #[test]
+    fn the_label_names_what_was_dropped() {
+        use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+        let node = crate::scene_graph::tests::resectable_node("/runs/run_a.sfmr");
+        let recon = crate::test_support::with_adjustment(
+            crate::test_support::as_sfmtool_pinhole(node.recon().clone()),
+            1,
+            sfmtool_core::IntrinsicAdjustment {
+                focal: 0.01,
+                principal_point: [0.002, -0.001],
+                ..Default::default()
+            },
+        );
+        let camera = recon.image_set.images[1].camera_index as usize;
+        let target = RefitTarget::from_name("SFMTOOL_PINHOLE", None).unwrap();
+        let switch = |drops: Vec<ImageAdjustmentParameter>| {
+            let options = SwitchCameraModelOptions {
+                drop_image_adjustments: drops,
+                outermost_keypoint: false,
+                ..SwitchCameraModelOptions::default()
+            };
+            switch_camera_model(&recon, &[camera], &target, &options)
+                .map(|(_, report)| report.cameras.into_iter().next().unwrap())
+                .map_err(|e| e.to_string())
+                .unwrap()
+        };
+        let kept = switch(Vec::new());
+        assert_eq!(
+            switch_label("run_a", &kept),
+            format!(
+                "Refit spline of camera {camera} of run_a: 4 coefficients kept, domain 50.2° kept"
+            )
+        );
+        assert_eq!(
+            switch_and_retriangulate_label("run_a", &kept),
+            format!(
+                "Refit spline of camera {camera} of run_a: 4 coefficients kept, domain 50.2° \
+                 kept and retriangulated its tracks"
+            )
+        );
+        let dropped = switch(vec![Focal, PrincipalPoint]);
+        assert_eq!(
+            switch_label("run_a", &dropped),
+            format!(
+                "Refit spline of camera {camera} of run_a: 4 coefficients kept, domain 50.2° \
+                 kept, dropped per-image focal and principal point"
+            )
+        );
+        assert_eq!(
+            switch_and_retriangulate_label("run_a", &dropped),
+            format!(
+                "Refit spline of camera {camera} of run_a: 4 coefficients kept, domain 50.2° \
+                 kept, dropped per-image focal and principal point, and retriangulated its \
+                 tracks"
+            )
+        );
+        assert_eq!(
+            per_image_parameter_list(&[Focal, PrincipalPoint, RollingShutter]),
+            "focal, principal point and rolling-shutter rates"
+        );
+    }
+
+    /// A drop has to name a parameter the camera varies.
+    #[test]
+    fn a_drop_of_a_parameter_the_camera_does_not_vary_is_refused() {
+        use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+        let node = crate::scene_graph::tests::resectable_node("/runs/run_a.sfmr");
+        let recon = crate::test_support::with_adjustment(
+            node.recon().clone(),
+            0,
+            sfmtool_core::IntrinsicAdjustment {
+                focal: 0.01,
+                ..Default::default()
+            },
+        );
+        let camera = recon.image_set.images[0].camera_index as usize;
+        assert_eq!(drop_refusal(&recon, camera, &[Focal, PrincipalPoint]), None);
+        let why = drop_refusal(&recon, camera, &[RadialBspline]).expect("refused");
+        assert!(
+            why.contains("does not vary its radial correction per image")
+                && why.contains("only its focal and principal point per image"),
+            "{why}"
+        );
+    }
 
     /// A refusal naming a point of the materialised value names it by the
     /// index the version on screen gives it: with point 2 deleted, the

@@ -150,6 +150,7 @@ fn a_spline_cameras_proposal_opens_as_the_refit_of_its_spline() {
             coeff_count: Some(4),
             spline_domain_deg: None,
             theta_fit_deg: None,
+            drop_image_adjustments: Vec::new(),
         }
     );
     // The domain field set back to the camera's own is untouched.
@@ -403,6 +404,7 @@ fn a_refused_fit_is_shown_and_cannot_be_applied() {
         coeff_count: Some(4),
         theta_fit_deg: None,
         spline_domain_deg: Some(95.0),
+        drop_image_adjustments: Vec::new(),
     };
     state
         .open_camera_model_proposal(CameraRef::new(id, 1), Some(inputs))
@@ -449,6 +451,7 @@ fn selecting_another_node_applies_the_proposal_and_drops_a_refused_one() {
         coeff_count: Some(4),
         theta_fit_deg: None,
         spline_domain_deg: Some(95.0),
+        drop_image_adjustments: Vec::new(),
     };
     state
         .open_camera_model_proposal(CameraRef::new(id, 1), Some(inputs))
@@ -1102,9 +1105,66 @@ fn an_adjusted_images_observations_are_reprojected_with_its_adjustment() {
     }
 }
 
+/// A proposal that drops a per-image parameter reprojects each image under
+/// the proposed camera through what the drop leaves of its adjustment, while
+/// the current reprojection keeps the adjustment the image has.
+#[test]
+fn a_dropped_parameter_leaves_the_proposed_reprojection() {
+    use crate::test_support::ADJUSTMENT;
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
+
+    let mut node = fisheye_node("/runs/kerry.sfmr");
+    node.recon_mut().image_set.images[2].intrinsic_adjustment = ADJUSTMENT;
+    let mut state = AppState::new();
+    state.append_node(node);
+    let id = state.scene[0].id;
+    state
+        .open_camera_model_proposal(CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_mut().expect("open");
+    let mut inputs = proposal.inputs.clone();
+    inputs.drop_image_adjustments = vec![ImageAdjustmentParameter::PrincipalPoint];
+    assert!(proposal.set_inputs(inputs));
+    let proposal = state.camera_model_proposal.as_ref().expect("open");
+    let recon = state.scene[0].recon();
+    let refit = proposal.fit.as_ref().expect("a fitted camera");
+    let current = recon.image_set.image_intrinsics(2);
+    let left = sfmtool_core::IntrinsicAdjustment {
+        principal_point: [0.0; 2],
+        ..ADJUSTMENT
+    };
+    let proposed = refit.camera.with_adjustment(&left, None);
+    let kept = refit.camera.with_adjustment(&ADJUSTMENT, None);
+    let pose = crate::scene::cam_from_world(&recon.image_set.images[2]);
+    let rows: Vec<usize> = (0..recon.point_set.tracks.len())
+        .filter(|&r| recon.point_set.tracks[r].image_index == 2)
+        .collect();
+    let layer = proposal.image_reprojections(2);
+    assert_eq!(layer.len(), rows.len());
+    let xy = recon.keypoints_xy().expect("inline keypoints");
+    let mut moved = false;
+    for &row in &rows {
+        let keypoint = [f64::from(xy[[row, 0]]), f64::from(xy[[row, 1]])];
+        let observation = layer
+            .iter()
+            .find(|o| o.keypoint == keypoint)
+            .expect("the observation");
+        let point = &recon.point_set.points[recon.point_set.tracks[row].point_index as usize];
+        let project = |camera: &sfmtool_core::CameraIntrinsics| {
+            camera.project_homogeneous(&pose, point.position.coords, point.w)
+        };
+        assert_eq!(observation.current, project(&current));
+        assert_eq!(observation.proposed, project(&proposed));
+        moved |= observation.proposed != project(&kept);
+    }
+    assert!(moved, "the drop moved no proposed reprojection");
+}
+
 /// A proposal on a camera whose images carry a radial correction and
-/// rolling-shutter rates opens without panicking: the switch refuses the fit,
-/// and the observation layer reprojects under the current camera through the
+/// rolling-shutter rates opens without panicking: its own model's refit
+/// carries them, the fixture's point 95° off the axis refuses that
+/// perspective fit, and the observation layer reprojects under the current
+/// camera through the
 /// image's corrected intrinsics, with no proposed reprojection.
 #[test]
 fn a_corrected_images_observations_are_reprojected_through_its_corrections() {
@@ -1128,7 +1188,8 @@ fn a_corrected_images_observations_are_reprojected_through_its_corrections() {
         .open_camera_model_proposal(CameraRef::new(id, 0), None)
         .expect("opens");
     let proposal = state.camera_model_proposal.as_ref().expect("open");
-    assert!(proposal.fit.is_err(), "the switch refuses lens corrections");
+    let why = proposal.fit.as_ref().expect_err("refused");
+    assert!(why.contains("90° or more"), "{why}");
     let recon = state.scene[0].recon();
     let current = recon.image_set.image_intrinsics(2);
     assert!(current.rolling_shutter.is_some());

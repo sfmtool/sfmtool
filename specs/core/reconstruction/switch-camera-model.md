@@ -52,7 +52,19 @@ pub fn default_fit_angle(
     camera: usize,
 ) -> Result<(f64, ThetaFitSource), SwitchCameraModelError>;
 
+pub fn varied_image_adjustments(image_set: &ImageSet, camera: usize) -> Vec<ImageAdjustmentParameter>;
+
+pub fn image_adjustments_carried(
+    recon: &SfmrReconstruction,
+    camera: usize,
+    target: &RefitTarget,
+    options: &RefitOptions,
+) -> Result<Vec<CarriedImageAdjustment>, SwitchCameraModelError>;
+
+pub struct CarriedImageAdjustment { pub parameter: ImageAdjustmentParameter, pub carried: bool }
+
 pub struct SwitchCameraModelOptions {
+    pub drop_image_adjustments: Vec<ImageAdjustmentParameter>, // default empty: every image keeps its own
     pub refit: RefitOptions,       // the lens fit's: theta_fit_deg, spline_domain_deg
     pub outermost_keypoint: bool,  // default true
 }
@@ -63,7 +75,8 @@ pub struct SwitchCameraModelReport {
 
 pub struct CameraSwitch {
     pub camera: usize,
-    pub source: CameraIntrinsics,
+    pub source: CameraIntrinsics,              // before any drop
+    pub dropped_image_adjustments: Vec<ImageAdjustmentParameter>,
     pub refit: CameraIntrinsicsRefit,          // carries the new camera
     pub images: usize,
     pub observations: ObservationComparison,
@@ -90,6 +103,8 @@ pub enum SwitchCameraModelError {
     UnknownCamera { camera: usize, count: usize },
     Refit { camera: usize, error: RefitError },
     Observations(String),
+    LensCorrections { camera: usize, target: &'static str, kept: Vec<ImageAdjustmentParameter> },
+    Drop(DropImageAdjustmentsError),
 }
 ```
 
@@ -123,16 +138,27 @@ written, and before any `.sift` file is read for the observations' pixels, and
 the first refusal refuses the whole switch with the camera's index and the
 fit's own reason.
 
-**A camera whose images carry lens corrections is refused.** An image's radial
-correction is a spline in its camera's own basis on its camera's domain, and
-its rolling-shutter rates are defined on `SFMTOOL_PINHOLE` alone
-([../camera/sfmtool-pinhole-kernels.md § Per-image
-corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)), so
-a refitted camera would read either as something else. `fit_camera_switch`
-therefore refuses, with `SwitchCameraModelError::LensCorrections` naming the
-camera, a camera any of whose images carries a non-zero radial correction or
-non-zero rates, or which lists `radial_bspline` or `rolling_shutter` as varying
-per image, before it fits anything.
+**The drops are an option of the switch, not a step before it.** A caller
+asking for a new model often wants some per-image parameters gone with it, and
+has to have them gone where the target cannot carry them (§ "What a switch
+carries"). With the drops in `SwitchCameraModelOptions`, one call drops and
+fits, and its comparison measures `before` on the value as it was handed in, so
+it says what the drops and the switch cost together; a caller that dropped
+first with [`drop_image_adjustments`](drop-image-adjustments.md) and switched
+the result would see only the switch's share. One list serves every camera
+named, and a parameter a camera does not vary is passed over, since the
+parameters are the same four words for every camera. `fit_camera_switch` fits
+the camera as the value holds it, so a caller showing the fit of a request
+with drops, as the viewer's proposal does, calls `drop_image_adjustments` and
+hands it the value that returns. Each entry's `dropped_image_adjustments` is
+what that camera dropped, for a caller's label.
+
+**Which drops a target forces is callable on its own.**
+`image_adjustments_carried` lists each per-image parameter a camera varies
+(`varied_image_adjustments`: its flag, or a non-zero value on one of its
+images, the parameters a drop changes something for) and whether a switch to a
+target with given fit options carries it. The viewer's proposal reads it to
+tick and grey the drops its target forces before it fits anything.
 
 **A spline camera switched to its own model is a refit, in the same call.** A
 new coefficient count or domain end is a change of how the lens curve is
@@ -161,6 +187,44 @@ for camera in &report.cameras {
 ```
 
 ## What the call does
+
+### The drops
+
+Before any fit, each camera named drops the parameters of
+`SwitchCameraModelOptions::drop_image_adjustments` it varies, by
+`drop_image_adjustments`: its flag for each is cleared, its images' values are
+set to zero, and their mean is folded into the camera (the geometric mean for
+the focal, linear for the principal point and the radial correction; the
+rolling-shutter rates fold nothing and the scanlines setting is kept). The
+target is then fitted to the folded camera, so the fit's `rms_px` and `max_px`
+are the new camera's distance from the folded one, and the value written back
+is the dropped one with its cameras replaced. A refused drop refuses the switch
+(`Drop`), before any fit. With the list empty, as by default, nothing is
+dropped and the switch is the one it was before the option existed.
+
+### What a switch carries
+
+An image keeps whatever per-image parameter it is not asked to drop, on top of
+the switched camera. The focal scale and the principal-point offset are relative
+to whatever the camera becomes, so every switch carries them. The other two are
+not:
+
+| Parameter | Carried by |
+|-----------|------------|
+| `rolling_shutter` | an `SFMTOOL_PINHOLE` target, the one model the rates are defined on ([../camera/sfmtool-pinhole-kernels.md § Per-image corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)) |
+| `radial_bspline` | a refit of an `SFMTOOL_PINHOLE` spline as itself with neither `theta_fit_deg` nor `spline_domain_deg` given |
+
+The radial correction is a curve on the camera's own domain, `τ = ρ/ρ_max`,
+added to the camera's spline, so it means the same after the switch only where
+the model stays `SFMTOOL_PINHOLE` and `ρ_max` stays put: a refit at another
+coefficient count keeps the domain end bit for bit, while a given domain end or
+a fit over a given angle (whose domain end is the far image corner) moves it.
+`fit_camera_switch` refuses a camera that keeps a parameter its switch does not
+carry, with `SwitchCameraModelError::LensCorrections` naming the camera, the
+target and the parameters kept, before it fits anything; `switch_camera_model`
+checks after its drops, so dropping them lifts the refusal. A parameter counts
+as kept where the camera lists it or any of its images holds a non-zero value
+of it.
 
 ### The observations of a camera
 
@@ -230,12 +294,13 @@ models, and is fitted like any other source too.
 ### What is written back
 
 Each switched camera is replaced by its fitted camera. Nothing else in the image
-set, the point set or the observation columns changes: in particular each
-image keeps its focal scale and principal-point offset as they are, since they
-are relative to whatever its camera is, and the fit refits the shared camera
-alone. Every
+set, the point set or the observation columns changes beyond the drops: in
+particular each image keeps what it was not asked to drop of its adjustment as
+it is, since it is relative to whatever its camera is, and the fit refits the
+shared camera alone. Every
 reprojection error below, before and after, is read through each image's
-intrinsics, its camera with its adjustment applied. The stored error of
+intrinsics, its camera with its adjustment applied: before through the value
+handed in, after through the dropped and switched one. The stored error of
 every point observed in an image that uses a switched camera is recomputed as
 the root mean square of its reprojection errors over all its observations, the convention
 `SfmrReconstruction::recompute_point_errors` writes; a point with none that
@@ -290,6 +355,11 @@ switches every camera. `SfmrReconstruction.switch_camera_model` takes the same
 arguments and returns `(SfmrReconstruction, report)`; it is what `sfm xform
 --camera-model` calls
 ([`../../cli/reconstruction/xform/xform-command.md`](../../cli/reconstruction/xform/xform-command.md)).
+The bindings drop nothing; a caller drops first with
+`SfmrReconstruction.drop_image_adjustments`
+([drop-image-adjustments.md](drop-image-adjustments.md)). Whether the CLI gets
+an option that drops per-image parameters is open in
+[per-image-adjustments-ui.md](../../drafts/per-image-adjustments-ui.md).
 
 The report's `cameras` is a list with one dict per switched camera: `camera`,
 `images`, `source` and `target` (the two `CameraIntrinsics`), `fit` (the dict
@@ -319,8 +389,8 @@ exact projection, plus one point 95° off the first image's axis:
   camera, with nothing detected beside no `.sift` file;
 - only the named cameras changing;
 - with every image carrying its own intrinsic adjustment and its keypoints made
-  through it, every adjustment kept, the `before` errors under `10⁻³` px and the
-  stored errors the ones a recompute gives;
+  through it, every adjustment kept when nothing is dropped, the `before` errors
+  under `10⁻³` px and the stored errors the ones a recompute gives;
 - `fit_camera_switch` giving the camera and report the switch installs, for a
   change of model, a source with no trusted bound and a refit of a spline, and
   the switch's refusals; `default_fit_angle` giving the angle and source such a
@@ -328,6 +398,21 @@ exact projection, plus one point 95° off the first image's axis:
 - a source with no trusted bound fitted out to its observations' extent;
 - a perspective target refused for a camera observed past 90°, and every
   refusal naming its camera;
+- each of the focal and the principal point dropped before the fit: the
+  camera installed being the fit of the camera `drop_image_adjustments`
+  leaves, the parameter's flag cleared and its values zero, every other value
+  kept, and `before` the value as it was handed in; nothing dropped, or only
+  parameters the camera does not vary, giving the switch without the option;
+- `image_adjustments_carried` on an `SFMTOOL_PINHOLE` camera varying all four:
+  an `SFMTOOL_FISHEYE` target carrying the focal and principal point only, the
+  camera's own refit all four, and a given domain end or fit angle everything
+  but the radial correction;
+- a kept radial correction or kept rates on a target that cannot carry them
+  refused (`LensCorrections` naming what was kept), the same camera switching
+  once they are dropped with its scanlines setting kept, and a camera listing
+  either at zero refused alike;
+- a same-model refit whose only change is a drop, on an `SFMTOOL_PINHOLE`
+  camera that keeps its corrections and on an `SFMTOOL_FISHEYE` spline;
 - a spline camera switched to its own model at a new count and domain giving
   exactly `refit_spline`'s camera and report, over the whole domain; the domain
   end kept bit for bit when none is given; a given fit angle taking the general

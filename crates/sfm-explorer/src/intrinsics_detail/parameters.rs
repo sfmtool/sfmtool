@@ -15,10 +15,13 @@
 use sfmtool_core::camera::{
     CameraIntrinsics, CameraModel, IntrinsicAdjustment, RollingShutterScanlines,
 };
+use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
 use sfmtool_core::reconstruction::image_adjustment_statistics::{
     ComponentStatistics, ImageAdjustmentStatistics,
 };
 use sfmtool_core::reconstruction::{PerImageAdjustments, SfmrImage};
+
+use crate::state::edits::per_image_parameter_list;
 
 use super::derived::Derived;
 use super::format;
@@ -39,7 +42,8 @@ pub(super) struct PerImage<'a> {
 /// images' values (`per_image`).
 ///
 /// A camera that varies nothing per image, or a table given no `per_image`
-/// (the proposed camera's), is the parameters alone. Otherwise a line under
+/// (the proposed camera's), is the parameters alone, under `note` where one
+/// is given: the proposed camera's [`proposed_per_image_note`]. Otherwise a line under
 /// the heading names what varies per image, what does not and what the model
 /// cannot carry ([`per_image_summary`]), and each component the camera varies
 /// gets a `per image` row of its own ([`statistics_rows`]) with a histogram
@@ -54,20 +58,18 @@ pub(super) fn show_parameters(
     ui: &mut egui::Ui,
     camera: &CameraIntrinsics,
     per_image: Option<&PerImage<'_>>,
+    note: Option<&str>,
     selected_image: Option<usize>,
     id_salt: &str,
 ) -> HistogramResponse {
     ui.label(egui::RichText::new("Parameters").strong());
     let per_image = per_image.filter(|p| p.flags.any());
-    if let Some(per_image) = per_image {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(per_image_summary(camera, per_image))
-                    .weak()
-                    .small(),
-            )
-            .wrap(),
-        );
+    let line = match per_image {
+        Some(per_image) => Some(per_image_summary(camera, per_image)),
+        None => note.map(str::to_string),
+    };
+    if let Some(line) = line {
+        ui.add(egui::Label::new(egui::RichText::new(line).weak().small()).wrap());
     }
     let rows = per_image
         .map(|p| statistics_rows(camera, p))
@@ -314,6 +316,37 @@ pub(super) fn per_image_summary(camera: &CameraIntrinsics, per_image: &PerImage)
         ));
     }
     text
+}
+
+/// The line under the proposed camera's Parameters heading, `Per image,
+/// unchanged from Current: focal. Dropped: principal point.`, naming which of
+/// the camera's per-image parameters, `varied`, the proposal keeps and which
+/// it drops; `None` for a camera that varies nothing per image. A kept
+/// parameter's values are the images' own and do not change with the switch,
+/// so the Current table's statistics and histograms stand for them and the
+/// proposed table does not repeat them.
+pub(super) fn proposed_per_image_note(
+    varied: &[ImageAdjustmentParameter],
+    dropped: &[ImageAdjustmentParameter],
+) -> Option<String> {
+    if varied.is_empty() {
+        return None;
+    }
+    let (gone, kept): (Vec<_>, Vec<_>) = varied.iter().partition(|p| dropped.contains(p));
+    let mut parts = Vec::new();
+    if !kept.is_empty() {
+        parts.push(format!(
+            "Per image, unchanged from Current: {}.",
+            per_image_parameter_list(&kept)
+        ));
+    }
+    if !gone.is_empty() {
+        parts.push(format!(
+            "Dropped per image: {}.",
+            per_image_parameter_list(&gone)
+        ));
+    }
+    Some(parts.join(" "))
 }
 
 /// The `per image` rows of a camera, in the order the table draws them: the
