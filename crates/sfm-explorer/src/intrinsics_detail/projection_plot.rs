@@ -58,6 +58,7 @@ use sfmtool_core::camera::report;
 use sfmtool_core::camera::CameraIntrinsics;
 
 use super::derived::{ChangeProfile, Derived, ProfileSample};
+use super::plot::{ticks, Palette, Scale, DASH, SMALL_FONT};
 
 /// Width reserved left of the plots for their y-axis labels.
 const LEFT_GUTTER: f32 = 52.0;
@@ -98,12 +99,6 @@ const Y_MARGIN: f64 = 1.06;
 /// and `v edge` would be a drawing artefact rather than a fact about the lens.
 const EDGE_MERGE_DEG: f64 = 0.1;
 
-/// Dash and gap of the ideal map's stroke.
-const DASH: (f32, f32) = (5.0, 4.0);
-
-/// Font size of the rules' labels and the axes' tick labels.
-const SMALL_FONT: f32 = 9.0;
-
 /// Font size of the plots' titles and the extrapolated regions' labels.
 const LABEL_FONT: f32 = 10.0;
 
@@ -113,75 +108,6 @@ const LABEL_ROW: f32 = 13.0;
 /// Rows of rule labels the upper plot holds before a label that fits on none
 /// of them is left off, its rule still drawn.
 const LABEL_ROWS: usize = 6;
-
-/// The palette, resolved per frame against the viewer's theme.
-struct Palette {
-    axis: Color32,
-    grid: Color32,
-    text: Color32,
-    /// The camera's curve, and while a proposal is open the proposed camera's.
-    model: Color32,
-    ideal: Color32,
-    band: Color32,
-    extrapolated_wash: Color32,
-    extrapolated_rule: Color32,
-    /// The current camera's curve while a proposal is open.
-    current: Color32,
-    current_band: Color32,
-    current_wash: Color32,
-    /// The proposed camera's extrapolated region.
-    proposed_wash: Color32,
-    /// Where the monotonicity constraint bound.
-    monotone: Color32,
-    /// The plate under each label: the panel's own colour, nearly opaque.
-    plate: Color32,
-}
-
-impl Palette {
-    fn resolve(visuals: &egui::Visuals) -> Self {
-        if visuals.dark_mode {
-            Self {
-                axis: Color32::from_gray(110),
-                grid: Color32::from_gray(58),
-                text: visuals.text_color(),
-                model: Color32::from_rgb(0x6c, 0xb6, 0xff),
-                ideal: Color32::from_rgb(0xe0, 0xa8, 0x4c),
-                band: Color32::from_rgba_unmultiplied(0x6c, 0xb6, 0xff, 44),
-                extrapolated_wash: Color32::from_rgba_unmultiplied(0xff, 0x8a, 0x5c, 26),
-                extrapolated_rule: Color32::from_rgb(0xff, 0x9d, 0x76),
-                current: Color32::from_gray(205),
-                current_band: Color32::from_rgba_unmultiplied(205, 205, 205, 40),
-                current_wash: Color32::from_rgba_unmultiplied(205, 205, 205, 30),
-                proposed_wash: Color32::from_rgba_unmultiplied(0x6c, 0xb6, 0xff, 22),
-                monotone: Color32::from_rgb(0xd0, 0x8c, 0xff),
-                plate: plate(visuals),
-            }
-        } else {
-            Self {
-                axis: Color32::from_gray(120),
-                grid: Color32::from_gray(206),
-                text: visuals.text_color(),
-                model: Color32::from_rgb(0x14, 0x5c, 0xb0),
-                ideal: Color32::from_rgb(0x9a, 0x62, 0x00),
-                band: Color32::from_rgba_unmultiplied(0x14, 0x5c, 0xb0, 40),
-                extrapolated_wash: Color32::from_rgba_unmultiplied(0xc0, 0x4a, 0x10, 26),
-                extrapolated_rule: Color32::from_rgb(0xa8, 0x40, 0x0c),
-                current: Color32::from_gray(70),
-                current_band: Color32::from_rgba_unmultiplied(70, 70, 70, 36),
-                current_wash: Color32::from_rgba_unmultiplied(70, 70, 70, 26),
-                proposed_wash: Color32::from_rgba_unmultiplied(0x14, 0x5c, 0xb0, 20),
-                monotone: Color32::from_rgb(0x7a, 0x2c, 0xb0),
-                plate: plate(visuals),
-            }
-        }
-    }
-}
-
-/// The plate under the plots' labels: the panel's fill, nearly opaque.
-fn plate(visuals: &egui::Visuals) -> Color32 {
-    let fill = visuals.panel_fill;
-    Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 215)
-}
 
 /// What the plot draws beside the current camera while a proposal with a
 /// fitted camera is open on it.
@@ -203,26 +129,6 @@ pub(super) struct Comparison<'a> {
 struct Marker {
     theta_deg: f64,
     label: String,
-}
-
-/// One linear map from a data interval to a screen interval.
-#[derive(Clone, Copy)]
-struct Scale {
-    lo: f64,
-    hi: f64,
-    screen_lo: f32,
-    screen_hi: f32,
-}
-
-impl Scale {
-    fn at(&self, value: f64) -> f32 {
-        let t = if self.hi > self.lo {
-            (value - self.lo) / (self.hi - self.lo)
-        } else {
-            0.5
-        };
-        self.screen_lo + (self.screen_hi - self.screen_lo) * t as f32
-    }
 }
 
 /// How one camera's curves are drawn: its samples, how many of them it
@@ -1225,33 +1131,6 @@ fn legend(
         };
         ui.label(egui::RichText::new(sentence).small().weak());
     }
-}
-
-/// Round `span / count` down to a 1, 2 or 5 times a power of ten, and return
-/// the multiples of it that fall inside `[lo, hi]`.
-///
-/// The 1/2/5 ladder rather than an even division so the labels read as numbers
-/// a person would have picked — 20°, not 18.8°.
-fn ticks(lo: f64, hi: f64, count: usize) -> Vec<f64> {
-    let span = hi - lo;
-    if span <= 0.0 || span.is_nan() || count == 0 {
-        return Vec::new();
-    }
-    let rough = span / count as f64;
-    let decade = 10.0_f64.powf(rough.log10().floor());
-    let step = [1.0, 2.0, 5.0, 10.0]
-        .into_iter()
-        .map(|m| m * decade)
-        .find(|s| *s >= rough)
-        .unwrap_or(decade * 10.0);
-    let first = (lo / step).ceil() * step;
-    let mut out = Vec::new();
-    let mut value = first;
-    while value <= hi + step * 1e-9 && out.len() <= count * 3 {
-        out.push(value);
-        value += step;
-    }
-    out
 }
 
 /// A y-axis tick label: enough decimals to tell adjacent ticks apart, and no

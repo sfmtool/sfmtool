@@ -592,8 +592,9 @@ pub(super) fn get_camera_intrinsics(
 /// `get_camera_intrinsics`'s `per_image_statistics`: per parameter camera
 /// `index` varies per image, its statistics over the camera's images in the
 /// unit the file stores it in, with the unit the Camera Intrinsics panel shows
-/// it in and the factor between them; `null` for a camera that varies nothing
-/// per image, and `null` for a parameter it does not vary.
+/// it in and the factor between them, and each component's histogram as the
+/// panel bins it; `null` for a camera that varies nothing per image, and
+/// `null` for a parameter it does not vary.
 fn per_image_statistics(recon: &sfmtool_core::SfmrReconstruction, index: usize) -> Value {
     use sfmtool_core::reconstruction::image_adjustment_statistics::{
         image_adjustment_statistics, ComponentStatistics,
@@ -607,10 +608,33 @@ fn per_image_statistics(recon: &sfmtool_core::SfmrReconstruction, index: usize) 
     }
     let camera = &recon.image_set.cameras[index];
     let short_side = f64::from(camera.width.min(camera.height));
+    // Component `k` of the parameter `value` reads, as the panel bins it:
+    // in its display unit, with its edges put back into the stored one.
+    let histogram = |s: &ComponentStatistics,
+                     value: &dyn Fn(&sfmtool_core::IntrinsicAdjustment) -> f64,
+                     display_scale: f64,
+                     log_space: bool| {
+        let values = statistics
+            .images
+            .iter()
+            .map(|&i| (i, value(&recon.image_set.images[i].intrinsic_adjustment)));
+        let shown = crate::intrinsics_detail::histogram::Histogram::of_component(
+            values,
+            s,
+            display_scale,
+            log_space,
+        );
+        json!({
+            "edges": shown.edges.iter().map(|e| e / display_scale).collect::<Vec<_>>(),
+            "counts": shown.counts(),
+        })
+    };
     let block = |components: Option<&[ComponentStatistics]>,
                  unit: &str,
                  display_unit: &str,
-                 display_scale: f64| {
+                 display_scale: f64,
+                 value: &dyn Fn(&sfmtool_core::IntrinsicAdjustment, usize) -> f64,
+                 log_space: bool| {
         components.map(|components| {
             json!({
                 "unit": unit,
@@ -618,12 +642,14 @@ fn per_image_statistics(recon: &sfmtool_core::SfmrReconstruction, index: usize) 
                 "display_scale": display_scale,
                 "components": components
                     .iter()
-                    .map(|s| json!({
+                    .enumerate()
+                    .map(|(k, s)| json!({
                         "mean": s.mean,
                         "standard_deviation": s.std,
                         "min": s.min,
                         "max": s.max,
                         "beyond_two_standard_deviations": s.beyond_two_std,
+                        "histogram": histogram(s, &|a| value(a, k), display_scale, log_space),
                     }))
                     .collect::<Vec<_>>(),
             })
@@ -636,24 +662,32 @@ fn per_image_statistics(recon: &sfmtool_core::SfmrReconstruction, index: usize) 
             "focal scale",
             "%",
             100.0,
+            &|a, _| a.focal,
+            true,
         ),
         "principal_point": block(
             statistics.principal_point.as_ref().map(|c| &c[..]),
             "short side",
             "px",
             short_side,
+            &|a, k| a.principal_point[k],
+            false,
         ),
         "radial_bspline": block(
             statistics.radial_bspline.as_ref().map(|c| &c[..]),
             "normalized radius",
             "normalized radius",
             1.0,
+            &|a, k| a.radial_bspline[k],
+            false,
         ),
         "rolling_shutter": block(
             statistics.rolling_shutter.as_ref().map(|c| &c[..]),
             "rad per short side",
             "mrad per short side",
             1000.0,
+            &|a, k| a.rolling_shutter[k],
+            false,
         ),
     })
 }

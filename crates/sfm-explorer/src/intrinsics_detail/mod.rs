@@ -12,7 +12,7 @@
 //! The panel is a detail view of a selection, like its two dock neighbours, and
 //! it is driven by [`crate::state::AppState::selected_camera`]. This module
 //! owns the panel state and the [`IntrinsicsDetail::show`] entry point that
-//! orchestrates one frame; the work lives in seven children:
+//! orchestrates one frame; the work lives in nine children:
 //!
 //! - [`derived`] — the per-camera derived report ([`sfmtool_core::camera::report`]),
 //!   computed once per camera and cached.
@@ -25,9 +25,14 @@
 //! - [`parameters`] — the parameter table, with the statistics of the
 //!   camera's per-image values beside the parameters they adjust, the derived
 //!   table and `K`.
+//! - [`histogram`] — the histogram of each per-image component's values that
+//!   the parameter table draws beside its statistics, and its bins, which MCP
+//!   reports too.
 //! - [`mod@projection_plot`] — the radial map, the residual and the domain
 //!   the model can be held to; while a proposal is open, both cameras drawn
 //!   against each other, the change plot and the observation rug.
+//! - [`plot`] — what the projection plot and the histograms share: the
+//!   palette, the linear scale and the 1/2/5 tick ladder.
 //! - [`extrinsics`] — the selected image's pose, the node-transform toggle and
 //!   the rig block.
 //! - [`mod@format`] — the number, matrix and vector spellings the tables share.
@@ -41,7 +46,9 @@ mod derived;
 mod extrinsics;
 mod format;
 mod header;
+pub(crate) mod histogram;
 mod parameters;
+mod plot;
 mod projection_plot;
 pub(crate) mod proposal;
 
@@ -99,8 +106,12 @@ pub(crate) struct IntrinsicsDetail {
 /// the dock turns into a camera model proposal, and the proposal's Apply and
 /// Cancel. A change of a proposal's controls is made on the proposal in place.
 pub(crate) struct IntrinsicsDetailResponse {
-    /// The user clicked the image name in the extrinsics header.
+    /// The user clicked the image name in the extrinsics header, or a bin of
+    /// a per-image histogram, which selects one of the bin's images.
     pub(crate) select_image: Option<ImageRef>,
+    /// The image a click on the per-image histogram bin under the pointer
+    /// would select, for the other panels to highlight.
+    pub(crate) hovered_image: Option<ImageRef>,
     /// The user clicked `Switch Model…` for this camera.
     pub(crate) switch_model: Option<CameraRef>,
     /// The user ended the proposal shown: Apply, or Cancel or `Escape`.
@@ -138,6 +149,7 @@ impl IntrinsicsDetail {
     ) -> IntrinsicsDetailResponse {
         let mut response = IntrinsicsDetailResponse {
             select_image: None,
+            hovered_image: None,
             switch_model: None,
             proposal: None,
             has_pointer: false,
@@ -207,7 +219,9 @@ impl IntrinsicsDetail {
             .map(|statistics| parameters::PerImage {
                 flags: node.recon().image_set.camera_per_image_adjustments(index),
                 statistics,
+                images: &node.recon().image_set.images,
             });
+        let mut histograms = histogram::HistogramResponse::default();
 
         egui::ScrollArea::vertical()
             .id_salt("intrinsics_detail")
@@ -258,15 +272,22 @@ impl IntrinsicsDetail {
                     (Some(proposed), Some((_, _, proposed_report))) => {
                         let aspect_row = parameters::has_two_focal_lengths(camera)
                             || parameters::has_two_focal_lengths(proposed);
-                        compare_tables(
+                        histograms = compare_tables(
                             ui,
                             [(camera, derived), (proposed, &proposed_report.derived)],
                             per_image.as_ref(),
+                            image,
                             aspect_row,
                         );
                     }
                     _ => {
-                        parameters::show_parameters(ui, camera, per_image.as_ref(), "current");
+                        histograms = parameters::show_parameters(
+                            ui,
+                            camera,
+                            per_image.as_ref(),
+                            image,
+                            "current",
+                        );
                         ui.separator();
                         parameters::show_derived(ui, camera, derived, "current", false);
                     }
@@ -307,6 +328,13 @@ impl IntrinsicsDetail {
                 }
             });
 
+        if let Some(picked) = histograms.select {
+            response.select_image = Some(ImageRef::new(node.id, picked));
+        }
+        response.hovered_image = histograms
+            .hovered
+            .map(|hovered| ImageRef::new(node.id, hovered));
+
         // `Escape` cancels the proposal while the pointer is over the panel
         // showing it, so the key keeps its meaning everywhere else, and only
         // when no popup was open and no field was being edited as the frame
@@ -345,13 +373,16 @@ impl IntrinsicsDetail {
 /// The width each needs is measured in an invisible sizing pass, since a
 /// table's widest row depends on the model and its numbers. The statistics of
 /// the camera's per-image values, `per_image`, are the images' and not either
-/// lens's, and are stated once, in the current camera's table.
+/// lens's, and are stated once, in the current camera's table, with their
+/// histograms, whose response is returned; `selected_image` as for
+/// [`parameters::show_parameters`].
 fn compare_tables(
     ui: &mut egui::Ui,
     cameras: [(&sfmtool_core::camera::CameraIntrinsics, &Derived); 2],
-    per_image: Option<&parameters::PerImage>,
+    per_image: Option<&parameters::PerImage<'_>>,
+    selected_image: Option<usize>,
     aspect_row: bool,
-) {
+) -> histogram::HistogramResponse {
     let per_image_of = |k: usize| if k == 0 { per_image } else { None };
     const SALTS: [&str; 2] = ["current", "proposed"];
     const HEADINGS: [&str; 2] = ["Current", "Proposed"];
@@ -366,17 +397,28 @@ fn compare_tables(
                     .sizing_pass()
                     .invisible(),
             );
-            parameters::show_parameters(&mut sizing, camera, per_image_of(k), salt);
+            parameters::show_parameters(&mut sizing, camera, per_image_of(k), None, salt);
             parameters::show_derived(&mut sizing, camera, derived, salt, aspect_row);
             sizing.min_rect().width()
         })
         .fold(0.0f32, f32::max);
     let gap = ui.spacing().item_spacing.x;
+    let mut response = histogram::HistogramResponse::default();
+    let mut keep = |shown: histogram::HistogramResponse| {
+        response.select = response.select.or(shown.select);
+        response.hovered = response.hovered.or(shown.hovered);
+    };
     if 2.0 * needed + gap <= ui.available_width() {
         ui.columns(2, |columns| {
             for (k, (camera, _)) in cameras.iter().enumerate() {
                 columns[k].label(egui::RichText::new(HEADINGS[k]).weak());
-                parameters::show_parameters(&mut columns[k], camera, per_image_of(k), SALTS[k]);
+                keep(parameters::show_parameters(
+                    &mut columns[k],
+                    camera,
+                    per_image_of(k),
+                    selected_image,
+                    SALTS[k],
+                ));
             }
         });
         ui.separator();
@@ -391,11 +433,18 @@ fn compare_tables(
                 ui.separator();
             }
             ui.label(egui::RichText::new(HEADINGS[k]).weak());
-            parameters::show_parameters(ui, camera, per_image_of(k), SALTS[k]);
+            keep(parameters::show_parameters(
+                ui,
+                camera,
+                per_image_of(k),
+                selected_image,
+                SALTS[k],
+            ));
             ui.separator();
             parameters::show_derived(ui, camera, derived, SALTS[k], aspect_row);
         }
     }
+    response
 }
 
 /// The "nothing selected" state.

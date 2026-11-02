@@ -4,12 +4,13 @@
 and the rule that only the bundle adjustment turns a per-image parameter on
 while every other operation only drops one. Step 1 is built and specified in
 [core/reconstruction/drop-image-adjustments.md](../core/reconstruction/drop-image-adjustments.md),
-and step 2 in [gui/camera-intrinsics.md § 2.
+and steps 2 and 3 in [gui/camera-intrinsics.md § 2.
 Parameters](../gui/camera-intrinsics.md#2-parameters), whose Decisions record
 that the rates are shown in milliradians per short side, the unit of Image
-Detail's legend, rather than per frame of readout; this draft proposes steps 3 to
-5. Open: the exact layout of the histograms, and whether `sfm xform` gets an
-option to drop per-image parameters.
+Detail's legend, rather than per frame of readout, and that a click on a
+histogram's bin selects one of its images at a time; this draft proposes steps
+4 and 5. Open: whether `sfm xform` gets an option to drop per-image
+parameters.
 
 A camera in a `.sfmr` file can vary its focal, principal point, radial
 correction and rolling-shutter rates per image
@@ -35,14 +36,13 @@ and [gui/mcp-server.md](../gui/mcp-server.md#list_camera_images--get_camera_imag
 
 ## Step 3: a histogram per component
 
-Beside its statistics in the Parameters table, each component of each
-parameter the camera varies gets a small histogram of its images' values: one for the focal scale, two
-each for the principal point and the radial correction, three for the rates.
-They are hand-painted with the projection plot's helpers
-([projection_plot.rs](../../crates/sfm-explorer/src/intrinsics_detail/projection_plot.rs)),
-since the viewer has no plotting dependency and is not to gain one for this.
-Hovering a bin lists the images in it; clicking it selects them, so an outlier
-is one click from Image Detail.
+Built. Each `per image` row of the Parameters table draws a histogram of its
+images' values, beside its statistics where the table leaves room and under
+them otherwise; hovering a bin lists its images, a click selects one of them,
+stepping through the bin on repeated clicks, and MCP `get_camera_intrinsics`
+reports the bins: [gui/camera-intrinsics.md § 2.
+Parameters](../gui/camera-intrinsics.md#2-parameters) and
+[gui/mcp-server.md](../gui/mcp-server.md#list_camera_images--get_camera_image--get_camera_intrinsics--get_intrinsic_adjustments--get_point).
 
 ## Step 4: dropping a parameter in Switch Camera Model
 

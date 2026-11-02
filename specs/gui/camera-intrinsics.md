@@ -995,8 +995,8 @@ field and at some readable off-axis angle, which is the point of composing them.
 The panel is
 [`intrinsics_detail/`](../../crates/sfm-explorer/src/intrinsics_detail/mod.rs),
 split the way `track_view/body/` is: `mod.rs` owns the state and the one
-frame, with `derived`, `header`, `parameters`, `extrinsics`, `format`,
-`projection_plot` and `proposal` under it.
+frame, with `derived`, `header`, `parameters`, `histogram`, `extrinsics`,
+`format`, `plot`, `projection_plot` and `proposal` under it.
 
 A sixth dock tab, `Tab::IntrinsicsDetail`, title **"Camera Intrinsics"**,
 defaulting into the same top-right tab group as Track View, as the non-active
@@ -1217,12 +1217,85 @@ bspline_c3                  0.024083
   out, and its statistics are one label that wraps between its cells and never
   inside one (the spaces within a cell are non-breaking), so at a narrow panel
   a row takes more lines rather than running past the edge. Each row's label
-  has a tooltip saying what the numbers are and what images they are over.
-  Step 3 of [per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md)
-  adds a histogram of each component beside its statistics.
+  has a tooltip saying what the numbers are, what images they are over and
+  what the histogram's lines mark.
 - **With a proposal open** the statistics are stated once, in the `Current`
   table: they are the images' values, which a switch of model does not change,
   and not a statement about either lens.
+
+**Per-image histograms.** Each `per image` row with numbers, all but
+`scanlines`, carries a histogram of its images' values, 180 px wide and 40 px
+tall, hand-painted with the projection plot's palette, scale and tick ladder
+([histogram.rs](../../crates/sfm-explorer/src/intrinsics_detail/histogram.rs),
+with what the two share in
+[plot.rs](../../crates/sfm-explorer/src/intrinsics_detail/plot.rs)). At 1800 px
+the Δcx row reads as below, the histogram beside its numbers, its six bins 2 px
+wide from −6 to 6 px:
+
+```
+  per image Δcx   mean +0.000 px  sd 2.887 px  …  0 of 17 past 2 sd   ▂▅█▆▃▃
+                                                                   −5  0  5
+```
+
+- **Where it goes.** Where the table leaves room for it, measured with each
+  row's statistics on one line, the histograms go in a third column of the
+  table, beside the statistics and level with them, all in one column.
+  Otherwise, as at the stock window's 341 px, each goes under its row's
+  statistics in the same cell, at most 180 px wide and never wider than the
+  cell, and the row's label keeps level with the statistics' first line. Either
+  way nothing the table paints overlaps another string or a bin, and nothing
+  runs past the panel's edge, at 341, 482 and 1800 px.
+- **Units.** The values are in the row's units: the focal scale `s` in percent,
+  the principal-point offsets in pixels, the radial coefficients as stored and
+  the rates in milliradians per short side.
+- **The bins.** A histogram of `n` values aims for `⌈√n⌉` bins, at least 2 and
+  at most 20, and rounds the width that gives, the values' spread over that
+  count, to the nearest step of the 1/2/5 ladder the axes walk, nearest on a
+  log scale, so every edge is a multiple of a round step in the row's unit.
+  Nearest rather than up, since rounding a width of 2.1 up to 5 would leave 17
+  images in four bins. The bins
+  run from the step below the smaller of the smallest value and the lower
+  two-standard-deviation bound to the step past the larger of the largest value
+  and the upper bound, so both bounds and every value are on the axis; a bin
+  holds the values from its lower edge up to, and not including, its upper
+  edge. Values that are all equal, one image's among them, make one bin
+  centred on the value, as wide as the smallest ladder step of at least a
+  fifth of it, or one unit wide for zero. A bar's height is its count over the fullest bin's.
+- **The marks.** The mean is a solid line and the bounds two standard
+  deviations either side of it dashed lines, in the colour of the projection
+  plot's ideal map, so the images past the dashed lines are the ones the row
+  counts past 2 sd; zero is a grey line wherever it is on the axis, drawn under
+  the mean, which right after a solve sits on it. Tick labels on the ladder
+  sit under the axis, each left off where it would run past the histogram or
+  into the one before it.
+- **The focal is binned as `s`**, the number the row's minimum and maximum
+  are, in percent, while its mean and bounds are mapped back from the log
+  space its statistics are taken in: the mean at the geometric mean, and the
+  bounds at `exp(mean ln(1 + s) ± 2 sd) − 1`. Since that map is monotone, an
+  image is past a dashed line exactly when the row counts it past 2 sd.
+- **The images binned** are the ones the statistics are over, the camera's
+  posed images or all of them where none is posed. An unposed image's values
+  are left out, as they are of the statistics and of the mean a drop folds, so
+  a histogram's counts add up to the `of 17` the row states.
+- **Hover.** Hovering a bin outlines it, brightens its bar and shows a tooltip
+  naming the component, the bin's range and its count, `Δcy from 2 to 4 px: 3
+  of 17 images`, then each of its images with its value in the row's
+  spelling, ordered by value, up to twelve and then `… and 5 more`, and last
+  the image a click selects, `Click to select IMG_0039.jpg.` (or `… is
+  selected.`). The image a click would select is also the panel's hovered
+  image, so its frustum and its thumbnail light up as for any other hover
+  ([cross-panel-hover.md](cross-panel-hover.md)).
+- **Click.** The viewer selects one image at a time
+  (§ "The selection coupling"), so a click on a bin selects one of its images:
+  the first, by value, when none of them is selected, and otherwise the one
+  after the selected one, wrapping round, so repeated clicks step through the
+  bin and an outlier alone in its bin is one click from Image Detail. Its
+  camera is the camera shown, so the panel keeps showing it, and its pose block
+  appears below. The bin holding the selected image is outlined.
+- **On the wire.** Each bin is a button named for what it holds, `per image Δcy
+  2 to 4 px: 3 images`, so `get_widgets` lists it and `click` can press it, and
+  `get_camera_intrinsics` reports each component's bins
+  ([mcp-server.md](mcp-server.md#list_camera_images--get_camera_image--get_camera_intrinsics--get_intrinsic_adjustments--get_point)).
 
 MCP `get_camera_intrinsics` reports the same statistics in their stored units
 and `get_intrinsic_adjustments` every image's values
@@ -1486,8 +1559,12 @@ offers, which the dock turns into a proposal, and the proposal's two endings:
 
 ```rust
 pub struct IntrinsicsDetailResponse {
-    /// The user clicked the image name in the extrinsics header.
+    /// The user clicked the image name in the extrinsics header, or a bin of
+    /// a per-image histogram, which selects one of the bin's images.
     pub select_image: Option<ImageRef>,
+    /// The image a click on the per-image histogram bin under the pointer
+    /// would select, for the other panels to highlight.
+    pub(crate) hovered_image: Option<ImageRef>,
     /// The user clicked `Switch Model…` for this camera.
     pub(crate) switch_model: Option<CameraRef>,
     /// The user ended the proposal shown: Apply, or Cancel or `Escape`.
@@ -1498,7 +1575,8 @@ pub struct IntrinsicsDetailResponse {
 
 `show` takes the open proposal, `Option<&mut CameraModelProposal>`, and the
 sentence `Switch Model…` is greyed with, both read by the dock before it
-borrows the node.
+borrows the node. While the panel has the pointer the dock sets
+`AppState::hovered_image` to `hovered_image` and clears `hovered_point`.
 
 ---
 
@@ -1724,6 +1802,20 @@ Two caveats remain, both named in the tests rather than left implicit:
   fonts. The arithmetic of the statistics is tested in core, in
   [`image_adjustment_statistics/tests.rs`](../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics/tests.rs),
   the focal's mean against what `drop_image_adjustments` folds.
+- The per-image histograms, in the same file: the bins' edges are multiples
+  of the nearest ladder step and run past both two-standard-deviation bounds,
+  a value on an edge is in the bin above it, two images bin apart, values all
+  equal (zeros among them) make one bin centred on them, a value that is not
+  a number is in no bin, and an outlier sits alone in its bin; repeated clicks
+  step through a bin's images; on the seoul_bull ground truth `_v02` each of
+  the eight varied components has a histogram of all 17 images whose dashed
+  bounds leave out exactly the images its row counts past 2 sd, the focal's
+  mapped back from `ln(1 + s)`, and the panel draws a named bin for each
+  non-empty one; at 341 and 482 px the histograms are under their statistics
+  and at 1800 px beside them, and at all three no string is painted over a bin
+  and no bin runs past the edge; and hovering a bin lists its images with
+  their values, names the image a click selects and raises it as the hovered
+  image, a click selects it and a second click the bin's next image.
 - A camera row's per-image tag and its tooltip line, in
   `scene_graph/cameras/tests.rs`, and the tag on a painted row beside a
   camera whose row is unchanged, in `scene_graph/tests.rs`.
@@ -1905,10 +1997,23 @@ need a scanline count the file does not hold. The
 focal's mean is the geometric mean of `1 + s`, the value the bundle
 adjustment re-centres to and a drop folds, so the panel's mean is the one an
 operation acts on. A camera that varies nothing per image keeps the table it
-always had. Step 3 of
-[per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md) adds a
-histogram beside each row, and step 4 offers to drop each parameter in
-operations such as Switch Camera Model.
+always had. Step 4 of
+[per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md) offers to
+drop each parameter in operations such as Switch Camera Model.
+
+**A per-image histogram's bin selects one image per click** (2026-11-01). Each
+`per image` row draws a histogram of its values (§ "2. Parameters"), and a
+click on a bin selects one of its images, stepping through them on repeated
+clicks, rather than all of them: the viewer's selection is one image, which the
+selection coupling, Image Detail, the pose block and every other panel are
+built on, and a selection of several images is a model of its own that a
+histogram is a poor reason to introduce. Stepping through a bin reaches every
+image in it, and an outlier, which is what a person usually clicks, is alone in
+its bin. For the same reason a hovered bin raises one image as the hovered
+image, the one a click would select, which the tooltip names. The focal is
+binned as `s`, the number its minimum and maximum are, with the mean and the
+two-standard-deviation bounds mapped back from `ln(1 + s)`, so the images past
+the dashed lines are exactly the ones the row counts.
 
 **An image's adjustment is stated in Image Detail's legend** (2026-10-25,
 revised 2026-11-01 above). The viewer shows one image's intrinsic adjustment

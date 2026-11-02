@@ -1136,11 +1136,13 @@ impl TabContext<'_> {
                 switch_refusal.as_deref(),
             );
             if response.has_pointer {
-                // The panel raises neither hover channel, so owning the
-                // pointer means clearing both: a highlight left over
+                // The panel raises an image only from a per-image
+                // histogram's bin, the image a click there would select,
+                // and never a point, so owning the pointer means setting
+                // the one and clearing the other: a highlight left over
                 // from the panel the pointer came from would otherwise
                 // sit there for as long as the user reads a table.
-                self.state.hovered_image = None;
+                self.state.hovered_image = response.hovered_image;
                 self.state.hovered_point = None;
             }
             if let Some(image) = response.select_image {
