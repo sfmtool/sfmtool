@@ -30,6 +30,13 @@ used. Directories are expanded recursively, keeping only files ending in
 whatever its extension. The command errors if no image remains after expansion
 and `--range` filtering.
 
+`-r/--range` also accepts the name of one of the workspace's named image
+lists: a value with a letter in it is a name, and one name with one range
+narrows the list. A list replaces `PATHS`, and giving both is an error; the
+workspace is the one found from the current directory, and only the
+list's members that are image files are used, in the list's order.
+The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+
 ## Action Modes
 
 Exactly one of these is required:
@@ -44,7 +51,8 @@ Exactly one of these is required:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--filter-sfm` | path | | Only draw features used in a `.sfmr` reconstruction (with `--draw`) |
-| `--range / -r` | string | | Range expression for file numbers (e.g., `1-100`, `1-100:2`, `5,10,15`) |
+| `--range / -r` | string | | Range expression for file numbers (e.g., `1-100`, `1-100:2`, `5,10,15`), or a named image list's name |
+| `--named-image-list` | name | | Use the images of this named image list of the workspace in place of `PATHS`; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--num-threads / -t` | int | -1 (all) | Thread count for extraction (`colmap` and `opencv` only) |
 | `--tool` | `colmap` \| `opencv` \| `sfmtool` | workspace | Use this feature tool instead of the workspace |
 | `--dsp / --no-dsp` | bool | off | Domain size pooling; requires `--tool colmap` |
@@ -230,6 +238,9 @@ COLMAP/OpenCV backends share the same queue unchanged (they return eager lists).
 ## Usage Examples
 
 ```bash
+# Extract features for the images of a named image list, frames 10-20
+sfm sift --extract -r walk1_sharp -r 10-20
+
 # Extract features for all images in workspace
 sfm sift --extract
 

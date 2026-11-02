@@ -33,11 +33,21 @@ case-insensitively); any other extension is a usage error.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--range / -r` | range expression | (none) | Export only images whose file number matches the expression. Observations on excluded images are dropped. |
-| `--filter-points` | flag | off | With `--range`, also drop 3D points that have no remaining observations. Default is to keep all 3D points. |
+| `--range / -r` | range expression or name | (none) | Export only images whose file number matches the expression, or the members of the named image list it names. Observations on excluded images are dropped. |
+| `--named-image-list` | name | (none) | Export only the reconstruction's images that are members of this named image list; with `-r RANGE`, only its members whose frame number is in `RANGE`. |
+| `--filter-points` | flag | off | With `--range` or `--named-image-list`, also drop 3D points that have no remaining observations. Default is to keep all 3D points. |
 
-`--filter-points` is only meaningful together with `--range`; supplying it without
-`--range` is an error. The range grammar matches `sfm sift -r`, `sfm match -r`,
+`-r/--range` also accepts the name of one of the named image lists of the
+reconstruction's workspace: a value with a letter in it is a name, and one
+name with one range narrows the list. The list is matched against the
+reconstruction's image names, so the image files need not exist; it keeps
+the reconstruction's images that are members, in the reconstruction's
+order, ignores members the reconstruction does not hold, and is an error
+naming the list when none are left. The rules and errors are
+in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+
+`--filter-points` is only meaningful together with `--range` or
+`--named-image-list`; supplying it without either is an error. The range grammar matches `sfm sift -r`, `sfm match -r`,
 `sfm solve -r`, and `sfm xform --include-range` (parsed with
 `sfmtool.reconstruction.RangeExpr`, matched against file numbers recovered by
 `number_from_filename`).
@@ -105,7 +115,7 @@ camera as one camera and gives no image an adjustment.
 
 ## Range Semantics
 
-With `N` images in the input and `K` kept by `--range`:
+With `N` images in the input and `K` kept by `--range` or a named image list:
 
 1. **Images.** Keep the `K` in their original relative order. Image IDs in
    `images.bin` are 1-based and contiguous over the kept set.
@@ -135,6 +145,9 @@ numbers listed.
 sfm to-colmap-bin sfmr/solve_001.sfmr colmap_export/
 colmap gui --import_path colmap_export/ --image_path images/
 
+# Export only the images of a named image list
+sfm to-colmap-bin reconstruction.sfmr colmap_output/ --named-image-list hero_shots
+
 # Export only images 10-50, keeping the full 3D point cloud
 sfm to-colmap-bin sfmr/solve_001.sfmr colmap_export/ -r 10-50
 
@@ -163,11 +176,14 @@ filtering (dropping frames with no remaining images and remapping frame
 indices).
 
 The CLI shim, [`to_colmap_bin.py`](../../../src/sfmtool/_commands/to_colmap_bin.py),
-loads the input and, when `--range` is given, calls `apply_range_filter` from
+loads the input and, when `--range` or `--named-image-list` is given, calls
+`apply_image_selection` from
 [`_range_options.py`](../../../src/sfmtool/_commands/_range_options.py), which
-it shares with `sfm to-nerfstudio`. That helper parses `--range` with
-`RangeExpr`, resolves file numbers to image indices via `number_from_filename`,
-and calls `subset_by_image_indices`. The shim then hands the result to
+it shares with `sfm to-nerfstudio`. For a range that helper parses `--range`
+with `RangeExpr` and resolves file numbers to image indices via
+`number_from_filename`; for a list it resolves the list with
+`NamedImageLists.resolve_in_names` against the reconstruction's image names.
+Either way it then calls `subset_by_image_indices`. The shim then hands the result to
 `save_colmap_binary` in [`colmap/io.py`](../../../src/sfmtool/colmap/io.py),
 which calls `materialize_infinity_for_export` before converting and writing.
 `save_colmap_binary` builds the written cameras with `_colmap_cameras`, which
@@ -185,6 +201,9 @@ CLI and end-to-end tests are in
 [`tests/test_colmap_interop.py`](../../../tests/test_colmap_interop.py): the
 non-`.sfmr` input error, a full export, points at infinity, `--range` with and
 without `--filter-points`, and the range error cases.
+[`tests/test_named_image_list_cli.py`](../../../tests/test_named_image_list_cli.py)
+covers a named image list, narrowed and not, against a reconstruction whose
+image files are absent, and its errors.
 [`tests/test_per_image_intrinsics.py`](../../../tests/test_per_image_intrinsics.py)
 checks a camera with an adjusted image written once per image with each image's
 intrinsics beside a camera written whole, and the refusal of a split rig sensor

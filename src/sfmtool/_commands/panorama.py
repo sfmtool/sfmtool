@@ -9,6 +9,11 @@ import click
 from click.core import ParameterSource
 
 from .._cli_utils import timed_command
+from ._range_options import (
+    parse_image_selection,
+    range_option,
+    reconstruction_list_indices,
+)
 from ._sfmr_path import check_sfmr_path
 
 
@@ -32,13 +37,10 @@ from ._sfmr_path import check_sfmr_path
     help="Directory the reconstruction's image names are relative to "
     "(default: the reconstruction's workspace directory).",
 )
-@click.option(
-    "--range",
-    "-r",
-    "range_expr",
-    default=None,
-    help="Composite only images whose file number matches this range "
+@range_option(
+    "Composite only images whose file number matches this range "
     "expression (e.g. '10-50' or '0-9,20-29').",
+    on="reconstruction",
 )
 @click.option(
     "--near-image",
@@ -142,6 +144,7 @@ def panorama(
     output_path,
     image_dir,
     range_expr,
+    named_image_list,
     near_image,
     near_count,
     near_radius,
@@ -192,6 +195,7 @@ def panorama(
         camrig_path = Path(camrig_path)
 
     reconstruction_path = check_sfmr_path(reconstruction_path, "Reconstruction path")
+    selection = parse_image_selection(range_expr, named_image_list)
     if camrig_path is not None:
         if camrig_path.suffix.lower() != ".camrig":
             raise click.UsageError(
@@ -218,9 +222,19 @@ def panorama(
         recon = SfmrReconstruction.load(reconstruction_path)
         click.echo(f"  Images: {recon.image_count}, cameras: {recon.camera_count}")
 
+        image_indices = None
+        if selection.list_name is not None:
+            image_indices = reconstruction_list_indices(
+                recon, selection, reconstruction_path
+            )
+            click.echo(
+                f"  The {selection.describe_list()} holds {len(image_indices)} "
+                "of its images"
+            )
         indices = select_source_indices(
             recon,
-            range_expr=range_expr,
+            range_expr=selection.range_expr if image_indices is None else None,
+            image_indices=image_indices,
             near_image=near_image,
             near_count=near_count,
             near_radius=near_radius,

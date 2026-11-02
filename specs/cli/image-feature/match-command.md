@@ -26,6 +26,14 @@ sfm match --merge FILE1.matches FILE2.matches ... -o OUTPUT.matches
 which requires exactly one). Exactly one matching method must be specified, or `--merge`
 to combine existing `.matches` files.
 
+`-r/--range` also accepts the name of one of the workspace's named image
+lists: a value with a letter in it is a name, and one name with one range
+narrows the list. A list replaces `PATHS`, and giving both is an error; the
+workspace is the one found from the current directory, and only the
+list's members that are image files are used, in the list's order. The list's workspace is the one
+the matches are written for.
+The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+
 ## Matching Methods
 
 | Method | Description |
@@ -70,7 +78,8 @@ otherwise. The cluster matcher appends `-clusters` to the stem.
 | `--cluster-preset` | `accurate` \| `balanced` \| `fast` | `accurate` | Kd-tree forest preset for cluster matching |
 | `--max-features` | int | | Maximum features per image |
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
-| `--range / -r` | string | | Range expression for file numbers |
+| `--range / -r` | string | | Range expression for file numbers, or a named image list's name |
+| `--named-image-list` | name | | Use the images of this named image list of the workspace in place of `PATHS`; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--camera-model` | choice | auto | Camera model override (e.g., `SIMPLE_RADIAL`, `OPENCV`). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
 
 `--cluster` has one more matcher option with no flag: the minimum cluster
@@ -79,7 +88,7 @@ which is the smallest cluster that yields a pair match. The value is still
 recorded as `min_size` in the file's matcher options (with `mode`, `d`, `alpha`
 and `preset`), so a reader sees every parameter the clusters were built with.
 
-`--max-features` and `--range` describe an image set being matched, so
+`--max-features`, `--range` and `--named-image-list` describe an image set being matched, so
 `--derive-pairs` — whose image set is fixed by the clusters file it reads —
 rejects them. `--camera-model` feeds geometric verification, so `--cluster`,
 which verifies nothing, rejects it too; under `--derive-pairs` it selects the
@@ -256,6 +265,9 @@ sfm match --derive-pairs matches/my-clusters.matches
 
 # Match a subset of images
 sfm match --exhaustive --range 1-100 --max-features 4096
+
+# Match the images of a named image list
+sfm match --exhaustive --named-image-list walk1_sharp
 
 # Merge matches from different strategies
 sfm match --merge seq.matches exhaustive.matches -o combined.matches

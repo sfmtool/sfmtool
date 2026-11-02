@@ -118,6 +118,7 @@ _SUBMODULES = (
     "sift",
     "spatial",
     "spherical",
+    "workspace",
 )
 
 

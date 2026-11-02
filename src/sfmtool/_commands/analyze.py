@@ -9,6 +9,11 @@ from pathlib import Path
 import click
 
 from .._cli_utils import timed_command
+from ._range_options import (
+    parse_image_selection,
+    range_option,
+    reconstruction_list_indices,
+)
 from ._sfmr_path import check_sfmr_path
 from ..analyze.graphs import print_covisibility_graph, print_frustum_intersection_graph
 from ..analyze.depth import print_depth_reliability, print_z_range
@@ -86,11 +91,9 @@ def _require_finite(ctx, param, value):
     "a point is finite when its bearing cost and either its depth score or its "
     "midpoint bound reach it. Only with --depth-reliability.",
 )
-@click.option(
-    "--range",
-    "-r",
-    "range_expr",
-    help="Range expression of file numbers to include (e.g. '1-10'). Only with --metrics.",
+@range_option(
+    "Range expression of file numbers to include (e.g. '1-10'). Only with --metrics.",
+    on="reconstruction",
 )
 @click.option(
     "--near-percentile",
@@ -124,6 +127,7 @@ def analyze(
     sigma_px,
     depth_likelihood_ratio_threshold,
     range_expr,
+    named_image_list,
     near_percentile,
     far_percentile,
     num_samples,
@@ -206,8 +210,14 @@ def analyze(
             "--depth-reliability are mutually exclusive."
         )
 
-    if range_expr is not None and not metrics_flag:
-        raise click.UsageError("--range can only be used with --metrics.")
+    selection = parse_image_selection(range_expr, named_image_list)
+    if not metrics_flag:
+        if range_expr:
+            raise click.UsageError("--range can only be used with --metrics.")
+        if named_image_list is not None:
+            raise click.UsageError(
+                "--named-image-list can only be used with --metrics."
+            )
 
     if not depth_reliability_flag:
         if sigma_px is not None:
@@ -239,9 +249,22 @@ def analyze(
     try:
         recon_name = reconstruction_path.name
 
-        if metrics_flag:
+        if metrics_flag and selection.list_name is not None:
+            recon = SfmrReconstruction.load(reconstruction_path)
             print_metrics_analysis(
-                reconstruction_path, recon_name=recon_name, range_expr=range_expr
+                reconstruction_path,
+                recon_name=recon_name,
+                recon=recon,
+                image_indices=reconstruction_list_indices(
+                    recon, selection, reconstruction_path
+                ),
+                image_selection_label=selection.describe_list(),
+            )
+        elif metrics_flag:
+            print_metrics_analysis(
+                reconstruction_path,
+                recon_name=recon_name,
+                range_expr=selection.range_expr,
             )
         else:
             recon = SfmrReconstruction.load(reconstruction_path)

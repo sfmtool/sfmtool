@@ -66,7 +66,8 @@ Exactly one is required:
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
 | `--max-features` | int | | Maximum features per image |
 | `--camera-model` | choice | auto | Camera model override; one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
-| `--range / -r` | string | | Range expression for file numbers |
+| `--range / -r` | string | | Range expression for file numbers, from the input directories or the images of a `.matches` file; or a named image list's name |
+| `--named-image-list` | name | | Use the images of this named image list of the workspace in place of image paths or a `.matches` file; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../../formats/sfmr-file-format.md). |
 
 ## Input Modes
@@ -76,6 +77,15 @@ Exactly one is required:
 When `PATHS` are image files or directories, the command extracts features (if needed), runs
 matching, and then solves. The matching strategy is exhaustive by default, or flow-based with
 `--flow-match`.
+
+### From a named image list
+
+With `-r NAME` or `--named-image-list NAME` and no `PATHS`, the images are the
+members of that named image list of the workspace found from the current
+directory, in the list's order, keeping only the members that are image files;
+a range given with the name narrows the list. Giving image paths or a
+`.matches` file as well is an error, and the list's workspace is the solve's
+workspace. The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
 ### From `.matches` file
 
@@ -188,4 +198,7 @@ sfm solve images/ --global --seq-overlap 100,20
 
 # Solve a subset of images
 sfm solve images/ --incremental --range 1-200 --max-features 8192
+
+# Solve the images of a named image list
+sfm solve --incremental -r walk1_sharp
 ```

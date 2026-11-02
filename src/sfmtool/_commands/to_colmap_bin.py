@@ -9,7 +9,12 @@ import click
 
 from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
-from ._range_options import apply_range_filter, range_options, validate_range_options
+from ._range_options import (
+    apply_image_selection,
+    parse_image_selection,
+    range_options,
+    validate_range_options,
+)
 
 
 @click.command("to-colmap-bin")
@@ -21,7 +26,8 @@ from ._range_options import apply_range_filter, range_options, validate_range_op
 def to_colmap_bin(
     input_sfmr: str,
     output_dir: str,
-    range_expr: str | None,
+    range_expr: tuple[str, ...],
+    named_image_list: str | None,
     filter_points: bool,
 ):
     """Convert a .sfmr file to COLMAP .bin format.
@@ -53,13 +59,16 @@ def to_colmap_bin(
     input_path = check_sfmr_path(input_sfmr, "Input path")
     output_path = Path(output_dir)
 
-    validate_range_options(range_expr, filter_points)
+    selection = parse_image_selection(range_expr, named_image_list)
+    validate_range_options(selection, filter_points)
 
     try:
         recon = SfmrReconstruction.load(input_path)
 
-        if range_expr is not None:
-            recon = apply_range_filter(recon, range_expr, filter_points, echo=print)
+        if selection.given:
+            recon = apply_image_selection(
+                recon, selection, filter_points, echo=print, sfmr_path=input_path
+            )
 
         save_colmap_binary(recon, output_path)
     except Exception as e:

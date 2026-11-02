@@ -11,7 +11,8 @@
 //! `_sfmtool.fileio`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
 //! `_sfmtool.patches`, `_sfmtool.bench`, `_sfmtool.matching`,
 //! `_sfmtool.analysis`, `_sfmtool.flow`, `_sfmtool.spatial`,
-//! `_sfmtool.spherical`, `_sfmtool.explorer`). The extension is internal to the Python package:
+//! `_sfmtool.spherical`, `_sfmtool.explorer`, `_sfmtool.workspace`). The
+//! extension is internal to the Python package:
 //! each submodule's public home is the Python module `sfmtool.<name>`, which
 //! re-exports it (`sfmtool/sift/__init__.py` for `sift`). Each submodule's
 //! `__name__` reads as that public name, so binding objects report the public
@@ -163,6 +164,10 @@ mod spherical;
 
 mod explorer;
 
+// ── Workspace configuration files (named image lists) ────────────────────
+
+mod workspace;
+
 // ── Module registration ───────────────────────────────────────────────────
 
 /// Cargo build profile this extension was compiled with: `"debug"` or `"release"`.
@@ -265,6 +270,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The viewer's MCP tool catalog and the parse its `tools/call` runs, which
     // `sfm explorer-call` checks a call against before it sends it.
     helpers::install_submodule(m, "sfmtool.explorer", explorer::register)?;
+
+    // The files in a workspace root that configure the workspace as a whole:
+    // its named image lists.
+    helpers::install_submodule(m, "sfmtool.workspace", workspace::register)?;
 
     // Deliberately root-level: `ProgressCounter` is cross-cutting progress
     // instrumentation consumed by patch AND matching kernels, so no single

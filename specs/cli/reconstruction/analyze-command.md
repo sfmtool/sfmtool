@@ -41,12 +41,24 @@ algorithms and parameter semantics.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--range / -r` | string | | Range expression for file numbers (only with `--metrics`) |
+| `--range / -r` | string | | Range expression for file numbers, or a named image list's name (only with `--metrics`) |
+| `--named-image-list` | name | | Use only the reconstruction's images that are members of this named image list; with `-r RANGE`, only its members whose frame number is in `RANGE` (only with `--metrics`) |
 | `--near-percentile` | float (0–100) | 5.0 | Near depth percentile (only with `--frustum`; must be less than `--far-percentile`) |
 | `--far-percentile` | float (0–100) | 95.0 | Far depth percentile (only with `--frustum`) |
 | `--samples` | int (min 100) | 100 | Monte Carlo samples per frustum pair (only with `--frustum`) |
 | `--sigma-px` | float (finite, > 0) | measured | Per-axis pixel noise the point-or-bearing test weights its rays by (only with `--depth-reliability`) |
 | `--depth-likelihood-ratio-threshold` | float (finite, ≥ 0) | 25 | The threshold the test's verdict (`is_finite`) applies: a point is finite when its bearing cost and either its depth score or its midpoint bound reach it (only with `--depth-reliability`) |
+
+`-r/--range` also accepts the name of one of the named image lists of the
+reconstruction's workspace: a value with a letter in it is a name, and one
+name with one range narrows the list. The list is matched against the
+reconstruction's image names, so the image files need not exist; it keeps
+the reconstruction's images that are members, in the reconstruction's
+order, ignores members the reconstruction does not hold, and is an error
+naming the list when none are left. The report names the list and how many images it kept;
+its reconstruction-wide figures and flag thresholds cover every image, as with
+a range. The rules and errors are
+in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
 ## Depth Reliability (`--depth-reliability`)
 
@@ -228,6 +240,9 @@ sfm analyze solve.sfmr --metrics
 
 # Quality metrics for a subset
 sfm analyze solve.sfmr --metrics --range 1-50
+
+# Quality metrics for the images of a named image list
+sfm analyze solve.sfmr --metrics -r walk1_sharp
 
 # Depth estimation for rendering
 sfm analyze solve.sfmr --frustum --near-percentile 2 --far-percentile 98

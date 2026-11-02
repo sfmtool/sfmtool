@@ -114,9 +114,11 @@ The file has no other keys. A version 2 of the file is proposed in
 object the `.sift` file records, in place of the `sfmtool` tool's
 `gray_formula`, so a workspace written under it gets a new features directory.
 An optional second file beside it in the workspace
-root, `.sfm-named-image-lists.json`, naming sets of the workspace's images by pattern
-and frame range so that commands can be pointed at one by name, is proposed in
-[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
+root, `.sfm-named-image-lists.json`, names sets of the workspace's images by
+pattern and frame range; it is described in
+[`named-image-lists.md`](named-image-lists.md). The commands that take
+`-r/--range` accept a set's name there
+([`../cli/README.md`](../cli/README.md#the-shared--r--range-option)).
 
 ### Feature Prefix Directory
 

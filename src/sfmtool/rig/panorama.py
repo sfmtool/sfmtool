@@ -11,6 +11,7 @@ loads the source images, and threads the parameters through.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -89,22 +90,25 @@ def select_source_indices(
     recon: SfmrReconstruction,
     *,
     range_expr: str | None = None,
+    image_indices: Sequence[int] | None = None,
     near_image: str | None = None,
     near_count: int | None = None,
     near_radius: float | None = None,
 ) -> NDArray[np.uint32] | None:
     """Choose which images to composite into the panorama.
 
-    Filters are applied in order — first ``range_expr`` (by file number), then
-    spatial proximity to ``near_image``'s camera center (``near_radius`` keeps
-    everything within that world-space distance; ``near_count`` keeps the
-    nearest N, the reference always included).
+    Filters are applied in order — first ``range_expr`` (by file number) and
+    ``image_indices`` (the images at those indices, such as the members of a
+    named image list), then spatial proximity to ``near_image``'s camera
+    center (``near_radius`` keeps everything within that world-space distance;
+    ``near_count`` keeps the nearest N, the reference always included).
 
     Returns the kept image indices as ``uint32``, or ``None`` when no filter is
     requested (render every image). Raises ``ValueError`` if a filter removes
-    every image or the reference is excluded by ``range_expr``.
+    every image or the reference is excluded by ``range_expr`` or
+    ``image_indices``.
     """
-    if range_expr is None and near_image is None:
+    if range_expr is None and image_indices is None and near_image is None:
         return None
 
     image_names = list(recon.image_names)
@@ -119,12 +123,24 @@ def select_source_indices(
         if not mask.any():
             raise ValueError(f"No images match --range {range_expr!r}.")
 
+    if image_indices is not None:
+        selected = np.zeros(n, dtype=bool)
+        selected[np.asarray(image_indices, dtype=np.intp)] = True
+        mask &= selected
+        if not mask.any():
+            raise ValueError("No images remain in the image selection.")
+
     if near_image is not None:
         ref = _resolve_reference_index(image_names, near_image)
         if not mask[ref]:
+            if range_expr is not None:
+                raise ValueError(
+                    f"--near-image {near_image!r} is excluded by --range; widen the "
+                    "range or choose a reference image inside it."
+                )
             raise ValueError(
-                f"--near-image {near_image!r} is excluded by --range; widen the "
-                "range or choose a reference image inside it."
+                f"--near-image {near_image!r} is not in the named image list; "
+                "choose a reference image the list holds."
             )
         centers = camera_centers(recon.quaternions_wxyz, recon.translations)
         dist = np.linalg.norm(centers - centers[ref], axis=1)

@@ -21,7 +21,7 @@ means anything across scenes; both are read against the other frames of the
 same capture, where a frame much less sharp than the capture's median, or whose
 gradients favour one direction more than the median frame's do, is a blurred
 frame. Choosing images by these readings, and naming the set chosen, is the
-subject of [named-image-lists.md](named-image-lists.md).
+subject of [named-image-lists.md](../workspace/named-image-lists.md).
 
 It amends these standing specs, each of which links back here:
 
@@ -513,7 +513,7 @@ No command rewrites the workspace file unless the user runs one of these:
   workspace its tool's row; names a new `feature_prefix_dir` from the new
   options; prints the old and new folders; and leaves the old folder, its
   `.sift` files and the named image lists file
-  ([named-image-lists.md](named-image-lists.md)) on disk. On a version 2 file it
+  ([named-image-lists.md](../workspace/named-image-lists.md)) on disk. On a version 2 file it
   says "nothing to do: already version 2" and changes nothing. `.sfmr` files
   that name the old folder still find their `.sift` files through their own
   record.
@@ -543,7 +543,7 @@ from a version 2 workspace, `images/metadata.json`'s `image_to_gray` equals
 columns and a required `image_to_gray` record for them in
 `images/metadata.json`. A `.sfmr` does not reference named image lists at all:
 it records no list name and no list entries, and never embeds the workspace's
-list file ([named-image-lists.md](named-image-lists.md)). When this ships, the `.sfmr` spec defines the
+list file ([named-image-lists.md](../workspace/named-image-lists.md)). When this ships, the `.sfmr` spec defines the
 `image_to_gray` object (its inputs, grammar and rounding), the reading image,
 the sharpness and the tensor in its own words, repeating Part 1, because a
 format spec does not send its reader to another spec for what a field means.
@@ -953,7 +953,7 @@ where it is described and why, for review:
 
 Any rule for which frames count as blurred: the readings are recorded so that
 such a rule can be written, and it will be designed with the command that
-writes named image lists ([named-image-lists.md](named-image-lists.md)).
+writes named image lists ([named-image-lists.md](../workspace/named-image-lists.md)).
 
 Decoding 16-bit sources at full depth, so that a 16-bit image's readings and
 features follow the **Inputs** definition rather than an 8-bit reduction of it,

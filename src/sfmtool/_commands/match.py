@@ -11,6 +11,7 @@ import click
 from .._cli_utils import timed_command
 from .._filenames import expand_paths
 from ..camera.cameras import CAMERA_MODEL_NAMES
+from ._range_options import parse_image_selection, range_option, resolve_list_images
 
 
 # Options that only have an effect under one matching method. Passing one of
@@ -34,6 +35,7 @@ _MODE_OPTIONS: dict[str, list[tuple[str, str]]] = {
 _DERIVE_PAIRS_STRAY_OPTIONS: list[tuple[str, str]] = [
     ("max_feature_count", "--max-features"),
     ("range_expr", "--range"),
+    ("named_image_list", "--named-image-list"),
 ]
 
 
@@ -81,11 +83,9 @@ def _reject_stray_mode_options(selected: str) -> None:
     type=click.Path(),
     help="Output .matches file path. If not specified, generates a timestamped filename.",
 )
-@click.option(
-    "--range",
-    "-r",
-    "range_expr",
-    help="A range expression of file numbers to use from the input directories.",
+@range_option(
+    "A range expression of file numbers to use from the input directories.",
+    on="paths",
 )
 @click.option(
     "--sequential",
@@ -183,6 +183,7 @@ def match(
     max_feature_count,
     output_path,
     range_expr,
+    named_image_list,
     flow_match,
     flow_preset,
     flow_wide_baseline_skip,
@@ -268,6 +269,14 @@ def match(
         _run_derive_pairs_mode(paths, output_path, camera_model)
         return
 
+    selection = parse_image_selection(range_expr, named_image_list)
+    range_expr = selection.range_expr
+    if selection.list_name is not None and paths:
+        raise click.UsageError(
+            "A named image list replaces the image paths; give paths or a list, "
+            "not both."
+        )
+
     # Default to the current directory when no paths are given
     if not paths:
         paths = (".",)
@@ -281,23 +290,27 @@ def match(
             "two-view geometries."
         )
 
-    numbers = None
-    if range_expr:
-        from .._sfmtool.reconstruction import RangeExpr
+    extensions = (".png", ".jpg", ".jpeg")
+    if selection.list_name is not None:
+        list_images = resolve_list_images(selection, extensions=extensions)
+        absolute_paths = [Path(os.path.normpath(p)) for p in list_images.paths]
+        workspace_dir = list_images.workspace_dir
+    else:
+        numbers = None
+        if range_expr:
+            from .._sfmtool.reconstruction import RangeExpr
 
-        numbers = RangeExpr(range_expr)
+            numbers = RangeExpr(range_expr)
 
-    paths = [Path(p) for p in paths]
-    filenames = expand_paths(
-        paths, extensions=(".png", ".jpg", ".jpeg"), numbers=numbers
-    )
-    if not filenames:
-        raise click.UsageError("No image files found in the provided paths.")
+        paths = [Path(p) for p in paths]
+        filenames = expand_paths(paths, extensions=extensions, numbers=numbers)
+        if not filenames:
+            raise click.UsageError("No image files found in the provided paths.")
 
-    from ..cli import deduce_workspace
+        from ..cli import deduce_workspace
 
-    absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
-    workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
+        absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
+        workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
 
     from ..camera.config import CameraConfigResolver
     from ..camera.setup import _check_camera_model_conflict

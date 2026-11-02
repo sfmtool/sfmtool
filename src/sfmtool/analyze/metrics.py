@@ -3,6 +3,7 @@
 
 """Print per-image metrics analysis with reprojection error breakdown."""
 
+from collections.abc import Collection
 from pathlib import Path
 
 import click
@@ -16,16 +17,24 @@ from .._histogram_utils import create_histogram_string
 def _compute_per_image_metrics(
     rust_recon: SfmrReconstruction,
     range_numbers: set[int] | None = None,
+    image_indices: Collection[int] | None = None,
 ) -> list[dict]:
-    """Compute per-image metrics using true per-observation reprojection errors."""
+    """Compute per-image metrics using true per-observation reprojection errors.
+
+    `range_numbers` keeps the images whose file number it holds, and
+    `image_indices` the images at those indices.
+    """
     num_images = rust_recon.image_count
     track_image_indexes = rust_recon.track_image_indexes
     track_point_indexes = rust_recon.track_point_indexes
     observation_counts = rust_recon.observation_counts
     image_names = rust_recon.image_names
 
+    keep = set(image_indices) if image_indices is not None else None
     results = []
     for img_idx in range(num_images):
+        if keep is not None and img_idx not in keep:
+            continue
         if range_numbers is not None:
             file_number = number_from_filename(image_names[img_idx])
             if file_number is None or file_number not in range_numbers:
@@ -120,8 +129,20 @@ def print_metrics_analysis(
     sfmr_path: Path,
     recon_name: str | None = None,
     range_expr: str | None = None,
+    *,
+    recon: SfmrReconstruction | None = None,
+    image_indices: Collection[int] | None = None,
+    image_selection_label: str | None = None,
 ) -> None:
-    """Print per-image metrics analysis sorted by mean reprojection error."""
+    """Print per-image metrics analysis sorted by mean reprojection error.
+
+    `range_expr` limits the table to the images whose file number it holds.
+    `image_indices` limits it to the images at those indices instead, and
+    `image_selection_label` names that selection in the report, such as
+    "named image list 'walk'". `recon`, when given, is the reconstruction
+    already loaded from `sfmr_path`. The reconstruction-wide figures and the
+    flag thresholds are taken over every image either way.
+    """
     from .._sfmtool.reconstruction import RangeExpr
 
     if recon_name is None:
@@ -131,7 +152,7 @@ def print_metrics_analysis(
     if range_expr is not None:
         range_numbers = set(RangeExpr(range_expr))
 
-    rust_recon = SfmrReconstruction.load(sfmr_path)
+    rust_recon = recon if recon is not None else SfmrReconstruction.load(sfmr_path)
 
     if rust_recon.point_count == 0:
         click.echo(f"\nPer-image metrics analysis for: {recon_name}")
@@ -140,7 +161,9 @@ def print_metrics_analysis(
         click.echo("")
         return
 
-    per_image = _compute_per_image_metrics(rust_recon, range_numbers=range_numbers)
+    per_image = _compute_per_image_metrics(
+        rust_recon, range_numbers=range_numbers, image_indices=image_indices
+    )
 
     errors = rust_recon.rms_reprojection_errors
     recon_median_error = float(np.median(errors))
@@ -181,6 +204,11 @@ def print_metrics_analysis(
     if range_expr is not None:
         click.echo(
             f"Range filter: {range_expr} ({len(per_image)} of {rust_recon.image_count} images)"
+        )
+    if image_indices is not None:
+        label = image_selection_label or "image selection"
+        click.echo(
+            f"Selected by {label} ({len(per_image)} of {rust_recon.image_count} images)"
         )
     click.echo(
         f"Mean reprojection error: {errors.mean():.3f} px "

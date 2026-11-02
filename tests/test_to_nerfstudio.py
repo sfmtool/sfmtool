@@ -18,6 +18,7 @@ from sfmtool._to_nerfstudio import (
     write_sparse_ply,
 )
 from sfmtool.cli import main
+from sfmtool.reconstruction import SfmrReconstruction
 
 
 class TestFrameTransformMatrix:
@@ -320,6 +321,45 @@ class TestToNerfstudioE2E:
         assert sum(1 for _ in images_dir.iterdir()) == 5
         for frame in frames:
             assert (out / frame["file_path"]).exists()
+
+    def test_named_image_list_filters_frames(self, pinhole_sfmr_17_images, tmp_path):
+        recon = SfmrReconstruction.load(pinhole_sfmr_17_images)
+        lists_path = Path(recon.workspace_dir) / ".sfm-named-image-lists.json"
+        lists_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "named_image_lists": {
+                        "first": [
+                            {
+                                "pattern": "**/seoul_bull_sculpture_%02d.jpg",
+                                "range": "1-4",
+                            }
+                        ]
+                    },
+                }
+            )
+        )
+        out = tmp_path / "ns_dataset"
+        result = CliRunner().invoke(
+            main,
+            [
+                "to-nerfstudio",
+                str(pinhole_sfmr_17_images),
+                str(out),
+                "--num-downscales",
+                "0",
+                "-r",
+                "first",
+                "-r",
+                "2-4",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "keeping 3 of 17 images" in result.output
+        with open(out / "transforms.json") as f:
+            data = json.load(f)
+        assert len(data["frames"]) == 3
 
     def test_range_with_no_matches_errors(self, pinhole_sfmr_17_images, tmp_path):
         out = tmp_path / "ns_dataset"
