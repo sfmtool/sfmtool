@@ -14,6 +14,12 @@ it narrows.
 The Python bindings to these modules are indexed by submodule in
 [../python-bindings.md](../python-bindings.md), which names the spec for each.
 
+The crate-level module
+[`numeric`](../../crates/sfmtool-core/src/numeric.rs) has no directory here: it
+holds the shared median and quantile, whose contract is in
+[STANDARDS.md § "Medians and quantiles come from one module"](../STANDARDS.md#medians-and-quantiles-come-from-one-module),
+and `splitmix64`, the RNG step the deterministic samplers share.
+
 | Directory | Module | Contents |
 |-----------|--------|----------|
 | [analysis/](analysis/) | `analysis/` | Graphs and measurements over a reconstruction: covisibility, adjacency, coverage, alignment between reconstructions. |
