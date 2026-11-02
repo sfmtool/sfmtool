@@ -108,9 +108,9 @@ feature-cache hash since it does not affect feature output.
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
 
-The file has no other keys. An optional `named_image_lists` key, naming sets of
-the workspace's images by pattern and frame range so that commands can be
-pointed at one by name, is proposed in
+The file has no other keys. An optional second file beside it in the workspace
+root, `.sfm-named-image-lists.json`, naming sets of the workspace's images by pattern
+and frame range so that commands can be pointed at one by name, is proposed in
 [`../drafts/image-sharpness-and-named-image-lists.md`](../drafts/image-sharpness-and-named-image-lists.md).
 
 ### Feature Prefix Directory
