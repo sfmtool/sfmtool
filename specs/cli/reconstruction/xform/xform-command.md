@@ -406,14 +406,70 @@ later refit of the spline; the default domain of a switch stays the far corner.
 --camera-model SFMTOOL_FISHEYE,coeffs=8,spline_domain=108,cameras=0
 ```
 
+A camera that varies a per-image parameter the target cannot carry (the
+radial correction or the rolling-shutter rates) is refused here; drop the
+parameter first with `--drop-image-adjustments`, below, in the same command.
+
+#### `--drop-image-adjustments parameters=<NAME>+<NAME>...[,cameras=<I>+<J>...]`
+
+Stops cameras varying per-image parameters
+([`../../../formats/sfmr-file-format.md`](../../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)):
+each chosen camera's flag for each parameter named is cleared, every image of
+the camera has that part of its adjustment set to zero, and the mean over the
+camera's posed images is folded into the camera, the focal's the geometric
+mean, so the lens changes as little as it can. Rolling-shutter rates are
+dropped with nothing folded, and the camera keeps its scanlines setting. Poses
+and points are not moved; the stored errors of the points the camera's images
+observe are recomputed from the inline keypoints where the reconstruction
+carries them. The operation is
+[`../../../core/reconstruction/drop-image-adjustments.md`](../../../core/reconstruction/drop-image-adjustments.md);
+the transform, `DropImageAdjustmentsTransform`
+([`xform/_drop_image_adjustments.py`](../../../../src/sfmtool/xform/_drop_image_adjustments.py)),
+calls `SfmrReconstruction.drop_image_adjustments` once for each camera. It is
+the CLI's counterpart of Switch Camera Model's Drop per image row
+([`../../../gui/edits/switch-camera-model.md`](../../../gui/edits/switch-camera-model.md#dropping-per-image-parameters)).
+Only `--bundle-adjust` turns a per-image parameter on, since it is what solves
+it; this option only turns one off.
+
+The value is a required, comma-separated list of `key=value` fields:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `parameters` | required | The per-image parameters to drop, joined by `+`, by the names a camera's `per_image_adjustments` lists: `focal`, `principal_point`, `radial_bspline` and `rolling_shutter`. |
+| `cameras` | every camera | Camera indexes to drop them from, joined by `+`, as `--camera-model` and `--bundle-adjust` take them. |
+
+The option is named after the operation, `drop_image_adjustments`, and takes
+the glossary's *drop*: it removes no image, as `--drop-thumbnails` removes no
+row. A missing `parameters=`, an empty one, a name that is not one of the
+four, an unknown key and a malformed value are usage errors when the arguments
+are parsed; a camera index past the reconstruction's cameras is a usage error
+when the step runs, before anything is written, and a folded camera that is
+not a valid lens stops the command with the operation's own refusal. A camera that does not vary
+a parameter named is left as it is, so the step drops from each camera only
+what it varies. For each chosen camera it prints what it dropped, `Camera 0:
+dropped focal, principal_point per image`, or `Camera 1: varies none of them
+per image`. The recorded transform description lists the parameters in that
+order and the cameras where `cameras=` was given, `Drop per-image adjustments
+(parameters=focal+principal_point, cameras=0)`.
+
+```bash
+--drop-image-adjustments parameters=principal_point
+--drop-image-adjustments parameters=radial_bspline+rolling_shutter,cameras=1
+# Drop each image's principal-point offset, then solve one principal point per
+# camera.
+--drop-image-adjustments parameters=principal_point --bundle-adjust principal_point=on
+# Drop the corrections a COLMAP model cannot carry, then switch to it.
+--drop-image-adjustments parameters=radial_bspline+rolling_shutter --camera-model OPENCV_FISHEYE
+```
+
 ### Optimization
 
-#### `--bundle-adjust [cameras=0+1,cross=off,image_focal=on,...,scanlines=rows]`
+#### `--bundle-adjust [cameras=0+1,cross=off,principal_point=on,image_focal=on,...,scanlines=rows]`
 
 Applies bundle adjustment via pycolmap to refine camera poses and 3D point positions.
 The value is optional, as for `--refine-normals`: bare `--bundle-adjust` takes no
-parameters, `cameras=` (also `--bundle-adjust=cameras=0`) applies to both
-paths below, and `cross=` and the per-image keys (`image_focal=`,
+parameters, `cameras=` (also `--bundle-adjust=cameras=0`) and
+`principal_point=` apply to both paths below, and `cross=` and the per-image keys (`image_focal=`,
 `image_principal_point=`, `image_radial_bspline=`, `image_rolling_shutter=`
 and `scanlines=`, [below](#per-image-releases)) to the sfmtool path alone.
 
@@ -436,12 +492,9 @@ carries those only on an `SFMTOOL_PINHOLE` camera, so it never reaches the
 pycolmap path, whose COLMAP export refuses them),
 with every camera's focal released, and the lens distortion released on each
 camera whose model has some the solve can release: the spline, and `k1` on a
-`SIMPLE_RADIAL_FISHEYE` camera beside it. The shared principal point is held on
-both paths: `--bundle-adjust` has no key for it, though the transform behind it,
-`BundleAdjustTransform`, takes `release_principal_point` and passes it to
-either solver; `image_principal_point=on` moves it to its images' mean. A key
-for it is proposed in
-[per-image-adjustments-ui.md](../../../drafts/per-image-adjustments-ui.md). That path needs inline keypoints (an
+`SIMPLE_RADIAL_FISHEYE` camera beside it. The shared principal point is held
+on both paths unless `principal_point=on` is given (below), and
+`image_principal_point=on` moves it to its images' mean. That path needs inline keypoints (an
 `embedded_patches` reconstruction) and a camera model whose focal it can release
 for every posed image whose camera is released, and stops with the adjustment's
 own refusal, naming the camera, otherwise; a rig with one spline camera and one
@@ -481,6 +534,28 @@ pycolmap path each other camera's intrinsics are held constant in the solve,
 which otherwise runs as pycolmap's own bundle adjustment does: every registered
 image, with the gauge fixed by two camera poses; it prints which cameras were
 released and which held. An index past the reconstruction's cameras is a usage error.
+
+`principal_point=on` (a boolean, spelled as for `cross=`; off is the default)
+releases the shared principal point of every camera the run releases, on
+either path, as `BundleAdjustTransform(release_principal_point=True)` and the
+viewer's **Release principal point** do: pycolmap's `refine_principal_point`,
+or the `principal_point` field of each released camera's `CameraRelease` on
+sfmtool's path, which needs no focal and is accepted on every model. A held
+camera's principal point stays held. The key is the `CameraRelease` field's
+name, as the per-image keys are. On sfmtool's path each camera's line then
+names it and its change, as on the seoul_bull ground truth switched to
+`SFMTOOL_PINHOLE`: `Camera 0 (17 images): focal 333.908 -> 339.318; principal
+point (135.0, 240.0) -> (124.7, 236.5); released: focal, principal point,
+distortion`, and the recorded description lists it, `Bundle adjustment
+(release: focal,principal_point,distortion)`. Beside `image_principal_point=on`
+it is the same release, since the per-image release already moves the shared
+value. With a narrow field of view the data barely tell the principal point
+from a turn of every image, so its change is worth reading.
+
+```bash
+--bundle-adjust principal_point=on
+--bundle-adjust cameras=0,principal_point=on
+```
 
 ##### Per-image releases
 
@@ -1108,4 +1183,10 @@ sfm xform candidate.sfmr ws/ground_truth.sfmr --minimal wspath=.
 sfm xform input.sfmr refined.sfmr \
   --camera-model RADIAL \
   --bundle-adjust
+
+# Drop each image's principal-point offset and solve one principal point per
+# camera instead
+sfm xform input.sfmr refined.sfmr \
+  --drop-image-adjustments parameters=principal_point \
+  --bundle-adjust principal_point=on
 ```

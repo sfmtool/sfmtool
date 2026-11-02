@@ -54,7 +54,8 @@ from ..xform._arg_parser import (
         "and each point stored as a position or a direction by its rays at the "
         "end; 'cameras=0+1' releases only those cameras' lenses, and "
         "'cross=off' keeps every point in the representation it has (e.g. "
-        "'--bundle-adjust cameras=0,cross=off'). 'image_focal=on', "
+        "'--bundle-adjust cameras=0,cross=off'). 'principal_point=on' releases "
+        "each released camera's principal point too. 'image_focal=on', "
         "'image_principal_point=on', 'image_radial_bspline=on' and "
         "'image_rolling_shutter=on' release that field of each image, by "
         "sfmtool's adjustment, and 'scanlines=rows|columns|unknown' chooses the "
@@ -293,6 +294,16 @@ from ..xform._arg_parser import (
     ),
 )
 @click.option(
+    "--drop-image-adjustments",
+    multiple=True,
+    help=(
+        "Stop cameras varying per-image parameters, folding the images' mean "
+        "into each camera: parameters=NAME+NAME[,cameras=0+1], the names among "
+        "focal, principal_point, radial_bspline and rolling_shutter (e.g., "
+        "'parameters=principal_point'). Poses and points are not moved."
+    ),
+)
+@click.option(
     "--find-points-at-infinity",
     multiple=True,
     help=(
@@ -368,10 +379,11 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
     Camera model:
       --camera-model MODEL[,KEY=VAL...]   Fit another model to each camera (e.g. SFMTOOL_FISHEYE,coeffs=8)
+      --drop-image-adjustments PARAMS     Stop cameras varying per-image parameters (parameters=, cameras=)
 
     \b
     Optimization:
-      --bundle-adjust [PARAMS]            Apply bundle adjustment (cameras=, cross=, image_*=, scanlines=)
+      --bundle-adjust [PARAMS]            Apply bundle adjustment (cameras=, cross=, principal_point=, image_*=, scanlines=)
       --refine-normals                    Turn each patch to its grown-plane normal (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
       --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)
@@ -431,6 +443,11 @@ def xform(ctx, input_path, output_path, **kwargs):
         # Release each image's radial correction and rolling shutter, racing
         # rows against columns where the scanlines are not known
         sfm xform in.sfmr out.sfmr --bundle-adjust image_radial_bspline=on,image_rolling_shutter=on
+
+    \b
+        # Drop each image's principal-point offset, then solve one principal
+        # point per camera
+        sfm xform in.sfmr out.sfmr --drop-image-adjustments parameters=principal_point --bundle-adjust principal_point=on
 
     \b
         # Discover points at infinity, capping features per image
@@ -509,7 +526,7 @@ def xform(ctx, input_path, output_path, **kwargs):
             "--filter-by-zncc-self-similarity-radius, --filter-by-patch-size, "
             "--include-by-distribution, "
             "--find-points-at-infinity, --classify-points-at-infinity, "
-            "--camera-model, --bundle-adjust, --refine-normals, --refine-keypoints, "
+            "--camera-model, --drop-image-adjustments, --bundle-adjust, --refine-normals, --refine-keypoints, "
             "--localize-keypoints, --to-embedded-patches, "
             "--drop-thumbnails, --drop-patch-bitmaps, --add-thumbnails, "
             "--add-patch-bitmaps, --minimal, "

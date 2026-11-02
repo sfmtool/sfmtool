@@ -16,8 +16,9 @@ image's radial correction or rolling-shutter rates sit on an
 sfmtool's path, which holds both and each camera's scanlines setting; the
 pycolmap path's COLMAP export refuses them.
 
-Either path releases every camera's lens by default. ``cameras=`` limits the
-release to the cameras it names and holds the rest. A per-image release
+Either path releases every camera's lens by default, its principal point only
+with ``principal_point=on``. ``cameras=`` limits the release to the cameras it
+names and holds the rest. A per-image release
 (``image_focal=``, ``image_principal_point=``, ``image_radial_bspline=``,
 ``image_rolling_shutter=``, with ``scanlines=`` choosing the rates' scanlines)
 applies to the released cameras and always takes sfmtool's path, since
@@ -171,7 +172,7 @@ class BundleAdjustTransform:
     Args:
         release_focal: Whether a released camera's focal may move.
         release_principal_point: Whether a released camera's principal point
-            may move, on either path. ``--bundle-adjust`` leaves it ``False``.
+            may move, on either path (``--bundle-adjust principal_point=on``).
         release_distortion: Whether a released camera's lens distortion may
             move. sfmtool's adjustment releases it only together with the
             focal, and only where the camera model has distortion it can free.

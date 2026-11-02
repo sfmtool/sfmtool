@@ -30,8 +30,9 @@ use sfmtool_core::geometry::{BaSchedule, FreePointPolicy, DEFAULT_SCHEDULE};
 use sfmtool_core::reconstruction::bundle_adjust::{
     check_schedule, distortion_is_releasable, focal_is_releasable,
     image_radial_bspline_is_releasable, image_rolling_shutter_is_releasable, CameraRelease,
-    RollingShutterScanlinesChoice,
+    ImageAdjustmentParameter, RollingShutterScanlinesChoice,
 };
+use sfmtool_core::reconstruction::switch_camera_model::varied_image_adjustments;
 use sfmtool_core::{CameraModel, EditedReconstruction};
 
 use crate::scene::ReconId;
@@ -137,8 +138,9 @@ pub(crate) fn parse_schedule(text: &str) -> Result<Vec<BaSchedule>, String> {
 
 /// One camera the posed images use, as its row in the dialog shows it: which
 /// camera, how many posed images it takes, why its focal, distortion,
-/// per-image radial or per-image rolling-shutter checkbox is greyed, and the
-/// scanlines setting it stores. Its principal-point checkboxes are never
+/// per-image radial or per-image rolling-shutter checkbox is greyed, the
+/// per-image parameters it already varies, and the scanlines setting it
+/// stores. Its principal-point checkboxes are never
 /// greyed for the model, since every model can release its principal point,
 /// shared or per image; its per-image focal checkbox is greyed for the focal's
 /// reason.
@@ -166,6 +168,9 @@ pub(crate) struct CameraGate {
     /// an `SFMTOOL_PINHOLE`. The per-image rolling-shutter checkbox carries
     /// this as its disabled hover text.
     pub(crate) image_rolling_shutter_refusal: Option<String>,
+    /// The per-image parameters the camera already varies
+    /// ([`varied_image_adjustments`]), whose boxes the row opens ticked.
+    pub(crate) varied: Vec<ImageAdjustmentParameter>,
     /// The scanlines setting the camera stores, which the row's Scanlines
     /// choice opens on; `None` where it stores none, and the choice opens on
     /// `Unknown`.
@@ -242,6 +247,7 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
                              SFMTOOL_PINHOLE alone. Switch the camera to SFMTOOL_PINHOLE first."
                         )
                     }),
+                varied: varied_image_adjustments(image_set, c as usize),
                 scanlines: image_set
                     .camera_per_image_adjustments(c as usize)
                     .rolling_shutter_scanlines,
@@ -357,12 +363,21 @@ impl Default for RowState {
 }
 
 impl RowState {
-    /// A row as the dialog opens it for `gate`'s camera: every checkbox clear,
-    /// and the Scanlines choice on the camera's stored setting, or `Unknown`
-    /// where it stores none, since an absent setting means the scanlines are
-    /// not known.
+    /// A row as the dialog opens it for `gate`'s camera: each per-image box
+    /// ticked where the camera already varies that parameter and its model can
+    /// take the release, so a second solve keeps solving what the first turned
+    /// on, every other checkbox clear, and the Scanlines choice on the
+    /// camera's stored setting, or `Unknown` where it stores none, since an
+    /// absent setting means the scanlines are not known.
     fn opening(gate: &CameraGate) -> Self {
+        let varies = |p| gate.varied.contains(&p);
         Self {
+            image_focal: varies(ImageAdjustmentParameter::Focal) && gate.focal_refusal.is_none(),
+            image_principal_point: varies(ImageAdjustmentParameter::PrincipalPoint),
+            image_radial_bspline: varies(ImageAdjustmentParameter::RadialBspline)
+                && gate.image_radial_bspline_refusal.is_none(),
+            image_rolling_shutter: varies(ImageAdjustmentParameter::RollingShutter)
+                && gate.image_rolling_shutter_refusal.is_none(),
             scanlines: gate
                 .scanlines
                 .map_or(RollingShutterScanlinesChoice::Unknown, Into::into),
@@ -448,12 +463,14 @@ impl BundleAdjustPrompt {
     /// Ask about `recon`.
     ///
     /// Idempotent while the dialog is already up, so a menu item racing itself
-    /// cannot stack two of them. Every checkbox starts **clear**: a lens that
-    /// moves is a different claim about the capture than a pose that does, and
-    /// the default should be the smaller one. Each Scanlines choice starts on
-    /// its camera's stored setting, or `Unknown` where it stores none. The
-    /// schedule starts as the one last run on `recon` this session, or the
-    /// core function's default.
+    /// cannot stack two of them. The shared checkboxes start **clear**: a lens
+    /// that moves is a different claim about the capture than a pose that
+    /// does, and the default should be the smaller one. A per-image box starts
+    /// ticked where its camera already varies that parameter, since the
+    /// reconstruction already makes that claim, and clear elsewhere. Each
+    /// Scanlines choice starts on its camera's stored setting, or `Unknown`
+    /// where it stores none. The schedule starts as the one last run on
+    /// `recon` this session, or the core function's default.
     pub(crate) fn ask(&mut self, recon: ReconId, label: String, gates: BundleAdjustGates) {
         if self.pending.is_none() {
             let rows = gates.cameras.iter().map(RowState::opening).collect();
