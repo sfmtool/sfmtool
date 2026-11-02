@@ -120,7 +120,7 @@ construction cost by about `d` and makes each large cluster vote on up to
 
 A positioned build runs three passes over the same arrays and returns one
 object, so which pass the time went to is not visible from outside it.
-`SFMTOOL_PROFILE=1` turns on per-phase wall-time counters
+[`SFMTOOL_PROFILE=1`](../README.md#phase-timing-with-sfmtool_profile) turns on per-phase wall-time counters
 (`covisibility/prof.rs`, the convention of `focal_vote/prof.rs`) and prints a
 summary to stderr when the build finishes: `cluster_pass` (the span dedupe, the
 shared-count votes and the sampled displacement draw), `mean_fold` (the `N²`

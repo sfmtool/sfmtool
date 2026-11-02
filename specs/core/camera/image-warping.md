@@ -516,7 +516,7 @@ For performance, bilinear interpolation on `u8` data should:
   by keypoint-subpixel refinement (`remap_bilinear_with_grad`), so both the value
   and gradient batched gathers stay in lockstep with the per-channel path.
   Opt-in sampler counters live in `camera::remap::prof` (gated on
-  `SFMTOOL_PROFILE`).
+  [`SFMTOOL_PROFILE`](../README.md#phase-timing-with-sfmtool_profile)).
 
 ### Anisotropic Filtering
 
