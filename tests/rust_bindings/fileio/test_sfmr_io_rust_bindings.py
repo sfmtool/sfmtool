@@ -187,7 +187,7 @@ class TestDictRoundTrip:
         data["patch_v_halfvec_xyz"] = None
         data["patch_bitmaps_y_x_rgba"] = None
 
-        with pytest.raises(OSError, match="requires patch_u_halfvec_xyz"):
+        with pytest.raises(ValueError, match="requires patch_u_halfvec_xyz"):
             write_sfmr(tmp_path / "dropped.sfmr", data, skip_recompute_depth_stats=True)
 
 
@@ -598,7 +598,7 @@ class TestPointConstraints:
         data["point_constraints"] = constraints
         data["constraint_distances"] = distance
         data["constraint_reference_images"] = reference
-        with pytest.raises(OSError, match="past the"):
+        with pytest.raises(ValueError, match="past the"):
             write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)
 
     def test_columns_survive_a_point_filter(self, seoul_bull_sfmr_only, tmp_path):
@@ -679,7 +679,7 @@ class TestPointConstraints:
         data["point_constraints"] = constraints
         data["constraint_distances"] = distance
         data["constraint_reference_images"] = reference
-        with pytest.raises(OSError, match="its legend gives"):
+        with pytest.raises(ValueError, match="its legend gives"):
             write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)
 
 
@@ -973,7 +973,7 @@ class TestPerImageIntrinsicAdjustments:
     def test_a_column_without_the_key_is_refused(self, seoul_bull_sfmr_only, tmp_path):
         data = read_sfmr(seoul_bull_sfmr_only)
         data["focal_adjustments"] = np.zeros(len(data["image_names"]))
-        with pytest.raises(OSError, match="no camera lists"):
+        with pytest.raises(ValueError, match="no camera lists"):
             write_sfmr(tmp_path / "unlisted.sfmr", data)
 
     def test_image_intrinsics_is_the_camera_without_an_adjustment(

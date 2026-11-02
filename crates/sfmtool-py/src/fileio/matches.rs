@@ -14,6 +14,7 @@ use sfmtool_matches_format::{
     TwoViewGeometryData,
 };
 
+use crate::format_errors::{read_err, write_err};
 use crate::helpers::{
     dtype_name, get_item, get_optional_item, py_to_serde, py_to_u128_bytes, serde_to_py,
     u128_bytes_to_py,
@@ -130,16 +131,14 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
 /// Read a complete .matches file, returning a dict with numpy arrays and metadata.
 #[pyfunction]
 pub fn read_matches(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = sfmtool_matches_format::read_matches(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let data = sfmtool_matches_format::read_matches(&path).map_err(read_err)?;
     matches_data_to_py(py, data)
 }
 
 /// Read only metadata from a .matches file (fast, no binary data).
 #[pyfunction]
 pub fn read_matches_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let metadata = sfmtool_matches_format::read_matches_metadata(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+    let metadata = sfmtool_matches_format::read_matches_metadata(&path).map_err(read_err)?;
     serde_to_py(py, &metadata)
 }
 
@@ -339,9 +338,7 @@ pub fn write_matches(
             .iter()
             .map(|s| {
                 s.parse()
-                    .map_err(|e: sfmtool_matches_format::MatchesError| {
-                        pyo3::exceptions::PyValueError::new_err(e.to_string())
-                    })
+                    .map_err(write_err::<sfmtool_matches_format::MatchesError>)
             })
             .collect::<PyResult<_>>()?;
         let config_indexes: PyReadonlyArray1<u8> = get_item(data, "config_indexes")?.extract()?;
@@ -403,8 +400,7 @@ pub fn write_matches(
         two_view_geometries,
     };
 
-    sfmtool_matches_format::write_matches(&path, &matches_data, zstd_level)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_matches_format::write_matches(&path, &matches_data, zstd_level).map_err(write_err)
 }
 
 /// Write a clusters file: a `.matches` file with the cluster backbone and no
@@ -418,8 +414,9 @@ pub fn write_matches(
 /// `feature_tool_hashes` and `sift_content_hashes` take the forms
 /// `write_matches` takes. `member_positions` `(M, 2)` and
 /// `member_affine_shapes` `(M, 2, 2)` are float32, and the other arrays are
-/// uint32. Raises `IOError` with the writer's message when the arrays
-/// disagree, such as a member index past its image's feature count.
+/// uint32. Raises `ValueError` with the writer's message when the arrays
+/// disagree, such as a member index past its image's feature count, and the
+/// `OSError` subclass for its kind when the write itself fails.
 #[pyfunction]
 #[pyo3(signature = (
     path,
@@ -497,8 +494,7 @@ pub fn write_clusters_matches(
             matcher_options: py_to_serde(py, matcher_options)?,
         },
     };
-    sfmtool_matches_format::write_clusters_matches(&path, data, zstd_level)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_matches_format::write_clusters_matches(&path, data, zstd_level).map_err(write_err)
 }
 
 /// Verify integrity of a .matches file.
@@ -506,8 +502,7 @@ pub fn write_clusters_matches(
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
 pub fn verify_matches(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    sfmtool_matches_format::verify_matches(&path)
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_matches_format::verify_matches(&path).map_err(read_err)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -5,19 +5,22 @@
 //! `write_sift` functions, the `SiftFile` handle most of the package reads
 //! through, and the `SiftWriteQueue` that `sfm sift` saves through.
 //!
-//! Errors follow one rule across all of them: a missing file raises
-//! `FileNotFoundError`, any other failed read or write raises `OSError`, and
-//! data a caller hands a writer that the format does not allow (a metadata key
-//! the format does not define, a missing or mistyped value, an array whose
-//! shape disagrees with `feature_count`) raises `ValueError` before anything is
-//! written. An array of the wrong dtype raises `TypeError` naming its key, as
+//! Every `SiftError` raises through the format-error table in
+//! [`crate::format_errors`], so these raise what the other formats' bindings
+//! raise: a failed filesystem call is the `OSError` subclass for its kind
+//! (`FileNotFoundError` for a missing file), a file that cannot be parsed or
+//! breaks a rule of the format is an `OSError`, and data a caller hands a
+//! writer that the format does not allow (a metadata key the format does not
+//! define, a missing or mistyped value, an array whose shape disagrees with
+//! `feature_count`) is a `ValueError`, raised before anything is written. An
+//! array of the wrong dtype raises `TypeError` naming its key, as
 //! `write_matches` does.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use numpy::{IntoPyArray, PyReadonlyArray2, PyReadonlyArray3, ToPyArray};
-use pyo3::exceptions::{PyFileNotFoundError, PyIOError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
@@ -25,23 +28,8 @@ use sfmtool_sift_format::{
     self, FeatureToolMetadata, SiftContentHash, SiftData, SiftError, SiftMetadata, SIFT_ZSTD_LEVEL,
 };
 
+use crate::format_errors::{read_err, write_err};
 use crate::helpers::{dtype_name, get_item, py_to_serde, serde_to_py};
-
-/// The Python error for a failed `.sift` read or write: `FileNotFoundError`
-/// for a file that does not exist, `OSError` for everything else.
-fn sift_os_err(e: SiftError) -> PyErr {
-    let not_found = match &e {
-        SiftError::Io(source) | SiftError::IoPath { source, .. } => {
-            source.kind() == std::io::ErrorKind::NotFound
-        }
-        _ => false,
-    };
-    if not_found {
-        PyFileNotFoundError::new_err(e.to_string())
-    } else {
-        PyIOError::new_err(e.to_string())
-    }
-}
 
 /// Convert SiftData to a Python dict.
 fn sift_data_to_py(py: Python<'_>, data: SiftData) -> PyResult<Py<PyAny>> {
@@ -75,7 +63,7 @@ fn sift_data_to_py(py: Python<'_>, data: SiftData) -> PyResult<Py<PyAny>> {
 pub fn read_sift(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let data = py
         .detach(|| sfmtool_sift_format::read_sift(&path))
-        .map_err(sift_os_err)?;
+        .map_err(read_err)?;
     sift_data_to_py(py, data)
 }
 
@@ -86,7 +74,7 @@ pub fn read_sift(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
 pub fn read_sift_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let (tool_meta, meta, hash) = py
         .detach(|| sfmtool_sift_format::read_sift_metadata(&path))
-        .map_err(sift_os_err)?;
+        .map_err(read_err)?;
 
     let dict = PyDict::new(py);
     dict.set_item("feature_tool_metadata", serde_to_py(py, &tool_meta)?)?;
@@ -102,7 +90,7 @@ pub fn read_sift_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> 
 pub fn read_sift_partial(py: Python<'_>, path: PathBuf, count: usize) -> PyResult<Py<PyAny>> {
     let data = py
         .detach(|| sfmtool_sift_format::read_sift_partial(&path, count))
-        .map_err(sift_os_err)?;
+        .map_err(read_err)?;
     sift_data_to_py(py, data)
 }
 
@@ -144,12 +132,11 @@ fn column<'py, T: FromPyObjectOwned<'py>>(
 /// wrong dtype or rank `TypeError`, and anything the format refuses
 /// `ValueError`.
 fn sift_data_from_dict(py: Python<'_>, data: &Bound<'_, PyDict>) -> PyResult<SiftData> {
-    let invalid = |e: SiftError| PyValueError::new_err(e.to_string());
     let feature_tool_metadata =
         FeatureToolMetadata::from_json_for_write(metadata_json(py, data, "feature_tool_metadata")?)
-            .map_err(invalid)?;
-    let metadata =
-        SiftMetadata::from_json_for_write(metadata_json(py, data, "metadata")?).map_err(invalid)?;
+            .map_err(write_err)?;
+    let metadata = SiftMetadata::from_json_for_write(metadata_json(py, data, "metadata")?)
+        .map_err(write_err)?;
 
     let positions_xy: PyReadonlyArray2<f32> = column(data, "positions_xy", "(N, 2) float32")?;
     let affine_shapes: PyReadonlyArray3<f32> = column(data, "affine_shapes", "(N, 2, 2) float32")?;
@@ -172,7 +159,7 @@ fn sift_data_from_dict(py: Python<'_>, data: &Bound<'_, PyDict>) -> PyResult<Sif
             .as_standard_layout()
             .into_owned(),
     };
-    sfmtool_sift_format::validate_sift_data(&sift_data).map_err(invalid)?;
+    sfmtool_sift_format::validate_sift_data(&sift_data).map_err(write_err)?;
     Ok(sift_data)
 }
 
@@ -203,7 +190,7 @@ pub fn write_sift(
     // The arrays are now owned, so release the GIL around the CPU-bound
     // zstd/ZIP compression and file write.
     py.detach(|| sfmtool_sift_format::write_sift(&path, &sift_data, zstd_level))
-        .map_err(sift_os_err)
+        .map_err(write_err)
 }
 
 /// An open `.sift` file: its metadata, read when it is opened, and its
@@ -241,7 +228,7 @@ impl PySiftFile {
             let path = &self.path;
             let data = py
                 .detach(|| sfmtool_sift_format::read_sift_partial(path, count))
-                .map_err(sift_os_err)?;
+                .map_err(read_err)?;
             return Ok(f(&data));
         }
         let cached = self.lock_data().clone();
@@ -251,7 +238,7 @@ impl PySiftFile {
                 let path = &self.path;
                 let data = Arc::new(
                     py.detach(|| sfmtool_sift_format::read_sift(path))
-                        .map_err(sift_os_err)?,
+                        .map_err(read_err)?,
                 );
                 // Another thread may have read it meanwhile; keep the first.
                 self.lock_data().get_or_insert(data).clone()
@@ -286,7 +273,7 @@ impl PySiftFile {
     ///     path: `.sift` file path (str or Path).
     #[new]
     fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
-        py.detach(|| Self::open(&path)).map_err(sift_os_err)
+        py.detach(|| Self::open(&path)).map_err(read_err)
     }
 
     /// The path the file was opened from.
@@ -424,14 +411,14 @@ const DEFAULT_LOOKAHEAD: usize = 2;
 // hold the Senders. This avoids the default pyclass `Send + Sync` requirement.
 #[pyclass(unsendable, module = "sfmtool.fileio")]
 pub struct SiftWriteQueue {
-    pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Result<(), String>>>,
+    pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Result<(), SiftError>>>,
     lookahead: usize,
 }
 
-fn recv_write(rx: std::sync::mpsc::Receiver<Result<(), String>>) -> PyResult<()> {
+fn recv_write(rx: std::sync::mpsc::Receiver<Result<(), SiftError>>) -> PyResult<()> {
     match rx.recv() {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(PyIOError::new_err(e)),
+        Ok(Err(e)) => Err(write_err(e)),
         Err(_) => Err(PyIOError::new_err(
             "sift write task panicked before reporting a result",
         )),
@@ -441,7 +428,7 @@ fn recv_write(rx: std::sync::mpsc::Receiver<Result<(), String>>) -> PyResult<()>
 /// Await every save in `receivers`, discarding results (no GIL needed — the
 /// tasks are pure Rust). Shared by `drain` and `Drop`, which only need to
 /// guarantee no spawned save outlives the queue.
-fn await_all(receivers: Vec<std::sync::mpsc::Receiver<Result<(), String>>>) {
+fn await_all(receivers: Vec<std::sync::mpsc::Receiver<Result<(), SiftError>>>) {
     for rx in receivers {
         let _ = rx.recv();
     }
@@ -496,8 +483,7 @@ impl SiftWriteQueue {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         rayon::spawn(move || {
-            let result = sfmtool_sift_format::write_sift(&path, &sift_data, zstd_level)
-                .map_err(|e| e.to_string());
+            let result = sfmtool_sift_format::write_sift(&path, &sift_data, zstd_level);
             let _ = tx.send(result);
         });
         self.pending.push_back(rx);
@@ -579,7 +565,7 @@ impl Drop for SiftWriteQueue {
 #[pyfunction]
 pub fn verify_sift(py: Python<'_>, path: PathBuf) -> PyResult<(bool, Vec<String>)> {
     py.detach(|| sfmtool_sift_format::verify_sift(&path))
-        .map_err(sift_os_err)
+        .map_err(read_err)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
