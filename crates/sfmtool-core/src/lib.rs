@@ -25,6 +25,8 @@
 //!   messages and counts through, and is told to stop by
 //! - [`web_export`]: a reconstruction as static web files, the `scene.json`
 //!   and JPEG atlas pages `sfm web-export` writes for a browser viewer
+//! - [`workspace`]: the files in a workspace root that configure the
+//!   workspace as a whole, such as its named image lists
 //!
 //! File-format I/O is provided by the sibling crates `sfmtool-sift-format`,
 //! `sfmtool-sfmr-format`, `sfmtool-matches-format`, and `sfmtool-camrig-format`.
@@ -42,6 +44,7 @@ pub mod reconstruction;
 pub mod spatial;
 pub mod spherical;
 pub mod web_export;
+pub mod workspace;
 
 // Headline types reachable as `sfmtool_core::Foo`, leaning on each group's
 // own facade re-exports (`camera::{Camera, CameraIntrinsics, CameraModel}`,
