@@ -40,7 +40,9 @@ class SwitchCameraModelTransform:
     ``theta_fit_deg``, is refitted over its whole spline domain: that is how a
     spline's coefficient count and domain change. Its domain end is kept
     exactly unless ``spline_domain_deg`` is given; its count is
-    ``coeff_count``, which defaults to 8 here as for any spline target.
+    ``coeff_count``, which defaults to 8 here as for any spline target. Where
+    an ``SFMTOOL_PINHOLE`` camera's domain end moves, each image's radial
+    correction is refitted to the new domain too.
     """
 
     def __init__(
@@ -137,6 +139,9 @@ def format_camera_report(entry: dict) -> list[str]:
     held = format_monotone_constraint(fit["monotone_constraint"])
     if held:
         lines.append(f"  {held}")
+    refitted = format_radial_corrections(entry["radial_corrections"])
+    if refitted:
+        lines.append(f"  {refitted}")
     for dropped in fit["dropped"]:
         lines.append(f"  {dropped}")
     lines.append(
@@ -181,6 +186,24 @@ def format_monotone_constraint(constraint: dict) -> str | None:
         f"monotone constraint bound at {count} angle{'' if count == 1 else 's'}, "
         f"{where}, where the fit departs from the source"
     )
+
+
+def format_radial_corrections(refitted: dict | None) -> str | None:
+    """``radial corrections refitted to the new domain for 17 images: rms 0.016
+    px, max 0.057 px (image 11)`` when the switch refitted the images' radial
+    corrections to a moved spline domain end; ``None`` when it refitted none."""
+    if refitted is None:
+        return None
+    count = len(refitted["images"])
+    line = (
+        f"radial corrections refitted to the new domain for {count} "
+        f"image{'' if count == 1 else 's'}: rms {refitted['rms_px']:.3f} px, "
+        f"max {refitted['max_px']:.3f} px (image {refitted['max_image']})"
+    )
+    held = refitted["monotone_constrained_images"]
+    if held:
+        line += f"; monotone constraint bound on {held}"
+    return line
 
 
 def format_outermost_keypoint(outermost: dict) -> str | None:

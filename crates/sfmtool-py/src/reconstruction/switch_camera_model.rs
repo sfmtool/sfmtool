@@ -21,14 +21,14 @@ use sfmtool_core::reconstruction::outermost_keypoint::{
     outermost_keypoints as core_outermost, KeypointReach, OutermostKeypoints,
 };
 use sfmtool_core::reconstruction::switch_camera_model::{
-    switch_camera_model as core_switch, ErrorSummary, SwitchCameraModelOptions,
-    SwitchCameraModelReport,
+    switch_camera_model as core_switch, ErrorSummary, RefittedRadialCorrections,
+    SwitchCameraModelOptions, SwitchCameraModelReport,
 };
 use sfmtool_core::SfmrReconstruction;
 
 use super::edited::{materialised, PyEditedReconstruction};
 use super::sfmr_reconstruction::PySfmrReconstruction;
-use crate::geometry::camera_intrinsics::refit_report_to_py;
+use crate::geometry::camera_intrinsics::{monotone_constraint_to_py, refit_report_to_py};
 use crate::PyCameraIntrinsics;
 
 fn summary_to_py<'py>(py: Python<'py>, s: &ErrorSummary) -> PyResult<Bound<'py, PyDict>> {
@@ -66,6 +66,39 @@ fn outermost_to_py<'py>(py: Python<'py>, o: &OutermostKeypoints) -> PyResult<Bou
     Ok(d)
 }
 
+/// One camera's radial corrections refitted to its new spline domain as a
+/// dict: ``rms_px``, ``max_px``, ``max_image``, ``monotone_constrained_images``
+/// and ``images``, one dict per image refitted (``image``, ``radial_bspline``,
+/// ``rms_px``, ``max_px``, ``monotone_constraint``).
+fn radial_corrections_to_py<'py>(
+    py: Python<'py>,
+    refitted: &RefittedRadialCorrections,
+) -> PyResult<Bound<'py, PyDict>> {
+    let images = PyList::empty(py);
+    for (image, r) in &refitted.images {
+        let d = PyDict::new(py);
+        d.set_item("image", image)?;
+        d.set_item("radial_bspline", (r.radial_bspline[0], r.radial_bspline[1]))?;
+        d.set_item("rms_px", r.rms_px)?;
+        d.set_item("max_px", r.max_px)?;
+        d.set_item(
+            "monotone_constraint",
+            monotone_constraint_to_py(py, &r.monotone_constraint)?,
+        )?;
+        images.append(d)?;
+    }
+    let d = PyDict::new(py);
+    d.set_item("rms_px", refitted.rms_px)?;
+    d.set_item("max_px", refitted.max_px)?;
+    d.set_item("max_image", refitted.max_image)?;
+    d.set_item(
+        "monotone_constrained_images",
+        refitted.monotone_constrained_images,
+    )?;
+    d.set_item("images", images)?;
+    Ok(d)
+}
+
 fn report_to_py<'py>(py: Python<'py>, r: &SwitchCameraModelReport) -> PyResult<Bound<'py, PyDict>> {
     let cameras = PyList::empty(py);
     for entry in &r.cameras {
@@ -85,6 +118,13 @@ fn report_to_py<'py>(py: Python<'py>, r: &SwitchCameraModelReport) -> PyResult<B
             },
         )?;
         c.set_item("fit", refit_report_to_py(py, &entry.refit)?)?;
+        match &entry.radial_corrections {
+            Some(refitted) => c.set_item(
+                "radial_corrections",
+                radial_corrections_to_py(py, refitted)?,
+            )?,
+            None => c.set_item("radial_corrections", py.None())?,
+        }
         let o = &entry.observations;
         let obs = PyDict::new(py);
         obs.set_item("observations", o.observations)?;
@@ -177,12 +217,20 @@ impl PyEditedReconstruction {
     /// is then ``"spline_domain"``, and its ``monotone_constraint`` says where
     /// the refit departs from the old curve. This is how a spline's count and
     /// domain change; ``bundle_adjust`` refines the coefficients a camera has.
+    /// Where an ``SFMTOOL_PINHOLE`` camera's domain end moves, each image's
+    /// radial correction is refitted to the new domain the same way.
     ///
     /// Returns:
     ///     ``(EditedReconstruction, report)``. The report's ``cameras`` holds
     ///     one dict per switched camera: ``camera``, ``images``, ``source`` and
     ///     ``target`` (the two ``CameraIntrinsics``), ``fit`` (the dict
-    ///     ``CameraIntrinsics.refit`` reports) and ``observations``, the
+    ///     ``CameraIntrinsics.refit`` reports), ``radial_corrections`` (the
+    ///     images' radial corrections refitted to a moved domain end:
+    ///     ``rms_px``, ``max_px``, ``max_image``,
+    ///     ``monotone_constrained_images`` and ``images``, one dict per image
+    ///     with ``image``, ``radial_bspline``, ``rms_px``, ``max_px`` and
+    ///     ``monotone_constraint``; ``None`` where none was refitted) and
+    ///     ``observations``, the
     ///     comparison over one fixed set of observations: ``observations``,
     ///     ``unmeasured``, ``max_theta_deg``, ``before`` and ``after`` (each
     ///     ``median_px``, ``p90_px``, ``max_px``), ``changed_over_1px``,

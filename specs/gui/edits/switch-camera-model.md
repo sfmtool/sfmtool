@@ -187,14 +187,18 @@ The panel shows a strip of controls under the header
   checkbox per parameter it varies, in the panel's words (`focal`, `principal
   point`, `radial correction`, `rolling-shutter rates`), cleared when the
   proposal opens. A parameter the target cannot carry is ticked and greyed,
-  its hover text saying why the switch drops it (§ "Dropping per-image
-  parameters").
+  its hover text saying why the switch drops it, and a radial correction the
+  switch refits to a moved domain end is cleared and enabled, its hover text
+  saying so (§ "Dropping per-image parameters").
 - The fit's **report** in one line, for example `rms 0.130 px, radial 0.013 px,
   max 0.292 px over θ ≤ 84.5°; aspect fy/fx 0.9978 dropped (single focal)`,
   with `; monotone constraint bound at 1 angle, 113.2°` added where the
   constraint bound, since over that range the proposed curve is the closest
   invertible one rather than the current one. A refused fit shows `Refused:`
-  and the core's sentence instead, in the error colour.
+  and the core's sentence instead, in the error colour. Where the fit refits
+  the images' radial corrections to a moved domain end, a second line under
+  it says how far their curves moved, `radial corrections refitted per image:
+  rms 0.016 px, max 0.057 px (IMG_0011.jpg)`.
 - The **observation comparison** the proposal's job sends when its switch
   returns (§ "The proposal's job"): the median, 90th percentile and largest
   error of the camera's observations under each camera over one fixed set, and
@@ -279,12 +283,30 @@ its adjustment.
 Every box opens cleared, keeping every image's own values, except where the
 target cannot carry the parameter
 ([../../core/reconstruction/switch-camera-model.md](../../core/reconstruction/switch-camera-model.md)
-§ "What a switch carries"): the rolling-shutter rates on any target other than
-`SFMTOOL_PINHOLE`, and the radial correction on any switch other than a refit of
-an `SFMTOOL_PINHOLE` spline that keeps its domain end. Those boxes are ticked
+§ "What a switch carries"): the rolling-shutter rates and the radial
+correction on any target other than `SFMTOOL_PINHOLE`. Those boxes are ticked
 and greyed, with hover text naming the target and the reason, and the proposal
 drops them whatever was ticked, so a camera whose images carry a radial
 correction or rates opens a proposal for any target rather than a refused fit.
+
+A refit of an `SFMTOOL_PINHOLE` spline whose domain end moves (a new Spline
+domain, or a Fit to θ the wire gave) keeps the radial correction by refitting
+each image's correction to the new domain, as the switch does
+([../../core/reconstruction/switch-camera-model.md](../../core/reconstruction/switch-camera-model.md)
+§ "Refitting the images' radial corrections"). Its box is enabled and cleared,
+like any carried parameter's, and its hover text says what clearing it means:
+*Cleared, every image's radial correction is refitted to the new spline
+domain, the way the camera's curve is, so the image's curve stays as close as
+it can to its curve now.* Ticking it drops the correction as before. The
+proposal's fit refits the images' corrections beside the camera
+(`refit_radial_corrections`), on every change of a control, and a line under
+the fit's report says how far the images' curves moved: `radial corrections
+refitted per image: rms 0.016 px, max 0.057 px (IMG_0011.jpg)`, the image the
+largest distance belongs to in brackets, and `; monotone constraint bound on 2
+images` where the floor held any. The Action Log row of the proposal and of
+Apply carry the same numbers. The observation comparison below the lines is
+the job's switch, which refits them the same way, so it shows what the
+conversion costs the observations.
 A drop the target requires is worked out again for each change of the
 controls, so it lasts only as long as the target that requires it, while a box
 the person ticked stays ticked across a change of model: the proposal keeps
@@ -298,13 +320,15 @@ to the folded camera and drops the per-image principal point, and on an
 `SFMTOOL_PINHOLE` camera the same refit keeps the radial correction and the
 rates while dropping what is ticked.
 
-The **Proposed** table states which per-image parameters the proposal keeps
-and which it drops, in the line under its Parameters heading: `Per image,
-unchanged from Current: focal and principal point. Dropped per image: radial
-correction and rolling-shutter rates.` A kept parameter's values are the
-images' own and do not change with the switch, so the Current table's
-statistics and histograms stand for them, and the Proposed table does not
-repeat them.
+The **Proposed** table states which per-image parameters the proposal keeps,
+which it refits and which it drops, in the line under its Parameters heading:
+`Per image, unchanged from Current: focal and principal point. Dropped per
+image: radial correction and rolling-shutter rates.`, or on a moved domain end
+`Per image, unchanged from Current: focal, principal point and rolling-shutter
+rates. Refitted to the new domain: radial correction.` A parameter kept as it
+is has the images' own values, which do not change with the switch, so the
+Current table's statistics and histograms stand for them, and the Proposed
+table does not repeat them.
 
 ### The proposal's job
 
@@ -696,7 +720,9 @@ median error 0.298 → 0.301 px over 4210 observations (v5 → v6)`
 says how much of a later change is the refit rather than the adjustment. Where
 the monotonicity constraint bound, `; monotone constraint bound at 3 angles,
 112.0°–118.7°` follows, since over that range the refit is the closest
-invertible curve rather than the old one. The median is over the camera's
+invertible curve rather than the old one. Where the switch refitted the
+images' radial corrections to a moved domain end, `; radial corrections
+refitted per image, rms 0.016 px, max 0.057 px` follows. The median is over the camera's
 observations with an error under both models. Apply's row follows the fit's
 report with `; ` and the counts the Retriangulate edits write for a whole-value
 run (`3020 of 3020 points moved, …, median shift 0.0123`), read off the
@@ -781,7 +807,12 @@ Explorer (`sfm-explorer` lib tests, headless):
   change of model while the required ones go with their target, and a tick
   surviving a target that forces the same drop and back, then cleared; the row and
   the line inside the panel and apart from the rest at 341, 482 and 1800 px;
-  and no row for a camera that varies nothing per image.
+  and no row for a camera that varies nothing per image. A refit of the
+  seoul_bull spline on a domain end 5° shorter: the radial correction's box
+  cleared and enabled with the refit's hover text, the request dropping
+  nothing, every image refitted with the report line under the fit's painted,
+  the job's switch refitting the same, the Proposed table's line naming the
+  correction as refitted, and a click on the box dropping it instead.
 - `scene_graph/tests.rs`: a camera row's menu offering `Switch Camera Model…`,
   greyed on another camera while a proposal is open, with the node's
   retriangulation greyed too.
@@ -824,7 +855,11 @@ Explorer (`sfm-explorer` lib tests, headless):
   drops in the label and in `fit`; and `propose_camera_model`'s
   `per_image_adjustment_drops` list marking the corrections required on an
   `SFMTOOL_FISHEYE` target and nothing required on the camera's own refit,
-  which drops what the call names.
+  which drops what the call names; and an `SFMTOOL_PINHOLE` refit on a new
+  domain end listing the radial correction as neither dropped nor required but
+  refitted, its `fit` carrying `radial_corrections` (`null` on the camera's own
+  domain end), and the direct switch on that domain end switching with the
+  correction kept and `fit.radial_corrections` in the reply.
 - `camera_model_proposal/job/tests.rs`: without the preview the job sending
   the comparison alone, pushing nothing and writing no row; Apply with the
   answer in hand installing it with no background task, and pushing the

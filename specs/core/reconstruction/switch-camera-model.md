@@ -52,6 +52,12 @@ pub fn default_fit_angle(
     camera: usize,
 ) -> Result<(f64, ThetaFitSource), SwitchCameraModelError>;
 
+pub fn refit_radial_corrections(
+    recon: &SfmrReconstruction,
+    camera: usize,
+    refit: &CameraIntrinsicsRefit, // fit_camera_switch's
+) -> Result<Option<RefittedRadialCorrections>, SwitchCameraModelError>;
+
 pub fn varied_image_adjustments(image_set: &ImageSet, camera: usize) -> Vec<ImageAdjustmentParameter>;
 
 pub fn image_adjustments_carried(
@@ -61,7 +67,19 @@ pub fn image_adjustments_carried(
     options: &RefitOptions,
 ) -> Result<Vec<CarriedImageAdjustment>, SwitchCameraModelError>;
 
-pub struct CarriedImageAdjustment { pub parameter: ImageAdjustmentParameter, pub carried: bool }
+pub struct CarriedImageAdjustment {
+    pub parameter: ImageAdjustmentParameter,
+    pub carried: bool,
+    pub refitted: bool, // carried by refitting each image's value to a moved domain end
+}
+
+pub struct RefittedRadialCorrections {
+    pub images: Vec<(usize, RadialCorrectionRefit)>, // by image index, ascending
+    pub rms_px: f64,                                 // over every image's samples
+    pub max_px: f64,
+    pub max_image: usize,
+    pub monotone_constrained_images: usize,
+}
 
 pub struct SwitchCameraModelOptions {
     pub drop_image_adjustments: Vec<ImageAdjustmentParameter>, // default empty: every image keeps its own
@@ -78,6 +96,7 @@ pub struct CameraSwitch {
     pub source: CameraIntrinsics,              // before any drop
     pub dropped_image_adjustments: Vec<ImageAdjustmentParameter>,
     pub refit: CameraIntrinsicsRefit,          // carries the new camera
+    pub radial_corrections: Option<RefittedRadialCorrections>, // None: none refitted
     pub images: usize,
     pub observations: ObservationComparison,
     pub outermost: Option<OutermostKeypoints>, // under the switched camera; None when left out
@@ -105,6 +124,7 @@ pub enum SwitchCameraModelError {
     Observations(String),
     LensCorrections { camera: usize, target: &'static str, kept: Vec<ImageAdjustmentParameter> },
     Drop(DropImageAdjustmentsError),
+    RadialCorrection { camera: usize, image: usize, error: RefitError },
 }
 ```
 
@@ -156,9 +176,18 @@ what that camera dropped, for a caller's label.
 **Which drops a target forces is callable on its own.**
 `image_adjustments_carried` lists each per-image parameter a camera varies
 (`varied_image_adjustments`: its flag, or a non-zero value on one of its
-images, the parameters a drop changes something for) and whether a switch to a
-target with given fit options carries it. The viewer's proposal reads it to
-tick and grey the drops its target forces before it fits anything.
+images, the parameters a drop changes something for), whether a switch to a
+target with given fit options carries it, and whether it carries it by
+refitting it. The viewer's proposal reads it to tick and grey the drops its
+target forces, and to say which correction it refits, before it fits anything.
+
+**The images' radial corrections are refitted beside the camera's fit, by a
+call of their own.** `fit_camera_switch` fits the shared camera, as before;
+`refit_radial_corrections` takes that fit and refits each image's correction
+to it (§ "Refitting the images' radial corrections"), without building the
+switched value or reading any pixel. `switch_camera_model` calls both, and the
+viewer's proposal calls both on every change of a control, so it shows the
+images' refit the switch would install.
 
 **A spline camera switched to its own model is a refit, in the same call.** A
 new coefficient count or domain end is a change of how the lens curve is
@@ -212,19 +241,71 @@ not:
 | Parameter | Carried by |
 |-----------|------------|
 | `rolling_shutter` | an `SFMTOOL_PINHOLE` target, the one model the rates are defined on ([../camera/sfmtool-pinhole-kernels.md § Per-image corrections](../camera/sfmtool-pinhole-kernels.md#per-image-corrections)) |
-| `radial_bspline` | a refit of an `SFMTOOL_PINHOLE` spline as itself with neither `theta_fit_deg` nor `spline_domain_deg` given |
+| `radial_bspline` | an `SFMTOOL_PINHOLE` target: as it is where the spline's domain end stays put, refitted to the new domain where the switch moves it |
 
 The radial correction is a curve on the camera's own domain, `τ = ρ/ρ_max`,
-added to the camera's spline, so it means the same after the switch only where
-the model stays `SFMTOOL_PINHOLE` and `ρ_max` stays put: a refit at another
-coefficient count keeps the domain end bit for bit, while a given domain end or
-a fit over a given angle (whose domain end is the far image corner) moves it.
-`fit_camera_switch` refuses a camera that keeps a parameter its switch does not
-carry, with `SwitchCameraModelError::LensCorrections` naming the camera, the
-target and the parameters kept, before it fits anything; `switch_camera_model`
-checks after its drops, so dropping them lifts the refusal. A parameter counts
-as kept where the camera lists it or any of its images holds a non-zero value
-of it.
+added to the camera's spline, so only an `SFMTOOL_PINHOLE` camera has it. A
+switch to `SFMTOOL_PINHOLE` (whose source, since it has corrections, is an
+`SFMTOOL_PINHOLE` too) keeps each image's correction as it is, bit for bit,
+where `ρ_max` stays the same number: a refit at another coefficient count
+keeps the domain end bit for bit, and so does a given domain end equal to it.
+A given domain end that differs, or a fit over a given angle (whose domain end
+is the far image corner), moves it, and each image's correction is then
+refitted to the new domain (below), so it is carried either way;
+`CarriedImageAdjustment::refitted` says which. `fit_camera_switch` refuses a
+camera that keeps a parameter its switch does not carry, with
+`SwitchCameraModelError::LensCorrections` naming the camera, the target and
+the parameters kept, before it fits anything; `switch_camera_model` checks
+after its drops, so dropping them lifts the refusal. A parameter counts as
+kept where the camera lists it or any of its images holds a non-zero value of
+it.
+
+### Refitting the images' radial corrections
+
+Where a switch of an `SFMTOOL_PINHOLE` camera to `SFMTOOL_PINHOLE` moves
+`ρ_max`, the two coefficients each image holds would describe another curve on
+the new domain. So after the camera's fit, `refit_radial_corrections` refits
+each image's correction the way the camera's curve was refitted: the new
+camera's spline plus the image's new correction is fitted to the old camera's
+spline plus its old correction, linear tail included, over the angles the
+camera's fit sampled (the whole new domain for a refit of the spline as
+itself, `θ_fit` for a fit over a given angle), with the same weights and under
+the same monotonicity floor on the same grid. The correction is linear in its
+two coefficients for a fixed camera, so each image is one small least-squares
+solve, constrained where the floor binds; the math is
+[`../camera/refit-camera-intrinsics.md` § An image's radial correction on a new
+domain](../camera/refit-camera-intrinsics.md#an-images-radial-correction-on-a-new-domain).
+An image whose old curve is flatter than the floor is held at the floor, as
+the camera's fit holds the camera, and the report says on how many images
+that happened; a curve that still fails the monotonicity check refuses the
+switch (`RadialCorrection`, naming the camera and the image), which only a
+failed solve can give.
+
+Every image of the camera is refitted where the camera lists the radial
+correction, a zero correction included, since the camera's own refit leaves a
+residual the image's curve takes up; where the camera does not list it, only
+the images that hold a non-zero one are, and a zero stays zero. The focal
+scale, the principal-point offset and the rates are not refitted: they are
+relative to whatever the camera becomes. The refit is a fraction of a
+millisecond per image, so it takes no `Progress`.
+
+The entry's `radial_corrections` reports it: each image's new coefficients
+with the rms and largest pixel distance between its curve before and after
+over the fit's samples, and over all of them the rms (`rms_px`), the largest
+(`max_px`) and its image (`max_image`), and `monotone_constrained_images`.
+These sit beside the camera fit's `rms_px` and `max_px`, and say what the
+conversion cost each image's own lens. On the seoul_bull ground truth
+(`seoul_bull_sculpture_ground_truth_v02.sfmr`, 17 images, domain end 37.8°):
+
+| Domain end | Camera fit rms / max | Images' refit rms / max | Median error before → after | p90 before → after | Median, p90 after with the correction dropped |
+|---|---|---|---|---|---|
+| 32.8° | 0.016 / 0.057 px | 0.016 / 0.057 px | 0.101 → 0.105 px | 0.275 → 0.288 px | 0.231, 0.538 px |
+| 42.8° | 0.147 / 0.426 px | 0.149 / 0.696 px | 0.101 → 0.149 px | 0.275 → 0.322 px | 0.222, 0.574 px |
+
+The images' curves move about as far as the camera's: what a two-coefficient
+correction cannot follow on the new domain is what the camera's spline cannot
+follow either. Dropping the corrections instead costs about twice the median
+error.
 
 ### The observations of a camera
 
@@ -281,7 +362,10 @@ The fit's report says what the refit did: `theta_fit_source` is
 `spline_domain`, `rms_px` and `max_px` are the refitted camera's distance from
 the old one over the whole domain, and `monotone_constraint` gives the range of
 incidence angles where the monotonicity constraint held the slope at its floor,
-which is where the refit departs from the old curve. The observation
+which is where the refit departs from the old curve. An `SFMTOOL_PINHOLE`
+refit given a new domain end also refits its images' radial corrections to it
+(§ "Refitting the images' radial corrections"), and the entry's
+`radial_corrections` reports that beside the fit. The observation
 comparison is taken as for any switch. A domain end the model cannot have (past
 180°, or at 90° or more for `SFMTOOL_PINHOLE`) is refused, naming the camera; a count
 outside 0 and 2 to 32 is refused by `RefitTarget::from_name`, before any camera.
@@ -294,10 +378,11 @@ models, and is fitted like any other source too.
 ### What is written back
 
 Each switched camera is replaced by its fitted camera. Nothing else in the image
-set, the point set or the observation columns changes beyond the drops: in
-particular each image keeps what it was not asked to drop of its adjustment as
-it is, since it is relative to whatever its camera is, and the fit refits the
-shared camera alone. Every
+set, the point set or the observation columns changes beyond the drops and the
+refitted radial corrections: each image keeps what it was not asked to drop of
+its adjustment as it is, since it is relative to whatever its camera is,
+except a radial correction on a domain end the switch moved, which takes its
+refit. Every
 reprojection error below, before and after, is read through each image's
 intrinsics, its camera with its adjustment applied: before through the value
 handed in, after through the dropped and switched one. The stored error of
@@ -364,7 +449,10 @@ command
 
 The report's `cameras` is a list with one dict per switched camera: `camera`,
 `images`, `source` and `target` (the two `CameraIntrinsics`), `fit` (the dict
-`CameraIntrinsics.refit` reports), `observations` (the comparison's fields,
+`CameraIntrinsics.refit` reports), `radial_corrections` (`None`, or a dict of
+`rms_px`, `max_px`, `max_image`, `monotone_constrained_images` and `images`,
+one dict per image refitted with `image`, `radial_bspline`, `rms_px`, `max_px`
+and `monotone_constraint`), `observations` (the comparison's fields,
 each summary a dict of `median_px`, `p90_px` and `max_px`) and `outermost` (as
 `SfmrReconstruction.outermost_keypoints` reports it; the bindings always ask
 for it). A refusal is a `ValueError` carrying the error's sentence.
@@ -406,14 +494,28 @@ exact projection, plus one point 95° off the first image's axis:
   parameters the camera does not vary, giving the switch without the option;
 - `image_adjustments_carried` on an `SFMTOOL_PINHOLE` camera varying all four:
   an `SFMTOOL_FISHEYE` target carrying the focal and principal point only, the
-  camera's own refit all four, and a given domain end or fit angle everything
-  but the radial correction;
+  camera's own refit, and one given its own domain end, all four as they are,
+  and a given domain end or fit angle all four with the radial correction
+  refitted;
 - a kept radial correction or kept rates on a target that cannot carry them
   refused (`LensCorrections` naming what was kept), the same camera switching
   once they are dropped with its scanlines setting kept, and a camera listing
   either at zero refused alike;
 - a same-model refit whose only change is a drop, on an `SFMTOOL_PINHOLE`
   camera that keeps its corrections and on an `SFMTOOL_FISHEYE` spline;
+- the radial corrections refitted to a moved domain end: on the seoul_bull
+  ground truth (read only) shortened and lengthened by 5°, every image
+  refitted, its correction written and valid and monotone, nothing else of its
+  adjustment changed, its curve over the shared domain moving no more than
+  the camera's does plus 0.3 px, its report's rms the distance over the fit's
+  angles and no larger than the old coefficients read on the new domain give,
+  and the comparison closer than dropping the corrections leaves it; on the
+  synthetic scene, a given domain end and a given fit angle both refitting,
+  as `refit_radial_corrections` reports alone, an image with a zero
+  correction refitted near zero, and on a camera that does not list the
+  correction a zero kept exactly; a new count alone, and the camera's own
+  domain end given as a number, carrying every correction bit for bit; and an
+  image whose curve is flatter than the floor held at it, its curve monotone;
 - a spline camera switched to its own model at a new count and domain giving
   exactly `refit_spline`'s camera and report, over the whole domain; the domain
   end kept bit for bit when none is given; a given fit angle taking the general

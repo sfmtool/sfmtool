@@ -114,6 +114,15 @@ pub fn refit_spline(
 /// domain end that is not positive and finite.
 pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64>;
 
+/// One image's radial correction refitted onto an `SFMTOOL_PINHOLE` camera
+/// with a new domain end, and how far the image's curve moved.
+pub struct RadialCorrectionRefit {
+    pub radial_bspline: [f64; 2],
+    pub rms_px: f64,
+    pub max_px: f64,
+    pub monotone_constraint: MonotoneConstraint,
+}
+
 /// The counts a spline with a curve takes, 2 to 32: what a count field is
 /// bounded by.
 pub const SPLINE_COEFF_COUNT_RANGE: RangeInclusive<usize>;
@@ -335,6 +344,53 @@ rms 0.49 px and max 1.52 px over the whole domain, the floor binding at one grid
 angle, 113.2°, the bottom of the dip; sixteen give rms 0.18 px and max 0.56 px,
 binding at 113.3°.
 
+### An image's radial correction on a new domain
+
+An image of an `SFMTOOL_PINHOLE` camera may carry a radial correction, two
+coefficients `e` on the camera's own domain, `τ = ρ/ρ_max`, added to the
+camera's spline
+([`sfmtool-pinhole-kernels.md` § Per-image corrections](sfmtool-pinhole-kernels.md#per-image-corrections)).
+Where a fit moves `ρ_max`, the same two coefficients describe another curve, so
+the reconstruction-level switch refits each image's correction after the
+camera's own fit, with `refit_radial_correction` (crate-internal; its report
+is `RadialCorrectionRefit`). It is the camera's fit narrowed to the two
+unknowns that are the image's own:
+
+- **The curves.** The image's old curve is the old camera with its adjustment
+  applied, linear tail included; the new one is the fitted camera with the
+  same focal scale and principal-point offset and a new correction `e`. The
+  new radius is `f·(d + δ(d) + e₀·B₀(d) + e₁·B₁(d))`, with `δ` the fitted
+  camera's spline and `B₀`, `B₁` the two-coefficient basis on the new domain
+  carried along its end tangent, which the camera's basis contains exactly. For
+  a fixed camera that is linear in `e`.
+- **The samples and weights** are the camera fit's: its 96 incidence angles
+  over `(0, θ_fit]`, the whole new domain for a refit of the spline as itself,
+  each weighted equally in pixels. Both curves are radial about the same
+  principal point, so one azimuth gives the distance all 64 do, and the
+  solution and the distances are those of the full sample set. The solve is
+  the SVD of a 96 × 2 design matrix; there is no smoothing penalty, as the
+  camera fit has none for two coefficients.
+- **The monotonicity floor** is the camera fit's, on its grid: the image's
+  slope `1 + δ′(d) + (K·e)·B′(d)`, in units of its focal, stays at or above
+  `MIN_SLOPE` at the 64 points per knot span of the camera's own basis, with
+  `K` the insertion matrix. That is `G·e ≥ h`, with `h` the camera's own slack
+  below the floor negated, so `e = 0` is feasible wherever the camera holds
+  the floor, as its fit makes it. The constrained solve is the camera fit's
+  ([Implementation notes](#implementation-notes)), with that right-hand side.
+  An image whose old curve is flatter than the floor, which the kernels allow,
+  is held at the floor there, and the report's `monotone_constraint` says
+  where. The image's curve is then checked with `bspline_is_monotone`, and a
+  failure, which only a failed solve can give, is refused (`NotMonotone`).
+- **The rolling-shutter rates are left out.** They act after the radial map,
+  the same way on both curves.
+
+The focal scale and the principal-point offset are not refitted: they are
+relative to the camera, whatever it becomes. On the seoul_bull ground truth
+(`seoul_bull_sculpture_ground_truth_v02.sfmr`, domain end 37.8°), refits to
+32.8° and 42.8° move the images' curves by rms 0.016 px and 0.149 px, max
+0.057 px and 0.70 px, close to the camera's own 0.016 px and 0.147 px: what the
+correction cannot follow is what the camera's spline cannot either.
+
 ### Polynomial targets: a small nonlinear fit
 
 For the COLMAP models the pixel is not linear in the parameters, so the samples
@@ -412,8 +468,10 @@ the same weight, counting two data rows per kept observation
 
 **The constrained solve reuses the SVD.** With the design matrix `A = U·S·Vᵀ`,
 the substitution `z = S·Vᵀ·x − Uᵀ·b` turns `min ‖A·x − b‖²` subject to
-`G·x ≥ 0` into the least-distance problem `min ‖z‖` subject to `E·z ≥ f`, with
-`E = G·V·S⁻¹` and `f = −G·x_unconstrained`. Its dual is a non-negative least
+`G·x ≥ h` into the least-distance problem `min ‖z‖` subject to `E·z ≥ f`, with
+`E = G·V·S⁻¹` and `f = h − G·x_unconstrained`. The camera fit's floor is
+homogeneous, `h = 0`; an image's radial correction has the camera's slack on
+the right-hand side. Its dual is a non-negative least
 squares problem over one variable per constraint, solved by the Lawson–Hanson
 active-set algorithm (Lawson & Hanson, *Solving Least Squares Problems*,
 chapter 23), and the constraints with a positive dual variable are the ones the
@@ -490,6 +548,12 @@ print(report["rms_px"], report["radial_rms_px"], report["dropped"])
   infeasible one.
 - A `SIMPLE_RADIAL_FISHEYE` source with `k1 < 0` is fitted by default to its
   fold, and refused past it.
+- An image's radial correction on a new domain is tested through the switch
+  that calls it
+  ([`../reconstruction/switch-camera-model.md`](../reconstruction/switch-camera-model.md)
+  § Testing): closer than the old coefficients read on the new domain, a zero
+  correction refitted near zero, and an image flatter than the floor held at
+  it.
 - Refusals: a perspective target past 90°; a fit past the trusted bound; a
   polynomial trusted short of the fit; a `SIMPLE_RADIAL_FISHEYE` target that
   folds inside the fit; target names and coefficient counts.

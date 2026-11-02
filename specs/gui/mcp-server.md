@@ -4529,9 +4529,12 @@ agent that wants the direct switch alone cancels the proposal first.
   per-image parameters"). Omitted, every image keeps its own values. A name
   outside the four, one named twice, and one the camera does not vary are
   refused. A kept radial correction or kept rates the target cannot carry
-  refuse the switch, naming them: only an `SFMTOOL_PINHOLE` target carries the
-  rates, and only a refit of an `SFMTOOL_PINHOLE` spline that keeps its domain
-  end the radial correction.
+  refuse the switch, naming them: only an `SFMTOOL_PINHOLE` target carries
+  either. Where an `SFMTOOL_PINHOLE` refit moves the spline's domain end, each
+  image's radial correction is refitted to the new domain, the way the
+  camera's curve is
+  ([../core/reconstruction/switch-camera-model.md](../core/reconstruction/switch-camera-model.md)
+  § "Refitting the images' radial corrections"), so it need not be dropped.
 
 The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
 `fit` object beside it: `camera_intrinsics_index`, `camera_model_before`,
@@ -4539,7 +4542,13 @@ The reply is an edit's (`cursor`, `serial`, `label`, `report`, `changed`) with a
 by the same names), `theta_fit_deg`, `theta_fit_source` (`spline_domain` for a
 refit), `spline_domain_deg`, `rms_px` and `max_px` (the fitted camera's
 distance from the old over the fit), `monotone_constraint` (`active`,
-`active_angles`, `range_deg`), `observations`, the number of the camera's
+`active_angles`, `range_deg`), `radial_corrections` (`null` unless the switch
+refitted the images' radial corrections to a moved domain end; then `rms_px`
+and `max_px`, the distance between each image's curve before and after over
+the fit's angles, `max_image`, the image the largest belongs to,
+`monotone_constrained_images`, and `images`, one `{ "image", "radial_bspline",
+"rms_px", "max_px", "monotone_constraint_active" }` per image refitted),
+`observations`, the number of the camera's
 observations with an error under both models, and beside it
 `median_error_before_px` and `median_error_after_px`, the median of those
 observations' errors under the old camera and the new. The label reads
@@ -4597,7 +4606,8 @@ a fit the core refused, a busy node or viewer, and a switch refused because a
              "max_px": 0.292,
              "dropped": ["aspect fy/fx 0.9978 dropped (single focal)"],
              "monotone_constraint": { "active": false, "active_angles": 0,
-                                      "range_deg": null } },
+                                      "range_deg": null },
+             "radial_corrections": null },
     "fit_report": "rms 0.130 px, radial 0.013 px, max 0.292 px over θ ≤ 84.5°; aspect fy/fx 0.9978 dropped (single focal)",
     "refusal": null,
     "observation_comparison": null,
@@ -4659,14 +4669,18 @@ The `proposed` block, which `get_camera_intrinsics` also carries for the
 camera, holds what the proposal was fitted from (`request`, `null` where the
 default holds, with `drop_per_image_adjustments` the drops the proposal makes,
 those asked for and those the target requires), `per_image_adjustment_drops`, the
-panel's Drop per image row (one `{ "parameter", "drop", "required" }` per
-per-image parameter the camera varies, `required` where the target cannot
-carry it, so the proposal drops it whatever the call asked), `refit_spline`
+panel's Drop per image row (one `{ "parameter", "drop", "required",
+"refitted" }` per per-image parameter the camera varies, `required` where the
+target cannot carry it, so the proposal drops it whatever the call asked, and
+`refitted` where the switch keeps it by refitting each image's value to a
+moved spline domain end, the radial correction of an `SFMTOOL_PINHOLE` refit
+given a new domain end), `refit_spline`
 for a spline camera's own model, its
 `generation`, the proposed `camera` as `get_camera_intrinsics` spells one, the
 `fit` report (`camera_model_before`, `camera_model_after`, `theta_fit_deg` and
 `theta_fit_source`, `spline_domain_deg`, `rms_px`, `radial_rms_px`, `max_px`,
-`dropped` as sentences, and `monotone_constraint`), and `fit_report`, the one
+`dropped` as sentences, `monotone_constraint`, and `radial_corrections` as
+`switch_camera_model`'s `fit` carries it), and `fit_report`, the one
 line the panel shows under its controls. It also carries what the proposal's
 job has found ([edits/switch-camera-model.md](edits/switch-camera-model.md)
 § "The proposal's job"):

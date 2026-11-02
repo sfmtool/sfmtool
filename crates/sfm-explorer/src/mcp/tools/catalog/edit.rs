@@ -684,12 +684,18 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           how a spline's count or domain changes; bundle_adjust then refines \
                           the coefficients it has. drop_per_image_adjustments drops per-image \
                           parameters first, and the new model is fitted to the camera that \
-                          leaves; a kept radial correction or kept rolling-shutter rates the \
-                          target cannot carry are refused. The direct form's reply carries the \
+                          leaves; a kept radial correction or kept rolling-shutter rates on a \
+                          target other than SFMTOOL_PINHOLE are refused. Where an \
+                          SFMTOOL_PINHOLE camera's switch moves its spline's domain end, each \
+                          image's radial correction is refitted to the new domain the way the \
+                          camera's curve is. The direct form's reply carries the \
                           version, the Action Log sentence, and fit: the fit's rms and max \
                           pixel distance from the old camera, theta_fit_deg and its source, the \
                           spline domain, the range of incidence angles where the monotonicity \
-                          constraint bound, and the median reprojection error of the camera's \
+                          constraint bound, radial_corrections (the images' refitted radial \
+                          corrections and the rms and max pixel distance between each image's \
+                          curve before and after, or null where none was refitted), and the \
+                          median reprojection error of the camera's \
                           observations before and after. A camera model proposal open on the \
                           reconstruction (propose_camera_model) is applied first; cancel it \
                           first to make the direct switch alone. The proposal form, with \
@@ -802,8 +808,10 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           on another reconstruction is applied first, as selecting another \
                           reconstruction applies it. The reply is the proposed block \
                           get_camera_intrinsics also reports, which carries the per-image \
-                          parameters the camera varies, each with whether it is dropped and \
-                          whether the target requires the drop, the observation \
+                          parameters the camera varies, each with whether it is dropped, \
+                          whether the target requires the drop and whether the switch refits \
+                          it to a moved spline domain end, the fit with its \
+                          radial_corrections, the observation \
                           comparison once the proposal's job has switched the camera, and a \
                           triangulation block whose state is off, pending, ready (with the \
                           preview's counts and lost_points, the points that lose their \
@@ -949,8 +957,9 @@ fn drop_per_image_adjustments_schema() -> Value {
              so the observation comparison covers what the drop costs. Each has to be one \
              the camera varies. Omit to keep every image's own values. A switch keeps the \
              focal and the principal point on any target; an SFMTOOL_PINHOLE target keeps \
-             the rolling-shutter rates, and only a refit of an SFMTOOL_PINHOLE spline that \
-             keeps its domain end keeps the radial correction. A kept parameter the target \
+             the rolling-shutter rates and the radial correction, refitting each image's \
+             radial correction to the new domain where the switch moves the spline's domain \
+             end. A kept parameter the target \
              cannot carry is refused by switch_camera_model, and dropped by \
              propose_camera_model, whose per_image_adjustment_drops list marks it required.",
     })
