@@ -108,7 +108,7 @@ Nearly all of it is doc comments copied into a spec's fenced API block.
 pair that shares prose outside fences is `translation-averaging.md:140, 159,
 182` ↔ `translation_averaging.rs:675, 881, 892`, carried below.
 
-> _Status (2026-10-31): the `patch-normal-refinement` row is **Superseded** — the spec and the settings and result types of `normal_refine/params.rs` it copied were deleted with the photometric normal search, branch `retire-photometric-search`._
+> _Status (2026-10-31): the `patch-normal-refinement` row is **Superseded** — the spec and the settings and result types of `normal_refine/params.rs` it copied were deleted with the photometric normal search, PR #1082._
 
 ### 3. Shape of the `specs/core/` specs
 
@@ -412,7 +412,7 @@ Non-goals/deferrals checked: 3; no longer hold: 0 (one names a non-existent meth
 **Unclear / incorrect / suspicious:** The 3,000-point results are not tied to a named script run.
 Non-goals/deferrals checked: 2; no longer hold: 0
 
-> _Status (2026-10-31): **Superseded** — the fronto-parallel cache, `CacheMode`, the search and `PatchCloud.refine_normals` were deleted with the photometric normal search, and this spec with them, branch `retire-photometric-search`._
+> _Status (2026-10-31): **Superseded** — the fronto-parallel cache, `CacheMode`, the search and `PatchCloud.refine_normals` were deleted with the photometric normal search, and this spec with them, PR #1082. The spec fixes made for this finding on branch `fix-1031-10-fronto-parallel-cache-spec` were dropped unmerged._
 
 ### specs/core/patch/keypoint-localization-consensus-basis.md
 **Summary:** Caps keypoint localization's congealing to a basis of at most `K` views (default 8) and registers the rest once against the finished template. Behaviour is accurate: defaults, `select_basis` and the stride, the tail gates, the cache sizing, `is_basis`, the bindings and the CLI flag. The prior audit's shape row (dated A/B tables) is fixed by #881.
