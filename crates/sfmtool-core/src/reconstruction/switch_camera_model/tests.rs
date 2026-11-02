@@ -861,27 +861,43 @@ fn nothing_dropped_leaves_the_switch_as_it_was() {
 #[test]
 fn what_a_switch_carries_depends_on_the_target_and_the_domain() {
     let recon = pinhole_corrected_scene();
-    let carried = |name: &str, options: &RefitOptions| -> Vec<(ImageAdjustmentParameter, bool)> {
+    type Carried = Vec<(ImageAdjustmentParameter, bool, bool)>;
+    let carried = |name: &str, options: &RefitOptions| -> Carried {
         image_adjustments_carried(&recon, 0, &target(name), options)
             .unwrap()
             .into_iter()
-            .map(|c| (c.parameter, c.carried))
+            .map(|c| (c.parameter, c.carried, c.refitted))
             .collect()
     };
     let default = RefitOptions::default();
     assert_eq!(
         carried("SFMTOOL_FISHEYE", &default),
         vec![
-            (Focal, true),
-            (PrincipalPoint, true),
-            (RadialBspline, false),
-            (RollingShutter, false)
+            (Focal, true, false),
+            (PrincipalPoint, true, false),
+            (RadialBspline, false, false),
+            (RollingShutter, false, false)
         ]
     );
-    // A refit of the spline that keeps its domain end carries all four.
-    assert!(carried("SFMTOOL_PINHOLE", &default).iter().all(|&(_, c)| c));
+    // A refit of the spline that keeps its domain end carries all four as
+    // they are, and so does one given its own domain end, the same number.
+    for options in [
+        default.clone(),
+        RefitOptions {
+            spline_domain_deg: Some(60.0),
+            ..default.clone()
+        },
+    ] {
+        assert!(
+            carried("SFMTOOL_PINHOLE", &options)
+                .iter()
+                .all(|&(_, c, r)| c && !r),
+            "{options:?}"
+        );
+    }
     // A new domain end, or a fit over a given angle, moves the domain the
-    // radial correction is written on; the rates still ride on the model.
+    // radial correction is written on, so it is carried refitted; the rates
+    // still ride on the model.
     for options in [
         RefitOptions {
             spline_domain_deg: Some(50.0),
@@ -895,10 +911,10 @@ fn what_a_switch_carries_depends_on_the_target_and_the_domain() {
         assert_eq!(
             carried("SFMTOOL_PINHOLE", &options),
             vec![
-                (Focal, true),
-                (PrincipalPoint, true),
-                (RadialBspline, false),
-                (RollingShutter, true)
+                (Focal, true, false),
+                (PrincipalPoint, true, false),
+                (RadialBspline, true, true),
+                (RollingShutter, true, false)
             ],
             "{options:?}"
         );
@@ -949,20 +965,6 @@ fn lens_corrections_kept_on_a_target_that_cannot_carry_them_are_refused() {
         matches!(&err, SwitchCameraModelError::LensCorrections { kept, .. } if *kept == vec![RollingShutter]),
         "{err}"
     );
-    // A refit over a new domain end keeps the rates and refuses the radial
-    // correction.
-    let pinhole = target("SFMTOOL_PINHOLE");
-    let moved = SwitchCameraModelOptions {
-        refit: RefitOptions {
-            spline_domain_deg: Some(50.0),
-            ..RefitOptions::default()
-        },
-        ..SwitchCameraModelOptions::default()
-    };
-    assert!(matches!(
-        switch_camera_model(&recon, &[0], &pinhole, &moved),
-        Err(SwitchCameraModelError::LensCorrections { kept, .. }) if kept == vec![RadialBspline]
-    ));
 }
 
 #[test]
@@ -1057,4 +1059,330 @@ fn a_refit_that_only_drops_a_parameter_runs() {
             .camera_per_image_adjustments(0)
             .principal_point
     );
+}
+
+// ── Radial corrections refitted to a new domain ───────────────────────────
+
+/// The seoul_bull ground truth, whose `SFMTOOL_PINHOLE` camera varies all four
+/// per-image parameters, read only.
+fn seoul_bull_v02() -> SfmrReconstruction {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr",
+    );
+    SfmrReconstruction::load(&path, &crate::progress::Progress::none()).expect("it loads")
+}
+
+/// The largest distance in pixels between the radii `a` and `b` give rays at
+/// incidence angles up to `up_to_deg`, along +X.
+fn largest_radius_difference(a: &CameraIntrinsics, b: &CameraIntrinsics, up_to_deg: f64) -> f64 {
+    (1..=400)
+        .map(|k| {
+            let t = (up_to_deg * f64::from(k) / 400.0).to_radians();
+            let ray = [t.sin(), 0.0, -t.cos()];
+            let (ua, _) = a.ray_to_pixel(ray).unwrap();
+            let (ub, _) = b.ray_to_pixel(ray).unwrap();
+            ((ua - a.principal_point().0) - (ub - b.principal_point().0)).abs()
+        })
+        .fold(0.0, f64::max)
+}
+
+/// The RMS distance in pixels between the radii `a` and `b` give rays at the
+/// 96 incidence angles a fit up to `up_to_deg` samples, along +X.
+fn rms_radius_difference(a: &CameraIntrinsics, b: &CameraIntrinsics, up_to_deg: f64) -> f64 {
+    let sum: f64 = (1..=96)
+        .map(|k| {
+            let t = up_to_deg.to_radians() * f64::from(k) / 96.0;
+            let ray = [t.sin(), 0.0, -t.cos()];
+            let (ua, _) = a.ray_to_pixel(ray).unwrap();
+            let (ub, _) = b.ray_to_pixel(ray).unwrap();
+            ((ua - a.principal_point().0) - (ub - b.principal_point().0)).powi(2)
+        })
+        .sum();
+    (sum / 96.0).sqrt()
+}
+
+fn domain(deg: f64) -> SwitchCameraModelOptions {
+    SwitchCameraModelOptions {
+        refit: RefitOptions {
+            spline_domain_deg: Some(deg),
+            ..RefitOptions::default()
+        },
+        outermost_keypoint: false,
+        ..SwitchCameraModelOptions::default()
+    }
+}
+
+#[test]
+fn a_moved_domain_refits_each_images_radial_correction() {
+    let recon = seoul_bull_v02();
+    assert!(
+        recon
+            .image_set
+            .camera_per_image_adjustments(0)
+            .radial_bspline
+    );
+    let own = crate::camera::refit_intrinsics::spline_domain_deg(&recon.image_set.cameras[0])
+        .expect("a spline camera");
+    let pinhole = target("SFMTOOL_PINHOLE");
+    for deg in [own - 5.0, own + 5.0] {
+        let (out, report) = switch_camera_model(&recon, &[0], &pinhole, &domain(deg)).unwrap();
+        let entry = &report.cameras[0];
+        let refitted = entry.radial_corrections.as_ref().expect("refitted");
+        // Every image of the camera, in order, with its new correction
+        // written and valid.
+        let indexes: Vec<usize> = refitted.images.iter().map(|(i, _)| *i).collect();
+        assert_eq!(
+            indexes,
+            (0..recon.image_set.images.len()).collect::<Vec<_>>()
+        );
+        out.image_set.check_image_intrinsics().unwrap();
+        let camera_moved = largest_radius_difference(
+            &recon.image_set.cameras[0],
+            &out.image_set.cameras[0],
+            own.min(deg),
+        );
+        for (i, r) in &refitted.images {
+            let image = &out.image_set.images[*i];
+            assert_eq!(image.intrinsic_adjustment.radial_bspline, r.radial_bspline);
+            // Only the radial correction changes.
+            let before = &recon.image_set.images[*i].intrinsic_adjustment;
+            assert_eq!(
+                (before.focal, before.principal_point, before.rolling_shutter),
+                (
+                    image.intrinsic_adjustment.focal,
+                    image.intrinsic_adjustment.principal_point,
+                    image.intrinsic_adjustment.rolling_shutter
+                )
+            );
+            let effective = out.image_set.image_intrinsics(*i);
+            let (bspline, d_max, _) = effective.model.radial_spline().unwrap();
+            assert!(crate::camera::distortion::bspline::bspline_is_monotone(
+                bspline, d_max, d_max
+            ));
+            // Each image's own curve moves over the shared domain about as
+            // far as the camera's own curve does, the cost of the camera's
+            // refit, and much less than the old two coefficients would move
+            // it read on the new domain.
+            let old_image = recon.image_set.image_intrinsics(*i);
+            let shared = own.min(deg);
+            let moved = largest_radius_difference(&old_image, &effective, shared);
+            assert!(moved < camera_moved + 0.3, "image {i}: {moved} px");
+            // Over the fit's own angles the refit is the closest curve, so
+            // closer than the old coefficients read on the new domain.
+            let radial = |camera: &CameraIntrinsics, e: [f64; 2]| {
+                camera.with_adjustment(
+                    &IntrinsicAdjustment {
+                        radial_bspline: e,
+                        rolling_shutter: [0.0; 3],
+                        ..*before
+                    },
+                    None,
+                )
+            };
+            let old_curve = radial(&recon.image_set.cameras[0], before.radial_bspline);
+            let refit_rms = rms_radius_difference(
+                &old_curve,
+                &radial(&out.image_set.cameras[0], r.radial_bspline),
+                entry.refit.theta_fit_deg,
+            );
+            assert!((refit_rms - r.rms_px).abs() < 1e-9, "{refit_rms} vs {r:?}");
+            let verbatim_rms = rms_radius_difference(
+                &old_curve,
+                &radial(&out.image_set.cameras[0], before.radial_bspline),
+                entry.refit.theta_fit_deg,
+            );
+            assert!(
+                r.rms_px <= verbatim_rms + 1e-12,
+                "image {i}: {r:?} vs {verbatim_rms}"
+            );
+            assert!(
+                r.max_px >= r.rms_px && r.rms_px < 1.5 * entry.refit.rms_px + 0.01,
+                "{r:?}"
+            );
+        }
+        assert!(refitted.max_px >= refitted.rms_px);
+        assert_eq!(
+            refitted.max_px,
+            refitted
+                .images
+                .iter()
+                .map(|(_, r)| r.max_px)
+                .fold(0.0, f64::max)
+        );
+        // The comparison moves by what the camera's own refit costs: little
+        // where the domain shrinks inside the old one, more where the spline
+        // has to follow the old linear tail. Either way it is closer than a
+        // drop of the corrections leaves it.
+        let o = &entry.observations;
+        if deg < own {
+            assert!(o.after.median_px < o.before.median_px + 0.01, "{o:?}");
+        }
+        let (_, dropping) = switch_camera_model(
+            &recon,
+            &[0],
+            &pinhole,
+            &SwitchCameraModelOptions {
+                drop_image_adjustments: vec![RadialBspline],
+                ..domain(deg)
+            },
+        )
+        .unwrap();
+        let dropped = &dropping.cameras[0];
+        assert!(dropped.radial_corrections.is_none());
+        assert!(
+            o.after.p90_px < dropped.observations.after.p90_px,
+            "{o:?} vs {:?}",
+            dropped.observations
+        );
+    }
+}
+
+#[test]
+fn a_refit_that_keeps_the_domain_end_carries_each_correction_bit_for_bit() {
+    let recon = pinhole_corrected_scene();
+    let pinhole = |count: Option<usize>| RefitTarget::SfmtoolPinhole { coeff_count: count };
+    // A new count alone, and the camera's own domain end given as the same
+    // number, both keep the domain end, so nothing is refitted.
+    for (target, options) in [
+        (pinhole(Some(6)), SwitchCameraModelOptions::default()),
+        (pinhole(None), domain(60.0)),
+    ] {
+        let (out, report) = switch_camera_model(&recon, &[0], &target, &options).unwrap();
+        let entry = &report.cameras[0];
+        assert!(entry.radial_corrections.is_none());
+        let rho = |r: &SfmrReconstruction| match &r.image_set.cameras[0].model {
+            CameraModel::SfmtoolPinhole {
+                bspline_rho_max, ..
+            } => bspline_rho_max.to_bits(),
+            _ => unreachable!(),
+        };
+        assert_eq!(rho(&out), rho(&recon));
+        for (a, b) in out.image_set.images.iter().zip(&recon.image_set.images) {
+            assert_eq!(a.intrinsic_adjustment, b.intrinsic_adjustment);
+        }
+        assert_eq!(
+            refit_radial_corrections(&recon, 0, &entry.refit).unwrap(),
+            None
+        );
+    }
+}
+
+#[test]
+fn a_moved_domain_refits_the_corrections_on_every_path() {
+    let recon = pinhole_corrected_scene();
+    let pinhole = target("SFMTOOL_PINHOLE");
+    // A given domain end, and a fit over a given angle (whose domain end is
+    // the far image corner), both refit every image the camera lists.
+    for options in [
+        domain(50.0),
+        SwitchCameraModelOptions {
+            refit: RefitOptions {
+                theta_fit_deg: Some(40.0),
+                ..RefitOptions::default()
+            },
+            outermost_keypoint: false,
+            ..SwitchCameraModelOptions::default()
+        },
+    ] {
+        let (out, report) = switch_camera_model(&recon, &[0], &pinhole, &options).unwrap();
+        let entry = &report.cameras[0];
+        let refitted = entry.radial_corrections.as_ref().expect("refitted");
+        assert_eq!(refitted.images.len(), IMAGES);
+        assert_eq!(
+            refit_radial_corrections(&recon, 0, &entry.refit).unwrap(),
+            entry.radial_corrections
+        );
+        out.image_set.check_image_intrinsics().unwrap();
+        // Image 2's correction is zero: its curve is the camera's, so its
+        // refit is what is left of the camera's own fit, close to zero.
+        let (_, zero) = refitted.images[2];
+        assert_eq!(
+            recon.image_set.images[2]
+                .intrinsic_adjustment
+                .radial_bspline,
+            [0.0; 2]
+        );
+        assert!(
+            zero.radial_bspline.iter().all(|e| e.abs() < 1e-4),
+            "{zero:?}"
+        );
+        // Its distance is the camera's, scaled by the image's own focal.
+        let scale = 1.0 + recon.image_set.images[2].intrinsic_adjustment.focal;
+        assert!(
+            zero.rms_px <= scale * entry.refit.rms_px + 1e-9,
+            "{zero:?} vs {}",
+            entry.refit.rms_px
+        );
+        // The others carry their correction onto the new domain: the
+        // keypoints were made through it, and the comparison stays small.
+        let o = &entry.observations;
+        assert!(o.after.median_px < 0.05, "{options:?}: {o:?}");
+    }
+    // A camera that does not list the radial correction refits only the
+    // images that hold one, so a zero stays exactly zero.
+    let mut unlisted = recon.clone_for_edit();
+    unlisted.image_set.per_image_adjustments[0].radial_bspline = false;
+    let (out, report) = switch_camera_model(&unlisted, &[0], &pinhole, &domain(50.0)).unwrap();
+    let refitted = report.cameras[0].radial_corrections.as_ref().unwrap();
+    assert_eq!(
+        refitted.images.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        vec![0, 1, 3, 4]
+    );
+    assert_eq!(
+        out.image_set.images[2].intrinsic_adjustment.radial_bspline,
+        [0.0; 2]
+    );
+}
+
+#[test]
+fn a_refitted_correction_is_held_monotone() {
+    // An empty spline on a 60° domain, and one image whose correction flattens
+    // its curve to a slope of 0.01 of the focal at the domain end and along
+    // the tail: monotone, but below the floor a fit may reach.
+    let camera = CameraIntrinsics {
+        model: CameraModel::SfmtoolPinhole {
+            focal_length: 300.0,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            bspline_rho_max: 60f64.to_radians().tan(),
+            bspline: Vec::new(),
+        },
+        width: 480,
+        height: 480,
+        rolling_shutter: None,
+    };
+    let mut recon = scene(vec![camera], |_| 0);
+    recon.image_set.per_image_adjustments = vec![PerImageAdjustments {
+        radial_bspline: true,
+        ..Default::default()
+    }];
+    let rho_max = 60f64.to_radians().tan();
+    recon.image_set.images[1]
+        .intrinsic_adjustment
+        .radial_bspline = [0.0, -0.99 * rho_max / 3.0];
+    recon.image_set.check_image_intrinsics().unwrap();
+    let options = RefitOptions {
+        spline_domain_deg: Some(70.0),
+        ..RefitOptions::default()
+    };
+    let refit = fit_camera_switch(&recon, 0, &target("SFMTOOL_PINHOLE"), &options).unwrap();
+    let refitted = refit_radial_corrections(&recon, 0, &refit)
+        .unwrap()
+        .expect("refitted");
+    assert_eq!(refitted.monotone_constrained_images, 1);
+    let (image, flattened) = refitted.images[1];
+    assert_eq!(image, 1);
+    let held = flattened.monotone_constraint;
+    assert!(held.active && held.active_angles > 0, "{held:?}");
+    // The image's curve on the new domain is invertible.
+    let mut out = recon.clone_for_edit();
+    out.image_set.cameras[0] = refit.camera.clone();
+    out.image_set.images[1].intrinsic_adjustment.radial_bspline = flattened.radial_bspline;
+    let effective = out.image_set.image_intrinsics(1);
+    let (bspline, d_max, _) = effective.model.radial_spline().unwrap();
+    assert!(crate::camera::distortion::bspline::bspline_is_monotone(
+        bspline, d_max, d_max
+    ));
+    // The other images have no correction and stay where the camera is.
+    assert!(refitted.images[0].1.monotone_constraint == Default::default());
 }

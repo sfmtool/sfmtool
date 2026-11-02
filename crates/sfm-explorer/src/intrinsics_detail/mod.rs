@@ -239,8 +239,9 @@ impl IntrinsicsDetail {
                 }
                 ui.separator();
                 let mut proposed_camera = None;
-                // Which per-image parameters the proposed camera keeps and
-                // which it drops, for its table.
+                // Which per-image parameters the proposed camera keeps, which
+                // it refits to a moved domain end and which it drops, for its
+                // table.
                 let mut proposed_note = None;
                 // The fit's largest angle and where its monotonicity
                 // constraint bound, for the change plot.
@@ -270,6 +271,11 @@ impl IntrinsicsDetail {
                                 index,
                             ),
                             &proposal.inputs.drop_image_adjustments,
+                            if proposal.radial_corrections.is_some() {
+                                &[sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::RadialBspline]
+                            } else {
+                                &[]
+                            },
                         );
                         let monotone = refit.monotone_constraint;
                         fit_angles = Some((

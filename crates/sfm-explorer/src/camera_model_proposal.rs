@@ -33,8 +33,8 @@ use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
 use sfmtool_core::reconstruction::drop_image_adjustments::drop_image_adjustments;
 use sfmtool_core::reconstruction::outermost_keypoint::KeypointReach;
 use sfmtool_core::reconstruction::switch_camera_model::{
-    default_fit_angle, fit_camera_switch, image_adjustments_carried, varied_image_adjustments,
-    CameraSwitch, CarriedImageAdjustment,
+    default_fit_angle, fit_camera_switch, image_adjustments_carried, refit_radial_corrections,
+    varied_image_adjustments, CameraSwitch, CarriedImageAdjustment, RefittedRadialCorrections,
 };
 use sfmtool_core::{RowMap, SfmrReconstruction};
 
@@ -220,8 +220,14 @@ pub(crate) struct CameraModelProposal {
     /// generation and a cache keyed by it never serves one proposal's camera
     /// for another's.
     pub(crate) generation: u64,
-    /// The fit, or the core's refusal sentence.
+    /// The fit, or the core's refusal sentence: the camera's fit, and the
+    /// images' radial corrections the switch refits to a moved spline domain
+    /// end ([`Self::radial_corrections`]), the switch's refusal of either.
     pub(crate) fit: Result<CameraIntrinsicsRefit, String>,
+    /// The images' radial corrections refitted to the fit's new domain end,
+    /// as the switch would refit them; `None` where the fit refits none or
+    /// was refused.
+    pub(crate) radial_corrections: Option<RefittedRadialCorrections>,
     /// The fit angle the core takes with none given, and where it came from
     /// (`default_fit_angle`), read once when the proposal opens: what Fit to θ
     /// shows and how far it can be raised, whether or not the fit at that
@@ -421,6 +427,7 @@ impl CameraModelProposal {
                 .map(|parameter| CarriedImageAdjustment {
                     parameter,
                     carried: true,
+                    refitted: false,
                 })
                 .collect()
         })
@@ -475,7 +482,11 @@ impl CameraModelProposal {
         }
         self.inputs = inputs;
         self.generation = next_generation();
-        self.fit = self.refresh_dropped().and_then(|()| self.compute_fit());
+        let fitted = self.refresh_dropped().and_then(|()| self.compute_fit());
+        (self.fit, self.radial_corrections) = match fitted {
+            Ok((refit, corrections)) => (Ok(refit), corrections),
+            Err(why) => (Err(why), None),
+        };
         if let Ok(refit) = &self.fit {
             if self.inputs.spline_domain_deg.is_none()
                 && !self.is_spline_refit(self.inputs.camera_model)
@@ -507,18 +518,26 @@ impl CameraModelProposal {
     }
 
     /// The fit the current inputs ask for, as the switch would make it: of
-    /// the camera the drops leave.
-    fn compute_fit(&self) -> Result<CameraIntrinsicsRefit, String> {
+    /// the camera the drops leave, with the images' radial corrections
+    /// refitted where the fit moves the spline's domain end.
+    fn compute_fit(
+        &self,
+    ) -> Result<(CameraIntrinsicsRefit, Option<RefittedRadialCorrections>), String> {
         let target = RefitTarget::from_name(self.inputs.camera_model, self.inputs.coeff_count)
             .map_err(|e| format!("camera {}: {e}", self.camera))?;
         let options = RefitOptions {
             theta_fit_deg: self.inputs.theta_fit_deg,
             spline_domain_deg: self.inputs.spline_domain_deg,
         };
-        fit_camera_switch(&self.dropped.1, self.camera, &target, &options).map_err(|e| {
+        let refused = |e| {
             crate::state::edits::switch_refusal_in_version_numbering(e, self.rows.as_ref())
                 .to_string()
-        })
+        };
+        let refit =
+            fit_camera_switch(&self.dropped.1, self.camera, &target, &options).map_err(refused)?;
+        let corrections =
+            refit_radial_corrections(&self.dropped.1, self.camera, &refit).map_err(refused)?;
+        Ok((refit, corrections))
     }
 
     /// The request Apply hands the switch.
@@ -562,6 +581,43 @@ impl CameraModelProposal {
             Err(why) => format!("Refused: {why}"),
         }
     }
+
+    /// The line under the fit's for a fit that refits the images' radial
+    /// corrections to a moved domain end, how far their curves moved:
+    /// `radial corrections refitted per image: rms 0.016 px, max 0.057 px
+    /// (image_011.jpg)`; `None` where it refits none.
+    pub(crate) fn radial_corrections_line(&self) -> Option<String> {
+        let refitted = self.radial_corrections.as_ref()?;
+        let image = self
+            .value
+            .image_set
+            .images
+            .get(refitted.max_image)
+            .map_or_else(
+                || format!("image {}", refitted.max_image),
+                |i| i.name.clone(),
+            );
+        Some(radial_corrections_report_line(refitted, &image))
+    }
+}
+
+/// `radial corrections refitted per image: rms 0.016 px, max 0.057 px
+/// (image_011.jpg)`, with the image the largest distance belongs to named
+/// `image`, and `; monotone constraint bound on 2 images` where it bound.
+pub(crate) fn radial_corrections_report_line(
+    refitted: &RefittedRadialCorrections,
+    image: &str,
+) -> String {
+    let mut line = format!(
+        "radial corrections refitted per image: rms {:.3} px, max {:.3} px ({image})",
+        refitted.rms_px, refitted.max_px
+    );
+    match refitted.monotone_constrained_images {
+        0 => {}
+        1 => line.push_str("; monotone constraint bound on 1 image"),
+        n => line.push_str(&format!("; monotone constraint bound on {n} images")),
+    }
+    line
 }
 
 /// `rms 0.130 px, radial 0.013 px, max 0.292 px over θ ≤ 84.5°; aspect fy/fx
@@ -792,6 +848,7 @@ impl AppState {
             },
             generation: 0,
             fit: Err(String::new()),
+            radial_corrections: None,
             theta_fit_default: default_fit_angle(&value_for_default, camera.index()).ok(),
             spline_domain_default: None,
             base_count: edited.base_point_count(),
@@ -999,7 +1056,10 @@ pub(crate) fn open_in_window(
 fn opened_text(proposal: &CameraModelProposal) -> String {
     let target = proposal.target_label(proposal.inputs.camera_model);
     let fit = match &proposal.fit {
-        Ok(refit) => fit_report_line(refit),
+        Ok(refit) => match proposal.radial_corrections_line() {
+            Some(corrections) => format!("{}; {corrections}", fit_report_line(refit)),
+            None => fit_report_line(refit),
+        },
         Err(why) => format!("refused: {why}"),
     };
     let drops = &proposal.inputs.drop_image_adjustments;

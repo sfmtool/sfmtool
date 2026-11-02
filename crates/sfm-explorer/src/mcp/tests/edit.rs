@@ -1315,6 +1315,91 @@ fn propose_camera_model_reports_and_takes_its_drops() {
     assert_eq!(version_count(&state), 1);
 }
 
+/// An `SFMTOOL_PINHOLE` refit on a new domain end keeps the radial correction
+/// and refits it: the proposal lists it as neither dropped nor required but
+/// refitted, its fit reports the images' refit, and the direct switch, which
+/// used to refuse it, switches and reports the same.
+#[test]
+fn a_moved_domain_refits_the_radial_correction_over_the_wire() {
+    let (mut state, mut viewer) = editable();
+    with_lens_corrections_on_camera_0(&mut state);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "spline_domain_deg": 45.0,
+        }),
+    );
+    let proposed = &reply["proposed"];
+    assert_eq!(proposed["refusal"], Value::Null, "{proposed}");
+    let radial = proposed["per_image_adjustment_drops"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|e| e["parameter"] == "radial_bspline")
+        .expect("the camera varies it")
+        .clone();
+    assert_eq!(
+        radial,
+        json!({ "parameter": "radial_bspline", "drop": false, "required": false, "refitted": true })
+    );
+    assert_eq!(proposed["request"]["drop_per_image_adjustments"], json!([]));
+    let refitted = &proposed["fit"]["radial_corrections"];
+    assert!(
+        refitted["rms_px"].as_f64().is_some_and(|r| r >= 0.0),
+        "{refitted}"
+    );
+    assert!(
+        refitted["max_px"].as_f64() >= refitted["rms_px"].as_f64(),
+        "{refitted}"
+    );
+    let images = refitted["images"].as_array().expect("a list");
+    assert!(images.iter().any(|i| i["image"] == 2), "{refitted}");
+    assert!(images[0]["radial_bspline"]
+        .as_array()
+        .is_some_and(|e| e.len() == 2));
+    // The camera's own domain end carries the correction as it is.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "propose_camera_model",
+        json!({ "reconstruction_label": "run_a", "camera_intrinsics_index": 0 }),
+    );
+    assert_eq!(reply["proposed"]["fit"]["radial_corrections"], Value::Null);
+    call(
+        &mut state,
+        &mut viewer,
+        "cancel_camera_model_proposal",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "switch_camera_model",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_intrinsics_index": 0,
+            "spline_domain_deg": 45.0,
+        }),
+    );
+    let fit = &reply["fit"];
+    assert_eq!(fit["dropped_per_image_adjustments"], json!([]));
+    assert!(
+        fit["radial_corrections"]["max_px"].as_f64().is_some(),
+        "{fit}"
+    );
+    let flags = state.scene[0]
+        .recon()
+        .image_set
+        .camera_per_image_adjustments(0);
+    assert!(flags.radial_bspline && flags.rolling_shutter);
+    assert_eq!(version_count(&state), 2);
+}
+
 /// The adjustment runs on the node's value and reports its residuals.
 #[test]
 fn bundle_adjust_pushes_a_version_and_reports_its_residuals() {

@@ -536,6 +536,7 @@ fn insert_fit(
             "active_angles": constraint.active_angles,
             "range_deg": constraint.range_deg,
         },
+        "radial_corrections": super::render::radial_corrections(entry.radial_corrections.as_ref()),
         "observations": o.observations,
         "median_error_before_px": finite(o.before.median_px),
         "median_error_after_px": finite(o.after.median_px),

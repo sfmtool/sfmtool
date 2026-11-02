@@ -389,6 +389,7 @@ pub(super) fn camera_model_proposal(
                     "active_angles": constraint.active_angles,
                     "range_deg": constraint.range_deg,
                 },
+                "radial_corrections": radial_corrections(proposal.radial_corrections.as_ref()),
             });
             (camera_intrinsics(&refit.camera), fit, Value::Null)
         }
@@ -418,6 +419,7 @@ pub(super) fn camera_model_proposal(
                 "parameter": choice.parameter.name(),
                 "drop": inputs.drop_image_adjustments.contains(&choice.parameter),
                 "required": !choice.carried,
+                "refitted": choice.refitted,
             }))
             .collect::<Vec<_>>(),
         "generation": proposal.generation,
@@ -430,6 +432,36 @@ pub(super) fn camera_model_proposal(
         "animate": proposal.animate,
         "s": proposal.motion.s,
         "triangulation": triangulation(proposal),
+    })
+}
+
+/// A fit's `radial_corrections`: the images' radial corrections refitted to a
+/// moved spline domain end, with how far their curves moved (`rms_px`,
+/// `max_px`, the image `max_image` it belongs to, how many images the
+/// monotonicity constraint changed, and each image's new coefficients and
+/// distances); `null` where the switch refits none.
+pub(super) fn radial_corrections(
+    refitted: Option<&sfmtool_core::reconstruction::switch_camera_model::RefittedRadialCorrections>,
+) -> Value {
+    let Some(refitted) = refitted else {
+        return Value::Null;
+    };
+    json!({
+        "rms_px": refitted.rms_px,
+        "max_px": refitted.max_px,
+        "max_image": refitted.max_image,
+        "monotone_constrained_images": refitted.monotone_constrained_images,
+        "images": refitted
+            .images
+            .iter()
+            .map(|(image, r)| json!({
+                "image": image,
+                "radial_bspline": r.radial_bspline,
+                "rms_px": r.rms_px,
+                "max_px": r.max_px,
+                "monotone_constraint_active": r.monotone_constraint.active,
+            }))
+            .collect::<Vec<_>>(),
     })
 }
 

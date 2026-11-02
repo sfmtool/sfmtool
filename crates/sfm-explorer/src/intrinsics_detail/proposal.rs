@@ -14,7 +14,8 @@
 //! because a given angle makes the core fit the camera like any other source. A
 //! camera that varies parameters per image gets a Drop per image row, one
 //! checkbox per parameter, with those the target cannot carry ticked and
-//! greyed.
+//! greyed. A fit that refits the images' radial corrections to a moved domain
+//! end shows how far their curves moved on a line under its own report.
 
 use sfmtool_core::camera::refit_intrinsics::SPLINE_COEFF_COUNT_RANGE;
 use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
@@ -205,6 +206,11 @@ pub(super) fn show_proposal(
         }
         Err(_) => ui.colored_label(ui.visuals().error_fg_color, proposal.fit_line()),
     };
+    // How far the images' own curves moved where their radial corrections
+    // are refitted to the new domain end, under the camera's.
+    if let Some(line) = proposal.radial_corrections_line() {
+        ui.add(egui::Label::new(egui::RichText::new(line).monospace()).wrap());
+    }
 
     // The observation comparison the job sends once its switch returns.
     if proposal.fit.is_ok() {
@@ -277,10 +283,11 @@ pub(crate) const DROP_PER_IMAGE: &str = "Drop per image";
 
 /// The Drop per image row: one checkbox per per-image parameter the camera
 /// varies, in the panel's words, for `inputs`' target. A box is ticked where
-/// `inputs` drops the parameter, and cleared by default, which keeps it. A
-/// parameter the target cannot carry is ticked and greyed, its hover text
-/// saying why the switch drops it. No row for a camera that varies nothing
-/// per image.
+/// `inputs` drops the parameter, and cleared by default, which keeps it: as
+/// it is, or for a radial correction on a domain end the fit moves, refitted
+/// to the new domain, which its hover text says. A parameter the target
+/// cannot carry is ticked and greyed, its hover text saying why the switch
+/// drops it. No row for a camera that varies nothing per image.
 fn show_drop_row(ui: &mut egui::Ui, proposal: &CameraModelProposal, inputs: &mut ProposalInputs) {
     let choices = proposal.drop_choices(inputs);
     if choices.is_empty() {
@@ -294,7 +301,7 @@ fn show_drop_row(ui: &mut egui::Ui, proposal: &CameraModelProposal, inputs: &mut
             let mut ticked = !choice.carried || inputs.drop_image_adjustments.contains(&parameter);
             let response = ui.add_enabled(choice.carried, egui::Checkbox::new(&mut ticked, words));
             if choice.carried {
-                response.on_hover_text(drop_hover_text(parameter));
+                response.on_hover_text(drop_hover_text(parameter, choice.refitted));
                 let listed = inputs.drop_image_adjustments.contains(&parameter);
                 if ticked && !listed {
                     inputs.drop_image_adjustments.push(parameter);
@@ -308,8 +315,9 @@ fn show_drop_row(ui: &mut egui::Ui, proposal: &CameraModelProposal, inputs: &mut
     });
 }
 
-/// The hover text of a Drop per image box the person can tick.
-fn drop_hover_text(parameter: ImageAdjustmentParameter) -> String {
+/// The hover text of a Drop per image box the person can tick; `refitted` is
+/// a radial correction the switch refits to a moved domain end when kept.
+pub(crate) fn drop_hover_text(parameter: ImageAdjustmentParameter, refitted: bool) -> String {
     let words = per_image_parameter_words(parameter);
     let fold = if parameter == ImageAdjustmentParameter::RollingShutter {
         "every image's rates are set to zero; nothing is folded into the camera, since a mean \
@@ -317,9 +325,17 @@ fn drop_hover_text(parameter: ImageAdjustmentParameter) -> String {
     } else {
         "every image's value is set to zero and their mean is folded into the camera"
     };
+    let kept = if refitted {
+        format!(
+            "Cleared, every image's {words} is refitted to the new spline domain, the way the \
+             camera's curve is, so the image's curve stays as close as it can to its curve now"
+        )
+    } else {
+        format!("Cleared, every image keeps its own {words}")
+    };
     format!(
         "Drop each image's own {words} before the fit: {fold}. The comparison below then \
-         includes what the drop costs. Cleared, every image keeps its own {words}."
+         includes what the drop costs. {kept}."
     )
 }
 
@@ -327,14 +343,9 @@ fn drop_hover_text(parameter: ImageAdjustmentParameter) -> String {
 fn required_drop_text(parameter: ImageAdjustmentParameter, target: &str) -> String {
     let why = match parameter {
         ImageAdjustmentParameter::RollingShutter => {
-            "the rates are defined on SFMTOOL_PINHOLE alone".to_string()
+            "the rates are defined on SFMTOOL_PINHOLE alone"
         }
-        _ if target == "SFMTOOL_PINHOLE" => {
-            "the correction is a curve on the spline's own domain, which this fit moves; only \
-             a refit of the spline that keeps its domain end carries it"
-                .to_string()
-        }
-        _ => "the correction is a curve added to an SFMTOOL_PINHOLE camera's spline".to_string(),
+        _ => "the correction is a curve added to an SFMTOOL_PINHOLE camera's spline",
     };
     let them = if parameter == ImageAdjustmentParameter::RollingShutter {
         "them"

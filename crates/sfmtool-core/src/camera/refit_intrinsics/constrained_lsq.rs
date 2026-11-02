@@ -3,7 +3,7 @@
 
 //! Linear least squares under linear inequality constraints.
 //!
-//! The spline fits minimize `‖A·x − b‖²` subject to `G·x ≥ 0`, with `x` at
+//! The spline fits minimize `‖A·x − b‖²` subject to `G·x ≥ h`, with `x` at
 //! most 33 wide and a few thousand constraint rows. The method is the one in
 //! Lawson & Hanson, *Solving Least Squares Problems* (1974), chapter 23: the
 //! SVD of `A` turns the problem into a least-distance problem, `min ‖z‖`
@@ -29,7 +29,7 @@ pub(super) struct Constrained {
     pub(super) active: Vec<bool>,
 }
 
-/// Minimize `‖A·x − b‖²` subject to `G·x ≥ 0`, where `A = U·diag(s)·Vᵀ` is
+/// Minimize `‖A·x − b‖²` subject to `G·x ≥ h`, where `A = U·diag(s)·Vᵀ` is
 /// given by the `singular_values` and `v_t` of its thin SVD, every singular
 /// value positive, and `unconstrained` is the minimizer without constraints,
 /// `V·diag(s)⁻¹·Uᵀ·b`. `U` and `b` are not needed: they enter only through
@@ -37,7 +37,7 @@ pub(super) struct Constrained {
 ///
 /// With `z = diag(s)·Vᵀ·x − Uᵀ·b` the objective is `‖z‖²` plus a constant,
 /// and `x = unconstrained + V·diag(s)⁻¹·z`, so the constraints become
-/// `E·z ≥ f` with `E = G·V·diag(s)⁻¹` and `f = −G·unconstrained`. Each row of
+/// `E·z ≥ f` with `E = G·V·diag(s)⁻¹` and `f = h − G·unconstrained`. Each row of
 /// `E` is scaled to unit length, with its `f`, which changes neither the
 /// feasible set nor the solution.
 ///
@@ -48,6 +48,7 @@ pub(super) fn least_squares_with_inequalities(
     v_t: &DMatrix<f64>,
     unconstrained: &DVector<f64>,
     g: &DMatrix<f64>,
+    h: &DVector<f64>,
 ) -> Option<Constrained> {
     let n = unconstrained.len();
     let mut k = v_t.transpose();
@@ -55,7 +56,7 @@ pub(super) fn least_squares_with_inequalities(
         k.column_mut(j).scale_mut(1.0 / s);
     }
     let mut e = g * &k;
-    let mut f = -(g * unconstrained);
+    let mut f = h - g * unconstrained;
     for row in 0..e.nrows() {
         let norm = e.row(row).norm();
         if norm > 0.0 {

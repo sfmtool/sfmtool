@@ -31,9 +31,12 @@ use nalgebra::{DMatrix, DVector};
 use sfmtool_sfmr_format::SfmrCamera;
 
 use super::distortion::bspline::{
-    basis_at, bspline_is_monotone, smoothing_weight, BSPLINE_SUPPORT, MIN_BSPLINE_COEFFS,
+    basis_at, bspline_is_monotone, radial_bspline_insertion, smoothing_weight, BSPLINE_SUPPORT,
+    MIN_BSPLINE_COEFFS,
 };
-use super::intrinsics::{fixed_arity_model_by_name, CameraIntrinsics, CameraModel, SplineRadial};
+use super::intrinsics::{
+    fixed_arity_model_by_name, CameraIntrinsics, CameraModel, IntrinsicAdjustment, SplineRadial,
+};
 use super::report::{forward_fold_deg, off_axis_angle_deg, trustworthy_max_theta_deg};
 use constrained_lsq::least_squares_with_inequalities;
 
@@ -334,6 +337,31 @@ pub struct MonotoneConstraint {
     /// The smallest and the largest of those angles, as incidence angles in
     /// degrees, or `None` when the constraint is not active.
     pub range_deg: Option<[f64; 2]>,
+}
+
+impl MonotoneConstraint {
+    /// What the constraint did, from which rows of the slope-floor grid
+    /// `grid` (radial coordinates of the family `radial`) the constrained
+    /// solve rests on.
+    fn at(radial: SplineRadial, grid: &[f64], active: &[bool]) -> Self {
+        let angles: Vec<f64> = grid
+            .iter()
+            .zip(active)
+            .filter(|(_, &active)| active)
+            .map(|(&d, _)| incidence_angle(radial, d).to_degrees())
+            .collect();
+        if angles.is_empty() {
+            return MonotoneConstraint::default();
+        }
+        MonotoneConstraint {
+            active: true,
+            active_angles: angles.len(),
+            range_deg: Some([
+                angles.iter().copied().fold(f64::INFINITY, f64::min),
+                angles.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            ]),
+        }
+    }
 }
 
 /// The fitted camera and how well it matches its source.
@@ -753,6 +781,210 @@ pub fn spline_domain_deg(camera: &CameraIntrinsics) -> Option<f64> {
     (d_max > 0.0 && d_max.is_finite()).then(|| incidence_angle(radial, d_max).to_degrees())
 }
 
+/// One image's radial correction refitted onto a camera with a new spline
+/// domain, and how far the image's new curve is from its old one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RadialCorrectionRefit {
+    /// The image's new radial correction, the two coefficients on the new
+    /// domain.
+    pub radial_bspline: [f64; 2],
+    /// RMS pixel distance between the image's radial map before and after,
+    /// over the fit's sampled angles.
+    pub rms_px: f64,
+    /// The largest such distance.
+    pub max_px: f64,
+    /// What the monotonicity constraint did to the image's curve: where it
+    /// held the slope of the camera's spline plus the correction at the
+    /// floor.
+    pub monotone_constraint: MonotoneConstraint,
+}
+
+/// Refit an image's radial correction from `source`, the `SFMTOOL_PINHOLE`
+/// camera it was written on, onto `camera`, an `SFMTOOL_PINHOLE` refitted from
+/// `source` with another domain end, over incidence angles up to
+/// `theta_fit_deg`, the angle the camera's own fit sampled.
+///
+/// The image's old curve is `source` with `adjustment` applied, linear tail
+/// included; its new curve is `camera` with the same focal scale and
+/// principal-point offset and a new correction `e`. For a fixed `camera` the
+/// new curve's radius is linear in `e`, `f·(d + δ(d) + e₀·B₀(d) + e₁·B₁(d))`,
+/// with `B₀`, `B₁` the two-coefficient basis on the new domain carried along
+/// its end tangent, so `e` is one two-column least-squares solve of the
+/// radius difference at the camera fit's sampled angles. Both curves are
+/// radial about the same principal point, so one azimuth gives the distance
+/// every azimuth does. The fit holds the image's slope at or above
+/// [`MIN_SLOPE`] times its focal on the camera fit's own grid, as the camera
+/// fit holds the camera's, so the curve stays invertible; `e = 0` meets that
+/// floor wherever the camera does. The rolling-shutter rates are left out:
+/// they act after the radial map, the same on both curves.
+///
+/// Refused where `camera` is not an `SFMTOOL_PINHOLE`, the adjustment does
+/// not apply to `source`, a curve has no pixel for a sampled ray, the solve
+/// is degenerate, or the image's curve fails the monotonicity test
+/// (`NotMonotone`), which the constraint rules out but for a failed solve.
+pub(crate) fn refit_radial_correction(
+    source: &CameraIntrinsics,
+    camera: &CameraIntrinsics,
+    adjustment: &IntrinsicAdjustment,
+    theta_fit_deg: f64,
+) -> Result<RadialCorrectionRefit, RefitError> {
+    let CameraModel::SfmtoolPinhole {
+        bspline,
+        bspline_rho_max: d_max,
+        ..
+    } = &camera.model
+    else {
+        return Err(RefitError::Degenerate {
+            reason: "a radial correction is refitted only onto an SFMTOOL_PINHOLE camera",
+        });
+    };
+    let d_max = *d_max;
+    if !(d_max > 0.0 && d_max.is_finite()) || bspline.len() == 1 {
+        return Err(RefitError::Degenerate {
+            reason: "the camera's spline cannot take a radial correction",
+        });
+    }
+    // The radial map alone: the rates act after it, the same on both curves.
+    let radial_only = IntrinsicAdjustment {
+        rolling_shutter: [0.0; 3],
+        ..*adjustment
+    };
+    if source.check_adjustment(&radial_only, None).is_err() {
+        return Err(RefitError::Degenerate {
+            reason: "the image's radial correction does not apply to its camera",
+        });
+    }
+    let old = source.with_adjustment(&radial_only, None);
+    let base = camera.with_adjustment(
+        &IntrinsicAdjustment {
+            radial_bspline: [0.0; 2],
+            ..radial_only
+        },
+        None,
+    );
+    let (f, _) = base.focal_lengths();
+    // The pixel radius a camera gives the ray at `theta` along +X.
+    let radius = |cam: &CameraIntrinsics, theta: f64| {
+        let (sin_t, cos_t) = theta.sin_cos();
+        cam.ray_to_pixel([sin_t, 0.0, -cos_t])
+            .filter(|(u, v)| u.is_finite() && v.is_finite())
+            .map(|(u, _)| u - cam.principal_point().0)
+    };
+    let theta = sample_angles(theta_fit_deg.to_radians());
+    let mut old_r = Vec::with_capacity(theta.len());
+    let mut design = DMatrix::<f64>::zeros(theta.len(), 2);
+    let mut rhs = DVector::<f64>::zeros(theta.len());
+    for (k, &t) in theta.iter().enumerate() {
+        let r_old = radius(&old, t).ok_or(RefitError::SourceCannotProject {
+            theta_deg: t.to_degrees(),
+        })?;
+        let r_base = radius(&base, t).ok_or(RefitError::Degenerate {
+            reason: "the refitted camera has no pixel for a sampled ray",
+        })?;
+        let d = radial_coordinate(SplineRadial::ImagePlaneRadius, t);
+        for (c, value) in coefficient_basis(MIN_BSPLINE_COEFFS, d_max, d) {
+            if c != usize::MAX {
+                design[(k, c)] = f * value;
+            }
+        }
+        rhs[k] = r_old - r_base;
+        old_r.push(r_old);
+    }
+    let svd = design.svd(true, true);
+    let largest = svd.singular_values.max();
+    let smallest = svd.singular_values.min();
+    if largest.is_nan() || largest <= 0.0 || smallest <= largest * 1e-12 {
+        return Err(RefitError::Degenerate {
+            reason: "the sampled angles do not determine the radial correction",
+        });
+    }
+    let x = svd
+        .solve(&rhs, largest * 1e-14)
+        .map_err(|_| RefitError::Degenerate {
+            reason: "the radial correction solve failed",
+        })?;
+
+    // The image's slope over the camera's own floor grid, in units of its
+    // focal: `s₀ + G·e ≥ 0`, with `s₀` the camera's slack and `G` the grid's
+    // basis derivatives through the insertion of `e` into the camera's basis.
+    let n = bspline.len().max(MIN_BSPLINE_COEFFS);
+    let coeffs: Vec<f64> = if bspline.is_empty() {
+        vec![0.0; n]
+    } else {
+        bspline.clone()
+    };
+    let insertion = radial_bspline_insertion(n);
+    let (grid, rows) = slope_floor_rows(n, d_max);
+    let mut camera_x = DVector::<f64>::zeros(n + 1);
+    camera_x[0] = 1.0;
+    for (i, c) in coeffs.iter().enumerate() {
+        camera_x[i + 1] = *c;
+    }
+    let slack = &rows * &camera_x;
+    let k = DMatrix::from_fn(n, 2, |i, j| insertion[i][j]);
+    let g = rows.columns(1, n) * k;
+    let mut constraint = MonotoneConstraint::default();
+    let x = if (&slack + &g * &x).iter().all(|&s| s >= 0.0) {
+        x
+    } else {
+        let v_t = svd.v_t.as_ref().ok_or(RefitError::Degenerate {
+            reason: "the radial correction solve failed",
+        })?;
+        let solved = least_squares_with_inequalities(&svd.singular_values, v_t, &x, &g, &-slack)
+            .ok_or(RefitError::Degenerate {
+                reason: "the monotonicity-constrained radial correction solve did not converge",
+            })?;
+        constraint = MonotoneConstraint::at(SplineRadial::ImagePlaneRadius, &grid, &solved.active);
+        solved.x
+    };
+    let e = [x[0], x[1]];
+    if e.iter().any(|v| !v.is_finite()) {
+        return Err(RefitError::Degenerate {
+            reason: "a refitted radial correction coefficient is not finite",
+        });
+    }
+    let image: Vec<f64> = coeffs
+        .iter()
+        .zip(&insertion)
+        .map(|(c, row)| c + row[0] * e[0] + row[1] * e[1])
+        .collect();
+    if !bspline_is_monotone(&image, d_max, d_max) {
+        return Err(RefitError::NotMonotone);
+    }
+
+    let refitted = base.with_adjustment(
+        &IntrinsicAdjustment {
+            radial_bspline: e,
+            ..IntrinsicAdjustment::default()
+        },
+        None,
+    );
+    let mut sum = 0.0;
+    let mut max: f64 = 0.0;
+    for (&t, r_old) in theta.iter().zip(&old_r) {
+        let r_new = radius(&refitted, t).ok_or(RefitError::Degenerate {
+            reason: "the refitted image has no pixel for a sampled ray",
+        })?;
+        let distance = (r_new - r_old).abs();
+        sum += distance * distance;
+        max = max.max(distance);
+    }
+    Ok(RadialCorrectionRefit {
+        radial_bspline: e,
+        rms_px: (sum / theta.len() as f64).sqrt(),
+        max_px: max,
+        monotone_constraint: constraint,
+    })
+}
+
+/// The incidence angles, in radians, a fit over `(0, theta_fit]` samples:
+/// [`THETA_SAMPLES`] of them, evenly spaced, the last at `theta_fit`.
+fn sample_angles(theta_fit: f64) -> Vec<f64> {
+    (1..=THETA_SAMPLES)
+        .map(|k| theta_fit * k as f64 / THETA_SAMPLES as f64)
+        .collect()
+}
+
 /// The report of a fitted `camera` against its `source` over `samples`.
 fn measured(
     source: &CameraIntrinsics,
@@ -828,9 +1060,7 @@ struct Samples {
 
 impl Samples {
     fn new(source: &CameraIntrinsics, theta_fit: f64) -> Result<Self, RefitError> {
-        let theta: Vec<f64> = (1..=THETA_SAMPLES)
-            .map(|k| theta_fit * k as f64 / THETA_SAMPLES as f64)
-            .collect();
+        let theta = sample_angles(theta_fit);
         let mut rays = Vec::with_capacity(THETA_SAMPLES * AZIMUTHS);
         for &t in &theta {
             let (sin_t, cos_t) = t.sin_cos();
@@ -931,7 +1161,7 @@ fn radial_coordinate(radial: SplineRadial, theta: f64) -> f64 {
 
 /// A spline family's domain end, in its own radial coordinate, for an
 /// incidence angle in degrees; refused where the family cannot end there.
-fn domain_end_of(radial: SplineRadial, deg: f64) -> Result<f64, RefitError> {
+pub(crate) fn domain_end_of(radial: SplineRadial, deg: f64) -> Result<f64, RefitError> {
     let valid = deg > 0.0
         && match radial {
             SplineRadial::IncidenceAngle => deg <= 180.0,
@@ -945,6 +1175,28 @@ fn domain_end_of(radial: SplineRadial, deg: f64) -> Result<f64, RefitError> {
     Ok(radial_coordinate(radial, deg.to_radians()))
 }
 
+/// Where a fit of `source` to a spline model of the family `radial` places the
+/// domain end when no `spline_domain_deg` is given, in the family's radial
+/// coordinate: the far corner's pixel radius over the source's focal on the
+/// axis, where every model family agrees with its base. This is the format
+/// spec's placement, fixed before the spline is fitted on it. A refit of a
+/// spline as itself keeps the source's own end instead ([`refit_spline`]).
+pub(crate) fn far_corner_domain_end(source: &CameraIntrinsics, radial: SplineRadial) -> f64 {
+    let (cx, cy) = source.principal_point();
+    let (fx, fy) = source.focal_lengths();
+    let f0 = (fx * fy).sqrt();
+    let (w, h) = (f64::from(source.width), f64::from(source.height));
+    let corner = CORNERS
+        .iter()
+        .map(|[a, b]| (a * w - cx).hypot(b * h - cy))
+        .fold(0.0, f64::max);
+    let d = corner / f0;
+    match radial {
+        SplineRadial::IncidenceAngle => d.min(std::f64::consts::PI),
+        SplineRadial::ImagePlaneRadius => d,
+    }
+}
+
 /// Fit a spline camera: place the domain, solve, build, and check the result
 /// is monotone. Returns the camera, its domain end in degrees and what the
 /// monotonicity constraint did.
@@ -955,26 +1207,9 @@ fn fit_spline_camera(
     coeff_count: usize,
     spline_domain_deg: Option<f64>,
 ) -> Result<(CameraIntrinsics, Option<f64>, MonotoneConstraint), RefitError> {
-    let (cx, cy) = source.principal_point();
     let d_max = match spline_domain_deg {
         Some(deg) => domain_end_of(radial, deg)?,
-        None => {
-            // The far corner's pixel radius over the source's focal on the
-            // axis, where every model family agrees with its base: the format
-            // spec's placement, fixed before the spline is fitted on it.
-            let (fx, fy) = source.focal_lengths();
-            let f0 = (fx * fy).sqrt();
-            let (w, h) = (f64::from(source.width), f64::from(source.height));
-            let corner = CORNERS
-                .iter()
-                .map(|[a, b]| (a * w - cx).hypot(b * h - cy))
-                .fold(0.0, f64::max);
-            let d = corner / f0;
-            match radial {
-                SplineRadial::IncidenceAngle => d.min(std::f64::consts::PI),
-                SplineRadial::ImagePlaneRadius => d,
-            }
-        }
+        None => far_corner_domain_end(source, radial),
     };
     if !(d_max > 0.0 && d_max.is_finite()) {
         return Err(RefitError::Degenerate {
@@ -1154,26 +1389,13 @@ fn fit_spline(
             let v_t = svd.v_t.as_ref().ok_or(RefitError::Degenerate {
                 reason: "the spline solve failed",
             })?;
-            let solved = least_squares_with_inequalities(&svd.singular_values, v_t, &x, &rows)
-                .ok_or(RefitError::Degenerate {
-                    reason: "the monotonicity-constrained spline solve did not converge",
-                })?;
-            let angles: Vec<f64> = grid
-                .iter()
-                .zip(&solved.active)
-                .filter(|(_, &active)| active)
-                .map(|(&d, _)| incidence_angle(radial, d).to_degrees())
-                .collect();
-            if !angles.is_empty() {
-                constraint = MonotoneConstraint {
-                    active: true,
-                    active_angles: angles.len(),
-                    range_deg: Some([
-                        angles.iter().copied().fold(f64::INFINITY, f64::min),
-                        angles.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-                    ]),
-                };
-            }
+            let floor = DVector::<f64>::zeros(rows.nrows());
+            let solved =
+                least_squares_with_inequalities(&svd.singular_values, v_t, &x, &rows, &floor)
+                    .ok_or(RefitError::Degenerate {
+                        reason: "the monotonicity-constrained spline solve did not converge",
+                    })?;
+            constraint = MonotoneConstraint::at(radial, &grid, &solved.active);
             solved.x
         }
     } else {

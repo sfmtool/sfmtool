@@ -407,8 +407,21 @@ later refit of the spline; the default domain of a switch stays the far corner.
 ```
 
 A camera that varies a per-image parameter the target cannot carry (the
-radial correction or the rolling-shutter rates) is refused here; drop the
-parameter first with `--drop-image-adjustments`, below, in the same command.
+radial correction or the rolling-shutter rates on a target other than
+`SFMTOOL_PINHOLE`) is refused here; drop the parameter first with
+`--drop-image-adjustments`, below, in the same command. An `SFMTOOL_PINHOLE`
+camera switched to `SFMTOOL_PINHOLE` with a new `spline_domain=`, or a
+`fit_to=`, keeps its images' radial corrections by refitting each to the new
+domain
+([`../../../core/reconstruction/switch-camera-model.md`](../../../core/reconstruction/switch-camera-model.md#refitting-the-images-radial-corrections)),
+and prints how far the images' curves moved under the fit's line, for example
+`radial corrections refitted to the new domain for 17 images: rms 0.016 px,
+max 0.057 px (image 11)`.
+
+```bash
+# Shorten the spline domain of camera 0, refitting its images' radial corrections.
+--camera-model SFMTOOL_PINHOLE,spline_domain=33,cameras=0
+```
 
 #### `--drop-image-adjustments parameters=<NAME>+<NAME>...[,cameras=<I>+<J>...]`
 

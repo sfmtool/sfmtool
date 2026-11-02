@@ -23,11 +23,12 @@ use super::drop_image_adjustments::{drop_image_adjustments, DropImageAdjustments
 use super::outermost_keypoint::{outermost_keypoints, OutermostKeypoints};
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::refit_intrinsics::{
-    image_corner_deg, refit_camera_intrinsics_over, refit_spline, CameraIntrinsicsRefit,
+    domain_end_of, far_corner_domain_end, image_corner_deg, refit_camera_intrinsics_over,
+    refit_radial_correction, refit_spline, CameraIntrinsicsRefit, RadialCorrectionRefit,
     RefitError, RefitOptions, RefitTarget, ThetaFitSource,
 };
 use crate::camera::report::trustworthy_max_theta_deg;
-use crate::camera::CameraIntrinsics;
+use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::numeric::quantile_of_sorted;
 
 /// Why a switch produced nothing.
@@ -53,12 +54,11 @@ pub enum SwitchCameraModelError {
     /// reconstruction without inline keypoints whose `.sift` files are missing.
     Observations(String),
     /// The camera keeps a per-image parameter the switch cannot carry over
-    /// ([`image_adjustments_carried`]): a radial correction outside a refit of
-    /// an `SFMTOOL_PINHOLE` spline that keeps its domain end, or
-    /// rolling-shutter rates on a target other than `SFMTOOL_PINHOLE`. The
-    /// radial correction is written on the camera's own spline domain and the
-    /// rates are defined on `SFMTOOL_PINHOLE` alone, so the switched camera
-    /// would read them as something else. Dropping them
+    /// ([`image_adjustments_carried`]): a radial correction or rolling-shutter
+    /// rates on a target other than `SFMTOOL_PINHOLE`. The radial correction
+    /// is a curve added to an `SFMTOOL_PINHOLE` camera's spline and the rates
+    /// are defined on `SFMTOOL_PINHOLE` alone, so the switched camera would
+    /// read them as something else. Dropping them
     /// ([`SwitchCameraModelOptions::drop_image_adjustments`]) lifts it.
     LensCorrections {
         /// The camera's index among the reconstruction's cameras.
@@ -71,6 +71,16 @@ pub enum SwitchCameraModelError {
     },
     /// Dropping the named per-image parameters refused, before any fit.
     Drop(DropImageAdjustmentsError),
+    /// One image's radial correction could not be refitted to the switched
+    /// camera's new spline domain ([`refit_radial_corrections`]).
+    RadialCorrection {
+        /// The camera's index among the reconstruction's cameras.
+        camera: usize,
+        /// The image's index among the reconstruction's images.
+        image: usize,
+        /// The refit's refusal.
+        error: RefitError,
+    },
 }
 
 impl fmt::Display for SwitchCameraModelError {
@@ -97,13 +107,21 @@ impl fmt::Display for SwitchCameraModelError {
                 write!(
                     f,
                     "camera {camera} keeps its images' own {}, which a switch to {target} \
-                     does not carry over (an SFMTOOL_PINHOLE target carries the rates, and \
-                     only a refit of an SFMTOOL_PINHOLE spline that keeps its domain end \
-                     carries the radial correction); drop them per image to switch",
+                     does not carry over (only an SFMTOOL_PINHOLE target carries the rates \
+                     and the radial correction); drop them per image to switch",
                     names.join(" and ")
                 )
             }
             SwitchCameraModelError::Drop(e) => write!(f, "{e}"),
+            SwitchCameraModelError::RadialCorrection {
+                camera,
+                image,
+                error,
+            } => write!(
+                f,
+                "camera {camera}: the radial correction of image {image} could not be refitted \
+                 to the new spline domain: {error}"
+            ),
         }
     }
 }
@@ -126,10 +144,17 @@ fn correction_words(parameter: ImageAdjustmentParameter) -> &'static str {
 pub struct CarriedImageAdjustment {
     /// The parameter.
     pub parameter: ImageAdjustmentParameter,
-    /// Whether the switch keeps it as it is. `false` is a parameter the
-    /// switch refuses to keep ([`SwitchCameraModelError::LensCorrections`]),
-    /// which has to be dropped for the switch to run.
+    /// Whether the switch keeps it, as it is or refitted (`refitted`).
+    /// `false` is a parameter the switch refuses to keep
+    /// ([`SwitchCameraModelError::LensCorrections`]), which has to be dropped
+    /// for the switch to run.
     pub carried: bool,
+    /// Whether the switch carries it by refitting each image's value to the
+    /// switched camera rather than as it is: the radial correction of an
+    /// `SFMTOOL_PINHOLE` camera whose spline domain end the switch moves
+    /// ([`refit_radial_corrections`]). Never `true` where `carried` is
+    /// `false`.
+    pub refitted: bool,
 }
 
 /// The per-image parameters camera `camera` of `image_set` varies: those its
@@ -173,11 +198,13 @@ pub fn varied_image_adjustments(
 /// the camera becomes, so every switch carries them. The rolling-shutter rates
 /// are defined on `SFMTOOL_PINHOLE` alone, so only an `SFMTOOL_PINHOLE` target
 /// carries them. The radial correction is a curve on the camera's own spline
-/// domain, `τ = ρ/ρ_max`, added to the camera's spline, so it is carried only
-/// where the domain end stays put and the model stays `SFMTOOL_PINHOLE`: a
-/// refit of an `SFMTOOL_PINHOLE` spline as itself with neither
+/// domain, `τ = ρ/ρ_max`, added to the camera's spline, so it too is carried
+/// only by an `SFMTOOL_PINHOLE` target: as it is where the domain end stays
+/// put (a refit of the spline as itself with neither
 /// [`RefitOptions::theta_fit_deg`] nor [`RefitOptions::spline_domain_deg`]
-/// given. A parameter that is not carried has to be dropped
+/// given), and refitted to the new domain where the switch moves it
+/// ([`CarriedImageAdjustment::refitted`], [`refit_radial_corrections`]). A
+/// parameter that is not carried has to be dropped
 /// ([`SwitchCameraModelOptions::drop_image_adjustments`]); kept, the switch
 /// refuses ([`SwitchCameraModelError::LensCorrections`]). A caller offering
 /// the choice, such as the viewer's camera model proposal, reads here which
@@ -199,21 +226,45 @@ pub fn image_adjustments_carried(
         return Err(SwitchCameraModelError::UnknownCamera { camera, count });
     };
     let pinhole_target = matches!(target, RefitTarget::SfmtoolPinhole { .. });
-    let domain_kept = pinhole_target
-        && spline_refit_count(source, target).is_some()
-        && options.theta_fit_deg.is_none()
-        && options.spline_domain_deg.is_none();
+    let moves_domain = pinhole_target && moves_domain_end(source, options);
     Ok(varied_image_adjustments(image_set, camera)
         .into_iter()
-        .map(|parameter| CarriedImageAdjustment {
-            parameter,
-            carried: match parameter {
-                ImageAdjustmentParameter::Focal | ImageAdjustmentParameter::PrincipalPoint => true,
-                ImageAdjustmentParameter::RadialBspline => domain_kept,
-                ImageAdjustmentParameter::RollingShutter => pinhole_target,
-            },
+        .map(|parameter| {
+            let (carried, refitted) = match parameter {
+                ImageAdjustmentParameter::Focal | ImageAdjustmentParameter::PrincipalPoint => {
+                    (true, false)
+                }
+                ImageAdjustmentParameter::RadialBspline => (pinhole_target, moves_domain),
+                ImageAdjustmentParameter::RollingShutter => (pinhole_target, false),
+            };
+            CarriedImageAdjustment {
+                parameter,
+                carried,
+                refitted,
+            }
         })
         .collect())
+}
+
+/// Whether a switch of the `SFMTOOL_PINHOLE` camera `source` to
+/// `SFMTOOL_PINHOLE` with `options` puts the spline's domain end anywhere but
+/// where it is, bit for bit: a given domain end does unless it is the same
+/// number, a fit over a given angle places it at the far image corner, and a
+/// refit of the spline with neither keeps it. `false` for any other source.
+fn moves_domain_end(source: &CameraIntrinsics, options: &RefitOptions) -> bool {
+    let CameraModel::SfmtoolPinhole {
+        bspline_rho_max, ..
+    } = &source.model
+    else {
+        return false;
+    };
+    let radial = SplineRadial::ImagePlaneRadius;
+    let placed = match (options.theta_fit_deg, options.spline_domain_deg) {
+        (_, Some(deg)) => domain_end_of(radial, deg).ok(),
+        (None, None) => Some(*bspline_rho_max),
+        (Some(_), None) => Some(far_corner_domain_end(source, radial)),
+    };
+    placed != Some(*bspline_rho_max)
 }
 
 /// The median, 90th percentile and maximum of a set of reprojection errors,
@@ -323,6 +374,11 @@ pub struct CameraSwitch {
     /// The fit, carrying the camera after the switch. It is fitted to the
     /// camera the drops left, so its distances are from that camera.
     pub refit: CameraIntrinsicsRefit,
+    /// The images' radial corrections refitted to the camera's new spline
+    /// domain ([`refit_radial_corrections`]), with how far each image's curve
+    /// moved; `None` where the switch refitted none: the camera keeps its
+    /// domain end, varies no radial correction, or dropped it.
+    pub radial_corrections: Option<RefittedRadialCorrections>,
     /// Posed or not, the images that use the camera.
     pub images: usize,
     /// The observation comparison.
@@ -332,6 +388,24 @@ pub struct CameraSwitch {
     /// photographs reach, beside the spline domain the fit placed. `None`
     /// where [`SwitchCameraModelOptions::outermost_keypoint`] was off.
     pub outermost: Option<OutermostKeypoints>,
+}
+
+/// The radial corrections of one camera's images, refitted to the camera's
+/// new spline domain by [`refit_radial_corrections`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefittedRadialCorrections {
+    /// Each image refitted, by its index among the reconstruction's images,
+    /// ascending, with its new correction and its distance from its old curve.
+    pub images: Vec<(usize, RadialCorrectionRefit)>,
+    /// RMS pixel distance between each image's radial map before and after,
+    /// over every refitted image's sampled angles.
+    pub rms_px: f64,
+    /// The largest such distance.
+    pub max_px: f64,
+    /// The image it belongs to.
+    pub max_image: usize,
+    /// How many images the monotonicity constraint changed.
+    pub monotone_constrained_images: usize,
 }
 
 /// What one switch did, one entry per switched camera in camera index order.
@@ -371,9 +445,13 @@ pub struct SwitchCameraModelReport {
 /// by [`drop_image_adjustments`], and the target is fitted to the camera that
 /// leaves. A camera that keeps a per-image parameter the switch cannot carry
 /// ([`image_adjustments_carried`]) is refused
-/// ([`SwitchCameraModelError::LensCorrections`]). The comparison's `before` is
-/// measured on `recon` as it was handed in, so it covers the drops and the
-/// switch together.
+/// ([`SwitchCameraModelError::LensCorrections`]). Where an `SFMTOOL_PINHOLE`
+/// camera's switch moves its spline's domain end, each image's radial
+/// correction is refitted to the new domain after the camera's fit
+/// ([`refit_radial_corrections`]), and the entry's `radial_corrections` says
+/// how far each image's curve moved. The comparison's `before` is measured on
+/// `recon` as it was handed in, so it covers the drops and the switch
+/// together.
 ///
 /// Poses, points, keypoints, patches and tracks are carried over unchanged. The
 /// stored error of every point observed in an image that uses a switched
@@ -483,8 +561,11 @@ pub fn switch_camera_model(
     // The fits next: each is a few milliseconds, and a refused one refuses
     // the switch before any `.sift` file is read for the pixels below.
     let mut refits: Vec<CameraIntrinsicsRefit> = Vec::with_capacity(chosen.len());
+    let mut corrections: Vec<Option<RefittedRadialCorrections>> = Vec::with_capacity(chosen.len());
     for &c in &chosen {
-        refits.push(fit_camera_switch(working, c, target, refit_options)?);
+        let refit = fit_camera_switch(working, c, target, refit_options)?;
+        corrections.push(refit_radial_corrections(working, c, &refit)?);
+        refits.push(refit);
     }
     let pixels = observation_pixels(recon, &touched_rows)?;
     let theta: Vec<f64> = switched_rows
@@ -500,11 +581,20 @@ pub fn switch_camera_model(
     for (&c, refit) in chosen.iter().zip(&refits) {
         out.image_set.cameras[c] = refit.camera.clone();
     }
-    // Only the shared cameras are refitted: every image keeps what the drops
-    // left of its intrinsic adjustment as it is, since the adjustment is
-    // relative to whatever its camera is. The errors below are read through
-    // each image's intrinsics, before against the value as it was handed in,
-    // so the comparison covers the drops and the switch together.
+    // Every image keeps what the drops left of its intrinsic adjustment as it
+    // is, since the focal scale, the principal-point offset and the rates are
+    // relative to whatever its camera is, except a radial correction written
+    // on a domain end the switch moved, which takes its refit. The errors
+    // below are read through each image's intrinsics, before against the
+    // value as it was handed in, so the comparison covers the drops and the
+    // switch together.
+    for refitted in corrections.iter().flatten() {
+        for (image, correction) in &refitted.images {
+            out.image_set.images[*image]
+                .intrinsic_adjustment
+                .radial_bspline = correction.radial_bspline;
+        }
+    }
     let before_intrinsics = recon.image_set.all_image_intrinsics();
     let after_intrinsics = out.image_set.all_image_intrinsics();
 
@@ -550,9 +640,10 @@ pub fn switch_camera_model(
         vec![None; chosen.len()]
     };
     let mut entries = Vec::with_capacity(chosen.len());
-    for ((((&c, refit), rows), outermost), dropped) in chosen
+    for (((((&c, refit), radial_corrections), rows), outermost), dropped) in chosen
         .iter()
         .zip(refits)
+        .zip(corrections)
         .zip(rows_of)
         .zip(outermost)
         .zip(dropped)
@@ -568,6 +659,7 @@ pub fn switch_camera_model(
             source: image_set.cameras[c].clone(),
             dropped_image_adjustments: dropped,
             refit,
+            radial_corrections,
             images,
             observations,
             outermost,
@@ -594,7 +686,9 @@ pub fn switch_camera_model(
 /// It fits the camera as `recon` holds it, so a caller dropping per-image
 /// parameters first ([`SwitchCameraModelOptions::drop_image_adjustments`])
 /// calls [`drop_image_adjustments`] and hands this the value that returns, as
-/// [`switch_camera_model`] does.
+/// [`switch_camera_model`] does. It fits the shared camera alone; the images'
+/// radial corrections the switch refits to a moved domain end are
+/// [`refit_radial_corrections`] of the fit this returns.
 ///
 /// # Errors
 ///
@@ -661,6 +755,102 @@ pub fn fit_camera_switch(
         ),
     }
     .map_err(|error| SwitchCameraModelError::Refit { camera, error })
+}
+
+/// The radial corrections of camera `camera`'s images refitted to `refit`,
+/// the camera's fit by [`fit_camera_switch`], where that fit moved an
+/// `SFMTOOL_PINHOLE` spline's domain end; `None` where there is nothing to
+/// refit.
+///
+/// A radial correction is a curve on the camera's own domain, `τ = ρ/ρ_max`,
+/// so where `ρ_max` moves the same two coefficients would describe another
+/// curve. Each image's correction is refitted the way the camera's curve was:
+/// over the angles the camera's fit sampled, so that the new camera's spline
+/// plus the new correction is as close as it can be to the old camera's
+/// spline plus the old correction, linear tail included, under the same
+/// monotonicity floor. The refit is two coefficients per image and one small
+/// least-squares solve, a fraction of a millisecond, so it takes no
+/// `Progress`. An image is refitted where the camera's
+/// `per_image_adjustments` lists the radial correction, or where its own
+/// correction is non-zero; a zero correction on a camera that does not list
+/// it stays zero. The focal scale, the principal-point offset and the rates
+/// are relative to whatever the camera becomes and are not refitted.
+///
+/// `None` where either camera is not an `SFMTOOL_PINHOLE`, the domain end is
+/// the same number bit for bit (the corrections then mean what they did, and
+/// are carried as they are), or no image has a correction to refit.
+///
+/// # Errors
+///
+/// [`SwitchCameraModelError::UnknownCamera`] for an index past the image set's
+/// cameras, and [`SwitchCameraModelError::RadialCorrection`] naming the first
+/// image whose refit is refused.
+pub fn refit_radial_corrections(
+    recon: &SfmrReconstruction,
+    camera: usize,
+    refit: &CameraIntrinsicsRefit,
+) -> Result<Option<RefittedRadialCorrections>, SwitchCameraModelError> {
+    let image_set = &recon.image_set;
+    let count = image_set.cameras.len();
+    let Some(source) = image_set.cameras.get(camera) else {
+        return Err(SwitchCameraModelError::UnknownCamera { camera, count });
+    };
+    let (
+        CameraModel::SfmtoolPinhole {
+            bspline_rho_max: before,
+            ..
+        },
+        CameraModel::SfmtoolPinhole {
+            bspline_rho_max: after,
+            ..
+        },
+    ) = (&source.model, &refit.camera.model)
+    else {
+        return Ok(None);
+    };
+    if before.to_bits() == after.to_bits() {
+        return Ok(None);
+    }
+    let listed = image_set
+        .camera_per_image_adjustments(camera)
+        .radial_bspline;
+    let mut images = Vec::new();
+    for (index, image) in image_set.images.iter().enumerate() {
+        let adjustment = &image.intrinsic_adjustment;
+        if image.camera_index as usize != camera || !listed && adjustment.radial_bspline == [0.0; 2]
+        {
+            continue;
+        }
+        let refitted =
+            refit_radial_correction(source, &refit.camera, adjustment, refit.theta_fit_deg)
+                .map_err(|error| SwitchCameraModelError::RadialCorrection {
+                    camera,
+                    image: index,
+                    error,
+                })?;
+        images.push((index, refitted));
+    }
+    let Some(&(max_image, worst)) = images
+        .iter()
+        .max_by(|a, b| a.1.max_px.total_cmp(&b.1.max_px))
+    else {
+        return Ok(None);
+    };
+    // Every image samples the same angles, so the mean of the images' mean
+    // squares is the mean square over every sample.
+    let mean_square =
+        images.iter().map(|(_, r)| r.rms_px * r.rms_px).sum::<f64>() / images.len() as f64;
+    let monotone_constrained_images = images
+        .iter()
+        .filter(|(_, r)| r.monotone_constraint.active)
+        .count();
+    Ok(Some(RefittedRadialCorrections {
+        rms_px: mean_square.sqrt(),
+        max_px: worst.max_px,
+        max_image,
+        monotone_constrained_images,
+        images,
+    }))
 }
 
 /// The fit angle a switch of camera `camera` of `recon` takes when none is

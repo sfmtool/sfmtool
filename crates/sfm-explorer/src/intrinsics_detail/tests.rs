@@ -2621,6 +2621,115 @@ fn a_tick_survives_a_target_that_forces_the_same_drop() {
     assert!(proposal.chosen_drops().is_empty());
 }
 
+/// A refit of the seoul_bull spline on a new domain end refits each image's
+/// radial correction rather than dropping it: the box is enabled and cleared,
+/// its hover text says the corrections are refitted, the request drops
+/// nothing, a line under the fit's report says how far the images' curves
+/// moved, and the Proposed table names the correction as refitted. Ticking
+/// the box drops it as before.
+#[test]
+fn a_moved_domain_refits_the_radial_correction_by_default() {
+    use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter::*;
+    let mut state = crate::state::AppState::new();
+    let id = state.append_node(seoul_bull_v02());
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_mut().unwrap();
+    let own = proposal.source_domain_deg().expect("a spline camera");
+    let mut inputs = proposal.inputs.clone();
+    inputs.spline_domain_deg = Some(own - 5.0);
+    proposal.set_inputs(inputs);
+    assert!(proposal.fit.is_ok(), "{}", proposal.fit_line());
+    assert!(proposal.inputs.drop_image_adjustments.is_empty());
+    assert!(proposal.request().drop_image_adjustments.is_empty());
+    let radial = proposal
+        .drop_choices(&proposal.inputs)
+        .into_iter()
+        .find(|c| c.parameter == RadialBspline)
+        .expect("the camera varies it");
+    assert!(radial.carried && radial.refitted, "{radial:?}");
+    let hover = super::proposal::drop_hover_text(RadialBspline, radial.refitted);
+    assert!(
+        hover.contains(
+            "Cleared, every image's radial correction is refitted to the new spline domain"
+        ),
+        "{hover}"
+    );
+    let refitted = proposal.radial_corrections.clone().expect("refitted");
+    assert_eq!(refitted.images.len(), 17);
+    let line = proposal.radial_corrections_line().expect("a line");
+    assert!(
+        line.starts_with(&format!(
+            "radial corrections refitted per image: rms {:.3} px, max {:.3} px (",
+            refitted.rms_px, refitted.max_px
+        )),
+        "{line}"
+    );
+    // The job's switch refits them the same way.
+    state.settle_camera_model_proposal_job();
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    let entry = proposal
+        .current_comparison()
+        .expect("the job answered")
+        .expect("the switch ran");
+    assert_eq!(entry.radial_corrections.as_ref(), Some(&refitted));
+    assert!(entry.dropped_image_adjustments.is_empty());
+
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    }
+    let (painted, nodes) = drop_frame(&mut panel, &ctx, &mut state, 482.0, Vec::new());
+    assert_eq!(
+        drop_boxes(&nodes),
+        owned(&[
+            ("focal", false, false),
+            ("principal point", false, false),
+            ("radial correction", false, false),
+            ("rolling-shutter rates", false, false),
+        ])
+    );
+    let texts = texts_of(&painted);
+    assert!(says(&texts, &line), "{texts:?}");
+    assert!(
+        says(
+            &texts,
+            "Per image, unchanged from Current: focal, principal point and rolling-shutter \
+             rates. Refitted to the new domain: radial correction."
+        ),
+        "{texts:?}"
+    );
+
+    // Ticking the box drops the correction instead.
+    let pos = painted
+        .iter()
+        .find(|p| p.text == "radial correction")
+        .expect("the box's label")
+        .rect
+        .center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    drop_frame(
+        &mut panel,
+        &ctx,
+        &mut state,
+        482.0,
+        vec![egui::Event::PointerMoved(pos)],
+    );
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(true)]);
+    drop_frame(&mut panel, &ctx, &mut state, 482.0, vec![press(false)]);
+    let proposal = state.camera_model_proposal.as_ref().unwrap();
+    assert_eq!(proposal.inputs.drop_image_adjustments, vec![RadialBspline]);
+    assert!(proposal.radial_corrections.is_none());
+    assert!(proposal.radial_corrections_line().is_none());
+}
+
 /// The Drop per image row, with greyed boxes, and the Proposed table's line
 /// stay inside the panel and apart from everything else from the narrowest
 /// width to a wide one.

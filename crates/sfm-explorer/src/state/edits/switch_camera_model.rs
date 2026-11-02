@@ -257,8 +257,10 @@ pub(crate) fn refit_change(
 }
 
 /// The report half of the Action Log row: how far the new camera is from the
-/// old over the fit, where the monotonicity constraint bound, and the median
-/// reprojection error of the camera's observations before and after.
+/// old over the fit, where the monotonicity constraint bound, how far the
+/// images' curves moved where their radial corrections were refitted to a
+/// moved domain end, and the median reprojection error of the camera's
+/// observations before and after.
 pub(crate) fn switch_report_text(entry: &CameraSwitch) -> String {
     let refit = &entry.refit;
     let o = &entry.observations;
@@ -270,8 +272,17 @@ pub(crate) fn switch_report_text(entry: &CameraSwitch) -> String {
     } else {
         String::new()
     };
+    let corrections = entry
+        .radial_corrections
+        .as_ref()
+        .map_or_else(String::new, |refitted| {
+            format!(
+                "; radial corrections refitted per image, rms {:.3} px, max {:.3} px",
+                refitted.rms_px, refitted.max_px
+            )
+        });
     format!(
-        "fit rms {:.3} px, max {:.3} px over θ ≤ {:.1}° ({}){}{median}",
+        "fit rms {:.3} px, max {:.3} px over θ ≤ {:.1}° ({}){}{corrections}{median}",
         refit.rms_px,
         refit.max_px,
         refit.theta_fit_deg,

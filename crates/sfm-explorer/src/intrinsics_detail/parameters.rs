@@ -319,25 +319,35 @@ pub(super) fn per_image_summary(camera: &CameraIntrinsics, per_image: &PerImage)
 }
 
 /// The line under the proposed camera's Parameters heading, `Per image,
-/// unchanged from Current: focal. Dropped: principal point.`, naming which of
-/// the camera's per-image parameters, `varied`, the proposal keeps and which
-/// it drops; `None` for a camera that varies nothing per image. A kept
-/// parameter's values are the images' own and do not change with the switch,
+/// unchanged from Current: focal. Refitted to the new domain: radial
+/// correction. Dropped per image: principal point.`, naming which of the
+/// camera's per-image parameters, `varied`, the proposal keeps as they are,
+/// which it refits to a moved spline domain end (`refitted`) and which it
+/// drops; `None` for a camera that varies nothing per image. A parameter kept
+/// as it is has the images' own values, which do not change with the switch,
 /// so the Current table's statistics and histograms stand for them and the
 /// proposed table does not repeat them.
 pub(super) fn proposed_per_image_note(
     varied: &[ImageAdjustmentParameter],
     dropped: &[ImageAdjustmentParameter],
+    refitted: &[ImageAdjustmentParameter],
 ) -> Option<String> {
     if varied.is_empty() {
         return None;
     }
     let (gone, kept): (Vec<_>, Vec<_>) = varied.iter().partition(|p| dropped.contains(p));
+    let (moved, kept): (Vec<_>, Vec<_>) = kept.into_iter().partition(|p| refitted.contains(p));
     let mut parts = Vec::new();
     if !kept.is_empty() {
         parts.push(format!(
             "Per image, unchanged from Current: {}.",
             per_image_parameter_list(&kept)
+        ));
+    }
+    if !moved.is_empty() {
+        parts.push(format!(
+            "Refitted to the new domain: {}.",
+            per_image_parameter_list(&moved)
         ));
     }
     if !gone.is_empty() {

@@ -1068,7 +1068,10 @@ row of its own that wraps, so at a narrow panel what follows a control (the
 camera's own value, the default and its `Default` button) moves to the next
 line and stays on screen. A camera that varies parameters per image gets a
 **Drop per image** row of checkboxes, one per parameter, in the words of the
-`per image` summary; one the target cannot carry is ticked and greyed
+`per image` summary; one the target cannot carry is ticked and greyed, and a
+radial correction the switch refits to a moved spline domain end is cleared
+and enabled, with a second line under the fit's report saying how far the
+images' curves moved
 ([edits/switch-camera-model.md](edits/switch-camera-model.md) § "Dropping
 per-image parameters"). The panel showing another
 camera of the node shows no strip.
@@ -1078,9 +1081,10 @@ While the strip is shown and the fit succeeded, the **Parameters** and
 camera's and the proposed one's, the per-image statistics in the current one's
 alone (§ "2. Parameters"). The proposed one's Parameters heading carries a line
 naming the per-image parameters the proposal keeps, whose values the switch
-leaves as they are, and those it drops: `Per image, unchanged from Current:
-focal and principal point. Dropped per image: radial correction and
-rolling-shutter rates.` They are side by side when the panel is wide
+leaves as they are, those it refits to a moved domain end, and those it drops:
+`Per image, unchanged from Current: focal and principal point. Dropped per
+image: radial correction and rolling-shutter rates.`, or `… Refitted to the
+new domain: radial correction.` They are side by side when the panel is wide
 enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
 The two derived tables both carry the aspect row when either camera has two

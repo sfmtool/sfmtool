@@ -344,6 +344,45 @@ def test_camera_model_refits_a_spline_camera_to_a_new_count_and_domain(
     assert adjusted.cameras[0].to_dict()["parameters"]["bspline_coeff_count"] == 8
 
 
+def test_a_moved_domain_refits_the_images_radial_corrections(tmp_path, capsys):
+    """An SFMTOOL_PINHOLE camera whose images carry their own radial
+    correction, given a new domain end, refits each image's correction to it
+    rather than refusing, and the report says how far the images' curves
+    moved."""
+    from sfmtool.xform._arg_parser import parse_transform_args
+    from tests.conftest import SEOUL_BULL_DIR
+
+    source_path = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
+    source = SfmrReconstruction.load(source_path)
+    assert "radial_bspline" in source.per_image_adjustments[0]
+    output_path = tmp_path / "moved.sfmr"
+    apply_transforms_to_file(
+        source_path,
+        output_path,
+        parse_transform_args(["--camera-model", "SFMTOOL_PINHOLE,spline_domain=33"]),
+    )
+    out = capsys.readouterr().out
+    assert "radial corrections refitted to the new domain for 17 images" in out
+    result = SfmrReconstruction.load(output_path)
+    assert result.per_image_adjustments == source.per_image_adjustments
+    before = np.asarray(source.radial_bspline_adjustments)
+    after = np.asarray(result.radial_bspline_adjustments)
+    assert after.shape == before.shape and not np.array_equal(after, before)
+    np.testing.assert_array_equal(result.focal_adjustments, source.focal_adjustments)
+
+    _, report = source.switch_camera_model("SFMTOOL_PINHOLE", spline_domain_deg=33.0)
+    (entry,) = report["cameras"]
+    refitted = entry["radial_corrections"]
+    assert [i["image"] for i in refitted["images"]] == list(range(17))
+    assert 0.0 < refitted["rms_px"] <= refitted["max_px"] < 0.1
+    np.testing.assert_allclose(
+        [i["radial_bspline"] for i in refitted["images"]], after, rtol=0, atol=0
+    )
+    # The camera's own domain end carries the corrections as they are.
+    _, kept = source.switch_camera_model("SFMTOOL_PINHOLE", coeff_count=6)
+    assert kept["cameras"][0]["radial_corrections"] is None
+
+
 def test_the_switch_report_names_the_outermost_keypoint(seoul_bull_ground_truth_sfmr):
     from sfmtool.xform._switch_camera_model import format_camera_report
 
