@@ -544,7 +544,7 @@ sfmtool's path, which needs no focal and is accepted on every model. A held
 camera's principal point stays held. The key is the `CameraRelease` field's
 name, as the per-image keys are. On sfmtool's path each camera's line then
 names it and its change, as on the seoul_bull ground truth switched to
-`SFMTOOL_PINHOLE`: `Camera 0 (17 images): focal 333.908 -> 339.318; principal
+`SFMTOOL_PINHOLE,coeffs=4`: `Camera 0 (17 images): focal 333.908 -> 339.318; principal
 point (135.0, 240.0) -> (124.7, 236.5); released: focal, principal point,
 distortion`, and the recorded description lists it, `Bundle adjustment
 (release: focal,principal_point,distortion)`. Beside `image_principal_point=on`
