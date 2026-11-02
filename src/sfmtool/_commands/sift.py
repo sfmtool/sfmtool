@@ -14,6 +14,7 @@ from .._path_summary import summarize_path_list
 from .._filenames import expand_paths
 from .._sfmtool.reconstruction import RangeExpr
 from .._workspace import find_workspace_for_path, load_workspace_config
+from ._range_options import parse_image_selection, range_option, resolve_list_images
 from ..sift.file import get_used_features_from_reconstruction
 from ..sift.extract import SiftExtractionError, image_files_to_sift_files
 from ..sift.draw import draw_sift_features
@@ -43,11 +44,9 @@ from ..sift.draw import draw_sift_features
     type=click.Path(exists=True),
     help="Only draw features used in this .sfmr reconstruction file (only with --draw).",
 )
-@click.option(
-    "--range",
-    "-r",
-    "range_expr",
-    help="A range expression of file numbers to use from the input directories",
+@range_option(
+    "A range expression of file numbers to use from the input directories.",
+    on="paths",
 )
 @click.option(
     "--num-threads",
@@ -75,6 +74,7 @@ def sift(
     draw_output_dir,
     filter_sfm_path,
     range_expr,
+    named_image_list,
     num_threads,
     tool,
     domain_size_pooling,
@@ -92,24 +92,36 @@ def sift(
     if filter_sfm_path and not draw_output_dir:
         raise click.UsageError("--filter-sfm can only be used with --draw mode.")
 
-    # Default to the current directory when no paths are given
-    if not paths:
-        paths = (".",)
+    selection = parse_image_selection(range_expr, named_image_list)
+    range_expr = selection.range_expr
+    if selection.list_name is not None and paths:
+        raise click.UsageError(
+            "A named image list replaces the image paths; give paths or a list, "
+            "not both."
+        )
 
-    paths = [Path(p) for p in paths]
     if draw_output_dir:
         draw_output_dir = Path(draw_output_dir)
     if filter_sfm_path:
         filter_sfm_path = Path(filter_sfm_path)
 
-    numbers = None
-    if range_expr:
-        numbers = RangeExpr(range_expr)
+    extensions = (".png", ".jpg", ".jpeg")
+    if selection.list_name is not None:
+        filenames = resolve_list_images(selection, extensions=extensions).paths
+        given = f"Given {selection.describe_list()}"
+    else:
+        # Default to the current directory when no paths are given
+        if not paths:
+            paths = (".",)
+        paths = [Path(p) for p in paths]
 
-    # Convert any directories into lists of image paths for processing
-    filenames = expand_paths(
-        paths, extensions=(".png", ".jpg", ".jpeg"), numbers=numbers
-    )
+        numbers = None
+        if range_expr:
+            numbers = RangeExpr(range_expr)
+
+        # Convert any directories into lists of image paths for processing
+        filenames = expand_paths(paths, extensions=extensions, numbers=numbers)
+        given = f"Given {len(paths)} path(s) to process"
 
     # Validate we have files to process
     if not filenames:
@@ -175,9 +187,7 @@ def sift(
         click.echo(f"  Feature tool: {tool}")
 
     if extract_flag:
-        click.echo(
-            f"Given {len(paths)} path(s) to process, expanded to {len(filenames)} filename(s):"
-        )
+        click.echo(f"{given}, expanded to {len(filenames)} filename(s):")
         click.echo(textwrap.indent(summarize_path_list(filenames), "  "))
 
         try:
@@ -194,9 +204,7 @@ def sift(
     elif draw_output_dir:
         draw_output_dir.mkdir(parents=True, exist_ok=True)
 
-        click.echo(
-            f"Given {len(paths)} path(s) to process, expanded to {len(filenames)} filename(s)"
-        )
+        click.echo(f"{given}, expanded to {len(filenames)} filename(s)")
 
         if not filenames:
             raise click.UsageError(

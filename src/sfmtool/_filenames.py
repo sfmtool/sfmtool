@@ -35,6 +35,17 @@ def number_from_filename(filename: str | Path) -> int | None:
     return None
 
 
+def has_extension(path: Path, extensions: tuple[str, ...]) -> bool:
+    """Whether `path` ends in one of `extensions` (such as `(".jpg", ".png")`),
+    compared without regard to case.
+
+    This is the test `expand_paths` keeps a directory's files by, and the one
+    a command applies to the members of a named image list, so the two select
+    the same image files.
+    """
+    return path.suffix.lower() in extensions or path.name.lower().endswith(extensions)
+
+
 def expand_paths(
     paths: Iterable[str | Path],
     *,
@@ -64,10 +75,7 @@ def expand_paths(
                     # extensions are typically passed as (".jpg", ".png")
                     # path.suffix includes the dot
                     dir_contents = [
-                        p
-                        for p in dir_contents
-                        if p.suffix.lower() in extensions
-                        or p.name.lower().endswith(extensions)
+                        p for p in dir_contents if has_extension(p, extensions)
                     ]
 
                 # Filter by number if needed

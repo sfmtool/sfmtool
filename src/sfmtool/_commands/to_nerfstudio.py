@@ -9,7 +9,12 @@ import click
 
 from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
-from ._range_options import apply_range_filter, range_options, validate_range_options
+from ._range_options import (
+    apply_image_selection,
+    parse_image_selection,
+    range_options,
+    validate_range_options,
+)
 
 
 @click.command("to-nerfstudio")
@@ -49,7 +54,8 @@ def to_nerfstudio(
     num_downscales: int,
     jpeg_quality: int,
     include_colmap: bool,
-    range_expr: str | None,
+    range_expr: tuple[str, ...],
+    named_image_list: str | None,
     filter_points: bool,
 ):
     """Convert a pinhole .sfmr reconstruction to a Nerfstudio dataset.
@@ -75,7 +81,8 @@ def to_nerfstudio(
 
     input_path = check_sfmr_path(input_sfmr, "Input path")
 
-    validate_range_options(range_expr, filter_points)
+    selection = parse_image_selection(range_expr, named_image_list)
+    validate_range_options(selection, filter_points)
 
     if output_dir is None:
         out_path = input_path.parent / f"{input_path.stem}_nerfstudio"
@@ -84,9 +91,9 @@ def to_nerfstudio(
 
     try:
         recon = SfmrReconstruction.load(input_path)
-        if range_expr is not None:
-            recon = apply_range_filter(
-                recon, range_expr, filter_points, echo=click.echo
+        if selection.given:
+            recon = apply_image_selection(
+                recon, selection, filter_points, echo=click.echo, sfmr_path=input_path
             )
     except Exception as e:
         raise click.ClickException(str(e))

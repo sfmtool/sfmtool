@@ -10,6 +10,7 @@ import click
 from .._cli_utils import timed_command
 from .._filenames import expand_paths
 from .._path_summary import summarize_paths_by_sequence
+from ._range_options import parse_image_selection, range_option, resolve_list_images
 
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
@@ -19,11 +20,9 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
 @timed_command
 @click.help_option("--help", "-h")
 @click.argument("paths", nargs=-1, type=click.Path(exists=True))
-@click.option(
-    "--range",
-    "-r",
-    "range_expr",
-    help="A range expression of file numbers to use from the input directories.",
+@range_option(
+    "A range expression of file numbers to use from the input directories.",
+    on="paths",
 )
 @click.option(
     "--initial-stride",
@@ -68,6 +67,7 @@ IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
 def motion(
     paths,
     range_expr,
+    named_image_list,
     initial_stride,
     min_stride,
     max_stride,
@@ -90,17 +90,25 @@ def motion(
         sfm motion images/
         sfm motion images/ --initial-stride 16
         sfm motion images/ -r 1-100
+        sfm motion -r walk1_sharp
     """
     from ..motion.image_sequence import analyze_image_sequence
     from .._filenames import number_from_filename
 
-    if not paths:
+    selection = parse_image_selection(range_expr, named_image_list)
+    range_expr = selection.range_expr
+    if selection.list_name is not None and paths:
+        raise click.UsageError(
+            "A named image list replaces the image paths; give paths, a .sfmr "
+            "file or a list, not more than one."
+        )
+    if not paths and selection.list_name is None:
         raise click.UsageError(
             "Must provide image paths, directories, or a .sfmr file."
         )
 
     # Check if input is a .sfmr file
-    if len(paths) == 1 and paths[0].endswith(".sfmr"):
+    if selection.list_name is None and len(paths) == 1 and paths[0].endswith(".sfmr"):
         from ..motion.recon_discontinuity import analyze_reconstruction
         from ..motion.report import (
             reconstruction_results_to_json,
@@ -124,13 +132,16 @@ def motion(
         return
 
     # Image sequence mode
-    numbers = None
-    if range_expr:
-        from .._sfmtool.reconstruction import RangeExpr
+    if selection.list_name is not None:
+        image_paths = resolve_list_images(selection, extensions=IMAGE_EXTENSIONS).paths
+    else:
+        numbers = None
+        if range_expr:
+            from .._sfmtool.reconstruction import RangeExpr
 
-        numbers = RangeExpr(range_expr)
+            numbers = RangeExpr(range_expr)
 
-    image_paths = expand_paths(paths, extensions=IMAGE_EXTENSIONS, numbers=numbers)
+        image_paths = expand_paths(paths, extensions=IMAGE_EXTENSIONS, numbers=numbers)
     if not image_paths:
         raise click.ClickException("No image files found in the provided paths.")
 

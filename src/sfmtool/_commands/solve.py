@@ -13,6 +13,7 @@ from .._cli_utils import timed_command
 from .._filenames import expand_paths
 from .._sfmtool.reconstruction import RangeExpr
 from ..camera.cameras import CAMERA_MODEL_NAMES
+from ._range_options import parse_image_selection, range_option, resolve_list_images
 
 
 @click.command("solve")
@@ -31,11 +32,10 @@ from ..camera.cameras import CAMERA_MODEL_NAMES
     type=click.IntRange(min=1),
     help="Maximum number of features to use from each image.",
 )
-@click.option(
-    "--range",
-    "-r",
-    "range_expr",
-    help="A range expression of file numbers to use from the input directories.",
+@range_option(
+    "A range expression of file numbers to use from the input directories, "
+    "or from the images of a .matches file.",
+    on="paths",
 )
 @click.option(
     "--incremental",
@@ -123,6 +123,7 @@ def solve(
     colmap_dir,
     max_feature_count,
     range_expr,
+    named_image_list,
     incremental,
     global_mode,
     sfmr_dir,
@@ -153,11 +154,21 @@ def solve(
 
         # Sequential overlap mode
         sfm solve -i path/to/images/ --seq-overlap 100,20
+
+        # The images of a named image list of the workspace
+        sfm solve -i -r walk1_sharp
     """
     from ..cli import deduce_workspace
     from .._solve_driver import _run_sequential_overlap_sfm, _run_sfm
 
-    if not paths:
+    selection = parse_image_selection(range_expr, named_image_list)
+    range_expr = selection.range_expr
+    if selection.list_name is not None and paths:
+        raise click.UsageError(
+            "A named image list replaces the image paths; give image paths, a "
+            ".matches file or a list, not more than one."
+        )
+    if not paths and selection.list_name is None:
         raise click.UsageError("Must provide image paths or a .matches file.")
 
     if incremental and global_mode:
@@ -255,23 +266,29 @@ def solve(
             raise click.ClickException(str(e))
         return
 
-    # Standard path: solve from image paths
-    paths = [Path(p) for p in paths]
+    # Standard path: solve from image paths, or from a named image list
+    extensions = (".png", ".jpg", ".jpeg")
+    if selection.list_name is not None:
+        list_images = resolve_list_images(selection, extensions=extensions)
+        absolute_paths = [Path(os.path.normpath(p)) for p in list_images.paths]
+        workspace_dir = list_images.workspace_dir
+    else:
+        paths = [Path(p) for p in paths]
 
-    numbers = None
-    if range_expr:
-        numbers = RangeExpr(range_expr)
+        numbers = None
+        if range_expr:
+            numbers = RangeExpr(range_expr)
 
-    filenames = expand_paths(
-        paths, extensions=(".png", ".jpg", ".jpeg"), numbers=numbers
-    )
+        filenames = expand_paths(paths, extensions=extensions, numbers=numbers)
 
-    if not filenames:
-        raise click.UsageError("No image files to process in the provided directories.")
+        if not filenames:
+            raise click.UsageError(
+                "No image files to process in the provided directories."
+            )
 
-    absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
+        absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
 
-    workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
+        workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
 
     from ..camera.config import CameraConfigResolver
     from ..camera.setup import _check_camera_model_conflict
