@@ -213,9 +213,9 @@ pub(super) fn statistics_rows(
     let n = statistics.images.len();
     let short_side = f64::from(camera.width.min(camera.height));
     let over = format!(
-        "Over the camera's {n} posed image(s), or all its images where none is posed: the \
-         mean, the standard deviation, the smallest and the largest value, and how many \
-         images lie more than two standard deviations from the mean."
+        "Over {n} of the camera's images, its posed ones, or all of them where none is \
+         posed: the mean, the standard deviation, the smallest and the largest value, and \
+         how many images lie more than two standard deviations from the mean."
     );
     let mut rows = Vec::new();
     let row =
