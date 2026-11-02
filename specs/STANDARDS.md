@@ -218,13 +218,14 @@ The rule is enforced by
 [`numeric/tests.rs`](../crates/sfmtool-core/src/numeric/tests.rs).
 `the_workspace_has_one_median` and `the_workspace_has_one_quantile` read every
 `.rs` file under `crates/`, skipping `target` and `tests` directories and files
-named `tests.rs`, and fail on any `fn` whose name contains `median`, or
-`quantile` or `percentile`, that is not listed by path and name in
-`MEDIAN_ALLOWLIST` or `QUANTILE_ALLOWLIST`. Each entry states why it is not a
-second copy. Most entries are helpers named for the statistic they report that
-call the shared function, such as `residual_quantiles_px` in `move_camera.rs`.
-The fix for a failure is to call `numeric`; an entry is added only for a
-genuinely different operation, with the reason.
+named `tests.rs`. The first fails on any `fn` whose name contains `median`, and
+the second on any whose name contains `quantile` or `percentile`, ignoring
+case, unless it is listed by path and name in `MEDIAN_ALLOWLIST` or
+`QUANTILE_ALLOWLIST`. Each entry states why it is not a second copy. Most
+entries are helpers named for the statistic they report that call the shared
+function, such as `residual_quantiles_px` in `move_camera.rs`. The fix for a
+failure is to call `numeric`; an entry is added, with the reason, only for such
+a helper or for a genuinely different operation.
 
 The test reads function names only, so look for what it cannot see:
 
