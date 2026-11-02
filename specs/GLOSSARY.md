@@ -196,6 +196,15 @@ The two stored halves of an `SfmrReconstruction`'s data, in Rust and in prose
 |------|-------|-----|-----|
 | **image set** / **point set** | the two stored halves of a reconstruction's data. The **image set** holds the cameras, the posed images, the rig frames and the per-image columns, all addressed by image index: `ImageSet`, the field `SfmrReconstruction::image_set`. The **point set** holds the points, their tracks and the per-point and per-observation columns: `PointSet`, the field `SfmrReconstruction::point_set` | `ImageTable`, `image_table`, "the image table" for the reconstruction's half | *table* is kept for a derived view a person sorts and filters, such as the track table, and a stored half named like one reads as derived. *Set* pairs the image half with the point half under one word. The image table of a `.kdf` or `.matches` file (`KdfImageTable`, the `image_table()` accessor of a `.kdf` reader) is a part of that file's format and keeps its name |
 
+## Named image lists
+
+A named set of a workspace's images, in `sfmtool_core::workspace`, the
+`sfmtool.workspace` bindings and [workspace/named-image-lists.md](workspace/named-image-lists.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **named image list** | a named set of workspace images defined in `.sfm-named-image-lists.json` by pattern and range entries; `NamedImageLists` (the file), `NamedImageList` (one list), `NamedImageListEntry` and `NamedImageListMember` | `image set`, `selection`, `image list` alone | *image set* already names the image half of a reconstruction's data, and *selection* is what the viewer uses for what is picked on screen. *Named* is what separates these lists from any other list of images, so it stays in the file name and in every type name |
+
 ## Track table
 
 The named per-point values of `sfmtool_core::analysis::track_table`, the

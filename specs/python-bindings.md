@@ -15,7 +15,7 @@ column reads *none* is a binding that no spec describes.
 
 ## How the module is assembled
 
-[`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers twelve submodules, each
+[`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers thirteen submodules, each
 through the `register` function of its source module, and sets each
 submodule's `__name__` to the public `sfmtool.<name>`, so tracebacks and help
 text name the public location. Three names are registered at the root for
@@ -63,6 +63,7 @@ the same objects:
 | [`sfmtool.sift`](../src/sfmtool/sift/__init__.py) | `_sfmtool.sift` |
 | [`sfmtool.spatial`](../src/sfmtool/spatial.py) | `_sfmtool.spatial` |
 | [`sfmtool.spherical`](../src/sfmtool/spherical.py) | `_sfmtool.spherical` |
+| [`sfmtool.workspace`](../src/sfmtool/workspace.py) | `_sfmtool.workspace` |
 
 `sfmtool.sift` is the one package among them, so the file is its
 [`__init__.py`](../src/sfmtool/sift/__init__.py), which imports from
@@ -73,7 +74,10 @@ that find an image's `.sift` path, imported by module path
 `sfmtool.fileio`'s, as it is for every other format. `sfmtool.analysis` holds
 the analysis bindings and is a different module from `sfmtool.analyze`, the
 Python reconstruction analysis that calls some of them; each keeps its name,
-the one from the extension and the one from the code it holds.
+the one from the extension and the one from the code it holds. In the same
+way `sfmtool.workspace` holds the bindings for a workspace's named image lists,
+and `sfmtool._workspace` is the internal Python that writes
+`.sfm-workspace.json` and finds a workspace by the upward search.
 `sfmtool.fileio` is named `fileio` rather than `io` because
 `from sfmtool import *` binds it with the other public modules (see below),
 and a module named `io` would replace the standard library's `io` in the
@@ -87,7 +91,7 @@ this way, where a flat root surface would hold the binding
 `match_image_pair` and `sfmtool.feature_match` the Python
 `match_image_pair` that takes different arguments, and the bench's steps
 (`commit`, `split`, `fit`) would read as something else beside the rest. The
-twelve public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
+thirteen public modules, and `sfmtool.rig`, are listed in `_LAZY_SUBPACKAGES`
 and bound on the root on first use by the root's module `__getattr__`, so
 `import sfmtool` followed by `sfmtool.fileio.read_sfmr(…)` works and
 `import sfmtool` still loads nothing but the extension. The root also holds
@@ -381,6 +385,12 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [explorer.rs](../crates/sfmtool-py/src/explorer.rs) | `tool_catalog`, `validate_tool_call`: the SfM Explorer's MCP tool catalog and the parse its `tools/call` runs | [explorer-call-command.md](cli/automation/explorer-call-command.md) |
+
+### `workspace`
+
+| Source | Exposes | Spec |
+|--------|---------|------|
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `is_named_image_list_name`, `NAMED_IMAGE_LISTS_FILE_NAME` | [named-image-lists.md](workspace/named-image-lists.md) |
 
 ## Keeping the index current
 

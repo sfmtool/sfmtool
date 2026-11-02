@@ -90,6 +90,7 @@ _LAZY_SUBPACKAGES = (
     "sift",
     "spatial",
     "spherical",
+    "workspace",
 )
 
 # Type checkers and editors do not run `__getattr__`, so they read the lazy
@@ -110,6 +111,7 @@ if TYPE_CHECKING:
         sift,
         spatial,
         spherical,
+        workspace,
     )
     from sfmtool._filenames import (  # noqa: F401
         expand_paths,

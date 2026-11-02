@@ -78,6 +78,14 @@ impl PyRangeExpr {
     }
 }
 
+impl PyRangeExpr {
+    /// The parsed range, for a binding in another module that takes a
+    /// `RangeExpr` argument.
+    pub(crate) fn inner(&self) -> &RangeExpr {
+        &self.inner
+    }
+}
+
 /// Iterator over the integer values of a [`PyRangeExpr`].
 #[pyclass(module = "sfmtool.reconstruction")]
 pub struct PyRangeExprIter {
