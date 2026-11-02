@@ -323,8 +323,8 @@ section will.
 | `feature_tool` | `image_to_gray.formula` | `quantize_bits` | Status |
 |----------------|-------------------------|-----------------|--------|
 | `sfmtool` | the workspace's `gray_formula`, by default `0.2126*R + 0.7152*G + 0.0722*B` | absent | from the code: `gray_from_rgb` in `sfmtool-core` divides each 8-bit channel by 255, evaluates the formula in double precision and stores the result unclamped as `f32` for the detector, with no rounding to a bit depth |
-| `colmap` | `0.2126*R + 0.7152*G + 0.0722*B` | `8` | **to verify**: the standing specs say COLMAP's `Bitmap::CloneAsGrey` uses BT.709 weights, and COLMAP's SIFT reads an 8-bit grey bitmap, so `quantize_bits: 8`; how COLMAP rounds (to nearest or by truncation), whether its decoder applies the EXIF orientation, and whether the conversion happens before or after its `max_image_size` resize have not been checked against COLMAP's source |
-| `opencv` | `0.299*R + 0.587*G + 0.114*B` | `8` | from the code: `extract_opencv.py` makes the detector's input with `cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)` on the 8-bit decode, which gives 8-bit grey. **To verify**: OpenCV's conversion uses fixed-point weights (believed to be 4899, 9617 and 1868 over 16384, rounded), which can differ from `q` of the exact BT.601 formula by one grey level on a few pixels |
+| `colmap` | `0.2126*R + 0.7152*G + 0.0722*B` | `8` | measured with pycolmap 4.2.1: `Bitmap.read(path, as_rgb=False)` gives an 8-bit grey bitmap equal to `clone_as_grey()` of the RGB read, whose value is the BT.709 weights applied in single precision to the 0 to 255 samples and rounded to nearest with half up; that matched all 262,144 pixels of a random RGB image, and `q` of the double-precision formula differs from it by one grey level on 18 of them. A JPEG carrying EXIF orientation 6 read back at its stored width and height, so the tag is not applied. **To verify**: that COLMAP's feature extractor reads through this same `Bitmap` path, and whether the conversion happens before or after its `max_image_size` resize |
+| `opencv` | `0.299*R + 0.587*G + 0.114*B` | `8` | from the code: `extract_opencv.py` makes the detector's input with `cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)` on the 8-bit decode, which gives 8-bit grey. Measured with OpenCV 5.0.0: the 8-bit conversion is `(9798·R + 19235·G + 3735·B + 16384) >> 15` on the 0 to 255 samples, which matched all 262,144 pixels of a random RGB image; `q` of the exact BT.601 formula differs from it by one grey level on 346 of them (0.13%) |
 
 All three Python backends decode with `sfmtool.fileio.read_image_rgb`, which
 ignores the EXIF orientation and returns 8 bits per channel, and make their
@@ -348,9 +348,11 @@ configuration, as it would for any change to the bytes of
 `metadata.version` becomes `15`. Version 15 adds two required per-image
 columns, a required `image_to_gray` record for them in `images/metadata.json`,
 and an optional record of the named image list a reconstruction was made from.
-When this ships, the `.sfmr` spec defines the reading image, the sharpness and
-the tensor in its own words, repeating Part 1's definitions, because a format
-spec does not send its reader to another spec for what a column means.
+When this ships, the `.sfmr` spec defines the `image_to_gray` object (its
+inputs, grammar and rounding), the reading image, the sharpness, the tensor and
+the rules for a named image list's entries in its own words, repeating Parts 1
+and 3, because a format spec does not send its reader to another spec for what
+a field means.
 
 ### `images/sharpness.{N}.float64.zst`
 
