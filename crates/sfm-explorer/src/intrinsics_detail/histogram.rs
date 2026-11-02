@@ -118,6 +118,7 @@ impl Histogram {
     }
 
     /// How many images each bin holds.
+    #[cfg(any(test, feature = "mcp"))]
     pub(crate) fn counts(&self) -> Vec<usize> {
         self.bins.iter().map(Vec::len).collect()
     }
