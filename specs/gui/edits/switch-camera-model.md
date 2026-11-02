@@ -749,7 +749,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   fixture: the rug holding one angle per observation, ascending, with the wide
   observations past the trusted bound; an image's observations reprojected
   under both cameras, the current one onto its keypoint, and a point at infinity
-  reprojected as its direction; the Change to proposed field mode selected on
+  reprojected as its direction; an image's proposed reprojection, once the
+  proposal drops the per-image principal point, read through what the drop
+  leaves of its adjustment; the Change to proposed field mode selected on
   opening and restored after Cancel and after Apply, a mode chosen while open
   standing until the end; a reopened proposal taking a new generation; and the
   one pass over the images giving the outermost keypoint `outermost_keypoints`
