@@ -361,244 +361,173 @@ A workspace's `.sfm-workspace.json` defines the directory its `.sift` files go
 in, through `feature_options` and `feature_prefix_dir`, and its
 `feature_options` are what the extractor writes into each `.sift` file. So the
 workspace spells the conversion the way the `.sift` file does: a version 2
-workspace file's `feature_options` carries the same `image_to_gray` object,
-`formula` and optional `quantize_bits`, for every feature tool, and the `.sift`
-file's `feature_options` are a copy of it.
+workspace file's `feature_options` carries the same `image_to_gray` object, at
+its top level, for every feature tool, and the `.sift` file's `feature_options`
+are a copy of it.
 
 | `feature_tool` | `feature_options.image_to_gray` in a version 2 workspace |
 |----------------|----------------------------------------------------------|
 | `sfmtool` | `{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}` by default; a setting, which the `sfmtool` extractor honours for any formula and any `quantize_bits` |
 | `colmap` | `{"formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8}`, fixed by the tool |
 | `opencv` | `{"formula": "0.299*R + 0.587*G + 0.114*B", "quantize_bits": 8}`, fixed by the tool |
+| `sfmtool-undistort` | its source's conversion ([`sfm undistort`](#sfm-undistort)); recorded, not settable |
 
-The `gray_formula` key is gone from version 2: the object replaces it, and a
-version 2 file that carries `gray_formula` is invalid. For `colmap` and
-`opencv` the object records what the tool does rather than choosing it, so
-extraction refuses a workspace whose object differs from the tool's row above,
-saying the tool converts only that way.
+The `gray_formula` key is gone from version 2: the object replaces it. For
+`colmap` and `opencv` the object records what the tool does rather than
+choosing it. The file's other fields are unchanged.
 
-**`sfm undistort` writes a version 2 workspace.** It writes its own workspace
-(`.sfm-workspace.json` in its output directory) whose `feature_tool` is the
-sentinel `sfmtool-undistort` and whose `feature_options` record the source
-(`source_feature_tool`, `source_feature_options`) and the warp (`fit`,
-`filter`). It always writes that file as version 2, with a top-level
-`image_to_gray` in `feature_options` converted from the source the way
-`sfm ws upgrade` converts a workspace: the source's own top-level
-`image_to_gray` when its recorded options have one, else its `gray_formula` as
-`{"formula": …}`, else the source tool's row above, where a version 1
-`sfmtool-undistort` source is converted from its own nested source record the
-same way. The `.sift` files it writes are version 2 with that
-object, and their two readings are computed from the undistorted images it
-writes, decoded from the files it wrote, so they describe those images and not
-the source images, and a later `.sfmr` writer that recomputes them from the
-image files gets the same values. So undistort never refuses because its source
-is version 1: its source is only read, and its own directory is new.
+**The version number.** `.sfm-workspace.json` becomes version 2 because a
+reader has to tell an old file, whose conversion is a `gray_formula` string or
+unstated, from a new one, whose conversion is the object. The version says which
+without guessing from the keys, and keeps one spelling per version instead of
+carrying `gray_formula` forward beside the object.
 
-| `feature_tool` | `feature_options.image_to_gray` in a version 2 workspace |
-|----------------|----------------------------------------------------------|
-| `sfmtool-undistort` | the source's conversion, converted as above; recorded, not settable |
+#### The recorded folder name is authoritative
 
-The nested `source_feature_options` is a record of the source copied as it was,
-so it may hold a version 1 `gray_formula`; the version 2 rules about
-`gray_formula` and `image_to_gray` apply to the top level of `feature_options`
-only. Undistort names its directory `features/sift-sfmtool-undistort-{hash}`
-when it creates it, the hash taken as `sfm ws init` takes it (below) over its
-tool, its type and the whole `feature_options`, the new top-level
-`image_to_gray` and the nested source record included. The added object changes
-the name, so undistorting the same reconstruction again under the new rules
-writes a new directory beside any older output. `sfm ws upgrade` refuses an undistort workspace, whose `.sift`
-files come from undistortion and cannot be re-extracted into a new directory;
-running `sfm undistort` again is the way to a version 2 one.
-
-**The version number.** `.sfm-workspace.json` becomes version 2. The change is
-to what `feature_options` must hold, and a reader has to tell an old file,
-whose conversion is a `gray_formula` string or unstated, from a new one, whose
-conversion is the object; the version says which without guessing from the
-keys, and keeps one spelling per version instead of carrying `gray_formula`
-forward beside the object. The file's other fields are unchanged.
-
-**The recorded folder name is authoritative.** `feature_prefix_dir` is stored
-in the workspace file so that nothing downstream has to compute it: every
-command, the viewer and every `.sfmr` use the recorded name as it is and never
-recompute it. A folder name is computed only when a folder is created, by
-`sfm ws init`, `sfm ws upgrade`, `sfm undistort` and the viewer's conversion of
-a version 1 record (below). It must differ for different options, and the
-existing name, `features/{feature_type}-{hash}` with the XXH3-128 hash of the
-compact JSON of `feature_tool`, `feature_type` and `feature_options` (without
-`use_gpu`) that `get_feature_tool_xxh128` computes, does that. It need not be
-the same in Python and Rust: two writers that name the same options
-differently cache the features twice, never wrongly. The Rust test that keeps
-the default `sfmtool` folder name equal in both languages stays as a
-convenience, not as a rule of the format.
-
-Because `image_to_gray` is part of the options a new folder is named from,
-`sfm ws init` and `sfm ws upgrade` give a workspace written under the new rules
-a new features directory, for every tool, even with otherwise identical
-settings, and so do extraction outside a workspace and `sfm undistort`.
+`feature_prefix_dir` is stored in the workspace file so that nothing downstream
+has to compute it: every command, the viewer and every `.sfmr` use the recorded
+name as it is, and `load_workspace_config` returns it without recomputing it. A
+folder name is computed only when a folder is created: by `sfm ws init`,
+`sfm ws upgrade`, `sfm undistort` and the viewer's conversion of a version 1
+record. It must differ for different options, and the existing name,
+`features/{feature_type}-{hash}` with the XXH3-128 hash of the compact JSON of
+`feature_tool`, `feature_type` and `feature_options` (without `use_gpu`) that
+`get_feature_tool_xxh128` computes, does that. It need not be the same in
+Python and Rust: two writers that name the same options differently cache the
+features twice, never wrongly. Because `image_to_gray` is part of the options a
+folder is named from, every folder created under the new rules is new, for
+every tool, even with otherwise identical settings.
 
 What this gives up: a hand edit of `feature_options` does not move the folder,
 so it can put `.sift` files made under different settings into one folder. Each
 `.sift` file records its own `feature_tool_metadata`, so that is detectable
-afterwards from the files. To change the options, run `sfm ws init --force` or
-`sfm ws upgrade`, which choose a new folder.
+afterwards. To change the options, run `sfm ws init --force` or
+`sfm ws upgrade`, which create a new folder.
 
-The relation the workspace spec states still holds: this cache hash is a
-different value from the `.sift` file's `feature_tool_xxh128`, which is the
-XXH128 of the stored bytes of the file's `feature_tool_metadata.json` (with
-`feature_type` `"sift"`, `use_gpu` included where the options have it, and the
-writer's own serialisation). Under the new shape both inputs contain the same
-`image_to_gray` object, but the two are computed from different bytes, and a
-reader must not compare one with the other.
+The folder hash is still a different value from a `.sift` file's
+`feature_tool_xxh128`, which is the XXH128 of the stored bytes of its
+`feature_tool_metadata.json`; both inputs now hold the same `image_to_gray`
+object, but a reader must not compare one with the other.
 
-**Loading checks the version.** `load_workspace_config` in
-`src/sfmtool/_workspace.py`, the one reader of `.sfm-workspace.json` that every
-command goes through, gains these checks, each an error naming the file:
+#### Loading checks
 
-- A missing `version` key is an error. `init_workspace` has written
-  `"version": 1` since the commit that added it, and the workspace spec has said
-  the field must be `1` since it was first written, so every file sfmtool made
-  has one.
-- A `version` other than `1` or `2`, including one above 2, is refused with an
-  error naming the file and the version it found.
-- A version 2 file whose `feature_options` carry `gray_formula` at the top
-  level, or carry no top-level `image_to_gray`, or whose `image_to_gray` does
-  not parse, is rejected at load, not later at extraction.
-- A version 1 file whose `feature_options` carry `image_to_gray` is invalid
-  too: the object belongs to version 2.
+`load_workspace_config` in `src/sfmtool/_workspace.py`, the one reader of
+`.sfm-workspace.json` (core's `BuildSiftFilesOptions::from_workspace`, which
+has no caller outside its tests, is removed), refuses at load:
 
-`load_workspace_config` never recomputes `feature_prefix_dir`; it returns the
-stored one.
+- a file with no `version` key (`init_workspace` has written `"version": 1`
+  since the commit that added it, and the workspace spec has required it from
+  its first version);
+- a `version` other than `1` or `2`;
+- a version 2 file whose `feature_options` carry `gray_formula` at the top
+  level, carry no top-level `image_to_gray`, or carry one that does not parse;
+- a version 1 file whose `feature_options` carry `image_to_gray`, since the
+  object belongs to version 2.
 
-`load_workspace_config` is also the only reader of the file. Core's
-`BuildSiftFilesOptions::from_workspace`, which reads `.sfm-workspace.json` on
-its own and has no caller outside its tests, is removed rather than given a
-second copy of these checks; a Rust caller is handed its options by the Python
-side or by a `.sfmr`'s record, as the viewer and the binding already are.
+The version 2 rules apply to the top level of `feature_options` only;
+`sfmtool-undistort`'s nested `source_feature_options` is a copy of its source's
+record and may hold a version 1 `gray_formula`.
 
-**Every path that writes `.sift` files refuses to mix versions.** A version 2
-`.sift` file never goes into a directory that holds version 1 files, and no
-`.sift` file is written from version 1 settings. The check is in the two
-functions every writer goes through, not in one command:
+#### Versions never mix
 
-- `image_files_to_sift_files` in `src/sfmtool/sift/extract.py`, which writes
-  each `.sift` that is missing or older than its image. `sfm sift --extract`
-  calls it, and so do three commands that extract implicitly: `sfm solve`
-  (`src/sfmtool/colmap/db_setup.py`), `sfm match`
-  (`src/sfmtool/feature_match/_run.py`) and `sfm to-colmap-db`
-  (`src/sfmtool/colmap/db_export.py`), as does the
-  `image_files_to_sift_files_opencv` wrapper.
-- `build_sift_files` in `sfmtool-core`
-  (`crates/sfmtool-core/src/features/sift/files.rs`), which the viewer's
-  *Build SIFT Files* (`crates/sfm-explorer/src/sift_files.rs`) and the Python
-  binding over it call.
+**No `.sift` file is written from version 1 settings, and no version 2 `.sift`
+file goes into a folder that holds version 1 files.** Version 1 settings are a
+version 1 workspace file or a record whose `feature_options` carry no
+`image_to_gray`, such as a `.sfmr` made from a version 1 workspace. A version 1
+workspace moves to version 2 only through `sfm ws upgrade` or `sfm ws init`,
+both of which create a new folder. **Reading version 1 files stays allowed
+everywhere**: a command that reads `.sift` or `.sfmr` files in a version 1
+workspace reads them in its recorded folder as today, a `gray_formula` reading
+as `{"formula": <gray_formula>}` and a `colmap` or `opencv` file with no stated
+conversion as its tool's row, and a `.sfmr` written there takes its readings
+from the image files ([Part 2](#where-a-writer-gets-the-values)). A command that
+only needed features already there, and finds every `.sift` present and
+current, writes nothing and so does not refuse.
 
-`sfm undistort` writes its `.sift` files with `write_sift` directly, into a
-directory of its own that is new under the new rules, as a version 2 workspace
-(above), so it has nothing to refuse.
+#### The writers
 
-The check refuses, before writing anything, when the workspace file is version
-1 (in `image_files_to_sift_files`, which reads it; `build_sift_files` is handed
-its options and never reads the file), when the feature options it is given
-carry no `image_to_gray` object (a version 1 record, such as a `.sfmr` made
-from a version 1 workspace), or when any `.sift` file already in the target
-directory is version 1. Every refusal carries the same message: it names the workspace file or the directory, says it
-holds version 1 settings or version 1 `.sift` files, and says to run
-`sfm ws upgrade` (below), which moves the workspace to version 2 and a new
-features directory. A command that only needed to read features that are
-already there, and finds every `.sift` present and current, writes nothing and
-so does not refuse.
+Every `.sift` file is written by one of these, and the rule above is checked in
+each, not in one command:
 
-**The viewer's *Build SIFT Files* converts the node's record in memory.** The
-viewer builds from the options and the directory a node's `.sfmr` records, and
-it does not read `.sfm-workspace.json`, so that the files go where the node
-looks for them; a node whose record names another tool is already switched to
-the `sfmtool` defaults in memory, the switch pushed as a version when the build
-succeeds and undone by Undo. The version 2 rule extends that mechanism rather
-than reading the workspace file:
+| Writer | Reached from | Reads its settings from | Writes into | Refuses when |
+|--------|--------------|-------------------------|-------------|--------------|
+| `image_files_to_sift_files` (`src/sfmtool/sift/extract.py`), which writes each `.sift` that is missing or older than its image | `sfm sift --extract`, and implicitly `sfm solve` (`colmap/db_setup.py`), `sfm match` (`feature_match/_run.py`), `sfm to-colmap-db` (`colmap/db_export.py`), the `image_files_to_sift_files_opencv` wrapper | the workspace file, through `load_workspace_config` | the recorded `feature_prefix_dir` | the workspace file is version 1; a `.sift` already in the folder is version 1; a `colmap` or `opencv` object differs from its tool's row |
+| core's `build_sift_files` (`crates/sfmtool-core/src/features/sift/files.rs`) | its Python binding (`crates/sfmtool-py/src/sift/files.rs`) and the viewer | the options and folder it is handed; it never reads the workspace file | the folder it is handed | the options carry no `image_to_gray`; a `.sift` already in the folder is version 1 |
+| the viewer's *Build SIFT Files* (`crates/sfm-explorer/src/sift_files.rs`), through `build_sift_files` | the scene tree and the wire | the node's `.sfmr` record, not the workspace file, so the files go where the node looks for them | a version 2 `sfmtool` record: its recorded folder. A version 1 `sfmtool` record of an embedded-patches node: a new folder named from the record converted in memory by the conversion `sfm ws upgrade` makes. A record naming another tool: the `sfmtool` defaults' folder, as today's switch | a version 1 record on a `sift_files` node |
+| `sfm undistort` (`src/sfmtool/_undistort_images.py`), with `write_sift` | `sfm undistort` | the input `.sfmr`'s record and the undistorted images | a new folder in its output | never, for version reasons |
 
-- A node whose record is a version 2 `sfmtool` record (a top-level
-  `image_to_gray`) builds into its recorded directory, as today.
-- A node whose record is a version 1 `sfmtool` record (`gray_formula`, or no
-  conversion) and whose observations are embedded patches has its record
-  converted in memory by the same conversion `sfm ws upgrade` makes, one core
-  function that both call, and builds into a new directory named from the
-  converted options. When every file is built, the conversion is pushed as a version, like
-  today's switch, so the node then looks in the new directory; Undo puts the old
-  record back, and a save writes the new one into the `.sfmr`.
-- A node with `sift_files` observations and a version 1 record is refused, for
-  the reason today's switch is refused for such a node: its feature indexes name
-  features of the files in the old directory, and files in a new directory hold
-  other features. The message says so and suggests converting to embedded
-  patches.
-- A node whose record names another tool is switched to
-  `BuildSiftFilesOptions::sfmtool_defaults()`, which are version 2 options, as
-  today.
+**The viewer.** When every file is built, a converted record (like today's
+switch to the `sfmtool` defaults) is pushed as a version, so the node then
+looks in the new folder; Undo puts the old record back and a save writes the new
+one. The workspace's `.sfm-workspace.json` is neither read nor changed, so it
+may still be version 1 and the command-line writers keep refusing there until
+`sfm ws upgrade` names its own new folder. The old folder stays, and other
+reconstructions still find it through their own records. The Background panel
+line and the Action Log entry name the folder written to and, after a
+conversion, the folder the record moved from. A version 1 record on a
+`sift_files` node is refused for the reason today's switch is: its feature
+indexes name features of the old files.
 
-The workspace's own `.sfm-workspace.json` is neither read nor changed, so it can
-still be version 1 after a build, and the command-line extractors keep refusing
-there until `sfm ws upgrade` is run, which names its own new directory. The old directory and
-its `.sift` files stay on disk, and any other reconstruction whose record names
-them still finds them through its own record. The Background panel's line and
-the Action Log entry for the build name the directory the files were written to,
-and, when the record was converted, the directory it moved from.
+<a id="sfm-undistort"></a>**`sfm undistort`** writes its own workspace
+(`feature_tool` `sfmtool-undistort`, `feature_options` holding the source's
+`source_feature_tool` and `source_feature_options` and the warp's `fit` and
+`filter`) as version 2, with a top-level `image_to_gray` converted from the
+source as `sfm ws upgrade` converts one: the source's own top-level object, else
+its `gray_formula` as `{"formula": …}`, else the source tool's row, a version 1
+`sfmtool-undistort` source being converted from its own nested record the same
+way. Its `.sift` files are version 2 with that object, and their readings are
+computed by decoding the undistorted image files it wrote, so they describe
+those images, not the source images, and a later `.sfmr` writer that recomputes
+them from the image files gets the same values. Its folder,
+`features/sift-sfmtool-undistort-{hash}`, is named over its whole
+`feature_options` when it creates it, so undistorting again under the new rules
+writes a new folder beside any older output.
 
-**Reading version 1 files stays allowed everywhere.** A command that reads
-`.sift` files or `.sfmr` files in a version 1 workspace (`sfm inspect`, the
-viewer opening a `.sfmr`, `sfm solve` or `sfm match` on images whose `.sift`
-files all exist and are current, a `.sfmr` save) reads its version 1 `.sift`
-files in its existing `feature_prefix_dir` as today, and a `.sfmr` written there
-takes its readings from the image files
-([Part 2](#where-a-writer-gets-the-values)). A `gray_formula` in a version 1
-`sfmtool` workspace reads as `{"formula": <gray_formula>}`, and a version 1
-`colmap` or `opencv` workspace, which states no conversion, reads as that tool's
-row above.
+#### Refusals
 
-**Migration.** No command rewrites the workspace file unless the user runs
-`sfm ws upgrade` or `sfm ws init`:
+| Refusal | Raised by | Its message |
+|---------|-----------|-------------|
+| Version 1 settings | `image_files_to_sift_files`, `build_sift_files` | names the workspace file or the record, says it holds version 1 settings, and says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new folder |
+| Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder, says it holds version 1 `.sift` files, and says to run `sfm ws upgrade` |
+| `colmap` or `opencv` conversion differs | `image_files_to_sift_files` | names the tool and the one conversion it makes |
+| Version 1 record on a `sift_files` node | the viewer | says the feature indexes name features of the old files, which a new folder would not hold, and suggests converting to embedded patches |
+| Invalid workspace file at load | `load_workspace_config` | names the file and what is wrong: no `version`, the version found, or the key that breaks the version's rules |
+| `sfm ws upgrade` cannot upgrade | `sfm ws upgrade`, changing nothing | names the file and says which: no workspace file, no `version`, a version above 2, a `feature_tool` other than `sfmtool`, `colmap` or `opencv` (an `sfmtool-undistort` workspace is told to run `sfm undistort` again, since its `.sift` files cannot be re-extracted), or a `gray_formula` that does not parse |
 
-- **`sfm ws upgrade` moves a workspace to version 2 and keeps its settings.**
-  It acts on the workspace found by the usual discovery from the directory it is
-  given, or the current directory. It
-  rewrites a version 1 `.sfm-workspace.json` as version 2 with every existing
-  option kept, including hand-edited ones such as `peak_threshold` or
-  `max_image_size`. It converts `sfmtool`'s `gray_formula` into
-  `image_to_gray: {"formula": <gray_formula>}`, and gives a `colmap` or
-  `opencv` workspace its tool's row from the table above. It recomputes
-  `feature_prefix_dir` from the new options and writes it, prints the old and
-  the new directory, and leaves the old features directory, its `.sift` files
-  and the named image lists file
-  ([named-image-lists.md](named-image-lists.md)) on disk. On a version 2 file it changes
-  nothing and says "nothing to do: already version 2", whatever its options
-  hold. The `.sfmr` files that name the old directory still
-  resolve their `.sift` files through their own record. It refuses, changing
-  nothing and naming the file, when there is no workspace file, when the file
-  has no `version` or a version above 2, when its `feature_tool` is not
-  `sfmtool`, `colmap` or `opencv` (an `sfmtool-undistort` workspace gets its
-  own message saying to run `sfm undistort` again), when a `gray_formula` does
-  not parse under the formula grammar.
-- **`sfm ws init` and `sfm ws init --force` write version 2 with fresh
-  defaults**: `version: 2`, the tool's default `feature_options` with its
-  `image_to_gray` from the table above, and a `feature_prefix_dir` named from
-  them. `--force` over a version 1 file therefore changes `feature_prefix_dir`
-  and drops any hand-edited option, which is why the refusal message points at
-  `sfm ws upgrade` instead. The old features directory stays on disk, as every
-  features directory does. Neither form touches the named image lists file.
-- **`sfm ws init` sets the grey conversion** for the `sfmtool` tool with
-  `--image-to-gray FORMULA` and `--quantize-bits B`, written into
-  `image_to_gray` before `feature_prefix_dir` is named, so the directory
-  follows the conversion. The formula is checked against the grammar and `B`
-  must be an integer from 1 to 16. With `--feature-tool colmap` or `opencv`
-  either option is an error, since those tools convert only one way.
+#### Migration
 
-**`.sfmr` files.** `workspace.contents` in a `.sfmr` copies the workspace's
-`feature_tool`, `feature_type`, `feature_options` and `feature_prefix_dir`, so a
-`.sfmr` written from a version 2 workspace holds the `image_to_gray` object in
-`workspace.contents.feature_options`, and one written from a version 1
-workspace holds what that file held. The `.sfmr` format treats
-`feature_options` as tool-defined, as it does today, so this needs no format
-change of its own; the `.sfmr` spec's example of `workspace.contents` gains the
-object when version 15 is filed. In a version 15 file written from a version 2
-workspace, `images/metadata.json`'s `image_to_gray` equals
+No command rewrites the workspace file unless the user runs one of these:
+
+- **`sfm ws upgrade`** acts on the workspace found by the usual discovery from
+  the directory it is given, or the current directory. It rewrites a version 1
+  file as version 2 keeping every option, including hand-edited ones such as
+  `peak_threshold` or `max_image_size`; converts `sfmtool`'s `gray_formula` into
+  `image_to_gray: {"formula": <gray_formula>}` and gives a `colmap` or `opencv`
+  workspace its tool's row; names a new `feature_prefix_dir` from the new
+  options; prints the old and new folders; and leaves the old folder, its
+  `.sift` files and the named image lists file
+  ([named-image-lists.md](named-image-lists.md)) on disk. On a version 2 file it
+  says "nothing to do: already version 2" and changes nothing. `.sfmr` files
+  that name the old folder still find their `.sift` files through their own
+  record.
+- **`sfm ws init` and `sfm ws init --force`** write version 2 with fresh
+  options from the tool's defaults and the flags, the tool's `image_to_gray`
+  row, and a new folder named from them. `--force` drops any hand-edited option,
+  which is why the refusals point at `sfm ws upgrade`. The old folder stays on
+  disk, and the named image lists file is not touched.
+- **`sfm ws init --image-to-gray FORMULA --quantize-bits B`** sets the
+  `sfmtool` tool's conversion before the folder is named. The formula is checked
+  against the grammar and `B` must be an integer from 1 to 16; with
+  `--feature-tool colmap` or `opencv` either flag is an error.
+
+**`.sfmr` files.** `workspace.contents` copies the workspace's `feature_tool`,
+`feature_type`, `feature_options` and `feature_prefix_dir`, so a `.sfmr` written
+from a version 2 workspace holds the object in
+`workspace.contents.feature_options`, and one written from a version 1 workspace
+holds what that file held. The `.sfmr` format treats `feature_options` as
+tool-defined, so this needs no format change of its own; the `.sfmr` spec's
+example gains the object when version 15 is filed. In a version 15 file written
+from a version 2 workspace, `images/metadata.json`'s `image_to_gray` equals
 `workspace.contents.feature_options.image_to_gray`.
 
 ## Part 2: `.sfmr` version 15
@@ -861,32 +790,19 @@ Named once here, as the format specs' Implementations sections will name them:
   object in place of `gray_formula`; the test stays as a convenience that keeps
   the two default folder names equal, not as a format rule.
 - **The version and extraction checks**: `load_workspace_config` in
-  `src/sfmtool/_workspace.py` checks the workspace version at load; the
-  refusal to mix versions is in `image_files_to_sift_files`
-  (`src/sfmtool/sift/extract.py`), reached from `sfm sift`, `sfm solve`
-  (`src/sfmtool/colmap/db_setup.py`), `sfm match`
-  (`src/sfmtool/feature_match/_run.py`) and `sfm to-colmap-db`
-  (`src/sfmtool/colmap/db_export.py`), and in core's `build_sift_files`,
-  reached from the viewer's *Build SIFT Files*
-  (`crates/sfm-explorer/src/sift_files.rs`) and its Python binding
-  (`crates/sfmtool-py/src/sift/files.rs`). `sfm ws upgrade`
+  `src/sfmtool/_workspace.py` checks the version at load, and each writer in
+  [the writers table](#the-writers) checks the no-mixing rule. `sfm ws upgrade`
   is a new subcommand of the `ws` group in `src/sfmtool/_commands/ws.py`, and
   `sfm ws init` gains `--image-to-gray` and `--quantize-bits` there.
-- `BuildSiftFilesOptions::from_workspace` is removed.
-- **The viewer's build** (`crates/sfm-explorer/src/sift_files.rs`) converts a
-  version 1 `sfmtool` record through the same core conversion function that
-  `sfm ws upgrade` binds, and pushes it as a version the way it pushes today's
-  switch.
-- **`sfm undistort`** (`src/sfmtool/_undistort_images.py`) writes its workspace
-  file as version 2 with the converted top-level `image_to_gray`, and computes
-  each `.sift` file's readings from the undistorted image file it wrote.
 - **The three Python backends** (`extract_sfmtool.py`, `extract_colmap.py`,
   `extract_opencv.py` in `src/sfmtool/sift/`) call it on the decode they make
   the thumbnail from, beside `thumbnail_of_rgb` or `cv2.resize`, and put the
   readings and `image_to_gray` into the metadata they yield. The Rust writer
-  `build_sift_files` calls it beside `thumbnail_from_rgb`. `sfm undistort`,
-  which writes `.sift` files for the images it undistorts, calls it on each
-  undistorted image file it wrote.
+  `build_sift_files` calls it beside `thumbnail_from_rgb`. `sfm undistort`
+  calls it on each undistorted image file it wrote, after writing its
+  workspace file as version 2 ([`sfm undistort`](#sfm-undistort)); the viewer
+  converts a version 1 record through the same core function `sfm ws upgrade`
+  binds.
 - **`sfmtool-sift-format`** reads and writes version 2: `SiftMetadata` gains the
   two fields, `validate_sift_data` checks them, and `SIFT_FORMAT_VERSION`
   becomes 2.
@@ -896,6 +812,7 @@ Named once here, as the format specs' Implementations sections will name them:
   (`src/sfmtool/colmap/io.py`) copies the readings beside them, and the Rust
   save path gains a lookup like `verified_sift_thumbnail` with the photograph
   as the fallback.
+
 ## Words for the glossary
 
 To add to [`../GLOSSARY.md`](../GLOSSARY.md) when this lands:
@@ -917,74 +834,50 @@ To add to [`../GLOSSARY.md`](../GLOSSARY.md) when this lands:
 
 ## Choices made here
 
-Decisions inside the maintainer's decisions that this draft makes and that
-review should check:
+Decisions inside the maintainer's decisions that this draft makes, each with
+where it is described and why, for review:
 
-1. **The EXIF orientation is not applied** in `image_to_gray`'s inputs. The
-   incremental-extraction draft said it was. Every extractor decodes with
-   `read_image_rgb`, which ignores the tag, and keypoints, thumbnails and the
-   `.sfmr` thumbnail rule all address stored pixels, so a definition that
-   applied the tag would contradict every file the backends write.
-2. **The readings live in `metadata.json`**, as two fields, not in a new entry;
-   reasons above.
-3. **The tensor is stored raw**, not divided by `Exx + Eyy`, because the
-   normalised form is one division away while the energy cannot be recovered
-   from it, and the energy is itself a contrast reading a reader can use (for
-   example to skip near-flat frames, where coherence is unstable).
-4. **`float32`** for both `.sfmr` columns, the values computed in double
-   precision and rounded to the nearest `float32` when stored: the use needs
-   about three significant digits, `float16` would underflow on flat or dark
-   captures, and `float32` does not for any realistic value.
-5. **The resize rule**: long side to 480, short side rounded to nearest with
-   half up, never enlarged; the grey conversion and quantisation happen at full
-   resolution before the resize.
-6. **The border rule**: interior pixels only, so no padding convention enters
-   the definition; readings are `0` for an image under 3 pixels on a side.
-7. **The Sobel scale** of 1/8, so the derivative is in grey units per pixel.
-8. **The `.sfmr` records one `image_to_gray`** in `images/metadata.json`, and a
-   writer recomputes rows recorded under another conversion; for an
-   `embedded_patches` file with no `.sift` files it uses unquantised BT.709.
-9. **The workspace and the `.sift` file spell the conversion the same way**:
-   `.sfm-workspace.json` version 2 carries the `image_to_gray` object in
-   `feature_options` for every tool, replacing `gray_formula`, and the `.sift`
-   file copies it. A workspace written under the new rules gets a new features
-   directory. Every path that writes `.sift` files (`image_files_to_sift_files`
-   and core's `build_sift_files`) refuses version 1 settings (a version 1
-   workspace file, or a record with no `image_to_gray`) and a directory of
-   version 1 files, and points at `sfm ws upgrade`; reading
-   version 1 files stays allowed.
-10. **`sfm ws init`, with or without `--force`, writes a version 2
-    `.sfm-workspace.json`** with fresh options from its defaults and flags, and
-    never touches the lists file.
-11. **Proposed for review: `sfm ws upgrade`**, a migration command that rewrites
-    a version 1 workspace file as version 2 keeping every option, converts the
-    grey conversion, recomputes `feature_prefix_dir`, and leaves the old
-    features directory and the lists file on disk; the refusal message points at
-    it rather than at `sfm ws init --force` with reconstructed flags, which
-    cannot reproduce hand-edited options. On a version 2 file it does nothing.
-12. **Proposed for review: `sfm ws init --image-to-gray FORMULA` and
-    `--quantize-bits B`** for the `sfmtool` tool, so the conversion can be set
-    and the directory is named from it. A hand edit of the options does not move
-    the folder; the recorded folder name is authoritative.
-13. **The workspace file's version is checked at load**: a missing `version`,
-    a version other than 1 or 2, a version 2 file with `gray_formula`, without
-    `image_to_gray`, and a version 1 file with `image_to_gray` are all errors
-    there.
-14. **`sfm undistort` writes a version 2 workspace**, with a top-level
-    `image_to_gray` converted from its source as `sfm ws upgrade` converts it
-    and readings computed from the undistorted images, so it never refuses a
-    version 1 source; `sfmtool-undistort` records its source's conversion and is
-    not settable, and `sfm ws upgrade` refuses an undistort workspace.
-15. **The viewer's *Build SIFT Files* converts a version 1 `sfmtool` record in
-    memory** and pushes the conversion as an undoable version, extending
-    today's switch to the `sfmtool` defaults, rather than reading the
-    workspace's `.sfm-workspace.json`: the viewer builds where the node looks
-    for its files, and reading the workspace file would build where the node
-    does not look. A `sift_files` node with a version 1 record is refused, as
-    today's switch is for such a node.
-16. **`BuildSiftFilesOptions::from_workspace` is removed**, leaving
-    `load_workspace_config` as the one reader of the workspace file and its
-    checks in one place.
+1. **EXIF orientation not applied**
+   ([inputs](#feature_tool_metadatajson-feature_optionsimage_to_gray)): every
+   extractor decodes in stored pixel order, so applying it would contradict
+   every file written.
+2. **Readings in `.sift` `metadata.json`**
+   ([why](#where-the-readings-live-and-why)): they describe the image, every
+   reader already reads it, and no hash slot changes.
+3. **Tensor stored raw** ([tensor](#gradient-structure-tensor)): the normalised
+   form is one division away, the energy is not recoverable from it.
+4. **`float32` in `.sfmr`** ([why](#why-float32-and-these-names)): three
+   significant digits suffice and `float16` underflows on flat captures.
+5. **Long side 480, never enlarged, area averaged** ([reading
+   image](#the-reading-image), [rationale](#why-480)): the middle of the
+   measured plateau, exact at whole-number factors of common sizes.
+6. **Interior pixels only, `0` under 3 pixels** ([reading
+   image](#the-reading-image)): no padding convention enters the definition.
+7. **Sobel divided by 8** ([tensor](#gradient-structure-tensor)): derivatives in
+   grey units per pixel.
+8. **One `image_to_gray` per `.sfmr`, rows under another recomputed**
+   ([`images/metadata.json`](#imagesmetadatajson-image_to_gray),
+   [sources](#where-a-writer-gets-the-values)): rows under different conversions
+   do not compare.
+9. **Version checks at load** ([loading checks](#loading-checks)): a bad file
+   fails before any work, not at extraction.
+10. **No-mixing checked in every writer** ([writers](#the-writers)): implicit
+    extraction in `solve`, `match` and `to-colmap-db` and the viewer write
+    `.sift` files too.
+11. **Proposed for review: `sfm ws upgrade`** ([migration](#migration)): keeps
+    hand-edited options, which `sfm ws init --force` with reconstructed flags
+    cannot.
+12. **Proposed for review: `sfm ws init --image-to-gray`, `--quantize-bits`**
+    ([migration](#migration)): the only way to set the conversion and name its
+    folder, since a hand edit does not move the folder.
+13. **`sfm undistort` writes version 2 from any source** ([`sfm
+    undistort`](#sfm-undistort)): it only reads its source, and its folder is
+    new.
+14. **The viewer converts a version 1 record in memory** ([writers](#the-writers)):
+    it builds where the node looks, and today's switch already works this way.
+15. **`BuildSiftFilesOptions::from_workspace` removed**
+    ([loading checks](#loading-checks)): one reader of the workspace file,
+    with its checks in one place.
 
 ## Not in this draft
 
