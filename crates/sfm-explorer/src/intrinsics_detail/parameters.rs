@@ -12,21 +12,26 @@
 //! a count prints as an integer and an angle in degrees
 //! ([`format::parameter`]).
 
-use sfmtool_core::camera::{CameraIntrinsics, CameraModel, RollingShutterScanlines};
+use sfmtool_core::camera::{
+    CameraIntrinsics, CameraModel, IntrinsicAdjustment, RollingShutterScanlines,
+};
 use sfmtool_core::reconstruction::image_adjustment_statistics::{
     ComponentStatistics, ImageAdjustmentStatistics,
 };
-use sfmtool_core::reconstruction::PerImageAdjustments;
+use sfmtool_core::reconstruction::{PerImageAdjustments, SfmrImage};
 
 use super::derived::Derived;
 use super::format;
+use super::histogram::{self, Histogram, HistogramResponse};
 
 /// What the parameter table states of a camera's per-image parameters: which
-/// it varies, with its scanlines setting, and their statistics over its
-/// images.
-pub(super) struct PerImage {
+/// it varies, with its scanlines setting, their statistics over its images,
+/// and the images themselves, whose values the histograms bin and whose names
+/// their tooltips list.
+pub(super) struct PerImage<'a> {
     pub(super) flags: PerImageAdjustments,
     pub(super) statistics: ImageAdjustmentStatistics,
+    pub(super) images: &'a [SfmrImage],
 }
 
 /// Table 1: the model's parameters, in declaration order, and beside each
@@ -37,16 +42,21 @@ pub(super) struct PerImage {
 /// (the proposed camera's), is the parameters alone. Otherwise a line under
 /// the heading names what varies per image, what does not and what the model
 /// cannot carry ([`per_image_summary`]), and each component the camera varies
-/// gets a `per image` row of its own ([`statistics_rows`]).
+/// gets a `per image` row of its own ([`statistics_rows`]) with a histogram
+/// of its images' values: in a column of its own beside the statistics where
+/// the table leaves room for one, and under them otherwise. The bin holding
+/// `selected_image`, the selected image, is outlined, and the response says
+/// what the pointer did on the histograms.
 ///
 /// `id_salt` tells two tables in one frame apart: the current camera's and,
 /// while a proposal is open, the proposed one's beside it.
 pub(super) fn show_parameters(
     ui: &mut egui::Ui,
     camera: &CameraIntrinsics,
-    per_image: Option<&PerImage>,
+    per_image: Option<&PerImage<'_>>,
+    selected_image: Option<usize>,
     id_salt: &str,
-) {
+) -> HistogramResponse {
     ui.label(egui::RichText::new("Parameters").strong());
     let per_image = per_image.filter(|p| p.flags.any());
     if let Some(per_image) = per_image {
@@ -64,24 +74,72 @@ pub(super) fn show_parameters(
         .unwrap_or_default();
     let parameters = camera.parameters();
     let anchors = anchors(&parameters);
+    const SPACING: f32 = 12.0;
+    let beside = histograms_fit_beside(ui, &parameters, &rows, SPACING);
+    let image_name = |image: usize| {
+        per_image
+            .and_then(|p| p.images.get(image))
+            .map_or_else(|| format!("image {image}"), |i| i.name.clone())
+    };
+    let mut response = HistogramResponse::default();
     egui::Grid::new(("intrinsics_parameters", id_salt))
-        .num_columns(2)
-        .spacing([12.0, 2.0])
+        .num_columns(if beside { 3 } else { 2 })
+        .spacing([SPACING, 2.0])
         .striped(true)
         .show(ui, |ui| {
+            let mut show_row = |ui: &mut egui::Ui, row: &StatisticsRow| {
+                let shown = show_statistics_row(ui, row, beside, selected_image, &image_name);
+                response.select = response.select.or(shown.select);
+                response.hovered = response.hovered.or(shown.hovered);
+            };
             for (k, (name, value)) in parameters.iter().enumerate() {
                 ui.monospace(name.as_ref());
                 ui.monospace(format::parameter(name.as_ref(), *value));
                 ui.end_row();
                 for row in rows.iter().filter(|r| anchors.row_of(r.anchor) == Some(k)) {
-                    show_statistics_row(ui, row);
+                    show_row(ui, row);
                 }
             }
             // The rows with no shared parameter of their own to sit under.
             for row in rows.iter().filter(|r| anchors.row_of(r.anchor).is_none()) {
-                show_statistics_row(ui, row);
+                show_row(ui, row);
             }
         });
+    response
+}
+
+/// Whether the table, each row's statistics on one line, leaves room at the
+/// width it is given for the histograms in a third column beside them.
+///
+/// Measured rather than tried, so the choice is made before the grid lays out
+/// its first row and every histogram goes in the same place.
+fn histograms_fit_beside(
+    ui: &egui::Ui,
+    parameters: &[(std::borrow::Cow<'static, str>, f64)],
+    rows: &[StatisticsRow],
+    spacing: f32,
+) -> bool {
+    if rows.iter().all(|r| r.histogram.is_none()) {
+        return false;
+    }
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let width = |text: String| {
+        ui.painter()
+            .layout_no_wrap(text, font.clone(), egui::Color32::WHITE)
+            .size()
+            .x
+    };
+    let names = parameters
+        .iter()
+        .map(|(name, _)| width(name.to_string()))
+        .chain(rows.iter().map(|r| width(r.label.clone())))
+        .fold(0.0, f32::max);
+    let values = parameters
+        .iter()
+        .map(|(name, value)| width(format::parameter(name, *value)))
+        .chain(rows.iter().map(|r| width(r.cells.join("  "))))
+        .fold(0.0, f32::max);
+    names + spacing + values + spacing + histogram::WIDTH <= ui.available_width()
 }
 
 /// The shared parameter a `per image` row sits under, or `None` for a row
@@ -123,19 +181,43 @@ fn anchors(parameters: &[(std::borrow::Cow<'static, str>, f64)]) -> Anchors {
     }
 }
 
-/// One `per image` row: what it sits under, its label, its cells and its
-/// tooltip.
+/// One `per image` row: what it sits under, its label, its cells, its
+/// tooltip and the histogram of its values, which the scanlines row has none
+/// of.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct StatisticsRow {
     anchor: Option<Anchor>,
     pub(super) label: String,
     pub(super) cells: Vec<String>,
     tooltip: String,
+    /// The component as the histogram's tooltips name it, `focal` or `Δcx`.
+    component: &'static str,
+    unit: Unit,
+    pub(super) histogram: Option<Histogram>,
 }
 
-fn show_statistics_row(ui: &mut egui::Ui, row: &StatisticsRow) {
-    ui.add(egui::Label::new(egui::RichText::new(&row.label).monospace().weak()).extend())
-        .on_hover_text(&row.tooltip);
+/// One `per image` row, with its histogram in the third column when
+/// `beside`, and under its statistics otherwise.
+fn show_statistics_row(
+    ui: &mut egui::Ui,
+    row: &StatisticsRow,
+    beside: bool,
+    selected_image: Option<usize>,
+    name: &dyn Fn(usize) -> String,
+) -> HistogramResponse {
+    let id = ui.id().with(("per_image_histogram", &row.label));
+    let label = egui::Label::new(egui::RichText::new(&row.label).monospace().weak()).extend();
+    if !beside && row.histogram.is_some() {
+        // As tall as the histogram under the statistics beside it, so the
+        // label stays level with their first line rather than centring on
+        // the histogram.
+        ui.vertical(|ui| {
+            ui.add(label).on_hover_text(&row.tooltip);
+            ui.add_space(histogram::HEIGHT + ui.spacing().item_spacing.y);
+        });
+    } else {
+        ui.add(label).on_hover_text(&row.tooltip);
+    }
     // One label that wraps between the cells and never inside one, its
     // spaces within a cell non-breaking, so at a narrow panel a row takes more
     // lines rather than running past the edge. A label rather than a wrapping
@@ -148,8 +230,40 @@ fn show_statistics_row(ui: &mut egui::Ui, row: &StatisticsRow) {
         .map(|cell| cell.replace(' ', "\u{a0}"))
         .collect::<Vec<_>>()
         .join("  ");
-    ui.add(egui::Label::new(egui::RichText::new(text).monospace()).wrap());
+    let statistics = egui::Label::new(egui::RichText::new(text).monospace());
+    let value = |v: f64| {
+        format!(
+            "{}{}",
+            format::signed(v, row.unit.decimals()),
+            row.unit.suffix()
+        )
+    };
+    let labels = histogram::Labels {
+        component: row.component,
+        unit: row.unit.name(),
+        value: &value,
+        name,
+    };
+    let mut response = HistogramResponse::default();
+    match &row.histogram {
+        Some(shown) if beside => {
+            ui.add(statistics.extend());
+            response =
+                histogram::show_histogram(ui, id, shown, &labels, selected_image, histogram::WIDTH);
+        }
+        Some(shown) => {
+            ui.vertical(|ui| {
+                ui.add(statistics.wrap());
+                let width = histogram::WIDTH.min(ui.available_width());
+                response = histogram::show_histogram(ui, id, shown, &labels, selected_image, width);
+            });
+        }
+        None => {
+            ui.add(statistics.wrap());
+        }
+    }
     ui.end_row();
+    response
 }
 
 /// Whether the model can carry a radial correction and rolling-shutter rates
@@ -207,7 +321,7 @@ pub(super) fn per_image_summary(camera: &CameraIntrinsics, per_image: &PerImage)
 /// coefficients and the scanlines setting with the three rates.
 pub(super) fn statistics_rows(
     camera: &CameraIntrinsics,
-    per_image: &PerImage,
+    per_image: &PerImage<'_>,
 ) -> Vec<StatisticsRow> {
     let statistics = &per_image.statistics;
     let n = statistics.images.len();
@@ -215,18 +329,43 @@ pub(super) fn statistics_rows(
     let over = format!(
         "Over {n} of the camera's images, its posed ones, or all of them where none is \
          posed: the mean, the standard deviation, the smallest and the largest value, and \
-         how many images lie more than two standard deviations from the mean."
+         how many images lie more than two standard deviations from the mean. The \
+         histogram bins the same images' values: the solid line is the mean, the dashed \
+         lines are two standard deviations either side of it, and the grey line is zero. \
+         Hover a bin to list its images, and click it to select them one at a time."
     );
     let mut rows = Vec::new();
-    let row =
-        |anchor: Option<Anchor>, label: &str, s: &ComponentStatistics, unit: Unit, what: &str| {
-            StatisticsRow {
-                anchor,
-                label: format!("  per image {label}"),
-                cells: cells(s, unit, n),
-                tooltip: format!("{what}. {over}"),
-            }
-        };
+    // A component's values over the images the statistics are over, each with
+    // its image's index.
+    let values = |value: &dyn Fn(&IntrinsicAdjustment) -> f64| -> Vec<(usize, f64)> {
+        statistics
+            .images
+            .iter()
+            .filter_map(|&i| {
+                let image = per_image.images.get(i)?;
+                Some((i, value(&image.intrinsic_adjustment)))
+            })
+            .collect()
+    };
+    let row = |anchor: Option<Anchor>,
+               label: &'static str,
+               s: &ComponentStatistics,
+               unit: Unit,
+               what: &str,
+               value: &dyn Fn(&IntrinsicAdjustment) -> f64| StatisticsRow {
+        anchor,
+        label: format!("  per image {label}"),
+        cells: cells(s, unit, n),
+        tooltip: format!("{what}. {over}"),
+        component: label,
+        unit,
+        histogram: Some(Histogram::of_component(
+            values(value),
+            s,
+            unit.scale(),
+            matches!(unit, Unit::Percent),
+        )),
+    };
     if let Some(focal) = &statistics.focal {
         rows.push(row(
             Some(Anchor::Focal),
@@ -236,21 +375,41 @@ pub(super) fn statistics_rows(
             "Each image's focal scale s, in percent: the image's focal is the camera's times \
              1 + s. The mean is the geometric mean of 1 + s, less one, the scale a drop of the \
              per-image focal folds into the camera, and the standard deviation is that of \
-             ln(1 + s)",
+             ln(1 + s). The histogram bins s itself, with the mean and the bounds mapped back \
+             from ln(1 + s)",
+            &|a| a.focal,
         ));
     }
     if let Some([x, y]) = &statistics.principal_point {
         let unit = Unit::Pixels(short_side);
         let what = "Each image's principal-point offset from the camera's, in pixels: the stored \
                     offset times the short side, min(width, height)";
-        rows.push(row(Some(Anchor::PrincipalPointX), "Δcx", x, unit, what));
-        rows.push(row(Some(Anchor::PrincipalPointY), "Δcy", y, unit, what));
+        rows.push(row(
+            Some(Anchor::PrincipalPointX),
+            "Δcx",
+            x,
+            unit,
+            what,
+            &|a| a.principal_point[0],
+        ));
+        rows.push(row(
+            Some(Anchor::PrincipalPointY),
+            "Δcy",
+            y,
+            unit,
+            what,
+            &|a| a.principal_point[1],
+        ));
     }
     if let Some([e_0, e_1]) = &statistics.radial_bspline {
         let what = "Each image's radial correction coefficient, as stored, in units of the \
                     normalized radius, added to the camera's spline";
-        rows.push(row(None, "e0", e_0, Unit::Number, what));
-        rows.push(row(None, "e1", e_1, Unit::Number, what));
+        rows.push(row(None, "e0", e_0, Unit::Number, what, &|a| {
+            a.radial_bspline[0]
+        }));
+        rows.push(row(None, "e1", e_1, Unit::Number, what, &|a| {
+            a.radial_bspline[1]
+        }));
     }
     if let Some(rates) = &statistics.rolling_shutter {
         let scanlines = match per_image.flags.rolling_shutter_scanlines {
@@ -265,19 +424,29 @@ pub(super) fn statistics_rows(
             tooltip: "Whether the sensor reads out one row or one column at a time: the camera \
                       setting its images' rolling-shutter rates are read on."
                 .to_string(),
+            component: "scanlines",
+            unit: Unit::Number,
+            histogram: None,
         });
         let what = "Each image's rolling-shutter rate, in milliradians per short side of \
                     readout: the stored rate, in radians per short side, times 1000, as Image \
                     Detail's legend states one image's";
-        for (label, s) in ["ωx", "ωy", "ωz"].iter().zip(rates) {
-            rows.push(row(None, label, s, Unit::MilliradiansPerShortSide, what));
+        for (k, (label, s)) in ["ωx", "ωy", "ωz"].into_iter().zip(rates).enumerate() {
+            rows.push(row(
+                None,
+                label,
+                s,
+                Unit::MilliradiansPerShortSide,
+                what,
+                &move |a| a.rolling_shutter[k],
+            ));
         }
     }
     rows
 }
 
 /// How a `per image` row's numbers read.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Unit {
     /// A fraction, shown as a percentage.
     Percent,
@@ -290,15 +459,50 @@ enum Unit {
     MilliradiansPerShortSide,
 }
 
+impl Unit {
+    /// The factor from the stored number to the number shown.
+    fn scale(self) -> f64 {
+        match self {
+            Unit::Percent => 100.0,
+            Unit::Pixels(short_side) => short_side,
+            Unit::MilliradiansPerShortSide => 1000.0,
+            Unit::Number => 1.0,
+        }
+    }
+
+    /// The decimals a number is shown to.
+    fn decimals(self) -> usize {
+        match self {
+            Unit::Number => 6,
+            _ => 3,
+        }
+    }
+
+    /// What follows a number in a cell: nothing for the rates, whose unit is
+    /// a cell of its own.
+    fn suffix(self) -> &'static str {
+        match self {
+            Unit::Percent => "%",
+            Unit::Pixels(_) => " px",
+            Unit::MilliradiansPerShortSide | Unit::Number => "",
+        }
+    }
+
+    /// The unit's name, in which a histogram's tooltip states a bin's range.
+    fn name(self) -> &'static str {
+        match self {
+            Unit::Percent => "%",
+            Unit::Pixels(_) => "px",
+            Unit::MilliradiansPerShortSide => "mrad per short side",
+            Unit::Number => "",
+        }
+    }
+}
+
 /// `mean +0.120%`, `sd 0.400%`, `min −0.700%`, `max +0.950%`, the unit where
 /// it is a cell of its own, and `1 of 17 past 2 sd`.
 fn cells(s: &ComponentStatistics, unit: Unit, images: usize) -> Vec<String> {
-    let (scale, decimals, suffix) = match unit {
-        Unit::Percent => (100.0, 3, "%"),
-        Unit::Pixels(short_side) => (short_side, 3, " px"),
-        Unit::MilliradiansPerShortSide => (1000.0, 3, ""),
-        Unit::Number => (1.0, 6, ""),
-    };
+    let (scale, decimals, suffix) = (unit.scale(), unit.decimals(), unit.suffix());
     let signed = |v: f64| format!("{}{suffix}", format::signed(scale * v, decimals));
     let mut cells = vec![
         format!("mean {}", signed(s.mean)),

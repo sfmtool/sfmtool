@@ -1628,6 +1628,7 @@ fn the_statistics_are_the_images_values_in_readable_units() {
                 0,
             )
             .unwrap(),
+        images: &recon.image_set.images,
     };
     let rows = super::parameters::statistics_rows(camera, &per_image);
     let adjustments: Vec<_> = recon
@@ -1841,4 +1842,410 @@ fn a_signed_number_never_reads_minus_zero() {
     assert_eq!(super::format::signed(-0.0004, 3), "+0.000");
     assert_eq!(super::format::signed(-0.0006, 3), "\u{2212}0.001");
     assert_eq!(super::format::signed(0.25, 2), "+0.25");
+}
+
+// ── The per-image histograms ────────────────────────────────────────────
+
+use super::histogram::{bin_edges, Histogram};
+
+/// Values `0, 1, …, 8`: nine values aim for three bins, the spread of 8 over
+/// three is nearest 2 on the ladder, and the bins run from the step below the
+/// lower two-standard-deviation bound to the step past the upper one.
+#[test]
+fn the_bins_are_round_and_hold_every_value() {
+    let values: Vec<(usize, f64)> = (0..9).map(|i| (i, i as f64)).collect();
+    let histogram = Histogram::new(values, 4.0, [-1.16, 9.16]);
+    assert_eq!(histogram.edges, [-2.0, 0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
+    assert_eq!(histogram.counts(), [0, 2, 2, 2, 2, 1]);
+    // A value on an edge is in the bin above it, and a bin is ordered by
+    // value.
+    assert_eq!(histogram.bins[3], [(4, 4.0), (5, 5.0)]);
+    assert_eq!(histogram.bins[5], [(8, 8.0)]);
+    // The nearest step on a log scale, not the next one up.
+    assert_eq!(super::histogram::nearest_step(2.04), 2.0);
+    assert_eq!(super::histogram::nearest_step(3.3), 5.0);
+    assert_eq!(super::histogram::nearest_step(0.0012), 0.001);
+    // A hundred values aim for ten bins, every edge a multiple of the step.
+    let many: Vec<f64> = (0..100).map(|i| (i as f64 * 0.37).sin() * 3.0).collect();
+    let edges = bin_edges(&many, [-4.5, 4.5]);
+    let step = edges[1] - edges[0];
+    assert_eq!(step, 0.5, "{edges:?}");
+    for edge in &edges {
+        assert!(
+            (edge / step - (edge / step).round()).abs() < 1e-9,
+            "{edges:?}"
+        );
+    }
+    assert!(
+        edges[0] <= -4.5 && *edges.last().unwrap() > 4.5,
+        "{edges:?}"
+    );
+}
+
+/// Two images still bin apart, and values that are all equal, a single
+/// image's among them, make one bin centred on the value.
+#[test]
+fn few_and_equal_values_still_bin() {
+    let two = Histogram::new(vec![(0, -1.0), (1, 1.0)], 0.0, [-2.0, 2.0]);
+    assert_eq!(two.edges, [-2.0, -1.0, 0.0, 1.0, 2.0, 3.0]);
+    assert_eq!(two.counts(), [0, 1, 0, 1, 0]);
+
+    let zeros = Histogram::new(vec![(0, 0.0), (1, 0.0), (2, 0.0)], 0.0, [0.0, 0.0]);
+    assert_eq!(zeros.edges, [-0.5, 0.5]);
+    assert_eq!(zeros.counts(), [3]);
+
+    let one = Histogram::new(vec![(4, 0.003)], 0.003, [0.003, 0.003]);
+    assert_eq!(one.counts(), [1]);
+    let [lo, hi] = [one.edges[0], one.edges[1]];
+    assert!(
+        (lo - 0.0025).abs() < 1e-12 && (hi - 0.0035).abs() < 1e-12,
+        "{one:?}"
+    );
+
+    // A value that is not a number is in no bin.
+    let gap = Histogram::new(vec![(0, 1.0), (1, f64::NAN), (2, 2.0)], 1.5, [0.5, 2.5]);
+    assert_eq!(gap.counts().iter().sum::<usize>(), 2);
+    assert!(Histogram::new(Vec::new(), 0.0, [0.0, 0.0]).edges.is_empty());
+}
+
+/// An outlier far past the rest sits alone in the last bin, and the bin
+/// count stays within the cap.
+#[test]
+fn an_outlier_sits_alone_in_its_bin() {
+    let mut values: Vec<(usize, f64)> = (0..16).map(|i| (i, 0.1 * (i as f64 - 8.0))).collect();
+    values.push((16, 10.0));
+    let plain: Vec<f64> = values.iter().map(|(_, v)| *v).collect();
+    let s =
+        sfmtool_core::reconstruction::image_adjustment_statistics::ComponentStatistics::of(&plain)
+            .unwrap();
+    let histogram = Histogram::of_component(values, &s, 1.0, false);
+    let counts = histogram.counts();
+    assert_eq!(counts.iter().sum::<usize>(), 17);
+    let last = counts.iter().rposition(|&c| c > 0).unwrap();
+    assert_eq!(histogram.bins[last], [(16, 10.0)], "{histogram:?}");
+    assert!(counts.len() <= 3 * super::histogram::MAX_BINS, "{counts:?}");
+    assert!(histogram.two_sd[1] < 10.0, "the outlier is past two sd");
+}
+
+/// A click on a bin selects its first image, and a click with one of its
+/// images selected selects the next, wrapping round.
+#[test]
+fn a_click_steps_through_a_bins_images() {
+    let histogram = Histogram::new(
+        vec![(7, 0.12), (3, 0.11), (9, 0.13), (1, 1.0)],
+        0.34,
+        [0.0, 0.8],
+    );
+    let k = histogram.bins.iter().position(|b| b.len() == 3).unwrap();
+    assert_eq!(histogram.next_in_bin(k, None), Some(3));
+    assert_eq!(histogram.next_in_bin(k, Some(3)), Some(7));
+    assert_eq!(histogram.next_in_bin(k, Some(7)), Some(9));
+    assert_eq!(histogram.next_in_bin(k, Some(9)), Some(3));
+    assert_eq!(histogram.next_in_bin(k, Some(42)), Some(3));
+}
+
+/// The seoul_bull camera's `per image` rows, read off the panel's own
+/// computation.
+fn seoul_bull_rows(node: &SceneNode) -> Vec<super::parameters::StatisticsRow> {
+    let recon = node.recon();
+    let per_image = super::parameters::PerImage {
+        flags: recon.image_set.camera_per_image_adjustments(0),
+        statistics:
+            sfmtool_core::reconstruction::image_adjustment_statistics::image_adjustment_statistics(
+                &recon.image_set,
+                0,
+            )
+            .unwrap(),
+        images: &recon.image_set.images,
+    };
+    super::parameters::statistics_rows(&recon.image_set.cameras[0], &per_image)
+}
+
+/// What one frame of the panel painted, its AccessKit nodes and its
+/// response.
+type HistogramFrame = (
+    Vec<crate::test_support::PaintedText>,
+    Vec<egui::accesskit::Node>,
+    super::IntrinsicsDetailResponse,
+);
+
+/// One frame of the panel on camera 0 of `node`, `width` wide, with `image`
+/// selected and `events` in its input. Tooltips show at once, since a
+/// headless frame has no clock to wait out their delay.
+fn histogram_frame(
+    panel: &mut IntrinsicsDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    image: Option<usize>,
+    width: f32,
+    events: Vec<egui::Event>,
+) -> HistogramFrame {
+    ctx.enable_accesskit();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(width, VIEWPORT.y),
+        )),
+        events,
+        ..Default::default()
+    };
+    let mut response = None;
+    let mut output = ctx.run_ui(input, |ui| {
+        response = Some(panel.show(ui, node, Some(0), image, None, None));
+    });
+    output.textures_delta.clear();
+    let painted = crate::test_support::output_text_rects(&output);
+    let nodes = output
+        .platform_output
+        .accesskit_update
+        .expect("AccessKit is on")
+        .nodes
+        .into_iter()
+        .map(|(_, node)| node)
+        .collect();
+    (painted, nodes, response.expect("the panel ran"))
+}
+
+/// The bins a frame drew, by their names, with their rectangles.
+fn bins_of(nodes: &[egui::accesskit::Node]) -> Vec<(String, egui::Rect)> {
+    nodes
+        .iter()
+        .filter(|node| {
+            node.role() == egui::accesskit::Role::Button
+                && node.label().is_some_and(|l| l.starts_with("per image "))
+        })
+        .map(|node| {
+            let b = node.bounds().expect("a bin has a rectangle");
+            (
+                node.label().unwrap().to_string(),
+                egui::Rect::from_min_max(
+                    egui::pos2(b.x0 as f32, b.y0 as f32),
+                    egui::pos2(b.x1 as f32, b.y1 as f32),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// Every component the seoul_bull camera varies has a histogram of all 17
+/// images, whose two-standard-deviation bounds leave out exactly the images
+/// the row counts past two sd, the focal's mapped back from `ln(1 + s)`; and
+/// the panel draws a bin for each non-empty bin of each.
+#[test]
+fn every_varied_component_draws_its_histogram() {
+    let node = seoul_bull_v02();
+    let rows = seoul_bull_rows(&node);
+    let shown: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.histogram.is_some())
+        .map(|r| r.label.as_str())
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "  per image focal",
+            "  per image Δcx",
+            "  per image Δcy",
+            "  per image e0",
+            "  per image e1",
+            "  per image ωx",
+            "  per image ωy",
+            "  per image ωz",
+        ]
+    );
+    for row in rows.iter().filter(|r| r.histogram.is_some()) {
+        let histogram = row.histogram.as_ref().unwrap();
+        assert_eq!(
+            histogram.counts().iter().sum::<usize>(),
+            17,
+            "{}",
+            row.label
+        );
+        let [lo, hi] = histogram.two_sd;
+        let past = histogram
+            .bins
+            .iter()
+            .flatten()
+            .filter(|(_, v)| *v < lo || *v > hi)
+            .count();
+        let stated = row.cells.last().unwrap().clone();
+        assert_eq!(stated, format!("{past} of 17 past 2 sd"), "{}", row.label);
+    }
+
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        histogram_frame(&mut panel, &ctx, &node, None, 482.0, Vec::new());
+    }
+    let (_, nodes, _) = histogram_frame(&mut panel, &ctx, &node, None, 482.0, Vec::new());
+    let bins = bins_of(&nodes);
+    for row in rows.iter().filter(|r| r.histogram.is_some()) {
+        let named = format!("{} ", row.label.trim_start());
+        let drawn = bins
+            .iter()
+            .filter(|(name, _)| name.starts_with(&named))
+            .count();
+        let filled = row
+            .histogram
+            .as_ref()
+            .unwrap()
+            .counts()
+            .iter()
+            .filter(|&&c| c > 0)
+            .count();
+        assert_eq!(drawn, filled, "{named}: {bins:?}");
+    }
+}
+
+/// At the stock window's width the histograms go under their statistics and
+/// at a wide one beside them; at every width each stays inside the panel and
+/// no string is painted over a bin.
+#[test]
+fn the_histograms_stay_inside_the_panel_at_any_width() {
+    let node = seoul_bull_v02();
+    for width in [341.0, 482.0, 1800.0] {
+        let mut panel = IntrinsicsDetail::new();
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            histogram_frame(&mut panel, &ctx, &node, None, width, Vec::new());
+        }
+        let (painted, nodes, _) = histogram_frame(&mut panel, &ctx, &node, None, width, Vec::new());
+        let bins = bins_of(&nodes);
+        assert!(!bins.is_empty(), "at {width} px");
+        for (name, rect) in &bins {
+            assert!(
+                rect.right() <= width + 0.5,
+                "{name} past the edge at {width} px"
+            );
+            for text in painted.iter().filter(|p| !p.text.trim().is_empty()) {
+                assert!(
+                    !text.rect.shrink(1.0).intersects(rect.shrink(1.0)),
+                    "{:?} over {name} at {width} px",
+                    text.text
+                );
+            }
+        }
+        // The focal's statistics, the first row of them painted.
+        let statistics = painted
+            .iter()
+            .find(|p| p.text.starts_with("mean\u{a0}"))
+            .expect("the focal's statistics");
+        let focal: Vec<&egui::Rect> = bins
+            .iter()
+            .filter(|(name, _)| name.starts_with("per image focal "))
+            .map(|(_, rect)| rect)
+            .collect();
+        assert!(!focal.is_empty(), "at {width} px");
+        for rect in &focal {
+            if width >= 1800.0 {
+                assert!(rect.left() > statistics.rect.right(), "at {width} px");
+                assert!(rect.top() < statistics.rect.bottom(), "at {width} px");
+            } else {
+                assert!(
+                    rect.top() >= statistics.rect.bottom() - 0.5,
+                    "at {width} px"
+                );
+            }
+        }
+    }
+}
+
+/// Hovering a bin lists its images with their values and names the image a
+/// click selects, and raises that image as the hovered one; a click selects
+/// it, and a second click with it selected selects the bin's next image.
+#[test]
+fn a_bins_tooltip_lists_its_images_and_a_click_selects_them() {
+    let node = seoul_bull_v02();
+    let rows = seoul_bull_rows(&node);
+    let row = rows
+        .iter()
+        .find(|r| r.label == "  per image Δcy")
+        .expect("the Δcy row");
+    let histogram = row.histogram.as_ref().unwrap();
+    // The fullest bin, which holds more than one image to step through.
+    let fullest = (0..histogram.bins.len())
+        .max_by_key(|&k| histogram.bins[k].len())
+        .unwrap();
+    let images = &histogram.bins[fullest];
+    assert!(images.len() > 1, "{histogram:?}");
+    let name = |i: usize| node.recon().image_set.images[i].name.clone();
+
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    for _ in 0..4 {
+        histogram_frame(&mut panel, &ctx, &node, None, 482.0, Vec::new());
+    }
+    let (_, nodes, _) = histogram_frame(&mut panel, &ctx, &node, None, 482.0, Vec::new());
+    let bins = bins_of(&nodes);
+    let count = images.len();
+    let (bin_name, rect) = bins
+        .iter()
+        .filter(|(n, _)| n.starts_with("per image Δcy "))
+        .find(|(n, _)| n.ends_with(&format!(": {count} images")))
+        .cloned()
+        .unwrap_or_else(|| panic!("no Δcy bin of {count} images: {bins:?}"));
+    let at = rect.center();
+
+    let mut hovered = Vec::new();
+    let mut response = None;
+    for _ in 0..3 {
+        let (painted, _, shown) = histogram_frame(
+            &mut panel,
+            &ctx,
+            &node,
+            None,
+            482.0,
+            vec![egui::Event::PointerMoved(at)],
+        );
+        hovered = texts_of(&painted);
+        response = Some(shown);
+    }
+    let header = hovered
+        .iter()
+        .find(|t| t.starts_with("Δcy from "))
+        .unwrap_or_else(|| panic!("no tooltip for {bin_name}: {hovered:?}"));
+    assert!(
+        header.ends_with(&format!(" px: {count} of 17 images")),
+        "{header}"
+    );
+    for &(image, value) in images {
+        let line = format!("{}  {} px", name(image), super::format::signed(value, 3));
+        assert!(hovered.contains(&line), "{line:?} missing: {hovered:?}");
+    }
+    let first = images[0].0;
+    assert!(
+        hovered.contains(&format!("Click to select {}.", name(first))),
+        "{hovered:?}"
+    );
+    assert_eq!(
+        response.unwrap().hovered_image,
+        Some(crate::scene::ImageRef::new(node.id, first))
+    );
+
+    let mut click = |selected: Option<usize>| {
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let moved = vec![egui::Event::PointerMoved(at)];
+        histogram_frame(&mut panel, &ctx, &node, selected, 482.0, moved);
+        histogram_frame(&mut panel, &ctx, &node, selected, 482.0, vec![press(true)]);
+        let (_, _, response) =
+            histogram_frame(&mut panel, &ctx, &node, selected, 482.0, vec![press(false)]);
+        response.select_image
+    };
+    assert_eq!(
+        click(None),
+        Some(crate::scene::ImageRef::new(node.id, first))
+    );
+    assert_eq!(
+        click(Some(first)),
+        Some(crate::scene::ImageRef::new(node.id, images[1].0))
+    );
 }

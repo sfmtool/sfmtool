@@ -627,6 +627,32 @@ fn per_image_statistics_and_every_images_adjustment() {
     assert_eq!(pp["components"][0]["max"], 0.02);
     assert_eq!(pp["components"][1]["min"], -0.01);
     assert_eq!(pp["components"][1]["beyond_two_standard_deviations"], 0);
+    // The panel's histogram of Δcx, 0 px three times and 21.6 px once: a
+    // mean of 5.4 px and two standard deviations reaching −13.3 and 24.1 px,
+    // binned 10 px wide on round edges and put back into the short side.
+    let histogram = &pp["components"][0]["histogram"];
+    assert_eq!(histogram["counts"], json!([0, 0, 3, 0, 1]), "{histogram}");
+    let edges: Vec<f64> = histogram["edges"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .map(|e| 1080.0 * number(e))
+        .collect();
+    for (edge, expected) in edges.iter().zip([-20.0, -10.0, 0.0, 10.0, 20.0, 30.0]) {
+        assert!((edge - expected).abs() < 1e-9, "{edges:?}");
+    }
+    assert_eq!(edges.len(), 6);
+    let focal_histogram = &component["histogram"];
+    assert_eq!(
+        focal_histogram["counts"]
+            .as_array()
+            .expect("counts")
+            .iter()
+            .map(|c| c.as_u64().unwrap())
+            .sum::<u64>(),
+        4,
+        "{focal_histogram}"
+    );
 
     let adjustments = call(
         &mut state,

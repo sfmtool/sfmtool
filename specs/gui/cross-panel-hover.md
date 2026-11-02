@@ -44,6 +44,7 @@ Both fields are cleared in `append_node()` alongside `selected_image` and
 | 3D Viewer | From GPU pick buffer (frustum tag) | From GPU pick buffer (point tag) |
 | Image Browser | From thumbnail hit-test | — |
 | Image Detail | — | From nearest-feature hit-test (8px radius) |
+| Camera Intrinsics | From a per-image histogram's bin: the image a click there selects ([camera-intrinsics.md](camera-intrinsics.md#2-parameters)) | — |
 
 When the pointer leaves a panel or moves to empty space, both hover fields
 are cleared to `None`.

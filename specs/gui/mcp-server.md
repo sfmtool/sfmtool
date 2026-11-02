@@ -759,7 +759,9 @@ looking at is the one at the cursor, and this block reports it.
     "focal": { "unit": "focal scale", "display_unit": "%", "display_scale": 100.0,
                "components": [ { "mean": 0.0001, "standard_deviation": 0.0048,
                                  "min": -0.0094, "max": 0.0066,
-                                 "beyond_two_standard_deviations": 0 } ] },
+                                 "beyond_two_standard_deviations": 0,
+                                 "histogram": { "edges": [-0.01, -0.005, 0.0, 0.005, 0.01],
+                                                "counts": [3, 5, 6, 3] } } ] },
     "principal_point": { "unit": "short side", "display_unit": "px",
                          "display_scale": 270.0,
                          "components": [ { "mean": 0.0, "standard_deviation": 0.0107,
@@ -955,6 +957,16 @@ correction, which it shows as stored. The focal is taken in log space, as
 the bundle adjustment re-centres it and a drop folds it: its `mean` is the
 geometric mean of `1 + s` less one, `exp(mean ln(1 + s)) − 1`, its
 `standard_deviation` that of `ln(1 + s)`, and its `min` and `max` the smallest and largest `s`.
+Each component's `histogram` is the one the panel draws beside its row
+([camera-intrinsics.md](camera-intrinsics.md#2-parameters)), from the same
+code, `Histogram`
+([histogram.rs](../../crates/sfm-explorer/src/intrinsics_detail/histogram.rs)):
+`counts` holds each bin's number of images, adding up to the images in
+`camera_image_indices`, and `edges` the bins' edges, one more than there are
+bins, ascending, in the stored unit like the rest of the block. The edges are
+chosen round in the display unit, so `edges` times `display_scale` reads as
+multiples of a 1, 2 or 5 step, up to rounding. A bin holds the values from its
+lower edge up to, and not including, its upper one; the focal is binned as `s`.
 
 `get_intrinsic_adjustments` returns every camera image of one intrinsics
 record, in index order, with its `intrinsic_adjustment` as `get_camera_image`
@@ -6298,7 +6310,8 @@ where a test hands no host over.
 - **A camera's per-image values**: `get_camera_intrinsics`' `per_image_statistics`
   is `null` for a camera that varies nothing and otherwise the statistics of
   each varied parameter in its stored unit, with the panel's unit and scale,
-  the focal's mean the geometric one; `get_intrinsic_adjustments` lists every
+  the focal's mean the geometric one, and each component's histogram as the
+  panel bins it, its edges in the stored unit; `get_intrinsic_adjustments` lists every
   image of the camera with its values, and an unposed image outside the
   statistics (in `mcp/tests/read.rs`).
 - **The selection invariants survive the boundary**: selecting a camera image
