@@ -62,9 +62,9 @@ channels — `feature_options.gray_formula = "0.2126*R + 0.7152*G + 0.0722*B"`,
 BT.709 luma, matching COLMAP's `Bitmap::CloneAsGrey` — so it participates in both
 the `.sift` field `feature_tool_xxh128` and the feature-cache hash in the `features/`
 directory name, and two conversions land in different `features/` subdirectories. The structured `image_to_gray` object that would replace the
-plain string, with a formula grammar the reader can evaluate, is part of the
-proposed `.sift` version 2; see
-[`../../drafts/sift-incremental-extraction-amendment.md`](../../drafts/sift-incremental-extraction-amendment.md).
+plain string, with a formula grammar the reader can evaluate and an optional bit
+depth, is part of the proposed `.sift` version 2; see
+[`../../drafts/image-sharpness.md`](../../drafts/image-sharpness.md).
 
 ### 1. Scale-space pyramid
 

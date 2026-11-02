@@ -2797,7 +2797,11 @@ The format spans fourteen versions (`1` to `14`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.
 Version 14 is the current format version: a reader accepts any version up to
 it. This section is the one place the versions and their changes are
-described; [Version History](#version-history) is an index into it.
+described; [Version History](#version-history) is an index into it. A version
+15 is proposed in
+[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md): it adds
+required per-image sharpness and gradient structure tensor columns, stored as
+`float32`.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals

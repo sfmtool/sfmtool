@@ -74,7 +74,7 @@ COLMAP-shaped one shown in the File Format example below.
 {
   "version": 1,
   "feature_tool": "colmap",
-  "feature_type": "sift",
+  "feature_type": "sift-colmap",
   "feature_options": {
     "max_image_size": 4096,
     "max_num_features": 8192,
@@ -104,9 +104,19 @@ feature-cache hash since it does not affect feature output.
 |-------|------|-------------|
 | `version` | integer | Format version of the workspace config file. Must be `1` |
 | `feature_tool` | string | Feature extraction tool: `"colmap"`, `"opencv"`, or `"sfmtool"` (the Rust SIFT in `sfmtool-core`; the default when `--feature-tool` is omitted) |
-| `feature_type` | string | Feature type: `"sift"` (future: `"surf"`, `"superpoint"`, etc.) |
+| `feature_type` | string | Feature type, which names the tool and any option that changes the output: `"sift-sfmtool"`, `"sift-opencv"`, or `"sift-colmap"` with `-dsp` for domain-size pooling and `-max<N>` for a feature cap other than 8192, as in `"sift-colmap-dsp-max4096"`; a workspace `sfm undistort` writes has `"sift-sfmtool-undistort"`. It is the start of the last component of `feature_prefix_dir` |
 | `feature_options` | object | All parameters that affect feature output. Keys are tool-defined. See the `.sift` format spec for details |
 | `feature_prefix_dir` | string | Relative path to the features subdirectory, including a content hash of the tool configuration |
+
+The file has no other keys. A version 2 of the file is proposed in
+[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md): its
+`feature_options` carry, for every feature tool, the structured `image_to_gray`
+object the `.sift` file records, in place of the `sfmtool` tool's
+`gray_formula`, so a workspace written under it gets a new features directory.
+An optional second file beside it in the workspace
+root, `.sfm-named-image-lists.json`, naming sets of the workspace's images by pattern
+and frame range so that commands can be pointed at one by name, is proposed in
+[`../drafts/named-image-lists.md`](../drafts/named-image-lists.md).
 
 ### Feature Prefix Directory
 
@@ -269,7 +279,7 @@ key:
     "relative_path": "../..",
     "contents": {
       "feature_tool": "colmap",
-      "feature_type": "sift",
+      "feature_type": "sift-colmap",
       "feature_options": { ... },
       "feature_prefix_dir": "features/sift-colmap-d1245b460906df27ee4730273e0aba41"
     }
