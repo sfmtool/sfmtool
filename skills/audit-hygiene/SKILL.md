@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -172,7 +172,7 @@ how this audit runs them.
 
 - **Check per function, not per convention split.** A breach is a finding
   even where the whole module is consistent with itself. Run the
-  mechanical checks 9–17 below, and the standards' tallies in check 5,
+  mechanical checks 9–18 below, and the standards' tallies in check 5,
   first, then read each hit against the standard it feeds.
 - **Cite the standard.** Each finding names the standard by its heading
   and links it (`specs/STANDARDS.md#caller-input-never-panics`).
@@ -317,6 +317,18 @@ worth more than a paragraph.
     `_`-prefixed `sfmtool` names, which no test scans, and the command
     modules for module-level work beyond imports and defining the command.
     Report each gate as passed or failed.
+18. **Medians and quantiles** — `pixi run cargo test -p sfmtool-core --lib
+    numeric` runs the name scan, so report it as passed or failed. Then grep
+    `crates/` for what the scan cannot see, leaving out `numeric.rs` and test
+    code (`tests/` directories, `tests.rs` files, inline `#[cfg(test)]`
+    modules): an inline median, `select_nth_unstable` and
+    `\[\s*([a-z_.]+\.len\(\)|n|len)\s*/\s*2\s*\]`; and a hand-written
+    percentile, an index from a fraction times a length
+    (`(\.len\(\)|\bn)\s*(-\s*1\s*)?\)?\s*as f64[^;]*as usize`) and an
+    interpolation position (`\* *\(?(\w+\.len\(\)|n) *- *1\)? *as f64`).
+    Report the hit count per pattern, then read each hit and keep those that
+    compute an order statistic of a population. Feeds STANDARDS.md
+    § "Medians and quantiles come from one module".
 
 ## Output
 
