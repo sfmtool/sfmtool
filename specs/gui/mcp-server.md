@@ -124,7 +124,7 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and two tools. Nineteen read -- eighteen that answer with JSON, and
+One hundred and three tools. Twenty read -- nineteen that answer with JSON, and
 `screenshot`, which closes the loop by handing back a picture -- seventy-six
 write, six send input, and one writes a file. `get_widgets` and the six input
 tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
@@ -137,7 +137,8 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `get_scene` | read | The whole scene graph, the selection, and the view state |
 | `list_camera_images` | read | One reconstruction's camera images, paginated |
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
-| `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
+| `get_camera_intrinsics` | read | One intrinsics record, the camera images that use it, and the statistics of their per-image values |
+| `get_intrinsic_adjustments` | read | Every camera image of one intrinsics record with its intrinsic adjustment |
 | `get_point` | read | One 3D point: position, colour, RMS reprojection error (`rms_error_px`), patch frame, full track, and the viewed track's evaluation for the viewed point |
 | `find_points` | read | The points of one reconstruction that pass bounds on the track table's columns, optionally only those one camera image sees, sorted by a column, a page at a time with the values asked for; computes the columns it lacks with *Find points*, on a worker thread |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
@@ -236,7 +237,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `press_key` | input | Press and release one key, with modifiers, optionally with the pointer moved over a panel first |
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
-Every tool is annotated: the eighteen reads and `screenshot` carry
+Every tool is annotated: the nineteen reads and `screenshot` carry
 `readOnlyHint: true`, the seventy-six writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
@@ -696,7 +697,7 @@ draws the node at its own scale (§ "The view block").
 like any other, and its `label` says what it was; the only transform anyone is
 looking at is the one at the cursor, and this block reports it.
 
-### `list_camera_images` / `get_camera_image` / `get_camera_intrinsics` / `get_point`
+### `list_camera_images` / `get_camera_image` / `get_camera_intrinsics` / `get_intrinsic_adjustments` / `get_point`
 
 ```jsonc
 // list_camera_images { "reconstruction_label": "seoul_bull",
@@ -743,11 +744,42 @@ looking at is the one at the cursor, and this block reports it.
   "camera_image_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
   "per_image_adjustments": [],
   "rolling_shutter_scanlines": null,
+  "per_image_statistics": null,          // the camera varies nothing per image
   "outermost_keypoint": {
     "observed": { "radius_px": 262.4, "theta_deg": 34.1,
                   "camera_image_index": 7, "xy": [12.8, 470.1] },
     "detected": null,                    // no readable .sift file
     "detected_camera_images": 0 } }
+
+// get_camera_intrinsics on a camera that varies its focal and principal point
+{ /* ...as above... */
+  "per_image_adjustments": ["focal", "principal_point"],
+  "per_image_statistics": {
+    "camera_image_indices": [0, 1, 2, /* ... */ 16],
+    "focal": { "unit": "focal scale", "display_unit": "%", "display_scale": 100.0,
+               "components": [ { "mean": 0.0001, "standard_deviation": 0.0048,
+                                 "min": -0.0094, "max": 0.0066,
+                                 "beyond_two_standard_deviations": 0 } ] },
+    "principal_point": { "unit": "short side", "display_unit": "px",
+                         "display_scale": 270.0,
+                         "components": [ { "mean": 0.0, "standard_deviation": 0.0107,
+                                           /* ... */ },
+                                         { "mean": 0.0, "standard_deviation": 0.0112,
+                                           /* ... */ } ] },
+    "radial_bspline": null,              // not varied per image
+    "rolling_shutter": null } }
+
+// get_intrinsic_adjustments { "reconstruction_label": "seoul_bull",
+//                             "camera_intrinsics_index": 0 }
+{ "reconstruction_label": "seoul_bull", "camera_intrinsics_index": 0,
+  "per_image_adjustments": ["focal", "principal_point"],
+  "rolling_shutter_scanlines": null,
+  "camera_images": [ { "index": 0, "name": "images/IMG_0039.jpg",
+                       "in_statistics": true,
+                       "intrinsic_adjustment": { "focal": 0.0031,
+                                                 "principal_point": [0.0124, -0.0061],
+                                                 "radial_bspline": [0.0, 0.0],
+                                                 "rolling_shutter": [0.0, 0.0, 0.0] } } ] }
 
 // get_point { "point": "pt3d_a1b2c3d4_1207" }
 { "id": "pt3d_a1b2c3d4_1207", "reconstruction_label": "seoul_bull",
@@ -895,6 +927,42 @@ lists them, and is empty when it varies none, and its
 `"COLUMNS"` or `null` where the file records none. Every figure a
 reply computes through one image reads that image's intrinsics: a `get_point`
 track observation's `reproj_error`, and `get_camera_image`'s error summary.
+
+**The statistics of a camera's per-image values** are
+`get_camera_intrinsics`'s `per_image_statistics`, the numbers the Camera
+Intrinsics panel states beside the parameters they adjust
+([camera-intrinsics.md](camera-intrinsics.md#2-parameters)), computed by the
+same call, `image_adjustment_statistics`
+([image_adjustment_statistics.rs](../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics.rs)).
+The block is `null` for a camera that varies nothing per image. Otherwise
+`camera_image_indices` names the images they are over, the camera's posed
+images or all of them where none is posed, the images
+`drop_image_adjustments` takes its mean over, and each of `focal`,
+`principal_point`, `radial_bspline` and `rolling_shutter` is `null` where the
+camera does not vary it and otherwise holds one entry per component in
+`components` (one for the focal, two for the principal point and the radial
+correction, three for the rates), each with its `mean`,
+`standard_deviation` (the population one), `min`, `max` and
+`beyond_two_standard_deviations`, the count of images more than two standard
+deviations from the mean. A varied parameter whose
+values are all zero has statistics of zero, not `null`. The numbers are in the
+unit the file stores (`unit`: the focal scale as a fraction, the short side,
+the normalized radius, radians per short side of readout), and `display_unit`
+and `display_scale` give the panel's unit and the factor to it: `%` and 100,
+`px` and the camera's short side, `mrad per short side` and 1000 for the
+rates, which the panel shows in Image Detail's unit, and 1 for the radial
+correction, which it shows as stored. The focal is taken in log space, as
+the bundle adjustment re-centres it and a drop folds it: its `mean` is the
+geometric mean of `1 + s` less one, `exp(mean ln(1 + s)) − 1`, its
+`standard_deviation` that of `ln(1 + s)`, and its `min` and `max` the smallest and largest `s`.
+
+`get_intrinsic_adjustments` returns every camera image of one intrinsics
+record, in index order, with its `intrinsic_adjustment` as `get_camera_image`
+reports it and `in_statistics`, whether `per_image_statistics` is taken over
+it, beside the record's `per_image_adjustments` and
+`rolling_shutter_scanlines`, so an agent can check the panel's numbers against
+the stored ones in one call. It is not paginated: a camera's images are a
+reconstruction's at most, and the rows are small.
 
 `get_camera_intrinsics`'s `outermost_keypoint` is how far out the camera's
 photographs reach
@@ -6227,6 +6295,12 @@ where a test hands no host over.
 
 - **Every command against that scene**: the JSON shape, the ids, and the
   `selection` block each of the six selection tools returns.
+- **A camera's per-image values**: `get_camera_intrinsics`' `per_image_statistics`
+  is `null` for a camera that varies nothing and otherwise the statistics of
+  each varied parameter in its stored unit, with the panel's unit and scale,
+  the focal's mean the geometric one; `get_intrinsic_adjustments` lists every
+  image of the camera with its values, and an unposed image outside the
+  statistics (in `mcp/tests/read.rs`).
 - **The selection invariants survive the boundary**: selecting a camera image
   sets its intrinsics; selecting an intrinsics record the selected camera image
   does not use clears that camera image; selecting the one it *does* use keeps
@@ -6661,7 +6735,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and two tools**, nineteen of them reads, six of the
+- **The catalog is one hundred and three tools**, twenty of them reads, six of the
   `Input` kind and one of the `Save` kind, those seven carrying
   `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

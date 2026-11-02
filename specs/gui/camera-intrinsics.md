@@ -450,6 +450,16 @@ The node body has a group above the images group, so its two rows read:
   `fx == fy`, `fx/fy` otherwise, one decimal), and the number of images using
   it. A camera no image references reads `0 images` and is drawn weak — that
   state is legal in a `.sfmr` and worth seeing rather than hiding.
+- **Per-image tag.** A camera that varies parameters per image names them
+  after the image count, abbreviated in the order the `.sfmr` file lists them:
+  `#0  SFMTOOL_PINHOLE β  270×480  f 331.6  17 images  per image: f, pp,
+  radial, shutter`, where `f` is the focal, `pp` the principal point, `radial`
+  the radial correction and `shutter` the rolling-shutter rates. The tooltip
+  names them in full under the parameter list, the rates with the scanlines
+  setting they are read on: `Varies per image: focal, principal point, radial
+  correction, rolling-shutter rates (read on columns)`. A camera that varies
+  nothing per image, a scanlines setting alone included, has neither, so every
+  other file's rows are as they were.
 - Models flagged beta in the registry (`SFMTOOL_FISHEYE`, `SFMTOOL_PINHOLE`)
   carry a `β` suffix on the model name, and the registry's beta note
   (`CameraModel::beta_note`) is appended to the row's hover tooltip under a
@@ -1061,7 +1071,8 @@ camera of the node shows no strip.
 
 While the strip is shown and the fit succeeded, the **Parameters** and
 **Derived** tables are drawn twice, under `Current` and `Proposed`: the current
-camera's and the proposed one's. They are side by side when the panel is wide
+camera's and the proposed one's, the per-image statistics in the current one's
+alone (§ "2. Parameters"). They are side by side when the panel is wide
 enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
 The two derived tables both carry the aspect row when either camera has two
@@ -1126,8 +1137,96 @@ in the same column width: `bspline_coeff_count` is a count and prints as an
 integer (`8`, not `8.000000`), and `bspline_theta_max` is an angle the file
 stores in radians and prints in degrees, as every other angle in the panel is
 shown (`150.000000°`, not `2.617994`). `bspline_rho_max`, a tangent, prints as
-stored. `Parameters (text)` copies the table as it reads, these two rows
-included; `Parameters (JSON)` copies the stored values at full precision.
+stored. `Parameters (text)` copies the shared parameters as the table reads
+them, these two rows included, and not the `per image` rows below; `Parameters
+(JSON)` copies the stored values at full precision.
+
+**Per-image statistics.** A camera can vary its focal, its principal point and,
+on `SFMTOOL_PINHOLE`, its radial correction and rolling-shutter rates per image
+([../formats/sfmr-file-format.md](../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13)).
+For each component of each parameter the camera varies, the table carries a
+`per image` row beside the shared parameter it adjusts, holding the statistics
+of the images' values: the mean, the standard deviation, the smallest and
+largest value, and how many images lie more than two standard deviations from
+the mean, out of how many. They are computed by
+`image_adjustment_statistics`
+([image_adjustment_statistics.rs](../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics.rs))
+over the camera's posed images, or all its images where none is posed, the
+images `drop_image_adjustments` takes its mean over
+([../core/reconstruction/drop-image-adjustments.md](../core/reconstruction/drop-image-adjustments.md)),
+so the mean the panel states is the value a drop folds into the camera. For
+the seoul_bull ground truth `_v02`, whose camera varies all four:
+
+```
+Parameters
+Per image, over 17 images: focal, principal point, radial correction,
+rolling-shutter rates.
+focal_length              331.609029
+  per image focal     mean +0.000%  sd 0.484%  min −0.941%  max +0.661%  0 of 17 past 2 sd
+principal_point_x         126.802752
+  per image Δcx       mean +0.000 px  sd 2.887 px  min −4.646 px  max +5.569 px  0 of 17 past 2 sd
+principal_point_y         243.788600
+  per image Δcy       mean +0.000 px  sd 3.037 px  min −7.783 px  max +3.781 px  2 of 17 past 2 sd
+bspline_rho_max             0.774720
+bspline_coeff_count                4
+bspline_c0                  0.005107
+bspline_c1                  0.013143
+bspline_c2                  0.025602
+bspline_c3                  0.024083
+  per image e0        mean +0.000000  sd 0.002650  min −0.003076  max +0.005934  1 of 17 past 2 sd
+  per image e1        mean +0.000000  sd 0.001552  min −0.002522  max +0.004300  1 of 17 past 2 sd
+  scanlines           columns
+  per image ωx        mean +0.000  sd 1.791  min −3.188  max +4.218  mrad per short side  1 of 17 past 2 sd
+  per image ωy        mean +0.000  sd 2.112  min −3.319  max +3.809  mrad per short side  0 of 17 past 2 sd
+  per image ωz        mean +0.000  sd 1.201  min −1.913  max +2.062  mrad per short side  0 of 17 past 2 sd
+```
+
+- **Where each row sits.** The focal's row follows the last focal length, since
+  one scale multiplies both on a two-focal model; `Δcx` follows
+  `principal_point_x` and `Δcy` `principal_point_y`; the radial correction's
+  two coefficients `e0` and `e1` follow the spline, whose whole curve they
+  adjust; and the rates, which no shared parameter is, end the table after a
+  `scanlines` row naming the camera's setting (`rows`, `columns` or `not
+  known`).
+- **Units.** The focal scale is a percentage of the camera's focal; the
+  principal-point offsets are in pixels, the stored offset times the short side
+  `min(width, height)`; the radial correction's coefficients are the stored
+  numbers, in units of the normalized radius; and the rates are in
+  milliradians per short side of readout, the stored radians per short side
+  times 1000, the unit Image Detail's legend states one image's rates in, named
+  in a cell of their own. The percentages, pixels and milliradians are shown to
+  three decimals and the radial coefficients to six, each with its sign, and a
+  value that rounds to zero reads `+`.
+- **The focal is taken in log space**, as the bundle adjustment re-centres it
+  and a drop folds it: the mean is the geometric mean of `1 + s` less one,
+  `exp(mean ln(1 + s)) − 1`, as a percentage, so right after a solve it reads
+  `+0.000%` where an arithmetic mean of `s` would sit above zero by half the
+  variance; the standard deviation is that of `ln(1 + s)`, which for small
+  values reads as a fraction of the focal as `s` does; the minimum and maximum
+  are the smallest and largest `s`; and the count past two deviations is
+  counted in `ln(1 + s)`.
+- **What does not vary is named, not left out.** A line under the heading names
+  what the camera varies per image, then what it does not (`Not varied:
+  radial correction, rolling-shutter rates.`), then what its model cannot
+  carry (`Not on OPENCV_FISHEYE: radial correction, rolling-shutter rates.`).
+  A parameter the camera varies whose values are all zero has a row of zeros,
+  `mean +0.000%  sd 0.000%  …  0 of 17 past 2 sd`, so "varies, all zero" and
+  "does not vary" read differently. A camera that varies nothing per image has
+  no line and no row: its table is as it always was.
+- **Layout.** A `per image` row's label is weak, so the shared parameters stand
+  out, and its statistics are one label that wraps between its cells and never
+  inside one (the spaces within a cell are non-breaking), so at a narrow panel
+  a row takes more lines rather than running past the edge. Each row's label
+  has a tooltip saying what the numbers are and what images they are over.
+  Step 3 of [per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md)
+  adds a histogram of each component beside its statistics.
+- **With a proposal open** the statistics are stated once, in the `Current`
+  table: they are the images' values, which a switch of model does not change,
+  and not a statement about either lens.
+
+MCP `get_camera_intrinsics` reports the same statistics in their stored units
+and `get_intrinsic_adjustments` every image's values
+([mcp-server.md](mcp-server.md#list_camera_images--get_camera_image--get_camera_intrinsics--get_intrinsic_adjustments--get_point)).
 
 ### 3. Derived
 
@@ -1609,6 +1708,25 @@ Two caveats remain, both named in the tests rather than left implicit:
   renderer side `frustum_colors` resolves an image that is selected *and* in
   the track *and* a sibling to the strongest of the three, with all three
   written at the full alpha the tint exempts.
+- The per-image statistics, in `intrinsics_detail/tests.rs`: a camera that
+  varies nothing per image, a scanlines setting alone included, has no `per
+  image` line or row; on the seoul_bull ground truth `_v02`, whose
+  `SFMTOOL_PINHOLE` camera varies all four, each row sits beside what it
+  adjusts in the specified order, and the numbers are the file's, worked out
+  in the test from the images themselves, in the panel's units, the focal's
+  mean the geometric one; with its radial correction and rates dropped the
+  line names them as not varied, and on the Kerry Park `OPENCV_FISHEYE` with
+  focal and principal point it names them as not on the model and puts the
+  focal row after `focal_length_y`; a varied parameter whose values are all
+  zero reads as zeros; at 341, 482 and 1800 px nothing above `K` overlaps or
+  runs past the edge, without a proposal and with one, when the statistics
+  are in the current table alone; and their glyphs are in egui's bundled
+  fonts. The arithmetic of the statistics is tested in core, in
+  [`image_adjustment_statistics/tests.rs`](../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics/tests.rs),
+  the focal's mean against what `drop_image_adjustments` folds.
+- A camera row's per-image tag and its tooltip line, in
+  `scene_graph/cameras/tests.rs`, and the tag on a painted row beside a
+  camera whose row is unchanged, in `scene_graph/tests.rs`.
 - The Camera Intrinsics panel renders its empty state with no selection, its
   populated state with one, and the extrinsics block only when an image is
   selected; the `P` row is absent for a fisheye fixture, replaced by the
@@ -1768,21 +1886,43 @@ name.
 
 ## Decisions
 
-**An image's adjustment is stated in Image Detail's legend** (2026-10-25).
-The viewer shows an image's intrinsic adjustment in one place: the intrinsics
-layer's legend, and only when the image's camera varies some parameter per
-image. Image Detail is where one photograph is looked at through its lens, and
-the layer already draws the principal point the adjustment moves, so the
-number sits beside the mark it explains. The Camera Intrinsics panel shows and
-edits the shared camera, and a per-image line there would sit among the shared
-parameters as if it were one of them; its pose block does read the image's own
-`K` for `P`, since `P` is a statement about this photograph. Stating the value
-only for a camera that lists per-image parameters keeps every existing file's
-panel unchanged, and stating a zero adjustment as zero, rather than leaving the
-line out, says that the parameter is varied and this image's happens to be zero.
-MCP's `get_camera_image` reports the same numbers. A revision that shows the
-statistics of a camera's per-image values in the panel is proposed in
-[per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md).
+**A camera's per-image values are stated as statistics beside its shared
+parameters** (2026-11-01, revising the decision of 2026-10-25 below). The
+Camera Intrinsics panel shows every per-image parameter the camera varies as
+the statistics of its images' values, in the Parameters table beside the
+shared parameter it adjusts, not in a section of its own and not hidden
+(§ "2. Parameters"). Statistics over the whole camera are a statement about
+the camera, not about one image, and each row is marked `per image` and its
+label drawn weak, so it does not read as a shared parameter; the line under
+the heading names what varies, what does not and what the model cannot carry,
+so a parameter left out is not mistaken for one that varies with all its
+values zero. The rates are shown in milliradians per short side of readout,
+the unit Image Detail's legend states one image's rates in, so the panel and
+the legend never show one quantity in two units; the file stores radians per
+short side, and MCP reports that stored unit with the display unit and its
+factor of 1000 beside it. They are not shown per frame of readout, which would
+need a scanline count the file does not hold. The
+focal's mean is the geometric mean of `1 + s`, the value the bundle
+adjustment re-centres to and a drop folds, so the panel's mean is the one an
+operation acts on. A camera that varies nothing per image keeps the table it
+always had. Step 3 of
+[per-image-adjustments-ui.md](../drafts/per-image-adjustments-ui.md) adds a
+histogram beside each row, and step 4 offers to drop each parameter in
+operations such as Switch Camera Model.
+
+**An image's adjustment is stated in Image Detail's legend** (2026-10-25,
+revised 2026-11-01 above). The viewer shows one image's intrinsic adjustment
+in the intrinsics layer's legend, and only when the image's camera varies some
+parameter per image. Image Detail is where one photograph is looked at through
+its lens, and the layer already draws the principal point the adjustment
+moves, so the number sits beside the mark it explains. The Camera Intrinsics
+panel shows the shared camera with the statistics of all its images' values
+beside it, and states no one image's value; its pose block does read the
+image's own `K` for `P`, since `P` is a statement about this photograph.
+Stating the value only for a camera that lists per-image parameters keeps
+every existing file's legend unchanged, and stating a zero adjustment as zero,
+rather than leaving the line out, says that the parameter is varied and this
+image's happens to be zero. MCP's `get_camera_image` reports the same numbers.
 
 **The lens corrections are stated in the same legend** (2026-10-29). An
 image's radial correction and rolling-shutter rates are two more lines of that

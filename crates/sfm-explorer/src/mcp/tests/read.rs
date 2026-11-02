@@ -567,4 +567,129 @@ fn get_camera_image_reports_the_image_s_lens_corrections() {
         ])
     );
     assert_eq!(lens["rolling_shutter_scanlines"], "COLUMNS");
+    // The rates' statistics are stored in radians per short side and shown,
+    // as Image Detail's legend shows them, in milliradians.
+    let rates = &lens["per_image_statistics"]["rolling_shutter"];
+    assert_eq!(rates["unit"], "rad per short side");
+    assert_eq!(rates["display_unit"], "mrad per short side");
+    assert_eq!(rates["display_scale"], 1000.0);
+    assert_eq!(rates["components"][0]["max"], 0.02);
+}
+
+/// `get_camera_intrinsics` states the statistics of the camera's per-image
+/// values in their stored units, with the panel's units beside them, and
+/// `get_intrinsic_adjustments` every image's values they are taken over.
+#[test]
+fn per_image_statistics_and_every_images_adjustment() {
+    use crate::test_support::{with_adjustment, ADJUSTMENT};
+
+    let (_, mut viewer) = two_reconstructions();
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/alpha.sfmr"),
+        with_adjustment(recon(8, "A"), 5, ADJUSTMENT),
+    ));
+    let lens = |state: &mut AppState, viewer: &mut Viewer3D, index: usize| {
+        call(
+            state,
+            viewer,
+            "get_camera_intrinsics",
+            json!({ "camera_intrinsics_index": index }),
+        )
+    };
+    // Camera 0 varies nothing.
+    assert_eq!(
+        lens(&mut state, &mut viewer, 0)["per_image_statistics"],
+        Value::Null
+    );
+
+    // Camera 1's images 4 to 7, of which image 5 alone is adjusted: a focal
+    // scale of 0.01 and an offset of (0.02, −0.01) of the 1080 px short side.
+    let statistics = lens(&mut state, &mut viewer, 1)["per_image_statistics"].clone();
+    assert_eq!(statistics["camera_image_indices"], json!([4, 5, 6, 7]));
+    assert_eq!(statistics["radial_bspline"], Value::Null);
+    assert_eq!(statistics["rolling_shutter"], Value::Null);
+    let focal = &statistics["focal"];
+    assert_eq!(focal["unit"], "focal scale");
+    assert_eq!(focal["display_unit"], "%");
+    assert_eq!(focal["display_scale"], 100.0);
+    let number = |value: &Value| value.as_f64().expect("a number");
+    let component = &focal["components"][0];
+    // The geometric mean of 1 + s over four images, one of them 1.01.
+    let mean = (0.01f64.ln_1p() / 4.0).exp_m1();
+    assert!((number(&component["mean"]) - mean).abs() < 1e-15, "{focal}");
+    assert!((number(&component["max"]) - 0.01).abs() < 1e-15, "{focal}");
+    assert_eq!(component["min"], 0.0);
+    let pp = &statistics["principal_point"];
+    assert_eq!(pp["unit"], "short side");
+    assert_eq!(pp["display_unit"], "px");
+    assert_eq!(pp["display_scale"], 1080.0);
+    assert_eq!(pp["components"][0]["max"], 0.02);
+    assert_eq!(pp["components"][1]["min"], -0.01);
+    assert_eq!(pp["components"][1]["beyond_two_standard_deviations"], 0);
+
+    let adjustments = call(
+        &mut state,
+        &mut viewer,
+        "get_intrinsic_adjustments",
+        json!({ "camera_intrinsics_index": 1 }),
+    );
+    assert_eq!(adjustments["camera_intrinsics_index"], 1);
+    assert_eq!(
+        adjustments["per_image_adjustments"],
+        json!(["focal", "principal_point"])
+    );
+    let rows = adjustments["camera_images"].as_array().expect("rows");
+    let indices: Vec<u64> = rows.iter().map(|r| r["index"].as_u64().unwrap()).collect();
+    assert_eq!(indices, [4, 5, 6, 7]);
+    assert!(rows.iter().all(|r| r["in_statistics"] == true));
+    assert_eq!(
+        rows[1]["intrinsic_adjustment"],
+        json!({
+            "focal": 0.01,
+            "principal_point": [0.02, -0.01],
+            "radial_bspline": [0.0, 0.0],
+            "rolling_shutter": [0.0, 0.0, 0.0],
+        })
+    );
+    assert_eq!(rows[0]["intrinsic_adjustment"]["focal"], 0.0);
+}
+
+/// An unposed image is listed, outside the statistics, which are over the
+/// camera's posed images.
+#[test]
+fn an_unposed_image_is_listed_outside_the_statistics() {
+    use crate::test_support::{with_adjustment, ADJUSTMENT};
+
+    let (_, mut viewer) = two_reconstructions();
+    let mut state = AppState::new();
+    let mut reconstruction = with_adjustment(recon(8, "A"), 5, ADJUSTMENT);
+    reconstruction.image_set.images[5].translation_xyz.x = f64::NAN;
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/alpha.sfmr"),
+        reconstruction,
+    ));
+    let statistics = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_intrinsics",
+        json!({ "camera_intrinsics_index": 1 }),
+    )["per_image_statistics"]
+        .clone();
+    assert_eq!(statistics["camera_image_indices"], json!([4, 6, 7]));
+    assert_eq!(statistics["focal"]["components"][0]["max"], 0.0);
+    let rows = call(
+        &mut state,
+        &mut viewer,
+        "get_intrinsic_adjustments",
+        json!({ "camera_intrinsics_index": 1 }),
+    )["camera_images"]
+        .clone();
+    let listed: Vec<bool> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["in_statistics"].as_bool().unwrap())
+        .collect();
+    assert_eq!(listed, [true, false, true, true]);
 }

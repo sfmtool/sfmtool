@@ -53,6 +53,19 @@ pub(super) fn parameter(name: &str, v: f64) -> String {
     }
 }
 
+/// `v` to `decimals` places with its sign, `+` or `−` (U+2212, the minus the
+/// viewer's legends print), and `+` for a value that rounds to zero, so a
+/// column of them never reads `−0.000`.
+pub(super) fn signed(v: f64, decimals: usize) -> String {
+    let text = format!("{:.decimals$}", v.abs());
+    let zero = text.chars().all(|c| c == '0' || c == '.');
+    if v < 0.0 && !zero {
+        format!("\u{2212}{text}")
+    } else {
+        format!("+{text}")
+    }
+}
+
 /// A row of numbers as one monospaced string, two spaces between columns.
 pub(super) fn row(values: impl IntoIterator<Item = f64>) -> String {
     values.into_iter().map(value).collect::<Vec<_>>().join("  ")

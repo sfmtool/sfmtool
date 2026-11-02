@@ -11,6 +11,8 @@
 //! [`crate::image_menu`], the one the Image Browser strip opens on a thumbnail.
 
 use eframe::egui;
+use sfmtool_core::camera::RollingShutterScanlines;
+use sfmtool_core::reconstruction::PerImageAdjustments;
 use sfmtool_core::CameraIntrinsics;
 
 use crate::action_log::{visibility_text, Layer};
@@ -95,7 +97,9 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
             for (index, camera) in cameras.iter().enumerate() {
                 let reference = CameraRef::new(node.id, index);
                 let selected = ctx.selected_camera == Some(reference);
-                let mut text = egui::RichText::new(camera_row_text(index, camera, uses[index]));
+                let varies = node.recon().image_set.camera_per_image_adjustments(index);
+                let mut text =
+                    egui::RichText::new(camera_row_text(index, camera, uses[index], varies));
                 if uses[index] == 0 && !selected {
                     // A camera no image references is legal in a `.sfmr` and
                     // worth seeing rather than hiding — but it describes
@@ -107,7 +111,7 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
                 let row = ui
                     .push_id(index, |ui| ui.add(egui::Button::selectable(selected, text)))
                     .inner
-                    .on_hover_ui(|ui| camera_tooltip(ui, camera));
+                    .on_hover_ui(|ui| camera_tooltip(ui, camera, varies));
                 let row = out.hit(row_id(node.id, &format!("intrinsics_{index}")), row);
                 if row.clicked() {
                     out.response.select_camera = Some(reference);
@@ -154,8 +158,14 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
 
 /// `#0  OPENCV_FISHEYE  480×480  f 129.1/129.3  24 images` — one intrinsics
 /// record on one line, with a `β` on a model whose parameterization is not yet
-/// frozen.
-fn camera_row_text(index: usize, camera: &CameraIntrinsics, uses: usize) -> String {
+/// frozen, and after the image count the tag naming what the camera varies per
+/// image ([`per_image_tag`]).
+fn camera_row_text(
+    index: usize,
+    camera: &CameraIntrinsics,
+    uses: usize,
+    varies: PerImageAdjustments,
+) -> String {
     let beta = if camera.model.beta_note().is_some() {
         " β"
     } else {
@@ -166,13 +176,54 @@ fn camera_row_text(index: usize, camera: &CameraIntrinsics, uses: usize) -> Stri
     } else {
         format!("{uses} images")
     };
+    let tag = per_image_tag(varies)
+        .map(|tag| format!("  {tag}"))
+        .unwrap_or_default();
     format!(
-        "#{index}  {}{beta}  {}×{}  {}  {images}",
+        "#{index}  {}{beta}  {}×{}  {}  {images}{tag}",
         camera.model.model_name(),
         camera.width,
         camera.height,
         focal_text(camera),
     )
+}
+
+/// `per image: f, pp, radial, shutter`: the parameters the camera varies per
+/// image, abbreviated, in the order the `.sfmr` file lists them, or `None` for
+/// a camera that varies none, whose row is unchanged. The tooltip names them
+/// in full ([`per_image_names`]).
+fn per_image_tag(varies: PerImageAdjustments) -> Option<String> {
+    let short: Vec<&str> = [
+        (varies.focal, "f"),
+        (varies.principal_point, "pp"),
+        (varies.radial_bspline, "radial"),
+        (varies.rolling_shutter, "shutter"),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect();
+    (!short.is_empty()).then(|| format!("per image: {}", short.join(", ")))
+}
+
+/// `Varies per image: focal, principal point, radial correction,
+/// rolling-shutter rates (read on columns)`, the tooltip's line for the tag,
+/// or `None` for a camera that varies nothing.
+fn per_image_names(varies: PerImageAdjustments) -> Option<String> {
+    let rates = match varies.rolling_shutter_scanlines {
+        Some(RollingShutterScanlines::Rows) => "rolling-shutter rates (read on rows)",
+        Some(RollingShutterScanlines::Columns) => "rolling-shutter rates (read on columns)",
+        None => "rolling-shutter rates (scanlines not known)",
+    };
+    let names: Vec<&str> = [
+        (varies.focal, "focal"),
+        (varies.principal_point, "principal point"),
+        (varies.radial_bspline, "radial correction"),
+        (varies.rolling_shutter, rates),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect();
+    (!names.is_empty()).then(|| format!("Varies per image: {}", names.join(", ")))
 }
 
 /// `f 129.1`, or `f 129.1/129.3` when the model carries two focal lengths and
@@ -197,10 +248,11 @@ fn focal_text(camera: &CameraIntrinsics) -> String {
 /// `BTreeMap`'s lexicographic order, which separates related terms and puts
 /// `bspline_c10` before `bspline_c2`.
 ///
-/// A beta model's note lands here too, under a separator, rather than on the
-/// `β` itself: egui hangs a tooltip off a whole widget, and the row is one
+/// The parameters the camera varies per image follow the table, named in
+/// full. A beta model's note lands here too, under a separator, rather than on
+/// the `β` itself: egui hangs a tooltip off a whole widget, and the row is one
 /// button — so a sub-span of its label has nowhere of its own to put one.
-fn camera_tooltip(ui: &mut egui::Ui, camera: &CameraIntrinsics) {
+fn camera_tooltip(ui: &mut egui::Ui, camera: &CameraIntrinsics, varies: PerImageAdjustments) {
     ui.label(format!(
         "{} · {}×{}",
         camera.model.model_name(),
@@ -218,6 +270,9 @@ fn camera_tooltip(ui: &mut egui::Ui, camera: &CameraIntrinsics) {
         table.push_str(&format!("{name:<width$}  {value:>14.6}\n"));
     }
     ui.label(egui::RichText::new(table.trim_end()).monospace());
+    if let Some(names) = per_image_names(varies) {
+        ui.label(names);
+    }
     if let Some(note) = camera.model.beta_note() {
         ui.separator();
         ui.label(egui::RichText::new(note).weak());

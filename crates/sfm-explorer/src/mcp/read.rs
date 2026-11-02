@@ -545,6 +545,12 @@ pub(super) fn get_camera_intrinsics(
         "rolling_shutter_scanlines".into(),
         json!(varies.rolling_shutter_scanlines.map(|s| s.as_str())),
     );
+    // The statistics of those per-image values, the numbers the Camera
+    // Intrinsics panel states beside the parameters they adjust.
+    object.insert(
+        "per_image_statistics".into(),
+        per_image_statistics(recon, index),
+    );
     // How far out this camera's photographs reach, beside the spline domain
     // an agent may set from it. The detected keypoint reads the images'
     // `.sift` positions, a few milliseconds per camera, so it is read on
@@ -581,6 +587,122 @@ pub(super) fn get_camera_intrinsics(
         object.insert("proposed".into(), render::camera_model_proposal(proposal));
     }
     Ok(out)
+}
+
+/// `get_camera_intrinsics`'s `per_image_statistics`: per parameter camera
+/// `index` varies per image, its statistics over the camera's images in the
+/// unit the file stores it in, with the unit the Camera Intrinsics panel shows
+/// it in and the factor between them; `null` for a camera that varies nothing
+/// per image, and `null` for a parameter it does not vary.
+fn per_image_statistics(recon: &sfmtool_core::SfmrReconstruction, index: usize) -> Value {
+    use sfmtool_core::reconstruction::image_adjustment_statistics::{
+        image_adjustment_statistics, ComponentStatistics,
+    };
+    let varies = recon.image_set.camera_per_image_adjustments(index);
+    let Ok(statistics) = image_adjustment_statistics(&recon.image_set, index) else {
+        return Value::Null;
+    };
+    if !varies.any() {
+        return Value::Null;
+    }
+    let camera = &recon.image_set.cameras[index];
+    let short_side = f64::from(camera.width.min(camera.height));
+    let block = |components: Option<&[ComponentStatistics]>,
+                 unit: &str,
+                 display_unit: &str,
+                 display_scale: f64| {
+        components.map(|components| {
+            json!({
+                "unit": unit,
+                "display_unit": display_unit,
+                "display_scale": display_scale,
+                "components": components
+                    .iter()
+                    .map(|s| json!({
+                        "mean": s.mean,
+                        "standard_deviation": s.std,
+                        "min": s.min,
+                        "max": s.max,
+                        "beyond_two_standard_deviations": s.beyond_two_std,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+    };
+    json!({
+        "camera_image_indices": statistics.images,
+        "focal": block(
+            statistics.focal.as_ref().map(std::slice::from_ref),
+            "focal scale",
+            "%",
+            100.0,
+        ),
+        "principal_point": block(
+            statistics.principal_point.as_ref().map(|c| &c[..]),
+            "short side",
+            "px",
+            short_side,
+        ),
+        "radial_bspline": block(
+            statistics.radial_bspline.as_ref().map(|c| &c[..]),
+            "normalized radius",
+            "normalized radius",
+            1.0,
+        ),
+        "rolling_shutter": block(
+            statistics.rolling_shutter.as_ref().map(|c| &c[..]),
+            "rad per short side",
+            "mrad per short side",
+            1000.0,
+        ),
+    })
+}
+
+pub(super) fn get_intrinsic_adjustments(
+    state: &mut AppState,
+    reconstruction_label: Option<&str>,
+    index: usize,
+) -> JsonReply {
+    let id = super::resolve_reconstruction(state, reconstruction_label)?;
+    resolve_camera_intrinsics(state, id, index)?;
+    let node = state.node(id).expect("just resolved");
+    let recon = node.recon();
+    let varies = recon.image_set.camera_per_image_adjustments(index);
+    let counted =
+        sfmtool_core::reconstruction::image_adjustment_statistics::image_adjustment_statistics(
+            &recon.image_set,
+            index,
+        )
+        .map(|s| s.images)
+        .unwrap_or_default();
+    let rows: Vec<Value> = recon
+        .image_set
+        .images
+        .iter()
+        .enumerate()
+        .filter(|(_, image)| image.camera_index as usize == index)
+        .map(|(i, image)| {
+            let adjustment = image.intrinsic_adjustment;
+            json!({
+                "index": i,
+                "name": image.name,
+                "in_statistics": counted.binary_search(&i).is_ok(),
+                "intrinsic_adjustment": {
+                    "focal": adjustment.focal,
+                    "principal_point": adjustment.principal_point,
+                    "radial_bspline": adjustment.radial_bspline,
+                    "rolling_shutter": adjustment.rolling_shutter,
+                },
+            })
+        })
+        .collect();
+    Ok(json!({
+        "reconstruction_label": node.label,
+        "camera_intrinsics_index": index,
+        "per_image_adjustments": varies.names(),
+        "rolling_shutter_scanlines": varies.rolling_shutter_scanlines.map(|s| s.as_str()),
+        "camera_images": rows,
+    }))
 }
 
 pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQuery) -> JsonReply {

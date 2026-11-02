@@ -479,7 +479,8 @@ fixed-height for virtualization.
 **Camera Intrinsics row** — `#0  OPENCV_FISHEYE  480×480  f 129.1/129.3  24 images`
 - Click, double-click and tooltip as
   [camera-intrinsics.md](camera-intrinsics.md) § "Scene Graph: the Camera
-  Intrinsics group" says.
+  Intrinsics group" says, as is the tag a camera that varies parameters per
+  image carries after its image count, `per image: f, pp`.
 - Context menu: one entry, `Switch Camera Model…`, which opens a camera model
   proposal on the row's camera and brings the Camera Intrinsics panel to the
   front ([edits/switch-camera-model.md](edits/switch-camera-model.md)). Greyed,

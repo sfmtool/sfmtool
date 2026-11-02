@@ -99,7 +99,16 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           per_image_adjustments names which of focal, principal_point, \
                           radial_bspline and rolling_shutter each image adjusts, empty when \
                           none does, and rolling_shutter_scanlines is ROWS, COLUMNS or null, \
-                          the setting the images' rates are read on. outermost_keypoint \
+                          the setting the images' rates are read on. per_image_statistics \
+                          (null when nothing varies) gives, per parameter varied (null \
+                          otherwise), the mean, standard_deviation, min, max and \
+                          beyond_two_standard_deviations of each \
+                          component over the camera_image_indices it names (the posed images, \
+                          or all where none is posed), in the stored unit, with the \
+                          display_unit the Camera Intrinsics panel shows and the \
+                          display_scale between them; the focal's mean is exp(mean ln(1 + s)) \
+                          - 1 and its standard_deviation that of ln(1 + s). get_intrinsic_adjustments lists \
+                          every image's values. outermost_keypoint \
                           is the keypoint of those images furthest from the principal point, \
                           as a radius in pixels and an incidence angle under this model: \
                           observed among the reconstruction's observations, and detected \
@@ -117,6 +126,30 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "description":
                             "Index of the intrinsics record. An intrinsics record has no name to \
                              address it by; get_camera_image reports the index each image uses.",
+                    }),
+                )],
+            ),
+        },
+        ToolSpec {
+            name: "get_intrinsic_adjustments",
+            description: "Every camera image of one camera intrinsics record with its \
+                          intrinsic_adjustment, as get_camera_image reports one (the focal \
+                          scale as a fraction, the principal-point offset in fractions of the \
+                          short side, the radial_bspline coefficients and the rolling_shutter \
+                          rates in radians per short side of readout), in index order, each \
+                          with in_statistics saying whether get_camera_intrinsics' \
+                          per_image_statistics are taken over it; beside them the record's \
+                          per_image_adjustments and rolling_shutter_scanlines.",
+            kind: Read,
+            schema: object(
+                &[("reconstruction_label", reconstruction_label_schema())],
+                &[(
+                    "camera_intrinsics_index",
+                    json!({
+                        "type": "integer",
+                        "minimum": 0,
+                        "description":
+                            "Index of the intrinsics record, as get_camera_intrinsics takes it.",
                     }),
                 )],
             ),
