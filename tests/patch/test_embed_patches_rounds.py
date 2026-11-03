@@ -182,8 +182,8 @@ def test_embed_patches_multiple_rounds_round_trips(
     ``embedded_patches`` recon. Every point a one-round or a three-round run keeps
     is an input point that survived round 1's self-similarity cull, and a point
     both runs keep is observed by the three-round run in a subset of the images
-    the one-round run keeps. A per-round ``progress`` callback fires once per
-    round.
+    the one-round run observes it in. A per-round ``progress`` callback fires
+    once per round.
 
     The point count is not monotone in the number of rounds. The final cull
     drops each point the last sub-pixel pass rendered no valid bitmap for, but a
