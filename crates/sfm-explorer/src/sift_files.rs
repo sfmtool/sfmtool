@@ -332,8 +332,9 @@ struct SiftFilesPlan {
 ///
 /// The change is pushed only when every file was built, so a build that is
 /// cancelled or fails leaves the definition as it was. The files it wrote stay,
-/// and a later build skips them. The sentence names the folder written to and,
-/// after a change, the folder the definition moved from.
+/// and a later build skips them. The Background panel's message and the
+/// sentence name the folder written to and, after a change, the folder the
+/// definition moved from.
 fn build(plan: SiftFilesPlan, progress: &Progress<'_>) -> Finished {
     let SiftFilesPlan {
         label,
@@ -341,6 +342,15 @@ fn build(plan: SiftFilesPlan, progress: &Progress<'_>) -> Finished {
         options,
         switch,
     } = plan;
+    let folder = options.feature_prefix_dir.display();
+    match &switch {
+        Some(switch) => sfmtool_core::progress_info!(
+            progress,
+            "Writing the .sift files into {folder}, moved from {}",
+            switch.old_folder
+        ),
+        None => sfmtool_core::progress_info!(progress, "Writing the .sift files into {folder}"),
+    }
     let report = match build_sift_files(&images, &options, progress) {
         Ok(report) => report,
         Err(BuildSiftFilesError::Cancelled) => return Finished::Cancelled,

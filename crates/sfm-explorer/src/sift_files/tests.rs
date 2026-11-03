@@ -366,6 +366,13 @@ fn a_version_1_record_is_converted_and_built_into_a_new_folder() {
         "{}",
         entry.text
     );
+    // The Background panel's line names both folders too.
+    let task = state.last_finished_task().expect("it finished");
+    let said = task.detail.iter().any(|row| {
+        matches!(row, crate::progress::Detail::Message { text, .. }
+            if text.contains(&folder) && text.contains(&format!("moved from {OWN_PREFIX}")))
+    });
+    assert!(said, "the panel's rows name both folders");
     assert!(every_sift_file_is_there(&state, id));
     let sift = sfmtool_sift_format::read_sift_metadata(&node.recon().sift_path_for_image(0))
         .unwrap()
