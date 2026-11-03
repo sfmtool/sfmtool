@@ -446,6 +446,9 @@ The bindings drop nothing; a caller drops first with
 --drop-image-adjustments` does before a `--camera-model` later in the same
 command
 ([../../cli/reconstruction/xform/xform-command.md](../../cli/reconstruction/xform/xform-command.md#--drop-image-adjustments-parametersnamename-camerasij)).
+`SfmrReconstruction.varied_image_adjustments(camera)` binds
+`varied_image_adjustments`, returning the parameters' names as
+`per_image_adjustments` lists them; an unknown camera raises `ValueError`.
 
 The report's `cameras` is a list with one dict per switched camera: `camera`,
 `images`, `source` and `target` (the two `CameraIntrinsics`), `fit` (the dict

@@ -189,6 +189,14 @@ dropped = recon.drop_image_adjustments(0, ["radial_bspline", "rolling_shutter"])
 this one as it was. An unknown name, an unknown camera and every refusal above
 raise `ValueError` with the error's message.
 
+`recon.varied_image_adjustments(camera)` lists, by the same names and in that
+order, the parameters the camera varies, which are the ones a drop changes
+something for: its flags, and any parameter one of its images holds a non-zero
+value of (`varied_image_adjustments` in
+[switch-camera-model.md](switch-camera-model.md)). An unknown camera raises
+`ValueError`. `sfm xform --drop-image-adjustments` reads it to drop from each
+camera only what it varies and to say so.
+
 ## Testing
 
 [`drop_image_adjustments/tests.rs`](../../../crates/sfmtool-core/src/reconstruction/drop_image_adjustments/tests.rs)

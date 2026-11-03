@@ -52,6 +52,14 @@ def test_bundle_adjust_release_checks_are_not_on_the_camera():
         assert not hasattr(geometry.CameraIntrinsics, name), name
 
 
+def test_image_adjustment_methods_are_on_the_reconstruction():
+    """Dropping per-image parameters and listing the ones a camera varies are
+    methods of `SfmrReconstruction`, not functions of the submodule."""
+    for name in ("drop_image_adjustments", "varied_image_adjustments"):
+        assert callable(getattr(reconstruction.SfmrReconstruction, name, None)), name
+        assert not hasattr(reconstruction, name), name
+
+
 def test_patches_bindings_registered():
     """Every expected class and function is present on `_sfmtool.patches`."""
     missing = [n for n in _PATCHES_CLASSES if not hasattr(patches, n)]

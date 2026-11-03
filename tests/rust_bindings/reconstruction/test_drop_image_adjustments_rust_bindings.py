@@ -3,7 +3,8 @@
 
 """Tests for `SfmrReconstruction.drop_image_adjustments` on the seoul_bull
 ground truth whose one `SFMTOOL_PINHOLE` camera varies all four per-image
-parameters."""
+parameters, and for `SfmrReconstruction.varied_image_adjustments` on it and on
+the kerry_park ground truth, whose two cameras vary none."""
 
 import shutil
 
@@ -11,7 +12,7 @@ import numpy as np
 import pytest
 
 from sfmtool.reconstruction import SfmrReconstruction
-from tests.conftest import SEOUL_BULL_DIR
+from tests.conftest import KERRY_PARK_GROUND_TRUTH, SEOUL_BULL_DIR
 
 GROUND_TRUTH_V02 = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
 ALL = ["focal", "principal_point", "radial_bspline", "rolling_shutter"]
@@ -110,3 +111,47 @@ def test_bad_arguments_raise_value_error(recon):
         recon.drop_image_adjustments(0, ["distortion"])
     with pytest.raises(ValueError, match="camera 3 does not exist"):
         recon.drop_image_adjustments(3, ["focal"])
+
+
+def test_varied_image_adjustments_lists_every_flagged_parameter(recon):
+    assert recon.varied_image_adjustments(0) == ALL
+
+
+def test_a_flag_with_every_value_zero_still_varies(recon):
+    n = recon.image_count
+    zeroed = recon.clone_with_changes(
+        focal_adjustments=np.zeros(n),
+        principal_point_adjustments_xy=np.zeros((n, 2)),
+        radial_bspline_adjustments=np.zeros((n, 2)),
+        rolling_shutter_rates_xyz=np.zeros((n, 3)),
+    )
+    assert zeroed.per_image_adjustments == [ALL]
+    assert zeroed.varied_image_adjustments(0) == ALL
+
+
+@pytest.fixture(scope="module")
+def kerry_park():
+    return SfmrReconstruction.load(KERRY_PARK_GROUND_TRUTH)
+
+
+def test_a_camera_with_no_flag_and_no_value_varies_nothing(kerry_park):
+    assert kerry_park.per_image_adjustments == [[], []]
+    assert kerry_park.varied_image_adjustments(0) == []
+    assert kerry_park.varied_image_adjustments(1) == []
+
+
+def test_a_non_zero_value_with_no_flag_varies(kerry_park):
+    # One image of camera 1 holds a principal-point offset its camera does not
+    # flag; camera 0 is unchanged.
+    image = int(np.flatnonzero(np.asarray(kerry_park.camera_indexes) == 1)[0])
+    offsets = np.zeros((kerry_park.image_count, 2))
+    offsets[image] = [0.001, 0.0]
+    stray = kerry_park.clone_with_changes(principal_point_adjustments_xy=offsets)
+    assert stray.per_image_adjustments == [[], []]
+    assert stray.varied_image_adjustments(0) == []
+    assert stray.varied_image_adjustments(1) == ["principal_point"]
+
+
+def test_varied_image_adjustments_refuses_an_unknown_camera(recon):
+    with pytest.raises(ValueError, match="camera 1 does not exist"):
+        recon.varied_image_adjustments(1)

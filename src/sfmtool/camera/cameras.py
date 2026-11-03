@@ -220,7 +220,12 @@ def _adjusted_cameras(recon) -> list[int]:
 def _camera_adjustments(recon) -> dict[int, list[str]]:
     """Per camera of ``recon`` with a non-zero intrinsic adjustment on any of
     its images, the parts that are non-zero, named and ordered as
-    ``per_image_adjustments`` names them."""
+    ``per_image_adjustments`` names them.
+
+    These are the values the images hold, for a caller whose output cannot hold
+    them. A camera's ``per_image_adjustments`` flags are not read: the
+    parameters a camera varies, flagged or held, are
+    ``SfmrReconstruction.varied_image_adjustments``."""
     camera_indexes = np.asarray(recon.camera_indexes)
     adjusted: dict[int, list[str]] = {}
     for name, mask in _adjustment_masks(recon).items():
