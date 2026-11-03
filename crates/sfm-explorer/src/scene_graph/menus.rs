@@ -342,7 +342,7 @@ fn show_build_sift_files_entry(
     out: &mut TreeOutput,
 ) {
     let refusal = rows.sift_build_refusal.clone();
-    let hover = crate::sift_files::build_sift_files_hover(rows.sift_switch_from.as_deref());
+    let hover = crate::sift_files::build_sift_files_hover(&rows.sift_record_change);
     let entry = ui
         .add_enabled(refusal.is_none(), egui::Button::new(rows.sift_build_label))
         .on_disabled_hover_text(refusal.unwrap_or_default())
