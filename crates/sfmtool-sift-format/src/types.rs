@@ -108,8 +108,17 @@ pub struct FeatureToolMetadata {
     pub feature_options: serde_json::Value,
 }
 
-/// Newest `.sift` format version this build understands.
-pub const SIFT_FORMAT_VERSION: u32 = 1;
+/// Newest `.sift` format version this build understands, and the version a
+/// conforming writer writes. A reader accepts every version from 1 to this one.
+pub const SIFT_FORMAT_VERSION: u32 = 2;
+
+/// The first `.sift` format version that records `feature_options.image_to_gray`
+/// and the two image readings, [`SiftMetadata::sharpness`] and
+/// [`SiftMetadata::gradient_structure_tensor_xx_yy_xy`].
+pub const SIFT_READINGS_VERSION: u32 = 2;
+
+/// The most bits `feature_options.image_to_gray.quantize_bits` may round to.
+pub const MAX_QUANTIZE_BITS: u64 = 16;
 
 /// The zstd level `.sift` files are written at unless a caller asks for
 /// another: the level `sfm sift` writes at and the Python bindings default to.
@@ -135,6 +144,15 @@ pub struct SiftMetadata {
     pub image_height: u32,
     /// Number of SIFT features.
     pub feature_count: u32,
+    /// The variance of the Laplacian of the image's reading image, in grey
+    /// units squared. Required from version 2, absent (`None`) in version 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sharpness: Option<f64>,
+    /// `[Exx, Eyy, Exy]`, the means of `Gx²`, `Gy²` and `Gx·Gy` over the
+    /// reading image's interior. Required from version 2, absent (`None`) in
+    /// version 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_structure_tensor_xx_yy_xy: Option<[f64; 3]>,
 }
 
 impl FeatureToolMetadata {

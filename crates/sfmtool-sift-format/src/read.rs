@@ -21,16 +21,39 @@ fn open_file(path: &Path) -> Result<std::fs::File, SiftError> {
     })
 }
 
-/// Reject a version this build cannot read: 0, which no writer has ever
-/// produced, or one newer than [`SIFT_FORMAT_VERSION`], whose layout is unknown
-/// so reading it with current-version assumptions would misparse silently.
-pub(crate) fn check_version(metadata: &SiftMetadata) -> Result<(), SiftError> {
+/// Reject metadata this build cannot read: a version of 0, which no writer has
+/// ever produced, or one newer than [`SIFT_FORMAT_VERSION`], whose layout is
+/// unknown so reading it with current-version assumptions would misparse
+/// silently; a version 2 file without the two image readings, which version 2
+/// requires; and a version 1 file with either reading, which belongs to
+/// version 2.
+pub(crate) fn check_metadata(metadata: &SiftMetadata) -> Result<(), SiftError> {
     if metadata.version == 0 || metadata.version > SIFT_FORMAT_VERSION {
         return Err(SiftError::InvalidFormat(format!(
-            "unsupported .sift format version {} (this build reads versions 1 to \
-             {SIFT_FORMAT_VERSION})",
+            "unsupported .sift format version {} (this build reads versions 1 to {SIFT_FORMAT_VERSION})",
             metadata.version
         )));
+    }
+    let readings = [
+        ("sharpness", metadata.sharpness.is_some()),
+        (
+            "gradient_structure_tensor_xx_yy_xy",
+            metadata.gradient_structure_tensor_xx_yy_xy.is_some(),
+        ),
+    ];
+    for (name, present) in readings {
+        if metadata.version >= SIFT_READINGS_VERSION && !present {
+            return Err(SiftError::InvalidFormat(format!(
+                "version {} .sift metadata has no '{name}', which version {SIFT_READINGS_VERSION} requires",
+                metadata.version
+            )));
+        }
+        if metadata.version < SIFT_READINGS_VERSION && present {
+            return Err(SiftError::InvalidFormat(format!(
+                "version {} .sift metadata has '{name}', which belongs to version {SIFT_READINGS_VERSION}",
+                metadata.version
+            )));
+        }
     }
     Ok(())
 }
@@ -64,7 +87,7 @@ pub fn read_sift_features(path: &Path) -> Result<SiftFeatures, SiftError> {
     let mut archive = ZipArchive::new(file)?;
 
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    check_version(&metadata)?;
+    check_metadata(&metadata)?;
     let content_hash: SiftContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
     let total = metadata.feature_count as usize;
 
@@ -96,7 +119,7 @@ pub fn read_sift_positions(path: &Path, count: usize) -> Result<Vec<[f32; 2]>, S
     let mut archive = ZipArchive::new(file)?;
 
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    check_version(&metadata)?;
+    check_metadata(&metadata)?;
     let total = metadata.feature_count as usize;
     let read_count = count.min(total);
 
@@ -126,7 +149,7 @@ pub fn read_sift_keypoints(path: &Path, count: usize) -> Result<SiftKeypoints, S
     let mut archive = ZipArchive::new(file)?;
 
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    check_version(&metadata)?;
+    check_metadata(&metadata)?;
     let total = metadata.feature_count as usize;
     let read_count = count.min(total);
 
@@ -173,7 +196,7 @@ pub fn read_sift_thumbnail(path: &Path) -> Result<SiftThumbnail, SiftError> {
     let mut archive = ZipArchive::new(file)?;
 
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    check_version(&metadata)?;
+    check_metadata(&metadata)?;
     let content_hash: SiftContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
     let pixels: Vec<u8> = read_binary_array(
         &mut archive,
@@ -195,7 +218,7 @@ pub fn read_sift_metadata(
     let feature_tool_metadata: FeatureToolMetadata =
         read_json_entry(&mut archive, "feature_tool_metadata.json.zst")?;
     let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
-    check_version(&metadata)?;
+    check_metadata(&metadata)?;
     let content_hash: SiftContentHash = read_json_entry(&mut archive, "content_hash.json.zst")?;
 
     Ok((feature_tool_metadata, metadata, content_hash))
@@ -210,7 +233,7 @@ fn read_sift_from_archive<R: Read + Seek>(
     let feature_tool_metadata: FeatureToolMetadata =
         read_json_entry(archive, "feature_tool_metadata.json.zst")?;
     let metadata: SiftMetadata = read_json_entry(archive, "metadata.json.zst")?;
-    check_version(&metadata)?;
+    check_metadata(&metadata)?;
     let content_hash: SiftContentHash = read_json_entry(archive, "content_hash.json.zst")?;
 
     let total = metadata.feature_count as usize;

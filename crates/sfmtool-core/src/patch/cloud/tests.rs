@@ -880,7 +880,7 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
             feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
                 feature_tool: "test".into(),
                 feature_type: "sift".into(),
-                feature_options: serde_json::json!({}),
+                feature_options: serde_json::json!({"image_to_gray": {"formula": "G"}}),
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
@@ -890,6 +890,8 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
                 image_width: recon.image_set.cameras[0].width,
                 image_height: recon.image_set.cameras[0].height,
                 feature_count: count as u32,
+                sharpness: Some(0.0),
+                gradient_structure_tensor_xx_yy_xy: Some([0.0; 3]),
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
             positions_xy: Array2::<f32>::zeros((count, 2)),

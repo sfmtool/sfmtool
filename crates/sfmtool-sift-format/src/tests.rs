@@ -4,7 +4,7 @@
 use crate::*;
 use ndarray::{Array2, Array3};
 
-/// Create minimal valid SiftData for testing.
+/// Create minimal valid version 2 SiftData for testing.
 fn make_test_data() -> SiftData {
     let feature_count: u32 = 4;
     let n = feature_count as usize;
@@ -13,16 +13,21 @@ fn make_test_data() -> SiftData {
         feature_tool_metadata: FeatureToolMetadata {
             feature_tool: "colmap".into(),
             feature_type: "sift".into(),
-            feature_options: serde_json::json!({"max_num_features": 8192}),
+            feature_options: serde_json::json!({
+                "max_num_features": 8192,
+                "image_to_gray": {"formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8},
+            }),
         },
         metadata: SiftMetadata {
-            version: 1,
+            version: 2,
             image_name: "test_image.jpg".into(),
             image_file_xxh128: "abcdef0123456789abcdef0123456789".into(),
             image_file_size: 12345,
             image_width: 640,
             image_height: 480,
             feature_count,
+            sharpness: Some(0.004_120_6),
+            gradient_structure_tensor_xx_yy_xy: Some([0.000_931_14, 0.000_714_02, -8.351e-5]),
         },
         content_hash: SiftContentHash::default(),
         positions_xy: Array2::from_shape_vec(
@@ -132,7 +137,8 @@ fn test_read_thumbnail_only() {
 
 #[test]
 fn test_content_hash_populated() {
-    let data = make_test_data();
+    // Version 1 data, so the bytes are those a version 1 writer wrote.
+    let data = make_version_1_data();
     let dir = std::env::temp_dir().join("sift_test_hash");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("test.sift");
@@ -507,4 +513,177 @@ fn test_read_ignores_unknown_metadata_keys() {
     let (_, read, _) = read_sift_metadata(&path).unwrap();
     assert_eq!(read.image_name, "test_image.jpg");
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+/// [`make_test_data`] as version 1 data: no `image_to_gray` and no readings.
+fn make_version_1_data() -> SiftData {
+    let mut data = make_test_data();
+    data.metadata.version = 1;
+    data.metadata.sharpness = None;
+    data.metadata.gradient_structure_tensor_xx_yy_xy = None;
+    data.feature_tool_metadata.feature_options = serde_json::json!({"max_num_features": 8192});
+    data
+}
+
+#[test]
+fn test_version_2_round_trip_keeps_readings_exactly() {
+    let data = make_test_data();
+    let dir = std::env::temp_dir().join("sift_test_v2_round_trip");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    write_sift(&path, &data, 3).unwrap();
+    let loaded = read_sift(&path).unwrap();
+    assert_eq!(loaded.metadata.version, 2);
+    assert_eq!(loaded.metadata.sharpness, data.metadata.sharpness);
+    assert_eq!(
+        loaded.metadata.gradient_structure_tensor_xx_yy_xy,
+        data.metadata.gradient_structure_tensor_xx_yy_xy
+    );
+    assert_eq!(
+        loaded.feature_tool_metadata.feature_options["image_to_gray"],
+        serde_json::json!({"formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8})
+    );
+    let (_, metadata, _) = read_sift_metadata(&path).unwrap();
+    assert_eq!(metadata.sharpness, data.metadata.sharpness);
+    assert_eq!(verify_sift(&path).unwrap(), (true, vec![]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_version_1_round_trip_reads_readings_absent() {
+    let data = make_version_1_data();
+    let dir = std::env::temp_dir().join("sift_test_v1_round_trip");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    write_sift(&path, &data, 3).unwrap();
+    let loaded = read_sift(&path).unwrap();
+    assert_eq!(loaded.metadata.version, 1);
+    assert_eq!(loaded.metadata.sharpness, None);
+    assert_eq!(loaded.metadata.gradient_structure_tensor_xx_yy_xy, None);
+    // The keys are not written at all, so a version 1 file holds only the
+    // keys a version 1 writer wrote.
+    let json = serde_json::to_value(&loaded.metadata).unwrap();
+    assert!(json.get("sharpness").is_none());
+    assert!(json.get("gradient_structure_tensor_xx_yy_xy").is_none());
+    assert_eq!(verify_sift(&path).unwrap(), (true, vec![]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_validate_version_rules() {
+    let invalid = |data: &SiftData| validate_sift_data(data).unwrap_err().to_string();
+
+    let mut data = make_test_data();
+    data.metadata.sharpness = None;
+    assert!(invalid(&data).contains("has no 'sharpness'"));
+
+    let mut data = make_test_data();
+    data.metadata.gradient_structure_tensor_xx_yy_xy = None;
+    assert!(invalid(&data).contains("has no 'gradient_structure_tensor_xx_yy_xy'"));
+
+    let mut data = make_test_data();
+    data.feature_tool_metadata.feature_options = serde_json::json!({"max_num_features": 8192});
+    assert!(invalid(&data).contains("must carry 'image_to_gray'"));
+
+    for (image_to_gray, problem) in [
+        (serde_json::json!("G"), "must be a JSON object"),
+        (serde_json::json!({}), "has no 'formula'"),
+        (
+            serde_json::json!({"formula": 3}),
+            "must be a non-empty string",
+        ),
+        (
+            serde_json::json!({"formula": " "}),
+            "must be a non-empty string",
+        ),
+        (
+            serde_json::json!({"formula": "G", "quantize_bits": 0}),
+            "from 1 to 16",
+        ),
+        (
+            serde_json::json!({"formula": "G", "quantize_bits": 17}),
+            "from 1 to 16",
+        ),
+        (
+            serde_json::json!({"formula": "G", "quantize_bits": 8.5}),
+            "from 1 to 16",
+        ),
+        (
+            serde_json::json!({"formula": "G", "gamma": 2.2}),
+            "unknown key",
+        ),
+    ] {
+        let mut data = make_test_data();
+        data.feature_tool_metadata.feature_options["image_to_gray"] = image_to_gray.clone();
+        let message = invalid(&data);
+        assert!(message.contains(problem), "{image_to_gray}: {message}");
+    }
+
+    for sharpness in [f64::NAN, f64::INFINITY, -1e-9] {
+        let mut data = make_test_data();
+        data.metadata.sharpness = Some(sharpness);
+        assert!(invalid(&data).contains("sharpness must be finite"));
+    }
+    for tensor in [
+        [f64::NAN, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.0, f64::INFINITY],
+    ] {
+        let mut data = make_test_data();
+        data.metadata.gradient_structure_tensor_xx_yy_xy = Some(tensor);
+        assert!(invalid(&data).contains("gradient_structure_tensor_xx_yy_xy must be finite"));
+    }
+    // A negative cross term is an ordinary value.
+    let mut data = make_test_data();
+    data.metadata.gradient_structure_tensor_xx_yy_xy = Some([1.0, 1.0, -0.5]);
+    validate_sift_data(&data).unwrap();
+
+    let mut data = make_version_1_data();
+    data.metadata.sharpness = Some(0.1);
+    assert!(invalid(&data).contains("which belongs to version 2"));
+
+    let mut data = make_version_1_data();
+    data.feature_tool_metadata.feature_options["image_to_gray"] =
+        serde_json::json!({"formula": "G"});
+    assert!(invalid(&data).contains("which belongs to version 2"));
+
+    // Only the top level of feature_options records the conversion.
+    let mut data = make_version_1_data();
+    data.feature_tool_metadata.feature_options =
+        serde_json::json!({"source_feature_options": {"image_to_gray": {"formula": "G"}}});
+    validate_sift_data(&data).unwrap();
+}
+
+#[test]
+fn test_read_and_verify_reject_version_2_without_readings() {
+    let mut data = make_test_data();
+    data.metadata.sharpness = None;
+    let dir = std::env::temp_dir().join("sift_test_v2_no_readings");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    crate::write::write_sift_any_version(&path, &data, 3).unwrap();
+    let message = read_sift(&path).err().unwrap().to_string();
+    assert!(message.contains("has no 'sharpness'"), "{message}");
+    let (ok, errors) = verify_sift(&path).unwrap();
+    assert!(!ok);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_verify_reports_version_2_without_image_to_gray() {
+    let mut data = make_test_data();
+    data.feature_tool_metadata.feature_options = serde_json::json!({});
+    let dir = std::env::temp_dir().join("sift_test_v2_no_image_to_gray");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    crate::write::write_sift_any_version(&path, &data, 3).unwrap();
+    let (ok, errors) = verify_sift(&path).unwrap();
+    assert!(!ok);
+    assert!(
+        errors[0].contains("must carry 'image_to_gray'"),
+        "{errors:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

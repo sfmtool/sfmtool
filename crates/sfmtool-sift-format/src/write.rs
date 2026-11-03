@@ -25,27 +25,114 @@ pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), S
 /// Check that `data` is a `.sift` file's content, without writing anything.
 ///
 /// Rejects a `metadata.version` that [`crate::read_sift`] would reject
-/// ([`SiftError::InvalidFormat`]), `feature_options` that is not a JSON
-/// object ([`SiftError::InvalidMetadata`]), and an array whose shape does not
-/// match `metadata.feature_count` or, for the thumbnail, the
+/// ([`SiftError::InvalidFormat`]), including a version 2 file without the two
+/// image readings and a version 1 file with either; `feature_options` that is
+/// not a JSON object, a version 2 file whose `feature_options` carry no valid
+/// `image_to_gray` object, a version 1 file whose `feature_options` carry one,
+/// and a reading that is not finite or, for the sharpness, `Exx` and `Eyy`, is
+/// negative ([`SiftError::InvalidMetadata`]); and an array whose shape does
+/// not match `metadata.feature_count` or, for the thumbnail, the
 /// [`THUMBNAIL_SIZE`] square ([`SiftError::ShapeMismatch`]). A writer that
 /// parses its metadata from JSON parses it with
 /// [`SiftMetadata::from_json_for_write`] and
 /// [`FeatureToolMetadata::from_json_for_write`], which refuse a key the
 /// format does not define.
 ///
+/// The `image_to_gray` check is of the object's shape: a string `formula`, an
+/// optional integer `quantize_bits` from 1 to [`MAX_QUANTIZE_BITS`], and no
+/// other key. Whether the formula follows the grammar is checked by the
+/// writer that evaluates it.
+///
 /// [`write_sift`] calls it; a caller that must tell a caller's mistake from a
 /// failed write, such as the Python binding, which raises `ValueError` for
 /// one and `OSError` for the other, calls it first.
 pub fn validate_sift_data(data: &SiftData) -> Result<(), SiftError> {
-    crate::read::check_version(&data.metadata)?;
+    crate::read::check_metadata(&data.metadata)?;
     if !data.feature_tool_metadata.feature_options.is_object() {
         return Err(SiftError::InvalidMetadata(format!(
             "feature_options must be a JSON object, got {}",
             data.feature_tool_metadata.feature_options
         )));
     }
+    check_version_content(&data.feature_tool_metadata, &data.metadata)?;
     validate_dimensions(data, data.metadata.feature_count as usize)
+}
+
+/// The rules on `feature_options.image_to_gray` and the two readings that
+/// depend on the version: required and valid from version 2, absent before.
+/// [`validate_sift_data`] and [`crate::verify_sift`] apply them.
+pub(crate) fn check_version_content(
+    feature_tool_metadata: &FeatureToolMetadata,
+    metadata: &SiftMetadata,
+) -> Result<(), SiftError> {
+    let invalid = |message: String| Err(SiftError::InvalidMetadata(message));
+    let image_to_gray = feature_tool_metadata.feature_options.get("image_to_gray");
+    if metadata.version < SIFT_READINGS_VERSION {
+        if image_to_gray.is_some() {
+            return invalid(format!(
+                "version {} feature_options carry 'image_to_gray', which belongs to version {SIFT_READINGS_VERSION}",
+                metadata.version
+            ));
+        }
+        return Ok(());
+    }
+    let Some(image_to_gray) = image_to_gray else {
+        return invalid(format!(
+            "version {} feature_options must carry 'image_to_gray'",
+            metadata.version
+        ));
+    };
+    check_image_to_gray(image_to_gray).map_err(SiftError::InvalidMetadata)?;
+    if let Some(sharpness) = metadata.sharpness {
+        if !sharpness.is_finite() || sharpness < 0.0 {
+            return invalid(format!(
+                "sharpness must be finite and not negative, got {sharpness}"
+            ));
+        }
+    }
+    if let Some([xx, yy, xy]) = metadata.gradient_structure_tensor_xx_yy_xy {
+        if !(xx.is_finite() && yy.is_finite() && xy.is_finite()) || xx < 0.0 || yy < 0.0 {
+            return invalid(format!(
+                "gradient_structure_tensor_xx_yy_xy must be finite with Exx and Eyy not negative, got [{xx}, {yy}, {xy}]"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Check the shape of an `image_to_gray` object, returning what is wrong.
+fn check_image_to_gray(value: &serde_json::Value) -> Result<(), String> {
+    let Some(map) = value.as_object() else {
+        return Err(format!("image_to_gray must be a JSON object, got {value}"));
+    };
+    if let Some(key) = map
+        .keys()
+        .find(|k| k.as_str() != "formula" && k.as_str() != "quantize_bits")
+    {
+        return Err(format!(
+            "image_to_gray has an unknown key {key:?} (only 'formula' and 'quantize_bits' are defined)"
+        ));
+    }
+    match map.get("formula") {
+        Some(serde_json::Value::String(formula)) if !formula.trim().is_empty() => {}
+        Some(other) => {
+            return Err(format!(
+                "image_to_gray 'formula' must be a non-empty string, got {other}"
+            ))
+        }
+        None => return Err("image_to_gray has no 'formula'".to_owned()),
+    }
+    if let Some(bits) = map.get("quantize_bits") {
+        if !bits
+            .as_u64()
+            .is_some_and(|b| (1..=MAX_QUANTIZE_BITS).contains(&b))
+        {
+            return Err(format!(
+                "image_to_gray 'quantize_bits' must be an integer from 1 to {MAX_QUANTIZE_BITS}, got {bits}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// [`write_sift`] without the version check, so the tests can produce the

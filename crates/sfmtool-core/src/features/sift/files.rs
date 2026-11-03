@@ -490,6 +490,8 @@ fn build_one(
             image_width: width,
             image_height: height,
             feature_count: count as u32,
+            sharpness: None,
+            gradient_structure_tensor_xx_yy_xy: None,
         },
         content_hash: SiftContentHash::default(),
         positions_xy: Array2::from_shape_vec((count, 2), positions).map_err(shape_error)?,

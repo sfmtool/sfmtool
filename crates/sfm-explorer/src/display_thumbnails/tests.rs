@@ -74,7 +74,7 @@ pub(crate) fn write_sift_thumbnails(
             feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
                 feature_tool: "test".into(),
                 feature_type: "sift".into(),
-                feature_options: serde_json::json!({}),
+                feature_options: serde_json::json!({"image_to_gray": {"formula": "G"}}),
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
@@ -84,6 +84,8 @@ pub(crate) fn write_sift_thumbnails(
                 image_width: 96,
                 image_height: 54,
                 feature_count: 0,
+                sharpness: Some(0.0),
+                gradient_structure_tensor_xx_yy_xy: Some([0.0; 3]),
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
             positions_xy: Array2::zeros((0, 2)),
