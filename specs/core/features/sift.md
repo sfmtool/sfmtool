@@ -66,6 +66,27 @@ plain string, with a formula grammar the reader can evaluate and an optional bit
 depth, is part of the proposed `.sift` version 2; see
 [`../../drafts/image-sharpness.md`](../../drafts/image-sharpness.md).
 
+The code for that object and the readings it feeds is in place, though no file
+records them yet. [`ImageToGray`](../../../crates/sfmtool-core/src/features/sift/gray.rs)
+is the formula with an optional `quantize_bits` from 1 to 16, read from the JSON
+object `{"formula": …, "quantize_bits": …}` by `ImageToGray::from_json` (which
+refuses any other key) or made from a `gray_formula` string by
+`ImageToGray::from_gray_formula`, with no rounding. With `quantize_bits = b`, a
+grey sample `v` becomes `round(clamp(v, 0, 1) · (2^b − 1)) / (2^b − 1)`, an
+exact half rounded up (`gray::quantize`).
+[`image_readings_from_rgb`](../../../crates/sfmtool-core/src/features/sift/image_readings.rs)
+takes the decoded 8-bit RGB pixels and an `ImageToGray`, and returns an
+`ImageReadings` holding the image's `sharpness` and
+`gradient_structure_tensor_xx_yy_xy`, as the draft defines them: the grey image
+in double precision, reduced by an exact area average to a long side of 480
+(`reading_image_size`), then the Laplacian variance and the means of the
+Sobel-divided-by-8 products over the interior pixels. A reading that is not
+finite is an `ImageReadingsError`. The detector does not use `ImageToGray`:
+`SiftParams::image_to_gray` is still a `GrayFormula` read from the
+`gray_formula` option, so extraction applies no rounding. A formula of more
+than 1000 tokens is refused by `parse_gray_formula`, so its recursive parse and
+evaluation stay within a thread's stack.
+
 ### 1. Scale-space pyramid
 
 Scale space is `L(x, y, σ) = G(x, y, σ) ∗ I(x, y)` with the 2D Gaussian
@@ -635,7 +656,8 @@ sfmtool-core/src/features/sift/
 ├── detect.rs       # 26-neighbor extrema + subpixel localization + contrast/edge rejection, DoG fused per stripe
 ├── orientation.rs  # 36-bin gradient histogram + multi-peak assignment
 ├── descriptor.rs   # 4x4x8 trilinear-interpolated descriptor + normalize/clamp/quantize
-├── gray.rs         # GrayFormula: the colour-to-gray conversion and its value domain
+├── gray.rs         # GrayFormula and ImageToGray: the colour-to-gray conversion and its value domain
+├── image_readings.rs # image_readings_from_rgb: an image's sharpness and gradient structure tensor
 ├── feature_options.rs # SiftParams::from_feature_options: a workspace's feature_options object -> SiftParams
 ├── files.rs        # build_sift_files: extract and write a set of images' .sift files
 └── simd.rs         # runtime-dispatched AVX2+FMA / SSE2 kernels the stages above share
@@ -654,6 +676,7 @@ Each of those modules carries a `tests.rs` beside it, in a directory of its own 
 - `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 - `build_sift_files(image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None) -> (sift_paths, extracted, skipped)` -- the binding for `build_sift_files` ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for invalid options and `OSError` naming the image or file that failed
+- `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` and the `formula` and `quantize_bits` properties, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness` and `gradient_structure_tensor_xx_yy_xy` -- the bindings for `ImageToGray` and `image_readings_from_rgb` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3 or a reading that is not finite
 
 The `params` dict the first three take is read as the `feature_options` JSON
 object and parsed by `SiftParams::from_feature_options`, so a key means the same

@@ -8,7 +8,9 @@ version 2 carrying the same `image_to_gray` object as the `.sift` file, with
 the recorded features folder name authoritative; each feature tool recording
 the formula closest to its own grey conversion. The choices this draft makes
 inside those decisions are listed in [Choices made here](#choices-made-here)
-for review. Nothing here is implemented.
+for review. Only the first bullet of [Implementation](#implementation) is
+implemented: the `ImageToGray` value and the readings function, with their
+Python bindings. No file format, workspace file or extractor records them yet.
 
 Some frames of a hand-held capture are blurred, by focus or by the camera
 moving during the exposure, and a solve does better without them. This draft
@@ -830,7 +832,8 @@ they are in pixels of the 1920-pixel images SIFT ran on.
 Named once here, as the format specs' Implementations sections will name them:
 
 - **One function computes the readings.** A Rust function in `sfmtool-core`,
-  beside `gray_from_rgb`, takes the decoded 8-bit RGB pixels and the
+  `image_readings_from_rgb` in `features/sift/image_readings.rs`, exported
+  from `features::sift` beside `gray_from_rgb`, takes the decoded 8-bit RGB pixels and the
   `image_to_gray` object and returns the sharpness and the three tensor
   values, building the reading image in double precision. `GrayFormula` gains
   the optional `quantize_bits` (the pair becoming an `ImageToGray` value

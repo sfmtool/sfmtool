@@ -30,12 +30,16 @@
 //! workspace records for the `sfmtool` feature tool, and [`build_sift_files`]
 //! writes the `.sift` files of a set of images with it, as
 //! `sfm sift --extract` does.
+//!
+//! [`image_readings_from_rgb`] takes an image's sharpness and gradient
+//! structure tensor through an [`ImageToGray`] conversion.
 
 mod descriptor;
 mod detect;
 mod feature_options;
 mod files;
 pub mod gray;
+mod image_readings;
 mod orientation;
 mod scale_space;
 mod simd;
@@ -46,7 +50,14 @@ pub use files::{
     CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL,
     WORKSPACE_CONFIG_FILE,
 };
-pub use gray::{gray_from_rgb, parse_gray_formula, GrayFormula, DEFAULT_GRAY_FORMULA};
+pub use gray::{
+    gray_from_rgb, parse_gray_formula, GrayFormula, ImageToGray, ImageToGrayError,
+    DEFAULT_GRAY_FORMULA,
+};
+pub use image_readings::{
+    image_readings_from_rgb, reading_image_size, ImageReadings, ImageReadingsError,
+    READING_IMAGE_LONG_SIDE,
+};
 pub use scale_space::ScaleSpace;
 
 // Reuse the optical-flow grayscale image type rather than duplicating it; the
