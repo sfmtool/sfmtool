@@ -227,6 +227,7 @@ is prepended the same way rather than declaring those values again. See
 | `save_minimal_prompt.rs` | The workspace path `File > Save As Minimal...` asks about once its file dialog has named a file: a `SaveMinimalPrompt` holding the chosen file and the text of the field, prefilled with the path the save would measure, and reporting a `SaveMinimalAnswer` for the caller to write with rather than writing anything itself. See [saving.md](saving.md) § "The workspace path prompt". |
 | `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
 | `context_menu.rs` | `on_secondary_click(&response)`, the builder every context menu in the window is opened with. It is `egui::Popup::context_menu` restricted to `clicked_by(Secondary)`, and `on_secondary_click_where(&response, here)` for a widget that hit-tests its own parts, such as the Image Browser strip: egui's own builder also opens on a long touch, and on Windows the left mouse button reaches egui as a touch contact, so a left press rested for 0.8 s would otherwise put the menu up. See [scene-graph.md](scene-graph.md) § "Panel plumbing". |
+| `fonts.rs` | The viewer's fonts: egui's bundled `FontDefinitions` with Hack added as the proportional family's last face, installed on the egui context when it is made. See § "Fonts" below. |
 | `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — Track View's table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
 
 ---
@@ -366,6 +367,27 @@ The 3D scene renders to an offscreen texture, which is then displayed as an
 egui `Image` filling the central panel. egui renders its own UI (menu bar,
 overlays, controls) on top. This avoids the complexity of mixing egui and wgpu
 render passes.
+
+### Fonts
+
+The viewer draws its text in egui's bundled fonts (`fonts.rs`). The
+proportional family is Ubuntu-Light, then the NotoEmoji-Regular and
+emoji-icon-font faces, then Hack; the monospace family is egui's own, Hack
+first and then the same three. egui's own proportional family stops before
+Hack, and none of its three faces has `→` (U+2192), `▸` (U+25B8) or `●`
+(U+25CF): without Hack, a tooltip, a label or a button in the proportional
+font draws each of them as an empty box, where the same text in the
+monospace font draws the character. With Hack as the last face, a character
+the other three lack is drawn from Hack and every other character is drawn as
+before. No font file is added: Hack ships inside egui with the other three.
+
+`fonts/tests.rs` reads the non-ASCII characters out of the viewer's own
+string and character literals, test files left out, and fails on one that
+either family has no glyph for, so a new string with a character neither
+family draws is caught before it is drawn as a box. It asks each family's
+faces for their character maps rather than calling egui's `has_glyph`, which
+answers no for every character of the face that also holds the replacement
+glyph, as Hack does for the monospace family.
 
 ---
 

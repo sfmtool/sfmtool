@@ -206,9 +206,8 @@ together.
 Each line wraps at the narrower of the view less a 16 px margin and 640 px,
 and the panel is as wide as its widest line, so at any width of the 3D view
 the words stay inside it and no line runs into the next. The words are in the
-12 pt proportional font, and each run of characters it has no glyph for (the
-`→` of a model change) is laid out in the monospace font, which has the
-arrow (`banner_job`), so it is not drawn as an empty box.
+12 pt proportional font, which draws the `→` of a model change from its last
+face, Hack ([architecture.md](architecture.md) § "Fonts").
 
 Both banners start at `BANNER_TOP`, 64 px below the view's top edge, under the
 stats line, the status line (`STATUS_TOP`, 28 px) and the row the camera
