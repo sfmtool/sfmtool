@@ -1453,10 +1453,6 @@ luma unrounded without one; BT.709 luma rounded to 8 bits for `colmap`; BT.601
 luma rounded to 8 bits for `opencv`); and otherwise BT.709 luma unrounded,
 `{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}`.
 
-A save that reads `.sift` files costs one small read per image; one that
-decodes images costs about one decode per image (a 1920-pixel JPEG decodes to
-grey in about 6 ms on one thread).
-
 ##### Reading older files
 
 A file of version 14 or earlier has neither column nor the `image_to_gray`
@@ -2839,10 +2835,17 @@ describes. Other parts of this spec are implemented by:
   `ImageSet::image_to_gray`. The readings are computed by
   `image_readings_from_rgb`, the function every `.sift` writer calls.
   [Where a writer gets the values](#where-a-writer-gets-the-values) is
-  `SfmrReconstruction::gather_image_readings`, which `SfmrReconstruction::save`
-  calls for a value that lacks a row and `fill_image_readings` stores in the
-  value ([source](../../crates/sfmtool-core/src/reconstruction/image_readings.rs));
+  `SfmrReconstruction::gather_image_readings`, which
+  `SfmrReconstruction::save(path, progress)` calls for a value that lacks a
+  row, reporting the images it gathers through `progress` and stopping when it
+  is cancelled, and `fill_image_readings(progress)` stores in the value, as SfM
+  Explorer does before it records the version a save writes
+  ([source](../../crates/sfmtool-core/src/reconstruction/image_readings.rs));
   `write_sfmr` refuses a value without them and computes nothing. The Python
+  `SfmrReconstruction.save` takes an optional `ProgressCounter` as `progress`
+  and gathers with the GIL released. A save that reads `.sift` files costs one
+  small read per image; one that decodes images costs about one decode per
+  image (a 1920-pixel JPEG decodes to grey in about 6 ms on one thread). The Python
   writers that copy thumbnails from `.sift` files (`sfm solve` and
   `sfm from-colmap-bin`, through
   [`sfmtool.colmap.io`](../../src/sfmtool/colmap/io.py)) copy the readings

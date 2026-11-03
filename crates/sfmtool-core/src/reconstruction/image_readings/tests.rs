@@ -223,13 +223,19 @@ fn an_image_with_no_source_fails_the_gather_naming_it() {
     assert!(images[2].sift.contains("no such file"), "{images:?}");
     assert!(images[2].photograph.contains("no such file"), "{images:?}");
     assert!(
+        images
+            .iter()
+            .all(|i| i.reconstruction.contains("holds no row")),
+        "{images:?}"
+    );
+    assert!(
         images[2].sift.contains(&format!("{}.sift", names[3])),
         "{images:?}"
     );
 
     // A save of the value fails the same way and writes nothing.
     let out = dir.path().join("out.sfmr");
-    let err = recon.save(&out).unwrap_err().to_string();
+    let err = recon.save(&out, &Progress::none()).unwrap_err().to_string();
     for name in &names[1..] {
         assert!(err.contains(name.as_str()), "{err}");
     }
@@ -311,7 +317,7 @@ fn a_save_writes_the_gathered_rows_and_leaves_the_value_unchanged() {
         set_sift_content_hash(&mut recon, i, hash);
     }
     let out = dir.path().join("out.sfmr");
-    recon.save(&out).unwrap();
+    recon.save(&out, &Progress::none()).unwrap();
     assert!(!recon.image_set.has_image_readings(), "the save keeps none");
     let written = sfmtool_sfmr_format::read_sfmr(&out)
         .unwrap()

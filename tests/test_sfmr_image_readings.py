@@ -143,8 +143,13 @@ class TestOlderFiles:
         self, seoul_bull_ground_truth_sfmr
     ):
         recon = SfmrReconstruction.load(seoul_bull_ground_truth_sfmr)
+        from sfmtool import ProgressCounter
+
         out = seoul_bull_ground_truth_sfmr.parent / "resaved.sfmr"
-        recon.save(out)
+        counter = ProgressCounter()
+        recon.save(out, progress=counter)
+        # The gather counts every image it read.
+        assert counter.value == recon.image_count
         # The value itself is not changed by the save.
         assert recon.sharpness is None
 

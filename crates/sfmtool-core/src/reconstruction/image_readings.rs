@@ -97,6 +97,9 @@ pub(crate) fn image_reading_columns(
 pub struct UnavailableImageReadings {
     /// The image's name, as the reconstruction records it.
     pub name: String,
+    /// Why the reconstruction's own row was not used: it holds none, or holds
+    /// one under no recorded conversion.
+    pub reconstruction: String,
     /// Why its `.sift` file was not used: the path tried and the reason.
     pub sift: String,
     /// Why its photograph was not used: the path tried and the reason.
@@ -138,8 +141,8 @@ impl fmt::Display for ImageReadingsError {
                 for image in images {
                     write!(
                         f,
-                        "\n    {}: {}; {}",
-                        image.name, image.sift, image.photograph
+                        "\n    {}: {}; {}; {}",
+                        image.name, image.reconstruction, image.sift, image.photograph
                     )?;
                 }
                 Ok(())
@@ -259,6 +262,7 @@ impl SfmrReconstruction {
                     if progress.is_cancelled() {
                         return Err(UnavailableImageReadings {
                             name: String::new(),
+                            reconstruction: String::new(),
                             sift: String::new(),
                             photograph: String::new(),
                         });
@@ -266,7 +270,17 @@ impl SfmrReconstruction {
                     let image = &self.image_set.images[index];
                     let result = match image.readings.filter(|_| own_rows) {
                         Some(row) => Ok((row, ImageReadingSource::Reconstruction)),
-                        None => self.image_readings_from_files(index, &image_to_gray),
+                        None => self
+                            .image_readings_from_files(index, &image_to_gray)
+                            .map_err(|mut unavailable| {
+                                unavailable.reconstruction = if image.readings.is_some() {
+                                    "the reconstruction's row is under no recorded image_to_gray"
+                                        .into()
+                                } else {
+                                    "the reconstruction holds no row for it".into()
+                                };
+                                unavailable
+                            }),
                     };
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                     progress.count(n, Some(total), "image");
@@ -332,6 +346,7 @@ impl SfmrReconstruction {
         if self.workspace_dir.as_os_str().is_empty() {
             return Err(UnavailableImageReadings {
                 name,
+                reconstruction: String::new(),
                 sift: "the reconstruction has no workspace directory to find a .sift file in"
                     .into(),
                 photograph: "nor a photograph".into(),
@@ -349,6 +364,7 @@ impl SfmrReconstruction {
             Ok(row) => Ok((row, ImageReadingSource::Photograph)),
             Err(reason) => Err(UnavailableImageReadings {
                 name,
+                reconstruction: String::new(),
                 sift: sift_reason,
                 photograph: format!("{}: {reason}", photograph.display()),
             }),

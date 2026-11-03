@@ -307,12 +307,14 @@ impl PySfmrReconstruction {
     /// photograph, checked against the reconstruction's record of its hash.
     /// The reconstruction itself is not changed. When an image has none of
     /// the three, nothing is written and ``ValueError`` names each such image
-    /// with the paths tried.
+    /// with the paths tried. Gathering them reads a ``.sift`` file or decodes a
+    /// photograph per image, with the GIL released; ``progress``, an optional
+    /// :class:`ProgressCounter`, counts the images gathered so far.
     // Every argument is one Python keyword of the save's surface, so they are a
     // list rather than a struct: a `SaveOptions` here would be a type the caller
     // cannot name.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false, workspace_path=None))]
+    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false, workspace_path=None, progress=None))]
     fn save(
         &mut self,
         py: Python<'_>,
@@ -322,6 +324,7 @@ impl PySfmrReconstruction {
         tool_options: Option<&Bound<'_, PyDict>>,
         minimal: bool,
         workspace_path: Option<&str>,
+        progress: Option<crate::py_progress::ProgressCounter>,
     ) -> PyResult<()> {
         // The workspace path is one of the fields the stamp writes, so a save
         // that states it and names no operation would drop it silently.
@@ -371,9 +374,19 @@ impl PySfmrReconstruction {
             }
         }
 
-        let record = self
-            .inner
-            .save(&path)
+        // The images the readings gather counts, from parallel workers, so the
+        // counter keeps the largest seen.
+        let counter = progress.as_ref().map(|p| p.handle());
+        let sink = |event: sfmtool_core::progress::Event<'_>| {
+            if let (sfmtool_core::progress::Event::Count { done, .. }, Some(counter)) =
+                (event, &counter)
+            {
+                counter.fetch_max(done as usize, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let inner = &self.inner;
+        let record = py
+            .detach(|| inner.save(&path, &Progress::to(&sink)))
             .map_err(crate::format_errors::write_err)?;
         // The value is untouched by the save; the in-memory metadata echoes the
         // write record so a caller reading it back sees what the file carries.

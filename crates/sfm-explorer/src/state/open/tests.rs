@@ -21,7 +21,9 @@ use crate::test_support::{phase_note, phase_rows};
 fn save_into(dir: &Path, recon: &SfmrReconstruction, name: &str) -> PathBuf {
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join(name);
-    recon.save(&path).unwrap();
+    recon
+        .save(&path, &sfmtool_core::progress::Progress::none())
+        .unwrap();
     path
 }
 

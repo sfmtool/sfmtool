@@ -1252,7 +1252,7 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     // the value gets the demo's back before it is saved.
     let saved = dir.join("upgraded_v5.sfmr");
     restore_image_readings(&mut loaded, &recon);
-    loaded.save(&saved).unwrap();
+    loaded.save(&saved, &Progress::none()).unwrap();
     assert_eq!(
         sfmtool_sfmr_format::read_sfmr_metadata(&saved)
             .unwrap()
@@ -1504,7 +1504,7 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
     );
     let resaved = dir.join("resaved.sfmr");
     restore_image_readings(&mut loaded, &recon);
-    loaded.save(&resaved).unwrap();
+    loaded.save(&resaved, &Progress::none()).unwrap();
     assert_eq!(
         sfmtool_sfmr_format::read_sfmr_metadata(&resaved)
             .unwrap()
@@ -1562,7 +1562,9 @@ fn saved_demo(name: &str, points: usize) -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("demo.sfmr");
-    SfmrReconstruction::demo(points).save(&path).unwrap();
+    SfmrReconstruction::demo(points)
+        .save(&path, &Progress::none())
+        .unwrap();
     path
 }
 

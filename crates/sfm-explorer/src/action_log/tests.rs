@@ -1266,7 +1266,7 @@ fn openable_file(dir: &Path) -> PathBuf {
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").expect("a writable temp dir");
     let path = dir.join("recon.sfmr");
     SfmrReconstruction::demo(64)
-        .save(&path)
+        .save(&path, &sfmtool_core::progress::Progress::none())
         .expect("a writable temp dir");
     path
 }

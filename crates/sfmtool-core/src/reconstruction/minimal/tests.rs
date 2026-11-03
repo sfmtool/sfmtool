@@ -102,7 +102,7 @@ fn to_minimal_drops_the_heavy_columns_and_the_incidental_metadata() {
     // The input is untouched.
     assert!(recon.image_set.thumbnails_y_x_rgb.is_some());
 
-    minimal.save(&out).unwrap();
+    minimal.save(&out, &Progress::none()).unwrap();
     let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
     assert!(read.image_set.thumbnails_y_x_rgb.is_none());
     assert!(read.point_set.patch_bitmaps_y_x_rgba.is_none());
@@ -179,7 +179,7 @@ fn a_minimal_copy_carries_the_stated_workspace_path() {
     assert_eq!(minimal.metadata.workspace.relative_path, ".");
     assert!(minimal.metadata.workspace.absolute_path.is_empty());
 
-    minimal.save(&out).unwrap();
+    minimal.save(&out, &Progress::none()).unwrap();
     let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
     assert_eq!(read.metadata.workspace.relative_path, ".");
     // The stated path is what the reader walks, so it finds the workspace with
@@ -252,7 +252,7 @@ fn a_display_bitmap_column_is_left_out_of_the_save_and_the_hash() {
     recon.stamp_save(&out, &STAMP);
     // Hashed with the display column in place, which is what the session holds.
     let in_memory = recon.content_xxh128().unwrap();
-    recon.save(&out).unwrap();
+    recon.save(&out, &Progress::none()).unwrap();
     let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
     assert!(read.point_set.patch_bitmaps_y_x_rgba.is_none());
     assert!(!read.point_set.patch_bitmaps_for_display);

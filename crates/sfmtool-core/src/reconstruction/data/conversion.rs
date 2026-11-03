@@ -180,19 +180,32 @@ impl SfmrReconstruction {
     /// A value that does not hold them for every image, such as one read from
     /// a file below version 15, has them gathered for the write by
     /// [`Self::gather_image_readings`] (its own rows first, then each image's
-    /// `.sift`, then its photograph), and the value is not changed; call
-    /// [`Self::fill_image_readings`] first to keep them, or to report the
-    /// gather's progress. When an image has none of the three, nothing is
-    /// written and the error names each such image
-    /// ([`SfmrError::InvalidFormat`] carrying the
+    /// `.sift`, then its photograph), in a phase `image readings` of
+    /// `progress` that counts the images; the value is not changed. When an
+    /// image has none of the three, nothing is written and the error names
+    /// each such image ([`SfmrError::InvalidFormat`] carrying the
     /// [`ImageReadingsError`](crate::reconstruction::image_readings::ImageReadingsError)
-    /// message).
-    pub fn save(&self, path: &Path) -> Result<sfmtool_sfmr_format::WriteRecord, SfmrError> {
+    /// message). A cancelled `progress` stops the gather and writes nothing,
+    /// returning [`SfmrError::Io`] of kind
+    /// [`Interrupted`](std::io::ErrorKind::Interrupted). Pass
+    /// `&Progress::none()` to report nothing.
+    pub fn save(
+        &self,
+        path: &Path,
+        progress: &Progress<'_>,
+    ) -> Result<sfmtool_sfmr_format::WriteRecord, SfmrError> {
         let mut data = self.to_sfmr_data();
         if data.image_readings.is_none() {
-            let gathered = self
-                .gather_image_readings(&Progress::none())
-                .map_err(|e| SfmrError::InvalidFormat(e.to_string()))?;
+            let phase = progress.phase("image readings");
+            let gathered = self.gather_image_readings(&phase).map_err(|e| match e {
+                crate::reconstruction::image_readings::ImageReadingsError::Cancelled => {
+                    SfmrError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        e.to_string(),
+                    ))
+                }
+                e => SfmrError::InvalidFormat(e.to_string()),
+            })?;
             data.image_readings = Some(gathered.to_columns());
         }
         sfmtool_sfmr_format::write_sfmr(path, &mut data)?;
@@ -234,7 +247,8 @@ impl SfmrReconstruction {
     /// file below version 15 does, is hashed without the reading columns,
     /// while a save gathers them first
     /// ([`Self::gather_image_readings`]), so the hash it stores is another
-    /// one; call [`Self::fill_image_readings`] first for the two to agree.
+    /// one; call [`Self::fill_image_readings`] first for the two to agree, as
+    /// SfM Explorer does before it records the version a save writes.
     ///
     /// The equality holds against a save that writes this value as it stands. A
     /// caller that stamps new metadata (an operation name, say) between hashing

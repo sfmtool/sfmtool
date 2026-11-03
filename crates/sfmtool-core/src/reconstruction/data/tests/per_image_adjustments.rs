@@ -211,7 +211,7 @@ fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
     // camera's flags.
     let path = dir.join("adjusted.sfmr");
     let adjusted = adjusted_demo();
-    adjusted.save(&path).unwrap();
+    adjusted.save(&path, &Progress::none()).unwrap();
     let loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
     assert_eq!(
         loaded.image_set.per_image_adjustments,
@@ -241,7 +241,9 @@ fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
     // rather than dropped by the save.
     let mut unflagged = adjusted_demo();
     unflagged.image_set.per_image_adjustments.clear();
-    assert!(unflagged.save(&dir.join("unflagged.sfmr")).is_err());
+    assert!(unflagged
+        .save(&dir.join("unflagged.sfmr"), &Progress::none())
+        .is_err());
 
     // The flags with every adjustment zero come back on load as well.
     let mut flagged = SfmrReconstruction::demo(16);
@@ -253,7 +255,7 @@ fn a_save_keeps_every_adjustment_and_refuses_one_its_camera_does_not_vary() {
         rolling_shutter_scanlines: None,
     }];
     let zero = dir.join("zero.sfmr");
-    flagged.save(&zero).unwrap();
+    flagged.save(&zero, &Progress::none()).unwrap();
     let loaded = SfmrReconstruction::load(&zero, &Progress::none()).unwrap();
     assert_eq!(
         loaded.image_set.per_image_adjustments,
@@ -488,7 +490,7 @@ fn rates_on_another_model_are_refused_and_a_save_keeps_both_corrections() {
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("corrected.sfmr");
     let corrected = corrected_demo();
-    corrected.save(&path).unwrap();
+    corrected.save(&path, &Progress::none()).unwrap();
     let loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
     assert_eq!(
         loaded.image_set.per_image_adjustments,

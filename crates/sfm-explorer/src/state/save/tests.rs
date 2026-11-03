@@ -174,6 +174,82 @@ fn a_save_with_no_overlay_writes_the_value_and_mints_nothing() {
     assert!(!node.is_dirty());
 }
 
+/// A node opened from a file below `.sfmr` version 15 holds no image readings,
+/// and a save gathers them, here from each image's `.sift` file. The save folds
+/// them into a version of its own before it writes, so the version the session
+/// holds is the content of the file on disk and its hash is the file's.
+#[test]
+fn a_save_of_a_value_without_readings_records_the_hash_of_the_file_written() {
+    use sfmtool_core::features::sift::ImageToGray;
+    use sfmtool_sift_format::*;
+
+    let dir = temp_dir("readings");
+    let mut recon = SfmrReconstruction::demo(32);
+    recon.workspace_dir = dir.clone();
+    recon.image_set.image_to_gray = None;
+    let conversion = ImageToGray::default().to_json();
+    for i in 0..recon.image_set.images.len() {
+        recon.image_set.images[i].readings = None;
+        let data = SiftData {
+            feature_tool_metadata: FeatureToolMetadata {
+                feature_tool: "sfmtool".into(),
+                feature_type: "sift".into(),
+                feature_options: serde_json::json!({ "image_to_gray": conversion }),
+            },
+            metadata: SiftMetadata {
+                version: 2,
+                image_name: recon.image_set.images[i].name.clone(),
+                image_file_xxh128: "00000000000000000000000000000000".into(),
+                image_file_size: 1,
+                image_width: 1920,
+                image_height: 1080,
+                feature_count: 0,
+                sharpness: Some(0.25 * (i + 1) as f64),
+                gradient_structure_tensor_xx_yy_xy: Some([0.5, 0.25, 0.0]),
+            },
+            content_hash: SiftContentHash::default(),
+            positions_xy: ndarray::Array2::zeros((0, 2)),
+            affine_shapes: ndarray::Array3::zeros((0, 2, 2)),
+            descriptors: ndarray::Array2::zeros((0, 128)),
+            thumbnail_y_x_rgb: ndarray::Array3::zeros((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)),
+        };
+        let sift = recon.sift_path_for_image(i);
+        write_sift(&sift, &data, 3).expect("a writable temp dir");
+        let (_, _, hash) = read_sift_metadata(&sift).expect("just written");
+        if let sfmtool_core::ObservationSource::SiftFiles {
+            sift_content_hashes,
+            ..
+        } = &mut recon.point_set.observations
+        {
+            sift_content_hashes[i] =
+                sfmtool_archive_io::parse_hash_bytes(&hash.content_xxh128).unwrap();
+        }
+    }
+    let path = dir.join("recon.sfmr");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(&path, recon));
+    let versions_before = state.scene[0].history.versions().len();
+
+    state
+        .save_node(id)
+        .expect("the readings are in the .sift files");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
+    let readings = written.image_readings.expect("a version 15 file");
+    assert_eq!(readings.sharpness[3], 1.0);
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), versions_before + 1);
+    assert!(node.edited().base.image_set.has_image_readings());
+    assert_eq!(
+        node.edited()
+            .base_content_hash()
+            .expect("hashable")
+            .content_xxh128,
+        written.content_hash.content_xxh128
+    );
+    assert!(!node.is_dirty());
+}
+
 #[test]
 fn save_as_writes_elsewhere_and_re_points_the_node() {
     let dir = temp_dir("save_as");

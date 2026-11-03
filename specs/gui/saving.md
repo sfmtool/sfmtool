@@ -194,7 +194,11 @@ save gathers them from each image's `.sift` file, or else from the image
 itself, as every `.sfmr` save does
 ([sfmr-file-format.md § Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)),
 and the save is refused, naming each image, when an image has neither. The
-gathered rows are written and not kept in the node. The display thumbnails the
+gathering is a phase of the save's progress, so it is reported in the Action
+Log row and can be cancelled. The rows are gathered into the materialised value
+before it is pushed as a version, as a stated workspace path is
+(`AppState::materialize_for_save`), so the version the node holds is the file
+written and its content hash is the file's. The display thumbnails the
 open builds for a file without thumbnails are the node's and never reach a
 value, so no save writes them. The patch bitmaps the open renders for a file
 without bitmaps are in the value, marked `PointSet::patch_bitmaps_for_display`,

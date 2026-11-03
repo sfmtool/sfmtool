@@ -295,7 +295,9 @@ fn open_reconstruction_defers_and_answers_with_the_reconstruction() {
     let dir = temp_dir("open_defers");
     std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.join("scene.sfmr");
-    SfmrReconstruction::demo(16).save(&path).unwrap();
+    SfmrReconstruction::demo(16)
+        .save(&path, &sfmtool_core::progress::Progress::none())
+        .unwrap();
     let (mut state, mut viewer) = quiet_scene();
 
     let open = |state: &mut AppState, viewer: &mut Viewer3D| {

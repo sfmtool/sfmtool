@@ -169,7 +169,9 @@ block a view is taken of, once the reconstruction is wrapped.** The wrapped
 `SfmrReconstruction` is a private field, so the only code that can reach it
 mutably is the class's own `&mut self` methods, and the bindings in other
 modules read it through `PySfmrReconstruction::inner()`, which hands out a
-shared reference. Those methods are `save`, which changes only the metadata,
+shared reference. Those methods are `save`, which changes only the metadata
+(it gathers the image readings a value lacks for the write alone, with the GIL
+released and counted on an optional `ProgressCounter`, and keeps none),
 and `recompute_point_errors` and `recompute_infinity_point_errors`, which
 rewrite each point's `rms_reprojection_error` in place. Every other method
 returns a new reconstruction, with no array gathered yet. A new `&mut self`

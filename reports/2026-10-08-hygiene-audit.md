@@ -589,6 +589,12 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 
 ## Python and test layout
 
+**`sfm merge` fails on two `embedded_patches` inputs** _(added 2026-11-02)_
+- Location: `src/sfmtool/merge/reconstructions.py`, `_merge_images`: `r_ft_hashes = recon.feature_tool_hashes` and then `merged_feature_tool_hashes.append(r_ft_hashes[old_idx])` (and `r_sift_hashes[old_idx]` beside it); `_create_merged_reconstruction` then passes `feature_tool_hashes` and `sift_content_hashes` to `clone_with_changes`.
+- Problem: an `embedded_patches` reconstruction has no `feature_tool_hashes` or `sift_content_hashes` (both getters return `None`), so merging two of them raises `TypeError: 'NoneType' object is not subscriptable` before any merging is done. The same lines are on `origin/main` (`reconstructions.py:340` and `:378`), so the failure predates `.sfmr` version 15; it was found while auditing branch `sfmr-v15-readings`. The merge's point correspondences and pose refinement also read `.sift` files by feature index, which an `embedded_patches` input has none of.
+- Proposed fix: decide whether `sfm merge` supports `embedded_patches` inputs. If not, refuse them up front with a message naming the input; if so, carry `image_file_hashes` and `keypoints_xy` instead of the `.sift` columns and match on the inline keypoints. Add a test either way.
+- Effort: low to refuse, medium to support. Risk: low.
+
 **Delete the dead Python `merge_points_and_tracks`, and test merging with points at infinity**
 - Location: `src/sfmtool/merge/correspondences.py`. The dead function runs from line 180 to the end; the copied binding call is `_find_pairwise_correspondences` at 18–36.
 - Problem:

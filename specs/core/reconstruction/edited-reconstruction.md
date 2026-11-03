@@ -148,8 +148,10 @@ copies images carries it without a step of its own; see
 [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13).
 Its image readings travel the same way, as `SfmrImage::readings`, an
 `ImageReadings` or `None`, under the one `ImageSet::image_to_gray`; a value read
-from a file below format version 15 holds none, and a save gathers the rows it
-lacks (`SfmrReconstruction::gather_image_readings`, see
+from a file below format version 15 holds none, and
+`SfmrReconstruction::save(path, progress)` gathers the rows it lacks through its
+`progress` (`SfmrReconstruction::gather_image_readings`, or
+`fill_image_readings(progress)` to keep them in the value; see
 [sfmr-file-format.md § Where a writer gets the values](../../formats/sfmr-file-format.md#where-a-writer-gets-the-values)).
 An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
 rolling-shutter rates (format version 14), held on its `IntrinsicAdjustment` as
