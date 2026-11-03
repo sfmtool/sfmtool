@@ -467,7 +467,7 @@ name is kept, file extension included, so the label reads as a file name:
 | Names in the reconstruction | Label of one |
 |---|---|
 | `seoul_bull_sculpture_01.jpg` … `seoul_bull_sculpture_17.jpg` | `…04.jpg` |
-| `images/dino_dog_toy_01.jpg` … `images/dino_dog_toy_85.jpg` | `…53.jpg` |
+| `dino_dog_toy_01.jpg` … `dino_dog_toy_85.jpg` | `…53.jpg` |
 | `fisheye_left/frame_01.jpg` … `fisheye_right/frame_24.jpg` | `…left/frame_01.jpg`, `…right/frame_01.jpg` |
 
 - The shared start is the longest start every name has in common, backed up to the last
@@ -482,13 +482,14 @@ name is kept, file extension included, so the label reads as a file name:
 - A label still wider than its thumbnail is shortened in the middle to the thumbnail's
   width, measured in the label's font, keeping its leading `…`, its start and its end,
   where the frame number and the extension are: `…left/fr…_01.jpg`. No label is wider than
-  its thumbnail, so none reaches its neighbour's; a thumbnail too narrow for even the marks
-  has no label. The shortening is `crate::elide::middle`, the one the Background Tasks
+  its thumbnail, so none reaches its neighbour's; a thumbnail too narrow to keep a character
+  of the name beside the marks has no label, rather than one of marks alone. The shortening is `crate::elide::middle`, the one the Background Tasks
   panel uses.
-- The number of characters left out is computed once per version of the image set and
-  kept with the thumbnail cache, keyed by the node, its image count and the address of the
-  value's base, so Delete Image, its Undo and any other image-set edit compute it again
-  and a point edit does not.
+- The number of characters left out is computed once per image set and kept with the
+  thumbnail cache, which drops it with the thumbnails: when the strip shows another node or
+  a different image count, and when the panels' caches for the node are dropped, which
+  Delete Image, Undo, Redo, a jump in Edit History and every other edit that can renumber
+  the images do.
 
 The rule and its tests are in
 [image_browser/label.rs](../../crates/sfm-explorer/src/image_browser/label.rs).
@@ -498,13 +499,14 @@ The rule and its tests are in
 ```text
 seoul_bull_sculpture_04.jpg
 <workspace_dir>/seoul_bull_sculpture_04.jpg
-image 3 of 17, camera 0
+image index 3 (0-based, 17 images), camera 0
 ```
 
 The first line is the image's name as the reconstruction stores it, relative to the
 workspace; the second the path it is read from, `workspace_dir.join(name)`, as Image
-Detail reads it; the third its 0-based image index, the index the MCP
-tools use, the number of images, and its camera index, followed by `, unposed` for an
+Detail reads it; the third its image index, marked 0-based so it is
+not read as a count from 1 (the index the MCP tools use), the number of images, and its
+camera index, followed by `, unposed` for an
 image whose pose is not finite (the rule the Scene tree's *Resect Image* greys by). It is
 egui's ordinary tooltip on the strip's own response, so it waits for the hover delay, is
 hidden by a click and while the image menu is open, and leaves the cross-panel hover and

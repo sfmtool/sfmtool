@@ -82,11 +82,12 @@ fn image_name(recon: &SfmrReconstruction, index: Option<usize>) -> String {
 /// The lines of the tooltip on thumbnail `index`: the image's name as the
 /// reconstruction stores it, the path it is read from (`workspace_dir` joined
 /// with the name, as Image Detail reads it), and its index among the images,
-/// its camera, and `unposed` for an image with no pose.
+/// marked `0-based` beside the number of images so it is not read as a count
+/// from 1, its camera, and `unposed` for an image with no pose.
 fn hover_lines(recon: &SfmrReconstruction, index: usize) -> [String; 3] {
     let image = &recon.image_set.images[index];
     let mut about = format!(
-        "image {index} of {}, camera {}",
+        "image index {index} (0-based, {} images), camera {}",
         recon.image_set.images.len(),
         image.camera_index
     );
@@ -165,32 +166,6 @@ impl NavigationMinibar {
     }
 }
 
-/// Which image set a cached label prefix was computed from.
-///
-/// The thumbnail cache's key, the node and its image count, plus the address
-/// of the base the strip was shown: an edit that changes the image set makes a
-/// new base, so a renumbering that keeps the count, a Delete Image followed by
-/// an Add, still computes the prefix again. A point edit keeps the base, so it
-/// keeps the prefix. The base the strip showed last is still held by the
-/// node's history when the next one is made, so the two never share an
-/// address.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LabelKey {
-    recon: ReconId,
-    images: usize,
-    base: usize,
-}
-
-impl LabelKey {
-    fn of(recon: &SfmrReconstruction, id: ReconId) -> Self {
-        Self {
-            recon: id,
-            images: recon.image_set.images.len(),
-            base: std::ptr::from_ref(recon) as usize,
-        }
-    }
-}
-
 /// Image browser panel state.
 pub(crate) struct ImageBrowser {
     /// Cached egui textures for thumbnails, keyed by image index within
@@ -206,8 +181,11 @@ pub(crate) struct ImageBrowser {
     /// Number of images when the cache was last built (for invalidation).
     cached_image_count: usize,
     /// How many leading characters of every image name the labels leave out
-    /// ([`label::shared_prefix_chars`]), and the version it was computed for.
-    label_prefix: Option<(LabelKey, usize)>,
+    /// ([`label::shared_prefix_chars`]). Dropped with the thumbnail cache, by a
+    /// change of node or image count and by [`ImageBrowser::forget_recon`],
+    /// which every image-set edit and cursor move calls, so it is computed
+    /// again for each image set the strip shows.
+    label_prefix: Option<usize>,
     /// The selected image index from the previous frame (for auto-scroll).
     prev_selected: Option<usize>,
     /// Index of the next thumbnail to lazily load.
@@ -320,27 +298,22 @@ impl ImageBrowser {
             self.thumbnail_cache.clear();
             self.cached_recon = Some(recon_id);
             self.cached_image_count = num_images;
+            self.label_prefix = None;
             self.next_lazy_load = 0;
             self.offset_x = 0.0;
             self.minibar.invalidate();
             self.animation.reset();
             self.menu_image = None;
         }
-        let label_key = LabelKey::of(recon, recon_id);
-        let label_prefix = match self.label_prefix {
-            Some((key, prefix)) if key == label_key => prefix,
-            _ => {
-                let names: Vec<&str> = recon
-                    .image_set
-                    .images
-                    .iter()
-                    .map(|image| image.name.as_str())
-                    .collect();
-                let prefix = label::shared_prefix_chars(&names);
-                self.label_prefix = Some((label_key, prefix));
-                prefix
-            }
-        };
+        let label_prefix = *self.label_prefix.get_or_insert_with(|| {
+            let names: Vec<&str> = recon
+                .image_set
+                .images
+                .iter()
+                .map(|image| image.name.as_str())
+                .collect();
+            label::shared_prefix_chars(&names)
+        });
 
         // Lazy-load up to 8 thumbnails per frame (background loading). An image
         // with no picture is skipped rather than cached as a placeholder.

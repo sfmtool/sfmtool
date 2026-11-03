@@ -79,22 +79,29 @@ pub(super) fn shared_prefix_chars(names: &[&str]) -> usize {
 /// `measure` is how wide a string is when drawn, as in
 /// [`crate::elide::middle`]. A shortened label keeps its leading `…` and cuts
 /// the rest, so it reads `…left/fr…_01.jpg` rather than losing the mark that
-/// says the start was left out. A width too narrow for any of it gives an
-/// empty label.
+/// says the start was left out. A width too narrow to keep a character of the
+/// name beside the marks gives an empty label, never one of marks alone.
 pub(super) fn label(
     name: &str,
     prefix_chars: usize,
     width: f32,
     measure: impl Fn(&str) -> f32,
 ) -> String {
+    // What `elide::middle` gives when it keeps no character of the text.
+    let lone_mark = |cut: &str, text: &str| cut != text && cut.chars().all(|c| c == ELLIPSIS);
     if prefix_chars == 0 {
-        return elide::middle(name, width, measure);
+        let cut = elide::middle(name, width, measure);
+        return if lone_mark(&cut, name) {
+            String::new()
+        } else {
+            cut
+        };
     }
     let rest: String = name.chars().skip(prefix_chars).collect();
     let marked = |s: &str| format!("{ELLIPSIS}{s}");
     let cut = elide::middle(&rest, width, |s| measure(&marked(s)));
-    if cut.is_empty() {
-        return cut;
+    if lone_mark(&cut, &rest) {
+        return String::new();
     }
     marked(&cut)
 }

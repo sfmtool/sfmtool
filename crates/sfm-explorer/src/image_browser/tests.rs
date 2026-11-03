@@ -213,7 +213,7 @@ fn hovering_a_thumbnail_names_the_image_in_full() {
     for line in [
         "seoul_bull_sculpture_04.jpg",
         &path,
-        "image 3 of 17, camera 0",
+        "image index 3 (0-based, 17 images), camera 0",
     ] {
         assert!(texts.iter().any(|t| t == line), "{line:?} in {texts:?}");
     }
@@ -222,7 +222,7 @@ fn hovering_a_thumbnail_names_the_image_in_full() {
     assert!(
         texts
             .iter()
-            .any(|t| t == "image 4 of 17, camera 0, unposed"),
+            .any(|t| t == "image index 4 (0-based, 17 images), camera 0, unposed"),
         "{texts:?}"
     );
 }

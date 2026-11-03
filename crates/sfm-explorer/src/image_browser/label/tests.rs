@@ -143,4 +143,10 @@ fn a_label_too_wide_is_shortened_in_the_middle() {
 fn a_thumbnail_too_narrow_gets_no_label() {
     assert_eq!(label("fisheye_left/frame_01.jpg", 8, 1.5, chars), "");
     assert_eq!(label("IMG_0001.jpg", 0, 0.5, chars), "");
+    // Wide enough for the marks but not for a character of the name beside
+    // them: still no label, rather than `……` or a lone `…`.
+    for width in [2.0, 2.5] {
+        assert_eq!(label("fisheye_left/frame_01.jpg", 8, width, chars), "");
+    }
+    assert_eq!(label("IMG_0001.jpg", 0, 1.5, chars), "");
 }
