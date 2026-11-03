@@ -693,17 +693,6 @@ fn perpendicular_part(normal: Vector3<f64>, line: Vector3<f64>) -> Option<Vector
 /// Turn the track to `normal` with [`tilt_patch`], read the result back and
 /// render its bitmap, as a fit ends, with every row scored against that
 /// bitmap ([`evaluate_rendering_bitmap`]).
-///
-/// A frame the tilt turned is first rounded to the `f32` half-vectors the
-/// reconstruction stores it as ([`OrientedPatch::at_stored_precision`]), so
-/// the bitmap rendered here, which a commit or `refine_normals` writes, is
-/// byte for byte the one a later render of the stored frame makes
-/// (`--drop-patch-bitmaps` then `--add-patch-bitmaps`). Rendered through the
-/// unrounded `f64` frame, a sample can land one 8-bit level away. The
-/// rounding is here rather than in [`tilt_patch`], which the viewer's tilt
-/// also calls and which turns to the normal asked to `f64` precision. A frame
-/// the tilt left as it was is not rounded, so a step that turns nothing
-/// changes nothing.
 fn turn_and_read(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -714,12 +703,7 @@ fn turn_and_read(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     progress.check_cancel()?;
-    let (mut turned, tilt) = tilt_patch(track, edited, normal)?;
-    if let Stage::Track(payload) = &mut turned.stage {
-        if let Some(frame) = payload.patch_frame.as_mut().filter(|_| tilt.changed) {
-            *frame = frame.at_stored_precision();
-        }
-    }
+    let (turned, tilt) = tilt_patch(track, edited, normal)?;
     let (rendered, evaluate) = evaluate_rendering_bitmap(
         &turned,
         edited,

@@ -640,11 +640,10 @@ fn a_turned_point_reports_how_well_its_views_agree_at_the_plane() {
 
 // ---- The bitmap is the render of the stored frame -----------------------------
 
-/// The turned frame is stored as `f32` half-vectors, and the bitmap is
-/// rendered through the frame the run turned to, so the two must be the same
-/// frame for `--drop-patch-bitmaps` then `--add-patch-bitmaps` to give back
-/// the bitmap. A turn by an arbitrary rotation gives half-vectors that no
-/// `f32` holds, so the run must render through the frame as stored.
+/// The turned frame is stored as `f32` half-vectors, so dropping and adding
+/// the bitmaps gives back the run's only where the run renders through the
+/// frame as stored. Three points rarely put a sample on an 8-bit boundary;
+/// `stored_bitmap.rs` holds the grid that does.
 #[test]
 fn each_turned_bitmap_is_the_render_of_the_frame_the_value_stores() {
     use crate::patch::cloud::PatchCloud;
@@ -654,31 +653,6 @@ fn each_turned_bitmap_is_the_render_of_the_frame_the_value_stores() {
     let scene = plane_scene();
     let recon = tilted_value(&scene, &three_points(), 25.0);
     let views = scene.views();
-    let edited = EditedReconstruction::new(Arc::new(recon.clone()));
-    for p in 0..3u32 {
-        let (bench, created) =
-            create_track(&Bench::new(), &edited, p, &CreateTrackOptions::default())
-                .expect("a live point");
-        let track = bench.track(&created.label).expect("just put on");
-        let (turned, _) = grown_plane_normal(
-            track,
-            &edited,
-            &views,
-            &GrownPlaneNormalOptions::default(),
-            &Progress::none(),
-        )
-        .expect("the step runs");
-        let frame = turned
-            .track()
-            .and_then(|t| t.patch_frame.clone())
-            .expect("a turned patch frame");
-        assert_eq!(
-            frame,
-            frame.at_stored_precision(),
-            "point {p}: the bitmap is rendered through a frame the value cannot store"
-        );
-    }
-
     let (out, report) = refine_over(&scene, &recon);
     assert_eq!(report.turned(), 3, "{report:?}");
     let cloud = PatchCloud::from_stored_patch_frames(&out).expect("framed");

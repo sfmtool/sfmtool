@@ -1571,9 +1571,14 @@ fn evaluate_track(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport, KeptTiles), EvaluateError> {
+    // Every tile is read through the frame as the reconstruction stores it,
+    // so a tile installed as the bitmap is the one a render of the stored
+    // frame makes (`specs/core/patch/reference-view.md` § "The stored
+    // bitmap").
     let patch_frame = payload
         .patch_frame
-        .clone()
+        .as_ref()
+        .map(OrientedPatch::at_stored_precision)
         .ok_or(EvaluateError::NoPatchFrame)?;
     check_observation_views(track, images)?;
 
@@ -2352,6 +2357,8 @@ pub fn score_bitmap(
     else {
         return Ok(next);
     };
+    // Through the frame as stored, as every render of the track is.
+    let patch_frame = &patch_frame.at_stored_precision();
     check_observation_views(track, images)?;
     let options = options.at_resolution(options.patch_resolution(&edited.base));
     let resolution = options.localize.resolution.max(2) as usize;

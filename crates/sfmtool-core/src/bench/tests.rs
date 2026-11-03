@@ -20,6 +20,7 @@ mod reference_view;
 mod refine_normals;
 mod refit_points;
 pub(super) mod scene;
+mod stored_bitmap;
 
 use std::sync::Arc;
 

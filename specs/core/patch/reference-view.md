@@ -1088,6 +1088,26 @@ renderer's coverage discard, the self-similarity culls) reads exactly the
 samples the rule read. The file records which observation it is, as an index
 into the point's own track, in `tracks/reference_observations`.
 
+**A stored bitmap is the render of the frame as stored.** The file holds a
+point's patch frame as two `f32` half-vectors and its position, and the
+keypoints as `f32`; the bitmap stored beside them is the render through
+exactly that frame, split back into unit axes and half-lengths as every reader
+of the columns splits them, at exactly those keypoints. So dropping the
+bitmaps and rendering them again (`--drop-patch-bitmaps` then
+`--add-patch-bitmaps`, `render_patch_cloud_bitmaps`) gives back the same
+bytes, on every platform. A writer that builds a frame in `f64` renders the
+bitmap through `OrientedPatch::at_stored_precision` of it, or renders from the
+stored value after writing it, never through the unrounded frame: a sample
+rendered through that moves by a few `f32` steps of the frame, which over a
+whole reconstruction puts a few samples on the other side of an 8-bit rounding
+or of a sampler's level or tap-count step, one level off. The bench does the
+first: every render it makes through a track's frame, the bitmap's
+(`fit::render_bitmap`), the evaluation's tiles that it installs as the bitmap
+and the scores against it, reads the frame through `at_stored_precision`,
+while the step's own frame stays `f64`, and the commit stores that same
+rounding. `sfm embed-patches` and `--refine-keypoints` do the second
+(`render_from_references`); `--localize-keypoints` drops the bitmaps.
+
 - **Why not a mean.** The photographs differ in exposure and white balance.
   The ZNCC is blind to those differences, but a mean of the tiles is not:
   without a model of each photograph's brightness and colour shift, a mean over

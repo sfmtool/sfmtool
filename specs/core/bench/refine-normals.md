@@ -228,13 +228,9 @@ else:
    the patch to that plane by the least rotation about its centre, renders the
    stored bitmap again from the reference observation, and reads the track
    back: every row's tile, its readings and its score against the new bitmap.
-   The turned frame is rounded to the `f32` half-vectors the reconstruction
-   stores before anything is rendered through it
-   (`OrientedPatch::at_stored_precision`), so the bitmap written is byte for
-   byte the one `--drop-patch-bitmaps` then `--add-patch-bitmaps` renders from
-   the stored frame. Rendered through the unrounded `f64` frame, a sample can
-   move enough to cross an 8-bit rounding or a sampler's level or tap-count
-   step, and land one level away.
+   The bitmap is the render of the turned frame as the value stores it
+   ([reference-view.md](../patch/reference-view.md#the-stored-bitmap)
+   § "The stored bitmap").
    It writes no keypoint: the turn keeps each keypoint's gap from the centre's
    projection, and the image shifts the plane fit solves for are reported, not
    written. It trusts the keypoints it is given, so on a reconstruction whose
