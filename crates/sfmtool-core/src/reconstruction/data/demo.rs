@@ -19,6 +19,7 @@ use sfmtool_sfmr_format::{
 };
 
 use crate::camera::CameraIntrinsics;
+use crate::features::sift::{ImageReadings, ImageToGray};
 
 use super::{
     compute_observation_offsets, count_points_at_infinity, ImageSet, ObservationSource, Point3D,
@@ -30,7 +31,9 @@ impl SfmrReconstruction {
     ///
     /// Generates `num_points` 3D points evenly distributed on a unit sphere
     /// (offset to sit in front of the camera arc), observed by 8 cameras
-    /// arranged in a circle around the origin.
+    /// arranged in a circle around the origin. Every image carries invented
+    /// image readings under the default grey conversion, so the demo saves
+    /// as a `.sfmr` with no photographs behind it.
     pub fn demo(num_points: usize) -> Self {
         use crate::camera::CameraModel;
         use crate::spherical::sphere_points::{evenly_distributed_sphere_points, RelaxConfig};
@@ -82,6 +85,13 @@ impl SfmrReconstruction {
                 quaternion_wxyz: rotation,
                 translation_xyz: translation,
                 intrinsic_adjustment: Default::default(),
+                // Invented like the poses, so the demo saves as the format
+                // requires: a softer frame every other image, with the
+                // horizontal gradients stronger than the vertical.
+                readings: Some(ImageReadings {
+                    sharpness: if i % 2 == 0 { 0.02 } else { 0.01 },
+                    gradient_structure_tensor_xx_yy_xy: [0.004, 0.003, 0.0005 * i as f32],
+                }),
             });
         }
 
@@ -214,6 +224,7 @@ impl SfmrReconstruction {
                 // Demo data has no photographs, and a zero column would be the
                 // placeholder rows the format forbids.
                 thumbnails_y_x_rgb: None,
+                image_to_gray: Some(ImageToGray::default()),
                 depth_statistics,
                 depth_histogram_counts,
                 rig_frame_data: None,

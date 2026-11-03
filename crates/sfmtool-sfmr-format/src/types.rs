@@ -23,10 +23,11 @@ use thiserror::Error;
 /// adjustable.
 ///
 /// These thumbnails are copied verbatim out of the per-image `.sift` files, so
-/// this must equal `sfmtool_sift_format::THUMBNAIL_SIZE`. The two crates are
-/// independent — neither depends on the other — so the agreement is enforced by
-/// a compile-time assertion in `sfmtool-core`, the first crate that sees both.
+/// this must equal `sfmtool_sift_format::THUMBNAIL_SIZE`, which the assertion
+/// below enforces at compile time.
 pub const THUMBNAIL_SIZE: usize = 128;
+
+const _: () = assert!(THUMBNAIL_SIZE == sfmtool_sift_format::THUMBNAIL_SIZE);
 
 /// Errors that can occur when reading or writing `.sfmr` files.
 #[derive(Error, Debug)]
@@ -830,6 +831,15 @@ impl OptionalPresence {
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 15 added each image's sharpness and gradient structure tensor, the
+/// required columns `images/sharpness` and
+/// `images/gradient_structure_tensors_xx_yy_xy`, and the required
+/// `image_to_gray` key of `images/metadata.json` that says which grey
+/// conversion both were computed through (see [`SfmrData::image_readings`]).
+/// A file below version 15 has none of them and reads with
+/// `image_readings` `None`; the writer refuses a value without them, so
+/// saving an older file needs its readings supplied first.
+///
 /// Version 14 added two more per-image corrections and a per-camera setting:
 /// the optional columns `images/radial_bspline_adjustments` and
 /// `images/rolling_shutter_rates_xyz` (see
@@ -906,7 +916,7 @@ impl OptionalPresence {
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 14;
+pub const SFMR_FORMAT_VERSION: u32 = 15;
 
 /// The first `.sfmr` version that stores the per-image radial B-spline
 /// correction and rolling-shutter rates: `images/radial_bspline_adjustments`,
@@ -1193,6 +1203,16 @@ pub struct SfmrData {
     /// present exactly when some camera lists `"rolling_shutter"`. A row whose
     /// image's camera does not list it is `[0, 0, 0]`; every value is finite.
     pub rolling_shutter_rates_xyz: Option<Array2<f64>>,
+    /// Every image's sharpness and gradient structure tensor, with the grey
+    /// conversion they were computed through, or `None` for a file below
+    /// version 15 ([`crate::SFMR_IMAGE_READINGS_VERSION`]), which has none.
+    ///
+    /// Required from version 15: [`crate::write_sfmr`] refuses a value
+    /// without them, and a read never computes them.
+    /// [`crate::content_hash_of`] hashes a value without them as it stands,
+    /// so the hash it returns for one is not the hash a write stores once the
+    /// readings are supplied.
+    pub image_readings: Option<crate::ImageReadingColumns>,
 
     // Points3D
     /// `(P, 4)` homogeneous 3D point positions in world coordinates.

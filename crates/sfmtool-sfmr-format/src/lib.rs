@@ -16,6 +16,7 @@ compile_error!(
 
 mod depth_stats;
 mod entries;
+mod image_readings;
 mod observation_readings;
 mod read;
 mod types;
@@ -23,6 +24,9 @@ mod verify;
 mod write;
 
 pub use depth_stats::{compute_depth_statistics, DepthStatsResult};
+pub use image_readings::{
+    validate_image_readings, ImageReadingColumns, SFMR_IMAGE_READINGS_VERSION,
+};
 pub use observation_readings::{
     ObservationReading, ObservationReadingColumns, ObservationReadingOptions, ReadingSampler,
     ReadingWindow, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS,

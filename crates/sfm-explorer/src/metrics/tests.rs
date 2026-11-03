@@ -28,6 +28,7 @@ fn image_at(translation: [f64; 3]) -> SfmrImage {
         quaternion_wxyz: UnitQuaternion::identity(),
         translation_xyz: Vector3::new(translation[0], translation[1], translation[2]),
         intrinsic_adjustment: Default::default(),
+        readings: None,
     }
 }
 

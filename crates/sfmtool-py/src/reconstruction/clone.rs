@@ -185,6 +185,13 @@ struct DeferredChanges {
     /// `per_image_adjustments`, one list of names per camera, checked against
     /// the camera count once `cameras` has settled it.
     per_image_adjustments: Option<Vec<sfmtool_core::reconstruction::PerImageAdjustments>>,
+    /// `image_to_gray`, `sharpness` and `gradient_structure_tensors_xx_yy_xy`,
+    /// applied together once the image count is settled: the outer `Option`
+    /// is "was the kwarg passed", the inner one "with a value, or with `None`
+    /// to drop the readings".
+    image_to_gray: Option<Option<serde_json::Value>>,
+    sharpness: Option<Option<Vec<f32>>>,
+    gradient_structure_tensors_xx_yy_xy: Option<Option<Vec<[f32; 3]>>>,
 }
 
 /// Apply one per-point keyword argument (positions, colors,
@@ -429,6 +436,7 @@ fn apply_image_field(
                     quaternion_wxyz: UnitQuaternion::identity(),
                     translation_xyz: Vector3::zeros(),
                     intrinsic_adjustment: Default::default(),
+                    readings: None,
                 });
             }
             recon.image_set.images.truncate(n);
@@ -552,6 +560,38 @@ fn apply_image_field(
             } else {
                 recon.metadata.world_space_unit = Some(value.extract()?);
             }
+        }
+        "image_to_gray" => {
+            deferred.image_to_gray = Some(if value.is_none() {
+                None
+            } else {
+                Some(crate::helpers::py_to_serde(py, value)?)
+            });
+        }
+        "sharpness" => {
+            deferred.sharpness = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array1!(value, "sharpness", f32)?;
+                Some(to_contiguous!(arr).into_owned())
+            });
+        }
+        "gradient_structure_tensors_xx_yy_xy" => {
+            deferred.gradient_structure_tensors_xx_yy_xy = Some(if value.is_none() {
+                None
+            } else {
+                let arr = extract_array2!(value, "gradient_structure_tensors_xx_yy_xy", f32)?;
+                if arr.shape()[1] != 3 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "clone_with_changes(): 'gradient_structure_tensors_xx_yy_xy' must have \
+                         shape (N, 3), got shape ({}, {})",
+                        arr.shape()[0],
+                        arr.shape()[1]
+                    )));
+                }
+                let flat = to_contiguous!(arr);
+                Some(flat.as_chunks::<3>().0.to_vec())
+            });
         }
         "focal_adjustments" => {
             deferred.focal_adjustments = Some(if value.is_none() {
@@ -823,9 +863,19 @@ fn finalize(
         rolling_shutter_rates_xyz,
         per_image_adjustments,
         rolling_shutter_scanlines,
+        image_to_gray,
+        sharpness,
+        gradient_structure_tensors_xx_yy_xy,
     } = deferred;
 
     apply_image_count_changes(&mut recon, image_names, camera_indexes)?;
+    settle_image_readings(
+        inner,
+        &mut recon,
+        image_to_gray,
+        sharpness,
+        gradient_structure_tensors_xx_yy_xy,
+    )?;
     apply_intrinsic_adjustments(
         &mut recon,
         focal_adjustments,
@@ -947,6 +997,7 @@ fn apply_image_count_changes(
                 quaternion_wxyz: UnitQuaternion::identity(),
                 translation_xyz: Vector3::zeros(),
                 intrinsic_adjustment: Default::default(),
+                readings: None,
             });
         }
         recon.image_set.images.truncate(n);
@@ -967,6 +1018,77 @@ fn apply_image_count_changes(
         }
     }
     Ok(())
+}
+
+/// Settle each image's readings once the image count and the names are
+/// settled.
+///
+/// Passed together, `image_to_gray`, `sharpness` and
+/// `gradient_structure_tensors_xx_yy_xy` replace every image's row and the
+/// conversion, checked as the format checks them, or, passed as `None`, drop
+/// them. Otherwise each image keeps the row of the image of the same name in
+/// `inner`, so a subset, a reorder or a merge built on `inner` moves the rows
+/// with their images, and an image `inner` does not hold has none (a save
+/// gathers it from the image's `.sift` or its photograph).
+fn settle_image_readings(
+    inner: &SfmrReconstruction,
+    recon: &mut SfmrReconstruction,
+    image_to_gray: Option<Option<serde_json::Value>>,
+    sharpness: Option<Option<Vec<f32>>>,
+    tensors: Option<Option<Vec<[f32; 3]>>>,
+) -> PyResult<()> {
+    use sfmtool_core::features::sift::{ImageReadings, ImageToGray};
+    let error = |message: String| {
+        pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {message}"))
+    };
+    match (image_to_gray, sharpness, tensors) {
+        (None, None, None) => {
+            let by_name: HashMap<&str, Option<ImageReadings>> = inner
+                .image_set
+                .images
+                .iter()
+                .map(|im| (im.name.as_str(), im.readings))
+                .collect();
+            for image in &mut recon.image_set.images {
+                image.readings = by_name.get(image.name.as_str()).copied().flatten();
+            }
+            Ok(())
+        }
+        (Some(None), Some(None), Some(None)) => {
+            recon.image_set.image_to_gray = None;
+            for image in &mut recon.image_set.images {
+                image.readings = None;
+            }
+            Ok(())
+        }
+        (Some(Some(image_to_gray)), Some(Some(sharpness)), Some(Some(tensors))) => {
+            let image_count = recon.image_set.images.len();
+            let columns = sfmtool_sfmr_format::ImageReadingColumns {
+                image_to_gray,
+                sharpness: ndarray::Array1::from_vec(sharpness),
+                gradient_structure_tensors_xx_yy_xy: ndarray::Array2::from_shape_fn(
+                    (tensors.len(), 3),
+                    |(i, k)| tensors[i][k],
+                ),
+            };
+            sfmtool_sfmr_format::validate_image_readings(&columns, image_count).map_err(error)?;
+            let conversion = ImageToGray::from_json(&columns.image_to_gray)
+                .map_err(|e| error(format!("'image_to_gray': {e}")))?;
+            for (i, image) in recon.image_set.images.iter_mut().enumerate() {
+                image.readings = Some(ImageReadings {
+                    sharpness: columns.sharpness[i],
+                    gradient_structure_tensor_xx_yy_xy: tensors[i],
+                });
+            }
+            recon.image_set.image_to_gray = Some(conversion);
+            Ok(())
+        }
+        _ => Err(error(
+            "'image_to_gray', 'sharpness' and 'gradient_structure_tensors_xx_yy_xy' are passed \
+             together, all with values or all None"
+                .to_string(),
+        )),
+    }
 }
 
 /// Apply the four per-image adjustment columns, `per_image_adjustments` and

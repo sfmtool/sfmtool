@@ -116,6 +116,7 @@ fn corrections_source(
                 quaternion_wxyz: r,
                 translation_xyz: -(r * center),
                 intrinsic_adjustment: planted[i],
+                readings: None,
             }
         })
         .collect();

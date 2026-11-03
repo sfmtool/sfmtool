@@ -1375,8 +1375,10 @@ fn one_image_set(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageSet {
             quaternion_wxyz: *pose.rotation.as_nalgebra(),
             translation_xyz: pose.translation,
             intrinsic_adjustment: Default::default(),
+            readings: None,
         }],
         thumbnails_y_x_rgb: None,
+        image_to_gray: None,
         depth_statistics: DepthStatistics {
             num_histogram_buckets: 0,
             images: Vec::new(),

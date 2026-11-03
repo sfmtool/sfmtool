@@ -95,6 +95,7 @@ fn image_row(i: usize) -> SfmrImage {
         quaternion_wxyz: UnitQuaternion::from_quaternion(Quaternion::new(0.0, 1.0, 0.0, 0.0)),
         translation_xyz: Vector3::new(-center[0], center[1], center[2]),
         intrinsic_adjustment: Default::default(),
+        readings: None,
     }
 }
 

@@ -13,6 +13,7 @@ pub mod edited;
 mod embed;
 pub mod filter;
 pub mod image_adjustment_statistics;
+pub mod image_readings;
 pub mod minimal;
 pub mod move_camera;
 pub mod outermost_keypoint;

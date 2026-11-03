@@ -151,6 +151,7 @@ fn make_image_at(x: f64, y: f64, z: f64) -> SfmrImage {
         quaternion_wxyz: q,
         translation_xyz: t,
         intrinsic_adjustment: Default::default(),
+        readings: None,
     }
 }
 

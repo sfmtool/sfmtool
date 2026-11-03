@@ -114,6 +114,7 @@ fn image_at(name: &str, eye: Point3<f64>, at: Point3<f64>) -> SfmrImage {
         quaternion_wxyz: rotation,
         translation_xyz: rotation * (-eye.coords),
         intrinsic_adjustment: Default::default(),
+        readings: None,
     }
 }
 
@@ -284,6 +285,7 @@ fn build_points(
             per_image_adjustments: Vec::new(),
             images,
             thumbnails_y_x_rgb: None,
+            image_to_gray: None,
             depth_statistics: DepthStatistics {
                 num_histogram_buckets: 0,
                 images: Vec::new(),
@@ -1283,6 +1285,7 @@ fn orbit_with_a_side_pair() -> SfmrReconstruction {
         quaternion_wxyz: rotation,
         translation_xyz: rotation * (-eye_b.coords),
         intrinsic_adjustment: Default::default(),
+        readings: None,
     };
     images.push(side_a);
     images.push(side_b);

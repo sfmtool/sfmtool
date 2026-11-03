@@ -22,6 +22,7 @@ use sfmtool_sfmr_format::{
 
 use crate::camera::intrinsics::IntrinsicAdjustment;
 use crate::camera::CameraIntrinsics;
+use crate::features::sift::{ImageReadings, ImageToGray};
 use crate::progress::Progress;
 use crate::progress_note;
 
@@ -174,8 +175,26 @@ impl SfmrReconstruction {
     /// record, so there is no second place that spells the clock. The value
     /// itself is untouched: the timestamp is about the act of writing, not the
     /// content, so a shared base can be saved without cloning it.
+    ///
+    /// The file stores every image's sharpness and gradient structure tensor.
+    /// A value that does not hold them for every image, such as one read from
+    /// a file below version 15, has them gathered for the write by
+    /// [`Self::gather_image_readings`] (its own rows first, then each image's
+    /// `.sift`, then its photograph), and the value is not changed; call
+    /// [`Self::fill_image_readings`] first to keep them, or to report the
+    /// gather's progress. When an image has none of the three, nothing is
+    /// written and the error names each such image
+    /// ([`SfmrError::InvalidFormat`] carrying the
+    /// [`ImageReadingsError`](crate::reconstruction::image_readings::ImageReadingsError)
+    /// message).
     pub fn save(&self, path: &Path) -> Result<sfmtool_sfmr_format::WriteRecord, SfmrError> {
         let mut data = self.to_sfmr_data();
+        if data.image_readings.is_none() {
+            let gathered = self
+                .gather_image_readings(&Progress::none())
+                .map_err(|e| SfmrError::InvalidFormat(e.to_string()))?;
+            data.image_readings = Some(gathered.to_columns());
+        }
         sfmtool_sfmr_format::write_sfmr(path, &mut data)?;
         Ok(sfmtool_sfmr_format::WriteRecord {
             timestamp: data.metadata.timestamp,
@@ -210,6 +229,12 @@ impl SfmrReconstruction {
     /// (tracks sorted, format version and infinity count refreshed, depth
     /// statistics and missing normals recomputed). Those normalisations happen
     /// on the temporary [`SfmrData`] copy, so `self` is unchanged.
+    ///
+    /// A value that lacks the image readings of some image, as one read from a
+    /// file below version 15 does, is hashed without the reading columns,
+    /// while a save gathers them first
+    /// ([`Self::gather_image_readings`]), so the hash it stores is another
+    /// one; call [`Self::fill_image_readings`] first for the two to agree.
     ///
     /// The equality holds against a save that writes this value as it stands. A
     /// caller that stamps new metadata (an operation name, say) between hashing
@@ -273,6 +298,19 @@ impl SfmrReconstruction {
             })
             .collect::<Result<_, _>>()
             .map_err(SfmrError::InvalidFormat)?;
+        // The image readings, checked as the format reader checks them (the
+        // raw PyO3 `from_data` builder reaches here unchecked), with the
+        // conversion's formula parsed, which the format crate leaves to here.
+        let (image_to_gray, image_readings) = match &data.image_readings {
+            None => (None, None),
+            Some(readings) => {
+                sfmtool_sfmr_format::validate_image_readings(readings, image_count)
+                    .map_err(SfmrError::InvalidFormat)?;
+                let image_to_gray = ImageToGray::from_json(&readings.image_to_gray)
+                    .map_err(|e| SfmrError::InvalidFormat(format!("images/metadata.json {e}")))?;
+                (Some(image_to_gray), Some(readings))
+            }
+        };
         // Empty when no camera varies anything or has a scanlines setting,
         // which is every file below version 13.
         let per_image_adjustments = if per_image_adjustments.iter().any(|p| p.is_set()) {
@@ -315,6 +353,13 @@ impl SfmrReconstruction {
                         .as_ref()
                         .map_or([0.0; 3], |a| [a[[i, 0]], a[[i, 1]], a[[i, 2]]]),
                 },
+                readings: image_readings.map(|r| {
+                    let t = &r.gradient_structure_tensors_xx_yy_xy;
+                    ImageReadings {
+                        sharpness: r.sharpness[i],
+                        gradient_structure_tensor_xx_yy_xy: [t[[i, 0]], t[[i, 1]], t[[i, 2]]],
+                    }
+                }),
             });
         }
 
@@ -450,6 +495,7 @@ impl SfmrReconstruction {
                 per_image_adjustments,
                 images,
                 thumbnails_y_x_rgb: data.thumbnails_y_x_rgb.map(Arc::new),
+                image_to_gray,
                 depth_statistics: data.depth_statistics,
                 depth_histogram_counts,
                 rig_frame_data: data.rig_frame_data,
@@ -736,6 +782,7 @@ impl SfmrReconstruction {
             sift_content_hashes,
             image_file_hashes,
             thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.as_deref().cloned(),
+            image_readings: self.image_set.image_reading_columns(),
             focal_adjustments,
             principal_point_adjustments_xy,
             radial_bspline_adjustments,

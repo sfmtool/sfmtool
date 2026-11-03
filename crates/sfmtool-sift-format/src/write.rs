@@ -82,7 +82,7 @@ pub(crate) fn check_version_content(
             metadata.version
         ));
     };
-    check_image_to_gray(image_to_gray).map_err(SiftError::InvalidMetadata)?;
+    validate_image_to_gray(image_to_gray).map_err(SiftError::InvalidMetadata)?;
     if let Some(sharpness) = metadata.sharpness {
         if !sharpness.is_finite() || sharpness < 0.0 {
             return invalid(format!(
@@ -100,8 +100,15 @@ pub(crate) fn check_version_content(
     Ok(())
 }
 
-/// Check the shape of an `image_to_gray` object, returning what is wrong.
-fn check_image_to_gray(value: &serde_json::Value) -> Result<(), String> {
+/// Check the shape of an `image_to_gray` object, returning what is wrong: a
+/// JSON object with a non-empty string `formula`, an optional integer
+/// `quantize_bits` from 1 to [`MAX_QUANTIZE_BITS`], and no other key.
+///
+/// Whether the formula follows the grammar is checked by the code that parses
+/// it. [`validate_sift_data`] applies this to a version 2 file's
+/// `feature_options.image_to_gray`, and the `.sfmr` format crate to the
+/// `image_to_gray` of an `.sfmr` file's image readings.
+pub fn validate_image_to_gray(value: &serde_json::Value) -> Result<(), String> {
     let Some(map) = value.as_object() else {
         return Err(format!("image_to_gray must be a JSON object, got {value}"));
     };

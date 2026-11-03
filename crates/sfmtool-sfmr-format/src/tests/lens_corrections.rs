@@ -89,7 +89,7 @@ fn both_columns_and_both_camera_keys_round_trip_bit_for_bit() {
         let radial = data.radial_bspline_adjustments.clone().unwrap();
         let rolling = data.rolling_shutter_rates_xyz.clone().unwrap();
         write_sfmr_with_options(&path, &mut data, &WriteOptions::default()).unwrap();
-        assert_eq!(data.metadata.version, 14);
+        assert_eq!(data.metadata.version, SFMR_FORMAT_VERSION);
 
         let names = archive_names(&path);
         assert!(names.contains(&RADIAL_ENTRY.to_string()), "{names:?}");
@@ -259,10 +259,12 @@ fn the_images_and_cameras_hashes_change_with_the_columns_and_the_keys() {
 }
 
 #[test]
-fn a_version_13_file_reads_with_no_corrections_and_saves_as_version_14_unchanged() {
+fn a_version_13_file_reads_with_no_corrections_and_saves_as_the_current_version() {
     let dir = temp_dir("sfmr_test_lens_corrections_v13");
     let current = dir.join("current.sfmr");
-    write_sfmr(&current, &mut make_test_data()).unwrap();
+    let mut data = make_test_data();
+    data.image_readings = None;
+    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
     let old = dir.join("v13.sfmr");
     rewrite_entries(&current, &old, |name, raw| {
         (name == "metadata.json.zst").then(|| {
@@ -278,16 +280,22 @@ fn a_version_13_file_reads_with_no_corrections_and_saves_as_version_14_unchanged
     assert!(loaded.radial_bspline_adjustments.is_none());
     assert!(loaded.rolling_shutter_rates_xyz.is_none());
     assert_eq!(loaded.cameras[0].rolling_shutter_scanlines, None);
+    assert!(loaded.image_readings.is_none());
 
+    // Saving it needs the image readings version 15 requires; with them, the
+    // cameras section is what the version 13 file stored, and the images
+    // section gains the readings.
     let saved = dir.join("saved.sfmr");
+    loaded.image_readings = Some(super::test_image_readings(3));
     write_sfmr(&saved, &mut loaded).unwrap();
-    assert_eq!(read_sfmr_metadata(&saved).unwrap().version, 14);
-    // Apart from the version, the cameras and images sections are what the
-    // version 13 file stored.
+    assert_eq!(
+        read_sfmr_metadata(&saved).unwrap().version,
+        SFMR_FORMAT_VERSION
+    );
     let old_hash = read_sfmr_content_hash(&old).unwrap();
     let new_hash = read_sfmr_content_hash(&saved).unwrap();
     assert_eq!(new_hash.cameras_xxh128, old_hash.cameras_xxh128);
-    assert_eq!(new_hash.images_xxh128, old_hash.images_xxh128);
+    assert_ne!(new_hash.images_xxh128, old_hash.images_xxh128);
     assert_ne!(new_hash.metadata_xxh128, old_hash.metadata_xxh128);
     assert!(verify_sfmr(&saved).unwrap().0);
     let _ = std::fs::remove_dir_all(&dir);

@@ -39,6 +39,7 @@ use sfmtool_sfmr_format::{
 
 use crate::camera::intrinsics::IntrinsicAdjustment;
 use crate::camera::CameraIntrinsics;
+use crate::features::sift::ImageReadings;
 
 mod affine_shape;
 mod conversion;
@@ -265,6 +266,17 @@ pub struct SfmrImage {
     /// [`ImageSet::image_intrinsics`], which applies it, rather than from this
     /// field.
     pub intrinsic_adjustment: IntrinsicAdjustment,
+    /// The image's sharpness and gradient structure tensor, computed through
+    /// [`ImageSet::image_to_gray`], or `None` where this value holds no row
+    /// for the image (a value read from a file below `.sfmr` version 15, or an
+    /// image added since). A row is meaningful only under that conversion, so
+    /// an image is `None` whenever `image_to_gray` is.
+    ///
+    /// It travels with the image like `intrinsic_adjustment`. A save fills
+    /// every `None` from the image's `.sift` or its photograph
+    /// ([`SfmrReconstruction::fill_image_readings`]), since a version 15 file
+    /// stores a row for every image.
+    pub readings: Option<ImageReadings>,
 }
 
 impl SfmrImage {

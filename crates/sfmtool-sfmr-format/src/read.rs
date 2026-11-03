@@ -10,11 +10,12 @@ use ndarray::{Array1, Array2, Array4};
 use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
 use crate::entries::{self, ReadingColumn};
+use crate::image_readings::image_readings_presence_error;
 use crate::observation_readings::{
     observation_reading_options, observation_readings_flagged, ReadingColumnsBuilder,
 };
 use crate::types::*;
-use crate::ObservationReadingColumns;
+use crate::{validate_image_readings, ImageReadingColumns, ObservationReadingColumns};
 
 const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
 
@@ -128,6 +129,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         principal_point_adjustments_xy: images.principal_point_adjustments_xy,
         radial_bspline_adjustments: images.radial_bspline_adjustments,
         rolling_shutter_rates_xyz: images.rolling_shutter_rates_xyz,
+        image_readings: images.image_readings,
         depth_statistics: images.depth_statistics,
         observed_depth_histogram_counts: images.observed_depth_histogram_counts,
         positions_xyzw: points.positions_xyzw,
@@ -247,6 +249,7 @@ struct ImagesSection {
     principal_point_adjustments_xy: Option<Array2<f64>>,
     radial_bspline_adjustments: Option<Array2<f64>>,
     rolling_shutter_rates_xyz: Option<Array2<f64>>,
+    image_readings: Option<ImageReadingColumns>,
     depth_statistics: DepthStatistics,
     observed_depth_histogram_counts: Array2<u32>,
 }
@@ -361,6 +364,7 @@ fn read_images_section(
         radial_bspline_adjustments,
         rolling_shutter_rates_xyz,
     } = read_per_image_adjustments(archive, metadata, cameras, &camera_indexes)?;
+    let image_readings = read_image_readings(archive, metadata, images_meta)?;
 
     // Depth statistics, under `images/` before version 10 and `derived/` from
     // version 10 on.
@@ -390,9 +394,45 @@ fn read_images_section(
         principal_point_adjustments_xy,
         radial_bspline_adjustments,
         rolling_shutter_rates_xyz,
+        image_readings,
         depth_statistics,
         observed_depth_histogram_counts,
     })
+}
+
+/// The image readings (version 15+): both columns and the `image_to_gray` key
+/// of `images/metadata.json`, required from version 15 and refused below it,
+/// checked by [`validate_image_readings`].
+fn read_image_readings(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    metadata: &SfmrMetadata,
+    images_meta: &serde_json::Value,
+) -> Result<Option<ImageReadingColumns>, SfmrError> {
+    let image_count = metadata.image_count as usize;
+    let sharpness_name = entries::images_sharpness(image_count);
+    let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
+    let image_to_gray = images_meta.get("image_to_gray");
+    let stored = [
+        archive.index_for_name(&sharpness_name).is_some(),
+        archive.index_for_name(&tensors_name).is_some(),
+        image_to_gray.is_some(),
+    ];
+    if let Some(e) = image_readings_presence_error(metadata.version, stored) {
+        return Err(SfmrError::InvalidFormat(e));
+    }
+    let Some(image_to_gray) = image_to_gray else {
+        return Ok(None);
+    };
+    let sharpness: Vec<f32> = read_binary_array(archive, &sharpness_name, image_count)?;
+    let tensors: Vec<f32> = read_binary_array(archive, &tensors_name, image_count * 3)?;
+    let readings = ImageReadingColumns {
+        image_to_gray: image_to_gray.clone(),
+        sharpness: Array1::from_vec(sharpness),
+        gradient_structure_tensors_xx_yy_xy: Array2::from_shape_vec((image_count, 3), tensors)
+            .map_err(|e| SfmrError::ShapeMismatch(format!("{tensors_name} reshape: {e}")))?,
+    };
+    validate_image_readings(&readings, image_count).map_err(SfmrError::InvalidFormat)?;
+    Ok(Some(readings))
 }
 
 /// The four per-image adjustment columns, each `None` where absent.

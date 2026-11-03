@@ -45,6 +45,7 @@ mod scale_space;
 mod simd;
 
 pub use feature_options::FeatureOptionsError;
+pub(crate) use files::xxh128_of_file;
 pub use files::{
     build_sift_files, BuildSiftFilesError, BuildSiftFilesOptions, BuildSiftFilesReport,
     CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL, SFMTOOL_FEATURE_TYPE, SIFT_ZSTD_LEVEL,

@@ -928,9 +928,29 @@ fn sfmr_data_canonical_to_colmap(data: &mut SfmrData) {
     }
 }
 
+/// Give `loaded` the image readings `source` holds, image by image, for a
+/// test that loads a file below version 15, which has none, and saves it again
+/// with no photographs to gather them from.
+fn restore_image_readings(loaded: &mut SfmrReconstruction, source: &SfmrReconstruction) {
+    loaded.image_set.image_to_gray = source.image_set.image_to_gray.clone();
+    for (image, from) in loaded
+        .image_set
+        .images
+        .iter_mut()
+        .zip(&source.image_set.images)
+    {
+        image.readings = from.readings;
+    }
+}
+
 /// Copy a written `.sfmr` archive, rewriting only `metadata.json.zst` so its
 /// `version` field reads `version` — producing genuine bytes of that version on
 /// disk (every version from 4 on shares this structural layout).
+///
+/// Below version 15 the image readings are dropped, both columns and the
+/// `image_to_gray` key, since a file of those versions has none; a test that
+/// saves what it loads gives the value its readings back first
+/// ([`restore_image_readings`]).
 fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
     use std::io::{Read, Write};
 
@@ -959,8 +979,22 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
             Some(rest) if version < 10 => format!("images/{rest}"),
             _ => name.clone(),
         };
+        let below_readings = version < sfmtool_sfmr_format::SFMR_IMAGE_READINGS_VERSION;
+        if below_readings
+            && (name.starts_with("images/sharpness.")
+                || name.starts_with("images/gradient_structure_tensors_xx_yy_xy."))
+        {
+            continue;
+        }
         zip_out.start_file(&placed, stored).unwrap();
-        if name == "metadata.json.zst" {
+        if below_readings && name == "images/metadata.json.zst" {
+            let mut json: serde_json::Value =
+                serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
+                    .unwrap();
+            json.as_object_mut().unwrap().remove("image_to_gray");
+            let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
+            zip_out.write_all(&bytes).unwrap();
+        } else if name == "metadata.json.zst" {
             let mut json: serde_json::Value =
                 serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())
                     .unwrap();
@@ -1179,7 +1213,7 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     // canonical ground truth and reports the current version. The upgrade is
     // one of the load's stages, and this is the file it runs for, so the
     // recorded load is what says the guard is conditional rather than dead.
-    let (loaded, phases) = load_recording(&v4_path);
+    let (mut loaded, phases) = load_recording(&v4_path);
     assert_eq!(
         phase_names(&phases),
         ["read", "convert convention", "derive", "keypoints"],
@@ -1214,7 +1248,10 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     }
 
     // Saving writes a v5 file that reloads unchanged (no double conversion).
+    // A version 4 file has no image readings and this one no photographs, so
+    // the value gets the demo's back before it is saved.
     let saved = dir.join("upgraded_v5.sfmr");
+    restore_image_readings(&mut loaded, &recon);
     loaded.save(&saved).unwrap();
     assert_eq!(
         sfmtool_sfmr_format::read_sfmr_metadata(&saved)
@@ -1460,12 +1497,13 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
         sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION,
     );
 
-    let loaded = SfmrReconstruction::load(&v5_path, &Progress::none()).unwrap();
+    let mut loaded = SfmrReconstruction::load(&v5_path, &Progress::none()).unwrap();
     assert_eq!(
         loaded.metadata.version,
         sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     );
     let resaved = dir.join("resaved.sfmr");
+    restore_image_readings(&mut loaded, &recon);
     loaded.save(&resaved).unwrap();
     assert_eq!(
         sfmtool_sfmr_format::read_sfmr_metadata(&resaved)
