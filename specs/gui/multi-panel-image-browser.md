@@ -460,7 +460,58 @@ and keep what they read.
 - Lazy: load a few thumbnails per frame to avoid stalling. Visible thumbnails load on the
   frame they are drawn.
 
-**Label**: Image index or filename shown below each thumbnail.
+**Label**: each thumbnail is labelled below with its image's name, less the start every
+image name in the reconstruction shares, which a leading `…` stands for. The end of the
+name is kept, file extension included, so the label reads as a file name:
+
+| Names in the reconstruction | Label of one |
+|---|---|
+| `seoul_bull_sculpture_01.jpg` … `seoul_bull_sculpture_17.jpg` | `…04.jpg` |
+| `dino_dog_toy_01.jpg` … `dino_dog_toy_85.jpg` | `…53.jpg` |
+| `fisheye_left/frame_01.jpg` … `fisheye_right/frame_24.jpg` | `…left/frame_01.jpg`, `…right/frame_01.jpg` |
+
+- The shared start is the longest start every name has in common, backed up to the last
+  place a reader would split a name: just after a separator (`/`, `\`, `_`, `-`, `.` or a
+  space), or where a run of digits begins. So a run of digits is never split (`frame_1.jpg`
+  and `frame_12.jpg` share `frame_1` and are labelled `…1.jpg` and `…12.jpg`), and nor is
+  a word (`cam_left/` and `cam_lower/` share `cam_l` and keep `left/` and `lower/`).
+- The cut leaves at least one character of every name. Nothing is left out, and no `…`
+  drawn, for a reconstruction of one image, for names that share no such start, or where
+  the shared start is a single character.
+- Names are cut on characters, not bytes, so a name in any script is cut whole.
+- A label still wider than its thumbnail is shortened in the middle to the thumbnail's
+  width, measured in the label's font, keeping its leading `…`, its start and its end,
+  where the frame number and the extension are: `…left/fr…_01.jpg`. No label is wider than
+  its thumbnail, so none reaches its neighbour's; a thumbnail too narrow to keep a character
+  of the name beside the marks has no label, rather than one of marks alone. The shortening is `crate::elide::middle`, the one the Background Tasks
+  panel uses.
+- The number of characters left out is computed once per image set and kept with the
+  thumbnail cache, which drops it with the thumbnails: when the strip shows another node or
+  a different image count, and when the panels' caches for the node are dropped, which
+  Delete Image, Undo, Redo, a jump in Edit History and every other edit that can renumber
+  the images do.
+
+The rule and its tests are in
+[image_browser/label.rs](../../crates/sfm-explorer/src/image_browser/label.rs).
+
+**Tooltip**: hovering a thumbnail shows a tooltip beside the pointer, in three lines:
+
+```text
+seoul_bull_sculpture_04.jpg
+<workspace_dir>/seoul_bull_sculpture_04.jpg
+image index 3 (0-based, 17 images), camera 0
+```
+
+The first line is the image's name as the reconstruction stores it, relative to the
+workspace; the second the path it is read from, `workspace_dir.join(name)`, as Image
+Detail reads it; the third its image index, marked 0-based so it is
+not read as a count from 1 (the index the MCP tools use), the number of images, and its
+camera index, followed by `, unposed` for an
+image whose pose is not finite (the rule the Scene tree's *Resect Image* greys by). It is
+egui's ordinary tooltip on the strip's own response, so it waits for the hover delay, is
+hidden by a click and while the image menu is open, and leaves the cross-panel hover and
+the click and double-click handling as they are. The second line is a local path, so a
+screenshot of the tooltip crops it out.
 
 ### Image Detail
 

@@ -63,7 +63,7 @@ pub(crate) fn is_create_track_chord(modifiers: egui::Modifiers) -> bool {
 /// Whether `image` of `recon` carries a pose: every component of its rotation
 /// and its translation finite, the rule the Scene tree's *Resect Image* greys
 /// by. A non-finite one is a placeholder rather than a registration.
-fn is_posed(recon: &sfmtool_core::SfmrReconstruction, image: usize) -> bool {
+pub(crate) fn is_posed(recon: &sfmtool_core::SfmrReconstruction, image: usize) -> bool {
     recon.image_set.images.get(image).is_some_and(|row| {
         row.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
             && row.translation_xyz.iter().all(|c| c.is_finite())
