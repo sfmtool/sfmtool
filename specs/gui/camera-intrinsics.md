@@ -1047,7 +1047,19 @@ The two buttons are laid out first, from the right edge, and the identity line
 takes the width they leave, wrapping between its parts (never inside one) onto
 a second line when the panel is narrow, so at the default width the size and
 the image count sit below the node and camera rather than under `Switch
-Model…`. A part that starts a line is not preceded by a `·`.
+Model…`. A part that starts a line is not preceded by a `·`. The node label is
+the one part that can be wider than that whole width, since it is a file name;
+where it is, it is shortened in its middle (`crate::elide::middle`, as the
+Background panel does a node's name), with the whole label as its hover text,
+and the camera number and model follow on the lines below. At the default 341 px
+a node named `seoul_bull_sculpture_ground_truth_v02` reads:
+
+```
+seoul_bull_scu…und_truth_v02   [Switch Model…] [Copy ▾]
+Camera #0
+SFMTOOL_PINHOLE (beta)
+270×480 · 17 images
+```
 
 ### The proposal strip
 
@@ -1895,6 +1907,13 @@ Two caveats remain, both named in the tests rather than left implicit:
   glyph test, for the same reason.
 - The node-transform toggle appears only when the node transform is
   non-identity.
+- The header's identity line, in `intrinsics_detail/tests.rs`: from 482 down
+  to 328 px it wraps between its parts, with no line starting with a `·`; with
+  the seoul_bull ground truth `_v02`'s own file name as the node label, at 341,
+  482 and 1800 px nothing above `Parameters` overlaps or runs past the edge and
+  the camera number, model and both buttons are painted, the label shortened
+  in its middle at 341 px and whole at 1800 px; and hovering the shortened
+  label shows it whole.
 - The header offers `Switch Model…` and no `Refit spline…`; a spline camera's
   proposal shows the refit's controls (the model as the refit, Coefficients and
   Spline domain each with `now`, no Fit to θ), the fit's line and the two
