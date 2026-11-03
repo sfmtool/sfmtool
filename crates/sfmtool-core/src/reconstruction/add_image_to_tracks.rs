@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
 use ndarray::Array2;
 use rayon::prelude::*;
 
@@ -35,7 +35,7 @@ use sfmtool_sfmr_format::ContentHash;
 use crate::camera::image::ImageU8Pyramid;
 use crate::geometry::RigidTransform;
 use crate::numeric::median_in_place;
-use crate::patch::cloud::OrientedPatch;
+use crate::patch::cloud::{split_halfvec, OrientedPatch};
 use crate::patch::keypoint_localize::{
     project_unclipped, KeypointLocalizeParams, NoTemplate, TemplateKind, TrackReferences,
 };
@@ -831,22 +831,14 @@ impl Context<'_, '_> {
         let mut out = CandidateReport::new(p);
         let pi = p as usize;
         let point = &self.recon.point_set.points[pi];
-        let u = Vector3::new(
-            f64::from(self.u_col[[pi, 0]]),
-            f64::from(self.u_col[[pi, 1]]),
-            f64::from(self.u_col[[pi, 2]]),
-        );
-        let v = Vector3::new(
-            f64::from(self.v_col[[pi, 0]]),
-            f64::from(self.v_col[[pi, 1]]),
-            f64::from(self.v_col[[pi, 2]]),
-        );
-        let (hu, hv) = (u.norm(), v.norm());
+        let row = |a: &Array2<f32>| [a[[pi, 0]], a[[pi, 1]], a[[pi, 2]]];
+        let (u, hu) = split_halfvec(row(self.u_col));
+        let (v, hv) = split_halfvec(row(self.v_col));
         if !(hu > 0.0 && hv > 0.0) {
             out.refusal = Some(Refusal::NoPatch);
             return out;
         }
-        let mut patch = OrientedPatch::new(point.position, u / hu, v / hv, [hu, hv]);
+        let mut patch = OrientedPatch::new(point.position, u, v, [hu, hv]);
         patch.w = if point.is_at_infinity() { 0.0 } else { 1.0 };
 
         let target = self.views[self.image].expect("the target's view was checked");
