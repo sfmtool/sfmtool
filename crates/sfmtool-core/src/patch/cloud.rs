@@ -218,6 +218,65 @@ impl OrientedPatch {
         }
     }
 
+    /// The patch's two half-vectors, `u_axis·half_extent[0]` and
+    /// `v_axis·half_extent[1]`, as the `f32` triples the
+    /// `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` columns store.
+    pub fn stored_halfvecs(&self) -> [[f32; 3]; 2] {
+        let triple = |v: Vector3<f64>| [v.x as f32, v.y as f32, v.z as f32];
+        [
+            triple(self.u_axis * self.half_extent[0]),
+            triple(self.v_axis * self.half_extent[1]),
+        ]
+    }
+
+    /// The patch as a reconstruction stores it: its half-vectors rounded to
+    /// the `f32` the columns hold ([`Self::stored_halfvecs`]) and split back
+    /// into a unit axis and a half-size the way every reader of the columns
+    /// splits them (`split_halfvec`). The centre and `w` are kept, since the
+    /// centre is the point's own `f64` position. An axis whose half-vector is
+    /// zero has no direction to read back and is kept as it was.
+    ///
+    /// A step that builds a new frame in `f64` and renders the bitmap the
+    /// point will store renders from this, so the bitmap is the one a later
+    /// render of the stored frame makes (`--drop-patch-bitmaps` then
+    /// `--add-patch-bitmaps`), byte for byte. Rendering from the unrounded
+    /// frame moves each sample by up to half an `f32` step of the frame,
+    /// which is enough to put a sample on the other side of an 8-bit
+    /// rounding or of a sampler's level or tap-count step. Storing this patch
+    /// gives back the same `f32` half-vectors, so the rounding is done once.
+    ///
+    /// ```
+    /// use nalgebra::{Point3, Vector3};
+    /// use sfmtool_core::patch::cloud::OrientedPatch;
+    ///
+    /// let turn = nalgebra::Rotation3::from_axis_angle(&Vector3::z_axis(), 0.3);
+    /// let patch = OrientedPatch::new(
+    ///     Point3::new(1.0, 2.0, 3.0),
+    ///     turn * Vector3::x(),
+    ///     turn * Vector3::y(),
+    ///     [0.01, 0.01],
+    /// );
+    /// let stored = patch.at_stored_precision();
+    /// assert_eq!(stored.stored_halfvecs(), patch.stored_halfvecs());
+    /// assert_eq!(stored.at_stored_precision(), stored);
+    /// assert_eq!(stored.center, patch.center);
+    /// ```
+    pub fn at_stored_precision(&self) -> Self {
+        let [u, v] = self.stored_halfvecs();
+        let read = |h: [f32; 3], was: Vector3<f64>| {
+            let (axis, half) = split_halfvec(h);
+            (if half > 0.0 { axis } else { was }, half)
+        };
+        let (u_axis, hu) = read(u, self.u_axis);
+        let (v_axis, hv) = read(v, self.v_axis);
+        Self {
+            u_axis,
+            v_axis,
+            half_extent: [hu, hv],
+            ..self.clone()
+        }
+    }
+
     /// Outward normal (`u_axis × v_axis`, normalized). The frame is right-handed;
     /// see the type docs for how the raster reverses `v` (not the normal) to
     /// render un-mirrored.
@@ -740,6 +799,18 @@ impl OrientedPatch {
     }
 }
 
+/// A stored half-vector split into its unit axis and its length, in `f64`:
+/// the one split every reader of the `patch_u_halfvec_xyz` /
+/// `patch_v_halfvec_xyz` columns makes, so a frame read from the columns and
+/// one passed through [`OrientedPatch::at_stored_precision`] are the same
+/// `f64` values. The axis is not finite where the length is zero; the caller
+/// decides what a zero half-vector means.
+pub(crate) fn split_halfvec(h: [f32; 3]) -> (Vector3<f64>, f64) {
+    let h = Vector3::new(f64::from(h[0]), f64::from(h[1]), f64::from(h[2]));
+    let n = h.norm();
+    (h / n, n)
+}
+
 fn normalize_or(v: Vector3<f64>, fallback: Vector3<f64>) -> Vector3<f64> {
     let n = v.norm();
     if n > 1e-12 {
@@ -1055,14 +1126,11 @@ impl PatchCloud {
             if i >= point_count {
                 continue;
             }
-            let u = patch.u_axis * patch.half_extent[0];
-            let v = patch.v_axis * patch.half_extent[1];
-            u_xyz[[i, 0]] = u.x as f32;
-            u_xyz[[i, 1]] = u.y as f32;
-            u_xyz[[i, 2]] = u.z as f32;
-            v_xyz[[i, 0]] = v.x as f32;
-            v_xyz[[i, 1]] = v.y as f32;
-            v_xyz[[i, 2]] = v.z as f32;
+            let [u, v] = patch.stored_halfvecs();
+            for c in 0..3 {
+                u_xyz[[i, c]] = u[c];
+                v_xyz[[i, c]] = v[c];
+            }
         }
         (u_xyz, v_xyz)
     }
@@ -1085,24 +1153,19 @@ impl PatchCloud {
         let mut patches = Vec::new();
         let mut point_indexes = Vec::new();
         for i in 0..half_u_xyz.shape()[0] {
-            let u = Vector3::new(
-                half_u_xyz[[i, 0]] as f64,
-                half_u_xyz[[i, 1]] as f64,
-                half_u_xyz[[i, 2]] as f64,
-            );
+            let row = |a: &Array2<f32>| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
             // A zero `u` marks a point with no patch (e.g. a point at infinity).
-            let hu = u.norm();
+            let (u_axis, hu) = split_halfvec(row(half_u_xyz));
             if hu <= 1e-12 {
                 continue;
             }
-            let v = Vector3::new(
-                half_v_xyz[[i, 0]] as f64,
-                half_v_xyz[[i, 1]] as f64,
-                half_v_xyz[[i, 2]] as f64,
-            );
-            let hv = v.norm();
-            let u_axis = u / hu;
-            let v_axis = if hv > 1e-12 { v / hv } else { v };
+            let v = row(half_v_xyz);
+            let (v_unit, hv) = split_halfvec(v);
+            let v_axis = if hv > 1e-12 {
+                v_unit
+            } else {
+                Vector3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]))
+            };
             let center = centers.get(i).copied().unwrap_or_else(Point3::origin);
             patches.push(OrientedPatch::new(center, u_axis, v_axis, [hu, hv]));
             point_indexes.push(i as u32);

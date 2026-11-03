@@ -476,10 +476,10 @@ pub(crate) fn point_record(
         observations,
         patch_u_halfvec: patch_frame
             .filter(|_| edited.has_patch_frames())
-            .map(|patch| halfvec(patch.u_axis * patch.half_extent[0])),
+            .map(|patch| patch.stored_halfvecs()[0]),
         patch_v_halfvec: patch_frame
             .filter(|_| edited.has_patch_frames())
-            .map(|patch| halfvec(patch.v_axis * patch.half_extent[1])),
+            .map(|patch| patch.stored_halfvecs()[1]),
         patch_bitmap: edited.has_patch_bitmaps().then(|| {
             payload
                 .committable_bitmap()
@@ -566,11 +566,6 @@ fn rms_reprojection_error(track: &EditableTrack, kept: &[usize]) -> f32 {
         return 0.0;
     }
     (measured.iter().map(|e| e * e).sum::<f64>() / measured.len() as f64).sqrt() as f32
-}
-
-/// A world half-vector as the column's `f32` triple.
-fn halfvec(v: Vector3<f64>) -> [f32; 3] {
-    [v.x as f32, v.y as f32, v.z as f32]
 }
 
 /// The row of readings a commit stores for an observation: what its last

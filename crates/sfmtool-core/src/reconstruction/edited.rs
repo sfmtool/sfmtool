@@ -16,7 +16,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-use nalgebra::Vector3;
 use ndarray::{Array2, Array3, Array4, ArrayView3, Axis};
 use xxhash_rust::xxh3::Xxh3;
 
@@ -26,7 +25,7 @@ use sfmtool_sfmr_format::{
     POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
-use crate::patch::cloud::OrientedPatch;
+use crate::patch::cloud::{split_halfvec, OrientedPatch};
 
 use super::data::{
     ImageSet, ObservationReading, ObservationReadings, ObservationSource, Point3D,
@@ -420,15 +419,13 @@ impl<'a> PointView<'a> {
     /// bearing's patch is tangent to the direction sphere and the two stored
     /// half-vectors do not say which kind it is.
     pub fn patch_frame(&self) -> Option<OrientedPatch> {
-        let axis = |h: [f32; 3]| Vector3::new(f64::from(h[0]), f64::from(h[1]), f64::from(h[2]));
-        let u = axis(self.patch_u_halfvec()?);
-        let v = axis(self.patch_v_halfvec()?);
-        let (hu, hv) = (u.norm(), v.norm());
+        let (u, hu) = split_halfvec(self.patch_u_halfvec()?);
+        let (v, hv) = split_halfvec(self.patch_v_halfvec()?);
         if !(hu > 0.0 && hv > 0.0) {
             return None;
         }
         let point = self.point();
-        let mut patch = OrientedPatch::new(point.position, u / hu, v / hv, [hu, hv]);
+        let mut patch = OrientedPatch::new(point.position, u, v, [hu, hv]);
         patch.w = if point.is_at_infinity() { 0.0 } else { 1.0 };
         Some(patch)
     }
