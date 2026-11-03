@@ -11,6 +11,10 @@
 //! A right click on a thumbnail opens the image menu ([`crate::image_menu`]),
 //! the same menu the Scene tree shows on that image's row, for the image of the
 //! node the strip is showing.
+//!
+//! Each thumbnail is labelled with its image's name less the start every name
+//! shares ([`label`]), and hovering one names the image in full: its name, the
+//! path it is read from, its index and its camera.
 
 use std::collections::HashMap;
 
@@ -23,6 +27,11 @@ use crate::image_menu::{ImageMenu, ImageMenuAction};
 use crate::platform::GestureEvent;
 use crate::scene::ReconId;
 use crate::texture::thumbnail_color_image;
+
+mod label;
+
+#[cfg(test)]
+mod tests;
 
 /// Response from the image browser (selection changes and hover state).
 ///
@@ -68,6 +77,27 @@ fn image_name(recon: &SfmrReconstruction, index: Option<usize>) -> String {
         .and_then(|index| recon.image_set.images.get(index))
         .map(|image| image.name.clone())
         .unwrap_or_else(|| "no image".to_string())
+}
+
+/// The lines of the tooltip on thumbnail `index`: the image's name as the
+/// reconstruction stores it, the path it is read from (`workspace_dir` joined
+/// with the name, as Image Detail reads it), and its index among the images,
+/// its camera, and `unposed` for an image with no pose.
+fn hover_lines(recon: &SfmrReconstruction, index: usize) -> [String; 3] {
+    let image = &recon.image_set.images[index];
+    let mut about = format!(
+        "image {index} of {}, camera {}",
+        recon.image_set.images.len(),
+        image.camera_index
+    );
+    if !crate::bench::track_at_pixel::is_posed(recon, index) {
+        about.push_str(", unposed");
+    }
+    [
+        image.name.clone(),
+        recon.workspace_dir.join(&image.name).display().to_string(),
+        about,
+    ]
 }
 
 /// Playback direction for image animation.
@@ -135,6 +165,32 @@ impl NavigationMinibar {
     }
 }
 
+/// Which image set a cached label prefix was computed from.
+///
+/// The thumbnail cache's key, the node and its image count, plus the address
+/// of the base the strip was shown: an edit that changes the image set makes a
+/// new base, so a renumbering that keeps the count, a Delete Image followed by
+/// an Add, still computes the prefix again. A point edit keeps the base, so it
+/// keeps the prefix. The base the strip showed last is still held by the
+/// node's history when the next one is made, so the two never share an
+/// address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LabelKey {
+    recon: ReconId,
+    images: usize,
+    base: usize,
+}
+
+impl LabelKey {
+    fn of(recon: &SfmrReconstruction, id: ReconId) -> Self {
+        Self {
+            recon: id,
+            images: recon.image_set.images.len(),
+            base: std::ptr::from_ref(recon) as usize,
+        }
+    }
+}
+
 /// Image browser panel state.
 pub(crate) struct ImageBrowser {
     /// Cached egui textures for thumbnails, keyed by image index within
@@ -149,6 +205,9 @@ pub(crate) struct ImageBrowser {
     cached_recon: Option<ReconId>,
     /// Number of images when the cache was last built (for invalidation).
     cached_image_count: usize,
+    /// How many leading characters of every image name the labels leave out
+    /// ([`label::shared_prefix_chars`]), and the version it was computed for.
+    label_prefix: Option<(LabelKey, usize)>,
     /// The selected image index from the previous frame (for auto-scroll).
     prev_selected: Option<usize>,
     /// Index of the next thumbnail to lazily load.
@@ -176,6 +235,7 @@ impl ImageBrowser {
             thumbnail_cache: HashMap::new(),
             cached_recon: None,
             cached_image_count: 0,
+            label_prefix: None,
             prev_selected: None,
             next_lazy_load: 0,
             offset_x: 0.0,
@@ -205,6 +265,7 @@ impl ImageBrowser {
             self.thumbnail_cache.clear();
             self.cached_recon = None;
             self.cached_image_count = 0;
+            self.label_prefix = None;
             self.next_lazy_load = 0;
             self.prev_selected = None;
             self.offset_x = 0.0;
@@ -265,6 +326,21 @@ impl ImageBrowser {
             self.animation.reset();
             self.menu_image = None;
         }
+        let label_key = LabelKey::of(recon, recon_id);
+        let label_prefix = match self.label_prefix {
+            Some((key, prefix)) if key == label_key => prefix,
+            _ => {
+                let names: Vec<&str> = recon
+                    .image_set
+                    .images
+                    .iter()
+                    .map(|image| image.name.as_str())
+                    .collect();
+                let prefix = label::shared_prefix_chars(&names);
+                self.label_prefix = Some((label_key, prefix));
+                prefix
+            }
+        };
 
         // Lazy-load up to 8 thumbnails per frame (background loading). An image
         // with no picture is skipped rather than cached as a placeholder.
@@ -676,16 +752,31 @@ impl ImageBrowser {
                 );
             }
 
-            // Label below the thumbnail.
+            // Label below the thumbnail: the name less the shared start, no
+            // wider than the thumbnail, so it never reaches a neighbour's.
+            let label_color = egui::Color32::from_gray(180);
+            let text = label::label(
+                &recon.image_set.images[i].name,
+                label_prefix,
+                thumb_w,
+                |candidate| {
+                    ui.ctx().fonts_mut(|fonts| {
+                        fonts
+                            .layout_no_wrap(candidate.to_owned(), font.clone(), label_color)
+                            .rect
+                            .width()
+                    })
+                },
+            );
             painter.text(
                 egui::pos2(
                     screen_x + thumb_w / 2.0,
                     panel_rect.top() + img_height + 2.0,
                 ),
                 egui::Align2::CENTER_TOP,
-                format!("{i}"),
+                text,
                 font.clone(),
-                egui::Color32::from_gray(180),
+                label_color,
             );
 
             #[cfg(test)]
@@ -707,6 +798,21 @@ impl ImageBrowser {
                     }
                 }
             }
+        }
+
+        // ── Hover tooltip ─────────────────────────────────────────────
+
+        // On the strip's own response, so it is egui's ordinary tooltip: shown
+        // after the hover delay, hidden by a click and while the image menu is
+        // open, and placed beside the pointer so it does not cover the
+        // thumbnail it names.
+        if let Some(i) = response.hovered_image {
+            let lines = hover_lines(recon, i);
+            panel_response.clone().on_hover_ui_at_pointer(|ui| {
+                for line in lines {
+                    ui.add(egui::Label::new(line).wrap_mode(egui::TextWrapMode::Extend));
+                }
+            });
         }
 
         // ── Image menu ────────────────────────────────────────────────
