@@ -674,9 +674,9 @@ pub(super) fn draw_tooltip(
     let top_height = top.size().y;
     painter.galley(tooltip_pos, top, egui::Color32::WHITE);
     if let Some(bottom) = bottom {
-        // A painted rule rather than a row of box-drawing characters: egui's
-        // bundled proportional font has none, and a separator that renders as
-        // replacement boxes would be worse than no separator at all.
+        // A painted rule rather than a row of box-drawing characters: it spans
+        // the box exactly, where a row of characters stops at the last whole
+        // glyph that fits.
         let y = tooltip_pos.y + top_height + RULE_HEIGHT / 2.0;
         painter.line_segment(
             [

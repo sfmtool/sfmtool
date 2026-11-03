@@ -2103,3 +2103,69 @@ fn a_truncated_row_shows_one_tooltip_rather_than_two() {
         "the row and one tooltip make two; {copies} means a second tooltip: {hovered:?}",
     );
 }
+
+/// A model switch's row, arrows and all, reads in its tooltip with a glyph
+/// for every character.
+///
+/// The tooltip is drawn in the proportional font, whose first face has no
+/// `→`, so with egui's fonts alone each arrow of `median error 0.101 → 0.105
+/// px` and `(v1 → v2)` was an empty box. The viewer's fonts end the family in
+/// Hack, which has it.
+#[test]
+fn a_model_switch_row_has_a_glyph_for_every_character_of_its_tooltip() {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, Vec<egui::FontFamily>)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let job = &text.galley.job;
+                let families = job
+                    .sections
+                    .iter()
+                    .map(|section| section.format.font_id.family.clone())
+                    .collect();
+                out.push((job.text.clone(), families));
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let frame = |ctx: &egui::Context, log: &mut ActionLog, input: egui::RawInput| {
+        let mut output = ctx.run_ui(input, |ui| show(ui, log));
+        output.textures_delta.clear();
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut out);
+        }
+        out
+    };
+
+    let mut log = log();
+    let text =
+        "Switched camera 0 of run_a to SIMPLE_RADIAL; median error 0.101 → 0.105 px (v1 → v2)";
+    log.record_at(at(0.0), Kind::Edit, None, false, text);
+
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let first = painted_shapes(&ctx, &mut log, input());
+    let (_, at_row) = painted_at(&first, text);
+    let mut hovering = input();
+    hovering.events = vec![egui::Event::PointerMoved(at_row + egui::vec2(20.0, 4.0))];
+    painted_shapes(&ctx, &mut log, hovering);
+    let hovered = frame(&ctx, &mut log, input());
+
+    let (tooltip, families) = hovered
+        .iter()
+        .find(|(painted, _)| painted.contains('\n') && painted.ends_with(text))
+        .unwrap_or_else(|| panic!("no tooltip carried the row's text: {hovered:?}"));
+    assert!(!families.is_empty());
+    for family in families {
+        assert_eq!(
+            crate::fonts::lacking_glyphs(family, tooltip),
+            "",
+            "the tooltip {tooltip:?} is drawn in {family:?}",
+        );
+    }
+}

@@ -432,53 +432,6 @@ fn camera_position_top(stats_right: f32, status_right: Option<f32>, position_lef
     }
 }
 
-/// `text` laid out for a banner in 12 pt words of `colour`, wrapping at
-/// `wrap`: in the proportional font, with each run of characters it has no
-/// glyph for (the `→` of a model change) in the monospace font, which has the
-/// arrow, so it is not drawn as an empty box. A character neither font has is
-/// still drawn as one, and the banner's glyph test fails on one its sample
-/// text holds.
-pub(crate) fn banner_job(
-    ctx: &egui::Context,
-    text: &str,
-    colour: Color32,
-    wrap: f32,
-) -> egui::text::LayoutJob {
-    let proportional = egui::FontId::proportional(12.0);
-    let monospace = egui::FontId::monospace(12.0);
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = wrap;
-    ctx.fonts_mut(|fonts| {
-        let mut run = String::new();
-        let mut run_font: Option<egui::FontId> = None;
-        for c in text.chars() {
-            let font = if c.is_whitespace() || fonts.has_glyph(&proportional, c) {
-                proportional.clone()
-            } else {
-                monospace.clone()
-            };
-            if run_font.as_ref().is_some_and(|f| *f != font) {
-                let f = run_font.take().expect("just checked");
-                job.append(&std::mem::take(&mut run), 0.0, text_format(f, colour));
-            }
-            run_font = Some(font);
-            run.push(c);
-        }
-        if let Some(f) = run_font {
-            job.append(&run, 0.0, text_format(f, colour));
-        }
-    });
-    job
-}
-
-fn text_format(font_id: egui::FontId, color: Color32) -> egui::TextFormat {
-    egui::TextFormat {
-        font_id,
-        color,
-        ..Default::default()
-    }
-}
-
 /// Draw the camera model proposal's banner, top-centre in the 3D view, in the
 /// Move Camera lock banner's style: 12 pt words on a dark ground in a framed
 /// panel.
@@ -507,7 +460,12 @@ pub(crate) fn draw_proposal_banner(
         .iter()
         .map(|line| {
             let colour = if line.failure { failure } else { BANNER_COLOUR };
-            painter.layout_job(banner_job(painter.ctx(), &line.text, colour, wrap))
+            painter.layout(
+                line.text.clone(),
+                egui::FontId::proportional(12.0),
+                colour,
+                wrap,
+            )
         })
         .collect();
     let width = galleys.iter().map(|g| g.size().x).fold(0.0_f32, f32::max) + 2.0 * PAD;

@@ -737,8 +737,7 @@ impl TrackBody {
         let busy = state.bench_edit_refusal(id);
         let housekeeping = state.busy_refusal(id);
         ui.horizontal_wrapped(|ui| {
-            // The arrow is U+23F5, which egui's bundled fonts draw; they have no
-            // glyph for U+2192, which draws as a box.
+            // The arrow is U+23F5, a small right-pointing triangle.
             let (next, stage_label) = match track.stage_kind() {
                 StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{23f5} track"),
                 StageKind::Track => (StageKind::Cluster, "Stage: track \u{23f5} cluster"),

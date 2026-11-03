@@ -40,6 +40,7 @@ mod document;
 mod edit_history_panel;
 mod elide;
 mod filter_3d;
+mod fonts;
 mod goto_point;
 mod image_browser;
 mod image_detail;
@@ -333,9 +334,11 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
         state.load_demo(state.demo_num_points);
     }
 
+    let egui_ctx = egui::Context::default();
+    fonts::install(&egui_ctx);
     let mut app = App {
         proxy,
-        egui_ctx: egui::Context::default(),
+        egui_ctx,
         egui_winit_state: None,
         window: None,
         // wgpu state

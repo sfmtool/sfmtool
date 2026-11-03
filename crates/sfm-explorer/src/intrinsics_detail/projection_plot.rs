@@ -1051,8 +1051,8 @@ fn legend(
     } else {
         "ideal r = f·tan θ"
     };
-    // Words rather than sample glyphs: egui's default font has no box-drawing
-    // or geometric-shape coverage, so a `──`/`▨` key renders as tofu.
+    // Words rather than sample glyphs such as a `──`/`▨` key: the words name
+    // what each line is.
     // One label rather than a row of them, so a narrow panel wraps it as one
     // sentence rather than running a wrapped part into the one before it.
     let mut key = match compare {

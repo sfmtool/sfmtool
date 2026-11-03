@@ -46,9 +46,7 @@ use crate::widget_name::set_widget_name;
 /// Marks the phase that has not closed yet, beside the time it has been open.
 ///
 /// The Edit History panel's cursor mark, and the same shape for the same
-/// reason: it points at the row the viewer is on. The smaller `\u{25b8}` reads
-/// better at this size and is not in the fonts egui bundles, so it draws as an
-/// empty box.
+/// reason: it points at the row the viewer is on.
 pub(super) const OPEN_MARK: &str = "\u{25b6}";
 
 /// The least share of the title line's room, after the count, that the title

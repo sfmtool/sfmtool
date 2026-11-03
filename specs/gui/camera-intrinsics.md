@@ -1442,10 +1442,11 @@ is not. The third branch is `EQUIRECTANGULAR`, which
 is its own reference and is neither of the other two.
 
 **The key is words, not glyphs.** `solid: model · dashed: ideal r = f·θ` rather
-than a `──`/`╌╌`/`▨` sample key: egui's default font has no box-drawing or
-geometric-shape coverage, so a glyph such as `▸` renders as a missing-glyph
-box. The key is one label that wraps, so in a narrow panel it takes a second
-line rather than running a wrapped part into the one before it.
+than a `──`/`╌╌`/`▨` sample key: the words name what each line is, and they
+need no box-drawing or geometric-shape glyph from the viewer's fonts
+([architecture.md](architecture.md) § "Fonts"). The key is one label that
+wraps, so in a narrow panel it takes a second line rather than running a
+wrapped part into the one before it.
 
 **Labels stay apart.** A rule's label goes on the first of six rows under the
 extrapolated regions' labels where it overlaps no label placed before it, to
