@@ -583,10 +583,12 @@ The tests read it to check the Jacobian against a central difference of renders
 **An iteration** solves `(JᵀJ + λ·diag(JᵀJ) + ε) δ = −Jᵀr`, with `λ` from
 `initial_damping` and `ε` 10⁻⁹ of the largest diagonal entry, scales `δ` back so
 that no tilt parameter moves more than 0.1 and no shift more than 2 px, and
-reads the true score at the new parameters from a fresh render. The step is
-kept only when the score rises, and `λ` falls tenfold, to no less than 10⁻⁹;
-the render that scored the kept step also gives the residual, frozen there,
-that the next iteration linearises at, so a kept point is rendered once.
+reads the true score at the new parameters from a fresh render. A fit with the
+tilt held has the shift alone as its parameters, and caps that shift at 2 px
+too. The step is kept only when the score rises, and `λ` falls tenfold, to no
+less than 10⁻⁹; the render that scored the kept step also gives the residual,
+frozen there, that the next iteration linearises at, so a kept point is
+rendered once.
 Otherwise `λ` rises tenfold and the step is solved again, up to three tries in
 all. A stage ends after `max_iterations` iterations, when a kept step raises
 the score by less than `min_improvement` or by less than 1% of what the stage's
@@ -1227,8 +1229,11 @@ the scenes with up to six views that need every view picked set a target σ of
   residual identity `‖â − b̂‖² = 2 − 2·ZNCC` with weights, the coverage bar, a
   flat channel left unscored, the window schedule on 24, 32 and 48 grids, the
   Schur complement against the profile it stands for, σ from the eigenvalues,
-  the fit reaching the optimum of a quadratic, and the weighted mean, its
-  covariance and the agreement distance against a hand-computed case.
+  the fit reaching the optimum of a quadratic, each step's caps (a fit of a
+  shift alone moves 2 px on its first step to a target 5 px away and reaches
+  it, and a fit of a tilt and a shift is held to 0.1 in the tilt first), and
+  the weighted mean, its covariance and the agreement distance against a
+  hand-computed case.
 
 No test covers a patch centre off along the reference ray, σ against the spread
 of the fitted normal under added noise, or a pair refused under its floor;

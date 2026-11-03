@@ -36,10 +36,10 @@ use super::render::{
 /// The largest change of the tilt one step may make, tilt units: a step
 /// past it is scaled back, so that the fit moves the plane in steps no larger
 /// than about six degrees and stays near the basin it started in.
-const MAX_TILT_STEP: f64 = 0.1;
+pub(super) const MAX_TILT_STEP: f64 = 0.1;
 
 /// The largest change of a shift one step may make, image px.
-const MAX_SHIFT_STEP_PX: f64 = 2.0;
+pub(super) const MAX_SHIFT_STEP_PX: f64 = 2.0;
 
 /// How many damped steps one iteration tries before the fit gives up. More
 /// than half of all fits end on an iteration that cannot rise, and each try
@@ -67,10 +67,16 @@ pub(super) struct Iteration {
 /// A residual frozen at a point, and its value there.
 pub(super) type Linearised<F> = (F, Vec<f64>);
 
-/// An objective over a parameter vector whose first two entries are a tilt
-/// and whose others are shifts in image px.
+/// An objective over a parameter vector whose first
+/// [`tilt_entries`](Objective::tilt_entries) entries are a tilt and whose
+/// others are shifts in image px.
 pub(super) trait Objective {
     type Frozen;
+
+    /// How many of the parameters are the tilt: two when the fit moves the
+    /// plane, none when it holds the tilt and fits a shift alone. The step
+    /// caps read it, so a shift is capped as a shift.
+    fn tilt_entries(&self) -> usize;
 
     /// The score at `p`, higher better, the residual frozen there and that
     /// residual's value at `p`, read from the same render as the score; no
@@ -177,7 +183,7 @@ pub(super) fn maximise<O: Objective>(
             };
             let q: Vec<f64> = p
                 .iter()
-                .zip(capped(delta).iter())
+                .zip(capped(delta, objective.tilt_entries()).iter())
                 .map(|(x, d)| x + d)
                 .collect();
             let (s, f) = objective.freeze(&q);
@@ -217,12 +223,13 @@ fn damped_step(a: &DMatrix<f64>, g: &DVector<f64>, damping: f64) -> Option<DVect
     step.iter().all(|v| v.is_finite()).then_some(step)
 }
 
-/// `delta` scaled back so that no tilt entry moves more than
-/// [`MAX_TILT_STEP`] and no shift entry more than [`MAX_SHIFT_STEP_PX`].
-fn capped(delta: DVector<f64>) -> DVector<f64> {
+/// `delta` scaled back so that no tilt entry, one of the first
+/// `tilt_entries`, moves more than [`MAX_TILT_STEP`] and no shift entry more
+/// than [`MAX_SHIFT_STEP_PX`].
+fn capped(delta: DVector<f64>, tilt_entries: usize) -> DVector<f64> {
     let mut factor: f64 = 1.0;
     for (i, d) in delta.iter().enumerate() {
-        let cap = if i < 2 {
+        let cap = if i < tilt_entries {
             MAX_TILT_STEP
         } else {
             MAX_SHIFT_STEP_PX
@@ -370,6 +377,14 @@ pub(super) struct ViewFrozen {
 impl Objective for ViewFit<'_, '_, '_> {
     type Frozen = ViewFrozen;
 
+    fn tilt_entries(&self) -> usize {
+        if self.held.is_some() {
+            0
+        } else {
+            2
+        }
+    }
+
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<ViewFrozen>>) {
         let (tilt, shift) = self.split(p);
         let samples = self.render.render(tilt, shift, &self.rows());
@@ -504,6 +519,10 @@ pub(super) struct PairFrozen {
 
 impl Objective for PairFit<'_, '_, '_> {
     type Frozen = PairFrozen;
+
+    fn tilt_entries(&self) -> usize {
+        2
+    }
 
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<PairFrozen>>) {
         let (first, second) = self.renders(p);

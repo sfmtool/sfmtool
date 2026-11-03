@@ -14,7 +14,7 @@ use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, GradientRead, Samples};
 use super::solve::{
     forward_difference, maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective,
-    DAMPING_TRIES, MIN_RELATIVE_GAIN,
+    DAMPING_TRIES, MAX_SHIFT_STEP_PX, MAX_TILT_STEP, MIN_RELATIVE_GAIN,
 };
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
@@ -196,13 +196,35 @@ fn sigma_reads_the_eigenvalues() {
 }
 
 /// A residual the test writes: `r = p − target`, scaled so that the score is
-/// `1 − ½‖r‖²`, as a block's would be.
+/// `1 − ½‖r‖²`, as a block's would be. Its parameters are a tilt and a shift,
+/// `[a, b, sx, sy]`, or a shift alone, `[sx, sy]`, as a fit with the tilt held
+/// has.
 struct Quadratic {
     target: Vec<f64>,
+    tilt_entries: usize,
+}
+
+impl Quadratic {
+    /// A tilt and a shift, `[a, b, sx, sy]`.
+    fn tilt_and_shift(target: Vec<f64>) -> Self {
+        Quadratic {
+            target,
+            tilt_entries: 2,
+        }
+    }
+
+    /// The forward-difference steps for its parameters.
+    fn steps(&self) -> &'static [f64] {
+        &STEPS[2 - self.tilt_entries..]
+    }
 }
 
 impl Objective for Quadratic {
     type Frozen = ();
+
+    fn tilt_entries(&self) -> usize {
+        self.tilt_entries
+    }
 
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<()>>) {
         let mut r = Vec::new();
@@ -216,7 +238,7 @@ impl Objective for Quadratic {
     }
 
     fn jacobian(&self, frozen: &(), p: &[f64], r0: &[f64], _: GradientRead) -> DMatrix<f64> {
-        forward_difference(self, frozen, p, r0, &STEPS)
+        forward_difference(self, frozen, p, r0, self.steps())
     }
 }
 
@@ -237,9 +259,7 @@ fn iteration() -> Iteration {
 #[test]
 fn the_fit_reaches_the_optimum_of_a_quadratic() {
     let target = vec![0.35, -0.2, 5.0, -3.0];
-    let objective = Quadratic {
-        target: target.clone(),
-    };
+    let objective = Quadratic::tilt_and_shift(target.clone());
     let (p, score, _) = maximise(&objective, &[0.0; 4], &iteration());
     for (a, b) in p.iter().zip(&target) {
         assert!((a - b).abs() < 1e-6, "{p:?}");
@@ -262,6 +282,10 @@ struct Logged {
 impl Objective for Logged {
     type Frozen = ();
 
+    fn tilt_entries(&self) -> usize {
+        self.inner.tilt_entries
+    }
+
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<()>>) {
         self.frozen_at.borrow_mut().push(p.to_vec());
         self.inner.freeze(p)
@@ -273,7 +297,7 @@ impl Objective for Logged {
     }
 
     fn jacobian(&self, frozen: &(), p: &[f64], r0: &[f64], _: GradientRead) -> DMatrix<f64> {
-        forward_difference(self, frozen, p, r0, &STEPS)
+        forward_difference(self, frozen, p, r0, self.inner.steps())
     }
 }
 
@@ -283,9 +307,7 @@ impl Objective for Logged {
 #[test]
 fn the_fit_does_not_render_a_scored_point_again() {
     let objective = Logged {
-        inner: Quadratic {
-            target: vec![0.35, -0.2, 5.0, -3.0],
-        },
+        inner: Quadratic::tilt_and_shift(vec![0.35, -0.2, 5.0, -3.0]),
         frozen_at: RefCell::new(Vec::new()),
         read_at: RefCell::new(Vec::new()),
     };
@@ -306,9 +328,7 @@ fn the_fit_does_not_render_a_scored_point_again() {
 fn a_fit_that_cannot_rise_stops_after_its_damping_tries() {
     let target = vec![0.35, -0.2, 5.0, -3.0];
     let objective = Logged {
-        inner: Quadratic {
-            target: target.clone(),
-        },
+        inner: Quadratic::tilt_and_shift(target.clone()),
         frozen_at: RefCell::new(Vec::new()),
         read_at: RefCell::new(Vec::new()),
     };
@@ -330,9 +350,7 @@ fn a_fit_that_cannot_rise_stops_after_its_damping_tries() {
 fn a_fit_stops_once_a_step_gains_under_its_share_of_the_first() {
     let target = vec![0.09, -0.05, 1.9, -1.0];
     let objective = Logged {
-        inner: Quadratic {
-            target: target.clone(),
-        },
+        inner: Quadratic::tilt_and_shift(target.clone()),
         frozen_at: RefCell::new(Vec::new()),
         read_at: RefCell::new(Vec::new()),
     };
@@ -354,6 +372,46 @@ fn a_fit_stops_once_a_step_gains_under_its_share_of_the_first() {
     // The absolute floor alone would not have stopped it: the second step's
     // gain is over the default `min_improvement`.
     assert!(second > iteration().min_improvement, "{second}");
+}
+
+/// A fit with the tilt held, whose parameters are a shift alone, caps its
+/// steps at [`MAX_SHIFT_STEP_PX`], not at the tilt's cap: its first step to a
+/// target 5 px away moves 2 px, and it reaches the target well within its
+/// iterations, which 0.1 px steps could not.
+#[test]
+fn a_shift_alone_is_capped_as_a_shift() {
+    let target = vec![5.0, -3.0];
+    let objective = Logged {
+        inner: Quadratic {
+            target: target.clone(),
+            tilt_entries: 0,
+        },
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    let (p, _, taken) = maximise(&objective, &[0.0; 2], &iteration());
+    let first = objective.frozen_at.borrow()[1].clone();
+    assert!((first[0] - MAX_SHIFT_STEP_PX).abs() < 1e-9, "{first:?}");
+    for (a, b) in p.iter().zip(&target) {
+        assert!((a - b).abs() < 1e-6, "{p:?} after {taken} steps");
+    }
+}
+
+/// A fit that moves the tilt caps its tilt at [`MAX_TILT_STEP`] and its
+/// shift at [`MAX_SHIFT_STEP_PX`]: the first step to a target 0.35 away in
+/// the tilt and 5 px away in the shift is scaled back by the tilt's cap, which
+/// binds first, so the tilt moves 0.1 and the shift less than 2 px.
+#[test]
+fn a_tilt_and_shift_cap_the_tilt_first() {
+    let objective = Logged {
+        inner: Quadratic::tilt_and_shift(vec![0.35, -0.2, 5.0, -3.0]),
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    maximise(&objective, &[0.0; 4], &iteration());
+    let first = objective.frozen_at.borrow()[1].clone();
+    assert!((first[0] - MAX_TILT_STEP).abs() < 1e-9, "{first:?}");
+    assert!(first[2] > 1.0 && first[2] < MAX_SHIFT_STEP_PX, "{first:?}");
 }
 
 /// The information-weighted mean against a hand-computed case:
