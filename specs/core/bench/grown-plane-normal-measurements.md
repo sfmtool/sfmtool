@@ -13,7 +13,7 @@ ladder; the weak-turn rule; the optimiser's Sobel gradient, its damping tries
 and its relative stop; the early stop, the second growth on the second rung and
 the shift-only fit; the information read through the Sobel gradient with the σ
 target of 2.75°; reading each view through its own slid patch; writing no
-keypoint; and the arithmetic of the fits.
+keypoint; the arithmetic of the fits; and the optimiser's tilt cap that grows.
 
 ## How the step is scored
 
@@ -526,3 +526,65 @@ best of four runs each, since the machine's speed drifted between runs.
 
 **Decision.** All three changes: about 10% less time in the step, and the same
 normals.
+
+## A tilt cap that grows (2026-11-03)
+
+**Question.** Each Levenberg–Marquardt step was scaled back so that no tilt
+entry moved more than 0.1. On `sfm embed-patches` of the Seoul bull workspace
+(780 points, two rounds), the cap shortened 70% to 79% of the kept steps, almost
+all on the tilt; the Gauss–Newton tilt step it shortened had a median of 8 to 9
+times the cap; 10% to 14% of the fits ran to `max_iterations`, most still
+stepping at the cap, and those fits made 33% to 39% of all iterations. The cap
+rescues every step, so the damping stays low. Does a cap that grows while it
+binds make fewer iterations and renders without moving the normals?
+
+**Changes.** In a fit whose tilt is free, a kept step that the tilt cap
+shortened doubles the cap, up to 0.8 (`MAX_GROWN_TILT_STEP`), or up to 0.4 in the
+alternative tried; every fit starts at 0.1. The shift-only fit is unchanged.
+
+**Method.** As in § [How the step is scored](#how-the-step-is-scored), with
+these differences: the dino is the approved ground truth
+`dino_dog_toy_ground_truth_v01.sfmr`, 1243 points, every finite point seen in
+two or more images (Kerry Park 382, Seoul bull 266); no judged-points column;
+an optimised build on this machine with one thread (`RAYON_NUM_THREADS=1`).
+Every run ran alone, one process at a time, twice per form and dataset, in the
+order 0.1, 0.8, 0.4 and then 0.4, 0.8, 0.1. The time is the step's own,
+summed over the points, the better of the two runs; the two runs of a form
+differed by at most 0.4 s on the dino and 8% on the Seoul bull. The renders and
+iterations, counted over the run, were the same in both runs, and so were the
+normals. "At the limit" counts the fits that ran all 20 iterations. "Moved"
+counts the points more than 1° better or worse than the cap of 0.1, then those
+more than 5° better or worse.
+
+| Dataset, form | Median, mean | < 1°, < 2°, < 5° | Moved better / worse | Renders | Iterations | At the limit | Time |
+|---|---|---|---|---|---|---|---|
+| Seoul bull, 0.1 (before) | 16.65°, 22.23° | 1.5%, 3.4%, 18.4% | – | 50,992 | 33,276 | 458 | 5.17 s |
+| **Seoul bull, up to 0.8** | **16.44°, 22.19°** | **1.9%, 3.4%, 18.4%** | **21 / 29, 7 / 9** | **42,506 (−17%)** | **24,318 (−27%)** | **125** | **4.61 s (−11%)** |
+| Seoul bull, up to 0.4 | 16.75°, 22.69° | 1.9%, 3.8%, 18.4% | 20 / 31, 7 / 10 | 43,665 (−14%) | 25,503 (−23%) | 167 | 4.63 s (−10%) |
+| Kerry Park, 0.1 (before) | 6.47°, 15.23° | 9.4%, 18.3%, 43.5% | – | 104,763 | 62,864 | 763 | 14.70 s |
+| **Kerry Park, up to 0.8** | **6.40°, 15.23°** | **9.2%, 18.6%, 43.5%** | **48 / 45, 12 / 15** | **90,357 (−14%)** | **47,534 (−24%)** | **243** | **12.96 s (−12%)** |
+| Kerry Park, up to 0.4 | 6.40°, 15.22° | 9.2%, 18.3%, 43.7% | 47 / 46, 13 / 15 | 92,237 (−12%) | 49,602 (−21%) | 328 | 13.12 s (−11%) |
+| dino, 0.1 (before) | 0.75°, 2.24° | 61.5%, 80.9%, 94.0% | – | 463,419 | 292,113 | 3,200 | 108.67 s |
+| **dino, up to 0.8** | **0.74°, 2.21°** | **61.0%, 80.5%, 94.0%** | **14 / 13, 2 / 4** | **451,199 (−2.6%)** | **278,890 (−4.5%)** | **2,925** | **107.35 s (−1.2%)** |
+| dino, up to 0.4 | 0.75°, 2.21° | 61.1%, 80.6%, 94.0% | 14 / 12, 2 / 4 | 451,879 (−2.5%) | 279,534 (−4.3%) | 2,936 | 107.06 s (−1.5%) |
+
+The points that moved most under the cap of 0.8 moved both towards and away
+from the stored normal: Seoul bull 194 went from 47.8° to 0.1° and 109 from
+57.7° to 22.3°, while 273 went from 11.0° to 71.5° and 191 from 25.2° to 50.6°;
+Kerry Park 248 went from 69.8° to 0.8° and 276 from 55.0° to 5.4°, while 31 went
+from 2.5° to 58.1° and 308 from 28.7° to 83.4°; dino 483 went from 60.2° to
+5.4°, while 992 went from 0.4° to 28.3°. Summed over the points that moved more
+than 5°, the error changed by −24° on the Seoul bull, +5° on Kerry Park and −12°
+on the dino. The dino's starts lie about as far from the stored normals as the
+others', a median of 32° against 34° and 35°, yet the growing cap saved it
+little; why was not measured.
+
+**Decision.** The tilt cap grows, doubling up to 0.8 (`MAX_GROWN_TILT_STEP`).
+Every share within 5° and every mean is unchanged or better, the medians are
+lower, the shares within 1° and 2° move by at most half a percentage point,
+about as many points move better as worse on Kerry Park and the dino, while
+on the Seoul bull more move worse (29) than better (21) though their summed
+error falls, and it makes 4.5% to 27% fewer
+iterations and 2.6% to 17% fewer renders and takes 1.2% to 12% less time. A cap
+of 0.4 makes more renders and iterations than 0.8 on every dataset and raises
+the Seoul bull's median and mean.

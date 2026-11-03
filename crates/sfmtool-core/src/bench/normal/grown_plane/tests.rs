@@ -14,7 +14,7 @@ use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, GradientRead, Samples};
 use super::solve::{
     forward_difference, maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective,
-    DAMPING_TRIES, MAX_SHIFT_STEP_PX, MAX_TILT_STEP, MIN_RELATIVE_GAIN,
+    DAMPING_TRIES, MAX_GROWN_TILT_STEP, MAX_SHIFT_STEP_PX, MAX_TILT_STEP, MIN_RELATIVE_GAIN,
 };
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
@@ -412,6 +412,40 @@ fn a_tilt_and_shift_cap_the_tilt_first() {
     let first = objective.frozen_at.borrow()[1].clone();
     assert!((first[0] - MAX_TILT_STEP).abs() < 1e-9, "{first:?}");
     assert!(first[2] > 1.0 && first[2] < MAX_SHIFT_STEP_PX, "{first:?}");
+}
+
+/// A fit whose Gauss–Newton step overshoots the tilt cap lets the cap grow:
+/// on a quadratic whose tilt target lies 2.5 away, the first step is held to
+/// [`MAX_TILT_STEP`], each later one may move the tilt twice as far as the one
+/// before until the cap reaches [`MAX_GROWN_TILT_STEP`], and the fit reaches
+/// the target in six steps, where the first cap alone would take 25.
+#[test]
+fn a_tilt_step_held_by_the_cap_lets_the_next_step_grow() {
+    let target = vec![2.5, -0.3, 0.5, -0.5];
+    let objective = Logged {
+        inner: Quadratic::tilt_and_shift(target.clone()),
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    let (p, _, taken) = maximise(&objective, &[0.0; 4], &iteration());
+    for (a, b) in p.iter().zip(&target) {
+        assert!((a - b).abs() < 1e-6, "{p:?}");
+    }
+    assert!(taken <= 6, "{taken}");
+    // Every step was kept on its first try, so the scored points are the
+    // start and the kept points in order.
+    let frozen_at = objective.frozen_at.borrow();
+    let tilt_step = |k: usize| (frozen_at[k + 1][0] - frozen_at[k][0]).abs();
+    let expected = [
+        MAX_TILT_STEP,
+        2.0 * MAX_TILT_STEP,
+        4.0 * MAX_TILT_STEP,
+        MAX_GROWN_TILT_STEP,
+        MAX_GROWN_TILT_STEP,
+    ];
+    for (k, want) in expected.iter().enumerate() {
+        assert!((tilt_step(k) - want).abs() < 1e-12, "{k}: {frozen_at:?}");
+    }
 }
 
 /// The information-weighted mean against a hand-computed case:

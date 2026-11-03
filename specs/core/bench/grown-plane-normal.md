@@ -588,13 +588,13 @@ The tests read it to check the Jacobian against a central difference of renders
 
 **An iteration** solves `(JᵀJ + λ·diag(JᵀJ) + ε) δ = −Jᵀr`, with `λ` from
 `initial_damping` and `ε` 10⁻⁹ of the largest diagonal entry, scales `δ` back so
-that no tilt parameter moves more than 0.1 and no shift more than 2 px, and
-reads the true score at the new parameters from a fresh render. A fit with the
-tilt held has the shift alone as its parameters, and caps that shift at 2 px
-too. The step is kept only when the score rises, and `λ` falls tenfold, to no
-less than 10⁻⁹; the render that scored the kept step also gives the residual,
-frozen there, that the next iteration linearises at, so a kept point is
-rendered once.
+that no tilt parameter moves more than the tilt cap and no shift more than 2 px,
+and reads the true score at the new parameters from a fresh render. A fit with
+the tilt held has the shift alone as its parameters, and caps that shift at
+2 px too. The step is kept only when the score rises, and `λ` falls tenfold, to
+no less than 10⁻⁹; the render that scored the kept step also gives the
+residual, frozen there, that the next iteration linearises at, so a kept point
+is rendered once.
 Otherwise `λ` rises tenfold and the step is solved again, up to three tries in
 all. A stage ends after `max_iterations` iterations, when a kept step raises
 the score by less than `min_improvement` or by less than 1% of what the stage's
@@ -606,6 +606,17 @@ the 1% are constants of the optimiser, not settings; together with reusing the
 kept render they cut the step's renders by 23% and its time by about a quarter
 with the judged points unchanged
 ([measurements](grown-plane-normal-measurements.md#fewer-renders-per-fit-2026-10-18)).
+
+The tilt cap is 0.1 at the start of every fit. In a fit whose tilt is free, a
+kept step that the tilt cap shortened doubles it, up to 0.8. The Gauss–Newton
+tilt step is often many times 0.1, so a fit held to 0.1 walks towards its
+optimum in kept steps of 0.1, some to `max_iterations`, while the damping, which
+only a refused step raises, stays low. The growing cap made 4.5% to 27% fewer
+iterations on the ground truths and took 1% to 12% less time, with every mean
+unchanged or better; it moved about as many points more than 1° better as
+worse on Kerry Park and the dino, and 21 better against 29 worse on the Seoul
+bull
+([measurements](grown-plane-normal-measurements.md#a-tilt-cap-that-grows-2026-11-03)).
 
 The parameters are a view's tilt and shift `[a, b, sx, sy]` within a view, its
 shift alone with the tilt held in the shift-only fit, and in the pair fit the
@@ -1118,8 +1129,10 @@ whose refused picks are grown again from the starting plane
 (`STARTING_PLANE_RETRY_RUNGS`); and the shift-only fit's window, the second
 fitted stage's (`SHIFT_ONLY_WINDOW`), and its two whole-grid iterations
 (`SHIFT_ONLY_GRID_ITERATIONS`). The optimiser's three damping tries
-(`DAMPING_TRIES`), its 1% relative stop (`MIN_RELATIVE_GAIN`) and its step caps
-of 0.1 in the tilt and 2 px in the shift are constants of
+(`DAMPING_TRIES`), its 1% relative stop (`MIN_RELATIVE_GAIN`), its step caps
+of 0.1 in the tilt (`MAX_TILT_STEP`) and 2 px in the shift
+(`MAX_SHIFT_STEP_PX`), and the 0.8 the tilt cap grows to
+(`MAX_GROWN_TILT_STEP`) are constants of
 [grown_plane/solve.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/solve.rs).
 The step has no setting for a shift search, since it makes none.
 
@@ -1238,9 +1251,11 @@ the scenes with up to six views that need every view picked set a target σ of
   Schur complement against the profile it stands for, σ from the eigenvalues,
   the fit reaching the optimum of a quadratic, each step's caps (a fit of a
   shift alone moves 2 px on its first step to a target 5 px away and reaches
-  it, and a fit of a tilt and a shift is held to 0.1 in the tilt first), and
-  the weighted mean, its covariance and the agreement distance against a
-  hand-computed case.
+  it, and a fit of a tilt and a shift is held to 0.1 in the tilt first), the
+  tilt cap doubling from 0.1 to 0.2, 0.4 and 0.8 and then holding on a
+  quadratic whose tilt target lies 2.5 away, which the fit reaches in at most
+  six steps, and the weighted mean, its covariance and the agreement distance
+  against a hand-computed case.
 
 No test covers a patch centre off along the reference ray, σ against the spread
 of the fitted normal under added noise, or a pair refused under its floor;
