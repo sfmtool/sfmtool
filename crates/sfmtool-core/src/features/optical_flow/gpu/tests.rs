@@ -3,7 +3,6 @@
 
 use super::super::{FlowField, GrayImage};
 use super::*;
-use crate::features::sift::{gray_from_rgb, ImageToGray};
 
 /// Derive the image subdirectory from the filename (e.g. "seoul_bull_sculpture_08.jpg" -> "seoul_bull_sculpture").
 fn image_subdir(filename: &str) -> &str {
@@ -22,8 +21,8 @@ fn load_test_image(filename: &str) -> GrayImage {
         .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e))
         .into_rgb8();
     let (w, h) = img.dimensions();
-    // Grey through sfmtool's one RGB-to-grey conversion, the detector's default.
-    gray_from_rgb(w, h, img.as_raw(), &ImageToGray::default())
+    // The grey the flow reads in production.
+    super::super::matcher_gray_from_rgb(w, h, img.as_raw())
 }
 
 /// The GPU context for a test, or `None` when the machine has no adapter, in

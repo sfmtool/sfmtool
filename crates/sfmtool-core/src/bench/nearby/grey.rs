@@ -5,17 +5,20 @@
 //! blurred by a Gaussian of one pixel, built the first time an image is read
 //! and kept.
 //!
-//! Every step reproduces what the harness's `cv2` calls do, so the reads score
-//! the same: the grey conversion is OpenCV's fixed-point one, the blur is a
-//! nine-tap separable Gaussian with the image reflected at its edges (without
-//! repeating the edge pixel), and a sample is bilinear, with no value where any
-//! of its four pixels is outside the photograph. What is left differs from
-//! OpenCV's arithmetic in the last bits of a 32-bit float, from the order the
-//! blur and the interpolation add their terms in.
+//! The grey is the matchers' 8-bit BT.601 grey
+//! ([`matcher_gray_from_rgb`]) on the 0 to 255 scale, the conversion the
+//! optical flow reads too. The blur and the sample reproduce what the
+//! harness's `cv2` calls do: the blur is a nine-tap separable Gaussian with the
+//! image reflected at its edges (without repeating the edge pixel), and a
+//! sample is bilinear, with no value where any of its four pixels is outside
+//! the photograph. What is left differs from OpenCV's arithmetic in the last
+//! bits of a 32-bit float, from the order the blur and the interpolation add
+//! their terms in.
 
 use std::sync::OnceLock;
 
 use crate::camera::image::ImageU8;
+use crate::features::optical_flow::matcher_gray_from_rgb;
 use crate::patch::normal_refine::ProjectedImage;
 
 /// The standard deviation of the blur, in px.
@@ -102,24 +105,34 @@ impl GreyImages {
     }
 }
 
-/// `image` in grey as OpenCV's `COLOR_RGB2GRAY` makes it, then blurred by
-/// [`GREY_BLUR_SIGMA`] as `cv2.GaussianBlur` does a 32-bit float image.
+/// `image` in grey on the 0 to 255 scale, then blurred by [`GREY_BLUR_SIGMA`]
+/// as `cv2.GaussianBlur` does a 32-bit float image.
+///
+/// A colour image is made grey by [`matcher_gray_from_rgb`], BT.601 luma
+/// rounded to 8 bits, each level `k` held as `k`; an alpha channel is dropped.
+/// A grey image (one or two channels) keeps its first channel.
 pub fn blurred_grey(image: &ImageU8) -> GreyImage {
     let (w, h) = (image.width() as usize, image.height() as usize);
     let c = image.channels() as usize;
     let data = image.data();
-    let grey: Vec<f32> = (0..w * h)
-        .map(|i| {
-            let p = &data[i * c..i * c + c];
-            if c >= 3 {
-                // OpenCV's 15-bit fixed-point weights for R, G and B.
-                let v = u32::from(p[0]) * 9798 + u32::from(p[1]) * 19235 + u32::from(p[2]) * 3735;
-                ((v + (1 << 14)) >> 15) as f32
-            } else {
-                f32::from(p[0])
-            }
-        })
-        .collect();
+    let grey: Vec<f32> = if c >= 3 {
+        let rgb: std::borrow::Cow<'_, [u8]> = if c == 3 {
+            data.into()
+        } else {
+            data.chunks_exact(c)
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect::<Vec<u8>>()
+                .into()
+        };
+        // Each sample is the f32 nearest k / 255, so times 255 it rounds to k.
+        matcher_gray_from_rgb(w as u32, h as u32, &rgb)
+            .data()
+            .iter()
+            .map(|v| (v * 255.0).round())
+            .collect()
+    } else {
+        data.chunks_exact(c).map(|p| f32::from(p[0])).collect()
+    };
     GreyImage::new(
         w as u32,
         h as u32,

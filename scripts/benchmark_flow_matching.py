@@ -65,7 +65,9 @@ def main():
         "--runs", type=int, default=3, help="Number of benchmark runs (default: 3)"
     )
     parser.add_argument(
-        "--trace", type=str, default=None,
+        "--trace",
+        type=str,
+        default=None,
         help="Write Perfetto trace JSON to this path (only for the first run)",
     )
     args = parser.parse_args()
@@ -77,8 +79,7 @@ def main():
 
     # Find images
     images = sorted(
-        glob.glob(str(image_dir / "*.jpg"))
-        + glob.glob(str(image_dir / "*.png"))
+        glob.glob(str(image_dir / "*.jpg")) + glob.glob(str(image_dir / "*.png"))
     )
     if len(images) < 2:
         print(f"Error: Need at least 2 images in {image_dir}", file=sys.stderr)
@@ -87,16 +88,22 @@ def main():
     # Find sift features
     sift_dir = find_sift_dir(image_dir)
     if sift_dir is None:
-        print(f"Error: No sift feature directory found in {image_dir}/features/", file=sys.stderr)
+        print(
+            f"Error: No sift feature directory found in {image_dir}/features/",
+            file=sys.stderr,
+        )
         print("Run: pixi run sfm sift --extract <image_dir>", file=sys.stderr)
         sys.exit(1)
 
     # Select subset
     end = min(args.start + args.n_images, len(images))
-    images = images[args.start:end]
+    images = images[args.start : end]
     n = len(images)
     if n < 2:
-        print(f"Error: Need at least 2 images in range [{args.start}, {end})", file=sys.stderr)
+        print(
+            f"Error: Need at least 2 images in range [{args.start}, {end})",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     image_paths = [Path(p) for p in images]
@@ -109,16 +116,27 @@ def main():
             sys.exit(1)
 
     # Import after arg parsing for fast --help
-    import cv2
+    import numpy as np
     from sfmtool.fileio import read_image_rgb
-    from sfmtool.flow import compute_optical_flow, gpu_available
+    from sfmtool.flow import (
+        compute_optical_flow,
+        gpu_available,
+        matcher_image_to_gray,
+    )
+    from sfmtool.sift import gray_from_rgb
+
+    def flow_gray(rgb):
+        # The grey the flow reads: the matchers' BT.601 grey rounded to 8 bits.
+        grey = gray_from_rgb(rgb, matcher_image_to_gray())
+        return np.rint(grey * np.float32(255)).astype(np.uint8)
+
     from sfmtool.feature_match import flow_match_sequential
 
     # Print setup info
     img = read_image_rgb(images[0])
     h, w = img.shape[:2]
     print(f"Images: {n} (frames {args.start} to {end - 1})")
-    print(f"Resolution: {w}x{h} ({w*h:,} pixels)")
+    print(f"Resolution: {w}x{h} ({w * h:,} pixels)")
     print(f"Preset: {args.preset}")
     print(f"Window size: {args.window_size}")
     print(f"GPU available: {gpu_available()}")
@@ -127,9 +145,9 @@ def main():
     # Warmup: run one flow computation to initialize GPU
     if gpu_available():
         print("Warming up GPU...")
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        gray = flow_gray(img)
         img2 = read_image_rgb(images[1])
-        gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
+        gray2 = flow_gray(img2)
         compute_optical_flow(gray, gray2, preset=args.preset)
         print()
 
@@ -154,7 +172,9 @@ def main():
         run_times.append(elapsed)
         total_matches = sum(len(m) for m in matches.values())
         run_match_counts.append(total_matches)
-        print(f"  Time: {elapsed:.2f}s  |  {len(matches)} pairs  |  {total_matches} matches")
+        print(
+            f"  Time: {elapsed:.2f}s  |  {len(matches)} pairs  |  {total_matches} matches"
+        )
         print()
 
     # Summary
@@ -165,7 +185,7 @@ def main():
     print()
     median_time = sorted(run_times)[len(run_times) // 2]
     for i, (t, mc) in enumerate(zip(run_times, run_match_counts)):
-        print(f"  Run {i+1}: {t:.2f}s total, {t / n_pairs:.2f}s/pair, {mc} matches")
+        print(f"  Run {i + 1}: {t:.2f}s total, {t / n_pairs:.2f}s/pair, {mc} matches")
     print(f"  Median: {median_time:.2f}s total, {median_time / n_pairs:.2f}s/pair")
 
 

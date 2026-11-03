@@ -36,7 +36,8 @@ import os
 import cv2
 import numpy as np
 
-from sfmtool.flow import compute_optical_flow
+from sfmtool.flow import compute_optical_flow, matcher_image_to_gray
+from sfmtool.sift import gray_from_rgb
 
 # Border excluded from every metric: patches that run off the image have no
 # meaningful flow, and including them measures the boundary policy, not the flow.
@@ -49,11 +50,18 @@ DEFAULT_IMAGES = [
 ]
 
 
+def flow_gray(rgb: np.ndarray) -> np.ndarray:
+    """The (H, W) uint8 grey the flow reads: the matchers' BT.601 grey rounded
+    to 8 bits, through sfmtool's one RGB-to-grey conversion."""
+    grey = gray_from_rgb(rgb, matcher_image_to_gray())
+    return np.rint(grey * np.float32(255)).astype(np.uint8)
+
+
 def load_gray(path, max_width=640):
     from sfmtool.fileio import read_image_rgb
 
     try:
-        img = cv2.cvtColor(read_image_rgb(path), cv2.COLOR_RGB2GRAY)
+        img = flow_gray(read_image_rgb(path))
     except OSError as e:
         raise SystemExit(f"could not read {path}: {e}") from e
     if max_width and img.shape[1] > max_width:

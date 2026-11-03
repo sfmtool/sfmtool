@@ -210,10 +210,14 @@ records the runs and the cases each rule was added for.
 
 ## Implementation notes
 
-**The grey images are the harness's.** The harness sampled `cv2` images, and the
-sweep's thresholds were chosen on them, so the conversion is OpenCV's: grey
-from RGB with its 15-bit fixed-point weights (9798, 19235, 3735, rounded, shift
-15), exact; a nine-tap separable Gaussian of sigma 1 with the image reflected
+**The grey images are the matchers'.** The grey is
+`optical_flow::matcher_gray_from_rgb`, BT.601 luma rounded to 8 bits and held
+on the 0 to 255 scale, the grey the optical flow reads, made by sfmtool's one
+RGB-to-grey conversion; the harness makes the same grey through
+`sfmtool.sift.gray_from_rgb`. The sweep's thresholds were chosen on OpenCV's
+fixed-point `COLOR_RGB2GRAY`, which this grey equals on all but 0.12% of the
+8-bit colours and is within one level of on the rest. The rest of the read
+follows the harness's `cv2` calls: a nine-tap separable Gaussian of sigma 1 with the image reflected
 at its borders without repeating the edge pixel (`BORDER_REFLECT_101`); and a
 bilinear sample in floating point with no value where any of its four pixels
 is off the image, as `cv2.remap` with a NaN border gives (OpenCV 5 interpolates
@@ -309,8 +313,8 @@ that it reads at disparity 0, as a bearing, with every image in one group; a
 plane at the distance of disparity 6 reading there and nowhere at infinity; a
 plane too near for the sweep giving no far reading; the patch reading best at
 the plane's distance and landing where the scene projects; a flat or
-off-photograph patch not read; the grey conversion and blur against OpenCV's
-numbers; best-three, prominence and average linkage on small cases; and a
+off-photograph patch not read; the grey conversion against the matchers'
+8-bit BT.601 grey and the blur against OpenCV's numbers; best-three, prominence and average linkage on small cases; and a
 reading whose sightings are within a pixel of a kept one's, in the same images,
 dropped as repeating it, where one a pixel and a half off or seen by one
 image fewer is kept.

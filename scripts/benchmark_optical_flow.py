@@ -19,15 +19,22 @@ import os
 import sys
 import time
 
-import cv2
 import numpy as np
 
 from sfmtool.fileio import read_image_rgb
-from sfmtool.flow import compute_optical_flow, gpu_available
+from sfmtool.flow import compute_optical_flow, gpu_available, matcher_image_to_gray
+from sfmtool.sift import gray_from_rgb
+
+
+def flow_gray(rgb: np.ndarray) -> np.ndarray:
+    """The (H, W) uint8 grey the flow reads: the matchers' BT.601 grey rounded
+    to 8 bits, through sfmtool's one RGB-to-grey conversion."""
+    grey = gray_from_rgb(rgb, matcher_image_to_gray())
+    return np.rint(grey * np.float32(255)).astype(np.uint8)
 
 
 def load_grayscale(path: str) -> np.ndarray:
-    return cv2.cvtColor(read_image_rgb(path), cv2.COLOR_RGB2GRAY)
+    return flow_gray(read_image_rgb(path))
 
 
 def benchmark(img0, img1, preset, use_gpu, n_runs):
@@ -85,9 +92,11 @@ def main():
     img1 = load_grayscale(images[args.frame_b])
     h, w = img0.shape
 
-    print(f"Images: {os.path.basename(images[args.frame_a])} -> "
-          f"{os.path.basename(images[args.frame_b])}")
-    print(f"Resolution: {w}x{h} ({w*h:,} pixels)")
+    print(
+        f"Images: {os.path.basename(images[args.frame_a])} -> "
+        f"{os.path.basename(images[args.frame_b])}"
+    )
+    print(f"Resolution: {w}x{h} ({w * h:,} pixels)")
     print(f"Preset: {args.preset}")
     print(f"GPU available: {gpu_available()}")
     print()
@@ -103,7 +112,7 @@ def main():
         print(f"GPU benchmark ({args.runs} runs):")
         gpu_times = benchmark(img0, img1, args.preset, True, args.runs)
         for i, ms in enumerate(gpu_times):
-            print(f"  Run {i+1}: {ms:.1f}ms")
+            print(f"  Run {i + 1}: {ms:.1f}ms")
         gpu_median = sorted(gpu_times)[len(gpu_times) // 2]
         print(f"  Median: {gpu_median:.1f}ms")
         print(f"  Min:    {min(gpu_times):.1f}ms")
@@ -113,7 +122,7 @@ def main():
     print(f"CPU benchmark ({args.runs} runs):")
     cpu_times = benchmark(img0, img1, args.preset, False, args.runs)
     for i, ms in enumerate(cpu_times):
-        print(f"  Run {i+1}: {ms:.1f}ms")
+        print(f"  Run {i + 1}: {ms:.1f}ms")
     cpu_median = sorted(cpu_times)[len(cpu_times) // 2]
     print(f"  Median: {cpu_median:.1f}ms")
     print(f"  Min:    {min(cpu_times):.1f}ms")
@@ -121,7 +130,9 @@ def main():
 
     # Summary
     if gpu_available():
-        print(f"Speedup: {cpu_median/gpu_median:.1f}x (GPU {gpu_median:.0f}ms vs CPU {cpu_median:.0f}ms)")
+        print(
+            f"Speedup: {cpu_median / gpu_median:.1f}x (GPU {gpu_median:.0f}ms vs CPU {cpu_median:.0f}ms)"
+        )
 
 
 if __name__ == "__main__":

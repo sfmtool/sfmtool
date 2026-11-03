@@ -13,14 +13,12 @@ from pathlib import Path
 import numpy as np
 
 from .fileio import read_image_rgb
-from .sift import ImageToGray, gray_from_rgb
+from .flow import matcher_image_to_gray
+from .sift import gray_from_rgb
 
-# The grey the optical flow kernels read: BT.601 luma rounded to 8 bits, the
-# 8-bit grey image they take. It is made by sfmtool's one RGB-to-grey
-# conversion, and it is within one level of OpenCV's ``COLOR_RGB2GRAY``, the
-# conversion the flow presets were tuned on, for all but 0.12% of the 8-bit
-# colours.
-_FLOW_IMAGE_TO_GRAY = ImageToGray("0.299*R + 0.587*G + 0.114*B", quantize_bits=8)
+# The grey the optical flow kernels read, defined in sfmtool-core beside the
+# flow code: BT.601 luma rounded to 8 bits.
+_FLOW_IMAGE_TO_GRAY = matcher_image_to_gray()
 
 
 def flow_gray(rgb: np.ndarray) -> np.ndarray:
