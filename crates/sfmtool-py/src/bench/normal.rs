@@ -1029,7 +1029,14 @@ fn grid_plane_normal(
 /// (default 3.0) times the weakest-direction ``σ`` (every kept estimate's
 /// information summed; a ``σ`` that is not finite counts as no evidence) is
 /// a large turn on weak evidence, and is not made. ``working_resolution`` is
-/// :func:`grid_plane_normal`'s.
+/// :func:`grid_plane_normal`'s. ``resolution`` (default 24, at least 2) is
+/// the patch resolution ``R`` the step works at where the reconstruction
+/// stores no patch bitmaps: the ``R`` that a ``working_resolution`` of
+/// ``None`` clamps the working grid's side to ``R ..= 2R`` by, the
+/// resolution the reference view is picked at, and the resolution the
+/// reading the step ends with renders its bitmap and reads at. A
+/// reconstruction that stores patch bitmaps is worked at their resolution
+/// whatever ``resolution`` says.
 /// Every default is the Rust step's, and a setting outside what the step
 /// takes is refused before the photographs are decoded.
 ///
@@ -1119,6 +1126,7 @@ fn grid_plane_normal(
     edited,
     images,
     *,
+    resolution = None,
     working_resolution = None,
     spot_window = None,
     window_fractions = None,
@@ -1151,6 +1159,7 @@ fn grown_plane_normal(
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
+    resolution: Option<u32>,
     working_resolution: Option<u32>,
     spot_window: Option<u32>,
     window_fractions: Option<Vec<f64>>,
@@ -1178,6 +1187,7 @@ fn grown_plane_normal(
     record_phases: bool,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let options = GrownPlaneKeywords {
+        resolution,
         working_resolution,
         spot_window,
         window_fractions,
@@ -1235,6 +1245,7 @@ fn grown_plane_normal(
 /// left it out. [`grown_plane_normal`] and the run over every point,
 /// `refine_normals`, take the same ones.
 pub(super) struct GrownPlaneKeywords {
+    pub(super) resolution: Option<u32>,
     pub(super) working_resolution: Option<u32>,
     pub(super) spot_window: Option<u32>,
     pub(super) window_fractions: Option<Vec<f64>>,
@@ -1301,12 +1312,18 @@ impl GrownPlaneKeywords {
             max_iterations: self.max_iterations.unwrap_or(defaults.max_iterations),
             initial_damping: self.initial_damping.unwrap_or(defaults.initial_damping),
             min_improvement: self.min_improvement.unwrap_or(defaults.min_improvement),
-            fit: fit_options(
-                self.max_seed_offset_px,
-                self.max_cache_bytes,
-                self.sigma_px,
-                self.depth_likelihood_ratio_threshold,
-            ),
+            fit: {
+                let fit = fit_options(
+                    self.max_seed_offset_px,
+                    self.max_cache_bytes,
+                    self.sigma_px,
+                    self.depth_likelihood_ratio_threshold,
+                );
+                match self.resolution {
+                    Some(resolution) => fit.at_resolution(resolution),
+                    None => fit,
+                }
+            },
         }
     }
 }

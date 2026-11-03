@@ -506,6 +506,19 @@ class TestGrownPlaneNormal:
         assert _keypoints(kept) == _keypoints(fitted)
         assert "normal left unchanged: large turn on weak evidence" in report["text"]
 
+    def test_resolution_is_the_r_the_working_grid_follows(
+        self, fitted, edited, images, grown
+    ):
+        # The fixture stores no patch bitmaps, so ``resolution`` is the ``R``
+        # the working grid's side is clamped to ``R ..= 2R`` by, and the side
+        # is never under ``spot_window`` (7). The default ``R`` is 24.
+        _, default = grown
+        assert 24 <= default["estimate"]["working_resolution"] <= 48
+        _, report = grown_plane_normal(fitted, edited, images, resolution=4)
+        assert 7 <= report["estimate"]["working_resolution"] <= 8
+        _, report = grown_plane_normal(fitted, edited, images, resolution=40)
+        assert 40 <= report["estimate"]["working_resolution"] <= 80
+
     def test_bad_settings_are_refused(self, fitted, edited, images):
         for name, value in [
             ("spot_window", 0),
@@ -519,6 +532,7 @@ class TestGrownPlaneNormal:
             ("first_rung_deg", 25.0),
             ("first_rung_min_deg", float("nan")),
             ("rung_ratio", 1.0),
+            ("resolution", 1),
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})

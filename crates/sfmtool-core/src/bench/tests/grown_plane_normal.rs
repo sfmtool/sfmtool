@@ -885,6 +885,23 @@ fn the_grown_plane_normal_refuses_a_bearing_bad_options_and_stops_when_cancelled
             "{rung_ratio}"
         );
     }
+    // The fit's patch resolution: at least 2.
+    for resolution in [0, 1] {
+        let bad = GrownPlaneNormalOptions {
+            fit: FitOptions::default().at_resolution(resolution),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGrownPlaneOption("resolution")),
+            "{resolution}"
+        );
+    }
+    let two = GrownPlaneNormalOptions {
+        fit: FitOptions::default().at_resolution(2),
+        ..Default::default()
+    };
+    assert_eq!(two.check(), Ok(()));
 
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);

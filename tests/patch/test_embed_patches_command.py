@@ -190,7 +190,8 @@ def _normals(cloud) -> list[np.ndarray]:
 def test_embed_patches_normal_step_is_the_grown_plane(
     monkeypatch, seoul_bull_workspace
 ):
-    """Each round's normal step is the grown plane (``sfmtool.bench.refine_normals``)
+    """Each round's normal step is the grown plane (``sfmtool.bench.refine_normals``),
+    at the patch resolution embed_patches was given,
     run over an embedded_patches value whose tracks carry keypoints. From round 2
     the tracks it reads hold the views view selection added. The turned frames
     are the ones view selection reads."""
@@ -234,7 +235,10 @@ def test_embed_patches_normal_step_is_the_grown_plane(
     for call in calls:
         assert call["recon"].feature_source == "embedded_patches"
         assert call["recon"].keypoints_xy is not None
-        assert call["kwargs"].keys() <= {"progress"}, "the step runs on its defaults"
+        # The step runs at the pipeline's patch resolution, its other
+        # settings at their defaults.
+        assert call["kwargs"].keys() <= {"progress", "resolution"}
+        assert call["kwargs"].get("resolution") == 12
         assert call["turned"] > 0
     # Round 2 reads the compacted tracks, which hold the views view selection
     # added, so they carry more observations than round 1's SIFT tracks.

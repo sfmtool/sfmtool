@@ -83,6 +83,7 @@ use crate::{ProgressCounter, PySfmrReconstruction};
     images,
     *,
     point_indexes = None,
+    resolution = None,
     working_resolution = None,
     spot_window = None,
     window_fractions = None,
@@ -115,6 +116,7 @@ fn refine_normals(
     recon: &PySfmrReconstruction,
     images: &Bound<'_, PyAny>,
     point_indexes: Option<Vec<u32>>,
+    resolution: Option<u32>,
     working_resolution: Option<u32>,
     spot_window: Option<u32>,
     window_fractions: Option<Vec<f64>>,
@@ -142,6 +144,7 @@ fn refine_normals(
     progress: Option<ProgressCounter>,
 ) -> PyResult<(PySfmrReconstruction, Py<PyDict>)> {
     let normal = GrownPlaneKeywords {
+        resolution,
         working_resolution,
         spot_window,
         window_fractions,

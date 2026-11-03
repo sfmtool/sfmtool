@@ -208,8 +208,9 @@ impl GrownPlaneNormalOptions {
     /// and target `σ`, a weak-turn bound of at least zero (infinite allowed)
     /// and a finite turn-to-`σ` ratio of at least zero, at least one selected
     /// view, a first rung of finite angles of at least zero with its aim
-    /// within its bounds, a finite rung ratio above 1, a coverage in `0 ..= 1`
-    /// and a finite damping of at least zero. The error names the first
+    /// within its bounds, a finite rung ratio above 1, a coverage in `0 ..= 1`,
+    /// a finite damping of at least zero and a fit whose sub-pixel kernel
+    /// runs at a patch resolution of at least 2. The error names the first
     /// setting that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
@@ -252,6 +253,9 @@ impl GrownPlaneNormalOptions {
         }
         if !(self.initial_damping.is_finite() && self.initial_damping >= 0.0) {
             return bad("initial_damping");
+        }
+        if self.fit.refine.resolution < 2 {
+            return bad("resolution");
         }
         Ok(())
     }

@@ -277,12 +277,17 @@ def _mean_angle_deg(n0: np.ndarray, n1: np.ndarray) -> float:
 def _grown_plane_normals(
     recon: SfmrReconstruction,
     pyramids: ImagePyramidSet,
+    resolution: int,
     log: Any,
     label: str,
 ) -> PatchCloud:
     """Turn each finite point's patch of ``recon`` to its grown-plane normal
-    (``sfmtool.bench.refine_normals`` on its default settings) and return the
-    turned patch frames.
+    (``sfmtool.bench.refine_normals`` at the patch resolution ``resolution``,
+    its other settings at their defaults) and return the turned patch frames.
+
+    ``recon`` stores no patch bitmaps, so ``resolution`` is the ``R`` the step
+    works at: the working grid's side is chosen within ``R`` to ``2R`` and the
+    closing render and reading are at ``R``.
 
     The plane is fitted over each point's track, every observation ``in``, at
     the keypoints ``recon`` stores; no keypoint moves. A point at infinity, and
@@ -296,7 +301,9 @@ def _grown_plane_normals(
         _timed_step(log, f"  {label}: refining normals ({recon.point_count} pts)..."),
         _poll_progress(log, recon.point_count) as counter,
     ):
-        refined, report = refine_normals(recon, pyramids, progress=counter)
+        refined, report = refine_normals(
+            recon, pyramids, resolution=resolution, progress=counter
+        )
     if log:
         agreement = report["mean_agreement"]
         agreement_text = "n/a" if np.isnan(agreement) else f"{agreement:.2f}"
@@ -451,10 +458,11 @@ def embed_patches(
        each image's hash from the ``.sift`` metadata. Everything below runs
        ``embedded_patches → embedded_patches``.
     1. **Refine each normal**: turn each finite point's patch to its
-       grown-plane normal (``sfmtool.bench.refine_normals`` on its default
-       settings), the one plane fitted over the point's track at the stored
-       (SIFT) keypoints. No keypoint moves. A point at infinity, and a point
-       the step leaves unchanged or refuses, keeps its frame.
+       grown-plane normal (``sfmtool.bench.refine_normals`` at ``resolution``,
+       its other settings at their defaults), the one plane fitted over the
+       point's track at the stored (SIFT) keypoints. No keypoint moves. A
+       point at infinity, and a point the step leaves unchanged or refuses,
+       keeps its frame.
     2. **Select the patch views** per point: the track plus other views that
        geometrically see the surfel and clear ``min_relative_zncc`` against a
        track-seeded template — the track views again rendered at their stored
@@ -516,7 +524,8 @@ def embed_patches(
             or water crop, or a lone straight edge, matches itself a few pixels
             away, so it is refused before it is scored. The radius reads at most ``3``,
             so ``3`` or more turns nothing out; ``0`` disables it. Default ``2.5``.
-        resolution: The ``R × R`` patch grid the kernels render/score on.
+        resolution: The ``R × R`` patch grid the kernels render/score on, the
+            normal step included.
         sampler: Pyramid sampler for view selection, the discrete localizer,
             the sub-pixel refiner and the stored bitmaps (the normal step uses
             the grown plane's own sampling): ``"per_view"`` (default: the sampler rule picks
@@ -612,7 +621,9 @@ def embed_patches(
     if embedded.patches is None:
         raise ValueError("to_embedded_patches produced no patch frames to refine")
     n_before = _patch_normals(embedded.patches) if log else None
-    cloud = _grown_plane_normals(embedded, pyramids, log, f"round 1/{rounds}")
+    cloud = _grown_plane_normals(
+        embedded, pyramids, resolution, log, f"round 1/{rounds}"
+    )
 
     # 2. Expand + vet the patch views per point (round 1 only; membership is fixed
     #    afterwards).
@@ -771,7 +782,9 @@ def embed_patches(
         # Each point's track is now the views the localizer kept, the ones
         # view selection added included, so the plane is fitted over all of
         # them at the previous round's keypoints.
-        cloud_r = _grown_plane_normals(emb_r, pyramids, log, f"round {r}/{rounds}")
+        cloud_r = _grown_plane_normals(
+            emb_r, pyramids, resolution, log, f"round {r}/{rounds}"
+        )
         base_loc = _localizations_from_recon(emb_r)
         # Re-prune grazing observations against THIS round's refined normal: the
         # low-parallax degeneracy tilts a normal toward grazing gradually over
