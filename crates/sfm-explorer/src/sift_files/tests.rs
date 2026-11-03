@@ -303,7 +303,7 @@ fn undoing_the_switch_judges_an_open_index_again() {
 /// `gray_formula` in place of `image_to_gray`, one hand-edited option, and the
 /// old folder [`OWN_PREFIX`].
 fn state_with_version_1_record(dir: &Path) -> (AppState, ReconId) {
-    let (mut state, id) = state_in(dir, "sfmtool");
+    let (state, id) = state_in(dir, "sfmtool");
     let mut recon = state.node(id).unwrap().recon().clone();
     let options = &mut recon.metadata.workspace.contents.feature_options;
     let options_map = options.as_object_mut().unwrap();

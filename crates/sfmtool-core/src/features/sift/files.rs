@@ -11,7 +11,7 @@
 //! extractor writes, and skips an image whose `.sift` is at least as new as the
 //! image. The files are `.sift` version 2: each records the conversion its
 //! options name as `feature_options.image_to_gray` and the image's two
-//! readings ([`image_readings_from_rgb`](super::image_readings_from_rgb)),
+//! readings ([`image_readings_from_rgb`]),
 //! taken from the decode the thumbnail is made from. It refuses version 1
 //! settings and a folder that holds version 1 files, since the two versions
 //! never share a folder (see `specs/workspace/workspace.md`).
