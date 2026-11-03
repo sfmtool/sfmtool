@@ -257,13 +257,16 @@ settings and some `.sift` file is missing or older than its image, it converts
 the record in memory as the viewer does (`upgrade_feature_options`), extracts
 into the folder named from the converted options, and reads every `.sift` file
 from there, printing one line that names the old and new folders; the `.sfmr`
-is not rewritten. For an `embedded_patches` reconstruction, and for a
-`sift_files` one of the `sfmtool` tool, whose extraction gives the same features
-for the same options, that is always sound. A `sift_files` reconstruction of the
-`colmap` or `opencv` tool is refused instead: its feature indexes name the
-features of its files, and a new extraction by an external library is not known
-to give the same ones. With every file present and current, nothing is
-converted.
+is not rewritten. This holds for every feature tool and both feature sources:
+the export writes keypoints and descriptors from the `.sift` files and no
+matches or tracks, so it reads all its features from one folder and needs no
+correspondence with the reconstruction's feature indexes. With every file
+present and current, nothing is converted.
+
+The viewer differs on a `sift_files` node, and refuses a version 1 record there:
+the node keeps using the reconstruction's feature indexes against the folder it
+builds, so files in a new folder would break that correspondence.
+`sfm to-colmap-db` has no such dependency.
 
 <a id="sfm-undistort"></a>**`sfm undistort`** writes its own workspace
 (`feature_tool` `sfmtool-undistort`, `feature_options` holding the source's
@@ -285,7 +288,6 @@ version 2 writes a new folder beside any older output.
 | Version 1 settings | `image_files_to_sift_files`, `build_sift_files` | names the workspace file or the record, says it holds version 1 settings, and, for a workspace file, says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new folder. For a `.sfmr`'s record it says the record is the `.sfmr`'s own, and never suggests `sfm ws upgrade` |
 | Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder, says it holds version 1 `.sift` files, and, for a workspace file's settings, says to run `sfm ws upgrade` |
 | An `sfmtool-undistort` tool | `image_files_to_sift_files` | says the files of an undistorted workspace are made by `sfm undistort` and cannot be extracted, and to run `sfm undistort` again |
-| A version 1 `colmap` or `opencv` record of a `sift_files` reconstruction with files to extract | `sfm to-colmap-db` | names the `.sfmr`, says its feature indexes name features of its files that a new extraction is not known to reproduce, and suggests restoring the files or converting to embedded patches |
 | `colmap` or `opencv` conversion differs | `image_files_to_sift_files` | names the tool and the one conversion it makes |
 | Version 1 record on a `sift_files` node | the viewer | says the feature indexes name features of the old files, which a new folder would not hold, and suggests converting to embedded patches |
 | Invalid workspace file at load | `load_workspace_config` | names the file and what is wrong: no `version`, the version found, or the key that breaks the version's rules |

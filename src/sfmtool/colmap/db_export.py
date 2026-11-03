@@ -19,14 +19,6 @@ from .._sfmtool.fileio import write_colmap_db
 __all__ = ["create_colmap_db_from_reconstruction"]
 
 
-# The feature tools whose extraction from a version 1 record cannot be shown to
-# reproduce the features of the files the record was made from: their output
-# depends on the external library's version and, for COLMAP, on whether SIFT ran
-# on the GPU, and neither is held to a reference here. The sfmtool extractor's
-# output is this package's own, and the same options give the same bytes.
-_UNREPRODUCIBLE_TOOLS = ("colmap", "opencv")
-
-
 def _stale_or_missing(image_paths: list[Path], prefix: str | None) -> list[Path]:
     """The images whose ``.sift`` in ``prefix`` is missing or older than they are."""
     if not prefix:
@@ -48,10 +40,11 @@ def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
     converted in memory as ``sfm ws upgrade`` converts a workspace file
     (``sfmtool.workspace.upgrade_feature_options``), the way the viewer's
     *Build SIFT Files* converts one, and every file is read from the new folder
-    the converted options name; the ``.sfmr`` is not rewritten. That is refused
-    for a ``sift_files`` reconstruction of the ``colmap`` or ``opencv`` tool,
-    whose feature indexes name features a new extraction is not known to
-    reproduce.
+    the converted options name; the ``.sfmr`` is not rewritten. That holds for
+    every feature tool: the export writes keypoints and descriptors from the
+    ``.sift`` files and no matches or tracks, so it reads all its features from
+    one folder and needs no correspondence with the reconstruction's feature
+    indexes.
     """
     from ..sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
     from ..workspace import upgrade_feature_options
@@ -65,16 +58,6 @@ def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
         return tool, options, prefix
 
     named = f"the reconstruction {sfmr_path}" if sfmr_path else "the reconstruction"
-    if recon.feature_source == "sift_files" and tool in _UNREPRODUCIBLE_TOOLS:
-        raise ValueError(
-            f"Some .sift files of {named} are missing or older than their images, "
-            f"and its record holds version 1 '{tool}' settings. Its observations are "
-            f"feature indexes into the '{tool}' .sift files it was made from, and a "
-            f"new '{tool}' extraction is not known to give the same features (they depend "
-            "on the library version that made the files and, for COLMAP, on whether "
-            "SIFT ran on the GPU), so the indexes could name other features. Restore the missing .sift files, or convert the reconstruction "
-            "to embedded patches."
-        )
     try:
         new_options = upgrade_feature_options(tool, options)
     except ValueError as e:

@@ -71,16 +71,14 @@ named from the converted options, reads them from there, and prints one line:
 Converted the version 1 SIFT extraction record of the reconstruction ‹path› to version 2 in memory, so its .sift files are read from ‹new folder›, moved from ‹old folder›; the .sfmr is not rewritten.
 ```
 
-That is sound for an `embedded_patches` reconstruction, which has no feature
-indexes into `.sift` files, and for a `sift_files` reconstruction of the
-`sfmtool` tool, whose extraction gives the same features for the same options,
-so the feature indexes still hold. A `sift_files` reconstruction of the
-`colmap` or `opencv` tool is refused, naming the `.sfmr`: a new extraction by
-those libraries is not known to give the features its indexes name (they depend
-on the library version and, for COLMAP, on whether SIFT ran on the GPU).
-Restoring the missing files, or converting the reconstruction to embedded
-patches, lets it export. A record of `sfmtool-undistort` is refused too, since
-only `sfm undistort` makes those files. No refusal about a `.sfmr`'s record
+This holds for every feature tool, and for both `embedded_patches` and
+`sift_files` reconstructions: the export writes keypoints and descriptors from
+the `.sift` files and no matches or tracks, so it reads all its features from
+one folder and needs no correspondence with the reconstruction's feature
+indexes. (The viewer's *Build SIFT Files* refuses a version 1 record on a
+`sift_files` node, because that node goes on using its feature indexes against
+the folder it builds.) A record of `sfmtool-undistort` is refused, since only
+`sfm undistort` makes those files. No refusal about a `.sfmr`'s record
 suggests `sfm ws upgrade`.
 
 The cameras follow `sfm to-colmap-bin`'s rule

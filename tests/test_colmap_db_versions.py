@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """`sfm to-colmap-db` on a reconstruction whose record holds version 1
-settings: the record is converted in memory and its `.sift` files are read
-from the converted folder, or, where a new extraction cannot be shown to give
-the record's features, the export is refused naming the `.sfmr`."""
+settings: the record is converted in memory and its `.sift` files are
+extracted into and read from the converted folder, for every feature tool."""
 
 import json
 import shutil
@@ -132,8 +131,8 @@ def _version_1_sift_files_reconstruction(tmp_path: Path, tool: str) -> Path:
 
 def test_a_version_1_sfmtool_sift_files_record_reads_the_converted_folder(tmp_path):
     """With one .sift file deleted, the export extracts into the converted
-    folder, and the database's features for that image are the deleted
-    file's, so the reconstruction's feature indexes still hold."""
+    folder. The database's features for that image equal the deleted file's,
+    which shows the sfmtool extractor giving the same features run to run."""
     sfmr = _version_1_sift_files_reconstruction(tmp_path, "sfmtool")
     workspace = sfmr.parent
     prefix = json.loads((workspace / ".sfm-workspace.json").read_text())[
@@ -158,22 +157,28 @@ def test_a_version_1_sfmtool_sift_files_record_reads_the_converted_folder(tmp_pa
     np.testing.assert_array_equal(descriptors, original["descriptors"])
 
 
-def test_a_version_1_opencv_sift_files_record_with_a_missing_file_is_refused(
+def test_a_version_1_opencv_sift_files_record_with_a_missing_file_exports(
     tmp_path,
 ):
-    """A new opencv or colmap extraction is not known to reproduce the
-    features the record's indexes name, so a missing file is refused, naming
-    the .sfmr and not pointing at sfm ws upgrade."""
+    """The export reads all its features from one folder and writes no
+    matches or tracks, so an opencv record converts and exports as an sfmtool
+    one does, every file extracted into the converted folder."""
     sfmr = _version_1_sift_files_reconstruction(tmp_path, "opencv")
-    gone = (
-        sfmr.parent / "images/features/sift-opencv-v1/seoul_bull_sculpture_03.jpg.sift"
-    )
-    gone.unlink()
+    old = sfmr.parent / "images/features/sift-opencv-v1"
+    (old / "seoul_bull_sculpture_03.jpg.sift").unlink()
     result = _export(sfmr, tmp_path / "out.db")
-    assert result.exit_code != 0
-    assert str(sfmr) in result.output
-    assert "not known to give the same features" in result.output
+    assert result.exit_code == 0, result.output
+    line = next(line for line in result.output.splitlines() if _CONVERTED in line)
+    assert "moved from features/sift-opencv-v1" in line
     assert "sfm ws upgrade" not in result.output
+    new_files = sorted(
+        p
+        for p in (sfmr.parent / "images/features").glob("sift-opencv-*/*.sift")
+        if p.parent != old
+    )
+    assert len(new_files) == 6
+    assert all(read_sift(p)["metadata"]["version"] == 2 for p in new_files)
+    assert not (old / "seoul_bull_sculpture_03.jpg.sift").exists()
 
     # With every file present, nothing is extracted and the export succeeds.
     sfmr2 = _version_1_sift_files_reconstruction(tmp_path / "again", "opencv")
