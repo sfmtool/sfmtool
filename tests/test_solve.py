@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+
+import numpy as np
 from types import SimpleNamespace
 
 from click.testing import CliRunner
@@ -68,6 +70,26 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
     assert recon.image_count > 0
     assert recon.point_count > 0
     assert recon.camera_count > 0
+
+    # Each image's readings are the ones its .sift records, bit for bit, under
+    # the conversion the .sift files record.
+    from sfmtool.fileio import SiftFile
+    from sfmtool.sift.file import get_sift_path_from_recon
+
+    for i, name in enumerate(recon.image_names):
+        with SiftFile(get_sift_path_from_recon(recon, name)) as reader:
+            assert (
+                reader.feature_tool_metadata["feature_options"]["image_to_gray"]
+                == recon.image_to_gray
+            )
+            assert recon.sharpness[i] == np.float32(reader.metadata["sharpness"])
+            np.testing.assert_array_equal(
+                recon.gradient_structure_tensors_xx_yy_xy[i],
+                np.asarray(
+                    reader.metadata["gradient_structure_tensor_xx_yy_xy"],
+                    dtype=np.float32,
+                ),
+            )
 
 
 def test_solve_global(isolated_seoul_bull_17_images: list[Path]):

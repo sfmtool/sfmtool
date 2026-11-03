@@ -327,6 +327,10 @@ def undistort_reconstruction_images(
     # Per-image outputs for .sfmr assembly
     per_image_remap = []  # list of {old_feat_idx: new_feat_idx} per image
     thumbnails = []
+    # Each output image's readings, which its .sift records and the .sfmr
+    # copies beside the thumbnails.
+    sharpness_rows: list[float] = []
+    tensor_rows: list[list[float]] = []
     feature_tool_hashes = []
     sift_content_hashes = []
 
@@ -471,6 +475,8 @@ def undistort_reconstruction_images(
         readings = image_readings_from_rgb(
             read_image_rgb(output_image_path), image_to_gray
         )
+        sharpness_rows.append(readings.sharpness)
+        tensor_rows.append(list(readings.gradient_structure_tensor_xx_yy_xy))
 
         sift_metadata = {
             "version": 2,
@@ -645,6 +651,13 @@ def undistort_reconstruction_images(
         thumbnails=thumbnails,
         metadata=metadata,
         rig_frame_data=rig_frame_data,
+        image_readings={
+            "image_to_gray": image_to_gray.to_dict(),
+            "sharpness": np.asarray(sharpness_rows, dtype=np.float32),
+            "gradient_structure_tensors_xx_yy_xy": np.asarray(
+                tensor_rows, dtype=np.float32
+            ).reshape(len(tensor_rows), 3),
+        },
     )
     # The images were warped into their cameras' pinholes, so no image has an
     # adjustment: the dict carries no adjustment columns, no camera's

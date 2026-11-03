@@ -355,6 +355,7 @@ def refine_camera_poses(
         "feature_tool_hashes": merged_images["feature_tool_hashes"],
         "sift_hashes": merged_images["sift_hashes"],
         "thumbnails_y_x_rgb": merged_images["thumbnails_y_x_rgb"],
+        "image_readings": merged_images["image_readings"],
     }
 
     # Preserve rig frame data keys if present
