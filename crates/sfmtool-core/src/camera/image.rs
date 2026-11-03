@@ -8,6 +8,9 @@
 //! float image carrying its per-channel `x` and `y` gradients. The resampling
 //! functions in [`remap`](super::remap) read and write them, and the patch,
 //! spherical-tile, bench and photograph-cache code hold them.
+//! [`area_resize`] is sfmtool's area-average resampler.
+
+pub mod area_resize;
 
 /// The JPEG quality a caller of [`ImageU8::write`] passes when it has no
 /// reason to choose another. It is 95, the default of OpenCV's

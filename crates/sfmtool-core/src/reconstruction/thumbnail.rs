@@ -7,9 +7,10 @@
 //! A `.sfmr` thumbnail row is the source photograph resized to
 //! [`THUMBNAIL_SIZE`] x [`THUMBNAIL_SIZE`] by area averaging, stretched to the
 //! square (see `specs/formats/sfmr-file-format.md`). [`resize_area`] is an area
-//! resize for any size. It matches OpenCV's `INTER_AREA` in method, each output
-//! pixel the coverage-weighted mean of the source pixels under it, but not bit
-//! for bit. [`thumbnail_from_rgb`] is the thumbnail resize itself: for a
+//! resize of 8-bit samples for any size, through sfmtool's one area-average
+//! resampler, [`area_resize`]. It matches OpenCV's `INTER_AREA` in method, each
+//! output pixel the coverage-weighted mean of the source pixels under it, but
+//! not bit for bit. [`thumbnail_from_rgb`] is the thumbnail resize itself: for a
 //! photograph at least [`THUMBNAIL_SIZE`] on each side it follows OpenCV's
 //! `INTER_AREA` arithmetic step for step, so its row is the one the Python SIFT
 //! extractors and `sfm xform --add-thumbnails` make with `cv2.resize`, byte for
@@ -24,40 +25,19 @@
 
 use ndarray::Array3;
 
+use crate::camera::image::area_resize::area_resize;
 use crate::{SfmrReconstruction, THUMBNAIL_SIZE};
 use sfmtool_archive_io::parse_hash_bytes;
-
-/// One output sample's source taps along one axis: `(source index, weight)`,
-/// the weights summing to one.
-fn axis_taps(src_len: usize, dst_len: usize) -> Vec<Vec<(usize, f32)>> {
-    let scale = src_len as f64 / dst_len as f64;
-    (0..dst_len)
-        .map(|d| {
-            let start = d as f64 * scale;
-            let end = (d + 1) as f64 * scale;
-            let mut taps = Vec::new();
-            let mut s = start.floor() as usize;
-            while (s as f64) < end && s < src_len {
-                let lo = start.max(s as f64);
-                let hi = end.min((s + 1) as f64);
-                if hi > lo {
-                    taps.push((s, ((hi - lo) / scale) as f32));
-                }
-                s += 1;
-            }
-            taps
-        })
-        .collect()
-}
 
 /// Resize an interleaved 8-bit image by area averaging.
 ///
 /// `pixels` is `height` rows of `width` pixels of `channels` bytes each, row
 /// major. Returns `dst_height` rows of `dst_width` pixels in the same layout.
-/// Each output pixel is the mean of the source area it covers, each source
-/// pixel weighted by the fraction of it inside that area, rounded to the
-/// nearest integer. Upscaling an axis degenerates to sampling the covering
-/// source pixel.
+/// Each output sample is [`area_resize`]'s `f32` mean of the source area it
+/// covers, each source pixel weighted by the fraction of it inside that area,
+/// rounded to the nearest integer with an exact half rounded up and limited
+/// to 0 to 255. Enlarging an axis gives each output the one or two source
+/// pixels under it.
 ///
 /// # Panics
 ///
@@ -80,36 +60,21 @@ pub fn resize_area(
         width * height * channels,
         "pixels must hold width * height * channels bytes"
     );
-    let x_taps = axis_taps(width, dst_width);
-    let y_taps = axis_taps(height, dst_height);
-
-    // Horizontal pass into f32 rows, then the vertical pass per output row.
-    let mut horizontal = vec![0f32; height * dst_width * channels];
-    for y in 0..height {
-        let src_row = &pixels[y * width * channels..(y + 1) * width * channels];
-        let dst_row = &mut horizontal[y * dst_width * channels..(y + 1) * dst_width * channels];
-        for (dx, taps) in x_taps.iter().enumerate() {
-            for c in 0..channels {
-                let mut acc = 0f32;
-                for &(sx, w) in taps {
-                    acc += w * f32::from(src_row[sx * channels + c]);
-                }
-                dst_row[dx * channels + c] = acc;
+    let row_len = width * channels;
+    area_resize(
+        (width, height),
+        channels,
+        (dst_width, dst_height),
+        || (),
+        |y, row, _| {
+            for (out, &v) in row.iter_mut().zip(&pixels[y * row_len..(y + 1) * row_len]) {
+                *out = f32::from(v);
             }
-        }
-    }
-    let mut out = vec![0u8; dst_height * dst_width * channels];
-    for (dy, taps) in y_taps.iter().enumerate() {
-        let dst_row = &mut out[dy * dst_width * channels..(dy + 1) * dst_width * channels];
-        for (i, value) in dst_row.iter_mut().enumerate() {
-            let mut acc = 0f32;
-            for &(sy, w) in taps {
-                acc += w * horizontal[sy * dst_width * channels + i];
-            }
-            *value = (acc + 0.5).clamp(0.0, 255.0) as u8;
-        }
-    }
-    out
+        },
+    )
+    .into_iter()
+    .map(|v| (v + 0.5).clamp(0.0, 255.0) as u8)
+    .collect()
 }
 
 /// The `THUMBNAIL_SIZE` x `THUMBNAIL_SIZE` RGB thumbnail row of an RGB
