@@ -216,7 +216,7 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 - Location: `spherical/photometric_ransac.rs:341-371` (per-row mean brightness), `:643-649` (mean score), `:678-681` (the median buffer), `:701-710` and `:727-732` (validity-weighted channel sums).
 - Problem:
   - The kernel accumulates `f32` pixel values, validities and scores of 8-bit patches in `f64` and gives no reason for it. [STANDARDS.md § "Numeric precision is the smallest the use justifies"](../specs/STANDARDS.md#numeric-precision-is-the-smallest-the-use-justifies) asks for the smallest precision the use justifies, with the reason stated where it is chosen, and audit-hygiene check 19 flags these loops.
-  - The sums are over one patch's pixels (a few hundred terms), where an `f32` running sum is bounded by about `n · 2^-24`, well under one 8-bit level; the median buffer is `f64` only because `median_in_place` takes `f64`.
+  - The sums are over one patch's pixels (a few hundred terms) or over the rows of one stack (fewer), where an `f32` running sum is bounded by about `n · 2^-24`, well under one 8-bit level; the median buffer is `f64` only because `median_in_place` takes `f64`.
 - Proposed fix: measure the inlier sets and gains against an `f32` version on the kerry_park and seoul_bull tile stacks, then either move the sums to `f32` or state in the module docs why `f64` is needed.
 - Effort: low–medium. Risk: medium, since a last-bit change can flip a residual threshold; pin the RANSAC fixtures before and after.
 

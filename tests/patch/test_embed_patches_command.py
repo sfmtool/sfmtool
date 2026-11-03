@@ -375,6 +375,8 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
 
     from sfmtool._embed_patches import embed_patches
     from sfmtool._workspace_image import read_workspace_image
+    from sfmtool.flow import matcher_image_to_gray
+    from sfmtool.sift import gray_from_rgb
 
     recon = SfmrReconstruction.load(seoul_bull_workspace)
     ws = recon.workspace_dir
@@ -386,7 +388,10 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
         path = str(Path(ws) / name)
         bgr = cv2.imread(path, cv2.IMREAD_COLOR)
         assert bgr is not None
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        grey = gray_from_rgb(
+            np.ascontiguousarray(bgr[..., ::-1]), matcher_image_to_gray()
+        )
+        gray = np.rint(grey * np.float32(255)).astype(np.uint8)
         repainted = np.zeros_like(bgr)
         repainted[..., 0] = gray // 6  # blue (BGR channel 0)
         repainted[..., 1] = gray  # green
