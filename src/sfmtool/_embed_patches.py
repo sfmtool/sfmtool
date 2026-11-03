@@ -460,8 +460,9 @@ def embed_patches(
     1. **Refine each normal**: turn each finite point's patch to its
        grown-plane normal (``sfmtool.bench.refine_normals`` at ``resolution``,
        its other settings at their defaults), the one plane fitted over the
-       point's track at the stored (SIFT) keypoints. No keypoint moves. A point at infinity, and a point
-       the step leaves unchanged or refuses, keeps its frame.
+       point's track at the stored (SIFT) keypoints. No keypoint moves. A
+       point at infinity, and a point the step leaves unchanged or refuses,
+       keeps its frame.
     2. **Select the patch views** per point: the track plus other views that
        geometrically see the surfel and clear ``min_relative_zncc`` against a
        track-seeded template — the track views again rendered at their stored
