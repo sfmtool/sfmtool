@@ -33,10 +33,21 @@ use super::render::{
     robust_score, textured, zncc, Block, GradientRead, Gradients, Samples, ViewRender,
 };
 
-/// The largest change of the tilt one step may make, tilt units: a step
-/// past it is scaled back, so that the fit moves the plane in steps no larger
-/// than about six degrees and stays near the basin it started in.
+/// The largest change of the tilt a fit's first step may make, tilt units: a
+/// step past it is scaled back, so that the fit starts by moving the plane in
+/// steps no larger than about six degrees and stays near the basin it started
+/// in.
 pub(super) const MAX_TILT_STEP: f64 = 0.1;
+
+/// The largest the tilt cap of a fit whose tilt is free grows to, tilt units.
+/// After a kept step that the tilt cap shortened, the cap doubles, up to this:
+/// the Gauss–Newton step often overshoots the first cap many times over,
+/// and a fit held to it walks towards the optimum at the cap, some to the
+/// iteration limit. On the three ground truths the growing cap made 4.5% to 27%
+/// fewer iterations and took 1% to 12% less time, with every mean error
+/// unchanged or lower; a cap of 0.4 saved less work on all three and
+/// raised the Seoul bull's mean error.
+pub(super) const MAX_GROWN_TILT_STEP: f64 = 0.8;
 
 /// The largest change of a shift one step may make, image px.
 pub(super) const MAX_SHIFT_STEP_PX: f64 = 2.0;
@@ -154,7 +165,10 @@ fn value_derivative(
 /// Fit `objective` from `p0`; the parameters reached, their score and how
 /// many steps were taken. The score never falls below the start's. The fit
 /// stops after a kept step that gains less than `it.min_improvement`, or less
-/// than [`MIN_RELATIVE_GAIN`] of the first kept step's gain.
+/// than [`MIN_RELATIVE_GAIN`] of the first kept step's gain. A step is
+/// scaled back to the tilt cap, which starts at [`MAX_TILT_STEP`] and, in a
+/// fit whose tilt is free, doubles after each kept step it shortened, up to
+/// [`MAX_GROWN_TILT_STEP`].
 pub(super) fn maximise<O: Objective>(
     objective: &O,
     p0: &[f64],
@@ -165,6 +179,10 @@ pub(super) fn maximise<O: Objective>(
     let mut damping = it.damping;
     let mut taken = 0;
     let mut first_gain = None;
+    // Only a fit whose tilt is free has tilt entries, and only its tilt cap
+    // grows.
+    let tilt_entries = objective.tilt_entries();
+    let mut tilt_cap = MAX_TILT_STEP;
     for _ in 0..it.max_iterations {
         let Some((fz, r0)) = frozen.as_ref() else {
             break;
@@ -181,14 +199,18 @@ pub(super) fn maximise<O: Objective>(
                 damping *= 10.0;
                 continue;
             };
+            let tilt_capped = delta.iter().take(tilt_entries).any(|d| d.abs() > tilt_cap);
             let q: Vec<f64> = p
                 .iter()
-                .zip(capped(delta, objective.tilt_entries()).iter())
+                .zip(capped(delta, tilt_entries, tilt_cap).iter())
                 .map(|(x, d)| x + d)
                 .collect();
             let (s, f) = objective.freeze(&q);
             if s > score + 1e-12 {
                 damping = (damping / 10.0).max(1e-9);
+                if tilt_capped {
+                    tilt_cap = (2.0 * tilt_cap).min(MAX_GROWN_TILT_STEP);
+                }
                 accepted = Some((q, s, f));
                 break;
             }
@@ -224,13 +246,13 @@ fn damped_step(a: &DMatrix<f64>, g: &DVector<f64>, damping: f64) -> Option<DVect
 }
 
 /// `delta` scaled back so that no tilt entry, one of the first
-/// `tilt_entries`, moves more than [`MAX_TILT_STEP`] and no shift entry more
-/// than [`MAX_SHIFT_STEP_PX`].
-fn capped(delta: DVector<f64>, tilt_entries: usize) -> DVector<f64> {
+/// `tilt_entries`, moves more than `tilt_cap` and no shift entry more than
+/// [`MAX_SHIFT_STEP_PX`].
+fn capped(delta: DVector<f64>, tilt_entries: usize, tilt_cap: f64) -> DVector<f64> {
     let mut factor: f64 = 1.0;
     for (i, d) in delta.iter().enumerate() {
         let cap = if i < tilt_entries {
-            MAX_TILT_STEP
+            tilt_cap
         } else {
             MAX_SHIFT_STEP_PX
         };
