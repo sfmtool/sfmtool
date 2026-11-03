@@ -226,8 +226,9 @@ These read through the bindings:
   loader behind `embed-patches`, the strip montages and the `xform` steps that
   read photographs.
 - `load_gray` in [_image_load.py](../../../src/sfmtool/_image_load.py), the
-  grey decode for optical flow, which converts the RGB with OpenCV's
-  `COLOR_RGB2GRAY`.
+  grey decode for optical flow, which converts the RGB with `flow_gray`:
+  `sfmtool.sift.gray_from_rgb`, sfmtool's one RGB-to-grey conversion, with
+  BT.601 luma rounded to 8 bits, the 8-bit grey image the flow kernels take.
 - `cluster-patches`, whose refinement kernel takes the RGB as read. The
   viewer's cluster run reads with `ImageU8::read_rgb`, so it hands the kernel
   the same pixels.
