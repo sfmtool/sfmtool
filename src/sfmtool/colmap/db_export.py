@@ -53,7 +53,7 @@ def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
     whose feature indexes name features a new extraction is not known to
     reproduce.
     """
-    from ..sift.file import get_feature_tool_xxh128
+    from ..sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
     from ..workspace import upgrade_feature_options
 
     contents = recon.source_metadata.get("workspace", {}).get("contents", {})
@@ -82,7 +82,10 @@ def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
             f"The version 1 workspace record of {named} cannot be converted to "
             f"version 2: {e}."
         ) from e
-    feature_type = contents.get("feature_type") or f"sift-{tool}"
+    # The folder is named as a new version 2 record's is, from the tool's
+    # feature type, so it is the one `sfm ws upgrade` and the viewer name for
+    # the same options; older records hold a bare "sift" feature type.
+    feature_type = get_feature_type_for_tool(tool, new_options)
     xxh128 = get_feature_tool_xxh128(tool, feature_type, new_options)
     new_prefix = f"features/{feature_type}-{xxh128}"
     print(
@@ -177,6 +180,8 @@ def create_colmap_db_from_reconstruction(
         output_db_path: Path where the COLMAP database should be created
         max_feature_count: Maximum features per image (None = all)
         populate_two_view_geometries: Pre-populate F matrices for guided matching
+        sfmr_path: The ``.sfmr`` the reconstruction was read from, for the
+                   messages about its workspace record to name
 
     Returns:
         Path to the created database file

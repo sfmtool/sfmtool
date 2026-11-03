@@ -57,6 +57,16 @@ def test_an_embedded_patches_record_of_version_1_is_converted(tmp_path):
     assert len(new_files) == 17
     assert all(read_sift(p)["metadata"]["version"] == 2 for p in new_files)
 
+    # The folder is the one `sfm ws upgrade` names for the same settings, though
+    # the .sfmr's record holds a bare "sift" feature type.
+    upgraded = CliRunner().invoke(main, ["ws", "upgrade", str(tmp_path)])
+    assert upgraded.exit_code == 0, upgraded.output
+    new_prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
+        "feature_prefix_dir"
+    ]
+    assert {p.parent for p in new_files} == {tmp_path / new_prefix}
+    assert f"read from {new_prefix}," in line
+
 
 def _as_version_1(data: dict, tool: str) -> dict:
     """A version 2 `.sift` dict rewritten as a version 1 writer wrote it."""
