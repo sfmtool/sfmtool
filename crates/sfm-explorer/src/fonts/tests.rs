@@ -30,8 +30,8 @@ fn source_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 /// The non-ASCII characters in `source` outside comments: those written
-/// literally in strings and character literals, and those a string spells as
-/// a `\u{…}` escape.
+/// literally in strings and character literals, and those a string or a
+/// character literal spells as a `\u{…}` escape.
 ///
 /// A small scanner rather than a Rust parser: it knows where a string starts
 /// and ends, so a `//` inside one is not taken for a comment, and it steps
@@ -89,7 +89,15 @@ fn written_characters(source: &str, found: &mut BTreeSet<char>) {
                 None
             };
             if let Some(close) = len {
-                for &d in &chars[i + 1..close] {
+                let body: String = chars[i + 1..close].iter().collect();
+                if let Some(hex) = body.strip_prefix("\\u{").and_then(|b| b.strip_suffix('}')) {
+                    let code = u32::from_str_radix(hex, 16).expect("a hex \\u{} escape");
+                    let escaped = char::from_u32(code).expect("a valid \\u{} escape");
+                    if !escaped.is_ascii() {
+                        found.insert(escaped);
+                    }
+                }
+                for d in body.chars() {
                     if !d.is_ascii() {
                         found.insert(d);
                     }
@@ -111,10 +119,11 @@ fn the_scanner_reads_strings_and_skips_comments() {
         "// a comment's × is never drawn\n\
          let a = \"0.1 → 0.2 // still a string ·\"; // but this — is a comment\n\
          let b = '\"'; let c = \"\\u{2212}\"; let d = '°'; fn f<'a>(x: &'a str) {}\n\
+         let e = '\\u{25b8}'; let f = '\\'';\n\
          /* a block comment's ≤ */",
         &mut found,
     );
-    assert_eq!(found, BTreeSet::from(['→', '·', '−', '°']));
+    assert_eq!(found, BTreeSet::from(['→', '·', '−', '°', '▸']));
 }
 
 #[test]
