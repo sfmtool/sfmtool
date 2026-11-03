@@ -324,10 +324,12 @@ from a version 2 workspace holds the object in
 holds what that file held. `.sfmr` files that name an old folder still find
 their `.sift` files there through their own record after an upgrade.
 
-The per-image readings a `.sfmr` will carry, and where a `.sfmr` writer gets
-them, are proposed in
-[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md) (`.sfmr`
-version 15).
+A `.sfmr` of version 15 carries each image's sharpness and gradient structure
+tensor under one `image_to_gray`. A writer takes the conversion from the value
+it writes, or else from `workspace.contents.feature_options.image_to_gray`, and
+copies each image's readings from its version 2 `.sift` file when that file
+records the same conversion; see
+[`../formats/sfmr-file-format.md` § Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values).
 
 ### Protection Against Nesting
 

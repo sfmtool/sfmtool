@@ -278,7 +278,9 @@ and the formula, and writes no file; it does not store the value or replace it.
 #### The reading image
 
 Both readings are taken on one grey image, the **reading image**, built from the
-decoded image of width `W` and height `H` in stored pixel order:
+decoded image of width `W` and height `H` in stored pixel order. The
+measurements behind its size and the two readings are in
+[sift-file-format-measurements.md](sift-file-format-measurements.md).
 
 1. **Grey.** Each pixel's grey sample is `image_to_gray` applied to it: the
    formula, then `q` when `quantize_bits` is present, in single precision as

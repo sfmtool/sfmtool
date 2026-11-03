@@ -28,6 +28,7 @@ sfmtool's data rather than defining a format.
 | [sfmr-file-format.md](sfmr-file-format.md) | `sfmtool-sfmr-format` | The `.sfmr` reconstruction container: sections, schemas, point IDs, and the coordinate-system conventions everything else inherits. |
 | [matches-file-format.md](matches-file-format.md) | `sfmtool-matches-format` | The `.matches` container: the cluster backbone, its members, and the derived cluster-patch sections. |
 | [sift-file-format.md](sift-file-format.md) | `sfmtool-sift-format` | The `.sift` feature file: the zip entries holding keypoints, descriptors and thumbnail, their descending-size ordering, and the hashes that identify the extraction. |
+| [sift-file-format-measurements.md](sift-file-format-measurements.md) | — | The measurements behind the image readings a `.sift` records and a `.sfmr` copies: why the sharpness is the Laplacian's variance, why the gradient structure tensor is recorded beside it, why the reading image is 480 pixels, and the measures not chosen. |
 | [camrig-file-format.md](camrig-file-format.md) | `sfmtool-camrig-format` | The `.camrig` camera-rig description and its pattern matching. |
 | [sfmtool-camera-models.md](sfmtool-camera-models.md) | — | The `SFMTOOL_PINHOLE` and `SFMTOOL_FISHEYE` camera models as they appear on disk. Kernels in [../core/camera/](../core/camera/README.md). |
 | [colmap-interop.md](colmap-interop.md) | `sfmtool-colmap` | Reading and writing COLMAP's binary model and SQLite database: ID remapping, the camera models it translates, and where the coordinate conversion happens. |

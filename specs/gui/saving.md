@@ -188,7 +188,13 @@ Saved a minimal copy of run_a at v7 to D:\published\run_a.sfmr
 
 ## What a plain save writes
 
-A Save or Save As writes the columns the file had. The display thumbnails the
+A Save or Save As writes the columns the file had, and the image readings
+the current format version requires. A file below version 15 has none, so its
+save gathers them from each image's `.sift` file, or else from the image
+itself, as every `.sfmr` save does
+([sfmr-file-format.md § Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)),
+and the save is refused, naming each image, when an image has neither. The
+gathered rows are written and not kept in the node. The display thumbnails the
 open builds for a file without thumbnails are the node's and never reach a
 value, so no save writes them. The patch bitmaps the open renders for a file
 without bitmaps are in the value, marked `PointSet::patch_bitmaps_for_display`,

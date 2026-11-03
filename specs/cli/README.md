@@ -123,6 +123,23 @@ sfm sift --extract -r rig_sharp -r 10-20   # the list, narrowed to frames 10-20
 sfm to-colmap-bin result.sfmr out/ --named-image-list hero_shots
 ```
 
+## Writing a `.sfmr`
+
+Every command that writes a `.sfmr` (`solve`, `xform`, `merge`, `align`,
+`densify`, `embed-patches`, `from-colmap-bin`, `undistort`, and SfM
+Explorer's Save) writes the current format version, 15, which stores every
+image's sharpness and gradient structure tensor
+([sfmr-file-format.md § Image readings](../formats/sfmr-file-format.md#image-readings-version-15)).
+A command whose input already holds them carries them with the images. One
+that writes from `.sift` files copies them from the version 2 files, and an
+input older than version 15 has them gathered when it is saved: from each
+image's `.sift` file, and otherwise from the image itself, decoded and checked
+against the reconstruction's record of its hash
+([§ Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)).
+So saving an older `.sfmr` needs its `.sift` files or its images. When an
+image has neither, the command fails before it writes anything, with an error
+naming each such image, the `.sift` path tried and the image path tried.
+
 ## Workspace
 
 | Command | Spec |

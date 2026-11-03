@@ -997,6 +997,11 @@ Thumbnails are in the shorthand as well as bitmaps because the purpose is the
 smallest file, and the `--add-*` steps rebuild both: the thumbnails from the
 `.sift` files or the photographs, the bitmaps from the photographs.
 A caller that wants the thumbnails kept writes `--minimal --add-thumbnails`.
+The image readings (each image's sharpness and gradient structure tensor) are
+not in the shorthand: they are 16 bytes per image and required, and a minimal
+file keeps them. A minimal copy of a file older than version 15 therefore needs
+its `.sift` files or its images when it is written, as every save of such a
+file does ([Writing a `.sfmr`](../../README.md#writing-a-sfmr)).
 
 ##### `--minimal wspath=<path>`: stating the workspace path
 

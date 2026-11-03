@@ -188,7 +188,9 @@ reconstruction.sfmr (ZIP archive)
 │   ├── principal_point_adjustments_xy.{N}.2.float64.zst # (Optional, v13+) per-image principal-point offset, short-side unit
 │   ├── radial_bspline_adjustments.{N}.2.float64.zst # (Optional, v14+) per-image radial B-spline correction, units of ρ
 │   ├── rolling_shutter_rates_xyz.{N}.3.float64.zst  # (Optional, v14+) per-image rolling-shutter rates, rad per short side of readout
-│   └── metadata.json.zst                      # Image metadata
+│   ├── sharpness.{N}.float32.zst              # (v15+) per-image sharpness
+│   ├── gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst # (v15+) per-image gradient structure tensor
+│   └── metadata.json.zst                      # Image metadata, with the readings' image_to_gray (v15+)
 ├── derived/                                   # Recomputable from the sections above (v10+)
 │   ├── depth_statistics.json.zst              # Per-image depth stats
 │   └── observed_depth_histogram_counts.{N}.128.uint32.zst  # Observed depth histograms
@@ -250,7 +252,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 14,
+  "version": 15,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -418,7 +420,7 @@ in the `content_xxh128` entry below.
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`, so it covers each camera's `per_image_adjustments` key (version 13+) and `rolling_shutter_scanlines` key (version 14+)
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
-- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates (version 14+) participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag, are always included, so two files that differ only in whether they carry thumbnails hash differently.
+- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates (version 14+) participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (version 15+, required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and, from version 15, the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc` first, before `feature_indexes`; `plain_bitmap_zncc` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
 - `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
@@ -774,7 +776,8 @@ must be consistent (i.e., `camera_indexes[j]` = `sensor_camera_indexes[image_sen
 {
   "image_count": 18,
   "has_thumbnails": true,
-  "thumbnail_size": 128
+  "thumbnail_size": 128,
+  "image_to_gray": { "formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8 }
 }
 ```
 
@@ -791,6 +794,9 @@ must be consistent (i.e., `camera_indexes[j]` = `sensor_camera_indexes[image_sen
 - `thumbnail_size`: `128` when `has_thumbnails` is `true`, and `null` when it is
   `false`. It restates the edge fixed by the entry name rather than
   parameterising it (see below).
+- `image_to_gray`: (version 15+, required) The grey conversion the image
+  readings were computed through, defined in
+  [`image_to_gray`](#image_to_gray-version-15). Absent below version 15.
 
 #### `images/names.json.zst`
 
@@ -1185,6 +1191,312 @@ the entry name is authoritative.
 
 A producer that copies thumbnails from `.sift` files relies on the `.sift`
 thumbnail edge being the same 128; the two formats fix the same value.
+
+#### Image readings (version 15+)
+
+Some frames of a hand-held capture are blurred, by focus or by the camera
+moving during the exposure. From version 15 a file records two readings of
+every image that let a reader rank its images by blur without the images: a
+**sharpness**, the variance of the Laplacian of a grey copy of the image
+reduced to a long side of 480 pixels, and a **gradient structure tensor**, the
+mean products of that copy's horizontal and vertical gradients. They are two
+required columns, and the grey conversion both were computed through is the
+required `image_to_gray` key of `images/metadata.json`.
+
+The readings are for comparing the images of one reconstruction with each
+other. They depend on what the scene holds (a frame that is mostly plain wall
+has a low sharpness however well it is focused), so they are not comparable
+between reconstructions of different scenes, and the format gives no threshold
+for either. A `.sfmr` file records no choice of images made by these readings
+and no named image list.
+
+##### `images/sharpness.{N}.float32.zst` (version 15+)
+
+- **Shape**: `(N,)` where N = image_count
+- **Data type**: `float32` (little-endian)
+- **Format**: image `i`'s sharpness, the population variance of the Laplacian
+  over the interior of its [reading image](#the-reading-image), in grey units
+  squared ([Sharpness](#sharpness)). Finite and not negative.
+- **Required** from version 15, in both feature sources.
+
+##### `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst` (version 15+)
+
+- **Shape**: `(N, 3)` where N = image_count
+- **Data type**: `float32` (little-endian)
+- **Format**: image `i`'s `[Exx, Eyy, Exy]`, the means over the interior of its
+  reading image of `Gx²`, `Gy²` and `Gx·Gy`, with `Gx` and `Gy` the 3 × 3
+  Sobel derivatives divided by 8, `x` to the right and `y` down
+  ([Gradient structure tensor](#gradient-structure-tensor)). Not normalised.
+  Finite; `Exx` and `Eyy` not negative.
+- **Required** from version 15, in both feature sources.
+
+Each value is computed in single precision, as the sections below define, so
+it is a `float32` already and a writer stores it as it is.
+
+##### `image_to_gray` (version 15+)
+
+`images/metadata.json`'s `image_to_gray` key holds the conversion from an
+image's colour samples to the grey samples both columns were computed from:
+
+```json
+"image_to_gray": { "formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8 }
+```
+
+* `formula` (string, required): an arithmetic expression whose value is the
+  grey sample, before any rounding.
+* `quantize_bits` (integer from 1 to 16, optional): when present, the formula's
+  value is rounded to this many bits over `[0, 1]`. When absent, the formula's
+  value is the grey sample as it is.
+
+No other key is defined. One conversion covers every row of the file, because
+readings computed through different conversions are in different grey units
+and do not compare. The key rides inside `images/metadata.json`, which
+`images_xxh128` covers.
+
+**Inputs.** `R`, `G` and `B` are the image's red, green and blue samples, each
+normalised to `[0, 1]` by dividing the stored sample by its full-scale value,
+`2^d − 1` for `d`-bit samples (255 for 8-bit, 65535 for 16-bit), so a full-scale
+sample is exactly `1`. For a single-channel image, `R = G = B`. An alpha
+channel is ignored. The pixels are the image's stored pixels in their stored
+order: an EXIF orientation tag is **not** applied.
+
+**Grammar.** The formula is an expression over the variables `R`, `G`, `B` and
+decimal numeric literals (digits with at most one decimal point, no exponent),
+with three operators and parentheses for grouping:
+
+| Operator | Meaning | Precedence | Associativity |
+|----------|---------|------------|---------------|
+| `**` | power | highest | right |
+| `*` | multiply | middle | left |
+| `+` | add | lowest | left |
+
+Whitespace is insignificant. A leading `-` on a numeric literal makes a
+negative coefficient; there is no subtraction or division operator. A formula
+has at most 1000 tokens, each variable, literal, operator and parenthesis
+counting as one, and a reader may refuse a longer one.
+
+**Precision.** The formula is evaluated in IEEE-754 single precision
+(binary32, `f32`), with every rounding to nearest, ties to even: each input is
+the `f32` nearest the normalised sample, each literal is the `f32` nearest its
+decimal text, and the result of each operation in the expression's tree is
+rounded to `f32`. `**` is the single-precision power function, which math
+libraries do not all round correctly, so for a formula that uses `**` two
+implementations can differ in the last bit of a sample; every other operation
+gives the same bits in every implementation that follows these rules.
+
+**Output.** Without `quantize_bits`, the grey sample is the formula's value `v`,
+not clamped. With `quantize_bits = b`, it is
+
+```
+q(v) = round(clamp(v, 0, 1) · (2^b − 1)) / (2^b − 1)
+```
+
+where `clamp(v, 0, 1)` is `v` limited to `[0, 1]` and `round` takes the nearest
+integer, with an exact half rounded up. `q` is evaluated in single precision
+too: `2^b − 1` is exact, and the product and the quotient are each rounded to
+`f32`.
+
+| `formula` | `quantize_bits` | Effect |
+|-----------|-----------------|--------|
+| `0.2126*R + 0.7152*G + 0.0722*B` | absent | BT.709 luma, unrounded |
+| `0.2126*R + 0.7152*G + 0.0722*B` | `8` | BT.709 luma rounded to 8 bits |
+| `0.299*R + 0.587*G + 0.114*B` | `8` | BT.601 luma rounded to 8 bits |
+| `G` | absent | the green channel |
+
+##### The reading image
+
+Both readings are taken on one grey image, the **reading image**, built from the
+decoded image of width `W` and height `H` in stored pixel order:
+
+1. **Grey.** Each pixel's grey sample is `image_to_gray` applied to it: the
+   formula, then `q` when `quantize_bits` is present, in single precision as
+   above. Every value from here on is an `f32`, and every product, sum and
+   difference below is rounded to `f32`, in the order written.
+2. **Size.** Let `L = max(W, H)` and `S = min(W, H)`. If `L ≤ 480`, the grey
+   image is used at its own size; it is never enlarged. Otherwise the long side
+   becomes `480` and the short side becomes
+   `S' = max(1, floor((2 · S · 480 + L) / (2 · L)))`, which is `S · 480 / L`
+   rounded to the nearest integer with an exact half rounded up, computed in
+   integers. Which side is long is kept.
+3. **Resize.** Each pixel of the `W' × H'` reading image is the area average of
+   the grey image over its footprint: treating the grey image as constant over
+   each unit pixel square, output pixel `(i, j)` covers
+   `[i · W / W', (i + 1) · W / W') × [j · H / H', (j + 1) · H / H')` of it, and
+   its value is the integral of the grey image over that rectangle divided by
+   the rectangle's area. It is computed one axis at a time. Along an axis of
+   `n` samples reduced to `m`, in units of `1 / m` of a source pixel, output
+   `d` covers `[d · n, (d + 1) · n)` and source `s` covers
+   `[s · m, (s + 1) · m)`; the weight of source `s` in output `d` is their
+   overlap, an integer, divided by `n`, rounded to the nearest `f32`. Each
+   grey row is first reduced across, each of its `W'` outputs being
+   `Σ w · g` over its sources in increasing order, added to `0`; then output
+   pixel `(i, j)` is `Σ w · a` over the reduced rows `a` under row `j`, in
+   increasing order, at column `i`. When the image is used at its own size,
+   every weight is `1` and the reading image is the grey image.
+
+Write `I(x, y)` for the reading image's sample at column `x` (left to right) and
+row `y` (top to bottom). The **interior** is the pixels with
+`1 ≤ x ≤ W' − 2` and `1 ≤ y ≤ H' − 2`; there are `n = (W' − 2)(H' − 2)` of
+them. Both readings are means over the interior; no border pixel is padded,
+reflected or counted. If `W' < 3` or `H' < 3`, the interior is empty, and the
+sharpness and all three tensor values are `0`.
+
+A **mean over the interior** of a quantity `t(x, y)` is taken in single
+precision in a fixed order: each interior row's `t` is summed from `x = 1` to
+`x = W' − 2`, starting from `0`; those row sums are summed from `y = 1` to
+`y = H' − 2`, starting from `0`; and the total is divided by `n`. An
+implementation that computes these steps in double precision, or sums in
+another order, gets readings that differ from these in the last digits: on
+photographs, by under `10^-5` of each value (for `Exy`, of `Exx + Eyy`), or
+`10^-12` absolute for a reading near `0`. The readings' use, comparing the
+images of one reconstruction, needs about three significant digits.
+
+##### Sharpness
+
+The Laplacian at an interior pixel is the 3 × 3 kernel
+`[[0, 1, 0], [1, −4, 1], [0, 1, 0]]`:
+
+```
+Λ(x, y) = I(x − 1, y) + I(x + 1, y) + I(x, y − 1) + I(x, y + 1) − 4 · I(x, y)
+```
+
+with the additions taken left to right, and the sharpness is its population
+variance over the interior, in two passes:
+
+```
+μ = (1/n) Σ Λ(x, y)
+sharpness = (1/n) Σ (Λ(x, y) − μ)²
+```
+
+where both are means over the interior as defined above, and the second pass
+computes `Λ − μ` and its square in `f32`. The units are grey units squared,
+the grey unit being the `[0, 1]` scale of `image_to_gray`.
+
+##### Gradient structure tensor
+
+The derivatives at an interior pixel are the 3 × 3 Sobel kernels divided by 8,
+so that on a linear ramp of slope `s` grey units per pixel the derivative is
+`s`:
+
+```
+Gx(x, y) = ( I(x+1, y−1) + 2·I(x+1, y) + I(x+1, y+1)
+           − I(x−1, y−1) − 2·I(x−1, y) − I(x−1, y+1) ) / 8
+
+Gy(x, y) = ( I(x−1, y+1) + 2·I(x, y+1) + I(x+1, y+1)
+           − I(x−1, y−1) − 2·I(x, y−1) − I(x+1, y−1) ) / 8
+```
+
+with the additions and subtractions taken left to right and the division by
+8 exact. `Gx` increases to the right and `Gy` increases downward. The three
+stored values are means over the interior of the `f32` products:
+
+```
+Exx = (1/n) Σ Gx²      Eyy = (1/n) Σ Gy²      Exy = (1/n) Σ Gx·Gy
+```
+
+in grey units squared per pixel squared of the reading image. They are stored
+as they are, not divided by the gradient energy `Exx + Eyy`. A reader derives
+from them the gradient energy `E = Exx + Eyy`; the coherence
+`sqrt((Exx − Eyy)² + 4·Exy²) / E`, from `0` (gradients equally strong in every
+direction) to `1` (all gradients along one direction), taken as `0` when
+`E = 0`; the dominant gradient direction `½ · atan2(2·Exy, Exx − Eyy)` from
+the `+x` axis toward `+y`, meaningful modulo `π`; and the axis ratio
+`|log(Exx / Eyy)|`. Motion blur weakens the gradients along the direction of
+motion, so a frame whose axis ratio or coherence is far from the
+reconstruction's median is a candidate for motion blur, which the sharpness
+alone can miss.
+
+##### Where a writer gets the values
+
+A version 15 writer stores a row for every image, so it needs each image's two
+readings under the file's one `image_to_gray`. It takes them, image by image,
+from the first of these that applies:
+
+1. **The reconstruction it is writing**, when that already holds the image's
+   row under the same `image_to_gray`, as a value read from a version 15 file
+   does. A subset, a transform or a merge moves rows with their images.
+2. **The image's version 2 `.sift` file**, when its
+   `feature_options.image_to_gray` equals the file's and it is verifiably that
+   image's: in a `sift_files` file, the `.sift` whose content hash
+   `sift_content_hashes[i]` records; in an `embedded_patches` file, a `.sift`
+   at the workspace's `feature_prefix_dir` whose `image_file_xxh128` equals
+   `image_file_hashes[i]`. The two readings are copied from its
+   `metadata.json`, the same way its thumbnail is copied. A `.sift` stores each
+   as a JSON number equal to the `float32`, so the row copied and the row
+   computed from the image are the same bytes.
+3. **The image file**, decoded in stored pixel order, verified against the
+   reconstruction's record of it (the matching `.sift`'s `image_file_xxh128`
+   in a `sift_files` file, `image_file_hashes[i]` in an `embedded_patches`
+   file), with the readings computed by the definitions above through the
+   file's `image_to_gray`. This is the path for a version 1 `.sift`, an
+   `embedded_patches` file with no `.sift`, a `.sift` recorded under a
+   different conversion, and an older `.sfmr` being saved as version 15. In a
+   `sift_files` file the image's record is in its `.sift`, so an image whose
+   `.sift` is missing or is another extraction cannot be verified and takes no
+   row from its image file.
+
+When none applies, because the image file is missing, cannot be decoded or no
+longer matches the recorded hash, the writer **fails** and writes nothing. Its
+error names each such image and says what it looked for: the `.sift` path it
+tried and why that file was not used, and the image path with the reason it
+could not be read. It never stores a placeholder, because a row in a required
+column asserts that the image looks that sharp. A row recorded under a
+different conversion than the file's is computed again from the `.sift` or the
+image, never converted.
+
+The file's `image_to_gray` is the reconstruction's own when it records one;
+otherwise `workspace.contents.feature_options.image_to_gray` when the workspace
+record holds one; otherwise the one recorded by the first image whose `.sift`
+is a version 2 file; otherwise the conversion a version 1 record states for its
+feature tool (its `gray_formula` string, unrounded, for `sfmtool`, or BT.709
+luma unrounded without one; BT.709 luma rounded to 8 bits for `colmap`; BT.601
+luma rounded to 8 bits for `opencv`); and otherwise BT.709 luma unrounded,
+`{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}`.
+
+A save that reads `.sift` files costs one small read per image; one that
+decodes images costs about one decode per image (a 1920-pixel JPEG decodes to
+grey in about 6 ms on one thread).
+
+##### Reading older files
+
+A file of version 14 or earlier has neither column nor the `image_to_gray`
+key. A reader reports the readings as absent; it does not compute them. Saving
+such a file as version 15 fills them by the rules above, so an older file whose
+`.sift` files and images are no longer available cannot be saved again until
+they are. A file below version 15 that carries either column or the key is
+invalid.
+
+##### Why the readings are stored this way
+
+- **Identifying, not derived.** The readings are part of `content_xxh128`, as
+  the thumbnails are, rather than of the unidentifying `derived/` section:
+  `derived/` holds values recomputable from the file's other sections, and
+  these are recomputable only from files outside it. Two writers whose resize
+  or arithmetic differs in the last bits can therefore write files with
+  different content hashes, as two thumbnail implementations would.
+- **`float32`.** The readings are only compared within one reconstruction, as
+  ranks, ratios to the median and z-scores, for which about three significant
+  digits suffice. With grey samples in `[0, 1]` the Laplacian lies in
+  `[−4, 4]`, so the sharpness is at most 16, and each tensor term is at most
+  1/4 in magnitude; on phone video the sharpness at long side 480 has medians
+  between `10^-2` and `5 · 10^-2`, and dark or low-texture captures read 10 to
+  100 times lower. `float16` has enough digits, but its normal values stop at
+  about `6.1 · 10^-5`, so the readings of a very flat or dark capture would lose
+  digits or underflow to 0 exactly where blur detection matters. `float32`
+  keeps about 7 significant digits down to `1.2 · 10^-38`. Four values per image
+  are negligible next to the thumbnails, so size does not decide it.
+- **The names.** `sharpness` names what the column is for and has no natural
+  plural, like `normal_confidence`. The tensor column takes the plural, as
+  `quaternions_wxyz` does, and its suffix names the component order, as
+  `principal_point_adjustments_xy` does, since three numbers named only
+  "tensor" do not say which is the cross term.
+- **Kept by a minimal file.** A minimal file (`sfm xform --minimal`) drops the
+  thumbnails and the patch bitmaps but keeps both reading columns: they are 16
+  bytes per image of the reconstruction's identity, where a thumbnail row is
+  49,152 bytes and optional.
+
+The measurements behind the reading image's size, the sharpness and the tensor
+are in [sift-file-format-measurements.md](sift-file-format-measurements.md).
 
 #### Depth Statistics
 
@@ -2470,7 +2782,15 @@ For the structure, a file fails verification when:
   `observation_reading_options`, an observation-reading column is not
   `observation_count` rows of its shape, or
   `zncc_self_similarity_ellipse_axes_is_at_least` holds a value other than `0`
-  or `1`.
+  or `1`;
+- in a version 15+ file, either image-reading column or the `image_to_gray`
+  key is missing, a column is not `N` rows of its shape, a reading is not
+  finite, a sharpness, `Exx` or `Eyy` is negative, or `image_to_gray` is not an
+  object with a non-empty string `formula`, an optional integer
+  `quantize_bits` from 1 to 16 and no other key; or a file below version 15
+  carries either column or the key. Whether `formula` follows the
+  [grammar](#image_to_gray-version-15) is checked by the reader that parses
+  it, not by the verifier.
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -2505,9 +2825,33 @@ describes. Other parts of this spec are implemented by:
   [camera-model-registry.md](../core/camera/camera-model-registry.md).
 - The thumbnail edge: `sfmtool_sfmr_format::THUMBNAIL_SIZE` is its single
   declaration, from which the entry name, the read and write paths and the
-  section metadata are derived. `sfmtool-core` asserts at compile time that it
-  equals `sfmtool_sift_format::THUMBNAIL_SIZE`, and Python sees it as
+  section metadata are derived. The format crate asserts at compile time that
+  it equals `sfmtool_sift_format::THUMBNAIL_SIZE`, and Python sees it as
   `sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors produce the pixels.
+- The image readings: the columns are `ImageReadingColumns` and their rules
+  `validate_image_readings`, which read, write and verify all call
+  ([source](../../crates/sfmtool-sfmr-format/src/image_readings.rs)); the
+  shape check of the `image_to_gray` object is the `.sift` format crate's
+  `validate_image_to_gray`, and the grammar is parsed by
+  `ImageToGray::from_json` in `sfmtool-core`, which
+  `SfmrReconstruction::from_sfmr_data` calls. In memory each image carries its
+  row as `SfmrImage::readings`, an `ImageReadings`, and the conversion is
+  `ImageSet::image_to_gray`. The readings are computed by
+  `image_readings_from_rgb`, the function every `.sift` writer calls.
+  [Where a writer gets the values](#where-a-writer-gets-the-values) is
+  `SfmrReconstruction::gather_image_readings`, which `SfmrReconstruction::save`
+  calls for a value that lacks a row and `fill_image_readings` stores in the
+  value ([source](../../crates/sfmtool-core/src/reconstruction/image_readings.rs));
+  `write_sfmr` refuses a value without them and computes nothing. The Python
+  writers that copy thumbnails from `.sift` files (`sfm solve` and
+  `sfm from-colmap-bin`, through
+  [`sfmtool.colmap.io`](../../src/sfmtool/colmap/io.py)) copy the readings
+  beside them, `sfm undistort` passes the readings of the images it writes,
+  and `sfm merge` passes its inputs' rows. The `read_sfmr` / `write_sfmr`
+  dicts carry them as `image_to_gray`, `sharpness` and
+  `gradient_structure_tensors_xx_yy_xy`, each `None` below version 15, and the
+  Python `SfmrReconstruction` has read-only getters of the same names and
+  accepts them in `clone_with_changes` and `from_data`.
 - The per-image intrinsic adjustments: in memory each image carries its own
   as `SfmrImage::intrinsic_adjustment`, an
   [`IntrinsicAdjustment`](../../crates/sfmtool-core/src/camera/intrinsics.rs)
@@ -2793,15 +3137,11 @@ appropriate units (e.g., "xyz: (1234.0, -567.0, 2891.0) mm" instead of bare numb
 
 ## Versioning and Migration
 
-The format spans fourteen versions (`1` to `14`), all valid; each extends the
+The format spans fifteen versions (`1` to `15`), all valid; each extends the
 previous, and how an older file maps to the current model is given below.
-Version 14 is the current format version: a reader accepts any version up to
+Version 15 is the current format version: a reader accepts any version up to
 it. This section is the one place the versions and their changes are
-described; [Version History](#version-history) is an index into it. A version
-15 is proposed in
-[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md): it adds
-required per-image sharpness and gradient structure tensor columns, stored as
-`float32`.
+described; [Version History](#version-history) is an index into it.
 
 A conforming writer always writes the current version. It does not choose its
 version by which optional columns a file carries: every optional column (normals
@@ -2809,6 +3149,24 @@ in 3, observation confidence in 6, constraints in 7, thumbnails in 11, observati
 radial B-spline correction, the rolling-shutter rates and the scanlines setting
 in 14) was introduced this way, and a writer that picked its version by
 content would make "which version is this file" a question about its columns.
+Version 15's image readings are required instead, so a version 15 writer
+needs them for every image (see
+[Where a writer gets the values](#where-a-writer-gets-the-values)).
+
+### Version 14 → Version 15
+
+| Change | Detail |
+|---|---|
+| `images/sharpness.{N}.float32.zst` | New **required** column: each image's [sharpness](#sharpness). Folded into `images_xxh128` after `rolling_shutter_rates_xyz` and before `sift_content_hashes` (`thumbnails_y_x_rgb` in an `embedded_patches` file). |
+| `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst` | New **required** column: each image's `[Exx, Eyy, Exy]` ([Gradient structure tensor](#gradient-structure-tensor)). Folded into `images_xxh128` after `focal_adjustments` (or `feature_tool_hashes`, or `camera_indexes`) and before `image_file_hashes` and `metadata.json`. |
+| `images/metadata.json` `image_to_gray` | New required key: the conversion both columns were computed through ([`image_to_gray`](#image_to_gray-version-15)). |
+
+Migration is not mechanical. A version 14 file reads with no readings; saving
+it as version 15 computes them from `.sift` files or image files
+([Where a writer gets the values](#where-a-writer-gets-the-values)), which
+changes `images_xxh128` and `content_xxh128`, and fails when an image is
+unavailable. A version 15 file maps back to version 14 by dropping both
+columns and the `image_to_gray` key.
 
 ### Version 13 → Version 14
 
@@ -3064,6 +3422,10 @@ row, reads `tracks/points3d_indexes` as `tracks/point_indexes` and both
 One line per version, newest first. Each version's changes are described in
 the migration section it links to.
 
+- **Version 15**: each image's sharpness and gradient structure tensor, the
+  required `images/sharpness` and `images/gradient_structure_tensors_xx_yy_xy`
+  columns and the required `image_to_gray` key of `images/metadata.json`. See
+  [Version 14 → Version 15](#version-14--version-15).
 - **Version 14**: the optional per-image radial B-spline correction and
   rolling-shutter rates, the `images/radial_bspline_adjustments` and
   `images/rolling_shutter_rates_xyz` columns and their names in

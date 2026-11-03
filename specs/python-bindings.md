@@ -142,7 +142,8 @@ depends on how `sfmtool-core` stores the column:
   observation record (`positions`, `positions_xyzw`, `point_is_at_infinity`,
   `colors`, `normals`, `rms_reprojection_errors`, `camera_indexes`,
   `quaternions_wxyz`, `translations`, the four per-image adjustment columns,
-  `track_image_indexes`, `track_point_indexes`, and `depth_histogram_counts`,
+  the two image-reading columns `sharpness` and
+  `gradient_structure_tensors_xx_yy_xy`, `track_image_indexes`, `track_point_indexes`, and `depth_histogram_counts`,
   stored as one `Vec` per image) is copied into one flat buffer on its
   getter's first read, which becomes the numpy array's own without a second
   copy. The object keeps that array, in a `PyOnceLock` per getter, and every
@@ -158,9 +159,9 @@ depends on how `sfmtool-core` stores the column:
   views, since a kept view would hold a reference back to the object and the
   pair could then only be freed by the cycle collector.
 
-`observation_readings` returns a dict of arrays built on each read, and the
-list getters (`cameras`, `image_names`, the hash lists, …) build a new list on
-each read.
+`observation_readings` returns a dict of arrays built on each read,
+`image_to_gray` a new dict on each read, and the list getters (`cameras`,
+`image_names`, the hash lists, …) build a new list on each read.
 
 A view is sound only while the block it points into stays where it is, so the
 binding keeps one invariant: **no method replaces, reallocates or writes a
