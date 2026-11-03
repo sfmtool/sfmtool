@@ -35,8 +35,9 @@ which is how the viewer's Switch Camera Model proposal and MCP
 `switch_camera_model` drop them
 ([../../gui/edits/switch-camera-model.md § Dropping per-image
 parameters](../../gui/edits/switch-camera-model.md#dropping-per-image-parameters)).
-`sfm xform --drop-image-adjustments` calls the binding once for each camera
-it names
+`sfm xform --drop-image-adjustments` reads what each camera it names varies
+with `SfmrReconstruction.varied_image_adjustments` and calls the binding once
+for each camera that varies a parameter it names
 ([../../cli/reconstruction/xform/xform-command.md](../../cli/reconstruction/xform/xform-command.md#--drop-image-adjustments-parametersnamename-camerasij)).
 
 ```rust
@@ -188,6 +189,14 @@ dropped = recon.drop_image_adjustments(0, ["radial_bspline", "rolling_shutter"])
 `per_image_adjustments` lists. It returns a new `SfmrReconstruction` and leaves
 this one as it was. An unknown name, an unknown camera and every refusal above
 raise `ValueError` with the error's message.
+
+`recon.varied_image_adjustments(camera)` lists, by the same names and in that
+order, the parameters the camera varies, which are the ones a drop changes
+something for: its flags, and any parameter one of its images holds a non-zero
+value of (`varied_image_adjustments` in
+[switch-camera-model.md](switch-camera-model.md)). An unknown camera raises
+`ValueError`. `sfm xform --drop-image-adjustments` reads it to drop from each
+camera only what it varies and to say so.
 
 ## Testing
 

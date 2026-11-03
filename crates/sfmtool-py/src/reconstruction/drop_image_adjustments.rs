@@ -3,13 +3,18 @@
 
 //! `SfmrReconstruction.drop_image_adjustments`: dropping per-image parameters
 //! from one camera, with their mean folded into the camera (see
-//! ``specs/core/reconstruction/drop-image-adjustments.md``).
+//! ``specs/core/reconstruction/drop-image-adjustments.md``), and
+//! `SfmrReconstruction.varied_image_adjustments`: the per-image parameters a
+//! camera varies, which are the ones a drop changes something for.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use sfmtool_core::reconstruction::bundle_adjust::ImageAdjustmentParameter;
 use sfmtool_core::reconstruction::drop_image_adjustments::drop_image_adjustments as core_drop;
+use sfmtool_core::reconstruction::switch_camera_model::{
+    varied_image_adjustments as core_varied, SwitchCameraModelError,
+};
 
 use super::sfmr_reconstruction::PySfmrReconstruction;
 
@@ -78,5 +83,38 @@ impl PySfmrReconstruction {
             .detach(|| core_drop(self.inner(), camera, &parameters))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PySfmrReconstruction::new(next))
+    }
+
+    /// The per-image parameters one camera varies.
+    ///
+    /// These are the parameters the camera's ``per_image_adjustments`` lists,
+    /// and any other one that an image of the camera holds a non-zero value
+    /// of: the parameters ``drop_image_adjustments`` changes something for.
+    /// Switch Camera Model's drop row, the Camera Intrinsics panel and the
+    /// Bundle Adjust dialog's default use the same rule. See
+    /// ``specs/core/reconstruction/switch-camera-model.md``.
+    ///
+    /// Args:
+    ///     camera: The camera's index.
+    ///
+    /// Returns:
+    ///     The names, each one of ``"focal"``, ``"principal_point"``,
+    ///     ``"radial_bspline"`` and ``"rolling_shutter"``, in that order.
+    ///     Raises ``ValueError`` for an unknown camera.
+    // A Python docstring, not Rust prose; see `drop_image_adjustments` above.
+    #[allow(rustdoc::invalid_rust_codeblocks)]
+    #[pyo3(signature = (camera))]
+    fn varied_image_adjustments(&self, camera: usize) -> PyResult<Vec<&'static str>> {
+        let image_set = &self.inner().image_set;
+        let count = image_set.cameras.len();
+        if camera >= count {
+            return Err(PyValueError::new_err(
+                SwitchCameraModelError::UnknownCamera { camera, count }.to_string(),
+            ));
+        }
+        Ok(core_varied(image_set, camera)
+            .into_iter()
+            .map(ImageAdjustmentParameter::name)
+            .collect())
     }
 }

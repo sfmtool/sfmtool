@@ -13,7 +13,6 @@ points are unchanged.
 import click
 
 from .._sfmtool.reconstruction import SfmrReconstruction
-from ..camera.cameras import _camera_adjustments
 
 # The per-image parameters, by the names a camera's `per_image_adjustments`
 # lists, in that order.
@@ -59,16 +58,17 @@ class DropImageAdjustmentsTransform:
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
         count = len(recon.cameras)
         cameras = list(range(count)) if self.cameras is None else self.cameras
+        # Every index is checked before any camera is dropped, so a bad one is
+        # a usage error naming the option, as for --bundle-adjust cameras=,
+        # rather than the bindings' ValueError after earlier cameras printed.
         bad = [c for c in cameras if not 0 <= c < count]
         if bad:
             raise click.UsageError(
                 f"--drop-image-adjustments cameras= names camera(s) {bad}, and "
                 f"this reconstruction has {count} camera(s)"
             )
-        flags = recon.per_image_adjustments
-        nonzero = _camera_adjustments(recon)
         for camera in cameras:
-            varied = set(flags[camera]) | set(nonzero.get(camera, []))
+            varied = recon.varied_image_adjustments(camera)
             dropped = [p for p in self.parameters if p in varied]
             if dropped:
                 recon = recon.drop_image_adjustments(camera, dropped)

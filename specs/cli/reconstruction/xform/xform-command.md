@@ -438,7 +438,10 @@ carries them. The operation is
 [`../../../core/reconstruction/drop-image-adjustments.md`](../../../core/reconstruction/drop-image-adjustments.md);
 the transform, `DropImageAdjustmentsTransform`
 ([`xform/_drop_image_adjustments.py`](../../../../src/sfmtool/xform/_drop_image_adjustments.py)),
-calls `SfmrReconstruction.drop_image_adjustments` once for each camera. It is
+reads what each camera varies with
+`SfmrReconstruction.varied_image_adjustments` and calls
+`SfmrReconstruction.drop_image_adjustments` once for each camera that varies
+a parameter named. It is
 the CLI's counterpart of Switch Camera Model's Drop per image row
 ([`../../../gui/edits/switch-camera-model.md`](../../../gui/edits/switch-camera-model.md#dropping-per-image-parameters)).
 Only `--bundle-adjust` turns a per-image parameter on, since it is what solves
