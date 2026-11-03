@@ -1088,14 +1088,19 @@ renderer's coverage discard, the self-similarity culls) reads exactly the
 samples the rule read. The file records which observation it is, as an index
 into the point's own track, in `tracks/reference_observations`.
 
-**A stored bitmap is the render of the frame as stored.** The file holds a
+**A rendered bitmap is the render of the frame as stored.** The file holds a
 point's patch frame as two `f32` half-vectors and its position, and the
-keypoints as `f32`; the bitmap stored beside them is the render through
+keypoints as `f32`; a writer that renders a point's bitmap renders it through
 exactly that frame, split back into unit axes and half-lengths as every reader
-of the columns splits them, at exactly those keypoints. So dropping the
-bitmaps and rendering them again (`--drop-patch-bitmaps` then
-`--add-patch-bitmaps`, `render_patch_cloud_bitmaps`) gives back the same
-bytes, on every platform. A writer that builds a frame in `f64` renders the
+of the columns splits them, at exactly those keypoints. So until a later edit
+moves the point's frame, its keypoints or the cameras, dropping the bitmaps
+and rendering them again (`--drop-patch-bitmaps` then `--add-patch-bitmaps`,
+`render_patch_cloud_bitmaps`) gives back the same bytes, on every platform. A
+writer that moves geometry without rendering (a bundle adjustment, a
+similarity, the conversion between points and points at infinity) keeps the
+bitmap, which is then the render as of the last render
+([sfmr-file-format.md](../../formats/sfmr-file-format.md) § 9, "Keeping it
+true"). A writer that builds a frame in `f64` renders the
 bitmap through `OrientedPatch::at_stored_precision` of it, or renders from the
 stored value after writing it, never through the unrounded frame: a sample
 rendered through that moves by a few `f32` steps of the frame, which over a
