@@ -9,6 +9,7 @@ _EXPECTED_FUNCTIONS = (
     "build_sift_files",
     "detect_sift_keypoints",
     "extract_sift",
+    "gray_from_rgb",
     "image_readings_from_rgb",
     "ImageReadings",
     "ImageToGray",

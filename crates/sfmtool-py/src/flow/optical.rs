@@ -9,6 +9,25 @@ use std::sync::OnceLock;
 
 use sfmtool_core::features::optical_flow;
 
+use crate::sift::image_readings::PyImageToGray;
+
+/// The grey the optical flow and the patch matchers read: BT.601 luma
+/// rounded to 8 bits, ``ImageToGray("0.299*R + 0.587*G + 0.114*B",
+/// quantize_bits=8)``.
+///
+/// The flow functions take an (H, W) uint8 grey image; this conversion,
+/// applied with ``sfmtool.sift.gray_from_rgb`` and scaled by 255, makes it
+/// from an RGB photograph, the same grey Find nearby tracks reads.
+///
+/// Returns:
+///     ImageToGray.
+#[pyfunction]
+pub fn matcher_image_to_gray() -> PyImageToGray {
+    PyImageToGray {
+        inner: optical_flow::matcher_image_to_gray(),
+    }
+}
+
 /// Lazily initialized GPU context, shared across all calls.
 /// Returns `None` if no GPU is available.
 static GPU_CONTEXT: OnceLock<Option<optical_flow::gpu::GpuFlowContext>> = OnceLock::new();
@@ -372,6 +391,7 @@ fn parse_flow_preset(preset: Option<&str>) -> PyResult<optical_flow::DisFlowPara
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gpu_available, m)?)?;
+    m.add_function(wrap_pyfunction!(matcher_image_to_gray, m)?)?;
     m.add_function(wrap_pyfunction!(compute_optical_flow, m)?)?;
     m.add_function(wrap_pyfunction!(compute_optical_flow_timed, m)?)?;
     m.add_function(wrap_pyfunction!(compute_optical_flow_with_init, m)?)?;

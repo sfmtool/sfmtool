@@ -637,3 +637,43 @@ fn a_turned_point_reports_how_well_its_views_agree_at_the_plane() {
     assert_eq!(report.none_joined(), 3, "{report:?}");
     assert!(report.mean_agreement().is_nan());
 }
+
+// ---- The bitmap is the render of the stored frame -----------------------------
+
+/// The turned frame is stored as `f32` half-vectors, so dropping and adding
+/// the bitmaps gives back the run's only where the run renders through the
+/// frame as stored. Three points rarely put a sample on an 8-bit boundary;
+/// `stored_bitmap.rs` holds the grid that does.
+#[test]
+fn each_turned_bitmap_is_the_render_of_the_frame_the_value_stores() {
+    use crate::patch::cloud::PatchCloud;
+    use crate::patch::normal_refine::ProjectedImage;
+    use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
+
+    let scene = plane_scene();
+    let recon = tilted_value(&scene, &three_points(), 25.0);
+    let views = scene.views();
+    let (out, report) = refine_over(&scene, &recon);
+    assert_eq!(report.turned(), 3, "{report:?}");
+    let cloud = PatchCloud::from_stored_patch_frames(&out).expect("framed");
+    let wrapped: Vec<Option<ProjectedImage<'_>>> = views.iter().copied().map(Some).collect();
+    let params = crate::patch::keypoint_subpixel::KeypointSubpixelParams {
+        resolution: BITMAP_R as u32,
+        ..GrownPlaneNormalOptions::default().fit.refine.clone()
+    };
+    let again = render_patch_cloud_bitmaps(
+        &cloud,
+        &out,
+        &wrapped,
+        &params,
+        UnreferencedPoints::Pick,
+        None,
+        &Progress::none(),
+    )
+    .expect("not cancelled");
+    assert_eq!(
+        Some(&again.bitmaps),
+        out.point_set.patch_bitmaps_y_x_rgba.as_deref(),
+        "dropping and adding the bitmaps gives back the run's"
+    );
+}

@@ -220,6 +220,14 @@ fractional coordinates, `advect_points` for batch keypoint advection, and
 `upsample_2x`/`downsample_2x` for pyramid operations.
 
 **`GrayImage`** is a simple f32 grayscale image (row-major, normalized to [0, 1]).
+The grey the flow reads from a photograph is defined once, beside it in
+[`image.rs`](../../../crates/sfmtool-core/src/features/optical_flow/image.rs):
+`matcher_image_to_gray()`, BT.601 luma rounded to 8 bits
+(`MATCHER_GRAY_FORMULA` with `quantize_bits` 8), and `matcher_gray_from_rgb`,
+which applies it through `gray_from_rgb`, sfmtool's one RGB-to-grey
+conversion. It is the 8-bit grey image the presets were tuned on (within one
+level of OpenCV's `COLOR_RGB2GRAY`, and equal to it on all but 0.12% of the
+8-bit colours), and Find nearby tracks' patch reads take the same grey.
 Coordinate convention: pixel centers at (0.5, 0.5), matching the .sfmr/.sift format
 and COLMAP convention. Sampling at (0.5, 0.5) returns the exact top-left pixel value.
 
@@ -268,6 +276,9 @@ The Python submodule `sfmtool.flow` exposes:
 - `compose_flow(flow_ab_u, flow_ab_v, flow_bc_u, flow_bc_v)` — returns composed `(flow_u, flow_v)`
 - `advect_points(points, flow_u, flow_v)` — advects `(N, 2)` float32 points through a flow field
 - `gpu_available()` — returns whether GPU acceleration is available
+- `matcher_image_to_gray()` — the `ImageToGray` of the grey the flow reads;
+  `sfmtool.sift.gray_from_rgb` with it, times 255 and rounded, makes the
+  `uint8` input from an RGB photograph
 
 Images accept two-dimensional `uint8` numpy arrays. Flow fields use separate u/v arrays
 (not interleaved), matching the internal split layout. The Python `preset` strings are

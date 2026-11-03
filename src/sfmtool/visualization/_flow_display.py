@@ -22,6 +22,7 @@ from .._sfmtool.flow import (
 )
 from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from .._histogram_utils import print_histogram
+from .._image_load import flow_gray
 from ..sift.file import get_sift_path_for_image
 from ..fileio import SiftFile
 from ._common import get_color_palette
@@ -207,9 +208,9 @@ def draw_flow_visualization(
         )
         sfmr_pairs = _get_shared_feature_pairs(recon, image1_idx, image2_idx)
 
-    # Convert to grayscale for flow computation
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_RGB2GRAY)
+    # The grey the flow kernels read.
+    gray1 = flow_gray(img1)
+    gray2 = flow_gray(img2)
 
     # Compute optical flow using Rust DIS implementation
     print(f"Computing optical flow ({preset} preset)...")

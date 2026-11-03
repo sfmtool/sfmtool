@@ -7,6 +7,7 @@ import sfmtool._sfmtool.flow as flow
 
 _EXPECTED_FUNCTIONS = (
     "gpu_available",
+    "matcher_image_to_gray",
     "compute_optical_flow",
     "compute_optical_flow_timed",
     "compute_optical_flow_with_init",

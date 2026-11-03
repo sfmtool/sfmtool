@@ -73,10 +73,29 @@ fn the_blur_keeps_a_constant_image_constant_and_its_mass() {
 }
 
 #[test]
-fn the_grey_conversion_is_opencvs() {
-    // cv2.cvtColor of (200, 100, 50) with COLOR_RGB2GRAY is 124.
+fn the_grey_conversion_is_the_matchers_8_bit_bt601_level() {
+    // 0.299 · 200 + 0.587 · 100 + 0.114 · 50 = 124.2: level 124, with or
+    // without an alpha channel.
     let grey = blurred_grey(&ImageU8::new(1, 1, 3, vec![200, 100, 50]));
     assert_eq!(grey.data()[0], 124.0);
+    let grey = blurred_grey(&ImageU8::new(1, 1, 4, vec![200, 100, 50, 7]));
+    assert_eq!(grey.data()[0], 124.0);
+    // The blur of a single pixel is its value times the kernel's sum, one to
+    // an f32 rounding, so each colour's grey is its matcher grey level.
+    let pixels: Vec<u8> = (0..=255u8).flat_map(|v| [v, 255 - v, v / 3]).collect();
+    let matcher = crate::features::optical_flow::matcher_gray_from_rgb(256, 1, &pixels);
+    for (p, v) in pixels.as_chunks::<3>().0.iter().zip(matcher.data()) {
+        let level = (v * 255.0).round();
+        let one = blurred_grey(&ImageU8::new(1, 1, 3, p.to_vec()));
+        assert!(
+            (one.data()[0] - level).abs() < 1e-3,
+            "{p:?}: {}",
+            one.data()[0]
+        );
+    }
+    // A grey image keeps its value.
+    let grey = blurred_grey(&ImageU8::new(1, 1, 1, vec![77]));
+    assert_eq!(grey.data()[0], 77.0);
 }
 
 #[test]

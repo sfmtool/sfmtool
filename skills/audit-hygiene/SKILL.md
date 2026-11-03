@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -172,7 +172,7 @@ how this audit runs them.
 
 - **Check per function, not per convention split.** A breach is a finding
   even where the whole module is consistent with itself. Run the
-  mechanical checks 9–18 below, and the standards' tallies in check 5,
+  mechanical checks 9–19 below, and the standards' tallies in check 5,
   first, then read each hit against the standard it feeds.
 - **Cite the standard.** Each finding names the standard by its heading
   and links it (`specs/STANDARDS.md#caller-input-never-panics`).
@@ -329,6 +329,18 @@ worth more than a paragraph.
     Report the hit count per pattern, then read each hit and keep those that
     compute an order statistic of a population. Feeds STANDARDS.md
     § "Medians and quantiles come from one module".
+19. **Numeric precision** — grep library code under `crates/` for `f64` in
+    pixel and sample loops: `as f64 / 255`, `f64::from(` of a `u8` sample,
+    and `vec![0f64` / `vec![0.0f64` / `Vec<f64>` buffers in image, patch,
+    tile, flow and feature code, and `= 0.0f64` accumulators in those loops;
+    for whole-image sums in one running `f32` accumulator (`.sum::<f32>()`
+    over every pixel); and for float reductions whose order rayon chooses
+    (`.sum()` or `.reduce(` on a `par_iter`) where the result is stored or
+    compared. Report the hit count per
+    pattern, then read each hit and keep those whose precision has no stated
+    reason or whose stated reason the values' range, the digits the use needs
+    and the accumulation error do not support. Feeds STANDARDS.md § "Numeric
+    precision is the smallest the use justifies".
 
 ## Output
 

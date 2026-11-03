@@ -8,6 +8,35 @@
 //! `sift::scale_space` documents its conventions as following this type.
 
 use super::interp;
+use crate::features::sift::gray::{gray_from_rgb, ImageToGray};
+
+/// The formula of [`matcher_image_to_gray`]: BT.601 luma.
+pub const MATCHER_GRAY_FORMULA: &str = "0.299*R + 0.587*G + 0.114*B";
+
+/// The grey the optical flow and the patch matchers read: BT.601 luma rounded
+/// to 8 bits, [`MATCHER_GRAY_FORMULA`] with `quantize_bits` 8.
+///
+/// It is the 8-bit grey image those matchers were built and tuned on, made by
+/// sfmtool's one RGB-to-grey conversion
+/// ([`ImageToGray::gray_row`]). It is within one level of OpenCV's
+/// `cvtColor(..., COLOR_RGB2GRAY)` on every 8-bit colour and equal to it on
+/// all but 0.12% of them. The flow kernels and Find nearby tracks' patch reads
+/// take their grey from it, and Python reaches it as
+/// `sfmtool.flow.matcher_image_to_gray()`.
+pub fn matcher_image_to_gray() -> ImageToGray {
+    ImageToGray::new(MATCHER_GRAY_FORMULA, Some(8)).expect("the matcher grey conversion is valid")
+}
+
+/// An interleaved 8-bit RGB image, `3 * width * height` bytes, as the
+/// [`GrayImage`] the matchers read: [`gray_from_rgb`] through
+/// [`matcher_image_to_gray`], each sample `k / 255` for its 8-bit level `k`.
+///
+/// # Panics
+///
+/// Panics if `rgb` is not `3 * width * height` bytes.
+pub fn matcher_gray_from_rgb(width: u32, height: u32, rgb: &[u8]) -> GrayImage {
+    gray_from_rgb(width, height, rgb, &matcher_image_to_gray())
+}
 
 /// Simple wrapper for grayscale image data.
 ///

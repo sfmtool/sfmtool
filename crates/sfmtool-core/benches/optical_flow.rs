@@ -13,7 +13,7 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use sfmtool_core::features::optical_flow::{
-    self, bench, compute_optical_flow, DisFlowParams, GrayImage,
+    self, bench, compute_optical_flow, matcher_gray_from_rgb, DisFlowParams, GrayImage,
 };
 use std::hint::black_box;
 use std::time::Duration;
@@ -35,9 +35,10 @@ fn load_gray(filename: &str) -> GrayImage {
     let path = test_data_dir().join(image_subdir(filename)).join(filename);
     let img = image::open(&path)
         .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e))
-        .into_luma8();
+        .into_rgb8();
     let (w, h) = img.dimensions();
-    GrayImage::from_u8(w, h, img.as_raw())
+    // The grey the flow reads in production.
+    matcher_gray_from_rgb(w, h, img.as_raw())
 }
 
 // ---------------------------------------------------------------------------

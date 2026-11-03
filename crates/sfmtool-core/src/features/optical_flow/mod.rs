@@ -56,7 +56,7 @@ pub mod gpu {
 // paths: `optical_flow::GrayImage` and friends are imported crate-wide and
 // through the PyO3 bindings.
 pub use flow_field::{FlowField, FlowFieldRef};
-pub use image::GrayImage;
+pub use image::{matcher_gray_from_rgb, matcher_image_to_gray, GrayImage, MATCHER_GRAY_FORMULA};
 pub use params::{DisFlowParams, FlowTiming};
 
 use pyramid::ImagePyramid;

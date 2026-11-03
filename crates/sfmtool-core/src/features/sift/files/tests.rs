@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use super::*;
-use crate::features::sift::ImageToGray;
+use crate::features::sift::{image_readings_from_rgb, ImageToGray};
 use crate::progress::Event;
 
 const SEOUL_BULL: &str = concat!(
@@ -107,10 +107,11 @@ fn a_built_file_holds_what_the_extractor_finds() {
         sfmtool_sift_format::SIFT_FORMAT_VERSION
     );
     let readings = image_readings_from_rgb(270, 480, rgb.data(), &params.image_to_gray).unwrap();
-    assert_eq!(data.metadata.sharpness, Some(readings.sharpness));
+    // The file holds the f32 readings as doubles, exactly.
+    assert_eq!(data.metadata.sharpness, Some(f64::from(readings.sharpness)));
     assert_eq!(
         data.metadata.gradient_structure_tensor_xx_yy_xy,
-        Some(readings.gradient_structure_tensor_xx_yy_xy)
+        Some(readings.gradient_structure_tensor_xx_yy_xy.map(f64::from))
     );
     assert!(readings.sharpness > 0.0);
 

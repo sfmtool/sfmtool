@@ -11,7 +11,7 @@
 //! extractor writes, and skips an image whose `.sift` is at least as new as the
 //! image. The files are `.sift` version 2: each records the conversion its
 //! options name as `feature_options.image_to_gray` and the image's two
-//! readings ([`image_readings_from_rgb`]),
+//! readings ([`image_readings_from_rgb`](super::image_readings_from_rgb)),
 //! taken from the decode the thumbnail is made from. It refuses version 1
 //! settings and a folder that holds version 1 files, since the two versions
 //! never share a folder (see `specs/workspace/workspace.md`).
@@ -34,9 +34,8 @@ use sfmtool_sift_format::{
     SIFT_READINGS_VERSION,
 };
 
-use super::{
-    extract_sift, gray_from_rgb, image_readings_from_rgb, FeatureOptionsError, SiftParams,
-};
+use super::image_readings::image_readings_from_gray;
+use super::{extract_sift, gray_from_rgb, FeatureOptionsError, SiftParams};
 use crate::camera::image::{image_dimensions, ImageU8};
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::thumbnail::thumbnail_from_rgb;
@@ -252,7 +251,7 @@ impl From<Cancelled> for BuildSiftFilesError {
 /// `feature_tool: "sfmtool"`, `feature_type: "sift"` and
 /// `options.feature_options` as given; its metadata names the image by its file
 /// name, records the image file's XXH128 and size, and holds the image's
-/// sharpness and gradient structure tensor ([`image_readings_from_rgb`] of the
+/// sharpness and gradient structure tensor ([`image_readings_from_rgb`](super::image_readings_from_rgb) of the
 /// decode, through the options' `image_to_gray`); its features are sorted by
 /// descending size; and its thumbnail is [`thumbnail_from_rgb`] of the same
 /// decode, which equals OpenCV's for any photograph at least
@@ -438,10 +437,11 @@ fn build_one(
     // this thread waits on rather than adding to; `rayon::scope` runs its body
     // on a pool thread. See the module docs.
     let (readings, features) = rayon::scope(|_| {
-        let readings = image_readings_from_rgb(width, height, image.data(), &params.image_to_gray)
-            .map_err(|e| image_error(e.to_string()))?;
+        // One grey image for the detector and the readings both.
         let gray = gray_from_rgb(width, height, image.data(), &params.image_to_gray);
         drop(image);
+        let readings = image_readings_from_gray(&gray, &params.image_to_gray)
+            .map_err(|e| image_error(e.to_string()))?;
         Ok::<_, BuildSiftFilesError>((readings, extract_sift(&gray, params)))
     })?;
     progress.check_cancel()?;
@@ -477,8 +477,10 @@ fn build_one(
             image_width: width,
             image_height: height,
             feature_count: count as u32,
-            sharpness: Some(readings.sharpness),
-            gradient_structure_tensor_xx_yy_xy: Some(readings.gradient_structure_tensor_xx_yy_xy),
+            sharpness: Some(f64::from(readings.sharpness)),
+            gradient_structure_tensor_xx_yy_xy: Some(
+                readings.gradient_structure_tensor_xx_yy_xy.map(f64::from),
+            ),
         },
         content_hash: SiftContentHash::default(),
         positions_xy: Array2::from_shape_vec((count, 2), positions).map_err(shape_error)?,

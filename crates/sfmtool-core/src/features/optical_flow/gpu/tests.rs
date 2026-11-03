@@ -19,9 +19,10 @@ fn load_test_image(filename: &str) -> GrayImage {
         .join(filename);
     let img = image::open(&path)
         .unwrap_or_else(|e| panic!("Failed to open {}: {}", path.display(), e))
-        .into_luma8();
+        .into_rgb8();
     let (w, h) = img.dimensions();
-    GrayImage::from_u8(w, h, img.as_raw())
+    // The grey the flow reads in production.
+    super::super::matcher_gray_from_rgb(w, h, img.as_raw())
 }
 
 /// The GPU context for a test, or `None` when the machine has no adapter, in

@@ -228,6 +228,9 @@ else:
    the patch to that plane by the least rotation about its centre, renders the
    stored bitmap again from the reference observation, and reads the track
    back: every row's tile, its readings and its score against the new bitmap.
+   The bitmap is the render of the turned frame as the value stores it
+   ([reference-view.md](../patch/reference-view.md#the-stored-bitmap)
+   § "The stored bitmap").
    It writes no keypoint: the turn keeps each keypoint's gap from the centre's
    projection, and the image shifts the plane fit solves for are reported, not
    written. It trusts the keypoints it is given, so on a reconstruction whose

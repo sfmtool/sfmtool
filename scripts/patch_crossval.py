@@ -56,8 +56,9 @@ import numpy as np
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool.geometry import RigidTransform
-from sfmtool.flow import ImagePyramid, WarpMap
+from sfmtool.flow import ImagePyramid, WarpMap, matcher_image_to_gray
 from sfmtool.fileio import read_image_rgb, read_matches, read_sift, write_image_rgb
+from sfmtool.sift import gray_from_rgb
 
 
 def find_sift_paths(workspace: str, names: list[str]) -> dict[str, str]:
@@ -139,7 +140,12 @@ def make_renderer(
     def get(idx):
         if idx not in images:
             rgb = read_image_rgb(os.path.join(workspace, names[idx]))
-            images[idx] = rgb if color else cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            if color:
+                images[idx] = rgb
+            else:
+                # The matchers' BT.601 grey rounded to 8 bits.
+                grey = gray_from_rgb(rgb, matcher_image_to_gray())
+                images[idx] = np.rint(grey * np.float32(255)).astype(np.uint8)
             d = read_sift(sift_paths[names[idx]])
             kpts[idx] = (
                 np.asarray(d["positions_xy"], np.float64),

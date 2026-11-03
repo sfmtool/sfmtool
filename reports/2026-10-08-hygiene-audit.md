@@ -212,6 +212,14 @@ This is a read-only survey of the whole tree at `18b1f970`, which is branch `hyg
 
 > _Status (2026-10-09): **Done** — `numeric::quantile_of_sorted` now uses numpy's `_lerp` arithmetic and returns NaN for empty input, with `quantile_in_place` and `quantile` (both sorting with `total_cmp`) beside it. The five private copies in `cluster_census`, `affine_factorization`, `column_scan`, `pose_refine` and `member_coherence/decide` are gone and their callers use the shared functions; the census keeps its `+∞` threshold for an empty population at the call site. `numeric/tests.rs` now scans for `quantile|percentile` names against an allowlist, and the copies' numpy reference tests moved there. All `sfmtool-core` tests pass unchanged, branch `hygiene-fix-1009-06-one-quantile`._
 
+**State or shrink the f64 accumulators in the photometric RANSAC** _(added 2026-11-02, branch `pixel-precision-unified-gray`)_
+- Location: `spherical/photometric_ransac.rs:341-371` (per-row mean brightness), `:643-649` (mean score), `:678-681` (the median buffer), `:701-710` and `:727-732` (validity-weighted channel sums).
+- Problem:
+  - The kernel accumulates `f32` pixel values, validities and scores of 8-bit patches in `f64` and gives no reason for it. [STANDARDS.md § "Numeric precision is the smallest the use justifies"](../specs/STANDARDS.md#numeric-precision-is-the-smallest-the-use-justifies) asks for the smallest precision the use justifies, with the reason stated where it is chosen, and audit-hygiene check 19 flags these loops.
+  - The sums are over one patch's pixels (a few hundred terms) or over the rows of one stack (fewer), where an `f32` running sum is bounded by about `n · 2^-24`, well under one 8-bit level; the median buffer is `f64` only because `median_in_place` takes `f64`.
+- Proposed fix: measure the inlier sets and gains against an `f32` version on the kerry_park and seoul_bull tile stacks, then either move the sums to `f32` or state in the module docs why `f64` is needed.
+- Effort: low–medium. Risk: medium, since a last-bit change can flip a residual threshold; pin the RANSAC fixtures before and after.
+
 **Share the Levenberg–Marquardt damping step**
 - Location:
   - Same rule: `geometry/pose_refine.rs:196-223`, `geometry/resect_images/finite.rs:395-422`, `reconstruction/triangulation/points.rs:972-991`, `analysis/cluster_census/group_consistency.rs:422-452`, `geometry/bundle_adjust.rs:2357-2680`.

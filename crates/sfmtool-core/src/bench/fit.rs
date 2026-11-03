@@ -1397,6 +1397,10 @@ fn render_bitmap(
     from: Option<usize>,
     progress: &Progress<'_>,
 ) -> (Option<Array3<u8>>, Option<usize>, Option<[u8; 3]>) {
+    // Rendered through the frame as the reconstruction stores it, so the
+    // bitmap is the one a render of the stored frame makes
+    // (`specs/core/patch/reference-view.md` § "The stored bitmap").
+    let patch = &patch.at_stored_precision();
     let (resolution, channels) = bitmap_layout(edited, options);
     let mut rows: Vec<usize> = Vec::with_capacity(ins.len());
     let mut patch_views: Vec<u32> = Vec::with_capacity(ins.len());

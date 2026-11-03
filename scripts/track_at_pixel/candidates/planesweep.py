@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+from sfmtool.flow import matcher_image_to_gray
+from sfmtool.sift import gray_from_rgb
 
 from api import TrackAtPixelError
 from candidates.common import (
@@ -74,7 +76,9 @@ def grey_images(ds, sigma: float) -> list[np.ndarray]:
     if key not in cache:
         out = []
         for im in ds.images:
-            g = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY).astype(np.float32)
+            # The matchers' BT.601 grey rounded to 8 bits, on the 0 to 255
+            # scale, as Find nearby tracks reads it.
+            g = np.rint(gray_from_rgb(im, matcher_image_to_gray()) * np.float32(255))
             if sigma > 0:
                 g = cv2.GaussianBlur(g, (0, 0), sigma)
             out.append(g)
