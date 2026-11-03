@@ -263,6 +263,71 @@ Out of scope:
 - Python code, which uses numpy; the shared functions match `numpy.median`
   and `numpy.quantile`.
 
+## Numeric precision is the smallest the use justifies
+
+Every numeric type in a computation, both the one its values are stored in and
+the one its arithmetic is done in, is the smallest precision that analysis and
+measurement show is enough for what the result is used for, with speed and
+storage weighed beside it. No precision is a default. Pixel colour arithmetic
+in particular does not default to `f64`: an 8-bit sample holds under three
+significant digits, and an `f32`'s 24 bits leave each rounding about
+1/65,000 of a grey level, while an `f64` row holds half the values per vector
+instruction and needs twice the memory. Where the choice is made, in the doc
+comment of the function or module that makes it or in its spec, the reason is
+stated: the range the values take, the digits the use needs, the accumulation
+error, and the speed or size it gains.
+
+A **reduction**, a sum of many values, is a different question from per-value
+arithmetic, because its rounding error grows with the number of terms.
+Its scheme is chosen by its error bound, as the cheapest that meets the digits
+needed:
+
+- One running sum of `n` terms in a precision of unit roundoff `u`
+  (`2^-24` for `f32`) is bounded by about `n · u` of the sum of the terms'
+  magnitudes. For the 130,000 terms of a 480 x 270 image in `f32` that is
+  `8 · 10^-3`.
+- Summing in blocks, each row and then the row sums, bounds it by about
+  `(rows + columns) · u`, `5 · 10^-5` for the same image, at no extra cost,
+  and splits the work by rows.
+- Pairwise or compensated (Kahan or Neumaier) summation bounds it by a few `u`
+  at a few times the arithmetic.
+- An `f64` accumulator is chosen only when no `f32` scheme's bound meets the
+  need, or when the terms themselves are `f64` for their own reasons.
+
+A reduction whose result is stored, hashed or compared is summed in a fixed
+order, so the result does not depend on the thread count.
+
+This exists because the reading image behind a `.sift` file's sharpness and
+gradient structure tensor was computed in `f64` throughout, from 8-bit pixels,
+for readings compared within a capture to about three significant digits.
+Measured against that, the same pipeline in `f32`, with each row summed and the
+row sums totalled, moved the readings by at most `1.1 · 10^-6` of their value
+on 140 photographs and made the grey conversion three times faster; one running
+`f32` sum instead moved them by up to `2 · 10^-4`. The SIFT detector's input was
+a second copy of the same grey conversion in `f64`.
+
+Look for:
+
+- `f64` in a loop over the pixels or samples of an image, a patch or a tile:
+  `as f64 / 255.0`, a `Vec<f64>` or `[f64; N]` image buffer, an `f64`
+  accumulator of `f32` samples.
+- A precision chosen with no stated reason where it is chosen.
+- A sum over a whole image or a large population kept in one running `f32`
+  accumulator (`.sum::<f32>()` over every pixel), whose `n · u` bound may
+  exceed what the use needs.
+- A parallel reduction whose order depends on how rayon splits the work, where
+  the result is stored or compared.
+
+Confirm before reporting: state the values' range and the digits the use needs,
+and show by an error bound or a measurement that the smaller precision meets
+that need (or, for a reduction, that the scheme's bound does not), with the
+speed or size it changes.
+
+Out of scope: the precision an interface fixes, such as a JSON number, which is
+a double, a numpy array a caller passes, a COLMAP database's columns or a
+GPU texture format; the choice is then made at that interface rather than in
+the code that fills it.
+
 ## Every file format has the same I/O shape
 
 Every sfmtool on-disk format, one per format crate (`.sfmr`, `.sift`,
