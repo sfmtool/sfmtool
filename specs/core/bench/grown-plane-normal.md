@@ -133,7 +133,8 @@ pub struct GrownPlaneNormalOptions {
 
 impl GrownPlaneNormalOptions {
     /// Refuses a setting the step cannot run with, naming the first that
-    /// fails: NormalError::BadGrownPlaneOption("zncc_tolerance").
+    /// fails: NormalError::BadGrownPlaneOption("zncc_tolerance"), or
+    /// ("resolution") for a fit.refine.resolution under 2.
     pub fn check(&self) -> Result<(), NormalError>;
 }
 
@@ -324,7 +325,10 @@ println!("{report}"); // "6 of 7 views joined, 1 left out, 10 shift only, 3 of 3
 `GrownPlaneNormalOptions` setting as a keyword of the same name, defaulting to
 the Rust default, and `fit`'s four keywords (`max_seed_offset_px`,
 `max_cache_bytes`, `sigma_px`, `depth_likelihood_ratio_threshold`), which set
-the reading the step ends with. It returns `(EditableTrack, report)`; the
+the reading the step ends with. `resolution` (default `None`, the fit's 24)
+sets the patch resolution `R` with `FitOptions::at_resolution`; it counts only
+where the reconstruction stores no patch bitmaps, and one under 2 is refused.
+It returns `(EditableTrack, report)`; the
 report's `estimate` has `kind` `"grown_plane"` and carries the sequence's
 fields, `agreement`, `turn_sigma_ratio`, the counts, and one dict per view, per
 try, per pick and per pair; [editable-track.md](editable-track.md) § "Estimating
@@ -357,7 +361,9 @@ at grid position `(col + ½ − W/2, row + ½ − W/2)`: the reference render's 
 in `grid_plane_normal`. `W` is `working_resolution`, or with `None` that step's
 rule: the reference view's footprint of the patch at the starting frame, about
 one sample per photograph pixel, clamped to `R ..= 2R` for the patch resolution
-`R`; at least `spot_window` either way.
+`R`, the edge of the reconstruction's stored patch bitmaps or, where it
+stores none, `fit.refine.resolution`, and at least 3; `W` is at least `spot_window`
+either way.
 
 **The plane** has two unknowns, a tilt `(a, b)` of the starting frame's normal
 `n` along the frame's own axes `u` and `v`:
@@ -1100,7 +1106,7 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 | `max_iterations` | `20` | Levenberg–Marquardt iterations per stage, at most |
 | `initial_damping` | `1e-3` | The damping each fit starts from; finite, at least 0 |
 | `min_improvement` | `1e-6` | A stage stops once a kept step raises its score by less |
-| `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler |
+| `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler; where the reconstruction stores no patch bitmaps, `refine.resolution` is the patch resolution `R` (`FitOptions::at_resolution` sets every kernel's), at least 2 |
 
 Five numbers are constants of the step rather than settings: the early stop's
 margin of 0.25 under `min_held_zncc` (`EARLY_REFUSAL_MARGIN`) and its first

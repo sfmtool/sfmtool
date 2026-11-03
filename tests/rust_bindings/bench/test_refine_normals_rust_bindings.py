@@ -161,6 +161,8 @@ def test_a_run_it_cannot_do_is_refused(ground_truth, images):
         refine_normals(ground_truth, images, point_indexes=[ground_truth.point_count])
     with pytest.raises(ValueError, match="spot_window"):
         refine_normals(ground_truth, images, spot_window=0)
+    with pytest.raises(ValueError, match="resolution"):
+        refine_normals(ground_truth, images, resolution=1)
     with pytest.raises(ValueError, match="images must be parallel"):
         refine_normals(ground_truth, images[:-1])
 

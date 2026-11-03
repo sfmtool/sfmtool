@@ -165,10 +165,16 @@ thereafter (the per-round obliquity drop).
    directions (`to_embedded_patches`'s `normal="mean_viewing"`).
 2. **Turn the patch to its grown-plane normal.** Each finite point's patch is
    turned about its centre to the normal of the one plane its views agree on —
-   `sfmtool.bench.refine_normals` on its default settings, the bench's *Grown
-   Plane Normal* with every observation of the point's track `in`
-   ([refine-normals.md](../bench/refine-normals.md)). The plane is fitted at
-   the keypoints the round starts from, and no keypoint moves. From round 2
+   `sfmtool.bench.refine_normals` at the pipeline's `resolution`, its other
+   settings at their defaults, the bench's *Grown Plane Normal* with every
+   observation of the point's track `in`
+   ([refine-normals.md](../bench/refine-normals.md)). The value it reads
+   stores no patch bitmaps, so `resolution` is the `R` the step works at: its
+   working grid's side follows the reference view's footprint, clamped to
+   `R ..= 2R` and to at least the first window's `spot_window` samples, and
+   the render and reading it ends with are at `R`. The plane
+   is fitted at the keypoints the round starts from, and no keypoint moves.
+   From round 2
    the track is the compacted one, so it holds the views step 3 added. A point
    at infinity, and a point the step leaves unchanged or refuses, keeps its
    frame. The pipeline takes only the turned frames from the step's output:

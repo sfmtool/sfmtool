@@ -348,17 +348,20 @@ since no checked-in reconstruction that size carries embedded patches.
 ## Python binding
 
 `sfmtool.bench.refine_normals(recon, images, *, point_indexes=None,
-working_resolution=None, ..., depth_likelihood_ratio_threshold=None,
-progress=None)`
+resolution=None, working_resolution=None, ...,
+depth_likelihood_ratio_threshold=None, progress=None)`
 ([`bench/refine_normals.rs`](../../../crates/sfmtool-py/src/bench/refine_normals.rs))
 takes an `sfmtool.reconstruction.SfmrReconstruction` and `images` as
 `sfmtool.bench.refit_points` does (one decoded image per image, or an
 `ImagePyramidSet`), `point_indexes` as `RefineNormalsOptions::point_indexes`,
 and `sfmtool.bench.grown_plane_normal`'s keyword arguments, each `None` for the
-Rust default, which make up `RefineNormalsOptions::normal`. A caller holding an
-`EditedReconstruction` folds it first with its `materialize`. A setting the
-step does not take is refused before the photographs are decoded. It runs with
-the GIL released and raises `ValueError` with the refusal's sentence.
+Rust default, which make up `RefineNormalsOptions::normal`; `resolution`, the
+patch resolution `R` set on its `fit`, counts only where `recon` stores no
+patch bitmaps, such as the values `sfm embed-patches` refines. A caller
+holding an `EditedReconstruction` folds it first with its `materialize`. A
+setting the step does not take is refused before the photographs are
+decoded. It runs with the GIL released and raises `ValueError` with the
+refusal's sentence.
 `progress`, an `sfmtool.ProgressCounter`, is set from the `refine normals`
 stage's count, so it climbs to that stage's `n` (§ "Stages and progress"):
 the points listed, each counted once, or every point, those at infinity

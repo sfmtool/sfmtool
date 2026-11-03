@@ -114,13 +114,29 @@ impl FitOptions {
     /// kernel and the evaluation the fit ends with, so the fit and its reading
     /// are stated in one grid.
     pub(super) fn at_patch_resolution(&self, recon: &crate::SfmrReconstruction) -> Self {
-        let mut options = self.clone();
-        if let Some(resolution) = super::evaluate::stored_patch_resolution(recon) {
-            let resolution = resolution.max(2);
-            options.localize.resolution = resolution;
-            options.refine.resolution = resolution;
-            options.evaluate.localize.resolution = resolution;
+        match super::evaluate::stored_patch_resolution(recon) {
+            Some(resolution) => self.at_resolution(resolution.max(2)),
+            None => self.clone(),
         }
+    }
+
+    /// These options with every track-stage kernel at `resolution`: the
+    /// localizer, the sub-pixel kernel and the bitmap render, and the
+    /// evaluation the fit ends with. A reconstruction that stores patch
+    /// bitmaps still has them run at its own resolution, as [`Self::localize`]
+    /// says.
+    ///
+    /// ```
+    /// # use sfmtool_core::bench::FitOptions;
+    /// let options = FitOptions::default().at_resolution(12);
+    /// assert_eq!(options.refine.resolution, 12);
+    /// assert_eq!(options.evaluate.localize.resolution, 12);
+    /// ```
+    pub fn at_resolution(&self, resolution: u32) -> Self {
+        let mut options = self.clone();
+        options.localize.resolution = resolution;
+        options.refine.resolution = resolution;
+        options.evaluate.localize.resolution = resolution;
         options
     }
 }

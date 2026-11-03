@@ -872,6 +872,12 @@ pub struct FitOptions {
     pub depth_likelihood_ratio_threshold: f64, // the classification's, 25
 }
 
+impl FitOptions {
+    // Every track-stage kernel (localize, refine, evaluate.localize) at
+    // `resolution`, which a reconstruction storing patch bitmaps overrides.
+    pub fn at_resolution(&self, resolution: u32) -> Self;
+}
+
 pub struct EvaluateReport {
     pub stage: StageKind,
     pub measured: usize,                 // track stage: rows the localizer read (a seed_shift_px)
