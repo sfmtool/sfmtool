@@ -62,6 +62,7 @@ def _setup_for_sfm(
         feature_tool=feature_tool,
         feature_options=feature_options,
         feature_prefix_dir=feature_prefix_dir,
+        settings_source=f"The workspace file {Path(workspace_dir) / '.sfm-workspace.json'}",
     )
 
     colmap_dir = Path(colmap_dir)

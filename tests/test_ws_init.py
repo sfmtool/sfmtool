@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
@@ -129,3 +130,62 @@ def test_init_max_features_opencv_rejected():
     )
     assert result.exit_code != 0
     assert "only supported for COLMAP and sfmtool" in result.output
+
+
+def test_init_writes_version_2(tmp_path: Path):
+    result = CliRunner().invoke(main, ["ws", "init", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    config = json.loads((tmp_path / ".sfm-workspace.json").read_text())
+    assert config["version"] == 2
+    assert config["feature_options"]["image_to_gray"] == {
+        "formula": "0.2126*R + 0.7152*G + 0.0722*B"
+    }
+    assert "image_to_gray: 0.2126*R + 0.7152*G + 0.0722*B" in result.output
+    assert f"feature_prefix_dir: {config['feature_prefix_dir']}" in result.output
+
+
+def test_init_image_to_gray_and_quantize_bits(tmp_path: Path):
+    result = CliRunner().invoke(
+        main,
+        ["ws", "init", "--image-to-gray", "G", "--quantize-bits", "8", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.output
+    config = json.loads((tmp_path / ".sfm-workspace.json").read_text())
+    assert config["feature_options"]["image_to_gray"] == {
+        "formula": "G",
+        "quantize_bits": 8,
+    }
+    assert "image_to_gray: G, rounded to 8 bits" in result.output
+
+    # --force with other flags writes fresh options and a new folder.
+    result = CliRunner().invoke(main, ["ws", "init", "--force", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    again = json.loads((tmp_path / ".sfm-workspace.json").read_text())
+    assert again["feature_options"]["image_to_gray"] == {
+        "formula": "0.2126*R + 0.7152*G + 0.0722*B"
+    }
+    assert again["feature_prefix_dir"] != config["feature_prefix_dir"]
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (
+            ["--feature-tool", "colmap", "--image-to-gray", "G"],
+            "--image-to-gray option is only supported for sfmtool",
+        ),
+        (
+            ["--feature-tool", "opencv", "--quantize-bits", "8"],
+            "--quantize-bits option is only supported for sfmtool",
+        ),
+        (["--quantize-bits", "0"], "must be an integer from 1 to 16, got 0"),
+        (["--quantize-bits", "17"], "must be an integer from 1 to 16, got 17"),
+        (["--image-to-gray", "R +"], "--image-to-gray: "),
+        (["--image-to-gray", "R - G"], "--image-to-gray: "),
+    ],
+)
+def test_init_image_to_gray_errors(tmp_path: Path, args, message):
+    result = CliRunner().invoke(main, ["ws", "init", *args, str(tmp_path / "ws")])
+    assert result.exit_code != 0
+    assert message in result.output
+    assert not (tmp_path / "ws" / ".sfm-workspace.json").exists()

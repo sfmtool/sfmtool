@@ -24,21 +24,24 @@ SEOUL_BULL_GROUND_TRUTH = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v0
 
 @pytest.fixture
 def sample_sift_data():
-    """Sample SIFT data (metadata and numpy arrays) for roundtrip tests."""
+    """Sample version 2 SIFT data (metadata and numpy arrays) for roundtrip
+    tests."""
     feature_count = 100
     feature_tool_metadata = {
         "feature_tool": "pytest",
         "feature_type": "sift",
-        "feature_options": {},
+        "feature_options": {"image_to_gray": {"formula": "G", "quantize_bits": 8}},
     }
     metadata = {
-        "version": 1,
+        "version": 2,
         "image_name": "test.jpg",
         "image_file_xxh128": "a" * 32,
         "image_file_size": 12345,
         "image_width": 1920,
         "image_height": 1080,
         "feature_count": feature_count,
+        "sharpness": 0.0041206,
+        "gradient_structure_tensor_xx_yy_xy": [0.00093114, 0.00071402, -0.00008351],
     }
     rng = np.random.default_rng(seed=42)
     position = rng.random((feature_count, 2), dtype=np.float32) * np.array(

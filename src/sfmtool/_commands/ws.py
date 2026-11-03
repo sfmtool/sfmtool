@@ -7,7 +7,12 @@ from pathlib import Path
 
 import click
 
-from .._workspace import find_workspace_for_path, init_workspace
+from .._workspace import (
+    WorkspaceUpgradeError,
+    find_workspace_for_path,
+    init_workspace,
+    upgrade_workspace,
+)
 
 
 @click.group("ws")
@@ -52,6 +57,22 @@ def ws():
     "Incompatible with GPU — use --no-gpu with --affine-shape.",
 )
 @click.option(
+    "--image-to-gray",
+    "image_to_gray_formula",
+    metavar="FORMULA",
+    default=None,
+    help="The formula over R, G and B that converts an image to grey (sfmtool only, "
+    "default: 0.2126*R + 0.7152*G + 0.0722*B).",
+)
+@click.option(
+    "--quantize-bits",
+    type=int,
+    metavar="B",
+    default=None,
+    help="Round the grey conversion's value to B bits, 1 to 16 (sfmtool only, "
+    "default: no rounding).",
+)
+@click.option(
     "--force",
     "-f",
     is_flag=True,
@@ -64,6 +85,8 @@ def init(
     max_num_features,
     use_gpu,
     estimate_affine_shape,
+    image_to_gray_formula,
+    quantize_bits,
     force,
 ):
     """Initialize a workspace with configuration.
@@ -80,6 +103,8 @@ def init(
         sfm ws init --feature-tool opencv opencv_workspace
 
         sfm ws init --dsp dsp_workspace
+
+        sfm ws init --image-to-gray G --quantize-bits 8 green_workspace
     """
     # Validate tool-specific options (these are all COLMAP-only knobs)
     tool_lower = feature_tool.lower()
@@ -100,6 +125,27 @@ def init(
         raise click.UsageError(
             f"The --affine-shape option is only supported for COLMAP, not {feature_tool}"
         )
+    if image_to_gray_formula is not None and tool_lower != "sfmtool":
+        raise click.UsageError(
+            f"The --image-to-gray option is only supported for sfmtool, not "
+            f"{feature_tool}, whose grey conversion is its own"
+        )
+    if quantize_bits is not None and tool_lower != "sfmtool":
+        raise click.UsageError(
+            f"The --quantize-bits option is only supported for sfmtool, not "
+            f"{feature_tool}, whose grey conversion is its own"
+        )
+    if quantize_bits is not None and not 1 <= quantize_bits <= 16:
+        raise click.UsageError(
+            f"--quantize-bits must be an integer from 1 to 16, got {quantize_bits}"
+        )
+    if image_to_gray_formula is not None:
+        from ..sift import ImageToGray
+
+        try:
+            ImageToGray(image_to_gray_formula)
+        except ValueError as e:
+            raise click.UsageError(f"--image-to-gray: {e}")
     if use_gpu and estimate_affine_shape and feature_tool.lower() == "colmap":
         raise click.UsageError(
             "COLMAP GPU SIFT does not support affine shape estimation. "
@@ -136,6 +182,8 @@ def init(
         max_num_features=max_num_features,
         estimate_affine_shape=estimate_affine_shape,
         use_gpu=use_gpu,
+        image_to_gray_formula=image_to_gray_formula,
+        quantize_bits=quantize_bits,
     )
 
     click.echo(f"Initialized workspace: {workspace_dir.resolve()}")
@@ -158,3 +206,56 @@ def init(
         click.echo(f"  max_num_features: {options_dict.get('max_num_features')}")
     else:
         click.echo(f"  nfeatures: {options_dict.get('nfeatures', 0)}")
+    click.echo(f"  image_to_gray: {_describe_image_to_gray(options_dict)}")
+    click.echo(f"  feature_prefix_dir: {workspace['feature_prefix_dir']}")
+
+
+def _describe_image_to_gray(feature_options: dict) -> str:
+    """The ``image_to_gray`` object as one line: the formula, and the bit
+    depth when there is one."""
+    image_to_gray = feature_options["image_to_gray"]
+    bits = image_to_gray.get("quantize_bits")
+    if bits is None:
+        return image_to_gray["formula"]
+    return f"{image_to_gray['formula']}, rounded to {bits} bits"
+
+
+@ws.command("upgrade")
+@click.help_option("--help", "-h")
+@click.argument("path", required=False, type=click.Path(exists=True))
+def upgrade(path):
+    """Move a version 1 workspace to version 2 and a new features folder.
+
+    Finds the workspace from PATH (or the current directory) by the upward
+    search for .sfm-workspace.json, and rewrites a version 1 file as version 2,
+    keeping every option, including hand-edited ones. The sfmtool tool's
+    gray_formula becomes the image_to_gray object, and a colmap or opencv
+    workspace gains its tool's conversion. A new feature_prefix_dir is named
+    from the new options, so .sift files are extracted again into a new folder;
+    the old folder, its .sift files and the named image lists file stay on
+    disk, and .sfmr files that name the old folder still find their .sift
+    files.
+
+    Example usage:
+
+        sfm ws upgrade
+
+        sfm ws upgrade my_workspace
+    """
+    try:
+        config_path, old, new = upgrade_workspace(Path(path) if path else Path("."))
+    except WorkspaceUpgradeError as e:
+        raise click.ClickException(str(e))
+    if new is None:
+        click.echo(f"{config_path}: nothing to do: already version 2")
+        return
+    click.echo(f"Upgraded workspace file: {config_path}")
+    click.echo("  version: 1 -> 2")
+    click.echo(f"  feature_tool: {new['feature_tool']}")
+    click.echo(f"  image_to_gray: {_describe_image_to_gray(new['feature_options'])}")
+    click.echo(f"  old features folder: {old.get('feature_prefix_dir')}")
+    click.echo(f"  new features folder: {new['feature_prefix_dir']}")
+    click.echo(
+        "The old folder and its .sift files are left on disk; .sift files are "
+        "extracted again into the new folder."
+    )

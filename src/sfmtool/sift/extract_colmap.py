@@ -11,8 +11,9 @@ import pycolmap
 
 from sfmtool.fileio import read_image_rgb
 from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool.sift.extract import SiftExtractionError
+from sfmtool.sift.extract import SiftExtractionError, _image_readings_fields
 from sfmtool.sift.file import feature_size, xxh128_of_file
+from sfmtool.workspace import tool_image_to_gray
 
 __all__ = [
     "get_colmap_feature_options",
@@ -43,7 +44,9 @@ def get_colmap_feature_options(
                  the feature-cache hash (see get_feature_tool_xxh128).
 
     Returns:
-        Dict of feature options that affect feature output
+        Dict of feature options that affect feature output, with the
+        ``image_to_gray`` object recording the grey conversion COLMAP makes
+        (BT.709 luma rounded to 8 bits), which is the tool's, not a setting.
     """
     sift_options = pycolmap.SiftExtractionOptions(
         estimate_affine_shape=estimate_affine_shape,
@@ -73,6 +76,7 @@ def get_colmap_feature_options(
     result = {k: v for k, v in sift_dict.items() if k in _sift_keys}
     result["max_image_size"] = max_image_size
     result["use_gpu"] = use_gpu
+    result["image_to_gray"] = tool_image_to_gray("colmap").to_dict()
 
     # Use None for max_num_features when it's the COLMAP default
     if max_num_features is None:
@@ -230,23 +234,25 @@ def read_colmap_db_sift(
         "feature_options": feature_options,
     }
 
+    # COLMAP decoded the image itself for the features; the thumbnail and the
+    # readings are made from the decode every extractor's thumbnail comes from.
+    rgb = read_image_rgb(image_file)
+    readings = _image_readings_fields(image_file, rgb, feature_options)
+
     metadata = {
-        "version": 1,
+        "version": 2,
         "image_name": image_name,
         "image_file_xxh128": file_xxh128,
         "image_file_size": file_size,
         "image_width": width,
         "image_height": height,
         "feature_count": len(keypoints),
+        **readings,
     }
 
-    # Generate the square RGB thumbnail the .sift format pins
-    # COLMAP decoded the image itself for the features; the thumbnail is
-    # made from the decode every extractor's thumbnail comes from.
+    # Generate the square RGB thumbnail the .sift format pins.
     thumbnail = cv2.resize(
-        read_image_rgb(image_file),
-        (THUMBNAIL_SIZE, THUMBNAIL_SIZE),
-        interpolation=cv2.INTER_AREA,
+        rgb, (THUMBNAIL_SIZE, THUMBNAIL_SIZE), interpolation=cv2.INTER_AREA
     )
 
     return (

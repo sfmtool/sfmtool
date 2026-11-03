@@ -22,8 +22,9 @@ import numpy as np
 
 from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool.fileio import read_image_rgb
-from sfmtool.sift.extract import SiftExtractionError
+from sfmtool.sift.extract import SiftExtractionError, _image_readings_fields
 from sfmtool.sift.file import xxh128_of_file
+from sfmtool.workspace import tool_image_to_gray
 
 __all__ = [
     "get_default_sfmtool_feature_options",
@@ -32,7 +33,9 @@ __all__ = [
 ]
 
 
-def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> dict:
+def get_default_sfmtool_feature_options(
+    max_num_features: int | None = None, image_to_gray: dict | None = None
+) -> dict:
     """Get default options for the sfmtool SIFT backend.
 
     The keys mirror the output-defining fields of ``SiftParams::default()`` in
@@ -46,6 +49,9 @@ def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> 
     Args:
         max_num_features: Cap on the number of features kept per image (the
             strongest are retained). ``None`` uses the sfmtool default of 8192.
+        image_to_gray: The grey conversion, the ``image_to_gray`` object
+            ``{"formula": ..., "quantize_bits": ...}``. ``None`` uses the
+            sfmtool default, BT.709 luma with no rounding.
 
     Returns:
         Dict of sfmtool SIFT options.
@@ -65,10 +71,13 @@ def get_default_sfmtool_feature_options(max_num_features: int | None = None) -> 
         "descriptor_bins": 8,
         "descriptor_magnification": 3.0,
         "descriptor_clamp": 0.2,
-        # BT.709 luma (matches COLMAP). The grayscale conversion is output-defining,
-        # so it is recorded here to pin it in the feature-tool hash even though the
-        # version 1 .sift layout does not require an image_to_gray field.
-        "gray_formula": "0.2126*R + 0.7152*G + 0.0722*B",
+        # The grey conversion is output-defining, so it is recorded here, where
+        # it names the feature folder and goes into every .sift file.
+        "image_to_gray": (
+            tool_image_to_gray("sfmtool").to_dict()
+            if image_to_gray is None
+            else dict(image_to_gray)
+        ),
     }
 
 
@@ -109,8 +118,13 @@ def _decode_image(image_path: Path):
 def _extract_one(
     image_path, rgb, thumbnail, params, feature_options, rust_extract_sift
 ):
-    """Run the Rust extract on a decoded image and assemble its result tuple."""
+    """Run the Rust extract on a decoded image and assemble its result tuple.
+
+    The image's readings are taken from the same decode the thumbnail was
+    made from, through the options' ``image_to_gray``.
+    """
     height, width = rgb.shape[:2]
+    readings = _image_readings_fields(image_path, rgb, feature_options)
 
     # The binding already returns C-contiguous float32/float32/uint8 arrays,
     # and keypoints already sorted by descending feature size (the .sift
@@ -128,13 +142,14 @@ def _extract_one(
     }
 
     metadata = {
-        "version": 1,
+        "version": 2,
         "image_name": image_path.name,
         "image_file_xxh128": file_xxh128,
         "image_file_size": file_size,
         "image_width": width,
         "image_height": height,
         "feature_count": len(positions),
+        **readings,
     }
 
     return (

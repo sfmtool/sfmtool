@@ -10,8 +10,9 @@ import numpy as np
 
 from sfmtool.fileio import read_image_rgb
 from sfmtool._sfmtool import THUMBNAIL_SIZE
-from sfmtool.sift.extract import SiftExtractionError
+from sfmtool.sift.extract import SiftExtractionError, _image_readings_fields
 from sfmtool.sift.file import feature_size, xxh128_of_file
+from sfmtool.workspace import tool_image_to_gray
 
 __all__ = [
     "get_default_opencv_feature_options",
@@ -23,6 +24,10 @@ __all__ = [
 def get_default_opencv_feature_options():
     """Get default OpenCV SIFT extraction options as a dict.
 
+    ``image_to_gray`` records the grey conversion the extractor makes,
+    ``cv2.cvtColor(..., cv2.COLOR_RGB2GRAY)`` on the 8-bit decode: BT.601 luma
+    rounded to 8 bits. It is the tool's, not a setting.
+
     Returns:
         Dict of OpenCV SIFT options
     """
@@ -32,6 +37,7 @@ def get_default_opencv_feature_options():
         "contrastThreshold": 0.04,
         "edgeThreshold": 10,
         "sigma": 1.6,
+        "image_to_gray": tool_image_to_gray("opencv").to_dict(),
     }
 
 
@@ -110,6 +116,7 @@ def extract_sift_with_opencv(
             ) from e
 
         height, width = image.shape[:2]
+        readings = _image_readings_fields(image_path, image, feature_options)
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
         keypoints, descriptors = sift.detectAndCompute(gray, None)
@@ -145,13 +152,14 @@ def extract_sift_with_opencv(
         }
 
         metadata = {
-            "version": 1,
+            "version": 2,
             "image_name": image_path.name,
             "image_file_xxh128": file_xxh128,
             "image_file_size": file_size,
             "image_width": width,
             "image_height": height,
             "feature_count": len(keypoints),
+            **readings,
         }
 
         thumbnail = cv2.resize(

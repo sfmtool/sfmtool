@@ -161,13 +161,13 @@ def create_colmap_db_from_reconstruction(
 
     # Load keypoints and descriptors from .sift files
     print("Loading keypoints and descriptors...")
-    feature_prefix_dir = (
-        recon.source_metadata.get("workspace", {})
-        .get("contents", {})
-        .get("feature_prefix_dir")
-    )
+    contents = recon.source_metadata.get("workspace", {}).get("contents", {})
     sift_paths = image_files_to_sift_files(
-        image_paths, feature_prefix_dir=feature_prefix_dir
+        image_paths,
+        feature_tool=contents.get("feature_tool"),
+        feature_options=contents.get("feature_options"),
+        feature_prefix_dir=contents.get("feature_prefix_dir"),
+        settings_source="The reconstruction's workspace record",
     )
 
     keypoints_per_image = []
