@@ -9,7 +9,13 @@ For each image in a reconstruction, this module:
 2. Transforms .sift feature positions and affine shapes
 3. Remaps tracks (dropping features outside the pinhole frame)
 4. Assembles a new .sfmr reconstruction with pinhole cameras
-5. Writes a workspace config (.sfm-workspace.json)
+5. Writes a version 2 workspace config (.sfm-workspace.json)
+
+The workspace and the ``.sift`` files it writes are version 2. Their
+``image_to_gray`` is the source's conversion, as ``sfm ws upgrade`` reads one
+(``sfmtool.workspace.recorded_image_to_gray``), and each ``.sift`` file's
+readings are computed from the undistorted image file written for it, so they
+describe that image and not its source.
 
 Each image is read through its own intrinsics, its camera's with its intrinsic
 adjustment applied (its focal scale, its principal-point offset, its radial
@@ -263,6 +269,8 @@ def undistort_reconstruction_images(
         xxh128_of_file,
     )
     from .fileio import SiftFile, write_sift
+    from .sift import image_readings_from_rgb
+    from .workspace import recorded_image_to_gray
 
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
@@ -284,13 +292,17 @@ def undistort_reconstruction_images(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Feature tool config for the undistorted .sift files
+    # Feature tool config for the undistorted .sift files. The top-level
+    # image_to_gray is the source's conversion, read from either version of its
+    # record; the nested source options are kept as the source recorded them.
+    image_to_gray = recorded_image_to_gray(source_feature_tool, source_feature_options)
     undistort_feature_tool = "sfmtool-undistort"
     undistort_feature_options = {
         "source_feature_tool": source_feature_tool,
         "source_feature_options": source_feature_options,
         "fit": fit,
         "filter": resampling_filter,
+        "image_to_gray": image_to_gray.to_dict(),
     }
     undistort_feature_type = f"sift-{undistort_feature_tool}"
     undistort_feature_tool_hash = get_feature_tool_xxh128(
@@ -451,18 +463,27 @@ def undistort_reconstruction_images(
                 worst_drop_rate = drop_rate
                 worst_drop_image = image_name
 
-        # Step 5: Write .sift file
+        # Step 5: Write .sift file. The readings are taken from the image file
+        # just written, decoded as every extractor decodes, so a later reader
+        # that computes them from the file gets the same values.
         image_file_hash = xxh128_of_file(output_image_path)
         image_file_size = output_image_path.stat().st_size
+        readings = image_readings_from_rgb(
+            read_image_rgb(output_image_path), image_to_gray
+        )
 
         sift_metadata = {
-            "version": 1,
+            "version": 2,
             "image_name": Path(image_name).name,
             "image_file_xxh128": image_file_hash,
             "image_file_size": image_file_size,
             "image_width": int(pinhole.width),
             "image_height": int(pinhole.height),
             "feature_count": n_kept,
+            "sharpness": readings.sharpness,
+            "gradient_structure_tensor_xx_yy_xy": list(
+                readings.gradient_structure_tensor_xx_yy_xy
+            ),
         }
 
         sift_dir = output_image_path.parent / feature_prefix_dir
@@ -639,7 +660,7 @@ def undistort_reconstruction_images(
 
     # === Write workspace config ===
     workspace_config = {
-        "version": 1,
+        "version": 2,
         "feature_tool": undistort_feature_tool,
         "feature_type": undistort_feature_type,
         "feature_options": undistort_feature_options,

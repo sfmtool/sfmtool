@@ -26,6 +26,7 @@ from sfmtool._undistort_images import (
     _features_in_frame,
     undistort_reconstruction_images,
 )
+from sfmtool import load_workspace_config
 from sfmtool.cli import main
 
 
@@ -338,9 +339,15 @@ class TestUndistortWorkspace:
             config = json.load(f)
 
         assert config["feature_tool"] == "sfmtool-undistort"
-        assert config["version"] == 1
+        assert config["version"] == 2
         assert "feature_prefix_dir" in config
         assert config["feature_type"] == "sift-sfmtool-undistort"
+        # The source's conversion, at the top level of the options.
+        assert config["feature_options"]["image_to_gray"] == {
+            "formula": "0.2126*R + 0.7152*G + 0.0722*B"
+        }
+        # The workspace loads under the version 2 rules.
+        assert load_workspace_config(output_dir) == config
 
     def test_reads_the_features_the_reconstruction_was_built_from(
         self, seoul_bull_workspace, tmp_path
@@ -420,6 +427,40 @@ class TestUndistortWorkspace:
                 assert positions.dtype == np.float32
                 assert positions.ndim == 2
                 assert positions.shape[1] == 2
+
+    def test_sift_files_are_version_2_with_readings_of_the_written_images(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        """Each .sift is version 2, records the source's conversion, and holds
+        the readings of the undistorted image file written beside it."""
+        from sfmtool.fileio import read_image_rgb
+        from sfmtool.sift import ImageToGray, image_readings_from_rgb
+
+        recon, output_dir, _, _ = _run_undistort(seoul_bull_workspace, tmp_path)
+        config = json.loads((output_dir / ".sfm-workspace.json").read_text())
+        image_to_gray = config["feature_options"]["image_to_gray"]
+        source = recon.metadata()["workspace"]["contents"]["feature_options"]
+        assert image_to_gray == source["image_to_gray"]
+
+        for image_name in recon.image_names[:3]:
+            image_path = output_dir / image_name
+            sift_path = (
+                image_path.parent
+                / config["feature_prefix_dir"]
+                / (image_path.name + ".sift")
+            )
+            with SiftFile(sift_path) as reader:
+                metadata = reader.metadata
+                options = reader.feature_tool_metadata["feature_options"]
+            assert metadata["version"] == 2
+            assert options["image_to_gray"] == image_to_gray
+            expected = image_readings_from_rgb(
+                read_image_rgb(image_path), ImageToGray.from_json(image_to_gray)
+            )
+            assert metadata["sharpness"] == expected.sharpness
+            assert metadata["gradient_structure_tensor_xx_yy_xy"] == list(
+                expected.gradient_structure_tensor_xx_yy_xy
+            )
 
     def test_feature_positions_in_bounds(self, seoul_bull_workspace, tmp_path):
         """All feature positions are within pinhole image dimensions."""
