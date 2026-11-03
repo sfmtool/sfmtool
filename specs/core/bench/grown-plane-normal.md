@@ -1010,7 +1010,8 @@ off
   evaluation per view: an iteration renders once for each damping it tries. The
   point an iteration starts from was rendered when its step was scored, and its
   Jacobian is read at that render: it renders nothing, and makes one pass over
-  the samples that reads each sample's Sobel gradient, 16 pixels per channel,
+  the samples that reads each sample's Sobel gradient, 16 pixels per channel
+  with their positions found once for all the channels,
   and, for a fit with the tilt free, goes through the lens model's Jacobian,
   which reads no photograph. The gradient is read only for a point a Jacobian is
   taken at, so a damped step that is refused costs its render alone. Each view
