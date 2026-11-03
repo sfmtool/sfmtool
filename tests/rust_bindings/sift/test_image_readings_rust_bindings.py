@@ -5,7 +5,7 @@
 independent numpy reference.
 
 The reference below recomputes the reading image and both readings from the
-definitions in `specs/drafts/image-sharpness.md`: the grey formula evaluated
+definitions in `specs/formats/sift-file-format.md`: the grey formula evaluated
 in numpy, the rounding to `quantize_bits` written out, the size rule, an exact
 area average as a pair of dense weight matrices, and the Laplacian and Sobel
 kernels as explicit sums of shifted slices. It calls nothing from sfmtool.

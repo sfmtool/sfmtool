@@ -128,6 +128,7 @@ sfm to-colmap-bin result.sfmr out/ --named-image-list hero_shots
 | Command | Spec |
 |---------|------|
 | `sfm ws init` | [ws-init-command.md](workspace/ws-init-command.md) |
+| `sfm ws upgrade` | [ws-upgrade-command.md](workspace/ws-upgrade-command.md) |
 | `sfm camrig` (`create`, `cp`, `spherical-tiles`) | [camrig-command.md](workspace/camrig-command.md) |
 | `sfm pano2rig` | [pano2rig-command.md](workspace/pano2rig-command.md) |
 | `sfm insv2rig` | [insv2rig-command.md](workspace/insv2rig-command.md) |

@@ -5,7 +5,11 @@
 `sfm sift` detects SIFT keypoints and descriptors in a set of images and writes
 one `.sift` file per image for `sfm match` and `sfm solve`; with `--draw` it
 draws those keypoints onto copies of the images. Exactly one action mode must
-be specified per invocation.
+be specified per invocation. The files are `.sift` version 2
+([sift-file-format.md](../../formats/sift-file-format.md#format-versions)): each
+records the grey conversion as `feature_options.image_to_gray` and the image's
+sharpness and gradient structure tensor, taken from the decode its thumbnail is
+made from.
 
 The command is implemented in
 [`src/sfmtool/_commands/sift.py`](../../../src/sfmtool/_commands/sift.py), with
@@ -97,6 +101,31 @@ Each image `<dir>/<name>` gets one `.sift` file:
 `--extract` skips an image whose `.sift` file already exists and is at least as
 new as the image (by modification time), and reports how many images were
 skipped and how many were extracted.
+
+## Version refusals
+
+Version 1 and version 2 files never mix
+([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
+When `--extract` has at least one file to write, it refuses, before writing
+anything:
+
+- **version 1 settings**: a version 1 workspace file, whose `feature_options`
+  carry no `image_to_gray`. The error names the workspace file and says to run
+  [`sfm ws upgrade`](../workspace/ws-upgrade-command.md), which moves the
+  workspace to version 2 and a new folder;
+- **a folder holding version 1 files**: the error names the folder and says to
+  run `sfm ws upgrade`;
+- **a `colmap` or `opencv` conversion other than the tool's**: the error names
+  the tool and the one conversion it makes.
+
+When every `.sift` file is present and current, nothing is written and nothing
+is refused, so a version 1 workspace's existing features keep working. The same
+refusals apply where [`sfm solve`](../reconstruction/solve-command.md),
+[`sfm match`](match-command.md) and
+[`sfm to-colmap-db`](../colmap-interop/to-colmap-db-command.md) extract missing
+features. In tool mode outside a workspace, the tool's version 2 defaults name a
+new folder, so version 1 files from an earlier run in the old folder are not
+touched.
 
 `--draw <DIR>` writes `<DIR>/<name>` for each image. An image whose `.sift` file
 is missing is reported as an error and the command continues with the next

@@ -54,6 +54,16 @@ required positional argument (matching the positional `OUTPUT` convention of
 Populates the database with camera intrinsics, pose priors, keypoints, descriptors, and
 (by default) two-view geometries with fundamental matrices for guided matching.
 
+The keypoints and descriptors are read from each image's `.sift` file in the
+`feature_prefix_dir` the reconstruction records. An image whose `.sift` file is
+missing or older than the image is extracted again with the feature tool and
+options the reconstruction records. That extraction writes `.sift` version 2
+and so refuses a record with version 1 settings and a folder holding version 1
+files, as `sfm sift --extract` does
+([sift-command.md § Version refusals](../image-feature/sift-command.md#version-refusals));
+when every file is present and current, nothing is extracted and nothing is
+refused.
+
 The cameras follow `sfm to-colmap-bin`'s rule
 ([to-colmap-bin-command.md](to-colmap-bin-command.md#cameras)): a camera with a
 non-zero intrinsic adjustment on any of its images is written as one camera per

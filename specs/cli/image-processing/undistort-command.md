@@ -79,29 +79,43 @@ written as a 3-channel image
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "feature_tool": "sfmtool-undistort",
   "feature_type": "sift-sfmtool-undistort",
   "feature_options": {
     "source_feature_tool": "colmap",
     "source_feature_options": { ... },
     "fit": "inside",
-    "filter": "aniso"
+    "filter": "aniso",
+    "image_to_gray": {
+      "formula": "0.2126*R + 0.7152*G + 0.0722*B",
+      "quantize_bits": 8
+    }
   },
   "feature_prefix_dir": "features/sift-sfmtool-undistort-{hash}"
 }
 ```
 
+The file is version 2 whatever the source's version
+([workspace.md § Versions](../../workspace/workspace.md#versions)).
 `feature_tool` is the sentinel `sfmtool-undistort`; `feature_type` is the
 compound string `sift-sfmtool-undistort`. `source_feature_tool` and
 `source_feature_options` are the `feature_tool` and `feature_options` recorded
-in the input `.sfmr`'s `workspace.contents`, the features it was built from.
+in the input `.sfmr`'s `workspace.contents`, the features it was built from,
+kept as the source recorded them, a version 1 `gray_formula` included.
+`image_to_gray` is the source's conversion, read as `sfm ws upgrade` reads one:
+the source's own top-level object, else its `gray_formula` as
+`{"formula": …}`, else the source tool's conversion, and for a version 1
+`sfmtool-undistort` source, the same reading of its own nested record. The
+folder is named over the whole `feature_options`, so undistorting again writes a
+new folder beside any older output.
 
 Features in this workspace are produced by undistortion, not extraction. The
 sentinel `feature_tool` value is reserved so that extraction tooling can
 distinguish an undistort workspace from a regular one. `sfm sift --extract`
 does not currently recognize this value — do not run it on an undistort
-workspace; the pre-existing `.sift` files are the features.
+workspace; the pre-existing `.sift` files are the features. `sfm ws upgrade`
+refuses an undistort workspace and says to run `sfm undistort` again.
 
 ## Behavior
 
@@ -218,11 +232,16 @@ file. The same thumbnail is the image's thumbnail in the output `.sfmr`. The
 `.sift` file is written **after** the image file; `image_file_xxh128` in the
 `.sift` metadata is therefore the hash of the bytes actually on disk.
 
-**Metadata.** `image_name` is the image basename (matching other `.sift`
-writers); `image_file_xxh128` and `image_file_size` reflect the newly written
-undistorted image; `image_width` / `image_height` use the pinhole camera's
-dimensions. `feature_tool_metadata` records the provenance (source feature
-tool and options, `fit`, `filter`).
+**Metadata.** Each `.sift` file is version 2. `image_name` is the image
+basename (matching other `.sift` writers); `image_file_xxh128` and
+`image_file_size` reflect the newly written undistorted image; `image_width` /
+`image_height` use the pinhole camera's dimensions. `sharpness` and
+`gradient_structure_tensor_xx_yy_xy` are computed by decoding the undistorted
+image file written for it, through the workspace's `image_to_gray`, so they
+describe the undistorted image, not the source, and a reader that computes them
+again from the image file gets the same values. `feature_tool_metadata` records
+the provenance (source feature tool and options, `fit`, `filter`) and the
+`image_to_gray` object.
 
 ### Track remapping
 
