@@ -289,8 +289,9 @@ needed:
 - Summing in blocks, each row and then the row sums, bounds it by about
   `(rows + columns) · u`, `5 · 10^-5` for the same image, at no extra cost,
   and splits the work by rows.
-- Pairwise or compensated (Kahan or Neumaier) summation bounds it by a few `u`
-  at a few times the arithmetic.
+- Pairwise summation bounds it by about `log2(n) · u` at about the same
+  arithmetic; compensated (Kahan or Neumaier) summation bounds it by a few `u`
+  at about four times the arithmetic.
 - An `f64` accumulator is chosen only when no `f32` scheme's bound meets the
   need, or when the terms themselves are `f64` for their own reasons.
 

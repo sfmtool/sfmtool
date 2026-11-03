@@ -172,7 +172,10 @@ counting as one, and a reader may refuse a longer one.
 the `f32` nearest the normalised sample (the sample and `2^d − 1` are exact,
 and their quotient is rounded once), each literal is the `f32` nearest its
 decimal text, and the result of each operation in the expression's tree is
-rounded to `f32`. `**` is the single-precision power function. Single
+rounded to `f32`. `**` is the single-precision power function, which math
+libraries do not all round correctly, so for a formula that uses `**` two
+implementations can differ in the last bit of a sample; every other operation
+gives the same bits in every implementation that follows these rules. Single
 precision holds 24 bits, about 7 decimal digits, against the 8 to 16 bits of a
 sample, so each rounding is a small fraction of one grey level of the image's
 own bit depth; it is twice the values per vector instruction of double
@@ -319,9 +322,12 @@ exact in an `f32`. Summing by rows bounds the rounding error of the total by
 about `(W' + H') · 2^-24` of the sum of the terms' magnitudes, under
 `6 · 10^-5`, where a single running sum over all `n` terms would be bounded
 only by `n · 2^-24`, about `10^-2`. An implementation that computes these
-steps in double precision, or sums in another order, gets readings that agree
-with these to within `10^-5` of each value (for `Exy`, of `Exx + Eyy`), or
-within `10^-12` absolute for a reading near `0`; the readings' use, comparing
+steps in double precision, or sums in another order, gets readings that differ
+from these in the last digits: on photographs, by under `10^-5` of each value
+(for `Exy`, of `Exx + Eyy`), or `10^-12` absolute for a reading near `0`. A
+sample at an exact or near tie of `q` can be rounded to the neighbouring level
+by such an implementation, so an image made mostly of tie colours can read
+differently by much more. The readings' use, comparing
 the images of one capture, needs about three significant digits.
 
 #### Sharpness

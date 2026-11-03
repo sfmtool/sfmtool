@@ -332,8 +332,11 @@ worth more than a paragraph.
 19. **Numeric precision** — grep library code under `crates/` for `f64` in
     pixel and sample loops: `as f64 / 255`, `f64::from(` of a `u8` sample,
     and `vec![0f64` / `vec![0.0f64` / `Vec<f64>` buffers in image, patch,
-    tile, flow and feature code; and for whole-image sums in one running `f32`
-    accumulator (`.sum::<f32>()` over every pixel). Report the hit count per
+    tile, flow and feature code, and `= 0.0f64` accumulators in those loops;
+    for whole-image sums in one running `f32` accumulator (`.sum::<f32>()`
+    over every pixel); and for float reductions whose order rayon chooses
+    (`.sum()` or `.reduce(` on a `par_iter`) where the result is stored or
+    compared. Report the hit count per
     pattern, then read each hit and keep those whose precision has no stated
     reason or whose stated reason the values' range, the digits the use needs
     and the accumulation error do not support. Feeds STANDARDS.md § "Numeric

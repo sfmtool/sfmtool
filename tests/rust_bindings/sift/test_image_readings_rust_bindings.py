@@ -10,8 +10,10 @@ precision: the grey formula evaluated in numpy, the rounding to
 `quantize_bits` written out, the size rule, an exact area average as a pair of
 dense weight matrices, and the Laplacian and Sobel kernels as explicit sums of
 shifted slices. The format computes them in single precision, and states that
-an evaluation in double precision agrees to within 1e-5 of each reading (of
-Exx + Eyy for Exy), or 1e-12 absolute near 0, which is the tolerance here. The
+on photographs an evaluation in double precision agrees to within 1e-5 of each
+reading (of Exx + Eyy for Exy), or 1e-12 absolute near 0, which is the
+tolerance here; the test images are not made of colours at a tie of the
+rounding to quantize_bits, where the two can differ by a level. The
 grey reference evaluates the formula in single precision as the format
 defines it, which `gray_from_rgb` matches bit for bit. Neither calls anything
 from sfmtool.
