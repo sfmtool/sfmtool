@@ -1041,6 +1041,71 @@ fn the_header_does_not_overlap_its_buttons_at_a_narrow_width() {
     }
 }
 
+/// A node label longer than the room beside the buttons is shortened in its
+/// middle, so the header paints nothing over `Switch Model…` and `Copy` and
+/// nothing past the panel's edge, the camera number and model stay on screen,
+/// and hovering the label shows it whole.
+#[test]
+fn a_long_node_label_does_not_run_under_the_header_buttons() {
+    let node = seoul_bull_v02();
+    assert_eq!(node.label, "seoul_bull_sculpture_ground_truth_v02");
+    for width in [341.0, 482.0, 1800.0] {
+        let painted = frame_at(&node, width);
+        let until = top_of(&painted, "Parameters");
+        assert_eq!(overlapping(&painted, until), Vec::new(), "at {width} px");
+        assert_eq!(
+            past_the_edge(&painted, until, width),
+            Vec::<String>::new(),
+            "at {width} px"
+        );
+        let texts = texts_of(&painted);
+        for needle in ["Camera #0", "SFMTOOL_PINHOLE", "Switch Model…", "Copy"] {
+            assert!(says(&texts, needle), "{needle} missing at {width} px");
+        }
+        let label = painted
+            .iter()
+            .find(|p| p.text.starts_with("seoul_bull"))
+            .unwrap_or_else(|| panic!("no node label at {width} px"));
+        assert!(
+            label.text.ends_with("_v02"),
+            "at {width} px: {}",
+            label.text
+        );
+        if width >= 1800.0 {
+            assert_eq!(label.text, node.label, "shortened with room to spare");
+        }
+    }
+
+    // Hovering the shortened label shows it whole.
+    let mut panel = IntrinsicsDetail::new();
+    let ctx = egui::Context::default();
+    let mut painted = Vec::new();
+    for _ in 0..4 {
+        (painted, _, _) = histogram_frame(&mut panel, &ctx, &node, None, 341.0, Vec::new());
+    }
+    let shown = painted
+        .iter()
+        .find(|p| p.text.starts_with("seoul_bull"))
+        .expect("the node label");
+    assert_ne!(shown.text, node.label, "not shortened at 341 px");
+    let at = shown.rect.center();
+    for _ in 0..3 {
+        (painted, _, _) = histogram_frame(
+            &mut panel,
+            &ctx,
+            &node,
+            None,
+            341.0,
+            vec![egui::Event::PointerMoved(at)],
+        );
+    }
+    assert!(
+        painted.iter().any(|p| p.text == node.label),
+        "no tooltip: {:?}",
+        texts_of(&painted)
+    );
+}
+
 /// The current and proposed tables never run into each other: one above the
 /// other at a narrow width, side by side at a wide one.
 #[test]
@@ -1470,11 +1535,7 @@ fn seoul_bull_v02() -> SceneNode {
     let path = std::path::Path::new(SEOUL_BULL_V02);
     let recon = SfmrReconstruction::load(path, &sfmtool_core::progress::Progress::none())
         .expect("the ground truth loads");
-    let mut node = SceneNode::from_path(path, recon);
-    // The file's own name is longer than the header can fit beside its
-    // buttons at the narrowest width, which is the header's business.
-    node.label = "seoul_bull".to_string();
-    node
+    SceneNode::from_path(path, recon)
 }
 
 /// The same camera with its radial correction and rates dropped, so it varies

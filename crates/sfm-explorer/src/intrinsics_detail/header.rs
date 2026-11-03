@@ -53,7 +53,8 @@ pub(super) fn show_header(
     // The buttons are laid out first, from the right edge, and the identity
     // line takes the width they leave, wrapping between its parts rather than
     // running under them: a narrow panel puts "480×480 · 24 images" on a
-    // second line instead of behind `Switch Model…`.
+    // second line instead of behind `Switch Model…`, and a node label wider
+    // than the whole of that width is shortened in its middle.
     ui.horizontal_top(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             show_copy_menu(ui, camera, pose);
@@ -70,7 +71,7 @@ pub(super) fn show_header(
             ui.with_layout(
                 egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
                 |ui| {
-                    part(ui, egui::RichText::new(&node.label).strong(), false);
+                    node_label(ui, &node.label);
                     part(
                         ui,
                         egui::RichText::new(format!("Camera #{index}")).strong(),
@@ -104,14 +105,6 @@ pub(super) fn show_header(
 /// part starts the next line and the separator is left out, so no line starts
 /// with one.
 fn part(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, separated: bool) -> egui::Response {
-    let layout = |ui: &egui::Ui, text: egui::WidgetText| {
-        text.into_galley(
-            ui,
-            Some(egui::TextWrapMode::Extend),
-            f32::INFINITY,
-            egui::TextStyle::Body,
-        )
-    };
     let galley = layout(ui, text.into());
     let gap = ui.spacing().item_spacing.x;
     let left = ui.available_size_before_wrap().x;
@@ -126,6 +119,38 @@ fn part(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, separated: bool) -
         }
     }
     ui.add(egui::Label::new(galley))
+}
+
+/// The node's label, the identity line's first part, shortened in its middle
+/// with [`crate::elide::middle`] where it is wider than the line, with the
+/// whole label as its hover text.
+///
+/// The line wraps between its parts but never inside one, so a part wider than
+/// the room left of the buttons would otherwise run under them. Only the label
+/// can be that wide: it is a file name, while the other parts are a few words
+/// or numbers each. Cut out of the middle, a run name keeps its family at the
+/// front and its version or range at the back.
+fn node_label(ui: &mut egui::Ui, label: &str) {
+    let left = ui.available_size_before_wrap().x;
+    let shown = crate::elide::middle(label, left, |text| {
+        layout(ui, egui::RichText::new(text).strong().into())
+            .size()
+            .x
+    });
+    let response = part(ui, egui::RichText::new(&shown).strong(), false);
+    if shown != label {
+        response.on_hover_text(label);
+    }
+}
+
+/// `text` laid out on one line, as the identity line's parts are drawn.
+fn layout(ui: &egui::Ui, text: egui::WidgetText) -> std::sync::Arc<egui::Galley> {
+    text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    )
 }
 
 /// What the header's button that opens a camera model proposal is called.
