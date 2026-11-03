@@ -77,16 +77,31 @@ grey sample `v` becomes `round(clamp(v, 0, 1) · (2^b − 1)) / (2^b − 1)`, an
 exact half rounded up (`gray::quantize`). `SiftParams::image_to_gray` is an
 `ImageToGray`, read by `SiftParams::from_feature_options` from the
 `image_to_gray` option, or from `gray_formula` for a version 1 record (the two
-together are refused), and `gray_from_rgb` applies it, rounding included, to
-make the detector's `f32` input.
+together are refused). `ImageToGray::gray_row` is sfmtool's one conversion of
+8-bit RGB pixels to grey: it converts a row at a time, each channel divided by
+255 and the formula evaluated a node of its tree at a time over the row, then
+rounded when `quantize_bits` is present, all in single precision as the format
+defines it, so the work is a few vectorised loops over `f32` rows.
+`gray_from_rgb` applies it to every row, in bands on the rayon pool, to make the
+detector's `f32` input; the readings make their grey samples with it too.
 [`image_readings_from_rgb`](../../../crates/sfmtool-core/src/features/sift/image_readings.rs)
 takes the decoded 8-bit RGB pixels and an `ImageToGray`, and returns an
 `ImageReadings` holding the image's `sharpness` and
-`gradient_structure_tensor_xx_yy_xy`, as the `.sift` format defines them: the
-grey image in double precision, reduced by an exact area average to a long side
-of 480 (`reading_image_size`), then the Laplacian variance and the means of the
-Sobel-divided-by-8 products over the interior pixels. A reading that is not
-finite is an `ImageReadingsError`. It runs on rayon's global pool, which is safe
+`gradient_structure_tensor_xx_yy_xy` as `f32`s, as the `.sift` format defines
+them: the grey image reduced by an area average to a long side of 480
+(`reading_image_size`) through
+[`camera::image::area_resize`](../../../crates/sfmtool-core/src/camera/image/area_resize.rs),
+sfmtool's one area-average resampler, then the Laplacian variance and the means
+of the Sobel-divided-by-8 products over the interior pixels, each row summed in
+`f32` and the row sums totalled in `f32`, so the result does not depend on the
+thread count. Single precision is enough for every step: the readings are
+compared within a capture and need about three significant digits, and every
+step's rounding error is several orders below that (see the format's
+[mean over the interior](../../formats/sift-file-format.md#the-reading-image)).
+`build_sift_files` makes each image grey once with `gray_from_rgb` and takes
+the readings from that grey image, which gives the same values as
+`image_readings_from_rgb` of the RGB. A reading that is not finite, an
+infinity, a NaN or a value too large for an `f32`, is an `ImageReadingsError`. It runs on rayon's global pool, which is safe
 to call from the extractors' own threads and from inside `rayon::scope`, and
 takes a few milliseconds on a 2040 × 1536 image. A formula of more than 1000
 tokens is refused by `parse_gray_formula`, so its recursive parse and evaluation
@@ -665,7 +680,7 @@ sfmtool-core/src/features/sift/
 ├── detect.rs       # 26-neighbor extrema + subpixel localization + contrast/edge rejection, DoG fused per stripe
 ├── orientation.rs  # 36-bin gradient histogram + multi-peak assignment
 ├── descriptor.rs   # 4x4x8 trilinear-interpolated descriptor + normalize/clamp/quantize
-├── gray.rs         # GrayFormula and ImageToGray: the colour-to-gray conversion and its value domain
+├── gray.rs         # GrayFormula and ImageToGray: the colour-to-gray conversion (gray_row) and its value domain
 ├── image_readings.rs # image_readings_from_rgb: an image's sharpness and gradient structure tensor
 ├── feature_options.rs # SiftParams::from_feature_options: a workspace's feature_options object -> SiftParams
 ├── files.rs        # build_sift_files: extract and write a set of images' .sift files
@@ -685,7 +700,7 @@ Each of those modules carries a `tests.rs` beside it, in a directory of its own 
 - `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 - `build_sift_files(image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None) -> (sift_paths, extracted, skipped)` -- the binding for `build_sift_files` ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for invalid options and `OSError` naming the image or file that failed
-- `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` and the `formula` and `quantize_bits` properties, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness` and `gradient_structure_tensor_xx_yy_xy` -- the bindings for `ImageToGray` and `image_readings_from_rgb` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3 or a reading that is not finite
+- `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` (in single precision) and the `formula` and `quantize_bits` properties, `gray_from_rgb(image (H,W,3) u8, image_to_gray) -> (H,W) float32`, the detector's grey image, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness` and `gradient_structure_tensor_xx_yy_xy` -- the bindings for `ImageToGray`, `gray_from_rgb` and `image_readings_from_rgb` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3 or a reading that is not finite
 
 The `params` dict the first three take is read as the `feature_options` JSON
 object and parsed by `SiftParams::from_feature_options`, so a key means the same
@@ -778,8 +793,9 @@ comparing the content hashes of the files the two write for the same images:
   and the options object. `metadata` is version 2: it names the image by its
   file name, records the XXH128 and size of the image file and the decoded
   width and height, and holds the image's `sharpness` and
-  `gradient_structure_tensor_xx_yy_xy` from `image_readings_from_rgb` of the
-  decode through the options' `image_to_gray`. A reading that is not finite
+  `gradient_structure_tensor_xx_yy_xy` of the decode through the options'
+  `image_to_gray`, the values `image_readings_from_rgb` gives, written as the
+  doubles equal to those `f32`s. A reading that is not finite
   fails the image with `BuildSiftFilesError::Image`, naming the conversion.
 - The image is decoded by `ImageU8::read_rgb` (EXIF orientation ignored), made
   gray by the options' `image_to_gray`, and extracted by `extract_sift`, whose
@@ -798,7 +814,7 @@ It runs images concurrently in the way the Python backend does (see
 [`sfm sift` § Extraction-orchestration
 pipelining](../../cli/image-feature/sift-command.md#extraction-orchestration-pipelining)):
 `K` scoped threads each take the next image, decode it, hash it and make its
-thumbnail, then run the readings, the gray conversion, the extraction and the
+thumbnail, then run the gray conversion, the readings, the extraction and the
 write inside
 `rayon::scope`, which puts that work on the global rayon pool while the thread
 waits. The pool therefore keeps one thread per core, and the threads outside it

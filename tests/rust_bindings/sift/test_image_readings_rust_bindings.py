@@ -1,14 +1,20 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""`sfmtool.sift.ImageToGray` and `image_readings_from_rgb` against an
-independent numpy reference.
+"""`sfmtool.sift.ImageToGray`, `gray_from_rgb` and `image_readings_from_rgb`
+against independent numpy references.
 
-The reference below recomputes the reading image and both readings from the
-definitions in `specs/formats/sift-file-format.md`: the grey formula evaluated
-in numpy, the rounding to `quantize_bits` written out, the size rule, an exact
-area average as a pair of dense weight matrices, and the Laplacian and Sobel
-kernels as explicit sums of shifted slices. It calls nothing from sfmtool.
+The readings reference below recomputes the reading image and both readings
+from the definitions in `specs/formats/sift-file-format.md`, in double
+precision: the grey formula evaluated in numpy, the rounding to
+`quantize_bits` written out, the size rule, an exact area average as a pair of
+dense weight matrices, and the Laplacian and Sobel kernels as explicit sums of
+shifted slices. The format computes them in single precision, and states that
+an evaluation in double precision agrees to within 1e-5 of each reading (of
+Exx + Eyy for Exy), or 1e-12 absolute near 0, which is the tolerance here. The
+grey reference evaluates the formula in single precision as the format
+defines it, which `gray_from_rgb` matches bit for bit. Neither calls anything
+from sfmtool.
 """
 
 from pathlib import Path
@@ -17,7 +23,12 @@ import numpy as np
 import pytest
 
 from sfmtool.fileio import read_image_rgb
-from sfmtool.sift import ImageReadings, ImageToGray, image_readings_from_rgb
+from sfmtool.sift import (
+    ImageReadings,
+    ImageToGray,
+    gray_from_rgb,
+    image_readings_from_rgb,
+)
 
 TEST_DATA = Path(__file__).resolve().parents[3] / "test-data" / "images"
 BT709 = "0.2126*R + 0.7152*G + 0.0722*B"
@@ -40,6 +51,31 @@ def _formula_value(formula, rgb):
     if formula == "0.2126*R**2.2 + 0.7152*G**2.2 + 0.0722*B**2.2":
         return 0.2126 * r**2.2 + 0.7152 * g**2.2 + 0.0722 * b**2.2
     raise AssertionError(f"no reference for {formula!r}")
+
+
+def _gray_f32(formula, rgb, quantize_bits=None):
+    """The grey samples as the format defines them: each channel the f32
+    nearest v / 255, each literal the f32 nearest its text, each operation
+    rounded to f32, in the formula's order; then the rounding to
+    quantize_bits, with its product and quotient in f32."""
+    f = np.float32
+    r, g, b = (rgb[..., c].astype(f) / f(255) for c in range(3))
+    if formula == BT709:
+        v = (f("0.2126") * r + f("0.7152") * g) + f("0.0722") * b
+    elif formula == BT601:
+        v = (f("0.299") * r + f("0.587") * g) + f("0.114") * b
+    elif formula == "G":
+        v = g
+    else:
+        raise AssertionError(f"no reference for {formula!r}")
+    assert v.dtype == f
+    if quantize_bits is None:
+        return v
+    levels = f(2**quantize_bits - 1)
+    x = np.clip(v, f(0), f(1)) * levels
+    whole = np.floor(x)
+    whole += (x - whole) >= f(0.5)
+    return whole / levels
 
 
 def _quantize(v, bits):
@@ -93,15 +129,15 @@ def reference_readings(rgb, formula, quantize_bits=None):
     return sharpness, ((gx * gx).mean(), (gy * gy).mean(), (gx * gy).mean())
 
 
-def _assert_agrees(rgb, to_gray, rel=1e-12):
+def _assert_agrees(rgb, to_gray, rel=1e-5, abs_=1e-12):
     got = image_readings_from_rgb(rgb, to_gray)
     sharpness, tensor = reference_readings(rgb, to_gray.formula, to_gray.quantize_bits)
-    assert got.sharpness == pytest.approx(sharpness, rel=rel, abs=1e-300)
+    assert got.sharpness == pytest.approx(sharpness, rel=rel, abs=abs_)
     # Exy can be near zero beside Exx and Eyy, so it is held to the tensor's
-    # own scale.
-    scale = max(tensor[0], tensor[1])
+    # own scale, Exx + Eyy.
+    scale = tensor[0] + tensor[1]
     for g, r in zip(got.gradient_structure_tensor_xx_yy_xy, tensor):
-        assert abs(g - r) <= rel * scale, (got, tensor)
+        assert abs(g - r) <= rel * scale + abs_, (got, tensor)
     return got
 
 
@@ -166,6 +202,38 @@ def test_a_non_contiguous_array_reads_as_its_copy():
     assert a.gradient_structure_tensor_xx_yy_xy == b.gradient_structure_tensor_xx_yy_xy
 
 
+# ── gray_from_rgb ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("formula", "bits"), [(BT709, None), (BT709, 8), (BT601, 8), ("G", 5)]
+)
+def test_gray_from_rgb_is_the_single_precision_definition(formula, bits):
+    # Every 8-bit colour, as a 4096 x 4096 image: the binding's grey samples
+    # are the format's single-precision ones, bit for bit.
+    v = np.arange(1 << 24, dtype=np.uint32)
+    rgb = np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], -1)
+    rgb = rgb.astype(np.uint8).reshape(4096, 4096, 3)
+    got = gray_from_rgb(rgb, ImageToGray(formula, quantize_bits=bits))
+    assert got.dtype == np.float32 and got.shape == (4096, 4096)
+    expected = _gray_f32(formula, rgb, bits)
+    assert np.array_equal(got.view(np.uint32), expected.view(np.uint32))
+
+
+def test_gray_from_rgb_rounds_an_exact_tie_up():
+    # 0.7152 * 14 + 0.0722 * 76 = 15.5 levels exactly: in single precision it
+    # rounds up to 16, where the same formula in double precision reads 15.
+    rgb = np.array([[[0, 14, 76]]], dtype=np.uint8)
+    got = gray_from_rgb(rgb, ImageToGray(BT709, quantize_bits=8))
+    assert got[0, 0] == np.float32(16) / np.float32(255)
+    assert round(float(_formula_value(BT709, rgb)[0, 0]) * 255) == 15
+
+
+def test_gray_from_rgb_refuses_a_wrong_shape():
+    with pytest.raises(ValueError, match=r"\(H, W, 3\)"):
+        gray_from_rgb(np.zeros((4, 4, 4), np.uint8), ImageToGray("G"))
+
+
 # ── ImageToGray ───────────────────────────────────────────────────────────
 
 
@@ -180,7 +248,13 @@ def test_image_to_gray_from_dict_and_json():
     assert plain.quantize_bits is None
     assert plain.to_dict() == {"formula": "G"}
     assert plain != ImageToGray("G", quantize_bits=8)
-    assert plain.gray(0.1, 0.7, 0.3) == 0.7
+    # In single precision: the channel comes back as the f32 nearest 0.7.
+    assert plain.gray(0.1, 0.7, 0.3) == float(np.float32(0.7))
+    assert ImageToGray(BT709).gray(0.5, 0.25, 0.75) == float(
+        np.float32("0.2126") * np.float32(0.5)
+        + np.float32("0.7152") * np.float32(0.25)
+        + np.float32("0.0722") * np.float32(0.75)
+    )
     # Half up: 0.5 with 1 bit is 1, where half to even would give 0.
     assert ImageToGray("G", quantize_bits=1).gray(0.0, 0.5, 0.0) == 1.0
     assert "quantize_bits=8" in repr(a)

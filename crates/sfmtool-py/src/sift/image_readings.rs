@@ -2,15 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python bindings for an image's grey conversion and its sharpness readings:
-//! `ImageToGray`, `ImageReadings` and `image_readings_from_rgb`.
+//! `ImageToGray`, `gray_from_rgb`, `ImageReadings` and
+//! `image_readings_from_rgb`.
 
-use numpy::{PyReadonlyArray3, PyUntypedArrayMethods};
+use numpy::{IntoPyArray, PyArray2, PyArrayMethods, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
 use sfmtool_core::features::sift::{
-    image_readings_from_rgb as core_image_readings_from_rgb, ImageReadings, ImageToGray,
+    gray_from_rgb as core_gray_from_rgb, image_readings_from_rgb as core_image_readings_from_rgb,
+    ImageReadings, ImageToGray,
 };
 
 use crate::helpers::{py_to_serde, serde_to_py};
@@ -22,7 +24,7 @@ fn value_error(e: impl std::fmt::Display) -> PyErr {
 /// The conversion from an image's colour samples to its grey samples.
 ///
 /// A formula over ``R``, ``G`` and ``B`` (each the 8-bit sample divided by
-/// 255), evaluated in double precision, and an optional ``quantize_bits``
+/// 255), evaluated in single precision, and an optional ``quantize_bits``
 /// from 1 to 16 that rounds its value to
 /// ``round(clamp(v, 0, 1) * (2**b - 1)) / (2**b - 1)``, an exact half rounded
 /// up. It is the ``image_to_gray`` object
@@ -109,8 +111,9 @@ impl PyImageToGray {
         self.inner.quantize_bits()
     }
 
-    /// The grey sample of channel values ``r``, ``g``, ``b`` on ``[0, 1]``.
-    fn gray(&self, r: f64, g: f64, b: f64) -> f64 {
+    /// The grey sample of channel values ``r``, ``g``, ``b`` on ``[0, 1]``,
+    /// each rounded to single precision, evaluated in single precision.
+    fn gray(&self, r: f32, g: f32, b: f32) -> f32 {
         self.inner.gray(r, g, b)
     }
 
@@ -139,12 +142,12 @@ pub struct PyImageReadings {
 #[pymethods]
 impl PyImageReadings {
     #[getter]
-    fn sharpness(&self) -> f64 {
+    fn sharpness(&self) -> f32 {
         self.inner.sharpness
     }
 
     #[getter]
-    fn gradient_structure_tensor_xx_yy_xy(&self) -> (f64, f64, f64) {
+    fn gradient_structure_tensor_xx_yy_xy(&self) -> (f32, f32, f32) {
         let [xx, yy, xy] = self.inner.gradient_structure_tensor_xx_yy_xy;
         (xx, yy, xy)
     }
@@ -158,13 +161,66 @@ impl PyImageReadings {
     }
 }
 
+/// The shape check the RGB bindings share: ``(width, height)`` of an
+/// ``(H, W, 3)`` array.
+fn rgb_size(image: &PyReadonlyArray3<'_, u8>) -> PyResult<(u32, u32)> {
+    let (h, w) = match image.shape() {
+        [h, w, 3] => (*h, *w),
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "image must be (H, W, 3) uint8 RGB, got shape {other:?}"
+            )))
+        }
+    };
+    match (u32::try_from(w), u32::try_from(h)) {
+        (Ok(width), Ok(height)) => Ok((width, height)),
+        _ => Err(PyValueError::new_err(format!(
+            "image is {w} x {h}, larger than a u32 side"
+        ))),
+    }
+}
+
+/// The grey image of an 8-bit RGB image, as the SIFT detector and the
+/// readings make it.
+///
+/// Each channel is divided by 255 and each pixel made grey by
+/// ``image_to_gray``, in single precision: sfmtool's one conversion from RGB
+/// to grey.
+///
+/// Args:
+///     image: (H, W, 3) uint8 RGB array, in stored pixel order.
+///     image_to_gray: the ``ImageToGray`` conversion.
+///
+/// Returns:
+///     (H, W) float32 array of grey samples.
+///
+/// Raises:
+///     ValueError: if the array is not (H, W, 3).
+#[pyfunction]
+#[pyo3(signature = (image, image_to_gray))]
+pub fn gray_from_rgb<'py>(
+    py: Python<'py>,
+    image: PyReadonlyArray3<'py, u8>,
+    image_to_gray: &PyImageToGray,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    let (width, height) = rgb_size(&image)?;
+    let data = to_contiguous!(image);
+    let data = &*data;
+    let to_gray = &image_to_gray.inner;
+    let gray = py.detach(|| core_gray_from_rgb(width, height, data, to_gray));
+    gray.data()
+        .to_vec()
+        .into_pyarray(py)
+        .reshape([height as usize, width as usize])
+}
+
 /// The sharpness and gradient structure tensor of an 8-bit RGB image.
 ///
-/// The image is made grey by ``image_to_gray`` in double precision, reduced
-/// by an exact area average to a long side of 480 pixels (an image no larger
-/// is used at its own size; the short side is rounded half up), and read over
-/// its interior pixels. An image whose reading image is under 3 pixels on a
-/// side reads 0.
+/// The image is made grey by ``image_to_gray``, reduced by an area average to
+/// a long side of 480 pixels (an image no larger is used at its own size; the
+/// short side is rounded half up), and read over its interior pixels, all in
+/// single precision. An image whose reading image is under 3 pixels on a side
+/// reads 0.
 ///
 /// Args:
 ///     image: (H, W, 3) uint8 RGB array, in stored pixel order.
@@ -183,23 +239,7 @@ pub fn image_readings_from_rgb(
     image: PyReadonlyArray3<'_, u8>,
     image_to_gray: &PyImageToGray,
 ) -> PyResult<PyImageReadings> {
-    let shape = image.shape();
-    let (h, w) = match shape {
-        [h, w, 3] => (*h, *w),
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "image must be (H, W, 3) uint8 RGB, got shape {other:?}"
-            )))
-        }
-    };
-    let (width, height) = match (u32::try_from(w), u32::try_from(h)) {
-        (Ok(width), Ok(height)) => (width, height),
-        _ => {
-            return Err(PyValueError::new_err(format!(
-                "image is {w} x {h}, larger than a u32 side"
-            )))
-        }
-    };
+    let (width, height) = rgb_size(&image)?;
     let data = to_contiguous!(image);
     let data = &*data;
     let to_gray = &image_to_gray.inner;
@@ -214,6 +254,7 @@ pub fn image_readings_from_rgb(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImageToGray>()?;
     m.add_class::<PyImageReadings>()?;
+    m.add_function(wrap_pyfunction!(gray_from_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(image_readings_from_rgb, m)?)?;
     Ok(())
 }

@@ -68,12 +68,11 @@ Both columns are for comparing the images of one reconstruction with each other,
 and a reader is told so in the format text: they depend on scene content and are
 not comparable across scenes.
 
-The values are computed in double precision, as the [`.sift` format](../formats/sift-file-format.md#sharpness)
-defines them, and a
-writer stores each one rounded to the nearest `float32` (ties to even). A value
-copied from a `.sift` file's `metadata.json`, where it is a JSON number holding
-the double, is rounded the same way, so a row copied from a `.sift` and a row
-computed from the image file by the same arithmetic are the same bytes.
+The values are computed in single precision, as the [`.sift` format](../formats/sift-file-format.md#the-reading-image)
+defines them, so each is a `float32` already and a writer stores it as it is.
+A `.sift` file's `metadata.json` holds the same value as a JSON number, which
+reads back as a double equal to that `float32`, so a row copied from a `.sift`
+and a row computed from the image file are the same bytes.
 
 ### `images/metadata.json`: `image_to_gray`
 

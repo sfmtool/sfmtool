@@ -165,8 +165,18 @@ with three operators and parentheses for grouping:
 Whitespace is insignificant. A leading `-` on a numeric literal makes a
 negative coefficient; there is no subtraction or division operator. A formula
 has at most 1000 tokens, each variable, literal, operator and parenthesis
-counting as one, and a reader may refuse a longer one. The formula is evaluated
-in IEEE-754 double precision.
+counting as one, and a reader may refuse a longer one.
+
+**Precision.** The formula is evaluated in IEEE-754 single precision
+(binary32, `f32`), with every rounding to nearest, ties to even: each input is
+the `f32` nearest the normalised sample (the sample and `2^d − 1` are exact,
+and their quotient is rounded once), each literal is the `f32` nearest its
+decimal text, and the result of each operation in the expression's tree is
+rounded to `f32`. `**` is the single-precision power function. Single
+precision holds 24 bits, about 7 decimal digits, against the 8 to 16 bits of a
+sample, so each rounding is a small fraction of one grey level of the image's
+own bit depth; it is twice the values per vector instruction of double
+precision and half the memory.
 
 **Output.** Without `quantize_bits`, the grey sample is the formula's value `v`,
 not clamped. With `quantize_bits = b`, it is
@@ -177,9 +187,15 @@ q(v) = round(clamp(v, 0, 1) · (2^b − 1)) / (2^b − 1)
 
 where `clamp(v, 0, 1)` is `v` limited to `[0, 1]` and `round` takes the nearest
 integer, with an exact half rounded up. Since the argument is never negative,
-rounding half up and rounding half away from zero agree. The rounded sample is a
-multiple of `1 / (2^b − 1)` in `[0, 1]`; `quantize_bits: 8` expresses the 8-bit
-grey image a tool makes before it runs SIFT.
+rounding half up and rounding half away from zero agree. `q` is evaluated in
+single precision too: `2^b − 1` is exact, and the product and the quotient are
+each rounded to `f32`. The rounded sample is the `f32` nearest a multiple of
+`1 / (2^b − 1)` in `[0, 1]`; `quantize_bits: 8` expresses the 8-bit grey image
+a tool makes before it runs SIFT. Where the formula's exact value times
+`2^b − 1` is a half, as `0.7152 · 14 + 0.0722 · 76 = 15.5` is for the BT.709
+weights at `(R, G, B) = (0, 14, 76)` in 8 bits, the level depends on the
+roundings before `round`; the single-precision evaluation above decides it
+(here 16).
 
 Value-domain parameters such as the contrast threshold assume samples on a
 `[0, 1]` scale, so a formula keeps typical values in that range. A tool that
@@ -240,8 +256,10 @@ and `content_xxh128` through `metadata.json`'s bytes.
 
 Both readings are of the image the file was extracted from, made from the same
 decoded pixels as the thumbnail and through the conversion `image_to_gray`
-records. Both are JSON numbers holding double-precision values, written so they
-read back as the same doubles. They are for comparing the images of one capture
+records. Each is computed in single precision, as the next sections define, and
+written as a JSON number that reads back as the same value: an `f32` is exactly
+a double, so a reader that reads doubles gets the `f32` unchanged. They are for
+comparing the images of one capture
 with each other: they depend on what the scene holds (a frame that is mostly
 plain wall has a low sharpness however well it is focused), so they are not
 comparable between captures of different scenes, and the format gives no
@@ -260,8 +278,9 @@ Both readings are taken on one grey image, the **reading image**, built from the
 decoded image of width `W` and height `H` in stored pixel order:
 
 1. **Grey.** Each pixel's grey sample is `image_to_gray` applied to it: the
-   formula, then `q` when `quantize_bits` is present. The samples are held in
-   double precision from here on.
+   formula, then `q` when `quantize_bits` is present, in single precision as
+   above. Every value from here on is an `f32`, and every product, sum and
+   difference below is rounded to `f32`, in the order written.
 2. **Size.** Let `L = max(W, H)` and `S = min(W, H)`. If `L ≤ 480`, the grey
    image is used at its own size; it is never enlarged. Otherwise the long side
    becomes `480` and the short side becomes
@@ -273,7 +292,16 @@ decoded image of width `W` and height `H` in stored pixel order:
    each unit pixel square, output pixel `(i, j)` covers
    `[i · W / W', (i + 1) · W / W') × [j · H / H', (j + 1) · H / H')` of it, and
    its value is the integral of the grey image over that rectangle divided by
-   the rectangle's area, in double precision.
+   the rectangle's area. It is computed one axis at a time. Along an axis of
+   `n` samples reduced to `m`, in units of `1 / m` of a source pixel, output
+   `d` covers `[d · n, (d + 1) · n)` and source `s` covers
+   `[s · m, (s + 1) · m)`; the weight of source `s` in output `d` is their
+   overlap, an integer, divided by `n`, rounded to the nearest `f32`. Each
+   grey row is first reduced across, each of its `W'` outputs being
+   `Σ w · g` over its sources in increasing order, added to `0`; then output
+   pixel `(i, j)` is `Σ w · a` over the reduced rows `a` under row `j`, in
+   increasing order, at column `i`. When the image is used at its own size,
+   every weight is `1` and the reading image is the grey image.
 
 Write `I(x, y)` for the reading image's sample at column `x` (left to right) and
 row `y` (top to bottom). The **interior** is the pixels with
@@ -282,6 +310,19 @@ lies inside the image; there are `n = (W' − 2)(H' − 2)` of them. Both readin
 are means over the interior. No border pixel is padded, reflected or counted.
 If `W' < 3` or `H' < 3`, the interior is empty, and the sharpness and all three
 tensor values are `0`.
+
+A **mean over the interior** of a quantity `t(x, y)` is taken in single
+precision in a fixed order: each interior row's `t` is summed from `x = 1` to
+`x = W' − 2`, starting from `0`; those row sums are summed from `y = 1` to
+`y = H' − 2`, starting from `0`; and the total is divided by `n`, which is
+exact in an `f32`. Summing by rows bounds the rounding error of the total by
+about `(W' + H') · 2^-24` of the sum of the terms' magnitudes, under
+`6 · 10^-5`, where a single running sum over all `n` terms would be bounded
+only by `n · 2^-24`, about `10^-2`. An implementation that computes these
+steps in double precision, or sums in another order, gets readings that agree
+with these to within `10^-5` of each value (for `Exy`, of `Exx + Eyy`), or
+within `10^-12` absolute for a reading near `0`; the readings' use, comparing
+the images of one capture, needs about three significant digits.
 
 #### Sharpness
 
@@ -292,13 +333,16 @@ The Laplacian at an interior pixel is the 3 × 3 kernel
 Λ(x, y) = I(x − 1, y) + I(x + 1, y) + I(x, y − 1) + I(x, y + 1) − 4 · I(x, y)
 ```
 
-and the sharpness is its population variance over the interior, in double
-precision:
+with the additions taken left to right, and the sharpness is its population
+variance over the interior, in two passes:
 
 ```
 μ = (1/n) Σ Λ(x, y)
 sharpness = (1/n) Σ (Λ(x, y) − μ)²
 ```
+
+where both are means over the interior as defined above, and the second pass
+computes `Λ − μ` and its square in `f32`.
 
 The units are grey units squared, the grey unit being the `[0, 1]` scale of
 `image_to_gray`.
@@ -317,9 +361,10 @@ Gy(x, y) = ( I(x−1, y+1) + 2·I(x, y+1) + I(x+1, y+1)
            − I(x−1, y−1) − 2·I(x, y−1) − I(x+1, y−1) ) / 8
 ```
 
-`Gx` increases to the right and `Gy` increases downward, the directions of
-column and row. The three stored values are means over the interior, in double
-precision:
+with the additions and subtractions taken left to right and the division by
+8 exact. `Gx` increases to the right and `Gy` increases downward, the
+directions of column and row. The three stored values are means over the
+interior, as defined above, of the `f32` products:
 
 ```
 Exx = (1/n) Σ Gx²      Eyy = (1/n) Σ Gy²      Exy = (1/n) Σ Gx·Gy
@@ -551,9 +596,9 @@ How each tool's recorded conversion relates to the grey image it makes:
 
 | `feature_tool` | Its grey conversion |
 |----------------|---------------------|
-| `sfmtool` | exact: `gray_from_rgb` in `sfmtool-core` divides each 8-bit channel by 255, evaluates the formula in double precision, applies `q` when `quantize_bits` is present, and stores the result as `f32` for the detector |
-| `colmap` | measured with pycolmap 4.2.1: `Bitmap.read(path, as_rgb=False)` gives an 8-bit grey bitmap equal to `clone_as_grey()` of the RGB read, the BT.709 weights applied in single precision to the 0 to 255 samples and rounded to nearest with half up; `q` of the double-precision formula differs from it by one grey level on 18 of 262,144 random pixels. A JPEG carrying EXIF orientation 6 read back at its stored size, so the tag is not applied |
-| `opencv` | `cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)` on the 8-bit decode, measured with OpenCV 5.0.0 as `(9798·R + 19235·G + 3735·B + 16384) >> 15` on the 0 to 255 samples; `q` of the exact BT.601 formula differs from it by one grey level on 346 of 262,144 random pixels (0.13%) |
+| `sfmtool` | exact: `ImageToGray::gray_row` in `sfmtool-core` divides each 8-bit channel by 255, evaluates the formula and applies `q` when `quantize_bits` is present, in single precision, and gives the detector and the readings the same `f32` samples |
+| `colmap` | measured with pycolmap 4.2.1: `Bitmap.read(path, as_rgb=False)` gives an 8-bit grey bitmap equal to `clone_as_grey()` of the RGB read, the BT.709 weights applied in single precision to the 0 to 255 samples and rounded to nearest with half up; `q` of the recorded formula differs from it by one grey level on 530 of the 2^24 8-bit colours (0.003%), measured on an image holding each colour once. A JPEG carrying EXIF orientation 6 read back at its stored size, so the tag is not applied |
+| `opencv` | `cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)` on the 8-bit decode, measured with OpenCV 5.0.0 as `(9798·R + 19235·G + 3735·B + 16384) >> 15` on the 0 to 255 samples; `q` of the recorded BT.601 formula differs from it by one grey level on 20,885 of the 2^24 8-bit colours (0.12%) |
 
 **16-bit images do not yet follow the definition.** Every backend's decoder
 reduces a 16-bit image to 8 bits per channel, `round(c · 255 / 65535)`, before

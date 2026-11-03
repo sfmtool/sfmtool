@@ -13,16 +13,29 @@
 //! grammar. In brief: an arithmetic expression over the variables `R`, `G`, `B`
 //! and decimal numeric literals (a leading `-` allowed on a literal), with the
 //! operators `+`, `*`, `**` (precedence `**` > `*` > `+`; `**` right-associative)
-//! and parentheses for grouping. Evaluation is in IEEE-754 double precision and
-//! the output is used as-is (not clamped).
+//! and parentheses for grouping. Evaluation is in IEEE-754 single precision
+//! and the output is used as-is (not clamped).
 //!
 //! [`ImageToGray`] is the formula together with the optional `quantize_bits`
 //! that rounds its value to a bit depth: the `image_to_gray` object
 //! `{"formula": …, "quantize_bits": …}` that a version 2 `.sift` file and a
-//! version 2 workspace record. The detector's input ([`gray_from_rgb`]) and
-//! the per-image readings
-//! ([`image_readings_from_rgb`](super::image_readings_from_rgb)) both take
-//! their grey samples through it.
+//! version 2 workspace record.
+//!
+//! [`ImageToGray::gray_row`] is sfmtool's one conversion of 8-bit RGB pixels
+//! to grey. The detector's input ([`gray_from_rgb`]) and the per-image
+//! readings ([`image_readings_from_rgb`](super::image_readings_from_rgb)) both
+//! make their grey samples with it, row by row, so the two see the same
+//! `f32` values.
+//!
+//! **Why single precision.** The inputs are 8-bit samples, 256 levels, about
+//! 2.4 significant digits; an `f32` holds 24 bits, so each operation's
+//! rounding (a relative `2^-24`, `6e-8`) is about 1/65,000 of a grey level.
+//! Evaluated in `f32` rather than `f64`, the default BT.709 formula's sample
+//! moves by at most 2 ulps, and rounded to 8 bits it lands on another level
+//! for 1,197 of the 2^24 colours, each an exact or near tie. A row of `f32`
+//! is twice the lanes of `f64` per vector instruction and half the memory:
+//! a 3840 x 2160 frame converts in about 15 ms on one thread, against 26 ms
+//! for the same row loops in `f64`.
 
 use super::GrayImage;
 
@@ -49,34 +62,36 @@ impl std::error::Error for ParseError {}
 
 /// A parsed image-to-gray formula, ready to evaluate per pixel.
 ///
-/// The expression tree is small and evaluation is a cheap recursive walk over
-/// the f64 channel values; for hot loops it is shared by reference across all
-/// pixels rather than re-parsed.
+/// The expression tree is small. [`GrayFormula::eval`] walks it for one pixel;
+/// a whole row is evaluated a node at a time by [`ImageToGray::gray_row`],
+/// which gives the same `f32` at each pixel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GrayFormula {
     root: Expr,
 }
 
 impl GrayFormula {
-    /// Evaluate the formula at the given (r, g, b) channel values, each in `[0, 1]`.
+    /// Evaluate the formula at the given (r, g, b) channel values, each in
+    /// `[0, 1]`, in single precision: every literal is the `f32` nearest its
+    /// decimal text and every operation's result is rounded to `f32`.
     ///
     /// The result is *not* clamped — value-domain parameters assume inputs on a
     /// `[0, 1]` scale, but a formula is free to produce values outside it.
-    pub fn eval(&self, r: f64, g: f64, b: f64) -> f64 {
+    pub fn eval(&self, r: f32, g: f32, b: f32) -> f32 {
         self.root.eval(r, g, b)
     }
 
     /// Evaluate the formula at every index of equal-length channel slices
-    /// into `out`, giving the same doubles as [`GrayFormula::eval`] at each
+    /// into `out`, giving the same `f32` as [`GrayFormula::eval`] at each
     /// index: the same operations in the same order, a whole row per node of
     /// the tree rather than a tree walk per pixel. `scratch` holds the
     /// intermediate rows, kept between calls so a caller converting row after
     /// row allocates them once.
-    pub(crate) fn eval_slices(
+    fn eval_slices(
         &self,
-        channels: (&[f64], &[f64], &[f64]),
-        out: &mut [f64],
-        scratch: &mut Vec<Vec<f64>>,
+        channels: (&[f32], &[f32], &[f32]),
+        out: &mut [f32],
+        scratch: &mut Vec<Vec<f32>>,
     ) {
         let (r, g, b) = channels;
         debug_assert!(r.len() == out.len() && g.len() == out.len() && b.len() == out.len());
@@ -96,7 +111,7 @@ impl Default for GrayFormula {
 #[derive(Debug, Clone, PartialEq)]
 enum Expr {
     /// A numeric literal (a leading `-` is folded into the value).
-    Literal(f64),
+    Literal(f32),
     /// The red channel variable `R`.
     R,
     /// The green channel variable `G`.
@@ -112,7 +127,7 @@ enum Expr {
 }
 
 impl Expr {
-    fn eval(&self, r: f64, g: f64, b: f64) -> f64 {
+    fn eval(&self, r: f32, g: f32, b: f32) -> f32 {
         match self {
             Expr::Literal(v) => *v,
             Expr::R => r,
@@ -126,18 +141,18 @@ impl Expr {
 
     fn eval_slices(
         &self,
-        channels: (&[f64], &[f64], &[f64]),
-        out: &mut [f64],
-        scratch: &mut Vec<Vec<f64>>,
+        channels: (&[f32], &[f32], &[f32]),
+        out: &mut [f32],
+        scratch: &mut Vec<Vec<f32>>,
     ) {
         /// `out = op(a, c)` elementwise, `a` evaluated into `out` first and
         /// `c` into a row taken from `scratch` and returned to it.
         fn binary(
             (a, c): (&Expr, &Expr),
-            channels: (&[f64], &[f64], &[f64]),
-            out: &mut [f64],
-            scratch: &mut Vec<Vec<f64>>,
-            op: impl Fn(f64, f64) -> f64,
+            channels: (&[f32], &[f32], &[f32]),
+            out: &mut [f32],
+            scratch: &mut Vec<Vec<f32>>,
+            op: impl Fn(f32, f32) -> f32,
         ) {
             a.eval_slices(channels, out, scratch);
             let mut rhs = scratch.pop().unwrap_or_default();
@@ -156,7 +171,7 @@ impl Expr {
             Expr::B => out.copy_from_slice(b),
             Expr::Add(a, c) => binary((a, c), channels, out, scratch, |x, y| x + y),
             Expr::Mul(a, c) => binary((a, c), channels, out, scratch, |x, y| x * y),
-            Expr::Pow(a, c) => binary((a, c), channels, out, scratch, f64::powf),
+            Expr::Pow(a, c) => binary((a, c), channels, out, scratch, f32::powf),
         }
     }
 }
@@ -380,8 +395,9 @@ impl ImageToGray {
     }
 
     /// The grey sample of channel values `r`, `g`, `b` on `[0, 1]`: the
-    /// formula's value, then [`quantize`] when `quantize_bits` is present.
-    pub fn gray(&self, r: f64, g: f64, b: f64) -> f64 {
+    /// formula's value in single precision, then [`quantize`] when
+    /// `quantize_bits` is present.
+    pub fn gray(&self, r: f32, g: f32, b: f32) -> f32 {
         let v = self.formula.eval(r, g, b);
         match self.quantize_bits {
             Some(bits) => quantize(v, bits),
@@ -389,22 +405,61 @@ impl ImageToGray {
         }
     }
 
-    /// [`ImageToGray::gray`] at every index of equal-length channel slices,
-    /// into `out`, with the same doubles at each index.
-    /// `scratch` is as [`GrayFormula`]'s row evaluation takes it.
-    pub(crate) fn gray_slices(
-        &self,
-        channels: (&[f64], &[f64], &[f64]),
-        out: &mut [f64],
-        scratch: &mut Vec<Vec<f64>>,
-    ) {
-        self.formula.eval_slices(channels, out, scratch);
+    /// The grey samples of one row of 8-bit RGB pixels, `[R, G, B]` per pixel,
+    /// into `out`, one per pixel: each channel divided by 255 in `f32` and the
+    /// pixel made grey by [`ImageToGray::gray`], giving the same `f32` at each
+    /// pixel.
+    ///
+    /// This is sfmtool's one conversion from RGB to grey: [`gray_from_rgb`]
+    /// and the reading image of
+    /// [`image_readings_from_rgb`](super::image_readings_from_rgb) both call
+    /// it. The formula is evaluated a node of its tree at a time over the
+    /// whole row, so the work is a few loops over `f32` rows that the compiler
+    /// vectorises, rather than a tree walk per pixel. `scratch` holds the row
+    /// buffers, kept between calls so a caller converting row after row
+    /// allocates them once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `rgb` does not hold `3 * out.len()` bytes.
+    pub fn gray_row(&self, rgb: &[u8], out: &mut [f32], scratch: &mut GrayRowScratch) {
+        assert_eq!(rgb.len(), 3 * out.len(), "a row of n pixels is 3 n bytes");
+        let n = out.len();
+        let [r, g, b] = &mut scratch.channels;
+        r.resize(n, 0.0);
+        g.resize(n, 0.0);
+        b.resize(n, 0.0);
+        for (x, p) in rgb.as_chunks::<3>().0.iter().enumerate() {
+            r[x] = UNIT_SAMPLES[usize::from(p[0])];
+            g[x] = UNIT_SAMPLES[usize::from(p[1])];
+            b[x] = UNIT_SAMPLES[usize::from(p[2])];
+        }
+        self.formula
+            .eval_slices((r, g, b), out, &mut scratch.formula);
         if let Some(bits) = self.quantize_bits {
             for v in out.iter_mut() {
                 *v = quantize(*v, bits);
             }
         }
     }
+}
+
+/// Each 8-bit sample `v` as `v / 255` in `f32`, the division rounded once.
+static UNIT_SAMPLES: [f32; 256] = {
+    let mut table = [0f32; 256];
+    let mut v = 0;
+    while v < 256 {
+        table[v] = v as f32 / 255.0;
+        v += 1;
+    }
+    table
+};
+
+/// The row buffers [`ImageToGray::gray_row`] works in, kept between rows.
+#[derive(Debug, Default)]
+pub struct GrayRowScratch {
+    channels: [Vec<f32>; 3],
+    formula: Vec<Vec<f32>>,
 }
 
 impl Default for ImageToGray {
@@ -418,13 +473,15 @@ impl Default for ImageToGray {
 /// `round(clamp(v, 0, 1) · (2^bits − 1)) / (2^bits − 1)`, an exact half
 /// rounded up.
 ///
-/// The argument of the rounding is never negative, so rounding half away
-/// from zero ([`f64::round`]) is rounding half up. An infinity clamps to `0`
-/// or `1`; a NaN stays NaN. `bits` is expected in 1 to [`MAX_QUANTIZE_BITS`],
-/// which [`ImageToGray`] checks; a value outside it is treated as the nearer
-/// end of that range.
-pub fn quantize(v: f64, bits: u8) -> f64 {
-    let levels = ((1u32 << bits.clamp(1, MAX_QUANTIZE_BITS)) - 1) as f64;
+/// In single precision: the product and the quotient are each rounded to
+/// `f32`, and `2^bits − 1`, at most 65,535, is exact. The argument of the
+/// rounding is never negative, so rounding half away from zero
+/// ([`f32::round`]) is rounding half up. An infinity clamps to `0` or `1`; a
+/// NaN stays NaN. `bits` is expected in 1 to [`MAX_QUANTIZE_BITS`], which
+/// [`ImageToGray`] checks; a value outside it is treated as the nearer end of
+/// that range.
+pub fn quantize(v: f32, bits: u8) -> f32 {
+    let levels = ((1u32 << bits.clamp(1, MAX_QUANTIZE_BITS)) - 1) as f32;
     (v.clamp(0.0, 1.0) * levels).round() / levels
 }
 
@@ -437,7 +494,7 @@ struct Token {
 
 #[derive(Debug, Clone, PartialEq)]
 enum TokKind {
-    Number(f64),
+    Number(f32),
     Ident(char),
     Plus,
     Star,
@@ -530,7 +587,8 @@ fn tokenize(src: &str) -> Result<Vec<Token>, ParseError> {
                     });
                 }
                 let text = &src[start..i];
-                let value: f64 = text.parse().map_err(|_| ParseError {
+                // The f32 nearest the decimal text, rounded once.
+                let value: f32 = text.parse().map_err(|_| ParseError {
                     message: format!("invalid numeric literal {:?}", text),
                     position: start,
                 })?;
@@ -648,11 +706,15 @@ impl Parser {
 /// `image_to_gray`.
 ///
 /// `rgb` is `3 * width * height` bytes in row-major `[R, G, B, R, G, B, ...]`
-/// order. Each channel is normalized to `[0, 1]` (divided by 255) before the
-/// formula is evaluated, and the value is rounded to `quantize_bits` bits when
-/// the conversion has them ([`ImageToGray::gray`]); without them it is used
-/// as-is and is **not** clamped. Each sample is computed in double precision
-/// and stored as `f32`. Rows are converted in parallel with rayon.
+/// order. Each row is made grey by [`ImageToGray::gray_row`]: each channel
+/// divided by 255, the formula evaluated in single precision, and the value
+/// rounded to `quantize_bits` bits when the conversion has them; without them
+/// it is used as-is and is **not** clamped. Bands of rows are converted in
+/// parallel with rayon, and each sample is the same whatever the thread count.
+///
+/// # Panics
+///
+/// Panics if `rgb` is not `3 * width * height` bytes.
 pub fn gray_from_rgb(
     width: u32,
     height: u32,
@@ -666,21 +728,24 @@ pub fn gray_from_rgb(
     assert_eq!(rgb.len(), 3 * w * h, "rgb must be 3 * width * height bytes");
 
     let mut data = vec![0.0f32; w * h];
-    data.par_chunks_mut(w)
-        .enumerate()
-        .for_each(|(row, out_row)| {
-            let row_base = row * w * 3;
-            for (col, out) in out_row.iter_mut().enumerate() {
-                let p = row_base + col * 3;
-                let r = rgb[p] as f64 / 255.0;
-                let g = rgb[p + 1] as f64 / 255.0;
-                let b = rgb[p + 2] as f64 / 255.0;
-                *out = image_to_gray.gray(r, g, b) as f32;
-            }
-        });
-
+    if !data.is_empty() {
+        data.par_chunks_mut(w * GRAY_BAND_ROWS)
+            .enumerate()
+            .for_each(|(band, out_rows)| {
+                let mut scratch = GrayRowScratch::default();
+                for (i, out_row) in out_rows.chunks_exact_mut(w).enumerate() {
+                    let y = band * GRAY_BAND_ROWS + i;
+                    let src = &rgb[y * w * 3..(y + 1) * w * 3];
+                    image_to_gray.gray_row(src, out_row, &mut scratch);
+                }
+            });
+    }
     GrayImage::new(width, height, data)
 }
+
+/// The rows a rayon task converts with one set of row buffers, so the buffers
+/// are allocated once per band rather than once per row.
+pub(crate) const GRAY_BAND_ROWS: usize = 16;
 
 #[cfg(test)]
 mod tests;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::features::sift::{gray_from_rgb, DEFAULT_GRAY_FORMULA};
 
 /// An RGB image whose three channels all hold `value(x, y)`.
 fn grey_rgb(w: usize, h: usize, value: impl Fn(usize, usize) -> u8) -> Vec<u8> {
@@ -26,20 +27,25 @@ fn readings(w: usize, h: usize, rgb: &[u8], to_gray: &ImageToGray) -> ImageReadi
 
 #[test]
 fn a_constant_image_reads_zero() {
-    // At its own size every sample is the same double, so the readings are
-    // exactly zero.
+    // At its own size every sample is the same f32. For 1.0 every sum in the
+    // kernels is exact, so the readings are exactly zero.
+    let white = grey_rgb(300, 200, |_, _| 255);
+    assert_eq!(readings(300, 200, &white, &green()), ImageReadings::ZERO);
+    // For 77/255 the partial sums of the kernels (3 v, say) are rounded to
+    // f32, so the readings are a few roundings of 2^-24 from zero.
     let rgb = grey_rgb(300, 200, |_, _| 77);
-    assert_eq!(
-        readings(300, 200, &rgb, &ImageToGray::default()),
-        ImageReadings::ZERO
-    );
-    // Reduced by 4/3, the coverage weights are rounded, so the samples agree
-    // only to a few ulps.
+    let r = readings(300, 200, &rgb, &ImageToGray::default());
+    assert!(r.sharpness < 1e-12, "{r:?}");
+    for v in r.gradient_structure_tensor_xx_yy_xy {
+        assert!(v.abs() < 1e-12, "{r:?}");
+    }
+    // Reduced by 4/3, the coverage weights are rounded too, so the samples
+    // agree only to a few f32 ulps, about 1e-7 of the value.
     let rgb = grey_rgb(640, 480, |_, _| 200);
     let r = readings(640, 480, &rgb, &ImageToGray::default());
-    assert!(r.sharpness < 1e-28, "{r:?}");
+    assert!(r.sharpness < 1e-12, "{r:?}");
     for v in r.gradient_structure_tensor_xx_yy_xy {
-        assert!(v.abs() < 1e-28, "{r:?}");
+        assert!(v.abs() < 1e-12, "{r:?}");
     }
 }
 
@@ -67,12 +73,14 @@ fn a_linear_ramp_reads_its_slopes() {
     // slopes, and the Laplacian of a plane is 0.
     let rgb = grey_rgb(6, 6, |x, y| (10 * x + 20 * y) as u8);
     let r = readings(6, 6, &rgb, &green());
-    let (a, b) = (10.0 / 255.0, 20.0 / 255.0);
+    // In f32 a sample is within 2^-24 of its value, so the slopes agree to
+    // about 1e-7 of the samples and their products to about 1e-8.
+    let (a, b) = (10.0f32 / 255.0, 20.0f32 / 255.0);
     let [xx, yy, xy] = r.gradient_structure_tensor_xx_yy_xy;
-    assert!((xx - a * a).abs() < 1e-15, "{xx}");
-    assert!((yy - b * b).abs() < 1e-15, "{yy}");
-    assert!((xy - a * b).abs() < 1e-15, "{xy}");
-    assert!(r.sharpness < 1e-30, "{}", r.sharpness);
+    assert!((xx - a * a).abs() < 1e-8, "{xx}");
+    assert!((yy - b * b).abs() < 1e-8, "{yy}");
+    assert!((xy - a * b).abs() < 1e-8, "{xy}");
+    assert!(r.sharpness < 1e-12, "{}", r.sharpness);
 }
 
 #[test]
@@ -124,41 +132,6 @@ fn the_reading_image_size_rule() {
 }
 
 #[test]
-fn area_taps_are_the_exact_overlaps() {
-    // 3 to 2: the middle pixel is split half and half.
-    let taps = area_taps(3, 2);
-    assert_eq!(
-        taps,
-        vec![
-            vec![(0, 2.0 / 3.0), (1, 1.0 / 3.0)],
-            vec![(1, 1.0 / 3.0), (2, 2.0 / 3.0)],
-        ]
-    );
-    // An integer factor is equal weights; the same size is the identity.
-    assert_eq!(
-        area_taps(4, 2),
-        vec![vec![(0, 0.5), (1, 0.5)], vec![(2, 0.5), (3, 0.5)]]
-    );
-    assert_eq!(
-        area_taps(3, 3),
-        vec![vec![(0, 1.0)], vec![(1, 1.0)], vec![(2, 1.0)]]
-    );
-    // Every output's weights sum to one, and every source pixel is used.
-    for (n, m) in [(1920, 480), (2040, 480), (641, 97), (1000, 7), (5, 3)] {
-        let taps = area_taps(n, m);
-        let mut used = vec![0f64; n];
-        for row in &taps {
-            let total: f64 = row.iter().map(|t| t.1).sum();
-            assert!((total - 1.0).abs() < 1e-14, "{n} -> {m}: {total}");
-            for &(s, w) in row {
-                used[s] += w * n as f64 / m as f64;
-            }
-        }
-        assert!(used.iter().all(|&u| (u - 1.0).abs() < 1e-12), "{n} -> {m}");
-    }
-}
-
-#[test]
 fn the_reading_image_is_the_area_integral() {
     // Each output pixel against a direct two-dimensional integral of the
     // piecewise-constant grey image over its footprint.
@@ -166,6 +139,8 @@ fn the_reading_image_is_the_area_integral() {
     let rgb = grey_rgb(w, h, |x, y| ((x * 37 + y * 101) % 256) as u8);
     let image = reading_image(w, h, &rgb, &green(), ow, oh);
     let grey = |x: usize, y: usize| f64::from(rgb[(y * w + x) * 3 + 1]) / 255.0;
+    // Each f32 sample of the grey image is within 2^-24 of its value, and the
+    // two passes of the resize round each of their few terms.
     for j in 0..oh {
         for i in 0..ow {
             let (x0, x1) = (
@@ -185,9 +160,9 @@ fn the_reading_image_is_the_area_integral() {
                 }
             }
             let expected = integral / ((x1 - x0) * (y1 - y0));
-            let got = image[j * ow + i];
+            let got = f64::from(image[j * ow + i]);
             assert!(
-                (got - expected).abs() < 1e-14,
+                (got - expected).abs() < 1e-6,
                 "({i}, {j}): {got} vs {expected}"
             );
         }
@@ -212,10 +187,10 @@ fn quantize_bits_rounds_the_grey_samples() {
     let scaled = |bits| ImageToGray::new("0.4 * G", bits).unwrap();
     assert_eq!(readings(6, 5, &rgb, &scaled(Some(1))), ImageReadings::ZERO);
     let r = readings(6, 5, &rgb, &scaled(Some(2)));
-    let third = 1.0f64 / 3.0;
-    assert!((r.sharpness - 0.5 * third * third).abs() < 1e-15, "{r:?}");
+    let third = 1.0f32 / 3.0;
+    assert!((r.sharpness - 0.5 * third * third).abs() < 1e-7, "{r:?}");
     let r = readings(6, 5, &rgb, &scaled(None));
-    assert!((r.sharpness - 0.5 * 0.4 * 0.4).abs() < 1e-15, "{r:?}");
+    assert!((r.sharpness - 0.5 * 0.4 * 0.4).abs() < 1e-7, "{r:?}");
 }
 
 #[test]
@@ -306,4 +281,44 @@ fn the_result_does_not_depend_on_the_thread_count() {
         .install(|| readings(1283, 721, &rgb, &to_gray));
     assert_eq!(many, one);
     assert!(many.sharpness > 0.0);
+}
+
+#[test]
+fn the_reading_image_takes_its_grey_samples_from_gray_row() {
+    // At its own size the reading image is the grey image: each weight is 1,
+    // so every sample is the one gray_from_rgb, the detector's input, holds.
+    let (w, h) = (53usize, 41usize);
+    let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 104_729 % 253) as u8).collect();
+    for to_gray in [
+        ImageToGray::default(),
+        ImageToGray::new(DEFAULT_GRAY_FORMULA, Some(8)).unwrap(),
+        ImageToGray::from_gray_formula("0.2126*R**2.2 + 0.7152*G**2.2 + 0.0722*B**2.2").unwrap(),
+    ] {
+        let image = reading_image(w, h, &rgb, &to_gray, w, h);
+        let gray = gray_from_rgb(w as u32, h as u32, &rgb, &to_gray);
+        assert_eq!(&image[..], gray.data(), "{}", to_gray.to_json());
+    }
+}
+
+#[test]
+fn the_readings_of_the_grey_image_are_the_readings_of_the_rgb() {
+    // .sift writing makes the image grey once and reads it; the result is
+    // the same as image_readings_from_rgb's, bit for bit, reduced or not.
+    for (w, h) in [(1283usize, 721usize), (300, 200), (961, 2), (2, 2)] {
+        let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7919 % 255) as u8).collect();
+        let to_gray = ImageToGray::default();
+        let gray = gray_from_rgb(w as u32, h as u32, &rgb, &to_gray);
+        assert_eq!(
+            image_readings_from_gray(&gray, &to_gray),
+            image_readings_from_rgb(w as u32, h as u32, &rgb, &to_gray),
+            "{w} x {h}"
+        );
+    }
+    let inverse = ImageToGray::from_gray_formula("R ** -1").unwrap();
+    let rgb = grey_rgb(8, 8, |x, _| if x == 4 { 0 } else { 128 });
+    let gray = gray_from_rgb(8, 8, &rgb, &inverse);
+    assert!(matches!(
+        image_readings_from_gray(&gray, &inverse),
+        Err(ImageReadingsError::NotFinite { .. })
+    ));
 }

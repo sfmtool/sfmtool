@@ -5,10 +5,10 @@
 //! Laplacian and the gradient structure tensor of its reading image.
 //!
 //! The **reading image** is the image made grey by an [`ImageToGray`]
-//! conversion, in double precision, and reduced by an exact area average to a
-//! long side of [`READING_IMAGE_LONG_SIDE`] pixels (an image no larger is used
-//! at its own size). On its interior pixels, those whose 3 x 3 neighbourhood
-//! lies inside it:
+//! conversion ([`ImageToGray::gray_row`]) and reduced by an area average
+//! ([`area_resize`]) to a long side of [`READING_IMAGE_LONG_SIDE`] pixels (an
+//! image no larger is used at its own size). On its interior pixels, those
+//! whose 3 x 3 neighbourhood lies inside it:
 //!
 //! - the **sharpness** is the population variance of the Laplacian
 //!   `[[0, 1, 0], [1, −4, 1], [0, 1, 0]]`;
@@ -20,10 +20,30 @@
 //! image", "Sharpness" and "Gradient structure tensor", which also says what
 //! a reader derives from the tensor (coherence, dominant direction, axis
 //! ratio). [`image_readings_from_rgb`] is the one implementation of both.
+//!
+//! **Precision.** Everything is single precision, `f32`. The readings are
+//! compared within a capture, as ranks, ratios to the median and z-scores,
+//! which need about three significant digits. The grey samples and the
+//! resize are `f32` for the reasons [`ImageToGray::gray_row`] and
+//! [`area_resize`] give. The Laplacian and the Sobel derivatives combine
+//! neighbouring samples in `f32`, each rounding about `2^-24` of a grey unit,
+//! against differences between neighbours of `10^-3` grey units and more
+//! where an image has detail. The means are sums of about 130,000 terms, the
+//! interior of a 480 x 270 reading image. Each row's terms are summed in `f32`
+//! from left to right and the row sums in `f32` from top to bottom, which
+//! bounds the rounding error of a mean by about `(W' + H') · 2^-24`, under
+//! `5 · 10^-5` of the sum of the terms' magnitudes, where one running sum over
+//! every term would be bounded only by `n · 2^-24`, about `8 · 10^-3`. On
+//! photographs the readings come within `2 · 10^-6` of a double-precision
+//! evaluation. Summing by rows costs no more than one running sum, splits the
+//! work by rows over the pool and keeps the order fixed, and an `f64`
+//! accumulator would be no faster and add nothing the readings' use needs.
 
 use rayon::prelude::*;
 
-use super::gray::ImageToGray;
+use super::gray::{GrayRowScratch, ImageToGray};
+use super::GrayImage;
+use crate::camera::image::area_resize::area_resize;
 
 /// The long side of the reading image, in pixels.
 pub const READING_IMAGE_LONG_SIDE: usize = 480;
@@ -34,11 +54,11 @@ pub const READING_IMAGE_LONG_SIDE: usize = 480;
 pub struct ImageReadings {
     /// The population variance of the Laplacian over the reading image's
     /// interior, in grey units squared. Finite and not negative.
-    pub sharpness: f64,
+    pub sharpness: f32,
     /// `[Exx, Eyy, Exy]`: the means of `Gx²`, `Gy²` and `Gx·Gy` over the
     /// reading image's interior, in grey units squared per pixel squared, not
     /// normalised. Finite; `Exx` and `Eyy` not negative.
-    pub gradient_structure_tensor_xx_yy_xy: [f64; 3],
+    pub gradient_structure_tensor_xx_yy_xy: [f32; 3],
 }
 
 impl ImageReadings {
@@ -63,7 +83,7 @@ pub enum ImageReadingsError {
         len: usize,
     },
     /// The conversion made a reading that is not finite, as an unclamped
-    /// formula can (`R**-1` at `R = 0`, say).
+    /// formula can (`R**-1` at `R = 0`, say), or one too large for an `f32`.
     NotFinite {
         /// The conversion's `image_to_gray` object, as JSON text.
         image_to_gray: String,
@@ -120,22 +140,22 @@ pub fn reading_image_size(width: usize, height: usize) -> (usize, usize) {
 /// The sharpness and gradient structure tensor of an 8-bit RGB image.
 ///
 /// `rgb` is `height` rows of `width` pixels, `[R, G, B]` per pixel, in stored
-/// order (no EXIF orientation applied). Each channel is divided by 255 and the
-/// pixel made grey by `image_to_gray` in double precision; the grey image is
-/// area averaged to [`reading_image_size`]: treating it as constant over each
-/// unit pixel square, output pixel `(i, j)` is its mean over
-/// `[i · W / W', (i + 1) · W / W') × [j · H / H', (j + 1) · H / H')`. Each
-/// coverage weight is the source pixel's exact overlap with that footprint
-/// (a ratio of integers) divided by the footprint's width, rounded once.
-/// The readings are then taken over the interior, `1 ≤ x ≤ W' − 2` and
+/// order (no EXIF orientation applied). Each row is made grey by
+/// [`ImageToGray::gray_row`], and the grey image is area averaged by
+/// [`area_resize`] to [`reading_image_size`]: treating it as constant over
+/// each unit pixel square, output pixel `(i, j)` is its mean over
+/// `[i · W / W', (i + 1) · W / W') × [j · H / H', (j + 1) · H / H')`. The
+/// readings are then taken over the interior, `1 ≤ x ≤ W' − 2` and
 /// `1 ≤ y ≤ H' − 2`, with nothing padded; when `W' < 3` or `H' < 3` there is
 /// no interior and every reading is `0` ([`ImageReadings::ZERO`]), without the
-/// conversion being evaluated.
+/// conversion being evaluated. All of it is in `f32`, in the order of
+/// operations `specs/formats/sift-file-format.md` § "The reading image" states.
 ///
-/// The work is a pass over the pixels and a pass over the 480-pixel reading
-/// image, split by rows over the rayon pool; every sum is taken in a fixed
-/// order, so the result does not depend on the number of threads. A 3840 x
-/// 2160 frame takes a few milliseconds, so the function takes no `Progress`.
+/// The work is a pass over the pixels and two passes over the 480-pixel
+/// reading image, split by rows over the rayon pool; every sum is taken in a
+/// fixed order, so the result does not depend on the number of threads. A
+/// 3840 x 2160 frame takes a few milliseconds, so the function takes no
+/// `Progress`.
 ///
 /// # Errors
 ///
@@ -156,8 +176,8 @@ pub fn reading_image_size(width: usize, height: usize) -> (usize, usize) {
 /// let readings = image_readings_from_rgb(4, 3, &rgb, &ImageToGray::default())?;
 /// // The interior is pixels (1, 1) and (2, 1); the step's Sobel derivative is
 /// // 1/2 at both, so Exx = 1/4, and the Laplacians are +1 and −1.
-/// assert!((readings.gradient_structure_tensor_xx_yy_xy[0] - 0.25).abs() < 1e-12);
-/// assert!((readings.sharpness - 1.0).abs() < 1e-12);
+/// assert!((readings.gradient_structure_tensor_xx_yy_xy[0] - 0.25).abs() < 1e-6);
+/// assert!((readings.sharpness - 1.0).abs() < 1e-6);
 /// # Ok::<(), sfmtool_core::features::sift::ImageReadingsError>(())
 /// ```
 pub fn image_readings_from_rgb(
@@ -179,7 +199,38 @@ pub fn image_readings_from_rgb(
         return Ok(ImageReadings::ZERO);
     }
     let image = reading_image(w, h, rgb, image_to_gray, out_w, out_h);
-    let readings = readings_of(&image, out_w, out_h);
+    finite_readings(readings_of(&image, out_w, out_h), image_to_gray)
+}
+
+/// [`image_readings_from_rgb`] of an image already made grey by
+/// [`gray_from_rgb`](super::gray_from_rgb) through `image_to_gray`, with the
+/// same result: the reading image is resized from `gray`'s rows, which are
+/// the samples [`ImageToGray::gray_row`] gives. `.sift` writing uses it so
+/// that the image is made grey once, for the detector and the readings both.
+pub(crate) fn image_readings_from_gray(
+    gray: &GrayImage,
+    image_to_gray: &ImageToGray,
+) -> Result<ImageReadings, ImageReadingsError> {
+    let (w, h) = (gray.width() as usize, gray.height() as usize);
+    let (out_w, out_h) = reading_image_size(w, h);
+    if out_w < 3 || out_h < 3 {
+        return Ok(ImageReadings::ZERO);
+    }
+    let image = area_resize(
+        (w, h),
+        1,
+        (out_w, out_h),
+        || (),
+        |y, row, _| row.copy_from_slice(&gray.data()[y * w..(y + 1) * w]),
+    );
+    finite_readings(readings_of(&image, out_w, out_h), image_to_gray)
+}
+
+/// `readings`, or [`ImageReadingsError::NotFinite`] when one is not finite.
+fn finite_readings(
+    readings: ImageReadings,
+    image_to_gray: &ImageToGray,
+) -> Result<ImageReadings, ImageReadingsError> {
     let finite = readings.sharpness.is_finite()
         && readings
             .gradient_structure_tensor_xx_yy_xy
@@ -195,37 +246,10 @@ pub fn image_readings_from_rgb(
     }
 }
 
-/// One output sample's source taps along an axis of `src_len` samples
-/// reduced to `dst_len` (`1 ≤ dst_len ≤ src_len`): `(source index, weight)`
-/// in source order.
-///
-/// In units of `1 / dst_len` source pixels, output `d` covers
-/// `[d · src_len, (d + 1) · src_len)` and source `s` covers
-/// `[s · dst_len, (s + 1) · dst_len)`, so each overlap is an exact integer and
-/// its weight `overlap / src_len` is rounded once.
-pub(crate) fn area_taps(src_len: usize, dst_len: usize) -> Vec<Vec<(usize, f64)>> {
-    let (n, m) = (src_len as u128, dst_len as u128);
-    (0..m)
-        .map(|d| {
-            let (lo, hi) = (d * n, (d + 1) * n);
-            let first = lo / m;
-            let last = hi.div_ceil(m); // exclusive
-            (first..last)
-                .filter_map(|s| {
-                    let overlap = hi.min((s + 1) * m) - lo.max(s * m);
-                    (overlap > 0).then(|| (s as usize, overlap as f64 / n as f64))
-                })
-                .collect()
-        })
-        .collect()
-}
-
 /// The reading image, `out_h` rows of `out_w` samples, of a `w` x `h` RGB
-/// image whose size is at least `out_w` x `out_h`.
-///
-/// Each source row is made grey and reduced across into `out_w` sums, then
-/// each output row is the weighted sum of the reduced rows under it, in
-/// source order.
+/// image whose size is at least `out_w` x `out_h`: each source row made grey
+/// by [`ImageToGray::gray_row`] and the grey image resized by
+/// [`area_resize`].
 pub(crate) fn reading_image(
     w: usize,
     h: usize,
@@ -233,119 +257,64 @@ pub(crate) fn reading_image(
     image_to_gray: &ImageToGray,
     out_w: usize,
     out_h: usize,
-) -> Vec<f64> {
-    let x_taps = area_taps(w, out_w);
-    let y_taps = area_taps(h, out_h);
-
-    // Each 8-bit sample divided by 255, looked up rather than divided per pixel.
-    let unit: [f64; 256] = std::array::from_fn(|v| v as f64 / 255.0);
-
-    // Source rows go to the pool in bands, each band with its own row buffers,
-    // so the buffers are allocated once per band rather than once per row.
-    const BAND_ROWS: usize = 16;
-    let mut across = vec![0f64; h * out_w];
-    across
-        .par_chunks_mut(out_w * BAND_ROWS)
-        .enumerate()
-        .for_each(|(band, out_rows)| {
-            let [mut r, mut g, mut b, mut gray] = std::array::from_fn(|_| vec![0f64; w]);
-            let mut scratch = Vec::new();
-            for (i, out_row) in out_rows.chunks_exact_mut(out_w).enumerate() {
-                let y = band * BAND_ROWS + i;
-                let src = &rgb[y * w * 3..(y + 1) * w * 3];
-                for (x, p) in src.as_chunks::<3>().0.iter().enumerate() {
-                    r[x] = unit[usize::from(p[0])];
-                    g[x] = unit[usize::from(p[1])];
-                    b[x] = unit[usize::from(p[2])];
-                }
-                image_to_gray.gray_slices((&r, &g, &b), &mut gray, &mut scratch);
-                for (out, taps) in out_row.iter_mut().zip(&x_taps) {
-                    *out = taps.iter().map(|&(s, wt)| wt * gray[s]).sum();
-                }
-            }
-        });
-
-    let mut image = vec![0f64; out_h * out_w];
-    image
-        .par_chunks_mut(out_w)
-        .zip(y_taps.par_iter())
-        .for_each(|(out_row, taps)| {
-            for (x, out) in out_row.iter_mut().enumerate() {
-                *out = taps.iter().map(|&(s, wt)| wt * across[s * out_w + x]).sum();
-            }
-        });
-    image
+) -> Vec<f32> {
+    area_resize(
+        (w, h),
+        1,
+        (out_w, out_h),
+        GrayRowScratch::default,
+        |y, row, scratch| image_to_gray.gray_row(&rgb[y * w * 3..(y + 1) * w * 3], row, scratch),
+    )
 }
 
-/// A compensated (Neumaier) running sum, so the means over a few hundred
-/// thousand interior pixels lose no more than a rounding or two.
-#[derive(Default)]
-struct Sum {
-    total: f64,
-    compensation: f64,
-}
-
-impl Sum {
-    fn add(&mut self, v: f64) {
-        let t = self.total + v;
-        if self.total.abs() >= v.abs() {
-            self.compensation += (self.total - t) + v;
-        } else {
-            self.compensation += (v - t) + self.total;
-        }
-        self.total = t;
-    }
-
-    fn value(&self) -> f64 {
-        self.total + self.compensation
-    }
-}
-
-/// The readings over the interior of a `w` x `h` reading image, `w, h ≥ 3`.
-pub(crate) fn readings_of(image: &[f64], w: usize, h: usize) -> ImageReadings {
+/// The readings over the interior of a `w` x `h` reading image, `w, h ≥ 3`,
+/// in `f32`: each row's terms summed from left to right, the row sums from
+/// top to bottom, and the variance in a second pass about the mean.
+pub(crate) fn readings_of(image: &[f32], w: usize, h: usize) -> ImageReadings {
     let at = |x: usize, y: usize| image[y * w + x];
-    let n = ((w - 2) * (h - 2)) as f64;
-    let mut laplacians = Vec::with_capacity((w - 2) * (h - 2));
-    let (mut sum_l, mut sum_xx, mut sum_yy, mut sum_xy) = (
-        Sum::default(),
-        Sum::default(),
-        Sum::default(),
-        Sum::default(),
-    );
-    for y in 1..h - 1 {
-        for x in 1..w - 1 {
-            let laplacian =
-                at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1) - 4.0 * at(x, y);
-            let gx = (at(x + 1, y - 1) + 2.0 * at(x + 1, y) + at(x + 1, y + 1)
-                - at(x - 1, y - 1)
-                - 2.0 * at(x - 1, y)
-                - at(x - 1, y + 1))
-                / 8.0;
-            let gy = (at(x - 1, y + 1) + 2.0 * at(x, y + 1) + at(x + 1, y + 1)
-                - at(x - 1, y - 1)
-                - 2.0 * at(x, y - 1)
-                - at(x + 1, y - 1))
-                / 8.0;
-            laplacians.push(laplacian);
-            sum_l.add(laplacian);
-            sum_xx.add(gx * gx);
-            sum_yy.add(gy * gy);
-            sum_xy.add(gx * gy);
-        }
-    }
-    let mean = sum_l.value() / n;
-    let mut sum_sq = Sum::default();
-    for l in &laplacians {
-        let d = l - mean;
-        sum_sq.add(d * d);
-    }
+    let laplacian = |x: usize, y: usize| {
+        at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1) - 4.0 * at(x, y)
+    };
+    // Each interior row's sums of the Laplacian, Gx², Gy² and Gx·Gy.
+    let rows: Vec<[f32; 4]> = (1..h - 1)
+        .into_par_iter()
+        .map(|y| {
+            let mut sums = [0f32; 4];
+            for x in 1..w - 1 {
+                let gx = (at(x + 1, y - 1) + 2.0 * at(x + 1, y) + at(x + 1, y + 1)
+                    - at(x - 1, y - 1)
+                    - 2.0 * at(x - 1, y)
+                    - at(x - 1, y + 1))
+                    / 8.0;
+                let gy = (at(x - 1, y + 1) + 2.0 * at(x, y + 1) + at(x + 1, y + 1)
+                    - at(x - 1, y - 1)
+                    - 2.0 * at(x, y - 1)
+                    - at(x + 1, y - 1))
+                    / 8.0;
+                sums[0] += laplacian(x, y);
+                sums[1] += gx * gx;
+                sums[2] += gy * gy;
+                sums[3] += gx * gy;
+            }
+            sums
+        })
+        .collect();
+    let total = |k: usize| rows.iter().fold(0f32, |acc, row| acc + row[k]);
+    // At most 478 x 478 interior pixels, so n is exact in an f32.
+    let n = ((w - 2) * (h - 2)) as f32;
+    let mean = total(0) / n;
+    let squares: Vec<f32> = (1..h - 1)
+        .into_par_iter()
+        .map(|y| {
+            (1..w - 1).fold(0f32, |acc, x| {
+                let d = laplacian(x, y) - mean;
+                acc + d * d
+            })
+        })
+        .collect();
     ImageReadings {
-        sharpness: sum_sq.value() / n,
-        gradient_structure_tensor_xx_yy_xy: [
-            sum_xx.value() / n,
-            sum_yy.value() / n,
-            sum_xy.value() / n,
-        ],
+        sharpness: squares.iter().fold(0f32, |acc, v| acc + v) / n,
+        gradient_structure_tensor_xx_yy_xy: [total(1) / n, total(2) / n, total(3) / n],
     }
 }
 

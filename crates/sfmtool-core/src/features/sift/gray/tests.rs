@@ -34,14 +34,17 @@ fn test_negative_literal() {
 #[test]
 fn test_default_colmap_formula() {
     let f = parse_gray_formula(DEFAULT_GRAY_FORMULA).unwrap();
-    // Pure white -> 0.2126 + 0.7152 + 0.0722 = 1.0
-    assert!((f.eval(1.0, 1.0, 1.0) - 1.0).abs() < 1e-12);
-    // Pure red -> 0.2126
-    assert!((f.eval(1.0, 0.0, 0.0) - 0.2126).abs() < 1e-12);
-    // A sample value
+    // Pure white -> 0.2126 + 0.7152 + 0.0722 = 1.0, to an f32 rounding.
+    assert!((f.eval(1.0, 1.0, 1.0) - 1.0).abs() < 1e-6);
+    // Pure red -> 0.2126, the f32 nearest the literal.
+    assert_eq!(f.eval(1.0, 0.0, 0.0), 0.2126f32);
+    // A sample value: the same operations in the same order, in f32.
     let v = f.eval(0.5, 0.25, 0.75);
-    let expected = 0.2126 * 0.5 + 0.7152 * 0.25 + 0.0722 * 0.75;
-    assert!((v - expected).abs() < 1e-12);
+    let expected = 0.2126f32 * 0.5 + 0.7152f32 * 0.25 + 0.0722f32 * 0.75;
+    assert_eq!(v.to_bits(), expected.to_bits());
+    // ... which is not the f64 evaluation rounded to f32 for this colour.
+    let in_f64 = (0.2126f64 * 0.5 + 0.7152 * 0.25 + 0.0722 * 0.75) as f32;
+    assert_ne!(v.to_bits(), in_f64.to_bits());
 }
 
 #[test]
@@ -78,8 +81,13 @@ fn test_gray_from_rgb_rounds_to_quantize_bits() {
     let exact = gray_from_rgb(1, 1, &rgb, &ImageToGray::default()).get_pixel(0, 0);
     let eight = ImageToGray::new(DEFAULT_GRAY_FORMULA, Some(8)).unwrap();
     let rounded = gray_from_rgb(1, 1, &rgb, &eight).get_pixel(0, 0);
-    assert_eq!(rounded, (143.0f64 / 255.0) as f32);
+    assert_eq!(rounded, 143.0f32 / 255.0);
     assert_ne!(rounded, exact);
+    // (0, 14, 76) is an exact tie, 0.7152 · 14 + 0.0722 · 76 = 15.5 levels.
+    // In f32 the formula's value times 255 rounds to 15.5, which rounds up to
+    // 16; the same formula in f64 gives 15.499999999999998 and level 15.
+    let tie = gray_from_rgb(1, 1, &[0, 14, 76], &eight).get_pixel(0, 0);
+    assert_eq!(tie, 16.0f32 / 255.0);
     let one = ImageToGray::new(DEFAULT_GRAY_FORMULA, Some(1)).unwrap();
     assert_eq!(gray_from_rgb(1, 1, &rgb, &one).get_pixel(0, 0), 1.0);
     // Rounding clamps, so a value above 1 reads 1.
@@ -205,13 +213,13 @@ fn test_overlong_formulas_are_refused_not_overflowed() {
 #[test]
 fn test_quantize_rounds_half_up_and_clamps() {
     // With 1 bit the only levels are 0 and 1: an exact half rounds up (half
-    // to even would give 0), and the double just below it rounds down, which
+    // to even would give 0), and the f32 just below it rounds down, which
     // `floor(v + 0.5)` would get wrong.
     assert_eq!(quantize(0.5, 1), 1.0);
-    assert_eq!(quantize(0.49999999999999994, 1), 0.0);
+    assert_eq!(quantize(0.499_999_97, 1), 0.0);
     // 2 bits: levels of 1/3; 0.5 · 3 = 1.5 rounds up to 2/3.
     assert_eq!(quantize(0.5, 2), 2.0 / 3.0);
-    assert_eq!(quantize(1.0 / 6.0 - 1e-12, 2), 0.0);
+    assert_eq!(quantize(0.166_666_6, 2), 0.0);
     // 8 bits: 127.5 rounds up to 128.
     assert_eq!(quantize(0.5, 8), 128.0 / 255.0);
     assert_eq!(quantize(100.0 / 255.0, 8), 100.0 / 255.0);
@@ -221,10 +229,10 @@ fn test_quantize_rounds_half_up_and_clamps() {
     for bits in [1, 8, 16] {
         assert_eq!(quantize(-0.3, bits), 0.0);
         assert_eq!(quantize(1.7, bits), 1.0);
-        assert_eq!(quantize(f64::INFINITY, bits), 1.0);
-        assert_eq!(quantize(f64::NEG_INFINITY, bits), 0.0);
+        assert_eq!(quantize(f32::INFINITY, bits), 1.0);
+        assert_eq!(quantize(f32::NEG_INFINITY, bits), 0.0);
         assert_eq!(quantize(1.0, bits), 1.0);
-        assert!(quantize(f64::NAN, bits).is_nan());
+        assert!(quantize(f32::NAN, bits).is_nan());
     }
     // ImageToGray applies it after the formula, and not without quantize_bits.
     let to_gray = ImageToGray::new("2 * G", Some(8)).unwrap();
@@ -235,13 +243,13 @@ fn test_quantize_rounds_half_up_and_clamps() {
 }
 
 #[test]
-fn test_gray_slices_equal_gray_per_sample() {
-    // Every channel value an 8-bit image can hold, in three different orders.
-    let r: Vec<f64> = (0..256).map(|v| v as f64 / 255.0).collect();
-    let g: Vec<f64> = (0..256).map(|v| ((v * 7) % 256) as f64 / 255.0).collect();
-    let b: Vec<f64> = (0..256)
-        .map(|v| ((v * 13 + 5) % 256) as f64 / 255.0)
+fn test_gray_row_equals_gray_per_pixel() {
+    // Every channel value an 8-bit image can hold, in three different orders,
+    // as one row of 256 pixels.
+    let rgb: Vec<u8> = (0..256usize)
+        .flat_map(|v| [v as u8, ((v * 7) % 256) as u8, ((v * 13 + 5) % 256) as u8])
         .collect();
+    let mut scratch = GrayRowScratch::default();
     for (formula, bits) in [
         (DEFAULT_GRAY_FORMULA, None),
         (DEFAULT_GRAY_FORMULA, Some(8)),
@@ -251,10 +259,11 @@ fn test_gray_slices_equal_gray_per_sample() {
         ("-1 ** 0.5", Some(8)),
     ] {
         let to_gray = ImageToGray::new(formula, bits).unwrap();
-        let mut out = vec![0f64; 256];
-        to_gray.gray_slices((&r, &g, &b), &mut out, &mut Vec::new());
-        for i in 0..256 {
-            let one = to_gray.gray(r[i], g[i], b[i]);
+        let mut out = vec![0f32; 256];
+        to_gray.gray_row(&rgb, &mut out, &mut scratch);
+        for (i, p) in rgb.as_chunks::<3>().0.iter().enumerate() {
+            let unit = |v: u8| f32::from(v) / 255.0;
+            let one = to_gray.gray(unit(p[0]), unit(p[1]), unit(p[2]));
             assert!(
                 out[i].to_bits() == one.to_bits() || (out[i].is_nan() && one.is_nan()),
                 "{formula} at {i}: {} vs {one}",
@@ -262,4 +271,28 @@ fn test_gray_slices_equal_gray_per_sample() {
             );
         }
     }
+}
+
+#[test]
+fn test_gray_from_rgb_is_gray_row_whatever_the_thread_count() {
+    // An image of more than one band of rows, its rows made one at a time by
+    // gray_row, and by gray_from_rgb on the pool and on one thread.
+    let (w, h) = (37usize, 3 * GRAY_BAND_ROWS + 5);
+    let rgb: Vec<u8> = (0..w * h * 3).map(|i| (i * 7919 % 251) as u8).collect();
+    let to_gray = ImageToGray::default();
+    let mut scratch = GrayRowScratch::default();
+    let mut rows = vec![0f32; w * h];
+    for (y, row) in rows.chunks_exact_mut(w).enumerate() {
+        to_gray.gray_row(&rgb[y * w * 3..(y + 1) * w * 3], row, &mut scratch);
+    }
+    let pool = gray_from_rgb(w as u32, h as u32, &rgb, &to_gray);
+    let one = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(|| gray_from_rgb(w as u32, h as u32, &rgb, &to_gray));
+    assert_eq!(pool.data(), &rows[..]);
+    assert_eq!(one.data(), &rows[..]);
+    // An empty image is empty, not a panic.
+    assert!(gray_from_rgb(0, 4, &[], &to_gray).data().is_empty());
 }
