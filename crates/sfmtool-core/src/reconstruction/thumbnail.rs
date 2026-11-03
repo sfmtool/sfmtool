@@ -459,6 +459,8 @@ mod tests {
                 image_width: 64,
                 image_height: 64,
                 feature_count: 0,
+                sharpness: None,
+                gradient_structure_tensor_xx_yy_xy: None,
             },
             content_hash: SiftContentHash::default(),
             positions_xy: Array2::zeros((0, 2)),

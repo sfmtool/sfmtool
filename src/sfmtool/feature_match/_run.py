@@ -67,6 +67,7 @@ def _run_matching(
         feature_tool=feature_tool,
         feature_options=feature_options,
         feature_prefix_dir=feature_prefix_dir,
+        settings_source=f"The workspace file {Path(workspace_dir) / '.sfm-workspace.json'}",
     )
 
     image_count = len(image_paths)

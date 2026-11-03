@@ -76,7 +76,11 @@ Exactly one is required:
 
 When `PATHS` are image files or directories, the command extracts features (if needed), runs
 matching, and then solves. The matching strategy is exhaustive by default, or flow-based with
-`--flow-match`.
+`--flow-match`. Extraction writes `.sift` version 2 with the workspace's options, so in a
+version 1 workspace it refuses to extract a missing or stale file, naming the workspace file
+and pointing at `sfm ws upgrade`
+([sift-command.md § Version refusals](../image-feature/sift-command.md#version-refusals));
+a version 1 workspace whose `.sift` files are all present and current solves as before.
 
 ### From a named image list
 

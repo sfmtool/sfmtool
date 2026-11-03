@@ -304,7 +304,7 @@ Run `pixi run sfm --help` to list all subcommands grouped by category
 Image Processing / COLMAP Interop). Source in
 `src/sfmtool/_commands/<name>.py`; specs in
 `specs/cli/<category>/<name>-command.md`. `sfm ws` and `sfm camrig` are command **groups**
-(`ws` has one subcommand, `ws init`; `camrig` has three: `camrig create`,
+(`ws` has two subcommands, `ws init` and `ws upgrade`; `camrig` has three: `camrig create`,
 `camrig cp`, `camrig spherical-tiles`); every other top-level command is flat.
 Typical reconstruction flow:
 

@@ -9,7 +9,7 @@ import shutil
 import numpy as np
 import pytest
 
-from sfmtool.fileio import read_image_rgb, read_sift, write_image_rgb
+from sfmtool.fileio import read_image_rgb, read_sift, write_image_rgb, write_sift
 from sfmtool.sift import build_sift_files
 from sfmtool.sift.extract import image_files_to_sift_files
 from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
@@ -76,5 +76,35 @@ def test_invalid_options_and_unreadable_images_raise(images, tmp_path):
         build_sift_files(images, {"sigma": "wide"}, "features/rust")
     broken = tmp_path / "broken.jpg"
     broken.write_bytes(b"not an image")
+    options = get_default_sfmtool_feature_options()
     with pytest.raises(OSError, match="broken.jpg"):
-        build_sift_files([broken], {}, "features/rust")
+        build_sift_files([broken], options, "features/rust")
+
+
+def test_version_1_settings_and_folders_are_refused(images, tmp_path):
+    """Options with no image_to_gray, and a folder of version 1 files, are
+    refused before anything is written."""
+    v1_options = get_default_sfmtool_feature_options()
+    v1_options["gray_formula"] = v1_options.pop("image_to_gray")["formula"]
+    with pytest.raises(ValueError, match="version 1 settings.*sfm ws upgrade"):
+        build_sift_files(images[:1], v1_options, "features/rust")
+    assert not (tmp_path / "features" / "rust").exists()
+
+    # A version 1 file in the folder the build would write into.
+    v1_dir = tmp_path / "features" / "v1"
+    v1_dir.mkdir(parents=True)
+    data = read_sift(
+        build_sift_files(
+            images[1:2], get_default_sfmtool_feature_options(), "features/tmp"
+        )[0][0]
+    )
+    data["metadata"]["version"] = 1
+    del data["metadata"]["sharpness"]
+    del data["metadata"]["gradient_structure_tensor_xx_yy_xy"]
+    data["feature_tool_metadata"]["feature_options"] = v1_options
+    write_sift(v1_dir / "seoul_bull_sculpture_02.jpg.sift", data)
+    with pytest.raises(OSError, match="holds version 1 .sift files"):
+        build_sift_files(
+            images[:1], get_default_sfmtool_feature_options(), "features/v1"
+        )
+    assert not (v1_dir / "seoul_bull_sculpture_01.jpg.sift").exists()

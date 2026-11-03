@@ -205,6 +205,18 @@ A named set of a workspace's images, in `sfmtool_core::workspace`, the
 |------|-------|-----|-----|
 | **named image list** | a named set of workspace images defined in `.sfm-named-image-lists.json` by pattern and range entries; `NamedImageLists` (the file), `NamedImageList` (one list), `NamedImageListEntry` and `NamedImageListMember` | `image set`, `selection`, `image list` alone | *image set* already names the image half of a reconstruction's data, and *selection* is what the viewer uses for what is picked on screen. *Named* is what separates these lists from any other list of images, so it stays in the file name and in every type name |
 
+## Image readings
+
+The two per-image readings a `.sift` file records, in `sfmtool-core`'s
+`image_readings_from_rgb`, the `sfmtool.sift` bindings and
+[formats/sift-file-format.md](formats/sift-file-format.md).
+
+| Word | Means | Not | Why |
+|------|-------|-----|-----|
+| **sharpness** (of an image) | the variance of the Laplacian of its reading image: the `.sift` `metadata.json` field `sharpness`, `ImageReadings::sharpness`, and the proposed `.sfmr` column `images/sharpness`. Scope: a whole image. The tile-level sharpness of the bench (`pair_sharpness`, the *sharper* tile of blur-matched ZNCC) is a different reading, the ZNCC self-similarity ellipse, and keeps its words | `laplacian_variance`, `focus` | it names what the number is for rather than the method, which `laplacian_variance` names; `focus` leaves out motion blur, which the reading is also read for |
+| **gradient structure tensor** | the means of `Gx²`, `Gy²` and `Gx·Gy` over an image's reading image, stored raw as `[Exx, Eyy, Exy]`: the `.sift` field `gradient_structure_tensor_xx_yy_xy` and `ImageReadings::gradient_structure_tensor_xx_yy_xy`. Its **coherence**, **dominant gradient direction** and **axis ratio** `\|log(Exx/Eyy)\|` are derived by a reader | `structure tensor` alone | elsewhere *structure tensor* often means a smoothed per-pixel field rather than one mean per image; the suffix `_xx_yy_xy` names the component order, since three numbers named only *tensor* do not say which is the cross term |
+| **reading image** | the 480-pixel area-averaged grey image, made through the file's `image_to_gray`, that both readings are taken on (`reading_image_size`, `READING_IMAGE_LONG_SIDE`) | `thumbnail`, `preview` | the thumbnail is a stretched 128 × 128 RGB square; the reading image keeps the aspect ratio, is grey and is never stored, so it needs its own word |
+
 ## Track table
 
 The named per-point values of `sfmtool_core::analysis::track_table`, the

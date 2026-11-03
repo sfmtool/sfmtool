@@ -229,7 +229,10 @@ its Cancel stops it before the next image. Each file goes to
 where `SfmrReconstruction::sift_path_for_image` and so *Build Index Files* look
 for it. An image whose `.sift` file is at least as new as the photograph is
 skipped, so the entry is live when every file is already there: running it
-then writes nothing.
+then writes nothing. The files are `.sift` version 2, with each image's
+sharpness and gradient structure tensor, and the build never writes one from
+version 1 settings or beside a version 1 file
+([workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix)).
 
 **The options are the node's own.** The feature options and the
 `feature_prefix_dir` come from the workspace definition the node's `.sfmr`
@@ -249,14 +252,35 @@ compact JSON of the tool, the type and the options
 *"Switched the SIFT extraction of ‹label› to sfmtool"*, only once every file
 is built; Undo puts the old definition back, and a save writes the new one
 into the `.sfmr`. A build that is cancelled or fails pushes no switch, and the
-files it wrote stay, so the next build skips them.
+files it wrote stay, so the next build skips them. The default options are the
+version 2 ones, with the `image_to_gray` object.
+
+**A version 1 `sfmtool` definition is converted.** A definition whose
+`feature_options` carry no `image_to_gray` holds version 1 settings, and no
+`.sift` file is written from those. The entry keeps its label, *Build SIFT
+Files*, and its hover says what happens first: the build converts the
+definition the viewer holds as `sfm ws upgrade` converts a workspace file
+(`sfmtool_core::workspace::upgrade_feature_options`, the conversion
+`sfmtool.workspace.upgrade_feature_options` binds), keeping every option and
+making its `gray_formula` the `image_to_gray` object, and names a new
+`feature_prefix_dir` from the converted options
+(`sfmtool_core::workspace::feature_prefix_dir`). The files go into that new
+folder, and the conversion is pushed as one version, *"Converted the SIFT
+extraction record of ‹label› to version 2"*, only once every file is built,
+so the node then looks in the new folder. Undo puts the old record back and a
+save writes the new one. The workspace's `.sfm-workspace.json` is neither read
+nor changed, so it may still be version 1, and the command-line writers keep
+refusing there until `sfm ws upgrade` names its own new folder. The old folder
+stays, and other reconstructions still find it through their own records.
 
 **When it is refused.** It is greyed, with the sentence the starter and the
 wire also give (`AppState::build_sift_files_refusal`), on a busy node, on a
 node with no images, on a node whose workspace directory is not there, and,
-for the switch only, on a node whose observations are `.sift` feature indexes:
-those indexes name features of the files the node was made from, and the
-files at the new prefix directory hold other features.
+for a switch or a conversion, on a node whose observations are `.sift` feature
+indexes: those indexes name features of the files the node was made from, and
+a new folder would not hold them, so the sentence suggests converting the node
+to embedded patches. A version 1 definition whose `gray_formula` does not parse
+is refused too, since it cannot be converted.
 
 **What it refreshes.** However the build ends, an open SIFT index of the node
 is classified again, since whether it is current depends on the `.sift`
@@ -265,8 +289,11 @@ is also reported to the frame in `Polled::installed`, as a node with a new
 version is, so Track View drops its cached answer to whether there are
 `.sift` files to index and Image Detail drops its feature overlay. Its Action
 Log row is a `Bench` row, *"Built the .sift files of ‹label›: N written and M
-already up to date, in ‹prefix›"*, or an `Edit` row naming the switch when it
-pushed one.
+already up to date, in ‹prefix›"*, or an `Edit` row naming the switch or the
+conversion when it pushed one, which ends *"…, in ‹new prefix›, moved from
+‹old prefix›"*. The Background Tasks panel shows the build's first message,
+*"Writing the .sift files into ‹prefix›"*, which after a switch or a
+conversion ends *", moved from ‹old prefix›"*.
 
 ## The Scene tree rows
 
@@ -337,10 +364,22 @@ pub(crate) const BUILD_SIFT_FILES: &str = "Build SIFT Files";
 pub(crate) const SWITCH_AND_BUILD_SIFT_FILES: &str =
     "Switch SIFT Extraction to sfmtool and Build SIFT Files";
 
+/// What a build does to the node's definition first.
+pub(crate) enum RecordChange {
+    Keep,
+    Switch(String),
+    Upgrade,
+}
+
+/// The entry's hover, for what the build does first.
+pub(crate) fn build_sift_files_hover(change: &RecordChange) -> String;
+
 impl AppState {
     pub(crate) fn sift_files_build_label(&self, id: ReconId) -> &'static str;
     /// The tool a build would switch away from, or `None` on an sfmtool node.
     pub(crate) fn sift_extraction_switch_from(&self, id: ReconId) -> Option<String>;
+    /// What a build of `id` does to its definition first.
+    pub(crate) fn sift_record_change(&self, id: ReconId) -> RecordChange;
     pub(crate) fn build_sift_files_refusal(&self, id: ReconId) -> Option<String>;
     pub(crate) fn start_build_sift_files(&mut self, id: ReconId) -> Result<Option<u64>, String>;
     pub(crate) fn build_sift_files_job(&self, id: ReconId) -> Result<Job, String>;
@@ -430,7 +469,11 @@ version with the default options and prefix, leaving `.sfm-workspace.json`
 as it was, and undone by Undo; a cancelled switch pushing nothing; an
 open index going stale, without being opened again, when a build rewrites a
 `.sift` file under it; and an open index judged again when the switch is
-undone, stale over the old prefix and current again after the redo. The
+undone, stale over the old prefix and current again after the redo; a
+version 1 `sfmtool` definition converted, keeping its options, built into a
+new folder named from them as version 2 files, pushed as one version whose
+sentence names both folders, and undone by Undo; and the refusals of a version
+1 definition over feature indexes and of one that cannot be converted. The
 entry's place above *Build Index Files* is tested in
 [scene_graph/tests.rs](../../crates/sfm-explorer/src/scene_graph/tests.rs) and
 [track_view/body/tests.rs](../../crates/sfm-explorer/src/track_view/body/tests.rs),

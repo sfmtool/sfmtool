@@ -18,11 +18,11 @@
 //!
 //! [`ImageToGray`] is the formula together with the optional `quantize_bits`
 //! that rounds its value to a bit depth: the `image_to_gray` object
-//! `{"formula": …, "quantize_bits": …}` that the `.sift` version 2 draft
-//! (`specs/drafts/image-sharpness.md`) records. The per-image readings
-//! ([`image_readings_from_rgb`](super::image_readings_from_rgb)) take their
-//! grey samples through it. The detector still takes a plain [`GrayFormula`]
-//! through [`gray_from_rgb`].
+//! `{"formula": …, "quantize_bits": …}` that a version 2 `.sift` file and a
+//! version 2 workspace record. The detector's input ([`gray_from_rgb`]) and
+//! the per-image readings
+//! ([`image_readings_from_rgb`](super::image_readings_from_rgb)) both take
+//! their grey samples through it.
 
 use super::GrayImage;
 
@@ -644,13 +644,21 @@ impl Parser {
     }
 }
 
-/// Convert an interleaved 8-bit RGB image to a [`GrayImage`] using `formula`.
+/// Convert an interleaved 8-bit RGB image to a [`GrayImage`] through
+/// `image_to_gray`.
 ///
 /// `rgb` is `3 * width * height` bytes in row-major `[R, G, B, R, G, B, ...]`
 /// order. Each channel is normalized to `[0, 1]` (divided by 255) before the
-/// formula is evaluated. The output is used as-is and is **not** clamped. Rows
-/// are converted in parallel with rayon.
-pub fn gray_from_rgb(width: u32, height: u32, rgb: &[u8], formula: &GrayFormula) -> GrayImage {
+/// formula is evaluated, and the value is rounded to `quantize_bits` bits when
+/// the conversion has them ([`ImageToGray::gray`]); without them it is used
+/// as-is and is **not** clamped. Each sample is computed in double precision
+/// and stored as `f32`. Rows are converted in parallel with rayon.
+pub fn gray_from_rgb(
+    width: u32,
+    height: u32,
+    rgb: &[u8],
+    image_to_gray: &ImageToGray,
+) -> GrayImage {
     use rayon::prelude::*;
 
     let w = width as usize;
@@ -667,7 +675,7 @@ pub fn gray_from_rgb(width: u32, height: u32, rgb: &[u8], formula: &GrayFormula)
                 let r = rgb[p] as f64 / 255.0;
                 let g = rgb[p + 1] as f64 / 255.0;
                 let b = rgb[p + 2] as f64 / 255.0;
-                *out = formula.eval(r, g, b) as f32;
+                *out = image_to_gray.gray(r, g, b) as f32;
             }
         });
 

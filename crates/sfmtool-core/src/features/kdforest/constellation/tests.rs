@@ -1062,7 +1062,7 @@ fn write_query_sift(path: &std::path::Path, corpus: &Corpus) {
         feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
             feature_tool: "test".into(),
             feature_type: "sift".into(),
-            feature_options: serde_json::json!({}),
+            feature_options: serde_json::json!({"image_to_gray": {"formula": "G"}}),
         },
         metadata: sfmtool_sift_format::SiftMetadata {
             version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
@@ -1072,6 +1072,8 @@ fn write_query_sift(path: &std::path::Path, corpus: &Corpus) {
             image_width: CANVAS as u32,
             image_height: CANVAS as u32,
             feature_count: count as u32,
+            sharpness: Some(0.0),
+            gradient_structure_tensor_xx_yy_xy: Some([0.0; 3]),
         },
         content_hash: sfmtool_sift_format::SiftContentHash::default(),
         positions_xy: positions,

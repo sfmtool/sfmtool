@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The `.sift` build: what the entry is called, when it is refused, where it
-//! writes, and the switch of the workspace definition it makes first on a node
-//! whose definition names another feature tool.
+//! writes, and the change of the workspace definition it makes first on a node
+//! whose definition names another feature tool or is a version 1 `sfmtool`
+//! one.
 //!
 //! The fixture is an `embedded_patches` node saved as `demo.sfmr` in a
 //! temporary directory that is also its workspace, with one of seoul_bull's
@@ -15,7 +16,7 @@ use sfmtool_core::features::sift::{
     BuildSiftFilesOptions, SFMTOOL_FEATURE_TOOL, WORKSPACE_CONFIG_FILE,
 };
 
-use super::{BUILD_SIFT_FILES, SWITCH_AND_BUILD_SIFT_FILES};
+use super::{RecordChange, BUILD_SIFT_FILES, SWITCH_AND_BUILD_SIFT_FILES};
 use crate::action_log::Kind;
 use crate::scene::{ReconId, SceneNode};
 use crate::state::edits::tests::projected_embedded_demo;
@@ -186,6 +187,11 @@ fn a_switch_changes_the_node_s_definition_only_and_is_undone_as_one_version() {
     assert!(!entry.failed, "{}", entry.text);
     assert_eq!(entry.kind, Kind::Edit);
     assert!(entry.text.contains("from 'colmap'"), "{}", entry.text);
+    assert!(
+        entry.text.contains(&format!("moved from {COLMAP_PREFIX}")),
+        "{}",
+        entry.text
+    );
 
     let node = state.node(id).unwrap();
     assert_eq!(node.history.versions().len(), versions + 1);
@@ -291,4 +297,132 @@ fn undoing_the_switch_judges_an_open_index_again() {
     state.redo(id).expect("the switch is redone");
     state.refresh_index_files(id);
     assert_eq!(state.sift_index_state(id), IndexFileState::Current);
+}
+
+/// The fixture with a version 1 `sfmtool` definition: the defaults with a
+/// `gray_formula` in place of `image_to_gray`, one hand-edited option, and the
+/// old folder [`OWN_PREFIX`].
+fn state_with_version_1_record(dir: &Path) -> (AppState, ReconId) {
+    let (state, id) = state_in(dir, "sfmtool");
+    let mut recon = state.node(id).unwrap().recon().clone();
+    let options = &mut recon.metadata.workspace.contents.feature_options;
+    let options_map = options.as_object_mut().unwrap();
+    options_map.remove("image_to_gray");
+    options_map.insert("gray_formula".into(), "0.5*R + 0.5*G".into());
+    options_map.insert("peak_ratio".into(), serde_json::json!(0.7));
+    let mut node = SceneNode::demo(recon);
+    node.path = Some(dir.join("demo.sfmr"));
+    let mut state = AppState::new();
+    state.append_node(node);
+    let id = state.selected_recon.expect("a selected reconstruction");
+    (state, id)
+}
+
+/// On a node with a version 1 `sfmtool` definition, the build converts the
+/// definition as `sfm ws upgrade` converts a workspace, keeping every option,
+/// writes version 2 files into a new folder named from the converted options,
+/// and pushes the conversion as one version, whose sentence names the new
+/// folder and the old one. Undo puts the version 1 definition back.
+#[test]
+fn a_version_1_record_is_converted_and_built_into_a_new_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = state_with_version_1_record(dir.path());
+    assert_eq!(state.sift_record_change(id), RecordChange::Upgrade);
+    assert_eq!(state.sift_files_build_label(id), BUILD_SIFT_FILES);
+    assert_eq!(state.build_sift_files_refusal(id), None);
+    let hover = super::build_sift_files_hover(&state.sift_record_change(id));
+    assert!(hover.contains("version 1 sfmtool settings"), "{hover}");
+    let versions = state.node(id).unwrap().history.versions().len();
+
+    state.start_build_sift_files(id).expect("it starts");
+    state.finish_background_tasks();
+    let entry = state.action_log.entries().next_back().expect("an entry");
+    assert!(!entry.failed, "{}", entry.text);
+    assert_eq!(entry.kind, Kind::Edit);
+
+    let node = state.node(id).unwrap();
+    assert_eq!(node.history.versions().len(), versions + 1);
+    let contents = &node.recon().metadata.workspace.contents;
+    assert_eq!(contents.feature_tool, "sfmtool");
+    assert_eq!(
+        contents.feature_options["image_to_gray"],
+        serde_json::json!({"formula": "0.5*R + 0.5*G"})
+    );
+    assert!(contents.feature_options.get("gray_formula").is_none());
+    assert_eq!(contents.feature_options["peak_ratio"], 0.7);
+    let folder = contents.feature_prefix_dir.clone();
+    assert_ne!(folder, OWN_PREFIX);
+    assert_eq!(
+        folder,
+        sfmtool_core::workspace::feature_prefix_dir(
+            "sfmtool",
+            "sift-sfmtool",
+            &contents.feature_options
+        )
+    );
+    assert!(
+        entry.text.contains(&format!("in {folder}"))
+            && entry.text.contains(&format!("moved from {OWN_PREFIX}")),
+        "{}",
+        entry.text
+    );
+    // The Background panel's line names both folders too.
+    let task = state.last_finished_task().expect("it finished");
+    let said = task.detail.iter().any(|row| {
+        matches!(row, crate::progress::Detail::Message { text, .. }
+            if text.contains(&folder) && text.contains(&format!("moved from {OWN_PREFIX}")))
+    });
+    assert!(said, "the panel's rows name both folders");
+    assert!(every_sift_file_is_there(&state, id));
+    let sift = sfmtool_sift_format::read_sift_metadata(&node.recon().sift_path_for_image(0))
+        .unwrap()
+        .1;
+    assert_eq!(sift.version, 2);
+    assert!(sift.sharpness.is_some());
+    assert!(!dir.path().join(OWN_PREFIX).exists());
+    assert_eq!(state.sift_record_change(id), RecordChange::Keep);
+
+    state.undo(id).expect("the conversion is undone");
+    let contents = &state.node(id).unwrap().recon().metadata.workspace.contents;
+    assert_eq!(contents.feature_prefix_dir, OWN_PREFIX);
+    assert_eq!(contents.feature_options["gray_formula"], "0.5*R + 0.5*G");
+}
+
+/// A version 1 definition on a node whose observations are feature indexes is
+/// refused: the indexes name features of the old files, which a new folder
+/// would not hold.
+#[test]
+fn a_version_1_record_with_feature_indexes_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recon = sfmtool_core::SfmrReconstruction::demo(12);
+    recon.workspace_dir = dir.path().to_path_buf();
+    let contents = &mut recon.metadata.workspace.contents;
+    contents.feature_tool = "sfmtool".into();
+    contents.feature_type = "sift-sfmtool".into();
+    contents.feature_options = serde_json::json!({"gray_formula": "G"});
+    contents.feature_prefix_dir = OWN_PREFIX.into();
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(recon));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    let refusal = state.build_sift_files_refusal(id).expect("refused");
+    assert!(refusal.contains("version 1 .sift files"), "{refusal}");
+    assert!(refusal.contains("embedded patches"), "{refusal}");
+}
+
+/// A version 1 definition whose `gray_formula` does not parse cannot be
+/// converted, and the entry says why.
+#[test]
+fn a_version_1_record_that_cannot_be_converted_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_with_version_1_record(dir.path());
+    let mut recon = state.node(id).unwrap().recon().clone();
+    recon.metadata.workspace.contents.feature_options["gray_formula"] = "R +".into();
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(recon));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    let refusal = state.build_sift_files_refusal(id).expect("refused");
+    assert!(
+        refusal.contains("cannot be converted to version 2"),
+        "{refusal}"
+    );
 }

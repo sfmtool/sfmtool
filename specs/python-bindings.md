@@ -274,7 +274,7 @@ Paths in the *Source* column are relative to
 |--------|---------|------|
 | [sift/extract.rs](../crates/sfmtool-py/src/sift/extract.rs) | `extract_sift`, `detect_sift_keypoints`, `describe_keypoints`, `affine_shapes_from_similarity` | [sift.md](core/features/sift.md) |
 | [sift/files.rs](../crates/sfmtool-py/src/sift/files.rs) | `build_sift_files` | [sift.md](core/features/sift.md) § "Building `.sift` files" |
-| [sift/image_readings.rs](../crates/sfmtool-py/src/sift/image_readings.rs) | `ImageToGray`, `ImageReadings`, `image_readings_from_rgb` | [sift.md](core/features/sift.md) § "Image-to-gray conversion", [image-sharpness.md](drafts/image-sharpness.md) |
+| [sift/image_readings.rs](../crates/sfmtool-py/src/sift/image_readings.rs) | `ImageToGray`, `ImageReadings`, `image_readings_from_rgb` | [sift.md](core/features/sift.md) § "Image-to-gray conversion", [sift-file-format.md](formats/sift-file-format.md) |
 
 ### `reconstruction`
 
@@ -391,7 +391,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `is_named_image_list_name`, `NAMED_IMAGE_LISTS_FILE_NAME` | [named-image-lists.md](workspace/named-image-lists.md) |
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `is_named_image_list_name`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade` | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md) |
 
 ## Keeping the index current
 

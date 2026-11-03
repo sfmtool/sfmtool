@@ -19,6 +19,66 @@ from .._sfmtool.fileio import write_colmap_db
 __all__ = ["create_colmap_db_from_reconstruction"]
 
 
+def _stale_or_missing(image_paths: list[Path], prefix: str | None) -> list[Path]:
+    """The images whose ``.sift`` in ``prefix`` is missing or older than they are."""
+    if not prefix:
+        return list(image_paths)
+    stale = []
+    for image in image_paths:
+        sift = image.parent / prefix / (image.name + ".sift")
+        if not sift.exists() or sift.stat().st_mtime < image.stat().st_mtime:
+            stale.append(image)
+    return stale
+
+
+def _extraction_settings(recon, image_paths: list[Path], sfmr_path) -> tuple:
+    """The feature tool, options and folder the export reads its ``.sift`` files
+    from, extracting any that are missing or stale.
+
+    A version 2 record, or a version 1 record whose files are all present and
+    current, is used as it is. A version 1 record with files to extract is
+    converted in memory as ``sfm ws upgrade`` converts a workspace file
+    (``sfmtool.workspace.upgrade_feature_options``), the way the viewer's
+    *Build SIFT Files* converts one, and every file is read from the new folder
+    the converted options name; the ``.sfmr`` is not rewritten. That holds for
+    every feature tool: the export writes keypoints and descriptors from the
+    ``.sift`` files and no matches or tracks, so it reads all its features from
+    one folder and needs no correspondence with the reconstruction's feature
+    indexes.
+    """
+    from ..sift.file import get_feature_tool_xxh128, get_feature_type_for_tool
+    from ..workspace import upgrade_feature_options
+
+    contents = recon.source_metadata.get("workspace", {}).get("contents", {})
+    tool = contents.get("feature_tool")
+    options = contents.get("feature_options")
+    prefix = contents.get("feature_prefix_dir")
+    is_version_1 = isinstance(options, dict) and "image_to_gray" not in options
+    if not is_version_1 or not _stale_or_missing(image_paths, prefix):
+        return tool, options, prefix
+
+    named = f"the reconstruction {sfmr_path}" if sfmr_path else "the reconstruction"
+    try:
+        new_options = upgrade_feature_options(tool, options)
+    except ValueError as e:
+        raise ValueError(
+            f"The version 1 workspace record of {named} cannot be converted to "
+            f"version 2: {e}."
+        ) from e
+    # The folder is named as a new version 2 record's is, from the tool's
+    # feature type, so it is the one `sfm ws upgrade` and the viewer name for
+    # the same options; older records hold a bare "sift" feature type.
+    feature_type = get_feature_type_for_tool(tool, new_options)
+    xxh128 = get_feature_tool_xxh128(tool, feature_type, new_options)
+    new_prefix = f"features/{feature_type}-{xxh128}"
+    print(
+        f"Converted the version 1 SIFT extraction record of {named} to version 2 in "
+        f"memory, so its .sift files are read from {new_prefix}, moved from {prefix}; "
+        "the .sfmr is not rewritten."
+    )
+    return tool, new_options, new_prefix
+
+
 def _compute_two_view_geometry(
     img_idx1: int,
     img_idx2: int,
@@ -83,6 +143,7 @@ def create_colmap_db_from_reconstruction(
     output_db_path: str | Path,
     max_feature_count: int | None = None,
     populate_two_view_geometries: bool = True,
+    sfmr_path: str | Path | None = None,
 ) -> str:
     """Create a COLMAP database from an SfM reconstruction with camera and pose priors.
 
@@ -102,6 +163,8 @@ def create_colmap_db_from_reconstruction(
         output_db_path: Path where the COLMAP database should be created
         max_feature_count: Maximum features per image (None = all)
         populate_two_view_geometries: Pre-populate F matrices for guided matching
+        sfmr_path: The ``.sfmr`` the reconstruction was read from, for the
+                   messages about its workspace record to name
 
     Returns:
         Path to the created database file
@@ -159,15 +222,18 @@ def create_colmap_db_from_reconstruction(
         rel_name = normalize_workspace_path(rel_path_raw)
         db_image_names.append(rel_name)
 
-    # Load keypoints and descriptors from .sift files
+    # Load keypoints and descriptors from .sift files, extracting any that are
+    # missing or stale with the reconstruction's own settings.
     print("Loading keypoints and descriptors...")
-    feature_prefix_dir = (
-        recon.source_metadata.get("workspace", {})
-        .get("contents", {})
-        .get("feature_prefix_dir")
-    )
+    tool, options, prefix = _extraction_settings(recon, image_paths, sfmr_path)
+    named = f"The reconstruction {sfmr_path}" if sfmr_path else "The reconstruction"
     sift_paths = image_files_to_sift_files(
-        image_paths, feature_prefix_dir=feature_prefix_dir
+        image_paths,
+        feature_tool=tool,
+        feature_options=options,
+        feature_prefix_dir=prefix,
+        settings_source=f"{named}'s workspace record",
+        settings_from_sfmr=True,
     )
 
     keypoints_per_image = []

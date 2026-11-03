@@ -6,11 +6,11 @@ Amends two standing specs, which describe the shipped behaviour:
 [`../core/features/sift.md`](../core/features/sift.md) (the SIFT detector and
 its split detect/describe interface) and
 [`../formats/sift-file-format.md`](../formats/sift-file-format.md) (the `.sift`
-container, which today has one version). Both point back here. It builds on
-the `.sift` version 2 proposed in
-[`image-sharpness.md`](image-sharpness.md),
-which adds the required `image_to_gray` object and the per-image sharpness and
-gradient structure tensor; the growable layout here is version 3.
+container, whose current version is 2). Both point back here. It builds on
+`.sift` version 2, which adds the required `image_to_gray` object and the
+per-image sharpness and gradient structure tensor
+([sift-file-format.md § Format versions](../formats/sift-file-format.md#format-versions));
+the growable layout here is version 3.
 
 Today a `.sift` file is written once, in full: every keypoint in it carries a
 descriptor. The in-memory interface is already lazy — `detect_keypoints` hands
@@ -135,7 +135,7 @@ back in the version 2 layout for consumers that want the plain single-array form
 Everything version 2 adds (`feature_options.image_to_gray` and the `sharpness` and
 `gradient_structure_tensor_xx_yy_xy` fields of `metadata.json`) is unchanged in
 version 3; see
-[`image-sharpness.md`](image-sharpness.md). The
+[`../formats/sift-file-format.md`](../formats/sift-file-format.md). The
 reader handles both (legacy = one implicit `0-(N-1)` chunk with
 `described_count = N`).
 
@@ -310,7 +310,7 @@ verified against the immutable prefix.)
 `feature_options.image_to_gray` arrives in version 2 and is unchanged here. Its
 definition (inputs, formula grammar, the optional `quantize_bits` and what each
 feature tool records) is in
-[`image-sharpness.md`](image-sharpness.md).
+[sift-file-format.md § `feature_options.image_to_gray`](../formats/sift-file-format.md#feature_optionsimage_to_gray).
 
 ### Example
 

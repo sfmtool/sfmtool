@@ -57,35 +57,44 @@ The detector operates on a single-channel float image `I`, and several parameter
 that value domain — notably the contrast threshold (`|D(x̂)| < 0.03`, assuming pixels in
 `[0, 1]`). The mapping from the source image to `I` therefore changes both the features and
 the meaning of those thresholds, so it must be pinned, not left to whatever the decoder
-happens to do. It is recorded in the `.sift` metadata as a formula over the normalized colour
-channels — `feature_options.gray_formula = "0.2126*R + 0.7152*G + 0.0722*B"`,
-BT.709 luma, matching COLMAP's `Bitmap::CloneAsGrey` — so it participates in both
-the `.sift` field `feature_tool_xxh128` and the feature-cache hash in the `features/`
-directory name, and two conversions land in different `features/` subdirectories. The structured `image_to_gray` object that would replace the
-plain string, with a formula grammar the reader can evaluate and an optional bit
-depth, is part of the proposed `.sift` version 2; see
-[`../../drafts/image-sharpness.md`](../../drafts/image-sharpness.md).
+happens to do. A version 2 `.sift` file records it as the `image_to_gray` object in
+`feature_options`, a formula over the colour channels normalized to `[0, 1]` and an optional
+bit depth the value is rounded to; the default for the `sfmtool` tool is
+`{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}`, BT.709 luma with no rounding, matching
+COLMAP's `Bitmap::CloneAsGrey`. Being inside `feature_options`, it participates in both the
+`.sift` field `feature_tool_xxh128` and the feature-cache hash in the `features/` directory
+name, so two conversions land in different `features/` subdirectories. The object, its
+grammar, its rounding and the readings below are defined in
+[sift-file-format.md § `feature_options.image_to_gray`](../../formats/sift-file-format.md#feature_optionsimage_to_gray);
+a version 1 record states the conversion as a `gray_formula` string instead.
 
-The code for that object and the readings it feeds is in place, though no file
-records them yet. [`ImageToGray`](../../../crates/sfmtool-core/src/features/sift/gray.rs)
+[`ImageToGray`](../../../crates/sfmtool-core/src/features/sift/gray.rs)
 is the formula with an optional `quantize_bits` from 1 to 16, read from the JSON
 object `{"formula": …, "quantize_bits": …}` by `ImageToGray::from_json` (which
-refuses any other key) or made from a `gray_formula` string by
+refuses any other key) or made from a version 1 `gray_formula` string by
 `ImageToGray::from_gray_formula`, with no rounding. With `quantize_bits = b`, a
 grey sample `v` becomes `round(clamp(v, 0, 1) · (2^b − 1)) / (2^b − 1)`, an
-exact half rounded up (`gray::quantize`).
+exact half rounded up (`gray::quantize`). `SiftParams::image_to_gray` is an
+`ImageToGray`, read by `SiftParams::from_feature_options` from the
+`image_to_gray` option, or from `gray_formula` for a version 1 record (the two
+together are refused), and `gray_from_rgb` applies it, rounding included, to
+make the detector's `f32` input.
 [`image_readings_from_rgb`](../../../crates/sfmtool-core/src/features/sift/image_readings.rs)
 takes the decoded 8-bit RGB pixels and an `ImageToGray`, and returns an
 `ImageReadings` holding the image's `sharpness` and
-`gradient_structure_tensor_xx_yy_xy`, as the draft defines them: the grey image
-in double precision, reduced by an exact area average to a long side of 480
-(`reading_image_size`), then the Laplacian variance and the means of the
+`gradient_structure_tensor_xx_yy_xy`, as the `.sift` format defines them: the
+grey image in double precision, reduced by an exact area average to a long side
+of 480 (`reading_image_size`), then the Laplacian variance and the means of the
 Sobel-divided-by-8 products over the interior pixels. A reading that is not
-finite is an `ImageReadingsError`. The detector does not use `ImageToGray`:
-`SiftParams::image_to_gray` is still a `GrayFormula` read from the
-`gray_formula` option, so extraction applies no rounding. A formula of more
-than 1000 tokens is refused by `parse_gray_formula`, so its recursive parse and
-evaluation stay within a thread's stack.
+finite is an `ImageReadingsError`. It runs on rayon's global pool, which is safe
+to call from the extractors' own threads and from inside `rayon::scope`, and
+takes a few milliseconds on a 2040 × 1536 image. A formula of more than 1000
+tokens is refused by `parse_gray_formula`, so its recursive parse and evaluation
+stay within a thread's stack. Each feature tool's own conversion, the
+conversion of a record of either version, and the version 1 to version 2
+conversion `sfm ws upgrade` makes are in
+[`sfmtool_core::workspace::feature_options`](../../../crates/sfmtool-core/src/workspace/feature_options.rs)
+([workspace.md § Versions](../../workspace/workspace.md#versions)).
 
 ### 1. Scale-space pyramid
 
@@ -706,7 +715,6 @@ pub struct BuildSiftFilesOptions {
     pub concurrent_images: Option<usize>,   // None: the default below
 }
 impl BuildSiftFilesOptions {
-    pub fn from_workspace(workspace_dir: &Path) -> Result<Self, BuildSiftFilesError>;
     pub fn sfmtool_defaults() -> Self; // what `sfm ws init --feature-tool sfmtool` writes
     pub fn sift_path_for_image(&self, image_path: &Path) -> PathBuf;
 }
@@ -722,20 +730,26 @@ impl SiftParams {
 ```
 
 ```rust
-let options = BuildSiftFilesOptions::from_workspace(&workspace_dir)?;
+let options = BuildSiftFilesOptions::sfmtool_defaults();
 let report = build_sift_files(&image_paths, &options, &progress)?;
 // report.sift_paths, report.extracted, report.skipped
 ```
 
-The options carry the workspace's own `feature_options` object rather than a
+The options carry a workspace's own `feature_options` object rather than a
 `SiftParams`, because the object is what each file records: a `.sift` file's
 `feature_tool_metadata.feature_options` is that object as the workspace wrote
-it, and a `SiftParams` does not convert back to it. `from_workspace` reads it,
-and `feature_prefix_dir`, from `.sfm-workspace.json` the way `sfm sift` does in
-workspace mode, and refuses a workspace whose `feature_tool` is not `sfmtool`
-with `BuildSiftFilesError::UnsupportedFeatureTool`: the COLMAP and OpenCV tools
-are external programs the Python package drives, and this crate does not run
-them.
+it, and a `SiftParams` does not convert back to it. The caller hands it the
+options and the folder; nothing in this crate reads `.sfm-workspace.json`,
+whose one reader is the Python `load_workspace_config`, with the version checks
+([workspace.md § Loading checks](../../workspace/workspace.md#loading-checks)).
+The viewer takes them from the node's `.sfmr` record.
+
+The files are `.sift` version 2. When at least one file is to be written,
+`build_sift_files` refuses options with no `image_to_gray`
+(`BuildSiftFilesError::Version1Settings`) and a folder that already holds a
+version 1 `.sift` file (`BuildSiftFilesError::Version1Files`), before writing
+anything, since the two versions never share a folder; when every file is up
+to date it refuses nothing.
 
 `sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
 tool and no other choice records: the default `feature_options` of
@@ -743,26 +757,32 @@ tool and no other choice records: the default `feature_options` of
 `features/sift-sfmtool-<hash>`, where the hash is the XXH128 that
 `get_feature_tool_xxh128` takes of the compact JSON of `feature_tool`
 (`SFMTOOL_FEATURE_TOOL`), `feature_type` (`SFMTOOL_FEATURE_TYPE`,
-`sift-sfmtool`) and `feature_options` with the keys sorted. A caller that
-switches a reconstruction's recorded feature tool to `sfmtool`, as the viewer's
-*Build SIFT Files* does, takes them, so its files land where such a workspace
-puts them; a test holds them to the `.sfm-workspace.json` that `sfm ws init`
-wrote for seoul_bull.
+`sift-sfmtool`) and `feature_options` with the keys sorted, computed by
+`sfmtool_core::workspace::feature_prefix_dir`. The options carry the
+`image_to_gray` object. A caller that switches a reconstruction's recorded
+feature tool to `sfmtool`, as the viewer's *Build SIFT Files* does, takes them,
+so its files land where such a workspace puts them; a Rust test and a Python
+test hold the folder name to the same string, which keeps the two default
+folder names equal, though nothing depends on their agreeing, since a folder
+name is read back from the record that holds it.
 
 What it writes matches the Python `sfmtool` backend byte for byte, which
 `tests/rust_bindings/sift/test_build_sift_files_rust_bindings.py` checks by
 comparing the content hashes of the files the two write for the same images:
 
 - The path is `<image dir>/<feature_prefix_dir>/<image name>.sift`, and every
-  output directory is made first.
+  output directory of an image to write is made before the first write.
 - An image whose `.sift` is at least as new as the image, by modification time,
   is skipped.
 - `feature_tool_metadata` is `feature_tool: "sfmtool"`, `feature_type: "sift"`
-  and the options object. `metadata` names the image by its file name and
-  records the XXH128 and size of the image file and the decoded width and
-  height.
+  and the options object. `metadata` is version 2: it names the image by its
+  file name, records the XXH128 and size of the image file and the decoded
+  width and height, and holds the image's `sharpness` and
+  `gradient_structure_tensor_xx_yy_xy` from `image_readings_from_rgb` of the
+  decode through the options' `image_to_gray`. A reading that is not finite
+  fails the image with `BuildSiftFilesError::Image`, naming the conversion.
 - The image is decoded by `ImageU8::read_rgb` (EXIF orientation ignored), made
-  gray by the options' gray formula, and extracted by `extract_sift`, whose
+  gray by the options' `image_to_gray`, and extracted by `extract_sift`, whose
   features are already sorted by descending size.
 - The thumbnail is `reconstruction::thumbnail::thumbnail_from_rgb`, which
   follows OpenCV's `INTER_AREA` arithmetic and so equals the
@@ -778,7 +798,8 @@ It runs images concurrently in the way the Python backend does (see
 [`sfm sift` § Extraction-orchestration
 pipelining](../../cli/image-feature/sift-command.md#extraction-orchestration-pipelining)):
 `K` scoped threads each take the next image, decode it, hash it and make its
-thumbnail, then run the gray conversion, the extraction and the write inside
+thumbnail, then run the readings, the gray conversion, the extraction and the
+write inside
 `rayon::scope`, which puts that work on the global rayon pool while the thread
 waits. The pool therefore keeps one thread per core, and the threads outside it
 run only the decode, the hash and the thumbnail, as the Python worker threads

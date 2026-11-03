@@ -169,11 +169,17 @@ fn sift_data_from_dict(py: Python<'_>, data: &Bound<'_, PyDict>) -> PyResult<Sif
 /// (recomputed on write). `feature_tool_metadata` holds exactly
 /// `feature_tool`, `feature_type` and `feature_options` (a dict), and
 /// `metadata` exactly `version`, `image_name`, `image_file_xxh128`,
-/// `image_file_size`, `image_width`, `image_height` and `feature_count`.
+/// `image_file_size`, `image_width`, `image_height` and `feature_count`, and
+/// in version 2 also `sharpness` (a float) and
+/// `gradient_structure_tensor_xx_yy_xy` (three floats). A version 2 file's
+/// `feature_options` carry the `image_to_gray` object; a version 1 file has
+/// neither the readings nor the object.
 ///
 /// Raises `ValueError`, before anything is written, for a metadata key the
 /// format does not define, a missing or mistyped metadata value, an
-/// unsupported `version`, or an array whose shape disagrees with
+/// unsupported `version`, readings or an `image_to_gray` that do not match the
+/// version, a reading that is not finite (or a negative sharpness, `Exx` or
+/// `Eyy`), or an array whose shape disagrees with
 /// `feature_count` (or, for the thumbnail, the `THUMBNAIL_SIZE` square);
 /// `TypeError` for an array of the wrong dtype; `KeyError` for a missing top-
 /// level key; and `OSError` when the write itself fails.
@@ -291,7 +297,9 @@ impl PySiftFile {
 
     /// `metadata.json` as a dict: `version`, `image_name`,
     /// `image_file_xxh128`, `image_file_size`, `image_width`, `image_height`
-    /// and `feature_count`.
+    /// and `feature_count`, and in a version 2 file `sharpness` and
+    /// `gradient_structure_tensor_xx_yy_xy`, which a version 1 file's dict
+    /// does not have.
     #[getter]
     fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         serde_to_py(py, &self.metadata)

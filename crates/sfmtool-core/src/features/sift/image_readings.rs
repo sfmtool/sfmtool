@@ -16,8 +16,8 @@
 //!   `Gx²`, `Gy²` and `Gx·Gy`, with `Gx` and `Gy` the 3 x 3 Sobel kernels
 //!   divided by 8, `x` to the right and `y` down.
 //!
-//! Both are defined in `specs/drafts/image-sharpness.md` § "`metadata.json`:
-//! `sharpness` and `gradient_structure_tensor_xx_yy_xy`", which also says what
+//! Both are defined in `specs/formats/sift-file-format.md` § "The reading
+//! image", "Sharpness" and "Gradient structure tensor", which also says what
 //! a reader derives from the tensor (coherence, dominant direction, axis
 //! ratio). [`image_readings_from_rgb`] is the one implementation of both.
 

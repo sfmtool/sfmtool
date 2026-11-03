@@ -5,14 +5,19 @@
 
 import sfmtool._sfmtool.workspace as workspace
 
-_EXPECTED_FUNCTIONS = ("is_named_image_list_name",)
+_EXPECTED_FUNCTIONS = (
+    "is_named_image_list_name",
+    "recorded_image_to_gray",
+    "tool_image_to_gray",
+    "upgrade_feature_options",
+)
 
 _EXPECTED_CLASSES = (
     "NamedImageLists",
     "NamedImageListMember",
 )
 
-_EXPECTED_CONSTANTS = ("NAMED_IMAGE_LISTS_FILE_NAME",)
+_EXPECTED_CONSTANTS = ("NAMED_IMAGE_LISTS_FILE_NAME", "WORKSPACE_VERSION")
 
 
 def test_all_workspace_bindings_registered():
@@ -26,6 +31,7 @@ def test_all_workspace_bindings_registered():
     for name in _EXPECTED_CLASSES:
         assert isinstance(getattr(workspace, name), type), f"{name} is not a class"
     assert workspace.NAMED_IMAGE_LISTS_FILE_NAME == ".sfm-named-image-lists.json"
+    assert workspace.WORKSPACE_VERSION == 2
 
 
 def test_workspace_submodule_public_name():

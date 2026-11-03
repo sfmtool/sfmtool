@@ -633,9 +633,10 @@ pub(super) struct IndexFilesRows {
     /// What the `.sift` build entry above the build is called: a build, or a
     /// switch of the feature tool and a build.
     pub(super) sift_build_label: &'static str,
-    /// The tool the node's workspace definition names, which the switch
-    /// entry's hover says it replaces. `None` when it is already `sfmtool`.
-    pub(super) sift_switch_from: Option<String>,
+    /// What the build does to the node's workspace definition first, which
+    /// the entry's hover describes: nothing, a switch from another tool, or a
+    /// conversion of a version 1 record.
+    pub(super) sift_record_change: crate::sift_files::RecordChange,
     /// Why the `.sift` build cannot start, or `None` when it can.
     pub(super) sift_build_refusal: Option<String>,
     /// Why closing would do nothing, or `None` when there is a file to close.
@@ -719,7 +720,7 @@ impl IndexFilesRows {
             build_label: state.index_files_build_label(id),
             build_refusal: state.build_index_files_refusal(id),
             sift_build_label: state.sift_files_build_label(id),
-            sift_switch_from: state.sift_extraction_switch_from(id),
+            sift_record_change: state.sift_record_change(id),
             sift_build_refusal: state.build_sift_files_refusal(id),
             close_refusal: (!open)
                 .then(|| "No index file is open beside this reconstruction.".to_string()),

@@ -3,9 +3,10 @@
 A `.sift` file holds the local image features extracted from one image — the
 keypoints, their descriptors, and enough metadata to say which image they came
 from and exactly which tool and settings produced them — plus a small thumbnail
-of the source image. One file per image, written once and never modified, so a
-pipeline can extract features once and every later stage can find them, check
-that the image behind them has not changed, and read only the columns it needs.
+of the source image and, from version 2, two readings of how sharp the image is.
+One file per image, written once and never modified, so a pipeline can extract
+features once and every later stage can find them, check that the image behind
+them has not changed, and read only the columns it needs.
 
 ## Format design principles
 
@@ -37,16 +38,32 @@ and bit/byte shuffling could be applied [like in blosc](https://www.blosc.org/po
 
 ## Format versions
 
-`metadata.version` records the format version. There is one version, `1`. A
-conforming writer writes `1`. A reader rejects a file whose version is `0`, which
-no version of the format has used, or is newer than the newest version it reads,
-because it cannot know that layout. Everything below describes version 1.
+`metadata.version` records the format version. There are two versions, `1` and
+`2`, and a conforming writer writes `2`. A reader reads both. It rejects a file
+whose version is `0`, which no version of the format has used, or is newer than
+the newest version it reads, because it cannot know that layout.
 
-A version 2 is proposed in
-[`../drafts/image-sharpness.md`](../drafts/image-sharpness.md): it makes a
-structured `feature_options.image_to_gray` object required for every feature
-tool and adds two readings of each image to `metadata.json`, its sharpness and
-its gradient structure tensor. A version 3 built on it is proposed in
+| Aspect | version 1 | version 2 |
+|--------|-----------|-----------|
+| `metadata.version` | `1` | `2` |
+| `feature_options.image_to_gray` | absent; the conversion is the tool's own, and files whose `feature_tool` is `"sfmtool"` record it as a `gray_formula` string | **required** for every feature tool: the formula and an optional `quantize_bits` ([below](#feature_optionsimage_to_gray)) |
+| `metadata.sharpness` | absent | **required**, a number ([Sharpness](#sharpness)) |
+| `metadata.gradient_structure_tensor_xx_yy_xy` | absent | **required**, an array of three numbers ([Gradient structure tensor](#gradient-structure-tensor)) |
+| Entries, entry names, content-hash order | as listed below | unchanged |
+
+A reader of a version 1 file finds no `image_to_gray`, sharpness or tensor in
+it. A version 1 file's conversion reads as `{"formula": <gray_formula>}` when
+it records a `gray_formula`, and otherwise as the one its feature tool makes
+([What each feature tool records](#what-each-feature-tool-records)). A
+version 1 file that carries `image_to_gray` or either reading, or a version 2
+file without them, is invalid.
+
+Files of the two versions never share a directory: a writer does not write a
+version 2 file into a directory that holds version 1 files, so a directory of
+`.sift` files is all of one version (see
+[workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix)).
+
+A version 3 built on version 2 is proposed in
 [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md):
 it would store descriptors as append-only range chunks so a keypoint pool can be
 detected once and described incrementally across several commands, add a
@@ -98,22 +115,109 @@ JSON. It contains the following fields (ignore additional fields for future back
   entry's bytes, these values determine it
   (see [Feature tool hash computation](#feature-tool-hash-computation)).
 
-  The image-to-gray conversion belongs in here, because SIFT operates on a single-channel
-  float image and several of its parameters — notably the contrast threshold — are defined
-  in that value domain, so the mapping changes both the features and the meaning of the
-  thresholds. The format does not prescribe how it is spelled; files whose `feature_tool` is
-  `"sfmtool"` record it as a `gray_formula` string (`"0.2126*R + 0.7152*G + 0.0722*B"`, BT.709 luma, matching
-  COLMAP's `Bitmap::CloneAsGrey`). A structured, reader-evaluable `image_to_gray` object with
-  its own formula grammar and an optional bit depth, required for every feature tool and
-  carried in the same form in the workspace's `feature_options`, is part of the proposed
-  version 2; see
-  [`../drafts/image-sharpness.md`](../drafts/image-sharpness.md).
+  In version 2, `feature_options` carries the image-to-gray conversion as the
+  `image_to_gray` object, described next. In version 1 the format does not
+  prescribe how the conversion is spelled; files whose `feature_tool` is
+  `"sfmtool"` record it as a `gray_formula` string in the formula grammar
+  below, with no rounding.
+
+#### `feature_options.image_to_gray`
+
+SIFT and the readings below operate on a single-channel image, and several of
+SIFT's parameters, most importantly the contrast threshold, are defined in that
+image's value domain. The mapping from the stored image to the grey samples
+therefore changes the features, the meaning of the thresholds and the readings,
+so a version 2 file records it, for every feature tool, as
+`feature_options.image_to_gray`. Being inside `feature_options`, it is part of
+`feature_tool_xxh128`.
+
+```json
+"image_to_gray": { "formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8 }
+```
+
+* `formula` (string, required): an arithmetic expression whose value is the
+  grey sample, before any rounding.
+* `quantize_bits` (integer from 1 to 16, optional): when present, the formula's
+  value is rounded to this many bits over `[0, 1]`. When absent, the formula's
+  value is the grey sample as it is.
+
+No other key is defined.
+
+**Inputs.** `R`, `G` and `B` are the image's red, green and blue samples, each
+normalised to `[0, 1]` by dividing the stored sample by its full-scale value,
+`2^d − 1` for `d`-bit samples (255 for 8-bit, 65535 for 16-bit), so a full-scale
+sample is exactly `1`. For a single-channel image, `R = G = B`. An alpha
+channel is ignored. The pixels are the image's stored pixels in their stored
+order: an EXIF orientation tag is **not** applied, so a keypoint position, a
+thumbnail pixel and the grey image all address the same pixel whatever tag the
+file carries.
+
+**Grammar.** The formula is an expression over the variables `R`, `G`, `B` and
+decimal numeric literals (digits with at most one decimal point, no exponent),
+with three operators and parentheses for grouping:
+
+| Operator | Meaning | Precedence | Associativity |
+|----------|---------|------------|---------------|
+| `**` | power | highest | right |
+| `*` | multiply | middle | left |
+| `+` | add | lowest | left |
+
+Whitespace is insignificant. A leading `-` on a numeric literal makes a
+negative coefficient; there is no subtraction or division operator. A formula
+has at most 1000 tokens, each variable, literal, operator and parenthesis
+counting as one, and a reader may refuse a longer one. The formula is evaluated
+in IEEE-754 double precision.
+
+**Output.** Without `quantize_bits`, the grey sample is the formula's value `v`,
+not clamped. With `quantize_bits = b`, it is
+
+```
+q(v) = round(clamp(v, 0, 1) · (2^b − 1)) / (2^b − 1)
+```
+
+where `clamp(v, 0, 1)` is `v` limited to `[0, 1]` and `round` takes the nearest
+integer, with an exact half rounded up. Since the argument is never negative,
+rounding half up and rounding half away from zero agree. The rounded sample is a
+multiple of `1 / (2^b − 1)` in `[0, 1]`; `quantize_bits: 8` expresses the 8-bit
+grey image a tool makes before it runs SIFT.
+
+Value-domain parameters such as the contrast threshold assume samples on a
+`[0, 1]` scale, so a formula keeps typical values in that range. A tool that
+works internally in another scale (0 to 255, say) and scales its thresholds to
+match still records the conversion on the `[0, 1]` scale.
+
+| `formula` | `quantize_bits` | Effect |
+|-----------|-----------------|--------|
+| `0.2126*R + 0.7152*G + 0.0722*B` | absent | BT.709 luma, unrounded |
+| `0.2126*R + 0.7152*G + 0.0722*B` | `8` | BT.709 luma rounded to 8 bits |
+| `0.299*R + 0.587*G + 0.114*B` | `8` | BT.601 luma rounded to 8 bits |
+| `G` | absent | the green channel |
+| `0.2126*R**2.2 + 0.7152*G**2.2 + 0.0722*B**2.2` | absent | weights applied after a gamma-style exponent |
+
+A geometric resize the tool applies before detection, such as a cap on the
+image size, is a separate concern with its own `feature_options` key and is not
+part of `image_to_gray`.
+
+#### What each feature tool records
+
+| `feature_tool` | `image_to_gray` |
+|----------------|-----------------|
+| `sfmtool` | the conversion the extraction was configured with, by default `{"formula": "0.2126*R + 0.7152*G + 0.0722*B"}`; any formula and any `quantize_bits` |
+| `colmap` | `{"formula": "0.2126*R + 0.7152*G + 0.0722*B", "quantize_bits": 8}` |
+| `opencv` | `{"formula": "0.299*R + 0.587*G + 0.114*B", "quantize_bits": 8}` |
+| `sfmtool-undistort` | its source's conversion, since its features are its source's, carried to the undistorted image |
+
+For `colmap` and `opencv` the object records the closest formula to the grey
+conversion the tool makes, not always an exact one: the tool's own 8-bit grey
+can differ from `q` of the formula by one grey level on a small fraction of
+pixels. The readings below are always computed from the recorded object, never
+taken from a tool's grey image, so they can be reproduced from the file.
 
 ### `metadata.json.zst`
 
 JSON. It should contain the following fields (ignore additional fields for future backwards-compatible extension):
 
-* `version`: (integer) The format version number — `1` (see
+* `version`: (integer) The format version number, `1` or `2` (see
   [Format versions](#format-versions)).
 * `image_name`: (string) The image filename without the directory.
 * `image_file_xxh128`: (string) The XXH128 sum of the bytes of the image file.
@@ -121,9 +225,132 @@ JSON. It should contain the following fields (ignore additional fields for futur
 * `image_width`: (integer) The width of the image, in pixels.
 * `image_height`: (integer) The height of the image, in pixels.
 * `feature_count`: (integer) The number of features (keypoints).
+* `sharpness`: (number, version 2, required) The variance of the Laplacian of
+  the reading image, defined in [The reading image](#the-reading-image) and
+  [Sharpness](#sharpness). Finite and not negative.
+* `gradient_structure_tensor_xx_yy_xy`: (array of three numbers, version 2,
+  required) `[Exx, Eyy, Exy]`, the means of `Gx²`, `Gy²` and `Gx·Gy` over the
+  reading image, defined in [Gradient structure tensor](#gradient-structure-tensor).
+  Finite; `Exx` and `Eyy` are not negative.
 
 `metadata.json`, like every other entry, is written once and never changes: a `.sift` file
-is immutable once written.
+is immutable once written. The two readings are therefore fixed when the file is
+written, like the image's hash and size beside them, and reach `metadata_xxh128`
+and `content_xxh128` through `metadata.json`'s bytes.
+
+Both readings are of the image the file was extracted from, made from the same
+decoded pixels as the thumbnail and through the conversion `image_to_gray`
+records. Both are JSON numbers holding double-precision values, written so they
+read back as the same doubles. They are for comparing the images of one capture
+with each other: they depend on what the scene holds (a frame that is mostly
+plain wall has a low sharpness however well it is focused), so they are not
+comparable between captures of different scenes, and the format gives no
+threshold for either. Images compared with each other must share one
+`image_to_gray`, since the readings are in its grey units.
+
+"Finite" is a rule on the writer as well as on the file. An unclamped formula
+can produce a NaN or an infinity (`R**-1` at `R = 0` without `quantize_bits`,
+for example), and a non-finite grey sample makes the readings non-finite. A
+writer whose readings come out non-finite fails, with an error naming the image
+and the formula, and writes no file; it does not store the value or replace it.
+
+#### The reading image
+
+Both readings are taken on one grey image, the **reading image**, built from the
+decoded image of width `W` and height `H` in stored pixel order:
+
+1. **Grey.** Each pixel's grey sample is `image_to_gray` applied to it: the
+   formula, then `q` when `quantize_bits` is present. The samples are held in
+   double precision from here on.
+2. **Size.** Let `L = max(W, H)` and `S = min(W, H)`. If `L ≤ 480`, the grey
+   image is used at its own size; it is never enlarged. Otherwise the long side
+   becomes `480` and the short side becomes
+   `S' = max(1, floor((2 · S · 480 + L) / (2 · L)))`, which is `S · 480 / L`
+   rounded to the nearest integer with an exact half rounded up, computed in
+   integers. Which side is long is kept: a portrait image stays portrait.
+3. **Resize.** Each pixel of the `W' × H'` reading image is the area average of
+   the grey image over its footprint: treating the grey image as constant over
+   each unit pixel square, output pixel `(i, j)` covers
+   `[i · W / W', (i + 1) · W / W') × [j · H / H', (j + 1) · H / H')` of it, and
+   its value is the integral of the grey image over that rectangle divided by
+   the rectangle's area, in double precision.
+
+Write `I(x, y)` for the reading image's sample at column `x` (left to right) and
+row `y` (top to bottom). The **interior** is the pixels with
+`1 ≤ x ≤ W' − 2` and `1 ≤ y ≤ H' − 2`, so that every 3 × 3 neighbourhood below
+lies inside the image; there are `n = (W' − 2)(H' − 2)` of them. Both readings
+are means over the interior. No border pixel is padded, reflected or counted.
+If `W' < 3` or `H' < 3`, the interior is empty, and the sharpness and all three
+tensor values are `0`.
+
+#### Sharpness
+
+The Laplacian at an interior pixel is the 3 × 3 kernel
+`[[0, 1, 0], [1, −4, 1], [0, 1, 0]]`:
+
+```
+Λ(x, y) = I(x − 1, y) + I(x + 1, y) + I(x, y − 1) + I(x, y + 1) − 4 · I(x, y)
+```
+
+and the sharpness is its population variance over the interior, in double
+precision:
+
+```
+μ = (1/n) Σ Λ(x, y)
+sharpness = (1/n) Σ (Λ(x, y) − μ)²
+```
+
+The units are grey units squared, the grey unit being the `[0, 1]` scale of
+`image_to_gray`.
+
+#### Gradient structure tensor
+
+The derivatives at an interior pixel are the 3 × 3 Sobel kernels divided by 8,
+so that on a linear ramp of slope `s` grey units per pixel the derivative is
+`s`:
+
+```
+Gx(x, y) = ( I(x+1, y−1) + 2·I(x+1, y) + I(x+1, y+1)
+           − I(x−1, y−1) − 2·I(x−1, y) − I(x−1, y+1) ) / 8
+
+Gy(x, y) = ( I(x−1, y+1) + 2·I(x, y+1) + I(x+1, y+1)
+           − I(x−1, y−1) − 2·I(x, y−1) − I(x+1, y−1) ) / 8
+```
+
+`Gx` increases to the right and `Gy` increases downward, the directions of
+column and row. The three stored values are means over the interior, in double
+precision:
+
+```
+Exx = (1/n) Σ Gx²      Eyy = (1/n) Σ Gy²      Exy = (1/n) Σ Gx·Gy
+```
+
+in grey units squared per pixel squared of the reading image. They are stored
+as they are, not divided by the gradient energy `Exx + Eyy`.
+
+A reader derives from them:
+
+- **Gradient energy** `E = Exx + Eyy`, the image's mean squared gradient.
+- **Normalised tensor** `(Exx, Eyy, Exy) / E`, which does not change when the
+  image's contrast does.
+- **Coherence** `c = sqrt((Exx − Eyy)² + 4·Exy²) / E`, from `0` (gradients
+  equally strong in every direction) to `1` (all gradients along one
+  direction). Because `Exy² ≤ Exx · Eyy`, `c` does not exceed `1` apart from
+  rounding. When `E = 0` the image is flat and `c` is taken as `0`.
+- **Dominant gradient direction** `θ = ½ · atan2(2·Exy, Exx − Eyy)`, an angle
+  in `(−π/2, π/2]` from the `+x` axis toward `+y` (on screen, clockwise from
+  pointing right), meaningful modulo `π` and only when `c` is well above `0`.
+  Motion blur weakens the gradients along the direction of motion, so a frame
+  blurred by motion reads a `θ` across the motion; the motion's direction is
+  near `θ + π/2`.
+- **Axis ratio** `|log(Exx / Eyy)|`, how far the gradient energy along `x`
+  differs from that along `y`, taken as unbounded when one of the two is `0`.
+
+Each is read against the other images of the capture: a frame whose axis ratio
+or coherence is well away from the capture's median, or whose normalised tensor
+lies far from the capture's median normalised tensor, is a candidate for motion
+blur. The directions are in stored pixel order, so for an image displayed with
+its orientation tag applied they turn with the display.
 
 ### `content_hash.json.zst`
 
@@ -229,12 +456,14 @@ formatting, whitespace) produce different values.
 
 The hash in the workspace's `feature_prefix_dir` directory name is a separate value. It is
 computed from `feature_tool`, the configured `feature_type` (for example `sift-colmap`) and
-`feature_options` minus options that do not affect the output. A workspace computes it once at
-initialization and stores it in `feature_prefix_dir`; for an image outside a workspace it is
+`feature_options` minus options that do not affect the output. A workspace computes it once, when
+the folder is created, and stores it in `feature_prefix_dir`, which is read back as it is
+from then on; for an image outside a workspace it is
 computed from the extraction options at extraction time. It is never computed from a `.sift`
 file; see
 [Feature Prefix Directory](../workspace/workspace.md#feature-prefix-directory). The two hashes
-do not in general agree, and a reader must not compare one with the other.
+do not in general agree, and a reader must not compare one with the other, although in
+version 2 both are taken over inputs that hold the same `image_to_gray` object.
 
 ## Implementations
 
@@ -247,18 +476,28 @@ The code that reads, writes and verifies `.sift` files is:
   feature columns only) and `read_sift_thumbnail`. Every reader rejects an
   unsupported `metadata.version`; `write_sift` refuses to write one; and
   `verify_sift`, which returns `(is_valid, error_messages)`, reports it as an
-  error. None of them checks the feature order. The readers ignore a metadata
-  key the format does not define, as the entries above ask. A writer is
-  stricter: `validate_sift_data`, which `write_sift` calls first, refuses an
-  unsupported version, `feature_options` that is not an object and an array
-  whose shape disagrees with `feature_count` or the thumbnail edge, and
+  error. Every reader also rejects a version 2 file without the two readings
+  and a version 1 file with either. None of them checks the feature order. The
+  readers ignore a metadata key the format does not define, as the entries
+  above ask. `SiftMetadata` holds the readings as `Option`s, `None` in a
+  version 1 file, whose `metadata.json` is written without the keys. A writer is
+  stricter: `validate_sift_data`, which `write_sift` calls first and
+  `verify_sift` applies too, refuses an unsupported version, `feature_options`
+  that is not an object, a version 2 file whose `feature_options` carry no
+  `image_to_gray` of the right shape (a string `formula`, an optional
+  `quantize_bits` from 1 to 16, no other key) or a reading that is not finite
+  or is negative where it must not be, a version 1 file with `image_to_gray`,
+  and an array whose shape disagrees with `feature_count` or the thumbnail
+  edge, and
   `SiftMetadata::from_json_for_write` and
   `FeatureToolMetadata::from_json_for_write` parse metadata given as JSON,
   refusing an unknown, missing or mistyped key. The zstd level a `.sift` is
   written at unless a caller asks otherwise is `SIFT_ZSTD_LEVEL`, 5.
 - Python: in `sfmtool.fileio` ([bindings](../../crates/sfmtool-py/src/fileio/sift.rs)),
   `read_sift`, `read_sift_metadata`, `read_sift_partial`, `write_sift` and
-  `verify_sift`, which take and return a dict of NumPy arrays and metadata;
+  `verify_sift`, which take and return a dict of NumPy arrays and metadata,
+  the readings present in a version 2 file's `metadata` dict and absent from a
+  version 1 file's;
   `SiftFile`, an open file that reads the metadata when it is opened and the
   columns and thumbnail on request, the whole file or its first `count`
   features, and is what most of the Python package reads through; and
@@ -282,7 +521,13 @@ The code that reads, writes and verifies `.sift` files is:
 
 `SIFT_FORMAT_VERSION` in
 [`types.rs`](../../crates/sfmtool-sift-format/src/types.rs) is the newest
-version the crate reads and writes. The descriptor width and the thumbnail edge
+version the crate reads and writes, `2`. The format crate checks the shape of
+`image_to_gray` and not its grammar; the formula is parsed, with the token
+limit, by `ImageToGray` in
+[`sfmtool-core`](../../crates/sfmtool-core/src/features/sift/gray.rs), and the
+readings are computed by one function, `image_readings_from_rgb` in
+[`image_readings.rs`](../../crates/sfmtool-core/src/features/sift/image_readings.rs),
+bound for Python as `sfmtool.sift.image_readings_from_rgb`. The descriptor width and the thumbnail edge
 each have a single declaration there, `DESCRIPTOR_DIM` and `THUMBNAIL_SIZE`,
 from which the entry names, the read path, the write path and the shape checks
 are derived. A compile-time assertion in `sfmtool-core` keeps `THUMBNAIL_SIZE`
@@ -291,11 +536,30 @@ Python as `sfmtool.THUMBNAIL_SIZE` for the extractors that produce the pixels.
 
 The three extraction backends of [`sfm sift`](../cli/image-feature/sift-command.md)
 (`colmap`, `opencv` and `sfmtool`) sort their features by descending size and
-resize the thumbnail with OpenCV's `INTER_AREA`. The Rust writer for the
-`sfmtool` tool, `build_sift_files` in
+resize the thumbnail with OpenCV's `INTER_AREA`. All three decode with
+`sfmtool.fileio.read_image_rgb`, which ignores the EXIF orientation, make their
+thumbnail from that decode, and compute the readings from the same decode; the
+`colmap` backend's detector reads the image through COLMAP's own decoder. The
+Rust writer for the `sfmtool` tool, `build_sift_files` in
 [`sfmtool-core`](../../crates/sfmtool-core/src/features/sift/files.rs), writes
 the same files as that backend, its thumbnail resize following `INTER_AREA`'s
 arithmetic (see [SIFT § Building `.sift` files](../core/features/sift.md#building-sift-files)).
+`sfm undistort` computes its files' readings by decoding the undistorted images
+it wrote.
+
+How each tool's recorded conversion relates to the grey image it makes:
+
+| `feature_tool` | Its grey conversion |
+|----------------|---------------------|
+| `sfmtool` | exact: `gray_from_rgb` in `sfmtool-core` divides each 8-bit channel by 255, evaluates the formula in double precision, applies `q` when `quantize_bits` is present, and stores the result as `f32` for the detector |
+| `colmap` | measured with pycolmap 4.2.1: `Bitmap.read(path, as_rgb=False)` gives an 8-bit grey bitmap equal to `clone_as_grey()` of the RGB read, the BT.709 weights applied in single precision to the 0 to 255 samples and rounded to nearest with half up; `q` of the double-precision formula differs from it by one grey level on 18 of 262,144 random pixels. A JPEG carrying EXIF orientation 6 read back at its stored size, so the tag is not applied |
+| `opencv` | `cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)` on the 8-bit decode, measured with OpenCV 5.0.0 as `(9798·R + 19235·G + 3735·B + 16384) >> 15` on the 0 to 255 samples; `q` of the exact BT.601 formula differs from it by one grey level on 346 of 262,144 random pixels (0.13%) |
+
+**16-bit images do not yet follow the definition.** Every backend's decoder
+reduces a 16-bit image to 8 bits per channel, `round(c · 255 / 65535)`, before
+anything else, so for such an image the detector, the thumbnail and the readings
+all see 8-bit samples rather than the 16-bit samples divided by 65535 that
+**Inputs** defines. For 8-bit images the code follows the definition.
 
 ## Using CLI commands to pull apart a .sift file
 
@@ -330,19 +594,25 @@ $ jq . feature_tool_metadata.json
     "peak_threshold": 0.006666666666666667,
     "edge_threshold": 10.0,
     "upright": false,
-    "normalization": "L1_ROOT"
+    "normalization": "L1_ROOT",
+    "image_to_gray": {
+      "formula": "0.2126*R + 0.7152*G + 0.0722*B",
+      "quantize_bits": 8
+    }
   }
 }
 
 $ jq . metadata.json
 {
-  "version": 1,
+  "version": 2,
   "image_name": "myimage.jpg",
   "image_file_xxh128": "3748f9341bfdcc712beb2c5392664982",
   "image_file_size": 21584,
   "image_width": 270,
   "image_height": 480,
-  "feature_count": 2464
+  "feature_count": 2464,
+  "sharpness": 0.0041206,
+  "gradient_structure_tensor_xx_yy_xy": [0.00093114, 0.00071402, -0.00008351]
 }
 
 $ jq . content_hash.json
@@ -362,10 +632,14 @@ $ od -Ax --endian=little -tf4 -w8 features/positions_xy.*.2.float32 | head -5
 
 ## Version History
 
-- **Version 1**: the current and only format version, written as the integer `1` in
-  `metadata.version`. A proposed version 2, with the required `image_to_gray` object and
-  each image's sharpness and gradient structure tensor, is drafted in
-  [`../drafts/image-sharpness.md`](../drafts/image-sharpness.md), and a proposed
-  version 3, with incremental chunked descriptors and the identity hashes that go with
-  them, in
-  [`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).
+- **Version 2**: the current version, written as the integer `2` in
+  `metadata.version`. It makes the `image_to_gray` object required in
+  `feature_options` for every feature tool and adds the image's `sharpness` and
+  `gradient_structure_tensor_xx_yy_xy` to `metadata.json`. The entries, their
+  names and the content-hash order are unchanged.
+- **Version 1**: the first version. It has no `image_to_gray` object and no
+  readings. Version 1 files stay valid and readable.
+
+A proposed version 3, with incremental chunked descriptors and the identity
+hashes that go with them, is drafted in
+[`../drafts/sift-incremental-extraction-amendment.md`](../drafts/sift-incremental-extraction-amendment.md).

@@ -45,7 +45,7 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
             feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
                 feature_tool: "test".into(),
                 feature_type: "sift".into(),
-                feature_options: serde_json::json!({}),
+                feature_options: serde_json::json!({"image_to_gray": {"formula": "G"}}),
             },
             metadata: sfmtool_sift_format::SiftMetadata {
                 version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
@@ -55,6 +55,8 @@ fn fixture(dir: &TempDir) -> SfmrReconstruction {
                 image_width: camera.width,
                 image_height: camera.height,
                 feature_count: count as u32,
+                sharpness: Some(0.0),
+                gradient_structure_tensor_xx_yy_xy: Some([0.0; 3]),
             },
             content_hash: sfmtool_sift_format::SiftContentHash::default(),
             positions_xy: positions,

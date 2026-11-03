@@ -139,6 +139,7 @@ def sift(
     # Determine feature tool and options based on CLI vs workspace
     tool_from_cli = tool is not None
     feature_prefix_dir = None
+    settings_source = None
 
     if tool_from_cli:
         if domain_size_pooling is not None and tool.lower() != "colmap":
@@ -182,6 +183,7 @@ def sift(
         tool = config["feature_tool"]
         feature_options = config["feature_options"]
         feature_prefix_dir = config["feature_prefix_dir"]
+        settings_source = f"The workspace file {workspace_dir / '.sfm-workspace.json'}"
 
         click.echo(f"Using workspace: {workspace_dir}")
         click.echo(f"  Feature tool: {tool}")
@@ -197,6 +199,7 @@ def sift(
                 feature_tool=tool,
                 feature_options=feature_options,
                 feature_prefix_dir=feature_prefix_dir,
+                settings_source=settings_source,
             )
         except SiftExtractionError as e:
             raise click.ClickException(str(e))

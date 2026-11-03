@@ -13,6 +13,110 @@ class SiftExtractionError(Exception):
     """Exception raised when SIFT feature extraction fails."""
 
 
+# The feature tools whose grey conversion is the tool's own, not a setting.
+_FIXED_CONVERSION_TOOLS = ("colmap", "opencv")
+
+
+def _image_readings_fields(image_path, rgb, feature_options: dict) -> dict:
+    """The two version 2 ``metadata`` readings of a decoded image.
+
+    ``rgb`` is the ``(H, W, 3)`` uint8 decode the thumbnail is made from, and
+    the conversion is ``feature_options["image_to_gray"]``. Returns the
+    ``sharpness`` and ``gradient_structure_tensor_xx_yy_xy`` keys of a
+    ``.sift`` file's metadata.
+
+    Raises:
+        SiftExtractionError: when the options carry no ``image_to_gray``, or
+            the readings are not finite under it; the message names the image
+            and the conversion.
+    """
+    from sfmtool.sift import ImageToGray, image_readings_from_rgb
+
+    try:
+        image_to_gray = ImageToGray.from_json(feature_options["image_to_gray"])
+    except KeyError:
+        raise SiftExtractionError(
+            "The feature options carry no 'image_to_gray', so they are version 1 "
+            "settings and no .sift file is written from them; run 'sfm ws upgrade'."
+        ) from None
+    except ValueError as e:
+        raise SiftExtractionError(str(e)) from e
+    try:
+        readings = image_readings_from_rgb(rgb, image_to_gray)
+    except ValueError as e:
+        raise SiftExtractionError(f"Image {image_path}: {e}") from e
+    return {
+        "sharpness": readings.sharpness,
+        "gradient_structure_tensor_xx_yy_xy": list(
+            readings.gradient_structure_tensor_xx_yy_xy
+        ),
+    }
+
+
+def _check_versions_never_mix(
+    feature_tool: str,
+    feature_options: dict,
+    sift_dirs,
+    settings_source: str | None,
+    settings_from_sfmr: bool = False,
+) -> None:
+    """Refuse to write version 2 ``.sift`` files where versions would mix.
+
+    Called only when at least one file is to be written. Refuses an
+    ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes;
+    options with no top-level ``image_to_gray`` (version 1 settings); a
+    ``colmap`` or ``opencv`` conversion other than the one the tool makes; and
+    a folder in ``sift_dirs`` that already holds a version 1 ``.sift`` file.
+    ``sfm ws upgrade`` is suggested only when the settings are a workspace
+    file's, not a ``.sfmr`` record's (``settings_from_sfmr``).
+    """
+    from sfmtool.fileio import SiftFile
+    from sfmtool.workspace import tool_image_to_gray
+
+    if feature_tool == "sfmtool-undistort":
+        raise SiftExtractionError(
+            "The feature tool is 'sfmtool-undistort': the .sift files of an "
+            "undistorted workspace are made by 'sfm undistort' from its source's, "
+            "and cannot be extracted. Run 'sfm undistort' again to write them."
+        )
+    upgrade = (
+        "The record is the .sfmr's own, so 'sfm ws upgrade' does not change it."
+        if settings_from_sfmr
+        else "Run 'sfm ws upgrade', which moves the workspace to version 2 and a "
+        "new folder."
+    )
+    if "image_to_gray" not in feature_options:
+        where = settings_source or "The feature options"
+        raise SiftExtractionError(
+            f"{where} holds version 1 settings (its feature options carry no "
+            "'image_to_gray'), and no .sift file is written from version 1 "
+            f"settings. {upgrade}"
+        )
+    if feature_tool in _FIXED_CONVERSION_TOOLS:
+        row = tool_image_to_gray(feature_tool).to_dict()
+        if feature_options["image_to_gray"] != row:
+            raise SiftExtractionError(
+                f"The '{feature_tool}' feature tool converts images to grey one way, "
+                f"image_to_gray {row}, and the feature options record "
+                f"{feature_options['image_to_gray']}."
+            )
+    for sift_dir in sorted(set(sift_dirs)):
+        if not sift_dir.is_dir():
+            continue
+        for path in sorted(sift_dir.glob("*.sift")):
+            try:
+                with SiftFile(path) as reader:
+                    version = reader.metadata["version"]
+            except OSError:
+                # A file that cannot be read says nothing about the folder.
+                continue
+            if version < 2:
+                raise SiftExtractionError(
+                    f"The folder {sift_dir} holds version 1 .sift files, and version 2 "
+                    f"files are never written beside them. {upgrade}"
+                )
+
+
 # The `write_sift` dict keys of the six values each extraction backend returns
 # for an image, in the order it returns them.
 _SIFT_DATA_KEYS = (
@@ -37,12 +141,23 @@ def image_files_to_sift_files(
     feature_tool: str | None = "colmap",
     feature_options: dict | None = None,
     feature_prefix_dir: str | None = None,
+    settings_source: str | None = None,
+    settings_from_sfmr: bool = False,
 ) -> list[Path]:
     """Extract and write SIFT features for a list of images.
 
     Processes images into .sift files using the specified tool (COLMAP or OpenCV),
     skipping images that already have up-to-date .sift files based on modification
     timestamps. Processing is done in chunks of 500 images for progress reporting.
+    The files are ``.sift`` version 2.
+
+    When at least one file is to be written, it refuses the
+    ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes,
+    version 1 settings
+    (``feature_options`` with no ``image_to_gray``, as a version 1 workspace
+    file's are), a ``colmap`` or ``opencv`` ``image_to_gray`` other than the
+    tool's, and a target folder that already holds a version 1 ``.sift`` file.
+    When every file is up to date it writes nothing and refuses nothing.
 
     Args:
         image_filename_list: List of absolute paths to image files
@@ -54,6 +169,12 @@ def image_files_to_sift_files(
         feature_prefix_dir: Optional relative path from each image's parent to the
                            features directory. When provided, takes precedence over
                            computing from tool+hash.
+        settings_source: What the settings were read from, such as the
+                         workspace file's path, for the refusal of version 1
+                         settings to name.
+        settings_from_sfmr: Whether the settings are a ``.sfmr``'s record
+                         rather than a workspace file's, in which case a
+                         refusal does not suggest ``sfm ws upgrade``.
 
     Returns:
         List of paths to the created/verified .sift files (in same order as input)
@@ -102,15 +223,11 @@ def image_files_to_sift_files(
         sift_filename_list = [
             feature_path / (p.name + ".sift") for p in image_filename_list
         ]
-        feature_path.mkdir(parents=True, exist_ok=True)
     elif feature_prefix_dir:
         sift_filename_list = [
             p.parent / feature_prefix_dir / (p.name + ".sift")
             for p in image_filename_list
         ]
-        sift_dirs = {p.parent for p in sift_filename_list}
-        for d in sift_dirs:
-            d.mkdir(parents=True, exist_ok=True)
     else:
         feature_tool_xxh128 = get_feature_tool_xxh128(
             feature_tool, feature_type, feature_options
@@ -123,9 +240,6 @@ def image_files_to_sift_files(
             / (p.name + ".sift")
             for p in image_filename_list
         ]
-        sift_dirs = {p.parent for p in sift_filename_list}
-        for d in sift_dirs:
-            d.mkdir(parents=True, exist_ok=True)
 
     # Check modification times to skip up-to-date files
     mtime_pairs = [
@@ -152,6 +266,16 @@ def image_files_to_sift_files(
     ]
 
     if image_filename_filtered_list:
+        sift_dirs = {p.parent for p in sift_filename_filtered_list}
+        _check_versions_never_mix(
+            feature_tool,
+            feature_options,
+            sift_dirs,
+            settings_source,
+            settings_from_sfmr,
+        )
+        for d in sift_dirs:
+            d.mkdir(parents=True, exist_ok=True)
         chunk_size = 500
         # Compress + write each .sift on the shared rayon pool via
         # SiftWriteQueue, which bounds the saves in flight and joins them at the

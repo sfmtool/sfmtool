@@ -56,7 +56,10 @@ def _invoke(args: list[str]):
 @pytest.fixture
 def list_workspace(tmp_path: Path, monkeypatch) -> Path:
     """Six seoul_bull images under `images/`, two non-image files beside them,
-    a lists file, and the current directory set to a subdirectory of it."""
+    a lists file, and the current directory set to a subdirectory of it.
+
+    The workspace file is seoul_bull's version 1 file, upgraded to version 2
+    in the copy so that extraction writes into it."""
     workspace = tmp_path / "ws"
     images = workspace / "images"
     images.mkdir(parents=True)
@@ -68,6 +71,8 @@ def list_workspace(tmp_path: Path, monkeypatch) -> Path:
     shutil.copy(
         SEOUL_BULL_DIR / ".sfm-workspace.json", workspace / ".sfm-workspace.json"
     )
+    upgraded = CliRunner().invoke(main, ["ws", "upgrade", str(workspace)])
+    assert upgraded.exit_code == 0, upgraded.output
     _write_lists(workspace, _LISTS)
     subdir = workspace / "elsewhere"
     subdir.mkdir()

@@ -95,6 +95,7 @@ def _from_sfmr(input_path, output_db_path, max_features, no_guided_matching):
             output_db_path=output_db_path,
             max_feature_count=max_features,
             populate_two_view_geometries=not no_guided_matching,
+            sfmr_path=input_path,
         )
     except Exception as e:
         raise click.ClickException(str(e))

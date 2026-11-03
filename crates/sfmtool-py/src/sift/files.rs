@@ -22,7 +22,10 @@ use super::extract::{feature_options_error, feature_options_from_dict};
 /// The Rust counterpart of `sfm sift --extract` for a workspace whose feature
 /// tool is `sfmtool`: each file goes to
 /// `<image dir>/<feature_prefix_dir>/<image name>.sift` and holds what the
-/// Python `sfmtool` backend writes for the same image and options. Several
+/// Python `sfmtool` backend writes for the same image and options, a `.sift`
+/// version 2 file with the image's readings. When there is something to
+/// write, version 1 settings (options with no `image_to_gray`) and a folder
+/// that holds version 1 `.sift` files are refused. Several
 /// images are extracted at once; `concurrent_images` sets how many, and
 /// `None` takes `SFMTOOL_SIFT_EXTRACT_WORKERS` or a default from the core
 /// count and memory. The GIL is released throughout.
@@ -42,9 +45,12 @@ use super::extract::{feature_options_error, feature_options_from_dict};
 ///     up to date.
 ///
 /// Raises:
-///     ValueError: if `feature_options` is invalid.
-///     OSError: if an image cannot be read or a file cannot be written; the
-///         first failing image in input order is named.
+///     ValueError: if `feature_options` is invalid or holds version 1
+///         settings.
+///     OSError: if a folder the files would go in holds version 1 `.sift`
+///         files, or an image cannot be read, its readings are not finite, or
+///         a file cannot be written; the first failing image in input order is
+///         named.
 #[pyfunction]
 #[pyo3(signature = (image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None))]
 pub fn build_sift_files(
@@ -63,6 +69,9 @@ pub fn build_sift_files(
         .detach(|| core_build_sift_files(&image_paths, &options, &Progress::none()))
         .map_err(|e| match e {
             BuildSiftFilesError::FeatureOptions(e) => feature_options_error(e),
+            e @ BuildSiftFilesError::Version1Settings => {
+                pyo3::exceptions::PyValueError::new_err(e.to_string())
+            }
             other => pyo3::exceptions::PyOSError::new_err(other.to_string()),
         })?;
     Ok((report.sift_paths, report.extracted, report.skipped))

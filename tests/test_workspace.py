@@ -105,3 +105,147 @@ class TestLoadWorkspaceConfig:
         _write_workspace_config(tmp_path, {"version": 1, "feature_options": {}})
         with pytest.raises(RuntimeError, match="missing required fields"):
             load_workspace_config(tmp_path)
+
+
+def _v2(feature_options: dict, **fields) -> dict:
+    """A version 2 workspace config with ``feature_options``."""
+    config = {
+        "version": 2,
+        "feature_tool": "sfmtool",
+        "feature_type": "sift-sfmtool",
+        "feature_options": feature_options,
+        "feature_prefix_dir": "features/sift-sfmtool-abc",
+    }
+    config.update(fields)
+    return config
+
+
+class TestLoadWorkspaceVersions:
+    """load_workspace_config checks the version at load."""
+
+    def test_version_2_with_image_to_gray_loads(self, tmp_path: Path):
+        config = _v2({"image_to_gray": {"formula": "G", "quantize_bits": 8}})
+        _write_workspace_config(tmp_path, config)
+        # The recorded folder name comes back as it is.
+        assert load_workspace_config(tmp_path) == config
+
+    def test_version_1_with_gray_formula_loads(self, tmp_path: Path):
+        config = _v2({"gray_formula": "G"}, version=1)
+        _write_workspace_config(tmp_path, config)
+        assert load_workspace_config(tmp_path) == config
+
+    @pytest.mark.parametrize(
+        "config, message",
+        [
+            (
+                {k: v for k, v in _v2({}).items() if k != "version"},
+                "has no 'version'",
+            ),
+            (_v2({"image_to_gray": {"formula": "G"}}, version=3), "version 3"),
+            (_v2({"image_to_gray": {"formula": "G"}}, version=0), "version 0"),
+            (_v2({"image_to_gray": {"formula": "G"}}, version="2"), "version '2'"),
+            (_v2({"image_to_gray": {"formula": "G"}}, version=True), "version True"),
+            (
+                _v2({"gray_formula": "G", "image_to_gray": {"formula": "G"}}),
+                "carry 'gray_formula', which belongs to version 1",
+            ),
+            (_v2({"gray_formula": "G"}), "carry 'gray_formula'"),
+            (_v2({}), "carry no 'image_to_gray'"),
+            (
+                _v2({"image_to_gray": {"formula": "R +"}}),
+                "'image_to_gray' is not valid",
+            ),
+            (
+                _v2({"image_to_gray": {"formula": "G", "quantize_bits": 17}}),
+                "'image_to_gray' is not valid",
+            ),
+            (_v2({"image_to_gray": "G"}), "'image_to_gray' is not valid"),
+            (
+                _v2({"image_to_gray": {"formula": "G"}}, version=1),
+                "carry 'image_to_gray', which belongs to version 2",
+            ),
+            (_v2([]), "'feature_options' is not a JSON object"),
+        ],
+    )
+    def test_invalid_files_are_refused_naming_the_file(
+        self, tmp_path: Path, config: dict, message: str
+    ):
+        path = _write_workspace_config(tmp_path, config)
+        with pytest.raises(RuntimeError, match=message) as info:
+            load_workspace_config(tmp_path)
+        assert str(path) in str(info.value)
+
+    def test_nested_source_options_may_hold_a_gray_formula(self, tmp_path: Path):
+        """The version 2 rules apply to the top level only: an undistort
+        workspace's source options are a copy of a version 1 record."""
+        config = _v2(
+            {
+                "source_feature_tool": "sfmtool",
+                "source_feature_options": {"gray_formula": "G"},
+                "image_to_gray": {"formula": "G"},
+            },
+            feature_tool="sfmtool-undistort",
+        )
+        _write_workspace_config(tmp_path, config)
+        assert load_workspace_config(tmp_path) == config
+
+
+# The `feature_prefix_dir` `sfm ws init` writes for the sfmtool defaults. The
+# Rust `BuildSiftFilesOptions::sfmtool_defaults()` test
+# (crates/sfmtool-core/src/features/sift/files/tests.rs) holds the Rust side to
+# the same string, so the two default folder names stay equal.
+WS_INIT_SFMTOOL_PREFIX = "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d"
+
+
+class TestInitWorkspace:
+    def test_writes_version_2_with_the_tool_conversion(self, tmp_path: Path):
+        from sfmtool import init_workspace
+
+        config = init_workspace(tmp_path / "s")
+        assert config["version"] == 2
+        assert config["feature_prefix_dir"] == WS_INIT_SFMTOOL_PREFIX
+        assert config["feature_options"]["image_to_gray"] == {
+            "formula": "0.2126*R + 0.7152*G + 0.0722*B"
+        }
+        assert "gray_formula" not in config["feature_options"]
+        assert load_workspace_config(tmp_path / "s") == config
+
+        colmap = init_workspace(tmp_path / "c", feature_tool="colmap")
+        assert colmap["feature_options"]["image_to_gray"] == {
+            "formula": "0.2126*R + 0.7152*G + 0.0722*B",
+            "quantize_bits": 8,
+        }
+        opencv = init_workspace(tmp_path / "o", feature_tool="opencv")
+        assert opencv["feature_options"]["image_to_gray"] == {
+            "formula": "0.299*R + 0.587*G + 0.114*B",
+            "quantize_bits": 8,
+        }
+
+    def test_sets_the_sfmtool_conversion_before_naming_the_folder(self, tmp_path: Path):
+        from sfmtool import init_workspace
+
+        config = init_workspace(tmp_path / "g", image_to_gray_formula="G")
+        assert config["feature_options"]["image_to_gray"] == {"formula": "G"}
+        assert config["feature_prefix_dir"] != WS_INIT_SFMTOOL_PREFIX
+        bits = init_workspace(tmp_path / "b", quantize_bits=8)
+        assert bits["feature_options"]["image_to_gray"] == {
+            "formula": "0.2126*R + 0.7152*G + 0.0722*B",
+            "quantize_bits": 8,
+        }
+        assert bits["feature_prefix_dir"] not in (
+            WS_INIT_SFMTOOL_PREFIX,
+            config["feature_prefix_dir"],
+        )
+
+    def test_refuses_a_conversion_for_another_tool_or_out_of_range(
+        self, tmp_path: Path
+    ):
+        from sfmtool import init_workspace
+
+        with pytest.raises(ValueError, match="only be set for sfmtool"):
+            init_workspace(tmp_path / "c", feature_tool="colmap", quantize_bits=8)
+        with pytest.raises(ValueError, match="does not parse"):
+            init_workspace(tmp_path / "s", image_to_gray_formula="R +")
+        with pytest.raises(ValueError, match="from 1 to 16"):
+            init_workspace(tmp_path / "s", quantize_bits=0)
+        assert not (tmp_path / "c").exists()

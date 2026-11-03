@@ -143,10 +143,11 @@ pub struct SiftParams {
     /// Descriptor component cap applied after L2 normalization, before renorm.
     /// Default 0.2. Honored by descriptor computation.
     pub descriptor_clamp: f64,
-    /// The image-to-gray conversion formula (see [`gray`]). The default is the
-    /// BT.709 luma matching COLMAP. This affects feature output and the meaning
+    /// The image-to-gray conversion (see [`gray`]): a formula and an optional
+    /// bit depth its value is rounded to. The default is the BT.709 luma
+    /// matching COLMAP, unrounded. This affects feature output and the meaning
     /// of value-domain thresholds, so it is part of the parameters.
-    pub image_to_gray: GrayFormula,
+    pub image_to_gray: ImageToGray,
 }
 
 impl Default for SiftParams {
@@ -166,7 +167,7 @@ impl Default for SiftParams {
             descriptor_bins: 8,
             descriptor_magnification: 3.0,
             descriptor_clamp: 0.2,
-            image_to_gray: GrayFormula::default(),
+            image_to_gray: ImageToGray::default(),
         }
     }
 }
