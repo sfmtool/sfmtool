@@ -107,13 +107,21 @@ pub(super) fn feature_options_error(e: FeatureOptionsError) -> PyErr {
 }
 
 /// A dict of feature options as the JSON object a workspace records: `None`,
-/// `bool`, `int`, `float` and `str` values, string keys.
+/// `bool`, `int`, `float`, `str` and, for an object such as `image_to_gray`,
+/// `dict` values, string keys.
 pub(super) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<serde_json::Value> {
+    object_from_dict(dict, "params")
+}
+
+/// [`feature_options_from_dict`] for the dict at `path` (`params`, or
+/// `params['image_to_gray']` for one nested in it), so an error names where.
+fn object_from_dict(dict: &Bound<'_, PyDict>, path: &str) -> PyResult<serde_json::Value> {
     let mut map = serde_json::Map::new();
     for (key, value) in dict.iter() {
-        let key: String = key
-            .extract()
-            .map_err(|_| pyo3::exceptions::PyValueError::new_err("params keys must be strings"))?;
+        let key: String = key.extract().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(format!("{path} keys must be strings"))
+        })?;
+        let at = format!("{path}['{key}']");
         let json = if value.is_none() {
             serde_json::Value::Null
         } else if let Ok(v) = value.extract::<bool>() {
@@ -127,15 +135,15 @@ pub(super) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<se
             serde_json::Number::from_f64(v)
                 .map(Into::into)
                 .ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "params['{key}'] must be a finite number"
-                    ))
+                    pyo3::exceptions::PyValueError::new_err(format!("{at} must be a finite number"))
                 })?
         } else if let Ok(v) = value.extract::<String>() {
             serde_json::Value::String(v)
+        } else if let Ok(nested) = value.cast::<PyDict>() {
+            object_from_dict(nested, &at)?
         } else {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "params['{key}'] has the wrong type"
+                "{at} has the wrong type"
             )));
         };
         map.insert(key, json);
@@ -147,16 +155,17 @@ pub(super) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<se
 ///
 /// Args:
 ///     image: (H, W, 3) uint8 RGB or (H, W) uint8 grayscale numpy array.
-///         RGB is converted to gray via the image-to-gray formula
-///         (params['gray_formula'] if given, else the BT.709 default);
-///         grayscale is normalized by /255.
+///         RGB is converted to gray through params['image_to_gray'] (or,
+///         for a version 1 record, params['gray_formula']), else the BT.709
+///         default; grayscale is normalized by /255.
 ///     params: optional dict of overrides onto SiftParams::default(). Keys:
 ///         octave_layers, sigma, blur_radius_factor, input_sigma, double_image,
 ///         contrast_threshold,
 ///         edge_threshold, max_num_features (int or None), orientation_bins,
 ///         peak_ratio, descriptor_width, descriptor_bins,
 ///         descriptor_magnification, descriptor_clamp (numeric/bool), and
-///         gray_formula (str).
+///         image_to_gray (a dict with a str formula and an optional int
+///         quantize_bits from 1 to 16) or gray_formula (str), not both.
 ///
 /// Returns:
 ///     Tuple of:

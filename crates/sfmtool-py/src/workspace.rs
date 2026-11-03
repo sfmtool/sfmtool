@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Bindings for the files in a workspace root that configure the workspace as
-//! a whole: its named image lists (`sfmtool_core::workspace`).
+//! a whole (`sfmtool_core::workspace`): its named image lists, and the rules of
+//! the feature options its `.sfm-workspace.json` records.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -12,9 +13,11 @@ use pyo3::prelude::*;
 use sfmtool_core::progress::{Event, Progress};
 use sfmtool_core::workspace::{
     is_named_image_list_name, NamedImageListMember, NamedImageLists, NamedImageListsError,
-    NAMED_IMAGE_LISTS_FILE_NAME,
+    NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_VERSION,
 };
 
+use crate::helpers::{py_to_serde, serde_to_py};
+use crate::sift::image_readings::PyImageToGray;
 use crate::{ProgressCounter, PyRangeExpr};
 
 /// The Python exception for `e`: the `OSError` subclass for a failed read,
@@ -200,10 +203,77 @@ fn is_named_image_list_name_py(name: &str) -> bool {
     is_named_image_list_name(name)
 }
 
+/// The grey conversion a version 2 record of `feature_tool` carries when made
+/// from the tool's defaults, or None for a tool with none of its own.
+///
+/// BT.709 luma, unrounded, for ``sfmtool`` (a setting a workspace may
+/// change); BT.709 luma rounded to 8 bits for ``colmap`` and BT.601 luma
+/// rounded to 8 bits for ``opencv``, the conversions those tools make. The
+/// name is matched without regard to case.
+#[pyfunction(name = "tool_image_to_gray")]
+fn tool_image_to_gray_py(feature_tool: &str) -> Option<PyImageToGray> {
+    sfmtool_core::workspace::tool_image_to_gray(feature_tool).map(|inner| PyImageToGray { inner })
+}
+
+/// The grey conversion a record of either version states.
+///
+/// The top-level ``image_to_gray`` object of ``feature_options`` when there
+/// is one; otherwise a ``gray_formula`` string with no rounding; otherwise the
+/// tool's conversion (``tool_image_to_gray``). An ``sfmtool-undistort``
+/// record without its own object states its source's, read from
+/// ``source_feature_tool`` and ``source_feature_options``.
+///
+/// Raises:
+///     ValueError: for options that are not a dict, an object or a formula
+///         that does not parse, an undistort record with no source, or a tool
+///         with no conversion of its own and no ``gray_formula``.
+#[pyfunction(name = "recorded_image_to_gray")]
+fn recorded_image_to_gray_py(
+    py: Python<'_>,
+    feature_tool: &str,
+    feature_options: &Bound<'_, PyAny>,
+) -> PyResult<PyImageToGray> {
+    let options = py_to_serde(py, feature_options)?;
+    sfmtool_core::workspace::recorded_image_to_gray(feature_tool, &options)
+        .map(|inner| PyImageToGray { inner })
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Version 1 ``feature_options`` of ``feature_tool`` made into version 2
+/// ones, every other option kept as it is: the conversion ``sfm ws upgrade``
+/// makes.
+///
+/// For ``sfmtool``, a ``gray_formula`` becomes
+/// ``image_to_gray: {"formula": <gray_formula>}``, and options without one
+/// gain the tool's default. For ``colmap`` and ``opencv``, the options gain
+/// the tool's conversion.
+///
+/// Raises:
+///     ValueError: for options that already carry ``image_to_gray``, an
+///         ``sfmtool-undistort`` record (whose ``.sift`` files cannot be
+///         extracted again), any other tool than the three, a
+///         ``gray_formula`` that does not parse, or options that are not a
+///         dict. The message says which.
+#[pyfunction(name = "upgrade_feature_options")]
+fn upgrade_feature_options_py(
+    py: Python<'_>,
+    feature_tool: &str,
+    feature_options: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let options = py_to_serde(py, feature_options)?;
+    let upgraded = sfmtool_core::workspace::upgrade_feature_options(feature_tool, &options)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    serde_to_py(py, &upgraded)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageLists>()?;
     m.add_class::<PyNamedImageListMember>()?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
+    m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;
+    m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
+    m.add_function(wrap_pyfunction!(upgrade_feature_options_py, m)?)?;
     m.add("NAMED_IMAGE_LISTS_FILE_NAME", NAMED_IMAGE_LISTS_FILE_NAME)?;
+    m.add("WORKSPACE_VERSION", WORKSPACE_VERSION)?;
     Ok(())
 }

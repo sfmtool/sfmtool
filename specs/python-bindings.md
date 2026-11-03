@@ -391,7 +391,7 @@ Paths in the *Source* column are relative to
 
 | Source | Exposes | Spec |
 |--------|---------|------|
-| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `is_named_image_list_name`, `NAMED_IMAGE_LISTS_FILE_NAME` | [named-image-lists.md](workspace/named-image-lists.md) |
+| [workspace.rs](../crates/sfmtool-py/src/workspace.rs) | `NamedImageLists`, `NamedImageListMember`, `is_named_image_list_name`, `NAMED_IMAGE_LISTS_FILE_NAME`; `tool_image_to_gray`, `recorded_image_to_gray`, `upgrade_feature_options`, `WORKSPACE_VERSION`: each feature tool's grey conversion and the version 1 to version 2 conversion of `sfm ws upgrade` | [named-image-lists.md](workspace/named-image-lists.md), [workspace.md](workspace/workspace.md) |
 
 ## Keeping the index current
 

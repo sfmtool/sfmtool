@@ -54,8 +54,7 @@ fn test_channel_selection() {
 fn test_gray_from_rgb_small_image() {
     // 2x1 image: white pixel then black pixel.
     let rgb = vec![255u8, 255, 255, 0, 0, 0];
-    let f = parse_gray_formula(DEFAULT_GRAY_FORMULA).unwrap();
-    let img = gray_from_rgb(2, 1, &rgb, &f);
+    let img = gray_from_rgb(2, 1, &rgb, &ImageToGray::default());
     assert_eq!(img.width(), 2);
     assert_eq!(img.height(), 1);
     assert!((img.get_pixel(0, 0) - 1.0).abs() < 1e-6);
@@ -65,10 +64,30 @@ fn test_gray_from_rgb_small_image() {
 #[test]
 fn test_gray_from_rgb_no_upper_clamp() {
     // A formula that exceeds 1.0 must not be clamped.
-    let f = parse_gray_formula("2 * R").unwrap();
+    let f = ImageToGray::from_gray_formula("2 * R").unwrap();
     let rgb = vec![255u8, 0, 0];
     let img = gray_from_rgb(1, 1, &rgb, &f);
     assert!((img.get_pixel(0, 0) - 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_gray_from_rgb_rounds_to_quantize_bits() {
+    // 0.2126 * 100/255 + 0.7152 * 150/255 + 0.0722 * 200/255 = 0.5606..., which
+    // rounds to 143/255 at 8 bits; at 1 bit it rounds to 1.
+    let rgb = vec![100u8, 150, 200];
+    let exact = gray_from_rgb(1, 1, &rgb, &ImageToGray::default()).get_pixel(0, 0);
+    let eight = ImageToGray::new(DEFAULT_GRAY_FORMULA, Some(8)).unwrap();
+    let rounded = gray_from_rgb(1, 1, &rgb, &eight).get_pixel(0, 0);
+    assert_eq!(rounded, (143.0f64 / 255.0) as f32);
+    assert_ne!(rounded, exact);
+    let one = ImageToGray::new(DEFAULT_GRAY_FORMULA, Some(1)).unwrap();
+    assert_eq!(gray_from_rgb(1, 1, &rgb, &one).get_pixel(0, 0), 1.0);
+    // Rounding clamps, so a value above 1 reads 1.
+    let doubled = ImageToGray::new("2 * R", Some(8)).unwrap();
+    assert_eq!(
+        gray_from_rgb(1, 1, &[255, 0, 0], &doubled).get_pixel(0, 0),
+        1.0
+    );
 }
 
 #[test]

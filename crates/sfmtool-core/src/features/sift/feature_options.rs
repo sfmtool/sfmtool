@@ -6,8 +6,9 @@
 //!
 //! `.sfm-workspace.json` and every `.sift` file the `sfmtool` tool writes carry
 //! the extraction settings as a JSON object whose keys are the output-defining
-//! [`SiftParams`] fields by name, plus `gray_formula` for
-//! [`SiftParams::image_to_gray`]. [`SiftParams::from_feature_options`] is the one
+//! [`SiftParams`] fields by name, plus the `image_to_gray` object for
+//! [`SiftParams::image_to_gray`] (a version 1 record's `gray_formula` string
+//! in its place). [`SiftParams::from_feature_options`] is the one
 //! reader of that object: the Python binding `extract_sift` converts its
 //! `params` dict to the same JSON value and calls it, and
 //! [`build_sift_files`](super::build_sift_files) calls it on the workspace's
@@ -15,7 +16,7 @@
 
 use std::fmt;
 
-use super::{gray, SiftParams};
+use super::{ImageToGray, SiftParams};
 
 /// A `feature_options` object [`SiftParams::from_feature_options`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,9 +55,11 @@ impl SiftParams {
     /// `input_sigma`, `double_image`, `contrast_threshold`, `edge_threshold`,
     /// `max_num_features` (an integer, or `null` for no cap),
     /// `orientation_bins`, `peak_ratio`, `descriptor_width`, `descriptor_bins`,
-    /// `descriptor_magnification`, `descriptor_clamp` and `gray_formula` (a
-    /// string [`gray::parse_gray_formula`] reads). A key left out keeps its
-    /// default; `null` for the whole value means no overrides.
+    /// `descriptor_magnification`, `descriptor_clamp` and `image_to_gray` (the
+    /// object [`ImageToGray::from_json`] reads). `gray_formula`, a formula
+    /// string with no rounding, is read in place of `image_to_gray` so that a
+    /// version 1 record still reads; the two together are refused. A key left
+    /// out keeps its default; `null` for the whole value means no overrides.
     ///
     /// # Errors
     ///
@@ -65,8 +68,9 @@ impl SiftParams {
     /// (`octave_layers` or `orientation_bins` below 1, a `sigma`,
     /// `blur_radius_factor`, `descriptor_magnification` or `descriptor_clamp`
     /// that is not positive and finite, an `input_sigma` that is negative or not
-    /// finite), and a descriptor grid other than 4 x 8, since the descriptor is
-    /// always 128 values.
+    /// finite), an `image_to_gray` or `gray_formula` that does not parse, both
+    /// of them at once, and a descriptor grid other than 4 x 8, since the
+    /// descriptor is always 128 values.
     pub fn from_feature_options(
         options: &serde_json::Value,
     ) -> Result<SiftParams, FeatureOptionsError> {
@@ -128,11 +132,21 @@ impl SiftParams {
                 "descriptor_bins" => out.descriptor_bins = as_u32(key, value)?,
                 "descriptor_magnification" => out.descriptor_magnification = as_f64(key, value)?,
                 "descriptor_clamp" => out.descriptor_clamp = as_f64(key, value)?,
+                "image_to_gray" => {
+                    out.image_to_gray = ImageToGray::from_json(value)
+                        .map_err(|e| FeatureOptionsError::key(key, format!("is not valid: {e}")))?;
+                }
                 "gray_formula" => {
+                    if map.contains_key("image_to_gray") {
+                        return Err(FeatureOptionsError::key(
+                            key,
+                            "cannot be given with 'image_to_gray', which replaces it",
+                        ));
+                    }
                     let formula = value
                         .as_str()
                         .ok_or_else(|| FeatureOptionsError::key(key, "must be a string"))?;
-                    out.image_to_gray = gray::parse_gray_formula(formula).map_err(|e| {
+                    out.image_to_gray = ImageToGray::from_gray_formula(formula).map_err(|e| {
                         FeatureOptionsError::key(key, format!("is not a gray formula: {e}"))
                     })?;
                 }

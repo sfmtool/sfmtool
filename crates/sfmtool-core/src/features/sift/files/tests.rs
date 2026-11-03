@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
 use super::*;
+use crate::features::sift::ImageToGray;
 use crate::progress::Event;
 
 const SEOUL_BULL: &str = concat!(
@@ -13,17 +14,16 @@ const SEOUL_BULL: &str = concat!(
     "/../../test-data/images/seoul_bull_sculpture"
 );
 
-/// A workspace in a temporary directory: seoul_bull's `.sfm-workspace.json`
-/// (the `sfmtool` tool with its default options) at the root, and copies of
-/// the first `count` seoul_bull images under `images/`.
+/// The `feature_prefix_dir` `sfm ws init --feature-tool sfmtool` writes for
+/// the default options. `tests/test_workspace.py` holds the Python side to the
+/// same string, so the two default folder names stay equal.
+const WS_INIT_SFMTOOL_PREFIX: &str = "features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d";
+
+/// Copies of the first `count` seoul_bull images under `images/` of a
+/// temporary directory.
 fn workspace_with_images(count: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     let dir = tempfile::tempdir().unwrap();
     let source = Path::new(SEOUL_BULL);
-    std::fs::copy(
-        source.join(WORKSPACE_CONFIG_FILE),
-        dir.path().join(WORKSPACE_CONFIG_FILE),
-    )
-    .unwrap();
     let images_dir = dir.path().join("images");
     std::fs::create_dir(&images_dir).unwrap();
     let images = (1..=count)
@@ -37,69 +37,36 @@ fn workspace_with_images(count: usize) -> (tempfile::TempDir, Vec<PathBuf>) {
     (dir, images)
 }
 
-#[test]
-fn options_come_from_the_workspace_file() {
-    let (dir, _) = workspace_with_images(0);
-    let options = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
-    assert_eq!(
-        options.feature_prefix_dir,
-        PathBuf::from("features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9")
-    );
-    assert_eq!(options.feature_options["max_num_features"], 8192);
-    assert_eq!(options.concurrent_images, None);
-    assert_eq!(
-        options.sift_path_for_image(Path::new("a/b/x.jpg")),
-        Path::new("a/b")
-            .join(&options.feature_prefix_dir)
-            .join("x.jpg.sift")
-    );
-}
-
-/// The defaults are what `sfm ws init` wrote into seoul_bull's workspace file,
-/// down to the hash in the prefix directory.
+/// The defaults are what `sfm ws init` writes for the `sfmtool` tool, down to
+/// the hash in the prefix directory.
 #[test]
 fn the_sfmtool_defaults_are_those_ws_init_writes() {
-    let (dir, _) = workspace_with_images(0);
-    let written = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
     let defaults = BuildSiftFilesOptions::sfmtool_defaults();
-    assert_eq!(defaults.feature_options, written.feature_options);
-    assert_eq!(defaults.feature_prefix_dir, written.feature_prefix_dir);
-    assert_eq!(defaults.concurrent_images, None);
-    let config: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(dir.path().join(WORKSPACE_CONFIG_FILE)).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(config["feature_tool"], SFMTOOL_FEATURE_TOOL);
-    assert_eq!(config["feature_type"], SFMTOOL_FEATURE_TYPE);
-}
-
-#[test]
-fn a_workspace_of_another_feature_tool_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join(WORKSPACE_CONFIG_FILE),
-        r#"{"feature_tool": "colmap", "feature_options": {}, "feature_prefix_dir": "features/x"}"#,
-    )
-    .unwrap();
     assert_eq!(
-        BuildSiftFilesOptions::from_workspace(dir.path()).unwrap_err(),
-        BuildSiftFilesError::UnsupportedFeatureTool {
-            feature_tool: "colmap".into()
-        }
+        defaults.feature_prefix_dir,
+        PathBuf::from(WS_INIT_SFMTOOL_PREFIX)
     );
-
-    let missing = tempfile::tempdir().unwrap();
-    let err = BuildSiftFilesOptions::from_workspace(missing.path()).unwrap_err();
-    assert!(
-        matches!(&err, BuildSiftFilesError::Workspace { problem, .. } if problem.contains("not initialized")),
-        "{err}"
+    assert_eq!(
+        defaults.feature_options["image_to_gray"],
+        serde_json::json!({"formula": "0.2126*R + 0.7152*G + 0.0722*B"})
     );
+    assert!(defaults.feature_options.get("gray_formula").is_none());
+    assert_eq!(defaults.feature_options["max_num_features"], 8192);
+    assert_eq!(defaults.concurrent_images, None);
+    assert_eq!(
+        defaults.sift_path_for_image(Path::new("a/b/x.jpg")),
+        Path::new("a/b")
+            .join(&defaults.feature_prefix_dir)
+            .join("x.jpg.sift")
+    );
+    // The options are a valid extraction.
+    SiftParams::from_feature_options(&defaults.feature_options).unwrap();
 }
 
 #[test]
 fn a_built_file_holds_what_the_extractor_finds() {
-    let (dir, images) = workspace_with_images(2);
-    let options = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
+    let (_dir, images) = workspace_with_images(2);
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
     let report = build_sift_files(&images, &options, &Progress::none()).unwrap();
     assert_eq!(report.extracted, 2);
     assert_eq!(report.skipped, 0);
@@ -131,9 +98,23 @@ fn a_built_file_holds_what_the_extractor_finds() {
         (270, 480)
     );
 
-    // The features are the extractor's on the same decode, in its order.
+    // A version 2 file, whose readings are those of the same decode through the
+    // options' conversion.
     let rgb = ImageU8::read_rgb(image).unwrap();
     let params = SiftParams::from_feature_options(&options.feature_options).unwrap();
+    assert_eq!(
+        data.metadata.version,
+        sfmtool_sift_format::SIFT_FORMAT_VERSION
+    );
+    let readings = image_readings_from_rgb(270, 480, rgb.data(), &params.image_to_gray).unwrap();
+    assert_eq!(data.metadata.sharpness, Some(readings.sharpness));
+    assert_eq!(
+        data.metadata.gradient_structure_tensor_xx_yy_xy,
+        Some(readings.gradient_structure_tensor_xx_yy_xy)
+    );
+    assert!(readings.sharpness > 0.0);
+
+    // The features are the extractor's on the same decode, in its order.
     let gray = gray_from_rgb(270, 480, rgb.data(), &params.image_to_gray);
     let expected = extract_sift(&gray, &params);
     let n = expected.keypoints.len();
@@ -162,10 +143,10 @@ fn a_built_file_holds_what_the_extractor_finds() {
 
 #[test]
 fn an_up_to_date_file_is_skipped_and_a_newer_image_rebuilt() {
-    let (dir, images) = workspace_with_images(2);
+    let (_dir, images) = workspace_with_images(2);
     let options = BuildSiftFilesOptions {
         concurrent_images: Some(2),
-        ..BuildSiftFilesOptions::from_workspace(dir.path()).unwrap()
+        ..BuildSiftFilesOptions::sfmtool_defaults()
     };
     let first = build_sift_files(&images, &options, &Progress::none()).unwrap();
     assert_eq!((first.extracted, first.skipped), (2, 0));
@@ -190,8 +171,8 @@ fn an_up_to_date_file_is_skipped_and_a_newer_image_rebuilt() {
 
 #[test]
 fn progress_counts_each_image_and_says_how_many_were_skipped() {
-    let (dir, images) = workspace_with_images(3);
-    let options = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
+    let (_dir, images) = workspace_with_images(3);
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
     build_sift_files(&images[..1], &options, &Progress::none()).unwrap();
 
     let events = Mutex::new(Vec::new());
@@ -215,8 +196,8 @@ fn progress_counts_each_image_and_says_how_many_were_skipped() {
 
 #[test]
 fn a_cancelled_build_writes_nothing_more() {
-    let (dir, images) = workspace_with_images(2);
-    let options = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
+    let (_dir, images) = workspace_with_images(2);
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
     let cancel = AtomicBool::new(true);
     let progress = Progress::none().cancelled_by(&cancel);
     assert_eq!(
@@ -239,7 +220,7 @@ fn the_first_failing_image_in_input_order_is_the_error() {
     images.push(images_dir.join("broken_b.jpg"));
     let options = BuildSiftFilesOptions {
         concurrent_images: Some(4),
-        ..BuildSiftFilesOptions::from_workspace(dir.path()).unwrap()
+        ..BuildSiftFilesOptions::sfmtool_defaults()
     };
     match build_sift_files(&images, &options, &Progress::none()).unwrap_err() {
         BuildSiftFilesError::Image { path, .. } => assert_eq!(path, images[1]),
@@ -250,7 +231,7 @@ fn the_first_failing_image_in_input_order_is_the_error() {
 #[test]
 fn invalid_feature_options_fail_before_anything_is_written() {
     let (dir, images) = workspace_with_images(1);
-    let mut options = BuildSiftFilesOptions::from_workspace(dir.path()).unwrap();
+    let mut options = BuildSiftFilesOptions::sfmtool_defaults();
     options.feature_options["sigma"] = serde_json::json!("wide");
     let err = build_sift_files(&images, &options, &Progress::none()).unwrap_err();
     assert!(
@@ -310,5 +291,132 @@ fn feature_options_override_the_defaults() {
     );
     assert!(refused(serde_json::json!({"descriptor_width": 3})).contains("fixed at 4 and 8"));
     assert!(refused(serde_json::json!({"gray_formula": "R +"})).contains("gray formula"));
+    assert!(
+        refused(serde_json::json!({"image_to_gray": {"formula": "G", "quantize_bits": 0}}))
+            .contains("feature option 'image_to_gray' is not valid")
+    );
+    assert!(refused(serde_json::json!({
+        "image_to_gray": {"formula": "G"},
+        "gray_formula": "G",
+    }))
+    .contains("cannot be given with 'image_to_gray'"));
     assert!(refused(serde_json::json!([1, 2])).contains("JSON object"));
+}
+
+#[test]
+fn the_conversion_comes_from_image_to_gray_or_a_version_1_gray_formula() {
+    let params = SiftParams::from_feature_options(&serde_json::json!({
+        "image_to_gray": {"formula": "G", "quantize_bits": 8},
+    }))
+    .unwrap();
+    assert_eq!(
+        params.image_to_gray,
+        ImageToGray::new("G", Some(8)).unwrap()
+    );
+    let v1 = SiftParams::from_feature_options(&serde_json::json!({"gray_formula": "R"})).unwrap();
+    assert_eq!(
+        v1.image_to_gray,
+        ImageToGray::from_gray_formula("R").unwrap()
+    );
+}
+
+#[test]
+fn version_1_settings_are_refused_when_there_is_something_to_write() {
+    let (dir, images) = workspace_with_images(1);
+    let mut options = BuildSiftFilesOptions::sfmtool_defaults();
+    let object = options
+        .feature_options
+        .as_object_mut()
+        .unwrap()
+        .remove("image_to_gray")
+        .unwrap();
+    options.feature_options["gray_formula"] = object["formula"].clone();
+    let err = build_sift_files(&images, &options, &Progress::none()).unwrap_err();
+    assert_eq!(err, BuildSiftFilesError::Version1Settings);
+    assert!(err.to_string().contains("sfm ws upgrade"), "{err}");
+    assert!(!dir.path().join("images/features").exists());
+
+    // With every file up to date there is nothing to write, so nothing is
+    // refused.
+    let v2 = BuildSiftFilesOptions::sfmtool_defaults();
+    build_sift_files(&images, &v2, &Progress::none()).unwrap();
+    let up_to_date = BuildSiftFilesOptions {
+        feature_prefix_dir: v2.feature_prefix_dir.clone(),
+        ..options
+    };
+    let report = build_sift_files(&images, &up_to_date, &Progress::none()).unwrap();
+    assert_eq!((report.extracted, report.skipped), (0, 1));
+}
+
+#[test]
+fn a_folder_holding_version_1_files_is_refused() {
+    let (dir, images) = workspace_with_images(2);
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
+    // A version 1 file of the second image in the folder the first goes in.
+    let v1_path = options.sift_path_for_image(&images[1]);
+    std::fs::create_dir_all(v1_path.parent().unwrap()).unwrap();
+    let mut data = sfmtool_sift_format::SiftData {
+        feature_tool_metadata: FeatureToolMetadata {
+            feature_tool: "sfmtool".into(),
+            feature_type: "sift".into(),
+            feature_options: serde_json::json!({"gray_formula": "G"}),
+        },
+        metadata: SiftMetadata {
+            version: 1,
+            image_name: "seoul_bull_sculpture_02.jpg".into(),
+            image_file_xxh128: "0".repeat(32),
+            image_file_size: 1,
+            image_width: 270,
+            image_height: 480,
+            feature_count: 0,
+            sharpness: None,
+            gradient_structure_tensor_xx_yy_xy: None,
+        },
+        content_hash: SiftContentHash::default(),
+        positions_xy: Array2::zeros((0, 2)),
+        affine_shapes: Array3::zeros((0, 2, 2)),
+        descriptors: Array2::zeros((0, 128)),
+        thumbnail_y_x_rgb: Array3::zeros((THUMBNAIL_SIZE, THUMBNAIL_SIZE, 3)),
+    };
+    sfmtool_sift_format::write_sift(&v1_path, &data, 1).unwrap();
+    let err = build_sift_files(&images[..1], &options, &Progress::none()).unwrap_err();
+    assert_eq!(
+        err,
+        BuildSiftFilesError::Version1Files {
+            folder: v1_path.parent().unwrap().to_path_buf()
+        }
+    );
+    assert!(
+        err.to_string().contains("holds version 1 .sift files"),
+        "{err}"
+    );
+    assert!(!options.sift_path_for_image(&images[0]).exists());
+
+    // A version 2 file beside it is no reason to refuse.
+    data.metadata.version = 2;
+    data.metadata.sharpness = Some(0.0);
+    data.metadata.gradient_structure_tensor_xx_yy_xy = Some([0.0; 3]);
+    data.feature_tool_metadata.feature_options =
+        serde_json::json!({"image_to_gray": {"formula": "G"}});
+    sfmtool_sift_format::write_sift(&v1_path, &data, 1).unwrap();
+    build_sift_files(&images[..1], &options, &Progress::none()).unwrap();
+    drop(dir);
+}
+
+#[test]
+fn a_reading_that_is_not_finite_fails_naming_the_image_and_the_conversion() {
+    let (_dir, images) = workspace_with_images(1);
+    let mut options = BuildSiftFilesOptions::sfmtool_defaults();
+    // R ** -1 is infinite where R is 0, and seoul_bull has black pixels.
+    options.feature_options["image_to_gray"] =
+        serde_json::json!({"formula": "R ** -1 + -1 ** 0.5"});
+    let err = build_sift_files(&images, &options, &Progress::none()).unwrap_err();
+    match &err {
+        BuildSiftFilesError::Image { path, problem } => {
+            assert_eq!(path, &images[0]);
+            assert!(problem.contains("R ** -1 + -1 ** 0.5"), "{problem}");
+        }
+        other => panic!("expected an image error, got {other}"),
+    }
+    assert!(!options.sift_path_for_image(&images[0]).exists());
 }
