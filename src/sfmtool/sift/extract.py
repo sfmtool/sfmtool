@@ -58,24 +58,39 @@ def _check_versions_never_mix(
     feature_options: dict,
     sift_dirs,
     settings_source: str | None,
+    settings_from_sfmr: bool = False,
 ) -> None:
     """Refuse to write version 2 ``.sift`` files where versions would mix.
 
-    Called only when at least one file is to be written. Refuses options with
-    no top-level ``image_to_gray`` (version 1 settings), a ``colmap`` or
-    ``opencv`` conversion other than the one the tool makes, and a folder in
-    ``sift_dirs`` that already holds a version 1 ``.sift`` file.
+    Called only when at least one file is to be written. Refuses an
+    ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes;
+    options with no top-level ``image_to_gray`` (version 1 settings); a
+    ``colmap`` or ``opencv`` conversion other than the one the tool makes; and
+    a folder in ``sift_dirs`` that already holds a version 1 ``.sift`` file.
+    ``sfm ws upgrade`` is suggested only when the settings are a workspace
+    file's, not a ``.sfmr`` record's (``settings_from_sfmr``).
     """
     from sfmtool.fileio import SiftFile
     from sfmtool.workspace import tool_image_to_gray
 
+    if feature_tool == "sfmtool-undistort":
+        raise SiftExtractionError(
+            "The feature tool is 'sfmtool-undistort': the .sift files of an "
+            "undistorted workspace are made by 'sfm undistort' from its source's, "
+            "and cannot be extracted. Run 'sfm undistort' again to write them."
+        )
+    upgrade = (
+        "The record is the .sfmr's own, so 'sfm ws upgrade' does not change it."
+        if settings_from_sfmr
+        else "Run 'sfm ws upgrade', which moves the workspace to version 2 and a "
+        "new folder."
+    )
     if "image_to_gray" not in feature_options:
         where = settings_source or "The feature options"
         raise SiftExtractionError(
             f"{where} holds version 1 settings (its feature options carry no "
             "'image_to_gray'), and no .sift file is written from version 1 "
-            "settings. Run 'sfm ws upgrade', which moves the workspace to version 2 "
-            "and a new folder."
+            f"settings. {upgrade}"
         )
     if feature_tool in _FIXED_CONVERSION_TOOLS:
         row = tool_image_to_gray(feature_tool).to_dict()
@@ -98,8 +113,7 @@ def _check_versions_never_mix(
             if version < 2:
                 raise SiftExtractionError(
                     f"The folder {sift_dir} holds version 1 .sift files, and version 2 "
-                    "files are never written beside them. Run 'sfm ws upgrade', which "
-                    "moves the workspace to version 2 and a new folder."
+                    f"files are never written beside them. {upgrade}"
                 )
 
 
@@ -128,6 +142,7 @@ def image_files_to_sift_files(
     feature_options: dict | None = None,
     feature_prefix_dir: str | None = None,
     settings_source: str | None = None,
+    settings_from_sfmr: bool = False,
 ) -> list[Path]:
     """Extract and write SIFT features for a list of images.
 
@@ -136,7 +151,9 @@ def image_files_to_sift_files(
     timestamps. Processing is done in chunks of 500 images for progress reporting.
     The files are ``.sift`` version 2.
 
-    When at least one file is to be written, it refuses version 1 settings
+    When at least one file is to be written, it refuses the
+    ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes,
+    version 1 settings
     (``feature_options`` with no ``image_to_gray``, as a version 1 workspace
     file's are), a ``colmap`` or ``opencv`` ``image_to_gray`` other than the
     tool's, and a target folder that already holds a version 1 ``.sift`` file.
@@ -155,6 +172,9 @@ def image_files_to_sift_files(
         settings_source: What the settings were read from, such as the
                          workspace file's path, for the refusal of version 1
                          settings to name.
+        settings_from_sfmr: Whether the settings are a ``.sfmr``'s record
+                         rather than a workspace file's, in which case a
+                         refusal does not suggest ``sfm ws upgrade``.
 
     Returns:
         List of paths to the created/verified .sift files (in same order as input)
@@ -248,7 +268,11 @@ def image_files_to_sift_files(
     if image_filename_filtered_list:
         sift_dirs = {p.parent for p in sift_filename_filtered_list}
         _check_versions_never_mix(
-            feature_tool, feature_options, sift_dirs, settings_source
+            feature_tool,
+            feature_options,
+            sift_dirs,
+            settings_source,
+            settings_from_sfmr,
         )
         for d in sift_dirs:
             d.mkdir(parents=True, exist_ok=True)

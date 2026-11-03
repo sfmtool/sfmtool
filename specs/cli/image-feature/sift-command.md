@@ -116,14 +116,18 @@ anything:
 - **a folder holding version 1 files**: the error names the folder and says to
   run `sfm ws upgrade`;
 - **a `colmap` or `opencv` conversion other than the tool's**: the error names
-  the tool and the one conversion it makes.
+  the tool and the one conversion it makes;
+- **the `sfmtool-undistort` tool**: the files of an undistorted workspace are
+  made by `sfm undistort`, and the error says to run it again.
 
 When every `.sift` file is present and current, nothing is written and nothing
 is refused, so a version 1 workspace's existing features keep working. The same
 refusals apply where [`sfm solve`](../reconstruction/solve-command.md),
 [`sfm match`](match-command.md) and
 [`sfm to-colmap-db`](../colmap-interop/to-colmap-db-command.md) extract missing
-features. In tool mode outside a workspace, the tool's version 2 defaults name a
+features; `sfm to-colmap-db`, whose settings are its `.sfmr`'s record,
+converts a version 1 record in memory instead of pointing at `sfm ws upgrade`.
+In tool mode outside a workspace, the tool's version 2 defaults name a
 new folder, so version 1 files from an earlier run in the old folder are not
 touched.
 

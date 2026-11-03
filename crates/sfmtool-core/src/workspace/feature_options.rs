@@ -265,8 +265,14 @@ fn gray_formula_conversion(value: &serde_json::Value) -> Result<ImageToGray, Fea
     let formula = value
         .as_str()
         .ok_or_else(|| FeatureOptionsError::GrayFormula(format!("is not a string: {value}")))?;
-    ImageToGray::from_gray_formula(formula)
-        .map_err(|e| FeatureOptionsError::GrayFormula(format!("does not parse: {e}")))
+    ImageToGray::from_gray_formula(formula).map_err(|e| {
+        FeatureOptionsError::GrayFormula(match e {
+            ImageToGrayError::Formula { formula, error } => {
+                format!("{formula:?} does not parse: {error}")
+            }
+            other => other.to_string(),
+        })
+    })
 }
 
 #[cfg(test)]

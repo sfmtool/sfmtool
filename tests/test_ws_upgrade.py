@@ -152,7 +152,7 @@ def test_upgrade_does_nothing_to_a_version_2_file(tmp_path: Path):
                 "feature_options": {"gray_formula": "R +"},
                 "feature_prefix_dir": "features/x",
             },
-            "'gray_formula' does not parse",
+            "'gray_formula' \"R +\" does not parse",
         ),
     ],
 )
@@ -172,3 +172,18 @@ def test_upgrade_without_a_workspace_is_an_error(tmp_path: Path):
     result = _upgrade(tmp_path)
     assert result.exit_code != 0
     assert "No workspace file .sfm-workspace.json was found" in result.output
+
+
+def test_an_unparseable_gray_formula_is_said_once(tmp_path: Path):
+    config = {
+        "version": 1,
+        "feature_tool": "sfmtool",
+        "feature_type": "sift-sfmtool",
+        "feature_options": {"gray_formula": "R +"},
+        "feature_prefix_dir": "features/x",
+    }
+    _write(tmp_path, config)
+    result = _upgrade(tmp_path)
+    assert result.exit_code != 0
+    assert result.output.count("does not parse") == 1, result.output
+    assert "'gray_formula' \"R +\" does not parse" in result.output

@@ -57,12 +57,31 @@ Populates the database with camera intrinsics, pose priors, keypoints, descripto
 The keypoints and descriptors are read from each image's `.sift` file in the
 `feature_prefix_dir` the reconstruction records. An image whose `.sift` file is
 missing or older than the image is extracted again with the feature tool and
-options the reconstruction records. That extraction writes `.sift` version 2
-and so refuses a record with version 1 settings and a folder holding version 1
-files, as `sfm sift --extract` does
-([sift-command.md § Version refusals](../image-feature/sift-command.md#version-refusals));
-when every file is present and current, nothing is extracted and nothing is
-refused.
+options the reconstruction records, and the extraction writes `.sift` version 2
+([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
+When every file is present and current, nothing is extracted.
+
+A record with version 1 settings (no `image_to_gray`) lives in the `.sfmr`, so
+`sfm ws upgrade` cannot change it. When such a record has files to extract, the
+command converts it in memory as `sfm ws upgrade` converts a workspace file, the
+way the viewer's *Build SIFT Files* does, extracts every file into the folder
+named from the converted options, reads them from there, and prints one line:
+
+```
+Converted the version 1 SIFT extraction record of the reconstruction ‹path› to version 2 in memory, so its .sift files are read from ‹new folder›, moved from ‹old folder›; the .sfmr is not rewritten.
+```
+
+That is sound for an `embedded_patches` reconstruction, which has no feature
+indexes into `.sift` files, and for a `sift_files` reconstruction of the
+`sfmtool` tool, whose extraction gives the same features for the same options,
+so the feature indexes still hold. A `sift_files` reconstruction of the
+`colmap` or `opencv` tool is refused, naming the `.sfmr`: a new extraction by
+those libraries is not known to give the features its indexes name (they depend
+on the library version and, for COLMAP, on whether SIFT ran on the GPU).
+Restoring the missing files, or converting the reconstruction to embedded
+patches, lets it export. A record of `sfmtool-undistort` is refused too, since
+only `sfm undistort` makes those files. No refusal about a `.sfmr`'s record
+suggests `sfm ws upgrade`.
 
 The cameras follow `sfm to-colmap-bin`'s rule
 ([to-colmap-bin-command.md](to-colmap-bin-command.md#cameras)): a camera with a
