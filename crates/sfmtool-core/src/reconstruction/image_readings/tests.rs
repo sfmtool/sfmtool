@@ -329,3 +329,44 @@ fn a_save_writes_the_gathered_rows_and_leaves_the_value_unchanged() {
     );
     assert_eq!(written.image_to_gray, ImageToGray::default().to_json());
 }
+
+#[test]
+fn a_cancelled_save_writes_nothing_and_says_it_was_interrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
+    let mut recon = without_readings(dir.path());
+    for (i, name) in names(&recon).iter().enumerate() {
+        let hash = write_sift_for(
+            dir.path(),
+            name,
+            [0; 16],
+            Some((&ImageToGray::default(), ImageReadings::ZERO)),
+        );
+        set_sift_content_hash(&mut recon, i, hash);
+    }
+    let out = dir.path().join("out.sfmr");
+    let cancel = std::sync::atomic::AtomicBool::new(true);
+    let err = recon
+        .save(&out, &Progress::none().cancelled_by(&cancel))
+        .unwrap_err();
+    match err {
+        sfmtool_sfmr_format::SfmrError::Io(e) => {
+            assert_eq!(e.kind(), std::io::ErrorKind::Interrupted)
+        }
+        other => panic!("expected an interrupted I/O error, got {other}"),
+    }
+    assert!(!out.exists(), "a cancelled save writes no file");
+    assert_eq!(
+        std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|e| e
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("out"))
+            .count(),
+        0,
+        "nor a temporary one"
+    );
+}

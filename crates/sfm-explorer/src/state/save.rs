@@ -362,7 +362,8 @@ impl AppState {
     }
 
     /// Fold `index`'s overlay into a base of its own and push it as a version,
-    /// when there is an overlay to fold or a workspace path to state.
+    /// when there is an overlay to fold, a workspace path to state, or image
+    /// readings to gather.
     ///
     /// The pushed value carries the provenance the file will, so its hash, which
     /// is what every id minted afterwards is built on, is the hash of the file
