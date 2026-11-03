@@ -491,7 +491,7 @@ about its centre, keeping every keypoint, and reports the shifts.
 ## Faster arithmetic in the fits (2026-11-03)
 
 **Question.** A profile of `sfm embed-patches` on the `seoul_bull_sculpture`
-test workspace at the tests' settings (resolution 12, one thread) put 93% of the
+test workspace at the tests' resolution of 12, on one thread, put 93% of the
 run in the normal step, spread over the Levenberg–Marquardt fits' renders and
 Jacobians. Can that arithmetic be made cheaper without changing what the step
 finds?
@@ -508,10 +508,10 @@ channels and the same order of arithmetic.
 in three ways: the dino ground truth is the checked-in
 `dino_dog_toy_ground_truth_v01.sfmr` (1243 points seen in two or more images),
 not the candidate; the points judged by eye are not scored, so there is no
-judged column; and it ran in an optimised build on a different machine, each run
-on one thread (`RAYON_NUM_THREADS=1`) with at most two runs at once. Every
-finite point seen in two or more images was started from the mean viewing
-direction and fitted, then the step ran at its defaults. "Step time" is the sum
+judged column; and each run used one thread (`RAYON_NUM_THREADS=1`), with at
+most two runs at once. Every finite point seen in two or more images was
+started from the mean viewing direction and fitted, then the step ran at its
+defaults. "Step time" is the sum
 of the step's own time over the points, the two forms run side by side.
 
 | Form | Bull median, < 5° | Kerry Park median, < 5° | Dino median, < 5° | Moved better / worse | Step time, bull | Step time, dino |
