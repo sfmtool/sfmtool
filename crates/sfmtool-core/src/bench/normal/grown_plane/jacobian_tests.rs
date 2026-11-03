@@ -481,7 +481,10 @@ fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
         let (gx, gy) = (x - 0.5, y - 0.5);
         let (x0, y0) = (gx.floor() as i32, gy.floor() as i32);
         let (fx, fy) = (gx - x0 as f32, gy - y0 as f32);
-        for c in 0..2 {
+        // Both channels in one read.
+        let mut read = [(0.0f32, 0.0f32); 2];
+        super::render::sobel_gradient(&image, x, y, &mut read);
+        for (c, &got) in (0..2).zip(&read) {
             let mut expected = (0.0f32, 0.0f32);
             for (dx, dy, weight) in [
                 (0, 0, (1.0 - fx) * (1.0 - fy)),
@@ -493,7 +496,6 @@ fn the_sobel_read_is_a_bilinear_read_of_the_sobel_images() {
                 expected.0 += weight * g.0;
                 expected.1 += weight * g.1;
             }
-            let got = super::render::sobel_gradient(&image, x, y, c);
             assert!(
                 (got.0 - expected.0).abs() < 1e-4 && (got.1 - expected.1).abs() < 1e-4,
                 "({x}, {y}) channel {c}: {got:?} vs {expected:?}"

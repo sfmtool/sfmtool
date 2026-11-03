@@ -167,8 +167,8 @@ pub(super) fn maximise<O: Objective>(
             break;
         }
         let j = objective.jacobian(fz, &p, r0, GradientRead::Sobel);
-        let a = j.transpose() * &j;
-        let g = j.transpose() * DVector::from_column_slice(r0);
+        let a = j.tr_mul(&j);
+        let g = j.tr_mul(&DVector::from_column_slice(r0));
         let mut accepted = None;
         for _ in 0..DAMPING_TRIES {
             let Some(delta) = damped_step(&a, &g, damping) else {
@@ -601,7 +601,7 @@ pub(super) fn normal_matrix<O: Objective>(objective: &O, p: &[f64]) -> Option<DM
         return None;
     }
     let j = objective.jacobian(&fz, p, &r0, GradientRead::Sobel);
-    Some(j.transpose() * &j)
+    Some(j.tr_mul(&j))
 }
 
 /// How the shifts of a fit whose normal matrix is `n`, over `[a, b, s…]`,

@@ -387,6 +387,8 @@ impl<'a> ViewImage<'a> {
         out: &mut Gradients,
     ) {
         let ch = out.channels;
+        // The level gradient of each channel at one sample.
+        let mut level = vec![(0.0f32, 0.0f32); ch];
         for (&k, pixel) in rows.iter().zip(pixels) {
             let Some(p) = pixel else {
                 out.values[k * ch..(k + 1) * ch].fill([0.0; 2]);
@@ -394,16 +396,18 @@ impl<'a> ViewImage<'a> {
             };
             let x = ((p[0] + shift[0]) / self.scale) as f32;
             let y = ((p[1] + shift[1]) / self.scale) as f32;
-            for c in 0..ch {
-                let (dx, dy) = match read {
-                    #[cfg(test)]
-                    GradientRead::Bilinear => {
+            match read {
+                #[cfg(test)]
+                GradientRead::Bilinear => {
+                    for (c, slot) in level.iter_mut().enumerate() {
                         let (_, dx, dy) = sample_bilinear_with_grad_u8(self.level, x, y, c as u32);
-                        (dx, dy)
+                        *slot = (dx, dy);
                     }
-                    GradientRead::Sobel => sobel_gradient(self.level, x, y, c as u32),
-                };
-                out.values[k * ch + c] = [f64::from(dx) / self.scale, f64::from(dy) / self.scale];
+                }
+                GradientRead::Sobel => sobel_gradient(self.level, x, y, &mut level),
+            }
+            for (value, &(dx, dy)) in out.values[k * ch..(k + 1) * ch].iter_mut().zip(&level) {
+                *value = [f64::from(dx) / self.scale, f64::from(dy) / self.scale];
             }
         }
     }
@@ -437,9 +441,10 @@ pub(super) enum GradientRead {
 }
 
 /// The bilinear read at level position `(x, y)` of the image's Sobel
-/// gradient images in `channel`, grey levels per level px
-/// ([`GradientRead::Sobel`]): `(∂I/∂x, ∂I/∂y)`.
-pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f32, f32) {
+/// gradient images in channels `0..out.len()`, grey levels per level px
+/// ([`GradientRead::Sobel`]): `out[c] = (∂I/∂x, ∂I/∂y)` in channel `c`. The
+/// 4×4 pixels' edge-clamped positions are found once for all the channels.
+pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, out: &mut [(f32, f32)]) {
     // The same half-pixel convention, floor and in-cell fractions as the
     // bilinear read of the value.
     let (gx, gy) = (x - 0.5, y - 0.5);
@@ -449,36 +454,41 @@ pub(super) fn sobel_gradient(img: &ImageU8, x: f32, y: f32, channel: u32) -> (f3
     let c = img.channels() as usize;
     let stride = img.width() as usize * c;
     let data = img.data();
-    // p[r][q]: the pixel at row y0 − 1 + r, column x0 − 1 + q, edge-clamped.
-    let mut p = [[0.0f32; 4]; 4];
-    for (r, row) in p.iter_mut().enumerate() {
+    // offsets[r][q]: where the pixel at row y0 − 1 + r, column x0 − 1 + q,
+    // edge-clamped, starts in `data`.
+    let mut offsets = [[0usize; 4]; 4];
+    for (r, row) in offsets.iter_mut().enumerate() {
         let yy = (y0 - 1 + r as i32).clamp(0, h - 1) as usize;
-        for (q, value) in row.iter_mut().enumerate() {
+        for (q, offset) in row.iter_mut().enumerate() {
             let xx = (x0 - 1 + q as i32).clamp(0, w - 1) as usize;
-            *value = f32::from(data[yy * stride + xx * c + channel as usize]);
+            *offset = yy * stride + xx * c;
         }
     }
     const SMOOTH: [f32; 3] = [0.25, 0.5, 0.25];
-    // The Sobel gradient at the tap at row y0 + i, column x0 + j.
-    let tap = |i: usize, j: usize| {
-        let (mut dx, mut dy) = (0.0, 0.0);
-        for (d, weight) in SMOOTH.iter().enumerate() {
-            dx += weight * (p[i + d][j + 2] - p[i + d][j]);
-            dy += weight * (p[i + 2][j + d] - p[i][j + d]);
-        }
-        (0.5 * dx, 0.5 * dy)
-    };
-    let (g00, g10, g01, g11) = (tap(0, 0), tap(0, 1), tap(1, 0), tap(1, 1));
-    let blend = |v00: f32, v10: f32, v01: f32, v11: f32| {
-        (1.0 - fx) * (1.0 - fy) * v00
-            + fx * (1.0 - fy) * v10
-            + (1.0 - fx) * fy * v01
-            + fx * fy * v11
-    };
-    (
-        blend(g00.0, g10.0, g01.0, g11.0),
-        blend(g00.1, g10.1, g01.1, g11.1),
-    )
+    for (channel, slot) in out.iter_mut().enumerate() {
+        // p[r][q]: the pixel at offsets[r][q], in this channel.
+        let p = offsets.map(|row| row.map(|offset| f32::from(data[offset + channel])));
+        // The Sobel gradient at the tap at row y0 + i, column x0 + j.
+        let tap = |i: usize, j: usize| {
+            let (mut dx, mut dy) = (0.0, 0.0);
+            for (d, weight) in SMOOTH.iter().enumerate() {
+                dx += weight * (p[i + d][j + 2] - p[i + d][j]);
+                dy += weight * (p[i + 2][j + d] - p[i][j + d]);
+            }
+            (0.5 * dx, 0.5 * dy)
+        };
+        let (g00, g10, g01, g11) = (tap(0, 0), tap(0, 1), tap(1, 0), tap(1, 1));
+        let blend = |v00: f32, v10: f32, v01: f32, v11: f32| {
+            (1.0 - fx) * (1.0 - fy) * v00
+                + fx * (1.0 - fy) * v10
+                + (1.0 - fx) * fy * v01
+                + fx * fy * v11
+        };
+        *slot = (
+            blend(g00.0, g10.0, g01.0, g11.0),
+            blend(g00.1, g10.1, g01.1, g11.1),
+        );
+    }
 }
 
 /// A render of every sample of the grid: values interleaved by channel, and
@@ -854,11 +864,20 @@ impl Block {
     ) -> usize {
         let n = self.rows.len();
         let cols = j.ncols();
+        let nrows = j.nrows();
+        // Column-major: column i's rows start at i * nrows.
+        let jd = j.as_mut_slice();
         let mut d = vec![0.0; n * cols];
+        let mut centred = vec![0.0; n];
+        let mut col = vec![0.0; n];
         for (index, &c) in self.channels.iter().enumerate() {
-            let values: Vec<f64> = self.rows.iter().map(|&k| view.at(k, c)).collect();
-            let mean = values.iter().sum::<f64>() / n.max(1) as f64;
-            let centred: Vec<f64> = values.iter().map(|v| v - mean).collect();
+            for (t, &k) in self.rows.iter().enumerate() {
+                centred[t] = view.at(k, c);
+            }
+            let mean = centred.iter().sum::<f64>() / n.max(1) as f64;
+            for v in centred.iter_mut() {
+                *v -= mean;
+            }
             let norm = centred.iter().map(|v| v * v).sum::<f64>().sqrt();
             if norm < TINY_NORM {
                 continue;
@@ -870,14 +889,20 @@ impl Block {
             let base = row0 + index * n;
             let factor = sign * self.scale / norm;
             for i in 0..cols {
-                let mean_d = (0..n).map(|t| d[t * cols + i]).sum::<f64>() / n as f64;
-                let along = (0..n)
-                    .map(|t| centred[t] * (d[t * cols + i] - mean_d))
+                for (t, x) in col.iter_mut().enumerate() {
+                    *x = d[t * cols + i];
+                }
+                let mean_d = col.iter().sum::<f64>() / n as f64;
+                let along = centred
+                    .iter()
+                    .zip(&col)
+                    .map(|(c, x)| c * (x - mean_d))
                     .sum::<f64>()
                     / norm;
-                for t in 0..n {
-                    let unit = centred[t] / norm;
-                    j[(base + t, i)] += factor * ((d[t * cols + i] - mean_d) - unit * along);
+                let out = &mut jd[i * nrows + base..i * nrows + base + n];
+                for ((o, &c), &x) in out.iter_mut().zip(&centred).zip(&col) {
+                    let unit = c / norm;
+                    *o += factor * ((x - mean_d) - unit * along);
                 }
             }
         }

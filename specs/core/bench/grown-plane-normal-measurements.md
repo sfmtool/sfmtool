@@ -12,8 +12,8 @@ of a selection of views rather than fitting the views together; the near-to-far
 ladder; the weak-turn rule; the optimiser's Sobel gradient, its damping tries
 and its relative stop; the early stop, the second growth on the second rung and
 the shift-only fit; the information read through the Sobel gradient with the σ
-target of 2.75°; reading each view through its own slid patch; and writing no
-keypoint.
+target of 2.75°; reading each view through its own slid patch; writing no
+keypoint; and the arithmetic of the fits.
 
 ## How the step is scored
 
@@ -487,3 +487,42 @@ where they started.
 keypoints than the localizer's; written into the track they make the normal step
 and the refit undo each other. The step writes no keypoint: it turns the patch
 about its centre, keeping every keypoint, and reports the shifts.
+
+## Faster arithmetic in the fits (2026-11-03)
+
+**Question.** A profile of `sfm embed-patches` on the `seoul_bull_sculpture`
+test workspace at the tests' settings (resolution 12, one thread) put 93% of the
+run in the normal step, spread over the Levenberg–Marquardt fits' renders and
+Jacobians. Can that arithmetic be made cheaper without changing what the step
+finds?
+
+**Changes.** The fits form `JᵀJ` and `Jᵀr` with nalgebra's `tr_mul`, which does
+not copy the transpose of `J` first (about 25 µs to 3.5 µs a call); it sums in
+another order, so its results can differ in the last bits. The Sobel gradient of
+every channel is read in one pass, finding the 4×4 pixels' edge-clamped
+positions once, with the same arithmetic per channel. A block's derivative is
+written straight into the Jacobian's columns, with its buffers reused across
+channels and the same order of arithmetic.
+
+**Method.** This measurement differs from § [How the step is scored](#how-the-step-is-scored)
+in three ways: the dino ground truth is the checked-in
+`dino_dog_toy_ground_truth_v01.sfmr` (1243 points seen in two or more images),
+not the candidate; the points judged by eye are not scored, so there is no
+judged column; and it ran in an optimised build on a different machine, each run
+on one thread (`RAYON_NUM_THREADS=1`) with at most two runs at once. Every
+finite point seen in two or more images was started from the mean viewing
+direction and fitted, then the step ran at its defaults. "Step time" is the sum
+of the step's own time over the points, the two forms run side by side.
+
+| Form | Bull median, < 5° | Kerry Park median, < 5° | Dino median, < 5° | Moved better / worse | Step time, bull | Step time, dino |
+|---|---|---|---|---|---|---|
+| before | 16.65°, 18.4% | 6.47°, 43.5% | 0.75°, 94.0% | – | 7.7 s | 179.7 s |
+| **the three changes** | **16.65°, 18.4%** | **6.47°, 43.5%** | **0.75°, 94.0%** | **0 / 0** | **6.9 s** | **163.0 s** |
+
+Every point's error is the same as before to within 10⁻¹⁰ degrees. On Kerry
+Park the step took 9% less time, not timed side by side with the form before.
+The `embed-patches` run took 26.9 s before and 24.3 s with the changes, the
+best of four runs each, since the machine's speed drifted between runs.
+
+**Decision.** All three changes: about 10% less time in the step, and the same
+normals.
