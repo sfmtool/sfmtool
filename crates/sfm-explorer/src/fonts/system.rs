@@ -18,7 +18,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 
-use super::sfnt;
+use skrifa::instance::{LocationRef, Size};
+use skrifa::raw::{FileRef, TableProvider as _};
+use skrifa::{FontRef, MetadataProvider as _};
+
 use crate::action_log::{ActionLog, Actor, Kind};
 use crate::state::AppState;
 
@@ -82,30 +85,134 @@ fn is_cjk(code: u32) -> bool {
     )
 }
 
-/// The code points egui's bundled faces map, as sorted, disjoint, inclusive
-/// ranges; read from the bundled files once.
-fn bundled_ranges() -> &'static [(u32, u32)] {
-    static RANGES: OnceLock<Vec<(u32, u32)>> = OnceLock::new();
-    RANGES.get_or_init(|| {
-        let mut ranges: Vec<(u32, u32)> = egui::FontDefinitions::default()
-            .font_data
-            .values()
-            .filter_map(|data| sfnt::faces(&data.font))
-            .flatten()
-            .flat_map(|face| face.ranges().to_vec())
-            .collect();
-        ranges.sort_unstable();
-        ranges
+/// The face at `index` in the font file `data`, opened with skrifa the way
+/// egui opens it, when it passes the checks below.
+///
+/// egui's font builder opens each face of its definitions with
+/// `skrifa::FontRef::from_index` and panics when that fails, so a file read
+/// from disk is opened the same way here first. The face must also give
+/// skrifa's metrics a `unitsPerEm` other than `0`, which egui divides every
+/// glyph's scale by, and have outlines skrifa can draw, which is where egui
+/// takes each glyph's shape from. The character map egui looks glyphs up in
+/// is the one [`Face::scripts`] is read from.
+///
+/// Every table the face's directory lists must also lie inside the file. A
+/// table cut short would not make egui panic, since skrifa bounds-checks each
+/// read and egui leaves out a glyph it cannot draw, but a file whose tables
+/// run past its end, as one copied in part does, is refused rather than
+/// drawn with some glyphs missing.
+fn open_face(data: &[u8], index: u32) -> Option<FontRef<'_>> {
+    let font = FontRef::from_index(data, index).ok()?;
+    let tables_fit = font.table_directory().table_records().iter().all(|record| {
+        usize::try_from(u64::from(record.offset()) + u64::from(record.length()))
+            .is_ok_and(|end| end <= data.len())
+    });
+    let units_per_em = font
+        .metrics(Size::unscaled(), LocationRef::default())
+        .units_per_em;
+    if !tables_fit || units_per_em == 0 || font.outline_glyphs().format().is_none() {
+        return None;
+    }
+    Some(font)
+}
+
+/// Whether egui builds its fonts from face `index` of `data`, alone, without
+/// panicking.
+///
+/// [`open_face`] makes the checks egui's own code makes before it opens a
+/// face, but egui then also hands the face to skrifa's autohinter and to the
+/// harfrust shaper, which read further tables, and skrifa 0.44's autohinter
+/// panics inside itself on some byte-changed copies of egui's own Hack that
+/// pass those checks. So the face is built into egui's fonts here
+/// once, on the search thread, the same way [`definitions_with`] gives it to
+/// egui, and a panic there refuses the face rather than reaching the frame
+/// that installs it. The panic's message is still printed, by the panic hook.
+fn egui_loads(data: &[u8], index: u32) -> bool {
+    let mut definitions = egui::FontDefinitions::empty();
+    let mut face = egui::FontData::from_owned(data.to_vec());
+    face.index = index;
+    definitions
+        .font_data
+        .insert("face".to_owned(), Arc::new(face));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        definitions.families.insert(family, vec!["face".to_owned()]);
+    }
+    std::panic::catch_unwind(move || {
+        egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), definitions);
+    })
+    .is_ok()
+}
+
+/// One face of a font file that [`open_face`] opens: its index in the file,
+/// its weight and the groups it draws.
+#[derive(Debug, Clone)]
+struct Face {
+    /// The face's index in its file: `0` for a plain font file, its place in
+    /// the collection for a `.ttc`.
+    index: u32,
+    /// The `OS/2` table's `usWeightClass`, `400` for a regular weight, or
+    /// `None` when the face has no `OS/2` table.
+    weight: Option<u16>,
+    /// The groups whose whole sample the face maps to a glyph with an
+    /// outline.
+    scripts: Vec<Script>,
+}
+
+/// Every face of the font file `data` that [`open_face`] opens, or `None`
+/// when the file is not a font file or a collection of them, or none of its
+/// faces opens.
+///
+/// A collection whose header opens keeps those of its faces that open, so
+/// one bad face does not cost the others.
+fn faces(data: &[u8]) -> Option<Vec<Face>> {
+    let count = match FileRef::new(data).ok()? {
+        FileRef::Font(_) => 1,
+        FileRef::Collection(collection) => collection.len(),
+    };
+    let faces: Vec<Face> = (0..count)
+        .filter_map(|index| {
+            let font = open_face(data, index)?;
+            let charmap = font.charmap();
+            let outlines = font.outline_glyphs();
+            let draws = |code: u32| {
+                charmap
+                    .map(code)
+                    .is_some_and(|glyph| outlines.get(glyph).is_some())
+            };
+            Some(Face {
+                index,
+                weight: font.os2().ok().map(|os2| os2.us_weight_class()),
+                scripts: Script::ALL
+                    .into_iter()
+                    .filter(|script| script.sample().iter().all(|&code| draws(code)))
+                    .collect(),
+            })
+        })
+        .collect();
+    (!faces.is_empty()).then_some(faces)
+}
+
+/// The code points egui's bundled faces map, sorted and each once; read from
+/// the bundled files once, through the same character maps egui reads.
+fn bundled_codes() -> &'static [u32] {
+    static CODES: OnceLock<Vec<u32>> = OnceLock::new();
+    CODES.get_or_init(|| {
+        let definitions = egui::FontDefinitions::default();
+        let mut codes: Vec<u32> = Vec::new();
+        for data in definitions.font_data.values() {
+            if let Ok(font) = FontRef::from_index(&data.font, data.index) {
+                codes.extend(font.charmap().mappings().map(|(code, _)| code));
+            }
+        }
+        codes.sort_unstable();
+        codes.dedup();
+        codes
     })
 }
 
 /// Whether any of egui's bundled faces maps `code`.
 fn bundled_has(code: u32) -> bool {
-    let ranges = bundled_ranges();
-    // The faces' ranges overlap one another, so look at every range that
-    // starts at or before `code`.
-    let i = ranges.partition_point(|&(start, _)| start <= code);
-    ranges[..i].iter().any(|&(_, end)| end >= code)
+    bundled_codes().binary_search(&code).is_ok()
 }
 
 /// Whether `text` has a Han, Kana or Hangul character that none of the
@@ -263,7 +370,7 @@ struct ChosenFace {
 }
 
 /// A candidate file that was read and opens as a font: its bytes and faces.
-type OpenedFile = (Vec<u8>, Vec<sfnt::Face>);
+type OpenedFile = (Vec<u8>, Vec<Face>);
 
 /// What a search of the candidates found.
 #[derive(Debug, Default)]
@@ -276,10 +383,10 @@ struct Found {
 
 /// The face of `faces` that maps all of `script`'s sample, nearest to a
 /// regular weight, and the first of those on a tie.
-fn best_face(faces: &[sfnt::Face], script: Script) -> Option<&sfnt::Face> {
+fn best_face(faces: &[Face], script: Script) -> Option<&Face> {
     faces
         .iter()
-        .filter(|face| script.sample().iter().all(|&code| face.maps(code)))
+        .filter(|face| face.scripts.contains(&script))
         .min_by_key(|face| face.weight.map_or(u16::MAX, |weight| weight.abs_diff(400)))
 }
 
@@ -288,8 +395,9 @@ fn best_face(faces: &[sfnt::Face], script: Script) -> Option<&sfnt::Face> {
 /// drawing it.
 ///
 /// A file that is missing is passed over without a word; one that cannot be
-/// read, does not open as a font, or has no face for the group it is listed
-/// for is passed over with a line in [`Found::problems`].
+/// read, does not open as a font, has no face for the group it is listed for,
+/// or whose face for it egui does not load ([`egui_loads`]) is passed over
+/// with a line in [`Found::problems`].
 fn choose(candidates: &[Candidate], read: &mut dyn FnMut(&Path) -> io::Result<Vec<u8>>) -> Found {
     let mut found = Found::default();
     // Each file is read at most once, and kept until it is taken or the
@@ -308,7 +416,7 @@ fn choose(candidates: &[Candidate], read: &mut dyn FnMut(&Path) -> io::Result<Ve
                 Some(slot) => slot,
                 None => {
                     let file = match read(&candidate.path) {
-                        Ok(bytes) => match sfnt::faces(&bytes) {
+                        Ok(bytes) => match faces(&bytes) {
                             Some(faces) => Some((bytes, faces)),
                             None => {
                                 found.problems.push(format!(
@@ -343,10 +451,18 @@ fn choose(candidates: &[Candidate], read: &mut dyn FnMut(&Path) -> io::Result<Ve
                 continue;
             };
             let index = face.index;
-            let scripts = Script::ALL
-                .into_iter()
-                .filter(|&s| s.sample().iter().all(|&code| face.maps(code)))
-                .collect();
+            let scripts = face.scripts.clone();
+            let loads = opened[slot]
+                .1
+                .as_ref()
+                .is_some_and(|(bytes, _)| egui_loads(bytes, index));
+            if !loads {
+                found.problems.push(format!(
+                    "{} (face {index}) does not load in egui",
+                    candidate.path.display()
+                ));
+                continue;
+            }
             let Some((bytes, _)) = opened[slot].1.take() else {
                 continue;
             };

@@ -19,7 +19,6 @@
 //!
 //! See `specs/gui/architecture.md` § "Fonts".
 
-mod sfnt;
 mod system;
 
 pub(crate) use system::SystemFallback;

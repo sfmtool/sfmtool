@@ -52,6 +52,7 @@ concerns with 10M+ points and GIL limitations for background image loading.
 | `eframe` | Used for its `egui_wgpu` sub-crate (renderer + screen descriptor), not the eframe event loop |
 | `egui` + `egui-winit` | Immediate-mode UI + winit integration |
 | `egui_dock` | Dockable tab layout for multi-panel interface |
+| `skrifa` | The font parser egui uses, at epaint's version; checks a system font file before egui is given it (§ "Fonts") |
 | `winit` | Window creation and event loop |
 | `pollster` | Blocking executor for wgpu async operations |
 | `rfd` | Native file open dialogs |
@@ -227,7 +228,7 @@ is prepended the same way rather than declaring those values again. See
 | `save_minimal_prompt.rs` | The workspace path `File > Save As Minimal...` asks about once its file dialog has named a file: a `SaveMinimalPrompt` holding the chosen file and the text of the field, prefilled with the path the save would measure, and reporting a `SaveMinimalAnswer` for the caller to write with rather than writing anything itself. See [saving.md](saving.md) § "The workspace path prompt". |
 | `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
 | `context_menu.rs` | `on_secondary_click(&response)`, the builder every context menu in the window is opened with. It is `egui::Popup::context_menu` restricted to `clicked_by(Secondary)`, and `on_secondary_click_where(&response, here)` for a widget that hit-tests its own parts, such as the Image Browser strip: egui's own builder also opens on a long touch, and on Windows the left mouse button reaches egui as a touch contact, so a left press rested for 0.8 s would otherwise put the menu up. See [scene-graph.md](scene-graph.md) § "Panel plumbing". |
-| `fonts.rs` | The viewer's fonts: egui's bundled `FontDefinitions` with Hack added as the proportional family's last face, installed on the egui context when it is made; `fonts/system.rs` adds faces the operating system has for Han, Kana and Hangul once text needs them, after checking each file with the small OpenType reader in `fonts/sfnt.rs`. See § "Fonts" below. |
+| `fonts.rs` | The viewer's fonts: egui's bundled `FontDefinitions` with Hack added as the proportional family's last face, installed on the egui context when it is made; `fonts/system.rs` adds faces the operating system has for Han, Kana and Hangul once text needs them, after checking each file with skrifa, the font parser egui uses. See § "Fonts" below. |
 | `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — Track View's table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
 
 ---
@@ -401,8 +402,9 @@ file is listed for the script groups it is expected to draw: *Han and Kana*
 **Selection.** The groups are taken in turn, Han and Kana first. A group that
 a face already taken draws is skipped; otherwise the first file on the list
 for that group that exists, opens and has a face drawing the group is taken.
-A face draws a group when it maps every character of a short sample of it
-(common Han ideographs, Hiragana and Katakana; common Hangul syllables). In a
+A face draws a group when its character map, as skrifa reads it, maps every
+character of a short sample of the group (common Han ideographs, Hiragana
+and Katakana; common Hangul syllables) to a glyph with an outline. In a
 `.ttc` collection the face taken is the one drawing the group whose `OS/2`
 weight is nearest 400 (regular), the first of those on a tie, and egui is
 given that face's index. Because a file that draws both groups is listed
@@ -424,22 +426,45 @@ ends. The next frame installs its faces with one `Context::set_fonts` and
 writes one Action Log line (kind Session, actor Viewer) naming the files and
 face indexes used. After that the fallback does nothing more for the rest of
 the session, whatever is opened later: it never searches twice and never
-runs two searches at once. On this development machine the search read both
-Windows files in about 20 ms with the files in the disk cache, and the first
+runs two searches at once. On this development machine the search read and
+checked both Windows files, the trial build of each in egui's fonts
+included, in about 20 ms with the files in the disk cache, and the first
 frame with the new fonts took about 17 ms longer to build them.
 
 **When none is found.** A missing file is passed over without a word. A file
-that cannot be read, does not open as a font, or has no face for its group
-is passed over too, and named in the Action Log line. When no face is found
-for a group, the line says so, the fonts are left as they were, and the
-characters draw as boxes as before. Nothing in this path panics: egui panics
-on a font file it cannot open, so each file is opened first by
-`fonts/sfnt.rs`, which reads the collection header, the table directory and
-the `cmap` and `head` tables with every read bounds-checked. It accepts only
-what egui's font reader also accepts, and refuses a face whose `head` table
-is missing, cut short or gives `0` units per em, which egui would divide by
-when it draws. It does not read the glyph outlines, so a file damaged inside
-them, rather than cut short, is not caught.
+that cannot be read, does not open as a font, has no face for its group, or
+whose face egui does not load is passed over too, and named in the Action
+Log line. When no face is found for a group, the line says so, the fonts are
+left as they were, and the characters draw as boxes as before.
+
+**Checking a file.** egui panics when a face in its font definitions does
+not open, so each file is checked before egui is given it, with
+[skrifa](https://crates.io/crates/skrifa), the font parser egui itself
+loads fonts with. `sfm-explorer` depends on it at the version and features
+epaint asks for, so it adds no crate to the build. A face passes when:
+
+- `skrifa::FontRef::from_index` opens it at its index, which is the call
+  egui makes and panics on when it fails;
+- every table its directory lists lies inside the file, so a file copied in
+  part is refused;
+- skrifa's metrics give it a `unitsPerEm` other than `0`, which egui divides
+  every glyph's scale by; and
+- it has outlines skrifa draws (`glyf`, CFF or CFF2), which is where egui
+  takes each glyph's shape from.
+
+The character map the sample is checked against, and the `OS/2` weight, are
+read from the face skrifa opened, so they are the ones egui uses. Then the
+face taken for a group is built, alone, into egui's fonts once on the search
+thread, inside `catch_unwind`: when egui builds its fonts it also gives the
+face to skrifa's autohinter and to the harfrust shaper, which read further
+tables, and skrifa 0.44's autohinter panics inside itself on some
+byte-changed copies of egui's own Hack that pass the checks above. A panic
+there refuses the face, with a line in the Action Log, rather
+than reaching the frame that installs it. What no check made when a face is
+loaded can catch is a glyph outline damaged so that drawing that glyph
+panics inside skrifa (read-fonts 0.41's simple-glyph reader does on one with
+no points but some flag bytes); a file from the operating system is not
+expected to carry one.
 
 `fonts/tests.rs` reads the non-ASCII characters out of the viewer's own
 string and character literals, test files left out, and fails on one that
@@ -457,13 +482,15 @@ is checked with the same function, `fonts::lacking_glyphs`, in the tests of
 the Action Log row's tooltip and of the Switch Camera Model banner.
 
 `fonts/system/tests.rs` tests the fallback without the machine's fonts: it
-builds small font files and collections in memory and passes the selection a
-reader over them, so the candidate lists, first-found order, the face index
-in a collection, damaged files and the one-time search are checked on any
-machine. It also checks that `fonts/sfnt.rs` reads the same character maps
-from egui's bundled faces as egui does, that it does not panic on random
-bytes, and that egui draws with each face it opens from a bundled face cut
-short. One test reads the real candidates
+builds small TrueType files and collections in memory, with the tables
+skrifa needs, and passes the selection a reader over them, so the
+candidate lists, first-found order, the face index in a collection, damaged
+files and the one-time search are checked on any machine. It also checks
+that the code points read from egui's bundled faces are the ones egui maps,
+that each bundled face passes the check and egui draws with it, that every
+cut-short copy of a bundled face is refused, that the check never panics on
+byte-changed copies or random bytes, and that egui builds its fonts from
+each byte-changed face the check passes. One test reads the real candidates
 and passes over itself when this machine has no Hangul face.
 
 ---

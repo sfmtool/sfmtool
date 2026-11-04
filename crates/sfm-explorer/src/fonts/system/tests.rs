@@ -1,12 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The system font fallback: the candidate lists, the choice among them, the
-//! check for text that needs a system face, and the one-time search.
+//! The system font fallback: the check of a font file, the candidate lists,
+//! the choice among them, the check for text that needs a system face, and
+//! the one-time search.
 //!
-//! The fonts a test reads are built here, not read from the machine, which
-//! may have none of the candidates. The one test that reads this machine's
-//! fonts passes over itself when none is there.
+//! The fonts a test reads are built here or are egui's bundled ones, not read
+//! from the machine, which may have none of the candidates. The one test that
+//! reads this machine's fonts passes over itself when none is there.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -17,9 +18,48 @@ use super::*;
 
 // ── Fonts built for the tests ──
 
-/// One face's tables: a format 12 `cmap` mapping each of `codes` to a glyph,
-/// a `head` table, and an `OS/2` table carrying `weight`, when there is one.
-fn tables(codes: &[u32], weight: Option<u16>) -> Vec<([u8; 4], Vec<u8>)> {
+/// The parts of a built face that a test can change.
+#[derive(Clone, Copy)]
+struct Build<'a> {
+    /// The characters the `cmap` maps, the `i`th in code order to glyph
+    /// `i + 1`.
+    codes: &'a [u32],
+    /// The `OS/2` table's weight, or no `OS/2` table.
+    weight: Option<u16>,
+    /// The number of glyphs the face has outlines for, glyph `0` included.
+    glyphs: usize,
+    units_per_em: u16,
+    /// Whether the `glyf` and `loca` tables, the outlines, are there.
+    outlines: bool,
+}
+
+impl<'a> Build<'a> {
+    /// A face mapping each of `codes` to a glyph of its own, with a regular
+    /// weight.
+    fn new(codes: &'a [u32]) -> Self {
+        Build {
+            codes,
+            weight: Some(400),
+            glyphs: codes.len() + 1,
+            units_per_em: 1000,
+            outlines: true,
+        }
+    }
+
+    fn weight(self, weight: Option<u16>) -> Self {
+        Build { weight, ..self }
+    }
+}
+
+/// One face's tables: a format 12 `cmap`, `head`, `hhea`, `hmtx` and
+/// `maxp`, the `glyf` and `loca` tables of empty TrueType outlines when the
+/// build has outlines, and an `OS/2` table when it has a weight.
+fn tables(build: Build) -> Vec<([u8; 4], Vec<u8>)> {
+    // A format 12 subtable's groups are in code order, which skrifa's
+    // binary search over them relies on.
+    let mut codes = build.codes.to_vec();
+    codes.sort_unstable();
+    let glyphs = u16::try_from(build.glyphs).expect("a glyph count that fits");
     let mut cmap = Vec::new();
     cmap.extend(0u16.to_be_bytes()); // version
     cmap.extend(1u16.to_be_bytes()); // one encoding record
@@ -36,13 +76,40 @@ fn tables(codes: &[u32], weight: Option<u16>) -> Vec<([u8; 4], Vec<u8>)> {
         cmap.extend(code.to_be_bytes());
         cmap.extend((i as u32 + 1).to_be_bytes());
     }
-    // A `head` table of the right size, with 1000 units per em.
+    // `head`: version 1.0, the magic number, the units per em, and short
+    // `loca` offsets.
     let mut head = vec![0u8; 54];
-    head[18..20].copy_from_slice(&1000u16.to_be_bytes());
-    let mut tables = vec![(*b"cmap", cmap), (*b"head", head)];
-    if let Some(weight) = weight {
-        let mut os2 = vec![0u8; 4];
-        os2.extend(weight.to_be_bytes());
+    head[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    head[12..16].copy_from_slice(&0x5F0F_3CF5u32.to_be_bytes());
+    head[18..20].copy_from_slice(&build.units_per_em.to_be_bytes());
+    // `hhea`: version 1.0 and one horizontal metric per glyph.
+    let mut hhea = vec![0u8; 36];
+    hhea[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+    hhea[34..36].copy_from_slice(&glyphs.to_be_bytes());
+    let hmtx: Vec<u8> = (0..glyphs)
+        .flat_map(|_| [500u16.to_be_bytes(), 0u16.to_be_bytes()].concat())
+        .collect();
+    // `maxp` version 0.5: the glyph count alone.
+    let mut maxp = 0x0000_5000u32.to_be_bytes().to_vec();
+    maxp.extend(glyphs.to_be_bytes());
+    let mut tables = vec![
+        (*b"cmap", cmap),
+        (*b"head", head),
+        (*b"hhea", hhea),
+        (*b"hmtx", hmtx),
+        (*b"maxp", maxp),
+    ];
+    if build.outlines {
+        // Every glyph is empty: each `loca` offset is `0`, and `glyf` holds
+        // nothing.
+        tables.push((*b"glyf", Vec::new()));
+        tables.push((*b"loca", vec![0u8; 2 * (usize::from(glyphs) + 1)]));
+    }
+    if let Some(weight) = build.weight {
+        // A version 0 `OS/2` table, the shortest skrifa reads, with the
+        // weight class at byte 4.
+        let mut os2 = vec![0u8; 78];
+        os2[4..6].copy_from_slice(&weight.to_be_bytes());
         tables.push((*b"OS/2", os2));
     }
     tables
@@ -69,8 +136,14 @@ fn face_bytes(base: usize, tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
 }
 
 /// A plain font file with one face.
+fn built(build: Build) -> Vec<u8> {
+    face_bytes(0, &tables(build))
+}
+
+/// A plain font file with one face mapping each of `codes`, of the weight
+/// `weight`.
 fn font(codes: &[u32], weight: Option<u16>) -> Vec<u8> {
-    face_bytes(0, &tables(codes, weight))
+    built(Build::new(codes).weight(weight))
 }
 
 /// A `.ttc` collection of the given faces.
@@ -80,7 +153,7 @@ fn collection(faces: &[(&[u32], Option<u16>)]) -> Vec<u8> {
     let mut offsets = Vec::new();
     let mut at = header;
     for &(codes, weight) in faces {
-        let body = face_bytes(at, &tables(codes, weight));
+        let body = face_bytes(at, &tables(Build::new(codes).weight(weight)));
         offsets.push(at as u32);
         at += body.len();
         bodies.push(body);
@@ -132,10 +205,19 @@ fn candidate(path: &str, scripts: &'static [Script]) -> Candidate {
     }
 }
 
-// ── The file format reader ──
+/// egui's bundled font files, by name.
+fn bundled_files() -> Vec<(String, Vec<u8>)> {
+    egui::FontDefinitions::default()
+        .font_data
+        .iter()
+        .map(|(name, data)| (name.clone(), data.font.to_vec()))
+        .collect()
+}
+
+// ── The check of a font file ──
 
 #[test]
-fn the_reader_maps_what_egui_maps_in_the_bundled_faces() {
+fn the_bundled_codes_are_what_egui_maps_in_the_bundled_faces() {
     let ctx = egui::Context::default();
     super::super::install(&ctx);
     crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |_| {});
@@ -143,10 +225,7 @@ fn the_reader_maps_what_egui_maps_in_the_bundled_faces() {
         let mut font = fonts.fonts.font(&egui::FontFamily::Monospace);
         font.characters().keys().map(|&c| u32::from(c)).collect()
     });
-    let mut ours = BTreeSet::new();
-    for &(start, end) in bundled_ranges() {
-        ours.extend(start..=end);
-    }
+    let ours: BTreeSet<u32> = bundled_codes().iter().copied().collect();
     // egui leaves out of the bundled faces a few code points it never draws.
     let dropped = BTreeSet::from([0x534D, 0x5350, 0xE0FF, 0xEFFD, 0xF0FF, 0xF200]);
     assert!(egui_has.len() > 1000, "egui's faces map {}", egui_has.len());
@@ -158,55 +237,103 @@ fn the_reader_maps_what_egui_maps_in_the_bundled_faces() {
     assert!(only_egui.is_empty(), "mapped by egui alone: {only_egui:x?}");
     assert!(
         only_ours.is_empty(),
-        "mapped by this reader alone: {only_ours:x?}"
+        "in the bundled codes alone: {only_ours:x?}"
     );
 }
 
 #[test]
-fn the_reader_opens_a_font_and_a_collection_and_refuses_damaged_files() {
-    let one = sfnt::faces(&font(&[0x41, 0xAC00], Some(400))).expect("a font");
-    assert_eq!(one.len(), 1);
-    assert!(one[0].maps(0xAC00) && one[0].maps(0x41) && !one[0].maps(0x42));
-    assert_eq!(one[0].weight, Some(400));
-
-    let ttc = collection(&[(&[0x41], Some(300)), (&[0x42], None)]);
-    let faces = sfnt::faces(&ttc).expect("a collection");
-    assert_eq!(
-        faces
-            .iter()
-            .map(|f| (f.index, f.weight))
-            .collect::<Vec<_>>(),
-        [(0, Some(300)), (1, None)]
-    );
-    assert!(faces[1].maps(0x42) && !faces[1].maps(0x41));
-
-    let good = font(&[0x41], None);
-    let no_head: Vec<_> = tables(&[0x41], None)
-        .into_iter()
-        .filter(|(tag, _)| tag != b"head")
-        .collect();
-    let zero_em: Vec<_> = tables(&[0x41], None)
-        .into_iter()
-        .map(|(tag, data)| match &tag {
-            b"head" => (tag, vec![0u8; 54]),
-            _ => (tag, data),
-        })
-        .collect();
-    for (what, bytes) in [
-        ("no head table", face_bytes(0, &no_head)),
-        ("zero units per em", face_bytes(0, &zero_em)),
-        ("empty", Vec::new()),
-        ("text", b"not a font at all".to_vec()),
-        ("cut short", good[..good.len() - 3].to_vec()),
-        ("collection header cut short", ttc[..14].to_vec()),
-    ] {
-        assert!(sfnt::faces(&bytes).is_none(), "{what} opened");
+fn every_bundled_face_opens() {
+    for (name, bytes) in bundled_files() {
+        let opened = faces(&bytes).unwrap_or_default();
+        assert_eq!(opened.len(), 1, "{name}");
+        assert!(opened[0].scripts.is_empty(), "{name}: {opened:?}");
     }
 }
 
 #[test]
-fn the_reader_never_panics_and_what_it_opens_egui_draws() {
-    // Random bytes, half of them starting like a font or a collection.
+fn the_check_opens_a_font_and_a_collection_and_refuses_damaged_files() {
+    let one = faces(&font(&both(), Some(400))).expect("a font");
+    assert_eq!(one.len(), 1);
+    assert_eq!((one[0].index, one[0].weight), (0, Some(400)));
+    assert_eq!(one[0].scripts, Script::ALL);
+    let korean = faces(&font(&hangul(), None)).expect("a font");
+    assert_eq!((korean[0].weight, &korean[0].scripts[..]), (None, HANGUL));
+
+    let kana = han_kana();
+    let ttc = collection(&[(&kana, Some(300)), (&[0x41], None)]);
+    let opened = faces(&ttc).expect("a collection");
+    assert_eq!(
+        opened
+            .iter()
+            .map(|f| (f.index, f.weight, f.scripts.clone()))
+            .collect::<Vec<_>>(),
+        [(0, Some(300), vec![Script::HanKana]), (1, None, vec![])]
+    );
+
+    // A sample character mapped to a glyph past the last one draws nothing,
+    // so the face does not draw the group, though it still opens.
+    let codes = both();
+    let short = faces(&built(Build {
+        glyphs: 3,
+        ..Build::new(&codes)
+    }))
+    .expect("a font");
+    assert!(short[0].scripts.is_empty(), "{short:?}");
+
+    let good = font(&han_kana(), None);
+    let no_head: Vec<_> = tables(Build::new(&kana))
+        .into_iter()
+        .filter(|(tag, _)| tag != b"head")
+        .collect();
+    for (what, bytes) in [
+        ("no head table", face_bytes(0, &no_head)),
+        (
+            "zero units per em",
+            built(Build {
+                units_per_em: 0,
+                ..Build::new(&kana)
+            }),
+        ),
+        (
+            "no outlines",
+            built(Build {
+                outlines: false,
+                ..Build::new(&kana)
+            }),
+        ),
+        ("empty", Vec::new()),
+        ("text", b"not a font at all".to_vec()),
+        ("table directory cut short", good[..20].to_vec()),
+        ("collection header cut short", ttc[..14].to_vec()),
+    ] {
+        assert!(faces(&bytes).is_none(), "{what} opened");
+    }
+}
+
+/// Build egui's fonts from `bytes`' face `index` alone, which is where egui
+/// opens the face and panics when it cannot, and lay out `text` in it, which
+/// draws each glyph of it.
+fn load_with(bytes: &[u8], index: u32, text: &str) {
+    let mut definitions = egui::FontDefinitions::empty();
+    let mut data = egui::FontData::from_owned(bytes.to_vec());
+    data.index = index;
+    definitions
+        .font_data
+        .insert("face".to_owned(), Arc::new(data));
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        definitions.families.insert(family, vec!["face".to_owned()]);
+    }
+    let mut fonts =
+        egui::epaint::text::Fonts::new(egui::epaint::text::TextOptions::default(), definitions);
+    fonts.with_pixels_per_point(1.0).layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(14.0),
+        egui::Color32::WHITE,
+    );
+}
+
+#[test]
+fn damaged_copies_of_the_bundled_fonts_never_panic_the_check() {
     let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
     let mut next = move || {
         seed ^= seed << 13;
@@ -214,6 +341,60 @@ fn the_reader_never_panics_and_what_it_opens_egui_draws() {
         seed ^= seed << 17;
         seed
     };
+    for (name, bytes) in bundled_files() {
+        // The whole file opens, and egui draws with it.
+        let mapped: Vec<char> = FontRef::new(&bytes)
+            .expect("a bundled face")
+            .charmap()
+            .mappings()
+            .filter_map(|(code, _)| char::from_u32(code))
+            .filter(|c| !c.is_control())
+            .collect();
+        let text: String = mapped.iter().step_by(mapped.len() / 40 + 1).collect();
+        assert!(text.chars().count() > 20, "{name}: {text:?}");
+        assert!(faces(&bytes).is_some(), "{name} did not open");
+        load_with(&bytes, 0, &text);
+
+        // Cut short at many lengths: the table directory or a table no
+        // longer fits in the file, so each is refused.
+        for step in 0..200 {
+            let cut = &bytes[..bytes.len() * step / 200];
+            assert!(faces(cut).is_none(), "{name} cut to {} opened", cut.len());
+        }
+
+        // Bytes changed at random places: the check never panics, and each
+        // face it opens and `egui_loads` accepts is one egui builds its fonts
+        // from. No text is drawn with it: a glyph outline damaged in some
+        // ways panics skrifa when egui draws that glyph, which no check made
+        // when a face is loaded can see.
+        let (mut opened, mut refused) = (0, 0);
+        for _ in 0..300 {
+            let mut damaged = bytes.clone();
+            for _ in 0..1 + next() % 8 {
+                // Half the changes in the table directory and the first
+                // tables, which is what opening a face reads.
+                let span = if next() % 2 == 0 { 512 } else { damaged.len() };
+                let at = (next() as usize) % span.min(damaged.len());
+                damaged[at] = next() as u8;
+            }
+            match faces(&damaged) {
+                Some(found) => {
+                    opened += 1;
+                    for face in found {
+                        if egui_loads(&damaged, face.index) {
+                            load_with(&damaged, face.index, "");
+                        }
+                    }
+                }
+                None => refused += 1,
+            }
+        }
+        assert!(
+            opened > 0 && refused > 0,
+            "{name}: {opened} opened, {refused} refused"
+        );
+    }
+    // Random bytes, half of them starting like a font or a collection.
     for i in 0..5000 {
         let len = (next() % 400) as usize;
         let mut bytes: Vec<u8> = (0..len).map(|_| next() as u8).collect();
@@ -221,33 +402,7 @@ fn the_reader_never_panics_and_what_it_opens_egui_draws() {
             let tag: &[u8; 4] = if i % 4 == 0 { b"ttcf" } else { b"\0\x01\0\0" };
             bytes[..4].copy_from_slice(tag);
         }
-        sfnt::faces(&bytes);
-    }
-    // A bundled face cut short at many lengths: each face the reader opens
-    // must be one egui builds and draws text with.
-    let hack = egui::FontDefinitions::default().font_data["Hack"]
-        .font
-        .to_vec();
-    for step in 1..40 {
-        let cut = &hack[..hack.len() * step / 40];
-        for face in sfnt::faces(cut).unwrap_or_default() {
-            let mut fonts = egui::FontDefinitions::default();
-            let mut data = egui::FontData::from_owned(cut.to_vec());
-            data.index = face.index;
-            fonts.font_data.insert("cut".to_owned(), Arc::new(data));
-            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts
-                    .families
-                    .entry(family)
-                    .or_default()
-                    .insert(0, "cut".to_owned());
-            }
-            let ctx = egui::Context::default();
-            ctx.set_fonts(fonts);
-            crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-                ui.label("Abc 123");
-            });
-        }
+        assert!(faces(&bytes).is_none(), "random bytes {i} opened");
     }
 }
 
