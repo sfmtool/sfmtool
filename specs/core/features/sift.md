@@ -111,6 +111,27 @@ conversion `sfm ws upgrade` makes are in
 [`sfmtool_core::workspace::feature_options`](../../../crates/sfmtool-core/src/workspace/feature_options.rs)
 ([workspace.md § Versions](../../workspace/workspace.md#versions)).
 
+`ImageReadings::new` makes an `ImageReadings` from stored readings, those of a
+`.sift` file's metadata or a `.sfmr`'s image columns, and refuses readings no
+image reads, a value that is not finite or a negative sharpness, `Exx` or `Eyy`
+(`ImageReadingsError::Invalid`). Two of the values the format has a reader
+derive from the tensor
+([sift-file-format.md § Gradient structure tensor](../../formats/sift-file-format.md#gradient-structure-tensor))
+are its methods, sfmtool's one derivation of them:
+
+- `ImageReadings::axis_ratio() -> Option<f32>`, `|log(Exx / Eyy)|` with the
+  natural logarithm, `f32::INFINITY` when exactly one of `Exx` and `Eyy` is 0
+  and `None` when both are, a flat image;
+- `ImageReadings::coherence() -> f32`,
+  `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, 0 for a flat image.
+
+Both are computed in `f32`, the precision the readings are stored in: they are
+compared within a capture to about three significant digits, and neither
+formula amplifies the rounding. The axis ratio is taken as `|ln Exx − ln Eyy|`,
+and the coherence's square root by `hypot`, with a tensor whose `Exx + Eyy` is
+beyond the range of an `f32` halved first, so a finite tensor gives a finite
+value however far apart its components are.
+
 ### 1. Scale-space pyramid
 
 Scale space is `L(x, y, σ) = G(x, y, σ) ∗ I(x, y)` with the 2D Gaussian
@@ -700,7 +721,7 @@ Each of those modules carries a `tests.rs` beside it, in a directory of its own 
 - `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 - `build_sift_files(image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None) -> (sift_paths, extracted, skipped)` -- the binding for `build_sift_files` ([files.rs](../../../crates/sfmtool-py/src/sift/files.rs)), raising `ValueError` for invalid options and `OSError` naming the image or file that failed
-- `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` (in single precision) and the `formula` and `quantize_bits` properties, `gray_from_rgb(image (H,W,3) u8, image_to_gray) -> (H,W) float32`, the detector's grey image, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness` and `gradient_structure_tensor_xx_yy_xy` -- the bindings for `ImageToGray`, `gray_from_rgb` and `image_readings_from_rgb` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3 or a reading that is not finite
+- `ImageToGray(formula, quantize_bits=None)`, with `ImageToGray.from_json(dict or str)`, `ImageToGray.from_gray_formula(str)`, `to_dict()`, `gray(r, g, b)` (in single precision) and the `formula` and `quantize_bits` properties, `gray_from_rgb(image (H,W,3) u8, image_to_gray) -> (H,W) float32`, the detector's grey image, and `image_readings_from_rgb(image (H,W,3) u8, image_to_gray) -> ImageReadings` with `sharpness`, `gradient_structure_tensor_xx_yy_xy`, `axis_ratio` (`None` for a flat image) and `coherence`, and `ImageReadings(sharpness, gradient_structure_tensor_xx_yy_xy)` from stored readings -- the bindings for `ImageToGray`, `gray_from_rgb`, `image_readings_from_rgb` and `ImageReadings::new` ([image_readings.rs](../../../crates/sfmtool-py/src/sift/image_readings.rs)), raising `ValueError` for a refused conversion, a last axis other than 3, a reading that is not finite or stored readings `ImageReadings::new` refuses
 
 The `params` dict the first three take is read as the `feature_options` JSON
 object and parsed by `SiftParams::from_feature_options`, so a key means the same

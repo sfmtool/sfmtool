@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 from sfmtool.reconstruction import SfmrReconstruction
@@ -188,7 +189,12 @@ def test_inspect_sift_verbose(seoul_bull_workspace):
     assert "Top 5 features" in out
 
 
-def _write_sift(sample_sift_data, path: Path, version: int) -> Path:
+def _write_sift(
+    sample_sift_data,
+    path: Path,
+    version: int,
+    tensor_xx_yy_xy=(0.004, 0.001, 0.001),
+) -> Path:
     """A `.sift` at ``path`` from the sample data: version 2 with readings
     chosen so the derived values are round, or version 1 with none."""
     from sfmtool.fileio import write_sift
@@ -200,7 +206,7 @@ def _write_sift(sample_sift_data, path: Path, version: int) -> Path:
     metadata = dict(metadata)
     if version == 2:
         metadata["sharpness"] = 0.0125
-        metadata["gradient_structure_tensor_xx_yy_xy"] = [0.004, 0.001, 0.001]
+        metadata["gradient_structure_tensor_xx_yy_xy"] = list(tensor_xx_yy_xy)
     else:
         metadata["version"] = 1
         del metadata["sharpness"]
@@ -251,6 +257,56 @@ def test_inspect_sift_shows_version_and_readings(sample_sift_data, tmp_path: Pat
     verbose = CliRunner().invoke(main, ["inspect", "-v", str(path)])
     assert verbose.exit_code == 0, verbose.output
     assert _row_value(verbose.output, "Image to gray") == "G, rounded to 8 bits"
+
+
+@pytest.mark.parametrize(
+    "tensor, axis_ratio, coherence",
+    [
+        # Exactly one of Exx and Eyy is 0: all gradient along one axis.
+        ((0.004, 0.0, 0.0), "inf", "1.000"),
+        ((0.0, 0.004, 0.0), "inf", "1.000"),
+        # Both are 0: a flat image.
+        ((0.0, 0.0, 0.0), "n/a (flat image)", "0.000"),
+        # Exy enters the coherence squared, so its sign does not change it.
+        ((0.004, 0.001, -0.001), "1.386", "0.721"),
+    ],
+)
+def test_inspect_sift_derived_value_edge_cases(
+    sample_sift_data, tmp_path: Path, tensor, axis_ratio, coherence
+):
+    path = _write_sift(sample_sift_data, tmp_path / "v2.sift", 2, tensor)
+    result = CliRunner().invoke(main, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    assert _row_value(result.output, "Axis ratio") == axis_ratio
+    assert _row_value(result.output, "Coherence") == coherence
+
+
+def test_inspect_sift_with_invalid_readings(sample_sift_data, tmp_path: Path):
+    """A .sift whose stored tensor no image reads says its readings are
+    invalid rather than deriving from them; changed after it was written, it
+    also fails its integrity check."""
+    import json
+    import zipfile
+    from compression import zstd
+
+    good = _write_sift(sample_sift_data, tmp_path / "good.sift", version=2)
+    bad = tmp_path / "bad.sift"
+    with zipfile.ZipFile(good) as src, zipfile.ZipFile(bad, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info)
+            if info.filename == "metadata.json.zst":
+                metadata = json.loads(zstd.decompress(data))
+                metadata["gradient_structure_tensor_xx_yy_xy"] = [-0.004, 0.001, 0.0]
+                data = zstd.compress(json.dumps(metadata).encode())
+            dst.writestr(info, data)
+    result = CliRunner().invoke(main, ["inspect", str(bad)])
+    assert result.exit_code != 0
+    out = result.output
+    assert _row_value(out, "Image readings").startswith("invalid (")
+    assert "must be finite" in _row_value(out, "Image readings")
+    assert _row_value(out, "Integrity") == "FAILED"
+    assert "Axis ratio" not in out
+    assert "Coherence" not in out
 
 
 def test_inspect_sift_version_1_has_no_readings(sample_sift_data, tmp_path: Path):

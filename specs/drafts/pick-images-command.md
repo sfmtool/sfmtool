@@ -499,34 +499,10 @@ and writes the lists.
 
 ### One derivation of the tensor's values
 
-Today the axis ratio and the coherence are derived only in Python, by
-`_image_reading_rows` in [`analyze/summary.py`](../../src/sfmtool/analyze/summary.py)
-for `sfm inspect`. The walk needs the same two values in Rust, and a second
-derivation would be the kind of copy
-[STANDARDS.md § Logic lives in Rust](../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers)
-rules out. So the derivation moves to one place, two methods on
-`ImageReadings` in
-[`image_readings.rs`](../../crates/sfmtool-core/src/features/sift/image_readings.rs):
-
-```rust
-impl ImageReadings {
-    /// `|log(Exx / Eyy)|`; `f32::INFINITY` when exactly one of the two is 0,
-    /// `None` when both are (a flat image).
-    pub fn axis_ratio(&self) -> Option<f32>;
-    /// `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, 0 for a flat image.
-    pub fn coherence(&self) -> f32;
-}
-```
-
-These are the cases `_image_reading_rows` prints today (`inf`, and
-`n/a (flat image)` when both are 0). They are computed in `f32`, the
-precision the readings are stored in, since the use compares readings within a
-capture to about three significant digits and nothing in either formula
-amplifies the rounding. The binding `sfmtool.sift.ImageReadings` gains the
-two as getters and a constructor from a stored sharpness and tensor, so that
-`sfm inspect` builds one from a `.sift` file's metadata or a `.sfmr`'s columns
-and prints its `axis_ratio` and `coherence`, and `_image_reading_rows` no
-longer derives them itself. `pick_images` calls the same methods.
+The walk takes the axis ratio and the coherence from
+`ImageReadings::axis_ratio` and `ImageReadings::coherence`
+([sift.md](../core/features/sift.md)), the methods whose values
+`sfm inspect` prints.
 
 ### Rust interface
 

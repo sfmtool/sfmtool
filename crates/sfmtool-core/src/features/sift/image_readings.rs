@@ -19,7 +19,9 @@
 //! Both are defined in `specs/formats/sift-file-format.md` § "The reading
 //! image", "Sharpness" and "Gradient structure tensor", which also says what
 //! a reader derives from the tensor (coherence, dominant direction, axis
-//! ratio). [`image_readings_from_rgb`] is the one implementation of both.
+//! ratio). [`image_readings_from_rgb`] is the one implementation of both, and
+//! [`ImageReadings::axis_ratio`] and [`ImageReadings::coherence`] the one
+//! derivation of those two values.
 //!
 //! **Precision.** Everything is single precision, `f32`. The readings are
 //! compared within a capture, as ranks, ratios to the median and z-scores,
@@ -68,6 +70,83 @@ impl ImageReadings {
         sharpness: 0.0,
         gradient_structure_tensor_xx_yy_xy: [0.0; 3],
     };
+
+    /// The readings as stored, in a `.sift` file's metadata or a `.sfmr`'s
+    /// image columns.
+    ///
+    /// # Errors
+    ///
+    /// [`ImageReadingsError::Invalid`] when a value is not finite, or the
+    /// sharpness, `Exx` or `Eyy` is negative, which no image reads.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use sfmtool_core::features::sift::ImageReadings;
+    ///
+    /// let readings = ImageReadings::new(0.0125, [0.004, 0.001, 0.001])?;
+    /// // |log(0.004 / 0.001)| = log 4.
+    /// assert!((readings.axis_ratio().unwrap() - 4f32.ln()).abs() < 1e-6);
+    /// assert!(ImageReadings::new(0.0125, [-0.004, 0.001, 0.001]).is_err());
+    /// # Ok::<(), sfmtool_core::features::sift::ImageReadingsError>(())
+    /// ```
+    pub fn new(
+        sharpness: f32,
+        gradient_structure_tensor_xx_yy_xy: [f32; 3],
+    ) -> Result<Self, ImageReadingsError> {
+        let readings = Self {
+            sharpness,
+            gradient_structure_tensor_xx_yy_xy,
+        };
+        let [xx, yy, xy] = gradient_structure_tensor_xx_yy_xy;
+        let finite = [sharpness, xx, yy, xy].iter().all(|v| v.is_finite());
+        if finite && sharpness >= 0.0 && xx >= 0.0 && yy >= 0.0 {
+            Ok(readings)
+        } else {
+            Err(ImageReadingsError::Invalid { readings })
+        }
+    }
+
+    /// The axis ratio `|log(Exx / Eyy)|`, with the natural logarithm: how far
+    /// the gradient energy along `x` differs from that along `y`.
+    /// `f32::INFINITY` when exactly one of `Exx` and `Eyy` is 0, and `None`
+    /// when both are, a flat image.
+    ///
+    /// It is taken as `|ln Exx − ln Eyy|`, so that a ratio beyond the range of
+    /// an `f32` still gives a finite value. Each logarithm is within about
+    /// `|ln E| · 2^-24` of exact, under `10^-5` for any `f32`, against the
+    /// three decimals the value is compared to.
+    pub fn axis_ratio(&self) -> Option<f32> {
+        let [xx, yy, _] = self.gradient_structure_tensor_xx_yy_xy;
+        if xx > 0.0 && yy > 0.0 {
+            Some((xx.ln() - yy.ln()).abs())
+        } else if xx == yy {
+            None
+        } else {
+            Some(f32::INFINITY)
+        }
+    }
+
+    /// The coherence `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, from 0
+    /// (gradients equally strong in every direction) to 1 (all gradients
+    /// along one direction), and 0 for a flat image, where `Exx + Eyy = 0`.
+    ///
+    /// The square root is taken by `hypot`, which squares nothing, and a
+    /// tensor whose `Exx + Eyy` is beyond the range of an `f32` is halved
+    /// first, which leaves the ratio unchanged, so a finite tensor gives a
+    /// finite coherence.
+    pub fn coherence(&self) -> f32 {
+        let [mut xx, mut yy, mut xy] = self.gradient_structure_tensor_xx_yy_xy;
+        if !(xx + yy).is_finite() {
+            (xx, yy, xy) = (0.5 * xx, 0.5 * yy, 0.5 * xy);
+        }
+        let energy = xx + yy;
+        if energy > 0.0 {
+            (xx - yy).hypot(2.0 * xy) / energy
+        } else {
+            0.0
+        }
+    }
 }
 
 /// Why [`image_readings_from_rgb`] could not take an image's readings.
@@ -90,6 +169,12 @@ pub enum ImageReadingsError {
         /// The readings as computed.
         readings: ImageReadings,
     },
+    /// Stored readings given to [`ImageReadings::new`] that no image reads: a
+    /// value that is not finite, or a negative sharpness, `Exx` or `Eyy`.
+    Invalid {
+        /// The readings as given.
+        readings: ImageReadings,
+    },
 }
 
 impl std::fmt::Display for ImageReadingsError {
@@ -105,6 +190,12 @@ impl std::fmt::Display for ImageReadingsError {
             } => write!(
                 f,
                 "the image's readings are not finite under image_to_gray {image_to_gray} \
+                 (sharpness {}, gradient structure tensor {:?})",
+                readings.sharpness, readings.gradient_structure_tensor_xx_yy_xy
+            ),
+            Self::Invalid { readings } => write!(
+                f,
+                "image readings must be finite, with the sharpness, Exx and Eyy not negative \
                  (sharpness {}, gradient structure tensor {:?})",
                 readings.sharpness, readings.gradient_structure_tensor_xx_yy_xy
             ),

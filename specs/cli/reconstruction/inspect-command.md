@@ -206,7 +206,11 @@ The default output is a compact label/value block. The fields per type:
   feature tool, the image readings, integrity. A version 2 file's readings are
   four lines, `Sharpness`, `Gradient structure tensor` (`Exx`, `Eyy`,
   `Exy`), `Axis ratio` and `Coherence`; a version 1 file, which holds none,
-  gets one line `Image readings: none`.
+  gets one line `Image readings: none`, and a file whose stored readings no
+  image reads (a value that is not finite, or a negative sharpness, `Exx` or
+  `Eyy`) one line `Image readings: invalid (<reason>)`. The writer refuses
+  such readings, so a file holds them only when it was changed after it was
+  written, which its integrity check reports separately.
 - **`.matches`** — format version, matching method (tool + version), image
   count, then for a pairwise file the image-pair and match counts, or for a
   file whose backbone is clusters a `Backbone` line reading `clusters`, the
@@ -368,7 +372,11 @@ Image readings:
 
 The axis ratio `|log(Exx / Eyy)|` and the coherence
 `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, with the natural logarithm, are
-two of the values the format spec has a reader derive from the tensor
+the `axis_ratio` and `coherence` of the image's `sfmtool.sift.ImageReadings`,
+made from a `.sift` file's stored readings or measured from an image file
+([sift.md](../../core/features/sift.md), `ImageReadings::axis_ratio` and
+`ImageReadings::coherence`), printed to three decimals. They are two of the
+values the format spec has a reader derive from the tensor
 ([§ Gradient structure tensor](../../formats/sift-file-format.md#gradient-structure-tensor)),
 and the two that the format's
 [measurements](../../formats/sift-file-format-measurements.md) found to pick
