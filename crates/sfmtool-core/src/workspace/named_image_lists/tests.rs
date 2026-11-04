@@ -976,3 +976,362 @@ fn a_slice_that_keeps_nothing_names_the_file_list_slice_and_length() {
         .unwrap_err();
     assert!(matches!(e, NamedImageListsError::UnknownList { .. }), "{e}");
 }
+
+// ── Writing ──────────────────────────────────────────────────────────────
+
+/// The example file of `specs/workspace/named-image-lists.md`, in the layout
+/// the writer writes.
+const SPEC_EXAMPLE: &str = r#"{
+  "version": 1,
+  "named_image_lists": {
+    "walk1_sharp": [
+      { "pattern": "frames/walk1_%04d.jpg", "range": "1-120,131-400" }
+    ],
+    "rig_sharp": [
+      { "pattern": "rig/*/frame_%05d.jpg", "range": "10-900:2" }
+    ],
+    "hero_shots": [
+      { "pattern": "photos/DSC_0042.JPG" },
+      { "pattern": "photos/DSC_0057.JPG" }
+    ]
+  }
+}
+"#;
+
+fn entry(pattern: &str, range_text: Option<&str>) -> NamedImageListEntry {
+    NamedImageListEntry::new(pattern, range_text.map(range))
+}
+
+fn list(name: &str, entries: Vec<NamedImageListEntry>) -> NamedImageList {
+    NamedImageList::new(name, entries)
+}
+
+fn lists_file(root: &Path) -> String {
+    std::fs::read_to_string(root.join(NAMED_IMAGE_LISTS_FILE_NAME)).unwrap()
+}
+
+fn names(lists: &NamedImageLists) -> Vec<&str> {
+    lists.lists().iter().map(|l| l.name()).collect()
+}
+
+/// The names in the workspace root, sorted, so a test can see that no
+/// temporary file was left beside the lists file.
+fn root_names(root: &Path) -> Vec<String> {
+    let mut found: Vec<String> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    found.sort();
+    found
+}
+
+#[test]
+fn writing_creates_the_file_when_the_workspace_has_none() {
+    let dir = workspace();
+    let path = NamedImageLists::write_lists(
+        dir.path(),
+        &[
+            list("walk1", vec![entry("frames/walk1_%04d.jpg", Some("1-5,9"))]),
+            list("hero", vec![entry("photos/DSC_0042.JPG", None)]),
+            list("empty", vec![]),
+        ],
+        false,
+    )
+    .unwrap();
+    assert_eq!(path, dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME));
+    assert_eq!(
+        lists_file(dir.path()),
+        r#"{
+  "version": 1,
+  "named_image_lists": {
+    "walk1": [
+      { "pattern": "frames/walk1_%04d.jpg", "range": "1-5,9" }
+    ],
+    "hero": [
+      { "pattern": "photos/DSC_0042.JPG" }
+    ],
+    "empty": []
+  }
+}
+"#
+    );
+    let read = NamedImageLists::read(dir.path()).unwrap().unwrap();
+    assert_eq!(names(&read), ["walk1", "hero", "empty"]);
+    assert_eq!(read.lists()[1].entries()[0].range(), None);
+    assert_eq!(
+        root_names(dir.path()),
+        [NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_FILE_NAME]
+    );
+}
+
+#[test]
+fn writing_no_lists_to_a_new_file_writes_an_empty_lists_object() {
+    let dir = workspace();
+    NamedImageLists::write_lists(dir.path(), &[], false).unwrap();
+    assert_eq!(
+        lists_file(dir.path()),
+        "{\n  \"version\": 1,\n  \"named_image_lists\": {}\n}\n"
+    );
+}
+
+#[test]
+fn a_new_list_goes_at_the_end_and_the_existing_text_is_unchanged() {
+    let dir = workspace();
+    std::fs::write(dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME), SPEC_EXAMPLE).unwrap();
+    NamedImageLists::write_lists(
+        dir.path(),
+        &[list(
+            "walk2",
+            vec![entry("frames/walk2_%d.jpg", Some("3-30:3"))],
+        )],
+        false,
+    )
+    .unwrap();
+    let before_end = SPEC_EXAMPLE.strip_suffix("\n  }\n}\n").unwrap();
+    assert_eq!(
+        lists_file(dir.path()),
+        format!(
+            "{before_end},\n    \"walk2\": [\n      {{ \"pattern\": \"frames/walk2_%d.jpg\", \
+             \"range\": \"3-30:3\" }}\n    ]\n  }}\n}}\n"
+        )
+    );
+}
+
+#[test]
+fn replacing_a_list_with_itself_leaves_the_file_byte_for_byte() {
+    let dir = workspace();
+    std::fs::write(dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME), SPEC_EXAMPLE).unwrap();
+    let read = NamedImageLists::read(dir.path()).unwrap().unwrap();
+    let rig = read.get("rig_sharp").unwrap().clone();
+    NamedImageLists::write_lists(dir.path(), &[rig], true).unwrap();
+    assert_eq!(lists_file(dir.path()), SPEC_EXAMPLE);
+}
+
+#[test]
+fn an_existing_range_is_written_from_its_text_and_a_new_one_by_display() {
+    let dir = workspace();
+    // A range that `RangeExpr`'s `Display` would write as "1-3,7", in a
+    // layout other than the writer's.
+    std::fs::write(
+        dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME),
+        one_list(r#"{"a": [{"range": " 1,2,3, 7", "pattern": "f_%d.jpg"}]}"#),
+    )
+    .unwrap();
+    NamedImageLists::write_lists(
+        dir.path(),
+        &[list("b", vec![entry("g_%d.jpg", Some("1,2,3, 7"))])],
+        false,
+    )
+    .unwrap();
+    let text = lists_file(dir.path());
+    assert!(
+        text.contains(r#"{ "pattern": "f_%d.jpg", "range": " 1,2,3, 7" }"#),
+        "{text}"
+    );
+    assert!(
+        text.contains(r#"{ "pattern": "g_%d.jpg", "range": "1-3,7" }"#),
+        "{text}"
+    );
+    let read = NamedImageLists::read(dir.path()).unwrap().unwrap();
+    assert_eq!(read.lists()[0].entries()[0].range(), Some(&range("1-3,7")));
+}
+
+#[test]
+fn a_name_the_file_defines_is_refused_without_replace_and_nothing_is_written() {
+    let dir = workspace();
+    std::fs::write(dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME), SPEC_EXAMPLE).unwrap();
+    let e = NamedImageLists::write_lists(
+        dir.path(),
+        &[
+            list("hero_shots", vec![entry("photos/DSC_0001.JPG", None)]),
+            list("new", vec![entry("photos/DSC_0002.JPG", None)]),
+            list("walk1_sharp", vec![entry("frames/walk1_%04d.jpg", None)]),
+        ],
+        false,
+    )
+    .unwrap_err();
+    let NamedImageListsError::ListExists { names, .. } = &e else {
+        panic!("expected ListExists, got: {e}");
+    };
+    assert_eq!(names, &["hero_shots", "walk1_sharp"]);
+    let path = dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME);
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{0}: the named image list 'hero_shots' is already defined, so nothing was \
+             written\n{0}: the named image list 'walk1_sharp' is already defined, so nothing \
+             was written",
+            path.display()
+        )
+    );
+    assert_eq!(lists_file(dir.path()), SPEC_EXAMPLE);
+}
+
+#[test]
+fn a_replaced_list_keeps_its_place_and_new_lists_follow_in_order() {
+    let dir = workspace();
+    std::fs::write(dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME), SPEC_EXAMPLE).unwrap();
+    NamedImageLists::write_lists(
+        dir.path(),
+        &[
+            list("zeta", vec![entry("z.jpg", None)]),
+            list(
+                "rig_sharp",
+                vec![entry("rig/cam0/frame_%05d.jpg", Some("1-9"))],
+            ),
+            list("alpha", vec![]),
+        ],
+        true,
+    )
+    .unwrap();
+    let read = NamedImageLists::read(dir.path()).unwrap().unwrap();
+    assert_eq!(
+        names(&read),
+        ["walk1_sharp", "rig_sharp", "hero_shots", "zeta", "alpha"]
+    );
+    let rig = read.get("rig_sharp").unwrap();
+    assert_eq!(rig.entries().len(), 1);
+    assert_eq!(rig.entries()[0].pattern(), "rig/cam0/frame_%05d.jpg");
+    assert_eq!(rig.entries()[0].range(), Some(&range("1-9")));
+    // The lists that were not replaced are written as they were.
+    let text = lists_file(dir.path());
+    assert!(
+        text.starts_with(
+            "{\n  \"version\": 1,\n  \"named_image_lists\": {\n    \"walk1_sharp\": [\n      \
+             { \"pattern\": \"frames/walk1_%04d.jpg\", \"range\": \"1-120,131-400\" }\n    ],\n"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "    \"hero_shots\": [\n      { \"pattern\": \"photos/DSC_0042.JPG\" },\n      \
+             { \"pattern\": \"photos/DSC_0057.JPG\" }\n    ],\n"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn new_lists_that_break_the_rules_are_refused_and_nothing_is_written() {
+    let dir = workspace();
+    // Values whose gaps alternate between 1 and more than 1 make a range whose
+    // `Display` has more sub-ranges than a range expression may hold.
+    let squares: Vec<i64> = (0..30_000).map(|i: i64| i * i).collect();
+    let too_long = RangeExpr::from_values(squares).unwrap();
+    let e = NamedImageLists::write_lists(
+        dir.path(),
+        &[
+            list("1-10", vec![entry("a_%d.jpg", None)]),
+            list("bad_pattern", vec![entry("../a.jpg", None)]),
+            list("no_field", vec![entry("a.jpg", Some("1-3"))]),
+            list(
+                "empty_range",
+                vec![NamedImageListEntry::new(
+                    "a_%d.jpg",
+                    Some(RangeExpr::from_values(vec![]).unwrap()),
+                )],
+            ),
+            list(
+                "too_long",
+                vec![NamedImageListEntry::new("a_%d.jpg", Some(too_long))],
+            ),
+            list("good", vec![entry("a_%d.jpg", None)]),
+            list("good", vec![entry("b_%d.jpg", None)]),
+        ],
+        false,
+    )
+    .unwrap_err();
+    let path = dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME);
+    for line in e.to_string().lines() {
+        assert!(
+            line.starts_with(&format!("{}: nothing was written: ", path.display())),
+            "{line}"
+        );
+    }
+    let NamedImageListsError::InvalidNewLists { problems, .. } = e else {
+        panic!("expected InvalidNewLists, got: {e}");
+    };
+    assert_eq!(problems.len(), 6, "{problems:#?}");
+    assert!(problems[0].starts_with("the new list name '1-10' is not valid; "));
+    assert!(problems[1].starts_with("new list 'bad_pattern' entry 1: "));
+    assert!(problems[2].starts_with("new list 'no_field' entry 1: has a 'range'"));
+    assert!(problems[3].starts_with("new list 'empty_range' entry 1: 'range' '' "));
+    assert!(problems[4].starts_with("new list 'too_long' entry 1: 'range' '0,1,4,9,"));
+    assert!(
+        problems[4].contains("too many sub-ranges"),
+        "{}",
+        &problems[4][problems[4].len() - 200..]
+    );
+    assert_eq!(problems[5], "the new list 'good' is given more than once");
+    assert!(!path.exists());
+
+    // An existing file is left as it was.
+    std::fs::write(&path, SPEC_EXAMPLE).unwrap();
+    let e = NamedImageLists::write_lists(
+        dir.path(),
+        &[list("x", vec![entry("a.jpg", Some("1"))])],
+        true,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(e, NamedImageListsError::InvalidNewLists { .. }),
+        "{e}"
+    );
+    assert_eq!(lists_file(dir.path()), SPEC_EXAMPLE);
+}
+
+#[test]
+fn a_lists_file_that_fails_the_readers_checks_is_refused_and_left_untouched() {
+    let dir = workspace();
+    let path = dir.path().join(NAMED_IMAGE_LISTS_FILE_NAME);
+    let new = [list("new", vec![entry("a.jpg", None)])];
+    let invalid_entry_key = one_list(r#"{"a": [{"pattern": "a.jpg", "colour": "red"}]}"#);
+    let unknown_top_level_key = r#"{"version": 1, "named_image_lists": {}, "comment": "x"}"#;
+    let other_version = r#"{"version": 2, "anything": []}"#;
+    let not_json = "{\"version\": 1,";
+    for text in [
+        invalid_entry_key.as_str(),
+        unknown_top_level_key,
+        other_version,
+        not_json,
+    ] {
+        std::fs::write(&path, text).unwrap();
+        let e = NamedImageLists::write_lists(dir.path(), &new, true).unwrap_err();
+        let expected = if text == other_version {
+            matches!(e, NamedImageListsError::UnsupportedVersion { .. })
+        } else if text == not_json {
+            matches!(e, NamedImageListsError::InvalidJson { .. })
+        } else {
+            matches!(e, NamedImageListsError::Invalid { .. })
+        };
+        assert!(expected, "{text}: {e}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
+    assert_eq!(
+        root_names(dir.path()),
+        [NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_FILE_NAME]
+    );
+}
+
+#[test]
+fn writing_into_a_directory_that_is_not_a_workspace_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = NamedImageLists::write_lists(dir.path(), &[list("a", vec![])], false).unwrap_err();
+    assert!(
+        matches!(e, NamedImageListsError::NotAWorkspace { .. }),
+        "{e}"
+    );
+    assert!(root_names(dir.path()).is_empty());
+}
+
+#[test]
+fn a_pattern_that_json_escapes_reads_back_the_same() {
+    let dir = workspace();
+    let pattern = "say \"hi\"/caf\u{e9}\ttab_%d.jpg";
+    NamedImageLists::write_lists(dir.path(), &[list("q", vec![entry(pattern, None)])], false)
+        .unwrap();
+    let text = lists_file(dir.path());
+    assert!(text.contains(r#""say \"hi\"/café\ttab_%d.jpg""#), "{text}");
+    let read = NamedImageLists::read(dir.path()).unwrap().unwrap();
+    assert_eq!(read.get("q").unwrap().entries()[0].pattern(), pattern);
+}

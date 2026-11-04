@@ -340,3 +340,89 @@ def test_slice_members_that_keep_nothing_raise(workspace):
         )
     with pytest.raises(ValueError, match="no named image list is called 'nope'"):
         lists.slice_members("nope", NamedImageListSlice(), members)
+
+
+def test_write_lists_creates_appends_and_resolves(workspace):
+    path = NamedImageLists.write_lists(
+        workspace,
+        [
+            ("walk1_picked", [("frames/walk1_%04d.jpg", RangeExpr("1,2,3,10"))]),
+            ("hero", [("photos/DSC_0042.JPG", None)]),
+        ],
+    )
+    assert path == workspace / NAMED_IMAGE_LISTS_FILE_NAME
+    lists = NamedImageLists.read(workspace)
+    assert lists.names == ["walk1_picked", "hero"]
+    assert [m.frame for m in lists.resolve("walk1_picked")] == [1, 2, 3, 10]
+    assert [m.path for m in lists.resolve("hero")] == ["photos/DSC_0042.JPG"]
+    # A new range is written as `str(RangeExpr)` writes it.
+    assert '"range": "1-3,10"' in path.read_text()
+
+    NamedImageLists.write_lists(workspace, list({"rig": []}.items()))
+    assert NamedImageLists.read(workspace).names == ["walk1_picked", "hero", "rig"]
+
+
+def test_write_lists_keeps_existing_lists_and_their_range_text(workspace):
+    _write_lists(workspace, _LISTS)
+    NamedImageLists.write_lists(
+        workspace,
+        [
+            ("rig_sharp", [("rig/cam0/frame_%05d.jpg", RangeExpr("1-2"))]),
+            ("extra", [("photos/DSC_0057.JPG", None)]),
+        ],
+        replace=True,
+    )
+    lists = NamedImageLists.read(workspace)
+    assert lists.names == ["walk1_sharp", "rig_sharp", "hero_shots", "extra"]
+    assert [m.path for m in lists.resolve("rig_sharp")] == [
+        "rig/cam0/frame_00001.jpg",
+        "rig/cam0/frame_00002.jpg",
+    ]
+    written = json.loads((workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())
+    assert written["named_image_lists"]["walk1_sharp"] == _LISTS["walk1_sharp"]
+    assert written["named_image_lists"]["hero_shots"] == _LISTS["hero_shots"]
+
+
+def test_write_lists_refuses_a_defined_name_and_leaves_the_file(workspace):
+    _write_lists(workspace, _LISTS)
+    lists_file = workspace / NAMED_IMAGE_LISTS_FILE_NAME
+    before = lists_file.read_bytes()
+    with pytest.raises(ValueError) as e:
+        NamedImageLists.write_lists(
+            workspace, [("hero_shots", [("photos/DSC_0042.JPG", None)])]
+        )
+    assert str(e.value) == (
+        f"{lists_file}: the named image list 'hero_shots' is already defined, "
+        "so nothing was written"
+    )
+    assert lists_file.read_bytes() == before
+
+
+def test_write_lists_refuses_bad_lists_and_bad_files(workspace, tmp_path_factory):
+    lists_file = workspace / NAMED_IMAGE_LISTS_FILE_NAME
+    with pytest.raises(ValueError) as e:
+        NamedImageLists.write_lists(
+            workspace,
+            [
+                ("1-10", []),
+                ("no_field", [("photos/DSC_0042.JPG", RangeExpr("1"))]),
+            ],
+        )
+    lines = str(e.value).splitlines()
+    assert len(lines) == 2
+    assert all(
+        line.startswith(f"{lists_file}: nothing was written: ") for line in lines
+    )
+    assert not lists_file.exists()
+
+    lists_file.write_text('{"version": 1, "named_image_lists": {}, "extra": 1}')
+    with pytest.raises(ValueError, match="unknown top-level key 'extra'"):
+        NamedImageLists.write_lists(workspace, [("a", [])])
+    assert (
+        lists_file.read_text() == '{"version": 1, "named_image_lists": {}, "extra": 1}'
+    )
+
+    not_a_workspace = tmp_path_factory.mktemp("not_a_workspace")
+    with pytest.raises(ValueError, match="not a workspace root"):
+        NamedImageLists.write_lists(not_a_workspace, [("a", [])])
+    assert list(not_a_workspace.iterdir()) == []

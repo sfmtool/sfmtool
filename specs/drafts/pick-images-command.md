@@ -381,10 +381,11 @@ same range, so the list holds every sensor's image of each chosen frame.
 }
 ```
 
-The lists file is rewritten whole, with every list it already held kept in its
-place and order, a replaced list in the place of the one it replaces, and new
-lists at the end. It is written to a temporary file beside it and renamed over
-it, so a failed write leaves the old file.
+The list is written by `NamedImageLists::write_lists`, which rewrites the
+lists file whole, keeps every list it already held in its place and order and
+with its text, puts a replaced list in the place of the one it replaces and a
+new one at the end, and leaves the old file when a write fails
+([named-image-lists.md § Writing the file](../workspace/named-image-lists.md#writing-the-file)).
 
 ## Report
 
@@ -491,8 +492,9 @@ and writes the lists.
   module has no MAD of its own.
 - **Lists.** `NamedImageLists` in
   [`named_image_lists.rs`](../../crates/sfmtool-core/src/workspace/named_image_lists.rs)
-  reads and checks the file, and `is_named_image_list_name` checks the output
-  name. The module has no writer today; the command needs one, below.
+  reads and checks the file, `is_named_image_list_name` checks the output
+  name, and `NamedImageLists::write_lists` writes the list
+  ([named-image-lists.md § Writing the file](../workspace/named-image-lists.md#writing-the-file)).
 - **Input.** `range_option`, `parse_image_selection` and `resolve_list_images`
   in [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py).
 - **Progress.** `ProgressCounter` ([py_progress.rs](../../crates/sfmtool-py/src/py_progress.rs)).
@@ -704,26 +706,11 @@ a `ValueError` with the Rust message, a `.sift` read error the `OSError` of
 [python-bindings.md § Format errors](../python-bindings.md#format-errors), and
 a cancelled run `InterruptedError`.
 
-The lists writer is a new method beside the reader, in Rust and bound in
-`sfmtool.workspace`:
-
-```rust
-impl NamedImageLists {
-    /// Add or replace lists in the workspace's lists file, creating it when
-    /// absent. Refuses a name the file already defines unless `replace`.
-    pub fn write_lists(
-        workspace_dir: &Path,
-        lists: &[(String, Vec<(String, Option<RangeExpr>)>)],
-        replace: bool,
-    ) -> Result<PathBuf, NamedImageListsError>;
-}
-```
-
-It checks the new names, patterns and ranges by the reader's rules, reads and
-checks the existing file, refuses with a new `ListExists` variant naming each
-list, and writes as [Writing the list](#writing-the-list) says. The existing
-lists' ranges are written back from their text as read, which needs the
-reader to keep that text beside the parsed `RangeExpr`.
+The command writes its list with `NamedImageLists.write_lists` in
+`sfmtool.workspace`, passing `replace=True` for `--force`
+([named-image-lists.md § Writing the file](../workspace/named-image-lists.md#writing-the-file)).
+Its `ListExists` refusal is the second check of
+[Refusing to overwrite](#command).
 
 ### The version 1 refusals
 
@@ -909,11 +896,10 @@ records the captures that moved it, by kind.
   takes the first sensor's images before any other's; one entry with a `*`
   segment keeps the sensors of a frame together but can match folders that
   are not sensors.
-- **Writing the lists file.** Rewriting it whole loses formatting a person gave
-  it by hand; this draft keeps each list's ranges as their text. A range of more
-  than 10,000 runs (`openjd_expr`'s `MAX_RANGE_EXPR_CHUNKS`) would not parse
-  back; the writer should check that the range it writes parses, and split the
-  entry when it does not.
+- **A range too long to write.** A range of more than 10,000 runs
+  (`openjd_expr`'s `MAX_RANGE_EXPR_CHUNKS`) does not parse back, and
+  `write_lists` refuses it. The command could split such a sequence into
+  several entries of one pattern, or stop with the error.
 - **The exit status** when the verdict stops a run that was asked to write a
   list: this draft exits 1. A flag to choose frames anyway, for a person who
   means to solve a panorama with a rotation-only tool, is not proposed.
