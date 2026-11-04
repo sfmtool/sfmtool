@@ -138,7 +138,10 @@ PYTHONIOENCODING = "utf-8"
 # (`pixi run -e test-ci pytest …`, `… maturin develop --release`); a task name
 # it also carried would put `test` and `test-ci` back in conflict.
 [feature.test-tasks.tasks]
-test = "pytest -n auto"
+# worksteal lets an idle worker take tests still queued on a busy one. The
+# default `load` scheduler never moves a queued test, so one worker can be left
+# running a block of slow tests alone while the others sit idle.
+test = "pytest -n auto --dist worksteal"
 test-rust = "cargo llvm-cov --workspace --exclude sfmtool-py --exclude sfm-explorer"
 coverage = "cargo llvm-cov --workspace --lcov --output-path lcov.info"
 coverage-all = "bash scripts/coverage.sh"
