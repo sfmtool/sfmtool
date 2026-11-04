@@ -13,6 +13,8 @@ _EXPECTED_FUNCTIONS = (
     "image_readings_from_rgb",
     "ImageReadings",
     "ImageToGray",
+    "version_1_sift_files",
+    "Version1SiftFiles",
 )
 
 

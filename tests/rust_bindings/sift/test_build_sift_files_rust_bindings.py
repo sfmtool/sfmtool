@@ -103,7 +103,7 @@ def test_version_1_settings_and_folders_are_refused(images, tmp_path):
     del data["metadata"]["gradient_structure_tensor_xx_yy_xy"]
     data["feature_tool_metadata"]["feature_options"] = v1_options
     write_sift(v1_dir / "seoul_bull_sculpture_02.jpg.sift", data)
-    with pytest.raises(OSError, match="holds version 1 .sift files"):
+    with pytest.raises(OSError, match="holds version 1 .sift files.*run again"):
         build_sift_files(
             images[:1], get_default_sfmtool_feature_options(), "features/v1"
         )

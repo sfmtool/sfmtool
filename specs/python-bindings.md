@@ -276,7 +276,7 @@ Paths in the *Source* column are relative to
 | Source | Exposes | Spec |
 |--------|---------|------|
 | [sift/extract.rs](../crates/sfmtool-py/src/sift/extract.rs) | `extract_sift`, `detect_sift_keypoints`, `describe_keypoints`, `affine_shapes_from_similarity` | [sift.md](core/features/sift.md) |
-| [sift/files.rs](../crates/sfmtool-py/src/sift/files.rs) | `build_sift_files` | [sift.md](core/features/sift.md) § "Building `.sift` files" |
+| [sift/files.rs](../crates/sfmtool-py/src/sift/files.rs) | `build_sift_files`, `version_1_sift_files`, `Version1SiftFiles` | [sift.md](core/features/sift.md) § "Building `.sift` files" |
 | [sift/image_readings.rs](../crates/sfmtool-py/src/sift/image_readings.rs) | `ImageToGray`, `ImageReadings`, `image_readings_from_rgb` | [sift.md](core/features/sift.md) § "Image-to-gray conversion", [sift-file-format.md](formats/sift-file-format.md) |
 
 ### `reconstruction`
