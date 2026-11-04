@@ -777,8 +777,10 @@ jobs:
         run: |
           # Parallelize across min(4, cpu) xdist workers (portable cpu count via
           # the env's Python so it works on the Windows runner's bash too).
+          # --dist worksteal lets an idle worker take tests still queued on a
+          # busy one, which the default `load` scheduler never does.
           workers=$(pixi run -e test-ci python -c 'import os; print(min(4, os.cpu_count() or 1))')
-          pixi run -e test-ci pytest -n "$workers"
+          pixi run -e test-ci pytest -n "$workers" --dist worksteal
 
       - name: Save Rust target
         # Main only, and only a new generation (the cache-hit guard): a PR's

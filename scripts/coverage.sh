@@ -100,11 +100,16 @@ fi
 # Run Python tests (generates Rust coverage from Python calls + Python coverage).
 # Parallelize across min(4, cpu) xdist workers: the suite's wall time is set by a
 # few long reconstruction/patch tests, and the runner has 4 cores with plenty of
-# RAM headroom (peak ~1.4 GB per worker, measured). pytest-cov auto-detects the
-# xdist workers and combines their coverage data at the end.
+# RAM headroom (peak ~1.4 GB per worker, measured). --dist worksteal lets an
+# idle worker take tests still queued on a busy one; the default `load`
+# scheduler never moves a queued test, and in a local 4-worker run it left one
+# worker running the slow patch tests alone for about three and a half minutes
+# while the other three sat idle.
+# pytest-cov auto-detects the xdist workers and combines their coverage data at
+# the end.
 if [ "$mode" != rust ]; then
   workers=$(python -c 'import os; print(min(4, os.cpu_count() or 1))')
-  pytest -n "$workers" --cov=sfmtool --cov-report=lcov:python-lcov.info
+  pytest -n "$workers" --dist worksteal --cov=sfmtool --cov-report=lcov:python-lcov.info
 fi
 
 # Generate the Rust coverage reports, one per profile. Without `--release`, the
