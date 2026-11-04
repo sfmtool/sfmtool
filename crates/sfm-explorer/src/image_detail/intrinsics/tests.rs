@@ -9,11 +9,10 @@
 //! comes off a real headless egui frame's galleys
 //! (`test_support::painted_texts`, the `track_view/body/tests.rs` pattern).
 //!
-//! And one test that is neither: every glyph the layer writes has to be in
-//! egui's bundled fonts. A glyph that is not renders as a replacement box
-//! rather than failing, and asserting a galley's *string* passes happily on
-//! characters the font cannot draw — which is how a `──`/`╌╌` legend shipped
-//! in phase 5's first draft.
+//! A galley's *string* passes on characters the font cannot draw, which is
+//! how a `──`/`╌╌` legend shipped in phase 5's first draft. The glyphs the
+//! layer writes are checked against the viewer's fonts by the source scan in
+//! `fonts/tests.rs`, not here.
 
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 
