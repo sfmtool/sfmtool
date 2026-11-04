@@ -103,7 +103,7 @@ def _image_reading_rows(
     return [
         (f"{indent}Sharpness", f"{sharpness:.4g}"),
         (
-            f"{indent}Gradient tensor",
+            f"{indent}Gradient structure tensor",
             f"Exx {exx:.4g}, Eyy {eyy:.4g}, Exy {exy:.4g}",
         ),
         (f"{indent}Axis ratio", axis_ratio),

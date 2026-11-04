@@ -237,7 +237,10 @@ def test_inspect_sift_shows_version_and_readings(sample_sift_data, tmp_path: Pat
     out = result.output
     assert _row_value(out, "Format") == ".sift version 2"
     assert _row_value(out, "Sharpness") == "0.0125"
-    assert _row_value(out, "Gradient tensor") == "Exx 0.004, Eyy 0.001, Exy 0.001"
+    assert (
+        _row_value(out, "Gradient structure tensor")
+        == "Exx 0.004, Eyy 0.001, Exy 0.001"
+    )
     # |log(0.004 / 0.001)| = log 4.
     assert _row_value(out, "Axis ratio") == "1.386"
     # sqrt(0.003**2 + 4 * 0.001**2) / 0.005.
@@ -397,7 +400,7 @@ def test_inspect_image_verbose_readings_outside_a_workspace(
     assert _row_value(out, "Sharpness") == _expected_sharpness(
         isolated_seoul_bull_image, "0.2126*R + 0.7152*G + 0.0722*B", None
     )
-    for label in ("Gradient tensor", "Axis ratio", "Coherence"):
+    for label in ("Gradient structure tensor", "Axis ratio", "Coherence"):
         _row_value(out, label)
 
     default = CliRunner().invoke(main, ["inspect", str(isolated_seoul_bull_image)])

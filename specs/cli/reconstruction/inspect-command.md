@@ -204,9 +204,9 @@ The default output is a compact label/value block. The fields per type:
   [Image readings](#image-readings)).
 - **`.sift`** — format version, image name and dimensions, feature count,
   feature tool, the image readings, integrity. A version 2 file's readings are
-  four lines, `Sharpness`, `Gradient tensor` (`Exx`, `Eyy`, `Exy`), `Axis
-  ratio` and `Coherence`; a version 1 file, which holds none, gets one line
-  `Image readings: none`.
+  four lines, `Sharpness`, `Gradient structure tensor` (`Exx`, `Eyy`,
+  `Exy`), `Axis ratio` and `Coherence`; a version 1 file, which holds none,
+  gets one line `Image readings: none`.
 - **`.matches`** — format version, matching method (tool + version), image
   count, then for a pairwise file the image-pair and match counts, or for a
   file whose backbone is clusters a `Backbone` line reading `clusters`, the
@@ -342,10 +342,10 @@ For one image, a `.sift` file or an image file, the lines are, for the first
 image of `seoul_bull_sculpture`:
 
 ```text
-Sharpness:       0.01365
-Gradient tensor: Exx 0.0008609, Eyy 0.001159, Exy -2.358e-05
-Axis ratio:      0.297
-Coherence:       0.149
+Sharpness:                 0.01365
+Gradient structure tensor: Exx 0.0008609, Eyy 0.001159, Exy -2.358e-05
+Axis ratio:                0.297
+Coherence:                 0.149
 ```
 
 and a reconstruction's verbose block is, for a version 15 copy of that
