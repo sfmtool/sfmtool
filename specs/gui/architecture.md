@@ -387,7 +387,14 @@ either family has no glyph for, so a new string with a character neither
 family draws is caught before it is drawn as a box. It asks each family's
 faces for their character maps rather than calling egui's `has_glyph`, which
 answers no for every character of the face that also holds the replacement
-glyph, as Hack does for the monospace family.
+glyph, as Hack does for the monospace family. A space is checked like any
+other character, the no-break space (U+00A0) of the Camera Intrinsics tables'
+cells among them, since egui looks it up in the faces and draws a box when
+none has it; only ASCII whitespace and the thin spaces U+2009 and U+202F,
+which egui draws with the space's glyph, are left out. The scan is the one
+check of the characters the viewer's literals spell. Text built at run time
+is checked with the same function, `fonts::lacking_glyphs`, in the tests of
+the Action Log row's tooltip and of the Switch Camera Model banner.
 
 ---
 

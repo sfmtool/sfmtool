@@ -39,12 +39,17 @@ pub(crate) fn install(ctx: &egui::Context) {
     ctx.set_fonts(font_definitions());
 }
 
-/// The characters of `text`, other than whitespace, that `family` in the
-/// viewer's fonts has no glyph for, each once and in order.
+/// The characters of `text` that `family` in the viewer's fonts has no glyph
+/// for, each once and in order.
 ///
 /// It asks the family's faces for their character maps rather than calling
 /// egui's `has_glyph`, which answers no for every character of the face that
 /// also holds the replacement glyph: Hack, the monospace family's first face.
+/// Left out are ASCII whitespace, which breaks a line or draws as a space,
+/// and the thin spaces U+2009 and U+202F, which egui draws with the space's
+/// glyph. Any other space, such as the no-break space U+00A0, egui looks up
+/// in the faces like a letter and draws as a box when none has it, so it is
+/// checked.
 #[cfg(test)]
 pub(crate) fn lacking_glyphs(family: &egui::FontFamily, text: &str) -> String {
     let ctx = egui::Context::default();
@@ -56,7 +61,8 @@ pub(crate) fn lacking_glyphs(family: &egui::FontFamily, text: &str) -> String {
         let characters = font.characters();
         let mut lacking = String::new();
         for c in text.chars() {
-            if !c.is_whitespace() && !characters.contains_key(&c) && !lacking.contains(c) {
+            let drawn_as_space = c.is_ascii_whitespace() || c == '\u{2009}' || c == '\u{202f}';
+            if !drawn_as_space && !characters.contains_key(&c) && !lacking.contains(c) {
                 lacking.push(c);
             }
         }

@@ -173,23 +173,6 @@ fn one_entry_per_changed_field() {
     );
 }
 
-/// Every glyph these texts put in the Action Log is one egui bundles; one
-/// it does not renders as a replacement box and nothing else would notice.
-#[test]
-fn the_texts_glyphs_are_available_in_the_bundled_fonts() {
-    let ctx = egui::Context::default();
-    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        ui.label("warm the font atlas");
-    });
-    let font = egui::FontId::proportional(12.0);
-    for glyph in [TIMES, EN_DASH] {
-        assert!(
-            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
-            "{glyph:?} is not in egui's bundled fonts and would render as a box"
-        );
-    }
-}
-
 /// The wire spellings the MCP surface takes, round-tripping through the
 /// enum they name — and exact, so a GUI label is not a mode name.
 #[test]

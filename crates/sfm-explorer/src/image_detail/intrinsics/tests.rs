@@ -71,28 +71,6 @@ fn pinhole_camera() -> CameraIntrinsics {
     }
 }
 
-#[test]
-fn the_layers_glyphs_are_available_in_the_bundled_fonts() {
-    let ctx = egui::Context::default();
-    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        ui.label("warm the font atlas");
-    });
-    let font = egui::FontId::proportional(super::LABEL_SIZE);
-    for glyph in [
-        super::DELTA,
-        super::MINUS,
-        super::MIDDOT,
-        super::DEGREE,
-        controls::TIMES,
-        controls::GEAR,
-    ] {
-        assert!(
-            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
-            "{glyph:?} is not in egui's bundled fonts and would render as a box"
-        );
-    }
-}
-
 /// The layer's numbers are [`report::distortion_extent`]'s, not a second
 /// summary of the same field.
 ///

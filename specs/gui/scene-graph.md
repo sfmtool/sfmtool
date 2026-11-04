@@ -453,7 +453,7 @@ fixed-height for virtualization.
   it.
 - Both eyes and the cursor are drawn as dimmable glyph buttons (U+1F441 EYE,
   U+1F5B1 TRACKBALL, U+221E INFINITY — all in egui's bundled proportional
-  fonts, which `scene_graph/tests.rs` pins); solo is the letter `S`, dimmed the
+  fonts); solo is the letter `S`, dimmed the
   same way, because no bundled pictograph says "only this one" and a mixer's
   solo button has said `S` for fifty years. Each is named in the
   accessibility tree, and so in `get_widgets`, by its glyph and then what it

@@ -1823,8 +1823,8 @@ Two caveats remain, both named in the tests rather than left implicit:
   focal row after `focal_length_y`; a varied parameter whose values are all
   zero reads as zeros; at 341, 482 and 1800 px nothing above `K` overlaps or
   runs past the edge, without a proposal and with one, when the statistics
-  are in the current table alone; and their glyphs are in egui's bundled
-  fonts. The arithmetic of the statistics is tested in core, in
+  are in the current table alone. The arithmetic of the statistics is tested
+  in core, in
   [`image_adjustment_statistics/tests.rs`](../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics/tests.rs),
   the focal's mean against what `drop_image_adjustments` folds.
 - The per-image histograms, in the same file: the bins' edges are multiples
@@ -1903,9 +1903,6 @@ Two caveats remain, both named in the tests rather than left implicit:
   bound while the axes carry a flagged tail past it; the auto scale fitted to
   the lens exceeds the one fitted to the fold, holds still under zoom, and never
   lets an arrow outgrow its cell; and the offset label appears only off centre.
-- Every glyph the layer writes — `Δ`, `−`, `·`, `°`, `×`, `⚙` — is in egui's
-  bundled fonts, each spelled once as a named constant. `scene_graph`'s own
-  glyph test, for the same reason.
 - The node-transform toggle appears only when the node transform is
   non-identity.
 - The header's identity line, in `intrinsics_detail/tests.rs`: from 482 down

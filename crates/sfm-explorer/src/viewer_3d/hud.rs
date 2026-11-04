@@ -56,8 +56,8 @@ const HUD_FILL_OPACITY: f32 = 0.88;
 /// covering the whole U+2715..U+2718 run, so it is now U+1F5D9 CANCELLATION X.
 /// That one is also the better fit — it lays out to the same 12.6px advance as
 /// the gear, so collapsed and expanded buttons are the same width.
-/// `the_hud_glyphs_are_available_in_the_bundled_fonts` in `hud/tests.rs`
-/// guards this.
+/// `fonts/tests.rs` checks that every character the viewer writes, these two
+/// among them, has a glyph.
 const HUD_EXPAND_GLYPH: &str = "⚙";
 const HUD_COLLAPSE_GLYPH: &str = "🗙";
 
