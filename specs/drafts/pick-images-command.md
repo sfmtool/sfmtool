@@ -7,7 +7,8 @@ its one-command shape (it reports, and writes a list when given a name), that a
 written list records nothing about how it was picked, the refusal to overwrite
 without `--force`, one list per run across every sequence, the workspace and
 `.sift` version 2 requirement, SIFT matching through a KD-forest as the measure
-of motion, the defaults of 10% and 0.6, and the algorithm in
+of motion, the detection of a sequence of photographs, which stops the
+command, the defaults of 10% and 0.6, and the algorithm in
 [The algorithm](#the-algorithm). The smaller choices this draft makes on its
 own are listed under [Open questions](#open-questions), and the default values
 other than 10% and 0.6 are starting values to be set as
@@ -132,9 +133,9 @@ sfm pick-images walk1/ walk2/ walk3/ --write-list all_walks --force
 
 ## The algorithm
 
-The command works in five stages: collect the frames, read a baseline sample,
-judge whether the capture can be solved, walk the capture choosing frames, and
-report. Each stage reads frames through the same source, which extracts a
+The command works in six stages: collect the frames, read a baseline sample,
+judge whether each sequence is a video, judge whether the capture can be
+solved, walk the capture choosing frames, and report. Each stage reads frames through the same source, which extracts a
 frame's `.sift` files when they are missing and reuses them otherwise.
 
 ### Words
@@ -186,17 +187,21 @@ Before choosing anything, the command reads a sample of `--baseline-frames`
 frames spread evenly over each sequence, the first and last frames included
 (every frame when the sequence is shorter). For each sampled frame `s` it also
 reads the frames `s + 1`, `s + 3`, `s + 10` and `s + 30` that exist, about five
-frames per sample, and reuses a frame another sample already read. All these
-frames are requested from the source together, so extraction runs as one batch.
+frames per sample, and reuses a frame another sample already read. It reads
+them in two batches: the sampled frames with the frames 1 and 3 after them
+first, which is enough to tell a video from a set of photographs
+([Is it a video?](#is-it-a-video)), and the frames 10 and 30 after them only
+for the sequences judged to be videos. Each batch is requested from the source
+at once, so extraction runs as one batch.
 
 From the sampled frames' own `.sift` files, per sequence:
 
 - the **median sharpness**, which every later frame is compared with;
 - the median and robust spread of the **axis ratio** `|log(Exx/Eyy)|` and the
-  **coherence** `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, derived from the
-  gradient structure tensor as `sfm inspect` derives them
-  (`_image_reading_rows` in [`analyze/summary.py`](../../src/sfmtool/analyze/summary.py),
-  defined in [sift-file-format.md § Gradient structure tensor](../formats/sift-file-format.md#gradient-structure-tensor)).
+  **coherence** `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, the values
+  [sift-file-format.md § Gradient structure tensor](../formats/sift-file-format.md#gradient-structure-tensor)
+  defines a reader to derive from the gradient structure tensor
+  ([One derivation of the tensor's values](#one-derivation-of-the-tensors-values)).
 
 From the matches between `s` and `s + 1`, and between `s` and `s + 3`:
 
@@ -209,6 +214,45 @@ From the matches between `s` and `s + 1`, and between `s` and `s + 3`:
 
 The baseline covers the whole capture independently of the walk, so a problem
 the walk could step over in one long step is still seen.
+
+### Is it a video?
+
+The walk assumes that neighbouring frames are close in time, so that the
+motion between them is small and changes smoothly. A folder of photographs
+numbered in the order they were taken does not behave that way, and the
+command judges each sequence separately from its baseline's 1- and 3-frame
+matches, so a run can hold a video folder beside a folder of photographs. A
+sequence is a video when at least three of these four signs hold, each the
+median over its sampled frames:
+
+- **The motion adds up.** The step from `s` to `s + 3` is about three times the
+  step from `s` to `s + 1`: their ratio is between `2` and `4`.
+- **The step is small.** The step from `s` to `s + 1` is below `5%` of the long
+  side.
+- **The step changes little.** Between neighbouring sampled frames, the 1-frame
+  steps differ by less than a factor of `2`: the median of
+  `|log(step_i / step_{i+1})|` is below `log 2`.
+- **Neighbours match well.** The F-inlier share of the 1-frame matches is above
+  `0.8`.
+
+A sample whose 1-frame or 3-frame pair has fewer than the minimum matches
+counts against every sign it enters, since photographs that barely overlap
+give that result. Photographs break the signs together: their 1-frame steps
+are large and erratic, the 3-frame motion is not three times the 1-frame
+motion, and neighbours barely match. A sequence of fewer than 4 frames has no
+3-frame pair and is judged not to be a video.
+
+A sequence judged to be photographs is named in the verdict, and the command
+stops before the walk, extracts nothing more and writes no list, with a message
+that it picks from video sequences only:
+
+```text
+Verdict: not a video: photos/DSC_%04d.JPG: steps 1 frame apart median 18.4% and erratic, 3 frames apart 1.2 times as far; sfm pick-images picks from video sequences only
+```
+
+The check comes before [Can it be solved?](#can-it-be-solved), whose gaps of
+10 and 30 frames mean something only in a video. Its thresholds are starting
+values ([Settling the defaults](#settling-the-defaults)).
 
 ### Can it be solved?
 
@@ -377,9 +421,10 @@ Using workspace: /captures/garden
   Feature tool: sfmtool
 1 sequence: frames/walk1_%04d.jpg, 6120 frames (1-6120)
 
-Baseline: 200 frames sampled, 984 frames read (972 extracted, 12 reused)
-  Sharpness: median 0.0123; 9 sampled frames blurred
+Baseline: 200 frames sampled, 984 frames read (972 extracted, 12 reused)  Sharpness: median 0.0123; 9 sampled frames blurred
   Motion per frame: median 0.72%, p90 1.31% of the long side; total 4400%
+  A video: 1 frame apart step 0.72%, F-inlier share 0.93; 3 frames apart
+    2.9 times as far; neighbouring samples' steps within a factor of 1.3
   10 frames apart: F-inlier share 0.84
   30 frames apart: H/F 0.41, rotation error 0.21
   Flagged regions: 2210-2271 (blurred), 4381-4442 (weak matches)
@@ -468,6 +513,37 @@ and writes the lists.
   in [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py).
 - **Progress.** `ProgressCounter` ([py_progress.rs](../../crates/sfmtool-py/src/py_progress.rs)).
 
+### One derivation of the tensor's values
+
+Today the axis ratio and the coherence are derived only in Python, by
+`_image_reading_rows` in [`analyze/summary.py`](../../src/sfmtool/analyze/summary.py)
+for `sfm inspect`. The walk needs the same two values in Rust, and a second
+derivation would be the kind of copy
+[STANDARDS.md § Logic lives in Rust](../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers)
+rules out. So the derivation moves to one place, two methods on
+`ImageReadings` in
+[`image_readings.rs`](../../crates/sfmtool-core/src/features/sift/image_readings.rs):
+
+```rust
+impl ImageReadings {
+    /// `|log(Exx / Eyy)|`; `f32::INFINITY` when exactly one of the two is 0,
+    /// `None` when both are (a flat image).
+    pub fn axis_ratio(&self) -> Option<f32>;
+    /// `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, 0 for a flat image.
+    pub fn coherence(&self) -> f32;
+}
+```
+
+These are the cases `_image_reading_rows` prints today (`inf`, and
+`n/a (flat image)` when both are 0). They are computed in `f32`, the
+precision the readings are stored in, since the use compares readings within a
+capture to about three significant digits and nothing in either formula
+amplifies the rounding. The binding `sfmtool.sift.ImageReadings` gains the
+two as getters and a constructor from a stored sharpness and tensor, so that
+`sfm inspect` builds one from a `.sift` file's metadata or a `.sfmr`'s columns
+and prints its `axis_ratio` and `coherence`, and `_image_reading_rows` no
+longer derives them itself. `pick_images` calls the same methods.
+
 ### Rust interface
 
 The walk asks a caller-supplied source to make sure frames' `.sift` files
@@ -513,9 +589,9 @@ pub struct PickImagesOptions {
     pub blur_ratio: f64,           // 0.6
     pub baseline_frames: usize,    // 200
     pub min_inlier_share: f64,     // 0.5
-    pub min_matches: usize,        // 30
     pub test_lists: bool,          // true
-    pub forest: KdForestParams,
+    pub forest: KdForestParams,    // KdForestParams::balanced()
+    pub pair: FramePairOptions,    // matching and fitting, below
 }
 
 pub fn pick_images(
@@ -525,12 +601,67 @@ pub fn pick_images(
     progress: &Progress,
 ) -> Result<PickImagesReport, PickImagesError>;
 
+/// One frame's features, with the forest over its descriptors built once, so
+/// that a frame matched with several others is indexed once.
+pub struct FrameFeatures { /* positions, descriptors, image size, forest */ }
+
+impl FrameFeatures {
+    /// `positions_xy` in pixels, `descriptors` `positions_xy.len() × 128`
+    /// bytes, as a `.sift` file holds them, and the image's size.
+    pub fn new(
+        positions_xy: Vec<[f32; 2]>,
+        descriptors: Vec<u8>,
+        width: u32,
+        height: u32,
+        forest: KdForestParams,
+        progress: &Progress,
+    ) -> Result<Self, FramePairError>;
+    /// The features of a `.sift` file read by `read_sift_features`, with the
+    /// image size from its `read_sift_metadata`.
+    pub fn from_sift(
+        features: SiftFeatures,
+        metadata: &SiftMetadata,
+        forest: KdForestParams,
+        progress: &Progress,
+    ) -> Result<Self, FramePairError>;
+    pub fn len(&self) -> usize;
+    pub fn width(&self) -> u32;
+    pub fn height(&self) -> u32;
+}
+
+/// How [`match_frame_pair`] matches and what it fits.
+pub struct FramePairOptions {
+    pub ratio: f32,                        // 0.8, Lowe's ratio on distances
+    pub min_matches: usize,                // 30; fewer gives no shares
+    pub max_leaf_checks: Option<usize>,    // None: the forest's own budget
+    pub fundamental_error_per_960px: f64,  // 1.0, scaled by the long side
+    pub homography_error_per_960px: f64,   // 2.0
+    pub seed: u64,                         // 0, for both RANSAC runs
+}
+
+/// Why `FrameFeatures::new` or `match_frame_pair` refused its input.
+pub enum FramePairError {
+    /// An option out of range: a ratio outside `(0, 1]`, an error bound that
+    /// is not positive and finite, or a forest parameter of 0, which
+    /// `KdForest::build` asserts against.
+    Options { name: &'static str, reason: String },
+    /// `descriptors` is not `128 × positions_xy.len()` bytes, or a position
+    /// is not finite.
+    FeatureArrays { reason: String },
+    /// A width or height of 0.
+    ImageSize { width: u32, height: u32 },
+    /// The two frames' images differ in size, so one step has no single
+    /// long side to be measured against.
+    SizeMismatch { a: (u32, u32), b: (u32, u32) },
+    Cancelled,
+}
+
 /// One pair's statistics, for a caller that matches two frames on its own.
 pub fn match_frame_pair(
     a: &FrameFeatures,
     b: &FrameFeatures,
     options: &FramePairOptions,
-) -> Result<FramePairStats, PickImagesError>;
+) -> Result<FramePairStats, FramePairError>;
 
 pub struct FramePairStats {
     pub matches: usize,
@@ -545,12 +676,22 @@ pub struct FramePairStats {
 readings, the chosen frames per sequence, the test walks, every step the walk
 measured with its `FramePairStats`, the swaps, the gaps filled in, the frames
 kept though blurred, the breaks, the weak points and the count of frames read.
-`PickImagesError` is an enum: `Options` (a value out of range, such as a
-target step that is not positive or a blur ratio outside `(0, 1)`), `Sequence`
-(an empty sequence, or a frame whose sensor count differs from its sequence's),
-`Source` (the source's error, carrying its message), `ReadSift` (with the path
-and the `SiftError`), `Version1Sift` (with the path), `ImageSize` (two frames
-of one sensor whose sizes differ) and `Cancelled`.
+`PickImagesError` is an enum: `Options` (a value of `PickImagesOptions` out of
+range, such as a target step that is not positive or a blur ratio outside
+`(0, 1)`), `Sequence` (an empty sequence, or a frame whose sensor count differs
+from its sequence's), `Version1Files` (a folder the capture's `.sift` files go
+in that holds version 1 files, with the folder and the files; see
+[The version 1 refusals](#the-version-1-refusals)), `Source` (the source's
+error, carrying its message), `ReadSift` (with the path and the `SiftError`),
+`Version1Sift` (with the path), `Pair` (a `FramePairError` with the two frames
+it was raised for, which covers the forest parameters and two frames of one
+sensor whose sizes differ) and `Cancelled`.
+
+**Two error types.** `match_frame_pair` returns its own `FramePairError`
+rather than `PickImagesError`, because a caller that matches two frames on its
+own has no capture, no source and no walk options, and an error type naming
+them would describe failures that call cannot have. `PickImagesError::Pair`
+wraps it with the frames, so a walk's error still says where it happened.
 
 **Why it is shaped this way.** The walk decides which frame to read next from
 what it read last, so it cannot be handed all its frames in advance; asking a
@@ -566,9 +707,10 @@ same statistics are what a later command, or `sfm motion`, could read from a
 pair. `pick_images` takes a `&Progress` and checks it for cancellation, since
 it runs for minutes, and returns an error rather than panicking on any input
 ([STANDARDS.md § Caller input never panics](../STANDARDS.md#caller-input-never-panics)):
-`KdForest::build` asserts its lengths and its parameters, so `pick_images` and
-`match_frame_pair` check the forest parameters as options and a `.sift` file's
-feature arrays against each other before building a forest.
+`KdForest::build` asserts its lengths and its parameters, so
+`FrameFeatures::new` checks the forest parameters and the feature arrays
+against each other before building a forest, and returns `FramePairError` for
+them.
 
 ### Python
 
@@ -590,7 +732,11 @@ report = pick_images(sequences, ensure_sift_files, target_step_percent=10.0, pro
 ```
 
 The binding implements `FrameSource` over a Python callable, taking the GIL for
-each call, and raises the callable's exception unchanged. Every other error is
+each call, and raises the callable's exception unchanged. The callable cannot
+raise the version 1 refusals of `image_files_to_sift_files` for a folder, whose
+advice is `sfm ws upgrade` even in a version 2 workspace, because `pick_images`
+has checked every folder before the first call
+([The version 1 refusals](#the-version-1-refusals)). Every other error is
 a `ValueError` with the Rust message, a `.sift` read error the `OSError` of
 [python-bindings.md § Format errors](../python-bindings.md#format-errors), and
 a cancelled run `InterruptedError`.
@@ -616,21 +762,53 @@ list, and writes as [Writing the list](#writing-the-list) says. The existing
 lists' ranges are written back from their text as read, which needs the
 reader to keep that text beside the parsed `RangeExpr`.
 
-### The version 1 refusal
+### The version 1 refusals
 
-Every reading comes from a version 2 `.sift` file. A version 1 workspace file
-is refused before anything is read, with the message `sfm sift --extract` gives
-for version 1 settings, which says to run
-[`sfm ws upgrade`](../cli/workspace/ws-upgrade-command.md): the upgrade moves
-the workspace to version 2 and a new features folder, where this command then
-extracts version 2 files. This has to be checked up front, because
-`image_files_to_sift_files` refuses version 1 settings only when it has a file
-to write, and a version 1 workspace whose files are all present would otherwise
-reach the reader. A `.sift` file the walk reads that is still version 1 (a
-version 2 workspace's folder holds version 1 files only after a hand edit,
-since [versions never mix](../workspace/workspace.md#versions-never-mix)) is
-`Version1Sift`, whose message names the file and says it records no
-sharpness.
+Every reading comes from a version 2 `.sift` file. The command checks for
+version 1 once, before it reads any frame, so that the message it gives names a
+fix that works in the case at hand. There are two cases, since
+[versions never mix](../workspace/workspace.md#versions-never-mix):
+
+- **A version 1 workspace.** Its `feature_options` carry no `image_to_gray`,
+  the test `image_files_to_sift_files` applies to version 1 settings. The
+  command refuses with the message `sfm sift --extract` gives for version 1
+  settings: it names the workspace file and says to run
+  [`sfm ws upgrade`](../cli/workspace/ws-upgrade-command.md), which moves the
+  workspace to version 2 and a new features folder. The advice works there:
+  `upgrade_workspace` rewrites a version 1 file as version 2 and names a new
+  `feature_prefix_dir`, which holds no `.sift` files, so the next run extracts
+  version 2 files into it. The check has to be made up front because
+  `image_files_to_sift_files` refuses version 1 settings only when it has a file
+  to write, and a version 1 workspace whose files are all present would
+  otherwise reach the reader.
+- **Version 1 files in a version 2 workspace's folder.** A folder named under
+  version 2 holds version 1 files only when they were put there by hand.
+  `sfm ws upgrade` cannot help: on a version 2 workspace file it prints
+  "nothing to do: already version 2" and changes nothing. `pick_images` lists
+  every folder the capture's `.sift` files go in, reads the version of each
+  `.sift` file already there, and returns `Version1Files` when one holds
+  version 1 files, before anything is extracted. Its message names the folder
+  and the version 1 files in it, and says to remove those files from the folder
+  and run the command again, which then extracts version 2 files in their
+  place. That works because the only check against a version 1 file in the
+  folder, in `image_files_to_sift_files` (`_check_versions_never_mix`) and in
+  `build_sift_files`, looks at the files the folder holds.
+
+The folder check is one Rust function, public in
+[`features/sift/files.rs`](../../crates/sfmtool-core/src/features/sift/files.rs)
+in place of the private `folder_holds_version_1_files` there, returning the
+version 1 files a folder holds. `build_sift_files`, `pick_images` and, through a
+binding, `_check_versions_never_mix` call it, so the three agree on what counts.
+The message is shared too: today `_check_versions_never_mix` tells a version 2
+workspace whose folder holds version 1 files to run `sfm ws upgrade`, since it
+chooses its advice only by whether the settings are a `.sfmr`'s record, and
+with this change it gives the fix above for a version 2 workspace and keeps
+`sfm ws upgrade` for a version 1 one.
+Once it has passed, every `.sift` file the run writes is version 2, so the
+per-call check in `image_files_to_sift_files` cannot fail on a folder the
+command checked. A `.sift` file the walk reads that is still version 1, one put
+in the folder while the command runs, is `Version1Sift`, whose message names the
+file and gives the same fix: remove it and run again.
 
 ## Why SIFT matching rather than optical flow
 
@@ -656,8 +834,8 @@ flow field.
   video where the inlier share was recorded, 59% to 85% of the matches 10 and
   30 frames apart fit a fundamental matrix at 960 pixels outside the blurred
   run, so the matches describe one camera motion; on the other video, a separate
-check at 960 pixels found 70% to 98% of the mutual matches fitting a
-fundamental matrix across gaps of 1 to 30. Where SIFT itself fails,
+  check at 960 pixels found 70% to 98% of the mutual matches fitting a
+  fundamental matrix across gaps of 1 to 30. Where SIFT itself fails,
   across the blurred run 30 frames apart, it found 30 matches and 37% of them
   fit, and the inlier share shows that the step is not to be trusted.
 - **The matching costs less than the flow, given the features.** Per pair on 32
@@ -687,9 +865,13 @@ same files and extracts nothing.
 `image_files_to_sift_files` checks, on every call that has a file to write,
 every `.sift` file already in the target folder for version 1
 (`_check_versions_never_mix`), which opens each file. Called once per walk
-step, that check grows with the files the run has written. The source should
-call extraction in batches and make the folder check once per run, or the
-check should remember a folder it has found clean.
+step, that check grows with the files the run has written. `pick_images`
+makes the folder check once, before the first extraction
+([The version 1 refusals](#the-version-1-refusals)), so the per-call check
+repeats work; the source calls extraction in batches, and
+`image_files_to_sift_files` should remember, for the life of the process, a
+folder it has found to hold no version 1 file and has since written only
+version 2 files into.
 
 ## Settling the defaults
 
@@ -699,7 +881,10 @@ value in this draft is a starting value: the band of ±30%, the inlier share of
 thresholds (an F-inlier share of 0.3, an H/F of 0.97, a rotation error of 0.01
 and a total motion of 100%, all from `probe.py`), the z of 2, the ratio test
 of 0.8, the inlier bounds of 1 and 2 pixels per 960, and the test lists' 30
-frames at half the target step. They are to be set by running the command on
+frames at half the target step, and the four signs of a video (a 3-frame to
+1-frame ratio between 2 and 4, a 1-frame step below 5%, neighbouring samples'
+steps within a factor of 2, a 1-frame F-inlier share above 0.8, with three of
+the four needed). They are to be set by running the command on
 the maintainer's collection of captures, covering at least:
 
 - walking videos, where the walk should choose steps near the target, read few
@@ -709,6 +894,9 @@ the maintainer's collection of captures, covering at least:
 - a rotation-only panorama, which the verdict should stop;
 - a video with a moving scene, which the verdict should stop;
 - a capture of several sequences, one list across them;
+- a folder of photographs numbered in the order they were taken, which the
+  verdict should name as not a video, beside a video folder in the same run,
+  which it should not;
 - a rig capture, with every sensor of each chosen frame in the list.
 
 Each value is judged by solving the lists it gives and by looking at the
@@ -717,11 +905,13 @@ records the captures that moved it, by kind.
 
 ## Non-goals
 
-- Photographs that are not a sequence. A folder of separate photographs has no
-  order a step can follow, and its files often carry no number `-r` can select.
-  The command stops with an error naming the files that carry no number.
-  `probe.py`'s `--photos` mode, which matched photographs neighbouring by file
-  number, is not carried over; see Open questions.
+- Choosing among photographs. A set of separate photographs has no motion a
+  step can follow. Files with no number are an error naming them
+  ([Collecting the frames](#collecting-the-frames)), and a numbered set is
+  judged not to be a video by the baseline ([Is it a video?](#is-it-a-video)),
+  which stops the command with a message that it picks from video sequences
+  only. `probe.py`'s `--photos` mode, which matched photographs neighbouring by
+  file number, is not carried over.
 - A rotation-only solve. The command stops a panorama capture rather than
   choosing frames for a solver that would accept it.
 - Recording why a frame was chosen in the list or in a `.sfmr`.
@@ -774,7 +964,12 @@ records the captures that moved it, by kind.
 - **The command's category.** *Image Feature*, beside `sift` and `match`, since
   it reads images and extracts features. *Workspace* is the other candidate,
   since it writes a workspace file.
-- **Photographs.** Whether to support separate photographs at all, by matching
-  each to its neighbours by file number as `--photos` did, or to leave them to
-  `sfm match` and hand-written lists.
+- **Telling photographs from a video.** The four signs, their thresholds and
+  the rule that three of four make a video are starting values. Whether a
+  sequence with a few photograph-like stretches (a video paused and resumed,
+  say) should be split rather than judged whole.
+- **A way to choose among photographs.** How a set of photographs should be
+  chosen from, for example by how much of the scene each one's matches cover
+  and by sharpness alone, without steps, is a design of its own and would be
+  proposed in its own draft. This draft only detects such a sequence and stops.
 - **The JSON schema** of `--json`, which this draft does not fix.
