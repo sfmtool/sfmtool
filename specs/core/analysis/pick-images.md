@@ -312,7 +312,8 @@ frame:
      wider than the band, and `c` is settled on if it matches well.
    - `m` below the band and the pair matches well: settle on `c` when it is
      the limit; otherwise re-aim.
-   - The pair does not match well, in or below the band: the step fails.
+   - The pair does not match well, in or below the band, or above it at
+     `f + 1`: the step fails.
 5. **Re-aim** to `c' = f + (c − f) · target / m`, kept strictly between the
    largest candidate measured below the band and the smallest measured above
    it. When no frame is left between them, they lie one frame apart on either
@@ -327,8 +328,8 @@ frame:
 7. **A blurred run.** When no neighbour qualifies, the walk reads every frame
    from `f + 1` to the band's upper edge at the candidate's rate in one batch,
    and accepts the farthest sharp one that matches well within the band's
-   upper edge, which may be a step below the band. When none of those is
-   sharp, it accepts the sharpest of the frames whose step matches well within
+   upper edge, which may be a step below the band. When no sharp frame there
+   does, it accepts the sharpest of the frames whose step matches well within
    the band, the sharpest being the frame whose least sharp sensor has the
    highest ratio to its median, and reports it as kept though blurred. A
    stretch where every frame is blurred is so crossed at the band's spacing,
@@ -468,7 +469,7 @@ three digits; the medians, ratios and z-scores are `f64` because
 | recent rates | 3 | the accepted steps the prediction takes the median of |
 | weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step and a short segment |
 
-The last ten are constants of the module.
+The last nine are constants of the module.
 
 ## Python bindings
 
