@@ -2408,6 +2408,7 @@ fn an_image_is_posed_only_when_its_whole_pose_is_finite() {
         quaternion_wxyz: UnitQuaternion::new_unchecked(nalgebra::Quaternion::new(w, 0.0, 0.0, 0.0)),
         translation_xyz: Vector3::new(x, 0.0, 0.0),
         intrinsic_adjustment: IntrinsicAdjustment::default(),
+        readings: None,
     };
     assert!(image(1.0, 2.0).is_posed());
     assert!(!image(f64::NAN, 2.0).is_posed());
