@@ -276,7 +276,8 @@ pub struct WalkStep {
     /// The step per frame, `stats.step_percent / (to − from)`.
     pub rate: f64,
     pub kind: StepKind,
-    /// The step's band was halved because `from` lies in a flagged region.
+    /// The step's band was halved because `from` lies in a region flagged
+    /// for weak matches.
     pub flagged: bool,
 }
 
@@ -293,7 +294,7 @@ pub enum StepKind {
     /// wider than the band.
     Bracketed,
     /// Below the band at the last frame of the sequence or the first frame of
-    /// a flagged region, which a step does not pass.
+    /// a region flagged for weak matches, which a step does not pass.
     AtLimit,
     /// Below the band after a step failed: part of a gap filled in.
     GapFill,

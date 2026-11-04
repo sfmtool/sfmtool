@@ -25,7 +25,7 @@ const MAX_REAIMS: usize = 4;
 const RECENT_RATES: usize = 3;
 
 /// A step with fewer than this many times `min_matches` matches is a weak
-/// point.
+/// point, and a step to a frame beyond the next one fails with it.
 const WEAK_MATCH_FACTOR: usize = 2;
 
 /// A step whose F-inlier share is within this of `min_inlier_share` is a weak
@@ -39,12 +39,13 @@ const MIN_SEGMENT_FRAMES: usize = 3;
 #[derive(Clone, Copy)]
 struct StepBounds {
     from: usize,
-    /// The band, halved with the target in a flagged region.
+    /// The band, halved with the target in a region flagged for weak
+    /// matches.
     low: f64,
     high: f64,
     target: f64,
     /// The farthest frame the step may reach: the sequence's last frame, or
-    /// the first frame of the next flagged region.
+    /// the first frame of the next region flagged for weak matches.
     limit: usize,
 }
 
@@ -196,6 +197,12 @@ fn find_start(
     Ok(None)
 }
 
+/// Whether a pair has fewer than [`WEAK_MATCH_FACTOR`] times `min_matches`
+/// matches.
+fn few_matches(stats: &FramePairStats, options: &PickImagesOptions) -> bool {
+    stats.matches < WEAK_MATCH_FACTOR * options.pair.min_matches
+}
+
 /// Fill in what the walk's report derives at the end: the weak points and
 /// the counts of frames used.
 fn finish(
@@ -205,9 +212,8 @@ fn finish(
     sequence: usize,
     options: &PickImagesOptions,
 ) {
-    let min_matches = options.pair.min_matches;
     for (i, step) in report.steps.iter().enumerate() {
-        let few_matches = step.stats.matches < WEAK_MATCH_FACTOR * min_matches;
+        let few_matches = few_matches(&step.stats, options);
         let low_inlier_share = step
             .stats
             .f_inlier_share
@@ -336,7 +342,11 @@ impl Walker<'_, '_> {
         loop {
             let stats = self.measure(c)?;
             let m = stats.step_percent;
-            let well = matches_well(&stats, self.options);
+            // A step with few matches is where a solve is most likely to
+            // split, so beyond the next frame it fails, and the gap is filled
+            // in at shorter steps.
+            let well = matches_well(&stats, self.options)
+                && (c == f + 1 || !few_matches(&stats, self.options));
             if m > b.high {
                 above = Some(above.map_or(c, |a| a.min(c)));
                 if c == f + 1 {

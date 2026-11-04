@@ -320,14 +320,20 @@ fn a_long_blurred_stretch_is_crossed_at_the_bands_spacing() {
         );
     }
     // Every frame chosen in the stretch is blurred, so it is kept though
-    // blurred, at the band's spacing rather than one frame at a time.
+    // blurred, at the band's spacing rather than one frame at a time. The
+    // stretch matches well, so it is flagged for blur alone and the band is
+    // not halved there: about 10 frames a step at 1% a frame.
     assert!(inside
         .iter()
         .all(|s| walk.kept_blurred.iter().any(|k| k.frame == s.to)));
+    let regions = &run.report().sequences[0].baseline.flagged_regions;
+    assert!(regions.iter().any(|r| r.blurred));
+    assert!(regions.iter().all(|r| !r.weak_matches), "{regions:?}");
+    assert!(inside.iter().all(|s| !s.flagged));
     assert!(
         median(&strides(walk, |s| stretch.contains(&s.from)
             && stretch.contains(&s.to)))
-            >= 4.0
+            >= 7.0
     );
     assert!(walk.breaks.is_empty());
     assert_read_is_asked(&run);
@@ -401,6 +407,18 @@ fn a_bad_patch_is_filled_in_at_shorter_steps() {
             assert!(step.from >= 110 && step.to <= 182, "{step:?}");
         }
     }
+    // The patch is flagged for weak matches, and the steps from inside it
+    // have their band halved.
+    let regions = &run.report().sequences[0].baseline.flagged_regions;
+    let weak: Vec<&FlaggedRegion> = regions.iter().filter(|r| r.weak_matches).collect();
+    assert!(!weak.is_empty(), "{regions:?}");
+    for step in &walk.steps {
+        let in_weak = weak
+            .iter()
+            .any(|r| r.first <= step.from && step.from <= r.last);
+        assert_eq!(step.flagged, in_weak, "{step:?}");
+    }
+    assert!(walk.steps.iter().any(|s| s.flagged));
     // Dense across the patch, sparse elsewhere.
     let inside = walk.chosen.iter().filter(|c| patch.contains(c)).count();
     assert!(inside >= 20, "{inside} frames chosen in the patch");
@@ -477,6 +495,12 @@ fn a_break_starts_a_new_segment_and_weak_points_are_reported() {
     assert!(!few.is_empty());
     for step in few {
         assert!(step.to >= 220 && step.from <= 260, "{step:?}");
+        // A step with few matches is settled on only at the next frame, or
+        // when halving a failed step finds nothing better.
+        assert!(
+            step.to == step.from + 1 || step.kind == StepKind::GapFill,
+            "{step:?}"
+        );
     }
     // Every frame of a break was read: the walk looked for the first that
     // matches its next frame.
@@ -506,6 +530,25 @@ fn shuffled_frames_are_not_a_video() {
     // Nothing is read after the first batch.
     assert!(report.frames.iter().all(|f| f.stage == Stage::BaselineNear));
     assert_eq!(run.calls.len(), 1);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn frames_whose_neighbours_are_far_apart_are_not_a_video() {
+    // Frames 6% of the long side apart: the motion adds up, the step is
+    // steady and neighbours match closely, but a step that large is no
+    // video's.
+    let synth = Synth::steady(28, 120, 6.0 * ONE_PERCENT);
+    let run = run(&[&synth]);
+    let report = run.report();
+    let video = &report.sequences[0].video;
+    assert!(
+        video.motion_adds_up && video.step_steady && video.neighbours_match,
+        "{video:?}"
+    );
+    assert!(!video.step_small, "{video:?}");
+    assert!(!video.is_video);
+    assert_eq!(report.verdict, Verdict::NotAVideo);
     assert_read_is_asked(&run);
 }
 

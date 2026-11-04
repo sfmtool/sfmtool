@@ -46,8 +46,9 @@ const VIDEO_MAX_STEP_FACTOR: f64 = 2.0;
 /// The 1-frame F-inlier share above which neighbours match closely.
 const VIDEO_MIN_SHARE: f64 = 0.8;
 
-/// How many of the four signs make a video.
-const VIDEO_SIGNS_NEEDED: usize = 3;
+/// How many of the three signs other than a small step make a video, with a
+/// small step, which every video has.
+const VIDEO_OTHER_SIGNS_NEEDED: usize = 2;
 
 /// The F-inlier share 10 frames apart below which the scene moves.
 const MOVING_SCENE_MAX_SHARE: f64 = 0.3;
@@ -204,18 +205,19 @@ pub(super) struct SequenceBaseline {
 }
 
 impl SequenceBaseline {
-    /// Whether position `frame` lies in a flagged region.
+    /// Whether position `frame` lies in a region flagged for weak matches.
     pub(super) fn is_flagged(&self, frame: usize) -> bool {
         self.flagged_regions
             .iter()
-            .any(|r| r.first <= frame && frame <= r.last)
+            .any(|r| r.weak_matches && r.first <= frame && frame <= r.last)
     }
 
-    /// The first flagged position after `frame`.
+    /// The first position after `frame` in a region flagged for weak
+    /// matches.
     pub(super) fn next_flagged(&self, frame: usize) -> Option<usize> {
         self.flagged_regions
             .iter()
-            .filter(|r| r.last > frame)
+            .filter(|r| r.weak_matches && r.last > frame)
             .map(|r| r.first.max(frame + 1))
             .min()
     }
@@ -404,7 +406,7 @@ pub(super) fn video_check(
     let step_small = step_1_median < VIDEO_MAX_STEP_PERCENT;
     let step_steady = step_change_median < VIDEO_MAX_STEP_FACTOR.ln();
     let neighbours_match = f_inlier_share_1_median > VIDEO_MIN_SHARE;
-    let signs = [motion_adds_up, step_small, step_steady, neighbours_match]
+    let other_signs = [motion_adds_up, step_steady, neighbours_match]
         .iter()
         .filter(|&&sign| sign)
         .count();
@@ -417,7 +419,7 @@ pub(super) fn video_check(
         step_small,
         step_steady,
         neighbours_match,
-        is_video: len >= 4 && signs >= VIDEO_SIGNS_NEEDED,
+        is_video: len >= 4 && step_small && other_signs >= VIDEO_OTHER_SIGNS_NEEDED,
     }
 }
 

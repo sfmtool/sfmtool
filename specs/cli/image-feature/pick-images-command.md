@@ -424,7 +424,6 @@ error, the list entries, a range split in parts, and the slice suggestion.
   choosing frames for a solver that would accept it.
 - Recording why a frame was chosen in the list or in a `.sfmr`.
 
-The defaults other than the target step and the blur ratio are starting
-values. How they are to be settled, and the choices of this command that are
-still open, are in
+The choices of this command that are still open, among them the size of the
+baseline, are in
 [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
