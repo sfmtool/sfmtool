@@ -196,11 +196,7 @@ impl CameraIntrinsics {
         }
         let x = rx / rz;
         let y = ry / rz;
-        if !self.model.forward_projection_invertible(x, y) {
-            return None;
-        }
-        let d = self.model.distort_jacobian(x, y)?;
-        let (x_d, y_d) = self.model.distort(x, y);
+        let ((x_d, y_d), d) = self.model.checked_distort_with_jacobian(x, y)?;
         let (x_r, y_r) = step.forward(x, y, x_d, y_d);
         let m = step.jacobian(x, y, x_d, y_d, d);
         // ∂(x, y)/∂ray = P·S, as on the perspective path of

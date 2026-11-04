@@ -113,6 +113,24 @@ use ray_grid::{COARSE_GRID_STRIDE, COARSE_GRID_TOL_PX};
 // CameraModel: normalized-space distortion
 // ---------------------------------------------------------------------------
 
+/// A distorted image-plane point `(x_d, y_d)` with the 2×2 Jacobian
+/// `∂(x_d, y_d)/∂(x, y)` of the distortion there, row-major.
+type DistortedWithJacobian = ((f64, f64), [[f64; 2]; 2]);
+
+/// The perspective family's 2×2 `∂(x_d, y_d)/∂(x, y)` of
+/// `x_d = x·g(r²) + T_x`, `y_d = y·g(r²) + T_y` at `(x, y)`, from the radial
+/// factor `g`, its derivative `gp = dg/d(r²)` and the tangential `(p1, p2)`
+/// (see [`CameraModel::distort_jacobian`]).
+#[inline]
+fn radial_tangential_jacobian(x: f64, y: f64, g: f64, gp: f64, p1: f64, p2: f64) -> [[f64; 2]; 2] {
+    // Cross term is shared by both off-diagonals (radial `2xy g'` plus the
+    // tangential `2 p1 x + 2 p2 y`).
+    let cross = 2.0 * x * y * gp + 2.0 * p1 * x + 2.0 * p2 * y;
+    let dxdx = g + 2.0 * x * x * gp + 2.0 * p1 * y + 6.0 * p2 * x;
+    let dydy = g + 2.0 * y * y * gp + 6.0 * p1 * y + 2.0 * p2 * x;
+    [[dxdx, cross], [cross, dydy]]
+}
+
 impl CameraModel {
     /// Apply forward distortion: undistorted image-plane → distorted image-plane.
     ///
@@ -296,12 +314,63 @@ impl CameraModel {
             // Fisheye / equirectangular: no analytic pixel Jacobian yet.
             _ => return None,
         };
-        // Cross term is shared by both off-diagonals (radial `2xy g'` plus the
-        // tangential `2 p1 x + 2 p2 y`).
-        let cross = 2.0 * x * y * gp + 2.0 * p1 * x + 2.0 * p2 * y;
-        let dxdx = g + 2.0 * x * x * gp + 2.0 * p1 * y + 6.0 * p2 * x;
-        let dydy = g + 2.0 * y * y * gp + 6.0 * p1 * y + 2.0 * p2 * x;
-        Some([[dxdx, cross], [cross, dydy]])
+        Some(radial_tangential_jacobian(x, y, g, gp, p1, p2))
+    }
+
+    /// [`Self::distort`] behind the perspective family's domain gate, together
+    /// with its Jacobian [`Self::distort_jacobian`]: `None` where
+    /// [`Self::forward_projection_invertible`] rejects `(x, y)` or the model has
+    /// no analytic Jacobian, and otherwise the distorted point and the 2×2,
+    /// each bit for bit what those methods return.
+    ///
+    /// [`CameraModel::SfmtoolPinhole`] reads the gate, the point and the radial
+    /// factor from one spline evaluation
+    /// (`checked_distort_sfmtool_pinhole_with_radial_factor`); every other model
+    /// calls the three methods in turn.
+    #[inline]
+    fn checked_distort_with_jacobian(&self, x: f64, y: f64) -> Option<DistortedWithJacobian> {
+        if let CameraModel::SfmtoolPinhole {
+            bspline,
+            bspline_rho_max,
+            ..
+        } = self
+        {
+            let (point, (g, gp)) = checked_distort_sfmtool_pinhole_with_radial_factor(
+                x,
+                y,
+                bspline,
+                *bspline_rho_max,
+            )?;
+            return Some((point, radial_tangential_jacobian(x, y, g, gp, 0.0, 0.0)));
+        }
+        if !self.forward_projection_invertible(x, y) {
+            return None;
+        }
+        let d = self.distort_jacobian(x, y)?;
+        Some((self.distort(x, y), d))
+    }
+
+    /// [`Self::distort`] behind the perspective family's domain gate: `None`
+    /// where [`Self::forward_projection_invertible`] rejects `(x, y)`, and
+    /// otherwise [`Self::distort`]'s point, bit for bit.
+    ///
+    /// [`CameraModel::SfmtoolPinhole`] reads the gate and the point from one
+    /// spline evaluation (`checked_distort_sfmtool_pinhole`); every other model
+    /// calls the two methods in turn.
+    #[inline]
+    fn checked_distort(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if let CameraModel::SfmtoolPinhole {
+            bspline,
+            bspline_rho_max,
+            ..
+        } = self
+        {
+            return checked_distort_sfmtool_pinhole(x, y, bspline, *bspline_rho_max);
+        }
+        if !self.forward_projection_invertible(x, y) {
+            return None;
+        }
+        Some(self.distort(x, y))
     }
 
     /// Whether the normalized image-plane point `(x, y)` lies in the
@@ -379,15 +448,17 @@ impl CameraModel {
                 let dyd_dy = (ypy - ymy) / (2.0 * h);
                 (dxd_dx * dyd_dy - dxd_dy * dyd_dx) > 0.0
             }
-            // Radial spline: the fold gate of `sfmtool_pinhole_unfolded`,
-            // `ρ + δ(ρ) > 0`. Both the projection and the analytic Jacobian
-            // reach the model through this predicate, so they leave the domain
-            // together by construction.
+            // Radial spline: the fold gate, `ρ + δ(ρ) > 0`, of
+            // `checked_distort_sfmtool_pinhole`. The projection and the
+            // analytic Jacobian do not ask this predicate: `checked_distort`
+            // and `checked_distort_with_jacobian` apply the same gate inside
+            // the kernel that distorts the point, from the one spline
+            // evaluation all of them read.
             CameraModel::SfmtoolPinhole {
                 bspline,
                 bspline_rho_max,
                 ..
-            } => sfmtool_pinhole_unfolded(x * x + y * y, bspline, *bspline_rho_max),
+            } => checked_distort_sfmtool_pinhole(x, y, bspline, *bspline_rho_max).is_some(),
             // Non-perspective models reach this only via accidental call.
             _ => true,
         }
@@ -578,11 +649,7 @@ impl CameraModel {
                 // principal monotonic branch. Beyond the first inflection
                 // the forward map stops being injective and produces ghost
                 // projections at spurious pixels inside the image rectangle.
-                if !self.forward_projection_invertible(x, y) {
-                    return None;
-                }
-                let (x_d, y_d) = self.distort(x, y);
-                Some((x_d, y_d))
+                self.checked_distort(x, y)
             }
 
             // Distortion-free equidistant: exact closed form at every θ, so

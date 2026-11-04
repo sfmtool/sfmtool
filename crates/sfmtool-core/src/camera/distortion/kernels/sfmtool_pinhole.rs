@@ -90,6 +90,10 @@ pub(in crate::camera::distortion) fn undistort_sfmtool_pinhole(
 /// finite only multiplied by the `O(ρ²)` factors of the radial 2×2, so do not
 /// use it on its own as a radial derivative. The derivation and the on-axis
 /// limit are in `specs/core/camera/sfmtool-pinhole-kernels.md` § "Ray Jacobian".
+///
+/// This applies no fold gate. The projection's Jacobian reads the pair from
+/// [`checked_distort_sfmtool_pinhole_with_radial_factor`] instead, which gates
+/// it and returns the distorted point from the same spline evaluation.
 pub(in crate::camera::distortion) fn sfmtool_pinhole_radial_factor(
     r2: f64,
     coeffs: &[f64],
@@ -103,31 +107,86 @@ pub(in crate::camera::distortion) fn sfmtool_pinhole_radial_factor(
         return (1.0, 0.0);
     }
     let (delta, deriv) = bspline::delta_and_deriv(coeffs, rho_max, rho);
+    radial_factor(rho, r2, delta, deriv)
+}
+
+/// `(g, dg/d(r²))` from one evaluation `(δ, δ')` at `ρ = √(r²)`, off the
+/// axis: the expressions of [`sfmtool_pinhole_radial_factor`], written once
+/// for it and for [`checked_distort_sfmtool_pinhole_with_radial_factor`].
+fn radial_factor(rho: f64, r2: f64, delta: f64, deriv: f64) -> (f64, f64) {
     (1.0 + delta / rho, (rho * deriv - delta) / (2.0 * rho * r2))
 }
 
-/// Whether the `SFMTOOL_PINHOLE` map is on its principal monotonic branch at
-/// squared image-plane radius `r2` — the fold gate, the same one
-/// [`distort_ray_sfmtool_fisheye`](super::distort_ray_sfmtool_fisheye) applies in `θ`: a spline that drives
-/// `ρ_d = ρ + δ(ρ)` non-positive at a positive `ρ` has left the branch
-/// connected to the origin, and the projection is out of domain there.
+/// [`distort_sfmtool_pinhole`] behind the fold gate: `None` where the
+/// image-plane point `(x, y)` is off the map's principal monotonic branch, and
+/// otherwise the distorted point, with one evaluation of `δ` serving both.
 ///
-/// The slope half of the polynomial family's branch test (`1 + δ'(ρ) > 0`) is
-/// this model's monotonicity **construction** invariant, enforced where
-/// splines are produced rather than probed per ray, so it is not repeated
-/// here. An inactive spline is `SIMPLE_PINHOLE`, whose domain is every ray in
-/// front of the camera.
-pub(in crate::camera::distortion) fn sfmtool_pinhole_unfolded(
-    r2: f64,
+/// The gate is the one [`distort_ray_sfmtool_fisheye`](super::distort_ray_sfmtool_fisheye)
+/// applies in `θ`: a spline that drives `ρ_d = ρ + δ(ρ)` non-positive at a
+/// positive `ρ` has left the branch connected to the origin, and the
+/// projection is out of domain there (so is a `NaN` `ρ_d`). The
+/// slope half of the polynomial family's branch test (`1 + δ'(ρ) > 0`) is this
+/// model's monotonicity **construction** invariant, enforced where splines are
+/// produced rather than probed per ray, so it is not repeated here.
+///
+/// An inactive spline is `SIMPLE_PINHOLE`, whose domain is every ray in front
+/// of the camera, and an on-axis point (`ρ < PINHOLE_AXIS_EPS`) is in domain;
+/// both return `(x, y)`, as [`distort_sfmtool_pinhole`] does. Every point this
+/// returns is [`distort_sfmtool_pinhole`]'s, bit for bit.
+pub(in crate::camera::distortion) fn checked_distort_sfmtool_pinhole(
+    x: f64,
+    y: f64,
     coeffs: &[f64],
     rho_max: f64,
-) -> bool {
+) -> Option<(f64, f64)> {
     if bspline::bspline_is_inactive(coeffs, rho_max) {
-        return true;
+        return Some((x, y));
     }
+    let rho = (x * x + y * y).sqrt();
+    if rho < PINHOLE_AXIS_EPS {
+        return Some((x, y));
+    }
+    let rho_d = rho + bspline::delta(coeffs, rho_max, rho);
+    // Written so that a `NaN` `ρ_d` is out of domain too.
+    if rho_d > 0.0 {
+        let scale = rho_d / rho;
+        Some((x * scale, y * scale))
+    } else {
+        None
+    }
+}
+
+/// [`checked_distort_sfmtool_pinhole`] together with the pair
+/// `(g, dg/d(r²))` of [`sfmtool_pinhole_radial_factor`], all from one
+/// evaluation of `(δ, δ')`: the fold gate, the distorted point and the pair
+/// the projection's Jacobian composes.
+///
+/// `None` on exactly the points where [`checked_distort_sfmtool_pinhole`]
+/// returns `None`. Elsewhere the point is that function's and the pair is
+/// [`sfmtool_pinhole_radial_factor`]'s, bit for bit: `δ` is
+/// [`bspline::delta`]'s value whichever of the two evaluates it. An inactive
+/// spline or an on-axis point returns `((x, y), (1, 0))`.
+pub(in crate::camera::distortion) fn checked_distort_sfmtool_pinhole_with_radial_factor(
+    x: f64,
+    y: f64,
+    coeffs: &[f64],
+    rho_max: f64,
+) -> Option<((f64, f64), (f64, f64))> {
+    if bspline::bspline_is_inactive(coeffs, rho_max) {
+        return Some(((x, y), (1.0, 0.0)));
+    }
+    let r2 = x * x + y * y;
     let rho = r2.sqrt();
     if rho < PINHOLE_AXIS_EPS {
-        return true;
+        return Some(((x, y), (1.0, 0.0)));
     }
-    rho + bspline::delta(coeffs, rho_max, rho) > 0.0
+    let (delta, deriv) = bspline::delta_and_deriv(coeffs, rho_max, rho);
+    let rho_d = rho + delta;
+    // The same test as `checked_distort_sfmtool_pinhole`'s.
+    if rho_d > 0.0 {
+        let scale = rho_d / rho;
+        Some(((x * scale, y * scale), radial_factor(rho, r2, delta, deriv)))
+    } else {
+        None
+    }
 }

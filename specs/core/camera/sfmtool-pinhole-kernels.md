@@ -23,8 +23,9 @@ coefficients, is specified in [bundle-adjustment.md](../geometry/bundle-adjustme
 
 The kernels live in
 [kernels/sfmtool_pinhole.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_pinhole.rs)
-(`distort_sfmtool_pinhole`, `undistort_sfmtool_pinhole`,
-`sfmtool_pinhole_radial_factor`, `sfmtool_pinhole_unfolded`), sharing both
+(`distort_sfmtool_pinhole`, `checked_distort_sfmtool_pinhole`,
+`checked_distort_sfmtool_pinhole_with_radial_factor`,
+`undistort_sfmtool_pinhole`, `sfmtool_pinhole_radial_factor`), sharing both
 `recover_radial_bspline` — which lives with the fisheye sibling in
 [kernels/sfmtool_fisheye.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs)
 — and the B-spline basis in
@@ -43,21 +44,39 @@ and the quotient's radius **is** the model's radial coordinate,
 
 so the model needs no ray-space entry point of its own.
 `distort_sfmtool_pinhole` takes the image-plane point to
-`(x_d, y_d) = (ρ + δ(ρ))·(x, y)/ρ`, and the dispatch reaches it through the
-same `rz > 0` guard, divide and `distort` call the pinhole and polynomial
-models use. A point on the optical axis (`ρ < 1e-15`) passes through
-unchanged: `δ(ρ)/ρ → 0` by the gauge, so the correction vanishes there.
+`(x_d, y_d) = (ρ + δ(ρ))·(x, y)/ρ`, and the dispatch reaches the model through
+the same `rz > 0` guard and divide the pinhole and polynomial models use. A
+point on the optical axis (`ρ < 1e-15`) passes through unchanged: `δ(ρ)/ρ → 0`
+by the gauge, so the correction vanishes there.
 
 The domain restriction is the pinhole's, `rz > 0`, plus the **fold gate**:
-`sfmtool_pinhole_unfolded` reports whether `ρ_d = ρ + δ(ρ)` is positive at a
-positive `ρ`. A spline that drives it non-positive has left the branch
-connected to the origin, and the projection is `None` there, the analog of
-[sfmtool-fisheye-kernels.md](sfmtool-fisheye-kernels.md)'s `θ_d ≤ 0` gate. It
-is answered inside `forward_projection_invertible`, the perspective family's
-branch predicate, which both the projection and the analytic Jacobian consult,
-so the two leave the domain together by construction.
+`ρ_d = ρ + δ(ρ)` must be positive at a positive `ρ`. A spline that drives it
+non-positive has left the branch connected to the origin, and the projection
+is `None` there, the analog of
+[sfmtool-fisheye-kernels.md](sfmtool-fisheye-kernels.md)'s `θ_d ≤ 0` gate.
 
-The slope half of that predicate for the polynomial models
+The gate and the distortion read the same `δ(ρ)`, so one kernel answers both.
+`checked_distort_sfmtool_pinhole` returns `None` past the fold and
+`distort_sfmtool_pinhole`'s point otherwise, from one evaluation of `δ`.
+`checked_distort_sfmtool_pinhole_with_radial_factor` returns the same and the
+radial factor of [Ray Jacobian](#ray-jacobian) as well, from one evaluation of
+`(δ, δ')`. The two compute the same `δ` (`bspline::delta` is the first value of
+`bspline::delta_and_deriv`, summed in the same order) and apply the same test to
+it, so they reject the same points.
+
+`CameraModel::distort_ray` projects this model through the first kernel, by way
+of `CameraModel::checked_distort`, and `ray_to_pixel_with_jacobian`, with or
+without a rolling shutter, through the second, by way of
+`CameraModel::checked_distort_with_jacobian` (an inactive spline without a
+rolling shutter takes the undistorted-pinhole path of
+[The zero-spline short-circuit](#the-zero-spline-short-circuit) instead).
+Every other perspective model asks `forward_projection_invertible`, the
+family's branch predicate, and then distorts. So a projection or a Jacobian of this model evaluates the spline once
+per ray, and the projection and the Jacobian leave the domain together.
+`forward_projection_invertible`'s arm for this model is the first kernel's
+`is_some()`.
+
+The slope half of the polynomial models' branch predicate
 (`g + 2r²g' > 0`, here `1 + δ'(ρ) > 0`) is this model's monotonicity
 **construction** invariant, enforced where splines are produced rather than
 probed per ray, so it is not repeated in the gate.
@@ -117,14 +136,17 @@ The derivative is the **perspective family's** composition from
 `diag(fx, fy) · D · (P · S)`, with `D` the 2×2 of a radially symmetric
 image-plane map `x_d = x·g(r²)`. This model's forward map is exactly that form,
 so the radial factor `g` is the only stage that differs from a pinhole's and
-the frame flip, the divide, the domain gate and the intrinsics scaling are the
-same code the rest of the family runs. Its fisheye sibling carries a dedicated
-kernel instead because that map never forms `(rx/rz, ry/rz)` at all, so none of
+the frame flip, the divide, the 2×2 composition and the intrinsics scaling are
+the same code the rest of the family runs. Its fisheye sibling carries a
+dedicated kernel instead because that map never forms `(rx/rz, ry/rz)` at all, so none of
 the composition applies to it.
 
-`sfmtool_pinhole_radial_factor` supplies the pair the family is parameterized
-by. The family reads `g` as a function of `r²`, so the chain rule through
-`ρ = √(r²)` (`dρ/d(r²) = 1/(2ρ)`) gives
+`checked_distort_sfmtool_pinhole_with_radial_factor` supplies the pair the
+family is parameterized by, with the distorted point and the fold gate
+([Forward projection](#forward-projection)), and
+`sfmtool_pinhole_radial_factor`, which `CameraModel::distort_jacobian` calls,
+the same pair with no gate. The family reads `g` as a function of `r²`, so the
+chain rule through `ρ = √(r²)` (`dρ/d(r²) = 1/(2ρ)`) gives
 
 ```
 g(ρ) = 1 + δ(ρ)/ρ        dg/d(r²) = (ρ·δ'(ρ) − δ(ρ))/(2·ρ³)
@@ -151,8 +173,7 @@ The limits:
   `diag(fx/rz, −fy/rz)` with the `rx/rz²` column, whatever the coefficients.
 - **Behind the camera** (`rz ≤ 0`): `None`, the pinhole domain, shared with the
   rest of the perspective family.
-- **Past the fold**: `None`, from the same `forward_projection_invertible` call
-  the projection makes.
+- **Past the fold**: `None`, from the same fold gate the projection applies.
 
 ## Per-image corrections
 
@@ -312,7 +333,8 @@ It is the derivative of the map as stated, with the velocity read at the
 undistorted point and `t` at the distorted one, not of a simplified map,
 because the bundle adjustment's damping ladder compares costs of the map
 itself. The domain is the model's: `None` behind the camera and past the fold,
-from the same `forward_projection_invertible` call.
+from the same fold gate, in
+`checked_distort_sfmtool_pinhole_with_radial_factor`.
 
 The bundle adjustment holds an image's corrections and differentiates its own
 columns through them
@@ -400,9 +422,10 @@ short-circuits every map to the `SIMPLE_PINHOLE` arithmetic:
 | entry point | short-circuits to |
 |-------------|-------------------|
 | `distort_sfmtool_pinhole` | the identity `(x, y)` |
+| `checked_distort_sfmtool_pinhole` | the identity `(x, y)`, in domain |
+| `checked_distort_sfmtool_pinhole_with_radial_factor` | the identity `(x, y)` with `(g, dg/d(r²)) = (1, 0)` |
 | `undistort_sfmtool_pinhole` | the identity `(x_d, y_d)` |
 | `sfmtool_pinhole_radial_factor` | `(g, dg/d(r²)) = (1, 0)` |
-| `sfmtool_pinhole_unfolded` | `true` |
 | `ray_to_pixel_with_jacobian` | the undistorted-pinhole fast path |
 
 The last row is what makes the contract bitwise rather than merely equal to a
@@ -449,6 +472,13 @@ holds on the derivative as well as the projection.
 - **Shared domain**: a spline folded inside the sampled field takes projection
   and Jacobian out of domain together (`None` from both); so does a ray at or
   behind the plane through the camera centre.
+- **One spline evaluation**: over points in and past the fold of a folded
+  spline and across `ρ_max` of a monotone one, the two `checked_` kernels are
+  `None` exactly where `ρ + δ(ρ) > 0` fails, their point is
+  `distort_sfmtool_pinhole`'s and their radial factor
+  `sfmtool_pinhole_radial_factor`'s, bit for bit; and the camera's projection
+  and Jacobian, with and without a rolling shutter, are `None` on exactly those
+  rays, with the Jacobian's pixel the projection's bit for bit.
 - **Classification**: the model reports perspective, image-plane and
   analytic-Jacobian support, reports no distortion for an empty or all-zero
   spline, and admits the pinhole fits.
