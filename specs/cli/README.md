@@ -88,6 +88,10 @@ Each of the eight commands handles it the same way:
   workspace is found is an error saying that no workspace was found and so no
   named image lists are defined, with the same sentence.
 
+A value is a name or a range and nothing more. A slice of a list by position,
+such as `-r 'walk1[:30]'` for its first 30 images, is proposed in
+[../drafts/named-image-list-slices-amendment.md](../drafts/named-image-list-slices-amendment.md).
+
 **The image-directory commands.** For `sift`, `match`, `motion` and `solve`, a
 list replaces the image path arguments: the command takes either paths (or,
 for `motion` and `solve`, a `.sfmr` or `.matches` file) or a list, and giving

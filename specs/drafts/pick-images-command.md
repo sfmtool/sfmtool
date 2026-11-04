@@ -56,8 +56,8 @@ option: the feature tool and its settings are always the workspace's.
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `--write-list NAME` | | Write the chosen frames as the named image list `NAME`, and the test lists beside it. Without it the command only reports. |
-| `--force` | off | Replace a list of that name (and the test lists' names) if the workspace already defines one. |
+| `--write-list NAME` | | Write the chosen frames as the named image list `NAME`. Without it the command only reports. |
+| `--force` | off | Replace a list of that name if the workspace already defines one. |
 | `-r/--range` | | A range of file numbers, or the name of a named image list, that narrows the input ([the shared `-r/--range` option](../cli/README.md#the-shared--r--range-option)). |
 | `--named-image-list NAME` | | Read the input frames from this named image list, in place of `PATHS`. |
 | `--target-step PERCENT` | `10` | The step to aim for between two chosen frames: the median feature displacement, in percent of the image's long side. |
@@ -65,7 +65,6 @@ option: the feature tool and its settings are always the workspace's.
 | `--blur-ratio RATIO` | `0.6` | A frame whose sharpness is below `RATIO` times the capture's median sharpness counts as blurred. |
 | `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. |
 | `--min-inlier-share SHARE` | `0.5` | A step whose matches fit a fundamental matrix with a smaller share of inliers fails. |
-| `--test-lists / --no-test-lists` | on | With `--write-list`, also write the three test lists. |
 | `--json PATH` | | Also write every measurement and decision to a JSON file. |
 
 **Why `--write-list` and not a positional name or `--name`.** On the eight
@@ -87,9 +86,8 @@ an existing list's. The output name may be the input list's own name only with
 
 **Refusing to overwrite.** Before it reads any image, the command reads the
 workspace's lists file (`NamedImageLists::read`) and stops with an error when
-it already defines `NAME` or, with test lists on, one of the test lists'
-names, naming the file and each such list and saying to pass `--force` to
-replace them. The same check is made again when the file is written, so that a
+it already defines `NAME`, naming the file and the list and saying to pass
+`--force` to replace it. The same check is made again when the file is written, so that a
 list another command added in the meantime is not lost silently.
 
 **No provenance.** A written list holds pattern and range entries only, in the
@@ -113,10 +111,9 @@ exits 1, since the list it was asked for does not exist.
 # Report on a capture without writing anything
 sfm pick-images frames/
 
-# Choose the frames and write them as the list walk1, plus walk1.start,
-# walk1.middle and walk1.end
+# Choose the frames and write them as the list walk1
 sfm pick-images frames/ --write-list walk1
-sfm solve -i -r walk1.start     # a quick test solve first
+sfm solve -i -r 'walk1[:30]'    # a quick test solve of its first 30 images
 sfm solve -i -r walk1
 
 # Larger steps, and only frames 1-3000
@@ -337,20 +334,6 @@ frames whose step matched well, in a stretch where no sampled frame of the
 baseline raised a flag. Every other frame of the capture was either read or
 lies inside a break.
 
-### Test lists
-
-With `--write-list NAME` and test lists on, the command also walks three short
-stretches of the capture, starting at its start, its middle and its end, with
-half the target step, until each holds 30 frames or reaches a break or the end
-of its sequence. A shorter step keeps each test list's frames close enough to
-match well while the 30 frames still span about 1.5 times the image's width
-of motion, enough for a solve to find depth. They are written as the lists
-`NAME.start`, `NAME.middle` and `NAME.end`, which the name rule allows, since
-`.` is one of its characters. The middle one starts at the middle of the
-longest segment; the end one walks backward from the last chosen frame of the
-last segment. A test list whose
-walk would overlap an earlier one is not written, and the report says so.
-
 ### Blur
 
 The axis ratio and coherence are judged with a robust z-score against the
@@ -393,9 +376,6 @@ same range, so the list holds every sensor's image of each chosen frame.
   "named_image_lists": {
     "walk1": [
       { "pattern": "frames/walk1_%04d.jpg", "range": "1-61:15,74,86-98:2,112-1462:15" }
-    ],
-    "walk1.start": [
-      { "pattern": "frames/walk1_%04d.jpg", "range": "1-204:7" }
     ]
   }
 }
@@ -409,8 +389,10 @@ it, so a failed write leaves the old file.
 ## Report
 
 The report prints the verdict, the motion along the capture, the blurred frames
-swapped, the gaps filled in, the breaks and the weak points. An example, for a
-4K video of a walk with one blurred run:
+swapped, the gaps filled in, the breaks and the weak points, and, when it
+writes a list, the number of images in it with three slices of 30 images to
+try as quick test solves. An example, for a 4K video of a walk with one blurred
+run:
 
 ```text
 Using workspace: /captures/garden
@@ -441,11 +423,18 @@ Walk: target step 10% (band 7-13%), 1 break, 2 segments
   Breaks (1): 4411->4416: frames 4411 to 4415 do not match their next frame
   Weak points (2): 4410->4411 (32 matches), 4416->4421 (F-inlier share 0.52)
 
-Test lists: walk1.start 1-204 (30 frames), walk1.middle 2950-3141 (30 frames),
-  walk1.end 5917-6120 (30 frames)
-Wrote 4 named image lists to /captures/garden/.sfm-named-image-lists.json:
-  walk1 (512 images), walk1.start, walk1.middle, walk1.end
+Wrote the named image list walk1 (512 images) to /captures/garden/.sfm-named-image-lists.json
+  For a quick test solve, try -r 'walk1[:30]', -r 'walk1[241:271]' or -r 'walk1[-30:]'
 ```
+
+The suggested slices use the syntax of
+[named-image-list-slices-amendment.md](named-image-list-slices-amendment.md):
+the first 30 images, the 30 from the middle, starting at `(n − 30) // 2` for a
+list of `n` images, and the last 30. A list of 60 images or fewer gets no
+suggestion line, since its slices would overlap or be the whole list. The
+slices count image files, not frames, so for a rig list, whose entries this
+draft writes one per sensor, `[:30]` would take only the first sensor's images
+([Rigs](#rigs)); the report gives no suggestion for a rig list.
 
 A **weak point** is an accepted step with fewer than twice the minimum match
 count, or an F-inlier share within `0.1` of `--min-inlier-share`, and a segment
@@ -589,7 +578,6 @@ pub struct PickImagesOptions {
     pub blur_ratio: f64,           // 0.6
     pub baseline_frames: usize,    // 200
     pub min_inlier_share: f64,     // 0.5
-    pub test_lists: bool,          // true
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // matching and fitting, below
 }
@@ -673,7 +661,7 @@ pub struct FramePairStats {
 ```
 
 `PickImagesReport` holds the verdict and the checks behind it, the baseline's
-readings, the chosen frames per sequence, the test walks, every step the walk
+readings, the chosen frames per sequence, every step the walk
 measured with its `FramePairStats`, the swaps, the gaps filled in, the frames
 kept though blurred, the breaks, the weak points and the count of frames read.
 `PickImagesError` is an enum: `Options` (a value of `PickImagesOptions` out of
@@ -883,8 +871,7 @@ value in this draft is a starting value: the band of ±30%, the inlier share of
 0.5, the minimum of 30 matches, the baseline of 200 samples, the solvability
 thresholds (an F-inlier share of 0.3, an H/F of 0.97, a rotation error of 0.01
 and a total motion of 100%), the z of 2, the ratio test of 0.8, the inlier
-bounds of 1 and 2 pixels per 960, the test lists' 30 frames at half the target
-step, and the four signs of a video (a 3-frame to 1-frame ratio between 2 and
+bounds of 1 and 2 pixels per 960, and the four signs of a video (a 3-frame to 1-frame ratio between 2 and
 4, a 1-frame step below 5%, neighbouring samples' steps within a factor of 2, a
 1-frame F-inlier share above 0.8, with three of the four needed). They are to
 be set by running the command on the maintainer's collection of captures,
@@ -926,11 +913,6 @@ records the captures that moved it, by kind.
 - **Taking `-r` and `--named-image-list` for the input.** This draft makes the
   command a ninth command of the shared `-r/--range` option, so a list or a
   range can narrow the input. Without them the input would be `PATHS` alone.
-- **The test lists' names and default.** `NAME.start`, `NAME.middle` and
-  `NAME.end`, on by default with `--write-list`. Alternatives: `NAME-test1` and
-  so on, or off by default. Whether `--force` should be needed for them
-  separately from `NAME`. Their length (30 frames) and step (half the target)
-  are starting values.
 - **The default baseline size.** 200 samples, about 1000 frames read. "A few
   hundred" could be 300; the cost grows by five frames per sample.
 - **The band and the inlier bar.** ±30% and 0.5, and whether the band should be
@@ -952,9 +934,11 @@ records the captures that moved it, by kind.
   blurred, and whether `.camrig` files, as well as `rig_config.json`, should
   define the rigs.
 - **Rig list entries.** One entry per sensor with the same range keeps each
-  pattern literal but orders the list by sensor and then frame; one entry with
-  a `*` segment keeps the sensors of a frame together but can match folders
-  that are not sensors.
+  pattern literal but orders the list by sensor and then frame, so a slice
+  of the list ([named-image-list-slices-amendment.md](named-image-list-slices-amendment.md))
+  takes the first sensor's images before any other's; one entry with a `*`
+  segment keeps the sensors of a frame together but can match folders that
+  are not sensors.
 - **Writing the lists file.** Rewriting it whole loses formatting a person gave
   it by hand; this draft keeps each list's ranges as their text. A range of more
   than 10,000 runs (`openjd_expr`'s `MAX_RANGE_EXPR_CHUNKS`) would not parse

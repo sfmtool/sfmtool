@@ -87,7 +87,10 @@ workspace-relative path. Paths compare byte by byte, so `B` sorts before `a`.
 **Narrowing.** A caller may narrow a list by a further range: the members are
 then the list's members whose frame number that range also holds. An entry
 with no frame field has no frame number to narrow, so narrowing a list that
-has such an entry is an error naming the entry.
+has such an entry is an error naming the entry. A caller selects members by
+frame number only, never by their position in the list; a slice by position,
+such as `walk1[:30]`, is proposed in
+[../drafts/named-image-list-slices-amendment.md](../drafts/named-image-list-slices-amendment.md).
 
 **An empty list.** A list that matches no file, after any narrowing, is an
 error when it is resolved, naming the list. When the list matches files and
