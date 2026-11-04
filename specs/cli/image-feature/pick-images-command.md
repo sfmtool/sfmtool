@@ -405,7 +405,8 @@ a range narrowing a folder; a capture that barely moves and the seoul_bull
 photographs, which write no list and exit 1 with `--write-list`; a version 1
 workspace; no workspace; files with no number or a shared number; a rig whose
 reference sensor is listed second, written one entry per sensor; a rig frame
-missing a sensor; and an invalid output name.
+missing a sensor; an invalid output name; and `--force` without `--write-list`
+and paths given with a list, which are usage errors.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the rig order, every

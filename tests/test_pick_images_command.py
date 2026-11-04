@@ -316,6 +316,9 @@ def test_a_version_1_workspace_is_refused(tmp_path: Path, monkeypatch):
         in result.output
     )
     assert "Run 'sfm ws upgrade'" in result.output
+    # Refused up front, before the sequences are collected, not by the first
+    # extraction of the walk.
+    assert "image file(s) in" not in result.output
     assert not (images / "features").exists()
 
 
@@ -431,3 +434,15 @@ def test_an_invalid_output_name_is_a_usage_error(pan_workspace: Path):
     result = CliRunner().invoke(main, ["pick-images", "frames", "--write-list", "12-3"])
     assert result.exit_code == 2, result.output
     assert "--write-list '12-3' is not a valid list name" in result.output
+
+
+def test_force_without_a_list_and_paths_with_a_list_are_usage_errors(
+    pan_workspace: Path,
+):
+    result = CliRunner().invoke(main, ["pick-images", "frames", "--force"])
+    assert result.exit_code == 2, result.output
+    assert "--force replaces a written list; give --write-list." in result.output
+    result = CliRunner().invoke(main, ["pick-images", "frames", "-r", "pan_all"])
+    assert result.exit_code == 2, result.output
+    assert "give paths or a list, not both" in result.output
+    assert not (pan_workspace / "frames" / "features").exists()
