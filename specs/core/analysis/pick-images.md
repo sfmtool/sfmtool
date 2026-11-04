@@ -559,8 +559,9 @@ alone, crossed with every step in the full band, a spread of 0 floored at the
 smallest deviation and readings mostly at the median flagging none of the
 rest, a bad patch flagged for weak matches and filled in at halved steps, two
 breaks with a short segment and steps with few matches taken only at the next
-frame or in a gap filled in, a blurred frame whose sharp neighbours and a
-blurred run whose sharp frames have few matches, neither taken, shuffled
+frame or in a gap filled in, a blurred frame whose sharp neighbours, a
+blurred run whose sharp frames and a wholly blurred run whose least blurred
+frames have few matches, none of them taken, shuffled
 frames, frames 6% apart that show the
 other three signs and a three-frame sequence that are not a video, a camera
 that only turns, one that barely moves and a moving scene that are not

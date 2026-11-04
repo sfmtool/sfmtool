@@ -360,6 +360,37 @@ fn a_blurred_run_does_not_take_a_sharp_frame_with_few_matches() {
     assert_read_is_asked(&run);
 }
 
+#[test]
+fn a_blurred_run_does_not_keep_a_sharper_blurred_frame_with_few_matches() {
+    // Every frame from the next one to past the frame the walk would choose
+    // is blurred, so the walk keeps the sharpest frame in the band. The
+    // frames past the next one that are less blurred than that frame show
+    // one point in 20, so a step to one of them has few matches.
+    let mut synth = Synth::steady(31, 300, ONE_PERCENT);
+    let first = run(&[&synth]);
+    let target = unsampled_choice(&first, 100);
+    let walk = first.walk(0);
+    let from = walk.chosen[walk.chosen.iter().position(|&c| c == target).unwrap() - 1];
+    for t in from + 1..=target + 4 {
+        synth.shots[t].readings[0].0 = 0.2;
+        if t > from + 1 && t != target {
+            synth.shots[t].readings[0].0 = 0.3;
+            synth.shots[t].content = Content::Subset { every: 20 };
+        }
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    assert!(walk.chosen.contains(&from));
+    assert!(walk.breaks.is_empty());
+    assert_few_match_steps_only_where_allowed(&run);
+    assert!(
+        walk.kept_blurred.iter().any(|k| k.frame == target),
+        "{:?}",
+        walk.kept_blurred
+    );
+    assert_read_is_asked(&run);
+}
+
 /// The band a step was held to: halved with the target in a flagged region.
 fn band(step: &WalkStep) -> (f64, f64) {
     let o = options();
