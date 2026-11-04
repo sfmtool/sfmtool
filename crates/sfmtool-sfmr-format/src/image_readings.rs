@@ -81,7 +81,7 @@ pub fn validate_image_readings(
     for (i, &s) in readings.sharpness.iter().enumerate() {
         if !s.is_finite() || s < 0.0 {
             return Err(format!(
-                "images/sharpness row {i} is {s}, which is not finite and not negative"
+                "images/sharpness row {i} is {s}, which must be finite and not negative"
             ));
         }
     }
@@ -90,7 +90,7 @@ pub fn validate_image_readings(
         if !(xx.is_finite() && yy.is_finite() && xy.is_finite()) || xx < 0.0 || yy < 0.0 {
             return Err(format!(
                 "images/gradient_structure_tensors_xx_yy_xy row {i} is [{xx}, {yy}, {xy}], \
-                 which is not finite with Exx and Eyy not negative"
+                 which must be finite with Exx and Eyy not negative"
             ));
         }
     }
