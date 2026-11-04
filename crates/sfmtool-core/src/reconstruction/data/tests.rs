@@ -1015,12 +1015,10 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
         } else if widen {
             let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
             let widened: Vec<u8> = raw
-                .chunks_exact(2)
-                .flat_map(|b| {
-                    half::f16::from_le_bytes([b[0], b[1]])
-                        .to_f32()
-                        .to_le_bytes()
-                })
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|b| half::f16::from_le_bytes(*b).to_f32().to_le_bytes())
                 .collect();
             zip_out
                 .write_all(&zstd::bulk::compress(&widened, 3).unwrap())

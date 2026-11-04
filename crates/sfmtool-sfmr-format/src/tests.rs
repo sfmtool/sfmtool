@@ -1469,8 +1469,10 @@ fn rewrite_renaming(
 
 /// The values of a little-endian `float16` payload, widened.
 fn float16_payload(raw: &[u8]) -> Vec<f32> {
-    raw.chunks_exact(2)
-        .map(|b| half::f16::from_le_bytes([b[0], b[1]]).to_f32())
+    raw.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| half::f16::from_le_bytes(*b).to_f32())
         .collect()
 }
 

@@ -624,10 +624,10 @@ fn a_reading_column_in_the_dtype_of_another_version_is_refused() {
     rewrite_renaming(&old, &bad, |name, raw| {
         (name == float32_name).then(|| {
             let bits: Vec<u8> = raw
-                .chunks_exact(4)
-                .flat_map(|b| {
-                    half::f16::from_f32(f32::from_le_bytes([b[0], b[1], b[2], b[3]])).to_le_bytes()
-                })
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|b| half::f16::from_f32(f32::from_le_bytes(*b)).to_le_bytes())
                 .collect();
             (float16_name.to_string(), bits)
         })

@@ -642,8 +642,10 @@ fn a_sharpness_in_the_dtype_of_another_version_is_refused() {
     rewrite_renaming(&old, &bad, |name, raw| {
         (name == SHARPNESS_ENTRY_V15).then(|| {
             let values: Vec<f32> = raw
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
                 .collect();
             (SHARPNESS_ENTRY.to_string(), float16_bytes(&values))
         })
