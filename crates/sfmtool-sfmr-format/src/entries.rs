@@ -406,20 +406,36 @@ impl ReadingColumn {
         }
     }
 
-    /// Whether the column is one of the five self-similarity value columns
-    /// that a file of version
+    /// Whether the column is one of the seven value columns that a file of
+    /// version
     /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
-    /// or later stores as `float16`: the axes, the two angles, `cos θ` and the
-    /// zoom. The two scores stay `float32` and the flags `uint8`.
+    /// or later stores as `float16`: the axes, the two angles, `cos θ`, the
+    /// zoom and the two scores (as their deficits, [`Self::stores_deficit`]).
+    /// The flags stay `uint8`.
     pub(crate) fn has_float16_form(self) -> bool {
+        self != ReadingColumn::EllipseAxesIsAtLeast
+    }
+
+    /// Whether the column is one of the two scores, which a file of version
+    /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
+    /// or later stores as their ZNCC deficit `1 − ZNCC`, under a name ending
+    /// `_zncc_deficit`.
+    pub(crate) fn stores_deficit(self) -> bool {
         matches!(
             self,
-            ReadingColumn::CosViewAngle
-                | ReadingColumn::EllipseAxes
-                | ReadingColumn::EllipseMajorAngle
-                | ReadingColumn::TiltAngle
-                | ReadingColumn::Zoom
+            ReadingColumn::BlurMatchedBitmapZncc | ReadingColumn::PlainBitmapZncc
         )
+    }
+
+    /// The column's name under `tracks/` in a file whose float columns are
+    /// `float16` where `float16` says so: [`Self::stem`], with `_deficit`
+    /// after a score's.
+    pub(crate) fn stored_stem(self, float16: bool) -> String {
+        if float16 && self.stores_deficit() {
+            format!("{}_deficit", self.stem())
+        } else {
+            self.stem().to_string()
+        }
     }
 
     /// Bytes per stored value: `1` for the flags, `2` for a column with a
@@ -446,7 +462,7 @@ impl ReadingColumn {
         };
         format!(
             "tracks/{}.{observation_count}{shape}.{dtype}.zst",
-            self.stem()
+            self.stored_stem(float16)
         )
     }
 }

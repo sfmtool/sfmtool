@@ -10,7 +10,7 @@ use ndarray::{Array1, Array2, Array4};
 use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
 use crate::entries::{self, ReadingColumn};
-use crate::float16::{stores_float16, widen_float16, wrong_dtype_error};
+use crate::float16::{scores_from_deficits, stores_float16, widen_float16, wrong_dtype_error};
 use crate::image_readings::image_readings_presence_error;
 use crate::observation_readings::{
     observation_reading_options, observation_readings_flagged, ReadingColumnsBuilder,
@@ -811,6 +811,28 @@ fn read_points_section(
         None
     };
 
+    // From version 16 the normal of a finite point with a patch is stored as
+    // (0, 0, 0) and derived from its frame; an older file reads as stored.
+    let mut normals_xyz = normals_xyz;
+    if let (true, Some(normals), Some(u), Some(v)) = (
+        crate::patch_normals::derives_patch_normals(metadata.version),
+        normals_xyz.as_mut(),
+        &patch_u_halfvec_xyz,
+        &patch_v_halfvec_xyz,
+    ) {
+        let w = positions_xyzw.column(3).to_vec();
+        let frame = crate::patch_normals::PatchFrameRows {
+            w: &w,
+            u: u.as_slice().expect("read in standard layout"),
+            v: v.as_slice().expect("read in standard layout"),
+        };
+        let values = normals.as_slice_mut().expect("read in standard layout");
+        frame
+            .check_stored(values)
+            .map_err(SfmrError::InvalidFormat)?;
+        frame.fill(values);
+    }
+
     Ok(PointsSection {
         positions_xyzw,
         colors_rgb,
@@ -973,9 +995,11 @@ fn read_tracks_section(
 /// them (`has_observation_readings`), with the options recorded beside them.
 /// Absent in a file without the flag, as every file before the columns was.
 ///
-/// Five of them are `float16` from version 16 and `float32` before it
-/// ([`SFMR_FLOAT16_READINGS_VERSION`]), widened to `f32` exactly; a file
-/// holding one in the other version's dtype is refused.
+/// From version 16 ([`SFMR_FLOAT16_READINGS_VERSION`]) the five
+/// self-similarity value columns are `float16`, widened to `f32` exactly, and
+/// the two scores are read from their stored `float16` ZNCC deficits `w` as
+/// `1 − w` in `f32`; before it all seven are `float32`. A file holding one in
+/// the other version's entry is refused.
 fn read_observation_readings(
     archive: &mut zip::ZipArchive<std::fs::File>,
     version: u32,
@@ -999,10 +1023,15 @@ fn read_observation_readings(
         }
         match column.element_size(float16) {
             1 => builder.push_flags(read_binary_array(archive, &name, len)?),
-            2 => builder.push_f32(
-                column,
-                widen_float16(&read_binary_array::<_, u16>(archive, &name, len)?),
-            ),
+            2 => {
+                let bits = read_binary_array::<_, u16>(archive, &name, len)?;
+                let values = if column.stores_deficit() {
+                    scores_from_deficits(&bits)
+                } else {
+                    widen_float16(&bits)
+                };
+                builder.push_f32(column, values);
+            }
             _ => builder.push_f32(column, read_binary_array(archive, &name, len)?),
         }
     }

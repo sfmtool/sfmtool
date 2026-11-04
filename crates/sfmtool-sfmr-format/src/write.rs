@@ -14,6 +14,7 @@ use sfmtool_archive_io::{format_hash, json_entry_bytes, write_binary_entry, writ
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries::{self, ReadingColumn};
+use crate::patch_normals::PatchFrameRows;
 use crate::types::*;
 use crate::{validate_image_readings, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS};
 
@@ -371,6 +372,11 @@ fn write_sfmr_into<S: EntrySink>(
     if let Some(readings) = data.observation_readings.as_mut() {
         readings.round_to_stored_precision();
     }
+    // The normal of a finite point with a patch is derived from its frame
+    // from version 16: set in the value here, so it is what a reader of the
+    // file gets back and the depth-statistics pass below finds no such row
+    // missing, and stored as (0, 0, 0) by `write_points3d`.
+    derive_patch_normals_in_place(data);
     let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
     // Ensure tracks are sorted by (point_indexes, image_indexes)
@@ -880,6 +886,55 @@ fn write_images<S: EntrySink>(
     Ok(images_hasher.digest128())
 }
 
+/// The `w` column and the row-major `u` and `v` of a value with the patch
+/// frame and normals, the arrays a version 16 writer derives the normals of
+/// finite patched points from, or `None` where it has neither or a shape is
+/// wrong (which the dimension checks report).
+fn patch_frame_columns(data: &SfmrData) -> Option<(Vec<f64>, Vec<f32>, Vec<f32>)> {
+    const _: () = assert!(crate::patch_normals::derives_patch_normals(
+        SFMR_FORMAT_VERSION
+    ));
+    let (normals, u, v) = (
+        data.normals_xyz.as_ref()?,
+        data.patch_u_halfvec_xyz.as_ref()?,
+        data.patch_v_halfvec_xyz.as_ref()?,
+    );
+    let p = data.positions_xyzw.shape()[0];
+    let shapes_agree = data.positions_xyzw.shape() == [p, 4]
+        && normals.shape() == [p, 3]
+        && u.shape() == [p, 3]
+        && v.shape() == [p, 3];
+    shapes_agree.then(|| {
+        (
+            data.positions_xyzw.column(3).to_vec(),
+            u.iter().copied().collect(),
+            v.iter().copied().collect(),
+        )
+    })
+}
+
+/// Set the normal of every finite point with a patch in `data` to
+/// `normalize(u × v)`, the normal a version 16 file derives for it. A point
+/// whose frame is degenerate keeps its normal, which the file stores.
+fn derive_patch_normals_in_place(data: &mut SfmrData) {
+    let Some((w, u, v)) = patch_frame_columns(data) else {
+        return;
+    };
+    let normals = data
+        .normals_xyz
+        .as_mut()
+        .expect("patch_frame_columns saw it");
+    let mut values: Vec<f32> = normals.iter().copied().collect();
+    PatchFrameRows {
+        w: &w,
+        u: &u,
+        v: &v,
+    }
+    .fill(&mut values);
+    *normals =
+        ndarray::Array2::from_shape_vec(normals.raw_dim(), values).expect("the shape was checked");
+}
+
 fn write_points3d<S: EntrySink>(
     sink: &mut S,
     data: &SfmrData,
@@ -961,12 +1016,27 @@ fn write_points3d<S: EntrySink>(
         )?;
     }
 
-    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
+    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions
+    // 1-2). From version 16 the rows of finite points with a patch are stored
+    // as (0, 0, 0), their normals derived from the frame on read.
     if let Some(normals_xyz) = &normals_xyz {
+        let normals = normals_xyz.as_standard_layout();
+        let normals = normals.as_slice().unwrap();
+        let stored: Cow<'_, [f32]> = match patch_frame_columns(data) {
+            Some((w, u, v)) => Cow::Owned(
+                PatchFrameRows {
+                    w: &w,
+                    u: &u,
+                    v: &v,
+                }
+                .stored(normals),
+            ),
+            None => Cow::Borrowed(normals),
+        };
         binary_hashed(
             sink,
             &entries::points3d_normals(false, point_count),
-            bytemuck::cast_slice(normals_xyz.as_slice().unwrap()),
+            bytemuck::cast_slice(&stored),
             &mut points3d_hasher,
         )?;
     }

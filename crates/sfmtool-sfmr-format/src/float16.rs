@@ -50,6 +50,44 @@ pub(crate) fn float16_bytes<'a>(values: impl IntoIterator<Item = &'a f32>) -> Ve
         .collect()
 }
 
+/// `score` rounded to what a version 16 file stores for it: its ZNCC deficit
+/// `w = 1 − score` in `f32`, rounded by [`round_to_float16`], and `1 − w` in
+/// `f32` again, which a reader computes from the stored `w`.
+///
+/// The second subtraction, and the `1 − z` of a later save, are exact once
+/// `w` is a `float16` in `[0, 2]`: every bit of `w`, of `1 − w` and of `1`
+/// lies at or above `2^-24`, and below `1` in `1 − w` when `w` is below `1`,
+/// so each result fits `f32`'s 24 significant bits. So a value this returns maps to itself, and a
+/// second save stores the same bytes. A score of `1` stores `0` and reads
+/// back `1`; `NaN` stays `NaN`.
+pub(crate) fn round_score_by_deficit(score: f32) -> f32 {
+    1.0 - round_to_float16(1.0 - score)
+}
+
+/// Round every score of `scores` in place by [`round_score_by_deficit`].
+pub(crate) fn round_all_scores_by_deficit<'a>(scores: impl IntoIterator<Item = &'a mut f32>) {
+    for s in scores {
+        *s = round_score_by_deficit(*s);
+    }
+}
+
+/// The little-endian `float16` bytes of the ZNCC deficits `1 − z` of
+/// `scores`, each computed in `f32` and rounded by [`round_to_float16`].
+pub(crate) fn deficit_float16_bytes<'a>(scores: impl IntoIterator<Item = &'a f32>) -> Vec<u8> {
+    scores
+        .into_iter()
+        .flat_map(|&z| f16::from_f32(1.0 - z).to_bits().to_le_bytes())
+        .collect()
+}
+
+/// The scores `1 − w`, in `f32`, of `bits`, the stored `float16` ZNCC
+/// deficits `w`.
+pub(crate) fn scores_from_deficits(bits: &[u16]) -> Vec<f32> {
+    bits.iter()
+        .map(|&b| 1.0 - f16::from_bits(b).to_f32())
+        .collect()
+}
+
 /// `bits`, the stored `float16` values, widened to `f32`.
 pub(crate) fn widen_float16(bits: &[u16]) -> Vec<f32> {
     bits.iter().map(|&b| f16::from_bits(b).to_f32()).collect()
@@ -79,6 +117,30 @@ pub(crate) fn float16_values(raw: &[u8], name: &str, expected: usize) -> Result<
 pub(crate) fn wrong_dtype_error(version: u32, found: &str, expected: &str) -> String {
     format!(
         "a version {version} file stores {expected}, and this one holds {found} instead; \
-         version {SFMR_FLOAT16_READINGS_VERSION} changed the column from float32 to float16"
+         version {SFMR_FLOAT16_READINGS_VERSION} changed the column's entry"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rounded_score_maps_to_itself_and_stores_its_own_deficit() {
+        // Every float16 deficit in [0, 2]: the score a reader computes from it
+        // rounds to itself and stores the same bits again.
+        for bits in 0..=f16::from_f32(2.0).to_bits() {
+            let w = f16::from_bits(bits).to_f32();
+            let z = 1.0 - w;
+            assert_eq!(round_score_by_deficit(z).to_bits(), z.to_bits(), "w = {w}");
+            assert_eq!(1.0 - z, w, "w = {w}");
+            assert_eq!(
+                deficit_float16_bytes([z].iter()),
+                bits.to_le_bytes(),
+                "w = {w}"
+            );
+        }
+        assert_eq!(round_score_by_deficit(1.0), 1.0);
+        assert!(round_score_by_deficit(f32::NAN).is_nan());
+    }
 }

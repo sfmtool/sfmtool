@@ -838,7 +838,14 @@ impl OptionalPresence {
 /// [`SFMR_FLOAT16_READINGS_VERSION`]). The values in memory stay `f32`: a
 /// writer rounds each to the nearest `float16`, and a reader widens it again
 /// exactly. A version 15 file reads as it did, and saves as version 16 with
-/// those columns rounded, which changes its content hash.
+/// those columns rounded, which changes its content hash. The two bitmap
+/// scores are stored as their ZNCC deficits `1 − z` in `float16`, under the
+/// names `tracks/plain_bitmap_zncc_deficit` and
+/// `tracks/blur_matched_bitmap_zncc_deficit`. And the normal of a finite
+/// point with a patch is no longer stored but derived from its frame as
+/// `normalize(u × v)` (see [`SFMR_DERIVED_PATCH_NORMALS_VERSION`]), so a
+/// version 15 file whose normals disagree with its frames saves with the
+/// derived ones.
 ///
 /// Version 15 added each image's sharpness and gradient structure tensor, the
 /// required columns `images/sharpness` and
@@ -930,14 +937,30 @@ pub const SFMR_FORMAT_VERSION: u32 = 16;
 /// The first `.sfmr` version that stores `images/sharpness` and the five
 /// observation-reading columns `tracks/zncc_self_similarity_ellipse_axes`,
 /// `_ellipse_major_angle`, `_cos_view_angle`, `_tilt_angle` and `_zoom` as
-/// `float16`.
+/// `float16`, and the two bitmap scores as their ZNCC deficits `1 − z` in
+/// `float16` (`tracks/plain_bitmap_zncc_deficit` and
+/// `tracks/blur_matched_bitmap_zncc_deficit`).
 ///
-/// A file below it stores them as `float32`. Each version has one dtype per
-/// column, and the reader refuses a file holding the other one. The two
-/// bitmap scores and the gradient structure tensor are `float32` in every
+/// A file below it stores them as `float32`, the scores as the scores
+/// themselves (`tracks/plain_bitmap_zncc`, `tracks/blur_matched_bitmap_zncc`).
+/// Each version has one entry per column, and the reader refuses a file
+/// holding the other one. The gradient structure tensor is `float32` in every
 /// version. See `specs/formats/sfmr-file-format.md` § "Version 15 → Version
 /// 16".
 pub const SFMR_FLOAT16_READINGS_VERSION: u32 = 16;
+
+/// The first `.sfmr` version that derives the normal of a finite point with a
+/// patch from its frame rather than storing it.
+///
+/// In a file of this version or later that has both `points3d/normals_xyz`
+/// and the patch frame, the row of every finite point (`w ≠ 0`) whose `u` is
+/// non-zero is stored as `(0, 0, 0)`, and the reader fills it with
+/// `normalize(u × v)` computed in `f32`. A writer sets those normals in the
+/// value it writes. A point whose `u × v` is zero or not finite gives no
+/// normal, and its row is stored as it is.
+/// A file below it reads its normals as stored. See
+/// `specs/formats/sfmr-file-format.md` § "Version 15 → Version 16".
+pub const SFMR_DERIVED_PATCH_NORMALS_VERSION: u32 = 16;
 
 /// The first `.sfmr` version that stores the per-image radial B-spline
 /// correction and rolling-shutter rates: `images/radial_bspline_adjustments`,

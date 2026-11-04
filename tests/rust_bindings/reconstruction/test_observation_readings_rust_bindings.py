@@ -37,10 +37,15 @@ FLOAT16_COLUMNS = (
 
 def _as_stored(readings: dict) -> dict:
     """``readings`` as a version 16 file stores them: the five float16 columns
-    rounded to the nearest float16 and widened back to float32."""
+    rounded to the nearest float16 and widened back to float32, and each score
+    ``z`` read back from its stored deficit as ``1 - f16(1 - z)`` in float32."""
     out = dict(readings)
     for key in FLOAT16_COLUMNS:
         out[key] = np.asarray(readings[key]).astype(np.float16).astype(np.float32)
+    one = np.float32(1.0)
+    for key in ("plain_bitmap_zncc", "blur_matched_bitmap_zncc"):
+        deficit = (one - np.asarray(readings[key])).astype(np.float16)
+        out[key] = one - deficit.astype(np.float32)
     return out
 
 
@@ -110,16 +115,16 @@ def test_clone_save_load_round_trip(ground_truth, seoul_bull_ground_truth_sfmr):
     # The file stores the five float16 columns rounded, the scores as given;
     # the reconstruction saved keeps its own values.
     stored = _as_stored(readings)
-    assert not np.array_equal(
-        stored["zncc_self_similarity_ellipse_major_angle"],
-        readings["zncc_self_similarity_ellipse_major_angle"],
-    )
+    for key in ("zncc_self_similarity_ellipse_major_angle", "plain_bitmap_zncc"):
+        assert not np.array_equal(stored[key], readings[key]), key
     _assert_rows_equal(SfmrReconstruction.load(path).observation_readings, stored)
     _assert_rows_equal(with_readings.observation_readings, readings)
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
     for key in COLUMNS:
-        assert any(n.startswith(f"tracks/{key}.{m}.") for n in names), key
+        # The scores are stored as their deficits, 1 - z.
+        stem = f"{key}_deficit" if key.endswith("bitmap_zncc") else key
+        assert any(n.startswith(f"tracks/{stem}.{m}.") for n in names), key
 
     # read_sfmr / write_sfmr carry the same dict.
     data = read_sfmr(path)
@@ -233,7 +238,7 @@ def test_a_reversed_column_writes(ground_truth, seoul_bull_ground_truth_sfmr):
     write_sfmr(out, data)
     np.testing.assert_array_equal(
         read_sfmr(out)["observation_readings"]["plain_bitmap_zncc"],
-        _readings(m)["plain_bitmap_zncc"],
+        _as_stored(_readings(m))["plain_bitmap_zncc"],
     )
 
 

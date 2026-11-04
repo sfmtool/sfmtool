@@ -700,27 +700,30 @@ fn verify_points3d_section<R: Read + Seek>(
         )?);
     }
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
-    if has_normals {
+    let normals_raw = if has_normals {
         let normals_name = entries::points3d_normals(is_pre_v3, point_count);
-        points3d_hasher.update(&read_zst_entry(archive, &normals_name)?);
-    }
+        let raw = read_zst_entry(archive, &normals_name)?;
+        points3d_hasher.update(&raw);
+        Some(raw)
+    } else {
+        None
+    };
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
-    if has_uv_frames {
+    let frame_raw = if has_uv_frames {
         if has_patch_bitmaps {
             points3d_hasher.update(&read_zst_entry(
                 archive,
                 &entries::points3d_patch_bitmaps_y_x_rgba(point_count, patch_bitmap_r),
             )?);
         }
-        points3d_hasher.update(&read_zst_entry(
-            archive,
-            &entries::points3d_patch_u_halfvec_xyz(point_count),
-        )?);
-        points3d_hasher.update(&read_zst_entry(
-            archive,
-            &entries::points3d_patch_v_halfvec_xyz(point_count),
-        )?);
-    }
+        let u = read_zst_entry(archive, &entries::points3d_patch_u_halfvec_xyz(point_count))?;
+        points3d_hasher.update(&u);
+        let v = read_zst_entry(archive, &entries::points3d_patch_v_halfvec_xyz(point_count))?;
+        points3d_hasher.update(&v);
+        Some((u, v))
+    } else {
+        None
+    };
     // points3d/point_constraints (optional, version 7+; sorts after the patch
     // frame, before positions_xyzw)
     let constraints_raw = if has_point_constraints {
@@ -734,6 +737,46 @@ fn verify_points3d_section<R: Read + Seek>(
     let positions_name = entries::points3d_positions(is_v1, point_count);
     let positions_raw = read_zst_entry(archive, &positions_name)?;
     points3d_hasher.update(&positions_raw);
+    // From version 16 a finite patched point's normal row is (0, 0, 0) and its
+    // frame gives a normal, the rule the reader holds a file to.
+    if let (true, Some(normals_raw), Some((u_raw, v_raw))) = (
+        crate::patch_normals::derives_patch_normals(metadata.version),
+        &normals_raw,
+        &frame_raw,
+    ) {
+        let floats = |raw: &[u8]| -> Vec<f32> {
+            raw.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect()
+        };
+        let w: Vec<f64> = positions_raw
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|b| f64::from_le_bytes(*b))
+            .skip(3)
+            .step_by(4)
+            .collect();
+        let (normals, u, v) = (floats(normals_raw), floats(u_raw), floats(v_raw));
+        let p = point_count;
+        if w.len() == p && normals.len() == 3 * p && u.len() == 3 * p && v.len() == 3 * p {
+            let frame = crate::patch_normals::PatchFrameRows {
+                w: &w,
+                u: &u,
+                v: &v,
+            };
+            if let Err(e) = frame.check_stored(&normals) {
+                errors.push(e);
+            }
+        } else {
+            errors.push(format!(
+                "points3d/normals_xyz, the patch frame or the positions do not hold \
+                 {point_count} rows"
+            ));
+        }
+    }
     // points3d/reprojection_errors
     points3d_hasher.update(&read_zst_entry(
         archive,
@@ -912,7 +955,7 @@ fn verify_tracks_section<R: Read + Seek>(
             if raw.len() != observation_count * column.width() * element {
                 errors.push(format!(
                     "tracks/{} holds {} bytes, not {}",
-                    column.stem(),
+                    column.stored_stem(float16),
                     raw.len(),
                     observation_count * column.width() * element
                 ));

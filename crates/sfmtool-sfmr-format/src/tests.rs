@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 mod image_readings;
 mod lens_corrections;
 mod observation_readings;
+mod patch_normals;
 mod per_image_adjustments;
 
 /// Image readings for `image_count` images: image `i` has sharpness
@@ -1482,7 +1483,8 @@ fn float32_payload(values: &[f32]) -> Vec<u8> {
 }
 
 /// `current`, a file this build wrote, rewritten as the version 15 file of
-/// the same values: every `.float16.` reading entry widened to `.float32.`,
+/// the same values: every `.float16.` reading entry widened to `.float32.`
+/// (a score's `_zncc_deficit` entry `w` as its `_zncc` entry `1 − w`),
 /// the version 15, and the hashes restamped so it verifies. `edit` may then
 /// change any widened `float32` payload, as a version 15 writer with values
 /// that are not `float16` would have stored.
@@ -1498,11 +1500,18 @@ fn rewrite_as_version_15(
             json["version"] = serde_json::json!(15);
             return Some((name.to_string(), serde_json::to_vec(&json).unwrap()));
         }
-        let renamed = name.replace(".float16.", ".float32.");
+        // A score's deficit entry becomes the score's own entry, 1 − w.
+        let deficit = name.contains("_zncc_deficit.");
+        let renamed = name
+            .replace("_zncc_deficit.", "_zncc.")
+            .replace(".float16.", ".float32.");
         if renamed == name {
             return None;
         }
         let mut values = float16_payload(raw);
+        if deficit {
+            values.iter_mut().for_each(|w| *w = 1.0 - *w);
+        }
         edit(&renamed, &mut values);
         Some((renamed, float32_payload(&values)))
     });
@@ -2951,7 +2960,23 @@ fn test_round_trip_with_patches_and_bitmaps() {
     assert_eq!(loaded.positions_xyzw, positions_xyzw);
     assert_eq!(loaded.colors_rgb, colors_rgb);
     assert_eq!(loaded.reprojection_errors, reprojection_errors);
-    assert_eq!(loaded.normals_xyz.unwrap(), normals_xyz);
+    // Every point is finite with a patch, so its normal is its frame's
+    // normalize(u × v), which the write also set in the value.
+    let loaded_normals = loaded.normals_xyz.unwrap();
+    assert_eq!(&loaded_normals, data.normals_xyz.as_ref().unwrap());
+    assert_ne!(loaded_normals, normals_xyz);
+    for i in 0..point_count {
+        let n = patch_normals::cross_normal_f64(
+            u_halfvec_xyz.row(i).to_vec(),
+            v_halfvec_xyz.row(i).to_vec(),
+        );
+        for k in 0..3 {
+            assert!(
+                (f64::from(loaded_normals[[i, k]]) - n[k]).abs() < 1e-6,
+                "point {i}"
+            );
+        }
+    }
     // The patch frame is hashed inside the points3d section.
     assert_eq!(loaded.content_hash.points3d_xxh128.len(), 32);
 
@@ -3508,11 +3533,11 @@ fn entry_names_are_pinned() {
         .collect();
     let expected = [
         (
-            "tracks/blur_matched_bitmap_zncc.17.float32.zst",
+            "tracks/blur_matched_bitmap_zncc_deficit.17.float16.zst",
             "tracks/blur_matched_bitmap_zncc.17.float32.zst",
         ),
         (
-            "tracks/plain_bitmap_zncc.17.float32.zst",
+            "tracks/plain_bitmap_zncc_deficit.17.float16.zst",
             "tracks/plain_bitmap_zncc.17.float32.zst",
         ),
         (

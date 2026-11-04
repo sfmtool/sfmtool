@@ -202,9 +202,9 @@ pub struct ObservationReadingOptions {
 ///
 /// Every float column is `f32` in memory. From version 16
 /// ([`crate::SFMR_FLOAT16_READINGS_VERSION`]) the five self-similarity value
-/// columns are stored as `float16`, and a write rounds them in place to the
-/// values it stores, so after a write this value equals what a reader gets
-/// back. The two scores are `float32` in every version.
+/// columns are stored as `float16`, and the two scores as their ZNCC deficits
+/// `1 − z` in `float16`. A write rounds them in place to the values it
+/// stores, so after a write this value equals what a reader gets back.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObservationReadingColumns {
     /// `(M, 2)` `tracks/zncc_self_similarity_ellipse_axes`, `float16` on disk
@@ -225,9 +225,13 @@ pub struct ObservationReadingColumns {
     /// `(M, 2)` `tracks/zncc_self_similarity_zoom`, `float16` on disk from
     /// version 16, where a zoom of 65,520 or more is stored as infinity.
     pub zncc_self_similarity_zoom: Array2<f32>,
-    /// `(M,)` `tracks/plain_bitmap_zncc`, `float32` on disk.
+    /// `(M,)` the plain score. On disk `tracks/plain_bitmap_zncc` as `float32`
+    /// before version 16, and from version 16 its ZNCC deficit `1 − z` as
+    /// `float16`, `tracks/plain_bitmap_zncc_deficit`.
     pub plain_bitmap_zncc: Array1<f32>,
-    /// `(M,)` `tracks/blur_matched_bitmap_zncc`, `float32` on disk.
+    /// `(M,)` the blur-matched score, stored as the plain one is
+    /// (`tracks/blur_matched_bitmap_zncc`, from version 16
+    /// `tracks/blur_matched_bitmap_zncc_deficit`).
     pub blur_matched_bitmap_zncc: Array1<f32>,
     /// What the readings were taken with.
     pub options: ObservationReadingOptions,
@@ -363,42 +367,43 @@ impl ObservationReadingColumns {
         Self::from_rows(&picked, self.options)
     }
 
-    /// Round the five columns a version 16 file stores as `float16` in place
-    /// to the values it stores, the nearest `float16` of each, ties to even:
-    /// the axes, the major angle, `cos θ`, the tilt angle and the zoom.
+    /// Round the seven float columns in place to the values a version 16
+    /// file stores for them: the axes, the major angle, `cos θ`, the tilt
+    /// angle and the zoom to the nearest `float16` of each, ties to even, and
+    /// each score `z` to `1 − w`, where `w` is its ZNCC deficit `1 − z`
+    /// rounded the same way, all in `f32`.
     ///
-    /// `NaN` stays `NaN`, so a row with nothing measured keeps its meaning. A
-    /// finite value of 65,520 or more rounds to infinity: of these only the
-    /// zoom could reach it, at a render that squeezes the patch to under
-    /// 1/65,504 of a photograph px along one axis. The scores and the flags
-    /// are left as they are.
+    /// `NaN` stays `NaN`, so a row with nothing measured keeps its meaning,
+    /// and a score of exactly `1` stays `1`. A finite value of 65,520 or more
+    /// rounds to infinity: of these only the zoom could reach it, at a render
+    /// that squeezes the patch to under 1/65,504 of a photograph px along one
+    /// axis. The flags are left as they are.
     pub(crate) fn round_to_stored_precision(&mut self) {
-        use crate::float16::round_all_to_float16;
+        use crate::float16::{round_all_scores_by_deficit, round_all_to_float16};
         round_all_to_float16(self.zncc_self_similarity_ellipse_axes.iter_mut());
         round_all_to_float16(self.zncc_self_similarity_ellipse_major_angle.iter_mut());
         round_all_to_float16(self.zncc_self_similarity_cos_view_angle.iter_mut());
         round_all_to_float16(self.zncc_self_similarity_tilt_angle.iter_mut());
         round_all_to_float16(self.zncc_self_similarity_zoom.iter_mut());
+        round_all_scores_by_deficit(self.plain_bitmap_zncc.iter_mut());
+        round_all_scores_by_deficit(self.blur_matched_bitmap_zncc.iter_mut());
     }
 
     /// The bytes of `column` as the current version stores it, little-endian,
-    /// row-major: the two scores as `float32`, borrowed where the column is in
-    /// standard layout and copied in row-major order where it is not (a
-    /// reversed or sliced view a caller handed in); the flags as `uint8`; the
-    /// other five as `float16`, each value rounded to the nearest.
+    /// row-major, in the order of the column's logical rows whatever its
+    /// layout (a reversed or sliced view a caller handed in): the flags as
+    /// `uint8`, the two scores as their ZNCC deficits `1 − z` in `float16`,
+    /// and the other five as `float16`, each value rounded to the nearest.
     pub(crate) fn bytes(&self, column: ReadingColumn) -> Cow<'_, [u8]> {
-        fn f32s<D: ndarray::Dimension>(a: &ndarray::Array<f32, D>) -> Cow<'_, [u8]> {
-            match a.as_slice() {
-                Some(s) => Cow::Borrowed(bytemuck::cast_slice(s)),
-                None => Cow::Owned(a.iter().flat_map(|v| v.to_le_bytes()).collect()),
-            }
-        }
         fn f16s<D: ndarray::Dimension>(a: &ndarray::Array<f32, D>) -> Cow<'_, [u8]> {
             Cow::Owned(crate::float16::float16_bytes(a.iter()))
         }
+        fn deficits(a: &Array1<f32>) -> Cow<'_, [u8]> {
+            Cow::Owned(crate::float16::deficit_float16_bytes(a.iter()))
+        }
         match column {
-            ReadingColumn::BlurMatchedBitmapZncc => f32s(&self.blur_matched_bitmap_zncc),
-            ReadingColumn::PlainBitmapZncc => f32s(&self.plain_bitmap_zncc),
+            ReadingColumn::BlurMatchedBitmapZncc => deficits(&self.blur_matched_bitmap_zncc),
+            ReadingColumn::PlainBitmapZncc => deficits(&self.plain_bitmap_zncc),
             ReadingColumn::CosViewAngle => f16s(&self.zncc_self_similarity_cos_view_angle),
             ReadingColumn::EllipseAxes => f16s(&self.zncc_self_similarity_ellipse_axes),
             ReadingColumn::EllipseAxesIsAtLeast => {

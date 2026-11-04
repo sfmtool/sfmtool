@@ -952,7 +952,9 @@ fn restore_image_readings(loaded: &mut SfmrReconstruction, source: &SfmrReconstr
 /// saves what it loads gives the value its readings back first
 /// ([`restore_image_readings`]). Below version 16 every `.float16.` reading
 /// entry is stored as its `.float32.` sibling, its values widened, as a
-/// writer of those versions stored the same values.
+/// writer of those versions stored the same values, and the normals the
+/// version 16 file derives from the patch frame are stored in `normals_xyz`,
+/// as a writer of those versions stored them.
 fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
     use std::io::{Read, Write};
 
@@ -962,6 +964,9 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
         .file_names()
         .map(|s| s.unwrap().into_owned())
         .collect();
+    let stored_normals = (version < sfmtool_sfmr_format::SFMR_DERIVED_PATCH_NORMALS_VERSION)
+        .then(|| sfmtool_sfmr_format::read_sfmr(src).unwrap().normals_xyz)
+        .flatten();
     let out = std::fs::File::create(dst).unwrap();
     let mut zip_out = zip::ZipWriter::new(out);
     let stored =
@@ -1012,6 +1017,13 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
                 .insert("version".into(), serde_json::json!(version));
             let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
             zip_out.write_all(&bytes).unwrap();
+        } else if let (Some(normals), true) =
+            (&stored_normals, name.starts_with("points3d/normals_xyz."))
+        {
+            let bytes: Vec<u8> = normals.iter().flat_map(|v| v.to_le_bytes()).collect();
+            zip_out
+                .write_all(&zstd::bulk::compress(&bytes, 3).unwrap())
+                .unwrap();
         } else if widen {
             let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
             let widened: Vec<u8> = raw
@@ -1452,7 +1464,14 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
         {
             assert_eq!(lp.position, rp.position, "{ctx}: point {i} moved on load");
             assert_eq!(lp.w, rp.w, "{ctx}: point {i} changed its w on load");
-            assert_eq!(lp.normal, rp.normal, "{ctx}: point {i} normal rotated");
+            // The normals as the write stored them: a finite patched point's
+            // is its frame's, which the write set in `data`.
+            let written = data.normals_xyz.as_ref().unwrap().row(i);
+            assert_eq!(
+                [lp.normal.x, lp.normal.y, lp.normal.z],
+                [written[0], written[1], written[2]],
+                "{ctx}: point {i} normal rotated"
+            );
         }
         assert_eq!(
             loaded.point_set.patch_u_halfvec_xyz, recon.point_set.patch_u_halfvec_xyz,

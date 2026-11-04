@@ -19,6 +19,7 @@ mod entries;
 mod float16;
 mod image_readings;
 mod observation_readings;
+mod patch_normals;
 mod read;
 mod types;
 mod verify;
