@@ -488,7 +488,7 @@ three digits; the medians, ratios and z-scores are `f64` because
 | barely moves | 100% | the total motion below which the camera barely moves |
 | re-aims | 4 | before a step fails |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
-| weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step and a short segment |
+| weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
 
 The last nine are constants of the module.
 
