@@ -15,7 +15,11 @@ import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.spatial import KdTree3d
-from .._histogram_utils import print_histogram
+from .._histogram_utils import (
+    create_histogram,
+    print_histogram,
+    render_histogram_string,
+)
 from .point_or_bearing import print_point_or_bearing_brief
 
 # The inverse-depth z under which the report counts a point as near infinity:
@@ -55,6 +59,87 @@ def _check_integrity(valid: bool, errors: list[str]) -> None:
     for err in errors:
         click.echo(f"  {err}")
     raise InspectError("integrity verification failed")
+
+
+# ---------------------------------------------------------------------------
+# Image readings
+# ---------------------------------------------------------------------------
+
+# How many of a reconstruction's least sharp images the verbose report names.
+LEAST_SHARP_IMAGE_COUNT = 5
+
+
+def _image_to_gray_text(image_to_gray: dict) -> str:
+    """An ``image_to_gray`` object as one line: its formula, and its rounding."""
+    text = image_to_gray["formula"]
+    bits = image_to_gray.get("quantize_bits")
+    if bits is not None:
+        text += f", rounded to {bits} bits"
+    return text
+
+
+def _image_reading_rows(
+    sharpness: float, tensor_xx_yy_xy, indent: str = ""
+) -> list[tuple[str, str]]:
+    """The rows of one image's readings: the two stored readings, then the
+    axis ratio and the coherence a reader derives from the tensor.
+
+    Both derived values are the `.sift` format spec's (§ "Gradient structure
+    tensor"): the axis ratio ``|log(Exx / Eyy)|``, unbounded when one of the
+    two is 0, and the coherence ``sqrt((Exx - Eyy)**2 + 4*Exy**2) / E`` with
+    ``E = Exx + Eyy``, 0 for a flat image.
+    """
+    exx, eyy, exy = (float(v) for v in tensor_xx_yy_xy)
+    if exx > 0.0 and eyy > 0.0:
+        axis_ratio = f"{abs(np.log(exx / eyy)):.3f}"
+    elif exx == eyy:
+        axis_ratio = "n/a (flat image)"
+    else:
+        axis_ratio = "inf"
+    energy = exx + eyy
+    coherence = (
+        float(np.sqrt((exx - eyy) ** 2 + 4.0 * exy**2)) / energy if energy > 0 else 0.0
+    )
+    return [
+        (f"{indent}Sharpness", f"{sharpness:.4g}"),
+        (
+            f"{indent}Gradient tensor",
+            f"Exx {exx:.4g}, Eyy {eyy:.4g}, Exy {exy:.4g}",
+        ),
+        (f"{indent}Axis ratio", axis_ratio),
+        (f"{indent}Coherence", f"{coherence:.3f}"),
+    ]
+
+
+def _sharpness_spread_text(sharpness: np.ndarray) -> str:
+    """``min A, median B, max C`` of a reconstruction's sharpness values."""
+    return (
+        f"min {float(sharpness.min()):.4g}, "
+        f"median {float(np.median(sharpness)):.4g}, "
+        f"max {float(sharpness.max()):.4g}"
+    )
+
+
+def _print_sfmr_image_readings(recon: SfmrReconstruction) -> None:
+    """The verbose report's image readings: the conversion, the sharpness
+    spread and histogram, and the least sharp images by name."""
+    sharpness = recon.sharpness
+    if sharpness is None:
+        click.echo("\nImage readings: none")
+        return
+    click.echo("\nImage readings:")
+    click.echo(f"  Conversion: {_image_to_gray_text(recon.image_to_gray)}")
+    click.echo(f"  Sharpness: {_sharpness_spread_text(sharpness)}")
+    num_buckets = 32
+    counts, edges = create_histogram(sharpness.astype(np.float64), num_buckets)
+    click.echo("    Sharpness distribution:")
+    click.echo(f"      {render_histogram_string(counts)}")
+    click.echo(f"      {edges[0]:<12.4g}{'':>{num_buckets - 24}}{edges[-1]:>12.4g}")
+    image_names = recon.image_names
+    count = min(LEAST_SHARP_IMAGE_COUNT, len(image_names))
+    click.echo(f"  Least sharp {count} images:")
+    for i in np.argsort(sharpness, kind="stable")[:count]:
+        click.echo(f"    {sharpness[i]:.4g}  {image_names[i]}")
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +188,20 @@ def _absolute_path_text(workspace_info: dict) -> str:
     return absolute if absolute else "(none recorded)"
 
 
+def _sfmr_readings_text(path: Path, meta: dict) -> str:
+    """The default summary's image readings row: the sharpness spread and the
+    conversion, or ``none`` below version 15."""
+    if meta["version"] < 15:
+        return "none"
+    from .._sfmtool.fileio import read_sfmr
+
+    data = read_sfmr(str(path))
+    return (
+        f"sharpness {_sharpness_spread_text(np.asarray(data['sharpness']))}  "
+        f"({_image_to_gray_text(data['image_to_gray'])})"
+    )
+
+
 def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sfmr` reconstruction file."""
     from .._sfmtool.fileio import read_sfmr_metadata, verify_sfmr
@@ -133,6 +232,7 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
         ("Observations", f"{meta['observation_count']:,}"),
     ]
     rows.extend(_heavy_column_rows(*_sfmr_heavy_columns(path)))
+    rows.append(("Image readings", _sfmr_readings_text(path, meta)))
     if meta.get("rig_count"):
         rows.append(
             (
@@ -151,6 +251,15 @@ def print_sfmr_summary(path: Path, verbose: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _sift_conversion_rows(feature_options) -> list[tuple[str, str]]:
+    """The verbose ``Image to gray`` row of a version 2 file; a version 1
+    file has no ``image_to_gray`` and gets none."""
+    if isinstance(feature_options, dict) and "image_to_gray" in feature_options:
+        text = _image_to_gray_text(feature_options["image_to_gray"])
+        return [("Image to gray", text)]
+    return []
+
+
 def print_sift_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sift` feature file."""
     from .._sfmtool.fileio import read_sift_metadata, verify_sift
@@ -165,15 +274,21 @@ def print_sift_summary(path: Path, verbose: bool = False) -> None:
 
     rows = [
         ("File", path.name),
-        ("Format", ".sift"),
+        ("Format", f".sift version {meta['version']}"),
         (
             "Image",
             f"{meta['image_name']}  ({meta['image_width']}x{meta['image_height']})",
         ),
         ("Features", f"{meta['feature_count']:,}"),
         ("Feature tool", tool_meta["feature_tool"]),
-        ("Integrity", "OK" if valid else "FAILED"),
     ]
+    if "sharpness" in meta:
+        rows += _image_reading_rows(
+            meta["sharpness"], meta["gradient_structure_tensor_xx_yy_xy"]
+        )
+    else:
+        rows.append(("Image readings", "none"))
+    rows.append(("Integrity", "OK" if valid else "FAILED"))
     _print_block(rows)
 
     if verbose:
@@ -186,6 +301,7 @@ def print_sift_summary(path: Path, verbose: bool = False) -> None:
                 ("Content hash", hashes["content_xxh128"]),
                 ("Feature options", str(tool_meta["feature_options"])),
             ]
+            + _sift_conversion_rows(tool_meta["feature_options"])
         )
         click.echo("\nTop 5 features (by size):")
         with SiftFile(path) as reader:
@@ -377,6 +493,31 @@ _IMAGE_FORMAT_NAMES = {
 }
 
 
+def _image_conversion_for(path: Path):
+    """The grey conversion an image's readings are taken through, and where it
+    came from: the workspace's recorded conversion when the image is inside
+    one, else the ``sfmtool`` feature tool's default."""
+    from .._workspace import find_workspace_for_path, load_workspace_config
+    from ..workspace import recorded_image_to_gray, tool_image_to_gray
+
+    workspace_dir = find_workspace_for_path(path.resolve())
+    if workspace_dir is None:
+        return tool_image_to_gray("sfmtool"), "default conversion, no workspace"
+    config = load_workspace_config(workspace_dir)
+    conversion = recorded_image_to_gray(
+        config["feature_tool"], config.get("feature_options", {})
+    )
+    return conversion, "the workspace's conversion"
+
+
+def _image_readings_of(path: Path, image_to_gray):
+    """The readings of the image file at ``path`` through ``image_to_gray``."""
+    from ..fileio import read_image_rgb
+    from ..sift import image_readings_from_rgb
+
+    return image_readings_from_rgb(read_image_rgb(path), image_to_gray)
+
+
 def print_image_summary(path: Path, verbose: bool = False) -> None:
     """Inspect an image file."""
     from ..camera.setup import _read_image_size
@@ -406,6 +547,23 @@ def print_image_summary(path: Path, verbose: bool = False) -> None:
             )
         except Exception as e:
             click.echo(f"Inferred camera (EXIF): unavailable ({e})")
+
+        click.echo("")
+        try:
+            image_to_gray, source = _image_conversion_for(path)
+            readings = _image_readings_of(path, image_to_gray)
+        except Exception as e:
+            click.echo(f"Image readings: unavailable ({e})")
+        else:
+            click.echo(f"Image readings ({source}):")
+            _print_block(
+                [("  Conversion", _image_to_gray_text(image_to_gray.to_dict()))]
+                + _image_reading_rows(
+                    readings.sharpness,
+                    readings.gradient_structure_tensor_xx_yy_xy,
+                    indent="  ",
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +767,8 @@ def print_reconstruction_summary(
                     click.echo(f"    {sensor_name}{ref_marker}: camera {cam_idx}")
     else:
         click.echo("\nRig configuration: none")
+
+    _print_sfmr_image_readings(recon)
 
     # 3D point statistics
     if recon.point_count > 0:

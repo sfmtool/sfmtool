@@ -535,14 +535,14 @@ def test_minimal_with_a_joined_workspace_path(embedded_sfmr):
 
 def test_inspect_reports_the_heavy_columns(embedded_sfmr):
     full = _run(["inspect", str(embedded_sfmr)]).output
-    assert "Thumbnails:    yes" in full
-    assert "Patch bitmaps: 16x16" in full
+    assert "Thumbnails:     yes" in full
+    assert "Patch bitmaps:  16x16" in full
 
     minimal = embedded_sfmr.with_name("minimal_inspect.sfmr")
     _xform(embedded_sfmr, minimal, "--minimal")
     bare = _run(["inspect", str(minimal)]).output
-    assert "Thumbnails:    no" in bare
-    assert "Patch bitmaps: no" in bare
+    assert "Thumbnails:     no" in bare
+    assert "Patch bitmaps:  no" in bare
 
     verbose = _run(["inspect", "-v", str(minimal)]).output
     assert "Absolute path: (none recorded)" in verbose

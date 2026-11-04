@@ -36,11 +36,11 @@ with a point ID (an error with a file `PATH`).
 
 | Extension | Type | What is read |
 |-----------|------|--------------|
-| `.sfmr` | Reconstruction | Metadata and the integrity check (default); the full reconstruction (verbose) |
-| `.sift` | Feature file | Metadata and the integrity check |
+| `.sfmr` | Reconstruction | Metadata, the image readings and the integrity check (default); the full reconstruction (verbose) |
+| `.sift` | Feature file | Metadata, the image readings and the integrity check |
 | `.matches` | Feature matches | Metadata and the integrity check (default); the full match data (verbose) |
 | `.camrig` | Camera rig | Metadata and the integrity check (default); the full rig (verbose) |
-| `.png` `.jpg` `.jpeg` | Image | Image dimensions; the camera pycolmap infers from EXIF (verbose) |
+| `.png` `.jpg` `.jpeg` | Image | Image dimensions; the camera pycolmap infers from EXIF and the image readings of the decoded pixels (verbose) |
 | `pt3d_<hash>_<index>` | 3D point | The content hashes of the workspace's `.sfmr` files, then the matching reconstruction (see below) |
 
 An unsupported extension is rejected with a message listing the supported
@@ -198,9 +198,15 @@ The default output is a compact label/value block. The fields per type:
   and whether a viewer will need the photographs both turn on them:
   `Thumbnails: yes` or `no`, and `Patch bitmaps: 24x24` (the stored
   resolution) or `no`. Both are read off the archive's entry names, which pin
-  them, so nothing is decompressed.
-- **`.sift`** — image name and dimensions, feature count, feature tool,
-  integrity.
+  them, so nothing is decompressed. An `Image readings` line gives the
+  smallest, median and largest image sharpness and the conversion they were
+  measured through, or reads `none` for a file below version 15 (see
+  [Image readings](#image-readings)).
+- **`.sift`** — format version, image name and dimensions, feature count,
+  feature tool, the image readings, integrity. A version 2 file's readings are
+  four lines, `Sharpness`, `Gradient tensor` (`Exx`, `Eyy`, `Exy`), `Axis
+  ratio` and `Coherence`; a version 1 file, which holds none, gets one line
+  `Image readings: none`.
 - **`.matches`** — format version, matching method (tool + version), image
   count, then for a pairwise file the image-pair and match counts, or for a
   file whose backbone is clusters a `Backbone` line reading `clusters`, the
@@ -226,7 +232,11 @@ The default output is a compact label/value block. The fields per type:
   observation statistics, nearest-neighbor distances. The
   3D point count carries the same `(N at infinity)` annotation as the default
   summary when any points at infinity are present, and the `Thumbnails` and
-  `Patch bitmaps` lines appear under the reconstruction summary. An empty
+  `Patch bitmaps` lines appear under the reconstruction summary. After the rig
+  configuration an `Image readings:` block gives the conversion, the
+  sharpness's smallest, median and largest value, a 32-bucket histogram of the
+  sharpness and the five least sharp images by name, least sharp first; a file
+  below version 15 prints `Image readings: none` instead. An empty
   absolute workspace path, which means none was recorded (as `sfm xform
   --minimal` writes), prints as `(none recorded)`.
 
@@ -296,7 +306,9 @@ The default output is a compact label/value block. The fields per type:
   reason instead. `inspect` takes no override; `analyze` does.
 
 - **`.sift`** — adds image file size and hashes, feature tool and content
-  hashes, feature tool options, and the top 5 features by size.
+  hashes, feature tool options, for a version 2 file an `Image to gray` line
+  with the conversion its readings were measured through, and the top 5
+  features by size.
 - **`.matches`** — adds timestamp, workspace, matching options, a cluster-size
   histogram (cluster backbone only), matches-per-pair and descriptor-distance
   histograms, and two-view-geometry inlier statistics. For a cluster backbone
@@ -305,7 +317,71 @@ The default output is a compact label/value block. The fields per type:
   omitted.
 - **`.camrig`** — adds `rig_attributes`, content hash, and per-camera details.
 - **image** — adds the pycolmap EXIF-inferred camera (model, dimensions,
-  focal length).
+  focal length), then the image readings of the photo itself: the file is
+  decoded with `sfmtool.fileio.read_image_rgb` and read by
+  `sfmtool.sift.image_readings_from_rgb`, the computation a `.sift` writer
+  makes. The conversion is the workspace's when the image is inside one (its
+  nearest ancestor with `.sfm-workspace.json`), as `recorded_image_to_gray`
+  reads it from the workspace's `feature_tool` and `feature_options`, and
+  otherwise the `sfmtool` feature tool's default, `tool_image_to_gray("sfmtool")`.
+  The block's heading says which (`Image readings (the workspace's
+  conversion):` or `Image readings (default conversion, no workspace):`), and
+  its lines are `Conversion` and the four reading lines a `.sift` summary
+  prints. A workspace file that cannot be read, or an image that cannot be
+  decoded, prints `Image readings: unavailable (<reason>)`.
+
+## Image readings
+
+The readings are the per-image sharpness and gradient structure tensor of
+[sift-file-format.md](../../formats/sift-file-format.md#sharpness), which a
+version 2 `.sift` file records and a version 15 `.sfmr` file copies for each
+image. A conversion prints as its formula, followed by `, rounded to N bits`
+when it has a `quantize_bits`.
+
+For one image, a `.sift` file or an image file, the lines are, for the first
+image of `seoul_bull_sculpture`:
+
+```text
+Sharpness:       0.01365
+Gradient tensor: Exx 0.0008609, Eyy 0.001159, Exy -2.358e-05
+Axis ratio:      0.297
+Coherence:       0.149
+```
+
+and a reconstruction's verbose block is, for a version 15 copy of that
+dataset's ground truth:
+
+```text
+Image readings:
+  Conversion: 0.2126*R + 0.7152*G + 0.0722*B
+  Sharpness: min 0.01169, median 0.01727, max 0.023
+    Sharpness distribution:
+      ▂▂   ▂▂ ▂   ▂  █ ▅▂        ▂▂▂ ▅
+      0.01169                    0.023
+  Least sharp 5 images:
+    0.01169  seoul_bull_sculpture_03.jpg
+    0.01211  seoul_bull_sculpture_02.jpg
+    0.01365  seoul_bull_sculpture_01.jpg
+    0.01394  seoul_bull_sculpture_04.jpg
+    0.01483  seoul_bull_sculpture_11.jpg
+```
+
+The axis ratio `|log(Exx / Eyy)|` and the coherence
+`sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)` are the two values the format spec
+names for a reader to derive from the tensor
+([§ Gradient structure tensor](../../formats/sift-file-format.md#gradient-structure-tensor)),
+and the two its measurements found to pick out directional blur that the
+sharpness misses. The axis ratio prints `inf` when exactly one of `Exx` and
+`Eyy` is 0 and `n/a (flat image)` when both are; the coherence of a flat image
+is 0. None of the four is a verdict: the format gives no threshold, because the
+readings depend on scene content, so a number means something only against the
+other images of the same capture.
+
+For that reason a reconstruction's report gives the spread over its images
+rather than any one image's value, and the verbose report names the least
+sharp ones, the frames to look at first for blur. The derived values are
+printed only for a single image; a reconstruction's report gives only the
+sharpness.
 
 ## Usage Examples
 
@@ -335,7 +411,9 @@ sfm inspect --strips sfmr/solve_001.sfmr 0-9 pt3d_220747a8_96414 -o strips.png
 ## Testing
 
 - [`tests/test_inspect.py`](../../../tests/test_inspect.py) — the default and
-  verbose summaries of each file type, the point-ID summary and its verbose
+  verbose summaries of each file type, the image readings of a version 2
+  `.sift`, a version 1 `.sift`, a version 15 and an older `.sfmr`, and an
+  image inside and outside a workspace, the point-ID summary and its verbose
   triangulation analysis (on a `sift_files` and an `embedded_patches` file),
   the point-or-bearing counts, and the argument errors.
 - [`tests/test_cli_inspect_strips.py`](../../../tests/test_cli_inspect_strips.py)
