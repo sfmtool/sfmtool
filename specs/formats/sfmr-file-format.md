@@ -3086,17 +3086,19 @@ describes. Other parts of this spec are implemented by:
   their column names with an `"options"` dict: `read_sfmr`'s
   `observation_readings`, `SfmrReconstruction.observation_readings` and
   `clone_with_changes(observation_readings=...)`.
-- Normals and their confidence: `write_sfmr` fills each zero row of
-  `normals_xyz` from mean-viewing normals it recomputes from the geometry, and
-  passes `normal_confidence` through untouched. It never invents or adjusts a
+- Normals and their confidence: `write_sfmr` sets the normal of each finite
+  point with a patch whose frame gives one to `normalize(u × v)`
+  ([Derived normals](#derived-normals-version-16)), fills each other zero row
+  of `normals_xyz` from mean-viewing normals it recomputes from the geometry,
+  and passes `normal_confidence` through untouched. It never invents or adjusts a
   confidence value, not even for a normal it fills in, so a caller that
   supplies both keeps them coherent. The Python `write_sfmr` treats the
   dict's `normals_xyz` the same way whether or not `skip_recompute_depth_stats`
   is set, since that flag chooses only where the depth statistics come from:
-  an array is written as given, apart from that fill of its zero rows; an
+  an array is written as given, apart from those derived and filled rows; an
   explicit `None` writes no normals; and a missing key stands for an all-zero
-  array, so every finite point gets a mean-viewing normal (a point at
-  infinity has none, so its row stays zero). A dict from `read_sfmr`
+  array, so every finite point gets its frame's normal or a mean-viewing one
+  (a point at infinity has none, so its row stays zero). A dict from `read_sfmr`
   therefore writes back the normals it was read with. A caller that moves or
   rotates the points in the dict updates `normals_xyz` with them, or deletes
   the key to have them computed again. `SfmrReconstruction.from_data` builds
