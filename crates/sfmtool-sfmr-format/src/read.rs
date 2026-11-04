@@ -680,7 +680,12 @@ fn read_points_section(
     }
     .check()
     .map_err(SfmrError::InvalidFormat)?;
-    let normals_xyz = if has_normals {
+    // A version 16 file with the patch frame stores only the normals the frame
+    // does not give, read below once the frame is.
+    let derives_normals = crate::patch_normals::derives_patch_normals(metadata.version)
+        && has_normals
+        && has_uv_frames;
+    let normals_xyz = if has_normals && !derives_normals {
         let normals_name = entries::points3d_normals(is_pre_v3, point_count);
         let normals_vec: Vec<f32> = read_binary_array(archive, &normals_name, point_count * 3)?;
         Some(
@@ -811,26 +816,46 @@ fn read_points_section(
         None
     };
 
-    // From version 16 the normal of a finite point with a patch is stored as
-    // (0, 0, 0) and derived from its frame; an older file reads as stored.
+    // From version 16, with the patch frame, the normal of a finite point
+    // whose frame gives one is derived, and only the others are stored; an
+    // older file reads its full column as stored.
     let mut normals_xyz = normals_xyz;
-    if let (true, Some(normals), Some(u), Some(v)) = (
-        crate::patch_normals::derives_patch_normals(metadata.version),
-        normals_xyz.as_mut(),
-        &patch_u_halfvec_xyz,
-        &patch_v_halfvec_xyz,
-    ) {
-        let w = positions_xyzw.column(3).to_vec();
-        let frame = crate::patch_normals::PatchFrameRows {
+    let w = positions_xyzw.column(3).to_vec();
+    let frame = match (&patch_u_halfvec_xyz, &patch_v_halfvec_xyz) {
+        (Some(u), Some(v)) => Some(crate::patch_normals::PatchFrameRows {
             w: &w,
             u: u.as_slice().expect("read in standard layout"),
             v: v.as_slice().expect("read in standard layout"),
+        }),
+        _ => None,
+    };
+    let underived = frame
+        .as_ref()
+        .filter(|_| derives_normals)
+        .map(|f| f.underived().len());
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.map(|n| n.into_owned()))
+        .collect::<Result<_, _>>()?;
+    if let Some(e) = crate::patch_normals::normals_entries_error(
+        metadata.version,
+        point_count,
+        underived,
+        names.iter().map(String::as_str),
+    ) {
+        return Err(SfmrError::InvalidFormat(e));
+    }
+    if let (Some(frame), Some(k)) = (&frame, underived) {
+        let stored: Vec<f32> = if k > 0 {
+            read_binary_array(archive, &entries::points3d_underived_normals(k), k * 3)?
+        } else {
+            Vec::new()
         };
-        let values = normals.as_slice_mut().expect("read in standard layout");
-        frame
-            .check_stored(values)
-            .map_err(SfmrError::InvalidFormat)?;
-        frame.fill(values);
+        let values = frame.rebuild(&stored).map_err(SfmrError::InvalidFormat)?;
+        normals_xyz = Some(
+            Array2::from_shape_vec((point_count, 3), values)
+                .map_err(|e| SfmrError::ShapeMismatch(format!("normals reshape: {e}")))?,
+        );
     }
 
     Ok(PointsSection {

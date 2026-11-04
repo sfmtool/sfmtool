@@ -700,14 +700,21 @@ fn verify_points3d_section<R: Read + Seek>(
         )?);
     }
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
-    let normals_raw = if has_normals {
+    // From version 16, with the patch frame, only the normals the frame does
+    // not give are stored, in points3d/underived_normals_xyz (sorts last).
+    let derives_normals = crate::patch_normals::derives_patch_normals(metadata.version)
+        && has_normals
+        && has_uv_frames;
+    if has_normals && !derives_normals {
         let normals_name = entries::points3d_normals(is_pre_v3, point_count);
-        let raw = read_zst_entry(archive, &normals_name)?;
-        points3d_hasher.update(&raw);
-        Some(raw)
-    } else {
-        None
-    };
+        if archive.index_for_name(&normals_name).is_some() {
+            points3d_hasher.update(&read_zst_entry(archive, &normals_name)?);
+        } else {
+            errors.push(format!(
+                "points3d/metadata.json sets has_normals, and the file holds no {normals_name}"
+            ));
+        }
+    }
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
     let frame_raw = if has_uv_frames {
         if has_patch_bitmaps {
@@ -737,51 +744,76 @@ fn verify_points3d_section<R: Read + Seek>(
     let positions_name = entries::points3d_positions(is_v1, point_count);
     let positions_raw = read_zst_entry(archive, &positions_name)?;
     points3d_hasher.update(&positions_raw);
-    // From version 16 a finite patched point's normal row is (0, 0, 0) and its
-    // frame gives a normal, the rule the reader holds a file to.
-    if let (true, Some(normals_raw), Some((u_raw, v_raw))) = (
-        crate::patch_normals::derives_patch_normals(metadata.version),
-        &normals_raw,
-        &frame_raw,
-    ) {
-        let floats = |raw: &[u8]| -> Vec<f32> {
-            raw.as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect()
-        };
-        let w: Vec<f64> = positions_raw
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|b| f64::from_le_bytes(*b))
-            .skip(3)
-            .step_by(4)
-            .collect();
-        let (normals, u, v) = (floats(normals_raw), floats(u_raw), floats(v_raw));
-        let p = point_count;
-        if w.len() == p && normals.len() == 3 * p && u.len() == 3 * p && v.len() == 3 * p {
-            let frame = crate::patch_normals::PatchFrameRows {
-                w: &w,
-                u: &u,
-                v: &v,
-            };
-            if let Err(e) = frame.check_stored(&normals) {
-                errors.push(e);
-            }
-        } else {
-            errors.push(format!(
-                "points3d/normals_xyz, the patch frame or the positions do not hold \
-                 {point_count} rows"
-            ));
-        }
-    }
     // points3d/reprojection_errors
     points3d_hasher.update(&read_zst_entry(
         archive,
         &entries::points3d_reprojection_errors(point_count),
     )?);
+    // points3d/underived_normals_xyz (version 16+, with normals and the patch
+    // frame; sorts last), present exactly when some finite point's normal is
+    // not given by its frame.
+    let underived = match (&frame_raw, derives_normals) {
+        (Some((u_raw, v_raw)), true) => {
+            let floats = |raw: &[u8]| -> Vec<f32> {
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
+                    .collect()
+            };
+            let w: Vec<f64> = positions_raw
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|b| f64::from_le_bytes(*b))
+                .skip(3)
+                .step_by(4)
+                .collect();
+            let (u, v) = (floats(u_raw), floats(v_raw));
+            let p = point_count;
+            if w.len() == p && u.len() == 3 * p && v.len() == 3 * p {
+                Some(
+                    crate::patch_normals::PatchFrameRows {
+                        w: &w,
+                        u: &u,
+                        v: &v,
+                    }
+                    .underived()
+                    .len(),
+                )
+            } else {
+                errors.push(format!(
+                    "the patch frame or the positions do not hold {point_count} rows, so the                      points whose normals are stored cannot be told"
+                ));
+                None
+            }
+        }
+        _ => None,
+    };
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.map(|n| n.into_owned()))
+        .collect::<Result<_, _>>()?;
+    if derives_normals && underived.is_none() {
+        // Reported above.
+    } else if let Some(e) = crate::patch_normals::normals_entries_error(
+        metadata.version,
+        point_count,
+        underived,
+        names.iter().map(String::as_str),
+    ) {
+        errors.push(e);
+    } else if let Some(k) = underived.filter(|&k| k > 0) {
+        let raw = read_zst_entry(archive, &entries::points3d_underived_normals(k))?;
+        if raw.len() != k * 12 {
+            errors.push(format!(
+                "points3d/underived_normals_xyz holds {} bytes, not {}",
+                raw.len(),
+                k * 12
+            ));
+        }
+        points3d_hasher.update(&raw);
+    }
 
     let points3d_hash = points3d_hasher.digest128();
     if format_hash(points3d_hash) != stored.points3d_xxh128 {

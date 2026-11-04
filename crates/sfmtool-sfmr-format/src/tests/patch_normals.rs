@@ -4,7 +4,7 @@
 //! The normals of version 16: a finite point with a patch has the normal of
 //! its frame, `normalize(u × v)`, which the file derives rather than stores.
 
-use super::{make_test_data, restamp_hashes, rewrite_entries};
+use super::{archive_names, make_test_data, restamp_hashes, rewrite_renaming};
 use crate::*;
 use ndarray::{Array1, Array2};
 
@@ -89,12 +89,16 @@ fn data_with_every_kind_of_point() -> SfmrData {
     data
 }
 
-fn stored_normals(path: &std::path::Path) -> Vec<f32> {
+const FULL_ENTRY: &str = "points3d/normals_xyz.5.3.float32.zst";
+const UNDERIVED_ENTRY: &str = "points3d/underived_normals_xyz.2.3.float32.zst";
+
+/// The values of the entry `name` of the archive at `path`.
+fn entry_floats(path: &std::path::Path, name: &str) -> Vec<f32> {
     use std::io::Read;
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     let mut compressed = Vec::new();
     archive
-        .by_name("points3d/normals_xyz.5.3.float32.zst")
+        .by_name(name)
         .unwrap()
         .read_to_end(&mut compressed)
         .unwrap();
@@ -107,12 +111,16 @@ fn stored_normals(path: &std::path::Path) -> Vec<f32> {
         .collect()
 }
 
+fn floats_payload(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
 fn row(a: &Array2<f32>, i: usize) -> Vec<f32> {
     a.row(i).to_vec()
 }
 
 #[test]
-fn a_finite_patched_point_stores_no_normal_and_reads_its_frames() {
+fn only_the_normals_the_frame_does_not_give_are_stored() {
     let dir = temp_dir("sfmr_test_patch_normals_round_trip");
     let path = dir.join("normals.sfmr");
     let given = data_with_every_kind_of_point();
@@ -124,19 +132,22 @@ fn a_finite_patched_point_stores_no_normal_and_reads_its_frames() {
     let mut data = given;
     write_sfmr(&path, &mut data).unwrap();
 
-    // The file holds zero rows for points 0 and 1, and every other row as
-    // given: the degenerate frame's, the unpatched point's and the point at
-    // infinity's.
-    let stored = stored_normals(&path);
-    assert_eq!(&stored[0..6], &[0.0; 6]);
+    // The file holds no full column, and the subset holds the normals of
+    // points 2 (degenerate frame) and 3 (no patch), in point order; points 0
+    // and 1 are derived and point 4 is at infinity.
+    let names = archive_names(&path);
+    assert!(!names.contains(&FULL_ENTRY.to_string()), "{names:?}");
     assert_eq!(
-        &stored[6..15],
-        given_normals.as_slice().unwrap()[6..15].as_ref()
+        entry_floats(&path, UNDERIVED_ENTRY),
+        given_normals.as_slice().unwrap()[6..12].to_vec()
     );
+    assert_eq!(super::read_points3d_metadata(&path)["has_normals"], true);
 
-    // A reader fills points 0 and 1 with normalize(u × v) and reads the rest.
+    // A reader fills points 0 and 1 with normalize(u × v), places the stored
+    // rows, and gives point 4 its zero row.
     let loaded = read_sfmr(&path).unwrap();
     let normals = loaded.normals_xyz.as_ref().unwrap();
+    assert_eq!(normals.shape(), [5, 3]);
     for i in 0..2 {
         let expected = cross_normal_f64(row(&u, i), row(&v, i));
         for k in 0..3 {
@@ -154,7 +165,7 @@ fn a_finite_patched_point_stores_no_normal_and_reads_its_frames() {
     }
 
     // The write set the value it was handed to what the file reads back, and
-    // a save of what was read writes the same hash.
+    // a save of what was read writes the same hash and the same entry.
     assert_eq!(data.normals_xyz.as_ref(), Some(normals));
     let stored_hash = read_sfmr_content_hash(&path).unwrap();
     let mut loaded = loaded;
@@ -164,28 +175,173 @@ fn a_finite_patched_point_stores_no_normal_and_reads_its_frames() {
         read_sfmr_content_hash(&resaved).unwrap().content_xxh128,
         stored_hash.content_xxh128
     );
+    assert_eq!(
+        entry_floats(&resaved, UNDERIVED_ENTRY),
+        entry_floats(&path, UNDERIVED_ENTRY)
+    );
     let (valid, errors) = verify_sfmr(&resaved).unwrap();
     assert!(valid, "{errors:?}");
 
     // An edit of a derived normal does not reach the file: the hash is the
-    // frame's.
-    let mut edited = data_with_every_kind_of_point();
-    edited.normals_xyz.as_mut().unwrap()[[1, 0]] = 1.0;
+    // frame's. An edit of a stored one does, and so does turning a frame.
     let options = WriteOptions::default();
+    let hash = |edit: fn(&mut SfmrData)| {
+        let mut d = data_with_every_kind_of_point();
+        edit(&mut d);
+        content_hash_of(&mut d, &options).unwrap().content_xxh128
+    };
     assert_eq!(
-        content_hash_of(&mut edited, &options)
-            .unwrap()
-            .content_xxh128,
+        hash(|d| d.normals_xyz.as_mut().unwrap()[[1, 0]] = 1.0),
         stored_hash.content_xxh128
     );
-    // Turning the frame does.
-    let mut turned = data_with_every_kind_of_point();
-    turned.patch_v_halfvec_xyz.as_mut().unwrap()[[1, 2]] = 0.07;
     assert_ne!(
-        content_hash_of(&mut turned, &options)
-            .unwrap()
-            .content_xxh128,
+        hash(|d| d.normals_xyz.as_mut().unwrap()[[3, 0]] = 0.6),
         stored_hash.content_xxh128
+    );
+    assert_ne!(
+        hash(|d| d.patch_v_halfvec_xyz.as_mut().unwrap()[[1, 2]] = 0.07),
+        stored_hash.content_xxh128
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_whose_every_normal_is_derived_stores_no_normals_entry() {
+    let dir = temp_dir("sfmr_test_patch_normals_all_derived");
+    let path = dir.join("all.sfmr");
+    let mut data = data_with_every_kind_of_point();
+    // Every point finite with a usable frame.
+    data.positions_xyzw[[4, 3]] = 1.0;
+    {
+        let u = data.patch_u_halfvec_xyz.as_mut().unwrap();
+        let v = data.patch_v_halfvec_xyz.as_mut().unwrap();
+        for i in 2..5 {
+            u.row_mut(i).assign(&ndarray::arr1(&[0.1, 0.0, 0.0]));
+            v.row_mut(i).assign(&ndarray::arr1(&[0.0, 0.1, 0.0]));
+        }
+    }
+    write_sfmr(&path, &mut data).unwrap();
+    let names = archive_names(&path);
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.starts_with("points3d/underived_normals_xyz.")
+                || n.starts_with("points3d/normals_xyz.")),
+        "{names:?}"
+    );
+    // The flag, not an entry, says the file has normals.
+    assert_eq!(super::read_points3d_metadata(&path)["has_normals"], true);
+    let normals = read_sfmr(&path).unwrap().normals_xyz.unwrap();
+    for i in 2..5 {
+        assert_eq!(row(&normals, i), vec![0.0, 0.0, 1.0], "point {i}");
+    }
+    assert_eq!(&normals, data.normals_xyz.as_ref().unwrap());
+    let (valid, errors) = verify_sfmr(&path).unwrap();
+    assert!(valid, "{errors:?}");
+
+    // Without the normals flag the same frames give no normals at all.
+    let mut none = data_with_every_kind_of_point();
+    none.normals_xyz = None;
+    let path = dir.join("none.sfmr");
+    write_sfmr(&path, &mut none).unwrap();
+    assert_eq!(super::read_points3d_metadata(&path)["has_normals"], false);
+    assert!(read_sfmr(&path).unwrap().normals_xyz.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_point_at_infinity_stores_no_normal_and_reads_back_zero() {
+    let dir = temp_dir("sfmr_test_patch_normals_infinity");
+    let path = dir.join("infinity.sfmr");
+    let mut data = data_with_every_kind_of_point();
+    // A normal left on a point at infinity is not a normal the file holds.
+    data.normals_xyz.as_mut().unwrap()[[4, 2]] = 1.0;
+    write_sfmr(&path, &mut data).unwrap();
+    assert_eq!(entry_floats(&path, UNDERIVED_ENTRY).len(), 6);
+    assert_eq!(row(data.normals_xyz.as_ref().unwrap(), 4), vec![0.0; 3]);
+    let loaded = read_sfmr(&path).unwrap();
+    assert_eq!(row(loaded.normals_xyz.as_ref().unwrap(), 4), vec![0.0; 3]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn assert_refused(path: &std::path::Path, needle: &str) {
+    let err = read_sfmr(path).err().expect("refused").to_string();
+    assert!(err.contains(needle), "reader: {err}");
+    let (valid, errors) = verify_sfmr(path).unwrap();
+    assert!(!valid);
+    assert!(
+        errors.iter().any(|e| e.contains(needle)),
+        "verifier: {errors:?}"
+    );
+}
+
+#[test]
+fn an_entry_of_the_wrong_count_is_refused() {
+    let dir = temp_dir("sfmr_test_patch_normals_wrong_count");
+    let good = dir.join("good.sfmr");
+    write_sfmr(&good, &mut data_with_every_kind_of_point()).unwrap();
+    // Three rows where two points' normals are not derived.
+    let bad = dir.join("three.sfmr");
+    rewrite_renaming(&good, &bad, |name, raw| {
+        (name == UNDERIVED_ENTRY).then(|| {
+            let mut values: Vec<f32> = raw
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect();
+            values.extend([0.0, 1.0, 0.0]);
+            (
+                "points3d/underived_normals_xyz.3.3.float32.zst".to_string(),
+                floats_payload(&values),
+            )
+        })
+    });
+    assert_refused(
+        &bad,
+        "points3d/underived_normals_xyz.3.3.float32.zst does not match the 2 finite points",
+    );
+    // The right name over the wrong number of bytes.
+    let short = dir.join("short.sfmr");
+    rewrite_renaming(&good, &short, |name, raw| {
+        (name == UNDERIVED_ENTRY).then(|| (name.to_string(), raw[..12].to_vec()))
+    });
+    let err = read_sfmr(&short).err().expect("refused").to_string();
+    assert!(err.contains("underived_normals_xyz"), "{err}");
+    let (valid, errors) = verify_sfmr(&short).unwrap();
+    assert!(!valid);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("underived_normals_xyz holds 12 bytes")),
+        "{errors:?}"
+    );
+    // No entry where two normals are not derived.
+    let missing = dir.join("missing.sfmr");
+    rewrite_renaming(&good, &missing, |name, raw| {
+        (name == UNDERIVED_ENTRY).then(|| ("points3d/unrelated.bin".to_string(), raw.to_vec()))
+    });
+    assert_refused(
+        &missing,
+        "and no points3d/underived_normals_xyz.2.3.float32.zst",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_full_normals_column_in_a_version_16_file_with_the_frame_is_refused() {
+    let dir = temp_dir("sfmr_test_patch_normals_full_column");
+    let good = dir.join("good.sfmr");
+    let mut data = data_with_every_kind_of_point();
+    write_sfmr(&good, &mut data).unwrap();
+    let full = floats_payload(data.normals_xyz.as_ref().unwrap().as_slice().unwrap());
+    let bad = dir.join("full.sfmr");
+    rewrite_renaming(&good, &bad, |name, _| {
+        (name == UNDERIVED_ENTRY).then(|| (FULL_ENTRY.to_string(), full.clone()))
+    });
+    assert_refused(
+        &bad,
+        "and this one holds the full column points3d/normals_xyz.5.3",
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -220,59 +376,6 @@ fn a_patch_frame_without_normals_stays_without_them() {
 }
 
 #[test]
-fn a_stored_normal_for_a_derived_row_is_refused() {
-    let dir = temp_dir("sfmr_test_patch_normals_stored_row");
-    let good = dir.join("good.sfmr");
-    write_sfmr(&good, &mut data_with_every_kind_of_point()).unwrap();
-    let bad = dir.join("bad.sfmr");
-    rewrite_entries(&good, &bad, |name, raw| {
-        (name == "points3d/normals_xyz.5.3.float32.zst").then(|| {
-            let mut values: Vec<f32> = raw
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|b| f32::from_le_bytes(*b))
-                .collect();
-            values[3..6].copy_from_slice(&[0.0, 0.6, 0.8]);
-            values.iter().flat_map(|v| v.to_le_bytes()).collect()
-        })
-    });
-    restamp_hashes_allowing(&bad, &dir);
-    let needle = "points3d/normals_xyz row 1 is [0.0, 0.6, 0.8], but point 1 is finite";
-    let err = read_sfmr(&bad).err().expect("refused").to_string();
-    assert!(err.contains(needle), "{err}");
-    let (valid, errors) = verify_sfmr(&bad).unwrap();
-    assert!(!valid);
-    assert!(errors.iter().any(|e| e.contains(needle)), "{errors:?}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Restamp the hashes of `path` so the only errors left are the ones its
-/// content carries.
-fn restamp_hashes_allowing(path: &std::path::Path, dir: &std::path::Path) {
-    let (_, errors) = verify_sfmr(path).unwrap();
-    let pairs: Vec<(String, String)> = errors
-        .iter()
-        .filter_map(|e| {
-            let (_, rest) = e.split_once("mismatch: computed ")?;
-            let (computed, stored) = rest.split_once(", stored ")?;
-            Some((stored.to_string(), computed.to_string()))
-        })
-        .collect();
-    let staged = dir.join("restamp.sfmr");
-    rewrite_entries(path, &staged, |name, raw| {
-        (name == "content_hash.json.zst").then(|| {
-            let mut text = String::from_utf8(raw.to_vec()).unwrap();
-            for (stored, computed) in &pairs {
-                text = text.replace(stored.as_str(), computed);
-            }
-            text.into_bytes()
-        })
-    });
-    std::fs::rename(&staged, path).unwrap();
-}
-
-#[test]
 fn a_version_15_file_reads_its_normals_as_stored_and_saves_them_from_the_frame() {
     let dir = temp_dir("sfmr_test_patch_normals_v15");
     let current = dir.join("current.sfmr");
@@ -286,9 +389,13 @@ fn a_version_15_file_reads_its_normals_as_stored_and_saves_them_from_the_frame()
     let old = dir.join("v15.sfmr");
     super::rewrite_as_version_15(&current, &old, &dir, |_, _| {});
     let staged = dir.join("staged.sfmr");
-    rewrite_entries(&old, &staged, |name, _| {
-        (name == "points3d/normals_xyz.5.3.float32.zst")
-            .then(|| given_normals.iter().flat_map(|v| v.to_le_bytes()).collect())
+    rewrite_renaming(&old, &staged, |name, _| {
+        (name == FULL_ENTRY).then(|| {
+            (
+                FULL_ENTRY.to_string(),
+                floats_payload(given_normals.as_slice().unwrap()),
+            )
+        })
     });
     std::fs::rename(&staged, &old).unwrap();
     restamp_hashes(&old, &dir);
@@ -325,8 +432,7 @@ fn normals_of_the_wrong_shape_are_written_with_the_frames_normals() {
     data.normals_xyz = Some(Array2::zeros((0, 3)));
     write_sfmr(&path, &mut data).unwrap();
 
-    let stored = stored_normals(&path);
-    assert_eq!(&stored[0..6], &[0.0; 6]);
+    assert!(!archive_names(&path).contains(&FULL_ENTRY.to_string()));
     let loaded = read_sfmr(&path).expect("the reader accepts what the writer wrote");
     let normals = loaded.normals_xyz.unwrap();
     for i in 0..2 {

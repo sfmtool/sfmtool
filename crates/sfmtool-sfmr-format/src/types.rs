@@ -843,7 +843,9 @@ impl OptionalPresence {
 /// names `tracks/plain_bitmap_zncc_deficit` and
 /// `tracks/blur_matched_bitmap_zncc_deficit`. And the normal of a finite
 /// point with a patch is no longer stored but derived from its frame as
-/// `normalize(u × v)` (see [`SFMR_DERIVED_PATCH_NORMALS_VERSION`]), so a
+/// `normalize(u × v)`, the other finite points' normals stored in
+/// `points3d/underived_normals_xyz` (see
+/// [`SFMR_DERIVED_PATCH_NORMALS_VERSION`]), so a
 /// version 15 file whose normals disagree with its frames saves with the
 /// derived ones.
 ///
@@ -952,13 +954,16 @@ pub const SFMR_FLOAT16_READINGS_VERSION: u32 = 16;
 /// The first `.sfmr` version that derives the normal of a finite point with a
 /// patch from its frame rather than storing it.
 ///
-/// In a file of this version or later that has both `points3d/normals_xyz`
-/// and the patch frame, the row of every finite point (`w ≠ 0`) whose `u` is
-/// non-zero is stored as `(0, 0, 0)`, and the reader fills it with
-/// `normalize(u × v)` computed in `f32`. A writer sets those normals in the
-/// value it writes. A point whose `u × v` is zero or not finite gives no
-/// normal, and its row is stored as it is.
-/// A file below it reads its normals as stored. See
+/// In a file of this version or later with both normals and the patch frame,
+/// the normal of every finite point (`w ≠ 0`) whose frame gives one
+/// ([`crate::patch_normal`]) is not stored, and the reader computes it as
+/// `normalize(u × v)` in `f32`. Only the normals of the other finite points
+/// (no patch, or a degenerate frame) are stored, in point order, in
+/// `points3d/underived_normals_xyz.{K}.3.float32.zst`, absent when `K` is 0;
+/// a point at infinity's normal is `(0, 0, 0)` and not stored. A file
+/// without the patch frame stores the full `normals_xyz` column. A writer
+/// sets the derived normals and the zero normals of points at infinity in
+/// the value it writes. A file below it reads its normals as stored. See
 /// `specs/formats/sfmr-file-format.md` § "Version 15 → Version 16".
 pub const SFMR_DERIVED_PATCH_NORMALS_VERSION: u32 = 16;
 

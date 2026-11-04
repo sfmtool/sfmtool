@@ -1515,7 +1515,57 @@ fn rewrite_as_version_15(
         edit(&renamed, &mut values);
         Some((renamed, float32_payload(&values)))
     });
+    let normals = read_sfmr(current).unwrap().normals_xyz;
+    with_full_normals(path, dir, normals.as_ref());
     restamp_hashes(path, dir);
+}
+
+/// Rewrite `path`, a file this build wrote and then edited, with its normals
+/// as a file below version 16 stores them: the full `points3d/normals_xyz`
+/// column `normals`, the normals the value written held after the write, in
+/// place of any `points3d/underived_normals_xyz` entry. Nothing changes for a
+/// file without the patch frame or without normals. Hashes are not
+/// restamped.
+fn with_full_normals(path: &std::path::Path, dir: &std::path::Path, normals: Option<&Array2<f32>>) {
+    use std::io::{Read, Write};
+
+    let meta = read_points3d_metadata(path);
+    let Some(normals) = normals.filter(|_| meta["has_uv_frames"] == true) else {
+        return;
+    };
+
+    let staged = dir.join("full_normals.sfmr");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&staged).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        if name.starts_with("points3d/underived_normals_xyz.") {
+            continue;
+        }
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zip.start_file(name, stored).unwrap();
+        zip.write_all(&compressed).unwrap();
+    }
+    zip.start_file(
+        format!("points3d/normals_xyz.{}.3.float32.zst", normals.nrows()),
+        stored,
+    )
+    .unwrap();
+    zip.write_all(&zstd::bulk::compress(&float32_payload(normals.as_slice().unwrap()), 3).unwrap())
+        .unwrap();
+    zip.finish().unwrap();
+    drop(archive);
+    std::fs::rename(&staged, path).unwrap();
 }
 
 /// Copy a `.sfmr` archive with `edit` applied to `points3d/metadata.json`.
@@ -2586,6 +2636,7 @@ fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::P
         zip.write_all(&compressed).unwrap();
     }
     zip.finish().unwrap();
+    with_full_normals(path, dir, data.normals_xyz.as_ref());
     restamp_hashes(path, dir);
 }
 

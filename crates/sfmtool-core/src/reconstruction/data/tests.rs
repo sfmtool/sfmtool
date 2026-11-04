@@ -972,6 +972,14 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for name in &names {
+        // Below version 16 the full column, appended after the loop, replaces
+        // whatever normals entry the file has.
+        if stored_normals.is_some()
+            && (name.starts_with("points3d/normals_xyz.")
+                || name.starts_with("points3d/underived_normals_xyz."))
+        {
+            continue;
+        }
         let mut compressed = Vec::new();
         archive
             .by_name(name)
@@ -1017,13 +1025,6 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
                 .insert("version".into(), serde_json::json!(version));
             let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
             zip_out.write_all(&bytes).unwrap();
-        } else if let (Some(normals), true) =
-            (&stored_normals, name.starts_with("points3d/normals_xyz."))
-        {
-            let bytes: Vec<u8> = normals.iter().flat_map(|v| v.to_le_bytes()).collect();
-            zip_out
-                .write_all(&zstd::bulk::compress(&bytes, 3).unwrap())
-                .unwrap();
         } else if widen {
             let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
             let widened: Vec<u8> = raw
@@ -1038,6 +1039,18 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
         } else {
             zip_out.write_all(&compressed).unwrap();
         }
+    }
+    if let Some(normals) = &stored_normals {
+        zip_out
+            .start_file(
+                format!("points3d/normals_xyz.{}.3.float32.zst", normals.nrows()),
+                stored,
+            )
+            .unwrap();
+        let bytes: Vec<u8> = normals.iter().flat_map(|v| v.to_le_bytes()).collect();
+        zip_out
+            .write_all(&zstd::bulk::compress(&bytes, 3).unwrap())
+            .unwrap();
     }
     zip_out.finish().unwrap();
 }

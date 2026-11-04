@@ -375,7 +375,7 @@ fn write_sfmr_into<S: EntrySink>(
     // The normal of a finite point with a patch is derived from its frame
     // from version 16: set in the value here, so it is what a reader of the
     // file gets back and the depth-statistics pass below finds no such row
-    // missing, and stored as (0, 0, 0) by `write_points3d`.
+    // missing; `write_points3d` stores only the other finite points' normals.
     derive_patch_normals_in_place(data);
     let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
@@ -1040,29 +1040,38 @@ fn write_points3d<S: EntrySink>(
     }
 
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions
-    // 1-2). From version 16 the rows of finite points with a patch are stored
-    // as (0, 0, 0), their normals derived from the frame on read.
-    if let Some(normals_xyz) = &normals_xyz {
-        let normals = normals_xyz.as_standard_layout();
-        let normals = normals.as_slice().unwrap();
-        let stored: Cow<'_, [f32]> = match patch_frame_columns(data, normals_xyz) {
-            Some((w, u, v)) => Cow::Owned(
+    // 1-2), the full column of a file without the patch frame. With the frame
+    // (version 16+) the normals the frame gives are not stored, and the rest
+    // go to points3d/underived_normals_xyz, written last below.
+    let underived_normals: Option<Vec<f32>> = match (&normals_xyz, &data.patch_u_halfvec_xyz) {
+        (Some(normals_xyz), Some(_)) => {
+            let (w, u, v) = patch_frame_columns(data, normals_xyz).ok_or_else(|| {
+                SfmrError::ShapeMismatch(
+                    "normals_xyz, the patch frame and positions_xyzw do not agree in their                      point counts"
+                        .into(),
+                )
+            })?;
+            let normals = normals_xyz.as_standard_layout();
+            Some(
                 PatchFrameRows {
                     w: &w,
                     u: &u,
                     v: &v,
                 }
-                .stored(normals),
-            ),
-            None => Cow::Borrowed(normals),
-        };
-        binary_hashed(
-            sink,
-            &entries::points3d_normals(false, point_count),
-            bytemuck::cast_slice(&stored),
-            &mut points3d_hasher,
-        )?;
-    }
+                .underived_rows(normals.as_slice().unwrap()),
+            )
+        }
+        (Some(normals_xyz), None) => {
+            binary_hashed(
+                sink,
+                &entries::points3d_normals(false, point_count),
+                bytemuck::cast_slice(normals_xyz.as_standard_layout().as_slice().unwrap()),
+                &mut points3d_hasher,
+            )?;
+            None
+        }
+        (None, _) => None,
+    };
 
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
     if let Some(bitmaps) = &data.patch_bitmaps_y_x_rgba {
@@ -1118,6 +1127,18 @@ fn write_points3d<S: EntrySink>(
         bytemuck::cast_slice(data.reprojection_errors.as_slice().unwrap()),
         &mut points3d_hasher,
     )?;
+
+    // points3d/underived_normals_xyz (version 16+, with the patch frame and
+    // normals; sorts last), absent when every normal is derived or at
+    // infinity.
+    if let Some(rows) = underived_normals.filter(|rows| !rows.is_empty()) {
+        binary_hashed(
+            sink,
+            &entries::points3d_underived_normals(rows.len() / 3),
+            bytemuck::cast_slice(&rows),
+            &mut points3d_hasher,
+        )?;
+    }
 
     Ok(points3d_hasher.digest128())
 }

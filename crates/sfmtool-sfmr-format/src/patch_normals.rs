@@ -4,21 +4,86 @@
 //! The normals a version 16 file derives from the patch frame.
 //!
 //! From [`SFMR_DERIVED_PATCH_NORMALS_VERSION`](crate::SFMR_DERIVED_PATCH_NORMALS_VERSION),
-//! in a file with both `points3d/normals_xyz` and the patch frame, the normal
-//! of a finite point (`w ≠ 0`) whose `u` is non-zero is not stored: its row
-//! holds `(0, 0, 0)` and a reader fills it with `normalize(u × v)`, computed
-//! in `f32` by [`patch_normal`]. A writer sets the value it is handed to the
-//! derived normals in place, so after a write the value is what a reader of
-//! the file gets back. Rows of points at infinity, of points without a patch,
-//! and of points whose frame is degenerate (`u × v` zero or not finite) are
-//! stored as before; the format does not otherwise constrain a frame, so a
-//! degenerate one is kept rather than refused. See `specs/formats/sfmr-file-format.md` § "Per-point patch
-//! frame".
+//! in a file with both normals and the patch frame, the normal of a finite
+//! point (`w ≠ 0`) whose frame gives one is not stored: a reader computes it
+//! as `normalize(u × v)` in `f32` by [`patch_normal`]. The file stores only
+//! the normals of the other finite points, the underived normals, in point
+//! order in `points3d/underived_normals_xyz.{K}.3.float32.zst`, and no entry
+//! at all when there are none; a point at infinity's normal is `(0, 0, 0)`
+//! and not stored. A writer sets the value it is handed to the normals a
+//! reader gives back, so after a write the value is what a reader of the file
+//! gets back. A point whose frame is degenerate (`u × v` zero or not finite)
+//! stores its normal; the format does not otherwise constrain a frame, so a
+//! degenerate one is kept rather than refused. See
+//! `specs/formats/sfmr-file-format.md` § "Derived normals (version 16+)".
 
 /// Whether a file of `version` derives the normals of its finite patched
 /// points from the frame.
 pub(crate) const fn derives_patch_normals(version: u32) -> bool {
     version >= crate::SFMR_DERIVED_PATCH_NORMALS_VERSION
+}
+
+/// The prefix of the `points3d/underived_normals_xyz` entry, whatever its K.
+pub(crate) const UNDERIVED_NORMALS_PREFIX: &str = "points3d/underived_normals_xyz.";
+
+/// Why the normals entries of a file are refused, or `None` where they are
+/// the ones its version and flags call for.
+///
+/// `names` is every entry name in the archive. `underived_count` is `Some(K)`
+/// for a file of version 16 or later with both `has_normals` and
+/// `has_uv_frames`, `K` its finite points whose normal the frame does not
+/// give, and `None` for any other file. Such a file stores
+/// `points3d/underived_normals_xyz.{K}.3.float32.zst` exactly when `K > 0`
+/// and no full `points3d/normals_xyz` column; any other file stores no
+/// underived entry. The reader and the verifier both ask this.
+pub(crate) fn normals_entries_error<'a>(
+    version: u32,
+    point_count: usize,
+    underived_count: Option<usize>,
+    names: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    let names: Vec<&str> = names.into_iter().collect();
+    let underived: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| n.starts_with(UNDERIVED_NORMALS_PREFIX))
+        .collect();
+    let Some(k) = underived_count else {
+        return underived.first().map(|found| {
+            format!(
+                "{found} is stored only by a file of version {} or later with both normals \
+                 and the patch frame, and this is a version {version} file without them",
+                crate::SFMR_DERIVED_PATCH_NORMALS_VERSION
+            )
+        });
+    };
+    let full = crate::entries::points3d_normals(false, point_count);
+    if names.contains(&full.as_str()) {
+        return Some(format!(
+            "a version {version} file with the patch frame stores the normals its frame does \
+             not give in points3d/underived_normals_xyz, and this one holds the full column \
+             {full}"
+        ));
+    }
+    let expected = (k > 0).then(|| crate::entries::points3d_underived_normals(k));
+    if let Some(found) = underived.iter().find(|n| Some(n.to_string()) != expected) {
+        return Some(format!(
+            "{found} does not match the {k} finite points whose normal the patch frame does \
+             not give{}",
+            expected
+                .as_ref()
+                .map_or(", which a file stores no entry for".to_string(), |e| {
+                    format!(", which a file stores as {e}")
+                })
+        ));
+    }
+    match &expected {
+        Some(e) if !underived.contains(&e.as_str()) => Some(format!(
+            "this file has {k} finite points whose normal the patch frame does not give, and \
+             no {e} to hold them"
+        )),
+        _ => None,
+    }
 }
 
 /// `normalize(u × v)` in `f32`, or `None` where the cross product is zero or
@@ -68,44 +133,61 @@ impl PatchFrameRows<'_> {
             .flatten()
     }
 
-    /// Set every derived row of `normals`, `(P, 3)` row-major, to its derived
-    /// normal: what a writer does to the value it is handed, and a reader to
-    /// the zero rows it read. Every other row is left as it is.
+    /// Set the rows of `normals`, `(P, 3)` row-major, that a version 16 file
+    /// does not store to what a reader gives back for them: each derived row
+    /// to its derived normal, and each point at infinity's row to `(0, 0, 0)`.
+    /// What a writer does to the value it is handed. Every other row is left
+    /// as it is.
     pub(crate) fn fill(&self, normals: &mut [f32]) {
         for i in 0..self.w.len() {
             if let Some(n) = self.derived(i) {
                 normals[3 * i..3 * i + 3].copy_from_slice(&n);
+            } else if self.w[i] == 0.0 {
+                normals[3 * i..3 * i + 3].fill(0.0);
             }
         }
     }
 
-    /// `normals` as a version 16 file stores them: every derived row `(0, 0,
-    /// 0)`, every other row as it is.
-    pub(crate) fn stored(&self, normals: &[f32]) -> Vec<f32> {
-        let mut out = normals.to_vec();
-        for i in 0..self.w.len() {
-            if self.derived(i).is_some() {
-                out[3 * i..3 * i + 3].fill(0.0);
-            }
-        }
-        out
+    /// The points whose normals a version 16 file stores, in point order:
+    /// the finite points whose normal is not derived, because they have no
+    /// patch (`u` zero) or a frame that gives no normal.
+    pub(crate) fn underived(&self) -> Vec<usize> {
+        (0..self.w.len())
+            .filter(|&i| self.w[i] != 0.0 && self.derived(i).is_none())
+            .collect()
     }
 
-    /// Check the stored `normals` of a version 16 file: every derived row is
-    /// `(0, 0, 0)`.
-    pub(crate) fn check_stored(&self, normals: &[f32]) -> Result<(), String> {
-        for i in 0..self.w.len() {
-            let row = Self::row(normals, i);
-            if self.derived(i).is_some() && row.iter().any(|&c| c != 0.0) {
-                return Err(format!(
-                    "points3d/normals_xyz row {i} is {row:?}, but point {i} is finite and has \
-                     a patch frame that gives a normal, so a version {} file stores (0, 0, 0) \
-                     there and derives the normal from the frame",
-                    crate::SFMR_DERIVED_PATCH_NORMALS_VERSION
-                ));
-            }
+    /// The rows of `normals`, `(P, 3)` row-major, that a version 16 file
+    /// stores: those of [`Self::underived`], in point order, `(K, 3)`.
+    pub(crate) fn underived_rows(&self, normals: &[f32]) -> Vec<f32> {
+        self.underived()
+            .into_iter()
+            .flat_map(|i| Self::row(normals, i))
+            .collect()
+    }
+
+    /// The `(P, 3)` normals a reader gives back from `stored`, the `(K, 3)`
+    /// row-major rows of [`Self::underived`]: row `k` of `stored` for the
+    /// `k`-th of those points, the derived normal for a point with a usable
+    /// frame, and `(0, 0, 0)` for a point at infinity. A message where
+    /// `stored` does not hold one row per such point.
+    pub(crate) fn rebuild(&self, stored: &[f32]) -> Result<Vec<f32>, String> {
+        let underived = self.underived();
+        if stored.len() != 3 * underived.len() {
+            return Err(format!(
+                "points3d/underived_normals_xyz holds {} values, not the {} of the {} finite \
+                 points whose normal the patch frame does not give",
+                stored.len(),
+                3 * underived.len(),
+                underived.len()
+            ));
         }
-        Ok(())
+        let mut normals = vec![0.0f32; 3 * self.w.len()];
+        self.fill(&mut normals);
+        for (k, i) in underived.into_iter().enumerate() {
+            normals[3 * i..3 * i + 3].copy_from_slice(&stored[3 * k..3 * k + 3]);
+        }
+        Ok(normals)
     }
 }
 

@@ -327,6 +327,13 @@ pub(crate) fn points3d_normals(is_pre_v3: bool, point_count: impl std::fmt::Disp
     }
 }
 
+/// `points3d/underived_normals_xyz` — the normals of the finite points whose
+/// patch frame gives none (v16+, in a file with normals and the patch frame,
+/// present only when there are any), `(K, 3)` in point order.
+pub(crate) fn points3d_underived_normals(underived_count: impl std::fmt::Display) -> String {
+    format!("points3d/underived_normals_xyz.{underived_count}.3.float32.zst")
+}
+
 /// `tracks/metadata.json.zst` — track-section metadata.
 pub(crate) fn tracks_metadata() -> &'static str {
     "tracks/metadata.json.zst"
