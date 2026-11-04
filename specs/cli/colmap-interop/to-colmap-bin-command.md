@@ -183,7 +183,8 @@ loads the input and, when `--range` or `--named-image-list` is given, calls
 it shares with `sfm to-nerfstudio`. For a range that helper parses `--range`
 with `RangeExpr` and resolves file numbers to image indices via
 `number_from_filename`; for a list it resolves the list with
-`NamedImageLists.resolve_in_names` against the reconstruction's image names.
+`NamedImageLists.resolve_in_names` against the reconstruction's image names,
+and applies a slice given after the name with `NamedImageLists.slice_members`.
 Either way it then calls `subset_by_image_indices`. The shim then hands the result to
 `save_colmap_binary` in [`colmap/io.py`](../../../src/sfmtool/colmap/io.py),
 which calls `materialize_infinity_for_export` before converting and writing.

@@ -39,7 +39,7 @@ a value with a letter in it is a name, one name with one range narrows the
 list, and a slice after the name (`'walk1[:30]'`) takes part of the list by
 position. A list replaces `PATHS`, and giving both is an error; the workspace
 is the one found from the current directory, and only the list's members that
-are image files are used, in the list's order. The rules and errors are in [the
+are image files are used, in the list's order or the slice's. The rules and errors are in [the
 shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
 ## Action Modes

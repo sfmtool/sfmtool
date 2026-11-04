@@ -56,7 +56,10 @@ impl fmt::Display for NamedImageListSliceError {
                 )?;
                 if before.is_empty() {
                     write!(f, "no name comes before the '['")
-                } else if !before.chars().any(char::is_alphabetic) {
+                } else if before
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || "-:,".contains(c) || c.is_whitespace())
+                {
                     write!(
                         f,
                         "'{before}' is a range, not a name, and a list is narrowed by a range \
@@ -549,6 +552,15 @@ mod tests {
             .to_string();
         assert!(
             message.contains("no name comes before the '['"),
+            "{message}"
+        );
+
+        // No letter, but not a range either: the name rule is the error.
+        let message = split_named_image_list_value("__[:30]")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("'__' is not a valid named image list name"),
             "{message}"
         );
 
