@@ -520,10 +520,11 @@ lists file: `NotAWorkspace`, `Io`, `InvalidJson` (with `line` and `column`),
 every problem of the lists given to `write_lists`), `ListExists` (with every
 list `write_lists` was given that the file already defines), `UnknownList`
 (with the names the file defines), `NarrowedEntryWithoutFrameField`,
-`DuplicateMatches` (with every file two entries match), `FrameNumberTooLarge` (a frame field
-that captured a number beyond `i64`), `NoMatch`, `NarrowedToNothing` (with
-the narrowing range), `SlicedToNothing` (with the narrowing range, the slice
-and the number of items it was given) and `Cancelled`.
+`DuplicateMatches` (with every file two entries match), `FrameNumberTooLarge`
+(a frame field that captured a number beyond `i64`), `NoMatch`,
+`NarrowedToNothing` (with the narrowing range), `SlicedToNothing` (with the
+narrowing range, the slice and the number of items it was given) and
+`Cancelled`.
 
 `NamedImageListSliceError` is the error about a value's text, and names the
 value as given: `InvalidName` (a value with no `[` that breaks the name rule),

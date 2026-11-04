@@ -3,9 +3,9 @@
 
 //! A workspace's named image lists: the `.sfm-named-image-lists.json` file in
 //! the workspace root, its validation, the resolution of one list to the
-//! workspace's image files or to a reconstruction's image names, and the slice
-//! that takes part of a resolved list by position ([`NamedImageListSlice`]),
-//! and the writer that adds or replaces lists in the file
+//! workspace's image files or to a reconstruction's image names, the slice that
+//! takes part of a resolved list by position ([`NamedImageListSlice`]), and
+//! the writer that adds or replaces lists in the file
 //! ([`NamedImageLists::write_lists`]).
 //!
 //! The file format, its rules and the order of a list's members are specified
