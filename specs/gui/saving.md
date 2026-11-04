@@ -195,9 +195,10 @@ save gathers them from each image's `.sift` file, or else from the image
 itself, as every `.sfmr` save does
 ([sfmr-file-format.md § Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)),
 and the save is refused, naming each image, when an image has neither. The
-gathering is a phase `image readings` under the save's `materialise`, counting
-the images, so the Action Log row reports it. The rows are gathered into the
-materialised value before it is pushed as a version, as a stated workspace path
+gathering is a phase `image readings` under the save's `materialise`, so the
+Action Log row names it; the phase counts the images while it runs, and like
+every count that is live progress only, not kept in the finished row. The rows
+are gathered into the materialised value before it is pushed as a version, as a stated workspace path
 is (`AppState::materialize_for_save`), so such a save folds, stamps and pushes a
 version even with an empty overlay, and the version the node holds is the file
 written and its content hash is the file's. The display thumbnails the
