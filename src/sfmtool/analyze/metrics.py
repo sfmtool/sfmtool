@@ -111,8 +111,14 @@ def _correction_columns(recon: SfmrReconstruction) -> list[tuple[str, np.ndarray
     rolling-shutter rates, in pixels as
     :func:`sfmtool.analyze._correction_sizes.image_correction_sizes` measures
     them (NaN for an image of another camera); none for a reconstruction with
-    neither."""
-    varied = {name for names in recon.per_image_adjustments for name in names}
+    neither. A camera varies a correction when
+    ``recon.varied_image_adjustments`` names it: when its flags list it or one
+    of its images holds a non-zero value of it."""
+    varied = {
+        name
+        for c in range(recon.camera_count)
+        for name in recon.varied_image_adjustments(c)
+    }
     if not varied & {"radial_bspline", "rolling_shutter"}:
         return []
     from ._correction_sizes import image_correction_sizes

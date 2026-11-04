@@ -232,7 +232,11 @@ The default output is a compact label/value block. The fields per type:
 
   A camera whose images vary the radial correction or the rolling-shutter
   rates gets a line for each giving its size in pixels over the camera's
-  images, the median and the maximum of each image's absolute value:
+  images, the median and the maximum of each image's absolute value. A camera
+  varies a correction when `SfmrReconstruction.varied_image_adjustments` names
+  it: when its `per_image_adjustments` lists it or one of its images holds a
+  non-zero value of it, so these lines appear for a camera whose images hold
+  values its `Adjusted per image:` line does not list:
 
   ```text
       Radial correction at the spline domain end: median 0.81 px, max 3.66 px over 17 images

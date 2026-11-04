@@ -54,14 +54,16 @@ def image_correction_sizes(recon) -> dict[str, np.ndarray]:
     a ray through the image's intrinsics without its rates and projecting the
     ray back through them with the rates. Each is an ``(N,)`` float64 array,
     NaN for an image whose camera does not vary that correction per image (or,
-    for the rolling shutter, has no scanlines setting).
+    for the rolling shutter, has no scanlines setting). A camera varies a
+    correction when ``recon.varied_image_adjustments`` names it: when its
+    ``per_image_adjustments`` lists it or one of its images holds a non-zero
+    value of it.
     """
     n = recon.image_count
     sizes = {
         "radial_bspline": np.full(n, np.nan),
         "rolling_shutter": np.full(n, np.nan),
     }
-    per_image = recon.per_image_adjustments
     scanlines = recon.rolling_shutter_scanlines
     cameras = recon.cameras
     camera_indexes = np.asarray(recon.camera_indexes)
@@ -74,9 +76,10 @@ def image_correction_sizes(recon) -> dict[str, np.ndarray]:
         for c in range(len(cameras))
         if scanlines[c] is not None
     }
+    varied = [set(recon.varied_image_adjustments(c)) for c in range(len(cameras))]
     for i in range(n):
         c = int(camera_indexes[i])
-        varies = per_image[c]
+        varies = varied[c]
         if "radial_bspline" in varies:
             e_1 = 0.0 if radial is None else float(radial[i][1])
             f_i = recon.image_intrinsics(i).focal_lengths[0]
