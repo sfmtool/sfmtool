@@ -324,10 +324,11 @@ frame:
    accepted steps' rates, or at the start of a segment the rate of the nearest
    sample that has one.
 3. **Measure** the step `m` from `f` to `c`.
-4. **Decide.** Beyond `f + 1`, a pair with fewer than twice `min_matches`
-   matches counts here as not matching well: such a step is a weak point,
-   where a solve is most likely to split, and the walk takes one only at the
-   next frame or when halving a failed step finds nothing better.
+4. **Decide.** Here and in steps 6 and 7, a pair beyond `f + 1` with fewer
+   than twice `min_matches` matches counts as not matching well: such a step
+   is a weak point, where a solve is most likely to split, and the walk takes
+   one only at the next frame or when halving a failed step finds nothing
+   better.
    - `m` in the band and the pair matches well: settle on `c`.
    - `m` above the band: re-aim. When `c` is `f + 1`, the motion per frame is
      wider than the band, and `c` is settled on if it matches well.
@@ -343,13 +344,14 @@ frame:
 6. **Settle** on a frame that is not blurred by accepting it. A blurred one is
    swapped: the walk reads its neighbours nearest first (`c − 1`, `c + 1`,
    `c − 2`, …) among the frames whose step, at the candidate's measured rate,
-   would be in the band, and accepts the first that is sharp, matches well,
-   and has a step no longer than the band and no shorter than the band or the
-   candidate's own step. The swap is reported.
+   would be in the band, and accepts the first that is sharp, matches well
+   (a neighbour beyond `f + 1` with few matches does not), and has a step no
+   longer than the band and no shorter than the band or the candidate's own
+   step. The swap is reported.
 7. **A blurred run.** When no neighbour qualifies, the walk reads every frame
    from `f + 1` to the band's upper edge at the candidate's rate in one batch,
-   and accepts the farthest sharp one that matches well within the band's
-   upper edge, which may be a step below the band. When no sharp frame there
+   and accepts the farthest sharp one that matches well, by the same rule,
+   within the band's upper edge, which may be a step below the band. When no sharp frame there
    does, it accepts the sharpest of the frames whose step matches well within
    the band, the sharpest being the frame whose least sharp sensor has the
    highest ratio to its median, and reports it as kept though blurred. A
@@ -557,7 +559,9 @@ alone, crossed with every step in the full band, a spread of 0 floored at the
 smallest deviation and readings mostly at the median flagging none of the
 rest, a bad patch flagged for weak matches and filled in at halved steps, two
 breaks with a short segment and steps with few matches taken only at the next
-frame or in a gap filled in, shuffled frames, frames 6% apart that show the
+frame or in a gap filled in, a blurred frame whose sharp neighbours and a
+blurred run whose sharp frames have few matches, neither taken, shuffled
+frames, frames 6% apart that show the
 other three signs and a three-frame sequence that are not a video, a camera
 that only turns, one that barely moves and a moving scene that are not
 solvable, a rig whose second sensor's images match nothing

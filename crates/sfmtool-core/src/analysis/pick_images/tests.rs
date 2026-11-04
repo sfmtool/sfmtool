@@ -290,6 +290,76 @@ fn a_blurred_run_keeps_its_sharpest_frames() {
     assert_read_is_asked(&run);
 }
 
+/// Every accepted step with fewer than twice `min_matches` matches goes to
+/// the next frame or fills in a gap; and the walk measured at least one such
+/// pair beyond the next frame from a chosen frame, so the rule was tested.
+fn assert_few_match_steps_only_where_allowed(run: &Run) {
+    let few = |matches: usize| matches < 2 * options().pair.min_matches;
+    let walk = run.walk(0);
+    for step in &walk.steps {
+        if few(step.stats.matches) {
+            assert!(
+                step.to == step.from + 1 || step.kind == StepKind::GapFill,
+                "{step:?}"
+            );
+        }
+    }
+    let chosen: BTreeSet<usize> = walk.chosen.iter().copied().collect();
+    assert!(
+        run.report().pairs.iter().any(|p| p.stage == Stage::Walk
+            && chosen.contains(&p.a.frame)
+            && p.b.frame > p.a.frame + 1
+            && p.stats.matches >= options().pair.min_matches
+            && few(p.stats.matches)),
+        "no pair with few matches was measured"
+    );
+}
+
+#[test]
+fn a_blurred_frame_is_not_swapped_for_a_neighbour_with_few_matches() {
+    // The frame the walk would choose is blurred, and its sharp neighbours
+    // show only one point in 20, so a step to one of them has few matches.
+    let mut synth = Synth::steady(29, 300, ONE_PERCENT);
+    let soft = unsampled_choice(&run(&[&synth]), 100);
+    synth.shots[soft].readings[0].0 = 0.3;
+    for t in soft - 4..=soft + 4 {
+        if t != soft {
+            synth.shots[t].content = Content::Subset { every: 20 };
+        }
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    assert!(!walk.chosen.contains(&soft));
+    assert!(walk.breaks.is_empty());
+    assert_few_match_steps_only_where_allowed(&run);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn a_blurred_run_does_not_take_a_sharp_frame_with_few_matches() {
+    // The frames around the one the walk would choose are blurred, so no
+    // neighbour can be swapped in, and the walk reads the blurred run. The
+    // only sharp frames in it past the next frame show one point in 20, so a
+    // step to one of them has few matches.
+    let mut synth = Synth::steady(30, 300, ONE_PERCENT);
+    let first = run(&[&synth]);
+    let target = unsampled_choice(&first, 100);
+    let walk = first.walk(0);
+    let from = walk.chosen[walk.chosen.iter().position(|&c| c == target).unwrap() - 1];
+    for t in from + 2..=from + 5 {
+        synth.shots[t].content = Content::Subset { every: 20 };
+    }
+    for t in from + 6..=target + 4 {
+        synth.shots[t].readings[0].0 = 0.3;
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    assert!(walk.chosen.contains(&from));
+    assert!(walk.breaks.is_empty());
+    assert_few_match_steps_only_where_allowed(&run);
+    assert_read_is_asked(&run);
+}
+
 /// The band a step was held to: halved with the target in a flagged region.
 fn band(step: &WalkStep) -> (f64, f64) {
     let o = options();

@@ -271,6 +271,15 @@ impl Walker<'_, '_> {
         self.blur(frame).0
     }
 
+    /// Whether the step from `f` to `n`, measured as `stats`, can be taken
+    /// by choice: it matches well and, beyond the next frame, has no fewer
+    /// than [`WEAK_MATCH_FACTOR`] times `min_matches` matches. A step with
+    /// few matches is where a solve is most likely to split, so only halving
+    /// a failed step takes one beyond the next frame.
+    fn holds(&self, f: usize, n: usize, stats: &FramePairStats) -> bool {
+        matches_well(stats, self.options) && (n == f + 1 || !few_matches(stats, self.options))
+    }
+
     /// Read `frame` and match it with the last chosen frame.
     fn measure(&mut self, frame: usize) -> Result<FramePairStats, PickImagesError> {
         self.read(&[frame])?;
@@ -342,11 +351,7 @@ impl Walker<'_, '_> {
         loop {
             let stats = self.measure(c)?;
             let m = stats.step_percent;
-            // A step with few matches is where a solve is most likely to
-            // split, so beyond the next frame it fails, and the gap is filled
-            // in at shorter steps.
-            let well = matches_well(&stats, self.options)
-                && (c == f + 1 || !few_matches(&stats, self.options));
+            let well = self.holds(f, c, &stats);
             if m > b.high {
                 above = Some(above.map_or(c, |a| a.min(c)));
                 if c == f + 1 {
@@ -431,10 +436,7 @@ impl Walker<'_, '_> {
                     continue;
                 }
                 let s = self.measure(n)?;
-                if matches_well(&s, self.options)
-                    && s.step_percent >= floor
-                    && s.step_percent <= b.high
-                {
+                if self.holds(f, n, &s) && s.step_percent >= floor && s.step_percent <= b.high {
                     self.report.swaps.push(Swap {
                         candidate: c,
                         chosen: n,
@@ -454,7 +456,7 @@ impl Walker<'_, '_> {
         let run: Vec<usize> = (f + 1..=last).collect();
         self.read(&run)?;
         let fits = |s: &FramePairStats, n: usize, walker: &Self| {
-            matches_well(s, walker.options) && (s.step_percent <= b.high || n == f + 1)
+            walker.holds(f, n, s) && (s.step_percent <= b.high || n == f + 1)
         };
         for &n in run.iter().rev() {
             if self.blurred(n) {
@@ -482,8 +484,7 @@ impl Walker<'_, '_> {
         let window: Vec<usize> = (first..=last).collect();
         for n in sharpest_first(&window, self) {
             let s = self.measure(n)?;
-            if matches_well(&s, self.options) && s.step_percent >= b.low && s.step_percent <= b.high
-            {
+            if self.holds(f, n, &s) && s.step_percent >= b.low && s.step_percent <= b.high {
                 return self.accept(Choice {
                     frame: n,
                     stats: s,
