@@ -38,12 +38,7 @@ median displacement of the SIFT features that match between them. The command
 reads only the frames it needs: a sample spread over the whole capture, the
 frames it chooses, and the frames it tries on the way.
 
-It replaces what the out-of-tree `reconstruct-dataset` skill's `probe.py`
-script does today: optical flow at 20 positions, a fixed stride, blurred
-frames swapped for a sharper neighbour, three test subsets and a verdict. That
-script prints a range expression for the user to copy; this command writes the
-list itself, and it chooses each step by measuring it rather than by a stride
-fixed in advance.
+It chooses each step by measuring it rather than by a stride fixed in advance.
 
 ## Command
 
@@ -271,9 +266,9 @@ the command judges three things, each from the median over the samples:
 - **A camera that barely moves.** The total motion over the sequence, the
   median rate times the frame count, is below `100%` of the long side.
 
-The **rotation error** is the probe's: for focal lengths `f` from `0.3` to `3`
-times the long side, on 80 steps spaced evenly in `log f`, with `K` the camera
-matrix of focal `f` and the principal point at the image centre, take
+The **rotation error** is defined this way: for focal lengths `f` from `0.3`
+to `3` times the long side, on 80 steps spaced evenly in `log f`, with `K` the
+camera matrix of focal `f` and the principal point at the image centre, take
 `M = K⁻¹ H K` scaled to determinant 1, and the error is the smallest
 Frobenius norm `‖M Mᵀ − I‖` over those focal lengths. It is 0 for a camera that
 turned without moving.
@@ -500,8 +495,7 @@ and writes the lists.
   [`homography_estimation.rs`](../../crates/sfmtool-core/src/geometry/homography_estimation.rs),
   each with a fixed seed, so a run is repeatable. Their inlier bounds scale
   with the image: 1 pixel per 960 pixels of the long side for the fundamental
-  matrix and 2 per 960 for the homography, the bounds `probe.py` used at
-  960 pixels.
+  matrix and 2 per 960 for the homography, as starting values.
 - **Statistics.** Medians from
   [`sfmtool_core::numeric`](../../crates/sfmtool-core/src/numeric.rs), and the
   MAD as the median of the absolute deviations from the median, since the
@@ -821,14 +815,14 @@ file and gives the same fix: remove it and run again.
 
 ## Why SIFT matching rather than optical flow
 
-`probe.py` measured motion with optical flow. Optical flow and SIFT matching
-were compared on two 4K portrait videos, one with a blurred run, CPU only, on
-frame pairs 1, 3, 10 and 30 frames apart starting at four or five places in
-each video, with each frame at 960 pixels, 1920 pixels and full size on its
-long side. The SIFT matches were mutual best matches through a KD-forest with
-the ratio test at `0.8`, with features capped at 8192, and the step was the
-median displacement of the matches; the flow's was the median length of the
-flow field.
+Optical flow and SIFT matching are two ways to measure the motion between
+frames. They were compared on two 4K portrait videos, one with a blurred run,
+CPU only, on frame pairs 1, 3, 10 and 30 frames apart starting at four or five
+places in each video, with each frame at 960 pixels, 1920 pixels and full size
+on its long side. The SIFT matches were mutual best matches through a KD-forest
+with the ratio test at `0.8`, with features capped at 8192, and the step was
+the median displacement of the matches; the flow's was the median length of
+the flow field.
 
 - **At 1 and 3 frames the two agree.** The SIFT step is within 6% of the
   flow's on one video and within about 30% on the other, where the flow reads
@@ -888,13 +882,13 @@ The target step of 10% and the blur ratio of 0.6 are decided. Every other
 value in this draft is a starting value: the band of ±30%, the inlier share of
 0.5, the minimum of 30 matches, the baseline of 200 samples, the solvability
 thresholds (an F-inlier share of 0.3, an H/F of 0.97, a rotation error of 0.01
-and a total motion of 100%, all from `probe.py`), the z of 2, the ratio test
-of 0.8, the inlier bounds of 1 and 2 pixels per 960, the test lists' 30
-frames at half the target step, and the four signs of a video (a 3-frame to
-1-frame ratio between 2 and 4, a 1-frame step below 5%, neighbouring samples'
-steps within a factor of 2, a 1-frame F-inlier share above 0.8, with three of
-the four needed). They are to be set by running the command on
-the maintainer's collection of captures, covering at least:
+and a total motion of 100%), the z of 2, the ratio test of 0.8, the inlier
+bounds of 1 and 2 pixels per 960, the test lists' 30 frames at half the target
+step, and the four signs of a video (a 3-frame to 1-frame ratio between 2 and
+4, a 1-frame step below 5%, neighbouring samples' steps within a factor of 2, a
+1-frame F-inlier share above 0.8, with three of the four needed). They are to
+be set by running the command on the maintainer's collection of captures,
+covering at least:
 
 - walking videos, where the walk should choose steps near the target, read few
   frames, and give a list that solves in one piece;
@@ -919,8 +913,7 @@ records the captures that moved it, by kind.
   ([Collecting the frames](#collecting-the-frames)), and a numbered set is
   judged not to be a video by the baseline ([Is it a video?](#is-it-a-video)),
   which stops the command with a message that it picks from video sequences
-  only. `probe.py`'s `--photos` mode, which matched photographs neighbouring by
-  file number, is not carried over.
+  only.
 - A rotation-only solve. The command stops a panorama capture rather than
   choosing frames for a solver that would accept it.
 - Recording why a frame was chosen in the list or in a `.sfmr`.
