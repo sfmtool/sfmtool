@@ -309,3 +309,36 @@ fn a_version_15_file_reads_its_normals_as_stored_and_saves_them_from_the_frame()
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn normals_of_the_wrong_shape_are_written_with_the_frames_normals() {
+    // A (0, 3) normals array makes the writer fall back to the recomputed
+    // mean-viewing normals wholesale; the finite patched points still take
+    // their frames' normals, so the file is one its reader accepts.
+    let dir = temp_dir("sfmr_test_patch_normals_wrong_shape");
+    let path = dir.join("fallback.sfmr");
+    let mut data = data_with_every_kind_of_point();
+    let (u, v) = (
+        data.patch_u_halfvec_xyz.clone().unwrap(),
+        data.patch_v_halfvec_xyz.clone().unwrap(),
+    );
+    data.normals_xyz = Some(Array2::zeros((0, 3)));
+    write_sfmr(&path, &mut data).unwrap();
+
+    let stored = stored_normals(&path);
+    assert_eq!(&stored[0..6], &[0.0; 6]);
+    let loaded = read_sfmr(&path).expect("the reader accepts what the writer wrote");
+    let normals = loaded.normals_xyz.unwrap();
+    for i in 0..2 {
+        let expected = cross_normal_f64(row(&u, i), row(&v, i));
+        for k in 0..3 {
+            assert!(
+                (f64::from(normals[[i, k]]) - expected[k]).abs() < 1e-6,
+                "point {i}"
+            );
+        }
+    }
+    let (valid, errors) = verify_sfmr(&path).unwrap();
+    assert!(valid, "{errors:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

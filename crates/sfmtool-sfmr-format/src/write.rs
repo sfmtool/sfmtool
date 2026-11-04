@@ -435,10 +435,15 @@ fn write_sfmr_into<S: EntrySink>(
             // reconstruction — whose normals start all-zero — still gets a full
             // set computed on its first write. A reconstruction that carries no
             // normals at all (`None`) opts out entirely: none are written.
-            let normals = data
-                .normals_xyz
-                .as_ref()
-                .map(|n| merge_preserving_normals(n, &r.mean_viewing_normals_xyz));
+            // The merge falls back to the recomputed set wholesale where the
+            // stored shape is wrong, so the derived normals are set again on
+            // what it returns: those are the normals written.
+            let normals = data.normals_xyz.as_ref().map(|n| {
+                with_patch_normals(
+                    data,
+                    merge_preserving_normals(n, &r.mean_viewing_normals_xyz),
+                )
+            });
             // A caller that asked to keep its statistics keeps them: the pass
             // ran only to fill the normals.
             if options.skip_recompute_depth_stats {
@@ -887,15 +892,18 @@ fn write_images<S: EntrySink>(
 }
 
 /// The `w` column and the row-major `u` and `v` of a value with the patch
-/// frame and normals, the arrays a version 16 writer derives the normals of
-/// finite patched points from, or `None` where it has neither or a shape is
-/// wrong (which the dimension checks report).
-fn patch_frame_columns(data: &SfmrData) -> Option<(Vec<f64>, Vec<f32>, Vec<f32>)> {
+/// frame, the arrays a version 16 writer derives the normals of finite
+/// patched points from, or `None` where it has no frame or a shape disagrees
+/// with `normals`, the normals being written (which the dimension checks
+/// report).
+fn patch_frame_columns(
+    data: &SfmrData,
+    normals: &ndarray::Array2<f32>,
+) -> Option<(Vec<f64>, Vec<f32>, Vec<f32>)> {
     const _: () = assert!(crate::patch_normals::derives_patch_normals(
         SFMR_FORMAT_VERSION
     ));
-    let (normals, u, v) = (
-        data.normals_xyz.as_ref()?,
+    let (u, v) = (
         data.patch_u_halfvec_xyz.as_ref()?,
         data.patch_v_halfvec_xyz.as_ref()?,
     );
@@ -913,26 +921,41 @@ fn patch_frame_columns(data: &SfmrData) -> Option<(Vec<f64>, Vec<f32>, Vec<f32>)
     })
 }
 
-/// Set the normal of every finite point with a patch in `data` to
-/// `normalize(u × v)`, the normal a version 16 file derives for it. A point
-/// whose frame is degenerate keeps its normal, which the file stores.
-fn derive_patch_normals_in_place(data: &mut SfmrData) {
-    let Some((w, u, v)) = patch_frame_columns(data) else {
-        return;
+/// `normals` with the normal of every finite point with a patch in `data` set
+/// to `normalize(u × v)`, the normal a version 16 file derives for it. A
+/// point whose frame is degenerate keeps its normal, which the file stores.
+/// Borrowed when nothing changes.
+fn with_patch_normals<'a>(
+    data: &SfmrData,
+    normals: Cow<'a, ndarray::Array2<f32>>,
+) -> Cow<'a, ndarray::Array2<f32>> {
+    let Some((w, u, v)) = patch_frame_columns(data, &normals) else {
+        return normals;
     };
-    let normals = data
-        .normals_xyz
-        .as_mut()
-        .expect("patch_frame_columns saw it");
-    let mut values: Vec<f32> = normals.iter().copied().collect();
+    let given: Vec<f32> = normals.iter().copied().collect();
+    let mut values = given.clone();
     PatchFrameRows {
         w: &w,
         u: &u,
         v: &v,
     }
     .fill(&mut values);
-    *normals =
-        ndarray::Array2::from_shape_vec(normals.raw_dim(), values).expect("the shape was checked");
+    if values == given {
+        return normals;
+    }
+    Cow::Owned(
+        ndarray::Array2::from_shape_vec(normals.raw_dim(), values).expect("the shape was checked"),
+    )
+}
+
+/// [`with_patch_normals`] applied to `data`'s own normals.
+fn derive_patch_normals_in_place(data: &mut SfmrData) {
+    let Some(normals) = data.normals_xyz.as_ref() else {
+        return;
+    };
+    if let Cow::Owned(derived) = with_patch_normals(data, Cow::Borrowed(normals)) {
+        data.normals_xyz = Some(derived);
+    }
 }
 
 fn write_points3d<S: EntrySink>(
@@ -1022,7 +1045,7 @@ fn write_points3d<S: EntrySink>(
     if let Some(normals_xyz) = &normals_xyz {
         let normals = normals_xyz.as_standard_layout();
         let normals = normals.as_slice().unwrap();
-        let stored: Cow<'_, [f32]> = match patch_frame_columns(data) {
+        let stored: Cow<'_, [f32]> = match patch_frame_columns(data, normals_xyz) {
             Some((w, u, v)) => Cow::Owned(
                 PatchFrameRows {
                     w: &w,
