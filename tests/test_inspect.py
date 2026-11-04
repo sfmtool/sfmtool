@@ -107,6 +107,54 @@ def test_inspect_sfmr_verbose_with_points_at_infinity(
     assert "Mean: inf" not in out
 
 
+def test_inspect_sfmr_image_readings(seoul_bull_workspace):
+    """A version 15 .sfmr shows the sharpness spread and conversion by
+    default, and verbose adds a sharpness histogram and the least sharp
+    images, least sharp first."""
+    recon = SfmrReconstruction.load(str(seoul_bull_workspace))
+    sharpness = np.asarray(recon.sharpness)
+    names = recon.image_names
+    assert sharpness.shape == (17,)
+
+    result = CliRunner().invoke(main, ["inspect", str(seoul_bull_workspace)])
+    assert result.exit_code == 0, result.output
+    row = _row_value(result.output, "Image readings")
+    assert row.startswith(
+        f"sharpness min {sharpness.min():.4g}, median {np.median(sharpness):.4g}, "
+        f"max {sharpness.max():.4g}"
+    )
+    assert row.endswith("(0.2126*R + 0.7152*G + 0.0722*B)")
+
+    verbose = CliRunner().invoke(main, ["inspect", "-v", str(seoul_bull_workspace)])
+    assert verbose.exit_code == 0, verbose.output
+    lines = verbose.output.splitlines()
+    start = lines.index("Image readings:")
+    block = lines[start : start + 12]
+    assert block[1] == "  Conversion: 0.2126*R + 0.7152*G + 0.0722*B"
+    assert block[3] == "    Sharpness distribution:"
+    # The histogram spans the values, so its first and last buckets hold one.
+    histogram = block[4].strip()
+    assert len(histogram) == 32
+    assert histogram[0] != " " and histogram[-1] != " "
+    assert block[6] == "  Least sharp 5 images:"
+    order = np.argsort(sharpness, kind="stable")[:5]
+    assert block[7:12] == [f"    {sharpness[i]:.4g}  {names[i]}" for i in order]
+
+
+def test_inspect_sfmr_below_version_15_has_no_readings(seoul_bull_ground_truth_sfmr):
+    """A file below version 15 holds no readings, and both summaries say so."""
+    result = CliRunner().invoke(main, ["inspect", str(seoul_bull_ground_truth_sfmr)])
+    assert result.exit_code == 0, result.output
+    assert _row_value(result.output, "Image readings") == "none"
+
+    verbose = CliRunner().invoke(
+        main, ["inspect", "-v", str(seoul_bull_ground_truth_sfmr)]
+    )
+    assert verbose.exit_code == 0, verbose.output
+    assert "Image readings: none" in verbose.output.splitlines()
+    assert "Sharpness distribution" not in verbose.output
+
+
 # ── .sift feature files ──────────────────────────────────────────────────────
 
 
@@ -138,6 +186,98 @@ def test_inspect_sift_verbose(seoul_bull_workspace):
     out = result.output
     assert "Content hash" in out
     assert "Top 5 features" in out
+
+
+def _write_sift(sample_sift_data, path: Path, version: int) -> Path:
+    """A `.sift` at ``path`` from the sample data: version 2 with readings
+    chosen so the derived values are round, or version 1 with none."""
+    from sfmtool.fileio import write_sift
+
+    feature_tool_metadata, metadata, positions, affine, descriptors, thumbnail = (
+        sample_sift_data
+    )
+    feature_tool_metadata = dict(feature_tool_metadata)
+    metadata = dict(metadata)
+    if version == 2:
+        metadata["sharpness"] = 0.0125
+        metadata["gradient_structure_tensor_xx_yy_xy"] = [0.004, 0.001, 0.001]
+    else:
+        metadata["version"] = 1
+        del metadata["sharpness"]
+        del metadata["gradient_structure_tensor_xx_yy_xy"]
+        feature_tool_metadata["feature_options"] = {"gray_formula": "G"}
+    write_sift(
+        path,
+        {
+            "feature_tool_metadata": feature_tool_metadata,
+            "metadata": metadata,
+            "positions_xy": positions,
+            "affine_shapes": affine,
+            "descriptors": descriptors,
+            "thumbnail_y_x_rgb": thumbnail,
+        },
+    )
+    return path
+
+
+def _row_value(out: str, label: str) -> str:
+    """The value of the ``label:`` row in ``out``."""
+    for line in out.splitlines():
+        if line.strip().startswith(label + ":"):
+            return line.split(":", 1)[1].strip()
+    raise AssertionError(f"no {label!r} row in:\n{out}")
+
+
+def test_inspect_sift_shows_version_and_readings(sample_sift_data, tmp_path: Path):
+    """A version 2 .sift shows its version, its two readings and the axis
+    ratio and coherence derived from the tensor; verbose adds the conversion."""
+    path = _write_sift(sample_sift_data, tmp_path / "v2.sift", version=2)
+    result = CliRunner().invoke(main, ["inspect", str(path)])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert _row_value(out, "Format") == ".sift version 2"
+    assert _row_value(out, "Sharpness") == "0.0125"
+    assert (
+        _row_value(out, "Gradient structure tensor")
+        == "Exx 0.004, Eyy 0.001, Exy 0.001"
+    )
+    # |log(0.004 / 0.001)| = log 4.
+    assert _row_value(out, "Axis ratio") == "1.386"
+    # sqrt(0.003**2 + 4 * 0.001**2) / 0.005.
+    assert _row_value(out, "Coherence") == "0.721"
+    assert "Image readings" not in out
+    assert "Image to gray" not in out
+
+    verbose = CliRunner().invoke(main, ["inspect", "-v", str(path)])
+    assert verbose.exit_code == 0, verbose.output
+    assert _row_value(verbose.output, "Image to gray") == "G, rounded to 8 bits"
+
+
+def test_inspect_sift_version_1_has_no_readings(sample_sift_data, tmp_path: Path):
+    """A version 1 .sift, which holds no readings, inspects cleanly and says so."""
+    path = _write_sift(sample_sift_data, tmp_path / "v1.sift", version=1)
+    for args in (["inspect", str(path)], ["inspect", "-v", str(path)]):
+        result = CliRunner().invoke(main, args)
+        assert result.exit_code == 0, result.output
+        out = result.output
+        assert _row_value(out, "Format") == ".sift version 1"
+        assert _row_value(out, "Image readings") == "none"
+        assert _row_value(out, "Integrity") == "OK"
+        assert "Sharpness" not in out
+        assert "Image to gray" not in out
+
+
+def test_inspect_workspace_sift_reads_its_own_readings(seoul_bull_workspace):
+    """An extracted .sift shows the readings its metadata stores."""
+    from sfmtool.fileio import SiftFile
+
+    sift_path = _find_sift_file(seoul_bull_workspace.parent)
+    with SiftFile(sift_path) as reader:
+        sharpness = reader.metadata["sharpness"]
+    result = CliRunner().invoke(main, ["inspect", str(sift_path)])
+    assert result.exit_code == 0, result.output
+    assert _row_value(result.output, "Format") == ".sift version 2"
+    assert _row_value(result.output, "Sharpness") == f"{sharpness:.4g}"
 
 
 # ── .matches files ───────────────────────────────────────────────────────────
@@ -235,6 +375,59 @@ def test_inspect_image_verbose(isolated_seoul_bull_image: Path):
     result = CliRunner().invoke(main, ["inspect", "-v", str(isolated_seoul_bull_image)])
     assert result.exit_code == 0, result.output
     assert "Inferred camera" in result.output
+
+
+def _expected_sharpness(image_path: Path, formula: str, bits: int | None) -> str:
+    from sfmtool.fileio import read_image_rgb
+    from sfmtool.sift import ImageToGray, image_readings_from_rgb
+
+    readings = image_readings_from_rgb(
+        read_image_rgb(image_path), ImageToGray(formula, bits)
+    )
+    return f"{readings.sharpness:.4g}"
+
+
+def test_inspect_image_verbose_readings_outside_a_workspace(
+    isolated_seoul_bull_image: Path,
+):
+    """Outside a workspace an image's readings are taken through the default
+    conversion, and the heading says so."""
+    result = CliRunner().invoke(main, ["inspect", "-v", str(isolated_seoul_bull_image)])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Image readings (default conversion, no workspace):" in out
+    assert _row_value(out, "Conversion") == "0.2126*R + 0.7152*G + 0.0722*B"
+    assert _row_value(out, "Sharpness") == _expected_sharpness(
+        isolated_seoul_bull_image, "0.2126*R + 0.7152*G + 0.0722*B", None
+    )
+    for label in ("Gradient structure tensor", "Axis ratio", "Coherence"):
+        _row_value(out, label)
+
+    default = CliRunner().invoke(main, ["inspect", str(isolated_seoul_bull_image)])
+    assert "Image readings" not in default.output
+
+
+def test_inspect_image_verbose_readings_use_the_workspace_conversion(
+    isolated_seoul_bull_image: Path,
+):
+    """Inside a workspace an image's readings are taken through the
+    workspace's recorded conversion."""
+    workspace = isolated_seoul_bull_image.parent
+    init = CliRunner().invoke(
+        main,
+        ["ws", "init", "--image-to-gray", "G", "--quantize-bits", "8", str(workspace)],
+    )
+    assert init.exit_code == 0, init.output
+    result = CliRunner().invoke(main, ["inspect", "-v", str(isolated_seoul_bull_image)])
+    assert result.exit_code == 0, result.output
+    out = result.output
+    assert "Image readings (the workspace's conversion):" in out
+    assert _row_value(out, "Conversion") == "G, rounded to 8 bits"
+    expected = _expected_sharpness(isolated_seoul_bull_image, "G", 8)
+    assert _row_value(out, "Sharpness") == expected
+    assert expected != _expected_sharpness(
+        isolated_seoul_bull_image, "0.2126*R + 0.7152*G + 0.0722*B", None
+    )
 
 
 # ── dispatch errors ──────────────────────────────────────────────────────────
