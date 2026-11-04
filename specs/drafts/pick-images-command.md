@@ -108,9 +108,9 @@ every folder and sequence it was given, one entry per sequence
 ([Writing the list](#writing-the-list)).
 
 **Exit status.** The command exits 0 when it finishes, whatever it found, as
-`sfm motion` does. When the verdict says the capture cannot be solved it writes
-no list, and with `--write-list` it then exits 1, since the list it was asked
-for does not exist.
+`sfm motion` does. When the verdict says a sequence is not a video or the
+capture cannot be solved it writes no list, and with `--write-list` it then
+exits 1, since the list it was asked for does not exist.
 
 ### Examples
 
@@ -135,8 +135,9 @@ sfm pick-images walk1/ walk2/ walk3/ --write-list all_walks --force
 
 The command works in six stages: collect the frames, read a baseline sample,
 judge whether each sequence is a video, judge whether the capture can be
-solved, walk the capture choosing frames, and report. Each stage reads frames through the same source, which extracts a
-frame's `.sift` files when they are missing and reuses them otherwise.
+solved, walk the capture choosing frames, and report. Every stage that reads
+frames reads them through the same source, which extracts a frame's `.sift`
+files when they are missing and reuses them otherwise.
 
 ### Words
 
@@ -191,8 +192,8 @@ frames per sample, and reuses a frame another sample already read. It reads
 them in two batches: the sampled frames with the frames 1 and 3 after them
 first, which is enough to tell a video from a set of photographs
 ([Is it a video?](#is-it-a-video)), and the frames 10 and 30 after them only
-for the sequences judged to be videos. Each batch is requested from the source
-at once, so extraction runs as one batch.
+when every sequence is judged to be a video. Each batch is requested from
+the source at once, so extraction runs as one batch.
 
 From the sampled frames' own `.sift` files, per sequence:
 
@@ -232,8 +233,8 @@ median over its sampled frames:
 - **The step changes little.** Between neighbouring sampled frames, the 1-frame
   steps differ by less than a factor of `2`: the median of
   `|log(step_i / step_{i+1})|` is below `log 2`.
-- **Neighbours match well.** The F-inlier share of the 1-frame matches is above
-  `0.8`.
+- **Neighbours match closely.** The F-inlier share of the 1-frame matches is
+  above `0.8`.
 
 A sample whose 1-frame or 3-frame pair has fewer than the minimum matches
 counts against every sign it enters, since photographs that barely overlap
@@ -574,6 +575,11 @@ pub struct FrameId {
     pub frame: usize, // position in the sequence, from 0
 }
 
+/// Why a [`FrameSource`] could not make the files exist, in its own words.
+pub struct FrameSourceError {
+    pub message: String,
+}
+
 /// Makes sure the `.sift` files of the given frames exist and are current.
 pub trait FrameSource {
     fn ensure_sift_files(
@@ -782,7 +788,8 @@ fix that works in the case at hand. There are two cases, since
   to write, and a version 1 workspace whose files are all present would
   otherwise reach the reader.
 - **Version 1 files in a version 2 workspace's folder.** A folder named under
-  version 2 holds version 1 files only when they were put there by hand.
+  version 2 holds version 1 files only when they were put there by hand, or
+  when the workspace file was edited by hand to name a version 1 folder.
   `sfm ws upgrade` cannot help: on a version 2 workspace file it prints
   "nothing to do: already version 2" and changes nothing. `pick_images` lists
   every folder the capture's `.sift` files go in, reads the version of each
@@ -803,7 +810,9 @@ The message is shared too: today `_check_versions_never_mix` tells a version 2
 workspace whose folder holds version 1 files to run `sfm ws upgrade`, since it
 chooses its advice only by whether the settings are a `.sfmr`'s record, and
 with this change it gives the fix above for a version 2 workspace and keeps
-`sfm ws upgrade` for a version 1 one.
+`sfm ws upgrade` for a version 1 one. `BuildSiftFilesError::Version1Files`
+also says to run `sfm ws upgrade` today, though `build_sift_files` reaches it
+only with version 2 settings, and gives the same fix with this change.
 Once it has passed, every `.sift` file the run writes is version 2, so the
 per-call check in `image_files_to_sift_files` cannot fail on a folder the
 command checked. A `.sift` file the walk reads that is still version 1, one put
@@ -880,7 +889,7 @@ value in this draft is a starting value: the band of ±30%, the inlier share of
 0.5, the minimum of 30 matches, the baseline of 200 samples, the solvability
 thresholds (an F-inlier share of 0.3, an H/F of 0.97, a rotation error of 0.01
 and a total motion of 100%, all from `probe.py`), the z of 2, the ratio test
-of 0.8, the inlier bounds of 1 and 2 pixels per 960, and the test lists' 30
+of 0.8, the inlier bounds of 1 and 2 pixels per 960, the test lists' 30
 frames at half the target step, and the four signs of a video (a 3-frame to
 1-frame ratio between 2 and 4, a 1-frame step below 5%, neighbouring samples'
 steps within a factor of 2, a 1-frame F-inlier share above 0.8, with three of
