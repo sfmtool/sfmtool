@@ -22,7 +22,8 @@ pub use feature_options::{
     UNDISTORT_TOOL, WORKSPACE_VERSION,
 };
 pub use named_image_lists::{
-    is_named_image_list_name, DuplicateMatch, NamedImageList, NamedImageListEntry,
-    NamedImageListMember, NamedImageLists, NamedImageListsError, NAMED_IMAGE_LISTS_FILE_NAME,
-    NAMED_IMAGE_LISTS_VERSION, WORKSPACE_FILE_NAME,
+    is_named_image_list_name, split_named_image_list_value, DuplicateMatch, NamedImageList,
+    NamedImageListEntry, NamedImageListMember, NamedImageListSlice, NamedImageListSliceError,
+    NamedImageLists, NamedImageListsError, NAMED_IMAGE_LISTS_FILE_NAME, NAMED_IMAGE_LISTS_VERSION,
+    WORKSPACE_FILE_NAME,
 };

@@ -87,7 +87,10 @@ a version 1 workspace whose `.sift` files are all present and current solves as 
 With `-r NAME` or `--named-image-list NAME` and no `PATHS`, the images are the
 members of that named image list of the workspace found from the current
 directory, in the list's order, keeping only the members that are image files;
-a range given with the name narrows the list. Giving image paths or a
+a range given with the name narrows the list, and a slice after the name takes
+part of it by position, in the slice's order (`-r 'walk1_sharp[:30]'` is its
+first 30 images).
+Giving image paths or a
 `.matches` file as well is an error, and the list's workspace is the solve's
 workspace. The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
 

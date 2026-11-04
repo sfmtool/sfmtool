@@ -8,5 +8,5 @@ The workspace layout and the config files that live in it. Implemented across
 |----------|-------------|
 | [workspace.md](workspace.md) | Workspace layout, the files `sfm ws init` creates, the two versions of `.sfm-workspace.json` and `sfm ws upgrade` between them, the rule that `.sift` versions never mix, and how commands locate them. |
 | [camera-config.md](camera-config.md) | Per-directory `camera_config.json` intrinsics, and closest-ancestor-wins resolution capped at the workspace root. |
-| [named-image-lists.md](named-image-lists.md) | `.sfm-named-image-lists.json`: named sets of the workspace's images by image pattern and frame range, their validation, order and resolution to files or to a reconstruction's image names. |
+| [named-image-lists.md](named-image-lists.md) | `.sfm-named-image-lists.json`: named sets of the workspace's images by image pattern and frame range, their validation, order and resolution to files or to a reconstruction's image names, and the slice that takes part of a list by position (`walk1[:30]`). |
 | [rig-config.md](rig-config.md) | `rig_config.json`: multi-sensor rig ingestion, frame grouping, and its relationship to `.camrig`. |

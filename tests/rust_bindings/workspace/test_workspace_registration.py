@@ -8,6 +8,7 @@ import sfmtool._sfmtool.workspace as workspace
 _EXPECTED_FUNCTIONS = (
     "is_named_image_list_name",
     "recorded_image_to_gray",
+    "split_named_image_list_value",
     "tool_image_to_gray",
     "upgrade_feature_options",
 )
@@ -15,6 +16,7 @@ _EXPECTED_FUNCTIONS = (
 _EXPECTED_CLASSES = (
     "NamedImageLists",
     "NamedImageListMember",
+    "NamedImageListSlice",
 )
 
 _EXPECTED_CONSTANTS = ("NAMED_IMAGE_LISTS_FILE_NAME", "WORKSPACE_VERSION")

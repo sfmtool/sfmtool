@@ -364,6 +364,135 @@ def test_sift_extracts_the_images_of_a_list(list_workspace):
     ]
 
 
+# ── Slices ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "value, frames",
+    [
+        ("bull_all[:2]", [1, 2]),
+        ("bull_all[-2:]", [5, 6]),
+        ("bull_all[1::2]", [2, 4, 6]),
+        ("bull_all[::-2]", [6, 4, 2]),
+        ("bull_all[:30]", [1, 2, 3, 4, 5, 6]),
+        ("bull_all[:]", [1, 2, 3, 4, 5, 6]),
+        # An entry without a frame field takes a slice, which narrowing refuses.
+        ("hero[::-1]", [2, 4]),
+    ],
+)
+def test_a_slice_takes_part_of_the_list_by_position(
+    list_workspace, recorded_sift, value, frames
+):
+    result = _invoke(["sift", "--extract", "-r", value])
+    assert result.exit_code == 0, result.output
+    # In the slice's order.
+    assert _names(recorded_sift[0]) == [
+        f"seoul_bull_sculpture_{i:02d}.jpg" for i in frames
+    ]
+
+
+def test_a_slice_indexes_the_image_files_after_the_extension_test(
+    list_workspace, recorded_sift
+):
+    """`images/**` also matches notes.txt, which sorts first, and a .json; the
+    slice counts only the images."""
+    result = _invoke(["sift", "--extract", "-r", "everything[:1]"])
+    assert result.exit_code == 0, result.output
+    assert _names(recorded_sift[0]) == ["seoul_bull_sculpture_01.jpg"]
+    result = _invoke(["sift", "--extract", "-r", "everything[2:4]"])
+    assert result.exit_code == 0, result.output
+    assert _names(recorded_sift[1]) == [
+        "seoul_bull_sculpture_03.jpg",
+        "seoul_bull_sculpture_04.jpg",
+    ]
+
+
+def test_a_range_narrows_the_list_before_the_slice(list_workspace, recorded_sift):
+    result = _invoke(["sift", "--extract", "-r", "bull_all[1:]", "-r", "2-4"])
+    assert result.exit_code == 0, result.output
+    assert _names(recorded_sift[0]) == [
+        "seoul_bull_sculpture_03.jpg",
+        "seoul_bull_sculpture_04.jpg",
+    ]
+    assert (
+        "Given named image list 'bull_all' narrowed by the range '2-4' and sliced "
+        "by [1:], expanded to 2 filename(s)"
+    ) in result.output
+
+
+def test_the_long_form_takes_a_slice(list_workspace, recorded_solve):
+    result = _invoke(["solve", "-i", "--named-image-list", "bull_all[-2:]"])
+    assert result.exit_code == 0, result.output
+    paths, workspace_dir, _ = recorded_solve[0]
+    assert _names(paths) == [
+        "seoul_bull_sculpture_05.jpg",
+        "seoul_bull_sculpture_06.jpg",
+    ]
+    assert Path(workspace_dir).resolve() == list_workspace.resolve()
+
+
+def test_match_and_motion_take_a_slice(list_workspace, recorded_match, recorded_motion):
+    result = _invoke(["match", "--exhaustive", "-r", "bull_all[::3]"])
+    assert result.exit_code == 0, result.output
+    assert _names(recorded_match[0][0]) == [
+        "seoul_bull_sculpture_01.jpg",
+        "seoul_bull_sculpture_04.jpg",
+    ]
+    result = _invoke(["motion", "-r", "bull_all[2:5]"])
+    assert result.exit_code == 0, result.output
+    assert _names(recorded_motion[0]) == [
+        f"seoul_bull_sculpture_{i:02d}.jpg" for i in (3, 4, 5)
+    ]
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (["-r", "bull_all[5]"], "--range 'bull_all[5]' is not a valid slice"),
+        (["-r", "bull_all[5]"], "[5:6] is the one image at index 5"),
+        (["-r", "bull_all[a:]"], "the start 'a' is not an integer"),
+        (["-r", "bull_all[::0]"], "--range 'bull_all[::0]': slice step cannot be zero"),
+        (["-r", "bull_all[:3][::2]"], "'[::2]' follows the ']'"),
+        (["-r", "10-20[::2]"], "'10-20' is a range, not a name"),
+        (["-r", "[:3]"], "no name comes before the '['"),
+        (
+            ["--named-image-list", "bull_all[1:2:3:4]"],
+            "--named-image-list 'bull_all[1:2:3:4]' is not a valid slice",
+        ),
+    ],
+)
+def test_a_malformed_slice_is_a_usage_error_before_any_file_is_read(
+    tmp_path, monkeypatch, args, message
+):
+    # No workspace here: the error comes before the workspace is looked for.
+    monkeypatch.chdir(tmp_path)
+    result = _invoke(["sift", "--extract", *args])
+    assert result.exit_code == 2, result.output
+    assert message in " ".join(result.output.split())
+
+
+def test_a_slice_that_keeps_nothing_names_the_list(list_workspace):
+    result = _invoke(["sift", "--extract", "-r", "bull_all[40:]"])
+    assert result.exit_code == 1, result.output
+    output = " ".join(result.output.split())
+    assert NAMED_IMAGE_LISTS_FILE_NAME in output
+    assert (
+        "the slice [40:] of named image list 'bull_all' leaves none of its 6 images"
+    ) in output
+    result = _invoke(["sift", "--extract", "-r", "bull_all[3:1]", "-r", "1-5"])
+    assert result.exit_code == 1, result.output
+    assert (
+        "of named image list 'bull_all' narrowed by the range '1-5' leaves none of "
+        "its 5 images"
+    ) in " ".join(result.output.split())
+
+
+def test_two_names_with_slices_are_an_error_quoting_both(list_workspace):
+    result = _invoke(["sift", "--extract", "-r", "hero[:1]", "-r", "bull_all[::2]"])
+    assert result.exit_code != 0
+    assert "got 'hero[:1]', 'bull_all[::2]'" in result.output
+
+
 # ── Reconstruction commands ──────────────────────────────────────────────
 
 
@@ -404,6 +533,44 @@ def test_to_colmap_bin_uses_a_list_without_the_image_files(
         "seoul_bull_sculpture_05.jpg",
         "seoul_bull_sculpture_09.jpg",
     ]
+
+
+def test_to_colmap_bin_slices_the_members_the_reconstruction_holds(
+    seoul_bull_ground_truth_sfmr, tmp_path
+):
+    """`picked` is 09, 99, 05 in the list's order; the reconstruction holds 09
+    and 05, so `[1:]` is 05, not 99."""
+    sfmr = seoul_bull_ground_truth_sfmr
+    _gt_lists(sfmr)
+    out = tmp_path / "colmap"
+    result = _invoke(["to-colmap-bin", str(sfmr), str(out), "-r", "picked[1:]"])
+    assert result.exit_code == 0, result.output
+    assert (
+        "Applied named image list 'picked' sliced by [1:]: keeping 1 of 17 images"
+    ) in result.output
+    data = read_colmap_binary(out)
+    assert list(data["image_names"]) == ["seoul_bull_sculpture_05.jpg"]
+
+
+def test_to_colmap_bin_slice_keeps_the_reconstructions_order(
+    seoul_bull_ground_truth_sfmr, tmp_path
+):
+    sfmr = seoul_bull_ground_truth_sfmr
+    _gt_lists(sfmr)
+    out = tmp_path / "colmap"
+    result = _invoke(["to-colmap-bin", str(sfmr), str(out), "-r", "first_three[::-2]"])
+    assert result.exit_code == 0, result.output
+    data = read_colmap_binary(out)
+    assert list(data["image_names"]) == [
+        f"seoul_bull_sculpture_{i:02d}.jpg" for i in (1, 3)
+    ]
+    result = _invoke(
+        ["to-colmap-bin", str(sfmr), str(tmp_path / "c2"), "-r", "picked[2:]"]
+    )
+    assert result.exit_code == 1, result.output
+    assert (
+        "the slice [2:] of named image list 'picked' leaves none of its 2 images"
+    ) in " ".join(result.output.split())
 
 
 def test_to_colmap_bin_narrows_and_filters_points(
@@ -476,6 +643,21 @@ def test_analyze_metrics_uses_a_list(seoul_bull_ground_truth_sfmr):
     assert result.exit_code == 0, result.output
     assert "Selected by named image list 'picked' (2 of 17 images)" in result.output
     assert "seoul_bull_sculpture_09.jpg" in result.output
+    assert "seoul_bull_sculpture_01.jpg" not in result.output
+
+
+def test_analyze_metrics_uses_a_sliced_list(seoul_bull_ground_truth_sfmr):
+    sfmr = seoul_bull_ground_truth_sfmr
+    _gt_lists(sfmr)
+    result = _invoke(
+        ["analyze", "--metrics", str(sfmr), "-r", "first_three[-1:]", "-r", "1-2"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (
+        "Selected by named image list 'first_three' narrowed by the range '1-2' "
+        "and sliced by [-1:] (1 of 17 images)"
+    ) in result.output
+    assert "seoul_bull_sculpture_02.jpg" in result.output
     assert "seoul_bull_sculpture_01.jpg" not in result.output
 
 
@@ -564,3 +746,7 @@ def test_help_explains_both_forms(command):
     assert "A value with a letter in it is instead the name of a named image list" in (
         output
     )
+    assert "A slice after the name, quoted, takes part of the list by position" in (
+        output
+    )
+    assert "'NAME[:30]' is its first 30 images" in output

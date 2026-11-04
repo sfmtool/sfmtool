@@ -428,7 +428,7 @@ Wrote the named image list walk1 (512 images) to /captures/garden/.sfm-named-ima
 ```
 
 The suggested slices use the syntax of
-[named-image-list-slices-amendment.md](named-image-list-slices-amendment.md):
+[named-image-lists.md § Slices](../workspace/named-image-lists.md#slices):
 the first 30 images, the 30 from the middle, starting at `(n − 30) // 2` for a
 list of `n` images, and the last 30. A list of 60 images or fewer gets no
 suggestion line, since its first 30 and last 30 images would overlap or be the
@@ -935,7 +935,7 @@ records the captures that moved it, by kind.
   define the rigs.
 - **Rig list entries.** One entry per sensor with the same range keeps each
   pattern literal but orders the list by sensor and then frame, so a slice
-  of the list ([named-image-list-slices-amendment.md](named-image-list-slices-amendment.md))
+  of the list ([named-image-lists.md § Slices](../workspace/named-image-lists.md#slices))
   takes the first sensor's images before any other's; one entry with a `*`
   segment keeps the sensors of a frame together but can match folders that
   are not sensors.

@@ -50,15 +50,16 @@ algorithms and parameter semantics.
 | `--depth-likelihood-ratio-threshold` | float (finite, ≥ 0) | 25 | The threshold the test's verdict (`is_finite`) applies: a point is finite when its bearing cost and either its depth score or its midpoint bound reach it (only with `--depth-reliability`) |
 
 `-r/--range` also accepts the name of one of the named image lists of the
-reconstruction's workspace: a value with a letter in it is a name, and one
-name with one range narrows the list. The list is matched against the
-reconstruction's image names, so the image files need not exist; it keeps
-the reconstruction's images that are members, in the reconstruction's
-order, ignores members the reconstruction does not hold, and is an error
-naming the list when none are left. The report names the list and how many images it kept;
+reconstruction's workspace: a value with a letter in it is a name, one name
+with one range narrows the list, and a slice after the name (`'walk1[:30]'`)
+takes part of the list by position. The list is matched against the
+reconstruction's image names, so the image files need not exist; it keeps the
+reconstruction's images that are members, in the reconstruction's order,
+ignores members the reconstruction does not hold, and is an error naming the
+list when none are left. The report names the list and how many images it kept;
 its reconstruction-wide figures and flag thresholds cover every image, as with
-a range. The rules and errors are
-in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+a range. The rules and errors are in [the shared `-r/--range`
+option](../README.md#the-shared--r--range-option).
 
 ## Depth Reliability (`--depth-reliability`)
 

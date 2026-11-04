@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Bindings for the files in a workspace root that configure the workspace as
-//! a whole (`sfmtool_core::workspace`): its named image lists, and the rules of
-//! the feature options its `.sfm-workspace.json` records.
+//! a whole (`sfmtool_core::workspace`): its named image lists and their slices,
+//! and the rules of the feature options its `.sfm-workspace.json` records.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -12,8 +12,9 @@ use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
 use sfmtool_core::progress::{Event, Progress};
 use sfmtool_core::workspace::{
-    is_named_image_list_name, NamedImageListMember, NamedImageLists, NamedImageListsError,
-    NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_VERSION,
+    is_named_image_list_name, split_named_image_list_value, NamedImageListMember,
+    NamedImageListSlice, NamedImageLists, NamedImageListsError, NAMED_IMAGE_LISTS_FILE_NAME,
+    WORKSPACE_VERSION,
 };
 
 use crate::helpers::{py_to_serde, serde_to_py};
@@ -73,6 +74,86 @@ fn to_py_members(members: Vec<NamedImageListMember>) -> Vec<PyNamedImageListMemb
             frame: m.frame,
         })
         .collect()
+}
+
+/// A slice of a named image list's images by position, Python's
+/// `[start:stop:step]`.
+///
+/// Build one with `NamedImageListSlice(start=None, stop=None, step=None)`, or
+/// read its bracketed text with `NamedImageListSlice.parse("[:30]")`; a `-r`
+/// value with a name before the slice is read by
+/// `split_named_image_list_value`. `start`, `stop` and `step` are `None` where
+/// the part was left empty, and the step is never 0. `str()` writes it back as
+/// `[start:stop]` or `[start:stop:step]`.
+#[pyclass(
+    name = "NamedImageListSlice",
+    module = "sfmtool.workspace",
+    frozen,
+    eq,
+    hash
+)]
+#[derive(PartialEq, Hash)]
+pub struct PyNamedImageListSlice {
+    inner: NamedImageListSlice,
+}
+
+#[pymethods]
+impl PyNamedImageListSlice {
+    /// The slice `[start:stop:step]`. Raises `ValueError` for a step of 0.
+    #[new]
+    #[pyo3(signature = (start=None, stop=None, step=None))]
+    fn new(start: Option<i64>, stop: Option<i64>, step: Option<i64>) -> PyResult<Self> {
+        NamedImageListSlice::new(start, stop, step)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Read the bracketed text of a slice, `[` and `]` included, such as
+    /// `"[:30]"` or `"[::3]"`. Raises `ValueError`, naming `text` and what is
+    /// wrong with it, for text that is not `[start:stop]` or
+    /// `[start:stop:step]` with each part empty or an integer, and for a step
+    /// of 0.
+    #[staticmethod]
+    fn parse(text: &str) -> PyResult<Self> {
+        NamedImageListSlice::parse(text)
+            .map(|inner| Self { inner })
+            .map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    #[getter]
+    fn start(&self) -> Option<i64> {
+        self.inner.start()
+    }
+
+    #[getter]
+    fn stop(&self) -> Option<i64> {
+        self.inner.stop()
+    }
+
+    #[getter]
+    fn step(&self) -> Option<i64> {
+        self.inner.step()
+    }
+
+    /// The indexes the slice keeps in a sequence of `length` items, in the
+    /// slice's order: `list(range(*slice(start, stop, step).indices(length)))`.
+    fn indices(&self, length: usize) -> Vec<usize> {
+        self.inner.indices(length)
+    }
+
+    fn __str__(&self) -> String {
+        self.inner.to_string()
+    }
+
+    fn __repr__(&self) -> String {
+        let part = |p: Option<i64>| p.map_or_else(|| "None".to_string(), |v| v.to_string());
+        format!(
+            "NamedImageListSlice(start={}, stop={}, step={})",
+            part(self.inner.start()),
+            part(self.inner.stop()),
+            part(self.inner.step())
+        )
+    }
 }
 
 /// A workspace's named image lists, read from the
@@ -194,6 +275,28 @@ impl PyNamedImageLists {
             .map(to_py_members)
             .map_err(to_py_err)
     }
+
+    /// The items `slice` keeps of `items`, in the slice's order: the images a
+    /// command takes from the list called `name`, already resolved, narrowed
+    /// by `narrow` when one was given, and reduced to what the command uses.
+    /// The items may be of any type, such as members or paths.
+    ///
+    /// `name` and `narrow` name the list in the error. Raises `ValueError`
+    /// for an unknown name and for a slice that keeps no item, naming the
+    /// lists file, the list, the slice and the number of items.
+    #[pyo3(signature = (name, slice, items, narrow=None))]
+    fn slice_members(
+        &self,
+        name: &str,
+        slice: PyRef<'_, PyNamedImageListSlice>,
+        items: Vec<Py<PyAny>>,
+        narrow: Option<PyRef<'_, PyRangeExpr>>,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        let narrow = narrow.as_ref().map(|r| r.inner());
+        self.inner
+            .slice_members(name, narrow, &slice.inner, items)
+            .map_err(to_py_err)
+    }
 }
 
 /// Whether `name` is a valid named image list name: one or more of the ASCII
@@ -201,6 +304,29 @@ impl PyNamedImageLists {
 #[pyfunction(name = "is_named_image_list_name")]
 fn is_named_image_list_name_py(name: &str) -> bool {
     is_named_image_list_name(name)
+}
+
+/// Split a `-r` or `--named-image-list` value into the list's name and its
+/// slice, or `None` when it has none: `"walk1[:30]"` gives
+/// `("walk1", NamedImageListSlice(stop=30))`, and `"walk1"` gives
+/// `("walk1", None)`.
+///
+/// The text before the first `[` is the name, and the text from the `[` to the
+/// end is the slice. Raises `ValueError`, naming `value`, when the name breaks
+/// the name rule (a range, or nothing, before the `[` included), when the
+/// slice is malformed, and for a step of 0.
+#[pyfunction(name = "split_named_image_list_value")]
+fn split_named_image_list_value_py(
+    value: &str,
+) -> PyResult<(String, Option<PyNamedImageListSlice>)> {
+    split_named_image_list_value(value)
+        .map(|(name, slice)| {
+            (
+                name.to_string(),
+                slice.map(|inner| PyNamedImageListSlice { inner }),
+            )
+        })
+        .map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
 /// The grey conversion a version 2 record of `feature_tool` carries when made
@@ -269,7 +395,9 @@ fn upgrade_feature_options_py(
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageLists>()?;
     m.add_class::<PyNamedImageListMember>()?;
+    m.add_class::<PyNamedImageListSlice>()?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
+    m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;
     m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(recorded_image_to_gray_py, m)?)?;
     m.add_function(wrap_pyfunction!(upgrade_feature_options_py, m)?)?;

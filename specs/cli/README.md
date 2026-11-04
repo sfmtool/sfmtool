@@ -62,24 +62,42 @@ Eight commands take `-r/--range`:
 
 Its value is either a range expression of file numbers or the name of one of
 the workspace's named image lists
-([`../workspace/named-image-lists.md`](../workspace/named-image-lists.md)).
-Each of the eight commands handles it the same way:
+([`../workspace/named-image-lists.md`](../workspace/named-image-lists.md)),
+optionally followed by a slice. Each of the eight commands handles it the same
+way:
 
-- **A value with a letter in it is a list name; any other value is a range.**
-  A range expression contains only digits, `-`, `:` and `,` (and whitespace),
-  so the two cannot be confused. A value with a letter that is not a valid
-  name (`walk 1`, say) is an error saying what a name may contain. A range
-  given alone reaches the command as before, so each command's handling of a
-  range is its own.
+- **A value with a letter or a `[` in it is a list name; any other value is a
+  range.** A range expression contains only digits, `-`, `:` and `,` (and
+  whitespace), so the two cannot be confused. A value with a letter that is
+  not a valid name (`walk 1`, say) is an error saying what a name may contain.
+  A range given alone reaches the command as before, so each command's
+  handling of a range is its own.
+- **A slice after the name takes part of the list by position**, with Python's
+  list slice syntax and rules: `-r 'walk1[:30]'` is the list's first 30
+  images, `-r 'walk1[-30:]'` its last 30 and `-r 'walk1[::3]'` every third
+  one. An item is one image file, not one frame, counted from 0 in the list's
+  order among the images the command would take from the list without a
+  slice, and a slice never looks at frame numbers. Negative indexes and a
+  negative step count from the end, and a bound beyond either end is clamped
+  to it. A single index (`walk1[5]`) and a step of 0 are errors, as is a
+  malformed slice or one with no valid name before it, before any file is
+  read; a slice that keeps no image is an error naming the lists file, the
+  list, the slice and how many images there were. `[` and `]` are glob
+  characters in bash and zsh, so a value with a slice is quoted. The rules in
+  full are in
+  [named-image-lists.md § Slices](../workspace/named-image-lists.md#slices).
 - **`--named-image-list NAME`** is the long form for a list, for scripts that
-  want to say which they mean. Its value must be a valid name.
+  want to say which they mean. Its value must be a valid name, and may carry a
+  slice (`--named-image-list 'walk1[:30]'`).
 - **One name and one range may be given together**, as two `-r` options or as
   `--named-image-list` with one `-r`. The images are then the list's members
   whose frame number the range also selects: the range narrows every entry of
   the list, by the number the entry's frame field captures. An entry with no
   frame field has no frame number to narrow, so narrowing a list with such an
   entry is an error naming the entry, and a range that leaves no members is
-  an error naming the list and the range. Two names, or two ranges, are an
+  an error naming the list and the range. A slice given with a range indexes
+  the narrowed list: `-r 'walk1[:30]' -r 100-900` is the first 30 of the
+  members whose frame number is in 100-900. Two names, or two ranges, are an
   error.
 - **An unknown name** is an error that names the lists file and lists the
   names it defines, or says the workspace has no lists file, and says: "A
@@ -87,10 +105,6 @@ Each of the eight commands handles it the same way:
   contains only digits, '-', ':' and ','." A list name given where no
   workspace is found is an error saying that no workspace was found and so no
   named image lists are defined, with the same sentence.
-
-A value is a name or a range and nothing more. A slice of a list by position,
-such as `-r 'walk1[:30]'` for its first 30 images, is proposed in
-[../drafts/named-image-list-slices-amendment.md](../drafts/named-image-list-slices-amendment.md).
 
 **The image-directory commands.** For `sift`, `match`, `motion` and `solve`, a
 list replaces the image path arguments: the command takes either paths (or,
@@ -104,7 +118,9 @@ same extension test the command's own directory expansion applies
 pattern such as `images/**` does not hand a command a `.sift` or `.json`
 file. The others are skipped without a message, as a directory listing skips
 them, and a list none of whose members is an image file is an error naming
-the list. `match` and `solve` use the list's workspace as theirs.
+the list. A slice indexes the image files that test leaves, and the command
+takes them in the slice's order. `match` and `solve` use the list's workspace
+as theirs.
 
 **The reconstruction commands.** For `analyze --metrics`, `panorama`,
 `to-colmap-bin` and `to-nerfstudio`, the list is resolved in the
@@ -113,7 +129,9 @@ matched against the reconstruction's image names rather than the filesystem,
 so it works where the image files are absent. It selects the reconstruction's
 images that are members, in the reconstruction's order; members the
 reconstruction does not hold are ignored, and it is an error, naming the list,
-when none are left. `--filter-points` keeps its meaning, and accepts a list in
+when none are left. A slice indexes the members the reconstruction holds, in
+the list's order, and the images it keeps are then used in the
+reconstruction's order. `--filter-points` keeps its meaning, and accepts a list in
 place of a range. `analyze --metrics` reports which list it used and how many
 images it kept, and takes its reconstruction-wide figures and flag thresholds
 over every image, as it does for a range.
@@ -124,6 +142,7 @@ as it records nothing about a range.
 ```bash
 sfm solve -i -r walk1_sharp            # the list's images
 sfm sift --extract -r rig_sharp -r 10-20   # the list, narrowed to frames 10-20
+sfm solve -i -r 'walk1_sharp[:30]'     # the list's first 30 images
 sfm to-colmap-bin result.sfmr out/ --named-image-list hero_shots
 ```
 

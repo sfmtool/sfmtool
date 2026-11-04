@@ -204,6 +204,7 @@ A named set of a workspace's images, in `sfmtool_core::workspace`, the
 | Word | Means | Not | Why |
 |------|-------|-----|-----|
 | **named image list** | a named set of workspace images defined in `.sfm-named-image-lists.json` by pattern and range entries; `NamedImageLists` (the file), `NamedImageList` (one list), `NamedImageListEntry` and `NamedImageListMember` | `image set`, `selection`, `image list` alone | *image set* already names the image half of a reconstruction's data, and *selection* is what the viewer uses for what is picked on screen. *Named* is what separates these lists from any other list of images, so it stays in the file name and in every type name |
+| **slice** (of a named image list) | part of a list taken by position with Python's `[start:stop:step]`, written after the list's name in a `-r` or `--named-image-list` value (`walk1[:30]`): an item is one image file, never a frame, and a slice never looks at frame numbers; `NamedImageListSlice`, `split_named_image_list_value`, `NamedImageLists::slice_members` | `subset`, `range`, `window` | *range* already names a range expression of frame numbers, which narrows a list by frame number rather than by position; the word and the syntax are Python's, so a reader who knows a list slice knows the rules, negative indexes and clamped bounds included |
 
 ## Image readings
 
