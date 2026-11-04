@@ -234,6 +234,47 @@ class TestTheReconstruction:
         assert plain.exit_code == 0, plain.output
         assert "Radial" not in plain.output and "RShut" not in plain.output
 
+    def test_values_without_flags_are_shown(self, seoul_bull_sfmr_only, capsys):
+        """A camera whose images hold a radial correction and rolling-shutter
+        rates that its ``per_image_adjustments`` does not list varies them as
+        ``varied_image_adjustments`` says, so the metrics table gets both
+        columns with those images' sizes and ``inspect --verbose`` their lines,
+        while a camera varying nothing gets neither."""
+        from sfmtool.analyze._correction_sizes import image_correction_sizes
+        from sfmtool.analyze.metrics import print_metrics_analysis
+        from sfmtool.analyze.summary import print_reconstruction_summary
+
+        refit = _refit(SfmrReconstruction.load(seoul_bull_sfmr_only))
+        recon = _corrected(refit).clone_with_changes(per_image_adjustments=None)
+        assert recon.per_image_adjustments == [[]]
+        assert recon.varied_image_adjustments(0) == CORRECTIONS
+
+        sizes = image_correction_sizes(recon)
+        f_2 = recon.image_intrinsics(2).focal_lengths[0]
+        assert sizes["radial_bspline"][2] == pytest.approx(f_2 * RADIAL[1])
+        assert sizes["rolling_shutter"][3] > 0.1
+        assert np.isfinite(sizes["radial_bspline"]).all()
+        assert np.isfinite(sizes["rolling_shutter"]).all()
+
+        print_metrics_analysis(seoul_bull_sfmr_only, recon=recon)
+        lines = capsys.readouterr().out.splitlines()
+        header = next(x for x in lines if x.startswith("Image ("))
+        assert header.split()[-3:] == ["Radial", "RShut", "Flag"]
+        for i, column, key in ((2, 6, "radial_bspline"), (3, 7, "rolling_shutter")):
+            name = recon.image_names[i].split("/")[-1]
+            row = next(x for x in lines if name in x).split()
+            assert float(row[column]) == pytest.approx(sizes[key][i], abs=0.005)
+
+        print_reconstruction_summary(recon)
+        out = capsys.readouterr().out
+        assert "Radial correction at the spline domain end" in out
+        assert "Rolling-shutter displacement at the bottom edge centre" in out
+
+        assert refit.varied_image_adjustments(0) == []
+        print_metrics_analysis(seoul_bull_sfmr_only, recon=refit)
+        out = capsys.readouterr().out
+        assert "Radial" not in out and "RShut" not in out
+
 
 class TestColmapExport:
     """COLMAP has no form for either correction, so each COLMAP writer refuses

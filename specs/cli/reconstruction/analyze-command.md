@@ -210,8 +210,12 @@ The two correction columns are the sizes `sfm inspect --verbose` summarises per
 camera, measured the same way
 ([inspect-command.md](inspect-command.md#verbose-output---verbose---v)); each
 appears, with a legend line under the table, only when some camera of the
-reconstruction lists that correction in its `per_image_adjustments`, and shows
-`nan` for an image of a camera that does not.
+reconstruction varies that correction per image, and shows `nan` for an image
+of a camera that does not. A camera varies a correction when
+`SfmrReconstruction.varied_image_adjustments` names it: when its
+`per_image_adjustments` lists it or one of its images holds a non-zero value of
+it ([drop-image-adjustments.md § Python
+bindings](../../core/reconstruction/drop-image-adjustments.md#python-bindings)).
 
 ### Output
 

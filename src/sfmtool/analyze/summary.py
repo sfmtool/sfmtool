@@ -444,13 +444,16 @@ def _correction_size_lines(recon: SfmrReconstruction) -> dict[int, list[str]]:
     px, max 1.30 px over 17 images`` (the edge named by the camera's scanlines
     setting and principal point), as
     :func:`sfmtool.analyze._correction_sizes.image_correction_sizes` measures
-    them.
+    them. A camera varies a correction when ``recon.varied_image_adjustments``
+    names it: when its flags list it or one of its images holds a non-zero
+    value of it.
     """
     from ._correction_sizes import image_correction_sizes, rolling_shutter_edge
 
     if not any(
-        "radial_bspline" in p or "rolling_shutter" in p
-        for p in recon.per_image_adjustments
+        p in ("radial_bspline", "rolling_shutter")
+        for c in range(recon.camera_count)
+        for p in recon.varied_image_adjustments(c)
     ):
         return {}
     sizes = image_correction_sizes(recon)
