@@ -368,6 +368,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
         quit_requested: false,
         startup_error: None,
         applied_title: String::new(),
+        system_fonts: fonts::SystemFallback::new(),
         no_default_layout: args.no_default_layout,
         #[cfg(feature = "mcp")]
         mcp_rx,
@@ -518,6 +519,9 @@ pub(crate) struct App {
     /// sync in `run_ui_and_paint` only calls `set_title` when it changes.
     /// Starts empty so the first frame always applies the real title.
     pub(crate) applied_title: String,
+    /// The system font fallback for Han, Kana and Hangul, driven once a frame
+    /// at the start of the egui pass. See [`fonts::SystemFallback`].
+    pub(crate) system_fonts: fonts::SystemFallback,
     /// `--no-default-layout`: start from the stock grid whatever is saved at
     /// [`layout::default_layout_path`]. Read once, in `resumed`.
     pub(crate) no_default_layout: bool,

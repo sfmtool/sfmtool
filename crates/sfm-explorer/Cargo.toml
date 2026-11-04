@@ -86,6 +86,12 @@ bytemuck = { version = "1.25", features = ["derive"] }
 log = "0.4"
 env_logger = "0.11"
 egui-winit = { version = "0.36", features = ["accesskit"] }
+# The font parser egui itself loads fonts with, at the version and features
+# epaint asks for, so it adds no crate to the build. The system font fallback
+# opens each candidate file with it before egui is given the file, since egui
+# panics on a face it cannot open. Moves with egui: when epaint takes another
+# skrifa version, this one follows, or the build carries two copies.
+skrifa = "0.44"
 raw-window-handle = "0.6"
 winit = "0.30.13"
 pollster = "1"
