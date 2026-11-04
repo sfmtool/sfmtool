@@ -28,11 +28,28 @@ def number_from_filename(filename: str | Path) -> int | None:
     "file123(456).jpg" -> 456  (parenthesized takes precedence)
     "file.jpg" -> None
     """
+    span = file_number_span(filename)
+    if span is None:
+        return None
+    start, end = span
+    return int(Path(filename).name[start:end])
+
+
+def file_number_span(filename: str | Path) -> tuple[int, int] | None:
+    """The start and end, in the file's name, of the digits
+    `number_from_filename` reads as its number, or `None` for a file with no
+    number.
+
+    The name is `Path(filename).name`, so for "walk1/frame_0012.jpg" this is
+    `(6, 10)`, the span of "0012" in "frame_0012.jpg", and for "file (12).jpg"
+    it is the span of "12".
+    """
     match = _NUMBER_FROM_FILENAME_RE.search(Path(filename).stem)
-    if match:
-        # Group 1 is for parenthesized numbers, group 2 is for non-parenthesized
-        return int(match.group(1) or match.group(2))
-    return None
+    if match is None:
+        return None
+    # Group 1 is for parenthesized numbers, group 2 is for non-parenthesized.
+    # The stem is the start of the name, so a span in it is a span in the name.
+    return match.span(1) if match.group(1) is not None else match.span(2)
 
 
 def has_extension(path: Path, extensions: tuple[str, ...]) -> bool:

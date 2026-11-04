@@ -1,17 +1,17 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The `-r/--range` and `--named-image-list` options shared by eight commands.
+"""The `-r/--range` and `--named-image-list` options shared by nine commands.
 
-`sfm sift`, `sfm match`, `sfm motion` and `sfm solve` pick images from image
-directories; `sfm analyze --metrics`, `sfm panorama`, `sfm to-colmap-bin` and
-`sfm to-nerfstudio` pick them from a reconstruction. Each takes `-r/--range`,
+`sfm sift`, `sfm match`, `sfm motion`, `sfm pick-images` and `sfm solve` pick
+images from image directories; `sfm analyze --metrics`, `sfm panorama`,
+`sfm to-colmap-bin` and `sfm to-nerfstudio` pick them from a reconstruction. Each takes `-r/--range`,
 whose value is either a range expression of file numbers or the name of a
 named image list of the workspace, optionally followed by a slice such as
 `[:30]`, and `--named-image-list NAME`, the long form for a list. One name and
 one range together narrow the list, and a slice then takes part of the
 narrowed list by position. The options, the rule that tells a name from a
-range, the errors and the resolution of a list all live here so that the eight
+range, the errors and the resolution of a list all live here so that the nine
 commands cannot drift apart.
 
 A range on its own reaches each command as the string it always took

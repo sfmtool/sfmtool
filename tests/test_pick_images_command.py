@@ -1,0 +1,433 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""`sfm pick-images` (specs/cli/image-feature/pick-images-command.md).
+
+The walk itself is tested in tests/rust_bindings/analysis/; these tests cover
+what the command adds: collecting the frames into sequences, the workspace and
+version 1 checks, the refusal to overwrite a list, the list it writes and the
+report. The video is a synthetic pan: crops 320 x 240 sliding 4 pixels per
+frame across one dino_dog_toy photograph, a step of 1.25% of the long side.
+"""
+
+import json
+import shutil
+from pathlib import Path
+
+import cv2
+import pytest
+from click.testing import CliRunner
+
+from sfmtool.cli import main
+from sfmtool.reconstruction import RangeExpr
+from sfmtool.workspace import NAMED_IMAGE_LISTS_FILE_NAME, NamedImageLists
+
+from .conftest import SEOUL_BULL_DIR, TEST_DATA_DIR
+
+PAN_FRAMES = 100
+PAN_WIDTH, PAN_HEIGHT, PAN_STEP = 320, 240, 4
+# A small baseline keeps each run to a few seconds.
+FAST = ["--baseline-frames", "10"]
+
+
+def _invoke(args: list[str]):
+    return CliRunner().invoke(main, args, catch_exceptions=False)
+
+
+@pytest.fixture(scope="module")
+def pan_source(tmp_path_factory) -> dict[str, list[Path]]:
+    """Two synthetic pans of PAN_FRAMES frames along two textured rows of
+    the photograph (the floor and the table), written once for the module."""
+    photo = cv2.imread(
+        str(TEST_DATA_DIR / "images" / "dino_dog_toy" / "dino_dog_toy_01.jpg")
+    )
+    root = tmp_path_factory.mktemp("pan_source")
+    pans = {}
+    for name, y0 in (("top", 1000), ("bottom", 1250)):
+        folder = root / name
+        folder.mkdir()
+        paths = []
+        for i in range(PAN_FRAMES):
+            x0 = i * PAN_STEP
+            path = folder / f"pan_{i + 1:03d}.jpg"
+            cv2.imwrite(str(path), photo[y0 : y0 + PAN_HEIGHT, x0 : x0 + PAN_WIDTH])
+            paths.append(path)
+        pans[name] = paths
+    return pans
+
+
+def _init_workspace(workspace: Path) -> None:
+    result = _invoke(["ws", "init", str(workspace)])
+    assert result.exit_code == 0, result.output
+
+
+def _copy_frames(paths: list[Path], folder: Path, count: int | None = None) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    for path in paths[:count]:
+        shutil.copy(path, folder / path.name)
+
+
+@pytest.fixture
+def pan_workspace(tmp_path: Path, pan_source, monkeypatch) -> Path:
+    """A version 2 workspace holding the top pan under `frames/`, with the
+    current directory set to it."""
+    workspace = tmp_path / "ws"
+    _copy_frames(pan_source["top"], workspace / "frames")
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+    return workspace
+
+
+def _files(workspace: Path) -> set[str]:
+    return {
+        p.relative_to(workspace).as_posix() for p in workspace.rglob("*") if p.is_file()
+    }
+
+
+def _resolve(workspace: Path, name: str) -> list[str]:
+    lists = NamedImageLists.read(workspace)
+    return [m.path for m in lists.resolve(name)]
+
+
+def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
+    before = _files(pan_workspace)
+    result = _invoke(["pick-images", "frames", *FAST])
+    assert result.exit_code == 0, result.output
+    assert "frames/pan_%03d.jpg, 100 frames (1-100)" in result.output
+    assert "Verdict: solvable" in result.output
+    assert "Walk: target step 10% (band 7-13%)" in result.output
+    assert "pass --write-list NAME" in result.output
+    added = _files(pan_workspace) - before
+    assert added
+    assert all(
+        p.endswith(".jpg.sift") and p.startswith("frames/features/") for p in added
+    )
+    assert not (pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
+
+
+def test_write_list_writes_the_chosen_frames(pan_workspace: Path):
+    result = _invoke(
+        ["pick-images", "frames", *FAST, "--write-list", "pan", "--json", "r.json"]
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads((pan_workspace / "r.json").read_text())
+    (chosen,) = data["chosen_numbers"]
+    assert len(chosen) > 5
+    walk = data["sequences"][0]["walk"]
+    assert chosen == [data["capture"][0]["numbers"][p] for p in walk["chosen"]]
+
+    lists = json.loads((pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())
+    (entry,) = lists["named_image_lists"]["pan"]
+    assert entry["pattern"] == "frames/pan_%03d.jpg"
+    assert set(RangeExpr(entry["range"])) == set(chosen)
+    assert _resolve(pan_workspace, "pan") == [f"frames/pan_{n:03d}.jpg" for n in chosen]
+    assert f"Wrote the named image list pan ({len(chosen)} images)" in result.output
+    assert data["named_image_list"]["entries"] == [entry]
+
+    # `sfm sift -r NAME` takes the same images.
+    sift = _invoke(["sift", "--extract", "-r", "pan"])
+    assert sift.exit_code == 0, sift.output
+    assert f"expanded to {len(chosen)} filename(s)" in sift.output
+
+
+def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
+    first = _invoke(["pick-images", "frames", *FAST, "--json", "a.json"])
+    assert first.exit_code == 0, first.output
+    a = json.loads((pan_workspace / "a.json").read_text())
+    assert a["verdict"] == "solvable"
+    assert set(a) >= {"sequences", "frames", "pairs", "capture", "options"}
+    assert a["options"]["target_step_percent"] == 10.0
+    assert a["options"]["baseline_frames"] == 10
+    assert a["capture"][0]["patterns"] == ["frames/pan_%03d.jpg"]
+    assert a["capture"][0]["numbers"] == list(range(1, PAN_FRAMES + 1))
+    assert a["capture"][0]["images"][4] == ["frames/pan_005.jpg"]
+    assert a["named_image_list"] is None
+    assert len(a["frames_extracted"]) == len(a["frames"])
+    assert all(a["frames_extracted"])
+    read = a["sequences"][0]["baseline"]["frames_read"]
+    assert f"{read} frames read ({read} extracted, 0 reused)" in first.output
+
+    # A second run reads the same frames and extracts none of them.
+    second = _invoke(["pick-images", "frames", *FAST, "--json", "b.json"])
+    assert second.exit_code == 0, second.output
+    b = json.loads((pan_workspace / "b.json").read_text())
+    assert b["chosen_numbers"] == a["chosen_numbers"]
+    assert not any(b["frames_extracted"])
+    assert f"{read} frames read (0 extracted, {read} reused)" in second.output
+
+
+def test_an_existing_name_is_refused_before_any_image_is_read(pan_workspace: Path):
+    lists_path = pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME
+    lists_path.write_text(
+        json.dumps({"version": 1, "named_image_lists": {"pan": [{"pattern": "x.jpg"}]}})
+    )
+    result = CliRunner().invoke(main, ["pick-images", "frames", "--write-list", "pan"])
+    assert result.exit_code == 1, result.output
+    assert (
+        f"{lists_path}: the named image list 'pan' is already defined" in result.output
+    )
+    assert "--force" in result.output
+    assert not (pan_workspace / "frames" / "features").exists()
+    assert "x.jpg" in lists_path.read_text()
+
+
+def test_force_replaces_a_list_in_place(pan_workspace: Path):
+    lists_path = pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME
+    lists_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "named_image_lists": {
+                    "pan": [{"pattern": "x.jpg"}],
+                    "other": [{"pattern": "y.jpg"}],
+                },
+            }
+        )
+    )
+    result = _invoke(
+        [
+            "pick-images",
+            "frames",
+            *FAST,
+            "--write-list",
+            "pan",
+            "--force",
+            "--json",
+            "r.json",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    (chosen,) = json.loads((pan_workspace / "r.json").read_text())["chosen_numbers"]
+    lists = json.loads(lists_path.read_text())["named_image_lists"]
+    assert list(lists) == ["pan", "other"]
+    assert lists["pan"][0]["pattern"] == "frames/pan_%03d.jpg"
+    assert _resolve(pan_workspace, "pan") == [f"frames/pan_{n:03d}.jpg" for n in chosen]
+
+
+def test_a_list_with_a_slice_as_input(pan_workspace: Path):
+    lists_path = pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME
+    lists_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "named_image_lists": {"pan_all": [{"pattern": "frames/pan_%03d.jpg"}]},
+            }
+        )
+    )
+    result = _invoke(["pick-images", "-r", "pan_all[10:90]", *FAST, "--json", "r.json"])
+    assert result.exit_code == 0, result.output
+    assert "Given named image list 'pan_all' sliced by [10:90]" in result.output
+    data = json.loads((pan_workspace / "r.json").read_text())
+    assert data["capture"][0]["numbers"] == list(range(11, 91))
+    assert all(11 <= n <= 90 for n in data["chosen_numbers"][0])
+
+    # The input list's own name is an output name only with --force.
+    refused = CliRunner().invoke(
+        main, ["pick-images", "-r", "pan_all", "--write-list", "pan_all"]
+    )
+    assert refused.exit_code == 1, refused.output
+    assert "'pan_all' is already defined" in refused.output
+    replaced = _invoke(
+        ["pick-images", "-r", "pan_all", *FAST, "--write-list", "pan_all", "--force"]
+    )
+    assert replaced.exit_code == 0, replaced.output
+    entries = json.loads(lists_path.read_text())["named_image_lists"]["pan_all"]
+    assert len(entries) == 1 and "range" in entries[0]
+    assert len(_resolve(pan_workspace, "pan_all")) < PAN_FRAMES
+
+
+def test_a_range_narrows_the_folder(pan_workspace: Path):
+    result = _invoke(["pick-images", "frames", "-r", "1-70", *FAST, "--json", "r.json"])
+    assert result.exit_code == 0, result.output
+    assert "frames/pan_%03d.jpg, 70 frames (1-70)" in result.output
+    data = json.loads((pan_workspace / "r.json").read_text())
+    assert data["capture"][0]["numbers"] == list(range(1, 71))
+
+
+def test_a_capture_that_barely_moves_writes_no_list(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    workspace = tmp_path / "ws"
+    # 40 frames at 1.25% per frame: 50% of the long side in all.
+    _copy_frames(pan_source["top"], workspace / "frames", count=40)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    report_only = _invoke(["pick-images", "frames", *FAST])
+    assert report_only.exit_code == 0, report_only.output
+    assert (
+        "Verdict: not solvable: frames/pan_%03d.jpg: the camera barely moves: 50% "
+        "of the long side in all" in report_only.output
+    )
+    assert "Walk" not in report_only.output
+
+    asked = CliRunner().invoke(
+        main, ["pick-images", "frames", *FAST, "--write-list", "short"]
+    )
+    assert asked.exit_code == 1, asked.output
+    assert (
+        "No named image list was written: the verdict is not solvable." in asked.output
+    )
+    assert not (workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
+
+
+def test_photographs_are_not_a_video(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "ws"
+    images = workspace / "photos"
+    images.mkdir(parents=True)
+    for path in sorted(SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg")):
+        shutil.copy(path, images / path.name)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(
+        main, ["pick-images", "photos", "--write-list", "bull", "--json", "r.json"]
+    )
+    assert result.exit_code == 1, result.output
+    assert (
+        "Verdict: not a video: photos/seoul_bull_sculpture_%02d.jpg: " in result.output
+    )
+    assert "sfm pick-images picks from video sequences only" in result.output
+    assert (
+        "No named image list was written: the verdict is not a video." in result.output
+    )
+    assert not (workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
+    data = json.loads((workspace / "r.json").read_text())
+    assert data["verdict"] == "not_a_video"
+    assert data["chosen_numbers"] == [None]
+
+
+def test_a_version_1_workspace_is_refused(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "ws"
+    images = workspace / "images"
+    images.mkdir(parents=True)
+    for i in range(1, 4):
+        name = f"seoul_bull_sculpture_{i:02d}.jpg"
+        shutil.copy(SEOUL_BULL_DIR / name, images / name)
+    shutil.copy(
+        SEOUL_BULL_DIR / ".sfm-workspace.json", workspace / ".sfm-workspace.json"
+    )
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["pick-images", "images"])
+    assert result.exit_code == 1, result.output
+    assert (
+        f"The workspace file {workspace / '.sfm-workspace.json'} holds version 1 settings"
+        in result.output
+    )
+    assert "Run 'sfm ws upgrade'" in result.output
+    assert not (images / "features").exists()
+
+
+def test_no_workspace_is_an_error(tmp_path: Path, pan_source):
+    _copy_frames(pan_source["top"], tmp_path / "frames", count=5)
+    result = CliRunner().invoke(main, ["pick-images", str(tmp_path / "frames")])
+    assert result.exit_code == 1, result.output
+    assert "No workspace found for images at" in result.output
+    assert "'sfm ws init'" in result.output
+
+
+def test_files_with_no_number_or_a_shared_number_are_errors(
+    tmp_path: Path, monkeypatch
+):
+    workspace = tmp_path / "ws"
+    frames = workspace / "frames"
+    frames.mkdir(parents=True)
+    photo = SEOUL_BULL_DIR / "seoul_bull_sculpture_01.jpg"
+    for name in ("cover.jpg", "shot_1.jpg", "shot_01.jpg", "shot_2.jpg"):
+        shutil.copy(photo, frames / name)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["pick-images", "frames"])
+    assert result.exit_code == 1, result.output
+    assert "1 image file(s) have no file number" in result.output
+    assert "frames/cover.jpg" in result.output
+    assert (
+        "1 file number(s) of the sequence frames/shot_%d.jpg name more than one file"
+        in (result.output)
+    )
+    assert (
+        "frames/shot_1.jpg" in result.output and "frames/shot_01.jpg" in result.output
+    )
+    assert not (frames / "features").exists()
+
+
+def _write_rig_config(workspace: Path) -> None:
+    # The reference sensor is listed second, so the command must put it first.
+    rig = [
+        {
+            "cameras": [
+                {
+                    "image_prefix": "rig/cam_b/",
+                    "cam_from_rig_rotation": [1, 0, 0, 0],
+                    "cam_from_rig_translation": [0.1, 0, 0],
+                },
+                {"image_prefix": "rig/cam_a/", "ref_sensor": True},
+            ]
+        }
+    ]
+    (workspace / "rig_config.json").write_text(json.dumps(rig))
+
+
+def test_a_rig_writes_every_sensor_of_each_chosen_frame(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    workspace = tmp_path / "ws"
+    _copy_frames(pan_source["top"], workspace / "rig" / "cam_a")
+    _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_b")
+    _write_rig_config(workspace)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = _invoke(
+        ["pick-images", "rig", *FAST, "--write-list", "rig_pick", "--json", "r.json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (
+        "rig/cam_a/pan_%03d.jpg and rig/cam_b/pan_%03d.jpg, 100 rig frames of 2 sensors"
+        in result.output
+    )
+    assert "For a quick test solve" not in result.output
+    data = json.loads((workspace / "r.json").read_text())
+    (capture,) = data["capture"]
+    assert capture["sensors"] == ["rig/cam_a/", "rig/cam_b/"]
+    assert capture["images"][0] == ["rig/cam_a/pan_001.jpg", "rig/cam_b/pan_001.jpg"]
+    assert all(len(frame["sensors"]) == 2 for frame in data["frames"])
+    (chosen,) = data["chosen_numbers"]
+    entries = json.loads((workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())[
+        "named_image_lists"
+    ]["rig_pick"]
+    assert [e["pattern"] for e in entries] == [
+        "rig/cam_a/pan_%03d.jpg",
+        "rig/cam_b/pan_%03d.jpg",
+    ]
+    assert entries[0]["range"] == entries[1]["range"]
+    assert _resolve(workspace, "rig_pick") == [
+        f"rig/{cam}/pan_{n:03d}.jpg" for cam in ("cam_a", "cam_b") for n in chosen
+    ]
+    assert f"({2 * len(chosen)} images)" in result.output
+
+
+def test_a_rig_frame_missing_a_sensor_is_an_error(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    workspace = tmp_path / "ws"
+    _copy_frames(pan_source["top"], workspace / "rig" / "cam_a", count=6)
+    _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_b", count=5)
+    _write_rig_config(workspace)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["pick-images", "rig"])
+    assert result.exit_code == 1, result.output
+    assert "1 rig frame(s) of rig/cam_a/pan_%03d.jpg lack the image of a sensor" in (
+        result.output
+    )
+    assert "rig/cam_a/pan_006.jpg (no image under rig/cam_b/)" in result.output
+
+
+def test_an_invalid_output_name_is_a_usage_error(pan_workspace: Path):
+    result = CliRunner().invoke(main, ["pick-images", "frames", "--write-list", "12-3"])
+    assert result.exit_code == 2, result.output
+    assert "--write-list '12-3' is not a valid list name" in result.output
