@@ -9,8 +9,8 @@ geometry. The first says how many of the matches are consistent with one
 camera motion through a static scene. The second says how many of those are
 also consistent with a camera that only turned, or with a scene that is one
 plane. The third says how close that turning motion is to a pure rotation. A
-caller choosing frames from a video reads the first number to space its
-choices and the other three to tell a usable step from a moving scene or a
+caller choosing frames from a video reads the median distance to space its
+choices and the three readings to tell a usable step from a moving scene or a
 camera that turned on the spot.
 
 The matching is the mutual best match of descriptors through one KD-forest per
@@ -232,14 +232,15 @@ in `log f` finds the basin, and a golden-section search in `log f` between the
 best grid value's two neighbours, 40 steps long, finds its floor. The grid
 alone would leave a pure rotation whose focal length falls between two grid
 values an error that grows with the angle turned, up to about 0.015 for a turn
-of 20°; with the refinement a pure rotation scores below `10⁻⁴` for any focal length in the
-range and any turn up to 45°.
+of 20°; with the refinement a pure rotation scores below `10⁻⁴` for any focal
+length in the range and any turn up to 45°.
 
 The error separates a camera that only turned, which has an H/F near 1 and an
 error near 0, from a flat scene seen from two places, which also has an H/F
 near 1 but a large error. The range of focal lengths covers fields of view
-across the long side from about 118° down to about 19°. It is `None` where H/F is `None`, where no homography fits, or where no focal
-length on the grid gives a finite `M` with a non-zero determinant.
+across the long side from about 118° down to about 19°. It is `None` where
+H/F is `None`, where no homography fits, or where no focal length on the grid
+gives a finite `M` with a non-zero determinant.
 
 ## Implementation notes
 
