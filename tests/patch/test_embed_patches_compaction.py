@@ -12,10 +12,12 @@ reconstruction, and round-trips it through ``.sfmr`` to confirm validity. See
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from sfmtool._embed_patches import _localizations_from_recon, _refine_subpixel
 from sfmtool._patch_compaction import (
@@ -40,7 +42,7 @@ def _run_pipeline(recon, images, resolution=12):
     value ``to_embedded_patches`` builds, starting from the mean-viewing frame.
     The bitmaps are each point's reference-view tile at the turned frame."""
     embedded = recon.to_embedded_patches(normal="mean_viewing", extent_value=5.0)
-    turned, _ = refine_normals(embedded, images)
+    turned, _ = refine_normals(embedded, images, resolution=resolution)
     cloud = turned.patches
     bitmaps, _ = cloud.render_bitmaps(turned, images, resolution=resolution)
     sel = cloud.select_views(recon, images, resolution=resolution)
@@ -51,6 +53,17 @@ def _run_pipeline(recon, images, resolution=12):
         recon, images, patch_views=patch_views, resolution=resolution
     )
     return cloud, bitmaps, locs
+
+
+@pytest.fixture(scope="module")
+def pipeline(seoul_bull_workspace_once: Path):
+    """``(recon, cloud, bitmaps, locs)``: :func:`_run_pipeline` on the shared
+    workspace, run once for the module. The bitmaps are read-only, and a test
+    that edits the localizations edits a ``copy.deepcopy`` of them."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    cloud, bitmaps, locs = _run_pipeline(recon, load_images(recon))
+    bitmaps.flags.writeable = False
+    return recon, cloud, bitmaps, locs
 
 
 def test_from_halfvec_arrays_round_trips_a_cloud():
@@ -100,13 +113,9 @@ def test_image_file_hashes_from_images_shape(seoul_bull_workspace: Path):
     assert all(isinstance(h, bytes) and len(h) == 16 for h in hashes)
 
 
-def test_compact_to_embedded_patches_round_trip(
-    seoul_bull_workspace: Path, tmp_path: Path
-):
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+def test_compact_to_embedded_patches_round_trip(pipeline, tmp_path: Path):
+    recon, cloud, bitmaps, locs = pipeline
     assert recon.feature_source == "sift_files"
-    images = load_images(recon)
-    cloud, bitmaps, locs = _run_pipeline(recon, images)
     hashes = image_file_hashes_from_images(recon)
 
     new = compact_to_embedded_patches(
@@ -177,14 +186,13 @@ def test_compact_to_embedded_patches_round_trip(
 
 
 def test_compact_writes_references_naming_observations_of_the_compacted_tracks(
-    seoul_bull_workspace: Path,
+    pipeline,
 ):
     """A localization's ``reference_image`` becomes the place, in the point's
     compacted (image-sorted) track, of its observation in that image, and
     ``-1`` where it is absent, ``None`` or not one of the kept views."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
-    cloud, bitmaps, locs = _run_pipeline(recon, images)
+    recon, cloud, bitmaps, shared_locs = pipeline
+    locs = copy.deepcopy(shared_locs)
     hashes = image_file_hashes_from_images(recon)
 
     # Name a kept view other than the first in input order, so the index has to
@@ -353,9 +361,7 @@ def _normal_frame_angles_deg(recon) -> np.ndarray:
     return np.degrees(np.arccos(dots))
 
 
-def test_compact_normals_match_the_written_patch_frame(
-    seoul_bull_workspace: Path, tmp_path: Path
-):
+def test_compact_normals_match_the_written_patch_frame(pipeline, tmp_path: Path):
     """Regression: the compaction must store the normal of the cloud it *writes*.
 
     The normal step turns the patch frames, so the source recon's
@@ -364,9 +370,7 @@ def test_compact_normals_match_the_written_patch_frame(
     ``normalize(u × v)`` of the stored frame). Assert the format's finite-patch
     coherence on the compacted recon, and again after a ``.sfmr`` round trip.
     """
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
-    cloud, bitmaps, locs = _run_pipeline(recon, images)
+    recon, cloud, bitmaps, locs = pipeline
     hashes = image_file_hashes_from_images(recon)
 
     # The refinement actually moved the frames — otherwise the assertion below
@@ -402,11 +406,9 @@ def test_compact_normals_match_the_written_patch_frame(
     assert _normal_frame_angles_deg(SfmrReconstruction.load(str(out))).max() < 1e-3
 
 
-def test_compact_min_views_culls_points(seoul_bull_workspace: Path):
+def test_compact_min_views_culls_points(pipeline):
     """Raising min_views drops more points (and never keeps an under-supported one)."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
-    cloud, bitmaps, locs = _run_pipeline(recon, images)
+    recon, cloud, _, locs = pipeline
     hashes = image_file_hashes_from_images(recon)
 
     low = compact_to_embedded_patches(recon, cloud, locs, hashes, min_views=2)
@@ -561,16 +563,12 @@ def _project_direction(recon, d: np.ndarray, image_idx: int, margin: float = 0.0
     return uv
 
 
-def test_compact_drops_points_without_a_valid_bitmap(
-    seoul_bull_workspace: Path,
-):
+def test_compact_drops_points_without_a_valid_bitmap(pipeline):
     """The validity mask is a hard cull: a point with enough kept views but no
     valid stored bitmap (``valid[pid] == False`` — the refiner produced no
     representative) is dropped by the final compact instead of being kept with an
     all-black bitmap."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
-    cloud, bitmaps, locs = _run_pipeline(recon, images)
+    recon, cloud, bitmaps, locs = pipeline
     hashes = image_file_hashes_from_images(recon)
 
     cloud_pids = {int(p) for p in cloud.point_indexes}
@@ -660,14 +658,11 @@ def test_reference_observations_from_images_takes_the_first_observation():
     assert out.dtype == np.int32
 
 
-def test_compact_scores_each_point_on_the_keypoints_it_writes(
-    seoul_bull_workspace: Path, tmp_path: Path
-):
+def test_compact_scores_each_point_on_the_keypoints_it_writes(pipeline, tmp_path: Path):
     """The compacted points' errors are the RMS of their reprojection errors at
     the keypoints written, not the input's errors for its own keypoints."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
-    cloud, _, locs = _run_pipeline(recon, images)
+    recon, cloud, _, shared_locs = pipeline
+    locs = copy.deepcopy(shared_locs)
     hashes = image_file_hashes_from_images(recon)
     # Move every localized keypoint, so that no input error can be right.
     for loc in locs:
