@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """`sfmtool.sift.ImageToGray`, `gray_from_rgb` and `image_readings_from_rgb`
-against independent numpy references.
+against independent numpy references, and `ImageReadings` from stored values
+with its `axis_ratio` and `coherence`.
 
 The readings reference below recomputes the reading image and both readings
 from the definitions in `specs/formats/sift-file-format.md`, in double
@@ -308,3 +309,83 @@ def test_a_wrong_shape_raises():
         image_readings_from_rgb(np.zeros((4, 4, 4), np.uint8), ImageToGray("G"))
     with pytest.raises(TypeError):
         image_readings_from_rgb(np.zeros((4, 4), np.uint8), ImageToGray("G"))
+
+
+# ── Stored readings and the values derived from them ──────────────────────
+
+
+def test_image_readings_from_stored_values():
+    readings = ImageReadings(0.0125, (0.004, 0.001, -0.001))
+    assert readings.sharpness == np.float32(0.0125)
+    assert readings.gradient_structure_tensor_xx_yy_xy == tuple(
+        float(np.float32(v)) for v in (0.004, 0.001, -0.001)
+    )
+    # A list is taken as well as a tuple, as a .sift file's metadata holds it.
+    assert ImageReadings(0.0125, [0.004, 0.001, -0.001]).coherence == (
+        readings.coherence
+    )
+
+
+@pytest.mark.parametrize(
+    "sharpness, tensor",
+    [
+        (-1.0, (0.004, 0.001, 0.001)),
+        (float("nan"), (0.004, 0.001, 0.001)),
+        (float("inf"), (0.004, 0.001, 0.001)),
+        (1.0, (-0.004, 0.001, 0.001)),
+        (1.0, (0.004, -0.001, 0.001)),
+        (1.0, (float("nan"), 0.001, 0.001)),
+        (1.0, (0.004, 0.001, float("-inf"))),
+        # Too large for an f32, so infinite once stored as one.
+        (1e39, (0.004, 0.001, 0.001)),
+    ],
+)
+def test_image_readings_refuses_values_no_image_reads(sharpness, tensor):
+    with pytest.raises(ValueError, match="must be finite"):
+        ImageReadings(sharpness, tensor)
+
+
+def test_image_readings_needs_three_tensor_values():
+    with pytest.raises(ValueError, match="length 3"):
+        ImageReadings(1.0, (0.004, 0.001))
+
+
+@pytest.mark.parametrize(
+    "tensor, axis_ratio, coherence",
+    [
+        ((0.004, 0.001, 0.001), np.log(4.0), np.sqrt(13.0) / 5.0),
+        ((0.001, 0.004, -0.001), np.log(4.0), np.sqrt(13.0) / 5.0),
+        ((0.002, 0.002, 0.0), 0.0, 0.0),
+        ((0.004, 0.0, 0.0), np.inf, 1.0),
+        ((0.0, 0.004, 0.0), np.inf, 1.0),
+    ],
+)
+def test_axis_ratio_and_coherence(tensor, axis_ratio, coherence):
+    readings = ImageReadings(1.0, tensor)
+    assert readings.axis_ratio == pytest.approx(axis_ratio, rel=1e-6, abs=1e-7)
+    assert readings.coherence == pytest.approx(coherence, rel=1e-6, abs=1e-7)
+
+
+def test_a_flat_image_has_no_axis_ratio_and_zero_coherence():
+    readings = ImageReadings(0.0, (0.0, 0.0, 0.0))
+    assert readings.axis_ratio is None
+    assert readings.coherence == 0.0
+    measured = image_readings_from_rgb(
+        np.full((32, 32, 3), 255, dtype=np.uint8), ImageToGray("G")
+    )
+    assert measured.axis_ratio is None
+    assert measured.coherence == 0.0
+
+
+def test_derived_values_of_measured_readings_match_their_definitions():
+    """On a photograph, the derived values agree with the formulas evaluated
+    in double precision on the stored tensor."""
+    rgb = read_image_rgb(
+        TEST_DATA / "seoul_bull_sculpture" / "seoul_bull_sculpture_01.jpg"
+    )
+    readings = image_readings_from_rgb(rgb, ImageToGray(BT709))
+    exx, eyy, exy = readings.gradient_structure_tensor_xx_yy_xy
+    assert exx > 0 and eyy > 0
+    assert readings.axis_ratio == pytest.approx(abs(np.log(exx / eyy)), abs=1e-5)
+    expected = np.sqrt((exx - eyy) ** 2 + 4 * exy**2) / (exx + eyy)
+    assert readings.coherence == pytest.approx(expected, rel=1e-6)

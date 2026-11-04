@@ -322,3 +322,106 @@ fn the_readings_of_the_grey_image_are_the_readings_of_the_rgb() {
         Err(ImageReadingsError::NotFinite { .. })
     ));
 }
+
+fn stored(xx: f32, yy: f32, xy: f32) -> ImageReadings {
+    ImageReadings::new(1.0, [xx, yy, xy]).unwrap()
+}
+
+#[test]
+fn new_keeps_the_stored_values() {
+    let r = ImageReadings::new(0.0125, [0.004, 0.001, -0.001]).unwrap();
+    assert_eq!(r.sharpness, 0.0125);
+    assert_eq!(r.gradient_structure_tensor_xx_yy_xy, [0.004, 0.001, -0.001]);
+    assert_eq!(
+        ImageReadings::new(0.0, [0.0; 3]).unwrap(),
+        ImageReadings::ZERO
+    );
+}
+
+#[test]
+fn new_refuses_readings_no_image_reads() {
+    let refused = [
+        (-1.0, [0.004, 0.001, 0.001]),
+        (f32::NAN, [0.004, 0.001, 0.001]),
+        (f32::INFINITY, [0.004, 0.001, 0.001]),
+        (1.0, [-0.004, 0.001, 0.001]),
+        (1.0, [0.004, -0.001, 0.001]),
+        (1.0, [f32::NAN, 0.001, 0.001]),
+        (1.0, [0.004, f32::INFINITY, 0.001]),
+        (1.0, [0.004, 0.001, f32::NEG_INFINITY]),
+    ];
+    for (sharpness, tensor) in refused {
+        match ImageReadings::new(sharpness, tensor) {
+            Err(e @ ImageReadingsError::Invalid { .. }) => {
+                assert!(e.to_string().contains("must be finite"), "{e}");
+            }
+            other => panic!("{sharpness} {tensor:?} gave {other:?}"),
+        }
+    }
+    // A negative Exy is a direction, not a fault.
+    assert!(ImageReadings::new(1.0, [0.004, 0.001, -0.001]).is_ok());
+}
+
+#[test]
+fn the_axis_ratio_by_hand() {
+    // |log(0.004 / 0.001)| = log 4, whichever of the two is larger.
+    let log4 = 4f32.ln();
+    assert!((stored(0.004, 0.001, 0.001).axis_ratio().unwrap() - log4).abs() < 1e-6);
+    assert!((stored(0.001, 0.004, -0.001).axis_ratio().unwrap() - log4).abs() < 1e-6);
+    assert_eq!(stored(0.002, 0.002, 0.0).axis_ratio(), Some(0.0));
+    // Exactly one of the two zero is unbounded, both zero is a flat image.
+    assert_eq!(stored(0.004, 0.0, 0.0).axis_ratio(), Some(f32::INFINITY));
+    assert_eq!(stored(0.0, 0.004, 0.0).axis_ratio(), Some(f32::INFINITY));
+    assert_eq!(stored(0.0, 0.0, 0.0).axis_ratio(), None);
+    // A ratio past f32::MAX, whose quotient would be infinite, stays finite:
+    // ln(f32::MAX) - ln(1e-30) is about 88.72 + 69.08.
+    let wide = stored(f32::MAX, 1e-30, 0.0).axis_ratio().unwrap();
+    assert!(
+        (wide - (f32::MAX.ln() - 1e-30f32.ln())).abs() < 1e-4,
+        "{wide}"
+    );
+    assert!(wide.is_finite() && wide > 157.0, "{wide}");
+}
+
+#[test]
+fn the_coherence_by_hand() {
+    // sqrt(0.003² + 4 · 0.001²) / 0.005 = sqrt(13) / 5.
+    let c = 13f32.sqrt() / 5.0;
+    assert!((stored(0.004, 0.001, 0.001).coherence() - c).abs() < 1e-6);
+    // Exy enters squared, so its sign does not change the coherence.
+    assert!((stored(0.004, 0.001, -0.001).coherence() - c).abs() < 1e-6);
+    // Gradients equally strong in every direction read 0, all along one
+    // direction 1.
+    assert_eq!(stored(0.002, 0.002, 0.0).coherence(), 0.0);
+    assert_eq!(stored(0.004, 0.0, 0.0).coherence(), 1.0);
+    assert_eq!(stored(0.0, 0.004, 0.0).coherence(), 1.0);
+    // A flat image reads 0.
+    assert_eq!(ImageReadings::ZERO.coherence(), 0.0);
+}
+
+#[test]
+fn the_coherence_of_a_tensor_at_the_top_of_the_f32_range_is_finite() {
+    // Exx + Eyy overflows an f32, and (Exx − Eyy)² overflows for one of them
+    // at f32::MAX; the coherence is still the ratio.
+    let both = stored(f32::MAX, f32::MAX, 0.0).coherence();
+    assert_eq!(both, 0.0);
+    let one = stored(f32::MAX, 0.0, 0.0).coherence();
+    assert_eq!(one, 1.0);
+    let mixed = stored(f32::MAX, f32::MAX / 4.0, 0.0).coherence();
+    assert!((mixed - 0.6).abs() < 1e-6, "{mixed}");
+}
+
+#[test]
+fn the_derived_values_of_measured_readings() {
+    // The vertical step edge: all gradient along x, so the axis ratio is
+    // unbounded and the coherence 1.
+    let rgb = grey_rgb(4, 3, |x, _| if x < 2 { 0 } else { 255 });
+    let r = readings(4, 3, &rgb, &green());
+    assert_eq!(r.axis_ratio(), Some(f32::INFINITY));
+    assert_eq!(r.coherence(), 1.0);
+    // A constant image is flat.
+    let white = grey_rgb(300, 200, |_, _| 255);
+    let r = readings(300, 200, &white, &green());
+    assert_eq!(r.axis_ratio(), None);
+    assert_eq!(r.coherence(), 0.0);
+}

@@ -78,36 +78,22 @@ def _image_to_gray_text(image_to_gray: dict) -> str:
     return text
 
 
-def _image_reading_rows(
-    sharpness: float, tensor_xx_yy_xy, indent: str = ""
-) -> list[tuple[str, str]]:
-    """The rows of one image's readings: the two stored readings, then the
-    axis ratio and the coherence a reader derives from the tensor.
-
-    Both derived values are the `.sift` format spec's (§ "Gradient structure
-    tensor"): the axis ratio ``|log(Exx / Eyy)|``, unbounded when one of the
-    two is 0, and the coherence ``sqrt((Exx - Eyy)**2 + 4*Exy**2) / E`` with
-    ``E = Exx + Eyy``, 0 for a flat image.
-    """
-    exx, eyy, exy = (float(v) for v in tensor_xx_yy_xy)
-    if exx > 0.0 and eyy > 0.0:
-        axis_ratio = f"{abs(np.log(exx / eyy)):.3f}"
-    elif exx == eyy:
-        axis_ratio = "n/a (flat image)"
-    else:
-        axis_ratio = "inf"
-    energy = exx + eyy
-    coherence = (
-        float(np.sqrt((exx - eyy) ** 2 + 4.0 * exy**2)) / energy if energy > 0 else 0.0
-    )
+def _image_reading_rows(readings, indent: str = "") -> list[tuple[str, str]]:
+    """The rows of one image's ``ImageReadings``: the two stored readings,
+    then the axis ratio and the coherence it derives from the tensor."""
+    exx, eyy, exy = readings.gradient_structure_tensor_xx_yy_xy
+    axis_ratio = readings.axis_ratio
     return [
-        (f"{indent}Sharpness", f"{sharpness:.4g}"),
+        (f"{indent}Sharpness", f"{readings.sharpness:.4g}"),
         (
             f"{indent}Gradient structure tensor",
             f"Exx {exx:.4g}, Eyy {eyy:.4g}, Exy {exy:.4g}",
         ),
-        (f"{indent}Axis ratio", axis_ratio),
-        (f"{indent}Coherence", f"{coherence:.3f}"),
+        (
+            f"{indent}Axis ratio",
+            "n/a (flat image)" if axis_ratio is None else f"{axis_ratio:.3f}",
+        ),
+        (f"{indent}Coherence", f"{readings.coherence:.3f}"),
     ]
 
 
@@ -263,6 +249,7 @@ def _sift_conversion_rows(feature_options) -> list[tuple[str, str]]:
 def print_sift_summary(path: Path, verbose: bool = False) -> None:
     """Inspect a `.sift` feature file."""
     from .._sfmtool.fileio import read_sift_metadata, verify_sift
+    from ..sift import ImageReadings
     from ..sift.file import feature_size_x, feature_size_y
     from ..fileio import SiftFile
 
@@ -283,9 +270,14 @@ def print_sift_summary(path: Path, verbose: bool = False) -> None:
         ("Feature tool", tool_meta["feature_tool"]),
     ]
     if "sharpness" in meta:
-        rows += _image_reading_rows(
-            meta["sharpness"], meta["gradient_structure_tensor_xx_yy_xy"]
-        )
+        try:
+            readings = ImageReadings(
+                meta["sharpness"], meta["gradient_structure_tensor_xx_yy_xy"]
+            )
+        except ValueError as e:
+            rows.append(("Image readings", f"invalid ({e})"))
+        else:
+            rows += _image_reading_rows(readings)
     else:
         rows.append(("Image readings", "none"))
     rows.append(("Integrity", "OK" if valid else "FAILED"))
@@ -558,11 +550,7 @@ def print_image_summary(path: Path, verbose: bool = False) -> None:
             click.echo(f"Image readings ({source}):")
             _print_block(
                 [("  Conversion", _image_to_gray_text(image_to_gray.to_dict()))]
-                + _image_reading_rows(
-                    readings.sharpness,
-                    readings.gradient_structure_tensor_xx_yy_xy,
-                    indent="  ",
-                )
+                + _image_reading_rows(readings, indent="  ")
             )
 
 

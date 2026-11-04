@@ -126,7 +126,16 @@ impl PyImageToGray {
 }
 
 /// An image's sharpness and gradient structure tensor, from
-/// ``image_readings_from_rgb``.
+/// ``image_readings_from_rgb``, or as stored in a ``.sift`` file's metadata
+/// or a ``.sfmr``'s image columns.
+///
+/// Args:
+///     sharpness: the stored sharpness.
+///     gradient_structure_tensor_xx_yy_xy: the stored ``(Exx, Eyy, Exy)``.
+///
+/// Raises:
+///     ValueError: if a value is not finite, or the sharpness, ``Exx`` or
+///         ``Eyy`` is negative, which no image reads.
 ///
 /// Attributes:
 ///     sharpness: the population variance of the 3 x 3 Laplacian over the
@@ -134,6 +143,10 @@ impl PyImageToGray {
 ///     gradient_structure_tensor_xx_yy_xy: ``(Exx, Eyy, Exy)``, the means of
 ///         ``Gx**2``, ``Gy**2`` and ``Gx*Gy`` over the interior, with ``Gx``
 ///         and ``Gy`` the Sobel derivatives divided by 8, x right and y down.
+///     axis_ratio: ``|log(Exx / Eyy)|``, ``inf`` when exactly one of the two
+///         is 0, and None when both are (a flat image).
+///     coherence: ``sqrt((Exx - Eyy)**2 + 4*Exy**2) / (Exx + Eyy)``, from 0
+///         to 1, and 0 for a flat image.
 #[pyclass(name = "ImageReadings", module = "sfmtool.sift", frozen)]
 pub struct PyImageReadings {
     inner: ImageReadings,
@@ -141,6 +154,24 @@ pub struct PyImageReadings {
 
 #[pymethods]
 impl PyImageReadings {
+    #[new]
+    #[pyo3(signature = (sharpness, gradient_structure_tensor_xx_yy_xy))]
+    fn new(sharpness: f32, gradient_structure_tensor_xx_yy_xy: [f32; 3]) -> PyResult<Self> {
+        ImageReadings::new(sharpness, gradient_structure_tensor_xx_yy_xy)
+            .map(|inner| Self { inner })
+            .map_err(value_error)
+    }
+
+    #[getter]
+    fn axis_ratio(&self) -> Option<f32> {
+        self.inner.axis_ratio()
+    }
+
+    #[getter]
+    fn coherence(&self) -> f32 {
+        self.inner.coherence()
+    }
+
     #[getter]
     fn sharpness(&self) -> f32 {
         self.inner.sharpness
