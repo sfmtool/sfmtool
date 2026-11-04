@@ -435,8 +435,11 @@ for a group, the line says so, the fonts are left as they were, and the
 characters draw as boxes as before. Nothing in this path panics: egui panics
 on a font file it cannot open, so each file is opened first by
 `fonts/sfnt.rs`, which reads the collection header, the table directory and
-the `cmap` table with every read bounds-checked and accepts only what egui's
-font reader also accepts.
+the `cmap` and `head` tables with every read bounds-checked. It accepts only
+what egui's font reader also accepts, and refuses a face whose `head` table
+is missing, cut short or gives `0` units per em, which egui would divide by
+when it draws. It does not read the glyph outlines, so a file damaged inside
+them, rather than cut short, is not caught.
 
 `fonts/tests.rs` reads the non-ASCII characters out of the viewer's own
 string and character literals, test files left out, and fails on one that
@@ -458,7 +461,9 @@ builds small font files and collections in memory and passes the selection a
 reader over them, so the candidate lists, first-found order, the face index
 in a collection, damaged files and the one-time search are checked on any
 machine. It also checks that `fonts/sfnt.rs` reads the same character maps
-from egui's bundled faces as egui does. One test reads the real candidates
+from egui's bundled faces as egui does, that it does not panic on random
+bytes, and that egui draws with each face it opens from a bundled face cut
+short. One test reads the real candidates
 and passes over itself when this machine has no Hangul face.
 
 ---

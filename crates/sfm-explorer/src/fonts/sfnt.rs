@@ -9,7 +9,9 @@
 //! face this module opens is one egui opens too: the checks are the ones
 //! egui's font reader makes (a collection header or a table directory that
 //! fits in the file, and a known `sfnt` version), and stricter, since the
-//! table records and the `cmap` table must also fit. The character map read
+//! table records and the `cmap` table must also fit, and the `head` table
+//! must fit and give a `unitsPerEm` other than `0`, which egui divides by.
+//! The character map read
 //! here is what tells whether a face has the glyphs the viewer is after,
 //! without building egui's fonts to ask.
 
@@ -93,6 +95,13 @@ fn face(data: &[u8], index: u32, offset: usize) -> Option<Face> {
             data.get(start..start.checked_add(length)?)
         })
     };
+    // egui scales every glyph by `unitsPerEm` from `head`, so a face whose
+    // `head` is missing, cut short or gives `0` would draw at an infinite
+    // scale.
+    let units_per_em = be16(table(b"head")?, 18)?;
+    if units_per_em == 0 {
+        return None;
+    }
     let ranges = charmap(table(b"cmap")?)?;
     let weight = table(b"OS/2").and_then(|os2| be16(os2, 4));
     Some(Face {

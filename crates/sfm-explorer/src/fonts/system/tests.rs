@@ -18,7 +18,7 @@ use super::*;
 // ── Fonts built for the tests ──
 
 /// One face's tables: a format 12 `cmap` mapping each of `codes` to a glyph,
-/// and an `OS/2` table carrying `weight`, when there is one.
+/// a `head` table, and an `OS/2` table carrying `weight`, when there is one.
 fn tables(codes: &[u32], weight: Option<u16>) -> Vec<([u8; 4], Vec<u8>)> {
     let mut cmap = Vec::new();
     cmap.extend(0u16.to_be_bytes()); // version
@@ -36,7 +36,10 @@ fn tables(codes: &[u32], weight: Option<u16>) -> Vec<([u8; 4], Vec<u8>)> {
         cmap.extend(code.to_be_bytes());
         cmap.extend((i as u32 + 1).to_be_bytes());
     }
-    let mut tables = vec![(*b"cmap", cmap)];
+    // A `head` table of the right size, with 1000 units per em.
+    let mut head = vec![0u8; 54];
+    head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+    let mut tables = vec![(*b"cmap", cmap), (*b"head", head)];
     if let Some(weight) = weight {
         let mut os2 = vec![0u8; 4];
         os2.extend(weight.to_be_bytes());
@@ -178,13 +181,73 @@ fn the_reader_opens_a_font_and_a_collection_and_refuses_damaged_files() {
     assert!(faces[1].maps(0x42) && !faces[1].maps(0x41));
 
     let good = font(&[0x41], None);
+    let no_head: Vec<_> = tables(&[0x41], None)
+        .into_iter()
+        .filter(|(tag, _)| tag != b"head")
+        .collect();
+    let zero_em: Vec<_> = tables(&[0x41], None)
+        .into_iter()
+        .map(|(tag, data)| match &tag {
+            b"head" => (tag, vec![0u8; 54]),
+            _ => (tag, data),
+        })
+        .collect();
     for (what, bytes) in [
+        ("no head table", face_bytes(0, &no_head)),
+        ("zero units per em", face_bytes(0, &zero_em)),
         ("empty", Vec::new()),
         ("text", b"not a font at all".to_vec()),
         ("cut short", good[..good.len() - 3].to_vec()),
         ("collection header cut short", ttc[..14].to_vec()),
     ] {
         assert!(sfnt::faces(&bytes).is_none(), "{what} opened");
+    }
+}
+
+#[test]
+fn the_reader_never_panics_and_what_it_opens_egui_draws() {
+    // Random bytes, half of them starting like a font or a collection.
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for i in 0..5000 {
+        let len = (next() % 400) as usize;
+        let mut bytes: Vec<u8> = (0..len).map(|_| next() as u8).collect();
+        if len >= 4 && i % 2 == 0 {
+            let tag: &[u8; 4] = if i % 4 == 0 { b"ttcf" } else { b"\0\x01\0\0" };
+            bytes[..4].copy_from_slice(tag);
+        }
+        sfnt::faces(&bytes);
+    }
+    // A bundled face cut short at many lengths: each face the reader opens
+    // must be one egui builds and draws text with.
+    let hack = egui::FontDefinitions::default().font_data["Hack"]
+        .font
+        .to_vec();
+    for step in 1..40 {
+        let cut = &hack[..hack.len() * step / 40];
+        for face in sfnt::faces(cut).unwrap_or_default() {
+            let mut fonts = egui::FontDefinitions::default();
+            let mut data = egui::FontData::from_owned(cut.to_vec());
+            data.index = face.index;
+            fonts.font_data.insert("cut".to_owned(), Arc::new(data));
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                fonts
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .insert(0, "cut".to_owned());
+            }
+            let ctx = egui::Context::default();
+            ctx.set_fonts(fonts);
+            crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
+                ui.label("Abc 123");
+            });
+        }
     }
 }
 
