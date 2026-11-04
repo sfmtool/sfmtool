@@ -71,8 +71,9 @@ without a rolling shutter, through the second, by way of
 rolling shutter takes the undistorted-pinhole path of
 [The zero-spline short-circuit](#the-zero-spline-short-circuit) instead).
 Every other perspective model asks `forward_projection_invertible`, the
-family's branch predicate, and then distorts. So a projection or a Jacobian of this model evaluates the spline once
-per ray, and the projection and the Jacobian leave the domain together.
+family's branch predicate, and then distorts. So a projection or a Jacobian
+of this model evaluates the spline once per ray, and the projection and the
+Jacobian leave the domain together.
 `forward_projection_invertible`'s arm for this model is the first kernel's
 `is_some()`.
 
