@@ -7,17 +7,21 @@
 directories; `sfm analyze --metrics`, `sfm panorama`, `sfm to-colmap-bin` and
 `sfm to-nerfstudio` pick them from a reconstruction. Each takes `-r/--range`,
 whose value is either a range expression of file numbers or the name of a
-named image list of the workspace, and `--named-image-list NAME`, the long
-form for a list. One name and one range together narrow the list. The options,
-the rule that tells a name from a range, the errors and the resolution of a
-list all live here so that the eight commands cannot drift apart.
+named image list of the workspace, optionally followed by a slice such as
+`[:30]`, and `--named-image-list NAME`, the long form for a list. One name and
+one range together narrow the list, and a slice then takes part of the
+narrowed list by position. The options, the rule that tells a name from a
+range, the errors and the resolution of a list all live here so that the eight
+commands cannot drift apart.
 
 A range on its own reaches each command as the string it always took
 (`ImageSelection.range_expr`), so a command's handling of a range is its own
 and is unchanged. A list is resolved here: against the workspace's files for
 the image-directory commands (`resolve_list_images`), and against a
 reconstruction's image names for the others
-(`reconstruction_list_indices`).
+(`reconstruction_list_indices`). The `sfmtool.workspace` bindings split a value
+into a name and a slice and apply the slice, and hold the rules and the
+messages for both.
 
 The filter for `to-colmap-bin` and `to-nerfstudio` takes its own `echo`
 callable rather than choosing one, because the two commands report through
@@ -28,26 +32,27 @@ leave their output untouched.
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from .._filenames import has_extension, number_from_filename
+
+if TYPE_CHECKING:
+    from .._sfmtool.workspace import NamedImageListSlice
 
 RANGE_OR_NAME_SENTENCE = (
     "A --range value with a letter in it is read as a named image list; "
     "a range contains only digits, '-', ':' and ','."
 )
 
-_NAME_RULE = (
-    "a name is one or more of the ASCII letters, the digits, '-', '_' and '.', "
-    "with at least one letter"
-)
-
 _NAME_HELP = (
     " A value with a letter in it is instead the name of a named image list "
     "of the workspace (see --named-image-list); give one name and one range, "
     "as two -r options, to keep the list's members whose frame number is in "
-    "the range."
+    "the range. A slice after the name, quoted, takes part of the list by "
+    "position, as for a Python list: 'NAME[:30]' is its first 30 images, "
+    "'NAME[-30:]' its last 30 and 'NAME[::3]' every third one."
 )
 
 _LIST_HELP = {
@@ -55,13 +60,16 @@ _LIST_HELP = {
         "Use the images of this named image list, defined in the workspace's "
         ".sfm-named-image-lists.json, in place of image paths. The workspace "
         "is found from the current directory. With -r RANGE, keep only the "
-        "members whose frame number is in RANGE."
+        "members whose frame number is in RANGE. A slice after the name, "
+        "such as 'NAME[:30]', then takes part of the list's images by position."
     ),
     "reconstruction": (
         "Use only the reconstruction's images that are members of this named "
         "image list, defined in the .sfm-named-image-lists.json of the "
         "reconstruction's workspace. With -r RANGE, keep only the members "
-        "whose frame number is in RANGE."
+        "whose frame number is in RANGE. A slice after the name, such as "
+        "'NAME[:30]', then takes part of the members the reconstruction holds "
+        "by position."
     ),
 }
 
@@ -71,21 +79,29 @@ class ImageSelection:
     """What `-r/--range` and `--named-image-list` asked for.
 
     At most one range and at most one list name. With both, the range narrows
-    the list rather than being applied on its own.
+    the list rather than being applied on its own. `list_slice` is the slice
+    given after the list's name, which takes part of the narrowed list by
+    position.
     """
 
     range_expr: str | None = None
     list_name: str | None = None
+    list_slice: "NamedImageListSlice | None" = None
 
     @property
     def given(self) -> bool:
         return self.range_expr is not None or self.list_name is not None
 
     def describe_list(self) -> str:
-        """The list, and the range narrowing it, as a message names them."""
+        """The list, the range narrowing it and its slice, as a message names
+        them."""
         text = f"named image list '{self.list_name}'"
         if self.range_expr is not None:
             text += f" narrowed by the range '{self.range_expr}'"
+            if self.list_slice is not None:
+                text += " and"
+        if self.list_slice is not None:
+            text += f" sliced by {self.list_slice}"
         return text
 
 
@@ -122,18 +138,20 @@ def range_option(range_help: str, *, on: str) -> Callable[[Callable], Callable]:
     return attach
 
 
-def _is_name(value: str) -> bool:
-    return any(c.isalpha() for c in value)
+def _is_list_value(value: str) -> bool:
+    """Whether a `-r` value names a list: it has a letter, or a slice's `[`."""
+    return "[" in value or any(c.isalpha() for c in value)
 
 
-def _check_name(value: str, option: str) -> str:
-    from .._sfmtool.workspace import is_named_image_list_name
+def _split_list_value(value: str, option: str) -> tuple[str, str, object]:
+    """`value`, its list name and its slice, or the usage error naming `option`."""
+    from .._sfmtool.workspace import split_named_image_list_value
 
-    if not is_named_image_list_name(value):
-        raise click.UsageError(
-            f"{option} '{value}' is not a valid named image list name: {_NAME_RULE}."
-        )
-    return value
+    try:
+        name, list_slice = split_named_image_list_value(value)
+    except ValueError as e:
+        raise click.UsageError(f"{option} {e}.")
+    return value, name, list_slice
 
 
 def parse_image_selection(
@@ -141,20 +159,21 @@ def parse_image_selection(
 ) -> ImageSelection:
     """Sort the `-r` values and `--named-image-list` into a range and a name.
 
-    A `-r` value with a letter in it is a list name, and any other value is a
-    range. At most one of each may be given in all.
+    A `-r` value with a letter or a `[` in it is a list name, optionally
+    followed by a slice, and any other value is a range. At most one of each
+    may be given in all.
     """
-    names: list[str] = []
+    names: list[tuple[str, str, object]] = []
     ranges: list[str] = []
     if named_image_list is not None:
-        names.append(_check_name(named_image_list, "--named-image-list"))
+        names.append(_split_list_value(named_image_list, "--named-image-list"))
     for value in range_values:
-        if _is_name(value):
-            names.append(_check_name(value, "--range"))
+        if _is_list_value(value):
+            names.append(_split_list_value(value, "--range"))
         else:
             ranges.append(value)
     if len(names) > 1:
-        quoted = ", ".join(f"'{n}'" for n in names)
+        quoted = ", ".join(f"'{value}'" for value, _, _ in names)
         raise click.UsageError(
             f"Give at most one named image list; got {quoted}. "
             "One name and one range may be given together, and the range then "
@@ -166,9 +185,11 @@ def parse_image_selection(
             f"Give at most one range; got {quoted}. Write the frames as one "
             "range expression, such as '1-10,20-30'."
         )
+    _, list_name, list_slice = names[0] if names else (None, None, None)
     return ImageSelection(
         range_expr=ranges[0] if ranges else None,
-        list_name=names[0] if names else None,
+        list_name=list_name,
+        list_slice=list_slice,
     )
 
 
@@ -204,6 +225,18 @@ def _resolution_error(lists, name: str, e: Exception) -> click.ClickException:
     return click.ClickException(message)
 
 
+def _slice(lists, selection: ImageSelection, narrow, items: list) -> list:
+    """The `items` the selection's slice keeps, or all of them without one."""
+    if selection.list_slice is None:
+        return items
+    try:
+        return lists.slice_members(
+            selection.list_name, selection.list_slice, items, narrow=narrow
+        )
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
 def _narrow(selection: ImageSelection):
     if selection.range_expr is None:
         return None
@@ -232,7 +265,8 @@ def resolve_list_images(
     finds. The images are the list's members, in the list's order, as
     absolute paths, keeping only the members with one of `extensions`, as the
     command's own directory expansion does; the others are skipped without a
-    word, as a directory listing skips them.
+    word, as a directory listing skips them. A slice indexes the images that
+    test leaves, and keeps them in the slice's order.
     """
     from .._workspace import find_workspace_for_path
 
@@ -258,6 +292,7 @@ def resolve_list_images(
             f"{selection.describe_list()} is an image file "
             f"({', '.join(extensions)})."
         )
+    images = _slice(lists, selection, narrow, images)
     return ListImages(paths=images, workspace_dir=root)
 
 
@@ -270,7 +305,8 @@ def reconstruction_list_indices(
     names, so the image files need not exist. The indices keep the
     reconstruction's order; members the reconstruction does not hold are
     ignored, and a list that leaves none of its images is an error naming the
-    list.
+    list. A slice indexes the members the reconstruction holds, in the list's
+    order, before the indices are put in the reconstruction's order.
     """
     name = selection.list_name
     assert name is not None
@@ -284,6 +320,7 @@ def reconstruction_list_indices(
         members = lists.resolve_in_names(name, image_names, narrow=narrow)
     except ValueError as e:
         raise _resolution_error(lists, name, e)
+    members = _slice(lists, selection, narrow, members)
     wanted = {m.path for m in members}
     return [i for i, image_name in enumerate(image_names) if image_name in wanted]
 

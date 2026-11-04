@@ -840,3 +840,139 @@ fn a_narrowing_range_that_leaves_nothing_names_the_list_and_the_range() {
         .unwrap_err();
     assert!(matches!(e, NamedImageListsError::NoMatch { .. }), "{e}");
 }
+
+// ── Slicing ──────────────────────────────────────────────────────────────
+
+fn slice(text: &str) -> NamedImageListSlice {
+    NamedImageListSlice::parse(text).unwrap()
+}
+
+#[test]
+fn a_slice_indexes_the_resolved_members_by_position_not_frame() {
+    let dir = workspace();
+    // Irregular frame numbers, as a picked list holds.
+    for i in [3, 7, 8, 20, 41, 42] {
+        touch(dir.path(), &format!("frames/walk1_{i:04}.jpg"));
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"walk1": [{"pattern": "frames/walk1_%04d.jpg"}]}"#,
+    );
+    let members = resolve(&lists, "walk1", None).unwrap();
+    let frames = |kept: Vec<NamedImageListMember>| -> Vec<Option<i64>> {
+        kept.into_iter().map(|m| m.frame).collect()
+    };
+    let sliced = |text: &str| {
+        lists
+            .slice_members("walk1", None, &slice(text), members.clone())
+            .unwrap()
+    };
+    assert_eq!(frames(sliced("[:2]")), [Some(3), Some(7)]);
+    assert_eq!(frames(sliced("[-2:]")), [Some(41), Some(42)]);
+    assert_eq!(frames(sliced("[::2]")), [Some(3), Some(8), Some(41)]);
+    assert_eq!(
+        frames(sliced("[::-1]")),
+        [Some(42), Some(41), Some(20), Some(8), Some(7), Some(3)]
+    );
+    // [3:8] is by position: the 4th and later, not frames 3 to 7.
+    assert_eq!(frames(sliced("[3:8]")), [Some(20), Some(41), Some(42)]);
+    assert_eq!(frames(sliced("[:30]")).len(), 6);
+
+    // Narrowed first, then sliced.
+    let narrow = range("5-41");
+    let narrowed = resolve(&lists, "walk1", Some("5-41")).unwrap();
+    let kept = lists
+        .slice_members("walk1", Some(&narrow), &slice("[1:3]"), narrowed)
+        .unwrap();
+    assert_eq!(frames(kept), [Some(8), Some(20)]);
+
+    // Any item type: paths as well as members.
+    let paths: Vec<&str> = vec!["a.jpg", "b.jpg", "c.jpg"];
+    assert_eq!(
+        lists
+            .slice_members("walk1", None, &slice("[1:]"), paths)
+            .unwrap(),
+        ["b.jpg", "c.jpg"]
+    );
+}
+
+#[test]
+fn a_rig_slice_counts_files_not_frames() {
+    let dir = workspace();
+    for i in [10, 12, 14] {
+        for cam in ["cam0", "cam1"] {
+            touch(dir.path(), &format!("rig/{cam}/frame_{i:05}.jpg"));
+        }
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"rig": [{"pattern": "rig/*/frame_%05d.jpg"}]}"#,
+    );
+    let members = resolve(&lists, "rig", None).unwrap();
+    let kept = |text: &str| {
+        let kept = lists
+            .slice_members("rig", None, &slice(text), members.clone())
+            .unwrap();
+        kept.into_iter().map(|m| m.path).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kept("[:3]"),
+        [
+            "rig/cam0/frame_00010.jpg",
+            "rig/cam1/frame_00010.jpg",
+            "rig/cam0/frame_00012.jpg"
+        ]
+    );
+    assert_eq!(
+        kept("[1::2]"),
+        [
+            "rig/cam1/frame_00010.jpg",
+            "rig/cam1/frame_00012.jpg",
+            "rig/cam1/frame_00014.jpg"
+        ]
+    );
+}
+
+#[test]
+fn a_slice_that_keeps_nothing_names_the_file_list_slice_and_length() {
+    let dir = workspace();
+    let lists = write_lists(
+        dir.path(),
+        r#"{"walk1": [{"pattern": "frames/walk1_%04d.jpg"}]}"#,
+    );
+    let items: Vec<usize> = (0..30).collect();
+    let e = lists
+        .slice_members("walk1", None, &slice("[40:]"), items.clone())
+        .unwrap_err();
+    assert!(
+        matches!(e, NamedImageListsError::SlicedToNothing { len: 30, .. }),
+        "{e:?}"
+    );
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{}: the slice [40:] of named image list 'walk1' leaves none of its 30 images",
+            lists.path().display()
+        )
+    );
+    let narrow = range("100-900");
+    let e = lists
+        .slice_members("walk1", Some(&narrow), &slice("[5:2]"), items)
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{}: the slice [5:2] of named image list 'walk1' narrowed by the range '100-900' \
+             leaves none of its 30 images",
+            lists.path().display()
+        )
+    );
+    let e = lists
+        .slice_members("walk1", None, &slice("[1:]"), vec![0])
+        .unwrap_err();
+    assert!(e.to_string().ends_with("leaves none of its 1 image"), "{e}");
+    let e = lists
+        .slice_members("nope", None, &slice("[:]"), vec![0])
+        .unwrap_err();
+    assert!(matches!(e, NamedImageListsError::UnknownList { .. }), "{e}");
+}

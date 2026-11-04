@@ -38,13 +38,14 @@ case-insensitively); any other extension is a usage error.
 | `--filter-points` | flag | off | With `--range` or `--named-image-list`, also drop 3D points that have no remaining observations. Default is to keep all 3D points. |
 
 `-r/--range` also accepts the name of one of the named image lists of the
-reconstruction's workspace: a value with a letter in it is a name, and one
-name with one range narrows the list. The list is matched against the
-reconstruction's image names, so the image files need not exist; it keeps
-the reconstruction's images that are members, in the reconstruction's
-order, ignores members the reconstruction does not hold, and is an error
-naming the list when none are left. The rules and errors are
-in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+reconstruction's workspace: a value with a letter in it is a name, one name
+with one range narrows the list, and a slice after the name (`'walk1[:30]'`)
+takes part of the list by position. The list is matched against the
+reconstruction's image names, so the image files need not exist; it keeps the
+reconstruction's images that are members, in the reconstruction's order,
+ignores members the reconstruction does not hold, and is an error naming the
+list when none are left. The rules and errors are in [the shared `-r/--range`
+option](../README.md#the-shared--r--range-option).
 
 `--filter-points` is only meaningful together with `--range` or
 `--named-image-list`; supplying it without either is an error. The range grammar matches `sfm sift -r`, `sfm match -r`,

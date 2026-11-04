@@ -5,13 +5,14 @@ of a walk, the frames of one rig run, a few hand-picked photographs. A
 workspace can give such a set a name in a small JSON file in its root,
 `.sfm-named-image-lists.json`, which defines each set by image patterns and
 frame ranges. This spec describes that file, the rules it is checked against,
-and how one list resolves to the workspace's image files or to the image names
-a reconstruction records. The set is called a **named image list**
-([GLOSSARY.md](../GLOSSARY.md)).
+how one list resolves to the workspace's image files or to the image names
+a reconstruction records, and the slice that takes part of a list by position.
+The set is called a **named image list** ([GLOSSARY.md](../GLOSSARY.md)).
 
 The eight commands that take `-r/--range` accept a list's name there, with
-`--named-image-list` as the long form; how they reach a list and which of its
-members they use is in [the commands](#the-commands) below and in
+`--named-image-list` as the long form, and a [slice](#slices) after the name
+(`-r 'walk1[:30]'`); how they reach a list and which of its members they use
+is in [the commands](#the-commands) below and in
 [`../cli/README.md`](../cli/README.md#the-shared--r--range-option).
 
 ## The file
@@ -87,16 +88,195 @@ workspace-relative path. Paths compare byte by byte, so `B` sorts before `a`.
 **Narrowing.** A caller may narrow a list by a further range: the members are
 then the list's members whose frame number that range also holds. An entry
 with no frame field has no frame number to narrow, so narrowing a list that
-has such an entry is an error naming the entry. A caller selects members by
-frame number only, never by their position in the list; a slice by position,
-such as `walk1[:30]`, is proposed in
-[../drafts/named-image-list-slices-amendment.md](../drafts/named-image-list-slices-amendment.md).
+has such an entry is an error naming the entry. Narrowing selects members by
+frame number only, never by their position in the list; a
+[slice](#slices) selects by position.
 
 **An empty list.** A list that matches no file, after any narrowing, is an
 error when it is resolved, naming the list. When the list matches files and
 the narrowing range holds the frame number of none of them, the error says
 instead that the range left no members, naming the list and the range. A list
 with no entries is valid in the file and is the first error when used.
+
+## Slices
+
+A user often wants part of a list rather than all of it: the first 30 images
+for a quick test solve, the last 30, or every third image for a coarser solve.
+A **slice** takes part of a list by position, with the syntax and the rules of
+a Python list slice, written after the list's name:
+
+```bash
+sfm solve -i -r 'walk1[:30]'      # the first 30 images of the list
+sfm solve -i -r 'walk1[-30:]'     # the last 30
+sfm solve -i -r 'walk1[::3]'      # every third image
+```
+
+### What a slice selects
+
+**The array.** A slice indexes, from 0, the ordered array of image files a
+command would take from the list without a slice: the list's members in the
+list's order ([Members and their order](#members-and-their-order)), narrowed
+first by a range when one is given, and reduced to what the command uses:
+
+- For `sfm sift`, `sfm match`, `sfm motion` and `sfm solve`, the members that
+  are image files, after the extension test those commands apply
+  ([the commands](#the-commands)), so `walk1[:30]` is 30 images whenever the
+  list has 30, even when its patterns also match files that are not images.
+- For `sfm analyze --metrics`, `sfm panorama`, `sfm to-colmap-bin` and
+  `sfm to-nerfstudio`, the members among the reconstruction's image names, in
+  the list's order, as `resolve_in_names` returns them. The images the slice
+  keeps are then used in the reconstruction's order, as a whole list's are.
+  So a slice counts only the images the reconstruction holds: `walk1[:30]`
+  against a reconstruction that lacks some of the list's images is not the
+  same 30 images as `walk1[:30]` given to `sfm solve`.
+
+**Python's rules.** `NAME[start:stop:step]` keeps the items whose indexes are
+`range(*slice(start, stop, step).indices(len))` in Python, for an array of
+`len` items:
+
+- `step` defaults to 1. A step of 0 is an error.
+- With a positive step, `start` defaults to 0 and `stop` to `len`; the items
+  kept are `start`, `start + step`, … while below `stop`.
+- With a negative step, `start` defaults to the last item and `stop` to before
+  the first; the items kept are `start`, `start + step`, … while above `stop`,
+  so the order is reversed: `walk1[::-1]` is the list backward.
+- A negative `start` or `stop` counts from the end: `len` is added to it, so
+  `-30` is the 30th item from the end.
+- A bound beyond either end is clamped to that end and is not an error:
+  `walk1[:30]` of a list of 20 images is all 20, and so is `walk1[-30:]`.
+- `NAME[:]` and `NAME[::]` are the whole list.
+
+**Order.** The images a slice keeps are used in the slice's order: the list's
+order, or its reverse for a negative step. The image-directory commands take
+them in that order, as they take a whole list's members in the list's order.
+
+**One item is one file.** An item of the array is one image file, not one
+frame. In a rig list, the sensors of one frame are adjacent items when one
+entry covers all the sensors, since a pattern such as `rig/*/frame_%05d.jpg`
+orders the files of one frame number by path. So, for a list of two sensors
+`cam0` and `cam1` whose items run `cam0` 10, `cam1` 10, `cam0` 12, `cam1` 12,
+…:
+
+- `[:30]` is 15 frames, both sensors of each;
+- `[:31]` is those 15 frames and the `cam0` image of the 16th;
+- `[::2]` is the `cam0` image of every frame and `[1::2]` the `cam1` image,
+  and any even step takes one sensor only.
+
+A slice whose `start` and `stop` are multiples of the sensor count, with a step
+of 1, keeps whole frames. A step other than 1 or -1 never keeps two adjacent
+items, so it keeps no frame whole: to thin a rig list by frames, narrow it by a
+stepped range instead (`-r rig_sharp -r 10-900:6`). A list with one entry per
+sensor holds all of the first sensor's images before any of the second's, so
+`[:30]` of such a list is 30 images of the first sensor.
+
+**By position, not by frame number.** A slice never looks at frame numbers.
+`-r walk1 -r 10-20` keeps the members whose frame number is between 10 and
+20, whatever their positions, while `-r 'walk1[10:20]'` keeps the 11th to the
+20th images of the list, whatever their frame numbers. A slice works on a list
+whose entries have no frame field, which narrowing refuses.
+
+**With narrowing.** A name with a slice and a range may be given together
+(`-r 'walk1[:30]' -r 100-900`). The range narrows the list first, and the
+slice then indexes the narrowed array: the first 30 of the members whose frame
+number is in 100-900. Slicing first and narrowing after is not offered, since
+the result would then depend on frame numbers the slice discarded.
+
+**A coarser list from a finer one.** `-r 'walk1[::3]'` keeps every third
+image. That is not the same as choosing frames with a step three times as
+large: no two images of the sliced list were checked against each other, only
+each against its neighbour in the finer list, so neighbouring images of the
+slice may not match well. Where the finer list is dense because the capture
+was hard to follow there, the slice thins it as much as everywhere else.
+
+**A list's length.** A slice from the middle of a list needs the list's
+length. The commands that resolve a list print the count as part of their
+work: `sfm sift --extract -r NAME` prints "Given named image list 'NAME',
+expanded to N filename(s)" before it extracts, and `sfm analyze --metrics`,
+`sfm panorama`, `sfm to-colmap-bin` and `sfm to-nerfstudio` print how many of
+a reconstruction's images the list kept. From Python,
+`len(NamedImageLists.read(workspace_dir).resolve("walk1"))` is the number of
+members, before the extension test.
+
+### Syntax
+
+The value of `-r` or `--named-image-list` is a list name, optionally followed
+by one slice:
+
+```text
+NAME
+NAME[start:stop]
+NAME[start:stop:step]
+```
+
+- **Telling a slice from a name.** A list name holds only the ASCII letters,
+  the digits, `-`, `_` and `.`, and a range expression only digits, `-`, `:`,
+  `,` and whitespace, so neither can contain `[`. A value with a `[` in it is
+  a name followed by a slice: the text before the first `[` is the name,
+  checked by the name rule as a bare name is, and the text from `[` to the end
+  is the slice.
+- **The parts.** `start`, `stop` and `step` are each empty or an integer:
+  ASCII digits with an optional leading `+` or `-`. A part that does not fit
+  in a 64-bit signed integer is an error; no list has that many images, so a
+  bound that large would only ever be clamped.
+- **One or two colons.** `[start:stop]` and `[start:stop:step]`, with each part
+  optional. A single index with no colon, `NAME[5]`, is not accepted: in
+  Python `a[5]` is one item rather than a list, and an index past the end is
+  an `IndexError` rather than clamped. `NAME[5:6]` is the sixth image, and the
+  error for `NAME[5]` says so.
+- **No whitespace.** A slice is written without spaces: a space anywhere in
+  the brackets is an error saying so.
+- **One slice.** The `]` ends the value. Python allows `a[:30][::2]`; a value
+  here does not, so text after the `]`, a second slice included, is an error.
+
+### Errors
+
+Each error names the value as given. Those about the slice's text are usage
+errors, raised before any file is read:
+
+- **Malformed.** A part that is not an integer (`walk1[a:3]`, `walk1[1.5:]`),
+  more than two colons (`walk1[1:2:3:4]`), a single index (`walk1[5]`), empty
+  brackets (`walk1[]`), a missing `]` (`walk1[:30`), whitespace in the
+  brackets, text after the `]`, or a part out of the 64-bit range. The message
+  says what is wrong and shows the form `NAME[start:stop:step]`.
+- **A step of 0.** "slice step cannot be zero", Python's own message, after
+  the value.
+- **A slice that is not on a name.** A value with `[` whose text before it is
+  not a valid name: a range (`-r '10-20[::2]'`), nothing (`-r '[:30]'`), or a
+  name that breaks the name rule. The message says that a slice follows the
+  name of a named image list, and for a range that a list is narrowed by a
+  range given beside its name (`-r NAME -r RANGE`).
+
+One error comes from applying the slice:
+
+- **A slice that leaves no images.** A slice that keeps no item, such as
+  `walk1[40:]` of a list of 30 images or `walk1[5:2]`, is an error naming the
+  lists file, the list, the slice and the number of images the array held:
+  "`<path>`: the slice [40:] of named image list 'walk1' leaves none of its 30
+  images". With a narrowing range the message names the range too ("… of
+  named image list 'walk1' narrowed by the range '100-900' leaves none of
+  …"). A list that is already empty, or that a range narrows to nothing, gives
+  the errors of [an empty list](#members-and-their-order), before the slice is
+  applied.
+
+### Quoting in a shell
+
+`[` and `]` are glob characters in the common shells, so a value with a slice
+is quoted: `-r 'walk1[:30]'`. Unquoted:
+
+- **zsh** stops with "no matches found" when no file matches the pattern, its
+  default `NOMATCH` behaviour, and the command does not run.
+- **bash** passes the value unchanged when no file matches, but when a file
+  does it passes that file's name instead. In a directory holding a file
+  `walk13`, `-r walk1[:30]` reaches the command as `-r walk13`, since the
+  bracket expression `[:30]` matches one of the characters `:`, `3` and `0`;
+  the command then reports an unknown list `walk13`, or, when the workspace
+  defines a list of that name, uses it.
+- **PowerShell** does not expand wildcards in the arguments of a native
+  command, so `sfm` receives the value as typed, quoted or not. A program
+  built on the MSYS runtime (Git for Windows' tools) expands them itself, but
+  `sfm` is a Python program and does not.
+
+Quoted, the value passes through `pixi run` unchanged in bash and PowerShell.
 
 ## Validation
 
@@ -149,13 +329,20 @@ expansion applies, and skip the rest. `sfm analyze --metrics`, `sfm panorama`,
 `sfm to-colmap-bin` and `sfm to-nerfstudio` resolve a list with
 `resolve_in_names` against the reconstruction's image names, in the
 reconstruction's workspace. A name given with a range is resolved with the
-range as `narrow`. The rules for telling a name from a range and the errors
-are in [`../cli/README.md`](../cli/README.md#the-shared--r--range-option).
+range as `narrow`. A value with a slice is split into the name and the slice
+by `split_named_image_list_value` before anything is read, and the slice is
+applied with `slice_members` to the images the command takes from the
+resolved list: the image paths after the extension test, or the members
+`resolve_in_names` returns, before they are put in the reconstruction's order.
+The rules for telling a name from a range and the errors are in
+[`../cli/README.md`](../cli/README.md#the-shared--r--range-option).
 
 ## Rust API
 
 The reader, validator and resolver live in
 [named_image_lists.rs](../../crates/sfmtool-core/src/workspace/named_image_lists.rs),
+and the slice's parser and arithmetic in
+[named_image_lists/slice.rs](../../crates/sfmtool-core/src/workspace/named_image_lists/slice.rs),
 in `sfmtool_core::workspace`, bound as `sfmtool.workspace`.
 
 ```rust
@@ -189,6 +376,17 @@ impl NamedImageLists {
         image_names: &[S],
         narrow: Option<&RangeExpr>,
     ) -> Result<Vec<NamedImageListMember>, NamedImageListsError>;
+
+    /// The items `slice` keeps of `items`, the images a command takes from
+    /// the list `name` (already resolved and narrowed by `narrow`), in the
+    /// slice's order; `SlicedToNothing` when it keeps none.
+    pub fn slice_members<T>(
+        &self,
+        name: &str,
+        narrow: Option<&RangeExpr>,
+        slice: &NamedImageListSlice,
+        items: Vec<T>,
+    ) -> Result<Vec<T>, NamedImageListsError>;
 }
 
 pub struct NamedImageListMember {
@@ -196,6 +394,31 @@ pub struct NamedImageListMember {
     pub entry: usize,       // the entry that matched it, from 0
     pub frame: Option<i64>, // None for an entry without a frame field
 }
+
+/// Python's `[start:stop:step]`; each part `None` when left empty, and the
+/// step never `Some(0)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NamedImageListSlice { /* start, stop, step: Option<i64> */ }
+
+impl NamedImageListSlice {
+    /// `ZeroStep` for a step of `Some(0)`.
+    pub fn new(start: Option<i64>, stop: Option<i64>, step: Option<i64>)
+        -> Result<Self, NamedImageListSliceError>;
+    /// The bracketed text, `[` and `]` included.
+    pub fn parse(text: &str) -> Result<Self, NamedImageListSliceError>;
+    pub fn start(&self) -> Option<i64>;
+    pub fn stop(&self) -> Option<i64>;
+    pub fn step(&self) -> Option<i64>;
+    /// Python's `range(*slice(start, stop, step).indices(len))`.
+    pub fn indices(&self, len: usize) -> Vec<usize>;
+}
+
+impl fmt::Display for NamedImageListSlice { /* `[start:stop]` or `[start:stop:step]` */ }
+
+/// A `-r` or `--named-image-list` value: the list's name and its slice.
+pub fn split_named_image_list_value(
+    value: &str,
+) -> Result<(&str, Option<NamedImageListSlice>), NamedImageListSliceError>;
 ```
 
 `NamedImageList` gives a list's `name()` and `entries()`, and
@@ -226,7 +449,22 @@ lists file: `NotAWorkspace`, `Io`, `InvalidJson` (with `line` and `column`),
 names the file defines), `NarrowedEntryWithoutFrameField`, `DuplicateMatches`
 (with every file two entries match), `FrameNumberTooLarge` (a frame field
 that captured a number beyond `i64`), `NoMatch`, `NarrowedToNothing` (with
-the narrowing range) and `Cancelled`.
+the narrowing range), `SlicedToNothing` (with the narrowing range, the slice
+and the number of items it was given) and `Cancelled`.
+
+`NamedImageListSliceError` is the error about a value's text, and names the
+value as given: `InvalidName` (a value with no `[` that breaks the name rule),
+`NotOnAName` (a `[` with no valid name before it), `Malformed` (with what is
+wrong) and `ZeroStep`. `split_named_image_list_value` checks a bare name as
+well as a sliced one, so a caller has one function to read the value with.
+
+**Why the slice is not an argument of the resolvers.** The image-directory
+commands apply their extension test to the resolver's members, and the slice
+must index what that test leaves. So the slice is a step after resolution,
+generic over the items so that it takes paths as well as members, while the
+arithmetic and the messages stay in Rust. `NamedImageListSlice`'s fields are
+private, with `new` the only way to build one from parts, so that no caller
+can make a slice with a step of 0 and `indices` never meets one.
 
 `resolve` reports through `progress` the number of directory entries it has
 read, and stops with `Cancelled` when `progress` is cancelled, since a `**`
@@ -248,22 +486,32 @@ if let Some(lists) = NamedImageLists::read(workspace_root)? {
 `read(workspace_dir)` (a static method that returns `None` when the workspace
 has no lists file), the `path`, `workspace_dir` and `names` properties,
 `len()` and `in`, `resolve(name, narrow=None, progress=None)` and
-`resolve_in_names(name, image_names, narrow=None)`. Both resolvers return a
-list of `NamedImageListMember`, with `path`, `entry` and `frame`. `narrow` is a
-`sfmtool.reconstruction.RangeExpr`, and `progress` a `ProgressCounter` that
-counts the directory entries read. The module also holds
-`is_named_image_list_name(name)` and the constant
+`resolve_in_names(name, image_names, narrow=None)`, and
+`slice_members(name, slice, items, narrow=None)`, which takes a list of any
+objects. Both resolvers return a list of `NamedImageListMember`, with `path`,
+`entry` and `frame`. `narrow` is a `sfmtool.reconstruction.RangeExpr`, and
+`progress` a `ProgressCounter` that counts the directory entries read. The
+class `NamedImageListSlice` is built as `NamedImageListSlice(start=None,
+stop=None, step=None)` or read by its static method `parse(text)`, has the
+`start`, `stop` and `step` properties and `indices(length)`, compares and
+hashes by its parts, and `str()` writes it back in brackets. The module also
+holds `is_named_image_list_name(name)`,
+`split_named_image_list_value(value)`, which returns the name and a
+`NamedImageListSlice` or `None`, and the constant
 `NAMED_IMAGE_LISTS_FILE_NAME`. An I/O failure raises the `OSError` subclass
 for its kind, a cancelled resolve `InterruptedError`, and every other error
 `ValueError`, with the Rust message.
 
 ```python
 from sfmtool.reconstruction import RangeExpr
-from sfmtool.workspace import NamedImageLists
+from sfmtool.workspace import NamedImageLists, split_named_image_list_value
 
 lists = NamedImageLists.read(workspace_dir)
 members = lists.resolve("rig_sharp", narrow=RangeExpr("10-20"))
 paths = [m.path for m in members]
+
+name, walk_slice = split_named_image_list_value("walk1[:30]")
+first_30 = lists.slice_members(name, walk_slice, lists.resolve(name))
 ```
 
 ## Implementation notes

@@ -34,12 +34,13 @@ used. Directories are expanded recursively, keeping only files ending in
 whatever its extension. The command errors if no image remains after expansion
 and `--range` filtering.
 
-`-r/--range` also accepts the name of one of the workspace's named image
-lists: a value with a letter in it is a name, and one name with one range
-narrows the list. A list replaces `PATHS`, and giving both is an error; the
-workspace is the one found from the current directory, and only the
-list's members that are image files are used, in the list's order.
-The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+`-r/--range` also accepts the name of one of the workspace's named image lists:
+a value with a letter in it is a name, one name with one range narrows the
+list, and a slice after the name (`'walk1[:30]'`) takes part of the list by
+position. A list replaces `PATHS`, and giving both is an error; the workspace
+is the one found from the current directory, and only the list's members that
+are image files are used, in the list's order. The rules and errors are in [the
+shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
 ## Action Modes
 

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A workspace's named image lists: the `.sfm-named-image-lists.json` file in
-//! the workspace root, its validation, and the resolution of one list to the
-//! workspace's image files or to a reconstruction's image names.
+//! the workspace root, its validation, the resolution of one list to the
+//! workspace's image files or to a reconstruction's image names, and the slice
+//! that takes part of a resolved list by position ([`NamedImageListSlice`]).
 //!
 //! The file format, its rules and the order of a list's members are specified
 //! in `specs/workspace/named-image-lists.md`. A pattern is checked and matched
@@ -12,6 +13,7 @@
 //! here.
 
 mod json;
+mod slice;
 mod walk;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +28,7 @@ use sfmtool_camrig_format::{
 use sfmtool_progress::Progress;
 
 use json::Json;
+pub use slice::{split_named_image_list_value, NamedImageListSlice, NamedImageListSliceError};
 
 /// The name of the lists file, in the workspace root beside
 /// [`WORKSPACE_FILE_NAME`].
@@ -212,6 +215,16 @@ pub enum NamedImageListsError {
         list: String,
         range: String,
     },
+    /// A slice kept none of the `len` images the caller took from the list.
+    /// `range` is the narrowing range, as written by `RangeExpr`'s `Display`,
+    /// when one was given, and `slice` the slice as its `Display` writes it.
+    SlicedToNothing {
+        path: PathBuf,
+        list: String,
+        range: Option<String>,
+        slice: String,
+        len: usize,
+    },
     /// The caller's progress asked the resolution to stop.
     Cancelled,
 }
@@ -344,6 +357,24 @@ impl fmt::Display for NamedImageListsError {
                 "{}: the range '{range}' left no members of named image list '{list}'",
                 path.display()
             ),
+            Self::SlicedToNothing {
+                path,
+                list,
+                range,
+                slice,
+                len,
+            } => {
+                write!(
+                    f,
+                    "{}: the slice {slice} of named image list '{list}'",
+                    path.display()
+                )?;
+                if let Some(range) = range {
+                    write!(f, " narrowed by the range '{range}'")?;
+                }
+                let images = if *len == 1 { "image" } else { "images" };
+                write!(f, " leaves none of its {len} {images}")
+            }
             Self::Cancelled => write!(f, "resolving the named image list was cancelled"),
         }
     }
@@ -526,6 +557,39 @@ impl NamedImageLists {
                 None => Box::new(names.iter().copied()),
             }
         })
+    }
+
+    /// The items `slice` keeps of `items`, in the slice's order: the images a
+    /// command takes from the list called `name`, already resolved, narrowed
+    /// by `narrow` when one was given, and reduced to what the command uses.
+    ///
+    /// `name` and `narrow` name the list in the error; `slice` indexes
+    /// `items` by position from 0, never by frame number. A slice that keeps
+    /// no item is `SlicedToNothing`, and an unknown `name` is `UnknownList`.
+    pub fn slice_members<T>(
+        &self,
+        name: &str,
+        narrow: Option<&RangeExpr>,
+        slice: &NamedImageListSlice,
+        items: Vec<T>,
+    ) -> Result<Vec<T>, NamedImageListsError> {
+        let list = self.list(name)?;
+        let indices = slice.indices(items.len());
+        if indices.is_empty() {
+            return Err(NamedImageListsError::SlicedToNothing {
+                path: self.path.clone(),
+                list: list.name.clone(),
+                range: narrow.map(ToString::to_string),
+                slice: slice.to_string(),
+                len: items.len(),
+            });
+        }
+        let mut items: Vec<Option<T>> = items.into_iter().map(Some).collect();
+        // A slice's indexes are distinct, so each item is taken once.
+        Ok(indices
+            .into_iter()
+            .filter_map(|index| items[index].take())
+            .collect())
     }
 
     fn check_narrowing(
