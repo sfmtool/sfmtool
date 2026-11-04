@@ -244,7 +244,11 @@ empty-handed". Name the thing and say what it does.
   radial B-spline and per-image focal, principal-point, B-spline and
   rolling-shutter adjustments, and refined normals. `kerry_park` likewise holds
   `kerry_park_ground_truth_v01.sfmr`, all 48 images with the rig, in metres
-  with X east and Y north from eight GPS fixes, and its own marker.
+  with X east and Y north from eight GPS fixes, and its own marker. Beside it
+  is `kerry_park_ground_truth_v02.sfmr`, a newer version of the same 48 images
+  and rig, also minimal and in metres: two `SFMTOOL_FISHEYE` cameras, each with
+  its own principal point and a radial B-spline, and refined normals. Its camera
+  positions match v01's to within 0.11 m, so it keeps v01's scale and axes.
   `dino_dog_toy` holds `dino_dog_toy_ground_truth_v01.sfmr`, all 85 images,
   minimal and in metres, with an `SFMTOOL_PINHOLE` camera, per-image camera
   adjustments and refined normals; its scale comes from four tape-measured
@@ -253,8 +257,10 @@ empty-handed". Name the thing and say what it does.
   differs from the other two. The `_v01` suffix is a version, so a file name
   always means the same content: a later correction, such as one found with SfM
   Explorer, goes into a new version (`_v02`, …) rather than overwriting an
-  earlier one, as seoul_bull's `_v02` sits beside its `_v01`. The tests and
-  scripts still use the `_v01` files, and none uses the dino file. The
+  earlier one, as seoul_bull's `_v02` sits beside its `_v01`. The fixtures and
+  scripts still use the `_v01` files; some Python and Rust tests of camera
+  models, per-image adjustments and the viewer read seoul_bull's `_v02`, and no
+  test or script uses kerry_park's `_v02` or the dino file. The
   `seoul_bull_workspace` and `kerry_park_workspace` fixtures triangulate at
   these poses rather than solving; only the tests of a solve itself use
   `kerry_park_solve_once` / `kerry_park_camrig_workspace`, which run COLMAP in a

@@ -97,14 +97,20 @@ Three datasets also carry reference reconstructions, in metres:
   camera adjustments and refined normals.
 - `kerry_park/kerry_park_ground_truth_v01.sfmr` — all 48 images, with the
   rig; the scale and orientation come from eight GPS fixes (X east, Y north).
+- `kerry_park/kerry_park_ground_truth_v02.sfmr` — a newer version of the same
+  48 images and rig, with two `SFMTOOL_FISHEYE` cameras that each have their
+  own principal point, and refined normals; its camera positions match v01's
+  to within 0.11 m, so it keeps v01's scale and orientation.
 - `dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr` — all 85 images, with an
   `SFMTOOL_PINHOLE` camera, per-image camera adjustments and refined normals;
   the scale comes from four tape-measured distances between points on the toy.
 
 The `_v01` suffix is a version, so a file name always means the same content:
 a later correction, such as one found with SfM Explorer, goes into a new
-version (`_v02`, …) rather than overwriting an earlier one. The tests and
-scripts still use the `_v01` files, and none uses the dino file.
+version (`_v02`, …) rather than overwriting an earlier one. The fixtures and
+scripts still use the `_v01` files; some Python and Rust tests of camera
+models, per-image adjustments and the viewer read seoul_bull's `_v02`, and no
+test or script uses kerry_park's `_v02` or the dino file.
 
 Each directory has a `.sfm-workspace.json`, so the file opens in place:
 
@@ -112,6 +118,7 @@ Each directory has a `.sfm-workspace.json`, so the file opens in place:
 pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v01.sfmr
 pixi run gui -- test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr
 pixi run gui -- test-data/images/kerry_park/kerry_park_ground_truth_v01.sfmr
+pixi run gui -- test-data/images/kerry_park/kerry_park_ground_truth_v02.sfmr
 pixi run gui -- test-data/images/dino_dog_toy/dino_dog_toy_ground_truth_v01.sfmr
 ```
 
