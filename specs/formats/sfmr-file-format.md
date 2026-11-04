@@ -198,8 +198,9 @@ reconstruction.sfmr (ZIP archive)
 │   ├── positions_xyzw.{N}.4.float64.zst       # Homogeneous 3D point coordinates (w=0 = point at infinity)
 │   ├── colors_rgb.{N}.3.uint8.zst             # RGB colors (0-255)
 │   ├── reprojection_errors.{N}.float32.zst    # Reprojection errors
+│   ├── underived_normals_xyz.{K}.3.float32.zst # (Optional, v16+ with normals and the patch frame) normals of the K finite points the frame gives none
 │   ├── metadata.json.zst                      # Points metadata
-│   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals; (0, 0, 0) for a finite point with a patch from v16
+│   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals; from v16 only in a file without the patch frame
 │   ├── normal_confidence.{N}.uint8.zst        # (Optional) per-point normal confidence
 │   ├── point_constraints.{N}.uint8.zst        # (Optional) per-point solve constraint (version 7+)
 │   ├── constraint_distances.{N}.float64.zst   # (Optional) a ranged point's distance (version 7+)
@@ -421,7 +422,7 @@ in the `content_xxh128` entry below.
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
 - `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file. The optional `thumbnails_y_x_rgb` participates only when present, in its lexicographic slot (after `sift_content_hashes`, before `translations_xyz`). The optional per-image intrinsic adjustment columns (version 13+) participate only when present, each in its lexicographic slot: `focal_adjustments` after `feature_tool_hashes` (in an `embedded_patches` file, after `camera_indexes`) and before `image_file_hashes` and `metadata.json`; `principal_point_adjustments_xy` after `names.json` and before `quaternions_wxyz`. The optional per-image radial B-spline correction and rolling-shutter rates (version 14+) participate the same way, `radial_bspline_adjustments` then `rolling_shutter_rates_xyz`, after `quaternions_wxyz` and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The two image-reading columns (version 15+, required) take their lexicographic slots: `gradient_structure_tensors_xx_yy_xy` after `focal_adjustments` (after `feature_tool_hashes` in a file without focal adjustments, after `camera_indexes` in an `embedded_patches` file without them) and before `image_file_hashes` and `metadata.json`; `sharpness` after `rolling_shutter_rates_xyz` (after `radial_bspline_adjustments` or `quaternions_wxyz` when those are absent) and before `sift_content_hashes` (in an `embedded_patches` file, before `thumbnails_y_x_rgb` and `translations_xyz`). The `images/metadata.json` bytes, which carry the `has_thumbnails` flag and, from version 15, the readings' `image_to_gray`, are always included, so two files that differ only in whether they carry thumbnails hash differently.
-- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
+- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, or from version 16 in a file with the patch frame `underived_normals_xyz` (in its lexicographic slot, after `reprojection_errors`, the last), `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`). `reference_observations` participates when present (version 12+, exactly when `points3d/metadata.json` has `has_uv_frames`), in its lexicographic slot, after `point_indexes`. The eight observation-reading columns participate when `has_observation_readings` is set, each in its lexicographic slot: `blur_matched_bitmap_zncc` first, before `feature_indexes`; `plain_bitmap_zncc` after `observation_counts`, before `point_indexes`; and the six `zncc_self_similarity_*` columns last, after `reference_observations`, in the order `cos_view_angle`, `ellipse_axes`, `ellipse_axes_is_at_least`, `ellipse_major_angle`, `tilt_angle`, `zoom`.
 - `derived_xxh128`: (Version 10+, required) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`. A version 10+ file without it fails verification; a file below version 10 has no such field, because its depth statistics are part of `images_xxh128`.
 - `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying"). Before version 10 the depth statistics reached this digest through `images_xxh128`.
@@ -1670,11 +1671,14 @@ the flag:
 
 **Field descriptions:**
 - `point_count`: Number of 3D points.
-- `has_normals`: (version 3+) Whether the optional `normals_xyz` array is
-  present. See [Normals](#points3dnormals_xyzn3float32zst-optional). From
-  version 16, with `has_uv_frames` also `true`, the normals of finite points
-  with a patch are derived from the frame; with `has_uv_frames` alone the file
-  has no normals.
+- `has_normals`: (version 3+) Whether the file has normals. Without the patch
+  frame they are the `normals_xyz` array. See
+  [Normals](#points3dnormals_xyzn3float32zst-optional). From version 16, with
+  `has_uv_frames` also `true`, the normals of finite points whose frame gives
+  one are derived from it and the rest are in `underived_normals_xyz`, which
+  is absent when there are none, so this flag, not an entry, says that the
+  file has normals ([Derived normals](#derived-normals-version-16)); with
+  `has_uv_frames` alone the file has no normals.
 - `has_normal_confidence`: (version 5+) Whether the optional
   `normal_confidence` array is present. See
   [Normal confidence](#points3dnormal_confidencenuint8zst-optional).
@@ -1822,22 +1826,24 @@ Per-point surface normals.
 - **Shape**: `(N, 3)` where N = point_count
 - **Data type**: `float32` (little-endian)
 - **Format**: [x, y, z] unit normal vectors in world coordinate system. Rows for
-  `w = 0` points are `(0, 0, 0)`. From version 16, in a file that also has the
-  patch frame, the row of a finite point whose `u` is non-zero and whose
-  `u × v` gives a normal is stored as `(0, 0, 0)`, and its normal is
-  `normalize(u × v)`, which a reader derives
-  ([Derived normals](#derived-normals-version-16)). Every other row of a finite
-  point is a unit vector, or `(0, 0, 0)` when the file has no normal for that
-  point, for example when the directions from the point to the cameras that
-  observe it cancel out. Outside the derived rows the zero row is the only
-  marker of a missing normal: a reader treats it as "no normal", never as a
-  direction. A writer may replace a zero row of a finite point with a normal
-  it derives from the geometry, and keeps every other unit-vector row as it was
-  given. A finite point with a patch frame that gives a normal has no "no
-  normal" state from version 16: its normal is its frame's.
+  `w = 0` points are `(0, 0, 0)`. A row for a finite point is a unit vector,
+  or `(0, 0, 0)` when the file has no normal for that point, for example when
+  the directions from the point to the cameras that observe it cancel out.
+  The zero row is the only marker of a missing normal: a reader treats it as
+  "no normal", never as a direction. A writer may replace a zero row of a
+  finite point with a normal it derives from the geometry, and keeps every
+  unit-vector row as it was given.
 - **Optional** (version 3+): present only when `points3d/metadata.json`'s
   `has_normals` is `true`. A reconstruction may carry no normals, in which case
   this array is absent. Versions 1 and 2 always include it.
+- **From version 16** this full column is stored only by a file without the
+  patch frame (`has_uv_frames` `false`), where no normal can be derived and
+  every row is stored, as before. A file with the patch frame stores its
+  normals as [derived normals](#derived-normals-version-16) and the
+  `underived_normals_xyz` entry instead, and a version 16 file with
+  `has_uv_frames` that holds `normals_xyz` is invalid. A finite point whose
+  frame gives a normal has no "no normal" state from version 16: its normal
+  is its frame's.
 - **Naming**: Versions 1 and 2 stored this array under the name
   `points3d/estimated_normals_xyz.{N}.3.float32.zst`; version 3 renamed it to
   `points3d/normals_xyz`.
@@ -2044,7 +2050,7 @@ and infinity points alike:
   `center`. Its outward normal `normalize(u × v)` is the point's normal (a
   unit vector; `u × v` itself is only parallel to it, scaled by the
   half-extents). From version 16 a file with normals stores none for such a
-  point and a reader derives it ([Derived normals](#derived-normals-version-16));
+  point, and a reader derives it ([Derived normals](#derived-normals-version-16));
   an older file stores it in `normals_xyz`.
 - **Point at infinity** (`w = 0`, direction `d`): the corner `d + s·u + t·v` is
   again a direction, so the patch is a small oriented region of the sphere of
@@ -2052,10 +2058,11 @@ and infinity points alike:
   a point at infinity is parallel to `d`, so the visible side faces back toward
   the observers and the normal is fixed at `normalize(-d)`. Accordingly `u` and
   `v` are tangent to the unit sphere (`⊥ d`) — carrying only the in-plane rotation
-  and the angular half-sizes — and `u × v` points along `-d`. The per-point
-  `normals_xyz` entry is `(0, 0, 0)` here, so unlike a finite point the patch's
-  `normalize(u × v)` is implied by the direction rather than read from
-  `normals_xyz`.
+  and the angular half-sizes — and `u × v` points along `-d`. The point's
+  normal is `(0, 0, 0)` here (a `normals_xyz` row before version 16, no stored
+  row from version 16), so unlike a finite point the patch's
+  `normalize(u × v)` is implied by the direction rather than read as a
+  normal.
 
 A producer that converts a point between finite and infinity carries its
 patch frame across preserving apparent size: demotion divides the half-vectors
@@ -2087,39 +2094,66 @@ does not store it.
 In a file of version 16 or later whose `points3d/metadata.json` has both
 `has_normals` and `has_uv_frames`, the normal of a point is **derived** when
 the point is finite (`w ≠ 0`), its `u` is non-zero, and `u × v` gives a
-normal. Its `normals_xyz` row is stored as `(0, 0, 0)`, and a reader fills it
-with `normalize(u × v)` computed in `f32`: the cross product
+normal: it is `normalize(u × v)` computed in `f32`, the cross product
 `(uy·vz − uz·vy, uz·vx − ux·vz, ux·vy − uy·vx)`, its length
 `sqrt(nx² + ny² + nz²)` summed in that order, and each component divided by
 the length. `u × v` gives no normal where that length is zero or not finite,
-or a component of the result is not finite.
+or a component of the result is not finite. A derived normal is not stored.
 
-- **Writer.** A writer sets the normal of each such point in the value it is
-  handed to `normalize(u × v)` before writing, and stores the zero row, so
-  after a write the value is what a reader of the file gets back, and the
-  normal it held before plays no part in the file or in `content_xxh128`. A
-  caller that changes a finite patched point's normal turns its frame to
-  match, or the change is lost when the value is saved.
-- **Rows stored as before.** A point at infinity keeps its zero row and gets
-  no derived normal: its normal is fixed through `-d`. A point without a
-  patch stores its normal, or the zero row of no normal. A point whose frame
-  is degenerate (`u` non-zero and `u × v` giving no normal) stores its normal
-  as well: the format does not otherwise constrain a frame, so a writer keeps
-  such a point rather than refusing the file.
-- **Refused.** A reader and a verifier refuse a version 16 file that stores a
-  non-zero row for a point whose normal is derived.
+The **underived** points are the other finite points: those without a patch
+(`u` zero) and those whose frame is degenerate (`u` non-zero and `u × v`
+giving no normal). Their normals, `K` of them, are stored in point order, the
+`k`-th row the normal of the `k`-th underived point, in
+
+##### `points3d/underived_normals_xyz.{K}.3.float32.zst` (Optional, version 16+)
+
+- **Shape**: `(K, 3)`, K = the number of underived points
+- **Data type**: `float32` (little-endian)
+- **Format**: each underived point's normal as `normals_xyz` defines a row of
+  a finite point: a unit vector, or `(0, 0, 0)` for a point with no normal.
+- **Present** exactly when the file has both `has_normals` and
+  `has_uv_frames` and `K > 0`. When every finite point's normal is derived the
+  entry is absent, not stored with zero rows; `has_normals` is what says the
+  file has normals, so a file with `has_normals` and no normals entry has
+  every normal derived, and a file without `has_normals` has none.
+
+A point at infinity is neither derived nor stored: its normal is `(0, 0, 0)`,
+fixed through `-d`. A reader rebuilds the full `(N, 3)` normals: the derived
+normal for each derived point, the stored rows for the underived points in
+order, and `(0, 0, 0)` for each point at infinity. In memory, and to Python,
+the normals stay `(N, 3)`.
+
+- **Writer.** A writer sets the normal of each derived point in the value it
+  is handed to `normalize(u × v)`, and each point at infinity's to
+  `(0, 0, 0)`, before writing, so after a write the value is what a reader of
+  the file gets back, and the normals it held before for those points play no
+  part in the file or in `content_xxh128`. A caller that changes a finite
+  patched point's normal turns its frame to match, or the change is lost when
+  the value is saved. A degenerate frame is kept rather than refused, since
+  the format does not otherwise constrain a frame; its point's normal is
+  stored.
+- **Refused.** A reader and a verifier refuse a version 16 file with both
+  flags that holds the full `normals_xyz` column, an `underived_normals_xyz`
+  entry whose `K` is not the file's number of underived points (or whose
+  bytes do not hold `K` rows), or no such entry where `K > 0`; and a file of
+  any version that holds `underived_normals_xyz` without both flags, or below
+  version 16.
 - **Only with both flags.** A file with the patch frame and no normals stays
-  without normals; nothing is derived for it.
-- **Older files** read their normals as stored, including normals that
+  without normals; nothing is derived for it. A file with normals and no
+  patch frame stores the full `normals_xyz` column.
+- **Older files** read their full column as stored, including normals that
   disagree with their frames. Saving one as version 16 replaces those normals
   by their frames' ([Version 15 → Version 16](#version-15--version-16)).
-- **Normal confidence** is stored and read as it is.
+- **Normal confidence** is stored and read as it is, for every point.
 - **Why.** The frame already states the normal, so storing it twice let the
-  two disagree, and a reader could not tell which to trust. Zero rows compress
-  to almost nothing: with zstd at level 3, `normals_xyz` of
-  `kerry_park_ground_truth_v02` (387 points, all derived) goes from 3,841 to
-  19 bytes, and that of `dino_dog_toy_ground_truth_v01` (1,243 points) from
-  13,769 to 19.
+  two disagree, and a reader could not tell which to trust. A shorter column
+  under the old name would read as a malformed `normals_xyz`, so the stored
+  rows take their own name, which says whose normals they are. In the five
+  ground-truth files every finite point has a patch whose frame gives its
+  normal, so a version 16 save of each stores no normals entry at all: with
+  zstd at level 3, `normals_xyz` took 3,841 bytes in
+  `kerry_park_ground_truth_v02` (387 points) and 13,769 in
+  `dino_dog_toy_ground_truth_v01` (1,243 points), and both files store none.
 
 Optional per-point data has five independent pieces, each flagged in
 `points3d/metadata.json`:
@@ -2958,9 +2992,11 @@ For the structure, a file fails verification when:
   stored under the entry another version gives it, such as a `.float32.`
   sharpness in a version 16 file or a `_deficit` column in a version 15 file
   ([Version 15 → Version 16](#version-15--version-16));
-- in a version 16+ file with both `has_normals` and `has_uv_frames`, a
-  `normals_xyz` row is not `(0, 0, 0)` where the point's normal is derived
-  from its frame ([Derived normals](#derived-normals-version-16)).
+- in a version 16+ file with both `has_normals` and `has_uv_frames`, the
+  full `normals_xyz` column is present, or `underived_normals_xyz` is missing,
+  extra or holds another number of rows than the file has underived points,
+  or the entry appears in a file that may not hold it
+  ([Derived normals](#derived-normals-version-16)).
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -3088,8 +3124,9 @@ describes. Other parts of this spec are implemented by:
   `clone_with_changes(observation_readings=...)`.
 - Normals and their confidence: `write_sfmr` sets the normal of each finite
   point with a patch whose frame gives one to `normalize(u × v)`
-  ([Derived normals](#derived-normals-version-16)), fills each other zero row
-  of `normals_xyz` from mean-viewing normals it recomputes from the geometry,
+  ([Derived normals](#derived-normals-version-16)), and each point at
+  infinity's to zero, fills each other zero row of the normals from
+  mean-viewing normals it recomputes from the geometry,
   and passes `normal_confidence` through untouched. It never invents or adjusts a
   confidence value, not even for a normal it fills in, so a caller that
   supplies both keeps them coherent. The Python `write_sfmr` treats the
@@ -3345,7 +3382,7 @@ or later needs them for every image (see
 | `images/sharpness.{N}.float32.zst` → `images/sharpness.{N}.float16.zst` | The sharpness is stored as `float16`, each value rounded to the nearest, ties to even ([Why the readings are stored this way](#why-the-readings-are-stored-this-way)). Same slot in `images_xxh128`. |
 | `tracks/zncc_self_similarity_ellipse_axes.{M}.2.float32.zst` → `.float16.zst`, and likewise `tracks/zncc_self_similarity_ellipse_major_angle`, `tracks/zncc_self_similarity_cos_view_angle`, `tracks/zncc_self_similarity_tilt_angle` and `tracks/zncc_self_similarity_zoom` | The five self-similarity value columns of the [observation readings](#observation-readings-optional-version-12) are stored as `float16`, rounded the same way. Same slots in `tracks_xxh128`. |
 | `tracks/plain_bitmap_zncc.{M}.float32.zst` → `tracks/plain_bitmap_zncc_deficit.{M}.float16.zst`, and `tracks/blur_matched_bitmap_zncc.{M}.float32.zst` → `tracks/blur_matched_bitmap_zncc_deficit.{M}.float16.zst` | The two scores are stored as their ZNCC deficits `1 − z` in `float16` ([Why the scores are stored as their deficits](#observation-readings-optional-version-12)). Same slots in `tracks_xxh128`. |
-| `points3d/normals_xyz` | In a file with both the normals and the patch frame, the row of a finite point whose patch frame gives a normal is stored as `(0, 0, 0)` and read as `normalize(u × v)` ([Per-point patch frame](#per-point-patch-frame-optional-version-3)). |
+| `points3d/normals_xyz.{N}.3.float32.zst` → `points3d/underived_normals_xyz.{K}.3.float32.zst` in a file with the patch frame | In a file with both the normals and the patch frame, the normal of a finite point whose frame gives one is not stored and reads as `normalize(u × v)`; only the K other finite points' normals are stored, in point order, and the entry is absent when K is 0 ([Derived normals](#derived-normals-version-16)). In its lexicographic slot in `points3d_xxh128`, after `reprojection_errors`. A file without the patch frame keeps the full `normals_xyz` column. |
 
 `images/gradient_structure_tensors_xx_yy_xy` stays `float32`, and the flags
 stay `uint8`.
@@ -3366,7 +3403,8 @@ has normals up to 49° from their frames' and `kerry_park_ground_truth_v01` up
 to 1.7°, while the later ground truths agree within 0.03°. A version 16 file
 maps back to version 15 by widening each `float16` column to `float32`, which
 is exact, writing each score as `1 − w`, renaming the entries, and storing the
-derived normals. A file holding one of these columns under the other
+full `normals_xyz` column of the normals it reads, the derived ones among
+them. A file holding one of these columns under the other
 version's entry is invalid.
 
 ### Version 14 → Version 15
