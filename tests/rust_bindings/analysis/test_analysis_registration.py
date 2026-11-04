@@ -28,9 +28,10 @@ _EXPECTED_FUNCTIONS = (
     "keypoint_pairs_within_reach",
     "covered_by_finer",
     "track_table",
+    "match_frame_pair",
 )
 
-_EXPECTED_CLASSES = ("ObservationCoverage",)
+_EXPECTED_CLASSES = ("ObservationCoverage", "FrameFeatures")
 
 
 def test_all_analysis_bindings_registered():

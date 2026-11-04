@@ -360,6 +360,7 @@ Paths in the *Source* column are relative to
 | [analysis/cell_plane_normals.rs](../crates/sfmtool-py/src/analysis/cell_plane_normals.rs) | `cell_plane_normals` | [cell-plane-normals.md](core/patch/cell-plane-normals.md) |
 | [analysis/cluster_census.rs](../crates/sfmtool-py/src/analysis/cluster_census.rs) | `cluster_census` | [cluster-census.md](core/analysis/cluster-census.md) |
 | [analysis/track_table.rs](../crates/sfmtool-py/src/analysis/track_table.rs) | `track_table` | [track-table.md](core/analysis/track-table.md) |
+| [analysis/pick_images.rs](../crates/sfmtool-py/src/analysis/pick_images.rs) | `FrameFeatures`, `match_frame_pair` | [frame-pair-matching.md](core/analysis/frame-pair-matching.md) |
 
 ### `flow`
 

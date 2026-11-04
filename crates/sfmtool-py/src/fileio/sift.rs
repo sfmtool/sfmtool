@@ -253,6 +253,17 @@ impl PySiftFile {
         Ok(f(&data))
     }
 
+    /// The path the file was opened from, for a sibling binding that reads
+    /// other parts of it.
+    pub(crate) fn sift_path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The file's `metadata.json`, as read when it was opened.
+    pub(crate) fn sift_metadata(&self) -> &SiftMetadata {
+        &self.metadata
+    }
+
     fn lock_data(&self) -> std::sync::MutexGuard<'_, Option<Arc<SiftData>>> {
         // A panic while the lock was held leaves only a cache behind it.
         self.data.lock().unwrap_or_else(|e| e.into_inner())
