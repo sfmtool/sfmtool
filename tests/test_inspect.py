@@ -283,7 +283,8 @@ def test_inspect_sift_derived_value_edge_cases(
 
 def test_inspect_sift_with_invalid_readings(sample_sift_data, tmp_path: Path):
     """A .sift whose stored tensor no image reads says its readings are
-    invalid, and fails its integrity check, rather than deriving from them."""
+    invalid rather than deriving from them; changed after it was written, it
+    also fails its integrity check."""
     import json
     import zipfile
     from compression import zstd
