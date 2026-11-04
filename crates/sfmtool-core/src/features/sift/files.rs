@@ -293,8 +293,9 @@ impl From<Cancelled> for BuildSiftFilesError {
 /// [`BuildSiftFilesError::Version1Files`] before anything is written, as
 /// above, and [`BuildSiftFilesError::ListFolder`] when a folder the files
 /// would go in is there but cannot be listed. [`BuildSiftFilesError::Image`]
-/// when an image's readings are not finite under the conversion, naming the image and the conversion, as well
-/// as for an image that cannot be read. [`BuildSiftFilesError::Image`] or
+/// when an image's readings are not finite under the conversion, naming the
+/// image and the conversion, as well as for an image that cannot be read.
+/// [`BuildSiftFilesError::Image`] or
 /// [`BuildSiftFilesError::Write`] when an image or a file fails: no further
 /// image is started, the ones in flight finish, and the error is the first
 /// failing image's in input order. [`BuildSiftFilesError::Cancelled`] when the

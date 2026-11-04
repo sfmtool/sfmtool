@@ -251,7 +251,7 @@ def test_version_1_sift_files_passes_over_what_is_not_a_version_1_sift(tmp_path)
     (folder / "broken.jpg.sift").write_bytes(b"not a zip")
     (folder / "notes.txt").write_text("")
     assert version_1_sift_files(folder) is None
-    with pytest.raises(OSError, match="could not list the folder"):
+    with pytest.raises(OSError, match="failed to list the folder"):
         version_1_sift_files(folder / "notes.txt")
 
 

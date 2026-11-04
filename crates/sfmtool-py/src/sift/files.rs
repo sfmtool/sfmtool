@@ -52,9 +52,9 @@ use super::extract::{feature_options_error, feature_options_from_dict};
 ///         settings.
 ///     OSError: if a folder the files would go in holds version 1 `.sift`
 ///         files (the message is `str` of `version_1_sift_files`' result) or
-///         cannot be listed, or an image cannot be read, its readings are not finite, or
-///         a file cannot be written; the first failing image in input order is
-///         named.
+///         cannot be listed, or an image cannot be read, its readings are not
+///         finite, or a file cannot be written; the first failing image in
+///         input order is named.
 #[pyfunction]
 #[pyo3(signature = (image_paths, feature_options, feature_prefix_dir, *, concurrent_images=None))]
 pub fn build_sift_files(
@@ -152,7 +152,7 @@ pub fn version_1_sift_files(
         .detach(|| core_version_1_sift_files(&folder))
         .map_err(|e| {
             pyo3::exceptions::PyOSError::new_err(format!(
-                "could not list the folder {}: {e}",
+                "failed to list the folder {}: {e}",
                 folder.display()
             ))
         })?;
