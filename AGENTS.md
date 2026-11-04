@@ -258,9 +258,9 @@ empty-handed". Name the thing and say what it does.
   always means the same content: a later correction, such as one found with SfM
   Explorer, goes into a new version (`_v02`, …) rather than overwriting an
   earlier one, as seoul_bull's `_v02` sits beside its `_v01`. The fixtures and
-  scripts still use the `_v01` files; only two tests of per-image camera
-  adjustments read seoul_bull's `_v02`, and none uses kerry_park's `_v02` or
-  the dino file. The
+  scripts still use the `_v01` files; some Python and Rust tests of camera
+  models, per-image adjustments and the viewer read seoul_bull's `_v02`, and no
+  test or script uses kerry_park's `_v02` or the dino file. The
   `seoul_bull_workspace` and `kerry_park_workspace` fixtures triangulate at
   these poses rather than solving; only the tests of a solve itself use
   `kerry_park_solve_once` / `kerry_park_camrig_workspace`, which run COLMAP in a

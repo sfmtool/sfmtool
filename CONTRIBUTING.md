@@ -108,9 +108,9 @@ Three datasets also carry reference reconstructions, in metres:
 The `_v01` suffix is a version, so a file name always means the same content:
 a later correction, such as one found with SfM Explorer, goes into a new
 version (`_v02`, …) rather than overwriting an earlier one. The fixtures and
-scripts still use the `_v01` files; only two tests of per-image camera
-adjustments read seoul_bull's `_v02`, and none uses kerry_park's `_v02` or the
-dino file.
+scripts still use the `_v01` files; some Python and Rust tests of camera
+models, per-image adjustments and the viewer read seoul_bull's `_v02`, and no
+test or script uses kerry_park's `_v02` or the dino file.
 
 Each directory has a `.sfm-workspace.json`, so the file opens in place:
 
