@@ -1,30 +1,39 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for frame pair matching: one frame's features with its
-//! forest, and the motion statistics of a pair of frames
-//! (``sfmtool.analysis.FrameFeatures`` / ``match_frame_pair``; see
-//! ``specs/core/analysis/frame-pair-matching.md``).
+//! Python bindings for choosing the frames of a video capture: one frame's
+//! features with its forest, the motion statistics of a pair of frames, and
+//! the walk over a capture's sequences (``sfmtool.analysis.FrameFeatures`` /
+//! ``match_frame_pair`` / ``pick_images``, with ``CaptureImage``,
+//! ``CaptureFrame``, ``CaptureSequence`` and ``FrameId``; see
+//! ``specs/core/analysis/frame-pair-matching.md`` and
+//! ``specs/core/analysis/pick-images.md``).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use numpy::ndarray::Ix2;
 use numpy::PyUntypedArrayMethods;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyInterruptedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use sfmtool_core::analysis::pick_images::{
-    match_frame_pair as core_match_frame_pair, FrameFeatures, FramePairOptions,
+    match_frame_pair as core_match_frame_pair, pick_images as core_pick_images, CaptureFrame,
+    CaptureImage, CaptureSequence, FrameFeatures, FrameId, FramePairOptions, FrameSource,
+    FrameSourceError, PickImagesError, PickImagesOptions,
 };
 use sfmtool_core::features::kdforest::KdForestParams;
+use sfmtool_core::progress::{Event, Progress};
 use sfmtool_sift_format::{read_sift_features, read_sift_metadata, SiftMetadata, DESCRIPTOR_DIM};
 
 use crate::csr_args::float_array_f32;
 use crate::fileio::sift::PySiftFile;
-use crate::format_errors::read_err;
-use crate::helpers::value_err;
+use crate::format_errors::{fault_to_py, read_err, Direction, FormatError};
+use crate::helpers::{serde_to_py, value_err};
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
+use crate::ProgressCounter;
 
 /// One frame's features, with the KD-forest over its descriptors built once,
 /// so that a frame matched with several others is indexed once.
@@ -229,8 +238,11 @@ impl PyFrameFeatures {
 /// Returns:
 ///     A dict: ``matches`` (int), ``step_percent`` (float, the median
 ///     displacement in percent of the long side, NaN with no matches),
-///     ``f_inlier_share``, ``h_over_f`` and ``rotation_error`` (float, or
-///     None under ``min_matches``).
+///     ``f_inlier_share`` (float, None under ``min_matches`` matches),
+///     ``h_over_f`` (float, None under ``min_matches`` matches or
+///     ``min_matches`` F-inliers) and ``rotation_error`` (float, None where
+///     ``h_over_f`` is None, where no homography fits the F-inliers, or where
+///     no focal length tried gives a finite, non-singular ``K⁻¹ H K``).
 ///
 /// Raises:
 ///     ValueError: an option out of range, or frames of different sizes.
@@ -275,8 +287,375 @@ pub fn match_frame_pair<'py>(
     Ok(out)
 }
 
+/// Where one image of a capture is and where its ``.sift`` file goes.
+///
+/// Args:
+///     image_path: The image file (str or Path).
+///     sift_path: Its ``.sift`` file, which the ``ensure_sift_files``
+///         callable of ``pick_images`` makes exist and the walk reads.
+#[allow(rustdoc::invalid_rust_codeblocks)]
+#[pyclass(name = "CaptureImage", module = "sfmtool.analysis", frozen)]
+pub struct PyCaptureImage {
+    inner: CaptureImage,
+}
+
+#[pymethods]
+impl PyCaptureImage {
+    #[new]
+    fn new(image_path: PathBuf, sift_path: PathBuf) -> Self {
+        Self {
+            inner: CaptureImage {
+                image_path,
+                sift_path,
+            },
+        }
+    }
+
+    /// The image file.
+    #[getter]
+    fn image_path(&self) -> PathBuf {
+        self.inner.image_path.clone()
+    }
+
+    /// The image's ``.sift`` file.
+    #[getter]
+    fn sift_path(&self) -> PathBuf {
+        self.inner.sift_path.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CaptureImage({:?}, {:?})",
+            self.inner.image_path.display().to_string(),
+            self.inner.sift_path.display().to_string()
+        )
+    }
+}
+
+/// One instant of a capture: one image, or one per rig sensor with the
+/// reference sensor's first.
+///
+/// Args:
+///     number: The file number the frame's images carry.
+///     images: The frame's ``CaptureImage`` objects, one per sensor.
+#[allow(rustdoc::invalid_rust_codeblocks)]
+#[pyclass(name = "CaptureFrame", module = "sfmtool.analysis", frozen)]
+pub struct PyCaptureFrame {
+    inner: CaptureFrame,
+    images: Py<PyTuple>,
+}
+
+#[pymethods]
+impl PyCaptureFrame {
+    #[new]
+    fn new(py: Python<'_>, number: i64, images: Vec<Bound<'_, PyCaptureImage>>) -> PyResult<Self> {
+        let inner = CaptureFrame {
+            number,
+            images: images.iter().map(|i| i.get().inner.clone()).collect(),
+        };
+        Ok(Self {
+            inner,
+            images: PyTuple::new(py, images)?.unbind(),
+        })
+    }
+
+    /// The file number.
+    #[getter]
+    fn number(&self) -> i64 {
+        self.inner.number
+    }
+
+    /// The frame's images, a tuple of ``CaptureImage``, the reference
+    /// sensor's first.
+    #[getter]
+    fn images(&self, py: Python<'_>) -> Py<PyTuple> {
+        self.images.clone_ref(py)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CaptureFrame({}, {} images)",
+            self.inner.number,
+            self.inner.images.len()
+        )
+    }
+}
+
+/// One sequence of a capture, in file-number order, with the pattern each
+/// sensor's list entry uses.
+///
+/// Args:
+///     patterns: One pattern per sensor, in the order of each frame's images.
+///     frames: The ``CaptureFrame`` objects, in file-number order.
+#[allow(rustdoc::invalid_rust_codeblocks)]
+#[pyclass(name = "CaptureSequence", module = "sfmtool.analysis", frozen)]
+pub struct PyCaptureSequence {
+    inner: CaptureSequence,
+    frames: Py<PyTuple>,
+}
+
+#[pymethods]
+impl PyCaptureSequence {
+    #[new]
+    fn new(
+        py: Python<'_>,
+        patterns: Vec<String>,
+        frames: Vec<Bound<'_, PyCaptureFrame>>,
+    ) -> PyResult<Self> {
+        let inner = CaptureSequence {
+            patterns,
+            frames: frames.iter().map(|f| f.get().inner.clone()).collect(),
+        };
+        Ok(Self {
+            inner,
+            frames: PyTuple::new(py, frames)?.unbind(),
+        })
+    }
+
+    /// One pattern per sensor.
+    #[getter]
+    fn patterns(&self) -> Vec<String> {
+        self.inner.patterns.clone()
+    }
+
+    /// The frames, a tuple of ``CaptureFrame``, so that
+    /// ``sequence.frames[frame_id.frame]`` is the frame a ``FrameId`` names.
+    #[getter]
+    fn frames(&self, py: Python<'_>) -> Py<PyTuple> {
+        self.frames.clone_ref(py)
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.frames.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CaptureSequence({:?}, {} frames)",
+            self.inner.patterns,
+            self.inner.frames.len()
+        )
+    }
+}
+
+/// One frame of a capture: the index of its sequence in the list given to
+/// ``pick_images``, and its position in that sequence, from 0.
+#[allow(rustdoc::invalid_rust_codeblocks)]
+#[pyclass(name = "FrameId", module = "sfmtool.analysis", frozen, eq, hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PyFrameId {
+    /// The index of the sequence.
+    #[pyo3(get)]
+    sequence: usize,
+    /// The position of the frame in its sequence, from 0.
+    #[pyo3(get)]
+    frame: usize,
+}
+
+#[pymethods]
+impl PyFrameId {
+    #[new]
+    fn new(sequence: usize, frame: usize) -> Self {
+        Self { sequence, frame }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("FrameId(sequence={}, frame={})", self.sequence, self.frame)
+    }
+}
+
+/// A `FrameSource` over a Python callable, called with the GIL held and a
+/// list of `FrameId`. Its exception is kept so the binding raises it
+/// unchanged.
+struct PyFrameSource {
+    callable: Py<PyAny>,
+    error: Option<PyErr>,
+}
+
+impl FrameSource for PyFrameSource {
+    fn ensure_sift_files(
+        &mut self,
+        frames: &[FrameId],
+        _progress: &Progress,
+    ) -> Result<(), FrameSourceError> {
+        Python::attach(|py| {
+            let ids = frames.iter().map(|id| PyFrameId {
+                sequence: id.sequence,
+                frame: id.frame,
+            });
+            let ids = PyList::new(py, ids)?;
+            self.callable.call1(py, (ids,)).map(drop)
+        })
+        .map_err(|e| {
+            let message = e.to_string();
+            self.error = Some(e);
+            FrameSourceError { message }
+        })
+    }
+}
+
+/// Choose the frames of a video capture a Structure-from-Motion solve should
+/// use, from the SIFT features of the frames.
+///
+/// Reads a baseline sample of each sequence, judges whether each is a video
+/// and whether the capture can be solved, and when it can, walks each
+/// sequence choosing frames about ``target_step_percent`` of the image's long
+/// side apart, sharp ones in place of blurred ones. Options left as ``None``
+/// take the defaults of the Rust ``PickImagesOptions``.
+///
+/// Args:
+///     sequences: The capture's ``CaptureSequence`` objects.
+///     ensure_sift_files: A callable taking a list of ``FrameId``, which
+///         makes the ``.sift`` file of every image of those frames exist,
+///         extracting those that are missing or older than their image. It
+///         is called with every frame just before the walk reads it, each
+///         frame once, and with no frame the walk does not read.
+///     target_step_percent: The step to aim for, in percent of the long
+///         side (10).
+///     step_band: How far a step may be from the target, as a fraction
+///         (0.3).
+///     blur_ratio: A frame below this times its sequence's median sharpness
+///         is blurred (0.6).
+///     baseline_frames: How many frames the baseline samples (200).
+///     min_inlier_share: The fewest fundamental-matrix inliers a step that
+///         matches well has, as a share of its matches (0.5).
+///     ratio, min_matches, fundamental_error_per_960px,
+///         homography_error_per_960px, seed: How each pair is matched, as
+///         for ``match_frame_pair``.
+///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,
+///         as for ``FrameFeatures``.
+///     progress: A ``ProgressCounter``, set to the number of frames read.
+///
+/// Returns:
+///     The report as a dict of plain values, which ``json.dump`` writes as
+///     it is: ``verdict`` (``"solvable"``, ``"not_a_video"`` or
+///     ``"not_solvable"``), ``sequences`` (per sequence: ``baseline``,
+///     ``video``, ``solvability`` and ``walk``), ``frames`` (every frame
+///     read, with its readings) and ``pairs`` (every pair matched, with its
+///     statistics). A number that is not finite is ``None``.
+///
+/// Raises:
+///     The exception the callable raised, unchanged, and the exception a
+///     signal handler raised between two pairs (``KeyboardInterrupt`` for
+///     Ctrl+C), which stops the walk.
+///     OSError: a ``.sift`` file that cannot be read, as
+///         ``sfmtool.fileio.read_sift`` raises it, or a folder the ``.sift``
+///         files go in that cannot be listed.
+///     InterruptedError: the walk was cancelled otherwise.
+///     ValueError: an option out of range, a malformed sequence, version 1
+///         ``.sift`` files in a folder or read, or two frames whose
+///         reference images differ in size.
+///
+/// The GIL is released while the walk runs, and taken for each call of the
+/// callable and each check for a signal.
+#[allow(rustdoc::invalid_rust_codeblocks)]
+#[pyfunction]
+#[pyo3(signature = (sequences, ensure_sift_files, *, target_step_percent=None, step_band=None,
+                    blur_ratio=None, baseline_frames=None, min_inlier_share=None, ratio=None,
+                    min_matches=None, fundamental_error_per_960px=None,
+                    homography_error_per_960px=None, seed=None, preset=None, num_trees=None,
+                    leaf_size=None, max_leaf_checks=None, progress=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn pick_images<'py>(
+    py: Python<'py>,
+    sequences: Vec<Bound<'py, PyCaptureSequence>>,
+    ensure_sift_files: Bound<'py, PyAny>,
+    target_step_percent: Option<f64>,
+    step_band: Option<f64>,
+    blur_ratio: Option<f64>,
+    baseline_frames: Option<usize>,
+    min_inlier_share: Option<f64>,
+    ratio: Option<f32>,
+    min_matches: Option<usize>,
+    fundamental_error_per_960px: Option<f64>,
+    homography_error_per_960px: Option<f64>,
+    seed: Option<u64>,
+    preset: Option<&str>,
+    num_trees: Option<usize>,
+    leaf_size: Option<usize>,
+    max_leaf_checks: Option<usize>,
+    progress: Option<ProgressCounter>,
+) -> PyResult<Py<PyAny>> {
+    if !ensure_sift_files.is_callable() {
+        return Err(PyTypeError::new_err("ensure_sift_files must be callable"));
+    }
+    let defaults = PickImagesOptions::default();
+    let pair = FramePairOptions::default();
+    let options = PickImagesOptions {
+        target_step_percent: target_step_percent.unwrap_or(defaults.target_step_percent),
+        step_band: step_band.unwrap_or(defaults.step_band),
+        blur_ratio: blur_ratio.unwrap_or(defaults.blur_ratio),
+        baseline_frames: baseline_frames.unwrap_or(defaults.baseline_frames),
+        min_inlier_share: min_inlier_share.unwrap_or(defaults.min_inlier_share),
+        forest: forest_params(preset, num_trees, leaf_size, max_leaf_checks, None)?,
+        pair: FramePairOptions {
+            ratio: ratio.unwrap_or(pair.ratio),
+            min_matches: min_matches.unwrap_or(pair.min_matches),
+            max_leaf_checks: pair.max_leaf_checks,
+            fundamental_error_per_960px: fundamental_error_per_960px
+                .unwrap_or(pair.fundamental_error_per_960px),
+            homography_error_per_960px: homography_error_per_960px
+                .unwrap_or(pair.homography_error_per_960px),
+            seed: seed.unwrap_or(pair.seed),
+        },
+    };
+    let sequences: Vec<CaptureSequence> = sequences.iter().map(|s| s.get().inner.clone()).collect();
+    let mut source = PyFrameSource {
+        callable: ensure_sift_files.unbind(),
+        error: None,
+    };
+
+    // Every event, and so every pair matched and every batch read, takes the
+    // GIL to run Python's signal handlers. One that raises stops the walk,
+    // and its exception is raised in place of the cancellation.
+    let counter = progress.as_ref().map(ProgressCounter::handle);
+    let cancel = AtomicBool::new(false);
+    let signal: Mutex<Option<PyErr>> = Mutex::new(None);
+    let sink = |event: Event<'_>| {
+        if let (Event::Count { done, .. }, Some(counter)) = (event, &counter) {
+            counter.store(done as usize, Ordering::Relaxed);
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Err(e) = Python::attach(|py| py.check_signals()) {
+            *signal.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+    let result = py.detach(|| {
+        let progress = Progress::to(&sink).cancelled_by(&cancel);
+        core_pick_images(&sequences, &mut source, &options, &progress)
+    });
+    match result {
+        Ok(report) => serde_to_py(py, &report),
+        Err(e) => Err(match e {
+            PickImagesError::Source { message } => source
+                .error
+                .take()
+                .unwrap_or_else(|| PyValueError::new_err(message)),
+            PickImagesError::Cancelled => signal
+                .into_inner()
+                .unwrap_or_else(|p| p.into_inner())
+                .unwrap_or_else(|| PyInterruptedError::new_err(e.to_string())),
+            PickImagesError::ReadSift { ref source, .. } => {
+                fault_to_py(source.fault(), e.to_string(), Direction::Read)
+            }
+            PickImagesError::ListFolder { ref source, .. } => {
+                PyErr::from(std::io::Error::new(source.kind(), e.to_string()))
+            }
+            other => value_err(other),
+        }),
+    }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFrameFeatures>()?;
     m.add_function(wrap_pyfunction!(match_frame_pair, m)?)?;
+    m.add_class::<PyCaptureImage>()?;
+    m.add_class::<PyCaptureFrame>()?;
+    m.add_class::<PyCaptureSequence>()?;
+    m.add_class::<PyFrameId>()?;
+    m.add_function(wrap_pyfunction!(pick_images, m)?)?;
     Ok(())
 }

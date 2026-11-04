@@ -89,18 +89,7 @@ impl FrameFeatures {
         height: u32,
         forest: KdForestParams,
     ) -> Result<Self, FramePairError> {
-        for (name, value) in [
-            ("forest.num_trees", forest.num_trees),
-            ("forest.split_dim_candidates", forest.split_dim_candidates),
-            ("forest.leaf_size", forest.leaf_size),
-        ] {
-            if value == 0 {
-                return Err(FramePairError::Options {
-                    name,
-                    reason: "must be positive".to_string(),
-                });
-            }
-        }
+        validate_forest(&forest)?;
         if width == 0 || height == 0 {
             return Err(FramePairError::ImageSize { width, height });
         }
@@ -230,8 +219,30 @@ impl Default for FramePairOptions {
     }
 }
 
+/// The forest parameters `KdForestU8::build` asserts against: a tree count,
+/// split candidate count or leaf size of 0. [`FrameFeatures::new`] checks them
+/// before it builds, and a caller that builds many frames can check them once
+/// first.
+pub(super) fn validate_forest(forest: &KdForestParams) -> Result<(), FramePairError> {
+    for (name, value) in [
+        ("forest.num_trees", forest.num_trees),
+        ("forest.split_dim_candidates", forest.split_dim_candidates),
+        ("forest.leaf_size", forest.leaf_size),
+    ] {
+        if value == 0 {
+            return Err(FramePairError::Options {
+                name,
+                reason: "must be positive".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl FramePairOptions {
-    fn validate(&self) -> Result<(), FramePairError> {
+    /// The checks [`match_frame_pair`] makes on the options, for a caller that
+    /// checks them once before matching many pairs.
+    pub(super) fn validate(&self) -> Result<(), FramePairError> {
         if !(self.ratio > 0.0 && self.ratio <= 1.0) {
             return Err(FramePairError::Options {
                 name: "ratio",
@@ -310,7 +321,7 @@ impl std::fmt::Display for FramePairError {
 impl std::error::Error for FramePairError {}
 
 /// One pair's statistics.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct FramePairStats {
     /// The number of mutual matches.
     pub matches: usize,

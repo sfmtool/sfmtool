@@ -346,8 +346,8 @@ into its own copy of the images, through a path and through a `SiftFile`.
 
 ## Non-goals
 
-- Choosing frames from a video. That walk, and the command around it, are
-  proposed in [pick-images-command.md](../../drafts/pick-images-command.md).
+- Choosing frames from a video, which [pick-images.md](pick-images.md) does
+  with these statistics.
 - Matching two cameras of different image sizes, such as two sensors of a
   rig. A rig's motion is measured from one sensor's frames.
 - Geometric verification for a solve. The matches are not stored, and a solve

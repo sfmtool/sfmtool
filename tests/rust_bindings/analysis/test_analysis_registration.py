@@ -29,9 +29,17 @@ _EXPECTED_FUNCTIONS = (
     "covered_by_finer",
     "track_table",
     "match_frame_pair",
+    "pick_images",
 )
 
-_EXPECTED_CLASSES = ("ObservationCoverage", "FrameFeatures")
+_EXPECTED_CLASSES = (
+    "ObservationCoverage",
+    "FrameFeatures",
+    "CaptureImage",
+    "CaptureFrame",
+    "CaptureSequence",
+    "FrameId",
+)
 
 
 def test_all_analysis_bindings_registered():
