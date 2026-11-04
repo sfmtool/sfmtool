@@ -521,33 +521,6 @@ fn the_infinity_mini_toggle_appears_only_when_the_node_has_points_at_infinity() 
     assert!(panel.hit_rect(row_id(none, "points_infinity")).is_none());
 }
 
-#[test]
-fn the_panel_glyphs_are_available_in_the_bundled_fonts() {
-    // A glyph egui does not bundle renders as a replacement box rather than
-    // failing, so nothing else here would notice.
-    let ctx = egui::Context::default();
-    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        ui.label("warm the font atlas");
-    });
-    let font = egui::FontId::proportional(14.0);
-    // The selection accent bar is deliberately absent: it is painted, not
-    // written, precisely because no bundled proportional glyph would do.
-    for glyph in [
-        super::EYE_GLYPH,
-        super::CURSOR_GLYPH,
-        super::INFINITY_GLYPH,
-        // A plain letter, so this one cannot fail — kept in the list because
-        // the reason it is a letter is precisely that no bundled pictograph
-        // says "only this one" (see `SOLO_GLYPH`).
-        super::SOLO_GLYPH,
-    ] {
-        assert!(
-            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
-            "{glyph:?} is not in egui's bundled fonts and would render as a box"
-        );
-    }
-}
-
 // ── The bench groups ────────────────────────────────────────────────────
 
 /// A node with a bench holding one track-stage item -- a point put on it -- and

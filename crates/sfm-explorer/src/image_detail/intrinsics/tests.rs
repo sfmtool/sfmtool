@@ -9,11 +9,10 @@
 //! comes off a real headless egui frame's galleys
 //! (`test_support::painted_texts`, the `track_view/body/tests.rs` pattern).
 //!
-//! And one test that is neither: every glyph the layer writes has to be in
-//! egui's bundled fonts. A glyph that is not renders as a replacement box
-//! rather than failing, and asserting a galley's *string* passes happily on
-//! characters the font cannot draw — which is how a `──`/`╌╌` legend shipped
-//! in phase 5's first draft.
+//! A galley's *string* passes on characters the font cannot draw, which is
+//! how a `──`/`╌╌` legend shipped in phase 5's first draft. The glyphs the
+//! layer writes are checked against the viewer's fonts by the source scan in
+//! `fonts/tests.rs`, not here.
 
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
 
@@ -68,28 +67,6 @@ fn pinhole_camera() -> CameraIntrinsics {
         width: 1280,
         height: 720,
         rolling_shutter: None,
-    }
-}
-
-#[test]
-fn the_layers_glyphs_are_available_in_the_bundled_fonts() {
-    let ctx = egui::Context::default();
-    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        ui.label("warm the font atlas");
-    });
-    let font = egui::FontId::proportional(super::LABEL_SIZE);
-    for glyph in [
-        super::DELTA,
-        super::MINUS,
-        super::MIDDOT,
-        super::DEGREE,
-        controls::TIMES,
-        controls::GEAR,
-    ] {
-        assert!(
-            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
-            "{glyph:?} is not in egui's bundled fonts and would render as a box"
-        );
     }
 }
 

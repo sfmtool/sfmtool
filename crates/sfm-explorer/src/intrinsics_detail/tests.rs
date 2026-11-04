@@ -1881,25 +1881,6 @@ fn a_proposal_states_the_statistics_in_the_current_table_only() {
     }
 }
 
-/// Every glyph the per-image rows write is in egui's bundled fonts. Checked
-/// in the proportional family, whose fonts the monospace family falls back to
-/// after its own, as `scene_graph`'s and the intrinsics layer's glyph tests
-/// check theirs.
-#[test]
-fn the_per_image_glyphs_are_in_the_bundled_fonts() {
-    let ctx = egui::Context::default();
-    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        ui.label("warm the font atlas");
-    });
-    let font = egui::FontId::proportional(14.0);
-    for glyph in ["Δ", "ω", "\u{2212}", "\u{a0}"] {
-        assert!(
-            ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
-            "{glyph:?} is not in egui's bundled fonts and would render as a box"
-        );
-    }
-}
-
 #[test]
 fn a_signed_number_never_reads_minus_zero() {
     assert_eq!(super::format::signed(-0.0004, 3), "+0.000");

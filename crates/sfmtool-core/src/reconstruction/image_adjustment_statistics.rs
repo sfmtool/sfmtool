@@ -13,7 +13,6 @@
 
 use std::fmt;
 
-use super::bundle_adjust::is_posed;
 use super::data::ImageSet;
 
 /// The statistics of one number over a set of images.
@@ -130,7 +129,7 @@ pub(crate) fn adjustment_images(image_set: &ImageSet, camera: usize) -> Vec<usiz
         .copied()
         .filter(|&i| {
             let image = &image_set.images[i];
-            is_posed(&image.quaternion_wxyz, &image.translation_xyz)
+            image.is_posed()
         })
         .collect();
     if posed.is_empty() {

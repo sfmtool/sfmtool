@@ -737,10 +737,11 @@ impl TrackBody {
         let busy = state.bench_edit_refusal(id);
         let housekeeping = state.busy_refusal(id);
         ui.horizontal_wrapped(|ui| {
-            // The arrow is U+23F5, a small right-pointing triangle.
+            // The arrow is U+2192, which the proportional family draws from
+            // its Hack fallback (`fonts.rs`).
             let (next, stage_label) = match track.stage_kind() {
-                StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{23f5} track"),
-                StageKind::Track => (StageKind::Cluster, "Stage: track \u{23f5} cluster"),
+                StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{2192} track"),
+                StageKind::Track => (StageKind::Cluster, "Stage: track \u{2192} cluster"),
             };
             let refusals = photometric_refusals(busy.as_deref(), track, next);
             show_evaluation(ui, &self.evaluation);

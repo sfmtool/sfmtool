@@ -27,7 +27,7 @@ use super::points::{
 use crate::numeric::median_in_place;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
-use crate::reconstruction::bundle_adjust::{is_posed, patch_frame_factor, rescale_patch_frame};
+use crate::reconstruction::bundle_adjust::{patch_frame_factor, rescale_patch_frame};
 use crate::reconstruction::data::{rms_reprojection_error_px, ImageSet, Point3D};
 use crate::reconstruction::edited::{EditError, EditedReconstruction, PointMap};
 
@@ -680,11 +680,7 @@ fn check_preconditions(edited: &EditedReconstruction) -> Result<(), Retriangulat
         return Err(RetriangulateError::NoKeypoints);
     }
     let image_set = &edited.base.image_set;
-    if !image_set
-        .images
-        .iter()
-        .any(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
-    {
+    if !image_set.images.iter().any(|image| image.is_posed()) {
         return Err(RetriangulateError::NoPosedImages);
     }
     Ok(())
@@ -702,12 +698,7 @@ fn gather(
     let image_set = &work.base.image_set;
 
     let posed: Vec<usize> = (0..image_set.images.len())
-        .filter(|&i| {
-            is_posed(
-                &image_set.images[i].quaternion_wxyz,
-                &image_set.images[i].translation_xyz,
-            )
-        })
+        .filter(|&i| image_set.images[i].is_posed())
         .collect();
     // Every image gets a row, so an observation's image index indexes these
     // pose arrays directly. An unposed image's row is not a pose, and the array
@@ -814,7 +805,7 @@ fn ranged_entry(
 /// point at a finite distance.
 pub(crate) fn reference_camera_center(image_set: &ImageSet, reference: u32) -> Option<[f64; 3]> {
     let image = image_set.images.get(reference as usize)?;
-    if !is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+    if !image.is_posed() {
         return None;
     }
     let origin = image.camera_center();

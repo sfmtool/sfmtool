@@ -507,7 +507,7 @@ workspace; the second the path it is read from, `workspace_dir.join(name)`, as I
 Detail reads it; the third its image index, marked 0-based so it is
 not read as a count from 1 (the index the MCP tools use), the number of images, and its
 camera index, followed by `, unposed` for an
-image whose pose is not finite (the rule the Scene tree's *Resect Image* greys by). It is
+image whose pose is not finite (`SfmrImage::is_posed`, the rule the Scene tree's *Resect Image* greys by). It is
 egui's ordinary tooltip on the strip's own response, so it waits for the hover delay, is
 hidden by a click and while the image menu is open, and leaves the cross-panel hover and
 the click and double-click handling as they are. The second line is a local path, so a

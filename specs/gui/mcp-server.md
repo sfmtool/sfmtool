@@ -6330,8 +6330,9 @@ shaped to avoid.
 ## Testing
 
 `crates/sfm-explorer/src/mcp/tests.rs` supplies shared headless fixtures; its
-`tests/` children group the 327 checks by read, display, view, write, log,
-layout, catalog, server, edit, bench, render, widget listing and input
+`tests/` children group the checks by read, display, view, write, log,
+layout, catalog, server, edit, bench, render, widget listing, the names
+controls are listed under, input, `find_points` and the Track Table query
 concerns. The catalog child
 keeps the exact name/classification and schema/parser fixtures together. These
 tests need no GPU or window — which is

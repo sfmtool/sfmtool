@@ -14,9 +14,7 @@ use crate::state::{FieldMode, IntrinsicsDisplaySettings};
 use crate::widget_name::set_widget_name;
 use sfmtool_core::camera::CameraIntrinsics;
 
-/// The gear that opens the settings popup. Spelled once so the glyph test can
-/// pin it: a glyph egui does not bundle renders as a replacement box rather
-/// than failing, and nothing else would notice.
+/// The gear that opens the settings popup.
 pub(crate) const GEAR: &str = "⚙";
 
 /// The gear's accessible name: its glyph, then what its popup holds.
@@ -185,7 +183,7 @@ pub(super) fn settings_popup(
 /// while a proposal is open.
 pub(crate) const AXES_ON_CURRENT: &str = "Axes on current model";
 
-/// U+00D7 MULTIPLICATION SIGN, the `×` of `×3`. Spelled once for the glyph test.
+/// U+00D7 MULTIPLICATION SIGN, the `×` of `×3`.
 pub(crate) const TIMES: &str = "×";
 
 /// An exaggeration without its decimal point: the ladder is whole numbers, and

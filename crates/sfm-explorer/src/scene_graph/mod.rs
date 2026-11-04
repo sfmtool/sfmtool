@@ -88,8 +88,7 @@ const LIST_MAX_HEIGHT: f32 = 220.0;
 const TOGGLE_WIDTH: f32 = 18.0;
 
 /// Master-eye glyph. Dimmed rather than swapped when off — egui's bundled fonts
-/// have no closed-eye counterpart, and `scene_graph/tests.rs` guards that every
-/// glyph here is actually present.
+/// have no closed-eye counterpart.
 const EYE_GLYPH: &str = "👁";
 
 /// Interaction-cursor glyph (the Blender-outliner eye/cursor pairing): whether

@@ -104,9 +104,7 @@ pub(crate) fn refusal(state: &AppState, viewer: &Viewer3D) -> Option<String> {
     let Some(image) = node.recon().image_set.images.get(view.image.index()) else {
         return Some("That image is no longer in the reconstruction".to_string());
     };
-    let posed = image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-        && image.translation_xyz.iter().all(|c| c.is_finite());
-    if !posed {
+    if !image.is_posed() {
         return Some("That image carries no pose to move".to_string());
     }
     None

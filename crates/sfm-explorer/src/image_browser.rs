@@ -91,7 +91,7 @@ fn hover_lines(recon: &SfmrReconstruction, index: usize) -> [String; 3] {
         recon.image_set.images.len(),
         image.camera_index
     );
-    if !crate::bench::track_at_pixel::is_posed(recon, index) {
+    if !image.is_posed() {
         about.push_str(", unposed");
     }
     [

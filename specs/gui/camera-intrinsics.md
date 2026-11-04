@@ -1099,6 +1099,9 @@ image: radial correction and rolling-shutter rates.`, or `… Refitted to the
 new domain: radial correction.` They are side by side when the panel is wide
 enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
+The sizing pass is clipped to nothing, so its copies of the tables' widgets
+take no pointer and `get_widgets` does not list them: each bin and each other
+widget of the tables is listed once, as drawn.
 The two derived tables both carry the aspect row when either camera has two
 focal lengths, reading `single focal` for the one that has one, so their rows
 stay in line side by side. The derived table's long values (the principal
@@ -1823,8 +1826,8 @@ Two caveats remain, both named in the tests rather than left implicit:
   focal row after `focal_length_y`; a varied parameter whose values are all
   zero reads as zeros; at 341, 482 and 1800 px nothing above `K` overlaps or
   runs past the edge, without a proposal and with one, when the statistics
-  are in the current table alone; and their glyphs are in egui's bundled
-  fonts. The arithmetic of the statistics is tested in core, in
+  are in the current table alone. The arithmetic of the statistics is tested
+  in core, in
   [`image_adjustment_statistics/tests.rs`](../../crates/sfmtool-core/src/reconstruction/image_adjustment_statistics/tests.rs),
   the focal's mean against what `drop_image_adjustments` folds.
 - The per-image histograms, in the same file: the bins' edges are multiples
@@ -1840,7 +1843,9 @@ Two caveats remain, both named in the tests rather than left implicit:
   and at 1800 px beside them, and at all three no string is painted over a bin
   and no bin runs past the edge; and hovering a bin lists its images with
   their values, names the image a click selects and raises it as the hovered
-  image, a click selects it and a second click the bin's next image.
+  image, a click selects it and a second click the bin's next image. With a
+  Switch Camera Model proposal open, `get_widgets` lists each bin once and
+  enabled, and no widget both enabled and greyed, in `mcp/tests/names.rs`.
 - A camera row's per-image tag and its tooltip line, in
   `scene_graph/cameras/tests.rs`, and the tag on a painted row beside a
   camera whose row is unchanged, in `scene_graph/tests.rs`.
@@ -1903,9 +1908,6 @@ Two caveats remain, both named in the tests rather than left implicit:
   bound while the axes carry a flagged tail past it; the auto scale fitted to
   the lens exceeds the one fitted to the fold, holds still under zoom, and never
   lets an arrow outgrow its cell; and the offset label appears only off centre.
-- Every glyph the layer writes — `Δ`, `−`, `·`, `°`, `×`, `⚙` — is in egui's
-  bundled fonts, each spelled once as a named constant. `scene_graph`'s own
-  glyph test, for the same reason.
 - The node-transform toggle appears only when the node transform is
   non-identity.
 - The header's identity line, in `intrinsics_detail/tests.rs`: from 482 down

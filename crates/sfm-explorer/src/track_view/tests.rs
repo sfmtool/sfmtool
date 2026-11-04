@@ -20,22 +20,6 @@ const POINT: usize = 2;
 
 const VIEWPORT: egui::Vec2 = egui::vec2(1400.0, 900.0);
 
-/// The infinity mark the headers draw is in egui's bundled fonts, so it does
-/// not render as a box.
-#[test]
-fn the_infinity_mark_is_in_the_bundled_fonts() {
-    let ctx = egui::Context::default();
-    crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
-        ui.label("warm the font atlas");
-    });
-    let font = egui::TextStyle::Body.resolve(&ctx.global_style());
-    assert!(
-        ctx.fonts_mut(|f| f.has_glyphs(&font, super::INFINITY)),
-        "{:?} is not in egui's bundled fonts and would render as a box",
-        super::INFINITY
-    );
-}
-
 /// The bench module's own fixture: one `embedded_patches` node, a photograph
 /// cached for every image.
 fn state() -> (AppState, ReconId) {

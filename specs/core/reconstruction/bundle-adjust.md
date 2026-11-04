@@ -796,7 +796,8 @@ centroid itself, which subtends no angle) leaves the frame alone rather than
 destroying it.
 
 The centroid is the mean of the posed images' camera centres. An unposed image
-(a non-finite rotation or translation) has no centre, so it is left out rather
+(a non-finite rotation or translation, the rule `SfmrImage::is_posed` states
+for every reader of a stored pose) has no centre, so it is left out rather
 than turning every distance into `NaN`, and an image set with no posed image measures
 from the origin. It is taken once per image set, not once per point:
 `ImageSet::camera_centroid` gives it and `ImageSet::placement_scale_from`

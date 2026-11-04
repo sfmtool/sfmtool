@@ -716,8 +716,8 @@ fn offset_label(camera: &CameraIntrinsics) -> Option<String> {
     ))
 }
 
-/// The `Δ` of the offset label. Spelled once so the glyph test can pin it.
-pub(super) const DELTA: &str = "Δ";
+/// The `Δ` of the offset label.
+const DELTA: &str = "Δ";
 
 /// A signed number with one decimal, using the typographic minus the rest of
 /// the layer's labels use.
@@ -735,15 +735,12 @@ fn signed_to(value: f64, decimals: usize) -> String {
 }
 
 /// U+2212 MINUS SIGN, which lines up with `+` where an ASCII hyphen does not.
-/// Spelled once so the glyph test can pin it.
 pub(super) const MINUS: &str = "−";
 
-/// U+00B7 MIDDLE DOT, the separator between clauses of a label. Spelled once so
-/// the glyph test can pin it.
+/// U+00B7 MIDDLE DOT, the separator between clauses of a label.
 pub(super) const MIDDOT: &str = "·";
 
-/// U+00B0 DEGREE SIGN, on every angle the layer writes. Spelled once so the
-/// glyph test can pin it.
+/// U+00B0 DEGREE SIGN, on every angle the layer writes.
 pub(super) const DEGREE: &str = "°";
 
 /// Draw the principal-point marker: a reticle — an open ring with four arms

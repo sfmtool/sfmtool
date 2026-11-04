@@ -774,7 +774,7 @@ pub fn bundle_adjust(
     let mut old_to_new: Vec<Option<u32>> = vec![None; image_set.images.len()];
     let mut posed: Vec<usize> = Vec::with_capacity(image_set.images.len());
     for (i, image) in image_set.images.iter().enumerate() {
-        if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+        if image.is_posed() {
             old_to_new[i] = Some(posed.len() as u32);
             posed.push(i);
         }
@@ -1792,18 +1792,6 @@ fn image_adjustment_spread(
         spread: prior.spread,
         near_prior,
     }
-}
-
-/// Whether a stored pose is one at all. Every `.sfmr` image row has the fields;
-/// a non-finite one is a placeholder rather than a registration.
-///
-/// Crate-visible because the same question decides which images enter this
-/// solve, whether
-/// [`move_camera`](super::move_camera::move_camera) has a pose to replace,
-/// which images a resection treats as already registered, and which centres
-/// [`ImageSet::camera_centroid`] averages.
-pub(crate) fn is_posed(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> bool {
-    rotation.coords.iter().all(|c| c.is_finite()) && translation.iter().all(|c| c.is_finite())
 }
 
 /// Whether the kernel's analytic focal column is exact for this camera, which is

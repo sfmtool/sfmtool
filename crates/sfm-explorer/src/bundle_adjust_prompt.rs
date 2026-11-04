@@ -188,10 +188,7 @@ pub(crate) fn camera_gates(edited: &EditedReconstruction) -> Vec<CameraGate> {
     let posed: Vec<u32> = image_set
         .images
         .iter()
-        .filter(|image| {
-            image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-                && image.translation_xyz.iter().all(|c| c.is_finite())
-        })
+        .filter(|image| image.is_posed())
         .map(|image| image.camera_index)
         .collect();
     edited

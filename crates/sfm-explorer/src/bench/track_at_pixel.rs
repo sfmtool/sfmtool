@@ -60,16 +60,6 @@ pub(crate) fn is_create_track_chord(modifiers: egui::Modifiers) -> bool {
     modifiers.ctrl && modifiers.shift && !modifiers.alt
 }
 
-/// Whether `image` of `recon` carries a pose: every component of its rotation
-/// and its translation finite, the rule the Scene tree's *Resect Image* greys
-/// by. A non-finite one is a placeholder rather than a registration.
-pub(crate) fn is_posed(recon: &sfmtool_core::SfmrReconstruction, image: usize) -> bool {
-    recon.image_set.images.get(image).is_some_and(|row| {
-        row.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-            && row.translation_xyz.iter().all(|c| c.is_finite())
-    })
-}
-
 /// Why *Create Track Here* is greyed over an image with no pose.
 pub(crate) const NOT_POSED: &str =
     "This image is not posed, so there is no ray through the pixel to build a track along.";
@@ -194,7 +184,7 @@ impl AppState {
                 image.index()
             ));
         }
-        if !is_posed(recon, image.index()) {
+        if !recon.image_set.images[image.index()].is_posed() {
             return Some(NOT_POSED.to_string());
         }
         None

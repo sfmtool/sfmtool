@@ -9,7 +9,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use super::bundle_adjust::{is_posed, rescale_patch_frame};
+use super::bundle_adjust::rescale_patch_frame;
 use super::data::{observation_reprojection_error, ImageSet, SfmrReconstruction};
 use super::triangulation::triangulate_track;
 use crate::camera::CameraIntrinsics;
@@ -161,7 +161,7 @@ pub fn move_camera(
         return Err(MoveCameraError::ImageOutOfRange { image, image_count });
     }
     let stored = &recon.image_set.images[image];
-    if !is_posed(&stored.quaternion_wxyz, &stored.translation_xyz) {
+    if !stored.is_posed() {
         return Err(MoveCameraError::NoPose(image));
     }
     let rotation = *world_from_camera.rotation.as_nalgebra();

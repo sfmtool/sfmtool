@@ -419,6 +419,13 @@ fn compare_tables(
                     .sizing_pass()
                     .invisible(),
             );
+            // egui still registers an invisible Ui's widgets, so clip them all
+            // away: a widget's interaction rectangle is clipped to its Ui, and
+            // with nothing left of it the pass's copies of the bins and the
+            // other widgets take no pointer and are not listed by
+            // `get_widgets`. The clip changes no layout, so the measured width
+            // is the same.
+            sizing.set_clip_rect(egui::Rect::NOTHING);
             parameters::show_parameters(
                 &mut sizing,
                 camera,

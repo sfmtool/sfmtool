@@ -126,6 +126,18 @@ fn the_scanner_reads_strings_and_skips_comments() {
     assert_eq!(found, BTreeSet::from(['→', '·', '−', '°', '▸']));
 }
 
+/// A space egui looks up in the faces, the no-break space among them, is
+/// checked like any other character, and the spaces egui draws without a
+/// lookup are not. U+3000, the ideographic space, is in none of the viewer's
+/// faces.
+#[test]
+fn only_the_spaces_egui_draws_without_a_lookup_are_left_out() {
+    let text = "a b\t\n\u{2009}\u{202f}\u{a0}\u{3000}";
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        assert_eq!(lacking_glyphs(&family, text), "\u{3000}", "in {family:?}");
+    }
+}
+
 #[test]
 fn every_character_the_viewer_writes_has_a_glyph_in_each_family() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -139,7 +151,9 @@ fn every_character_the_viewer_writes_has_a_glyph_in_each_family() {
     // Characters the viewer is known to write, the `→` the Action Log row's
     // tooltip drew as an empty box among them, so a scanner that stopped
     // finding characters cannot pass this test by finding none.
-    for c in ['→', '·', '×', '°', '…', '—'] {
+    // The no-break space of the Camera Intrinsics tables' cells is among
+    // them, as a space egui looks up in the faces.
+    for c in ['→', '·', '×', '°', '…', '—', '\u{a0}'] {
         assert!(found.contains(&c), "the scan found no {c:?} in {src:?}");
     }
 

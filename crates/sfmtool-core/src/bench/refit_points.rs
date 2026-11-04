@@ -26,7 +26,6 @@ use sfmtool_sfmr_format::{
 use crate::numeric::median_in_place;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::data::{
     ImageSet, ObservationReading, ObservationReadings, ObservationSource, PointSet,
     SfmrReconstruction,
@@ -533,12 +532,7 @@ pub(super) fn check_preconditions(
     if recon.point_set.patch_u_halfvec_xyz.is_none() {
         return Err(RefitPointsError::NoPatchFrames);
     }
-    if !recon
-        .image_set
-        .images
-        .iter()
-        .any(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
-    {
+    if !recon.image_set.images.iter().any(|image| image.is_posed()) {
         return Err(RefitPointsError::NoPosedImage);
     }
     let expected = recon.image_count();

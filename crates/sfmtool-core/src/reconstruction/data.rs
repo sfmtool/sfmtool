@@ -268,6 +268,22 @@ pub struct SfmrImage {
 }
 
 impl SfmrImage {
+    /// Whether this image carries a pose: every component of its rotation and
+    /// of its translation finite.
+    ///
+    /// Every `.sfmr` image row has the two fields, and a non-finite one is a
+    /// placeholder rather than a registration, so an unposed image states no
+    /// ray and has no centre. The one rule for every reader of a stored pose:
+    /// which images a bundle adjustment solves, whether
+    /// [`move_camera`](crate::reconstruction::move_camera::move_camera) has a
+    /// pose to replace, which images a resection treats as already
+    /// registered, which centres [`ImageSet::camera_centroid`] averages, and
+    /// what the viewer greys an image's pose-dependent entries by.
+    pub fn is_posed(&self) -> bool {
+        self.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
+            && self.translation_xyz.iter().all(|c| c.is_finite())
+    }
+
     /// Compute the camera center in world coordinates.
     ///
     /// For world-to-camera transform `(R, t)`, the camera center is `C = -R^T * t`.

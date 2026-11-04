@@ -448,7 +448,6 @@ fn distortion_scale_text(scale: Option<f32>) -> String {
 }
 
 /// U+00D7 MULTIPLICATION SIGN, the `×` the gear popup's scale dropdown shows.
-/// Spelled once here so the glyph test can pin it.
 const TIMES: &str = "×";
 
 /// U+2013 EN DASH, the range separator in `Feature size 2.0–40.0 px`.

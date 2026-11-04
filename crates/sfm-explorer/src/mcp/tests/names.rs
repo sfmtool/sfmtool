@@ -9,7 +9,8 @@
 //! name is checked as `get_widgets` reports it: a control's own label, or the
 //! label it is `labelled_by`. A number box, a dropdown or a text input that
 //! nothing names is listed with a `null` name, and the tests check that none
-//! of the controls they draw is.
+//! of the controls they draw is. One also checks that a panel which lays its
+//! tables out twice, once invisibly to measure them, lists each control once.
 
 use serde_json::{json, Value};
 use sfmtool_core::camera::{CameraIntrinsics, CameraModel};
@@ -414,4 +415,71 @@ fn the_dialogs_name_their_fields() {
     the_role(&listing, "text_input", "Schedule");
     the_role(&listing, "combo_box", "Schedule preset");
     assert_all_named(&listing);
+}
+
+/// With a Switch Camera Model proposal open, the Camera Intrinsics panel lists
+/// each histogram bin of its Current table once, and enabled. The panel lays
+/// both tables out once more, invisible, to measure whether they fit side by
+/// side, and none of that pass's widgets is listed.
+#[test]
+fn a_proposal_lists_each_histogram_bin_once() {
+    let path = std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_ground_truth_v02.sfmr"
+    ));
+    let recon = SfmrReconstruction::load(path, &sfmtool_core::progress::Progress::none())
+        .expect("the ground truth loads");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(path, recon));
+    state
+        .open_camera_model_proposal(crate::scene::CameraRef::new(id, 0), None)
+        .expect("opens");
+    let proposal = state.camera_model_proposal.as_mut().unwrap();
+    let inputs = proposal.default_inputs("SFMTOOL_FISHEYE");
+    proposal.set_inputs(inputs);
+
+    let mut panel = crate::intrinsics_detail::IntrinsicsDetail::new();
+    let drawn = Drawn::new();
+    let listing = drawn.listing(|_, ui| {
+        let node = &state.scene[0];
+        let proposal = state.camera_model_proposal.as_mut();
+        panel.show(ui, node, Some(0), None, proposal, None);
+    });
+    let bins: Vec<(&str, &Value)> = entries(&listing)
+        .into_iter()
+        .filter_map(|entry| {
+            let name = entry["name"].as_str()?;
+            name.starts_with("per image ")
+                .then_some((name, &entry["enabled"]))
+        })
+        .collect();
+    assert!(
+        !bins.is_empty(),
+        "the Current table draws its bins: {listing:#}"
+    );
+    let mut names: Vec<&str> = bins.iter().map(|(name, _)| *name).collect();
+    names.sort_unstable();
+    let count = names.len();
+    names.dedup();
+    assert_eq!(names.len(), count, "a bin is listed twice: {bins:?}");
+    assert!(
+        bins.iter().all(|(_, enabled)| **enabled == json!(true)),
+        "{bins:?}"
+    );
+    // Nor is any other widget of the tables listed a second time, greyed, as
+    // the sizing pass's copy of it would be.
+    let listed = |enabled: bool| -> std::collections::BTreeSet<(String, String)> {
+        entries(&listing)
+            .into_iter()
+            .filter(|entry| entry["enabled"] == json!(enabled))
+            .filter_map(|entry| {
+                Some((
+                    entry["role"].to_string(),
+                    entry["name"].as_str()?.to_string(),
+                ))
+            })
+            .collect()
+    };
+    let both: Vec<_> = listed(true).intersection(&listed(false)).cloned().collect();
+    assert_eq!(both, Vec::new(), "listed both enabled and greyed");
 }

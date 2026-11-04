@@ -2356,3 +2356,22 @@ fn recompute_depth_statistics_fills_only_missing_normals() {
         .iter()
         .all(|p| p.normal == Vector3::zeros()));
 }
+
+/// An image is posed when every component of its rotation and translation is
+/// finite; a NaN or an infinity in either one is the placeholder of an
+/// unposed image.
+#[test]
+fn an_image_is_posed_only_when_its_whole_pose_is_finite() {
+    let image = |w: f64, x: f64| SfmrImage {
+        name: "a.jpg".to_string(),
+        camera_index: 0,
+        quaternion_wxyz: UnitQuaternion::new_unchecked(nalgebra::Quaternion::new(w, 0.0, 0.0, 0.0)),
+        translation_xyz: Vector3::new(x, 0.0, 0.0),
+        intrinsic_adjustment: IntrinsicAdjustment::default(),
+    };
+    assert!(image(1.0, 2.0).is_posed());
+    assert!(!image(f64::NAN, 2.0).is_posed());
+    assert!(!image(1.0, f64::NAN).is_posed());
+    assert!(!image(f64::INFINITY, 2.0).is_posed());
+    assert!(!image(1.0, f64::NEG_INFINITY).is_posed());
+}
