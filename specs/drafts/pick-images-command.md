@@ -264,11 +264,12 @@ the command judges three things, each from the median over the samples:
   median rate times the frame count, is below `100%` of the long side.
 
 The **rotation error** is defined this way: for focal lengths `f` from `0.3`
-to `3` times the long side, on 80 steps spaced evenly in `log f`, with `K` the
-camera matrix of focal `f` and the principal point at the image centre, take
-`M = K⁻¹ H K` scaled to determinant 1, and the error is the smallest
-Frobenius norm `‖M Mᵀ − I‖` over those focal lengths. It is 0 for a camera that
-turned without moving.
+to `3` times the long side, with `K` the camera matrix of focal `f` and the
+principal point at the image centre, take `M = K⁻¹ H K` scaled to determinant
+1, and the error is the smallest Frobenius norm `‖M Mᵀ − I‖` over those focal
+lengths. It is 0 for a camera that turned without moving.
+[frame-pair-matching.md § The rotation error](../core/analysis/frame-pair-matching.md#the-rotation-error)
+says how the minimum is found.
 
 The command prints one verdict line, in the shape of the `Verdict:` line
 [`sfm motion`](../cli/reconstruction/motion-command.md) prints for a

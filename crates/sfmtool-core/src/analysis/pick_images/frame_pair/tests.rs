@@ -564,3 +564,23 @@ fn from_sift_refuses_features_and_metadata_of_different_counts() {
     assert!(matches!(err, FramePairError::FeatureArrays { .. }), "{err}");
     assert!(err.to_string().contains("records 4"), "{err}");
 }
+
+#[test]
+fn a_rotation_between_tried_focal_lengths_scores_near_zero() {
+    // Focal lengths midway, in log f, between neighbouring grid values, from
+    // the widest to the narrowest, each turned by up to 45 degrees about a
+    // tilted axis.
+    let log_step = 10f64.ln() / 79.0;
+    for k in (0..79).step_by(6) {
+        let f = 960.0 * 0.3 * ((k as f64 + 0.5) * log_step).exp();
+        let k_mat = camera_matrix(f);
+        for degrees in [1.0, 5.0, 20.0, 45.0] {
+            let angle = f64::to_radians(degrees);
+            let axis = nalgebra::Unit::new_normalize(Vector3::new(0.3, 1.0, 0.2));
+            let rotation = Rotation3::from_axis_angle(&axis, angle);
+            let h = k_mat * rotation.matrix() * k_mat.try_inverse().unwrap();
+            let error = rotation_error(&h, WIDTH, HEIGHT).unwrap();
+            assert!(error < 1e-4, "f {f:.1}, {degrees} degrees: error {error}");
+        }
+    }
+}

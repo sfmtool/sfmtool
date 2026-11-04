@@ -221,21 +221,24 @@ A camera that turned about its centre without moving maps the image through
 `H = K R K⁻¹`, with `K` its camera matrix and `R` the rotation. So for the
 right `K`, `M = K⁻¹ H K` is a rotation, and `M Mᵀ = I`. The **rotation error**
 is the smallest Frobenius norm `‖M Mᵀ − I‖` over focal lengths `f` from 0.3 to
-3 times the long side, on 80 values spaced evenly in `log f`, with `K` the
-camera matrix of focal `f`, square pixels and the principal point at the image
-centre, and `M` scaled to determinant 1 (a homography is defined up to scale).
-It is 0 for a camera that turned without moving, at a focal length on the
-grid, and grows with the parallax the homography absorbed: a plane seen from
-two places gives a homography that is not conjugate to any rotation.
+3 times the long side, with `K` the camera matrix of focal `f`, square pixels
+and the principal point at the image centre, and `M` scaled to determinant 1
+(a homography is defined up to scale). It is 0 for a camera that turned
+without moving, and grows with the parallax the homography absorbed: a plane
+seen from two places gives a homography that is not conjugate to any rotation.
+
+The minimum is found in two stages. A grid of 80 focal lengths spaced evenly
+in `log f` finds the basin, and a golden-section search in `log f` between the
+best grid value's two neighbours, 40 steps long, finds its floor. The grid
+alone would leave a pure rotation whose focal length falls between two grid
+values an error that grows with the angle turned, up to about 0.015 for a turn
+of 20°; with the refinement a pure rotation scores below `10⁻⁴` for any focal length in the
+range and any turn up to 45°.
 
 The error separates a camera that only turned, which has an H/F near 1 and an
 error near 0, from a flat scene seen from two places, which also has an H/F
-near 1 but a large error. The grid of focal lengths covers fields of view
-across the long side from about 118° down to about 19°. Its step of about 3% in
-`f` leaves a pure rotation whose focal length falls midway between two grid
-values an error of up to about 0.0008 per degree turned: 0.004 for a turn of
-5°, 0.015 for one of 20°.
-It is `None` where H/F is `None`, where no homography fits, or where no focal
+near 1 but a large error. The range of focal lengths covers fields of view
+across the long side from about 118° down to about 19°. It is `None` where H/F is `None`, where no homography fits, or where no focal
 length on the grid gives a finite `M` with a non-zero determinant.
 
 ## Implementation notes
@@ -323,7 +326,8 @@ build frames from random descriptors at synthetic positions:
   mean, of the displacements;
 - a pure rotation's matches give an F-inlier share and an H/F near 1 and a
   rotation error below 0.01, and the rotation error is 0 for a rotation at a
-  focal length on the grid and large for a zoom;
+  focal length on the grid, below `10⁻⁴` for focal lengths midway between grid
+  values and turns up to 45°, and large for a zoom;
 - a scene with depth seen from two places gives an F-inlier share near 1, an
   H/F below 0.5 and a rotation error above 0.05;
 - fewer than `min_matches` matches give no shares, and no matches a NaN step;

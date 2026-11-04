@@ -33,9 +33,14 @@ const REFERENCE_LONG_SIDE_PX: f64 = 960.0;
 /// the image's long side: from the first to the second, inclusive.
 const ROTATION_FOCAL_RANGE: (f64, f64) = (0.3, 3.0);
 
-/// How many focal lengths [`FramePairStats::rotation_error`] tries, spaced
-/// evenly in `log f`.
+/// How many focal lengths [`FramePairStats::rotation_error`] tries on its
+/// grid, spaced evenly in `log f`.
 const ROTATION_FOCAL_STEPS: usize = 80;
+
+/// The golden-section steps that refine the best grid value. Each shrinks the
+/// bracket of two grid steps (about 6% in `f`) by 0.618, so 40 leave it about
+/// `10⁻¹⁰` wide.
+const ROTATION_REFINE_ITERATIONS: usize = 40;
 
 /// The fewest correspondences a fundamental matrix is fitted from (the
 /// seven-point solver's sample), and so the least `min_matches` may be.
@@ -320,10 +325,11 @@ pub struct FramePairStats {
     /// `min_matches` matches or `min_matches` inliers.
     pub h_over_f: Option<f64>,
     /// How far that homography is from a pure rotation: the smallest
-    /// `‖M Mᵀ − I‖` (Frobenius) over the tried focal lengths, with
+    /// `‖M Mᵀ − I‖` (Frobenius) over focal lengths from 0.3 to 3 times the
+    /// long side, with
     /// `M = K⁻¹ H K` scaled to determinant 1. `None` where `h_over_f` is
-    /// `None`, where no homography fits, or where no tried focal length gives
-    /// a finite `M` with a non-zero determinant.
+    /// `None`, where no homography fits, or where no focal length on the grid
+    /// gives a finite `M` with a non-zero determinant.
     pub rotation_error: Option<f64>,
 }
 
@@ -519,29 +525,73 @@ fn best_passing(
         .collect()
 }
 
-/// The smallest `‖M Mᵀ − I‖` over the tried focal lengths, with `K` the
-/// camera matrix of focal `f` and the principal point at the image centre,
-/// and `M = K⁻¹ H K` scaled to determinant 1.
+/// The smallest `‖M Mᵀ − I‖` over focal lengths `f` in the tried range, with
+/// `K` the camera matrix of focal `f` and the principal point at the image
+/// centre, and `M = K⁻¹ H K` scaled to determinant 1.
+///
+/// The grid of `ROTATION_FOCAL_STEPS` values finds the basin, and a
+/// golden-section search in `log f` between the best value's two neighbours
+/// finds its floor, so a pure rotation scores near 0 whatever its focal
+/// length, not only on a grid value.
 fn rotation_error(h: &Matrix3<f64>, width: u32, height: u32) -> Option<f64> {
     let long_side = f64::from(width.max(height));
-    let (cx, cy) = (f64::from(width) / 2.0, f64::from(height) / 2.0);
+    let centre = (f64::from(width) / 2.0, f64::from(height) / 2.0);
     let (low, high) = ROTATION_FOCAL_RANGE;
+    let log_low = (long_side * low).ln();
     let log_step = (high / low).ln() / (ROTATION_FOCAL_STEPS - 1) as f64;
-    let mut best = f64::INFINITY;
+    let at = |k: usize| log_low + k as f64 * log_step;
+
+    let mut best: Option<(usize, f64)> = None;
     for k in 0..ROTATION_FOCAL_STEPS {
-        let f = long_side * low * (k as f64 * log_step).exp();
-        let k_mat = Matrix3::new(f, 0.0, cx, 0.0, f, cy, 0.0, 0.0, 1.0);
-        let k_inv = Matrix3::new(1.0 / f, 0.0, -cx / f, 0.0, 1.0 / f, -cy / f, 0.0, 0.0, 1.0);
-        let m = k_inv * h * k_mat;
-        let det = m.determinant();
-        if !det.is_finite() || det == 0.0 {
-            continue;
-        }
-        let m = m / det.cbrt();
-        let error = (m * m.transpose() - Matrix3::identity()).norm();
-        if error < best {
-            best = error;
+        if let Some(error) = rotation_error_at(h, at(k).exp(), centre) {
+            if best.is_none_or(|(_, e)| error < e) {
+                best = Some((k, error));
+            }
         }
     }
-    best.is_finite().then_some(best)
+    let (k, mut error) = best?;
+
+    // Golden-section search over the bracket the neighbours give, kept
+    // within the range. A focal length whose M is degenerate scores +inf, so
+    // the search never moves towards one.
+    let score = |log_f: f64| rotation_error_at(h, log_f.exp(), centre).unwrap_or(f64::INFINITY);
+    let (mut a, mut b) = (
+        at(k.saturating_sub(1)),
+        at((k + 1).min(ROTATION_FOCAL_STEPS - 1)),
+    );
+    let ratio = (5f64.sqrt() - 1.0) / 2.0;
+    let mut c = b - ratio * (b - a);
+    let mut d = a + ratio * (b - a);
+    let (mut fc, mut fd) = (score(c), score(d));
+    for _ in 0..ROTATION_REFINE_ITERATIONS {
+        if fc < fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - ratio * (b - a);
+            fc = score(c);
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + ratio * (b - a);
+            fd = score(d);
+        }
+    }
+    error = error.min(fc).min(fd);
+    Some(error)
+}
+
+/// `‖M Mᵀ − I‖` at focal `f`, or `None` when `M` is not finite or singular.
+fn rotation_error_at(h: &Matrix3<f64>, f: f64, (cx, cy): (f64, f64)) -> Option<f64> {
+    let k_mat = Matrix3::new(f, 0.0, cx, 0.0, f, cy, 0.0, 0.0, 1.0);
+    let k_inv = Matrix3::new(1.0 / f, 0.0, -cx / f, 0.0, 1.0 / f, -cy / f, 0.0, 0.0, 1.0);
+    let m = k_inv * h * k_mat;
+    let det = m.determinant();
+    if !det.is_finite() || det == 0.0 {
+        return None;
+    }
+    let m = m / det.cbrt();
+    let error = (m * m.transpose() - Matrix3::identity()).norm();
+    error.is_finite().then_some(error)
 }
