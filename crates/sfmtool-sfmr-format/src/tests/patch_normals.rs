@@ -448,3 +448,97 @@ fn normals_of_the_wrong_shape_are_written_with_the_frames_normals() {
     assert!(valid, "{errors:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Copy `src` to `dst` with the entry `name` holding `raw` added, its bytes
+/// compressed as the writer compresses them. Hashes are not restamped.
+fn with_extra_entry(src: &std::path::Path, dst: &std::path::Path, name: &str, raw: &[u8]) {
+    use std::io::{Read, Write};
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(src).unwrap()).unwrap();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(dst).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let entry_name = entry.name().unwrap().into_owned();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        zip.start_file(&entry_name, stored).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.start_file(name, stored).unwrap();
+    zip.write_all(&zstd::bulk::compress(raw, 3).unwrap())
+        .unwrap();
+    zip.finish().unwrap();
+}
+
+const STRAY_ENTRY: &str = "points3d/underived_normals_xyz.2.3.float32.zst";
+
+#[test]
+fn an_underived_entry_in_a_version_16_file_without_the_frame_is_refused() {
+    let dir = temp_dir("sfmr_test_patch_normals_stray_no_frame");
+    let good = dir.join("good.sfmr");
+    // Normals and no patch frame: the full column, and nothing derived.
+    write_sfmr(&good, &mut make_test_data()).unwrap();
+    assert!(archive_names(&good).contains(&FULL_ENTRY.to_string()));
+    let bad = dir.join("stray.sfmr");
+    with_extra_entry(
+        &good,
+        &bad,
+        STRAY_ENTRY,
+        &floats_payload(&[0.0, 0.0, 1.0, 0.0, 1.0, 0.0]),
+    );
+    assert_refused(
+        &bad,
+        &format!(
+            "{STRAY_ENTRY} is stored only by a file of version 16 or later with both normals \
+             and the patch frame, and this version 16 file is not one"
+        ),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_underived_entry_in_a_version_15_file_is_refused() {
+    let dir = temp_dir("sfmr_test_patch_normals_stray_v15");
+    let current = dir.join("current.sfmr");
+    write_sfmr(&current, &mut data_with_every_kind_of_point()).unwrap();
+    // The version 15 file of the same value, with the full column it
+    // stores, and the version 16 entry beside it.
+    let old = dir.join("v15.sfmr");
+    super::rewrite_as_version_15(&current, &old, &dir, |_, _| {});
+    assert!(archive_names(&old).contains(&FULL_ENTRY.to_string()));
+    assert!(read_sfmr(&old).is_ok());
+    let bad = dir.join("stray.sfmr");
+    with_extra_entry(&old, &bad, STRAY_ENTRY, &floats_payload(&[0.0; 6]));
+    assert_refused(
+        &bad,
+        &format!(
+            "{STRAY_ENTRY} is stored only by a file of version 16 or later with both normals \
+             and the patch frame, and this version 15 file is not one"
+        ),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_that_sets_has_normals_without_its_column_fails_verification() {
+    let dir = temp_dir("sfmr_test_patch_normals_missing_column");
+    let good = dir.join("good.sfmr");
+    // Without the patch frame no normal is derived, so has_normals needs the
+    // full column.
+    write_sfmr(&good, &mut make_test_data()).unwrap();
+    let bad = dir.join("missing.sfmr");
+    rewrite_renaming(&good, &bad, |name, raw| {
+        (name == FULL_ENTRY).then(|| ("points3d/unrelated.bin".to_string(), raw.to_vec()))
+    });
+    assert!(read_sfmr(&bad).is_err(), "the reader refuses it");
+    let (valid, errors) = verify_sfmr(&bad).expect("a list of failures, not an error");
+    assert!(!valid);
+    assert!(
+        errors.iter().any(|e| e.contains(&format!(
+            "points3d/metadata.json sets has_normals, and the file holds no {FULL_ENTRY}"
+        ))),
+        "{errors:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
