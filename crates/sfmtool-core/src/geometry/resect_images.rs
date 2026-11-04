@@ -47,7 +47,6 @@ use crate::geometry::focal_vote::column_scan::kabsch;
 use crate::geometry::reconstruction_growth::per_image_seed;
 use crate::geometry::rotation::orthonormalized;
 use crate::numeric::median_in_place;
-use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::reconstruction::{ObservationSource, ReconstructionError, SfmrReconstruction};
 
@@ -435,7 +434,7 @@ pub fn resect_images(
         .image_set
         .images
         .iter()
-        .map(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz))
+        .map(|image| image.is_posed())
         .collect();
     let mut is_target = vec![false; count];
     for &t in image_indexes {

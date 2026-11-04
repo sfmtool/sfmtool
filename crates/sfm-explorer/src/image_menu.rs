@@ -162,10 +162,7 @@ impl AppState {
             .image_set
             .images
             .iter()
-            .map(|image| {
-                image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-                    && image.translation_xyz.iter().all(|c| c.is_finite())
-            })
+            .map(|image| image.is_posed())
             .collect();
         let recon = node.recon();
         let photographs = recon

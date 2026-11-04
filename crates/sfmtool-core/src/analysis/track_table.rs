@@ -18,7 +18,6 @@ use rayon::prelude::*;
 use std::borrow::Cow;
 
 use crate::progress::{Cancelled, Progress};
-use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::{EditedReconstruction, PointView};
 use crate::CameraIntrinsics;
 
@@ -220,7 +219,7 @@ impl TrackTableColumn {
                 .image_set
                 .images
                 .iter()
-                .any(|image| is_posed(&image.quaternion_wxyz, &image.translation_xyz)),
+                .any(|image| image.is_posed()),
             TrackTableColumn::NormalConfidence => recon.has_normal_confidence(),
             TrackTableColumn::MinZncc => recon.has_observation_confidence(),
             TrackTableColumn::MinBlurMatchedBitmapZncc

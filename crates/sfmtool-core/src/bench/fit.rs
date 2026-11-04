@@ -35,7 +35,6 @@ use crate::patch::reference_view::render_view_tile;
 use crate::patch::stored_bitmap::{bitmap_from_tile, render_patch_bitmap};
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
-use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::edited::EditedReconstruction;
 use crate::reconstruction::triangulation::points::{
     triangulate_points_through_cameras, ObservationSet, PointDistance, PointRules,
@@ -1104,7 +1103,7 @@ fn ranged_coordinate(
     let mut quats_wxyz = Vec::with_capacity(image_set.images.len() * 4);
     let mut translations = Vec::with_capacity(image_set.images.len() * 3);
     for image in &image_set.images {
-        if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+        if image.is_posed() {
             let q = image.quaternion_wxyz;
             quats_wxyz.extend_from_slice(&[q.w, q.i, q.j, q.k]);
             let t = image.translation_xyz;

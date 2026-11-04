@@ -994,10 +994,7 @@ impl EditedReconstruction {
             .image_set
             .images
             .iter()
-            .filter(|image| {
-                image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-                    && image.translation_xyz.iter().all(|c| c.is_finite())
-            })
+            .filter(|image| image.is_posed())
             .map(|image| image.camera_index)
             .collect();
         lenses.sort_unstable();

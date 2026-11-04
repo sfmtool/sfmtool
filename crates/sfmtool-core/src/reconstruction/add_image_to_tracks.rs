@@ -51,7 +51,6 @@ use crate::patch::stored_bitmap::{
 };
 use crate::progress::{Cancelled, Progress};
 use crate::progress_info;
-use crate::reconstruction::bundle_adjust::is_posed;
 use crate::reconstruction::data::{
     observation_confidence_byte, observation_reading_options, ObservationReading,
     ObservationReadingOptions, ObservationReadings, ObservationSource, SfmrReconstruction,
@@ -611,7 +610,7 @@ pub fn add_image_to_tracks(
         });
     }
     let target = &image_set.images[image];
-    if !is_posed(&target.quaternion_wxyz, &target.translation_xyz) {
+    if !target.is_posed() {
         return Err(AddImageToTracksError::Unposed(image));
     }
     if pyramids[image].is_none() {
@@ -665,7 +664,7 @@ pub fn add_image_to_tracks(
         .map(|i| {
             let im = &image_set.images[i];
             let pyramid = pyramids[i]?;
-            is_posed(&im.quaternion_wxyz, &im.translation_xyz).then(|| ProjectedImage {
+            im.is_posed().then(|| ProjectedImage {
                 camera: &intrinsics[i],
                 cam_from_world: &poses[i],
                 pyramid,

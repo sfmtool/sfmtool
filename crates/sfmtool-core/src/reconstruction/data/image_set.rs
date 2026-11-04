@@ -15,7 +15,6 @@ use sfmtool_sfmr_format::{
 use crate::camera::{
     CameraIntrinsics, ImageIntrinsicsList, IntrinsicAdjustment, RollingShutterScanlines,
 };
-use crate::reconstruction::bundle_adjust::is_posed;
 
 use super::SfmrImage;
 
@@ -316,7 +315,7 @@ impl ImageSet {
         let mut centroid = nalgebra::Vector3::zeros();
         let mut posed = 0usize;
         for image in &self.images {
-            if is_posed(&image.quaternion_wxyz, &image.translation_xyz) {
+            if image.is_posed() {
                 centroid += image.camera_center().coords;
                 posed += 1;
             }

@@ -685,10 +685,12 @@ pub(crate) fn open_refusal(
             "Camera {camera} does not exist; the reconstruction has {cameras} camera(s)."
         ));
     }
-    let posed = node.recon().image_set.images.iter().any(|image| {
-        image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-            && image.translation_xyz.iter().all(|c| c.is_finite())
-    });
+    let posed = node
+        .recon()
+        .image_set
+        .images
+        .iter()
+        .any(|image| image.is_posed());
     (!posed).then(|| "No image of this reconstruction carries a pose.".to_string())
 }
 
