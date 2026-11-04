@@ -2436,6 +2436,66 @@ fn recompute_depth_statistics_fills_only_missing_normals() {
         .all(|p| p.normal == Vector3::zeros()));
 }
 
+#[test]
+fn a_missing_normal_of_a_finite_patched_point_is_filled_from_its_frame() {
+    // Point 0 has a patch and a missing normal; point 1's frame is
+    // degenerate (v along u), so its missing normal is the mean-viewing one;
+    // point 2 keeps its normal.
+    let mut recon = demo_embedded_projected(24);
+    assert!(recon.point_set.patch_u_halfvec_xyz.is_some());
+    {
+        let u = recon.point_set.patch_u_halfvec_xyz.as_mut().unwrap();
+        let v = recon.point_set.patch_v_halfvec_xyz.as_mut().unwrap();
+        for k in 0..3 {
+            v[[1, k]] = 2.0 * u[[1, k]];
+        }
+    }
+    let kept = recon.point_set.points[2].normal;
+    recon.point_set.points[0].normal = Vector3::zeros();
+    recon.point_set.points[1].normal = Vector3::zeros();
+    let mut without_frames = recon.clone();
+    without_frames.point_set.patch_u_halfvec_xyz = None;
+    without_frames.point_set.patch_v_halfvec_xyz = None;
+    without_frames.recompute_depth_statistics().unwrap();
+    recon.recompute_depth_statistics().unwrap();
+
+    let row = |a: &ndarray::Array2<f32>, i: usize| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
+    let u = recon.point_set.patch_u_halfvec_xyz.clone().unwrap();
+    let v = recon.point_set.patch_v_halfvec_xyz.clone().unwrap();
+    let [x, y, z] = sfmtool_sfmr_format::patch_normal(row(&u, 0), row(&v, 0)).unwrap();
+    let normal = |r: &SfmrReconstruction, i: usize| r.point_set.points[i].normal;
+    assert_eq!(normal(&recon, 0), Vector3::new(x, y, z));
+    assert_ne!(normal(&recon, 0), normal(&without_frames, 0));
+    assert_eq!(normal(&recon, 1), normal(&without_frames, 1));
+    assert!((normal(&recon, 1).norm() - 1.0).abs() < 1e-5);
+    assert_eq!(normal(&recon, 2), kept);
+
+    // The file stores what memory holds, and reads it back the same.
+    let dir = std::env::temp_dir().join(format!(
+        "sfmtool_frame_filled_normals_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.join("filled.sfmr");
+    let mut data = recon.to_sfmr_data();
+    let options = sfmtool_sfmr_format::WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    sfmtool_sfmr_format::write_sfmr_with_options(&path, &mut data, &options).unwrap();
+    let loaded =
+        SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    for i in 0..2 {
+        assert_eq!(normal(&loaded, i), normal(&recon, i), "point {i}");
+    }
+    // Point 2's normal was set, so memory keeps it, but the file holds its
+    // frame's, as for any finite patched point.
+    let [x, y, z] = sfmtool_sfmr_format::patch_normal(row(&u, 2), row(&v, 2)).unwrap();
+    assert_eq!(normal(&loaded, 2), Vector3::new(x, y, z));
+}
+
 /// An image is posed when every component of its rotation and translation is
 /// finite; a NaN or an infinity in either one is the placeholder of an
 /// unposed image.

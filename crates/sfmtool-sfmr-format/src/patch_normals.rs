@@ -28,7 +28,11 @@ pub(crate) const fn derives_patch_normals(version: u32) -> bool {
 /// length `sqrt(nx² + ny² + nz²)` summed in that order, and each component is
 /// divided by the length: one fixed sequence of `f32` operations, so every
 /// reader and writer gets the same bits.
-pub(crate) fn patch_normal(u: [f32; 3], v: [f32; 3]) -> Option<[f32; 3]> {
+///
+/// A version 16 file derives the normal of a finite point with a patch by
+/// this function, and a caller that fills a missing normal in memory as a
+/// write would calls it too, so the two agree to the bit.
+pub fn patch_normal(u: [f32; 3], v: [f32; 3]) -> Option<[f32; 3]> {
     let n = [
         u[1] * v[2] - u[2] * v[1],
         u[2] * v[0] - u[0] * v[2],

@@ -33,6 +33,7 @@ pub use observation_readings::{
     ObservationReading, ObservationReadingColumns, ObservationReadingOptions, ReadingSampler,
     ReadingWindow, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS,
 };
+pub use patch_normals::patch_normal;
 pub use read::{read_sfmr, read_sfmr_content_hash, read_sfmr_metadata, resolve_workspace_dir};
 pub use types::*;
 pub use verify::verify_sfmr;

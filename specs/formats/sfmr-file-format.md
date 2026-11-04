@@ -3104,7 +3104,11 @@ describes. Other parts of this spec are implemented by:
   `SfmrReconstruction::recompute_depth_statistics` it runs fills only the
   missing rows too
   ([source](../../crates/sfmtool-core/src/reconstruction/data/recompute.rs)),
-  with the writer's test for a missing row, `is_missing_normal`.
+  with the writer's test for a missing row, `is_missing_normal`. It fills a
+  missing row as a write stores it: a finite point with a patch whose frame
+  gives a normal takes `normalize(u × v)`, through the format crate's
+  `patch_normal`, the function the writer and reader derive it with, and any
+  other finite point the mean-viewing normal.
 - World orientation: `sfm xform --rotate` and `--align-to` refine it after a
   solve.
 - `world_space_unit`: `sfm xform --scale-by-measurements` scales a
