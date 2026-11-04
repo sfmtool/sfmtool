@@ -367,11 +367,12 @@ Image readings:
 ```
 
 The axis ratio `|log(Exx / Eyy)|` and the coherence
-`sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)` are the two values the format spec
-names for a reader to derive from the tensor
+`sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)`, with the natural logarithm, are
+two of the values the format spec has a reader derive from the tensor
 ([§ Gradient structure tensor](../../formats/sift-file-format.md#gradient-structure-tensor)),
-and the two its measurements found to pick out directional blur that the
-sharpness misses. The axis ratio prints `inf` when exactly one of `Exx` and
+and the two that the format's
+[measurements](../../formats/sift-file-format-measurements.md) found to pick
+out blur along one direction that the sharpness misses. The axis ratio prints `inf` when exactly one of `Exx` and
 `Eyy` is 0 and `n/a (flat image)` when both are; the coherence of a flat image
 is 0. None of the four is a verdict: the format gives no threshold, because the
 readings depend on scene content, so a number means something only against the
