@@ -88,11 +88,11 @@ files of one frame number by path). So, for a list of two sensors `cam0` and
   and any even step takes one sensor only.
 
 A slice whose `start` and `stop` are multiples of the sensor count, with a step
-of 1, keeps whole frames. There is no step that keeps whole frames and skips
-some: to thin a rig list by frames, narrow it by a stepped range instead
-(`-r rig_sharp -r 10-900:6`). A list with one entry per sensor holds all of the
-first sensor's images before any of the second's, so `[:30]` of such a list is
-30 images of the first sensor.
+of 1, keeps whole frames. A step other than 1 or -1 never keeps two adjacent
+items, so it keeps no frame whole: to thin a rig list by frames, narrow it by a
+stepped range instead (`-r rig_sharp -r 10-900:6`). A list with one entry per
+sensor holds all of the first sensor's images before any of the second's, so
+`[:30]` of such a list is 30 images of the first sensor.
 
 **By position, not by frame number.** A slice never looks at frame numbers.
 That is the difference from narrowing by a range: `-r walk1 -r 10-20` keeps the
@@ -207,8 +207,9 @@ Quoted, the value passes through `pixi run` unchanged in bash and PowerShell.
   slice may not match well. Where the finer list is dense because the capture
   was hard to follow there, which is where a picking algorithm puts its short
   steps, the slice thins it as much as everywhere else, so the sliced list is
-  short of images where the capture most needs them. For a rig list, a step separates the
-  sensors of a frame ([What a slice selects](#what-a-slice-selects)).
+  short of images where the capture most needs them. For a rig list, a step
+  separates the sensors of a frame
+  ([What a slice selects](#what-a-slice-selects)).
 
 ## Finding a list's length
 
@@ -296,9 +297,10 @@ and `ImageSelection` carries the slice beside `list_name`, with
 `reconstruction_list_indices` to the members `resolve_in_names` returns before
 it maps them to the reconstruction's indexes. Every command of the shared
 option goes through these two functions, so each takes a slice with no change
-of its own, `--named-image-list 'walk1[:30]'` and the `--filter-points` of the
-export commands included. The `--help` text of `-r` and `--named-image-list`
-gains a sentence on the slice.
+of its own, `--named-image-list 'walk1[:30]'` included. The `--filter-points`
+flag of `sfm to-colmap-bin` and `sfm to-nerfstudio` then drops the 3D points
+the sliced list leaves without observations, as it does for a whole list. The
+`--help` text of `-r` and `--named-image-list` gains a sentence on the slice.
 
 **Filing.** When this ships, the slice's rules fold into
 [named-image-lists.md](../workspace/named-image-lists.md) (a section after

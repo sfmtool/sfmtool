@@ -431,10 +431,10 @@ The suggested slices use the syntax of
 [named-image-list-slices-amendment.md](named-image-list-slices-amendment.md):
 the first 30 images, the 30 from the middle, starting at `(n − 30) // 2` for a
 list of `n` images, and the last 30. A list of 60 images or fewer gets no
-suggestion line, since its slices would overlap or be the whole list. The
-slices count image files, not frames, so for a rig list, whose entries this
-draft writes one per sensor, `[:30]` would take only the first sensor's images
-([Rigs](#rigs)); the report gives no suggestion for a rig list.
+suggestion line, since its first 30 and last 30 images would overlap or be the
+whole list. The slices count image files, not frames, so for a rig list, whose
+entries this draft writes one per sensor, `[:30]` would take only the first
+sensor's images ([Rigs](#rigs)); the report gives no suggestion for a rig list.
 
 A **weak point** is an accepted step with fewer than twice the minimum match
 count, or an F-inlier share within `0.1` of `--min-inlier-share`, and a segment
