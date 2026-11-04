@@ -3277,6 +3277,83 @@ fn sfmtool_pinhole_folded_bspline_projects_none_past_the_fold() {
 }
 
 #[test]
+fn sfmtool_pinhole_one_spline_evaluation_gates_distorts_and_differentiates() {
+    // The projection and its Jacobian read the fold gate, the distorted point
+    // and the radial factor from one spline evaluation, in the `checked_`
+    // kernels. Each is checked against what it replaced: the gate against
+    // `ρ + δ(ρ) > 0` written out here, the point against
+    // `distort_sfmtool_pinhole` and the pair against
+    // `sfmtool_pinhole_radial_factor`, bit for bit. Then the camera's
+    // projection and Jacobian, with and without a rolling shutter, are `None`
+    // on exactly the rays that gate rejects.
+    use crate::camera::{RollingShutter, RollingShutterScanlines};
+    let folded = vec![-0.02, -0.1, -0.35, -0.8, -1.2, -1.5, -1.7, -1.8];
+    let in_domain = |coeffs: &[f64], x: f64, y: f64| {
+        let rho = (x * x + y * y).sqrt();
+        rho < 1e-15 || rho + bspline::delta(coeffs, BSPLINE_RHO_MAX, rho) > 0.0
+    };
+    let bits = |p: (f64, f64)| (p.0.to_bits(), p.1.to_bits());
+    let mut kernel_counts = [0usize; 2];
+    let mut camera_counts = [0usize; 2];
+    for coeffs in [PINCUSHION_BSPLINE.to_vec(), folded] {
+        for i in 0..60 {
+            let rho = 0.03 * i as f64; // 0 out to ρ = 1.77, past ρ_max
+            for phi in [0.3f64, 2.1, 4.4] {
+                let (x, y) = (rho * phi.cos(), rho * phi.sin());
+                let expected = in_domain(&coeffs, x, y);
+                let checked = checked_distort_sfmtool_pinhole(x, y, &coeffs, BSPLINE_RHO_MAX);
+                let with_factor = checked_distort_sfmtool_pinhole_with_radial_factor(
+                    x,
+                    y,
+                    &coeffs,
+                    BSPLINE_RHO_MAX,
+                );
+                assert_eq!(checked.is_some(), expected, "gate at ρ={rho}");
+                assert_eq!(with_factor.is_some(), expected, "gate at ρ={rho}");
+                if let (Some(point), Some((point_too, factor))) = (checked, with_factor) {
+                    let plain = distort_sfmtool_pinhole(x, y, &coeffs, BSPLINE_RHO_MAX);
+                    assert_eq!(bits(point), bits(plain), "point at ρ={rho}");
+                    assert_eq!(bits(point_too), bits(plain), "point at ρ={rho}");
+                    let reference =
+                        sfmtool_pinhole_radial_factor(x * x + y * y, &coeffs, BSPLINE_RHO_MAX);
+                    assert_eq!(bits(factor), bits(reference), "factor at ρ={rho}");
+                }
+                kernel_counts[usize::from(!expected)] += 1;
+            }
+        }
+
+        let plain = sfmtool_pinhole_at(250.0, coeffs.clone());
+        let rolling = CameraIntrinsics {
+            rolling_shutter: Some(RollingShutter {
+                scanlines: RollingShutterScanlines::Rows,
+                rates: [2e-2, -1.5e-2, 1e-2],
+            }),
+            ..plain.clone()
+        };
+        for i in 0..30 {
+            let ray = ray_at((0.06 * i as f64).atan(), 0.6);
+            // The optical-frame image-plane point the projection forms.
+            let (x, y) = (ray[0] / -ray[2], -ray[1] / -ray[2]);
+            let expected = in_domain(&coeffs, x, y);
+            for cam in [&plain, &rolling] {
+                let pixel = cam.ray_to_pixel(ray);
+                let jacobian = cam.ray_to_pixel_with_jacobian(ray);
+                assert_eq!(pixel.is_some(), expected, "projection at ray {ray:?}");
+                assert_eq!(jacobian.is_some(), expected, "Jacobian at ray {ray:?}");
+                if let (Some(pixel), Some((pixel_too, _))) = (pixel, jacobian) {
+                    assert_eq!(bits(pixel_too), bits(pixel), "pixel at ray {ray:?}");
+                }
+            }
+            camera_counts[usize::from(!expected)] += 1;
+        }
+    }
+    assert!(
+        kernel_counts.iter().all(|&n| n >= 20) && camera_counts.iter().all(|&n| n >= 5),
+        "in domain / past the fold: kernels {kernel_counts:?}, cameras {camera_counts:?}"
+    );
+}
+
+#[test]
 fn sfmtool_pinhole_inverse_falls_back_to_the_identity_with_no_invertible_radius() {
     // A spline folded so far that ρ_max + δ(ρ_max) ≤ 0: the distorted radius
     // is non-positive at the domain end, so no positive r_d is reachable and

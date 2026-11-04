@@ -273,7 +273,24 @@ impl CameraIntrinsics {
                 bspline,
                 bspline_rho_max,
                 ..
-            } => bspline_is_inactive(bspline, *bspline_rho_max),
+            } => {
+                if !bspline_is_inactive(bspline, *bspline_rho_max) {
+                    // The domain gate, the distorted point and the 2×2 from
+                    // one spline evaluation. The other models keep their three
+                    // calls below: sending them through
+                    // `checked_distort_with_jacobian` as well measured slower
+                    // for `SIMPLE_RADIAL`.
+                    let (point, d) = self.model.checked_distort_with_jacobian(x, y)?;
+                    return Some(compose_perspective_jacobian(
+                        (fx, fy),
+                        (cx, cy),
+                        [rx, ry, rz],
+                        point,
+                        d,
+                    ));
+                }
+                true
+            }
             _ => false,
         };
         if undistorted_pinhole {
@@ -292,21 +309,14 @@ impl CameraIntrinsics {
         }
         // 2×2 distortion Jacobian ∂(x_d, y_d)/∂(x, y); None for unsupported models.
         let d = self.model.distort_jacobian(x, y)?;
-        let (x_d, y_d) = self.model.distort(x, y);
-
-        // ∂(x, y)/∂ray = P·S, where P = ∂(x, y)/∂(rx, ry, rz) and S flips the
-        // sign of the ry, rz columns: [[1/rz, 0, rx/rz²], [0, −1/rz, ry/rz²]].
-        let inv = 1.0 / rz;
-        let ps = [[inv, 0.0, rx * inv * inv], [0.0, -inv, ry * inv * inv]];
-        // J = diag(fx, fy) · D · (P·S).
-        let mut jac = [[0.0f64; 3]; 2];
-        for c in 0..3 {
-            let m0 = d[0][0] * ps[0][c] + d[0][1] * ps[1][c];
-            let m1 = d[1][0] * ps[0][c] + d[1][1] * ps[1][c];
-            jac[0][c] = fx * m0;
-            jac[1][c] = fy * m1;
-        }
-        Some(((fx * x_d + cx, fy * y_d + cy), jac))
+        let point = self.model.distort(x, y);
+        Some(compose_perspective_jacobian(
+            (fx, fy),
+            (cx, cy),
+            [rx, ry, rz],
+            point,
+            d,
+        ))
     }
 
     /// The 2×3 pixel Jacobian `∂(u, v)/∂p_cam` at the camera-frame point
@@ -549,6 +559,33 @@ impl CameraIntrinsics {
         let (cx, cy) = self.principal_point();
         step.invert(&self.model, (u - cx) / f, (v - cy) / f)
     }
+}
+
+/// The pixel and `∂(u, v)/∂ray` of the perspective family at the optical-frame
+/// ray `[rx, ry, rz]` (`rz > 0`), from its distorted point `(x_d, y_d)` and
+/// the 2×2 distortion Jacobian `d = ∂(x_d, y_d)/∂(x, y)`:
+/// `J = diag(fx, fy) · D · (P·S)`.
+#[inline]
+fn compose_perspective_jacobian(
+    (fx, fy): (f64, f64),
+    (cx, cy): (f64, f64),
+    [rx, ry, rz]: [f64; 3],
+    (x_d, y_d): (f64, f64),
+    d: [[f64; 2]; 2],
+) -> PixelJacobian {
+    // ∂(x, y)/∂ray = P·S, where P = ∂(x, y)/∂(rx, ry, rz) and S flips the
+    // sign of the ry, rz columns: [[1/rz, 0, rx/rz²], [0, −1/rz, ry/rz²]].
+    let inv = 1.0 / rz;
+    let ps = [[inv, 0.0, rx * inv * inv], [0.0, -inv, ry * inv * inv]];
+    // J = diag(fx, fy) · D · (P·S).
+    let mut jac = [[0.0f64; 3]; 2];
+    for c in 0..3 {
+        let m0 = d[0][0] * ps[0][c] + d[0][1] * ps[1][c];
+        let m1 = d[1][0] * ps[0][c] + d[1][1] * ps[1][c];
+        jac[0][c] = fx * m0;
+        jac[1][c] = fy * m1;
+    }
+    ((fx * x_d + cx, fy * y_d + cy), jac)
 }
 
 /// Euclidean length of a camera-frame point, associated left-to-right so it

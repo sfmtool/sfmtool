@@ -52,7 +52,7 @@ radial map `θ ↦ (θ_d, θ_d')` passed in, in
 [kernels/equidistant.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/equidistant.rs),
 `sfmtool_fisheye_ray_jacobian` in
 [kernels/sfmtool_fisheye.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs),
-`sfmtool_pinhole_radial_factor` in
+`checked_distort_sfmtool_pinhole_with_radial_factor` in
 [kernels/sfmtool_pinhole.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_pinhole.rs)
 — and `CameraModel::supports_pixel_jacobian` in
 [intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs).
