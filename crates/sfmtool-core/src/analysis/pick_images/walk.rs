@@ -439,8 +439,8 @@ impl Walker<'_, '_> {
             }
         }
 
-        // A blurred run: every frame up to the band's upper edge, the
-        // farthest sharp one that matches well, or else the sharpest.
+        // A blurred run: every frame up to the band's upper edge, and the
+        // farthest sharp one that matches well.
         let run: Vec<usize> = (f + 1..=last).collect();
         self.read(&run)?;
         let fits = |s: &FramePairStats, n: usize, walker: &Self| {
@@ -460,10 +460,29 @@ impl Walker<'_, '_> {
                 });
             }
         }
-        let mut by_sharpness: Vec<(usize, f64)> =
-            run.iter().map(|&n| (n, self.blur(n).1)).collect();
-        by_sharpness.sort_by(|x, y| y.1.total_cmp(&x.1).then(y.0.cmp(&x.0)));
-        for (n, _) in by_sharpness {
+        // No frame is sharp: the sharpest that matches well with its step in
+        // the band, so a blurred stretch is crossed at the band's spacing,
+        // and only when none of those matches well, the sharpest below it.
+        let sharpest_first = |frames: &[usize], walker: &Self| {
+            let mut ranked: Vec<(usize, f64)> =
+                frames.iter().map(|&n| (n, walker.blur(n).1)).collect();
+            ranked.sort_by(|x, y| y.1.total_cmp(&x.1).then(y.0.cmp(&x.0)));
+            ranked.into_iter().map(|(n, _)| n).collect::<Vec<usize>>()
+        };
+        let window: Vec<usize> = (first..=last).collect();
+        for n in sharpest_first(&window, self) {
+            let s = self.measure(n)?;
+            if matches_well(&s, self.options) && s.step_percent >= b.low && s.step_percent <= b.high
+            {
+                return self.accept(Choice {
+                    frame: n,
+                    stats: s,
+                    kind: StepKind::BlurredRun,
+                    kept_blurred: Some((first, last)),
+                });
+            }
+        }
+        for n in sharpest_first(&run, self) {
             let s = self.measure(n)?;
             if fits(&s, n, self) {
                 return self.accept(Choice {

@@ -69,12 +69,15 @@ pub(super) struct Synth {
     pub(super) sensors: usize,
 }
 
-/// The sharpness of a sharp frame `t` of sensor `k`: near 1 for the reference
-/// sensor and near 5 for the second, with a few percent of variation.
+/// The readings of a sharp frame `t` of sensor `k`: a sharpness near 1 for
+/// the reference sensor and near 5 for the second, and a tensor near
+/// `[1, 1, 0]`, each with a few percent of variation, so the axis ratio and
+/// the coherence have a spread.
 pub(super) fn sharp(t: usize, k: usize) -> (f32, [f32; 3]) {
     let base = if k == 0 { 1.0 } else { 5.0 };
     let wobble = ((t * 37 + k * 11) % 9) as f32 / 100.0;
-    (base * (0.96 + wobble), [1.0, 1.0, 0.0])
+    let tilt = (((t * 53 + k * 7) % 9) as f32 - 4.0) / 100.0;
+    (base * (0.96 + wobble), [1.0 + tilt, 1.0 - tilt, 0.0])
 }
 
 impl Synth {

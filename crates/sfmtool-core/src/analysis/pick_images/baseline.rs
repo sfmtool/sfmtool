@@ -99,26 +99,40 @@ pub(super) fn matches_well(stats: &FramePairStats, options: &PickImagesOptions) 
 }
 
 /// The median of `values` and their median absolute deviation from it.
-fn centre_and_spread(values: &[f64]) -> (f64, f64) {
+///
+/// Also the spread a z-score divides by: `1.4826 · MAD`, or, when the MAD is
+/// 0 because more than half the values equal the median, `1.4826` times the
+/// smallest positive deviation from the median, the finest difference the
+/// values themselves show. It is 0 only when every value equals the median.
+fn centre_and_spread(values: &[f64]) -> (f64, f64, f64) {
     let m = median(values);
     let deviations: Vec<f64> = values.iter().map(|v| (v - m).abs()).collect();
-    (m, median(&deviations))
+    let mad = median(&deviations);
+    let scale = if mad > 0.0 {
+        mad
+    } else {
+        deviations
+            .iter()
+            .copied()
+            .filter(|&d| d > 0.0)
+            .fold(f64::INFINITY, f64::min)
+    };
+    let spread = if scale.is_finite() {
+        MAD_TO_SIGMA * scale
+    } else {
+        0.0
+    };
+    (m, mad, spread)
 }
 
-/// The robust z-score `(x − median) / (1.4826 · MAD)`, and whether it is
-/// above 2. The comparison is made without dividing, so a MAD of 0 counts
-/// every value above the median and none at it.
-fn robust_z(x: f64, median: f64, mad: f64) -> (f64, bool) {
-    let spread = MAD_TO_SIGMA * mad;
-    let above = x - median > BLUR_Z * spread;
-    let z = if spread > 0.0 {
-        (x - median) / spread
-    } else if x == median {
-        0.0
-    } else {
-        (x - median).signum() * f64::INFINITY
-    };
-    (z, above)
+/// The robust z-score `(x − median) / spread`, and whether it is above 2.
+/// `None` when the spread is 0: every sampled value was the same, which says
+/// nothing about how far a value may stray, so no value is judged by it.
+fn robust_z(x: f64, median: f64, spread: f64) -> Option<(f64, bool)> {
+    (spread > 0.0).then(|| {
+        let z = (x - median) / spread;
+        (z, z > BLUR_Z)
+    })
 }
 
 /// One sensor's baseline over the readings of the sampled frames.
@@ -129,14 +143,16 @@ pub(super) fn sensor_baseline(readings: &[ImageReadings]) -> SensorBaseline {
         .filter_map(|r| r.axis_ratio().map(f64::from))
         .collect();
     let coherence: Vec<f64> = readings.iter().map(|r| f64::from(r.coherence())).collect();
-    let (axis_ratio_median, axis_ratio_mad) = centre_and_spread(&axis);
-    let (coherence_median, coherence_mad) = centre_and_spread(&coherence);
+    let (axis_ratio_median, axis_ratio_mad, axis_ratio_spread) = centre_and_spread(&axis);
+    let (coherence_median, coherence_mad, coherence_spread) = centre_and_spread(&coherence);
     SensorBaseline {
         sharpness_median: median(&sharpness),
         axis_ratio_median,
         axis_ratio_mad,
+        axis_ratio_spread,
         coherence_median,
         coherence_mad,
+        coherence_spread,
     }
 }
 
@@ -149,18 +165,18 @@ pub(super) fn judge(
     let sharpness = f64::from(readings.sharpness);
     let soft = sharpness < blur_ratio * baseline.sharpness_median;
     let axis_ratio = readings.axis_ratio();
-    let axis = axis_ratio.map(|a| {
+    let axis = axis_ratio.and_then(|a| {
         robust_z(
             f64::from(a),
             baseline.axis_ratio_median,
-            baseline.axis_ratio_mad,
+            baseline.axis_ratio_spread,
         )
     });
     let coherence = readings.coherence();
-    let (coherence_z, coherence_high) = robust_z(
+    let coherence_judged = robust_z(
         f64::from(coherence),
         baseline.coherence_median,
-        baseline.coherence_mad,
+        baseline.coherence_spread,
     );
     SensorReading {
         sharpness: readings.sharpness,
@@ -169,8 +185,10 @@ pub(super) fn judge(
         coherence,
         sharpness_ratio: sharpness / baseline.sharpness_median,
         axis_ratio_z: axis.map(|(z, _)| z),
-        coherence_z,
-        blurred: soft || axis.is_some_and(|(_, high)| high) || coherence_high,
+        coherence_z: coherence_judged.map(|(z, _)| z),
+        blurred: soft
+            || axis.is_some_and(|(_, high)| high)
+            || coherence_judged.is_some_and(|(_, high)| high),
     }
 }
 

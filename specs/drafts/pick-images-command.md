@@ -475,8 +475,9 @@ records the captures that moved it, by kind.
   match).
 - **The blur rule's spread.** A robust z of 2 against the MAD, one-sided. The
   MAD of a capture with very even blur readings is small and makes the rule
-  strict, and a MAD of 0 makes every reading above the median a blur; a floor
-  on the spread may be needed.
+  strict; the walk floors a MAD of 0 at the smallest positive deviation
+  ([core/analysis/pick-images.md § Blur](../core/analysis/pick-images.md#blur)),
+  and a floor on a small but positive MAD may be needed too.
 - **Medians per sequence or per capture.** The walk takes the sharpness and
   tensor medians per sequence, since separate sequences can differ in light and
   scene. For several sequences of one camera in one place, one median over the
@@ -512,10 +513,6 @@ records the captures that moved it, by kind.
   sub-pixel jitter, whose 3-frame step is not three times its 1-frame step and
   whose steps vary by more than a factor of 2, so it fails two signs and is
   judged not a video rather than a camera that barely moves.
-- **A stretch where every frame is blurred.** The walk then keeps the sharpest
-  frame up to the band's upper edge, which can be the next frame, so such a
-  stretch is walked in steps far below the band. The walk could instead take
-  the farthest frame whose sharpness is within some margin of the sharpest.
 - **A way to choose among photographs.** How a set of photographs should be
   chosen from, for example by how much of the scene each one's matches cover
   and by sharpness alone, without steps, is a design of its own and would be

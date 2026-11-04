@@ -177,7 +177,8 @@ matched (`MeasuredPair`, with its `FramePairStats`) in the order matched. A
 `SequenceReport` holds:
 
 - `baseline`: the sampled positions, the frames the baseline read, each
-  sensor's medians and median absolute deviations, the count of blurred
+  sensor's medians, median absolute deviations and the spreads the z-scores
+  divide by, the count of blurred
   samples, the rate at each sample, its median and 0.9 quantile, the total
   motion, and the flagged regions with what flagged them;
 - `video`: the four signs of a video, the medians behind them, and
@@ -326,11 +327,18 @@ frame:
 7. **A blurred run.** When no neighbour qualifies, the walk reads every frame
    from `f + 1` to the band's upper edge at the candidate's rate in one batch,
    and accepts the farthest sharp one that matches well within the band's
-   upper edge, a step below the band. When none of those is sharp, it accepts
-   the sharpest that matches well, the frame whose least sharp sensor has the
-   highest ratio to its median, and reports it as kept though blurred. The next
-   frame always qualifies when it matches well, and the candidate itself
-   matched well, so the search always accepts a frame.
+   upper edge, which may be a step below the band. When none of those is
+   sharp, it accepts the sharpest of the frames whose step matches well within
+   the band, the sharpest being the frame whose least sharp sensor has the
+   highest ratio to its median, and reports it as kept though blurred. A
+   stretch where every frame is blurred is so crossed at the band's spacing,
+   with the least blurred frame at each step, and the chosen frames are no
+   denser there than the band makes them elsewhere; taking the sharpest of all
+   the frames up to the upper edge would let the next frame win and walk the
+   stretch one frame at a time. Only when no frame in the band matches well
+   does it take the sharpest that matches well below the band. The next frame
+   always qualifies when it matches well, and the candidate itself matched
+   well, so the search always accepts a frame.
 
 **A failing step.** When a step fails, the largest candidate measured below the
 band that matched well is accepted, since halving would reach it. When there
@@ -368,10 +376,21 @@ deviation from `sfmtool_core::numeric::median` over the sampled frames. Only a
 z above 2 counts, one-sided, since motion blur raises both readings by
 weakening the gradients along the direction of motion. The sharpness ratio
 catches a frame blurred in every direction; the z-scores catch one blurred
-along one direction that the sharpness alone misses. The z test is made as
-`x − median > 2 · 1.4826 · MAD`, without dividing, so a MAD of 0 counts every
-value above the median and none at it. The report's z is infinite in that
-case.
+along one direction that the sharpness alone misses.
+
+**A MAD of 0** happens when more than half the sampled values equal the median
+exactly, as when frames repeat or a reading does not vary. Dividing by it
+would make any value above the median, however close, a blur, and so flag the
+other part of the capture. The spread is then `1.4826` times the smallest
+positive deviation from the median instead: the finest difference the
+capture's own readings show, so that a value counts as blurred only when it is
+more than twice that far beyond the median, and the readings that make up the
+other part, which deviate by about that much, do not. A fraction of the median
+would not serve as the floor, since the median axis ratio or coherence of
+images with gradients equally strong in every direction is near 0. When every
+sampled value equals the median there is no spread to judge against, the
+z-score is not made (`None`), and only the sharpness ratio judges that
+reading.
 
 ### Rigs
 
@@ -511,7 +530,10 @@ source that writes a frame's version 2 `.sift` files only when it is asked for
 them and records every request. They cover a steady video chosen at about the
 target step, a change of speed that the stride follows, a blurred frame (in
 every direction and along one) swapped for a neighbour, a blurred run kept at
-its sharpest frames, a bad patch filled in at short steps, two breaks with a
+its sharpest frames within the band, a long blurred stretch crossed with every
+step in the band, a spread of 0 floored at the smallest deviation and
+readings mostly at the median flagging none of the rest, a bad patch filled in
+at short steps, two breaks with a
 short segment and weak steps, shuffled frames and a three-frame sequence that
 are not a video, a camera that only turns, one that barely moves and a moving
 scene that are not solvable, a rig whose second sensor's images match nothing

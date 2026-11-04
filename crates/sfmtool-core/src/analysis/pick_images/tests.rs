@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use capture::{sharp, sift_files, Content, Fault, Synth, SynthSource, ONE_PERCENT};
 
 use super::*;
+use crate::features::sift::ImageReadings;
 use crate::numeric::median;
 use crate::progress::Progress;
 
@@ -264,8 +265,21 @@ fn a_blurred_run_keeps_its_sharpest_frames() {
     for kept in &walk.kept_blurred {
         assert!(run_frames.contains(&kept.frame));
         assert!(walk.chosen.contains(&kept.frame));
-        // The sharpest of the frames searched, all of which match well.
+        // The sharpest of the frames searched whose step from the last chosen
+        // frame matched well within the band.
+        let step = walk.steps.iter().find(|s| s.to == kept.frame).unwrap();
+        let (low, high) = band(step);
+        assert!((low..=high).contains(&step.stats.step_percent), "{step:?}");
+        let in_band = |n: usize| {
+            report.pairs.iter().any(|p| {
+                p.a.frame == step.from
+                    && p.b.frame == n
+                    && baseline::matches_well(&p.stats, &options())
+                    && (low..=high).contains(&p.stats.step_percent)
+            })
+        };
         let best = (kept.searched_first..=kept.searched_last)
+            .filter(|&n| in_band(n))
             .map(sharpness)
             .fold(f32::MIN, f32::max);
         assert_eq!(sharpness(kept.frame), best);
@@ -274,6 +288,96 @@ fn a_blurred_run_keeps_its_sharpest_frames() {
     assert!(walk.chosen.iter().any(|c| run_frames.contains(c)));
     assert_eq!(walk.chosen.last(), Some(&299));
     assert_read_is_asked(&run);
+}
+
+/// The band a step was held to: halved with the target in a flagged region.
+fn band(step: &WalkStep) -> (f64, f64) {
+    let o = options();
+    let target = o.target_step_percent * if step.flagged { 0.5 } else { 1.0 };
+    (target * (1.0 - o.step_band), target * (1.0 + o.step_band))
+}
+
+#[test]
+fn a_long_blurred_stretch_is_crossed_at_the_bands_spacing() {
+    let mut synth = Synth::steady(26, 300, ONE_PERCENT);
+    let stretch = 80..=220;
+    for t in stretch.clone() {
+        synth.shots[t].readings[0].0 = 0.2 + 0.01 * ((t * 7) % 10) as f32;
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    let inside: Vec<&WalkStep> = walk
+        .steps
+        .iter()
+        .filter(|s| stretch.contains(&s.from) && stretch.contains(&s.to))
+        .collect();
+    assert!(inside.len() >= 10, "{} steps in the stretch", inside.len());
+    for step in &inside {
+        let (low, high) = band(step);
+        assert!(
+            (low..=high).contains(&step.stats.step_percent),
+            "a step across the blurred stretch left its band: {step:?}"
+        );
+    }
+    // Every frame chosen in the stretch is blurred, so it is kept though
+    // blurred, at the band's spacing rather than one frame at a time.
+    assert!(inside
+        .iter()
+        .all(|s| walk.kept_blurred.iter().any(|k| k.frame == s.to)));
+    assert!(
+        median(&strides(walk, |s| stretch.contains(&s.from)
+            && stretch.contains(&s.to)))
+            >= 4.0
+    );
+    assert!(walk.breaks.is_empty());
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn a_spread_of_zero_is_floored_at_the_smallest_deviation() {
+    let reading = |xx: f32| ImageReadings::new(1.0, [xx, 1.0, 0.0]).unwrap();
+    // Most readings equal the median, so the MAD is 0; the floor is 1.4826
+    // times the smallest positive deviation, here 0.01 in the axis ratio.
+    let readings: Vec<ImageReadings> = (0..10)
+        .map(|i| reading(if i < 7 { 1.0 } else { 0.01f32.exp() }))
+        .collect();
+    let base = baseline::sensor_baseline(&readings);
+    assert_eq!(base.axis_ratio_mad, 0.0);
+    assert!((base.axis_ratio_spread - 1.4826 * 0.01).abs() < 1e-6);
+    let judged = |xx: f32| baseline::judge(&reading(xx), &base, 0.6);
+    // A deviation as small as the deviants' is not blurred; one well beyond
+    // two spreads is.
+    assert!(!judged(0.01f32.exp()).blurred);
+    assert!(judged(0.05f32.exp()).blurred);
+    assert!(judged(0.05f32.exp()).axis_ratio_z.unwrap() > 2.0);
+
+    // Every reading the same: no spread, so no z-score and no blur by it.
+    let same = baseline::sensor_baseline(&[reading(1.0); 10]);
+    assert_eq!(same.axis_ratio_spread, 0.0);
+    let streak = baseline::judge(&reading(5.0), &same, 0.6);
+    assert_eq!(streak.axis_ratio_z, None);
+    assert!(!streak.blurred);
+}
+
+#[test]
+fn readings_mostly_at_the_median_do_not_flag_the_rest() {
+    // Three frames in five read exactly [1, 1, 0] and two a tensor 2% apart:
+    // with no floor under a MAD of 0, those two in five would all be blurred.
+    let mut synth = Synth::steady(27, 300, ONE_PERCENT);
+    for (t, shot) in synth.shots.iter_mut().enumerate() {
+        shot.readings[0].1 = if t % 5 < 2 {
+            [1.02, 1.0, 0.0]
+        } else {
+            [1.0, 1.0, 0.0]
+        };
+    }
+    let run = run(&[&synth]);
+    let report = run.report();
+    assert_eq!(report.sequences[0].baseline.sensors[0].axis_ratio_mad, 0.0);
+    assert_eq!(report.sequences[0].baseline.blurred_samples, 0);
+    assert!(report.frames.iter().all(|f| !f.blurred));
+    let walk = run.walk(0);
+    assert!(walk.swaps.is_empty() && walk.kept_blurred.is_empty());
 }
 
 #[test]

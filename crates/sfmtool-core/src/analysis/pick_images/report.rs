@@ -88,11 +88,11 @@ pub struct SensorReading {
     /// is 0.
     pub sharpness_ratio: f64,
     /// The axis ratio's robust z-score against its sensor's baseline:
-    /// `(x − median) / (1.4826 · MAD)`. `None` for a flat image; infinite
-    /// when the MAD is 0 and `x` is not the median.
+    /// `(x − median) / spread` ([`SensorBaseline::axis_ratio_spread`]).
+    /// `None` for a flat image, or when the spread is 0.
     pub axis_ratio_z: Option<f64>,
-    /// The coherence's robust z-score, likewise.
-    pub coherence_z: f64,
+    /// The coherence's robust z-score, likewise; `None` when the spread is 0.
+    pub coherence_z: Option<f64>,
     /// Whether the image is blurred: its sharpness is below `blur_ratio` times
     /// the median, or a z-score is above 2.
     pub blurred: bool,
@@ -155,8 +155,14 @@ pub struct SensorBaseline {
     /// Over the sampled frames that are not flat.
     pub axis_ratio_median: f64,
     pub axis_ratio_mad: f64,
+    /// What an axis ratio's z-score divides by: `1.4826 · MAD`, or `1.4826`
+    /// times the smallest positive deviation from the median when the MAD is
+    /// 0, or 0 when every sampled value is the median.
+    pub axis_ratio_spread: f64,
     pub coherence_median: f64,
     pub coherence_mad: f64,
+    /// What a coherence's z-score divides by, likewise.
+    pub coherence_spread: f64,
 }
 
 /// The rate at one sampled frame.
