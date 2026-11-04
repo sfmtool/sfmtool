@@ -489,7 +489,7 @@ class TestReferenceObservations:
         out = tmp_path / "no_column.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=True)
         assert np.all(read_sfmr(out)["reference_observations"] == -1)
-        assert read_sfmr_metadata(out)["version"] == 15
+        assert read_sfmr_metadata(out)["version"] == 16
 
 
 class TestPatchColumnValidation:
@@ -931,7 +931,7 @@ class TestPerImageIntrinsicAdjustments:
         out = tmp_path / "flagged.sfmr"
         write_sfmr(out, data)
         again = read_sfmr(out)
-        assert read_sfmr_metadata(out)["version"] == 15
+        assert read_sfmr_metadata(out)["version"] == 16
         assert again["per_image_adjustments"] == data["per_image_adjustments"]
         assert again["focal_adjustments"].dtype == np.float64
         assert again["focal_adjustments"].shape == (n_img,)
@@ -1052,7 +1052,7 @@ class TestPerImageLensCorrections:
         out = tmp_path / "scanlines.sfmr"
         write_sfmr(out, data)
         again = read_sfmr(out)
-        assert read_sfmr_metadata(out)["version"] == 15
+        assert read_sfmr_metadata(out)["version"] == 16
         assert again["rolling_shutter_scanlines"] == settings
         assert again["radial_bspline_adjustments"] is None
         assert again["rolling_shutter_rates_xyz"] is None

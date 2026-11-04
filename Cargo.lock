@@ -5040,6 +5040,7 @@ dependencies = [
  "bytemuck",
  "chrono",
  "dunce",
+ "half",
  "nalgebra",
  "ndarray",
  "serde",

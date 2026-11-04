@@ -950,7 +950,9 @@ fn restore_image_readings(loaded: &mut SfmrReconstruction, source: &SfmrReconstr
 /// Below version 15 the image readings are dropped, both columns and the
 /// `image_to_gray` key, since a file of those versions has none; a test that
 /// saves what it loads gives the value its readings back first
-/// ([`restore_image_readings`]).
+/// ([`restore_image_readings`]). Below version 16 every `.float16.` reading
+/// entry is stored as its `.float32.` sibling, its values widened, as a
+/// writer of those versions stored the same values.
 fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
     use std::io::{Read, Write};
 
@@ -979,6 +981,13 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
             Some(rest) if version < 10 => format!("images/{rest}"),
             _ => name.clone(),
         };
+        let widen = version < sfmtool_sfmr_format::SFMR_FLOAT16_READINGS_VERSION
+            && placed.contains(".float16.");
+        let placed = if widen {
+            placed.replace(".float16.", ".float32.")
+        } else {
+            placed
+        };
         let below_readings = version < sfmtool_sfmr_format::SFMR_IMAGE_READINGS_VERSION;
         if below_readings
             && (name.starts_with("images/sharpness.")
@@ -1003,6 +1012,19 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
                 .insert("version".into(), serde_json::json!(version));
             let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
             zip_out.write_all(&bytes).unwrap();
+        } else if widen {
+            let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
+            let widened: Vec<u8> = raw
+                .chunks_exact(2)
+                .flat_map(|b| {
+                    half::f16::from_le_bytes([b[0], b[1]])
+                        .to_f32()
+                        .to_le_bytes()
+                })
+                .collect();
+            zip_out
+                .write_all(&zstd::bulk::compress(&widened, 3).unwrap())
+                .unwrap();
         } else {
             zip_out.write_all(&compressed).unwrap();
         }

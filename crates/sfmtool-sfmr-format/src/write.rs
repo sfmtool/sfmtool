@@ -158,6 +158,13 @@ impl Default for WriteOptions {
 /// absent and filled from the recomputed mean-viewing normals.
 const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 
+/// Whether the version this crate writes, [`SFMR_FORMAT_VERSION`], stores the
+/// reading columns that have a `float16` form as `float16`: the entry names
+/// the writer uses. `ObservationReadingColumns::bytes` and the sharpness
+/// bytes are `float16` to match, which the assertion below holds.
+const WRITES_FLOAT16: bool = crate::float16::stores_float16(SFMR_FORMAT_VERSION);
+const _: () = assert!(WRITES_FLOAT16);
+
 /// Whether a stored normal row counts as missing: its squared norm is at most
 /// `1e-6` (`MISSING_NORMAL_NORM_SQ`), so it is the zero vector or near it. A
 /// write fills such a row with the point's mean-viewing normal, and so does
@@ -219,6 +226,12 @@ fn merge_preserving_normals<'a>(
 /// `content_hash` field in `data` is ignored on write (recomputed). The
 /// per-observation and per-image columns written depend on
 /// `metadata.feature_source` (`sift_files` vs `embedded_patches`).
+///
+/// The columns the current version stores as `float16`
+/// ([`SFMR_FLOAT16_READINGS_VERSION`]), the sharpness and five of the
+/// observation readings, are rounded in `data` to the nearest `float16` before
+/// they are written and hashed, so after the write `data` holds what a reader
+/// of the file gets back.
 ///
 /// The image readings are required ([`SfmrData::image_readings`]): a value
 /// without them is refused with [`SfmrError::InvalidFormat`] and nothing is
@@ -345,6 +358,18 @@ fn write_sfmr_into<S: EntrySink>(
     if let Some(readings) = &data.image_readings {
         validate_image_readings(readings, data.metadata.image_count as usize)
             .map_err(SfmrError::InvalidFormat)?;
+    }
+    // The columns this version stores as `float16` are rounded here, in the
+    // value itself, as the tracks are sorted below: the bytes written and
+    // hashed are those values, and the value after the write is what a
+    // reader of the file gets back.
+    if let Some(readings) = data.image_readings.as_mut() {
+        readings
+            .round_to_stored_precision()
+            .map_err(SfmrError::InvalidFormat)?;
+    }
+    if let Some(readings) = data.observation_readings.as_mut() {
+        readings.round_to_stored_precision();
     }
     let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
@@ -805,14 +830,14 @@ fn write_images<S: EntrySink>(
         }
     }
 
-    // images/sharpness (version 15+; after rolling_shutter_rates_xyz, before
-    // sift_content_hashes and thumbnails_y_x_rgb)
+    // images/sharpness (version 15+, float16 from version 16; after
+    // rolling_shutter_rates_xyz, before sift_content_hashes and
+    // thumbnails_y_x_rgb)
     if let Some(readings) = &data.image_readings {
-        let values: Vec<f32> = readings.sharpness.iter().copied().collect();
         binary_hashed(
             sink,
-            &entries::images_sharpness(image_count),
-            bytemuck::cast_slice(&values),
+            &entries::images_sharpness(WRITES_FLOAT16, image_count),
+            &crate::float16::float16_bytes(readings.sharpness.iter()),
             &mut images_hasher,
         )?;
     }
@@ -1022,7 +1047,7 @@ fn write_tracks<S: EntrySink>(
                 for &column in columns {
                     binary_hashed(
                         sink,
-                        &column.entry(observation_count),
+                        &column.entry(WRITES_FLOAT16, observation_count),
                         &readings.bytes(column),
                         hasher,
                     )?;

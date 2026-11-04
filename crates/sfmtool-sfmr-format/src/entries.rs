@@ -189,9 +189,13 @@ pub(crate) fn images_rolling_shutter_rates_xyz(image_count: impl std::fmt::Displ
     format!("images/rolling_shutter_rates_xyz.{image_count}.3.float64.zst")
 }
 
-/// `images/sharpness` — sharpness per image (v15+, required).
-pub(crate) fn images_sharpness(image_count: impl std::fmt::Display) -> String {
-    format!("images/sharpness.{image_count}.float32.zst")
+/// `images/sharpness` — sharpness per image (v15+, required): `float32` in a
+/// version 15 file and `float16` from
+/// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
+/// on, as `float16` says.
+pub(crate) fn images_sharpness(float16: bool, image_count: impl std::fmt::Display) -> String {
+    let dtype = if float16 { "float16" } else { "float32" };
+    format!("images/sharpness.{image_count}.{dtype}.zst")
 }
 
 /// `images/gradient_structure_tensors_xx_yy_xy` — `[Exx, Eyy, Exy]` per
@@ -402,13 +406,43 @@ impl ReadingColumn {
         }
     }
 
-    /// The entry name for `observation_count` rows.
-    pub(crate) fn entry(self, observation_count: impl std::fmt::Display) -> String {
-        let shape = if self.width() == 2 { ".2" } else { "" };
-        let dtype = if self == ReadingColumn::EllipseAxesIsAtLeast {
-            "uint8"
+    /// Whether the column is one of the five self-similarity value columns
+    /// that a file of version
+    /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
+    /// or later stores as `float16`: the axes, the two angles, `cos θ` and the
+    /// zoom. The two scores stay `float32` and the flags `uint8`.
+    pub(crate) fn has_float16_form(self) -> bool {
+        matches!(
+            self,
+            ReadingColumn::CosViewAngle
+                | ReadingColumn::EllipseAxes
+                | ReadingColumn::EllipseMajorAngle
+                | ReadingColumn::TiltAngle
+                | ReadingColumn::Zoom
+        )
+    }
+
+    /// Bytes per stored value: `1` for the flags, `2` for a column with a
+    /// `float16` form where `float16` says the file stores that form (version
+    /// 16 on), `4` otherwise.
+    pub(crate) fn element_size(self, float16: bool) -> usize {
+        if self == ReadingColumn::EllipseAxesIsAtLeast {
+            1
+        } else if float16 && self.has_float16_form() {
+            2
         } else {
-            "float32"
+            4
+        }
+    }
+
+    /// The entry name for `observation_count` rows, its dtype as
+    /// [`Self::element_size`] gives it.
+    pub(crate) fn entry(self, float16: bool, observation_count: impl std::fmt::Display) -> String {
+        let shape = if self.width() == 2 { ".2" } else { "" };
+        let dtype = match self.element_size(float16) {
+            1 => "uint8",
+            2 => "float16",
+            _ => "float32",
         };
         format!(
             "tracks/{}.{observation_count}{shape}.{dtype}.zst",

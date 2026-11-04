@@ -10,6 +10,7 @@ use ndarray::{Array1, Array2, Array4};
 use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
 
 use crate::entries::{self, ReadingColumn};
+use crate::float16::{stores_float16, widen_float16, wrong_dtype_error};
 use crate::image_readings::image_readings_presence_error;
 use crate::observation_readings::{
     observation_reading_options, observation_readings_flagged, ReadingColumnsBuilder,
@@ -402,28 +403,50 @@ fn read_images_section(
 
 /// The image readings (version 15+): both columns and the `image_to_gray` key
 /// of `images/metadata.json`, required from version 15 and refused below it,
-/// checked by [`validate_image_readings`].
+/// checked by [`validate_image_readings`]. The sharpness is `float32` in a
+/// version 15 file and `float16` from version 16, widened to `f32` exactly; a
+/// file holding it in the other version's dtype is refused.
 fn read_image_readings(
     archive: &mut zip::ZipArchive<std::fs::File>,
     metadata: &SfmrMetadata,
     images_meta: &serde_json::Value,
 ) -> Result<Option<ImageReadingColumns>, SfmrError> {
     let image_count = metadata.image_count as usize;
-    let sharpness_name = entries::images_sharpness(image_count);
+    let float16 = stores_float16(metadata.version);
+    let sharpness_name = entries::images_sharpness(float16, image_count);
+    let other_sharpness_name = entries::images_sharpness(!float16, image_count);
+    let other_sharpness = archive.index_for_name(&other_sharpness_name).is_some();
     let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
     let image_to_gray = images_meta.get("image_to_gray");
+    // A sharpness in either dtype counts as carried, so a file below version
+    // 15 is refused for carrying it at all before its dtype is asked about.
     let stored = [
-        archive.index_for_name(&sharpness_name).is_some(),
+        archive.index_for_name(&sharpness_name).is_some() || other_sharpness,
         archive.index_for_name(&tensors_name).is_some(),
         image_to_gray.is_some(),
     ];
     if let Some(e) = image_readings_presence_error(metadata.version, stored) {
         return Err(SfmrError::InvalidFormat(e));
     }
+    if other_sharpness {
+        return Err(SfmrError::InvalidFormat(wrong_dtype_error(
+            metadata.version,
+            &other_sharpness_name,
+            &sharpness_name,
+        )));
+    }
     let Some(image_to_gray) = image_to_gray else {
         return Ok(None);
     };
-    let sharpness: Vec<f32> = read_binary_array(archive, &sharpness_name, image_count)?;
+    let sharpness: Vec<f32> = if float16 {
+        widen_float16(&read_binary_array::<_, u16>(
+            archive,
+            &sharpness_name,
+            image_count,
+        )?)
+    } else {
+        read_binary_array(archive, &sharpness_name, image_count)?
+    };
     let tensors: Vec<f32> = read_binary_array(archive, &tensors_name, image_count * 3)?;
     let readings = ImageReadingColumns {
         image_to_gray: image_to_gray.clone(),
@@ -898,7 +921,8 @@ fn read_tracks_section(
         None
     };
 
-    let observation_readings = read_observation_readings(archive, tracks_meta, observation_count)?;
+    let observation_readings =
+        read_observation_readings(archive, metadata.version, tracks_meta, observation_count)?;
 
     // Version 1 named this array `points3d_indexes`; version 2 renames it to
     // `point_indexes`.
@@ -948,8 +972,13 @@ fn read_tracks_section(
 /// The eight observation-reading columns, where `tracks/metadata.json` flags
 /// them (`has_observation_readings`), with the options recorded beside them.
 /// Absent in a file without the flag, as every file before the columns was.
+///
+/// Five of them are `float16` from version 16 and `float32` before it
+/// ([`SFMR_FLOAT16_READINGS_VERSION`]), widened to `f32` exactly; a file
+/// holding one in the other version's dtype is refused.
 fn read_observation_readings(
     archive: &mut zip::ZipArchive<std::fs::File>,
+    version: u32,
     tracks_meta: &serde_json::Value,
     observation_count: usize,
 ) -> Result<Option<ObservationReadingColumns>, SfmrError> {
@@ -957,14 +986,24 @@ fn read_observation_readings(
         return Ok(None);
     }
     let options = observation_reading_options(tracks_meta).map_err(SfmrError::InvalidFormat)?;
+    let float16 = stores_float16(version);
     let mut builder = ReadingColumnsBuilder::default();
     for column in ReadingColumn::ALL {
         let len = observation_count * column.width();
-        let name = column.entry(observation_count);
-        if column == ReadingColumn::EllipseAxesIsAtLeast {
-            builder.push_flags(read_binary_array(archive, &name, len)?);
-        } else {
-            builder.push_f32(column, read_binary_array(archive, &name, len)?);
+        let name = column.entry(float16, observation_count);
+        let other = column.entry(!float16, observation_count);
+        if other != name && archive.index_for_name(&other).is_some() {
+            return Err(SfmrError::InvalidFormat(wrong_dtype_error(
+                version, &other, &name,
+            )));
+        }
+        match column.element_size(float16) {
+            1 => builder.push_flags(read_binary_array(archive, &name, len)?),
+            2 => builder.push_f32(
+                column,
+                widen_float16(&read_binary_array::<_, u16>(archive, &name, len)?),
+            ),
+            _ => builder.push_f32(column, read_binary_array(archive, &name, len)?),
         }
     }
     builder

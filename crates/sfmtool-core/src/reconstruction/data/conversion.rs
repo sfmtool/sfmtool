@@ -174,7 +174,12 @@ impl SfmrReconstruction {
     /// The writer stamps the write timestamp and it is returned as the write
     /// record, so there is no second place that spells the clock. The value
     /// itself is untouched: the timestamp is about the act of writing, not the
-    /// content, so a shared base can be saved without cloning it.
+    /// content, so a shared base can be saved without cloning it. The same
+    /// goes for the readings the file stores as `float16`
+    /// ([`sfmtool_sfmr_format::SFMR_FLOAT16_READINGS_VERSION`]): the writer
+    /// rounds them in the copy it writes, and this value keeps its `f32`
+    /// values, which [`Self::content_xxh128`] hashes through the same
+    /// rounding.
     ///
     /// The file stores every image's sharpness and gradient structure tensor.
     /// A value that does not hold them for every image, such as one read from

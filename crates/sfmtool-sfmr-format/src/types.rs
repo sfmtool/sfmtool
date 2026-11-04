@@ -831,6 +831,15 @@ impl OptionalPresence {
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 16 stores six reading columns as `float16` where version 15 stored
+/// them as `float32`: `images/sharpness` and the five observation-reading
+/// columns `tracks/zncc_self_similarity_ellipse_axes`, `_ellipse_major_angle`,
+/// `_cos_view_angle`, `_tilt_angle` and `_zoom` (see
+/// [`SFMR_FLOAT16_READINGS_VERSION`]). The values in memory stay `f32`: a
+/// writer rounds each to the nearest `float16`, and a reader widens it again
+/// exactly. A version 15 file reads as it did, and saves as version 16 with
+/// those columns rounded, which changes its content hash.
+///
 /// Version 15 added each image's sharpness and gradient structure tensor, the
 /// required columns `images/sharpness` and
 /// `images/gradient_structure_tensors_xx_yy_xy`, and the required
@@ -916,7 +925,19 @@ impl OptionalPresence {
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 15;
+pub const SFMR_FORMAT_VERSION: u32 = 16;
+
+/// The first `.sfmr` version that stores `images/sharpness` and the five
+/// observation-reading columns `tracks/zncc_self_similarity_ellipse_axes`,
+/// `_ellipse_major_angle`, `_cos_view_angle`, `_tilt_angle` and `_zoom` as
+/// `float16`.
+///
+/// A file below it stores them as `float32`. Each version has one dtype per
+/// column, and the reader refuses a file holding the other one. The two
+/// bitmap scores and the gradient structure tensor are `float32` in every
+/// version. See `specs/formats/sfmr-file-format.md` § "Version 15 → Version
+/// 16".
+pub const SFMR_FLOAT16_READINGS_VERSION: u32 = 16;
 
 /// The first `.sfmr` version that stores the per-image radial B-spline
 /// correction and rolling-shutter rates: `images/radial_bspline_adjustments`,

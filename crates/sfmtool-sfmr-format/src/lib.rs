@@ -16,6 +16,7 @@ compile_error!(
 
 mod depth_stats;
 mod entries;
+mod float16;
 mod image_readings;
 mod observation_readings;
 mod read;

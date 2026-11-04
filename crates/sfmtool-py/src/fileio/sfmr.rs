@@ -111,6 +111,10 @@ where
 /// `{"formula": …, "quantize_bits": …}` conversion both were computed
 /// through. All three are `None` for a file below version 15.
 ///
+/// Version 16 stores the sharpness and five of the observation-reading
+/// columns as `float16`; they still read as float32 arrays, widened exactly,
+/// and a write rounds them to the nearest `float16`.
+///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
 /// their `(P,)` uint8 `normal_confidence`, the per-point constraint triple
@@ -728,7 +732,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// low-level writer computes nothing, so a dict read from a file below version
 /// 15 is refused with `ValueError` until they are supplied, where
 /// `SfmrReconstruction.save` gathers them from the `.sift` files or the
-/// photographs.
+/// photographs. The sharpness and five of the observation-reading columns are
+/// written rounded to the nearest `float16`; the dict's arrays are not
+/// changed.
 ///
 /// `skip_recompute_depth_stats` decides only where the depth statistics come
 /// from: by default they are recomputed from the geometry, and with `True`

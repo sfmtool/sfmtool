@@ -14,6 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 use zip::ZipArchive;
 
 use crate::entries::{self, ReadingColumn};
+use crate::float16::{float16_values, stores_float16, wrong_dtype_error};
 use crate::image_readings::{f32_values, image_readings_presence_error};
 use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
@@ -350,7 +351,12 @@ fn verify_images_section<R: Read + Seek>(
     // The image readings (version 15+) are hashed wherever the archive holds
     // them, and only there: the version rules below report one that is
     // missing or that a file below version 15 carries.
-    let sharpness_name = entries::images_sharpness(image_count);
+    // The sharpness is float32 in version 15 and float16 from version 16; an
+    // entry in the other version's dtype is reported below and not hashed.
+    let float16 = stores_float16(metadata.version);
+    let sharpness_name = entries::images_sharpness(float16, image_count);
+    let other_sharpness_name = entries::images_sharpness(!float16, image_count);
+    let other_sharpness = archive.index_for_name(&other_sharpness_name).is_some();
     let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
 
     // images/camera_indexes (captured for the keypoint bounds check below)
@@ -543,17 +549,27 @@ fn verify_images_section<R: Read + Seek>(
     if let Some(e) = image_readings_presence_error(
         metadata.version,
         [
-            sharpness_raw.is_some(),
+            sharpness_raw.is_some() || other_sharpness,
             tensors_raw.is_some(),
             image_to_gray.is_some(),
         ],
     ) {
         errors.push(e);
+    } else if other_sharpness {
+        errors.push(wrong_dtype_error(
+            metadata.version,
+            &other_sharpness_name,
+            &sharpness_name,
+        ));
     } else if let (Some(image_to_gray), Some(sharpness_raw), Some(tensors_raw)) =
         (image_to_gray, &sharpness_raw, &tensors_raw)
     {
         let check = (|| -> Result<(), String> {
-            let sharpness = f32_values(sharpness_raw, &sharpness_name, image_count)?;
+            let sharpness = if float16 {
+                float16_values(sharpness_raw, &sharpness_name, image_count)?
+            } else {
+                f32_values(sharpness_raw, &sharpness_name, image_count)?
+            };
             let tensors = f32_values(tensors_raw, &tensors_name, image_count * 3)?;
             crate::validate_image_readings(
                 &crate::ImageReadingColumns {
@@ -870,6 +886,7 @@ fn verify_tracks_section<R: Read + Seek>(
     // The observation-reading columns (optional, present together), hashed
     // each in its lexicographic slot; the flags column is checked for 0 or 1.
     let has_observation_readings = observation_readings_flagged(&tracks_meta);
+    let float16 = stores_float16(metadata.version);
     if has_observation_readings {
         if let Err(e) = observation_reading_options(&tracks_meta) {
             errors.push(e);
@@ -884,12 +901,14 @@ fn verify_tracks_section<R: Read + Seek>(
             return Ok(());
         }
         for &column in columns {
-            let raw = read_zst_entry(archive, &column.entry(observation_count))?;
-            let element = if column == ReadingColumn::EllipseAxesIsAtLeast {
-                1
-            } else {
-                4
-            };
+            let name = column.entry(float16, observation_count);
+            let other = column.entry(!float16, observation_count);
+            if other != name && archive.index_for_name(&other).is_some() {
+                errors.push(wrong_dtype_error(metadata.version, &other, &name));
+                continue;
+            }
+            let raw = read_zst_entry(archive, &name)?;
+            let element = column.element_size(float16);
             if raw.len() != observation_count * column.width() * element {
                 errors.push(format!(
                     "tracks/{} holds {} bytes, not {}",

@@ -172,7 +172,8 @@ fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
     // A point with no patch in the cloud keeps the rows the value stores,
     // where they stand under the same options; under other options it is not
     // measured. The value is saved to a `.sfmr` and loaded back first, so the
-    // options compared are the ones the file's JSON gives back.
+    // options compared are the ones the file's JSON gives back, and the rows
+    // are the ones the file stores, rounded where it stores `float16`.
     let scene = Scene::new();
     let (next, point, _) = evaluated_and_committed(&scene);
     let (written, map) = next.materialize();
@@ -180,13 +181,23 @@ fn a_reading_carries_the_rows_of_a_point_it_does_not_read() {
     let dir = std::env::temp_dir().join(format!("sfmtool_readings_carry_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("committed.sfmr");
-    sfmtool_sfmr_format::write_sfmr(&path, &mut written.to_sfmr_data()).unwrap();
+    let mut data = written.to_sfmr_data();
+    sfmtool_sfmr_format::write_sfmr(&path, &mut data).unwrap();
     let recon =
         SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
+    // The write rounds the value it was handed to what the file stores.
+    let saved = data.observation_readings.expect("written");
+    let loaded = recon.point_set.observation_readings.as_ref().expect("read");
+    assert_eq!(loaded.rows, saved.rows());
+    assert_eq!(loaded.options, saved.options);
     assert_eq!(
-        recon.point_set.observation_readings,
-        written.point_set.observation_readings
+        Some(loaded.options),
+        written
+            .point_set
+            .observation_readings
+            .as_ref()
+            .map(|r| r.options)
     );
     let mut cloud = PatchCloud::from_stored_patch_frames(&recon).expect("a patch frame");
     let at = cloud
