@@ -227,7 +227,7 @@ is prepended the same way rather than declaring those values again. See
 | `save_minimal_prompt.rs` | The workspace path `File > Save As Minimal...` asks about once its file dialog has named a file: a `SaveMinimalPrompt` holding the chosen file and the text of the field, prefilled with the path the save would measure, and reporting a `SaveMinimalAnswer` for the caller to write with rather than writing anything itself. See [saving.md](saving.md) § "The workspace path prompt". |
 | `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
 | `context_menu.rs` | `on_secondary_click(&response)`, the builder every context menu in the window is opened with. It is `egui::Popup::context_menu` restricted to `clicked_by(Secondary)`, and `on_secondary_click_where(&response, here)` for a widget that hit-tests its own parts, such as the Image Browser strip: egui's own builder also opens on a long touch, and on Windows the left mouse button reaches egui as a touch contact, so a left press rested for 0.8 s would otherwise put the menu up. See [scene-graph.md](scene-graph.md) § "Panel plumbing". |
-| `fonts.rs` | The viewer's fonts: egui's bundled `FontDefinitions` with Hack added as the proportional family's last face, installed on the egui context when it is made. See § "Fonts" below. |
+| `fonts.rs` | The viewer's fonts: egui's bundled `FontDefinitions` with Hack added as the proportional family's last face, installed on the egui context when it is made; `fonts/system.rs` adds faces the operating system has for Han, Kana and Hangul once text needs them, after checking each file with the small OpenType reader in `fonts/sfnt.rs`. See § "Fonts" below. |
 | `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — Track View's table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
 
 ---
@@ -381,6 +381,63 @@ monospace font draws the character. With Hack as the last face, a character
 the other three lack is drawn from Hack and every other character is drawn as
 before. No font file is added: Hack ships inside egui with the other three.
 
+None of the bundled faces has Han, Kana or Hangul, so an image name, a
+reconstruction label or a path in Chinese, Japanese or Korean would draw as
+empty boxes. For those the viewer uses a font the operating system already
+has (`fonts/system.rs`). No font is shipped with the viewer and none is a
+dependency of it: the fallback only reads files that are already on the
+machine, and draws boxes as before where there are none.
+
+**Candidates.** Each system has a fixed list of files, tried in order. Each
+file is listed for the script groups it is expected to draw: *Han and Kana*
+(Chinese and Japanese) or *Hangul* (Korean), or both.
+
+| System | Files, in order |
+|---|---|
+| Windows, in `%WINDIR%\Fonts` (`%SystemRoot%` when `WINDIR` is unset) | `msyh.ttc` (Microsoft YaHei), `YuGothR.ttc`, `YuGothM.ttc` (Yu Gothic), `msgothic.ttc` (MS Gothic), `simsun.ttc` (SimSun) for Han and Kana; `malgun.ttf` (Malgun Gothic), `gulim.ttc` for Hangul |
+| macOS | `/System/Library/Fonts/PingFang.ttc`, `/System/Library/Fonts/Hiragino Sans GB.ttc`, `/System/Library/Fonts/Supplemental/Songti.ttc` for Han and Kana; `Arial Unicode.ttf` in `/System/Library/Fonts/Supplemental` and `/Library/Fonts` for both; `/System/Library/Fonts/AppleSDGothicNeo.ttc`, `/System/Library/Fonts/Supplemental/AppleGothic.ttf` for Hangul |
+| Linux and other Unix systems | `NotoSansCJK-Regular.ttc` in `/usr/share/fonts/opentype/noto`, `/usr/share/fonts/noto-cjk`, `/usr/share/fonts/google-noto-cjk` and `/usr/share/fonts/truetype/noto`, then `/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc`, then `NotoSansCJK-Regular.ttc` in `$XDG_DATA_HOME/fonts`, `~/.local/share/fonts` and `~/.fonts`, all for both; then `wqy-microhei.ttc` and `wqy-zenhei.ttc` in `/usr/share/fonts/truetype/wqy` and `DroidSansFallbackFull.ttf` in `/usr/share/fonts/truetype/droid` for both; `NanumGothic.ttf` in `/usr/share/fonts/truetype/nanum` for Hangul |
+
+**Selection.** The groups are taken in turn, Han and Kana first. A group that
+a face already taken draws is skipped; otherwise the first file on the list
+for that group that exists, opens and has a face drawing the group is taken.
+A face draws a group when it maps every character of a short sample of it
+(common Han ideographs, Hiragana and Katakana; common Hangul syllables). In a
+`.ttc` collection the face taken is the one drawing the group whose `OS/2`
+weight is nearest 400 (regular), the first of those on a tie, and egui is
+given that face's index. Because a file that draws both groups is listed
+before the single-group files, one face is loaded where one will do (Noto
+Sans CJK on Linux); on Windows it is two, Microsoft YaHei for Han and Kana
+and Malgun Gothic for Hangul, about 19.7 MB and 13.5 MB. The faces go after
+Hack at the end of both families, the Han and Kana face before the Hangul
+one, so a Han character both have is drawn in the Chinese or Japanese face,
+and no character the bundled faces draw changes its font.
+
+**When it loads.** At startup nothing is read. Once a frame, before the egui
+pass, `SystemFallback::update` scans the text of each reconstruction whose
+current version it has not scanned (its label, its path, its image names and
+its rig and sensor names) and each Action Log entry written since the last
+frame, which carries the paths of files opened or refused. When any of that
+text has a character in a Han, Kana or Hangul block that no bundled face has,
+the search runs once on its own thread and wakes the event loop when it
+ends. The next frame installs its faces with one `Context::set_fonts` and
+writes one Action Log line (kind Session, actor Viewer) naming the files and
+face indexes used. After that the fallback does nothing more for the rest of
+the session, whatever is opened later: it never searches twice and never
+runs two searches at once. On this development machine the search read both
+Windows files in about 20 ms with the files in the disk cache, and the first
+frame with the new fonts took about 17 ms longer to build them.
+
+**When none is found.** A missing file is passed over without a word. A file
+that cannot be read, does not open as a font, or has no face for its group
+is passed over too, and named in the Action Log line. When no face is found
+for a group, the line says so, the fonts are left as they were, and the
+characters draw as boxes as before. Nothing in this path panics: egui panics
+on a font file it cannot open, so each file is opened first by
+`fonts/sfnt.rs`, which reads the collection header, the table directory and
+the `cmap` table with every read bounds-checked and accepts only what egui's
+font reader also accepts.
+
 `fonts/tests.rs` reads the non-ASCII characters out of the viewer's own
 string and character literals, test files left out, and fails on one that
 either family has no glyph for, so a new string with a character neither
@@ -395,6 +452,14 @@ which egui draws with the space's glyph, are left out. The scan is the one
 check of the characters the viewer's literals spell. Text built at run time
 is checked with the same function, `fonts::lacking_glyphs`, in the tests of
 the Action Log row's tooltip and of the Switch Camera Model banner.
+
+`fonts/system/tests.rs` tests the fallback without the machine's fonts: it
+builds small font files and collections in memory and passes the selection a
+reader over them, so the candidate lists, first-found order, the face index
+in a collection, damaged files and the one-time search are checked on any
+machine. It also checks that `fonts/sfnt.rs` reads the same character maps
+from egui's bundled faces as egui does. One test reads the real candidates
+and passes over itself when this machine has no Hangul face.
 
 ---
 

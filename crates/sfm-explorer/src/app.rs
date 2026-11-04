@@ -1007,6 +1007,10 @@ impl App {
         let hover_depth = self.scene_renderer.hover_depth();
         let hover_pick = self.scene_renderer.hover_pick();
 
+        // Before the pass, so that fonts a finished search installs are in
+        // place for this frame's text.
+        self.system_fonts.update(&self.egui_ctx, &mut self.state);
+
         let mut raw_input = egui_winit_state.take_egui_input(window);
 
         // An agent's `click`, `hover`, `drag`, `scroll`, `press_key` or

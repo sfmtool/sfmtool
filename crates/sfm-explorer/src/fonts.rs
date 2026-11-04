@@ -13,7 +13,16 @@
 //! proportional family's own faces lack, so no text that drew before changes
 //! its font.
 //!
+//! Han, Kana and Hangul, which no bundled face has, are drawn from a face
+//! the operating system already has, found and added only once text that
+//! needs it appears: see [`SystemFallback`].
+//!
 //! See `specs/gui/architecture.md` § "Fonts".
+
+mod sfnt;
+mod system;
+
+pub(crate) use system::SystemFallback;
 
 /// The bundled face added at the end of the proportional family: the
 /// monospace family's first face, which has `→`, `▸` and `●`.
