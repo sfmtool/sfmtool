@@ -278,7 +278,7 @@ class TestGettersAndClone:
         assert dropped.sharpness is None and dropped.image_to_gray is None
         with pytest.raises(ValueError, match="passed together"):
             recon.clone_with_changes(sharpness=sharpness)
-        with pytest.raises(ValueError, match="not finite"):
+        with pytest.raises(ValueError, match="must be finite and not negative"):
             bad = sharpness.copy()
             bad[0] = np.nan
             recon.clone_with_changes(
