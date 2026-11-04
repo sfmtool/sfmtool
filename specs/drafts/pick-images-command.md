@@ -29,7 +29,8 @@ as a named image list ([workspace/named-image-lists.md](../workspace/named-image
 which `sfm solve -r NAME` and the other commands that take `-r` then use.
 
 It measures everything from SIFT features. Each frame it reads gets a `.sift`
-file, extracted with the workspace's own settings and stored where
+file, extracted with the workspace's own settings (its grey conversion
+`image_to_gray` included) and stored where
 `sfm sift --extract` would store it, and the frame's sharpness and gradient
 structure tensor come from that file. The motion between two frames is the
 median displacement of the SIFT features that match between them. The command
@@ -351,7 +352,7 @@ same range, so the list holds every sensor's image of each chosen frame.
   "version": 1,
   "named_image_lists": {
     "walk1": [
-      { "pattern": "frames/walk1_%04d.jpg", "range": "1-61:15,74,86-98:2,112,127-1462:15" }
+      { "pattern": "frames/walk1_%04d.jpg", "range": "1-61:15,74,86-98:2,112-1462:15" }
     ],
     "walk1.start": [
       { "pattern": "frames/walk1_%04d.jpg", "range": "1-204:7" }
@@ -455,13 +456,15 @@ and writes the lists.
   with the image: 1 pixel per 960 pixels of the long side for the fundamental
   matrix and 2 per 960 for the homography, the bounds `probe.py` used at
   960 pixels.
-- **Statistics.** Medians and the MAD from
-  [`sfmtool_core::numeric`](../../crates/sfmtool-core/src/numeric.rs).
+- **Statistics.** Medians from
+  [`sfmtool_core::numeric`](../../crates/sfmtool-core/src/numeric.rs), and the
+  MAD as the median of the absolute deviations from the median, since the
+  module has no MAD of its own.
 - **Lists.** `NamedImageLists` in
   [`named_image_lists.rs`](../../crates/sfmtool-core/src/workspace/named_image_lists.rs)
   reads and checks the file, and `is_named_image_list_name` checks the output
   name. The module has no writer today; the command needs one, below.
-- **Input.** `range_options`, `parse_image_selection` and `resolve_list_images`
+- **Input.** `range_option`, `parse_image_selection` and `resolve_list_images`
   in [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py).
 - **Progress.** `ProgressCounter` ([py_progress.rs](../../crates/sfmtool-py/src/py_progress.rs)).
 
@@ -527,7 +530,7 @@ pub fn match_frame_pair(
     a: &FrameFeatures,
     b: &FrameFeatures,
     options: &FramePairOptions,
-) -> FramePairStats;
+) -> Result<FramePairStats, PickImagesError>;
 
 pub struct FramePairStats {
     pub matches: usize,
@@ -563,7 +566,8 @@ same statistics are what a later command, or `sfm motion`, could read from a
 pair. `pick_images` takes a `&Progress` and checks it for cancellation, since
 it runs for minutes, and returns an error rather than panicking on any input
 ([STANDARDS.md § Caller input never panics](../STANDARDS.md#caller-input-never-panics)):
-`KdForest::build` asserts its lengths, so `pick_images` checks a `.sift` file's
+`KdForest::build` asserts its lengths and its parameters, so `pick_images` and
+`match_frame_pair` check the forest parameters as options and a `.sift` file's
 feature arrays against each other before building a forest.
 
 ### Python
@@ -648,10 +652,12 @@ flow field.
   is 6% to 43% of the SIFT step: at one place 2.2% to 2.4% of the long side
   against 22% to 23%. The SIFT step grows steadily with the gap there, 1.1%,
   3.7%, 12% and 22% at gaps of 1, 3, 10 and 30. At 10 frames the flow already
-  falls well short at 3 of the 9 places (27% to 63% of the SIFT step). On the
+  falls well short at 3 of the 9 places (24% to 64% of the SIFT step). On the
   video where the inlier share was recorded, 59% to 85% of the matches 10 and
   30 frames apart fit a fundamental matrix at 960 pixels outside the blurred
-  run, so the matches describe one camera motion. Where SIFT itself fails,
+  run, so the matches describe one camera motion; on the other video, a separate
+check at 960 pixels found 70% to 98% of the mutual matches fitting a
+fundamental matrix across gaps of 1 to 30. Where SIFT itself fails,
   across the blurred run 30 frames apart, it found 30 matches and 37% of them
   fit, and the inlier share shows that the step is not to be trusted.
 - **The matching costs less than the flow, given the features.** Per pair on 32
@@ -725,6 +731,9 @@ records the captures that moved it, by kind.
 - **The output option's name.** This draft uses `--write-list NAME`. `--name`
   was the maintainer's example; it reads less clearly beside the input's
   `--named-image-list`.
+- **Taking `-r` and `--named-image-list` for the input.** This draft makes the
+  command a ninth command of the shared `-r/--range` option, so a list or a
+  range can narrow the input. Without them the input would be `PATHS` alone.
 - **The test lists' names and default.** `NAME.start`, `NAME.middle` and
   `NAME.end`, on by default with `--write-list`. Alternatives: `NAME-test1` and
   so on, or off by default. Whether `--force` should be needed for them
