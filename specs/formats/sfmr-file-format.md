@@ -2567,7 +2567,7 @@ place of `.float16.`, and stores the scores themselves as `float32`, in
   bitmap's own readings and blur assessment, which are read from the bitmap.
 - **Units.** The grid px are those of the point's `R`, so the axes convert to
   scene units through the point's patch half-extents.
-- **Size.** 16 bytes an observation before compression, 38 before version 16.
+- **Size.** 20 bytes an observation before compression, 38 before version 16.
   The float columns compress little, the flags column to almost nothing. On
   the dino_dog_toy `sfm embed-patches` output (262,430 observations) the eight
   entries took 8.1 MB of a 44.3 MB version 15 file, about 31 bytes an
@@ -2883,7 +2883,7 @@ Binary entry names follow the container's
 - `camera_indexes.18.uint32.zst` → 18 images, uint32 indices
 - `quaternions_wxyz.18.4.float64.zst` → 18 images, 4 components, float64
 
-A `.sfmr` file uses `uint8`, `uint32`, `float32`, `float64`, and `uint128` (a raw
+A `.sfmr` file uses `uint8`, `uint32`, `int32`, `float16`, `float32`, `float64`, and `uint128` (a raw
 16-byte XXH128 digest per element).
 
 ## Integrity Verification
@@ -2953,7 +2953,14 @@ For the structure, a file fails verification when:
   `quantize_bits` from 1 to 16 and no other key; or a file below version 15
   carries either column or the key. Whether `formula` follows the
   [grammar](#image_to_gray-version-15) is checked by the reader that parses
-  it, not by the verifier.
+  it, not by the verifier;
+- a reading column (the sharpness, or an observation-reading column) is
+  stored under the entry another version gives it, such as a `.float32.`
+  sharpness in a version 16 file or a `_deficit` column in a version 15 file
+  ([Version 15 → Version 16](#version-15--version-16));
+- in a version 16+ file with both `has_normals` and `has_uv_frames`, a
+  `normals_xyz` row is not `(0, 0, 0)` where the point's normal is derived
+  from its frame ([Derived normals](#derived-normals-version-16)).
 
 A verifier reports every failure it finds rather than stopping at the first; a
 file whose entries it cannot read at all is an error, not a list of failures.
@@ -3340,7 +3347,8 @@ stay `uint8`.
 Migration is mechanical, apart from one change of content. A version 15 file
 reads with its values and its normals as they are stored: a reader derives the
 normals only for a file of version 16 or later. Saving it as version 16 rounds
-the seven reading columns to `float16` and stores the scores as deficits,
+the sharpness and the five self-similarity columns to `float16` and stores
+the scores as `float16` deficits,
 which changes `images_xxh128` (and `tracks_xxh128` where the file has
 observation readings) and so `content_xxh128`, even for a file whose values
 were all `float16` values already, since the stored bytes are half as long.

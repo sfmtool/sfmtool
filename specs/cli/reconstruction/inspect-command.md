@@ -334,7 +334,7 @@ The default output is a compact label/value block. The fields per type:
 
 The readings are the per-image sharpness and gradient structure tensor of
 [sift-file-format.md](../../formats/sift-file-format.md#sharpness), which a
-version 2 `.sift` file records and a version 15 `.sfmr` file copies for each
+version 2 `.sift` file records and a `.sfmr` file of version 15 or later copies for each
 image. A conversion prints as its formula, followed by `, rounded to N bits`
 when it has a `quantize_bits`.
 
