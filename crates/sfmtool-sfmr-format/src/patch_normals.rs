@@ -52,7 +52,7 @@ pub(crate) fn normals_entries_error<'a>(
         return underived.first().map(|found| {
             format!(
                 "{found} is stored only by a file of version {} or later with both normals \
-                 and the patch frame, and this is a version {version} file without them",
+                 and the patch frame, and this version {version} file is not one",
                 crate::SFMR_DERIVED_PATCH_NORMALS_VERSION
             )
         });

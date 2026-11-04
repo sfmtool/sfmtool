@@ -1047,7 +1047,8 @@ fn write_points3d<S: EntrySink>(
         (Some(normals_xyz), Some(_)) => {
             let (w, u, v) = patch_frame_columns(data, normals_xyz).ok_or_else(|| {
                 SfmrError::ShapeMismatch(
-                    "normals_xyz, the patch frame and positions_xyzw do not agree in their                      point counts"
+                    "normals_xyz, the patch frame and positions_xyzw do not agree in their \
+                     point counts"
                         .into(),
                 )
             })?;

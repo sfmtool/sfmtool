@@ -1859,7 +1859,7 @@ Per-point confidence in the stored normal.
 
 - **Shape**: `(N,)` where N = point_count
 - **Data type**: `uint8` (little-endian)
-- **Format**: `0` means the stored `normals_xyz` row carries **no data-derived
+- **Format**: `0` means the point's normal carries **no data-derived
   support** — the writer's estimator could not fit a normal for this point and
   either substituted a placeholder (for example a view-direction fallback) or
   copied a value of unknown provenance. `255` means fully data-derived.
@@ -3124,8 +3124,8 @@ describes. Other parts of this spec are implemented by:
   `clone_with_changes(observation_readings=...)`.
 - Normals and their confidence: `write_sfmr` sets the normal of each finite
   point with a patch whose frame gives one to `normalize(u × v)`
-  ([Derived normals](#derived-normals-version-16)), and each point at
-  infinity's to zero, fills each other zero row of the normals from
+  ([Derived normals](#derived-normals-version-16)), and, in a file with the
+  patch frame, each point at infinity's to zero, fills each other zero row of the normals from
   mean-viewing normals it recomputes from the geometry,
   and passes `normal_confidence` through untouched. It never invents or adjusts a
   confidence value, not even for a normal it fills in, so a caller that

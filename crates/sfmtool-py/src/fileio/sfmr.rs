@@ -743,8 +743,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// `normals_xyz` array is written as given, except that each zero row is
 /// filled with the point's mean-viewing normal, and that with the patch frame
 /// present the row of a finite point with a patch is its frame's
-/// `normalize(u × v)` (version 16 derives it rather than storing it); an
-/// explicit `None` writes no
+/// `normalize(u × v)` (version 16 derives it rather than storing it) and the
+/// row of a point at infinity is zero; an explicit `None` writes no
 /// normals; and a missing key writes a mean-viewing normal for every finite
 /// point. A point at infinity has no mean-viewing normal, so its row stays
 /// zero. A caller that moves or rotates the points in the dict updates `normals_xyz`

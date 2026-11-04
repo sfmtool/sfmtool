@@ -293,7 +293,8 @@ impl PySfmrReconstruction {
     /// The write preserves the in-memory ``normals`` of every point that has one
     /// (recomputing only the missing/zero rows from geometry), except that a
     /// finite point with a patch takes its patch frame's ``normalize(u × v)``,
-    /// which a version 16 file derives rather than stores. So normals set via
+    /// which a version 16 file derives rather than stores, and with the patch
+    /// frame a point at infinity's normal is zero. So normals set via
     /// ``clone_with_changes(normals=...)`` survive the round trip for points
     /// without a patch; for a point with one, turn its patch frame (as ``sfm
     /// xform --refine-normals`` does, through ``patches=``). A reconstruction with

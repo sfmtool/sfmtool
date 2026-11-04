@@ -783,7 +783,8 @@ fn verify_points3d_section<R: Read + Seek>(
                 )
             } else {
                 errors.push(format!(
-                    "the patch frame or the positions do not hold {point_count} rows, so the                      points whose normals are stored cannot be told"
+                    "the patch frame or the positions do not hold {point_count} rows, so the \
+                     points whose normals are stored cannot be told"
                 ));
                 None
             }
