@@ -1099,6 +1099,9 @@ image: radial correction and rolling-shutter rates.`, or `… Refitted to the
 new domain: radial correction.` They are side by side when the panel is wide
 enough for both at their natural width, which an invisible sizing pass
 measures, and one above the other otherwise, so neither runs into the other.
+The sizing pass is clipped to nothing, so its copies of the tables' widgets
+take no pointer and `get_widgets` does not list them: each bin and each other
+widget of the tables is listed once, as drawn.
 The two derived tables both carry the aspect row when either camera has two
 focal lengths, reading `single focal` for the one that has one, so their rows
 stay in line side by side. The derived table's long values (the principal
@@ -1840,7 +1843,9 @@ Two caveats remain, both named in the tests rather than left implicit:
   and at 1800 px beside them, and at all three no string is painted over a bin
   and no bin runs past the edge; and hovering a bin lists its images with
   their values, names the image a click selects and raises it as the hovered
-  image, a click selects it and a second click the bin's next image.
+  image, a click selects it and a second click the bin's next image. With a
+  Switch Camera Model proposal open, `get_widgets` lists each bin once and
+  enabled, and no widget both enabled and greyed, in `mcp/tests/names.rs`.
 - A camera row's per-image tag and its tooltip line, in
   `scene_graph/cameras/tests.rs`, and the tag on a painted row beside a
   camera whose row is unchanged, in `scene_graph/tests.rs`.
