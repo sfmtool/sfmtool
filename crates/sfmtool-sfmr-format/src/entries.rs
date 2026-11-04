@@ -189,6 +189,19 @@ pub(crate) fn images_rolling_shutter_rates_xyz(image_count: impl std::fmt::Displ
     format!("images/rolling_shutter_rates_xyz.{image_count}.3.float64.zst")
 }
 
+/// `images/sharpness` — sharpness per image (v15+, required).
+pub(crate) fn images_sharpness(image_count: impl std::fmt::Display) -> String {
+    format!("images/sharpness.{image_count}.float32.zst")
+}
+
+/// `images/gradient_structure_tensors_xx_yy_xy` — `[Exx, Eyy, Exy]` per
+/// image (v15+, required).
+pub(crate) fn images_gradient_structure_tensors_xx_yy_xy(
+    image_count: impl std::fmt::Display,
+) -> String {
+    format!("images/gradient_structure_tensors_xx_yy_xy.{image_count}.3.float32.zst")
+}
+
 /// `images/thumbnails_y_x_rgb` — fixed square RGB thumbnail per image, with
 /// [`THUMBNAIL_SIZE`](crate::THUMBNAIL_SIZE) as its edge.
 pub(crate) fn images_thumbnails_y_x_rgb(image_count: impl std::fmt::Display) -> String {

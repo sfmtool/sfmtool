@@ -74,7 +74,8 @@ sits on, and it can be undone, jumped away from and returned to like every other
 version.
 
 **A value whose overlay is empty is written exactly as it stands**, provenance
-and all, and mints no version. It is already the content its hash names: a
+and all, and mints no version, unless it states a workspace path or lacks some
+image's readings (both below). It is already the content its hash names: a
 second stamping would change the content the hash was taken over, and a version
 identical to the one before it would say that something happened when nothing
 did.
@@ -188,7 +189,19 @@ Saved a minimal copy of run_a at v7 to D:\published\run_a.sfmr
 
 ## What a plain save writes
 
-A Save or Save As writes the columns the file had. The display thumbnails the
+A Save or Save As writes the columns the file had, and the image readings
+the current format version requires. A file below version 15 has none, so its
+save gathers them from each image's `.sift` file, or else from the image
+itself, as every `.sfmr` save does
+([sfmr-file-format.md § Where a writer gets the values](../formats/sfmr-file-format.md#where-a-writer-gets-the-values)),
+and the save is refused, naming each image, when an image has neither. The
+gathering is a phase `image readings` under the save's `materialise`, so the
+Action Log row names it; the phase counts the images while it runs, and like
+every count that is live progress only, not kept in the finished row. The rows
+are gathered into the materialised value before it is pushed as a version, as a stated workspace path
+is (`AppState::materialize_for_save`), so such a save folds, stamps and pushes a
+version even with an empty overlay, and the version the node holds is the file
+written and its content hash is the file's. The display thumbnails the
 open builds for a file without thumbnails are the node's and never reach a
 value, so no save writes them. The patch bitmaps the open renders for a file
 without bitmaps are in the value, marked `PointSet::patch_bitmaps_for_display`,
@@ -271,7 +284,9 @@ before a save still resolves after it through the version graph, while the id
 the panels *show* moves onto the file just written; that a save with no overlay writes the value and mints nothing; that
 Save As writes elsewhere and re-points the node; that a Save As stating a
 workspace path records it and mints the version that carries it, so the value the
-session holds hashes to the file; that a save writes one log entry
+session holds hashes to the file; that a save of a value without image readings
+gathers them into the version it mints, whose hash is the written file's; that a
+save writes one log entry
 naming the path and the version; that a failed write is refused with a reason and
 changes nothing; and that the window title marks the first node while it is
 dirty.

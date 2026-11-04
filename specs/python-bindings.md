@@ -142,7 +142,8 @@ depends on how `sfmtool-core` stores the column:
   observation record (`positions`, `positions_xyzw`, `point_is_at_infinity`,
   `colors`, `normals`, `rms_reprojection_errors`, `camera_indexes`,
   `quaternions_wxyz`, `translations`, the four per-image adjustment columns,
-  `track_image_indexes`, `track_point_indexes`, and `depth_histogram_counts`,
+  the two image-reading columns `sharpness` and
+  `gradient_structure_tensors_xx_yy_xy`, `track_image_indexes`, `track_point_indexes`, and `depth_histogram_counts`,
   stored as one `Vec` per image) is copied into one flat buffer on its
   getter's first read, which becomes the numpy array's own without a second
   copy. The object keeps that array, in a `PyOnceLock` per getter, and every
@@ -158,9 +159,9 @@ depends on how `sfmtool-core` stores the column:
   views, since a kept view would hold a reference back to the object and the
   pair could then only be freed by the cycle collector.
 
-`observation_readings` returns a dict of arrays built on each read, and the
-list getters (`cameras`, `image_names`, the hash lists, …) build a new list on
-each read.
+`observation_readings` returns a dict of arrays built on each read,
+`image_to_gray` a new dict on each read, and the list getters (`cameras`,
+`image_names`, the hash lists, …) build a new list on each read.
 
 A view is sound only while the block it points into stays where it is, so the
 binding keeps one invariant: **no method replaces, reallocates or writes a
@@ -168,7 +169,9 @@ block a view is taken of, once the reconstruction is wrapped.** The wrapped
 `SfmrReconstruction` is a private field, so the only code that can reach it
 mutably is the class's own `&mut self` methods, and the bindings in other
 modules read it through `PySfmrReconstruction::inner()`, which hands out a
-shared reference. Those methods are `save`, which changes only the metadata,
+shared reference. Those methods are `save`, which changes only the metadata
+(it gathers the image readings a value lacks for the write alone, with the GIL
+released and counted on an optional `ProgressCounter`, and keeps none),
 and `recompute_point_errors` and `recompute_infinity_point_errors`, which
 rewrite each point's `rms_reprojection_error` in place. Every other method
 returns a new reconstruction, with no array gathered yet. A new `&mut self`

@@ -5,9 +5,23 @@ use crate::*;
 use ndarray::{Array1, Array2, Array4};
 use std::collections::BTreeMap;
 
+mod image_readings;
 mod lens_corrections;
 mod observation_readings;
 mod per_image_adjustments;
+
+/// Image readings for `image_count` images: image `i` has sharpness
+/// `0.01 · (i + 1)` and tensor `[0.002 · (i + 1), 0.001 · (i + 1), -0.0005]`,
+/// under the BT.709 conversion.
+pub(crate) fn test_image_readings(image_count: usize) -> ImageReadingColumns {
+    ImageReadingColumns {
+        image_to_gray: serde_json::json!({"formula": "0.2126*R + 0.7152*G + 0.0722*B"}),
+        sharpness: Array1::from_iter((0..image_count).map(|i| 0.01 * (i + 1) as f32)),
+        gradient_structure_tensors_xx_yy_xy: Array2::from_shape_fn((image_count, 3), |(i, k)| {
+            [0.002 * (i + 1) as f32, 0.001 * (i + 1) as f32, -0.0005][k]
+        }),
+    }
+}
 
 /// Create minimal valid SfmrData for testing.
 fn make_test_data() -> SfmrData {
@@ -120,6 +134,7 @@ fn make_test_data() -> SfmrData {
         principal_point_adjustments_xy: None,
         radial_bspline_adjustments: None,
         rolling_shutter_rates_xyz: None,
+        image_readings: Some(test_image_readings(image_count)),
         // Points sit at negative z: in front of the identity camera in the
         // canonical convention (the camera looks down −Z).
         positions_xyzw: Array2::from_shape_vec(
@@ -692,7 +707,10 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen at format version 14, which stamps the new version into
+    // Frozen at format version 15, which adds the fixture's image readings,
+    // two columns and the `image_to_gray` key of `images/metadata.json`, to
+    // the images section, and stamps the new version. Before that it was
+    // frozen at format version 14, which stamps the new version into
     // `metadata.json`, hashed; this fixture has no per-image corrections and
     // no scanlines setting, so its cameras and images sections are what
     // version 13 wrote. Before that it was frozen at version 13, which also
@@ -712,7 +730,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "2f7510125cc35cb2658fedec76c5ad2d"
+        "1fcb63f66fb70a9c92218d41e85f67d4"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -926,7 +944,9 @@ fn test_read_version_1_layout() {
     let v2_path = dir.join("v2.sfmr");
     let v1_path = dir.join("v1.sfmr");
 
-    write_sfmr(&v2_path, &mut data).unwrap();
+    // A version 1 file has no image readings.
+    data.image_readings = None;
+    crate::write::write_sfmr_without_readings_check(&v2_path, &mut data).unwrap();
     rewrite_v2_as_v1(&v2_path, &v1_path);
 
     // Metadata-only read must accept the version-1 `points3d_count` key.
@@ -1056,6 +1076,7 @@ fn test_empty_reconstruction() {
         principal_point_adjustments_xy: None,
         radial_bspline_adjustments: None,
         rolling_shutter_rates_xyz: None,
+        image_readings: Some(test_image_readings(0)),
         positions_xyzw: Array2::zeros((0, 4)),
         colors_rgb: Array2::zeros((0, 3)),
         reprojection_errors: Array1::from_vec(vec![]),
@@ -2436,7 +2457,9 @@ fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::P
     use std::io::{Read, Write};
 
     let current = dir.join("current.sfmr");
-    write_sfmr(&current, &mut make_framed_test_data(vec![1, 2, 0, -1, 0])).unwrap();
+    let mut data = make_framed_test_data(vec![1, 2, 0, -1, 0]);
+    data.image_readings = None;
+    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
     let file = std::fs::File::open(&current).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = archive
@@ -2524,8 +2547,10 @@ fn test_version_11_with_patch_frames_reads_every_reference_as_minus_one() {
         vec![NO_REFERENCE_OBSERVATION; 5]
     );
 
-    // Saving it writes version 12 with the column, and it reads back.
+    // Saving it writes the current version with the column, and it reads
+    // back. The save needs the image readings version 15 requires.
     let saved = dir.join("v12.sfmr");
+    loaded.image_readings = Some(test_image_readings(loaded.image_names.len()));
     write_sfmr(&saved, &mut loaded).unwrap();
     let reloaded = read_sfmr(&saved).unwrap();
     assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
@@ -3461,9 +3486,11 @@ fn archive_entry_names_pin_call_sites() {
         "derived/observed_depth_histogram_counts.3.128.uint32.zst",
         "images/camera_indexes.3.uint32.zst",
         "images/feature_tool_hashes.3.uint128.zst",
+        "images/gradient_structure_tensors_xx_yy_xy.3.3.float32.zst",
         "images/metadata.json.zst",
         "images/names.json.zst",
         "images/quaternions_wxyz.3.4.float64.zst",
+        "images/sharpness.3.float32.zst",
         "images/sift_content_hashes.3.uint128.zst",
         "images/thumbnails_y_x_rgb.3.128.128.3.uint8.zst",
         "images/translations_xyz.3.3.float64.zst",
@@ -3794,7 +3821,9 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
     data.focal_adjustments = None;
     data.principal_point_adjustments_xy = None;
     data.reference_observations = None;
-    write_sfmr(&current, &mut data).unwrap();
+    // And without the image readings, which version 15 added.
+    data.image_readings = None;
+    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
 
     let stamp = "2025-12-21T14:32:15.123456+00:00";
     let mut legacy_metadata = data.metadata.clone();
@@ -4155,7 +4184,8 @@ fn a_version_10_file_without_the_flag_reads_as_having_thumbnails() {
     let legacy = dir.join("v10.sfmr");
 
     let mut data = data_with_distinct_thumbnails();
-    write_sfmr(&current, &mut data).unwrap();
+    let readings = data.image_readings.take();
+    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
     rewrite_entries(&current, &legacy, |name, raw| match name {
         "images/metadata.json.zst" => {
             let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
@@ -4174,10 +4204,11 @@ fn a_version_10_file_without_the_flag_reads_as_having_thumbnails() {
     assert_eq!(loaded.metadata.version, 10);
     assert_eq!(loaded.thumbnails_y_x_rgb, data.thumbnails_y_x_rgb);
 
-    // Saving it again writes the current version and the flag, keeping the
-    // column.
+    // Saving it again, with the image readings version 15 requires, writes
+    // the current version and the flag, keeping the column.
     let resaved = dir.join("resaved.sfmr");
     let mut value = loaded;
+    value.image_readings = readings;
     write_sfmr(&resaved, &mut value).unwrap();
     assert_eq!(
         read_sfmr_metadata(&resaved).unwrap().version,

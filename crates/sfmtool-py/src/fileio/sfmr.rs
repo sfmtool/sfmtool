@@ -86,7 +86,9 @@ where
 ///   focal_adjustments, principal_point_adjustments_xy,
 ///   radial_bspline_adjustments, rolling_shutter_rates_xyz (numpy arrays or
 ///   `None`), per_image_adjustments (`list[list[str]]`, one per camera),
-///   rolling_shutter_scanlines (`list[str | None]`, one per camera).
+///   rolling_shutter_scanlines (`list[str | None]`, one per camera),
+///   image_to_gray (a dict or `None`), sharpness and
+///   gradient_structure_tensors_xx_yy_xy (numpy arrays or `None`).
 ///
 /// The per-image intrinsic adjustments (version 13+): `focal_adjustments` is
 /// the `(N,)` float64 focal scale `s` of each image (its focal is its camera's
@@ -102,6 +104,12 @@ where
 /// `rolling_shutter_rates_xyz`, the `(N, 3)` float64 per-image rolling-shutter
 /// rates in radians per short side of readout, and `rolling_shutter_scanlines`,
 /// each camera's `"ROWS"`, `"COLUMNS"` or `None`. All three read as stored.
+///
+/// Version 15 adds the image readings: `sharpness`, the `(N,)` float32
+/// sharpness of each image, `gradient_structure_tensors_xx_yy_xy`, the
+/// `(N, 3)` float32 `[Exx, Eyy, Exy]` of each image, and `image_to_gray`, the
+/// `{"formula": …, "quantize_bits": …}` conversion both were computed
+/// through. All three are `None` for a file below version 15.
 ///
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
@@ -295,6 +303,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         "rolling_shutter_rates_xyz",
         data.rolling_shutter_rates_xyz.map(|a| a.into_pyarray(py)),
     )?;
+    image_readings_to_py(py, &dict, data.image_readings)?;
 
     // Rig/frame data (optional)
     match &data.rig_frame_data {
@@ -303,6 +312,75 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     }
 
     Ok(dict.into())
+}
+
+/// Set the `image_to_gray`, `sharpness` and `gradient_structure_tensors_xx_yy_xy`
+/// keys of `dict` from `readings`, each `None` when there are none.
+pub(crate) fn image_readings_to_py(
+    py: Python<'_>,
+    dict: &Bound<'_, PyDict>,
+    readings: Option<sfmtool_sfmr_format::ImageReadingColumns>,
+) -> PyResult<()> {
+    match readings {
+        Some(r) => {
+            dict.set_item("image_to_gray", serde_to_py(py, &r.image_to_gray)?)?;
+            dict.set_item("sharpness", r.sharpness.into_pyarray(py))?;
+            dict.set_item(
+                "gradient_structure_tensors_xx_yy_xy",
+                r.gradient_structure_tensors_xx_yy_xy.into_pyarray(py),
+            )?;
+        }
+        None => {
+            dict.set_item("image_to_gray", py.None())?;
+            dict.set_item("sharpness", py.None())?;
+            dict.set_item("gradient_structure_tensors_xx_yy_xy", py.None())?;
+        }
+    }
+    Ok(())
+}
+
+/// The image readings a dict states: its `image_to_gray`, `sharpness` and
+/// `gradient_structure_tensors_xx_yy_xy`, which are given together or not at
+/// all (each missing or `None`). The values and row counts are the format
+/// writer's to check.
+pub(crate) fn image_readings_from_dict(
+    py: Python<'_>,
+    data: &Bound<'_, PyDict>,
+) -> PyResult<Option<sfmtool_sfmr_format::ImageReadingColumns>> {
+    let image_to_gray = get_optional_item(data, "image_to_gray")?;
+    let sharpness = optional_array::<f32, ndarray::Ix1>(data, "sharpness", "a 1D float32 array")?;
+    let tensors = optional_array::<f32, ndarray::Ix2>(
+        data,
+        "gradient_structure_tensors_xx_yy_xy",
+        "a 2D float32 array",
+    )?;
+    match (image_to_gray, sharpness, tensors) {
+        (None, None, None) => Ok(None),
+        (Some(image_to_gray), Some(sharpness), Some(tensors)) => {
+            Ok(Some(sfmtool_sfmr_format::ImageReadingColumns {
+                image_to_gray: py_to_serde(py, &image_to_gray)?,
+                sharpness,
+                gradient_structure_tensors_xx_yy_xy: tensors,
+            }))
+        }
+        (image_to_gray, sharpness, tensors) => {
+            let given = |present: bool, name: &str| present.then(|| name.to_string());
+            let named: Vec<String> = [
+                given(image_to_gray.is_some(), "'image_to_gray'"),
+                given(sharpness.is_some(), "'sharpness'"),
+                given(tensors.is_some(), "'gradient_structure_tensors_xx_yy_xy'"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "the image readings 'image_to_gray', 'sharpness' and \
+                 'gradient_structure_tensors_xx_yy_xy' are given together or not at all; \
+                 only {} was given",
+                named.join(" and ")
+            )))
+        }
+    }
 }
 
 /// Read only the top-level metadata from a .sfmr file (fast, no binary data).
@@ -556,6 +634,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
         "a 2D float64 array",
     )?;
 
+    // The image readings (version 15+), given together or not at all.
+    let image_readings = image_readings_from_dict(py, data)?;
+
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
 
@@ -593,6 +674,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
         principal_point_adjustments_xy,
         radial_bspline_adjustments,
         rolling_shutter_rates_xyz,
+        image_readings,
         positions_xyzw: positions_xyzw.as_array().as_standard_layout().into_owned(),
         colors_rgb: colors_rgb.as_array().as_standard_layout().into_owned(),
         reprojection_errors: reprojection_errors
@@ -641,7 +723,12 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// while an `embedded_patches` dict must carry it, since the format requires
 /// the frame there. A missing `per_image_adjustments` means no camera varies
 /// anything per image, and a missing `rolling_shutter_scanlines` that no
-/// camera has a scanlines setting.
+/// camera has a scanlines setting. The image readings (`image_to_gray`,
+/// `sharpness` and `gradient_structure_tensors_xx_yy_xy`) are required: this
+/// low-level writer computes nothing, so a dict read from a file below version
+/// 15 is refused with `ValueError` until they are supplied, where
+/// `SfmrReconstruction.save` gathers them from the `.sift` files or the
+/// photographs.
 ///
 /// `skip_recompute_depth_stats` decides only where the depth statistics come
 /// from: by default they are recomputed from the geometry, and with `True`

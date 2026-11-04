@@ -57,9 +57,16 @@ from tests.rust_bindings.fileio.test_matches_file_rust_bindings import _pairwise
 from tests.rust_bindings.fileio.test_write_clusters_matches_rust_bindings import (
     _clusters_kwargs,
 )
-from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
+from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH, with_image_readings
 
 _SFMR = SEOUL_BULL_GROUND_TRUTH
+
+
+def _sfmr_dict() -> dict:
+    """The ground truth's dict with the image readings a write needs, which
+    the file is too old to hold."""
+    return with_image_readings(read_sfmr(str(_SFMR)), SEOUL_BULL_DIR)
+
 
 _CAMERA = {
     "model": "PINHOLE",
@@ -270,7 +277,7 @@ def test_data_a_writer_cannot_store_is_a_value_error(tmp_path):
         write_clusters_matches(tmp_path / "bad_clusters.matches", **clusters)
 
     # Shape mismatch: a points table shorter than its metadata says.
-    sfmr = read_sfmr(str(_SFMR))
+    sfmr = _sfmr_dict()
     sfmr["metadata"]["point_count"] += 1
     with pytest.raises(ValueError, match="Shape mismatch"):
         write_sfmr(str(tmp_path / "bad.sfmr"), sfmr, skip_recompute_depth_stats=True)
@@ -292,7 +299,7 @@ def test_a_write_the_filesystem_refuses_is_an_os_error(tmp_path):
     with pytest.raises(FileExistsError):
         write_sfmr(
             str(parent / "out.sfmr"),
-            read_sfmr(str(_SFMR)),
+            _sfmr_dict(),
             skip_recompute_depth_stats=True,
         )
 
@@ -329,7 +336,7 @@ def test_a_reconstruction_this_build_cannot_apply_is_a_value_error(tmp_path):
     # reconstruction applies them on SFMTOOL_PINHOLE alone, so loading a
     # SIMPLE_RADIAL one with rates is `Unsupported`.
     shutil.copy(SEOUL_BULL_DIR / ".sfm-workspace.json", tmp_path)
-    data = read_sfmr(str(_SFMR))
+    data = _sfmr_dict()
     data["per_image_adjustments"] = [["rolling_shutter"] for _ in data["cameras"]]
     data["rolling_shutter_rates_xyz"] = np.full((len(data["image_names"]), 3), 1e-3)
     data["rolling_shutter_scanlines"] = ["ROWS"] * len(data["cameras"])

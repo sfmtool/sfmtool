@@ -15,6 +15,7 @@ use sfmtool_sfmr_format::{
 use crate::camera::{
     CameraIntrinsics, ImageIntrinsicsList, IntrinsicAdjustment, RollingShutterScanlines,
 };
+use crate::features::sift::{ImageReadings, ImageToGray};
 
 use super::SfmrImage;
 
@@ -126,6 +127,13 @@ pub struct ImageSet {
     /// thumbnails share one copy. Nothing writes through it: a producer that
     /// changes the thumbnails builds a new array and wraps it.
     pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
+    /// The grey conversion every image's [`SfmrImage::readings`] row was
+    /// computed through, the `image_to_gray` a save records; `None` when no
+    /// image holds a row, as for a value read from a file below `.sfmr`
+    /// version 15. One conversion covers every row, because readings computed
+    /// through different conversions do not compare, so an edit that brings in
+    /// an image whose row was computed through another drops that row.
+    pub image_to_gray: Option<ImageToGray>,
     /// Per-image depth statistics.
     pub depth_statistics: DepthStatistics,
     /// Depth histogram counts: `depth_histogram_counts[i]` has
@@ -139,6 +147,25 @@ impl ImageSet {
     /// Number of registered images.
     pub fn image_count(&self) -> usize {
         self.images.len()
+    }
+
+    /// Whether every image holds a [`SfmrImage::readings`] row under
+    /// [`Self::image_to_gray`], so that a save writes the image readings as
+    /// they stand. An image set with no images holds them when it records a
+    /// conversion.
+    pub fn has_image_readings(&self) -> bool {
+        self.image_to_gray.is_some() && self.images.iter().all(|im| im.readings.is_some())
+    }
+
+    /// The `.sfmr` image-readings columns of these images, or `None` unless
+    /// every image holds a row ([`Self::has_image_readings`]).
+    pub fn image_reading_columns(&self) -> Option<sfmtool_sfmr_format::ImageReadingColumns> {
+        if !self.has_image_readings() {
+            return None;
+        }
+        let image_to_gray = self.image_to_gray.as_ref()?;
+        let rows: Vec<ImageReadings> = self.images.iter().filter_map(|im| im.readings).collect();
+        Some(crate::reconstruction::image_readings::image_reading_columns(image_to_gray, &rows))
     }
 
     /// Number of camera models.

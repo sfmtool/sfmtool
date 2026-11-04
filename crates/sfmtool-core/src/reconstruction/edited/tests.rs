@@ -563,7 +563,8 @@ fn the_materialised_hash_is_the_files_hash_after_a_save() {
         std::process::id(),
         std::thread::current().id()
     ));
-    mat.save(&path).expect("saved");
+    mat.save(&path, &crate::progress::Progress::none())
+        .expect("saved");
     let stored = sfmtool_sfmr_format::read_sfmr_content_hash(&path).expect("read back");
     let _ = std::fs::remove_file(&path);
     assert_eq!(computed.content_xxh128, stored.content_xxh128);
@@ -618,9 +619,11 @@ fn the_hash_survives_the_clock() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let first = dir.join("first.sfmr");
     let second = dir.join("second.sfmr");
-    mat.save(&first).expect("saved");
+    mat.save(&first, &crate::progress::Progress::none())
+        .expect("saved");
     std::thread::sleep(std::time::Duration::from_millis(20));
-    mat.save(&second).expect("saved again");
+    mat.save(&second, &crate::progress::Progress::none())
+        .expect("saved again");
 
     let a = sfmtool_sfmr_format::read_sfmr_content_hash(&first).expect("read back");
     let b = sfmtool_sfmr_format::read_sfmr_content_hash(&second).expect("read back");

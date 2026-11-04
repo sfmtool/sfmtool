@@ -296,7 +296,12 @@ def _merge_images(
     """Merge images from all reconstructions.
 
     For overlapping images (same relative path), uses the first occurrence's
-    pose and intrinsic adjustment (all four parts of it).
+    pose and intrinsic adjustment (all four parts of it), and its image
+    readings when that input recorded them through the merged conversion: the
+    first input's ``image_to_gray`` that records one. The readings are passed
+    on only when every merged image has a row under that conversion; otherwise
+    the merged reconstruction keeps the first input's rows by name and its
+    save gathers the others from the ``.sift`` files or the photographs.
     """
     merged_names = []
     merged_camera_indexes = []
@@ -309,6 +314,14 @@ def _merge_images(
     merged_feature_tool_hashes = []
     merged_sift_hashes = []
     merged_thumbnails = []
+    # Rows computed through another conversion do not compare with these, so
+    # they are left for the save to gather again.
+    image_to_gray = next(
+        (r.image_to_gray for r in reconstructions if r.image_to_gray is not None),
+        None,
+    )
+    merged_sharpness: list[float] | None = [] if image_to_gray is not None else None
+    merged_tensors: list[np.ndarray] = []
 
     # Rig frame data per-image arrays
     merged_image_sensor_indexes = []
@@ -344,6 +357,13 @@ def _merge_images(
         r_principal_point = recon.principal_point_adjustments_xy
         r_radial = recon.radial_bspline_adjustments
         r_rates = recon.rolling_shutter_rates_xyz
+        same_conversion = image_to_gray is not None and recon.image_to_gray == (
+            image_to_gray
+        )
+        r_sharpness = recon.sharpness if same_conversion else None
+        r_tensors = (
+            recon.gradient_structure_tensors_xx_yy_xy if same_conversion else None
+        )
         for old_idx, img_name in enumerate(r_names):
             img_key = Path(img_name).as_posix()
 
@@ -379,6 +399,12 @@ def _merge_images(
                 merged_sift_hashes.append(r_sift_hashes[old_idx])
                 if has_thumbnails:
                     merged_thumbnails.append(r_thumbs[old_idx])
+                if merged_sharpness is not None:
+                    if r_sharpness is None:
+                        merged_sharpness = None
+                    else:
+                        merged_sharpness.append(r_sharpness[old_idx])
+                        merged_tensors.append(r_tensors[old_idx])
 
                 if rfd is not None:
                     merged_image_sensor_indexes.append(
@@ -413,6 +439,17 @@ def _merge_images(
         "sift_hashes": merged_sift_hashes,
         "thumbnails_y_x_rgb": (
             np.array(merged_thumbnails, dtype=np.uint8) if has_thumbnails else None
+        ),
+        "image_readings": (
+            None
+            if merged_sharpness is None
+            else {
+                "image_to_gray": image_to_gray,
+                "sharpness": np.array(merged_sharpness, dtype=np.float32),
+                "gradient_structure_tensors_xx_yy_xy": np.array(
+                    merged_tensors, dtype=np.float32
+                ).reshape(-1, 3),
+            }
         ),
     }
 
@@ -454,6 +491,8 @@ def _create_merged_reconstruction(
     readings = _merged_readings(source_reconstructions, images["names"], tracks)
     if readings is not None:
         extra["observation_readings"] = readings
+    if images["image_readings"] is not None:
+        extra.update(images["image_readings"])
 
     return first_recon.clone_with_changes(
         **extra,

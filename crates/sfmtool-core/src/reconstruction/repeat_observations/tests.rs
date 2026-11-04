@@ -122,6 +122,7 @@ fn scene(points: &[([f64; 4], Vec<Row>)]) -> SfmrReconstruction {
                 quaternion_wxyz: rotation,
                 translation_xyz: -(rotation * centre),
                 intrinsic_adjustment: Default::default(),
+                readings: None,
             }
         })
         .collect();

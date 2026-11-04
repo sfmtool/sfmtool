@@ -11,6 +11,9 @@ description = "Read/write .sfmr file format for SfM reconstructions"
 
 [dependencies]
 sfmtool-archive-io = { path = "../sfmtool-archive-io" }
+# The shape check of an `image_to_gray` object, which a version 15 file
+# records for its image readings as a `.sift` file records it for its own.
+sfmtool-sift-format = { path = "../sfmtool-sift-format" }
 ndarray = "0.17"
 bytemuck = { version = "1.25", features = ["derive"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }

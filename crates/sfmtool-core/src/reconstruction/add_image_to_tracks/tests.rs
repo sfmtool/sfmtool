@@ -151,6 +151,7 @@ fn capture(points: &[(Point3<f64>, &[u32])]) -> Capture {
                 quaternion_wxyz: q,
                 translation_xyz: t,
                 intrinsic_adjustment: Default::default(),
+                readings: None,
             }
         })
         .collect();

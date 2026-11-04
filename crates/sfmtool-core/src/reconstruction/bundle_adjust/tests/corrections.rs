@@ -116,6 +116,7 @@ fn corrections_source(
                 quaternion_wxyz: r,
                 translation_xyz: -(r * center),
                 intrinsic_adjustment: planted[i],
+                readings: None,
             }
         })
         .collect();
@@ -1067,7 +1068,9 @@ fn write_scanlines_race_scenes() {
                 }
             }
             let name = format!("planted_{}_rates_{tau_w:e}.sfmr", planted.as_str());
-            source.save(&dir.join(name)).expect("write a scene");
+            source
+                .save(&dir.join(name), &Progress::none())
+                .expect("write a scene");
         }
     }
 }

@@ -47,8 +47,9 @@ pub struct SfmrReconstruction {
 pub struct ImageSet {
     pub cameras: Vec<CameraIntrinsics>,
     pub per_image_adjustments: Vec<PerImageAdjustments>, // per camera; empty = none varies
-    pub images: Vec<SfmrImage>, // each carries its own intrinsic_adjustment
+    pub images: Vec<SfmrImage>, // each carries its own intrinsic_adjustment and readings
     pub thumbnails_y_x_rgb: Option<Arc<Array4<u8>>>,
+    pub image_to_gray: Option<ImageToGray>, // the conversion the images' readings were taken through
     pub depth_statistics: DepthStatistics,
     pub depth_histogram_counts: Vec<Vec<u32>>,
     pub rig_frame_data: Option<RigFrameData>,
@@ -145,6 +146,13 @@ edit that adds or removes cameras keeps the two in step. An image's intrinsic
 adjustment travels on its `SfmrImage`, so every edit that reorders, filters or
 copies images carries it without a step of its own; see
 [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13).
+Its image readings travel the same way, as `SfmrImage::readings`, an
+`ImageReadings` or `None`, under the one `ImageSet::image_to_gray`; a value read
+from a file below format version 15 holds none, and
+`SfmrReconstruction::save(path, progress)` gathers the rows it lacks through its
+`progress` (`SfmrReconstruction::gather_image_readings`, or
+`fill_image_readings(progress)` to keep them in the value; see
+[sfmr-file-format.md § Where a writer gets the values](../../formats/sfmr-file-format.md#where-a-writer-gets-the-values)).
 An image of an `SFMTOOL_PINHOLE` camera may also carry a radial correction and
 rolling-shutter rates (format version 14), held on its `IntrinsicAdjustment` as
 `radial_bspline` and `rolling_shutter`, and `image_intrinsics(i)` reads it

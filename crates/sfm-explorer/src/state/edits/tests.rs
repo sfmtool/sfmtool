@@ -1961,7 +1961,9 @@ fn converting_renders_and_persists_patch_bitmaps_when_photographs_are_available(
 
     let saved = dir.path().join("converted.sfmr");
     std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
-    recon.save(&saved).unwrap();
+    recon
+        .save(&saved, &sfmtool_core::progress::Progress::none())
+        .unwrap();
     let reloaded = SfmrReconstruction::load(&saved, &sfmtool_core::progress::Progress::none())
         .expect("the bitmaps are stored, not display-only");
     assert_eq!(

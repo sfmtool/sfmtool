@@ -80,6 +80,8 @@ struct ArrayCache {
     principal_point_adjustments_xy: PyOnceLock<Option<Py<PyArray2<f64>>>>,
     radial_bspline_adjustments: PyOnceLock<Option<Py<PyArray2<f64>>>>,
     rolling_shutter_rates_xyz: PyOnceLock<Option<Py<PyArray2<f64>>>>,
+    sharpness: PyOnceLock<Option<Py<PyArray1<f32>>>>,
+    gradient_structure_tensors_xx_yy_xy: PyOnceLock<Option<Py<PyArray2<f32>>>>,
     positions: PyOnceLock<Py<PyArray2<f64>>>,
     positions_xyzw: PyOnceLock<Py<PyArray2<f64>>>,
     point_is_at_infinity: PyOnceLock<Py<PyArray1<bool>>>,
@@ -103,6 +105,8 @@ impl Default for ArrayCache {
             principal_point_adjustments_xy: PyOnceLock::new(),
             radial_bspline_adjustments: PyOnceLock::new(),
             rolling_shutter_rates_xyz: PyOnceLock::new(),
+            sharpness: PyOnceLock::new(),
+            gradient_structure_tensors_xx_yy_xy: PyOnceLock::new(),
             positions: PyOnceLock::new(),
             positions_xyzw: PyOnceLock::new(),
             point_is_at_infinity: PyOnceLock::new(),
@@ -226,6 +230,9 @@ impl PySfmrReconstruction {
     /// deletes the key to have them computed again. A ``sift_files`` dict
     /// without ``keypoints_xy`` gets the column from the ``.sift`` files
     /// when every one it needs is present and matches ``sift_content_hashes``.
+    /// The image readings (``image_to_gray``, ``sharpness``,
+    /// ``gradient_structure_tensors_xx_yy_xy``) are optional here: a dict
+    /// without them gives a reconstruction whose :meth:`save` gathers them.
     ///
     /// Args:
     ///     workspace_dir: Resolved workspace directory path.
@@ -290,11 +297,24 @@ impl PySfmrReconstruction {
     /// ``has_normals`` ``False`` writes no normals at all. Any attached patch
     /// cloud is written as the per-point patch frame in ``points3d/`` (format
     /// version 3+).
+    ///
+    /// The file stores every image's :attr:`sharpness` and
+    /// :attr:`gradient_structure_tensors_xx_yy_xy`. A reconstruction that does
+    /// not hold them for every image, such as one loaded from a file below
+    /// version 15, has them gathered for the write: each image's own readings
+    /// first, then its ``.sift`` file when that belongs to the image and
+    /// records them through the same :attr:`image_to_gray`, then its
+    /// photograph, checked against the reconstruction's record of its hash.
+    /// The reconstruction itself is not changed. When an image has none of
+    /// the three, nothing is written and ``ValueError`` names each such image
+    /// with the paths tried. Gathering them reads a ``.sift`` file or decodes a
+    /// photograph per image, with the GIL released; ``progress``, an optional
+    /// :class:`ProgressCounter`, counts the images gathered so far.
     // Every argument is one Python keyword of the save's surface, so they are a
     // list rather than a struct: a `SaveOptions` here would be a type the caller
     // cannot name.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false, workspace_path=None))]
+    #[pyo3(signature = (path, operation=None, tool_name=None, tool_options=None, minimal=false, workspace_path=None, progress=None))]
     fn save(
         &mut self,
         py: Python<'_>,
@@ -304,6 +324,7 @@ impl PySfmrReconstruction {
         tool_options: Option<&Bound<'_, PyDict>>,
         minimal: bool,
         workspace_path: Option<&str>,
+        progress: Option<crate::py_progress::ProgressCounter>,
     ) -> PyResult<()> {
         // The workspace path is one of the fields the stamp writes, so a save
         // that states it and names no operation would drop it silently.
@@ -353,9 +374,19 @@ impl PySfmrReconstruction {
             }
         }
 
-        let record = self
-            .inner
-            .save(&path)
+        // The images the readings gather counts, from parallel workers, so the
+        // counter keeps the largest seen.
+        let counter = progress.as_ref().map(|p| p.handle());
+        let sink = |event: sfmtool_core::progress::Event<'_>| {
+            if let (sfmtool_core::progress::Event::Count { done, .. }, Some(counter)) =
+                (event, &counter)
+            {
+                counter.fetch_max(done as usize, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let inner = &self.inner;
+        let record = py
+            .detach(|| inner.save(&path, &Progress::to(&sink)))
             .map_err(crate::format_errors::write_err)?;
         // The value is untouched by the save; the in-memory metadata echoes the
         // write record so a caller reading it back sees what the file carries.
@@ -541,6 +572,62 @@ impl PySfmrReconstruction {
             };
             (listed || values().any(|r| r != [0.0; 3])).then(|| array_from_rows(values()))
         })
+    }
+
+    /// Each image's sharpness, shape `(N,)` float32: the population variance
+    /// of the Laplacian over the interior of its reading image, computed
+    /// through :attr:`image_to_gray`. For comparing the images of this
+    /// reconstruction with each other; it depends on scene content. `None`
+    /// unless every image holds its readings, as for a reconstruction read
+    /// from a file below `.sfmr` version 15 (:meth:`save` gathers them).
+    ///
+    /// Read-only, and the same array on each read.
+    #[getter]
+    fn sharpness<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f32>>> {
+        cached_optional(py, &self.cache.sharpness, || {
+            let image_set = &self.inner.image_set;
+            image_set.has_image_readings().then(|| {
+                image_set
+                    .images
+                    .iter()
+                    .map(|im| im.readings.map_or(0.0, |r| r.sharpness))
+                    .collect()
+            })
+        })
+    }
+
+    /// Each image's gradient structure tensor `[Exx, Eyy, Exy]`, shape
+    /// `(N, 3)` float32: the means of `Gx²`, `Gy²` and `Gx·Gy` over the
+    /// interior of its reading image, not normalised, `x` to the right and `y`
+    /// down. `None` exactly when :attr:`sharpness` is.
+    ///
+    /// Read-only, and the same array on each read.
+    #[getter]
+    fn gradient_structure_tensors_xx_yy_xy<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Option<Bound<'py, PyArray2<f32>>> {
+        cached_optional(py, &self.cache.gradient_structure_tensors_xx_yy_xy, || {
+            let image_set = &self.inner.image_set;
+            image_set.has_image_readings().then(|| {
+                array_from_rows(image_set.images.iter().map(|im| {
+                    im.readings
+                        .map_or([0.0; 3], |r| r.gradient_structure_tensor_xx_yy_xy)
+                }))
+            })
+        })
+    }
+
+    /// The `{"formula": …, "quantize_bits": …}` grey conversion the image
+    /// readings were computed through, a new dict on each read; `None`
+    /// exactly when :attr:`sharpness` is.
+    #[getter]
+    fn image_to_gray(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let image_set = &self.inner.image_set;
+        match (&image_set.image_to_gray, image_set.has_image_readings()) {
+            (Some(conversion), true) => Ok(Some(serde_to_py(py, &conversion.to_json())?)),
+            _ => Ok(None),
+        }
     }
 
     /// Per camera, its rolling-shutter scanlines setting, `"ROWS"`,
@@ -1952,6 +2039,18 @@ impl PySfmrReconstruction {
     /// setting, a value that is not finite) raises ``ValueError``. To produce an
     /// ``embedded_patches`` reconstruction, set ``feature_source``,
     /// ``keypoints_xy``, and ``image_file_hashes`` together.
+    ///
+    /// The image readings ``image_to_gray`` (a dict), ``sharpness`` (an
+    /// ``(N,)`` float32 array) and ``gradient_structure_tensors_xx_yy_xy`` (an
+    /// ``(N, 3)`` float32 array) are passed together, and replace every image's
+    /// readings and their conversion, or are passed as ``None`` together to
+    /// drop them. Values the format refuses (a reading that is not finite, a
+    /// negative sharpness, ``Exx`` or ``Eyy``, a conversion that does not parse)
+    /// raise ``ValueError``. When they are not passed, each image keeps the
+    /// readings of the image of the same name in this reconstruction, so a
+    /// subset, a reorder or a merge that renames the images moves the rows
+    /// with them, and an image this reconstruction does not hold has none,
+    /// which :meth:`save` gathers from its ``.sift`` file or its photograph.
     ///
     /// The points' stored errors are not scored again, whatever is replaced:
     /// each keeps its ``rms_reprojection_errors`` entry (a point added by a

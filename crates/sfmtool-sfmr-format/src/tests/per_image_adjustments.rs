@@ -78,7 +78,7 @@ fn both_columns_and_the_camera_key_round_trip_bit_for_bit() {
         let focal = data.focal_adjustments.clone().unwrap();
         let principal_point = data.principal_point_adjustments_xy.clone().unwrap();
         write_sfmr_with_options(&path, &mut data, &WriteOptions::default()).unwrap();
-        assert_eq!(data.metadata.version, 14);
+        assert_eq!(data.metadata.version, SFMR_FORMAT_VERSION);
 
         let names = archive_names(&path);
         assert!(names.contains(&FOCAL_ENTRY.to_string()), "{names:?}");
@@ -183,7 +183,9 @@ fn the_images_and_cameras_hashes_change_with_the_columns_and_the_key() {
 fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_the_current_version_without_them() {
     let dir = temp_dir("sfmr_test_per_image_adjustments_v12");
     let current = dir.join("current.sfmr");
-    write_sfmr(&current, &mut make_test_data()).unwrap();
+    let mut data = make_test_data();
+    data.image_readings = None;
+    crate::write::write_sfmr_without_readings_check(&current, &mut data).unwrap();
     let old = dir.join("v12.sfmr");
     rewrite_entries(&current, &old, |name, raw| {
         (name == "metadata.json.zst").then(|| {
@@ -201,17 +203,21 @@ fn a_version_12_file_reads_with_zero_adjustments_and_saves_as_the_current_versio
     assert!(loaded.cameras[0].per_image_adjustments.is_empty());
 
     let saved = dir.join("saved.sfmr");
+    loaded.image_readings = Some(super::test_image_readings(3));
     write_sfmr(&saved, &mut loaded).unwrap();
-    assert_eq!(read_sfmr_metadata(&saved).unwrap().version, 14);
+    assert_eq!(
+        read_sfmr_metadata(&saved).unwrap().version,
+        SFMR_FORMAT_VERSION
+    );
     assert!(!archive_names(&saved)
         .iter()
         .any(|n| n.contains("adjustments")));
-    // Apart from the version, the cameras and images sections are what the
-    // version 12 file stored.
+    // Apart from the version, the cameras section is what the version 12 file
+    // stored; the images section gains the readings version 15 requires.
     let old_hash = read_sfmr_content_hash(&old).unwrap();
     let new_hash = read_sfmr_content_hash(&saved).unwrap();
     assert_eq!(new_hash.cameras_xxh128, old_hash.cameras_xxh128);
-    assert_eq!(new_hash.images_xxh128, old_hash.images_xxh128);
+    assert_ne!(new_hash.images_xxh128, old_hash.images_xxh128);
     assert!(verify_sfmr(&saved).unwrap().0);
     let _ = std::fs::remove_dir_all(&dir);
 }

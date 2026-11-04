@@ -324,6 +324,12 @@ pub(in crate::bench) fn fixture_of(
                 quaternion_wxyz: UnitQuaternion::from_quaternion(Quaternion::new(w, x, y, z)),
                 translation_xyz: scene.poses[i].translation,
                 intrinsic_adjustment: Default::default(),
+                // Invented, under the demo value's conversion, so the fixture
+                // saves as the format requires.
+                readings: Some(crate::features::sift::ImageReadings {
+                    sharpness: 0.01,
+                    gradient_structure_tensor_xx_yy_xy: [0.004, 0.003, 0.0],
+                }),
             }
         })
         .collect();

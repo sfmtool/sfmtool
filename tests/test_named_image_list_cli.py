@@ -391,7 +391,8 @@ def test_to_colmap_bin_uses_a_list_without_the_image_files(
 ):
     sfmr = seoul_bull_ground_truth_sfmr
     _gt_lists(sfmr)
-    assert not list(sfmr.parent.glob("*.jpg"))
+    for image in sfmr.parent.glob("*.jpg"):
+        image.unlink()
     out = tmp_path / "colmap"
     result = _invoke(["to-colmap-bin", str(sfmr), str(out), "-r", "picked"])
     assert result.exit_code == 0, result.output

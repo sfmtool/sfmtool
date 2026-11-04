@@ -80,7 +80,7 @@ impl SfmrReconstruction {
     ///         workspace_path: None,
     ///     },
     /// );
-    /// recon.save(out)?;
+    /// recon.save(out, &Progress::none())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -182,7 +182,9 @@ impl SfmrReconstruction {
     ///     tool_version: "0.2.0",
     ///     workspace_path: None,
     /// };
-    /// recon.to_minimal(out, &stamp, BTreeMap::new()).save(out)?;
+    /// recon
+    ///     .to_minimal(out, &stamp, BTreeMap::new())
+    ///     .save(out, &Progress::none())?;
     /// # Ok(())
     /// # }
     /// ```

@@ -513,7 +513,7 @@ fn folder_holds_version_1_files(folder: &Path) -> bool {
 }
 
 /// The XXH128 of a file's bytes as 32 lowercase hex digits, and its size.
-fn xxh128_of_file(path: &Path) -> std::io::Result<(String, u64)> {
+pub(crate) fn xxh128_of_file(path: &Path) -> std::io::Result<(String, u64)> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = xxhash_rust::xxh3::Xxh3::new();
     let mut buffer = vec![0u8; 1 << 16];

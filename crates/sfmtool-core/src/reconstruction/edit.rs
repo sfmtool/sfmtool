@@ -207,6 +207,8 @@ impl SfmrReconstruction {
                 // similarity of the scene does not touch, so the new value
                 // shares the old one's array rather than copying it.
                 thumbnails_y_x_rgb: self.image_set.thumbnails_y_x_rgb.clone(),
+                // So are the readings, which travel on the images.
+                image_to_gray: self.image_set.image_to_gray.clone(),
                 depth_statistics,
                 depth_histogram_counts: self.image_set.depth_histogram_counts.clone(),
             },
@@ -583,6 +585,7 @@ impl SfmrReconstruction {
                 per_image_adjustments: self.image_set.per_image_adjustments.clone(),
                 images: new_images,
                 thumbnails_y_x_rgb: new_thumbnails,
+                image_to_gray: self.image_set.image_to_gray.clone(),
                 depth_statistics: new_depth_statistics,
                 depth_histogram_counts: new_depth_histogram_counts,
                 rig_frame_data: new_rig_frame_data,

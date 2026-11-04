@@ -14,6 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 use zip::ZipArchive;
 
 use crate::entries::{self, ReadingColumn};
+use crate::image_readings::{f32_values, image_readings_presence_error};
 use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
 use sfmtool_archive_io::{format_hash, raw_to_u32, read_zst_entry};
@@ -346,6 +347,11 @@ fn verify_images_section<R: Read + Seek>(
             Ok(None)
         }
     };
+    // The image readings (version 15+) are hashed wherever the archive holds
+    // them, and only there: the version rules below report one that is
+    // missing or that a file below version 15 carries.
+    let sharpness_name = entries::images_sharpness(image_count);
+    let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
 
     // images/camera_indexes (captured for the keypoint bounds check below)
     let camera_indexes_raw = read_zst_entry(archive, &entries::images_camera_indexes(image_count))?;
@@ -357,10 +363,17 @@ fn verify_images_section<R: Read + Seek>(
     // images/feature_tool_hashes (sift_files) or image_file_hashes
     // (embedded_patches) — same lexicographic slot, mirrors the writer.
     // images/focal_adjustments sorts between the two.
+    // images/gradient_structure_tensors_xx_yy_xy (version 15+) sorts right
+    // after it.
     let focal_raw;
+    let tensors_raw;
     if is_embedded {
         focal_raw = read_optional(archive, &focal_name, listed[0])?;
         if let Some(raw) = &focal_raw {
+            images_hasher.update(raw);
+        }
+        tensors_raw = read_optional(archive, &tensors_name, false)?;
+        if let Some(raw) = &tensors_raw {
             images_hasher.update(raw);
         }
         images_hasher.update(&read_zst_entry(
@@ -374,6 +387,10 @@ fn verify_images_section<R: Read + Seek>(
         )?);
         focal_raw = read_optional(archive, &focal_name, listed[0])?;
         if let Some(raw) = &focal_raw {
+            images_hasher.update(raw);
+        }
+        tensors_raw = read_optional(archive, &tensors_name, false)?;
+        if let Some(raw) = &tensors_raw {
             images_hasher.update(raw);
         }
     }
@@ -407,6 +424,12 @@ fn verify_images_section<R: Read + Seek>(
     }
     let rolling_shutter_raw = read_optional(archive, &rolling_shutter_name, listed[3])?;
     if let Some(raw) = &rolling_shutter_raw {
+        images_hasher.update(raw);
+    }
+    // images/sharpness (version 15+; after rolling_shutter_rates_xyz, before
+    // sift_content_hashes)
+    let sharpness_raw = read_optional(archive, &sharpness_name, false)?;
+    if let Some(raw) = &sharpness_raw {
         images_hasher.update(raw);
     }
     // images/sift_content_hashes (sift_files only)
@@ -508,6 +531,41 @@ fn verify_images_section<R: Read + Seek>(
                 principal_point.as_ref(),
                 radial_bspline.as_ref(),
                 rolling_shutter.as_ref(),
+            )
+        })();
+        if let Err(e) = check {
+            errors.push(e);
+        }
+    }
+
+    // === Validate the image readings (version 15+) ===
+    let image_to_gray = images_meta.get("image_to_gray");
+    if let Some(e) = image_readings_presence_error(
+        metadata.version,
+        [
+            sharpness_raw.is_some(),
+            tensors_raw.is_some(),
+            image_to_gray.is_some(),
+        ],
+    ) {
+        errors.push(e);
+    } else if let (Some(image_to_gray), Some(sharpness_raw), Some(tensors_raw)) =
+        (image_to_gray, &sharpness_raw, &tensors_raw)
+    {
+        let check = (|| -> Result<(), String> {
+            let sharpness = f32_values(sharpness_raw, &sharpness_name, image_count)?;
+            let tensors = f32_values(tensors_raw, &tensors_name, image_count * 3)?;
+            crate::validate_image_readings(
+                &crate::ImageReadingColumns {
+                    image_to_gray: image_to_gray.clone(),
+                    sharpness: ndarray::Array1::from_vec(sharpness),
+                    gradient_structure_tensors_xx_yy_xy: ndarray::Array2::from_shape_vec(
+                        (image_count, 3),
+                        tensors,
+                    )
+                    .expect("f32_values checked the length"),
+                },
+                image_count,
             )
         })();
         if let Err(e) = check {

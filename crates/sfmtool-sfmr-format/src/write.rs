@@ -15,7 +15,7 @@ use sfmtool_archive_io::{format_hash, json_entry_bytes, write_binary_entry, writ
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries::{self, ReadingColumn};
 use crate::types::*;
-use crate::{HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS};
+use crate::{validate_image_readings, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS};
 
 /// Where one section entry's **uncompressed** bytes go.
 ///
@@ -219,6 +219,11 @@ fn merge_preserving_normals<'a>(
 /// `content_hash` field in `data` is ignored on write (recomputed). The
 /// per-observation and per-image columns written depend on
 /// `metadata.feature_source` (`sift_files` vs `embedded_patches`).
+///
+/// The image readings are required ([`SfmrData::image_readings`]): a value
+/// without them is refused with [`SfmrError::InvalidFormat`] and nothing is
+/// written. This crate does not compute them; `SfmrReconstruction::save` in
+/// `sfmtool-core` gathers them before it writes.
 pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
     write_sfmr_with_options(path, data, &WriteOptions::default())
 }
@@ -231,12 +236,20 @@ pub fn write_sfmr(path: &Path, data: &mut SfmrData) -> Result<(), SfmrError> {
 /// Every rule of the format is checked. The per-image intrinsic adjustments
 /// (the focal scales, the principal-point offsets, the radial B-spline
 /// corrections and the rolling-shutter rates) and the cameras'
-/// `rolling_shutter_scanlines` settings are written as given.
+/// `rolling_shutter_scanlines` settings are written as given, and so are the
+/// image readings, which are required (see [`write_sfmr`]).
 pub fn write_sfmr_with_options(
     path: &Path,
     data: &mut SfmrData,
     options: &WriteOptions,
 ) -> Result<(), SfmrError> {
+    if data.image_readings.is_none() {
+        return Err(SfmrError::InvalidFormat(format!(
+            "a version {SFMR_FORMAT_VERSION} file stores every image's sharpness and gradient \
+             structure tensor with the image_to_gray they were computed through, and this value \
+             has none; supply them as image_readings before writing"
+        )));
+    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| SfmrError::IoPath {
             operation: "Failed to create parent directory",
@@ -261,6 +274,25 @@ pub fn write_sfmr_with_options(
     Ok(())
 }
 
+/// [`write_sfmr`] without the requirement that the value carry image readings,
+/// so the tests can make the files of versions below 15, which have none.
+#[cfg(test)]
+pub(crate) fn write_sfmr_without_readings_check(
+    path: &Path,
+    data: &mut SfmrData,
+) -> Result<(), SfmrError> {
+    let options = WriteOptions::default();
+    sfmtool_archive_io::write_atomically(path, |file| {
+        write_sfmr_into(data, &options, || {
+            Ok(ArchiveSink {
+                zip: ZipWriter::new(file),
+                zstd_level: options.zstd_level,
+            })
+        })
+    })?;
+    Ok(())
+}
+
 /// The [`ContentHash`] a [`write_sfmr_with_options`] of `data` would write,
 /// computed without touching the filesystem.
 ///
@@ -273,6 +305,12 @@ pub fn write_sfmr_with_options(
 /// format version and `infinity_point_count` refreshed, depth statistics and
 /// missing normals recomputed unless the options skip them), which is why it
 /// is taken by `&mut`.
+///
+/// A value without image readings ([`SfmrData::image_readings`]) is hashed as
+/// it stands, with no reading columns and no `image_to_gray` key, although a
+/// write refuses it: a value loaded from a file older than version 15 still
+/// has a content hash. The hash a write stores once the readings are supplied
+/// is a different one.
 ///
 /// The cost is one serialisation of the value plus one XXH128 pass over it,
 /// with no compression; the patch bitmaps dominate both. A caller that asks
@@ -304,6 +342,10 @@ fn write_sfmr_into<S: EntrySink>(
         .map_err(SfmrError::InvalidFormat)?;
     validate_world_space_unit(data.metadata.world_space_unit.as_deref())
         .map_err(SfmrError::InvalidFormat)?;
+    if let Some(readings) = &data.image_readings {
+        validate_image_readings(readings, data.metadata.image_count as usize)
+            .map_err(SfmrError::InvalidFormat)?;
+    }
     let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
     // Ensure tracks are sorted by (point_indexes, image_indexes)
@@ -639,11 +681,27 @@ fn write_images<S: EntrySink>(
         .focal_adjustments
         .as_ref()
         .map(|a| a.iter().copied().collect());
+    // images/gradient_structure_tensors_xx_yy_xy (version 15+) sorts right
+    // after focal_adjustments, so the two are written together.
+    let tensors: Option<Vec<f32>> = data.image_readings.as_ref().map(|r| {
+        r.gradient_structure_tensors_xx_yy_xy
+            .iter()
+            .copied()
+            .collect()
+    });
     let write_focal = |sink: &mut S, hasher: &mut Xxh3| -> Result<(), SfmrError> {
         if let Some(values) = &focal_adjustments {
             binary_hashed(
                 sink,
                 &entries::images_focal_adjustments(image_count),
+                bytemuck::cast_slice(values),
+                hasher,
+            )?;
+        }
+        if let Some(values) = &tensors {
+            binary_hashed(
+                sink,
+                &entries::images_gradient_structure_tensors_xx_yy_xy(image_count),
                 bytemuck::cast_slice(values),
                 hasher,
             )?;
@@ -688,11 +746,14 @@ fn write_images<S: EntrySink>(
 
     // images/metadata.json
     let has_thumbnails = data.thumbnails_y_x_rgb.is_some();
-    let images_meta = serde_json::json!({
+    let mut images_meta = serde_json::json!({
         "image_count": image_count,
         "has_thumbnails": has_thumbnails,
         "thumbnail_size": has_thumbnails.then_some(THUMBNAIL_SIZE),
     });
+    if let Some(readings) = &data.image_readings {
+        images_meta["image_to_gray"] = readings.image_to_gray.clone();
+    }
     let bytes = sink.write_json(entries::images_metadata(), &images_meta)?;
     images_hasher.update(&bytes);
 
@@ -742,6 +803,18 @@ fn write_images<S: EntrySink>(
                 &mut images_hasher,
             )?;
         }
+    }
+
+    // images/sharpness (version 15+; after rolling_shutter_rates_xyz, before
+    // sift_content_hashes and thumbnails_y_x_rgb)
+    if let Some(readings) = &data.image_readings {
+        let values: Vec<f32> = readings.sharpness.iter().copied().collect();
+        binary_hashed(
+            sink,
+            &entries::images_sharpness(image_count),
+            bytemuck::cast_slice(&values),
+            &mut images_hasher,
+        )?;
     }
 
     // images/sift_content_hashes (sift_files only; absent in embedded_patches)

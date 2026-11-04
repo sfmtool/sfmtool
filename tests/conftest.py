@@ -709,6 +709,7 @@ def build_reconstruction_at_poses(
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
+        image_readings,
     ) = _resolve_workspace_and_sift(workspace_names, workspace_dir)
 
     colors = _mean_colors_at(
@@ -757,6 +758,7 @@ def build_reconstruction_at_poses(
         thumbnails=thumbnails,
         metadata=metadata,
         rig_frame_data=reference.rig_frame_data,
+        image_readings=image_readings,
     )
     recon = SfmrReconstruction.from_data(workspace_dir, data)
     recon.save(output_sfm_file)
@@ -769,15 +771,20 @@ def seoul_bull_ground_truth_sfmr(tmp_path_factory) -> Path:
 
     The reference reconstruction of all 17 images (one SIMPLE_RADIAL camera,
     metres, some points at infinity), copied with its ``.sfm-workspace.json``
-    marker into a fresh tmp dir so it loads as-is and resolves its workspace
-    there. Its features are embedded patches (no ``.sift`` files, so
-    ``track_feature_indexes`` is ``None``) and it sits beside no images. For a
-    SIFT-backed workspace at the same poses use :func:`seoul_bull_workspace`.
+    marker and its 17 images into a fresh tmp dir so it loads as-is and
+    resolves its workspace there. Its features are embedded patches (no
+    ``.sift`` files, so ``track_feature_indexes`` is ``None``). The file is
+    older than ``.sfmr`` version 15, so it holds no image readings, and a save
+    of it computes them from the copied images, which its
+    ``image_file_hashes`` verify. For a SIFT-backed workspace at the same poses
+    use :func:`seoul_bull_workspace`.
     """
     workspace_dir = tmp_path_factory.mktemp("seoul_bull_ground_truth")
     shutil.copy(SEOUL_BULL_GROUND_TRUTH, workspace_dir / SEOUL_BULL_GROUND_TRUTH.name)
     marker = SEOUL_BULL_DIR / ".sfm-workspace.json"
     shutil.copy(marker, workspace_dir / marker.name)
+    for image in SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg"):
+        shutil.copy(image, workspace_dir / image.name)
     return workspace_dir / SEOUL_BULL_GROUND_TRUTH.name
 
 
@@ -918,6 +925,33 @@ def assert_references_name_track_observations(
     picked = float(np.mean(refs >= 0))
     assert picked >= min_picked_share, f"only {picked:.0%} of points name a reference"
     return refs
+
+
+def with_image_readings(data: dict, workspace_dir: Path) -> dict:
+    """``data``, a ``read_sfmr`` dict of a file below ``.sfmr`` version 15, with
+    the image readings a version 15 ``write_sfmr`` requires.
+
+    The readings are computed from the images in ``workspace_dir``, through
+    BT.709 luma unrounded, the way a save of the file would compute them.
+    """
+    from sfmtool.fileio import read_image_rgb
+    from sfmtool.sift import ImageToGray, image_readings_from_rgb
+
+    image_to_gray = {"formula": "0.2126*R + 0.7152*G + 0.0722*B"}
+    conversion = ImageToGray.from_json(image_to_gray)
+    rows = [
+        image_readings_from_rgb(read_image_rgb(Path(workspace_dir) / name), conversion)
+        for name in data["image_names"]
+    ]
+    return dict(
+        data,
+        image_to_gray=image_to_gray,
+        sharpness=np.asarray([r.sharpness for r in rows], dtype=np.float32),
+        gradient_structure_tensors_xx_yy_xy=np.asarray(
+            [list(r.gradient_structure_tensor_xx_yy_xy) for r in rows],
+            dtype=np.float32,
+        ).reshape(len(rows), 3),
+    )
 
 
 def per_point_reprojection_error_stats(recon) -> tuple[np.ndarray, np.ndarray]:
@@ -1130,15 +1164,21 @@ def kerry_park_ground_truth_sfmr(tmp_path_factory) -> Path:
 
     The reference reconstruction of all 48 images (24 rig frames, two
     SFMTOOL_FISHEYE cameras, metres, some points at infinity), copied with its
-    ``.sfm-workspace.json`` marker into a fresh tmp dir so it loads as-is and
-    resolves its workspace there. Its features are embedded patches (no
-    ``.sift`` files) and it sits beside no images. For a SIFT-backed workspace
-    at the same poses use :func:`kerry_park_workspace`.
+    ``.sfm-workspace.json`` marker and its 48 images into a fresh tmp dir so it
+    loads as-is and resolves its workspace there. Its features are embedded
+    patches (no ``.sift`` files). The file is older than ``.sfmr`` version 15,
+    so it holds no image readings, and a save of it computes them from the
+    copied images. For a SIFT-backed workspace at the same poses use
+    :func:`kerry_park_workspace`.
     """
     workspace_dir = tmp_path_factory.mktemp("kerry_park_ground_truth")
     shutil.copy(KERRY_PARK_GROUND_TRUTH, workspace_dir / KERRY_PARK_GROUND_TRUTH.name)
     marker = KERRY_PARK_DIR / ".sfm-workspace.json"
     shutil.copy(marker, workspace_dir / marker.name)
+    for sensor in ("fisheye_left", "fisheye_right"):
+        (workspace_dir / sensor).mkdir()
+        for image in (KERRY_PARK_DIR / sensor).glob("*.jpg"):
+            shutil.copy(image, workspace_dir / sensor / image.name)
     return workspace_dir / KERRY_PARK_GROUND_TRUTH.name
 
 

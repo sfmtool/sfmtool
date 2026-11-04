@@ -90,6 +90,7 @@ fn scene() -> SfmrReconstruction {
                 quaternion_wxyz: rotation,
                 translation_xyz: -(rotation * centre),
                 intrinsic_adjustment: Default::default(),
+                readings: None,
             }
         })
         .collect();

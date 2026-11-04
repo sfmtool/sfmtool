@@ -93,12 +93,6 @@ pub use sfmtool_sfmr_format::{
 /// the table without depending on `sfmtool-sfmr-format` itself.
 pub use sfmtool_sfmr_format::{world_space_unit_in_metres, WORLD_SPACE_UNITS};
 
-// `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
-// the two formats' thumbnail extents must agree. Neither format crate depends
-// on the other — this crate is the first place both are visible, which makes it
-// the only place the agreement can be enforced at compile time rather than
-// discovered as a shape mismatch at runtime.
-const _: () = assert!(sfmtool_sfmr_format::THUMBNAIL_SIZE == sfmtool_sift_format::THUMBNAIL_SIZE);
 pub use spherical::{
     render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,
     ConsensusAtlasReport,

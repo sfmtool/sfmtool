@@ -1453,6 +1453,7 @@ impl EditedReconstruction {
             // base's, thumbnails shared rather than copied.
             image_set: ImageSet {
                 thumbnails_y_x_rgb: self.base.image_set.thumbnails_y_x_rgb.clone(),
+                image_to_gray: self.base.image_set.image_to_gray.clone(),
                 ..self.base.image_set.clone()
             },
             point_set,

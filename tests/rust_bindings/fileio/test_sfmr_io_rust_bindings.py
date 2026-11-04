@@ -24,6 +24,7 @@ from sfmtool.fileio import (
 )
 from sfmtool.patches import PatchCloud
 from sfmtool.reconstruction import SfmrReconstruction
+from tests.conftest import with_image_readings
 
 # Every numpy-array key `read_sfmr` emits. Optional columns are `None` when the
 # file does not carry them.
@@ -488,7 +489,7 @@ class TestReferenceObservations:
         out = tmp_path / "no_column.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=True)
         assert np.all(read_sfmr(out)["reference_observations"] == -1)
-        assert read_sfmr_metadata(out)["version"] == 14
+        assert read_sfmr_metadata(out)["version"] == 15
 
 
 class TestPatchColumnValidation:
@@ -721,7 +722,9 @@ class TestNormals:
     def test_a_read_dict_writes_back_its_normals(
         self, seoul_bull_ground_truth_sfmr, tmp_path, skip
     ):
-        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data = with_image_readings(
+            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
+        )
         normals = data["normals_xyz"]
         # The ground truth's normals are not its mean-viewing ones, so a write
         # that replaced them would be seen.
@@ -734,7 +737,9 @@ class TestNormals:
     def test_a_missing_key_gets_mean_viewing_normals(
         self, seoul_bull_ground_truth_sfmr, tmp_path
     ):
-        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data = with_image_readings(
+            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
+        )
         mean_viewing = self._mean_viewing(data, tmp_path)
         assert mean_viewing.shape == data["normals_xyz"].shape
         finite = data["positions_xyzw"][:, 3] != 0.0
@@ -752,7 +757,9 @@ class TestNormals:
         )
 
     def test_none_writes_no_normals(self, seoul_bull_ground_truth_sfmr, tmp_path):
-        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data = with_image_readings(
+            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
+        )
         data["normals_xyz"] = None
         # A confidence rates the stored normals, so it goes with them.
         data["normal_confidence"] = None
@@ -761,7 +768,9 @@ class TestNormals:
         assert read_sfmr(out)["normals_xyz"] is None
 
     def test_a_wrong_shape_is_refused(self, seoul_bull_ground_truth_sfmr, tmp_path):
-        data = read_sfmr(seoul_bull_ground_truth_sfmr)
+        data = with_image_readings(
+            read_sfmr(seoul_bull_ground_truth_sfmr), seoul_bull_ground_truth_sfmr.parent
+        )
         data["normals_xyz"] = data["normals_xyz"][:-1]
         with pytest.raises(ValueError, match="normals_xyz"):
             write_sfmr(tmp_path / "bad.sfmr", data)
@@ -922,7 +931,7 @@ class TestPerImageIntrinsicAdjustments:
         out = tmp_path / "flagged.sfmr"
         write_sfmr(out, data)
         again = read_sfmr(out)
-        assert read_sfmr_metadata(out)["version"] == 14
+        assert read_sfmr_metadata(out)["version"] == 15
         assert again["per_image_adjustments"] == data["per_image_adjustments"]
         assert again["focal_adjustments"].dtype == np.float64
         assert again["focal_adjustments"].shape == (n_img,)
@@ -1043,7 +1052,7 @@ class TestPerImageLensCorrections:
         out = tmp_path / "scanlines.sfmr"
         write_sfmr(out, data)
         again = read_sfmr(out)
-        assert read_sfmr_metadata(out)["version"] == 14
+        assert read_sfmr_metadata(out)["version"] == 15
         assert again["rolling_shutter_scanlines"] == settings
         assert again["radial_bspline_adjustments"] is None
         assert again["rolling_shutter_rates_xyz"] is None

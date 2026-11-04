@@ -16,7 +16,11 @@
 //!   [`crate::document::History::set_disk_serial`] name it and the dirty marker
 //!   mean something. A Save As that states a workspace path materialises for
 //!   the same reason, whether or not there is an overlay: the stated path is
-//!   metadata, and the hash covers the metadata.
+//!   metadata, and the hash covers the metadata. So does a save of a value
+//!   that lacks some image's readings, such as one opened from a file below
+//!   `.sfmr` version 15: the readings are gathered, through the save's
+//!   progress, into the materialised value before it becomes a version, so
+//!   the version's content hash is the hash of the file written.
 //! - **Provenance is stamped before the hash is taken.** The metadata is inside
 //!   `content_xxh128`, so stamping an operation onto a value after hashing it
 //!   would hand the session a hash the file does not have and break every id
@@ -198,9 +202,9 @@ impl AppState {
                 )
             };
             {
-                let _phase = save.phase("write");
+                let write = save.phase("write");
                 minimal
-                    .save(path)
+                    .save(path, &write)
                     .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
             }
             format!(
@@ -336,10 +340,10 @@ impl AppState {
             // One phase for the whole write: serialising the columns,
             // compressing them and hashing the sections are stages of
             // `SfmrReconstruction::save` rather than of this call.
-            let _phase = save.phase("write");
+            let write = save.phase("write");
             value
                 .base
-                .save(path)
+                .save(path, &write)
                 .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
         }
 
@@ -358,7 +362,8 @@ impl AppState {
     }
 
     /// Fold `index`'s overlay into a base of its own and push it as a version,
-    /// when there is an overlay to fold or a workspace path to state.
+    /// when there is an overlay to fold, a workspace path to state, or image
+    /// readings to gather.
     ///
     /// The pushed value carries the provenance the file will, so its hash, which
     /// is what every id minted afterwards is built on, is the hash of the file
@@ -382,7 +387,12 @@ impl AppState {
         let node = &self.scene[index];
         let edited = node.history.current();
         let (deleted, added) = (edited.deleted_points.len(), edited.added.points.len());
-        if deleted == 0 && added == 0 && workspace_path.is_none() {
+        // A base without every image's readings (one opened from a file below
+        // version 15) is not what the save writes, since the save gathers
+        // them; it is folded like an edit, so the version pushed holds them
+        // and its content hash is the written file's.
+        let has_readings = edited.base.image_set.has_image_readings();
+        if deleted == 0 && added == 0 && workspace_path.is_none() && has_readings {
             progress_note!(phase, "nothing to fold");
             return Ok(());
         }
@@ -394,6 +404,11 @@ impl AppState {
         base.metadata.tool_version = env!("CARGO_PKG_VERSION").to_string();
         if let Some(stated) = workspace_path {
             base.set_workspace_relative_path(stated);
+        }
+        if !base.image_set.has_image_readings() {
+            let readings = phase.phase("image readings");
+            base.fill_image_readings(&readings)
+                .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
         }
 
         let label = format!(

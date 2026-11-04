@@ -157,7 +157,7 @@ fn load_fills_a_file_without_the_column() {
     // The marker is how the load finds the workspace the `.sift` files are in.
     std::fs::write(dir.path().join(".sfm-workspace.json"), "{}").unwrap();
     let path = dir.path().join("no-keypoints.sfmr");
-    recon.save(&path).unwrap();
+    recon.save(&path, &Progress::none()).unwrap();
     assert!(!sfmtool_sfmr_format::read_sfmr(&path)
         .unwrap()
         .keypoints_xy
@@ -175,7 +175,7 @@ fn load_fills_a_file_without_the_column() {
     );
 
     let resaved = dir.path().join("with-keypoints.sfmr");
-    loaded.save(&resaved).unwrap();
+    loaded.save(&resaved, &Progress::none()).unwrap();
     assert!(sfmtool_sfmr_format::read_sfmr(&resaved)
         .unwrap()
         .keypoints_xy

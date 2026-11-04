@@ -27,12 +27,22 @@ def _get_feature_prefix_dir(workspace_config: dict) -> str:
 def _resolve_workspace_and_sift(
     image_names: list[str],
     image_dir: Path,
-) -> tuple[Path, dict, list[str], list[bytes], list[bytes], list[np.ndarray]]:
+) -> tuple[
+    Path, dict, list[str], list[bytes], list[bytes], list[np.ndarray], dict | None
+]:
     """Resolve workspace and read .sift metadata for a list of image names.
 
     Returns:
         (workspace_dir, workspace_contents, resolved_names,
-         feature_tool_hashes, sift_content_hashes, thumbnails)
+         feature_tool_hashes, sift_content_hashes, thumbnails, image_readings)
+
+    ``image_readings`` is the ``image_to_gray``, ``sharpness`` and
+    ``gradient_structure_tensors_xx_yy_xy`` entries of the data dict, copied
+    from the ``.sift`` files beside their thumbnails when every one is a
+    version 2 file recording the workspace's ``image_to_gray`` (or, in a
+    workspace that records none, the first file's). Otherwise it is ``None``,
+    and the reconstruction's save gathers the readings, computing the rows no
+    ``.sift`` file holds from the photographs.
     """
     workspace_dir = find_workspace_for_path(image_dir)
     if workspace_dir is None:
@@ -57,6 +67,11 @@ def _resolve_workspace_and_sift(
     feature_tool_hashes = []
     sift_content_hashes = []
     thumbnails = []
+    # The conversion the readings must be recorded through; the first .sift's
+    # when the workspace records none.
+    image_to_gray = feature_options.get("image_to_gray")
+    sharpness: list[float] | None = []
+    tensors: list[list[float]] = []
 
     for name in image_names:
         if Path(name).is_absolute():
@@ -90,6 +105,34 @@ def _resolve_workspace_and_sift(
             feature_tool_hashes.append(bytes.fromhex(ft_hash))
             sift_content_hashes.append(bytes.fromhex(sc_hash))
             thumbnails.append(reader.read_thumbnail())
+            if sharpness is not None:
+                recorded = reader.feature_tool_metadata["feature_options"].get(
+                    "image_to_gray"
+                )
+                sift_metadata = reader.metadata
+                if image_to_gray is None:
+                    image_to_gray = recorded
+                if (
+                    sift_metadata["version"] >= 2
+                    and recorded is not None
+                    and recorded == image_to_gray
+                ):
+                    sharpness.append(sift_metadata["sharpness"])
+                    tensors.append(sift_metadata["gradient_structure_tensor_xx_yy_xy"])
+                else:
+                    sharpness = None
+
+    image_readings = None
+    if sharpness is not None and image_to_gray is not None:
+        # Each reading is a double holding a float32 exactly, so the cast
+        # gives back the float32 the extractor computed.
+        image_readings = {
+            "image_to_gray": image_to_gray,
+            "sharpness": np.asarray(sharpness, dtype=np.float32),
+            "gradient_structure_tensors_xx_yy_xy": np.asarray(
+                tensors, dtype=np.float32
+            ).reshape(len(tensors), 3),
+        }
 
     return (
         workspace_dir,
@@ -98,6 +141,7 @@ def _resolve_workspace_and_sift(
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
+        image_readings,
     )
 
 
@@ -152,6 +196,7 @@ def _build_sfmr_data_dict(
     thumbnails: list[np.ndarray],
     metadata: dict,
     rig_frame_data: dict | None = None,
+    image_readings: dict | None = None,
 ) -> dict:
     """Assemble a v2 data dict for SfmrReconstruction.from_data.
 
@@ -164,6 +209,11 @@ def _build_sfmr_data_dict(
     the features ``track_feature_indexes`` point at -- but with the copy present
     a consumer reads where each observation sits without opening the ``.sift``
     companions. Omit it and the file carries no such column.
+
+    ``image_readings`` holds the ``image_to_gray``, ``sharpness`` and
+    ``gradient_structure_tensors_xx_yy_xy`` entries, from
+    :func:`_resolve_workspace_and_sift`; without it the reconstruction's save
+    gathers them.
     """
     data = {
         "metadata": metadata,
@@ -187,6 +237,8 @@ def _build_sfmr_data_dict(
         data["keypoints_xy"] = np.asarray(keypoints_xy, dtype=np.float32)
     if rig_frame_data is not None:
         data["rig_frame_data"] = rig_frame_data
+    if image_readings is not None:
+        data.update(image_readings)
     return data
 
 
@@ -503,6 +555,7 @@ def colmap_binary_to_rust_sfmr(
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
+        image_readings,
     ) = _resolve_workspace_and_sift(data["image_names"], image_dir)
 
     rig_frame_data = _conjugate_rig_sensor_poses(data.get("rig_frame_data"))
@@ -536,6 +589,7 @@ def colmap_binary_to_rust_sfmr(
         thumbnails=thumbnails,
         metadata=metadata,
         rig_frame_data=rig_frame_data,
+        image_readings=image_readings,
     )
 
     return _finish_import(workspace_dir, sfmr_dict, classify_infinity)
@@ -615,6 +669,7 @@ def pycolmap_to_rust_sfmr(
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
+        image_readings,
     ) = _resolve_workspace_and_sift(raw_image_names, image_dir)
 
     # Prepare 3D points
@@ -679,6 +734,7 @@ def pycolmap_to_rust_sfmr(
         thumbnails=thumbnails,
         metadata=metadata,
         rig_frame_data=rig_frame_data,
+        image_readings=image_readings,
     )
 
     return _finish_import(workspace_dir, sfmr_dict, classify_infinity)

@@ -104,6 +104,7 @@ fn image_looking_down_minus_z() -> crate::SfmrImage {
         quaternion_wxyz: nalgebra::UnitQuaternion::identity(),
         translation_xyz: Vector3::zeros(),
         intrinsic_adjustment: Default::default(),
+        readings: None,
     }
 }
 
