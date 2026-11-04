@@ -7,8 +7,8 @@ of the reading image. They bear on four decisions: that the sharpness is the
 variance of the Laplacian, that the gradient structure tensor is recorded
 beside it, that both are taken on one grey image reduced to a long side of
 480 pixels, and that full resolution and three other blur measures were not
-used. The `.sfmr` format's choice to store the readings as `float32` rests on
-the ranges given in
+used. The `.sfmr` format's choice to store the sharpness as `float16` and the
+tensor as `float32` rests on the ranges given in
 [the `.sfmr` format's reasons](sfmr-file-format.md#why-the-readings-are-stored-this-way), not on
 these measurements.
 
