@@ -78,6 +78,13 @@ def pan_workspace(tmp_path: Path, pan_source, monkeypatch) -> Path:
     return workspace
 
 
+def _assert_solvable(data: dict, output: str) -> None:
+    """Fail with the report when a run that should walk did not reach the
+    walk, so the failure names the reading that blocked it."""
+    assert data["verdict"] == "solvable", output
+    assert None not in data["chosen_numbers"], output
+
+
 def _files(workspace: Path) -> set[str]:
     return {
         p.relative_to(workspace).as_posix() for p in workspace.rglob("*") if p.is_file()
@@ -94,7 +101,7 @@ def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
     result = _invoke(["pick-images", "frames", *FAST])
     assert result.exit_code == 0, result.output
     assert "frames/pan_%03d.jpg, 100 frames (1-100)" in result.output
-    assert "Verdict: solvable" in result.output
+    assert "Verdict: solvable" in result.output, result.output
     assert "Walk: target step 10% (band 7-13%)" in result.output
     assert "pass --write-list NAME" in result.output
     added = _files(pan_workspace) - before
@@ -111,6 +118,7 @@ def test_write_list_writes_the_chosen_frames(pan_workspace: Path):
     )
     assert result.exit_code == 0, result.output
     data = json.loads((pan_workspace / "r.json").read_text())
+    _assert_solvable(data, result.output)
     (chosen,) = data["chosen_numbers"]
     assert len(chosen) > 5
     walk = data["sequences"][0]["walk"]
@@ -134,7 +142,7 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     first = _invoke(["pick-images", "frames", *FAST, "--json", "a.json"])
     assert first.exit_code == 0, first.output
     a = json.loads((pan_workspace / "a.json").read_text())
-    assert a["verdict"] == "solvable"
+    _assert_solvable(a, first.output)
     assert set(a) >= {"sequences", "frames", "pairs", "capture", "options"}
     assert a["options"]["target_step_percent"] == 10.0
     assert a["options"]["baseline_frames"] == 10
@@ -197,7 +205,9 @@ def test_force_replaces_a_list_in_place(pan_workspace: Path):
         ]
     )
     assert result.exit_code == 0, result.output
-    (chosen,) = json.loads((pan_workspace / "r.json").read_text())["chosen_numbers"]
+    data = json.loads((pan_workspace / "r.json").read_text())
+    _assert_solvable(data, result.output)
+    (chosen,) = data["chosen_numbers"]
     lists = json.loads(lists_path.read_text())["named_image_lists"]
     assert list(lists) == ["pan", "other"]
     assert lists["pan"][0]["pattern"] == "frames/pan_%03d.jpg"
@@ -214,12 +224,17 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
             }
         )
     )
-    result = _invoke(["pick-images", "-r", "pan_all[10:90]", *FAST, "--json", "r.json"])
+    # 90 frames at 1.25% per frame move 112.5% of the long side, clear of the
+    # 100% below which the camera barely moves. (80 frames would sit on that
+    # floor, and a rate measured a hundredth of a percent low fails it.)
+    result = _invoke(["pick-images", "-r", "pan_all[5:95]", *FAST, "--json", "r.json"])
     assert result.exit_code == 0, result.output
-    assert "Given named image list 'pan_all' sliced by [10:90]" in result.output
+    assert "Given named image list 'pan_all' sliced by [5:95]" in result.output
     data = json.loads((pan_workspace / "r.json").read_text())
-    assert data["capture"][0]["numbers"] == list(range(11, 91))
-    assert all(11 <= n <= 90 for n in data["chosen_numbers"][0])
+    assert data["capture"][0]["numbers"] == list(range(6, 96))
+    _assert_solvable(data, result.output)
+    (chosen,) = data["chosen_numbers"]
+    assert chosen and all(6 <= n <= 95 for n in chosen)
 
     # The input list's own name is an output name only with --force.
     refused = CliRunner().invoke(
@@ -228,9 +243,22 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
     assert refused.exit_code == 1, refused.output
     assert "'pan_all' is already defined" in refused.output
     replaced = _invoke(
-        ["pick-images", "-r", "pan_all", *FAST, "--write-list", "pan_all", "--force"]
+        [
+            "pick-images",
+            "-r",
+            "pan_all",
+            *FAST,
+            "--write-list",
+            "pan_all",
+            "--force",
+            "--json",
+            "replaced.json",
+        ]
     )
     assert replaced.exit_code == 0, replaced.output
+    _assert_solvable(
+        json.loads((pan_workspace / "replaced.json").read_text()), replaced.output
+    )
     entries = json.loads(lists_path.read_text())["named_image_lists"]["pan_all"]
     assert len(entries) == 1 and "range" in entries[0]
     assert len(_resolve(pan_workspace, "pan_all")) < PAN_FRAMES
@@ -393,6 +421,7 @@ def test_a_rig_writes_every_sensor_of_each_chosen_frame(
     )
     assert "For a quick test solve" not in result.output
     data = json.loads((workspace / "r.json").read_text())
+    _assert_solvable(data, result.output)
     (capture,) = data["capture"]
     assert capture["sensors"] == ["rig/cam_a/", "rig/cam_b/"]
     assert capture["images"][0] == ["rig/cam_a/pan_001.jpg", "rig/cam_b/pan_001.jpg"]
