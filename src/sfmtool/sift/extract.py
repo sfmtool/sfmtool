@@ -66,11 +66,16 @@ def _check_versions_never_mix(
     ``sfmtool-undistort`` tool, whose files only ``sfm undistort`` makes;
     options with no top-level ``image_to_gray`` (version 1 settings); a
     ``colmap`` or ``opencv`` conversion other than the one the tool makes; and
-    a folder in ``sift_dirs`` that already holds a version 1 ``.sift`` file.
-    ``sfm ws upgrade`` is suggested only when the settings are a workspace
-    file's, not a ``.sfmr`` record's (``settings_from_sfmr``).
+    a folder in ``sift_dirs`` that already holds a version 1 ``.sift`` file,
+    as ``version_1_sift_files`` finds them.
+
+    ``sfm ws upgrade`` is suggested only for version 1 settings that are a
+    workspace file's, not a ``.sfmr`` record's (``settings_from_sfmr``). A
+    folder is checked only for version 2 settings, which ``sfm ws upgrade``
+    leaves as they are, so its refusal is ``version_1_sift_files``' message,
+    which says to remove the version 1 files and run again.
     """
-    from sfmtool.fileio import SiftFile
+    from sfmtool.sift import version_1_sift_files
     from sfmtool.workspace import tool_image_to_gray
 
     if feature_tool == "sfmtool-undistort":
@@ -79,13 +84,13 @@ def _check_versions_never_mix(
             "undistorted workspace are made by 'sfm undistort' from its source's, "
             "and cannot be extracted. Run 'sfm undistort' again to write them."
         )
-    upgrade = (
-        "The record is the .sfmr's own, so 'sfm ws upgrade' does not change it."
-        if settings_from_sfmr
-        else "Run 'sfm ws upgrade', which moves the workspace to version 2 and a "
-        "new folder."
-    )
     if "image_to_gray" not in feature_options:
+        upgrade = (
+            "The record is the .sfmr's own, so 'sfm ws upgrade' does not change it."
+            if settings_from_sfmr
+            else "Run 'sfm ws upgrade', which moves the workspace to version 2 and a "
+            "new folder."
+        )
         where = settings_source or "The feature options"
         raise SiftExtractionError(
             f"{where} holds version 1 settings (its feature options carry no "
@@ -101,20 +106,9 @@ def _check_versions_never_mix(
                 f"{feature_options['image_to_gray']}."
             )
     for sift_dir in sorted(set(sift_dirs)):
-        if not sift_dir.is_dir():
-            continue
-        for path in sorted(sift_dir.glob("*.sift")):
-            try:
-                with SiftFile(path) as reader:
-                    version = reader.metadata["version"]
-            except OSError:
-                # A file that cannot be read says nothing about the folder.
-                continue
-            if version < 2:
-                raise SiftExtractionError(
-                    f"The folder {sift_dir} holds version 1 .sift files, and version 2 "
-                    f"files are never written beside them. {upgrade}"
-                )
+        found = version_1_sift_files(sift_dir)
+        if found is not None:
+            raise SiftExtractionError(str(found))
 
 
 # The `write_sift` dict keys of the six values each extraction backend returns

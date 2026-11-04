@@ -697,9 +697,8 @@ report = pick_images(sequences, ensure_sift_files, target_step_percent=10.0, pro
 
 The binding implements `FrameSource` over a Python callable, taking the GIL for
 each call, and raises the callable's exception unchanged. The callable cannot
-raise the version 1 refusals of `image_files_to_sift_files` for a folder, whose
-advice is `sfm ws upgrade` even in a version 2 workspace, because `pick_images`
-has checked every folder before the first call
+raise the version 1 refusals of `image_files_to_sift_files` for a folder,
+because `pick_images` has checked every folder before the first call
 ([The version 1 refusals](#the-version-1-refusals)). Every other error is
 a `ValueError` with the Rust message, a `.sift` read error the `OSError` of
 [python-bindings.md § Format errors](../python-bindings.md#format-errors), and
@@ -759,18 +758,13 @@ fix that works in the case at hand. There are two cases, since
   folder, in `image_files_to_sift_files` (`_check_versions_never_mix`) and in
   `build_sift_files`, looks at the files the folder holds.
 
-The folder check is one Rust function, public in
-[`features/sift/files.rs`](../../crates/sfmtool-core/src/features/sift/files.rs)
-in place of the private `folder_holds_version_1_files` there, returning the
-version 1 files a folder holds. `build_sift_files`, `pick_images` and, through a
-binding, `_check_versions_never_mix` call it, so the three agree on what counts.
-The message is shared too: today `_check_versions_never_mix` tells a version 2
-workspace whose folder holds version 1 files to run `sfm ws upgrade`, since it
-chooses its advice only by whether the settings are a `.sfmr`'s record, and
-with this change it gives the fix above for a version 2 workspace and keeps
-`sfm ws upgrade` for a version 1 one. `BuildSiftFilesError::Version1Files`
-also says to run `sfm ws upgrade` today, though `build_sift_files` reaches it
-only with version 2 settings, and gives the same fix with this change.
+The folder check is `version_1_sift_files` in
+[`features/sift/files.rs`](../../crates/sfmtool-core/src/features/sift/files.rs),
+which `build_sift_files` and, through its binding, `_check_versions_never_mix`
+call, and `pick_images` calls it too, so the three agree on what
+counts. `Version1Files` wraps the `Version1SiftFiles` it returns, whose message
+is the one those two writers give for a folder
+([workspace.md § Versions never mix](../workspace/workspace.md#versions-never-mix)).
 Once it has passed, every `.sift` file the run writes is version 2, so the
 per-call check in `image_files_to_sift_files` cannot fail on a folder the
 command checked. A `.sift` file the walk reads that is still version 1, one put

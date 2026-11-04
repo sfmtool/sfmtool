@@ -165,11 +165,16 @@ pub enum BuildSiftFilesError {
     /// `image_to_gray`, and no `.sift` file is written from version 1
     /// settings.
     Version1Settings,
-    /// A folder the files would go in holds a version 1 `.sift` file, and a
-    /// version 2 file never goes beside one.
-    Version1Files {
+    /// A folder the files would go in holds version 1 `.sift` files, and a
+    /// version 2 file never goes beside one. The options are version 2
+    /// settings here, since version 1 settings are refused first.
+    Version1Files(Version1SiftFiles),
+    /// A folder the files would go in is there but could not be listed.
+    ListFolder {
         /// The folder.
         folder: PathBuf,
+        /// What went wrong.
+        problem: String,
     },
     /// The feature options do not describe a valid extraction.
     FeatureOptions(FeatureOptionsError),
@@ -202,13 +207,14 @@ impl fmt::Display for BuildSiftFilesError {
                  .sift file is written from version 1 settings; run 'sfm ws upgrade', which \
                  moves the workspace to version 2 and a new folder"
             ),
-            Self::Version1Files { folder } => write!(
-                f,
-                "the folder {} holds version 1 .sift files, and version 2 files are never \
-                 written beside them; run 'sfm ws upgrade', which moves the workspace to \
-                 version 2 and a new folder",
-                folder.display()
-            ),
+            Self::Version1Files(files) => write!(f, "{files}"),
+            Self::ListFolder { folder, problem } => {
+                write!(
+                    f,
+                    "failed to list the folder {}: {problem}",
+                    folder.display()
+                )
+            }
             Self::FeatureOptions(e) => write!(f, "invalid sfmtool feature options: {e}"),
             Self::Image { path, problem } => {
                 write!(f, "failed to load image {}: {problem}", path.display())
@@ -258,9 +264,9 @@ impl From<Cancelled> for BuildSiftFilesError {
 /// [`THUMBNAIL_SIZE`] on each side.
 ///
 /// When there is something to write, it first refuses version 1 settings
-/// (options with no `image_to_gray`) and a folder that already holds a
-/// version 1 `.sift` file. When every file is up to date it writes nothing and
-/// refuses nothing.
+/// (options with no `image_to_gray`) and then a folder that already holds a
+/// version 1 `.sift` file ([`version_1_sift_files`]). When every file is up to
+/// date it writes nothing and refuses nothing.
 ///
 /// Reports through `progress` a `"build_sift_files"` phase, a message saying
 /// how many images were skipped, a status naming each image as it starts, and
@@ -285,8 +291,9 @@ impl From<Cancelled> for BuildSiftFilesError {
 /// [`BuildSiftFilesError::FeatureOptions`] before anything is touched when
 /// the options are invalid. [`BuildSiftFilesError::Version1Settings`] and
 /// [`BuildSiftFilesError::Version1Files`] before anything is written, as
-/// above. [`BuildSiftFilesError::Image`] when an image's readings are not
-/// finite under the conversion, naming the image and the conversion, as well
+/// above, and [`BuildSiftFilesError::ListFolder`] when a folder the files
+/// would go in is there but cannot be listed. [`BuildSiftFilesError::Image`]
+/// when an image's readings are not finite under the conversion, naming the image and the conversion, as well
 /// as for an image that cannot be read. [`BuildSiftFilesError::Image`] or
 /// [`BuildSiftFilesError::Write`] when an image or a file fails: no further
 /// image is started, the ones in flight finish, and the error is the first
@@ -349,10 +356,12 @@ pub fn build_sift_files(
     folders.sort();
     folders.dedup();
     for folder in &folders {
-        if folder_holds_version_1_files(folder) {
-            return Err(BuildSiftFilesError::Version1Files {
-                folder: folder.to_path_buf(),
-            });
+        let found = version_1_sift_files(folder).map_err(|e| BuildSiftFilesError::ListFolder {
+            folder: folder.to_path_buf(),
+            problem: e.to_string(),
+        })?;
+        if let Some(found) = found {
+            return Err(BuildSiftFilesError::Version1Files(found));
         }
     }
     for folder in &folders {
@@ -497,19 +506,98 @@ fn build_one(
     )
 }
 
-/// Whether `folder` holds a `.sift` file older than version 2. A file whose
-/// metadata cannot be read says nothing about the folder's version and is
-/// passed over; a folder that is not there holds nothing.
-fn folder_holds_version_1_files(folder: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        return false;
+/// The version 1 `.sift` files a folder holds, which no version 2 file may be
+/// written beside ([`version_1_sift_files`]).
+///
+/// Its `Display` is the refusal every writer of version 2 files gives for the
+/// folder: it names the folder and the files, and says to remove those files
+/// and run again, which then extracts version 2 files in their place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version1SiftFiles {
+    /// The folder.
+    pub folder: PathBuf,
+    /// The version 1 `.sift` files in it, sorted, never empty.
+    pub files: Vec<PathBuf>,
+}
+
+/// How many files [`Version1SiftFiles`]' message names before it gives the
+/// count of the rest.
+const NAMED_VERSION_1_FILES: usize = 5;
+
+impl fmt::Display for Version1SiftFiles {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<_> = self
+            .files
+            .iter()
+            .take(NAMED_VERSION_1_FILES)
+            .map(|path| path.file_name().unwrap_or_default().to_string_lossy())
+            .collect();
+        let mut names = names.join(", ");
+        if self.files.len() > NAMED_VERSION_1_FILES {
+            let more = self.files.len() - NAMED_VERSION_1_FILES;
+            names.push_str(&format!(" and {more} more"));
+        }
+        write!(
+            f,
+            "the folder {} holds version 1 .sift files ({names}), and version 2 files are \
+             never written beside them; remove those files from the folder and run again, \
+             which extracts version 2 files in their place",
+            self.folder.display()
+        )
+    }
+}
+
+/// The version 1 `.sift` files `folder` holds, or `None` when it holds none.
+///
+/// A file counts when its name ends in `.sift` and its metadata reads with a
+/// version below 2. Only the folder itself is listed, not its subfolders,
+/// since a workspace puts each image's `.sift` file directly in its folder. A
+/// file whose metadata cannot be read says nothing about the folder's version
+/// and is passed over, and a folder that is not there holds nothing.
+///
+/// Every writer of version 2 `.sift` files calls it before it writes into a
+/// folder: [`build_sift_files`] and, through its binding, the Python
+/// `image_files_to_sift_files`, so they agree on what counts. It opens every
+/// `.sift` file in the folder.
+///
+/// ```no_run
+/// use std::path::Path;
+/// use sfmtool_core::features::sift::version_1_sift_files;
+///
+/// if let Some(found) = version_1_sift_files(Path::new("images/features/sift-sfmtool-abc"))? {
+///     eprintln!("{found}");
+/// }
+/// # Ok::<(), std::io::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// The error of listing the folder when it is there but cannot be listed, such
+/// as a file in its place.
+pub fn version_1_sift_files(folder: &Path) -> std::io::Result<Option<Version1SiftFiles>> {
+    let entries = match std::fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
     };
-    entries.flatten().any(|entry| {
-        let path = entry.path();
-        path.extension().is_some_and(|e| e == "sift")
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "sift")
             && sfmtool_sift_format::read_sift_metadata(&path)
                 .is_ok_and(|(_, metadata, _)| metadata.version < SIFT_READINGS_VERSION)
-    })
+        {
+            files.push(path);
+        }
+    }
+    if files.is_empty() {
+        return Ok(None);
+    }
+    files.sort();
+    Ok(Some(Version1SiftFiles {
+        folder: folder.to_path_buf(),
+        files,
+    }))
 }
 
 /// The XXH128 of a file's bytes as 32 lowercase hex digits, and its size.

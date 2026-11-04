@@ -15,7 +15,7 @@ from click.testing import CliRunner
 
 from sfmtool.cli import main
 from sfmtool.fileio import SiftFile, read_image_rgb, read_sift, write_sift
-from sfmtool.sift import ImageToGray, image_readings_from_rgb
+from sfmtool.sift import ImageToGray, image_readings_from_rgb, version_1_sift_files
 from sfmtool.sift.extract import SiftExtractionError, image_files_to_sift_files
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
 from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
@@ -113,8 +113,101 @@ def test_sift_extract_refuses_a_version_1_workspace(images, tmp_path):
     assert result.exit_code != 0
     assert "holds version 1 settings" in result.output
     assert "sfm ws upgrade" in result.output
+    assert "remove those files" not in result.output
     assert str(workspace_file) in result.output
     assert not list(tmp_path.rglob("*.sift"))
+
+
+def test_a_version_1_workspace_with_version_1_files_is_told_to_upgrade(
+    images, tmp_path
+):
+    """A version 1 workspace's settings are refused before its folder is
+    looked at, so the advice is `sfm ws upgrade`, which moves it to a new
+    folder, even when the folder holds version 1 files."""
+    _version_1_workspace(tmp_path)
+    prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
+        "feature_prefix_dir"
+    ]
+    # One image's file is there, the other's is missing.
+    _write_version_1_sift(
+        images[1].parent / prefix / (images[1].name + ".sift"), images[1]
+    )
+    result = CliRunner().invoke(main, ["sift", "--extract", str(tmp_path / "images")])
+    assert result.exit_code != 0
+    assert "holds version 1 settings" in result.output
+    assert "sfm ws upgrade" in result.output
+    assert "remove those files" not in result.output
+
+
+def test_a_version_2_workspace_whose_folder_holds_version_1_files_is_told_to_remove_them(
+    images, tmp_path
+):
+    """`sfm ws upgrade` does nothing to a version 2 workspace, so the advice is
+    to remove the version 1 files from its folder and run again, which then
+    works."""
+    result = CliRunner().invoke(
+        main, ["ws", "init", "--feature-tool", "sfmtool", str(tmp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    prefix = json.loads((tmp_path / ".sfm-workspace.json").read_text())[
+        "feature_prefix_dir"
+    ]
+    folder = images[1].parent / prefix
+    v1_path = folder / (images[1].name + ".sift")
+    _write_version_1_sift(v1_path, images[1])
+
+    result = CliRunner().invoke(main, ["sift", "--extract", str(tmp_path / "images")])
+    assert result.exit_code != 0
+    assert f"the folder {folder} holds version 1 .sift files" in result.output
+    assert f"({v1_path.name})" in result.output
+    assert "remove those files from the folder and run again" in result.output
+    assert "sfm ws upgrade" not in result.output
+    assert not (folder / (images[0].name + ".sift")).exists()
+
+    v1_path.unlink()
+    result = CliRunner().invoke(main, ["sift", "--extract", str(tmp_path / "images")])
+    assert result.exit_code == 0, result.output
+    for image in images:
+        with SiftFile(folder / (image.name + ".sift")) as reader:
+            assert reader.metadata["version"] == 2
+
+
+def test_a_sfmr_record_gets_the_same_folder_advice_and_its_own_settings_advice(
+    images, tmp_path
+):
+    """For a `.sfmr`'s record, version 2 settings over a folder of version 1
+    files get the same fix as a workspace's, and version 1 settings are told
+    that `sfm ws upgrade` does not change the record."""
+    options = get_default_sfmtool_feature_options()
+    folder = tmp_path / "images" / "features" / "mixed"
+    _write_version_1_sift(folder / (images[1].name + ".sift"), images[1])
+    with pytest.raises(SiftExtractionError) as raised:
+        image_files_to_sift_files(
+            images[:1],
+            feature_tool="sfmtool",
+            feature_options=options,
+            feature_prefix_dir="features/mixed",
+            settings_source="The reconstruction r.sfmr's workspace record",
+            settings_from_sfmr=True,
+        )
+    message = str(raised.value)
+    assert "remove those files from the folder and run again" in message
+    assert "sfm ws upgrade" not in message
+
+    del options["image_to_gray"]
+    with pytest.raises(SiftExtractionError) as raised:
+        image_files_to_sift_files(
+            images[:1],
+            feature_tool="sfmtool",
+            feature_options=options,
+            feature_prefix_dir="features/mixed",
+            settings_source="The reconstruction r.sfmr's workspace record",
+            settings_from_sfmr=True,
+        )
+    message = str(raised.value)
+    assert message.startswith("The reconstruction r.sfmr's workspace record holds")
+    assert "The record is the .sfmr's own" in message
+    assert "remove those files" not in message
 
 
 def test_a_version_1_workspace_whose_files_are_current_writes_nothing(images, tmp_path):
@@ -135,14 +228,31 @@ def test_version_1_files_in_the_folder_are_refused(images, tmp_path):
     options = get_default_sfmtool_feature_options()
     folder = tmp_path / "images" / "features" / "mixed"
     _write_version_1_sift(folder / (images[1].name + ".sift"), images[1])
-    with pytest.raises(SiftExtractionError, match="holds version 1 .sift files"):
+    with pytest.raises(SiftExtractionError) as raised:
         image_files_to_sift_files(
             images[:1],
             feature_tool="sfmtool",
             feature_options=options,
             feature_prefix_dir="features/mixed",
         )
+    # The message is the binding's, so Rust and Python say the same.
+    found = version_1_sift_files(folder)
+    assert found is not None
+    assert str(raised.value) == str(found)
+    assert found.folder == folder
+    assert found.files == [folder / (images[1].name + ".sift")]
     assert not (folder / (images[0].name + ".sift")).exists()
+
+
+def test_version_1_sift_files_passes_over_what_is_not_a_version_1_sift(tmp_path):
+    folder = tmp_path / "features"
+    assert version_1_sift_files(folder) is None
+    folder.mkdir()
+    (folder / "broken.jpg.sift").write_bytes(b"not a zip")
+    (folder / "notes.txt").write_text("")
+    assert version_1_sift_files(folder) is None
+    with pytest.raises(OSError, match="could not list the folder"):
+        version_1_sift_files(folder / "notes.txt")
 
 
 @pytest.mark.parametrize(

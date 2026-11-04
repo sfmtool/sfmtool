@@ -782,10 +782,37 @@ The viewer takes them from the node's `.sfmr` record.
 
 The files are `.sift` version 2. When at least one file is to be written,
 `build_sift_files` refuses options with no `image_to_gray`
-(`BuildSiftFilesError::Version1Settings`) and a folder that already holds a
+(`BuildSiftFilesError::Version1Settings`) and then a folder that already holds a
 version 1 `.sift` file (`BuildSiftFilesError::Version1Files`), before writing
 anything, since the two versions never share a folder; when every file is up
 to date it refuses nothing.
+
+The folder check is a public function of its own, so every writer of version 2
+files makes the same one:
+
+```rust
+pub fn version_1_sift_files(folder: &Path) -> std::io::Result<Option<Version1SiftFiles>>;
+
+pub struct Version1SiftFiles {
+    pub folder: PathBuf,
+    pub files: Vec<PathBuf>, // sorted, never empty
+}
+```
+
+It lists the folder itself, not its subfolders, and returns the files whose
+name ends in `.sift` and whose metadata reads with a version below 2. A file
+whose metadata cannot be read is passed over, and a folder that is not there
+holds nothing; a folder that is there but cannot be listed, such as a file in
+its place, is the listing's error, which `build_sift_files` returns as
+`BuildSiftFilesError::ListFolder`. The `Display` of `Version1SiftFiles` is the
+refusal, and `BuildSiftFilesError::Version1Files` wraps it: it names the
+folder and the files (the first five, and a count of the rest) and says to
+remove those files from the folder and run again, which extracts version 2
+files in their place. That is the fix, rather than `sfm ws upgrade`, because
+the folder is checked only for version 2 settings, which `sfm ws upgrade`
+leaves as they are. The binding `sfmtool.sift.version_1_sift_files` returns the
+same `Version1SiftFiles` or `None`, and `image_files_to_sift_files` raises its
+`str` ([workspace.md § Versions never mix](../../workspace/workspace.md#versions-never-mix)).
 
 `sfmtool_defaults` is the options a workspace initialized with the `sfmtool`
 tool and no other choice records: the default `feature_options` of

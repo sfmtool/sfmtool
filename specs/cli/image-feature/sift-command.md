@@ -114,8 +114,10 @@ anything:
   carry no `image_to_gray`. The error names the workspace file and says to run
   [`sfm ws upgrade`](../workspace/ws-upgrade-command.md), which moves the
   workspace to version 2 and a new folder;
-- **a folder holding version 1 files**: the error names the folder and says to
-  run `sfm ws upgrade`;
+- **a folder holding version 1 files** in a version 2 workspace, where
+  `sfm ws upgrade` has nothing to do: the error names the folder and the
+  version 1 files in it, and says to remove those files from the folder and
+  run again, which extracts version 2 files in their place;
 - **a `colmap` or `opencv` conversion other than the tool's**: the error names
   the tool and the one conversion it makes;
 - **the `sfmtool-undistort` tool**: the files of an undistorted workspace are

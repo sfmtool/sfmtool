@@ -249,7 +249,14 @@ Every `.sift` file is written by one of these, and the rule is checked in each:
 | the viewer's *Build SIFT Files*, through `build_sift_files` | the scene tree and the wire | the node's `.sfmr` record, not the workspace file, so the files go where the node looks for them | a version 2 `sfmtool` record: its recorded folder. A version 1 `sfmtool` record of an embedded-patches node: a new folder named from the record converted in memory as `sfm ws upgrade` converts one. A record naming another tool: the `sfmtool` defaults' folder | a version 1 record on a `sift_files` node ([index-files.md](../gui/index-files.md#building-the-sift-files)) |
 | `sfm undistort` | `sfm undistort` | the input `.sfmr`'s record and the undistorted images | a new folder in its output | never, for version reasons |
 
-Each writer checks only when it has something to write.
+Each writer checks only when it has something to write. The two that check a
+folder for version 1 files, `image_files_to_sift_files` and `build_sift_files`,
+both call `version_1_sift_files`
+([`features/sift/files.rs`](../../crates/sfmtool-core/src/features/sift/files.rs),
+bound in `sfmtool.sift`), so they agree on what counts: a file in the folder
+itself, not a subfolder, whose name ends in `.sift` and whose metadata reads
+with a version below 2. A file whose metadata cannot be read says nothing about
+the folder and is passed over, and a folder that is not there holds nothing.
 
 **`sfm to-colmap-db`** reads its settings from the `.sfmr`, not the workspace
 file, so `sfm ws upgrade` cannot change them. When its record holds version 1
@@ -286,7 +293,7 @@ version 2 writes a new folder beside any older output.
 | Refusal | Raised by | Its message |
 |---------|-----------|-------------|
 | Version 1 settings | `image_files_to_sift_files`, `build_sift_files` | names the workspace file or the record, says it holds version 1 settings, and, for a workspace file, says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new folder. For a `.sfmr`'s record it says the record is the `.sfmr`'s own, and never suggests `sfm ws upgrade` |
-| Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder, says it holds version 1 `.sift` files, and, for a workspace file's settings, says to run `sfm ws upgrade` |
+| Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder and the version 1 `.sift` files in it (the first five, and a count of the rest), and says to remove those files from the folder and run again, which extracts version 2 files in their place. The folder is checked only for version 2 settings, since version 1 settings are refused first, and `sfm ws upgrade` prints "nothing to do: already version 2" for a version 2 workspace file and never changes a `.sfmr`'s record, so the message is the same for every caller. It is the `Display` of `Version1SiftFiles`, which `sfmtool_core::features::sift::version_1_sift_files` returns and `sfmtool.sift.version_1_sift_files` binds |
 | An `sfmtool-undistort` tool | `image_files_to_sift_files` | says the files of an undistorted workspace are made by `sfm undistort` and cannot be extracted, and to run `sfm undistort` again |
 | `colmap` or `opencv` conversion differs | `image_files_to_sift_files` | names the tool and the one conversion it makes |
 | Version 1 record on a `sift_files` node | the viewer | says the feature indexes name features of the old files, which a new folder would not hold, and suggests converting to embedded patches |
