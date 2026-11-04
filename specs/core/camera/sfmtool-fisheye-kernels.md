@@ -41,6 +41,24 @@ whose full index is below 2 are the anchored pair and carry no coefficient
 `MIN_BSPLINE_COEFFS = 2` evaluates as the identity `δ ≡ 0`, as does a `θ_max`
 that is not positive and finite.
 
+The values come from the Cox–de Boor recurrence (Piegl & Tiller A2.2) and the
+derivatives from the quadratic functions that the same recurrence passes
+through on its way to the cubic ones, so one recurrence gives both. It runs
+with the coordinate counted in interior knot spacings, `u = θ/h` with
+`h = θ_max/(n_coeffs − 1)`. The knots are clamped and uniform, so in these units
+every knot is a whole number, `clamp(i − 3, 0, n_coeffs − 1)`, and every knot
+interval the recurrence and the derivative divide by is 0, 1, 2 or 3 spacings:
+each division is a multiplication by a constant reciprocal, and the derivative
+in `θ` takes one factor `1/h`. `delta` alone, on `[0, θ_max]`, sums the values
+and skips the derivatives; past `θ_max` the continuation needs the end slope,
+so it is `delta_and_deriv`'s. A test in
+[bspline/tests.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline/tests.rs)
+compares the basis, `δ` and `δ'` against the same recurrence written on the
+knot values with a division for every interval, at the knots, inside every
+span, below 0 and past `θ_max`, for 2 to 20 coefficients; the two agree to a
+few `ε·(n_coeffs − 1)`, the rounding of subtracting a knot from a coordinate of
+up to `n_coeffs − 1` spacings.
+
 `basis_at` clamps `θ` into `[0, θ_max]`, so on the linear tail it reports the
 endpoint basis and its slope; `delta_and_deriv` reads both from that one
 evaluation and continues the correction along its end tangent,

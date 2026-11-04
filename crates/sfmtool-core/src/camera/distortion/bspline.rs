@@ -92,35 +92,67 @@ fn knot(i: usize, m: usize, d_max: f64) -> f64 {
     }
 }
 
-/// The knot span index `k` (with `t_k ≤ d < t_{k+1}`) for `d ∈ [0, d_max]`,
-/// in `3..=m − 1`; `d = d_max` lands in the last non-empty span.
-fn span_index(d: f64, m: usize, d_max: f64) -> usize {
-    let segs = m - 3;
-    3 + ((d / d_max * segs as f64).floor() as usize).min(segs - 1)
+/// `1/n` for the knot-interval lengths `n` that occur in [`basis_at`]'s
+/// recurrences, measured in units of the interior knot spacing
+/// `h = d_max / (m − 3)`. Every knot is a whole multiple of `h`, so every
+/// interval a cubic recurrence divides by is `0`, `1`, `2` or `3` spacings,
+/// and the divisions become multiplications by this table. Entry `0` is a
+/// zero-width interval, whose term in the derivative is dropped (its `N²`
+/// factor is zero there).
+const RECIPROCAL: [f64; BSPLINE_SUPPORT] = [0.0, 1.0, 0.5, 1.0 / 3.0];
+
+/// Knot `i` of the clamped cubic knot vector in units of `h`, for a basis of
+/// `segs = m − 3` knot spans: `knot(i, m, d_max) / h`, which is
+/// `clamp(i − 3, 0, segs)`.
+fn knot_units(i: usize, segs: usize) -> usize {
+    i.saturating_sub(3).min(segs)
 }
 
-/// Cox–de Boor basis evaluation (Piegl & Tiller A2.2) of the `p + 1` degree-`p`
-/// functions `N^p_{k−p} .. N^p_k` at `u` in span `k`, in `out[0..=p]`
-/// (`p ≤ 3`; the remaining entries stay zero).
-fn basis_funs(k: usize, u: f64, p: usize, m: usize, d_max: f64) -> [f64; BSPLINE_SUPPORT] {
-    let mut n = [0.0f64; BSPLINE_SUPPORT];
+/// The full-basis knot span index `k` (with `t_k ≤ d < t_{k+1}`) and the
+/// coordinate `u = d / h` in units of the knot spacing, for `d` clamped to
+/// `[0, d_max]`. `k` is in `3..=m − 1`; `d = d_max` lands in the last
+/// non-empty span.
+fn span_and_units(n_coeffs: usize, d_max: f64, d: f64) -> (usize, f64) {
+    debug_assert!(n_coeffs >= MIN_BSPLINE_COEFFS);
+    debug_assert!(d_max > 0.0);
+    let segs = n_coeffs - 1;
+    let u = d.clamp(0.0, d_max) / d_max * segs as f64;
+    (3 + (u.floor() as usize).min(segs - 1), u)
+}
+
+/// Cox–de Boor basis evaluation (Piegl & Tiller A2.2) in span `k` at `u`, both
+/// in units of the knot spacing, for a basis of `segs` knot spans: the four
+/// cubic functions `N³_{k−3} .. N³_k` and, from the same recurrence, the three
+/// quadratic ones `N²_{k−2} .. N²_k` the cubic derivative is built from.
+///
+/// Each denominator is the `j`-interval knot span containing the non-empty
+/// span `[t_k, t_{k+1})`, so it is a whole number of spacings from 1 to 3 and
+/// is read from [`RECIPROCAL`] rather than divided by.
+fn cubic_and_quadratic_basis(
+    k: usize,
+    u: f64,
+    segs: usize,
+) -> ([f64; BSPLINE_SUPPORT], [f64; BSPLINE_SUPPORT - 1]) {
+    let mut n = [1.0, 0.0, 0.0, 0.0];
+    let mut quad = [0.0; BSPLINE_SUPPORT - 1];
     let mut left = [0.0f64; BSPLINE_SUPPORT];
     let mut right = [0.0f64; BSPLINE_SUPPORT];
-    n[0] = 1.0;
-    for j in 1..=p {
-        left[j] = u - knot(k + 1 - j, m, d_max);
-        right[j] = knot(k + j, m, d_max) - u;
+    for j in 1..BSPLINE_SUPPORT {
+        left[j] = u - knot_units(k + 1 - j, segs) as f64;
+        right[j] = knot_units(k + j, segs) as f64 - u;
         let mut saved = 0.0;
         for r in 0..j {
-            // The denominator is the `j`-interval knot span containing the
-            // non-empty span `[t_k, t_{k+1})`, hence strictly positive.
-            let temp = n[r] / (right[r + 1] + left[j - r]);
+            let span = knot_units(k + 1 + r, segs) - knot_units(k + 1 + r - j, segs);
+            let temp = n[r] * RECIPROCAL[span];
             n[r] = saved + right[r + 1] * temp;
             saved = left[j - r] * temp;
         }
         n[j] = saved;
+        if j == 2 {
+            quad.copy_from_slice(&n[..3]);
+        }
     }
-    n
+    (n, quad)
 }
 
 /// The active cubic basis functions and their derivatives at the radial
@@ -142,40 +174,29 @@ pub(crate) fn basis_at(
     d_max: f64,
     d: f64,
 ) -> (usize, [f64; BSPLINE_SUPPORT], [f64; BSPLINE_SUPPORT]) {
-    debug_assert!(n_coeffs >= MIN_BSPLINE_COEFFS);
-    debug_assert!(d_max > 0.0);
-    let m = n_coeffs + 2;
-    let u = d.clamp(0.0, d_max);
-    let k = span_index(u, m, d_max);
-    let values = basis_funs(k, u, 3, m, d_max);
+    let segs = n_coeffs - 1;
+    let (k, u) = span_and_units(n_coeffs, d_max, d);
+    let (values, quad) = cubic_and_quadratic_basis(k, u, segs);
     // N³'_i = 3·(N²_i/(t_{i+3} − t_i) − N²_{i+1}/(t_{i+4} − t_{i+1})), terms
     // with a zero-span denominator dropped (their N² factor is zero there).
-    // The active degree-2 functions in span `k` are N²_{k−2..k} = quad[0..3].
-    let quad = basis_funs(k, u, 2, m, d_max);
+    // The intervals are counted in spacings, so the derivative in `d` carries
+    // the factor `1/h`. The active degree-2 functions in span `k` are
+    // N²_{k−2..k} = quad[0..3].
+    let scale = 3.0 * segs as f64 / d_max;
     let mut derivatives = [0.0f64; BSPLINE_SUPPORT];
     for (j, dv) in derivatives.iter_mut().enumerate() {
         let i = k - 3 + j;
         let a = if j >= 1 {
-            let den = knot(i + 3, m, d_max) - knot(i, m, d_max);
-            if den > 0.0 {
-                quad[j - 1] / den
-            } else {
-                0.0
-            }
+            quad[j - 1] * RECIPROCAL[knot_units(i + 3, segs) - knot_units(i, segs)]
         } else {
             0.0
         };
         let b = if j <= 2 {
-            let den = knot(i + 4, m, d_max) - knot(i + 1, m, d_max);
-            if den > 0.0 {
-                quad[j] / den
-            } else {
-                0.0
-            }
+            quad[j] * RECIPROCAL[knot_units(i + 4, segs) - knot_units(i + 1, segs)]
         } else {
             0.0
         };
-        *dv = 3.0 * (a - b);
+        *dv = scale * (a - b);
     }
     (k - 3, values, derivatives)
 }
@@ -250,9 +271,26 @@ pub(crate) fn radial_bspline_insertion(n_coeffs: usize) -> Vec<[f64; 2]> {
         .collect()
 }
 
-/// `δ(d)` alone — [`delta_and_deriv`] without the derivative.
+/// `δ(d)` alone — [`delta_and_deriv`]'s first value. On `[0, d_max]` it
+/// evaluates only the basis values, not their derivatives; past `d_max` the
+/// linear continuation needs the end slope, so it is `delta_and_deriv`'s.
 pub(crate) fn delta(bspline: &[f64], d_max: f64, d: f64) -> f64 {
-    delta_and_deriv(bspline, d_max, d).0
+    if bspline.len() < MIN_BSPLINE_COEFFS || d_max <= 0.0 || !d_max.is_finite() {
+        return 0.0;
+    }
+    if d > d_max {
+        return delta_and_deriv(bspline, d_max, d).0;
+    }
+    let (k, u) = span_and_units(bspline.len(), d_max, d);
+    let (values, _) = cubic_and_quadratic_basis(k, u, bspline.len() - 1);
+    let mut delta = 0.0;
+    for (j, &v) in values.iter().enumerate() {
+        let full = k - 3 + j;
+        if full >= 2 {
+            delta += bspline[full - 2] * v;
+        }
+    }
+    delta
 }
 
 /// Whether the radial map `d_d(d) = d + δ(d)` is strictly increasing
@@ -311,3 +349,6 @@ pub(crate) fn bspline_is_monotone(bspline: &[f64], d_max: f64, d_span: f64) -> b
         1.0 + delta_and_deriv(bspline, d_max, t).1 > 0.0
     })
 }
+
+#[cfg(test)]
+mod tests;
