@@ -277,6 +277,8 @@ empty-handed". Name the thing and say what it does.
   `implement-random-idea`, `suggest-next-steps`), checked in here and
   symlinked into `.claude/skills/`. `gui-bug-bash` carries a script that
   launches a viewer on a random port, and drives it with `sfm explorer-call`.
+  `audit-hygiene` carries `units.sh`, which lists the audit units it reads
+  in full, a budgeted sample of them per run.
   `implement-change` makes one change on a branch with an implementer agent
   and an independent auditor agent. `fix-report-findings` picks and orders
   open report findings and runs `implement-change` for each, one branch per
@@ -342,6 +344,13 @@ backlog and keep them honest as findings get addressed:
   squash-merged, so a branch commit's SHA is not on `main`. The body of a
   finding stays as the original snapshot; status accretes above or below it.
   This is how the existing reports already track progress.
+- **A hygiene report also holds two tables**: a coverage table, the date and
+  commit at which each audit unit was last read in full, and a table of the
+  slow tests examined, with their times and outcomes. The next
+  `audit-hygiene` run chooses what to read from them and copies them forward
+  into its own snapshot, so a regenerated snapshot supersedes the old one,
+  tables and all. A hygiene report retired with no successor needs nothing
+  more: the next run reads its tables back from git history.
 - **Retire a report once it has outlived its usefulness — use judgement.** The
   bar is "is this still earning its place as a live backlog?", not "is every last
   box ticked". Retire (delete the whole file, git preserves history) when any of
