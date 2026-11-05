@@ -1511,9 +1511,11 @@ holding `images/sharpness.{N}.float32.zst`, or a version 15 file holding
   about 2 significant digits at `10^-5`; 36 of Kerry's 48 `Exy` values are
   subnormal in `float16` already, with relative rounding errors up to 2%. The
   coherence `sqrt((Exx − Eyy)² + 4·Exy²) / (Exx + Eyy)` takes the difference
-  of near-equal terms, which loses those digits first (a reader of the
-  coherence is planned in
-  [pick-images-command.md § "One derivation of the tensor's values"](../drafts/pick-images-command.md#one-derivation-of-the-tensors-values)).
+  of near-equal terms, which loses those digits first (the coherence is read
+  by `ImageReadings::coherence`,
+  [sift.md § 0. Image-to-gray conversion](../core/features/sift.md#0-image-to-gray-conversion),
+  and compared across a capture by `sfm pick-images`'s blur rule,
+  [pick-images.md § Blur](../core/analysis/pick-images.md#blur)).
   `float32` keeps about 7 significant digits down to `1.2 · 10^-38`, and the
   column is 586 bytes of the Kerry file's 182 KB compressed, so size gives no
   reason to change it.

@@ -21,9 +21,9 @@ and gradient structure tensor come from its `.sift` file's metadata
 The walk reads only the frames it needs: the sample, the frames it chooses and
 the frames it tries on the way. A caller makes each frame's `.sift` files exist
 just before the walk reads them, so a frame gets a `.sift` file exactly when it
-is read. The `sfm pick-images` command that collects a workspace's frames,
-prints the report and writes the chosen frames as a named image list is
-proposed in [pick-images-command.md](../../drafts/pick-images-command.md).
+is read. The [`sfm pick-images`](../../cli/image-feature/pick-images-command.md)
+command collects a workspace's frames, prints the report and writes the chosen
+frames as a named image list.
 
 ## Rust API
 
@@ -554,9 +554,10 @@ classes, and the seoul_bull photographs extracted through the workspace's own
 ## Non-goals
 
 - Collecting a workspace's frames into sequences, printing the report and
-  writing the chosen frames as a named image list. The `sfm pick-images`
-  command that does them is proposed in
-  [pick-images-command.md](../../drafts/pick-images-command.md).
+  writing the chosen frames as a named image list, which the
+  [`sfm pick-images`](../../cli/image-feature/pick-images-command.md) command
+  does. Its starting defaults and open choices are in
+  [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
 - Choosing among photographs. A sequence that is not a video stops the run;
   nothing chooses frames from it.
 - Choosing frames for a rotation-only solve. A capture whose camera only turns

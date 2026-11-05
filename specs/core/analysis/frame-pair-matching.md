@@ -15,9 +15,20 @@ camera that turned on the spot.
 
 The matching is the mutual best match of descriptors through one KD-forest per
 frame, with Lowe's ratio test. It measures a step of any length, including the
-long steps between frames chosen for a solve, at which dense optical flow loses
-track of the motion
-([pick-images-command.md § Why SIFT matching rather than optical flow](../../drafts/pick-images-command.md#why-sift-matching-rather-than-optical-flow)).
+long steps between frames chosen for a solve.
+
+**Why matching rather than optical flow.** Dense optical flow follows motion
+from coarse to fine levels of an image pyramid, and over a gap of many frames,
+where the image has moved by a tenth of its width or more, it loses track and
+reports a fraction of the true displacement. Descriptor matching does not
+depend on how far a feature moved, so it measures the step a walk takes
+directly, rather than measuring short gaps and extrapolating. Where the
+matches themselves fail, across a blurred run say, their F-inlier share says
+the step is not to be trusted, where the flow gives no such sign. The cost is
+small for a caller that has the frames' `.sift` files anyway, as
+[`sfm pick-images`](../../cli/image-feature/pick-images-command.md) does for
+the readings and for the solve that follows: building two forests and
+querying them takes a few milliseconds per pair.
 
 ## Rust API
 

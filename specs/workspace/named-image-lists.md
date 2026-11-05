@@ -10,7 +10,7 @@ a reconstruction records, the slice that takes part of a list by position, and
 how lists are added to the file or replaced in it.
 The set is called a **named image list** ([GLOSSARY.md](../GLOSSARY.md)).
 
-The eight commands that take `-r/--range` accept a list's name there, with
+The nine commands that take `-r/--range` accept a list's name there, with
 `--named-image-list` as the long form, and a [slice](#slices) after the name
 (`-r 'walk1[:30]'`); how they reach a list and which of its members they use
 is in [the commands](#the-commands) below and in
@@ -119,10 +119,11 @@ command would take from the list without a slice: the list's members in the
 list's order ([Members and their order](#members-and-their-order)), narrowed
 first by a range when one is given, and reduced to what the command uses:
 
-- For `sfm sift`, `sfm match`, `sfm motion` and `sfm solve`, the members that
-  are image files, after the extension test those commands apply
-  ([the commands](#the-commands)), so `walk1[:30]` is 30 images whenever the
-  list has 30, even when its patterns also match files that are not images.
+- For `sfm sift`, `sfm match`, `sfm motion`, `sfm pick-images` and
+  `sfm solve`, the members that are image files, after the extension test
+  those commands apply ([the commands](#the-commands)), so `walk1[:30]` is 30
+  images whenever the list has 30, even when its patterns also match files
+  that are not images.
 - For `sfm analyze --metrics`, `sfm panorama`, `sfm to-colmap-bin` and
   `sfm to-nerfstudio`, the members among the reconstruction's image names, in
   the list's order, as `resolve_in_names` returns them. The images the slice
@@ -359,21 +360,24 @@ leaves it untouched.
 
 ## The commands
 
-`sfm sift`, `sfm match`, `sfm motion` and `sfm solve` resolve a list with
-`resolve`, in the workspace the upward search from the current directory
-finds, and use the list's members in place of image paths. They use only the
-members that are image files, by the same extension test their directory
-expansion applies, and skip the rest. `sfm analyze --metrics`, `sfm panorama`,
-`sfm to-colmap-bin` and `sfm to-nerfstudio` resolve a list with
+`sfm sift`, `sfm match`, `sfm motion`, `sfm pick-images` and `sfm solve`
+resolve a list with `resolve`, in the workspace the upward search from the
+current directory finds, and use the list's members in place of image paths.
+They use only the members that are image files, by the same extension test
+their directory expansion applies, and skip the rest. `sfm analyze --metrics`,
+`sfm panorama`, `sfm to-colmap-bin` and `sfm to-nerfstudio` resolve a list with
 `resolve_in_names` against the reconstruction's image names, in the
 reconstruction's workspace. A name given with a range is resolved with the
-range as `narrow`. A value with a slice is split into the name and the slice
-by `split_named_image_list_value` before anything is read, and the slice is
-applied with `slice_members` to the images the command takes from the
-resolved list: the image paths after the extension test, or the members
+range as `narrow`. A value with a slice is split into the name and the slice by
+`split_named_image_list_value` before anything is read, and the slice is
+applied with `slice_members` to the images the command takes from the resolved
+list: the image paths after the extension test, or the members
 `resolve_in_names` returns, before they are put in the reconstruction's order.
 The rules for telling a name from a range and the errors are in
-[`../cli/README.md`](../cli/README.md#the-shared--r--range-option).
+[`../cli/README.md`](../cli/README.md#the-shared--r--range-option). `sfm
+pick-images --write-list NAME` writes the frames it chooses as a list with
+`write_lists`, one entry per sequence and sensor
+([pick-images-command.md](../cli/image-feature/pick-images-command.md#writing-the-list)).
 
 ## Rust API
 

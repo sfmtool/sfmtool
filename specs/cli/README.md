@@ -36,7 +36,7 @@ numpy, OpenCV, pycolmap and the command modules.
 A helper that several commands share is a `_`-named module in
 `sfmtool._commands`, so it has no row in `COMMANDS`.
 [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py) holds
-the `-r/--range` and `--named-image-list` options that eight commands share
+the `-r/--range` and `--named-image-list` options that nine commands share
 ([below](#the-shared--r--range-option)), and the `--filter-points` option of
 `sfm to-colmap-bin` and `sfm to-nerfstudio`.
 [`_sfmr_path.py`](../../src/sfmtool/_commands/_sfmr_path.py) provides
@@ -52,18 +52,18 @@ they all report that mistake in the same words.
 
 ## The shared `-r/--range` option
 
-Eight commands take `-r/--range`:
+Nine commands take `-r/--range`:
 
 - On image directories, matched against each file's number by
-  `number_from_filename`: `sfm sift`, `sfm match`, `sfm motion` and
-  `sfm solve`.
+  `number_from_filename`: `sfm sift`, `sfm match`, `sfm motion`,
+  `sfm pick-images` and `sfm solve`.
 - On a reconstruction's images: `sfm analyze` (with `--metrics`),
   `sfm panorama`, `sfm to-colmap-bin` and `sfm to-nerfstudio`.
 
 Its value is either a range expression of file numbers or the name of one of
 the workspace's named image lists
 ([`../workspace/named-image-lists.md`](../workspace/named-image-lists.md)),
-optionally followed by a slice. Each of the eight commands handles it the same
+optionally followed by a slice. Each of the nine commands handles it the same
 way:
 
 - **A value with a letter or a `[` in it is a list name; any other value is a
@@ -106,21 +106,21 @@ way:
   workspace is found is an error saying that no workspace was found and so no
   named image lists are defined, with the same sentence.
 
-**The image-directory commands.** For `sift`, `match`, `motion` and `solve`, a
-list replaces the image path arguments: the command takes either paths (or,
-for `motion` and `solve`, a `.sfmr` or `.matches` file) or a list, and giving
-both is an error. The workspace is the one the upward search from the current
-directory finds, and the images are the list's members, in the list's order,
-as absolute paths. Only the members that are image files are used, by the
-same extension test the command's own directory expansion applies
-(`.png`, `.jpg` and `.jpeg` for `sift`, `match` and `solve`; those and `.tif`,
-`.tiff` and `.bmp` for `motion`; compared without regard to case), so a
-pattern such as `images/**` does not hand a command a `.sift` or `.json`
-file. The others are skipped without a message, as a directory listing skips
-them, and a list none of whose members is an image file is an error naming
-the list. A slice indexes the image files that test leaves, and the command
-takes them in the slice's order. `match` and `solve` use the list's workspace
-as theirs.
+**The image-directory commands.** For `sift`, `match`, `motion`, `pick-images`
+and `solve`, a list replaces the image path arguments: the command takes either
+paths (or, for `motion` and `solve`, a `.sfmr` or `.matches` file) or a list,
+and giving both is an error. The workspace is the one the upward search from
+the current directory finds, and the images are the list's members, in the
+list's order, as absolute paths. Only the members that are image files are
+used, by the same extension test the command's own directory expansion applies
+(`.png`, `.jpg` and `.jpeg` for `sift`, `match`, `pick-images` and `solve`;
+those and `.tif`, `.tiff` and `.bmp` for `motion`; compared without regard to
+case), so a pattern such as `images/**` does not hand a command a `.sift` or
+`.json` file. The others are skipped without a message, as a directory listing
+skips them, and a list none of whose members is an image file is an error
+naming the list. A slice indexes the image files that test leaves, and the
+command takes them in the slice's order. `match`, `pick-images` and `solve` use
+the list's workspace as theirs.
 
 **The reconstruction commands.** For `analyze --metrics`, `panorama`,
 `to-colmap-bin` and `to-nerfstudio`, the list is resolved in the
@@ -179,6 +179,7 @@ naming each such image, the `.sift` path tried and the image path tried.
 |---------|------|
 | `sfm sift` | [sift-command.md](image-feature/sift-command.md) |
 | `sfm match` | [match-command.md](image-feature/match-command.md) |
+| `sfm pick-images` | [pick-images-command.md](image-feature/pick-images-command.md) |
 | `sfm cluster-patches` | [cluster-patches-command.md](image-feature/cluster-patches-command.md) |
 
 ## Reconstruction

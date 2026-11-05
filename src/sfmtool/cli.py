@@ -67,6 +67,13 @@ COMMANDS = (
         "Match features between image pairs and write a .matches file.",
     ),
     (
+        "pick-images",
+        "Image Feature",
+        "pick_images",
+        "pick_images",
+        "Choose the frames of a video a solve should use, and write them as a named image list.",
+    ),
+    (
         "cluster-patches",
         "Image Feature",
         "cluster_patches",
