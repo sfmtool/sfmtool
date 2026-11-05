@@ -156,8 +156,8 @@ impl ExtractingSource {
             return Err(BuildSiftFilesError::Version1Settings);
         }
         let threads = options.concurrent_images.map(|n| n.max(1));
-        let job: Arc<Job> = Arc::new(move |frame, images, progress| {
-            extract_frame(frame, images, &options, &params, progress)
+        let job: Arc<Job> = Arc::new(move |frame, images, progress, wrote| {
+            extract_frame(frame, images, &options, &params, progress, wrote)
         });
         Ok(Self {
             pool: WorkerPool::new(job, threads.map_or(Threads::Default, Threads::Fixed)),
@@ -166,20 +166,22 @@ impl ExtractingSource {
 }
 
 /// Extract the `.sift` file of each image of one frame that is not up to
-/// date, returning whether any was written.
+/// date, setting `wrote` as soon as one is written, so a frame stopped or
+/// failed after some of its images still says it wrote them. Reports the
+/// count of the frame's images done after each one written.
 fn extract_frame(
     frame: FrameId,
     images: &[CaptureImage],
     options: &BuildSiftFilesOptions,
     params: &SiftParams,
     progress: &Progress,
-) -> Result<bool, FrameSourceError> {
+    wrote: &mut bool,
+) -> Result<(), FrameSourceError> {
     let extract = |error| match error {
         BuildSiftFilesError::Cancelled => FrameSourceError::Cancelled,
         error => FrameSourceError::Extract { frame, error },
     };
-    let mut wrote = false;
-    for image in images {
+    for (done, image) in images.iter().enumerate() {
         let expected = options.sift_path_for_image(&image.image_path);
         if image.sift_path != expected {
             return Err(FrameSourceError::SiftPath {
@@ -207,9 +209,10 @@ fn extract_frame(
             progress,
         )
         .map_err(extract)?;
-        wrote = true;
+        *wrote = true;
+        progress.count(done as u64 + 1, Some(images.len() as u64), "images");
     }
-    Ok(wrote)
+    Ok(())
 }
 
 impl FrameSource for ExtractingSource {
@@ -273,10 +276,12 @@ impl FrameSource for ReadOnlySource {
 }
 
 /// The work a [`WorkerPool`] does for one frame: make its images' `.sift`
-/// files exist, returning whether it wrote any. The progress carries only the
-/// pool's stop flag.
-pub(super) type Job =
-    dyn Fn(FrameId, &[CaptureImage], &Progress) -> Result<bool, FrameSourceError> + Send + Sync;
+/// files exist, setting the `bool` once it has written any, whether it then
+/// finishes, fails or is stopped. The progress carries only the pool's stop
+/// flag.
+pub(super) type Job = dyn Fn(FrameId, &[CaptureImage], &Progress, &mut bool) -> Result<(), FrameSourceError>
+    + Send
+    + Sync;
 
 /// How many workers a [`WorkerPool`] runs.
 #[derive(Clone, Copy, Debug)]
@@ -559,8 +564,9 @@ fn work(shared: &Shared, job: &Job) {
                 state = shared.work.wait(state).unwrap_or_else(|p| p.into_inner());
             }
         };
+        let mut wrote = false;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            job(task.id, &task.images, &progress)
+            job(task.id, &task.images, &progress, &mut wrote)
         }))
         .unwrap_or_else(|panic| {
             let message = panic
@@ -574,15 +580,17 @@ fn work(shared: &Shared, job: &Job) {
             })
         });
         let mut state = lock(shared);
+        // A frame with any file written counts, however its job ended: a rig
+        // frame stopped between its images keeps the files written before.
+        if wrote && !state.written.contains(&task.id) {
+            state.written.push(task.id);
+        }
         match result {
-            Ok(wrote) => {
-                if wrote {
-                    state.written.push(task.id);
-                }
+            Ok(()) => {
                 state.status.insert(task.id, Status::Done);
             }
-            // Stopped part way: nothing was written, and the frame is as if
-            // never asked for.
+            // Stopped part way: the frame is as if never asked for, and a
+            // later wait extracts the images still missing.
             Err(FrameSourceError::Cancelled) => {
                 state.status.remove(&task.id);
             }

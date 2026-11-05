@@ -355,8 +355,9 @@ pub(super) struct SynthSource<'s> {
 impl<'s> SynthSource<'s> {
     pub(super) fn new(synths: &[&Synth], threads: usize, fault: Fault) -> Self {
         let synths: Arc<Vec<Synth>> = Arc::new(synths.iter().map(|&s| s.clone()).collect());
-        let job: Arc<Job> =
-            Arc::new(move |id, images, _progress| write_frame(&synths, id, images, fault, threads));
+        let job: Arc<Job> = Arc::new(move |id, images, _progress, wrote| {
+            write_frame(&synths, id, images, fault, threads, wrote)
+        });
         Self {
             pool: WorkerPool::new(job, Threads::Fixed(threads)),
             threads,
@@ -384,7 +385,8 @@ fn write_frame(
     images: &[CaptureImage],
     fault: Fault,
     threads: usize,
-) -> Result<bool, FrameSourceError> {
+    wrote: &mut bool,
+) -> Result<(), FrameSourceError> {
     if threads > 1 {
         std::thread::sleep(Duration::from_micros(((id.frame * 7919) % 2000) as u64));
     }
@@ -399,7 +401,7 @@ fn write_frame(
         });
     }
     if fault == Fault::WriteNothing {
-        return Ok(false);
+        return Ok(());
     }
     let version = if fault == Fault::WriteVersion1 { 1 } else { 2 };
     let synth = &synths[id.sequence];
@@ -421,8 +423,9 @@ fn write_frame(
         } else {
             synth.write(id.frame, k, &image.sift_path, version);
         }
+        *wrote = true;
     }
-    Ok(true)
+    Ok(())
 }
 
 impl FrameSource for SynthSource<'_> {

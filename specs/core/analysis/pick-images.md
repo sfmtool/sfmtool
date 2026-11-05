@@ -508,7 +508,12 @@ prefetch's (a batch of the baseline, at most five frames per sample, or the
 drops the queued work, joins the workers and returns `Cancelled`. A worker
 stops at the extraction's next check, before its extraction or its write, so
 a cancelled run leaves only whole files. `finish` stops the workers the same
-way at the end of every run, with a report or an error.
+way at the end of every run, with a report or an error. A frame counts as
+written when any of its images' files was, however its work ended, so a rig
+frame stopped or failed between its images counts once among the frames
+written, and in `frames_extracted_unread` when the walk never reads it; a
+later wait for it extracts only the images still missing. The count is of
+frames, as the report's frame list is, not of files.
 
 The read-only source does nothing ahead: its `concurrency` is 0, so the walk
 predicts nothing, and its wait checks that each image's `.sift` file exists,
@@ -710,7 +715,10 @@ prefetched frame without a wait, naming the frame of an image that cannot be
 read and refusing a `sift_path` elsewhere, invalid options and version 1
 settings; the read-only source's missing file; and the pool's order (a wait
 ahead of prefetched frames, a prefetch replacing the last), a cancelled wait
-that stops its workers promptly, and a panicking job reported as an error.
+that stops its workers promptly, a panicking job reported as an error, a
+two-image frame cancelled between its images, which reports the file it
+wrote, and a frame whose work wrote and was then stopped or failed, which the
+pool counts as written.
 
 [test_pick_images_walk_rust_bindings.py](../../../tests/rust_bindings/analysis/test_pick_images_walk_rust_bindings.py)
 checks the bindings on a synthetic capture whose files are written first and

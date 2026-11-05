@@ -842,9 +842,9 @@ fn the_report_is_the_same_for_any_lookahead_and_thread_count() {
 }
 
 #[test]
-fn the_baseline_and_a_break_are_read_ahead() {
+fn the_baseline_and_a_break_are_read_ahead_and_a_frame_failing_unread_stops_nothing() {
     // A steady video with a stretch that matches nothing, which the walk
-    // reads one frame at a time.
+    // reads one frame at a time. The one clean run serves both halves.
     let mut synth = Synth::steady(33, 200, ONE_PERCENT);
     for t in 120..=140 {
         synth.shots[t].content = Content::Junk;
@@ -884,20 +884,13 @@ fn the_baseline_and_a_break_are_read_ahead() {
         "{walked_ahead} predicted and never read"
     );
     assert_read_is_asked(&run);
-}
 
-#[test]
-fn a_frame_that_fails_but_is_never_read_does_not_stop_the_run() {
-    // A break read ahead leaves frames past its end prefetched and unread.
-    let mut synth = Synth::steady(34, 200, ONE_PERCENT);
-    for t in 120..=140 {
-        synth.shots[t].content = Content::Junk;
-    }
-    let clean = run(&[&synth]);
-    let never_read = *clean
+    // The break read ahead leaves frames past its end prefetched and unread;
+    // a worker failing on one of them stops nothing.
+    let never_read = *run
         .prefetched
         .iter()
-        .find(|id| !was_read(&clean, id))
+        .find(|id| !was_read(&run, id))
         .expect("a frame predicted and never read");
     let failing = run_with(
         &[&synth],
@@ -905,7 +898,7 @@ fn a_frame_that_fails_but_is_never_read_does_not_stop_the_run() {
         Fault::FailFrame(never_read.frame),
         None,
     );
-    assert_eq!(decisions(&failing), decisions(&clean));
+    assert_eq!(decisions(&failing), decisions(&run));
 }
 
 #[test]

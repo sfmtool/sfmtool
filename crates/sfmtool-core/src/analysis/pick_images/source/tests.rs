@@ -247,7 +247,7 @@ fn frame(t: usize) -> CaptureFrame {
 fn gated_pool(threads: usize, gate: Arc<AtomicBool>) -> (WorkerPool, Arc<Mutex<Vec<FrameId>>>) {
     let ran = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&ran);
-    let job: Arc<Job> = Arc::new(move |id, _images, progress| {
+    let job: Arc<Job> = Arc::new(move |id, _images, progress, wrote| {
         log.lock().unwrap().push(id);
         while !gate.load(Ordering::Relaxed) {
             if progress.is_cancelled() {
@@ -255,7 +255,8 @@ fn gated_pool(threads: usize, gate: Arc<AtomicBool>) -> (WorkerPool, Arc<Mutex<V
             }
             std::thread::sleep(Duration::from_millis(2));
         }
-        Ok(true)
+        *wrote = true;
+        Ok(())
     });
     (WorkerPool::new(job, Threads::Fixed(threads)), ran)
 }
@@ -324,11 +325,11 @@ fn a_cancelled_wait_stops_the_workers_promptly() {
 #[test]
 fn a_panic_in_a_job_is_an_error_not_a_hang() {
     let frames: Vec<CaptureFrame> = (0..2).map(frame).collect();
-    let job: Arc<Job> = Arc::new(|id, _images, _progress| {
+    let job: Arc<Job> = Arc::new(|id, _images, _progress, _wrote| {
         if id.frame == 1 {
             panic!("a bug in the extractor");
         }
-        Ok(false)
+        Ok(())
     });
     let mut pool = WorkerPool::new(job, Threads::Fixed(2));
     match pool.wait(&requests(&frames, &[0, 1]), &Progress::none()) {
@@ -339,4 +340,74 @@ fn a_panic_in_a_job_is_an_error_not_a_hang() {
         other => panic!("{other:?}"),
     }
     assert!(pool.finish().is_empty());
+}
+
+#[test]
+fn a_rig_frame_stopped_between_its_images_reports_the_file_written() {
+    // One frame of two images; the progress cancels once the first is
+    // written, so the second stops at its first check.
+    let (_dir, paths) = images(2);
+    let options = BuildSiftFilesOptions::sfmtool_defaults();
+    let frame = CaptureFrame {
+        number: 1,
+        images: paths
+            .iter()
+            .map(|image| CaptureImage {
+                image_path: image.clone(),
+                sift_path: options.sift_path_for_image(image),
+            })
+            .collect(),
+    };
+    let params = SiftParams::from_feature_options(&options.feature_options).unwrap();
+    let flag = AtomicBool::new(false);
+    let sink = |event: crate::progress::Event<'_>| {
+        if let crate::progress::Event::Count { done: 1, .. } = event {
+            flag.store(true, Ordering::Relaxed);
+        }
+    };
+    let progress = Progress::to(&sink).cancelled_by(&flag);
+    let mut wrote = false;
+    let result = extract_frame(
+        id(0),
+        &frame.images,
+        &options,
+        &params,
+        &progress,
+        &mut wrote,
+    );
+    assert_eq!(result, Err(FrameSourceError::Cancelled));
+    assert!(wrote);
+    assert!(frame.images[0].sift_path.exists());
+    assert!(!frame.images[1].sift_path.exists());
+}
+
+#[test]
+fn a_frame_stopped_after_writing_is_counted_as_written() {
+    // A job that writes and is then stopped, as a rig frame stopped between
+    // its images is; and one that writes and then fails.
+    let frames: Vec<CaptureFrame> = (0..2).map(frame).collect();
+    let ran = Arc::new(AtomicBool::new(false));
+    let first_ran = Arc::clone(&ran);
+    let job: Arc<Job> = Arc::new(move |id, images, _progress, wrote| {
+        *wrote = true;
+        if id.frame == 0 {
+            first_ran.store(true, Ordering::Relaxed);
+            Err(FrameSourceError::Cancelled)
+        } else {
+            Err(FrameSourceError::Missing {
+                frame: id,
+                path: images[0].sift_path.clone(),
+            })
+        }
+    });
+    let mut pool = WorkerPool::new(job, Threads::Fixed(1));
+    pool.prefetch(&requests(&frames, &[0]));
+    let start = Instant::now();
+    while !ran.load(Ordering::Relaxed) && start.elapsed() < Duration::from_secs(10) {
+        std::thread::yield_now();
+    }
+    assert!(pool
+        .wait(&requests(&frames, &[1]), &Progress::none())
+        .is_err());
+    assert_eq!(pool.finish(), vec![id(0), id(1)]);
 }
