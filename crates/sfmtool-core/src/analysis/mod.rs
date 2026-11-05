@@ -9,8 +9,9 @@
 //! per-point values and the query over it, per-point triangulation inspection,
 //! the reconstruction's measured reprojection noise and the point-or-bearing test
 //! over its points, the cluster match census, the
-//! per-cluster feature radius and the coarsest-N cut over it, and the join that
-//! names the selection clusters a member left behind.
+//! per-cluster feature radius and the coarsest-N cut over it, the join that
+//! names the selection clusters a member left behind, and the motion between
+//! two frames of a video measured from their SIFT matches.
 
 pub mod adjacency_surfel_normals;
 pub mod alignment;
@@ -21,6 +22,7 @@ pub mod image_pair_graph;
 pub mod infinity;
 pub mod observation_adjacency;
 pub mod observation_coverage;
+pub mod pick_images;
 pub mod point_inspect;
 pub mod point_or_bearing;
 pub mod reprojection_noise;

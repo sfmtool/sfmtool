@@ -1,7 +1,8 @@
 # Analysis Specifications
 
-Graphs and measurements computed over a reconstruction or a `.matches` cluster
-backbone. Implemented in `crates/sfmtool-core/src/analysis/`.
+Graphs and measurements computed over a reconstruction, a `.matches` cluster
+backbone or the SIFT features of two video frames. Implemented in
+`crates/sfmtool-core/src/analysis/`.
 
 | Document | Description |
 |----------|-------------|
@@ -14,4 +15,5 @@ backbone. Implemented in `crates/sfmtool-core/src/analysis/`.
 | [track-table.md](track-table.md) | The track table: named per-point values (track length, error, ray angle, triangulation diagnostics, …) for every point of a reconstruction, one row per track keyed by point index and computed on demand, and the query that filters and sorts points by them. |
 | [cluster-census.md](cluster-census.md) | Match census over a cluster backbone: per-pair statistics, viewpoint groups, global satisfaction, and the score that ranks them. |
 | [reconstruction-alignment.md](reconstruction-alignment.md) | Least-squares similarity fit between two reconstructions, with RANSAC outlier rejection. |
+| [frame-pair-matching.md](frame-pair-matching.md) | The motion between two frames of a video from their SIFT features: the step, the share of matches that fit one camera motion, the share of those that fit one homography, and how close that homography is to a pure rotation. |
 | [source-clusters.md](source-clusters.md) | Which clusters of a selection a member's admission never held, joined by feature identity and banded by radius; the per-cluster radius reading and the coarsest-N cut over it. |

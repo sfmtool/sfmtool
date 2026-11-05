@@ -263,6 +263,13 @@ impl<S: ForestScalar> KdForest<S> {
         self.dim
     }
 
+    /// The flat row-major coordinates the forest was built from,
+    /// `len() * dim()` values, so a caller that queries another forest with
+    /// them need not keep a second copy.
+    pub fn points(&self) -> &[S] {
+        &self.points
+    }
+
     /// The parameters this forest was built with.
     pub fn params(&self) -> KdForestParams {
         self.params

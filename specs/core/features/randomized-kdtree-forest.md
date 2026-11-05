@@ -114,6 +114,8 @@ impl<S: ForestScalar> KdForest<S> {
     pub fn len(&self) -> usize;
     pub fn is_empty(&self) -> bool;
     pub fn dim(&self) -> usize;
+    // The flat row-major coordinates the forest was built from.
+    pub fn points(&self) -> &[S];
     pub fn num_trees(&self) -> usize;
 }
 ```

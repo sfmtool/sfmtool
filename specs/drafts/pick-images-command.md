@@ -264,11 +264,12 @@ the command judges three things, each from the median over the samples:
   median rate times the frame count, is below `100%` of the long side.
 
 The **rotation error** is defined this way: for focal lengths `f` from `0.3`
-to `3` times the long side, on 80 steps spaced evenly in `log f`, with `K` the
-camera matrix of focal `f` and the principal point at the image centre, take
-`M = K⁻¹ H K` scaled to determinant 1, and the error is the smallest
-Frobenius norm `‖M Mᵀ − I‖` over those focal lengths. It is 0 for a camera that
-turned without moving.
+to `3` times the long side, with `K` the camera matrix of focal `f` and the
+principal point at the image centre, take `M = K⁻¹ H K` scaled to determinant
+1, and the error is the smallest Frobenius norm `‖M Mᵀ − I‖` over those focal
+lengths. It is 0 for a camera that turned without moving.
+[frame-pair-matching.md § The rotation error](../core/analysis/frame-pair-matching.md#the-rotation-error)
+says how the minimum is found.
 
 The command prints one verdict line, in the shape of the `Verdict:` line
 [`sfm motion`](../cli/reconstruction/motion-command.md) prints for a
@@ -446,10 +447,12 @@ every pair matched and its statistics, and every decision of the walk.
 
 ## Where the code lives
 
-Pair matching and its statistics, and the walk's decisions, live in Rust core,
-in a new module `sfmtool_core::analysis::pick_images`
-(`crates/sfmtool-core/src/analysis/pick_images.rs` beside a
-`pick_images/` directory), bound in `sfmtool.analysis`, following
+The walk's decisions live in Rust core, in the module
+`sfmtool_core::analysis::pick_images`
+([`pick_images.rs`](../../crates/sfmtool-core/src/analysis/pick_images.rs) beside a
+`pick_images/` directory), beside the frame pair matching it already holds
+([core/analysis/frame-pair-matching.md](../core/analysis/frame-pair-matching.md)),
+bound in `sfmtool.analysis`, following
 [STANDARDS.md § Logic lives in Rust](../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers).
 Python holds the command, in `src/sfmtool/_commands/pick_images.py` with its
 row in `cli.COMMANDS` under *Image Feature*, beside `sift` and `match`. It
@@ -472,20 +475,14 @@ and writes the lists.
   `gradient_structure_tensor_xx_yy_xy`, `None` in a version 1 file), and the
   features give positions and descriptors. Rust reads the files itself, so no
   feature array crosses into Python and back.
-- **Matching.** `KdForestU8::build` and `search_batch_with_distances` in
-  [`features/kdforest/`](../../crates/sfmtool-core/src/features/kdforest/mod.rs)
-  ([randomized-kdtree-forest.md](../core/features/randomized-kdtree-forest.md)):
+- **Matching and geometry.** `FrameFeatures` and `match_frame_pair`
+  ([core/analysis/frame-pair-matching.md](../core/analysis/frame-pair-matching.md)):
   one forest per frame, built once and kept while the frame is in a pair still
-  to be matched; `k = 2` queries both ways, the ratio test at `0.8` on the
-  distances (squared distances against `0.8²`), and the mutual best matches.
-- **Geometry.** `estimate_fundamental` in
-  [`epipolar_estimation.rs`](../../crates/sfmtool-core/src/geometry/epipolar_estimation.rs)
-  ([epipolar-estimation.md](../core/geometry/epipolar-estimation.md)) and
-  `estimate_homography` in
-  [`homography_estimation.rs`](../../crates/sfmtool-core/src/geometry/homography_estimation.rs),
-  each with a fixed seed, so a run is repeatable. Their inlier bounds scale
-  with the image: 1 pixel per 960 pixels of the long side for the fundamental
-  matrix and 2 per 960 for the homography, as starting values.
+  to be matched, mutual best matches through the ratio test, and the step, the
+  F-inlier share, H/F and the rotation error of each pair, with a fixed seed so
+  a run is repeatable. Its inlier bounds of 1 pixel per 960 pixels of the long
+  side for the fundamental matrix and 2 per 960 for the homography are starting
+  values.
 - **Statistics.** Medians from
   [`sfmtool_core::numeric`](../../crates/sfmtool-core/src/numeric.rs), and the
   MAD as the median of the absolute deviations from the median, since the
@@ -509,7 +506,10 @@ The walk takes the axis ratio and the coherence from
 ### Rust interface
 
 The walk asks a caller-supplied source to make sure frames' `.sift` files
-exist, then reads them itself:
+exist, then reads them itself. It matches frames with `FrameFeatures` and
+`match_frame_pair`, whose options, error and statistics (`FramePairOptions`,
+`FramePairError`, `FramePairStats`) are in
+[core/analysis/frame-pair-matching.md § Rust API](../core/analysis/frame-pair-matching.md#rust-api):
 
 ```rust
 /// Where each image of a capture is and where its `.sift` file goes.
@@ -557,7 +557,7 @@ pub struct PickImagesOptions {
     pub baseline_frames: usize,    // 200
     pub min_inlier_share: f64,     // 0.5
     pub forest: KdForestParams,    // KdForestParams::balanced()
-    pub pair: FramePairOptions,    // matching and fitting, below
+    pub pair: FramePairOptions,    // matching and fitting
 }
 
 pub fn pick_images(
@@ -566,81 +566,13 @@ pub fn pick_images(
     options: &PickImagesOptions,
     progress: &Progress,
 ) -> Result<PickImagesReport, PickImagesError>;
-
-/// One frame's features, with the forest over its descriptors built once, so
-/// that a frame matched with several others is indexed once.
-pub struct FrameFeatures { /* positions, descriptors, image size, forest */ }
-
-impl FrameFeatures {
-    /// `positions_xy` in pixels, `descriptors` `positions_xy.len() × 128`
-    /// bytes, as a `.sift` file holds them, and the image's size.
-    pub fn new(
-        positions_xy: Vec<[f32; 2]>,
-        descriptors: Vec<u8>,
-        width: u32,
-        height: u32,
-        forest: KdForestParams,
-        progress: &Progress,
-    ) -> Result<Self, FramePairError>;
-    /// The features of a `.sift` file read by `read_sift_features`, with the
-    /// image size from its `read_sift_metadata`.
-    pub fn from_sift(
-        features: SiftFeatures,
-        metadata: &SiftMetadata,
-        forest: KdForestParams,
-        progress: &Progress,
-    ) -> Result<Self, FramePairError>;
-    pub fn len(&self) -> usize;
-    pub fn width(&self) -> u32;
-    pub fn height(&self) -> u32;
-}
-
-/// How [`match_frame_pair`] matches and what it fits.
-pub struct FramePairOptions {
-    pub ratio: f32,                        // 0.8, Lowe's ratio on distances
-    pub min_matches: usize,                // 30; fewer gives no shares
-    pub max_leaf_checks: Option<usize>,    // None: the forest's own budget
-    pub fundamental_error_per_960px: f64,  // 1.0, scaled by the long side
-    pub homography_error_per_960px: f64,   // 2.0
-    pub seed: u64,                         // 0, for both RANSAC runs
-}
-
-/// Why `FrameFeatures::new` or `match_frame_pair` refused its input.
-pub enum FramePairError {
-    /// An option out of range: a ratio outside `(0, 1]`, an error bound that
-    /// is not positive and finite, or a forest parameter of 0, which
-    /// `KdForest::build` asserts against.
-    Options { name: &'static str, reason: String },
-    /// `descriptors` is not `128 × positions_xy.len()` bytes, or a position
-    /// is not finite.
-    FeatureArrays { reason: String },
-    /// A width or height of 0.
-    ImageSize { width: u32, height: u32 },
-    /// The two frames' images differ in size, so one step has no single
-    /// long side to be measured against.
-    SizeMismatch { a: (u32, u32), b: (u32, u32) },
-    Cancelled,
-}
-
-/// One pair's statistics, for a caller that matches two frames on its own.
-pub fn match_frame_pair(
-    a: &FrameFeatures,
-    b: &FrameFeatures,
-    options: &FramePairOptions,
-) -> Result<FramePairStats, FramePairError>;
-
-pub struct FramePairStats {
-    pub matches: usize,
-    pub step_percent: f64,
-    pub f_inlier_share: Option<f64>,  // None under min_matches
-    pub h_over_f: Option<f64>,
-    pub rotation_error: Option<f64>,
-}
 ```
 
 `PickImagesReport` holds the verdict and the checks behind it, the baseline's
 readings, the chosen frames per sequence, every step the walk
-measured with its `FramePairStats`, the swaps, the gaps filled in, the frames
+measured with its `FramePairStats`
+([frame-pair-matching.md](../core/analysis/frame-pair-matching.md#rust-api)),
+the swaps, the gaps filled in, the frames
 kept though blurred, the breaks, the weak points and the count of frames read.
 `PickImagesError` is an enum: `Options` (a value of `PickImagesOptions` out of
 range, such as a target step that is not positive or a blur ratio outside
@@ -653,11 +585,11 @@ error, carrying its message), `ReadSift` (with the path and the `SiftError`),
 it was raised for, which covers the forest parameters and two frames of one
 sensor whose sizes differ) and `Cancelled`.
 
-**Two error types.** `match_frame_pair` returns its own `FramePairError`
-rather than `PickImagesError`, because a caller that matches two frames on its
-own has no capture, no source and no walk options, and an error type naming
-them would describe failures that call cannot have. `PickImagesError::Pair`
-wraps it with the frames, so a walk's error still says where it happened.
+**Two error types.** `match_frame_pair` returns its own `FramePairError`, for
+the reason
+[frame-pair-matching.md § Rust API](../core/analysis/frame-pair-matching.md#rust-api)
+gives, and `PickImagesError::Pair` wraps it with the frames, so a walk's error
+still says where it happened.
 
 **Why it is shaped this way.** The walk decides which frame to read next from
 what it read last, so it cannot be handed all its frames in advance; asking a
@@ -668,15 +600,12 @@ only to make the files exist, not to return features, because the Rust reader
 already reads and checks `.sift` files and the features then never cross the
 binding. It takes several frames per call because the baseline and a blur
 search know several frames at once, and extraction in a batch keeps the
-extractor's concurrent decodes busy. `match_frame_pair` is public because the
-same statistics are what a later command, or `sfm motion`, could read from a
-pair. `pick_images` takes a `&Progress` and checks it for cancellation, since
-it runs for minutes, and returns an error rather than panicking on any input
-([STANDARDS.md § Caller input never panics](../STANDARDS.md#caller-input-never-panics)):
-`KdForest::build` asserts its lengths and its parameters, so
-`FrameFeatures::new` checks the forest parameters and the feature arrays
-against each other before building a forest, and returns `FramePairError` for
-them.
+extractor's concurrent decodes busy. `pick_images` takes a `&Progress` and
+checks it for cancellation between pairs, since it runs for minutes, and
+returns an error rather than panicking on any input
+([STANDARDS.md § Caller input never panics](../STANDARDS.md#caller-input-never-panics));
+the checks on one frame's features and on the pair options are
+`FrameFeatures::new`'s and `match_frame_pair`'s.
 
 ### Python
 
