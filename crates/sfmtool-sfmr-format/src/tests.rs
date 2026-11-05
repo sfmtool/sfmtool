@@ -8,15 +8,17 @@ use std::collections::BTreeMap;
 mod image_readings;
 mod lens_corrections;
 mod observation_readings;
+mod patch_normals;
 mod per_image_adjustments;
 
 /// Image readings for `image_count` images: image `i` has sharpness
-/// `0.01 · (i + 1)` and tensor `[0.002 · (i + 1), 0.001 · (i + 1), -0.0005]`,
-/// under the BT.709 conversion.
+/// `(i + 1) / 64` and tensor `[0.002 · (i + 1), 0.001 · (i + 1), -0.0005]`,
+/// under the BT.709 conversion. Each sharpness is a `float16`, so a round
+/// trip gives back these values; the tests of the rounding use their own.
 pub(crate) fn test_image_readings(image_count: usize) -> ImageReadingColumns {
     ImageReadingColumns {
         image_to_gray: serde_json::json!({"formula": "0.2126*R + 0.7152*G + 0.0722*B"}),
-        sharpness: Array1::from_iter((0..image_count).map(|i| 0.01 * (i + 1) as f32)),
+        sharpness: Array1::from_iter((0..image_count).map(|i| (i + 1) as f32 / 64.0)),
         gradient_structure_tensors_xx_yy_xy: Array2::from_shape_fn((image_count, 3), |(i, k)| {
             [0.002 * (i + 1) as f32, 0.001 * (i + 1) as f32, -0.0005][k]
         }),
@@ -707,9 +709,12 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen at format version 15, which adds the fixture's image readings,
-    // two columns and the `image_to_gray` key of `images/metadata.json`, to
-    // the images section, and stamps the new version. Before that it was
+    // Frozen at format version 16, which stores the fixture's sharpness as
+    // float16 and stamps the new version; the fixture's sharpness values
+    // were also changed then, to float16 values. Before that it was frozen at
+    // format version 15, which adds the fixture's image readings, two columns
+    // and the `image_to_gray` key of `images/metadata.json`, to the images
+    // section, and stamps the new version. Before that it was
     // frozen at format version 14, which stamps the new version into
     // `metadata.json`, hashed; this fixture has no per-image corrections and
     // no scanlines setting, so its cameras and images sections are what
@@ -730,7 +735,7 @@ fn test_content_hash_populated() {
     // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "1fcb63f66fb70a9c92218d41e85f67d4"
+        "f58ded2490fd38f9e3117d8882bb703f"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -1420,6 +1425,147 @@ fn rewrite_entries(
         }
     }
     zip.finish().unwrap();
+}
+
+/// Copy a `.sfmr` archive, renaming and replacing the decompressed payload of
+/// every entry `edit` hands back a new name and payload for. Section hashes
+/// are not recomputed.
+fn rewrite_renaming(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    edit: impl Fn(&str, &[u8]) -> Option<(String, Vec<u8>)>,
+) {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(src).unwrap()).unwrap();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(dst).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
+        match edit(name, &raw) {
+            Some((new_name, replacement)) => {
+                zip.start_file(&new_name, stored).unwrap();
+                zip.write_all(&zstd::bulk::compress(&replacement, 3).unwrap())
+                    .unwrap();
+            }
+            None => {
+                zip.start_file(name, stored).unwrap();
+                zip.write_all(&compressed).unwrap();
+            }
+        }
+    }
+    zip.finish().unwrap();
+}
+
+/// The values of a little-endian `float16` payload, widened.
+fn float16_payload(raw: &[u8]) -> Vec<f32> {
+    raw.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| half::f16::from_le_bytes(*b).to_f32())
+        .collect()
+}
+
+/// The little-endian bytes of `values`.
+fn float32_payload(values: &[f32]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// `current`, a file this build wrote, rewritten as the version 15 file of
+/// the same values: every `.float16.` reading entry widened to `.float32.`
+/// (a score's `_zncc_deficit` entry `w` as its `_zncc` entry `1 − w`),
+/// the version 15, and the hashes restamped so it verifies. `edit` may then
+/// change any widened `float32` payload, as a version 15 writer with values
+/// that are not `float16` would have stored.
+fn rewrite_as_version_15(
+    current: &std::path::Path,
+    path: &std::path::Path,
+    dir: &std::path::Path,
+    edit: impl Fn(&str, &mut Vec<f32>),
+) {
+    rewrite_renaming(current, path, |name, raw| {
+        if name == "metadata.json.zst" {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json["version"] = serde_json::json!(15);
+            return Some((name.to_string(), serde_json::to_vec(&json).unwrap()));
+        }
+        // A score's deficit entry becomes the score's own entry, 1 − w.
+        let deficit = name.contains("_zncc_deficit.");
+        let renamed = name
+            .replace("_zncc_deficit.", "_zncc.")
+            .replace(".float16.", ".float32.");
+        if renamed == name {
+            return None;
+        }
+        let mut values = float16_payload(raw);
+        if deficit {
+            values.iter_mut().for_each(|w| *w = 1.0 - *w);
+        }
+        edit(&renamed, &mut values);
+        Some((renamed, float32_payload(&values)))
+    });
+    let normals = read_sfmr(current).unwrap().normals_xyz;
+    with_full_normals(path, dir, normals.as_ref());
+    restamp_hashes(path, dir);
+}
+
+/// Rewrite `path`, a file this build wrote and then edited, with its normals
+/// as a file below version 16 stores them: the full `points3d/normals_xyz`
+/// column `normals`, the normals the value written held after the write, in
+/// place of any `points3d/underived_normals_xyz` entry. Nothing changes for a
+/// file without the patch frame or without normals. Hashes are not
+/// restamped.
+fn with_full_normals(path: &std::path::Path, dir: &std::path::Path, normals: Option<&Array2<f32>>) {
+    use std::io::{Read, Write};
+
+    let meta = read_points3d_metadata(path);
+    let Some(normals) = normals.filter(|_| meta["has_uv_frames"] == true) else {
+        return;
+    };
+
+    let staged = dir.join("full_normals.sfmr");
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|s| s.unwrap().into_owned())
+        .collect();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&staged).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        if name.starts_with("points3d/underived_normals_xyz.") {
+            continue;
+        }
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zip.start_file(name, stored).unwrap();
+        zip.write_all(&compressed).unwrap();
+    }
+    zip.start_file(
+        format!("points3d/normals_xyz.{}.3.float32.zst", normals.nrows()),
+        stored,
+    )
+    .unwrap();
+    zip.write_all(&zstd::bulk::compress(&float32_payload(normals.as_slice().unwrap()), 3).unwrap())
+        .unwrap();
+    zip.finish().unwrap();
+    drop(archive);
+    std::fs::rename(&staged, path).unwrap();
 }
 
 /// Copy a `.sfmr` archive with `edit` applied to `points3d/metadata.json`.
@@ -2490,6 +2636,7 @@ fn write_version_11_with_patch_frames(path: &std::path::Path, dir: &std::path::P
         zip.write_all(&compressed).unwrap();
     }
     zip.finish().unwrap();
+    with_full_normals(path, dir, data.normals_xyz.as_ref());
     restamp_hashes(path, dir);
 }
 
@@ -2864,7 +3011,23 @@ fn test_round_trip_with_patches_and_bitmaps() {
     assert_eq!(loaded.positions_xyzw, positions_xyzw);
     assert_eq!(loaded.colors_rgb, colors_rgb);
     assert_eq!(loaded.reprojection_errors, reprojection_errors);
-    assert_eq!(loaded.normals_xyz.unwrap(), normals_xyz);
+    // Every point is finite with a patch, so its normal is its frame's
+    // normalize(u × v), which the write also set in the value.
+    let loaded_normals = loaded.normals_xyz.unwrap();
+    assert_eq!(&loaded_normals, data.normals_xyz.as_ref().unwrap());
+    assert_ne!(loaded_normals, normals_xyz);
+    for i in 0..point_count {
+        let n = patch_normals::cross_normal_f64(
+            u_halfvec_xyz.row(i).to_vec(),
+            v_halfvec_xyz.row(i).to_vec(),
+        );
+        for k in 0..3 {
+            assert!(
+                (f64::from(loaded_normals[[i, k]]) - n[k]).abs() < 1e-6,
+                "point {i}"
+            );
+        }
+    }
     // The patch frame is hashed inside the points3d section.
     assert_eq!(loaded.content_hash.points3d_xxh128.len(), 32);
 
@@ -3401,6 +3564,60 @@ fn entry_names_are_pinned() {
         e::tracks_observation_confidence(17),
         "tracks/observation_confidence.17.uint8.zst"
     );
+    // The reading columns: the sharpness and five observation-reading columns
+    // change dtype at version 16, the tensor, the scores and the flags do not.
+    assert_eq!(
+        e::images_sharpness(true, 11),
+        "images/sharpness.11.float16.zst"
+    );
+    assert_eq!(
+        e::images_sharpness(false, 11),
+        "images/sharpness.11.float32.zst"
+    );
+    assert_eq!(
+        e::images_gradient_structure_tensors_xx_yy_xy(11),
+        "images/gradient_structure_tensors_xx_yy_xy.11.3.float32.zst"
+    );
+    let readings: Vec<(String, String)> = e::ReadingColumn::ALL
+        .iter()
+        .map(|c| (c.entry(true, 17), c.entry(false, 17)))
+        .collect();
+    let expected = [
+        (
+            "tracks/blur_matched_bitmap_zncc_deficit.17.float16.zst",
+            "tracks/blur_matched_bitmap_zncc.17.float32.zst",
+        ),
+        (
+            "tracks/plain_bitmap_zncc_deficit.17.float16.zst",
+            "tracks/plain_bitmap_zncc.17.float32.zst",
+        ),
+        (
+            "tracks/zncc_self_similarity_cos_view_angle.17.float16.zst",
+            "tracks/zncc_self_similarity_cos_view_angle.17.float32.zst",
+        ),
+        (
+            "tracks/zncc_self_similarity_ellipse_axes.17.2.float16.zst",
+            "tracks/zncc_self_similarity_ellipse_axes.17.2.float32.zst",
+        ),
+        (
+            "tracks/zncc_self_similarity_ellipse_axes_is_at_least.17.2.uint8.zst",
+            "tracks/zncc_self_similarity_ellipse_axes_is_at_least.17.2.uint8.zst",
+        ),
+        (
+            "tracks/zncc_self_similarity_ellipse_major_angle.17.float16.zst",
+            "tracks/zncc_self_similarity_ellipse_major_angle.17.float32.zst",
+        ),
+        (
+            "tracks/zncc_self_similarity_tilt_angle.17.float16.zst",
+            "tracks/zncc_self_similarity_tilt_angle.17.float32.zst",
+        ),
+        (
+            "tracks/zncc_self_similarity_zoom.17.2.float16.zst",
+            "tracks/zncc_self_similarity_zoom.17.2.float32.zst",
+        ),
+    ]
+    .map(|(a, b)| (a.to_string(), b.to_string()));
+    assert_eq!(readings, expected);
     assert_eq!(
         e::tracks_observation_counts(13),
         "tracks/observation_counts.13.uint32.zst"
@@ -3490,7 +3707,7 @@ fn archive_entry_names_pin_call_sites() {
         "images/metadata.json.zst",
         "images/names.json.zst",
         "images/quaternions_wxyz.3.4.float64.zst",
-        "images/sharpness.3.float32.zst",
+        "images/sharpness.3.float16.zst",
         "images/sift_content_hashes.3.uint128.zst",
         "images/thumbnails_y_x_rgb.3.128.128.3.uint8.zst",
         "images/translations_xyz.3.3.float64.zst",

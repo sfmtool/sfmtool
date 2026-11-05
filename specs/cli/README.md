@@ -150,7 +150,7 @@ sfm to-colmap-bin result.sfmr out/ --named-image-list hero_shots
 
 Every command that writes a `.sfmr` (`solve`, `xform`, `merge`, `align`,
 `densify`, `embed-patches`, `from-colmap-bin`, `undistort`, and SfM
-Explorer's Save) writes the current format version, 15, which stores every
+Explorer's Save) writes the current format version, 16, which, like version 15, stores every
 image's sharpness and gradient structure tensor
 ([sfmr-file-format.md § Image readings](../formats/sfmr-file-format.md#image-readings-version-15)).
 A command whose input already holds them carries them with the images. One

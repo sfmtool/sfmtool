@@ -189,9 +189,13 @@ pub(crate) fn images_rolling_shutter_rates_xyz(image_count: impl std::fmt::Displ
     format!("images/rolling_shutter_rates_xyz.{image_count}.3.float64.zst")
 }
 
-/// `images/sharpness` — sharpness per image (v15+, required).
-pub(crate) fn images_sharpness(image_count: impl std::fmt::Display) -> String {
-    format!("images/sharpness.{image_count}.float32.zst")
+/// `images/sharpness` — sharpness per image (v15+, required): `float32` in a
+/// version 15 file and `float16` from
+/// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
+/// on, as `float16` says.
+pub(crate) fn images_sharpness(float16: bool, image_count: impl std::fmt::Display) -> String {
+    let dtype = if float16 { "float16" } else { "float32" };
+    format!("images/sharpness.{image_count}.{dtype}.zst")
 }
 
 /// `images/gradient_structure_tensors_xx_yy_xy` — `[Exx, Eyy, Exy]` per
@@ -323,6 +327,13 @@ pub(crate) fn points3d_normals(is_pre_v3: bool, point_count: impl std::fmt::Disp
     }
 }
 
+/// `points3d/underived_normals_xyz` — the normals of the finite points whose
+/// patch frame gives none (v16+, in a file with normals and the patch frame,
+/// present only when there are any), `(K, 3)` in point order.
+pub(crate) fn points3d_underived_normals(underived_count: impl std::fmt::Display) -> String {
+    format!("points3d/underived_normals_xyz.{underived_count}.3.float32.zst")
+}
+
 /// `tracks/metadata.json.zst` — track-section metadata.
 pub(crate) fn tracks_metadata() -> &'static str {
     "tracks/metadata.json.zst"
@@ -402,17 +413,63 @@ impl ReadingColumn {
         }
     }
 
-    /// The entry name for `observation_count` rows.
-    pub(crate) fn entry(self, observation_count: impl std::fmt::Display) -> String {
-        let shape = if self.width() == 2 { ".2" } else { "" };
-        let dtype = if self == ReadingColumn::EllipseAxesIsAtLeast {
-            "uint8"
+    /// Whether the column is one of the seven value columns that a file of
+    /// version
+    /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
+    /// or later stores as `float16`: the axes, the two angles, `cos θ`, the
+    /// zoom and the two scores (as their deficits, [`Self::stores_deficit`]).
+    /// The flags stay `uint8`.
+    pub(crate) fn has_float16_form(self) -> bool {
+        self != ReadingColumn::EllipseAxesIsAtLeast
+    }
+
+    /// Whether the column is one of the two scores, which a file of version
+    /// [`SFMR_FLOAT16_READINGS_VERSION`](crate::SFMR_FLOAT16_READINGS_VERSION)
+    /// or later stores as their ZNCC deficit `1 − ZNCC`, under a name ending
+    /// `_zncc_deficit`.
+    pub(crate) fn stores_deficit(self) -> bool {
+        matches!(
+            self,
+            ReadingColumn::BlurMatchedBitmapZncc | ReadingColumn::PlainBitmapZncc
+        )
+    }
+
+    /// The column's name under `tracks/` in a file whose float columns are
+    /// `float16` where `float16` says so: [`Self::stem`], with `_deficit`
+    /// after a score's.
+    pub(crate) fn stored_stem(self, float16: bool) -> String {
+        if float16 && self.stores_deficit() {
+            format!("{}_deficit", self.stem())
         } else {
-            "float32"
+            self.stem().to_string()
+        }
+    }
+
+    /// Bytes per stored value: `1` for the flags, `2` for a column with a
+    /// `float16` form where `float16` says the file stores that form (version
+    /// 16 on), `4` otherwise.
+    pub(crate) fn element_size(self, float16: bool) -> usize {
+        if self == ReadingColumn::EllipseAxesIsAtLeast {
+            1
+        } else if float16 && self.has_float16_form() {
+            2
+        } else {
+            4
+        }
+    }
+
+    /// The entry name for `observation_count` rows, its dtype as
+    /// [`Self::element_size`] gives it.
+    pub(crate) fn entry(self, float16: bool, observation_count: impl std::fmt::Display) -> String {
+        let shape = if self.width() == 2 { ".2" } else { "" };
+        let dtype = match self.element_size(float16) {
+            1 => "uint8",
+            2 => "float16",
+            _ => "float32",
         };
         format!(
             "tracks/{}.{observation_count}{shape}.{dtype}.zst",
-            self.stem()
+            self.stored_stem(float16)
         )
     }
 }

@@ -950,7 +950,11 @@ fn restore_image_readings(loaded: &mut SfmrReconstruction, source: &SfmrReconstr
 /// Below version 15 the image readings are dropped, both columns and the
 /// `image_to_gray` key, since a file of those versions has none; a test that
 /// saves what it loads gives the value its readings back first
-/// ([`restore_image_readings`]).
+/// ([`restore_image_readings`]). Below version 16 every `.float16.` reading
+/// entry is stored as its `.float32.` sibling, its values widened, as a
+/// writer of those versions stored the same values, and the normals the
+/// version 16 file derives from the patch frame are stored in `normals_xyz`,
+/// as a writer of those versions stored them.
 fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
     use std::io::{Read, Write};
 
@@ -960,11 +964,22 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
         .file_names()
         .map(|s| s.unwrap().into_owned())
         .collect();
+    let stored_normals = (version < sfmtool_sfmr_format::SFMR_DERIVED_PATCH_NORMALS_VERSION)
+        .then(|| sfmtool_sfmr_format::read_sfmr(src).unwrap().normals_xyz)
+        .flatten();
     let out = std::fs::File::create(dst).unwrap();
     let mut zip_out = zip::ZipWriter::new(out);
     let stored =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     for name in &names {
+        // Below version 16 the full column, appended after the loop, replaces
+        // whatever normals entry the file has.
+        if stored_normals.is_some()
+            && (name.starts_with("points3d/normals_xyz.")
+                || name.starts_with("points3d/underived_normals_xyz."))
+        {
+            continue;
+        }
         let mut compressed = Vec::new();
         archive
             .by_name(name)
@@ -978,6 +993,13 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
         let placed = match name.strip_prefix("derived/") {
             Some(rest) if version < 10 => format!("images/{rest}"),
             _ => name.clone(),
+        };
+        let widen = version < sfmtool_sfmr_format::SFMR_FLOAT16_READINGS_VERSION
+            && placed.contains(".float16.");
+        let placed = if widen {
+            placed.replace(".float16.", ".float32.")
+        } else {
+            placed
         };
         let below_readings = version < sfmtool_sfmr_format::SFMR_IMAGE_READINGS_VERSION;
         if below_readings
@@ -1003,9 +1025,32 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
                 .insert("version".into(), serde_json::json!(version));
             let bytes = zstd::bulk::compress(&serde_json::to_vec(&json).unwrap(), 3).unwrap();
             zip_out.write_all(&bytes).unwrap();
+        } else if widen {
+            let raw = zstd::stream::decode_all(&compressed[..]).unwrap();
+            let widened: Vec<u8> = raw
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|b| half::f16::from_le_bytes(*b).to_f32().to_le_bytes())
+                .collect();
+            zip_out
+                .write_all(&zstd::bulk::compress(&widened, 3).unwrap())
+                .unwrap();
         } else {
             zip_out.write_all(&compressed).unwrap();
         }
+    }
+    if let Some(normals) = &stored_normals {
+        zip_out
+            .start_file(
+                format!("points3d/normals_xyz.{}.3.float32.zst", normals.nrows()),
+                stored,
+            )
+            .unwrap();
+        let bytes: Vec<u8> = normals.iter().flat_map(|v| v.to_le_bytes()).collect();
+        zip_out
+            .write_all(&zstd::bulk::compress(&bytes, 3).unwrap())
+            .unwrap();
     }
     zip_out.finish().unwrap();
 }
@@ -1432,7 +1477,14 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
         {
             assert_eq!(lp.position, rp.position, "{ctx}: point {i} moved on load");
             assert_eq!(lp.w, rp.w, "{ctx}: point {i} changed its w on load");
-            assert_eq!(lp.normal, rp.normal, "{ctx}: point {i} normal rotated");
+            // The normals as the write stored them: a finite patched point's
+            // is its frame's, which the write set in `data`.
+            let written = data.normals_xyz.as_ref().unwrap().row(i);
+            assert_eq!(
+                [lp.normal.x, lp.normal.y, lp.normal.z],
+                [written[0], written[1], written[2]],
+                "{ctx}: point {i} normal rotated"
+            );
         }
         assert_eq!(
             loaded.point_set.patch_u_halfvec_xyz, recon.point_set.patch_u_halfvec_xyz,
@@ -2395,6 +2447,66 @@ fn recompute_depth_statistics_fills_only_missing_normals() {
         .points
         .iter()
         .all(|p| p.normal == Vector3::zeros()));
+}
+
+#[test]
+fn a_missing_normal_of_a_finite_patched_point_is_filled_from_its_frame() {
+    // Point 0 has a patch and a missing normal; point 1's frame is
+    // degenerate (v along u), so its missing normal is the mean-viewing one;
+    // point 2 keeps its normal.
+    let mut recon = demo_embedded_projected(24);
+    assert!(recon.point_set.patch_u_halfvec_xyz.is_some());
+    {
+        let u = recon.point_set.patch_u_halfvec_xyz.as_mut().unwrap();
+        let v = recon.point_set.patch_v_halfvec_xyz.as_mut().unwrap();
+        for k in 0..3 {
+            v[[1, k]] = 2.0 * u[[1, k]];
+        }
+    }
+    let kept = recon.point_set.points[2].normal;
+    recon.point_set.points[0].normal = Vector3::zeros();
+    recon.point_set.points[1].normal = Vector3::zeros();
+    let mut without_frames = recon.clone();
+    without_frames.point_set.patch_u_halfvec_xyz = None;
+    without_frames.point_set.patch_v_halfvec_xyz = None;
+    without_frames.recompute_depth_statistics().unwrap();
+    recon.recompute_depth_statistics().unwrap();
+
+    let row = |a: &ndarray::Array2<f32>, i: usize| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
+    let u = recon.point_set.patch_u_halfvec_xyz.clone().unwrap();
+    let v = recon.point_set.patch_v_halfvec_xyz.clone().unwrap();
+    let [x, y, z] = sfmtool_sfmr_format::patch_normal(row(&u, 0), row(&v, 0)).unwrap();
+    let normal = |r: &SfmrReconstruction, i: usize| r.point_set.points[i].normal;
+    assert_eq!(normal(&recon, 0), Vector3::new(x, y, z));
+    assert_ne!(normal(&recon, 0), normal(&without_frames, 0));
+    assert_eq!(normal(&recon, 1), normal(&without_frames, 1));
+    assert!((normal(&recon, 1).norm() - 1.0).abs() < 1e-5);
+    assert_eq!(normal(&recon, 2), kept);
+
+    // The file stores what memory holds, and reads it back the same.
+    let dir = std::env::temp_dir().join(format!(
+        "sfmtool_frame_filled_normals_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.join("filled.sfmr");
+    let mut data = recon.to_sfmr_data();
+    let options = sfmtool_sfmr_format::WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    sfmtool_sfmr_format::write_sfmr_with_options(&path, &mut data, &options).unwrap();
+    let loaded =
+        SfmrReconstruction::from_sfmr_data(sfmtool_sfmr_format::read_sfmr(&path).unwrap()).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    for i in 0..2 {
+        assert_eq!(normal(&loaded, i), normal(&recon, i), "point {i}");
+    }
+    // Point 2's normal was set, so memory keeps it, but the file holds its
+    // frame's, as for any finite patched point.
+    let [x, y, z] = sfmtool_sfmr_format::patch_normal(row(&u, 2), row(&v, 2)).unwrap();
+    assert_eq!(normal(&loaded, 2), Vector3::new(x, y, z));
 }
 
 /// An image is posed when every component of its rotation and translation is

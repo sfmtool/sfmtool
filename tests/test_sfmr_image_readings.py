@@ -3,7 +3,8 @@
 
 """The image readings of ``.sfmr`` version 15: each image's sharpness and
 gradient structure tensor, where every writer gets them, and how an older file
-is saved. See ``specs/formats/sfmr-file-format.md`` § "Image readings"."""
+is saved. From version 16 a file stores the sharpness as ``float16``. See
+``specs/formats/sfmr-file-format.md`` § "Image readings"."""
 
 from pathlib import Path
 
@@ -18,9 +19,16 @@ from sfmtool.sift import ImageToGray, image_readings_from_rgb
 from sfmtool.sift.file import get_sift_path_from_recon
 
 
+def _as_stored(sharpness: np.ndarray) -> np.ndarray:
+    """``sharpness`` as a version 16 file stores it: each value rounded to the
+    nearest float16, ties to even, and widened back to float32."""
+    return sharpness.astype(np.float16).astype(np.float32)
+
+
 def _sift_readings(recon: SfmrReconstruction) -> tuple[dict, np.ndarray, np.ndarray]:
     """The ``image_to_gray``, sharpness and tensors each image's ``.sift``
-    records, in the reconstruction's image order."""
+    records, in the reconstruction's image order, with the sharpness as a
+    ``.sfmr`` file stores it."""
     conversions, sharpness, tensors = [], [], []
     for name in recon.image_names:
         with SiftFile(get_sift_path_from_recon(recon, name)) as reader:
@@ -32,13 +40,14 @@ def _sift_readings(recon: SfmrReconstruction) -> tuple[dict, np.ndarray, np.ndar
     assert all(c == conversions[0] for c in conversions)
     return (
         conversions[0],
-        np.asarray(sharpness, dtype=np.float32),
+        _as_stored(np.asarray(sharpness, dtype=np.float32)),
         np.asarray(tensors, dtype=np.float32),
     )
 
 
 def _image_readings(recon: SfmrReconstruction, image_to_gray: dict):
-    """Each image's readings computed from its image file."""
+    """Each image's readings computed from its image file, with the sharpness
+    as a ``.sfmr`` file stores it."""
     conversion = ImageToGray.from_json(image_to_gray)
     rows = [
         image_readings_from_rgb(
@@ -47,7 +56,7 @@ def _image_readings(recon: SfmrReconstruction, image_to_gray: dict):
         for name in recon.image_names
     ]
     return (
-        np.asarray([r.sharpness for r in rows], dtype=np.float32),
+        _as_stored(np.asarray([r.sharpness for r in rows], dtype=np.float32)),
         np.asarray(
             [list(r.gradient_structure_tensor_xx_yy_xy) for r in rows],
             dtype=np.float32,
@@ -154,7 +163,7 @@ class TestOlderFiles:
         assert recon.sharpness is None
 
         saved = SfmrReconstruction.load(out)
-        assert read_sfmr(out)["metadata"]["version"] == 15
+        assert read_sfmr(out)["metadata"]["version"] == 16
         sharpness, tensors = _image_readings(saved, saved.image_to_gray)
         _assert_bits_equal(saved.sharpness, sharpness)
         _assert_bits_equal(saved.gradient_structure_tensors_xx_yy_xy, tensors)

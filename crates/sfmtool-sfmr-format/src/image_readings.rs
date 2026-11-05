@@ -9,7 +9,8 @@
 //! computed through. The readings are for comparing the images of one
 //! reconstruction with each other: they depend on scene content and are not
 //! comparable across scenes. See `specs/formats/sfmr-file-format.md`
-//! § "Image readings".
+//! § "Image readings". From version 16 the sharpness is stored as `float16`
+//! and the tensor stays `float32` (§ "Why the readings are stored this way").
 
 use ndarray::{Array1, Array2};
 
@@ -42,13 +43,43 @@ pub struct ImageReadingColumns {
     /// `(N,)` per image, its sharpness: the population variance of the
     /// Laplacian over the interior of its reading image, in grey units
     /// squared. Finite and not negative. On disk
-    /// `images/sharpness.{N}.float32.zst`.
+    /// `images/sharpness.{N}.float16.zst` from version 16
+    /// ([`crate::SFMR_FLOAT16_READINGS_VERSION`]), `.float32.` in version 15:
+    /// a write rounds each value to the nearest `float16` and rounds this
+    /// column in place to match, and a value above 65,504, the largest
+    /// `float16`, is refused.
     pub sharpness: Array1<f32>,
     /// `(N, 3)` per image, `[Exx, Eyy, Exy]`: the means of `Gx²`, `Gy²` and
     /// `Gx·Gy` over the interior of its reading image, not normalised.
     /// Finite; `Exx` and `Eyy` not negative. On disk
-    /// `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst`.
+    /// `images/gradient_structure_tensors_xx_yy_xy.{N}.3.float32.zst` in every
+    /// version: its terms of a dark or low-texture capture fall below the
+    /// smallest normal `float16`.
     pub gradient_structure_tensors_xx_yy_xy: Array2<f32>,
+}
+
+impl ImageReadingColumns {
+    /// Round the sharpness in place to the values a version 16 file stores
+    /// for it, the nearest `float16` of each, ties to even.
+    ///
+    /// Refuses a sharpness above 65,504, which `float16` cannot hold; the
+    /// definition bounds the sharpness by 16. The tensor is left as it is.
+    pub(crate) fn round_to_stored_precision(&mut self) -> Result<(), String> {
+        if let Some((i, s)) = self
+            .sharpness
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.abs() > f32::from(half::f16::MAX))
+        {
+            return Err(format!(
+                "images/sharpness row {i} is {s}, above 65504, the largest float16 a version \
+                 {} file can store",
+                crate::SFMR_FLOAT16_READINGS_VERSION
+            ));
+        }
+        crate::float16::round_all_to_float16(self.sharpness.iter_mut());
+        Ok(())
+    }
 }
 
 /// Check the image readings of a file of `image_count` images: the

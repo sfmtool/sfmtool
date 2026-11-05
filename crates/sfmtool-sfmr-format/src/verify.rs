@@ -14,6 +14,7 @@ use xxhash_rust::xxh3::Xxh3;
 use zip::ZipArchive;
 
 use crate::entries::{self, ReadingColumn};
+use crate::float16::{float16_values, stores_float16, wrong_dtype_error};
 use crate::image_readings::{f32_values, image_readings_presence_error};
 use crate::observation_readings::{observation_reading_options, observation_readings_flagged};
 use crate::types::*;
@@ -350,7 +351,12 @@ fn verify_images_section<R: Read + Seek>(
     // The image readings (version 15+) are hashed wherever the archive holds
     // them, and only there: the version rules below report one that is
     // missing or that a file below version 15 carries.
-    let sharpness_name = entries::images_sharpness(image_count);
+    // The sharpness is float32 in version 15 and float16 from version 16; an
+    // entry in the other version's dtype is reported below and not hashed.
+    let float16 = stores_float16(metadata.version);
+    let sharpness_name = entries::images_sharpness(float16, image_count);
+    let other_sharpness_name = entries::images_sharpness(!float16, image_count);
+    let other_sharpness = archive.index_for_name(&other_sharpness_name).is_some();
     let tensors_name = entries::images_gradient_structure_tensors_xx_yy_xy(image_count);
 
     // images/camera_indexes (captured for the keypoint bounds check below)
@@ -543,17 +549,27 @@ fn verify_images_section<R: Read + Seek>(
     if let Some(e) = image_readings_presence_error(
         metadata.version,
         [
-            sharpness_raw.is_some(),
+            sharpness_raw.is_some() || other_sharpness,
             tensors_raw.is_some(),
             image_to_gray.is_some(),
         ],
     ) {
         errors.push(e);
+    } else if other_sharpness {
+        errors.push(wrong_dtype_error(
+            metadata.version,
+            &other_sharpness_name,
+            &sharpness_name,
+        ));
     } else if let (Some(image_to_gray), Some(sharpness_raw), Some(tensors_raw)) =
         (image_to_gray, &sharpness_raw, &tensors_raw)
     {
         let check = (|| -> Result<(), String> {
-            let sharpness = f32_values(sharpness_raw, &sharpness_name, image_count)?;
+            let sharpness = if float16 {
+                float16_values(sharpness_raw, &sharpness_name, image_count)?
+            } else {
+                f32_values(sharpness_raw, &sharpness_name, image_count)?
+            };
             let tensors = f32_values(tensors_raw, &tensors_name, image_count * 3)?;
             crate::validate_image_readings(
                 &crate::ImageReadingColumns {
@@ -684,27 +700,37 @@ fn verify_points3d_section<R: Read + Seek>(
         )?);
     }
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
-    if has_normals {
+    // From version 16, with the patch frame, only the normals the frame does
+    // not give are stored, in points3d/underived_normals_xyz (sorts last).
+    let derives_normals = crate::patch_normals::derives_patch_normals(metadata.version)
+        && has_normals
+        && has_uv_frames;
+    if has_normals && !derives_normals {
         let normals_name = entries::points3d_normals(is_pre_v3, point_count);
-        points3d_hasher.update(&read_zst_entry(archive, &normals_name)?);
+        if archive.index_for_name(&normals_name).is_some() {
+            points3d_hasher.update(&read_zst_entry(archive, &normals_name)?);
+        } else {
+            errors.push(format!(
+                "points3d/metadata.json sets has_normals, and the file holds no {normals_name}"
+            ));
+        }
     }
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
-    if has_uv_frames {
+    let frame_raw = if has_uv_frames {
         if has_patch_bitmaps {
             points3d_hasher.update(&read_zst_entry(
                 archive,
                 &entries::points3d_patch_bitmaps_y_x_rgba(point_count, patch_bitmap_r),
             )?);
         }
-        points3d_hasher.update(&read_zst_entry(
-            archive,
-            &entries::points3d_patch_u_halfvec_xyz(point_count),
-        )?);
-        points3d_hasher.update(&read_zst_entry(
-            archive,
-            &entries::points3d_patch_v_halfvec_xyz(point_count),
-        )?);
-    }
+        let u = read_zst_entry(archive, &entries::points3d_patch_u_halfvec_xyz(point_count))?;
+        points3d_hasher.update(&u);
+        let v = read_zst_entry(archive, &entries::points3d_patch_v_halfvec_xyz(point_count))?;
+        points3d_hasher.update(&v);
+        Some((u, v))
+    } else {
+        None
+    };
     // points3d/point_constraints (optional, version 7+; sorts after the patch
     // frame, before positions_xyzw)
     let constraints_raw = if has_point_constraints {
@@ -723,6 +749,72 @@ fn verify_points3d_section<R: Read + Seek>(
         archive,
         &entries::points3d_reprojection_errors(point_count),
     )?);
+    // points3d/underived_normals_xyz (version 16+, with normals and the patch
+    // frame; sorts last), present exactly when some finite point's normal is
+    // not given by its frame.
+    let underived = match (&frame_raw, derives_normals) {
+        (Some((u_raw, v_raw)), true) => {
+            let floats = |raw: &[u8]| -> Vec<f32> {
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
+                    .collect()
+            };
+            let w: Vec<f64> = positions_raw
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|b| f64::from_le_bytes(*b))
+                .skip(3)
+                .step_by(4)
+                .collect();
+            let (u, v) = (floats(u_raw), floats(v_raw));
+            let p = point_count;
+            if w.len() == p && u.len() == 3 * p && v.len() == 3 * p {
+                Some(
+                    crate::patch_normals::PatchFrameRows {
+                        w: &w,
+                        u: &u,
+                        v: &v,
+                    }
+                    .underived()
+                    .len(),
+                )
+            } else {
+                errors.push(format!(
+                    "the patch frame or the positions do not hold {point_count} rows, so the \
+                     points whose normals are stored cannot be told"
+                ));
+                None
+            }
+        }
+        _ => None,
+    };
+    let names: Vec<String> = archive
+        .file_names()
+        .map(|n| n.map(|n| n.into_owned()))
+        .collect::<Result<_, _>>()?;
+    if derives_normals && underived.is_none() {
+        // Reported above.
+    } else if let Some(e) = crate::patch_normals::normals_entries_error(
+        metadata.version,
+        point_count,
+        underived,
+        names.iter().map(String::as_str),
+    ) {
+        errors.push(e);
+    } else if let Some(k) = underived.filter(|&k| k > 0) {
+        let raw = read_zst_entry(archive, &entries::points3d_underived_normals(k))?;
+        if raw.len() != k * 12 {
+            errors.push(format!(
+                "points3d/underived_normals_xyz holds {} bytes, not {}",
+                raw.len(),
+                k * 12
+            ));
+        }
+        points3d_hasher.update(&raw);
+    }
 
     let points3d_hash = points3d_hasher.digest128();
     if format_hash(points3d_hash) != stored.points3d_xxh128 {
@@ -870,6 +962,7 @@ fn verify_tracks_section<R: Read + Seek>(
     // The observation-reading columns (optional, present together), hashed
     // each in its lexicographic slot; the flags column is checked for 0 or 1.
     let has_observation_readings = observation_readings_flagged(&tracks_meta);
+    let float16 = stores_float16(metadata.version);
     if has_observation_readings {
         if let Err(e) = observation_reading_options(&tracks_meta) {
             errors.push(e);
@@ -884,16 +977,18 @@ fn verify_tracks_section<R: Read + Seek>(
             return Ok(());
         }
         for &column in columns {
-            let raw = read_zst_entry(archive, &column.entry(observation_count))?;
-            let element = if column == ReadingColumn::EllipseAxesIsAtLeast {
-                1
-            } else {
-                4
-            };
+            let name = column.entry(float16, observation_count);
+            let other = column.entry(!float16, observation_count);
+            if other != name && archive.index_for_name(&other).is_some() {
+                errors.push(wrong_dtype_error(metadata.version, &other, &name));
+                continue;
+            }
+            let raw = read_zst_entry(archive, &name)?;
+            let element = column.element_size(float16);
             if raw.len() != observation_count * column.width() * element {
                 errors.push(format!(
                     "tracks/{} holds {} bytes, not {}",
-                    column.stem(),
+                    column.stored_stem(float16),
                     raw.len(),
                     observation_count * column.width() * element
                 ));

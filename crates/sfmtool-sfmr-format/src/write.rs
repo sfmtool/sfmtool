@@ -14,6 +14,7 @@ use sfmtool_archive_io::{format_hash, json_entry_bytes, write_binary_entry, writ
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries::{self, ReadingColumn};
+use crate::patch_normals::PatchFrameRows;
 use crate::types::*;
 use crate::{validate_image_readings, HAS_OBSERVATION_READINGS, OBSERVATION_READING_OPTIONS};
 
@@ -158,6 +159,13 @@ impl Default for WriteOptions {
 /// absent and filled from the recomputed mean-viewing normals.
 const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 
+/// Whether the version this crate writes, [`SFMR_FORMAT_VERSION`], stores the
+/// reading columns that have a `float16` form as `float16`: the entry names
+/// the writer uses. `ObservationReadingColumns::bytes` and the sharpness
+/// bytes are `float16` to match, which the assertion below holds.
+const WRITES_FLOAT16: bool = crate::float16::stores_float16(SFMR_FORMAT_VERSION);
+const _: () = assert!(WRITES_FLOAT16);
+
 /// Whether a stored normal row counts as missing: its squared norm is at most
 /// `1e-6` (`MISSING_NORMAL_NORM_SQ`), so it is the zero vector or near it. A
 /// write fills such a row with the point's mean-viewing normal, and so does
@@ -219,6 +227,12 @@ fn merge_preserving_normals<'a>(
 /// `content_hash` field in `data` is ignored on write (recomputed). The
 /// per-observation and per-image columns written depend on
 /// `metadata.feature_source` (`sift_files` vs `embedded_patches`).
+///
+/// The columns the current version stores as `float16`
+/// ([`SFMR_FLOAT16_READINGS_VERSION`]), the sharpness and five of the
+/// observation readings, are rounded in `data` to the nearest `float16` before
+/// they are written and hashed, so after the write `data` holds what a reader
+/// of the file gets back.
 ///
 /// The image readings are required ([`SfmrData::image_readings`]): a value
 /// without them is refused with [`SfmrError::InvalidFormat`] and nothing is
@@ -346,6 +360,23 @@ fn write_sfmr_into<S: EntrySink>(
         validate_image_readings(readings, data.metadata.image_count as usize)
             .map_err(SfmrError::InvalidFormat)?;
     }
+    // The columns this version stores as `float16` are rounded here, in the
+    // value itself, as the tracks are sorted below: the bytes written and
+    // hashed are those values, and the value after the write is what a
+    // reader of the file gets back.
+    if let Some(readings) = data.image_readings.as_mut() {
+        readings
+            .round_to_stored_precision()
+            .map_err(SfmrError::InvalidFormat)?;
+    }
+    if let Some(readings) = data.observation_readings.as_mut() {
+        readings.round_to_stored_precision();
+    }
+    // The normal of a finite point with a patch is derived from its frame
+    // from version 16: set in the value here, so it is what a reader of the
+    // file gets back and the depth-statistics pass below finds no such row
+    // missing; `write_points3d` stores only the other finite points' normals.
+    derive_patch_normals_in_place(data);
     let is_embedded = data.metadata.feature_source == FEATURE_SOURCE_EMBEDDED_PATCHES;
 
     // Ensure tracks are sorted by (point_indexes, image_indexes)
@@ -404,10 +435,15 @@ fn write_sfmr_into<S: EntrySink>(
             // reconstruction — whose normals start all-zero — still gets a full
             // set computed on its first write. A reconstruction that carries no
             // normals at all (`None`) opts out entirely: none are written.
-            let normals = data
-                .normals_xyz
-                .as_ref()
-                .map(|n| merge_preserving_normals(n, &r.mean_viewing_normals_xyz));
+            // The merge falls back to the recomputed set wholesale where the
+            // stored shape is wrong, so the derived normals are set again on
+            // what it returns: those are the normals written.
+            let normals = data.normals_xyz.as_ref().map(|n| {
+                with_patch_normals(
+                    data,
+                    merge_preserving_normals(n, &r.mean_viewing_normals_xyz),
+                )
+            });
             // A caller that asked to keep its statistics keeps them: the pass
             // ran only to fill the normals.
             if options.skip_recompute_depth_stats {
@@ -805,14 +841,14 @@ fn write_images<S: EntrySink>(
         }
     }
 
-    // images/sharpness (version 15+; after rolling_shutter_rates_xyz, before
-    // sift_content_hashes and thumbnails_y_x_rgb)
+    // images/sharpness (version 15+, float16 from version 16; after
+    // rolling_shutter_rates_xyz, before sift_content_hashes and
+    // thumbnails_y_x_rgb)
     if let Some(readings) = &data.image_readings {
-        let values: Vec<f32> = readings.sharpness.iter().copied().collect();
         binary_hashed(
             sink,
-            &entries::images_sharpness(image_count),
-            bytemuck::cast_slice(&values),
+            &entries::images_sharpness(WRITES_FLOAT16, image_count),
+            &crate::float16::float16_bytes(readings.sharpness.iter()),
             &mut images_hasher,
         )?;
     }
@@ -853,6 +889,73 @@ fn write_images<S: EntrySink>(
     )?;
 
     Ok(images_hasher.digest128())
+}
+
+/// The `w` column and the row-major `u` and `v` of a value with the patch
+/// frame, the arrays a version 16 writer derives the normals of finite
+/// patched points from, or `None` where it has no frame or a shape disagrees
+/// with `normals`, the normals being written (which the dimension checks
+/// report).
+fn patch_frame_columns(
+    data: &SfmrData,
+    normals: &ndarray::Array2<f32>,
+) -> Option<(Vec<f64>, Vec<f32>, Vec<f32>)> {
+    const _: () = assert!(crate::patch_normals::derives_patch_normals(
+        SFMR_FORMAT_VERSION
+    ));
+    let (u, v) = (
+        data.patch_u_halfvec_xyz.as_ref()?,
+        data.patch_v_halfvec_xyz.as_ref()?,
+    );
+    let p = data.positions_xyzw.shape()[0];
+    let shapes_agree = data.positions_xyzw.shape() == [p, 4]
+        && normals.shape() == [p, 3]
+        && u.shape() == [p, 3]
+        && v.shape() == [p, 3];
+    shapes_agree.then(|| {
+        (
+            data.positions_xyzw.column(3).to_vec(),
+            u.iter().copied().collect(),
+            v.iter().copied().collect(),
+        )
+    })
+}
+
+/// `normals` with the normal of every finite point with a patch in `data` set
+/// to `normalize(u × v)`, the normal a version 16 file derives for it. A
+/// point whose frame is degenerate keeps its normal, which the file stores.
+/// Borrowed when nothing changes.
+fn with_patch_normals<'a>(
+    data: &SfmrData,
+    normals: Cow<'a, ndarray::Array2<f32>>,
+) -> Cow<'a, ndarray::Array2<f32>> {
+    let Some((w, u, v)) = patch_frame_columns(data, &normals) else {
+        return normals;
+    };
+    let given: Vec<f32> = normals.iter().copied().collect();
+    let mut values = given.clone();
+    PatchFrameRows {
+        w: &w,
+        u: &u,
+        v: &v,
+    }
+    .fill(&mut values);
+    if values == given {
+        return normals;
+    }
+    Cow::Owned(
+        ndarray::Array2::from_shape_vec(normals.raw_dim(), values).expect("the shape was checked"),
+    )
+}
+
+/// [`with_patch_normals`] applied to `data`'s own normals.
+fn derive_patch_normals_in_place(data: &mut SfmrData) {
+    let Some(normals) = data.normals_xyz.as_ref() else {
+        return;
+    };
+    if let Cow::Owned(derived) = with_patch_normals(data, Cow::Borrowed(normals)) {
+        data.normals_xyz = Some(derived);
+    }
 }
 
 fn write_points3d<S: EntrySink>(
@@ -936,15 +1039,40 @@ fn write_points3d<S: EntrySink>(
         )?;
     }
 
-    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
-    if let Some(normals_xyz) = &normals_xyz {
-        binary_hashed(
-            sink,
-            &entries::points3d_normals(false, point_count),
-            bytemuck::cast_slice(normals_xyz.as_slice().unwrap()),
-            &mut points3d_hasher,
-        )?;
-    }
+    // points3d/normals_xyz (optional; named estimated_normals_xyz in versions
+    // 1-2), the full column of a file without the patch frame. With the frame
+    // (version 16+) the normals the frame gives are not stored, and the rest
+    // go to points3d/underived_normals_xyz, written last below.
+    let underived_normals: Option<Vec<f32>> = match (&normals_xyz, &data.patch_u_halfvec_xyz) {
+        (Some(normals_xyz), Some(_)) => {
+            let (w, u, v) = patch_frame_columns(data, normals_xyz).ok_or_else(|| {
+                SfmrError::ShapeMismatch(
+                    "normals_xyz, the patch frame and positions_xyzw do not agree in their \
+                     point counts"
+                        .into(),
+                )
+            })?;
+            let normals = normals_xyz.as_standard_layout();
+            Some(
+                PatchFrameRows {
+                    w: &w,
+                    u: &u,
+                    v: &v,
+                }
+                .underived_rows(normals.as_slice().unwrap()),
+            )
+        }
+        (Some(normals_xyz), None) => {
+            binary_hashed(
+                sink,
+                &entries::points3d_normals(false, point_count),
+                bytemuck::cast_slice(normals_xyz.as_standard_layout().as_slice().unwrap()),
+                &mut points3d_hasher,
+            )?;
+            None
+        }
+        (None, _) => None,
+    };
 
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
     if let Some(bitmaps) = &data.patch_bitmaps_y_x_rgba {
@@ -1001,6 +1129,18 @@ fn write_points3d<S: EntrySink>(
         &mut points3d_hasher,
     )?;
 
+    // points3d/underived_normals_xyz (version 16+, with the patch frame and
+    // normals; sorts last), absent when every normal is derived or at
+    // infinity.
+    if let Some(rows) = underived_normals.filter(|rows| !rows.is_empty()) {
+        binary_hashed(
+            sink,
+            &entries::points3d_underived_normals(rows.len() / 3),
+            bytemuck::cast_slice(&rows),
+            &mut points3d_hasher,
+        )?;
+    }
+
     Ok(points3d_hasher.digest128())
 }
 
@@ -1022,7 +1162,7 @@ fn write_tracks<S: EntrySink>(
                 for &column in columns {
                     binary_hashed(
                         sink,
-                        &column.entry(observation_count),
+                        &column.entry(WRITES_FLOAT16, observation_count),
                         &readings.bytes(column),
                         hasher,
                     )?;

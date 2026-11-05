@@ -15,6 +15,9 @@ sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 # records for its image readings as a `.sift` file records it for its own.
 sfmtool-sift-format = { path = "../sfmtool-sift-format" }
 ndarray = "0.17"
+# The `float16` reading columns of version 16: rounding on write, widening on
+# read.
+half = "2"
 bytemuck = { version = "1.25", features = ["derive"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }

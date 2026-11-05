@@ -1,9 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The eight optional observation-reading columns in `tracks/`.
+//! The eight optional observation-reading columns in `tracks/`, and the
+//! change of five of them from `float32` to `float16` in version 16.
 
-use super::{make_test_data, rewrite_entries, rewrite_without_meta_key};
+use super::{
+    float16_payload, float32_payload, make_test_data, rewrite_as_version_15, rewrite_entries,
+    rewrite_renaming, rewrite_without_meta_key,
+};
 use crate::*;
 
 const OPTIONS: ObservationReadingOptions = ObservationReadingOptions {
@@ -19,17 +23,18 @@ const OPTIONS: ObservationReadingOptions = ObservationReadingOptions {
 };
 
 /// A row whose every value says which observation it is: `tag` is unique per
-/// observation.
+/// observation. The five values stored as `float16` are `float16` values, so
+/// a round trip gives the row back exactly; the scores are not.
 fn tagged_row(tag: f32) -> ObservationReading {
     ObservationReading {
         ellipse_axes: [tag, tag / 2.0],
         ellipse_axes_is_at_least: [(tag as u32).is_multiple_of(2), false],
-        ellipse_major_angle: 0.1 * tag,
-        cos_view_angle: 0.9,
+        ellipse_major_angle: tag / 16.0,
+        cos_view_angle: 0.875,
         tilt_angle: f32::NAN,
         zoom: [0.5, 0.75],
-        plain_bitmap_zncc: 0.01 * tag,
-        blur_matched_bitmap_zncc: 0.02 * tag,
+        plain_bitmap_zncc: 1.0 - tag / 64.0,
+        blur_matched_bitmap_zncc: 1.0 - tag / 128.0,
     }
 }
 
@@ -56,6 +61,18 @@ fn tracks_metadata(path: &std::path::Path) -> serde_json::Value {
 }
 
 const ENTRIES: [&str; 8] = [
+    "tracks/blur_matched_bitmap_zncc_deficit.8.float16.zst",
+    "tracks/plain_bitmap_zncc_deficit.8.float16.zst",
+    "tracks/zncc_self_similarity_cos_view_angle.8.float16.zst",
+    "tracks/zncc_self_similarity_ellipse_axes.8.2.float16.zst",
+    "tracks/zncc_self_similarity_ellipse_axes_is_at_least.8.2.uint8.zst",
+    "tracks/zncc_self_similarity_ellipse_major_angle.8.float16.zst",
+    "tracks/zncc_self_similarity_tilt_angle.8.float16.zst",
+    "tracks/zncc_self_similarity_zoom.8.2.float16.zst",
+];
+
+/// The entries a version 15 file stores the same columns in.
+const ENTRIES_V15: [&str; 8] = [
     "tracks/blur_matched_bitmap_zncc.8.float32.zst",
     "tracks/plain_bitmap_zncc.8.float32.zst",
     "tracks/zncc_self_similarity_cos_view_angle.8.float32.zst",
@@ -65,6 +82,53 @@ const ENTRIES: [&str; 8] = [
     "tracks/zncc_self_similarity_tilt_angle.8.float32.zst",
     "tracks/zncc_self_similarity_zoom.8.2.float32.zst",
 ];
+
+fn archive_names(path: &std::path::Path) -> Vec<String> {
+    super::archive_names(path)
+}
+
+/// Every float of `row`, compared bit for bit with `NaN` as `NaN`.
+fn row_bits(row: &ObservationReading) -> Vec<u32> {
+    [
+        row.ellipse_axes[0],
+        row.ellipse_axes[1],
+        row.ellipse_major_angle,
+        row.cos_view_angle,
+        row.tilt_angle,
+        row.zoom[0],
+        row.zoom[1],
+        row.plain_bitmap_zncc,
+        row.blur_matched_bitmap_zncc,
+    ]
+    .iter()
+    .map(|v| {
+        if v.is_nan() {
+            f32::NAN.to_bits()
+        } else {
+            v.to_bits()
+        }
+    })
+    .collect()
+}
+
+/// `row` with its seven float values rounded the way a version 16 writer
+/// rounds them, computed here from `half` rather than by the crate: each
+/// score `z` to `1 − f16(1 − z)` in `f32`, every other value to its nearest
+/// `float16`.
+fn rounded(row: ObservationReading) -> ObservationReading {
+    let r = |v: f32| half::f16::from_f32(v).to_f32();
+    let score = |z: f32| 1.0 - r(1.0 - z);
+    ObservationReading {
+        ellipse_axes: row.ellipse_axes.map(r),
+        ellipse_major_angle: r(row.ellipse_major_angle),
+        cos_view_angle: r(row.cos_view_angle),
+        tilt_angle: r(row.tilt_angle),
+        zoom: row.zoom.map(r),
+        plain_bitmap_zncc: score(row.plain_bitmap_zncc),
+        blur_matched_bitmap_zncc: score(row.blur_matched_bitmap_zncc),
+        ..row
+    }
+}
 
 #[test]
 fn readings_round_trip_and_verify() {
@@ -195,7 +259,7 @@ fn a_shape_mismatch_is_refused_on_read_and_verify() {
     write_sfmr(&path, &mut data).unwrap();
     // One row fewer than the entry name and the metadata say.
     rewrite_entries(&path, &short, |name, raw| {
-        (name == "tracks/zncc_self_similarity_zoom.8.2.float32.zst").then(|| raw[..56].to_vec())
+        (name == "tracks/zncc_self_similarity_zoom.8.2.float16.zst").then(|| raw[..28].to_vec())
     });
     assert!(read_sfmr(&short).is_err());
     let (valid, errors) = verify_sfmr(&short).unwrap();
@@ -203,7 +267,7 @@ fn a_shape_mismatch_is_refused_on_read_and_verify() {
     assert!(
         errors
             .iter()
-            .any(|e| e.contains("zncc_self_similarity_zoom holds 56 bytes")),
+            .any(|e| e.contains("zncc_self_similarity_zoom holds 28 bytes")),
         "{errors:?}"
     );
     std::fs::remove_dir_all(&dir).unwrap();
@@ -337,5 +401,328 @@ fn a_column_in_another_layout_is_written_in_row_major_order() {
             .rows(),
         rows
     );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Rows none of whose five `float16` values is a `float16`, with the edge
+/// cases a writer has to round: an angle just below `π`, a `cos θ` just below
+/// 1, a zoom past the largest `float16`, and the `NaN` of nothing measured.
+fn unrounded_rows() -> Vec<ObservationReading> {
+    let mut rows: Vec<ObservationReading> = (0..8)
+        .map(|j| {
+            let t = j as f32 + 1.0;
+            ObservationReading {
+                ellipse_axes: [0.3 * t, 0.1 * t],
+                ellipse_axes_is_at_least: [false, j == 2],
+                ellipse_major_angle: 0.37 * t,
+                cos_view_angle: 0.9 - 0.01 * t,
+                tilt_angle: 0.29 * t,
+                zoom: [0.7 * t, 1.3 * t],
+                plain_bitmap_zncc: 0.981 - 0.001 * t,
+                blur_matched_bitmap_zncc: 0.987 - 0.001 * t,
+            }
+        })
+        .collect();
+    rows[1].ellipse_major_angle = std::f32::consts::PI - 1.0e-6;
+    rows[1].cos_view_angle = 0.999_9;
+    rows[1].tilt_angle = f32::NAN;
+    rows[4].zoom = [65_519.0, 70_000.0];
+    // The reference observation's scores are exactly 1, and a score can be
+    // read and the other not.
+    rows[3].plain_bitmap_zncc = 1.0;
+    rows[3].blur_matched_bitmap_zncc = 1.0;
+    rows[5].plain_bitmap_zncc = f32::NAN;
+    rows[5].blur_matched_bitmap_zncc = -0.37;
+    rows[6] = ObservationReading::NOT_MEASURED;
+    rows
+}
+
+#[test]
+fn the_writer_rounds_the_seven_float_columns_in_the_value_it_writes() {
+    let dir = temp_dir("sfmr_test_observation_readings_float16");
+    let path = dir.join("rounded.sfmr");
+    let rows = unrounded_rows();
+    let unrounded = || {
+        let mut data = make_test_data();
+        data.observation_readings = Some(readings_for(&rows));
+        data
+    };
+    let mut data = unrounded();
+    write_sfmr(&path, &mut data).unwrap();
+
+    // The value now holds the rounded rows: each float16 column at the
+    // nearest float16, each score at 1 − f16(1 − z), the flags as they were.
+    let written = data.observation_readings.as_ref().unwrap().rows();
+    for (j, (got, given)) in written.iter().zip(&rows).enumerate() {
+        assert_eq!(row_bits(got), row_bits(&rounded(*given)), "row {j}");
+        assert_eq!(got.ellipse_axes_is_at_least, given.ellipse_axes_is_at_least);
+    }
+    assert_ne!(written[0].ellipse_axes[0], rows[0].ellipse_axes[0]);
+    assert_ne!(written[0].plain_bitmap_zncc, rows[0].plain_bitmap_zncc);
+    // A score keeps the relative precision of its deficit: 0.98 is within
+    // 2^-11 of 0.02 of where it was.
+    let z = rows[0].plain_bitmap_zncc;
+    assert!(((written[0].plain_bitmap_zncc - z) / (1.0 - z)).abs() <= 2f32.powi(-11));
+    // The reference observation's 1 stays 1, and a NaN score stays NaN.
+    assert_eq!(written[3].plain_bitmap_zncc, 1.0);
+    assert_eq!(written[3].blur_matched_bitmap_zncc, 1.0);
+    assert!(written[5].plain_bitmap_zncc.is_nan());
+    // An angle just below π stays below it, in [0, π).
+    assert!(written[1].ellipse_major_angle < std::f32::consts::PI);
+    assert_eq!(written[1].ellipse_major_angle, 3.140625);
+    // A cos θ just below 1 rounds to 1, the nearest float16.
+    assert_eq!(written[1].cos_view_angle, 1.0);
+    // The nothing-measured row and the direction-less tilt keep their NaN.
+    assert!(!written[6].is_measured());
+    assert!(written[1].tilt_angle.is_nan());
+    // Under 65,520 rounds to the largest float16, at or past it to infinity.
+    assert_eq!(written[4].zoom, [65_504.0, f32::INFINITY]);
+
+    // The file gives back what the value holds, and the entries are float16.
+    let mut loaded = read_sfmr(&path).unwrap();
+    let read_back = loaded.observation_readings.as_ref().unwrap().rows();
+    for (j, (got, held)) in read_back.iter().zip(&written).enumerate() {
+        assert_eq!(row_bits(got), row_bits(held), "row {j}");
+    }
+    let names = archive_names(&path);
+    for name in ENTRIES {
+        assert!(names.contains(&name.to_string()), "{name} missing");
+    }
+
+    // Hashing the unrounded value gives the stored hash, and saving what was
+    // read writes the same hash again.
+    let stored = read_sfmr_content_hash(&path).unwrap();
+    assert_eq!(
+        content_hash_of(&mut unrounded(), &WriteOptions::default())
+            .unwrap()
+            .content_xxh128,
+        stored.content_xxh128
+    );
+    let resaved = dir.join("resaved.sfmr");
+    write_sfmr(&resaved, &mut loaded).unwrap();
+    assert_eq!(
+        read_sfmr_content_hash(&resaved).unwrap().content_xxh128,
+        stored.content_xxh128
+    );
+    let (valid, errors) = verify_sfmr(&resaved).unwrap();
+    assert!(valid, "{errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_version_15_file_reads_its_float32_readings_and_saves_them_as_float16() {
+    let dir = temp_dir("sfmr_test_observation_readings_v15");
+    let current = dir.join("current.sfmr");
+    let rows = unrounded_rows();
+    let mut data = make_test_data();
+    data.observation_readings = Some(readings_for(&rows));
+    write_sfmr(&current, &mut data).unwrap();
+
+    // The version 15 file of the unrounded rows: its writer stored each
+    // float column as float32, at the values it was given.
+    let given = readings_for(&rows);
+    let old = dir.join("v15.sfmr");
+    rewrite_as_version_15(&current, &old, &dir, |name, values| {
+        let column = |a: &[f32]| a.to_vec();
+        let full = match name {
+            "tracks/zncc_self_similarity_cos_view_angle.8.float32.zst" => column(
+                given
+                    .zncc_self_similarity_cos_view_angle
+                    .as_slice()
+                    .unwrap(),
+            ),
+            "tracks/zncc_self_similarity_ellipse_axes.8.2.float32.zst" => {
+                column(given.zncc_self_similarity_ellipse_axes.as_slice().unwrap())
+            }
+            "tracks/zncc_self_similarity_ellipse_major_angle.8.float32.zst" => column(
+                given
+                    .zncc_self_similarity_ellipse_major_angle
+                    .as_slice()
+                    .unwrap(),
+            ),
+            "tracks/zncc_self_similarity_tilt_angle.8.float32.zst" => {
+                column(given.zncc_self_similarity_tilt_angle.as_slice().unwrap())
+            }
+            "tracks/zncc_self_similarity_zoom.8.2.float32.zst" => {
+                column(given.zncc_self_similarity_zoom.as_slice().unwrap())
+            }
+            "tracks/plain_bitmap_zncc.8.float32.zst" => {
+                column(given.plain_bitmap_zncc.as_slice().unwrap())
+            }
+            "tracks/blur_matched_bitmap_zncc.8.float32.zst" => {
+                column(given.blur_matched_bitmap_zncc.as_slice().unwrap())
+            }
+            _ => return,
+        };
+        *values = full;
+    });
+    let names = archive_names(&old);
+    for name in ENTRIES_V15 {
+        assert!(names.contains(&name.to_string()), "{name} missing");
+    }
+    let (valid, errors) = verify_sfmr(&old).unwrap();
+    assert!(valid, "{errors:?}");
+
+    let mut loaded = read_sfmr(&old).unwrap();
+    assert_eq!(loaded.metadata.version, 15);
+    let read_back = loaded.observation_readings.as_ref().unwrap().rows();
+    for (j, (got, given)) in read_back.iter().zip(&rows).enumerate() {
+        assert_eq!(row_bits(got), row_bits(given), "row {j}");
+    }
+
+    let saved = dir.join("saved.sfmr");
+    write_sfmr(&saved, &mut loaded).unwrap();
+    let names = archive_names(&saved);
+    for name in ENTRIES {
+        assert!(names.contains(&name.to_string()), "{name} missing");
+    }
+    let reloaded = read_sfmr(&saved).unwrap();
+    assert_eq!(reloaded.metadata.version, SFMR_FORMAT_VERSION);
+    for (j, (got, given)) in reloaded
+        .observation_readings
+        .unwrap()
+        .rows()
+        .iter()
+        .zip(&rows)
+        .enumerate()
+    {
+        assert_eq!(row_bits(got), row_bits(&rounded(*given)), "row {j}");
+    }
+    let old_hash = read_sfmr_content_hash(&old).unwrap();
+    let new_hash = read_sfmr_content_hash(&saved).unwrap();
+    assert_ne!(new_hash.tracks_xxh128, old_hash.tracks_xxh128);
+    assert_eq!(new_hash.points3d_xxh128, old_hash.points3d_xxh128);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_reading_column_in_the_dtype_of_another_version_is_refused() {
+    let dir = temp_dir("sfmr_test_observation_readings_wrong_dtype");
+    let current = dir.join("current.sfmr");
+    let mut data = make_test_data();
+    data.observation_readings = Some(readings_for(&[tagged_row(1.0); 8]));
+    write_sfmr(&current, &mut data).unwrap();
+    let assert_refused = |bad: &std::path::Path, needle: &str| {
+        let err = read_sfmr(bad)
+            .err()
+            .expect("the reader refuses it")
+            .to_string();
+        assert!(err.contains(needle), "reader: {err}");
+        let (valid, errors) = verify_sfmr(bad).unwrap();
+        assert!(!valid);
+        assert!(
+            errors.iter().any(|e| e.contains(needle)),
+            "verifier: {errors:?}"
+        );
+    };
+
+    // A current file holding the tilt angle as float32.
+    let float16_name = "tracks/zncc_self_similarity_tilt_angle.8.float16.zst";
+    let float32_name = "tracks/zncc_self_similarity_tilt_angle.8.float32.zst";
+    let bad = dir.join("float32_in_current.sfmr");
+    rewrite_renaming(&current, &bad, |name, raw| {
+        (name == float16_name).then(|| {
+            (
+                float32_name.to_string(),
+                float32_payload(&float16_payload(raw)),
+            )
+        })
+    });
+    assert_refused(
+        &bad,
+        &format!(
+            "a version {SFMR_FORMAT_VERSION} file stores {float16_name}, and this one holds \
+             {float32_name} instead"
+        ),
+    );
+
+    // A version 15 file holding the zoom as float16.
+    let old = dir.join("v15.sfmr");
+    rewrite_as_version_15(&current, &old, &dir, |_, _| {});
+    let float16_name = "tracks/zncc_self_similarity_zoom.8.2.float16.zst";
+    let float32_name = "tracks/zncc_self_similarity_zoom.8.2.float32.zst";
+    let bad = dir.join("float16_in_v15.sfmr");
+    rewrite_renaming(&old, &bad, |name, raw| {
+        (name == float32_name).then(|| {
+            let bits: Vec<u8> = raw
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|b| half::f16::from_f32(f32::from_le_bytes(*b)).to_le_bytes())
+                .collect();
+            (float16_name.to_string(), bits)
+        })
+    });
+    assert_refused(
+        &bad,
+        &format!(
+            "a version 15 file stores {float32_name}, and this one holds {float16_name} instead"
+        ),
+    );
+
+    // A current file holding a score under its version 15 name.
+    let deficit_name = "tracks/plain_bitmap_zncc_deficit.8.float16.zst";
+    let score_name = "tracks/plain_bitmap_zncc.8.float32.zst";
+    let bad = dir.join("score_in_current.sfmr");
+    rewrite_renaming(&current, &bad, |name, raw| {
+        (name == deficit_name).then(|| {
+            let scores: Vec<f32> = float16_payload(raw).iter().map(|w| 1.0 - w).collect();
+            (score_name.to_string(), float32_payload(&scores))
+        })
+    });
+    assert_refused(
+        &bad,
+        &format!(
+            "a version {SFMR_FORMAT_VERSION} file stores {deficit_name}, and this one holds \
+             {score_name} instead"
+        ),
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_scores_are_stored_as_their_float16_deficits() {
+    let dir = temp_dir("sfmr_test_observation_readings_deficits");
+    let rows = unrounded_rows();
+    let mut data = make_test_data();
+    data.observation_readings = Some(readings_for(&rows));
+    let path = dir.join("first.sfmr");
+    write_sfmr(&path, &mut data).unwrap();
+
+    // The stored values are 1 − z, so the reference's 1 is stored as 0.
+    let raw = |path: &std::path::Path, name: &str| -> Vec<u8> {
+        use std::io::Read;
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zstd::stream::decode_all(&compressed[..]).unwrap()
+    };
+    let plain = "tracks/plain_bitmap_zncc_deficit.8.float16.zst";
+    let blur = "tracks/blur_matched_bitmap_zncc_deficit.8.float16.zst";
+    let stored = float16_payload(&raw(&path, plain));
+    for (j, (w, row)) in stored.iter().zip(&rows).enumerate() {
+        let expected = half::f16::from_f32(1.0 - row.plain_bitmap_zncc).to_f32();
+        assert!(
+            *w == expected || (w.is_nan() && expected.is_nan()),
+            "row {j}: {w} != {expected}"
+        );
+    }
+    assert_eq!(stored[3].to_bits(), 0.0f32.to_bits());
+    assert!(
+        float16_payload(&raw(&path, blur))[5] > 1.0,
+        "a negative score"
+    );
+
+    // A second save of what was read stores the same bytes.
+    let mut loaded = read_sfmr(&path).unwrap();
+    let second = dir.join("second.sfmr");
+    write_sfmr(&second, &mut loaded).unwrap();
+    for name in [plain, blur] {
+        assert_eq!(raw(&path, name), raw(&second, name), "{name}");
+    }
     std::fs::remove_dir_all(&dir).unwrap();
 }

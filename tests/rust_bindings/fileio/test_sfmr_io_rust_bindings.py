@@ -489,7 +489,7 @@ class TestReferenceObservations:
         out = tmp_path / "no_column.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=True)
         assert np.all(read_sfmr(out)["reference_observations"] == -1)
-        assert read_sfmr_metadata(out)["version"] == 15
+        assert read_sfmr_metadata(out)["version"] == 16
 
 
 class TestPatchColumnValidation:
@@ -732,7 +732,16 @@ class TestNormals:
 
         out = tmp_path / "roundtrip.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=skip)
-        assert read_sfmr(out)["normals_xyz"].tobytes() == normals.tobytes()
+        written = read_sfmr(out)["normals_xyz"]
+        # A finite point with a patch takes its frame's normalize(u x v), which
+        # version 16 derives; every other row is written back as it was read.
+        u, v = data["patch_u_halfvec_xyz"], data["patch_v_halfvec_xyz"]
+        derived = (data["positions_xyzw"][:, 3] != 0.0) & np.any(u != 0.0, axis=1)
+        assert derived.any() and not derived.all()
+        cross = np.cross(u.astype(np.float64), v.astype(np.float64))
+        frame_normals = cross / np.linalg.norm(cross, axis=1, keepdims=True)
+        np.testing.assert_allclose(written[derived], frame_normals[derived], atol=1e-6)
+        assert written[~derived].tobytes() == normals[~derived].tobytes()
 
     def test_a_missing_key_gets_mean_viewing_normals(
         self, seoul_bull_ground_truth_sfmr, tmp_path
@@ -931,7 +940,7 @@ class TestPerImageIntrinsicAdjustments:
         out = tmp_path / "flagged.sfmr"
         write_sfmr(out, data)
         again = read_sfmr(out)
-        assert read_sfmr_metadata(out)["version"] == 15
+        assert read_sfmr_metadata(out)["version"] == 16
         assert again["per_image_adjustments"] == data["per_image_adjustments"]
         assert again["focal_adjustments"].dtype == np.float64
         assert again["focal_adjustments"].shape == (n_img,)
@@ -1052,7 +1061,7 @@ class TestPerImageLensCorrections:
         out = tmp_path / "scanlines.sfmr"
         write_sfmr(out, data)
         again = read_sfmr(out)
-        assert read_sfmr_metadata(out)["version"] == 15
+        assert read_sfmr_metadata(out)["version"] == 16
         assert again["rolling_shutter_scanlines"] == settings
         assert again["radial_bspline_adjustments"] is None
         assert again["rolling_shutter_rates_xyz"] is None

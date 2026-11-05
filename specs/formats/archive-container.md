@@ -83,7 +83,7 @@ knows exactly how many bytes to expect before it decompresses anything:
 decompress to exactly `2107 * 4 * 8 = 67424` bytes. A reader checks that byte
 count and rejects the entry if it disagrees, which is the format's shape check.
 Element types are spelled as `uint8`/`uint16`/`uint32`/`uint64`,
-`int8`/`int16`/`int32`/`int64`, `float32`/`float64`, and `uint128` for a raw
+`int8`/`int16`/`int32`/`int64`, `float16`/`float32`/`float64`, and `uint128` for a raw
 16-byte XXH128 digest column; which of them a format uses is the format's
 business.
 

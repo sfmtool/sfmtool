@@ -71,8 +71,9 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
     assert recon.point_count > 0
     assert recon.camera_count > 0
 
-    # Each image's readings are the ones its .sift records, bit for bit, under
-    # the conversion the .sift files record.
+    # Each image's readings are the ones its .sift records, under the
+    # conversion the .sift files record: the tensor bit for bit, the sharpness
+    # rounded to the float16 the file stores.
     from sfmtool.fileio import SiftFile
     from sfmtool.sift.file import get_sift_path_from_recon
 
@@ -82,7 +83,9 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
                 reader.feature_tool_metadata["feature_options"]["image_to_gray"]
                 == recon.image_to_gray
             )
-            assert recon.sharpness[i] == np.float32(reader.metadata["sharpness"])
+            assert recon.sharpness[i] == np.float32(
+                np.float16(np.float32(reader.metadata["sharpness"]))
+            )
             np.testing.assert_array_equal(
                 recon.gradient_structure_tensors_xx_yy_xy[i],
                 np.asarray(

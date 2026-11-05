@@ -429,13 +429,16 @@ impl SfmrReconstruction {
     /// writing uses.
     ///
     /// The normals follow the writer's rule: when the reconstruction carries
-    /// normals, a point's normal is kept where it is set and replaced by the
-    /// point's mean-viewing normal where it is missing
-    /// ([`sfmtool_sfmr_format::is_missing_normal`]: the zero vector, or within
-    /// `1e-6` of it in squared norm). A point at
-    /// infinity has no mean-viewing normal, so a missing one stays zero. A
-    /// reconstruction without normals gets none. A caller that wants every
-    /// normal computed again from the geometry zeroes them first.
+    /// normals, a point's normal is kept where it is set and filled where it
+    /// is missing ([`sfmtool_sfmr_format::is_missing_normal`]: the zero
+    /// vector, or within `1e-6` of it in squared norm). A finite point with a
+    /// patch whose frame gives a normal is filled with that normal,
+    /// `normalize(u × v)` by [`sfmtool_sfmr_format::patch_normal`], the one a
+    /// version 16 file derives for it; any other finite point with the
+    /// point's mean-viewing normal. A point at infinity has no mean-viewing
+    /// normal, so a missing one stays zero. A reconstruction without normals
+    /// gets none. A caller that wants every normal computed again from the
+    /// geometry zeroes them first.
     pub fn recompute_depth_statistics(&mut self) -> Result<(), SfmrError> {
         use ndarray::Array1;
 
@@ -493,8 +496,24 @@ impl SfmrReconstruction {
         // Only materialize normals when this reconstruction carries them, and
         // only where one is missing, as a write does.
         if self.point_set.has_normals {
+            let frames = self
+                .point_set
+                .patch_u_halfvec_xyz
+                .as_ref()
+                .zip(self.point_set.patch_v_halfvec_xyz.as_ref());
             for (i, pt) in self.point_set.points.iter_mut().enumerate() {
                 if !sfmtool_sfmr_format::is_missing_normal(pt.normal.x, pt.normal.y, pt.normal.z) {
+                    continue;
+                }
+                let from_frame = frames.and_then(|(u, v)| {
+                    let row = |a: &Array2<f32>| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
+                    let u = row(u);
+                    (pt.w != 0.0 && u != [0.0; 3])
+                        .then(|| sfmtool_sfmr_format::patch_normal(u, row(v)))
+                        .flatten()
+                });
+                if let Some([x, y, z]) = from_frame {
+                    pt.normal = Vector3::new(x, y, z);
                     continue;
                 }
                 pt.normal = Vector3::new(

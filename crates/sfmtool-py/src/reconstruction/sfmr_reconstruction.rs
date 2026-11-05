@@ -291,9 +291,13 @@ impl PySfmrReconstruction {
     ///         passes.
     ///
     /// The write preserves the in-memory ``normals`` of every point that has one
-    /// (recomputing only the missing/zero rows from geometry), so normals set via
-    /// ``clone_with_changes(normals=...)`` — e.g. by ``sfm xform
-    /// --refine-normals`` — survive the round trip. A reconstruction with
+    /// (recomputing only the missing/zero rows from geometry), except that a
+    /// finite point with a patch takes its patch frame's ``normalize(u × v)``,
+    /// which a version 16 file derives rather than stores, and with the patch
+    /// frame a point at infinity's normal is zero. So normals set via
+    /// ``clone_with_changes(normals=...)`` survive the round trip for points
+    /// without a patch; for a point with one, turn its patch frame (as ``sfm
+    /// xform --refine-normals`` does, through ``patches=``). A reconstruction with
     /// ``has_normals`` ``False`` writes no normals at all. Any attached patch
     /// cloud is written as the per-point patch frame in ``points3d/`` (format
     /// version 3+).
@@ -2008,7 +2012,9 @@ impl PySfmrReconstruction {
     /// Supported fields: ``positions``, ``colors``, ``rms_reprojection_errors``,
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_indexes``, ``observation_counts``,
-    /// ``normals``, ``normal_confidence`` (an ``(N,)`` uint8 array or ``None``
+    /// ``normals`` (a finite point with a patch is saved with its patch frame's
+    /// normal whatever this holds; see :meth:`save`), ``normal_confidence`` (an
+    /// ``(N,)`` uint8 array or ``None``
     /// to drop it), ``point_constraints`` / ``constraint_distances`` / ``constraint_reference_images``
     /// (the constraint triple: pass all three together, or any one as ``None``
     /// to drop the set), ``patches`` (a ``PatchCloud`` or ``None``),
