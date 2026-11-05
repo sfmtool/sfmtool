@@ -395,7 +395,8 @@ def report_lines(
     of each sequence, the verdict, and the walk of each sequence.
 
     `extracted[i]` maps a frame position of sequence `i` to whether a `.sift`
-    file was written for it."""
+    file was written for it; the last line counts the frames that had a
+    `.sift` file written and were never read, `report["frames_extracted_unread"]`."""
     several = len(sequences) > 1
     lines: list[str] = []
     for i, sequence in enumerate(sequences):
@@ -410,4 +411,9 @@ def report_lines(
         lines.extend(
             walk_lines(report, i, sequence, extracted[i], label, target_step, step_band)
         )
+    unread = report["frames_extracted_unread"]
+    lines.append("")
+    lines.append(
+        f"Extracted and never read: {unread} frame{'' if unread == 1 else 's'}"
+    )
     return lines

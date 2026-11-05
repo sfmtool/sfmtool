@@ -38,7 +38,6 @@ _EXPECTED_CLASSES = (
     "CaptureImage",
     "CaptureFrame",
     "CaptureSequence",
-    "FrameId",
 )
 
 

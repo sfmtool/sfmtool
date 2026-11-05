@@ -88,11 +88,3 @@ settled.
   stops.
 - **The JSON schema** of `--json`, which is the binding's report with the
   command's keys added and has no version of its own.
-- **The version 1 folder check per extraction.** `image_files_to_sift_files`
-  checks, on every call that has a file to write, every `.sift` file already in
-  the target folder for version 1 (`_check_versions_never_mix`), which opens
-  each file. The command's source calls it once per walk step, so that check
-  grows with the files the run has written, although `pick_images` has made
-  the folder check once before the first extraction. `image_files_to_sift_files`
-  could remember, for the life of the process, a folder it has found to hold no
-  version 1 file and has since written only version 2 files into.

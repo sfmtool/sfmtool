@@ -1,24 +1,25 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The frames `sfm pick-images` collects, the source it hands the walk, and
-the list entries it writes.
+"""The frames `sfm pick-images` collects, the extraction it makes before
+the walk for the feature tools the walk does not extract with, and the list
+entries it writes.
 
 The walk itself is `sfmtool.analysis.pick_images`
-(specs/core/analysis/pick-images.md). This module groups a command's image
-files into sequences by folder and by the name apart from the file number
+(specs/core/analysis/pick-images.md), which extracts the `.sift` files of the
+`sfmtool` feature tool itself. This module groups a command's image files
+into sequences by folder and by the name apart from the file number
 `number_from_filename` reads, which is the number `-r` selects a file by, so
 the pattern each sequence's list entry uses is built from the same rule; and
-it makes each frame's `.sift` files exist through `image_files_to_sift_files`
-with the workspace's settings. See
+for the other feature tools it extracts every frame's `.sift` files through
+`image_files_to_sift_files` with the workspace's settings. See
 specs/cli/image-feature/pick-images-command.md.
 """
 
-import contextlib
-import io
 import os
-import time
+import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -275,72 +276,65 @@ def _mtime(path: Path) -> int | None:
         return None
 
 
-class SiftSource:
-    """The callable `pick_images` asks to make frames' `.sift` files exist.
+def extract_every_frame(capture, config: dict, settings_source: str) -> list[set[int]]:
+    """Extract the `.sift` files of every frame of `capture` with
+    `image_files_to_sift_files` and the workspace's settings, as
+    `sfm sift --extract` does in a workspace, before a walk that reads them.
 
-    It extracts with `image_files_to_sift_files` and the workspace's
-    settings, as `sfm sift --extract` does in a workspace, with that
-    function's own output held back since it would print a file summary for
-    every step of the walk. It records whether each frame read had a `.sift`
-    file written for it, and every `interval` seconds echoes the count of
-    frames read so far, from `progress`.
-    """
+    Returns, per sequence, the positions of the frames that had a `.sift`
+    file written: one whose modification time changed or that appeared."""
+    from .sift.extract import image_files_to_sift_files
 
-    def __init__(
-        self,
-        capture,
-        config: dict,
-        settings_source: str,
-        echo: Callable[[str], None],
-        progress,
-        interval: float = 10.0,
-    ):
-        self.capture = capture
-        self.config = config
-        self.settings_source = settings_source
-        self.echo = echo
-        self.progress = progress
-        self.interval = interval
-        self.extracted: dict = {}
-        self._extracted_count = 0
-        self._last_echo = time.monotonic()
-
-    def __call__(self, frame_ids) -> None:
-        from .sift.extract import image_files_to_sift_files
-
-        images = [
-            image
-            for f in frame_ids
-            for image in self.capture[f.sequence].frames[f.frame].images
-        ]
-        before = [_mtime(image.sift_path) for image in images]
-        with contextlib.redirect_stdout(io.StringIO()):
-            image_files_to_sift_files(
-                [image.image_path for image in images],
-                feature_tool=self.config["feature_tool"],
-                feature_options=self.config["feature_options"],
-                feature_prefix_dir=self.config["feature_prefix_dir"],
-                settings_source=self.settings_source,
-            )
-        at = 0
-        for f in frame_ids:
-            count = len(self.capture[f.sequence].frames[f.frame].images)
-            written = any(
+    images = [
+        image
+        for sequence in capture
+        for frame in sequence.frames
+        for image in frame.images
+    ]
+    before = [_mtime(image.sift_path) for image in images]
+    image_files_to_sift_files(
+        [image.image_path for image in images],
+        feature_tool=config["feature_tool"],
+        feature_options=config["feature_options"],
+        feature_prefix_dir=config["feature_prefix_dir"],
+        settings_source=settings_source,
+    )
+    written: list[set[int]] = []
+    at = 0
+    for sequence in capture:
+        positions = set()
+        for position, frame in enumerate(sequence.frames):
+            count = len(frame.images)
+            if any(
                 _mtime(image.sift_path) != mtime
                 for image, mtime in zip(
                     images[at : at + count], before[at : at + count]
                 )
-            )
-            self.extracted[f] = written
-            self._extracted_count += written
+            ):
+                positions.add(position)
             at += count
-        now = time.monotonic()
-        if now - self._last_echo >= self.interval:
-            self._last_echo = now
-            read = self.progress.value + len(frame_ids)
-            self.echo(
-                f"  ... {read} frames read so far, {self._extracted_count} extracted"
-            )
+        written.append(positions)
+    return written
+
+
+@contextmanager
+def echo_frames_read(progress, echo: Callable[[str], None], interval: float = 10.0):
+    """While the body runs, echo every `interval` seconds how many frames the
+    walk has read so far, from the `ProgressCounter` it sets, from a thread of
+    its own: the walk runs with the GIL released."""
+    stop = threading.Event()
+
+    def loop():
+        while not stop.wait(interval):
+            echo(f"  ... {progress.value} frames read so far")
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def _range_pieces(numbers: list[int]) -> list:

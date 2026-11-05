@@ -10,8 +10,12 @@
 //! sequence choosing frames whose **step**, the median displacement of their
 //! mutual matches in percent of the image's long side, is near a target, with
 //! sharp frames in place of blurred ones and shorter steps where the capture
-//! is hard to follow. A caller-supplied [`FrameSource`] makes each frame's
-//! `.sift` files exist just before the walk reads them.
+//! is hard to follow. A [`FrameSource`] makes each frame's `.sift` files
+//! exist: an [`ExtractingSource`] extracts them on a pool of workers ahead of
+//! the walk, from the frames it knows it will read, and a
+//! [`ReadOnlySource`] reads files that already exist. The walk decides only
+//! from frames it waited for, so the work done ahead changes how long a run
+//! takes and never what it chooses.
 //!
 //! [`match_frame_pair`] matches the features of two frames through a KD-forest
 //! per frame and reports the step, what share of the matches fit one
@@ -29,14 +33,14 @@ mod frame_pair;
 mod frames;
 mod pick;
 mod report;
+mod source;
 mod walk;
 
 #[cfg(test)]
 mod tests;
 
 pub use capture::{
-    CaptureFrame, CaptureImage, CaptureSequence, FrameId, FrameSource, FrameSourceError,
-    PickImagesError, PickImagesOptions,
+    CaptureFrame, CaptureImage, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
 pub use frame_pair::{
     match_frame_pair, FrameFeatures, FramePairError, FramePairOptions, FramePairStats,
@@ -47,3 +51,4 @@ pub use report::{
     PickImagesReport, SampleRate, Segment, SensorBaseline, SensorReading, SequenceReport,
     SolvabilityCheck, Stage, StepKind, Swap, Verdict, VideoCheck, WalkReport, WalkStep, WeakPoint,
 };
+pub use source::{ExtractingSource, FrameSource, FrameSourceError, ReadOnlySource};

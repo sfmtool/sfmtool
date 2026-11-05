@@ -5,7 +5,7 @@
 //! features with its forest, the motion statistics of a pair of frames, and
 //! the walk over a capture's sequences (``sfmtool.analysis.FrameFeatures`` /
 //! ``match_frame_pair`` / ``pick_images``, with ``CaptureImage``,
-//! ``CaptureFrame``, ``CaptureSequence`` and ``FrameId``; see
+//! ``CaptureFrame`` and ``CaptureSequence``; see
 //! ``specs/core/analysis/frame-pair-matching.md`` and
 //! ``specs/core/analysis/pick-images.md``).
 
@@ -15,16 +15,19 @@ use std::sync::Mutex;
 
 use numpy::ndarray::Ix2;
 use numpy::PyUntypedArrayMethods;
-use pyo3::exceptions::{PyInterruptedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyFileNotFoundError, PyInterruptedError, PyOSError, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyTuple};
 
 use sfmtool_core::analysis::pick_images::{
     match_frame_pair as core_match_frame_pair, pick_images as core_pick_images, CaptureFrame,
-    CaptureImage, CaptureSequence, FrameFeatures, FrameId, FramePairOptions, FrameSource,
-    FrameSourceError, PickImagesError, PickImagesOptions,
+    CaptureImage, CaptureSequence, ExtractingSource, FrameFeatures, FramePairOptions, FrameSource,
+    FrameSourceError, PickImagesError, PickImagesOptions, ReadOnlySource,
 };
 use sfmtool_core::features::kdforest::KdForestParams;
+use sfmtool_core::features::sift::{BuildSiftFilesError, BuildSiftFilesOptions};
 use sfmtool_core::progress::{Event, Progress};
 use sfmtool_sift_format::{read_sift_features, read_sift_metadata, SiftMetadata, DESCRIPTOR_DIM};
 
@@ -32,6 +35,7 @@ use crate::csr_args::float_array_f32;
 use crate::fileio::sift::PySiftFile;
 use crate::format_errors::{fault_to_py, read_err, Direction, FormatError};
 use crate::helpers::{serde_to_py, value_err};
+use crate::sift::extract::{feature_options_error, feature_options_from_dict};
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
 use crate::ProgressCounter;
 
@@ -291,8 +295,8 @@ pub fn match_frame_pair<'py>(
 ///
 /// Args:
 ///     image_path: The image file (str or Path).
-///     sift_path: Its ``.sift`` file, which the ``ensure_sift_files``
-///         callable of ``pick_images`` makes exist and the walk reads.
+///     sift_path: Its ``.sift`` file, which ``pick_images`` extracts when it
+///         is given feature options, and otherwise reads.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyclass(name = "CaptureImage", module = "sfmtool.analysis", frozen)]
 pub struct PyCaptureImage {
@@ -419,7 +423,7 @@ impl PyCaptureSequence {
     }
 
     /// The frames, a tuple of ``CaptureFrame``, so that
-    /// ``sequence.frames[frame_id.frame]`` is the frame a ``FrameId`` names.
+    /// ``sequence.frames[id["frame"]]`` is the frame a report's ``id`` names.
     #[getter]
     fn frames(&self, py: Python<'_>) -> Py<PyTuple> {
         self.frames.clone_ref(py)
@@ -438,62 +442,6 @@ impl PyCaptureSequence {
     }
 }
 
-/// One frame of a capture: the index of its sequence in the list given to
-/// ``pick_images``, and its position in that sequence, from 0.
-#[allow(rustdoc::invalid_rust_codeblocks)]
-#[pyclass(name = "FrameId", module = "sfmtool.analysis", frozen, eq, hash)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PyFrameId {
-    /// The index of the sequence.
-    #[pyo3(get)]
-    sequence: usize,
-    /// The position of the frame in its sequence, from 0.
-    #[pyo3(get)]
-    frame: usize,
-}
-
-#[pymethods]
-impl PyFrameId {
-    #[new]
-    fn new(sequence: usize, frame: usize) -> Self {
-        Self { sequence, frame }
-    }
-
-    fn __repr__(&self) -> String {
-        format!("FrameId(sequence={}, frame={})", self.sequence, self.frame)
-    }
-}
-
-/// A `FrameSource` over a Python callable, called with the GIL held and a
-/// list of `FrameId`. Its exception is kept so the binding raises it
-/// unchanged.
-struct PyFrameSource {
-    callable: Py<PyAny>,
-    error: Option<PyErr>,
-}
-
-impl FrameSource for PyFrameSource {
-    fn ensure_sift_files(
-        &mut self,
-        frames: &[FrameId],
-        _progress: &Progress,
-    ) -> Result<(), FrameSourceError> {
-        Python::attach(|py| {
-            let ids = frames.iter().map(|id| PyFrameId {
-                sequence: id.sequence,
-                frame: id.frame,
-            });
-            let ids = PyList::new(py, ids)?;
-            self.callable.call1(py, (ids,)).map(drop)
-        })
-        .map_err(|e| {
-            let message = e.to_string();
-            self.error = Some(e);
-            FrameSourceError { message }
-        })
-    }
-}
-
 /// Choose the frames of a video capture a Structure-from-Motion solve should
 /// use, from the SIFT features of the frames.
 ///
@@ -503,13 +451,24 @@ impl FrameSource for PyFrameSource {
 /// side apart, sharp ones in place of blurred ones. Options left as ``None``
 /// take the defaults of the Rust ``PickImagesOptions``.
 ///
+/// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
+/// settings for the ``sfmtool`` feature tool, each frame's ``.sift`` files
+/// are extracted as ``build_sift_files`` extracts them, on a pool of workers
+/// that runs ahead of the walk on the frames it predicts it will read, and
+/// stay on disk; a file at least as new as its image is used as it is.
+/// Without them, every ``.sift`` file the walk reads must already exist.
+/// The frames chosen are the same either way, and for any number of workers.
+///
 /// Args:
 ///     sequences: The capture's ``CaptureSequence`` objects.
-///     ensure_sift_files: A callable taking a list of ``FrameId``, which
-///         makes the ``.sift`` file of every image of those frames exist,
-///         extracting those that are missing or older than their image. It
-///         is called with every frame just before the walk reads it, each
-///         frame once, and with no frame the walk does not read.
+///     feature_options: The workspace's ``feature_options`` dict for the
+///         ``sfmtool`` tool, to extract the files the walk reads.
+///     feature_prefix_dir: The workspace's ``feature_prefix_dir``, given
+///         with ``feature_options``. Each image's ``sift_path`` must be
+///         ``<image dir>/<feature_prefix_dir>/<image name>.sift``.
+///     concurrent_images: How many frames the workers extract at once, with
+///         ``feature_options``; ``None`` takes ``SFMTOOL_SIFT_EXTRACT_WORKERS``
+///         or the core count capped by memory, as ``build_sift_files`` does.
 ///     target_step_percent: The step to aim for, in percent of the long
 ///         side (10).
 ///     step_band: How far a step may be from the target, as a fraction
@@ -531,26 +490,36 @@ impl FrameSource for PyFrameSource {
 ///     it is: ``verdict`` (``"solvable"``, ``"not_a_video"`` or
 ///     ``"not_solvable"``), ``sequences`` (per sequence: ``baseline``,
 ///     ``video``, ``solvability`` and ``walk``), ``frames`` (every frame
-///     read, with its readings) and ``pairs`` (every pair matched, with its
-///     statistics). A number that is not finite is ``None``.
+///     read, with its readings), ``pairs`` (every pair matched, with its
+///     statistics), ``frames_extracted`` (per entry of ``frames``, whether
+///     its ``.sift`` files were written in this call) and
+///     ``frames_extracted_unread`` (how many frames had ``.sift`` files
+///     written ahead of the walk that it never read). A number that is not
+///     finite is ``None``.
 ///
 /// Raises:
-///     The exception the callable raised, unchanged, and the exception a
-///     signal handler raised between two pairs (``KeyboardInterrupt`` for
-///     Ctrl+C), which stops the walk.
+///     The exception a signal handler raised while the walk ran
+///     (``KeyboardInterrupt`` for Ctrl+C), which stops it and its workers.
+///     FileNotFoundError: without feature options, a ``.sift`` file the walk
+///         is about to read does not exist.
 ///     OSError: a ``.sift`` file that cannot be read, as
-///         ``sfmtool.fileio.read_sift`` raises it, or a folder the ``.sift``
-///         files go in that cannot be listed.
+///         ``sfmtool.fileio.read_sift`` raises it, a folder the ``.sift``
+///         files go in that cannot be listed, or an image that cannot be
+///         read or a ``.sift`` file that cannot be written while extracting.
 ///     InterruptedError: the walk was cancelled otherwise.
-///     ValueError: an option out of range, a malformed sequence, version 1
-///         ``.sift`` files in a folder or read, or two frames whose
-///         reference images differ in size.
+///     ValueError: an option out of range, invalid or version 1 feature
+///         options, one of ``feature_options`` and ``feature_prefix_dir``
+///         without the other, a malformed sequence, a ``sift_path`` that is
+///         not where the extraction writes it, version 1 ``.sift`` files in a
+///         folder or read, or two frames whose reference images differ in
+///         size.
 ///
-/// The GIL is released while the walk runs, and taken for each call of the
-/// callable and each check for a signal.
+/// The GIL is released while the walk runs, and taken for each check for a
+/// signal.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
-#[pyo3(signature = (sequences, ensure_sift_files, *, target_step_percent=None, step_band=None,
+#[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
+                    concurrent_images=None, target_step_percent=None, step_band=None,
                     blur_ratio=None, baseline_frames=None, min_inlier_share=None, ratio=None,
                     min_matches=None, fundamental_error_per_960px=None,
                     homography_error_per_960px=None, seed=None, preset=None, num_trees=None,
@@ -559,7 +528,9 @@ impl FrameSource for PyFrameSource {
 pub fn pick_images<'py>(
     py: Python<'py>,
     sequences: Vec<Bound<'py, PyCaptureSequence>>,
-    ensure_sift_files: Bound<'py, PyAny>,
+    feature_options: Option<Bound<'py, PyDict>>,
+    feature_prefix_dir: Option<PathBuf>,
+    concurrent_images: Option<usize>,
     target_step_percent: Option<f64>,
     step_band: Option<f64>,
     blur_ratio: Option<f64>,
@@ -576,9 +547,6 @@ pub fn pick_images<'py>(
     max_leaf_checks: Option<usize>,
     progress: Option<ProgressCounter>,
 ) -> PyResult<Py<PyAny>> {
-    if !ensure_sift_files.is_callable() {
-        return Err(PyTypeError::new_err("ensure_sift_files must be callable"));
-    }
     let defaults = PickImagesOptions::default();
     let pair = FramePairOptions::default();
     let options = PickImagesOptions {
@@ -598,21 +566,53 @@ pub fn pick_images<'py>(
                 .unwrap_or(pair.homography_error_per_960px),
             seed: seed.unwrap_or(pair.seed),
         },
+        prefetch: defaults.prefetch,
+    };
+    let mut source: Box<dyn FrameSource + Send> = match (feature_options, feature_prefix_dir) {
+        (Some(feature_options), Some(feature_prefix_dir)) => Box::new(
+            ExtractingSource::new(BuildSiftFilesOptions {
+                feature_options: feature_options_from_dict(&feature_options)?,
+                feature_prefix_dir,
+                concurrent_images,
+            })
+            .map_err(|e| match e {
+                BuildSiftFilesError::FeatureOptions(e) => feature_options_error(e),
+                other => PyValueError::new_err(other.to_string()),
+            })?,
+        ),
+        (None, None) if concurrent_images.is_none() => Box::new(ReadOnlySource),
+        (None, None) => {
+            return Err(PyValueError::new_err(
+                "concurrent_images sets how many frames are extracted at once; give it with \
+                 feature_options and feature_prefix_dir",
+            ))
+        }
+        _ => {
+            return Err(PyValueError::new_err(
+                "give feature_options and feature_prefix_dir together, to extract the .sift \
+                 files, or neither, to read .sift files that already exist",
+            ))
+        }
     };
     let sequences: Vec<CaptureSequence> = sequences.iter().map(|s| s.get().inner.clone()).collect();
-    let mut source = PyFrameSource {
-        callable: ensure_sift_files.unbind(),
-        error: None,
-    };
 
-    // Every event, and so every pair matched and every batch read, takes the
-    // GIL to run Python's signal handlers. One that raises stops the walk,
-    // and its exception is raised in place of the cancellation.
+    // Every event, among them each pair matched and every 50 ms of a wait on
+    // the workers, takes the GIL to run Python's signal handlers. One that
+    // raises stops the walk, and its exception is raised in place of the
+    // cancellation.
     let counter = progress.as_ref().map(ProgressCounter::handle);
     let cancel = AtomicBool::new(false);
     let signal: Mutex<Option<PyErr>> = Mutex::new(None);
     let sink = |event: Event<'_>| {
-        if let (Event::Count { done, .. }, Some(counter)) = (event, &counter) {
+        if let (
+            Event::Count {
+                done,
+                unit: "frames",
+                ..
+            },
+            Some(counter),
+        ) = (event, &counter)
+        {
             counter.store(done as usize, Ordering::Relaxed);
         }
         if cancel.load(Ordering::Relaxed) {
@@ -625,15 +625,11 @@ pub fn pick_images<'py>(
     };
     let result = py.detach(|| {
         let progress = Progress::to(&sink).cancelled_by(&cancel);
-        core_pick_images(&sequences, &mut source, &options, &progress)
+        core_pick_images(&sequences, &mut *source, &options, &progress)
     });
     match result {
         Ok(report) => serde_to_py(py, &report),
         Err(e) => Err(match e {
-            PickImagesError::Source { message } => source
-                .error
-                .take()
-                .unwrap_or_else(|| PyValueError::new_err(message)),
             PickImagesError::Cancelled => signal
                 .into_inner()
                 .unwrap_or_else(|p| p.into_inner())
@@ -643,6 +639,15 @@ pub fn pick_images<'py>(
             }
             PickImagesError::ListFolder { ref source, .. } => {
                 PyErr::from(std::io::Error::new(source.kind(), e.to_string()))
+            }
+            PickImagesError::Source(FrameSourceError::Missing { .. }) => {
+                PyFileNotFoundError::new_err(e.to_string())
+            }
+            PickImagesError::Source(FrameSourceError::Extract { .. }) => {
+                PyOSError::new_err(e.to_string())
+            }
+            PickImagesError::Source(FrameSourceError::Panicked { .. }) => {
+                PyRuntimeError::new_err(e.to_string())
             }
             other => value_err(other),
         }),
@@ -655,7 +660,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCaptureImage>()?;
     m.add_class::<PyCaptureFrame>()?;
     m.add_class::<PyCaptureSequence>()?;
-    m.add_class::<PyFrameId>()?;
     m.add_function(wrap_pyfunction!(pick_images, m)?)?;
     Ok(())
 }

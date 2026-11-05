@@ -12,13 +12,14 @@ use super::baseline::{
     SequenceBaseline, FAR_GAPS, NEAR_GAPS,
 };
 use super::capture::{
-    validate_sequences, CaptureSequence, FrameId, FrameSource, PickImagesError, PickImagesOptions,
+    validate_sequences, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
 use super::frames::Frames;
 use super::report::{
     BaselineReport, FrameReading, PickImagesReport, SequenceReport, SolvabilityCheck, Stage,
     Verdict, VideoCheck, WalkReport,
 };
+use super::source::FrameSource;
 use super::walk::walk_sequence;
 use crate::features::sift::version_1_sift_files;
 use crate::progress::Progress;
@@ -28,10 +29,17 @@ use crate::progress::Progress;
 /// Reads a baseline sample of each sequence, judges from it whether each
 /// sequence is a video and whether the capture can be solved, and, when it
 /// can, walks each sequence choosing frames about `target_step_percent` of
-/// the image's long side apart, sharp ones in place of blurred ones. Every
-/// frame is read through `source`, which is asked to make a frame's `.sift`
-/// files exist just before the frame is read and for no frame that is not
-/// read. A verdict that stops the capture is a report, not an error.
+/// the image's long side apart, sharp ones in place of blurred ones. A
+/// verdict that stops the capture is a report, not an error.
+///
+/// Every frame is read through `source`: [`pick_images`] waits on it for each
+/// frame just before reading the frame and, unless `options.prefetch` is
+/// off, asks it to prefetch the frames it knows it will read: each batch of
+/// the baseline, and the frames ahead of the walk through a break, where it
+/// reads every frame. It decides only from frames it waited for, so the report is the same whatever the source does ahead of
+/// it, except for [`PickImagesReport::frames_extracted_unread`]. When the run
+/// ends, with a report or an error, the source's work is stopped with
+/// [`FrameSource::finish`].
 ///
 /// Before anything is extracted, every folder the capture's `.sift` files go
 /// in is checked for version 1 files with [`version_1_sift_files`].
@@ -41,12 +49,13 @@ use crate::progress::Progress;
 /// [`PickImagesError::Options`] and [`PickImagesError::Sequence`] for
 /// input out of range, [`PickImagesError::Version1Files`] and
 /// [`PickImagesError::ListFolder`] from the folder check,
-/// [`PickImagesError::Source`] when the source fails,
-/// [`PickImagesError::ReadSift`] and [`PickImagesError::Version1Sift`] for a
-/// `.sift` file that cannot be used, [`PickImagesError::Pair`] for two frames
-/// whose reference images differ in size, and [`PickImagesError::Cancelled`]
-/// when `progress` is cancelled, which is checked before every call to the
-/// source and every pair matched.
+/// [`PickImagesError::Source`] when the source cannot make a frame read
+/// exist, naming the frame, [`PickImagesError::ReadSift`] and
+/// [`PickImagesError::Version1Sift`] for a `.sift` file that cannot be used,
+/// [`PickImagesError::Pair`] for two frames whose reference images differ in
+/// size, and [`PickImagesError::Cancelled`] when `progress` is cancelled,
+/// which is checked before every wait on the source, while it waits, and
+/// before every pair matched.
 pub fn pick_images(
     sequences: &[CaptureSequence],
     source: &mut dyn FrameSource,
@@ -58,66 +67,83 @@ pub fn pick_images(
     check_folders(sequences)?;
     progress.check_cancel()?;
 
+    let mut frames = Frames::new(sequences, source, options);
+    let decided = decide(&mut frames, sequences, options, progress);
+    // Stopped on every path, so no worker goes on extracting after the run.
+    let written = frames.finish_source();
+    Ok(assemble(decided?, frames, &written, options))
+}
+
+/// What [`decide`] found, for [`assemble`].
+struct Decided {
+    verdict: Verdict,
+    baselines: Vec<SequenceBaseline>,
+    videos: Vec<VideoCheck>,
+    checks: Option<Vec<SolvabilityCheck>>,
+    walks: Option<Vec<WalkReport>>,
+}
+
+/// The baseline in its two batches, the verdict, and the walk of each
+/// sequence.
+fn decide(
+    frames: &mut Frames,
+    sequences: &[CaptureSequence],
+    options: &PickImagesOptions,
+    progress: &Progress,
+) -> Result<Decided, PickImagesError> {
     let lengths: Vec<usize> = sequences.iter().map(|s| s.frames.len()).collect();
     let samples: Vec<Vec<usize>> = sample_counts(&lengths, options.baseline_frames)
         .into_iter()
         .zip(&lengths)
         .map(|(count, &len)| sample_positions(len, count))
         .collect();
-    let mut frames = Frames::new(sequences, source, options);
 
     // The first batch: the sampled frames and the frames 1 and 3 after them.
-    let (near_frames, near_pairs) = batch(&samples, &lengths, &NEAR_GAPS, true);
     {
         let phase = progress.phase("baseline");
-        frames.ensure(&near_frames, Stage::BaselineNear, &phase)?;
-        frames.match_pairs(&near_pairs, Stage::BaselineNear, &phase)?;
+        let groups = batch(&samples, &lengths, &NEAR_GAPS, true);
+        read_batch(frames, &groups, Stage::BaselineNear, &phase)?;
     }
     let baselines: Vec<SequenceBaseline> = samples
         .into_iter()
         .enumerate()
-        .map(|(s, positions)| sequence_baseline(&frames, s, positions, lengths[s], options))
+        .map(|(s, positions)| sequence_baseline(frames, s, positions, lengths[s], options))
         .collect();
     let videos: Vec<VideoCheck> = baselines
         .iter()
         .enumerate()
-        .map(|(s, b)| video_check(&frames, s, b, options))
+        .map(|(s, b)| video_check(frames, s, b, options))
         .collect();
     if videos.iter().any(|v| !v.is_video) {
-        return Ok(assemble(
-            Verdict::NotAVideo,
-            frames,
+        return Ok(Decided {
+            verdict: Verdict::NotAVideo,
             baselines,
             videos,
-            None,
-            None,
-            options,
-        ));
+            checks: None,
+            walks: None,
+        });
     }
 
     // The second batch: the frames 10 and 30 after the sampled frames.
     let sampled: Vec<Vec<usize>> = baselines.iter().map(|b| b.samples.clone()).collect();
-    let (far_frames, far_pairs) = batch(&sampled, &lengths, &FAR_GAPS, false);
     {
         let phase = progress.phase("baseline far pairs");
-        frames.ensure(&far_frames, Stage::BaselineFar, &phase)?;
-        frames.match_pairs(&far_pairs, Stage::BaselineFar, &phase)?;
+        let groups = batch(&sampled, &lengths, &FAR_GAPS, false);
+        read_batch(frames, &groups, Stage::BaselineFar, &phase)?;
     }
     let checks: Vec<SolvabilityCheck> = baselines
         .iter()
         .enumerate()
-        .map(|(s, b)| solvability_check(&frames, s, b))
+        .map(|(s, b)| solvability_check(frames, s, b))
         .collect();
     if checks.iter().any(|c| !c.solvable) {
-        return Ok(assemble(
-            Verdict::NotSolvable,
-            frames,
+        return Ok(Decided {
+            verdict: Verdict::NotSolvable,
             baselines,
             videos,
-            Some(checks),
-            None,
-            options,
-        ));
+            checks: Some(checks),
+            walks: None,
+        });
     }
 
     let mut walks = Vec::with_capacity(sequences.len());
@@ -125,24 +151,39 @@ pub fn pick_images(
         let phase = progress.phase("walk");
         for (s, baseline) in baselines.iter().enumerate() {
             walks.push(walk_sequence(
-                &mut frames,
-                baseline,
-                s,
-                lengths[s],
-                options,
-                &phase,
+                frames, baseline, s, lengths[s], options, &phase,
             )?);
         }
     }
-    Ok(assemble(
-        Verdict::Solvable,
-        frames,
+    Ok(Decided {
+        verdict: Verdict::Solvable,
         baselines,
         videos,
-        Some(checks),
-        Some(walks),
-        options,
-    ))
+        checks: Some(checks),
+        walks: Some(walks),
+    })
+}
+
+/// Read one batch of the baseline: prefetch all its frames, then wait for
+/// and match each sampled frame's in turn, so that matching one sample's
+/// pairs overlaps the source's work on the next ones. The frames are read,
+/// and the pairs matched, in the batch's order.
+fn read_batch(
+    frames: &mut Frames,
+    groups: &[SampleGroup],
+    stage: Stage,
+    progress: &Progress,
+) -> Result<(), PickImagesError> {
+    let all: Vec<FrameId> = groups
+        .iter()
+        .flat_map(|g| g.frames.iter().copied())
+        .collect();
+    frames.prefetch(&all);
+    for group in groups {
+        frames.ensure(&group.frames, stage, progress)?;
+        frames.match_pairs(&group.pairs, stage, progress)?;
+    }
+    Ok(())
 }
 
 /// Refuse a capture whose `.sift` folders hold version 1 files.
@@ -166,44 +207,60 @@ fn check_folders(sequences: &[CaptureSequence]) -> Result<(), PickImagesError> {
     Ok(())
 }
 
-/// One batch of the baseline: the frames `gaps` after each sampled frame
-/// that exist, with the sampled frames themselves when `with_samples`, and
-/// the pairs from each sampled frame to them, in sample order.
+/// One sampled frame's part of a batch of the baseline: the frames it reads
+/// and the pairs it matches.
+struct SampleGroup {
+    frames: Vec<FrameId>,
+    pairs: Vec<(FrameId, FrameId)>,
+}
+
+/// One batch of the baseline, per sampled frame in sample order: the frames
+/// `gaps` after it that exist, after the sampled frame itself when
+/// `with_samples`, and the pairs from the sampled frame to them.
 fn batch(
     samples: &[Vec<usize>],
     lengths: &[usize],
     gaps: &[usize],
     with_samples: bool,
-) -> (Vec<FrameId>, Vec<(FrameId, FrameId)>) {
-    let mut frames = Vec::new();
-    let mut pairs = Vec::new();
+) -> Vec<SampleGroup> {
+    let mut groups = Vec::new();
     for (sequence, positions) in samples.iter().enumerate() {
         let id = |frame| FrameId { sequence, frame };
         for &s in positions {
+            let mut group = SampleGroup {
+                frames: Vec::new(),
+                pairs: Vec::new(),
+            };
             if with_samples {
-                frames.push(id(s));
+                group.frames.push(id(s));
             }
             for &gap in gaps {
                 if s + gap < lengths[sequence] {
-                    frames.push(id(s + gap));
-                    pairs.push((id(s), id(s + gap)));
+                    group.frames.push(id(s + gap));
+                    group.pairs.push((id(s), id(s + gap)));
                 }
             }
+            groups.push(group);
         }
     }
-    (frames, pairs)
+    groups
 }
 
-/// The report from what was read and decided.
+/// The report from what was read and decided, and the frames the source
+/// wrote `.sift` files for.
 fn assemble(
-    verdict: Verdict,
+    decided: Decided,
     frames: Frames,
-    baselines: Vec<SequenceBaseline>,
-    videos: Vec<VideoCheck>,
-    checks: Option<Vec<SolvabilityCheck>>,
-    walks: Option<Vec<WalkReport>>,
+    written: &[FrameId],
     options: &PickImagesOptions,
 ) -> PickImagesReport {
+    let Decided {
+        verdict,
+        baselines,
+        videos,
+        checks,
+        walks,
+    } = decided;
     let readings: Vec<FrameReading> = frames
         .read_frames()
         .iter()
@@ -254,10 +311,15 @@ fn assemble(
             }
         })
         .collect();
+    let written: BTreeSet<FrameId> = written.iter().copied().collect();
+    let frames_extracted: Vec<bool> = readings.iter().map(|f| written.contains(&f.id)).collect();
+    let extracted_read = frames_extracted.iter().filter(|&&w| w).count();
     PickImagesReport {
         verdict,
         sequences,
         frames: readings,
         pairs: frames.into_pairs(),
+        frames_extracted,
+        frames_extracted_unread: written.len() - extracted_read,
     }
 }

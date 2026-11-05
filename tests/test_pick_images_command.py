@@ -154,6 +154,11 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     assert all(a["frames_extracted"])
     read = a["sequences"][0]["baseline"]["frames_read"]
     assert f"{read} frames read ({read} extracted, 0 reused)" in first.output
+    # The frames predicted and never read have .sift files, and are counted.
+    unread = a["frames_extracted_unread"]
+    sift_files = list((pan_workspace / "frames").rglob("*.jpg.sift"))
+    assert len(sift_files) == len(a["frames"]) + unread
+    assert f"Extracted and never read: {unread} frame" in first.output
 
     # A second run reads the same frames and extracts none of them.
     second = _invoke(["pick-images", "frames", *FAST, "--json", "b.json"])
@@ -297,6 +302,38 @@ def test_a_capture_that_barely_moves_writes_no_list(
         "No named image list was written: the verdict is not solvable." in asked.output
     )
     assert not (workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
+
+
+def test_another_feature_tool_extracts_every_frame_first(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    workspace = tmp_path / "ws"
+    # 70 frames: few to extract, and more than the baseline reads, so some
+    # are extracted first and never read.
+    _copy_frames(pan_source["top"], workspace / "frames", count=70)
+    result = _invoke(["ws", "init", "--feature-tool", "opencv", str(workspace)])
+    assert result.exit_code == 0, result.output
+    monkeypatch.chdir(workspace)
+
+    result = _invoke(["pick-images", "frames", *FAST, "--json", "r.json"])
+    assert result.exit_code == 0, result.output
+    assert "with the opencv tool before the walk" in result.output
+    data = json.loads((workspace / "r.json").read_text())
+    # Every input frame has a .sift file, extracted before the walk read any.
+    sift_files = sorted(p.name for p in (workspace / "frames").rglob("*.jpg.sift"))
+    assert sift_files == [f"pan_{n:03d}.jpg.sift" for n in range(1, 71)]
+    read = len(data["frames"])
+    assert 0 < read < 70
+    assert data["frames_extracted"] == [True] * read
+    assert data["frames_extracted_unread"] == 70 - read
+    assert f"Extracted and never read: {70 - read} frames" in result.output
+
+    # A second run reads the same files and extracts none.
+    again = _invoke(["pick-images", "frames", *FAST, "--json", "b.json"])
+    assert again.exit_code == 0, again.output
+    b = json.loads((workspace / "b.json").read_text())
+    assert b["frames"] == data["frames"]
+    assert not any(b["frames_extracted"]) and b["frames_extracted_unread"] == 0
 
 
 def test_photographs_are_not_a_video(tmp_path: Path, monkeypatch):
