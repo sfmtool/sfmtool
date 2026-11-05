@@ -312,8 +312,11 @@ and hosts the pictures:
 > Add a test when code behaviour changes. Every assertion in an added or
 > changed test must be able to fail: for a fix to a flaky or weak test, show
 > it by a temporary change to the guarded code that makes the test fail,
-> reverted before committing, and say what you changed. Check every writer and
-> checked-in file before making a reader stricter. Commit with a
+> reverted before committing, and say what you changed. Report the time of
+> each test you add and the before and after times of each test whose time you
+> change by more than a second, as `specs/STANDARDS.md` § "Tests cost what
+> their assertions need" asks. Check every writer and checked-in file before
+> making a reader stricter. Commit with a
 > plain-language message, signed off (`git commit -s`), with no attribution
 > lines. Do not push.
 >
@@ -391,7 +394,8 @@ and hosts the pictures:
 >    added or changed test must be able to fail: check that the implementer
 >    showed it for a fix to a flaky or weak test, and where it is cheap,
 >    repeat the check with a temporary change to the guarded code, reverted
->    afterwards. An assertion that cannot fail is SUBSTANTIVE. Check the
+>    afterwards. An assertion that cannot fail is SUBSTANTIVE, and so is a
+>    test made faster by dropping a case or weakening an assertion. Check the
 >    implementer's VISIBLE claim against the diff:
 >    a change to anything the viewer draws, an image a CLI command writes, or
 >    a docs page is visible however small, such as a new menu entry or a

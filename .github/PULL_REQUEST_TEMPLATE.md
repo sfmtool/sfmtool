@@ -17,7 +17,16 @@ Thanks for contributing to sfmtool! A few notes before you fill this out:
 
 ## Testing
 
-<!-- How did you verify this works? Commands run, datasets used, manual steps. -->
+<!--
+How did you verify this works? Commands run, datasets used, manual steps.
+
+If you added a test or changed code that a test runs, give the time of each
+test you added, and the before and after times of each existing test whose
+time you changed by more than a second, from the durations list at the end of
+`pixi run test`. Repeat a comparison before reporting it, since whole-suite
+times vary between runs. A test that needs more than 5 seconds says why it
+needs its input (see `specs/STANDARDS.md#tests-cost-what-their-assertions-need`).
+-->
 
 ## Screenshots
 
@@ -48,6 +57,7 @@ can screenshot a single panel.
 - [ ] Rust changes touching `sfmtool-py` re-exports: ran `pixi run maturin develop --release`
 - [ ] Tests pass locally: the full suites that apply (`pixi run test`, `pixi run cargo test --workspace`, `pixi run -e ui ui-test`), not a subset; if one did not run, say which and why. The one allowed failure is the Windows real-mouse `ui_basic` test failing with "could not aim at the viewer's own window" on a locked desktop, when the rest of `ui_basic` passes (see `AGENTS.md` § "Task completion checks")
 - [ ] Updated the relevant spec under `specs/` if behavior changed, or added a new spec if this introduces new behavior
+- [ ] Each test added or changed takes only the time its assertions need, with no case or assertion dropped to save time; test times reported in Testing (see `specs/STANDARDS.md#tests-cost-what-their-assertions-need`)
 
 ## License
 
