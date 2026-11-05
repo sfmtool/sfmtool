@@ -208,39 +208,53 @@ fn unsampled_choice(run: &Run, after: usize) -> usize {
         .expect("a chosen frame that is not sampled")
 }
 
+/// The report's reading of `frame`, which was read.
+fn judged(run: &Run, frame: usize) -> FrameReading {
+    run.report()
+        .frames
+        .iter()
+        .find(|f| f.id.frame == frame)
+        .expect("the frame was read")
+        .clone()
+}
+
 #[test]
 fn a_blurred_frame_is_swapped_for_a_sharp_neighbour() {
-    // Blurred in every direction, and along one direction only, each a
-    // frame the walk chose before it was blurred. The swap of the first
-    // changes the walk after it, so the second is taken from that walk.
+    // A frame the walk chose, made less sharp than 0.6 of the median.
     let mut blurred = Synth::steady(3, 300, ONE_PERCENT);
     let soft = unsampled_choice(&run(&[&blurred]), 100);
     blurred.shots[soft].readings[0].0 = 0.3;
-    let streaked = unsampled_choice(&run(&[&blurred]), 200);
-    blurred.shots[streaked].readings[0].1 = [1.0, 0.2, 0.0];
     let run = run(&[&blurred]);
     let walk = run.walk(0);
-    for frame in [soft, streaked] {
-        assert!(!walk.chosen.contains(&frame), "{frame} was chosen");
-        let swap = walk
-            .swaps
-            .iter()
-            .find(|s| s.candidate == frame)
-            .unwrap_or_else(|| panic!("{frame} was not swapped: {:?}", walk.swaps));
-        assert!(swap.chosen.abs_diff(frame) <= 2);
-        assert!(walk.chosen.contains(&swap.chosen));
-    }
-    let judged = |frame| {
-        run.report()
-            .frames
-            .iter()
-            .find(|f| f.id.frame == frame)
-            .expect("the frame was read")
-            .clone()
-    };
-    assert!(judged(soft).sensors[0].sharpness_ratio < 0.6);
-    assert!(judged(streaked).sensors[0].axis_ratio_z.unwrap() > 2.0);
-    assert!(judged(soft).blurred && judged(streaked).blurred);
+    assert!(!walk.chosen.contains(&soft), "{soft} was chosen");
+    let swap = walk
+        .swaps
+        .iter()
+        .find(|s| s.candidate == soft)
+        .unwrap_or_else(|| panic!("{soft} was not swapped: {:?}", walk.swaps));
+    assert!(swap.chosen.abs_diff(soft) <= 2);
+    assert!(walk.chosen.contains(&swap.chosen));
+    assert!(judged(&run, soft).sensors[0].sharpness_ratio < 0.6);
+    assert!(judged(&run, soft).blurred);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn gradients_along_one_direction_do_not_blur_a_sharp_frame() {
+    // A frame the walk chose, given a strongly directional tensor at its
+    // usual sharpness, as a sharp frame of a slope or of a line-like subject
+    // reads. It is still chosen, not swapped, and not blurred.
+    let mut streaked = Synth::steady(3, 300, ONE_PERCENT);
+    let frame = unsampled_choice(&run(&[&streaked]), 100);
+    streaked.shots[frame].readings[0].1 = [1.0, 0.2, 0.0];
+    let run = run(&[&streaked]);
+    let walk = run.walk(0);
+    assert!(walk.chosen.contains(&frame), "{frame} was not chosen");
+    assert!(walk.swaps.iter().all(|s| s.candidate != frame));
+    let reading = judged(&run, frame);
+    assert!(reading.sensors[0].axis_ratio.unwrap() > 1.5);
+    assert!(reading.sensors[0].coherence > 0.6);
+    assert!(!reading.blurred);
     assert_read_is_asked(&run);
 }
 
@@ -441,50 +455,22 @@ fn a_long_blurred_stretch_is_crossed_at_the_bands_spacing() {
 }
 
 #[test]
-fn a_spread_of_zero_is_floored_at_the_smallest_deviation() {
-    let reading = |xx: f32| ImageReadings::new(1.0, [xx, 1.0, 0.0]).unwrap();
-    // Most readings equal the median, so the MAD is 0; the floor is 1.4826
-    // times the smallest positive deviation, here 0.01 in the axis ratio.
-    let readings: Vec<ImageReadings> = (0..10)
-        .map(|i| reading(if i < 7 { 1.0 } else { 0.01f32.exp() }))
+fn only_the_sharpness_judges_blur() {
+    let reading = |sharpness: f32, tensor: [f32; 3]| ImageReadings::new(sharpness, tensor).unwrap();
+    let readings: Vec<ImageReadings> = (0..9)
+        .map(|i| reading(0.9 + 0.025 * i as f32, [1.0, 1.0, 0.0]))
         .collect();
     let base = baseline::sensor_baseline(&readings);
-    assert_eq!(base.axis_ratio_mad, 0.0);
-    assert!((base.axis_ratio_spread - 1.4826 * 0.01).abs() < 1e-6);
-    let judged = |xx: f32| baseline::judge(&reading(xx), &base, 0.6);
-    // A deviation as small as the deviants' is not blurred; one well beyond
-    // two spreads is.
-    assert!(!judged(0.01f32.exp()).blurred);
-    assert!(judged(0.05f32.exp()).blurred);
-    assert!(judged(0.05f32.exp()).axis_ratio_z.unwrap() > 2.0);
-
-    // Every reading the same: no spread, so no z-score and no blur by it.
-    let same = baseline::sensor_baseline(&[reading(1.0); 10]);
-    assert_eq!(same.axis_ratio_spread, 0.0);
-    let streak = baseline::judge(&reading(5.0), &same, 0.6);
-    assert_eq!(streak.axis_ratio_z, None);
+    assert!((base.sharpness_median - 1.0).abs() < 1e-6);
+    let judge = |r: ImageReadings| baseline::judge(&r, &base, 0.6);
+    assert!(judge(reading(0.59, [1.0, 1.0, 0.0])).blurred);
+    assert!(!judge(reading(0.61, [1.0, 1.0, 0.0])).blurred);
+    // Gradients in one direction only, at the median sharpness: the readings
+    // are reported, and the image is not blurred.
+    let streak = judge(reading(1.0, [1.0, 0.01, 0.0]));
+    assert!(streak.axis_ratio.unwrap() > 4.0);
+    assert!(streak.coherence > 0.9);
     assert!(!streak.blurred);
-}
-
-#[test]
-fn readings_mostly_at_the_median_do_not_flag_the_rest() {
-    // Three frames in five read exactly [1, 1, 0] and two a tensor 2% apart:
-    // with no floor under a MAD of 0, those two in five would all be blurred.
-    let mut synth = Synth::steady(27, 300, ONE_PERCENT);
-    for (t, shot) in synth.shots.iter_mut().enumerate() {
-        shot.readings[0].1 = if t % 5 < 2 {
-            [1.02, 1.0, 0.0]
-        } else {
-            [1.0, 1.0, 0.0]
-        };
-    }
-    let run = run(&[&synth]);
-    let report = run.report();
-    assert_eq!(report.sequences[0].baseline.sensors[0].axis_ratio_mad, 0.0);
-    assert_eq!(report.sequences[0].baseline.blurred_samples, 0);
-    assert!(report.frames.iter().all(|f| !f.blurred));
-    let walk = run.walk(0);
-    assert!(walk.swaps.is_empty() && walk.kept_blurred.is_empty());
 }
 
 #[test]

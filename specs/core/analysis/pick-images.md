@@ -177,10 +177,9 @@ matched (`MeasuredPair`, with its `FramePairStats`) in the order matched. A
 `SequenceReport` holds:
 
 - `baseline`: the sampled positions, the frames the baseline read, each
-  sensor's medians, median absolute deviations and the spreads the z-scores
-  divide by, the count of blurred
-  samples, the rate at each sample, its median and 0.9 quantile, the total
-  motion, and the flagged regions with what flagged them;
+  sensor's median sharpness, the count of blurred samples, the rate at each
+  sample, its median and 0.9 quantile, the total motion, and the flagged
+  regions with what flagged them;
 - `video`: the four signs of a video, the medians behind them, and
   `is_video`;
 - `solvability`: the three checks, their medians and `solvable`, or `None`
@@ -228,6 +227,14 @@ least 2 and at most its frame count. Its samples are spread evenly over it, at
 positions `round(i (len − 1) / (n − 1))`, so the first and last frames are
 sampled.
 
+The default of 200 samples is sized for what the command is for, subsampling
+long captures of 10,000 to 100,000 frames, where the baseline reads a small
+share of the frames. On a short capture of a few hundred frames the samples
+and the frames read after them are most of the capture, which is accepted:
+fewer samples would put neighbouring samples further apart, and the sign that
+the step changes little compares neighbouring samples' steps
+([Is it a video?](#is-it-a-video)).
+
 The baseline is read in two batches, each requested from the source in one
 call. The first reads the sampled frames and the frames 1 and 3 after each
 that exist, and matches each sample with them; that is enough to tell a video
@@ -237,11 +244,7 @@ with them. A frame another sample already read is not read again.
 
 From the first batch, per sequence:
 
-- **Each sensor's baseline**: the median sharpness, and the median and median
-  absolute deviation of the axis ratio and of the coherence, which
-  `ImageReadings::axis_ratio` and `ImageReadings::coherence` derive from the
-  gradient structure tensor, over the sampled frames. A flat image, which has
-  no axis ratio, is left out of the axis ratio's.
+- **Each sensor's baseline**: the median sharpness over the sampled frames.
 - **The rate at each sample**: the step to the frame 3 after it divided by 3,
   or, when that pair has fewer than `min_matches` matches, the step to the
   next frame; a sample with neither has no rate. The baseline's rate is the
@@ -393,28 +396,19 @@ not read either. Every frame of a break is read.
 ### Blur
 
 A frame's sensor image is **blurred** when its sharpness is below
-`blur_ratio` times its sensor's median sharpness, or when its axis ratio or its
-coherence has a robust z-score above 2 against its sensor's baseline:
-`z = (x − median) / (1.4826 · MAD)`, with the median and the median absolute
-deviation from `sfmtool_core::numeric::median` over the sampled frames. Only a
-z above 2 counts, one-sided, since motion blur raises both readings by
-weakening the gradients along the direction of motion. The sharpness ratio
-catches a frame blurred in every direction; the z-scores catch one blurred
-along one direction that the sharpness alone misses.
+`blur_ratio` times its sensor's median sharpness over the sampled frames, the
+median from `sfmtool_core::numeric::median`. Sharpness compared within one
+capture tracks blur, since the capture's frames show the same scene through
+the same lens, so a frame much less sharp than the capture's median is one
+whose detail was smeared.
 
-**A MAD of 0** happens when more than half the sampled values equal the median
-exactly, as when frames repeat or a reading does not vary. Dividing by it
-would make any value above the median, however close, a blur, and so flag the
-other part of the capture. The spread is then `1.4826` times the smallest
-positive deviation from the median instead: the finest difference the
-capture's own readings show, so that a value counts as blurred only when it is
-more than twice that far beyond the median, and the readings that make up the
-other part, which deviate by about that much, do not. A fraction of the median
-would not serve as the floor, since the median axis ratio or coherence of
-images with gradients equally strong in every direction is near 0. When every
-sampled value equals the median there is no spread to judge against, the
-z-score is not made (`None`), and only the sharpness ratio judges that
-reading.
+The report also carries each image's axis ratio and coherence, which
+`ImageReadings::axis_ratio` and `ImageReadings::coherence` derive from the
+gradient structure tensor, but blur is not judged from them. They measure the
+direction of the gradients, which the scene sets as strongly as motion blur
+does: a fisheye's geometry, a slope seen at an angle or a subject made of
+lines gives a sharp frame strongly directional gradients, so against a
+capture-wide median those readings would call such sharp frames blurred.
 
 ### Rigs
 
@@ -460,7 +454,7 @@ in its folder after the check, is `Version1Sift`, with the same advice.
   exact list of frames the source was asked for, in order.
 - **No duplicate derivations.** The axis ratio and coherence are
   `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, the
-  medians, MADs and the rate's 0.9 quantile `sfmtool_core::numeric`'s.
+  medians and the rate's 0.9 quantile `sfmtool_core::numeric`'s.
 
 ## Determinism and precision
 
@@ -469,7 +463,7 @@ statistics repeat exactly ([frame-pair-matching.md § Determinism and precision]
 every decision reads them and the readings in a fixed order, and no hash map is
 iterated for an output. The readings are kept as `f32`, as `ImageReadings`
 holds them, which is enough for readings compared within a capture to about
-three digits; the medians, ratios and z-scores are `f64` because
+three digits; the medians and ratios are `f64` because
 `sfmtool_core::numeric` takes `f64`, and widening is exact.
 
 ## Parameters
@@ -483,7 +477,6 @@ three digits; the medians, ratios and z-scores are `f64` because
 | `min_inlier_share` | `0.5` | the F-inlier share a pair that matches well has |
 | `pair.min_matches` | `30` | the matches a pair that matches well has |
 | baseline gaps | 1, 3; 10, 30 | the frames after each sample the two batches read |
-| robust z | 2 | above this, an axis ratio or coherence is blurred |
 | video signs | 2 to 4; 5%; factor 2; 0.8; the small step and 2 of the other 3 | the four signs and which make a video |
 | moving scene | 0.3 | the F-inlier share 10 frames apart below which the scene moves |
 | panorama | 0.97, 0.01 | the H/F and rotation error 30 frames apart |
@@ -552,14 +545,14 @@ a scene of points with random descriptors seen by a pinhole camera along a
 path with known motion per frame, with readings set per frame, served by a
 source that writes a frame's version 2 `.sift` files only when it is asked for
 them and records every request. They cover a steady video chosen at about the
-target step, a change of speed that the stride follows, a blurred frame (in
-every direction and along one) swapped for a neighbour, a blurred run kept at
-its sharpest frames within the band, a long blurred stretch, flagged for blur
-alone, crossed with every step in the full band, a spread of 0 floored at the
-smallest deviation and readings mostly at the median flagging none of the
-rest, a bad patch flagged for weak matches and filled in at halved steps, two
-breaks with a short segment and steps with few matches taken only at the next
-frame or in a gap filled in, a blurred frame whose sharp neighbours, a
+target step, a change of speed that the stride follows, a blurred frame
+swapped for a neighbour, a sharp frame with gradients along one direction
+kept and not judged blurred, blur judged from the sharpness alone, a blurred
+run kept at its sharpest frames within the band, a long blurred stretch,
+flagged for blur alone, crossed with every step in the full band, a bad patch
+flagged for weak matches and filled in at halved steps, two breaks with a
+short segment and steps with few matches taken only at the next frame or in
+a gap filled in, a blurred frame whose sharp neighbours, a
 blurred run whose sharp frames and a wholly blurred run whose least blurred
 frames have few matches, none of them taken, shuffled
 frames, frames 6% apart that show the

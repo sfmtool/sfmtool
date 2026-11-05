@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The baseline: the sampled frames of each sequence, the medians and spreads
+//! The baseline: the sampled frames of each sequence, the median sharpness
 //! its frames are judged against, the rate along it, the flagged regions, and
 //! the two judgements made from it, whether a sequence is a video and whether
 //! it can be solved. See `specs/core/analysis/pick-images.md` § "The
@@ -22,14 +22,6 @@ pub(super) const NEAR_GAPS: [usize; 2] = [1, 3];
 
 /// The gaps the second batch reads, for the checks of solvability.
 pub(super) const FAR_GAPS: [usize; 2] = [10, 30];
-
-/// The scale from a median absolute deviation to a standard deviation for
-/// normally distributed values.
-const MAD_TO_SIGMA: f64 = 1.4826;
-
-/// A reading whose robust z-score is above this is blurred along one
-/// direction.
-const BLUR_Z: f64 = 2.0;
 
 /// The range of the 3-frame step over the 1-frame step in which the motion
 /// adds up.
@@ -99,97 +91,29 @@ pub(super) fn matches_well(stats: &FramePairStats, options: &PickImagesOptions) 
             .is_some_and(|share| share >= options.min_inlier_share)
 }
 
-/// The median of `values` and their median absolute deviation from it.
-///
-/// Also the spread a z-score divides by: `1.4826 · MAD`, or, when the MAD is
-/// 0 because more than half the values equal the median, `1.4826` times the
-/// smallest positive deviation from the median, the finest difference the
-/// values themselves show. It is 0 only when every value equals the median.
-fn centre_and_spread(values: &[f64]) -> (f64, f64, f64) {
-    let m = median(values);
-    let deviations: Vec<f64> = values.iter().map(|v| (v - m).abs()).collect();
-    let mad = median(&deviations);
-    let scale = if mad > 0.0 {
-        mad
-    } else {
-        deviations
-            .iter()
-            .copied()
-            .filter(|&d| d > 0.0)
-            .fold(f64::INFINITY, f64::min)
-    };
-    let spread = if scale.is_finite() {
-        MAD_TO_SIGMA * scale
-    } else {
-        0.0
-    };
-    (m, mad, spread)
-}
-
-/// The robust z-score `(x − median) / spread`, and whether it is above 2.
-/// `None` when the spread is 0: every sampled value was the same, which says
-/// nothing about how far a value may stray, so no value is judged by it.
-fn robust_z(x: f64, median: f64, spread: f64) -> Option<(f64, bool)> {
-    (spread > 0.0).then(|| {
-        let z = (x - median) / spread;
-        (z, z > BLUR_Z)
-    })
-}
-
 /// One sensor's baseline over the readings of the sampled frames.
 pub(super) fn sensor_baseline(readings: &[ImageReadings]) -> SensorBaseline {
     let sharpness: Vec<f64> = readings.iter().map(|r| f64::from(r.sharpness)).collect();
-    let axis: Vec<f64> = readings
-        .iter()
-        .filter_map(|r| r.axis_ratio().map(f64::from))
-        .collect();
-    let coherence: Vec<f64> = readings.iter().map(|r| f64::from(r.coherence())).collect();
-    let (axis_ratio_median, axis_ratio_mad, axis_ratio_spread) = centre_and_spread(&axis);
-    let (coherence_median, coherence_mad, coherence_spread) = centre_and_spread(&coherence);
     SensorBaseline {
         sharpness_median: median(&sharpness),
-        axis_ratio_median,
-        axis_ratio_mad,
-        axis_ratio_spread,
-        coherence_median,
-        coherence_mad,
-        coherence_spread,
     }
 }
 
-/// Judge one image's readings against its sensor's baseline.
+/// Judge one image's readings against its sensor's baseline: it is blurred
+/// when its sharpness is below `blur_ratio` times the median sharpness.
 pub(super) fn judge(
     readings: &ImageReadings,
     baseline: &SensorBaseline,
     blur_ratio: f64,
 ) -> SensorReading {
     let sharpness = f64::from(readings.sharpness);
-    let soft = sharpness < blur_ratio * baseline.sharpness_median;
-    let axis_ratio = readings.axis_ratio();
-    let axis = axis_ratio.and_then(|a| {
-        robust_z(
-            f64::from(a),
-            baseline.axis_ratio_median,
-            baseline.axis_ratio_spread,
-        )
-    });
-    let coherence = readings.coherence();
-    let coherence_judged = robust_z(
-        f64::from(coherence),
-        baseline.coherence_median,
-        baseline.coherence_spread,
-    );
     SensorReading {
         sharpness: readings.sharpness,
         gradient_structure_tensor_xx_yy_xy: readings.gradient_structure_tensor_xx_yy_xy,
-        axis_ratio,
-        coherence,
+        axis_ratio: readings.axis_ratio(),
+        coherence: readings.coherence(),
         sharpness_ratio: sharpness / baseline.sharpness_median,
-        axis_ratio_z: axis.map(|(z, _)| z),
-        coherence_z: coherence_judged.map(|(z, _)| z),
-        blurred: soft
-            || axis.is_some_and(|(_, high)| high)
-            || coherence_judged.is_some_and(|(_, high)| high),
+        blurred: sharpness < blur_ratio * baseline.sharpness_median,
     }
 }
 
@@ -263,8 +187,8 @@ impl SequenceBaseline {
     }
 }
 
-/// The sequence's baseline from its first batch: the sensors' medians and
-/// spreads over the sampled frames, the rate at each sample, and the regions
+/// The sequence's baseline from its first batch: the sensors' median
+/// sharpness over the sampled frames, the rate at each sample, and the regions
 /// a blurred sample or one that does not match the frame 1 or 3 after it
 /// well flags.
 pub(super) fn sequence_baseline(

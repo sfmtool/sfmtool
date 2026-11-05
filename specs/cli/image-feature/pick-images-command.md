@@ -47,7 +47,7 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--target-step PERCENT` | `10` | The step to aim for between two chosen frames: the median feature displacement, in percent of the image's long side. |
 | `--step-band FRACTION` | `0.3` | How far a step may be from the target and still be accepted: within `target × (1 ± FRACTION)`, 7% to 13% at the defaults. |
 | `--blur-ratio RATIO` | `0.6` | A frame whose sharpness is below `RATIO` times its sequence's median sharpness counts as blurred. |
-| `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. |
+| `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. The default suits long captures of 10,000 frames or more; on a capture of a few hundred frames the baseline reads most of them ([core/analysis/pick-images.md § The baseline](../../core/analysis/pick-images.md#the-baseline)). |
 | `--min-inlier-share SHARE` | `0.5` | A step whose matches fit a fundamental matrix with a smaller share of inliers fails. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 

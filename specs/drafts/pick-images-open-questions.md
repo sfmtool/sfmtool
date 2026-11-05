@@ -10,7 +10,8 @@ about how it was picked, the refusal to overwrite without `--force`, one list
 per run across every sequence, the workspace and `.sift` version 2
 requirement, SIFT matching through a KD-forest as the measure of motion, the
 detection of a sequence of photographs, which stops the command, the target
-step of 10% and the blur ratio of 0.6, and the walk.
+step of 10% and the blur ratio of 0.6, the walk, the baseline size of 200,
+and that blur is judged from the sharpness alone.
 
 The other defaults were run on a collection of captures: handheld walking
 videos, slow orbits of an object, shaky videos with long blurred runs, a video
@@ -38,39 +39,18 @@ settled.
 - **Taking `-r` and `--named-image-list` for the input.** The command is one of
   the commands of the shared `-r/--range` option, so a list or a range can
   narrow the input. Without them the input would be `PATHS` alone.
-- **The default baseline size.** 200 samples read up to five frames each. On
-  captures of 400 to 1,300 frames that is half to all of the frames, and more
-  than the walk reads after it, which adds 30 to 260 frames; on a capture of
-  6,000 frames it is a sixth. With 50 samples the same captures got the same
-  verdicts, medians within a few percent and lists of about the same size,
-  for 35% to 55% fewer frames read in all. But the sign that the step changes
-  little compares neighbouring samples, which are then further apart, and it
-  failed on two videos that it passed with 200 samples; both stayed videos
-  with the other three signs. The options are to keep 200; to take one sample
-  per so many frames with a floor and `--baseline-frames` as the most; a fixed
-  lower default; or to read the frames 10 and 30 after only some of the
-  samples. Measuring the step's change in a way that does not depend on the
-  samples' spacing would go with any of the smaller ones.
 - **An asymmetric band.** ±30% held on every capture, but a short step costs
   only a frame more and a long one can lose the match, so a band wider below
   the target than above it is still a choice.
-- **The blur rule's spread.** A robust z of 2 against the MAD, one-sided. The
-  MAD of a capture with very even blur readings is small and makes the rule
-  strict; the walk floors a MAD of 0 at the smallest positive deviation
-  ([core/analysis/pick-images.md § Blur](../core/analysis/pick-images.md#blur)),
-  and a floor on a small but positive MAD may be needed too. A frame judged
-  blurred by a z-score alone can have a sharpness above its median, which the
-  report then shows as kept though blurred at more than 1 of the median. On
-  the captures such a call was right on a handheld video, whose frames were
-  smeared sideways at a sharpness near the median, and wrong on a walking
-  video, whose sharp frames of a tilted slope have strongly directional
-  gradients. Since a region flagged for blur alone no longer shortens the
-  walk's steps, a wrong call costs at most a swap. The options are to keep the
-  rule; to count a z-score only with a sharpness below the median; or to
-  compare the tensor's direction with the direction of the motion the
-  matches measure.
-- **Medians per sequence or per capture.** The walk takes the sharpness and
-  tensor medians per sequence, since separate sequences can differ in light and
+- **Blur against the neighbouring frames.** A frame is blurred when its
+  sharpness is below `blur_ratio` times the sequence's median
+  ([core/analysis/pick-images.md § Blur](../core/analysis/pick-images.md#blur)).
+  A frame could instead be judged against its neighbouring frames: one whose
+  sharpness is well below its neighbours' is blurred relative to them, even
+  where the whole stretch is sharper or softer than the median. The frames
+  such a rule picks are to be checked blind before it becomes a rule.
+- **Medians per sequence or per capture.** The walk takes the sharpness
+  median per sequence, since separate sequences can differ in light and
   scene. For several sequences of one camera in one place, one median over the
   capture may be better.
 - **A failing sequence among several.** The verdict stops the whole run when
