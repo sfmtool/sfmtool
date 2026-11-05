@@ -45,7 +45,9 @@ mod scale_space;
 mod simd;
 
 pub use feature_options::FeatureOptionsError;
-pub(crate) use files::xxh128_of_file;
+pub(crate) use files::{
+    build_sift_file, default_concurrent_images, sift_file_up_to_date, xxh128_of_file,
+};
 pub use files::{
     build_sift_files, version_1_sift_files, BuildSiftFilesError, BuildSiftFilesOptions,
     BuildSiftFilesReport, Version1SiftFiles, CONCURRENT_IMAGES_ENV_VAR, SFMTOOL_FEATURE_TOOL,

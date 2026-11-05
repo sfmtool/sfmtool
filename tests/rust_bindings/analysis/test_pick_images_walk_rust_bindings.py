@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the walk's bindings (``sfmtool.analysis.pick_images`` with
-``CaptureImage``, ``CaptureFrame``, ``CaptureSequence`` and ``FrameId``; see
+``CaptureImage``, ``CaptureFrame`` and ``CaptureSequence``; see
 ``specs/core/analysis/pick-images.md``)."""
 
 import _thread
@@ -20,10 +20,10 @@ from sfmtool.analysis import (
     CaptureFrame,
     CaptureImage,
     CaptureSequence,
-    FrameId,
     pick_images,
 )
-from sfmtool.fileio import write_sift
+from sfmtool.fileio import read_sift, write_sift
+from sfmtool.sift import build_sift_files
 
 WIDTH, HEIGHT, FOCAL = 640, 480, 500.0
 # The camera's x motion per frame for a step of about 1% of the long side.
@@ -32,8 +32,8 @@ ONE_PERCENT = 0.128
 
 class _Capture:
     """A synthetic video: a wall of points with random descriptors seen by a
-    camera moving along x, whose ``.sift`` files are written only when the
-    walk asks for them."""
+    camera moving along x, with every frame's ``.sift`` file written up
+    front, for the walk to read."""
 
     def __init__(self, folder: Path, frames: int = 150, seed: int = 0):
         rng = np.random.default_rng(seed)
@@ -63,7 +63,6 @@ class _Capture:
                 for t in range(frames)
             ],
         )
-        self.calls: list[list[FrameId]] = []
 
     def write(self, t: int, path: Path) -> None:
         rng = np.random.default_rng(t + 1)
@@ -100,20 +99,29 @@ class _Capture:
             },
         )
 
-    def __call__(self, frames: list[FrameId]) -> None:
-        self.calls.append(list(frames))
+    def write_all(self, skip: set[int] = frozenset()) -> "_Capture":
         self.folder.mkdir(parents=True, exist_ok=True)
-        for f in frames:
-            image = self.sequence.frames[f.frame].images[0]
-            self.write(f.frame, image.sift_path)
+        for t, frame in enumerate(self.sequence.frames):
+            if t not in skip:
+                self.write(t, frame.images[0].sift_path)
+        return self
 
 
-def test_a_steady_video_is_walked(tmp_path: Path):
-    capture = _Capture(tmp_path / "frames")
+@pytest.fixture(scope="module")
+def steady(tmp_path_factory) -> _Capture:
+    """One 150-frame capture with every file written, for the tests that only
+    read it."""
+    return _Capture(tmp_path_factory.mktemp("steady") / "frames").write_all()
+
+
+def _read(report: dict) -> list[int]:
+    return [f["id"]["frame"] for f in report["frames"]]
+
+
+def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
+    capture = steady
     counter = ProgressCounter()
-    report = pick_images(
-        [capture.sequence], capture, baseline_frames=20, progress=counter
-    )
+    report = pick_images([capture.sequence], baseline_frames=20, progress=counter)
     assert report["verdict"] == "solvable"
     walk = report["sequences"][0]["walk"]
     chosen = walk["chosen"]
@@ -123,29 +131,29 @@ def test_a_steady_video_is_walked(tmp_path: Path):
     steps = [s["stats"]["step_percent"] for s in walk["steps"]]
     assert 7 <= np.median(steps) <= 13
     assert walk["breaks"] == [] and walk["swaps"] == []
-    # The callable was handed FrameId objects, each frame once, and exactly
-    # those frames were read and have .sift files.
-    asked = [f for call in capture.calls for f in call]
-    assert all(isinstance(f, FrameId) for f in asked)
-    assert len(set(asked)) == len(asked)
-    read = [FrameId(f["id"]["sequence"], f["id"]["frame"]) for f in report["frames"]]
-    assert read == asked
-    assert sorted(p.name for p in capture.folder.glob("*.sift")) == sorted(
-        f"frame_{f.frame + 1:04d}.jpg.sift" for f in asked
-    )
-    assert counter.value == len(asked) < 150
+    read = _read(report)
+    assert len(set(read)) == len(read) < 150
+    assert counter.value == len(read)
+    # Nothing was extracted: the files were there.
+    assert report["frames_extracted"] == [False] * len(read)
+    assert report["frames_extracted_unread"] == 0
     # The report is plain data that JSON writes as it is.
     assert json.loads(json.dumps(report)) == report
 
 
-def test_options_reach_the_walk(tmp_path: Path):
-    capture = _Capture(tmp_path / "frames")
+def test_a_missing_sift_file_is_a_file_not_found_error(tmp_path: Path):
+    capture = _Capture(tmp_path / "frames", frames=40).write_all(skip={1})
+    with pytest.raises(FileNotFoundError, match="frame_0002.jpg.sift"):
+        pick_images([capture.sequence], baseline_frames=20)
+
+
+def test_options_reach_the_walk(steady: _Capture):
+    capture = steady
     report = pick_images(
-        [capture.sequence], capture, baseline_frames=20, target_step_percent=20.0
+        [capture.sequence], baseline_frames=20, target_step_percent=20.0
     )
     strides = np.diff(report["sequences"][0]["walk"]["chosen"])
     assert 16 <= np.median(strides) <= 24
-    calls = len(capture.calls)
     for name, value in [
         ("target_step_percent", 0.0),
         ("step_band", 1.0),
@@ -157,77 +165,71 @@ def test_options_reach_the_walk(tmp_path: Path):
     ]:
         key = name.split(".")[-1]
         with pytest.raises(ValueError, match=name.replace(".", r"\.")):
-            pick_images([capture.sequence], capture, **{key: value})
+            pick_images([capture.sequence], **{key: value})
     # The forest's parameters are checked as for FrameFeatures.
     with pytest.raises(ValueError, match="num_trees"):
-        pick_images([capture.sequence], capture, num_trees=0)
+        pick_images([capture.sequence], num_trees=0)
     with pytest.raises(ValueError, match="unknown preset"):
-        pick_images([capture.sequence], capture, preset="slow")
-    # Refused before anything is extracted.
-    assert len(capture.calls) == calls
+        pick_images([capture.sequence], preset="slow")
 
 
-def test_the_callables_exception_is_raised_unchanged(tmp_path: Path):
+def test_the_source_options_are_checked(tmp_path: Path):
     capture = _Capture(tmp_path / "frames")
+    config_options = {"image_to_gray": {"formula": "G"}}
+    with pytest.raises(ValueError, match="together"):
+        pick_images([capture.sequence], feature_options=config_options)
+    with pytest.raises(ValueError, match="together"):
+        pick_images([capture.sequence], feature_prefix_dir="features")
+    with pytest.raises(ValueError, match="concurrent_images"):
+        pick_images([capture.sequence], concurrent_images=2)
+    with pytest.raises(ValueError, match="version 1 settings"):
+        pick_images(
+            [capture.sequence], feature_options={}, feature_prefix_dir="features"
+        )
+    with pytest.raises(ValueError, match=r"params\['octave_layers'\]"):
+        pick_images(
+            [capture.sequence],
+            feature_options={**config_options, "octave_layers": 0},
+            feature_prefix_dir="features",
+        )
+    # Nothing was written for any of them.
+    assert not capture.folder.exists()
 
-    class ExtractorFailed(Exception):
-        pass
 
-    raised = ExtractorFailed("the extractor ran out of disk")
-    calls = []
-
-    def failing(frames):
-        calls.append(frames)
-        raise raised
-
-    with pytest.raises(ExtractorFailed) as excinfo:
-        pick_images([capture.sequence], failing, baseline_frames=20)
-    assert excinfo.value is raised
-    assert len(calls) == 1
-
-
-def test_a_signal_between_pairs_stops_the_walk(tmp_path: Path):
+def test_a_signal_while_the_walk_runs_stops_it(steady: _Capture):
     """Ctrl+C while the walk matches, with the GIL released, raises
-    ``KeyboardInterrupt`` from the walk's check between pairs, not from the
-    callable, and the callable is not called again."""
-    capture = _Capture(tmp_path / "frames", frames=300)
-    returned = threading.Event()
-
-    def ensure(frames):
-        capture(frames)
-        returned.set()
+    ``KeyboardInterrupt`` from the walk."""
+    capture = steady
+    counter = ProgressCounter()
 
     def interrupt():
-        returned.wait()
-        # The first batch's pairs take far longer than this to match.
-        time.sleep(0.02)
+        # The baseline's pairs take far longer to match than reading the
+        # first frame does.
+        deadline = time.monotonic() + 60
+        while counter.value == 0 and time.monotonic() < deadline:
+            time.sleep(0.001)
         _thread.interrupt_main()
 
     thread = threading.Thread(target=interrupt)
     thread.start()
-    with pytest.raises(KeyboardInterrupt) as excinfo:
-        pick_images([capture.sequence], ensure, baseline_frames=100)
+    with pytest.raises(KeyboardInterrupt):
+        pick_images([capture.sequence], baseline_frames=100, progress=counter)
     thread.join()
-    assert len(capture.calls) == 1
-    assert all(entry.name != "ensure" for entry in excinfo.traceback)
+    assert 0 < counter.value < 150
 
 
 def test_errors_map_to_python_exceptions(tmp_path: Path):
-    capture = _Capture(tmp_path / "frames", frames=40)
-    with pytest.raises(TypeError, match="callable"):
-        pick_images([capture.sequence], 3)
+    capture = _Capture(tmp_path / "frames", frames=40).write_all()
     with pytest.raises(ValueError, match="no sequences"):
-        pick_images([], capture)
+        pick_images([])
     with pytest.raises(ValueError, match="increasing"):
         frames = capture.sequence.frames
-        pick_images(
-            [CaptureSequence(["a_%d.jpg"], [frames[1], frames[0]])],
-            capture,
-        )
-    # A source that writes nothing: the .sift read raises the OSError of
-    # the format errors, with the path.
-    with pytest.raises(FileNotFoundError, match="frame_0001.jpg.sift"):
-        pick_images([capture.sequence], lambda frames: None)
+        pick_images([CaptureSequence(["a_%d.jpg"], [frames[1], frames[0]])])
+    # A file that is not a .sift file raises the OSError of the format errors,
+    # with the path.
+    capture.sequence.frames[0].images[0].sift_path.write_bytes(b"not a zip")
+    with pytest.raises(OSError, match="frame_0001.jpg.sift"):
+        pick_images([capture.sequence])
     # A folder in place of which there is a file cannot be listed.
     blocker = tmp_path / "blocker"
     blocker.write_text("a file")
@@ -240,21 +242,16 @@ def test_errors_map_to_python_exceptions(tmp_path: Path):
         ],
     )
     with pytest.raises(OSError, match="cannot be listed"):
-        pick_images([blocked], capture)
+        pick_images([blocked])
     # Version 1 files in a folder the capture's files go in.
     v1_folder = tmp_path / "v1"
-    v1_folder.mkdir()
-    v1 = _Capture(v1_folder, frames=40)
-    v1.write(0, v1_folder / "frame_0001.jpg.sift")
+    v1 = _Capture(v1_folder, frames=40).write_all()
     _rewrite_as_version_1(v1_folder / "frame_0001.jpg.sift")
     with pytest.raises(ValueError, match="version 1 .sift files"):
-        pick_images([v1.sequence], v1)
-    assert v1.calls == []
+        pick_images([v1.sequence])
 
 
 def _rewrite_as_version_1(path: Path) -> None:
-    from sfmtool.fileio import read_sift
-
     data = read_sift(path)
     data["metadata"]["version"] = 1
     del data["metadata"]["sharpness"]
@@ -272,22 +269,17 @@ def test_capture_classes():
     sequence = CaptureSequence(["frame_%04d.jpg"], [frame])
     assert sequence.patterns == ["frame_%04d.jpg"]
     assert sequence.frames == (frame,) and len(sequence) == 1
-    assert FrameId(0, 3) == FrameId(0, 3) != FrameId(1, 3)
-    assert len({FrameId(0, 3), FrameId(0, 3)}) == 1
-    assert (FrameId(2, 5).sequence, FrameId(2, 5).frame) == (2, 5)
-    assert repr(FrameId(2, 5)) == "FrameId(sequence=2, frame=5)"
     with pytest.raises(TypeError):
         CaptureFrame(1, ["not an image"])
 
 
-def test_photographs_extracted_by_the_workspace_are_not_a_video(
+def test_photographs_extracted_by_the_walk_are_not_a_video(
     isolated_seoul_bull_17_images: list[Path], tmp_path: Path
 ):
-    """Real images through the workspace's own extraction: the 17
-    photographs of a walk around a sculpture are judged not a video, and
-    every .sift file written is one the walk read."""
-    from sfmtool.sift.extract import image_files_to_sift_files
-
+    """Real images extracted by the walk with the workspace's settings: the
+    17 photographs of a walk around a sculpture are judged not a video, each
+    file is the one ``build_sift_files`` writes, and a second run extracts
+    nothing."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     images = []
@@ -303,21 +295,38 @@ def test_photographs_extracted_by_the_workspace_are_not_a_video(
             for t, p in enumerate(images)
         ],
     )
-    asked = []
-
-    def ensure(frames):
-        asked.extend(frames)
-        image_files_to_sift_files(
-            [sequence.frames[f.frame].images[0].image_path for f in frames],
-            feature_tool=config["feature_tool"],
-            feature_options=config["feature_options"],
-            feature_prefix_dir=config["feature_prefix_dir"],
-        )
-
-    report = pick_images([sequence], ensure)
+    extract = {
+        "feature_options": config["feature_options"],
+        "feature_prefix_dir": config["feature_prefix_dir"],
+        "concurrent_images": 4,
+    }
+    report = pick_images([sequence], **extract)
     assert report["verdict"] == "not_a_video"
     assert report["sequences"][0]["video"]["is_video"] is False
     assert report["sequences"][0]["walk"] is None
+    read = _read(report)
+    # Every frame is sampled, so every frame is read, and each was extracted.
+    assert sorted(read) == list(range(17))
+    assert report["frames_extracted"] == [True] * 17
+    assert report["frames_extracted_unread"] == 0
     assert sorted(p.name for p in features.glob("*.sift")) == sorted(
-        f"{images[f.frame].name}.sift" for f in asked
+        f"{p.name}.sift" for p in images
     )
+
+    copies = tmp_path / "copies"
+    copies.mkdir()
+    copied = [Path(shutil.copy(p, copies / p.name)) for p in images]
+    sift_paths, _, _ = build_sift_files(
+        copied, config["feature_options"], config["feature_prefix_dir"]
+    )
+    for image, built in zip(images, sift_paths):
+        walked = read_sift(features / f"{image.name}.sift")
+        expected = read_sift(built)
+        assert walked["metadata"] == expected["metadata"]
+        assert np.array_equal(walked["descriptors"], expected["descriptors"])
+
+    again = pick_images([sequence], **extract)
+    assert again["frames_extracted"] == [False] * 17
+    assert {k: v for k, v in again.items() if k != "frames_extracted"} == {
+        k: v for k, v in report.items() if k != "frames_extracted"
+    }

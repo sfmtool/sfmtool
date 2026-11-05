@@ -1,12 +1,14 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The frames [`super::pick_images`] has read: it asks the source for each
-//! frame once, reads every sensor's readings from the `.sift` metadata, and
-//! keeps each pair's statistics so no pair is matched twice. A frame's
+//! The frames [`super::pick_images`] has read: it waits on the source for
+//! each frame once, reads every sensor's readings from the `.sift` metadata,
+//! and keeps each pair's statistics so no pair is matched twice. A frame's
 //! features are read again from its `.sift` file whenever a pair needs them,
 //! and dropped when the pairs that need them are matched, so at most a few
-//! forests are held at once.
+//! forests are held at once. The frames [`super::pick_images`] predicts it
+//! will read are passed to the source's prefetch, which only starts work:
+//! nothing here reads a frame it did not wait for.
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -15,9 +17,10 @@ use sfmtool_sift_format::{
     read_sift_features, read_sift_metadata, SiftError, SiftMetadata, SIFT_READINGS_VERSION,
 };
 
-use super::capture::{CaptureSequence, FrameId, FrameSource, PickImagesError, PickImagesOptions};
+use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
 use super::frame_pair::{match_frame_pair, FrameFeatures, FramePairStats};
 use super::report::{MeasuredPair, Stage};
+use super::source::FrameSource;
 use crate::features::sift::ImageReadings;
 use crate::progress::Progress;
 
@@ -67,27 +70,62 @@ impl<'a> Frames<'a> {
         self.index[id.sequence][id.frame].is_some()
     }
 
-    /// Ask the source for the frames of `ids` not yet read, in one call, and
-    /// read their readings. A frame already read is not asked for again.
+    /// The frames of `ids` not yet read, each once, in order.
+    fn unread(&self, ids: &[FrameId]) -> Vec<FrameId> {
+        let mut new: Vec<FrameId> = Vec::new();
+        for &id in ids {
+            if !self.is_read(id) && !new.contains(&id) {
+                new.push(id);
+            }
+        }
+        new
+    }
+
+    fn requests(&self, ids: &[FrameId]) -> Vec<(FrameId, &'a CaptureFrame)> {
+        let sequences: &'a [CaptureSequence] = self.sequences;
+        ids.iter()
+            .map(|&id| (id, &sequences[id.sequence].frames[id.frame]))
+            .collect()
+    }
+
+    /// How many frames ahead the walk prefetches through a break, where it
+    /// reads every frame: as many as the source works on at once. 0 when the
+    /// options turn prefetching off or the source does no work ahead.
+    pub(super) fn prefetch_window(&self) -> usize {
+        if self.options.prefetch {
+            self.source.concurrency()
+        } else {
+            0
+        }
+    }
+
+    /// Ask the source to start on the frames of `ids` not yet read, in
+    /// order, in place of the last frames asked for. Nothing is read.
+    pub(super) fn prefetch(&mut self, ids: &[FrameId]) {
+        if self.prefetch_window() == 0 {
+            return;
+        }
+        let new = self.unread(ids);
+        let requests = self.requests(&new);
+        self.source.prefetch(&requests);
+    }
+
+    /// Wait on the source for the frames of `ids` not yet read, in one call,
+    /// and read their readings. A frame already read is not waited for
+    /// again.
     pub(super) fn ensure(
         &mut self,
         ids: &[FrameId],
         stage: Stage,
         progress: &Progress,
     ) -> Result<(), PickImagesError> {
-        let mut new = Vec::new();
-        for &id in ids {
-            if !self.is_read(id) && !new.contains(&id) {
-                new.push(id);
-            }
-        }
+        let new = self.unread(ids);
         if new.is_empty() {
             return Ok(());
         }
         progress.check_cancel()?;
-        self.source
-            .ensure_sift_files(&new, progress)
-            .map_err(|e| PickImagesError::Source { message: e.message })?;
+        let requests = self.requests(&new);
+        self.source.wait(&requests, progress)?;
         for id in new {
             let frame = &self.sequences[id.sequence].frames[id.frame];
             let mut readings = Vec::with_capacity(frame.images.len());
@@ -223,6 +261,12 @@ impl<'a> Frames<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Stop the source's work and return every frame it wrote `.sift` files
+    /// for, sorted.
+    pub(super) fn finish_source(&mut self) -> Vec<FrameId> {
+        self.source.finish()
     }
 
     /// Every pair matched, in order.

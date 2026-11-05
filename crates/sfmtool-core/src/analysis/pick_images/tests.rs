@@ -3,14 +3,16 @@
 
 //! The walk on synthetic captures: a scene of points with random descriptors
 //! seen along a camera path with known motion per frame, written as version 2
-//! `.sift` files only when the source is asked for them.
+//! `.sift` files by a pool of workers only for the frames the source is asked
+//! to prefetch or wait for.
 
 mod capture;
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-use capture::{sharp, sift_files, Content, Fault, Synth, SynthSource, ONE_PERCENT};
+use capture::{sharp, sift_files, Asked, Content, Fault, Synth, SynthSource, ONE_PERCENT};
 
 use super::*;
 use crate::features::sift::ImageReadings;
@@ -24,10 +26,17 @@ fn options() -> PickImagesOptions {
     }
 }
 
+/// How many workers the test source runs unless a test says otherwise.
+const THREADS: usize = 4;
+
 struct Run {
     result: Result<PickImagesReport, PickImagesError>,
+    /// Every frame waited for, in order.
     asked: Vec<FrameId>,
-    calls: Vec<Vec<FrameId>>,
+    /// The frames of each wait.
+    waits: Vec<Vec<FrameId>>,
+    /// Every frame asked to be prefetched.
+    prefetched: BTreeSet<FrameId>,
     sequences: Vec<CaptureSequence>,
     dir: tempfile::TempDir,
 }
@@ -54,6 +63,16 @@ fn run_with(
     fault: Fault,
     cancel: Option<&AtomicBool>,
 ) -> Run {
+    run_on(synths, options, fault, cancel, THREADS)
+}
+
+fn run_on(
+    synths: &[&Synth],
+    options: &PickImagesOptions,
+    fault: Fault,
+    cancel: Option<&AtomicBool>,
+    threads: usize,
+) -> Run {
     let dir = tempfile::tempdir().expect("a temporary folder");
     let sequences: Vec<CaptureSequence> = synths
         .iter()
@@ -63,17 +82,14 @@ fn run_with(
     let flag = AtomicBool::new(false);
     let flag = cancel.unwrap_or(&flag);
     let progress = Progress::none().cancelled_by(flag);
-    let (result, asked, calls) = {
-        let mut source = SynthSource::new(synths, &sequences);
-        source.fault = fault;
-        source.cancel = Some(flag);
-        let result = pick_images(&sequences, &mut source, options, &progress);
-        (result, source.asked, source.calls)
-    };
+    let mut source = SynthSource::new(synths, threads, fault).cancelled_by(flag);
+    let result = pick_images(&sequences, &mut source, options, &progress);
+    let Asked { waits, prefetched } = source.into_asked();
     Run {
         result,
-        asked,
-        calls,
+        asked: waits.iter().flatten().copied().collect(),
+        waits,
+        prefetched,
         sequences,
         dir,
     }
@@ -91,31 +107,42 @@ fn strides(walk: &WalkReport, keep: impl Fn(&WalkStep) -> bool) -> Vec<f64> {
         .collect()
 }
 
-/// The frames the source was asked for are exactly the frames the report
-/// lists as read, in the same order and each once, and exactly those frames
-/// have `.sift` files.
+/// The frames waited for are exactly the frames the report lists as read, in
+/// the same order and each once; every frame read has `.sift` files, written
+/// in the run; and the other frames with `.sift` files were prefetched, as
+/// many as the report counts as extracted and never read.
 fn assert_read_is_asked(run: &Run) {
-    let read: Vec<FrameId> = run.report().frames.iter().map(|f| f.id).collect();
+    let report = run.report();
+    let read: Vec<FrameId> = report.frames.iter().map(|f| f.id).collect();
     assert_eq!(read, run.asked);
     let unique: BTreeSet<FrameId> = run.asked.iter().copied().collect();
-    assert_eq!(unique.len(), run.asked.len(), "a frame was asked for twice");
+    assert_eq!(
+        unique.len(),
+        run.asked.len(),
+        "a frame was waited for twice"
+    );
+    assert_eq!(report.frames_extracted, vec![true; read.len()]);
+    let mut unread = 0;
     for (s, sequence) in run.sequences.iter().enumerate() {
         let folder = run.dir.path().join(format!("seq{s}"));
-        let expected: Vec<_> = run
-            .asked
-            .iter()
-            .filter(|id| id.sequence == s)
-            .flat_map(|id| {
-                sequence.frames[id.frame]
-                    .images
-                    .iter()
-                    .map(|i| i.sift_path.clone())
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        assert_eq!(sift_files(&folder), expected);
+        let files: BTreeSet<PathBuf> = sift_files(&folder).into_iter().collect();
+        for (t, frame) in sequence.frames.iter().enumerate() {
+            let id = FrameId {
+                sequence: s,
+                frame: t,
+            };
+            let has = frame.images.iter().all(|i| files.contains(&i.sift_path));
+            if unique.contains(&id) {
+                assert!(has, "{id:?} was read but has no .sift files");
+            } else if has {
+                assert!(run.prefetched.contains(&id), "{id:?} has files unasked");
+                unread += 1;
+            } else {
+                assert!(frame.images.iter().all(|i| !files.contains(&i.sift_path)));
+            }
+        }
     }
+    assert_eq!(report.frames_extracted_unread, unread);
 }
 
 #[test]
@@ -614,9 +641,9 @@ fn shuffled_frames_are_not_a_video() {
     for sequence in &report.sequences {
         assert!(sequence.solvability.is_none() && sequence.walk.is_none());
     }
-    // Nothing is read after the first batch.
+    // Nothing is read, or asked for, after the first batch.
     assert!(report.frames.iter().all(|f| f.stage == Stage::BaselineNear));
-    assert_eq!(run.calls.len(), 1);
+    assert!(run.prefetched.iter().all(|id| was_read(&run, id)));
     assert_read_is_asked(&run);
 }
 
@@ -727,13 +754,151 @@ fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     assert!(read.blurred && !read.sensors[0].blurred && read.sensors[1].blurred);
 }
 
+/// The report without the one count that depends on timing, as its JSON
+/// value, in which a NaN (a step with no matches) equals itself.
+fn decisions(run: &Run) -> serde_json::Value {
+    let report = PickImagesReport {
+        frames_extracted_unread: 0,
+        ..run.report().clone()
+    };
+    serde_json::to_value(report).expect("the report serializes")
+}
+
+fn was_read(run: &Run, id: &FrameId) -> bool {
+    run.report().frames.iter().any(|f| f.id == *id)
+}
+
 #[test]
 fn the_same_capture_gives_the_same_report() {
     let synth = Synth::steady(13, 200, ONE_PERCENT);
     let a = run(&[&synth]);
     let b = run(&[&synth]);
-    assert_eq!(a.report(), b.report());
-    assert_eq!(a.calls, b.calls);
+    assert_eq!(decisions(&a), decisions(&b));
+    assert_eq!(a.waits, b.waits);
+}
+
+/// A capture with something of everything the walk does: a change of speed,
+/// a blurred frame, a blurred run, a bad patch filled in and a break.
+fn eventful() -> Synth {
+    let mut x = 0.0;
+    let xs: Vec<f64> = (0..200)
+        .map(|t| {
+            let here = x;
+            x += if t < 130 { 1.0 } else { 1.6 } * ONE_PERCENT;
+            here
+        })
+        .collect();
+    let length = *xs.last().unwrap();
+    let mut synth = Synth::wall(32, -12.0, length + 12.0, 80.0).along(xs);
+    // Every third frame blurred, so a candidate that lands on one is
+    // swapped for a sharp neighbour.
+    for t in (15..=45).step_by(3) {
+        synth.shots[t].readings[0].0 = 0.3;
+    }
+    for t in 52..=72 {
+        synth.shots[t].readings[0].0 = 0.2 + 0.01 * ((t * 7) % 10) as f32;
+    }
+    for t in 85..=115 {
+        synth.shots[t].content = Content::Window {
+            period: 40,
+            lifetime: 4,
+        };
+    }
+    for t in 160..=170 {
+        synth.shots[t].content = Content::Junk;
+    }
+    synth
+}
+
+#[test]
+fn the_report_is_the_same_for_any_lookahead_and_thread_count() {
+    let synth = eventful();
+    let off = PickImagesOptions {
+        prefetch: false,
+        ..options()
+    };
+    let reference = run_on(&[&synth], &off, Fault::None, None, 1);
+    let walk = reference.walk(0);
+    // The capture exercises what it is meant to.
+    assert!(!walk.swaps.is_empty(), "no swap");
+    assert!(!walk.gaps.is_empty(), "no gap");
+    assert!(!walk.breaks.is_empty(), "no break");
+    assert!(!walk.kept_blurred.is_empty(), "nothing kept though blurred");
+    assert!(reference.prefetched.is_empty());
+    assert_eq!(reference.report().frames_extracted_unread, 0);
+    assert_read_is_asked(&reference);
+    for (prefetch, threads) in [(false, 8), (true, 1), (true, 8)] {
+        let options = PickImagesOptions {
+            prefetch,
+            ..options()
+        };
+        let run = run_on(&[&synth], &options, Fault::None, None, threads);
+        let case = format!("prefetch {prefetch}, {threads} threads");
+        assert_eq!(decisions(&run), decisions(&reference), "{case}");
+        assert_eq!(run.waits, reference.waits, "{case}");
+        assert_eq!(run.prefetched.is_empty(), !prefetch, "{case}");
+        assert_read_is_asked(&run);
+    }
+}
+
+#[test]
+fn the_baseline_and_a_break_are_read_ahead_and_a_frame_failing_unread_stops_nothing() {
+    // A steady video with a stretch that matches nothing, which the walk
+    // reads one frame at a time. The one clean run serves both halves.
+    let mut synth = Synth::steady(33, 200, ONE_PERCENT);
+    for t in 120..=140 {
+        synth.shots[t].content = Content::Junk;
+    }
+    let run = run(&[&synth]);
+    let report = run.report();
+    let walk = run.walk(0);
+    assert_eq!(walk.breaks.len(), 1, "{:?}", walk.breaks);
+    // Every frame of both batches of the baseline was prefetched.
+    for frame in report.frames.iter().filter(|f| f.stage != Stage::Walk) {
+        assert!(run.prefetched.contains(&frame.id), "{:?}", frame.id);
+    }
+    // Through the break, every frame waited for after the first pair that
+    // failed was prefetched, and nothing reaches past the break by more than
+    // the source's workers.
+    let after = walk.breaks[0].after;
+    let resumes = walk.breaks[0].resumes_at.expect("the walk resumes");
+    let id = |frame| FrameId { sequence: 0, frame };
+    let first = run
+        .waits
+        .iter()
+        .position(|w| w.contains(&id(after + 2)))
+        .expect("the break's first pair was waited for");
+    let last = run
+        .waits
+        .iter()
+        .position(|w| w.contains(&id(resumes + 1)))
+        .expect("the resumed pair was waited for");
+    let through: Vec<FrameId> = run.waits[first + 1..=last].concat();
+    assert!(!through.is_empty());
+    for frame in &through {
+        assert!(run.prefetched.contains(frame), "{frame:?}");
+    }
+    let walked_ahead = run.prefetched.iter().filter(|f| !was_read(&run, f)).count();
+    assert!(
+        walked_ahead <= THREADS,
+        "{walked_ahead} predicted and never read"
+    );
+    assert_read_is_asked(&run);
+
+    // The break read ahead leaves frames past its end prefetched and unread;
+    // a worker failing on one of them stops nothing.
+    let never_read = *run
+        .prefetched
+        .iter()
+        .find(|id| !was_read(&run, id))
+        .expect("a frame predicted and never read");
+    let failing = run_with(
+        &[&synth],
+        &options(),
+        Fault::FailFrame(never_read.frame),
+        None,
+    );
+    assert_eq!(decisions(&failing), decisions(&run));
 }
 
 #[test]
@@ -851,7 +1016,7 @@ fn every_option_out_of_range_is_refused() {
             PickImagesError::Options { name, .. } => assert_eq!(name, expected),
             other => panic!("{expected}: {other:?}"),
         }
-        assert!(run.calls.is_empty());
+        assert!(run.waits.is_empty() && run.prefetched.is_empty());
     }
     // The bounds themselves are accepted.
     let edges = PickImagesOptions {
@@ -867,10 +1032,12 @@ fn every_option_out_of_range_is_refused() {
 fn sequence_error(sequences: &[CaptureSequence]) -> String {
     let synth = Synth::steady(17, 10, ONE_PERCENT);
     let synths: Vec<&Synth> = sequences.iter().map(|_| &synth).collect();
-    let mut source = SynthSource::new(&synths, sequences);
-    match pick_images(sequences, &mut source, &options(), &Progress::none()) {
+    let mut source = SynthSource::new(&synths, THREADS, Fault::None);
+    let result = pick_images(sequences, &mut source, &options(), &Progress::none());
+    let asked = source.into_asked();
+    match result {
         Err(PickImagesError::Sequence { reason }) => {
-            assert!(source.calls.is_empty());
+            assert!(asked.waits.is_empty() && asked.prefetched.is_empty());
             reason
         }
         other => panic!("{other:?}"),
@@ -919,8 +1086,7 @@ fn version_1_files_in_a_folder_are_refused_before_anything_is_extracted() {
     // A version 1 file of an image of the capture, already in its folder.
     let path = &sequences[0].frames[7].images[0].sift_path;
     synth.write(7, 0, path, 1);
-    let synths = [&synth];
-    let mut source = SynthSource::new(&synths, &sequences);
+    let mut source = SynthSource::new(&[&synth], THREADS, Fault::None);
     let err = pick_images(&sequences, &mut source, &options(), &Progress::none()).unwrap_err();
     match &err {
         PickImagesError::Version1Files(found) => {
@@ -929,7 +1095,8 @@ fn version_1_files_in_a_folder_are_refused_before_anything_is_extracted() {
         }
         other => panic!("{other:?}"),
     }
-    assert!(source.calls.is_empty());
+    let asked = source.into_asked();
+    assert!(asked.waits.is_empty() && asked.prefetched.is_empty());
 }
 
 #[test]
@@ -951,27 +1118,40 @@ fn a_folder_that_cannot_be_listed_is_refused() {
     let blocker = dir.path().join("not_a_folder");
     std::fs::write(&blocker, b"a file").unwrap();
     let sequences = vec![synth.sequence(&blocker)];
-    let synths = [&synth];
-    let mut source = SynthSource::new(&synths, &sequences);
+    let mut source = SynthSource::new(&[&synth], THREADS, Fault::None);
     match pick_images(&sequences, &mut source, &options(), &Progress::none()) {
         Err(PickImagesError::ListFolder { folder, .. }) => assert_eq!(folder, blocker),
         other => panic!("{other:?}"),
     }
-    assert!(source.calls.is_empty());
+    let asked = source.into_asked();
+    assert!(asked.waits.is_empty() && asked.prefetched.is_empty());
 }
 
 #[test]
-fn the_sources_failure_is_returned() {
-    let synth = Synth::steady(22, 300, ONE_PERCENT);
-    for call in [0, 1, 2] {
-        let run = run_with(&[&synth], &options(), Fault::FailOnCall(call), None);
+fn a_worker_s_failure_on_a_frame_read_is_the_error_naming_the_frame() {
+    let synth = Synth::steady(22, 150, ONE_PERCENT);
+    let clean = run(&[&synth]);
+    // A frame of the first batch, of the second, and of the walk.
+    for stage in [Stage::BaselineNear, Stage::BaselineFar, Stage::Walk] {
+        let frame = clean
+            .report()
+            .frames
+            .iter()
+            .find(|f| f.stage == stage && f.id.frame > 0)
+            .expect("a frame of the stage")
+            .id;
+        let run = run_with(&[&synth], &options(), Fault::FailFrame(frame.frame), None);
         match error(&run) {
-            PickImagesError::Source { message } => {
-                assert_eq!(message, "the extractor ran out of disk");
+            PickImagesError::Source(FrameSourceError::Extract { frame: f, error }) => {
+                assert_eq!(*f, frame);
+                let message = error.to_string();
+                assert!(message.contains("the disk is full"), "{message}");
+                let name = format!("cam0_{:04}.jpg.sift", frame.frame + 1);
+                assert!(message.contains(&name), "{message}");
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(run.calls.len(), call + 1);
+        assert!(run.waits.last().unwrap().contains(&frame));
     }
 }
 
@@ -990,27 +1170,10 @@ fn a_missing_sift_file_is_a_read_error() {
 #[test]
 fn frames_of_different_sizes_are_a_pair_error() {
     let synth = Synth::steady(24, 40, ONE_PERCENT);
-    let dir = tempfile::tempdir().unwrap();
-    let sequences = vec![synth.sequence(dir.path())];
-    struct Resized<'s>(SynthSource<'s>, &'s [CaptureSequence]);
-    impl FrameSource for Resized<'_> {
-        fn ensure_sift_files(
-            &mut self,
-            frames: &[FrameId],
-            progress: &Progress,
-        ) -> Result<(), FrameSourceError> {
-            self.0.ensure_sift_files(frames, progress)?;
-            // Frame 1, matched with frame 0 in the first batch, at another
-            // size.
-            let path = &self.1[0].frames[1].images[0].sift_path;
-            capture::write_sift_file(path, &[[1.0, 1.0]], vec![0; 128], 320, 240, sharp(1, 0), 2);
-            Ok(())
-        }
-    }
-    let synths = [&synth];
-    let mut source = Resized(SynthSource::new(&synths, &sequences), &sequences);
-    match pick_images(&sequences, &mut source, &options(), &Progress::none()) {
-        Err(PickImagesError::Pair { a, b, error, .. }) => {
+    // Frame 1, matched with frame 0 in the first batch, at another size.
+    let run = run_with(&[&synth], &options(), Fault::Resize(1), None);
+    match error(&run) {
+        PickImagesError::Pair { a, b, error, .. } => {
             assert_eq!((a.frame, b.frame), (0, 1));
             assert!(matches!(error, FramePairError::SizeMismatch { .. }));
         }
@@ -1024,17 +1187,17 @@ fn a_cancelled_run_stops() {
     let flag = AtomicBool::new(true);
     let run = run_with(&[&synth], &options(), Fault::None, Some(&flag));
     assert!(matches!(error(&run), PickImagesError::Cancelled));
-    assert!(run.calls.is_empty());
+    assert!(run.waits.is_empty() && run.prefetched.is_empty());
 
-    for call in [0, 1, 3] {
+    for call in [0, 1, 3, 40] {
         let flag = AtomicBool::new(false);
         let run = run_with(
             &[&synth],
             &options(),
-            Fault::CancelOnCall(call),
+            Fault::CancelOnWait(call),
             Some(&flag),
         );
         assert!(matches!(error(&run), PickImagesError::Cancelled));
-        assert_eq!(run.calls.len(), call + 1);
+        assert_eq!(run.waits.len(), call + 1);
     }
 }

@@ -19,9 +19,12 @@ the median displacement of the features that match between them
 and gradient structure tensor come from its `.sift` file's metadata
 ([sift-file-format.md § The reading image](../../formats/sift-file-format.md#the-reading-image)).
 The walk reads only the frames it needs: the sample, the frames it chooses and
-the frames it tries on the way. A caller makes each frame's `.sift` files exist
-just before the walk reads them, so a frame gets a `.sift` file exactly when it
-is read. The [`sfm pick-images`](../../cli/image-feature/pick-images-command.md)
+the frames it tries on the way. A source makes each frame's `.sift` files
+exist: the extracting source extracts them on a pool of workers that runs
+ahead of the walk, on the frames the walk predicts it will read, so a frame
+gets a `.sift` file when the walk reads it or predicts it. The walk decides
+only from frames it waited for, so the work done ahead changes how long a run
+takes and never what it chooses. The [`sfm pick-images`](../../cli/image-feature/pick-images-command.md)
 command collects a workspace's frames, prints the report and writes the chosen
 frames as a named image list.
 
@@ -30,12 +33,14 @@ frames as a named image list.
 The walk lives in
 [pick_images/pick.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pick.rs),
 with its inputs in
-[capture.rs](../../../crates/sfmtool-core/src/analysis/pick_images/capture.rs)
+[capture.rs](../../../crates/sfmtool-core/src/analysis/pick_images/capture.rs),
+its sources in
+[source.rs](../../../crates/sfmtool-core/src/analysis/pick_images/source.rs)
 and its report in
 [report.rs](../../../crates/sfmtool-core/src/analysis/pick_images/report.rs),
 all re-exported from `sfmtool_core::analysis::pick_images` beside the frame
 pair matching it uses. It is bound as `sfmtool.analysis.pick_images`, with
-`CaptureImage`, `CaptureFrame`, `CaptureSequence` and `FrameId`.
+`CaptureImage`, `CaptureFrame` and `CaptureSequence`.
 
 ```rust
 /// Where each image of a capture is and where its `.sift` file goes.
@@ -51,15 +56,34 @@ pub struct CaptureSequence { pub patterns: Vec<String>, pub frames: Vec<CaptureF
 /// A sequence's index and a frame's position in it, from 0.
 pub struct FrameId { pub sequence: usize, pub frame: usize }
 
-pub struct FrameSourceError { pub message: String }
-
-/// Makes sure the `.sift` files of the given frames exist and are current.
+/// Makes the `.sift` files of a capture's frames exist.
 pub trait FrameSource {
-    fn ensure_sift_files(
-        &mut self,
-        frames: &[FrameId],
-        progress: &Progress,
-    ) -> Result<(), FrameSourceError>;
+    /// How many frames it works on at once; 0 when it does no work ahead.
+    fn concurrency(&self) -> usize;
+    /// Start on these frames, in place of the last prediction; return at once.
+    fn prefetch(&mut self, frames: &[(FrameId, &CaptureFrame)]);
+    /// Block until every image of these frames has its `.sift` file.
+    fn wait(&mut self, frames: &[(FrameId, &CaptureFrame)], progress: &Progress)
+        -> Result<(), FrameSourceError>;
+    /// Stop the work no wait asked for; the frames it wrote files for, sorted.
+    fn finish(&mut self) -> Vec<FrameId>;
+}
+
+/// Extracts missing `.sift` files with the `sfmtool` tool, as `build_sift_files` does.
+pub struct ExtractingSource { /* … */ }
+impl ExtractingSource {
+    pub fn new(options: BuildSiftFilesOptions) -> Result<Self, BuildSiftFilesError>;
+}
+
+/// Reads `.sift` files that already exist; a missing one is an error.
+pub struct ReadOnlySource;
+
+pub enum FrameSourceError {
+    Missing { frame: FrameId, path: PathBuf },
+    SiftPath { frame: FrameId, sift_path: PathBuf, expected: PathBuf },
+    Extract { frame: FrameId, error: BuildSiftFilesError },
+    Panicked { frame: FrameId, message: String },
+    Cancelled,
 }
 
 pub struct PickImagesOptions {
@@ -70,6 +94,7 @@ pub struct PickImagesOptions {
     pub min_inlier_share: f64,     // 0.5, in [0, 1]
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // FramePairOptions::default()
+    pub prefetch: bool,            // true; changes no choice, only the work ahead
 }
 
 pub fn pick_images(
@@ -84,7 +109,7 @@ pub enum PickImagesError {
     Sequence { reason: String },
     Version1Files(Version1SiftFiles),
     ListFolder { folder: PathBuf, source: std::io::Error },
-    Source { message: String },
+    Source(FrameSourceError),
     ReadSift { path: PathBuf, source: SiftError },
     Version1Sift { path: PathBuf },
     Pair { a: FrameId, b: FrameId, images: Box<[PathBuf; 2]>, error: FramePairError },
@@ -92,18 +117,22 @@ pub enum PickImagesError {
 }
 ```
 
-**Why a source, and why it only makes files exist.** The walk decides which
-frame to read next from what it read last, so it cannot be handed its frames in
-advance. Asking a caller-supplied source keeps every decision in Rust while
-extraction stays where it is, in the Python extraction path that handles all
-three feature tools and the workspace's settings (Rust's own
-`build_sift_files` writes only the `sfmtool` tool's files). The source is asked
-only to make the files exist, not to return features, because the Rust reader
-already reads and checks `.sift` files, and the features then never cross the
-binding. It takes several frames per call because the baseline's batches and a
-blurred run know several frames at once, and extraction in a batch keeps the
-extractor's concurrent decodes busy. The walk asks for each frame once and for
-no frame it does not then read.
+**Why a source that prefetches and waits.** The walk decides which frame to
+read next from what it read last, so it cannot be handed its frames in
+advance, and extraction, not matching, is most of a cold run's time. A source
+that is only asked for a frame when the walk needs it leaves the extractor
+idle while the walk matches and the walk idle while one frame is extracted.
+So the walk tells the source what it knows it will read
+([Run-ahead](#run-ahead)) with `prefetch`, which starts the work and returns
+at once, and blocks in `wait` only for the frames it is about to read. The
+source is asked only to make the files exist, not to return features: the
+files are on disk, the reader already reads and checks them, and what stays
+in memory is bounded ([Sources](#sources)). `finish` stops the work no wait
+asked for, so no worker goes on after a run, and says which frames the source
+wrote files for, which the report counts. The trait is public so a test, or
+another caller, can supply its own; the two sources here are the extracting
+one, for a workspace whose feature tool is `sfmtool`, and the read-only one,
+for files another tool already extracted.
 
 **Positions, not file numbers.** A `FrameId` names a frame by its position in
 its sequence, and every rate is a step per position, so a sequence numbered in
@@ -123,8 +152,15 @@ no sequences, a sequence with no frames, a frame with no images or with another
 number of images than its sequence's first frame, a pattern count that differs
 from the sensor count, frame numbers not in increasing order, and two images
 with one `.sift` path. `Version1Files` and `ListFolder` come from the check of
-the folders ([Version 1 files](#version-1-files)). `Source` carries the
-source's own message. `ReadSift` is a `.sift` file that cannot be read, or
+the folders ([Version 1 files](#version-1-files)). `Source` is a frame the
+walk waited for that the source could not make exist, naming the frame: a
+missing file for the read-only source, and for the extracting source an image
+that cannot be read or a file that cannot be written (`Extract`, with the
+`BuildSiftFilesError::Image` or `Write` that names the path), a `sift_path`
+other than where the extraction writes it (`SiftPath`), or a worker that
+panicked, which is a bug and is reported rather than left to hang the wait
+(`Panicked`). A frame that fails but is never waited for is no error, since
+whether a worker reached it depends on timing. `ReadSift` is a `.sift` file that cannot be read, or
 whose readings or features break the format's rules, such as a negative
 sharpness or a feature count that disagrees with the metadata, each wrapped as
 the `SiftError::InvalidFormat` a damaged file is. `Pair` is two frames whose
@@ -132,33 +168,33 @@ reference images differ in size, the one `FramePairError` the options checks
 leave possible. `Cancelled` is a set cancel flag. No caller input panics
 ([STANDARDS.md § Caller input never panics](../../STANDARDS.md#caller-input-never-panics)).
 
-**A `Progress`.** A walk over a long video runs for minutes, mostly in the
-source's extraction. `pick_images` opens the phases `baseline`,
-`baseline far pairs` and `walk`, reports the count of frames read after each
-call to the source, reports the count of pairs matched as the value
-`pairs_matched` after each pair, and checks for cancellation before every call
-to the source and every pair it matches
+**A `Progress`.** A walk over a long video runs for minutes, mostly in
+extraction. `pick_images` opens the phases `baseline`, `baseline far pairs`
+and `walk`, reports the count of frames read after each wait on the source,
+reports the count of pairs matched as the value `pairs_matched` after each
+pair, and checks for cancellation before every wait and every pair it
+matches. A wait that blocks reads the cancel flag and reports the value
+`source_frames_ended` every 50 ms, so a cancellation stops it within that
+time and a caller whose sink checks for a signal, as the binding's does, sees
+one while the workers extract
 ([STANDARDS.md § Long-running functions take a Progress](../../STANDARDS.md#long-running-functions-take-a-progress)).
+The workers run on threads of their own, which cannot hold the caller's
+`Progress`; each runs its job under a `Progress` whose cancel flag is the
+pool's stop flag, which a cancelled wait and `finish` set, so a worker stops
+at the extraction's next check, before its extraction or its write.
 
 **Example.**
 
 ```rust
 use sfmtool_core::analysis::pick_images::{
-    pick_images, CaptureSequence, FrameId, FrameSource, FrameSourceError, PickImagesOptions,
-    Verdict,
+    pick_images, ExtractingSource, PickImagesOptions, Verdict,
 };
+use sfmtool_core::features::sift::BuildSiftFilesOptions;
 use sfmtool_core::progress::Progress;
 
-struct Extract<'a>(&'a [CaptureSequence]);
-impl FrameSource for Extract<'_> {
-    fn ensure_sift_files(&mut self, frames: &[FrameId], _: &Progress)
-        -> Result<(), FrameSourceError> {
-        // Extract the .sift file of every image of `frames` that is missing.
-        Ok(())
-    }
-}
-
-let report = pick_images(&sequences, &mut Extract(&sequences),
+// The workspace's feature_options and feature_prefix_dir.
+let mut source = ExtractingSource::new(BuildSiftFilesOptions::sfmtool_defaults())?;
+let report = pick_images(&sequences, &mut source,
                          &PickImagesOptions::default(), &Progress::none())?;
 if report.verdict == Verdict::Solvable {
     let walk = report.sequences[0].walk.as_ref().unwrap();
@@ -172,9 +208,14 @@ if report.verdict == Verdict::Solvable {
 `PickImagesReport` holds the `verdict` (`Solvable`, `NotAVideo` or
 `NotSolvable`), one `SequenceReport` per sequence, every frame read
 (`FrameReading`: its id, the stage that read it, and each sensor's readings
-with the blur judgement made from them) in the order read, and every pair
-matched (`MeasuredPair`, with its `FramePairStats`) in the order matched. A
-`SequenceReport` holds:
+with the blur judgement made from them) in the order read, every pair
+matched (`MeasuredPair`, with its `FramePairStats`) in the order matched,
+`frames_extracted`, per frame read, whether the source wrote its `.sift`
+files in this run rather than finding them up to date, and
+`frames_extracted_unread`, how many frames the source wrote files for that
+the walk never read, the predictions it did not follow. That count is the one
+part of the report that depends on how far ahead the walk predicts and how
+fast the source works. A `SequenceReport` holds:
 
 - `baseline`: the sampled positions, the frames the baseline read, each
   sensor's median sharpness, the count of blurred samples, the rate at each
@@ -207,8 +248,8 @@ report. The sequences are walked one after another.
 
 - A **frame** is one instant of the capture: one image, or for a rig the
   images of all its sensors at that instant. A frame is **read** when its
-  `.sift` files are read, just after the source has been asked to make them
-  exist.
+  `.sift` files are read, just after the walk has waited on the source for
+  it. It is **predicted** when the walk asks the source to prefetch it.
 - The **step** between two frames is the median displacement of their mutual
   matches in percent of the image's long side, from the reference sensor's
   images ([frame-pair-matching.md § The step](frame-pair-matching.md#the-step)).
@@ -235,8 +276,10 @@ fewer samples would put neighbouring samples further apart, and the sign that
 the step changes little compares neighbouring samples' steps
 ([Is it a video?](#is-it-a-video)).
 
-The baseline is read in two batches, each requested from the source in one
-call. The first reads the sampled frames and the frames 1 and 3 after each
+The baseline is read in two batches. Each is prefetched whole, then waited
+for and matched sample by sample in sample order, so that matching one
+sample's pairs runs while the source works on the next ones; the frames are
+read, and the pairs matched, in the batch's order. The first reads the sampled frames and the frames 1 and 3 after each
 that exist, and matches each sample with them; that is enough to tell a video
 from a set of photographs. The second, read only when every sequence is a
 video, reads the frames 10 and 30 after each sample and matches each sample
@@ -391,7 +434,8 @@ with fewer than twice `min_matches` matches, or with an F-inlier share within
 **What is never read.** Outside regions flagged for weak matches, a frame the
 walk does not read lies between two chosen frames whose step matched well.
 Inside such a region the halved steps still pass over frames, which are then
-not read either. Every frame of a break is read.
+not read either. Every frame of a break is read. A frame the walk predicted
+and did not read may still have been extracted ([Run-ahead](#run-ahead)).
 
 ### Blur
 
@@ -424,6 +468,84 @@ judged per sensor against that sensor's own baseline, since the sensors look
 at different parts of the scene; a rig frame is blurred when any of its
 sensors is.
 
+## Sources
+
+The extracting source is `sfm sift --extract`'s extraction for the `sfmtool`
+feature tool, frame by frame: each image's file is the one `build_sift_files`
+writes, at `BuildSiftFilesOptions::sift_path_for_image`, with the same
+content, skipped when it is at least as new as its image, and kept on disk
+([features/sift.md § Building `.sift` files](../features/sift.md#building-sift-files)).
+`ExtractingSource::new` refuses options that describe no extraction and
+version 1 settings, as `build_sift_files` does, and `pick_images` has checked
+the folders for version 1 files before the first frame. An image whose
+`sift_path` is not where the extraction writes it is `SiftPath`, since the
+walk would otherwise read a file other than the one written.
+
+Its workers follow `build_sift_files`: there are `concurrent_images` of them,
+or by default the `SFMTOOL_SIFT_EXTRACT_WORKERS` environment variable or the
+core count capped so that the images in flight fit in half of physical memory
+at the first image's size, and each decodes, hashes and makes the thumbnail
+of its frame's images on its own thread, then extracts and writes on the
+rayon pool, which keeps one thread per core. They take the frames a wait is
+blocked on first, in its order, then the last prefetch's in its order. A
+prefetch replaces the one before: its frames not yet started are dropped
+unless the new one lists them too, and a frame started, written or failed is
+not started again. A wait puts its frames not yet started ahead of every
+prefetched one, and returns the error of the first of its frames, in its
+order, that failed.
+
+**Memory.** What stays resident does not grow with the frames extracted:
+the files are on disk, and the walk reads a frame's features back from its
+file when a pair needs them, holding only the few forests of the pairs near
+the current one ([Implementation notes](#implementation-notes)). The pool
+holds a state of a few bytes per frame asked for, the error of a frame that
+failed, and the image paths of the frames queued, which are at most one
+prefetch's (a batch of the baseline, at most five frames per sample, or the
+`W` frames ahead through a break); each worker holds the one frame it extracts, as many as
+`build_sift_files` holds in flight under the same memory cap.
+
+**Cancellation.** A wait that sees the cancel flag sets the pool's stop flag,
+drops the queued work, joins the workers and returns `Cancelled`. A worker
+stops at the extraction's next check, before its extraction or its write, so
+a cancelled run leaves only whole files. `finish` stops the workers the same
+way at the end of every run, with a report or an error. A frame counts as
+written when any of its images' files was, however its work ended, so a rig
+frame stopped or failed between its images counts once among the frames
+written, and in `frames_extracted_unread` when the walk never reads it; a
+later wait for it extracts only the images still missing. The count is of
+frames, as the report's frame list is, not of files.
+
+The read-only source does nothing ahead: its `concurrency` is 0, so the walk
+predicts nothing, and its wait checks that each image's `.sift` file exists,
+naming the first that does not (`Missing`). A caller whose feature tool is not
+`sfmtool` extracts the files first and walks with it.
+
+## Run-ahead
+
+The walk prefetches the frames it knows it will read, so that the source's
+workers extract them while it matches the frames already read.
+
+- **The baseline.** Each batch is one prefetch of all its frames, which the
+  workers extract while the walk waits for and matches the batch sample by
+  sample.
+- **A break.** Once a pair the walk reads forward through does not match
+  well, it reads every following frame until one matches its next frame, so
+  after each such pair it prefetches the next `W` frames, for a source of `W`
+  workers. At most `W` frames past the end of a break are extracted and not
+  read.
+- **The steps.** A step's candidates are not prefetched: its second candidate
+  is aimed from what its first measured, and a frame prefetched on a guess
+  takes a worker and cores from the frame the walk is waiting for, so a step
+  waits for each frame it measures, with every worker free for it.
+
+**The determinism rule.** The walk decides only from frames it explicitly
+waited for, never from what happens to be ready: every decision reads the
+readings and pairs of frames read, and a frame is read only after a wait on
+it returns. A prediction only starts work. So the frames waited for, the
+frames chosen and every decision in the report are the same with
+`prefetch` off or on and for any number of workers; only
+`frames_extracted_unread` differs.
+
 ## Version 1 files
 
 Every reading comes from a version 2 `.sift` file, which records the sharpness
@@ -451,10 +573,11 @@ in its folder after the check, is `Version1Sift`, with the same advice.
   become the chosen frame's when it is accepted. A frame's readings, a few
   numbers per sensor, are kept for every frame read. A pair's statistics are
   kept, so a pair the baseline matched is not matched again by the walk.
-- **The source sees each frame once.** Every frame passes through one reading
-  step that asks the source for the frames not yet read and reads all their
-  `.sift` metadata at once, which is what makes the report's frame list the
-  exact list of frames the source was asked for, in order.
+- **Each frame is waited for once.** Every frame passes through one reading
+  step that waits on the source for the frames not yet read and reads all
+  their `.sift` metadata, which is what makes the report's frame list the
+  exact list of frames waited for, in order. The prefetch step only passes on
+  the frames not yet read.
 - **No duplicate derivations.** The axis ratio and coherence are
   `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, the
   medians and the rate's 0.9 quantile `sfmtool_core::numeric`'s.
@@ -464,7 +587,9 @@ in its folder after the check, is `Version1Sift`, with the same advice.
 The report is the same for the same capture and options: the frame pair
 statistics repeat exactly ([frame-pair-matching.md § Determinism and precision](frame-pair-matching.md#determinism-and-precision)),
 every decision reads them and the readings in a fixed order, and no hash map is
-iterated for an output. The readings are kept as `f32`, as `ImageReadings`
+iterated for an output. It is the same for any source, lookahead and worker
+count too, but for `frames_extracted_unread`, by the
+[determinism rule](#run-ahead). The readings are kept as `f32`, as `ImageReadings`
 holds them, which is enough for readings compared within a capture to about
 three digits; the medians and ratios are `f64` because
 `sfmtool_core::numeric` takes `f64`, and widening is exact.
@@ -487,8 +612,9 @@ three digits; the medians and ratios are `f64` because
 | re-aims | 4 | before a step fails |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
 | weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
+| break read-ahead | `W` frames | how far the walk prefetches through a break, for a source of `W` workers |
 
-The last eight are constants of the module.
+The last nine are constants of the module.
 
 ## Python bindings
 
@@ -505,38 +631,43 @@ sequence = CaptureSequence(
      for n in range(1, 6121)],
 )
 
-def ensure_sift_files(frames):  # a list of FrameId
-    paths = [sequence.frames[f.frame].images[0].image_path for f in frames]
-    image_files_to_sift_files(paths, ...)
-
-report = pick_images([sequence], ensure_sift_files, target_step_percent=10.0)
+# Extract with the workspace's sfmtool settings, ahead of the walk.
+report = pick_images([sequence], feature_options=config["feature_options"],
+                     feature_prefix_dir=config["feature_prefix_dir"],
+                     target_step_percent=10.0)
+# Or read .sift files that already exist.
+report = pick_images([sequence])
 report["verdict"]                         # "solvable"
 report["sequences"][0]["walk"]["chosen"]  # positions of the chosen frames
 ```
 
 `CaptureImage`, `CaptureFrame` and `CaptureSequence` mirror the Rust structs;
 a frame's `images` and a sequence's `frames` are tuples, built once, so
-`sequence.frames[f.frame]` costs nothing per call. `FrameId` has `sequence`
-and `frame`, compares and hashes by them, and is what the callable is given, as
-a list. `pick_images` takes the fields of `PickImagesOptions` as keyword-only
-arguments, with the pair options under the names `match_frame_pair` uses and
-the forest under the names `FrameFeatures` uses (`preset`, `num_trees`,
-`leaf_size`, `max_leaf_checks`); one left out takes the Rust default.
-`progress`, a `ProgressCounter`, holds the count of frames read. The report is
-returned as a dict of plain values, the report's serde form, with `None` for a
-number that is not finite.
+`sequence.frames[id["frame"]]` is the frame a report's id names.
+`feature_options` and `feature_prefix_dir`, given together, choose the
+extracting source, with `concurrent_images` its worker count; with neither,
+the source is the read-only one, and one without the other, or
+`concurrent_images` without them, is a `ValueError`. `pick_images` takes the
+fields of `PickImagesOptions` as keyword-only arguments, with the pair options
+under the names `match_frame_pair` uses and the forest under the names
+`FrameFeatures` uses (`preset`, `num_trees`, `leaf_size`, `max_leaf_checks`);
+one left out takes the Rust default. `progress`, a `ProgressCounter`, holds
+the count of frames read. The report is returned as a dict of plain values,
+the report's serde form, with `None` for a number that is not finite.
 
-The GIL is released while the walk runs and taken for each call of the
-callable, whose exception is raised unchanged. Each progress event, so each
-pair matched and each batch read, also takes it to run Python's signal
-handlers; a handler that raises, such as the `KeyboardInterrupt` of Ctrl+C,
-cancels the walk, and its exception is raised, so Ctrl+C stops a walk that is
-matching as it stops one that is extracting. A cancellation from anywhere else
-is `InterruptedError`. A `.sift` file that cannot be read is the `OSError` of
+The GIL is released while the walk runs. Each progress event, so each pair
+matched, each wait and every 50 ms of a wait on the workers, takes it to run
+Python's signal handlers; a handler that raises, such as the
+`KeyboardInterrupt` of Ctrl+C, cancels the walk and stops its workers, and its
+exception is raised. A cancellation from anywhere else is `InterruptedError`.
+A `.sift` file that cannot be read is the `OSError` of
 [python-bindings.md § Format errors](../../python-bindings.md#format-errors),
-a folder that cannot be listed the `OSError` subclass for its kind, a callable
-that is not callable a `TypeError`, and every other error a `ValueError` with
-the Rust message.
+a folder that cannot be listed the `OSError` subclass for its kind, a missing
+file of the read-only source `FileNotFoundError`, an image that cannot be read
+or a file that cannot be written while extracting `OSError`, a panicked worker
+`RuntimeError`, and every other error a `ValueError` with the Rust message,
+among them invalid feature options, named as `params['key']` as
+`build_sift_files` names them.
 
 ## Testing
 
@@ -546,8 +677,9 @@ walk synthetic captures
 ([tests/capture.rs](../../../crates/sfmtool-core/src/analysis/pick_images/tests/capture.rs)):
 a scene of points with random descriptors seen by a pinhole camera along a
 path with known motion per frame, with readings set per frame, served by a
-source that writes a frame's version 2 `.sift` files only when it is asked for
-them and records every request. They cover a steady video chosen at about the
+source whose workers, the extracting source's pool, write a frame's version 2
+`.sift` files only when it is prefetched or waited for, and which records
+every wait and prefetch. They cover a steady video chosen at about the
 target step, a change of speed that the stride follows, a blurred frame
 swapped for a neighbour, a sharp frame with gradients along one direction
 kept and not judged blurred, blur judged from the sharpness alone, a blurred
@@ -563,17 +695,38 @@ other three signs and a three-frame sequence that are not a video, a camera
 that only turns, one that barely moves and a moving scene that are not
 solvable, a rig whose second sensor's images match nothing
 and whose blur alone swaps a frame, several sequences sharing the baseline,
-every error variant, cancellation before and during the run, and that a run
-repeats exactly. Every test checks that the frames the source was asked for are
-the frames the report lists as read, each once, and that exactly those have
-`.sift` files.
+every error variant, a worker's failure on a frame of each stage, which names
+the frame, and on a frame only predicted, which stops nothing, cancellation
+before and during the run, that a run repeats exactly, that every frame of
+the baseline and every frame read through a break after its first failing
+pair was prefetched, with no more than the workers' count extracted and not
+read, and that one capture with a change of
+speed, a swap, a blurred run, a gap and a break gives the same report and the
+same waits with prefetching off and on and with one and eight workers. Every
+test checks that the frames waited for are the frames the report lists as
+read, each once, that those have `.sift` files written in the run, and that
+every other frame with files was predicted, as many as
+`frames_extracted_unread` counts.
+
+[source/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/source/tests.rs)
+checks the extracting source on seoul_bull images, writing the files
+`build_sift_files` writes and nothing for files up to date, extracting a
+prefetched frame without a wait, naming the frame of an image that cannot be
+read and refusing a `sift_path` elsewhere, invalid options and version 1
+settings; the read-only source's missing file; and the pool's order (a wait
+ahead of prefetched frames, a prefetch replacing the last), a cancelled wait
+that stops its workers promptly, a panicking job reported as an error, a
+two-image frame cancelled between its images, which reports the file it
+wrote, and a frame whose work wrote and was then stopped or failed, which the
+pool counts as written.
 
 [test_pick_images_walk_rust_bindings.py](../../../tests/rust_bindings/analysis/test_pick_images_walk_rust_bindings.py)
-checks the bindings on a synthetic capture written by a Python callable, the
-options and their errors, a callable that raises, a `KeyboardInterrupt`
-delivered while the walk matches, the exceptions of each error, the capture
-classes, and the seoul_bull photographs extracted through the workspace's own
-`image_files_to_sift_files`, which are judged not a video.
+checks the bindings on a synthetic capture whose files are written first and
+read, a missing file, the options and the source options and their errors,
+a `KeyboardInterrupt` delivered while the walk runs, the exceptions of each
+error, the capture classes, and the seoul_bull photographs extracted by the
+walk with the workspace's settings, which are judged not a video, whose files
+equal `build_sift_files`', and which a second run reads without extracting.
 
 ## Non-goals
 

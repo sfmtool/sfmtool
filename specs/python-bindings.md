@@ -361,7 +361,7 @@ Paths in the *Source* column are relative to
 | [analysis/cluster_census.rs](../crates/sfmtool-py/src/analysis/cluster_census.rs) | `cluster_census` | [cluster-census.md](core/analysis/cluster-census.md) |
 | [analysis/track_table.rs](../crates/sfmtool-py/src/analysis/track_table.rs) | `track_table` | [track-table.md](core/analysis/track-table.md) |
 | [analysis/pick_images.rs](../crates/sfmtool-py/src/analysis/pick_images.rs) | `FrameFeatures`, `match_frame_pair` | [frame-pair-matching.md](core/analysis/frame-pair-matching.md) |
-| | `pick_images`, `CaptureImage`, `CaptureFrame`, `CaptureSequence`, `FrameId` | [pick-images.md](core/analysis/pick-images.md) |
+| | `pick_images`, `CaptureImage`, `CaptureFrame`, `CaptureSequence` | [pick-images.md](core/analysis/pick-images.md) |
 
 ### `flow`
 

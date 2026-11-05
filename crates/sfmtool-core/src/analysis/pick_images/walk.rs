@@ -4,7 +4,8 @@
 //! The walk along one sequence: predict the next frame from the recent rate,
 //! measure the step to it, accept it, re-aim, or swap a blurred frame for a
 //! sharp neighbour; halve the gap where a step fails, and start a new segment
-//! after a break. See `specs/core/analysis/pick-images.md` § "The walk".
+//! after a break, reading ahead through the break. See
+//! `specs/core/analysis/pick-images.md` § "The walk" and § "Run-ahead".
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -168,7 +169,9 @@ pub(super) fn walk_sequence(
 }
 
 /// The first frame from `from` on that matches its next frame well, with its
-/// features, reading the frames one pair at a time.
+/// features, reading the frames one pair at a time. Once a pair does not match
+/// well, every frame after it is read until one does, so the source is asked to
+/// prefetch the next [`Frames::prefetch_window`] frames each time.
 fn find_start(
     frames: &mut Frames,
     sequence: usize,
@@ -191,6 +194,11 @@ fn find_start(
         let stats = frames.match_pair(id(g), &fg, id(g + 1), &next, Stage::Walk, progress)?;
         if matches_well(&stats, options) {
             return Ok(Some((g, fg)));
+        }
+        let window = frames.prefetch_window();
+        if window > 0 {
+            let ahead: Vec<FrameId> = (g + 2..=last.min(g + 1 + window)).map(id).collect();
+            frames.prefetch(&ahead);
         }
         held = Some((g + 1, next));
     }

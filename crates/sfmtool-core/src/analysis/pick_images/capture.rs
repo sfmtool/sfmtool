@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! What [`super::pick_images`] is given: the capture's sequences of frames,
-//! the source that makes their `.sift` files exist, the options, and the
-//! errors it returns. See `specs/core/analysis/pick-images.md`.
+//! the options, and the errors it returns. See
+//! `specs/core/analysis/pick-images.md`.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -12,16 +12,16 @@ use serde::Serialize;
 use sfmtool_sift_format::SiftError;
 
 use super::frame_pair::{FramePairError, FramePairOptions};
+use super::source::FrameSourceError;
 use crate::features::kdforest::KdForestParams;
 use crate::features::sift::Version1SiftFiles;
-use crate::progress::Progress;
 
 /// Where one image of a capture is and where its `.sift` file goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureImage {
     /// The image file.
     pub image_path: PathBuf,
-    /// Its `.sift` file, which the [`FrameSource`] makes exist and
+    /// Its `.sift` file, which the [`super::FrameSource`] makes exist and
     /// [`super::pick_images`] reads.
     pub sift_path: PathBuf,
 }
@@ -59,44 +59,6 @@ pub struct FrameId {
     pub frame: usize,
 }
 
-/// Why a [`FrameSource`] could not make the files exist, in its own words.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FrameSourceError {
-    /// The source's message.
-    pub message: String,
-}
-
-impl fmt::Display for FrameSourceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for FrameSourceError {}
-
-/// Makes sure the `.sift` files of the given frames exist and are current.
-///
-/// [`super::pick_images`] calls it with every frame it is about to read and
-/// with no other, each frame once, and then reads every `.sift` file of each
-/// frame, so a frame gets a `.sift` file exactly when the walk reads it. It
-/// asks for several frames in one call where it knows them at once (the
-/// baseline's batches, a blurred run's frames), so a source can extract them
-/// as one batch.
-pub trait FrameSource {
-    /// Make the `.sift` file of every image of every frame in `frames` exist,
-    /// extracting those that are missing or older than their image.
-    ///
-    /// # Errors
-    ///
-    /// The source's own failure, which [`super::pick_images`] returns as
-    /// [`PickImagesError::Source`].
-    fn ensure_sift_files(
-        &mut self,
-        frames: &[FrameId],
-        progress: &Progress,
-    ) -> Result<(), FrameSourceError>;
-}
-
 /// How [`super::pick_images`] chooses frames.
 #[derive(Clone, Debug)]
 pub struct PickImagesOptions {
@@ -120,6 +82,11 @@ pub struct PickImagesOptions {
     /// How each pair of frames is matched and fitted. Its `min_matches` is
     /// also the fewest matches a step that matches well has.
     pub pair: FramePairOptions,
+    /// Whether the walk asks the source to prefetch the frames it knows it
+    /// will read: each batch of the baseline, and the frames ahead through a
+    /// break. It changes how long a run takes and which frames get a
+    /// `.sift` file without being read, never what the walk chooses.
+    pub prefetch: bool,
 }
 
 impl Default for PickImagesOptions {
@@ -132,6 +99,7 @@ impl Default for PickImagesOptions {
             min_inlier_share: 0.5,
             forest: KdForestParams::balanced(),
             pair: FramePairOptions::default(),
+            prefetch: true,
         }
     }
 }
@@ -215,8 +183,9 @@ pub enum PickImagesError {
         folder: PathBuf,
         source: std::io::Error,
     },
-    /// The [`FrameSource`] failed.
-    Source { message: String },
+    /// The [`super::FrameSource`] could not make a frame's `.sift` files
+    /// exist; the error names the frame.
+    Source(FrameSourceError),
     /// A `.sift` file the source made exist cannot be read, or holds readings
     /// or features that break the format's rules.
     ReadSift { path: PathBuf, source: SiftError },
@@ -247,7 +216,7 @@ impl fmt::Display for PickImagesError {
                 "the folder {} that .sift files go in cannot be listed: {source}",
                 folder.display()
             ),
-            Self::Source { message } => f.write_str(message),
+            Self::Source(error) => write!(f, "{error}"),
             Self::ReadSift { path, source } => {
                 write!(f, "cannot read {}: {source}", path.display())
             }
@@ -275,7 +244,17 @@ impl std::error::Error for PickImagesError {
             Self::ListFolder { source, .. } => Some(source),
             Self::ReadSift { source, .. } => Some(source),
             Self::Pair { error, .. } => Some(error),
+            Self::Source(error) => Some(error),
             _ => None,
+        }
+    }
+}
+
+impl From<FrameSourceError> for PickImagesError {
+    fn from(error: FrameSourceError) -> Self {
+        match error {
+            FrameSourceError::Cancelled => Self::Cancelled,
+            error => Self::Source(error),
         }
     }
 }

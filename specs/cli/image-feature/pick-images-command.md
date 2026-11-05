@@ -13,12 +13,14 @@ the capture can be solved, and when given a name it writes the frames it chose
 as a named image list ([workspace/named-image-lists.md](../../workspace/named-image-lists.md)),
 which `sfm solve -r NAME` and the other commands that take `-r` then use.
 
-It measures everything from SIFT features. Each frame it reads gets a `.sift`
-file, extracted with the workspace's own settings and stored where
-`sfm sift --extract` would store it, so a later `sfm sift`, `sfm match` or
-`sfm solve` finds the file and extracts nothing for it. It reads only the
-frames it needs: a sample spread over the whole capture, the frames it
-chooses, and the frames it tries on the way. The sample, the verdict and the
+It measures everything from SIFT features. Each frame it reads, and each it
+predicts it will read, gets a `.sift` file, extracted with the workspace's own
+settings and stored where `sfm sift --extract` would store it, so a later
+`sfm sift`, `sfm match` or `sfm solve` finds the file and extracts nothing for
+it; in a workspace whose feature tool is not `sfmtool`, every input frame gets
+one ([Extraction](#extraction)). It reads only the frames it needs: a sample
+spread over the whole capture, the frames it chooses, and the frames it tries
+on the way. The sample, the verdict and the
 walk that chooses the frames are
 [core/analysis/pick-images.md](../../core/analysis/pick-images.md)'s; this
 spec covers the command around them: collecting the frames, the options, the
@@ -131,9 +133,11 @@ In order, it:
 3. With `--write-list` and no `--force`, refuses a name the lists file already
    defines.
 4. Groups the files into sequences and prints them.
-5. Calls `sfmtool.analysis.pick_images` with one `CaptureSequence` per
-   sequence and a source that extracts the `.sift` files of the frames it is
-   asked for ([Extraction](#extraction)).
+5. With the `sfmtool` feature tool, calls `sfmtool.analysis.pick_images`
+   with one `CaptureSequence` per sequence and the workspace's feature
+   options, which extracts the `.sift` files itself; with another tool,
+   extracts every input frame first and calls it to read them
+   ([Extraction](#extraction)).
 6. Prints the report, writes the list when the verdict is solvable and a name
    was given, and writes the JSON file when asked.
 
@@ -185,23 +189,42 @@ one after another.
 
 ### Extraction
 
-The source the command hands `pick_images` is a callable that is given the
-`FrameId`s of the frames the walk is about to read and calls
-`image_files_to_sift_files` ([`sift/extract.py`](../../../src/sfmtool/sift/extract.py))
-with their images and the workspace's `feature_tool`, `feature_options` and
-`feature_prefix_dir`, as `sfm sift --extract` calls it in a workspace. It
-writes each `.sift` file that is missing or older than its image, through the
-same backends, the same refusals and the same `SiftWriteQueue` as
-`sfm sift --extract`. That function prints a summary of the files on every
-call; the source holds its output back, since the walk calls it once per step.
+How the frames get their `.sift` files depends on the workspace's
+`feature_tool`.
 
-The source records, for each frame, whether a `.sift` file of it was written
-(its modification time changed or it appeared), which the report and the JSON
-file count as **extracted**; a frame read from files already present is
-**reused**. Every 10 seconds of a run it prints how many frames have been read
-so far and how many were extracted, from the `ProgressCounter`
+**The `sfmtool` tool**, the one `sfm ws init` chooses by default, makes one
+call: `pick_images` is given the workspace's `feature_options` and
+`feature_prefix_dir` and extracts in Rust, as `build_sift_files` does
+([core/features/sift.md § Building `.sift` files](../../core/features/sift.md#building-sift-files)):
+the same files at the same paths, with the same content, a file at least as
+new as its image used as it is, and every file kept. The extraction runs on a
+pool of workers, as many as `build_sift_files` runs (one per core, capped
+by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the frames the walk knows it will read: each batch of
+the baseline, and the frames ahead of it through a break
+([core/analysis/pick-images.md § Run-ahead](../../core/analysis/pick-images.md#run-ahead)).
+The walk's steps wait for each frame they measure.
+The walk decides only from frames it waited for, so the frames chosen are the
+same whatever the workers did ahead of it; a predicted frame the walk does not
+read keeps its `.sift` file.
+
+**Another tool** (`colmap` or `opencv`) is extracted in Python, so the
+command first calls `image_files_to_sift_files`
+([`sift/extract.py`](../../../src/sfmtool/sift/extract.py)) once with every
+input frame's images and the workspace's `feature_tool`, `feature_options` and
+`feature_prefix_dir`, as `sfm sift --extract` calls it in a workspace, with its
+own output, and then calls `pick_images` with no feature options, which reads
+the files and extracts nothing. Such a workspace gets a `.sift` file for every
+input frame, not only for those the walk reads.
+
+A frame whose `.sift` file was written in the run counts as **extracted** in
+the report and the JSON file, and one read from a file already up to date as
+**reused**: with the `sfmtool` tool from the report's `frames_extracted`, and
+with another tool from whether the file's modification time changed in the
+extraction made first. Every 10 seconds of the walk the command prints how many
+frames have been read so far, from the `ProgressCounter`
 ([py_progress.rs](../../../crates/sfmtool-py/src/py_progress.rs)) that
-`pick_images` sets to the number of frames read. Ctrl+C stops the run, as
+`pick_images` sets to the number of frames read. Ctrl+C stops the run and its
+workers, as
 [core/analysis/pick-images.md § Python bindings](../../core/analysis/pick-images.md#python-bindings)
 describes.
 
@@ -210,9 +233,11 @@ missing, and nothing more than reading the file otherwise. The baseline reads
 each sampled frame and the frames 1, 3, 10 and 30 after it, so up to five
 frames per sample, fewer where two samples share a frame. The walk reads each
 frame it chooses and the candidates it measures on the way, usually two or
-three per choice, and skips the frames between. A later `sfm solve -r NAME`
-finds every `.sift` file it needs already written, and a second run of the
-command reads the same files and extracts nothing.
+three per choice, and skips the frames between; with the `sfmtool` tool the
+frames prefetched past the end of a break are extracted too, which the last
+line of the report counts. A later `sfm solve -r NAME` finds every `.sift`
+file it needs already written, and a second run of the command reads the same
+files and extracts none of them.
 
 ### The version 1 refusals
 
@@ -287,7 +312,6 @@ Using workspace: /captures/garden
 Given 1 path(s), 6120 image file(s) in 1 sequence:
   frames/walk1_%04d.jpg, 6120 frames (1-6120)
 
-  ... 412 frames read so far, 412 extracted
 Baseline: 200 frames sampled, 984 frames read (972 extracted, 12 reused)
   Sharpness: median 0.0123; 9 sampled frames blurred
   Motion per frame: median 0.72%, p90 1.31% of the long side; total 4400%
@@ -312,6 +336,8 @@ Walk: target step 10% (band 7-13%), 1 break, 2 segments
     2244, the sharpest of 2236-2251 (0.31 of the median)
   Breaks (1): 4411->4416: frames 4411-4415 do not match their next frame
   Weak points (2): 4410->4411 (32 matches), 4416->4421 (F-inlier share 0.52)
+
+Extracted and never read: 12 frames
 
 Wrote the named image list walk1 (512 images) to /captures/garden/.sfm-named-image-lists.json
   For a quick test solve, try -r 'walk1[:30]', -r 'walk1[241:271]' or -r 'walk1[-30:]'
@@ -359,6 +385,11 @@ first eight and the count of the rest.
   with the frames searched and its sharpness over the median; each break with
   where the walk resumed, or that the sequence ends there; and each weak point,
   a step with its matches or F-inlier share, or a short segment with its span.
+- **Extracted and never read.** The last line of the report, whatever the
+  verdict: how many frames had a `.sift` file written in the run that the walk
+  never read, the report's `frames_extracted_unread`. With the `sfmtool` tool
+  these are frames prefetched past the end of a break; with
+  another tool, the input frames extracted first that the walk did not read.
 - **The list.** When a list is written, its name, its number of images and the
   file. A list of more than 60 images that holds no rig gets a line of three
   slices of 30 images to try as quick test solves, in the syntax of
@@ -376,19 +407,21 @@ files of the baseline stay.
 ### JSON
 
 `--json PATH` writes the dict `pick_images` returns, as it is (`verdict`,
-`sequences`, `frames`, `pairs`; positions, not numbers), with these keys
-added:
+`sequences`, `frames`, `pairs`, `frames_extracted`, per entry of `frames`
+whether a `.sift` file was written for it, and `frames_extracted_unread`;
+positions, not numbers), with these keys added:
 
 | Key | Holds |
 |-----|-------|
 | `workspace` | the workspace folder |
 | `options` | the five numeric options, under the binding's names |
 | `capture` | per sequence: `patterns`, `sensors` (the sensor prefixes, or `null`), `numbers` (the file number at each position) and `images` (each frame's workspace-relative image paths) |
-| `frames_extracted` | per entry of `frames`, whether a `.sift` file was written for it |
 | `chosen_numbers` | per sequence, the chosen frames' file numbers, or `null` when it was not walked |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
 
 The file is written whatever the verdict, after the report and the list.
+With a tool other than `sfmtool`, `frames_extracted` and
+`frames_extracted_unread` are the command's, from the extraction made first.
 
 ## Testing
 
@@ -396,7 +429,9 @@ The file is written whatever the verdict, after the report and the list.
 runs the command with click's runner on scratch workspaces. Its video is a
 synthetic pan: crops sliding a few pixels per frame across one checked-in
 photograph, so it is a video that can be solved. It covers a report-only run
-that writes nothing but `.sift` files; a written list that `-r NAME` and
+that writes nothing but `.sift` files and prints the count of frames
+extracted and never read; an `opencv` workspace, whose every input frame gets a
+`.sift` file before the walk reads them; a written list that `-r NAME` and
 `sfm sift -r NAME` resolve to exactly the chosen frames; the JSON file and a
 second run that reuses every `.sift` file; the refusal of a defined name before
 any image is read, and `--force` replacing a list in place; a list with a

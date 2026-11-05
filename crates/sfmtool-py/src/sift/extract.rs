@@ -98,7 +98,7 @@ fn parse_sift_params(params: Option<&Bound<'_, PyDict>>) -> PyResult<SiftParams>
 
 /// The `ValueError` for feature options the core refused, naming the key as
 /// `params['key']`.
-pub(super) fn feature_options_error(e: FeatureOptionsError) -> PyErr {
+pub(crate) fn feature_options_error(e: FeatureOptionsError) -> PyErr {
     let message = match &e.key {
         Some(key) => format!("params['{key}'] {}", e.problem),
         None => e.problem.clone(),
@@ -109,7 +109,7 @@ pub(super) fn feature_options_error(e: FeatureOptionsError) -> PyErr {
 /// A dict of feature options as the JSON object a workspace records: `None`,
 /// `bool`, `int`, `float`, `str` and, for an object such as `image_to_gray`,
 /// `dict` values, string keys.
-pub(super) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<serde_json::Value> {
+pub(crate) fn feature_options_from_dict(dict: &Bound<'_, PyDict>) -> PyResult<serde_json::Value> {
     object_from_dict(dict, "params")
 }
 

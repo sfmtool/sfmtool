@@ -316,16 +316,7 @@ pub fn build_sift_files(
     // the image.
     let mut todo = Vec::new();
     for (index, (image, sift)) in image_paths.iter().zip(&sift_paths).enumerate() {
-        let image_modified = std::fs::metadata(image)
-            .and_then(|m| m.modified())
-            .map_err(|e| BuildSiftFilesError::Image {
-                path: image.clone(),
-                problem: e.to_string(),
-            })?;
-        let up_to_date = std::fs::metadata(sift)
-            .and_then(|m| m.modified())
-            .is_ok_and(|sift_modified| sift_modified >= image_modified);
-        if !up_to_date {
+        if !sift_file_up_to_date(image, sift)? {
             todo.push(index);
         }
     }
@@ -400,7 +391,7 @@ pub fn build_sift_files(
                     "Extracting SIFT features from {}",
                     image.file_name().unwrap_or_default().to_string_lossy()
                 );
-                match build_one(image, &sift_paths[index], options, &params, &progress) {
+                match build_sift_file(image, &sift_paths[index], options, &params, &progress) {
                     Ok(()) => {
                         let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                         progress.count(n, Some(total), "image");
@@ -424,8 +415,33 @@ pub fn build_sift_files(
     Ok(report(done.into_inner() as usize))
 }
 
-/// Decode, hash, extract and write one image.
-fn build_one(
+/// Whether the `.sift` file at `sift_path` is at least as new as the image at
+/// `image_path`, by modification time, which is when [`build_sift_files`]
+/// skips the image. A missing `.sift` file is not up to date.
+///
+/// # Errors
+///
+/// [`BuildSiftFilesError::Image`] when the image's modification time cannot
+/// be read, such as for a missing image.
+pub(crate) fn sift_file_up_to_date(
+    image_path: &Path,
+    sift_path: &Path,
+) -> Result<bool, BuildSiftFilesError> {
+    let image_modified = std::fs::metadata(image_path)
+        .and_then(|m| m.modified())
+        .map_err(|e| BuildSiftFilesError::Image {
+            path: image_path.to_path_buf(),
+            problem: e.to_string(),
+        })?;
+    Ok(std::fs::metadata(sift_path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|sift_modified| sift_modified >= image_modified))
+}
+
+/// Decode, hash, extract and write one image's `.sift` file, whose folder
+/// exists. The cancel flag is read after the decode and again after the
+/// extraction, so a cancelled call writes nothing.
+pub(crate) fn build_sift_file(
     image_path: &Path,
     sift_path: &Path,
     options: &BuildSiftFilesOptions,
@@ -621,7 +637,7 @@ pub(crate) fn xxh128_of_file(path: &Path) -> std::io::Result<(String, u64)> {
 /// How many images to run at once when the caller does not say: the
 /// [`CONCURRENT_IMAGES_ENV_VAR`] value when it is a whole number, otherwise the
 /// core count capped by memory at the size of `first_image`.
-fn default_concurrent_images(first_image: &Path, progress: &Progress) -> usize {
+pub(crate) fn default_concurrent_images(first_image: &Path, progress: &Progress) -> usize {
     // An empty value counts as unset, as it does for the Python backend.
     if let Some(value) = std::env::var(CONCURRENT_IMAGES_ENV_VAR)
         .ok()

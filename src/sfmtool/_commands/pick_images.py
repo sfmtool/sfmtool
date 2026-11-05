@@ -113,10 +113,11 @@ def pick_images(
     Reads a sample of each sequence's frames, judges whether each sequence is
     a video and whether the capture can be solved, and then walks each
     sequence, choosing frames about --target-step percent of the image's long
-    side apart and sharp frames in place of blurred ones. Each frame read gets
-    a .sift file, extracted with the workspace's settings. With --write-list
-    NAME the chosen frames are written as the named image list NAME, for
-    `sfm solve -r NAME`.
+    side apart and sharp frames in place of blurred ones. Each frame read, or
+    predicted to be read, gets a .sift file, extracted with the workspace's
+    settings; with a feature tool other than sfmtool, every input frame is
+    extracted first. With --write-list NAME the chosen frames are written as
+    the named image list NAME, for `sfm solve -r NAME`.
     """
     from .._sfmtool.workspace import is_named_image_list_name
 
@@ -196,9 +197,10 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     list and the JSON file."""
     from .._pick_images import (
         PickImagesInputError,
-        SiftSource,
         capture_sequences,
         collect_sequences,
+        echo_frames_read,
+        extract_every_frame,
         list_entries,
     )
     from .._pick_images_report import report_lines, slice_suggestion
@@ -262,18 +264,45 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     click.echo("")
 
     capture = capture_sequences(sequences, workspace_dir, config["feature_prefix_dir"])
+    # The walk extracts the sfmtool tool's files itself, ahead of the frames
+    # it reads; for another tool every frame is extracted first, and the walk
+    # reads the files.
+    if config["feature_tool"] == "sfmtool":
+        source = {
+            "feature_options": config["feature_options"],
+            "feature_prefix_dir": config["feature_prefix_dir"],
+        }
+        written_first = None
+    else:
+        click.echo(
+            f"Extracting the .sift files of every frame with the "
+            f"{config['feature_tool']} tool before the walk:"
+        )
+        try:
+            written_first = extract_every_frame(capture, config, settings_source)
+        except (SiftExtractionError, ValueError, OSError) as e:
+            raise click.ClickException(str(e))
+        click.echo("")
+        source = {}
     counter = ProgressCounter()
-    source = SiftSource(capture, config, settings_source, click.echo, counter)
     try:
-        report = walk(capture, source, progress=counter, **options)
-    except SiftExtractionError as e:
-        raise click.ClickException(str(e))
+        with echo_frames_read(counter, click.echo):
+            report = walk(capture, progress=counter, **source, **options)
     except (ValueError, OSError) as e:
         raise click.ClickException(str(e))
 
+    if written_first is not None:
+        # The walk extracted nothing; what this run wrote, it wrote first.
+        report["frames_extracted"] = [
+            f["id"]["frame"] in written_first[f["id"]["sequence"]]
+            for f in report["frames"]
+        ]
+        report["frames_extracted_unread"] = sum(map(len, written_first)) - sum(
+            report["frames_extracted"]
+        )
     extracted = [{} for _ in sequences]
-    for frame_id, written in source.extracted.items():
-        extracted[frame_id.sequence][frame_id.frame] = written
+    for frame, written in zip(report["frames"], report["frames_extracted"]):
+        extracted[frame["id"]["sequence"]][frame["id"]["frame"]] = written
     for line in report_lines(
         report,
         sequences,
@@ -339,9 +368,6 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             }
             for s in sequences
         ]
-        data["frames_extracted"] = [
-            source.extracted[_frame_id(f["id"])] for f in report["frames"]
-        ]
         data["chosen_numbers"] = chosen
         data["named_image_list"] = written_list
         json_path.write_text(json.dumps(data, indent=1) + "\n")
@@ -354,9 +380,3 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             err=True,
         )
         click.get_current_context().exit(1)
-
-
-def _frame_id(fid: dict):
-    from .._sfmtool.analysis import FrameId
-
-    return FrameId(fid["sequence"], fid["frame"])

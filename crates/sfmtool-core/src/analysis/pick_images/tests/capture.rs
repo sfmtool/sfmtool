@@ -4,9 +4,14 @@
 //! A synthetic capture for the walk's tests: a scene of points with random
 //! descriptors, seen by a pinhole camera along a path with known motion per
 //! frame, and a [`FrameSource`] that writes each frame's version 2 `.sift`
-//! files only when it is asked for them and records what it was asked.
+//! files on a pool of workers, as the extracting source does, only for the
+//! frames it is asked to prefetch or wait for, and records what it was asked.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use ndarray::{Array2, Array3};
 use rand::rngs::StdRng;
@@ -17,9 +22,11 @@ use sfmtool_sift_format::{
     THUMBNAIL_SIZE,
 };
 
+use super::super::source::{Job, Threads, WorkerPool};
 use super::super::{
     CaptureFrame, CaptureImage, CaptureSequence, FrameId, FrameSource, FrameSourceError,
 };
+use crate::features::sift::BuildSiftFilesError;
 use crate::progress::Progress;
 
 pub(super) const WIDTH: u32 = 640;
@@ -60,6 +67,7 @@ pub(super) struct Shot {
 }
 
 /// A synthetic capture: the scene, the frames, and how many sensors.
+#[derive(Clone)]
 pub(super) struct Synth {
     points: Vec<[f64; 3]>,
     descriptors: Vec<[u8; DESCRIPTOR_DIM]>,
@@ -310,79 +318,147 @@ pub(super) fn write_sift_file(
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Fault {
     None,
-    /// Fail on the call with this index, from 0.
-    FailOnCall(usize),
+    /// The worker fails on this frame of the first sequence, as an
+    /// extraction whose write fails.
+    FailFrame(usize),
     /// Write nothing.
     WriteNothing,
     /// Write version 1 files.
     WriteVersion1,
-    /// Set the cancel flag on the call with this index, after writing.
-    CancelOnCall(usize),
+    /// Write this frame of the first sequence at another image size.
+    Resize(usize),
+    /// Set the cancel flag on the wait with this index, from 0, before
+    /// waiting.
+    CancelOnWait(usize),
 }
 
-/// A [`FrameSource`] over a [`Synth`] that writes the `.sift` files of the
-/// frames it is asked for and records every request.
+/// What the test source was asked.
+#[derive(Default)]
+pub(super) struct Asked {
+    /// The frames of each wait, in order.
+    pub(super) waits: Vec<Vec<FrameId>>,
+    /// Every frame asked to be prefetched.
+    pub(super) prefetched: BTreeSet<FrameId>,
+}
+
+/// A [`FrameSource`] over [`Synth`]s whose workers write the `.sift` files of
+/// the frames asked for, after a short wait that differs per frame so that
+/// several workers finish out of order.
 pub(super) struct SynthSource<'s> {
-    synth: &'s [&'s Synth],
-    sequences: &'s [CaptureSequence],
-    /// Every frame asked for, in order.
-    pub(super) asked: Vec<FrameId>,
-    /// The frames of each call.
-    pub(super) calls: Vec<Vec<FrameId>>,
-    pub(super) fault: Fault,
-    pub(super) cancel: Option<&'s std::sync::atomic::AtomicBool>,
+    pool: WorkerPool,
+    threads: usize,
+    asked: Asked,
+    fault: Fault,
+    cancel: Option<&'s AtomicBool>,
 }
 
 impl<'s> SynthSource<'s> {
-    pub(super) fn new(synth: &'s [&'s Synth], sequences: &'s [CaptureSequence]) -> Self {
+    pub(super) fn new(synths: &[&Synth], threads: usize, fault: Fault) -> Self {
+        let synths: Arc<Vec<Synth>> = Arc::new(synths.iter().map(|&s| s.clone()).collect());
+        let job: Arc<Job> = Arc::new(move |id, images, _progress, wrote| {
+            write_frame(&synths, id, images, fault, threads, wrote)
+        });
         Self {
-            synth,
-            sequences,
-            asked: Vec::new(),
-            calls: Vec::new(),
-            fault: Fault::None,
+            pool: WorkerPool::new(job, Threads::Fixed(threads)),
+            threads,
+            asked: Asked::default(),
+            fault,
             cancel: None,
         }
     }
+
+    /// Set `flag` at the wait [`Fault::CancelOnWait`] names.
+    pub(super) fn cancelled_by(mut self, flag: &'s AtomicBool) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
+
+    pub(super) fn into_asked(self) -> Asked {
+        self.asked
+    }
+}
+
+/// Write the `.sift` files of one frame, as `fault` says.
+fn write_frame(
+    synths: &[Synth],
+    id: FrameId,
+    images: &[CaptureImage],
+    fault: Fault,
+    threads: usize,
+    wrote: &mut bool,
+) -> Result<(), FrameSourceError> {
+    if threads > 1 {
+        std::thread::sleep(Duration::from_micros(((id.frame * 7919) % 2000) as u64));
+    }
+    let first = id.sequence == 0;
+    if first && fault == Fault::FailFrame(id.frame) {
+        return Err(FrameSourceError::Extract {
+            frame: id,
+            error: BuildSiftFilesError::Write {
+                path: images[0].sift_path.clone(),
+                problem: "the disk is full".to_string(),
+            },
+        });
+    }
+    if fault == Fault::WriteNothing {
+        return Ok(());
+    }
+    let version = if fault == Fault::WriteVersion1 { 1 } else { 2 };
+    let synth = &synths[id.sequence];
+    for (k, image) in images.iter().enumerate() {
+        if let Some(parent) = image.sift_path.parent() {
+            std::fs::create_dir_all(parent).expect("the test folder is made");
+        }
+        if first && k == 0 && fault == Fault::Resize(id.frame) {
+            let readings = synth.shots[id.frame].readings[0];
+            write_sift_file(
+                &image.sift_path,
+                &[[1.0, 1.0]],
+                vec![0; 128],
+                320,
+                240,
+                readings,
+                2,
+            );
+        } else {
+            synth.write(id.frame, k, &image.sift_path, version);
+        }
+        *wrote = true;
+    }
+    Ok(())
 }
 
 impl FrameSource for SynthSource<'_> {
-    fn ensure_sift_files(
+    fn concurrency(&self) -> usize {
+        self.threads
+    }
+
+    fn prefetch(&mut self, frames: &[(FrameId, &CaptureFrame)]) {
+        self.asked
+            .prefetched
+            .extend(frames.iter().map(|&(id, _)| id));
+        self.pool.prefetch(frames);
+    }
+
+    fn wait(
         &mut self,
-        frames: &[FrameId],
-        _progress: &Progress,
+        frames: &[(FrameId, &CaptureFrame)],
+        progress: &Progress,
     ) -> Result<(), FrameSourceError> {
-        let call = self.calls.len();
-        self.calls.push(frames.to_vec());
-        if self.fault == Fault::FailOnCall(call) {
-            return Err(FrameSourceError {
-                message: "the extractor ran out of disk".to_string(),
-            });
-        }
-        for &id in frames {
-            self.asked.push(id);
-            if self.fault == Fault::WriteNothing {
-                continue;
-            }
-            let version = if self.fault == Fault::WriteVersion1 {
-                1
-            } else {
-                2
-            };
-            let frame = &self.sequences[id.sequence].frames[id.frame];
-            for (k, image) in frame.images.iter().enumerate() {
-                if let Some(parent) = image.sift_path.parent() {
-                    std::fs::create_dir_all(parent).expect("the test folder is made");
-                }
-                self.synth[id.sequence].write(id.frame, k, &image.sift_path, version);
-            }
-        }
-        if self.fault == Fault::CancelOnCall(call) {
+        let call = self.asked.waits.len();
+        self.asked
+            .waits
+            .push(frames.iter().map(|&(id, _)| id).collect());
+        if self.fault == Fault::CancelOnWait(call) {
             if let Some(flag) = self.cancel {
-                flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                flag.store(true, Ordering::Relaxed);
             }
         }
-        Ok(())
+        self.pool.wait(frames, progress)
+    }
+
+    fn finish(&mut self) -> Vec<FrameId> {
+        self.pool.finish()
     }
 }
 

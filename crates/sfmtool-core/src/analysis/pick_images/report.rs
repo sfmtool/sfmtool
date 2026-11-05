@@ -24,10 +24,19 @@ pub struct PickImagesReport {
     /// One report per sequence, in the order the sequences were given.
     pub sequences: Vec<SequenceReport>,
     /// Every frame read, in the order it was read, with its readings. The
-    /// source was asked for exactly these frames.
+    /// walk waited on the source for exactly these frames.
     pub frames: Vec<FrameReading>,
     /// Every pair of frames matched, in the order it was matched, each once.
     pub pairs: Vec<MeasuredPair>,
+    /// Per entry of `frames`, whether the source wrote its `.sift` files
+    /// during the run rather than finding them up to date.
+    pub frames_extracted: Vec<bool>,
+    /// How many frames the source wrote any `.sift` file for during the run
+    /// that the walk never read: frames it predicted it would read and then
+    /// did not, a rig frame stopped between its images among them. Unlike
+    /// everything else in the report, it depends on how far ahead the walk
+    /// predicts and on how fast the source works.
+    pub frames_extracted_unread: usize,
 }
 
 /// Whether the capture can be solved.
