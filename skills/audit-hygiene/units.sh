@@ -20,8 +20,8 @@
 #   split again the same way when it is over LIMIT), until what is left totals
 #   at most LIMIT lines;
 # - what is left is the unit "<module> (rest)", or, when it is still over
-#   LIMIT, the units "<module> (rest 1)", "<module> (rest 2)", ..., packed in
-#   name order up to LIMIT lines each.
+#   LIMIT, the units "<module> (rest 1)", "<module> (rest 2)", ..., as few
+#   as LIMIT allows and of about equal size, cut in name order.
 #
 # LIMIT defaults to 5000 and MIN to 1000; set them in the environment to
 # change them.

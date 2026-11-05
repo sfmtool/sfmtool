@@ -45,14 +45,15 @@ It counts the tracked `.rs` and `.wgsl` files under `crates/`, the `.py`
 files under `src/sfmtool/` and `tests/`, and the `.py`, `.sh` and `.ps1` files
 under `scripts/`. `specs/` has no units: this audit checks it only
 mechanically, and `audit-specs` reads it. The script starts from each crate,
-`src/sfmtool`, `tests` and `scripts`. A module is a file and the directory of the same name (`foo.rs`
-with `foo/`, `foo.py` with `foo/`). A module of at most 5,000 lines is one
+`src/sfmtool`, `tests` and `scripts`. A module is a file and the directory of
+the same name (`foo.rs` with `foo/`, `foo.py` with `foo/`). A module of at
+most 5,000 lines is one
 unit. A larger one is split: its own file, when that alone is over 5,000
 lines, is the unit `<module> (own file)`; its child modules of at least 1,000
 lines become units, largest first and each split the same way when it is
 over 5,000 lines, until what is left totals at most 5,000 lines; and what is
 left is the unit `<module> (rest)`, or `<module> (rest 1)`, `(rest 2)`, …
-of equal size in name order when it is still over 5,000 lines. A single file
+of about equal size in name order when it is still over 5,000 lines. A single file
 over 5,000 lines is a unit by itself. The script's header comment has the
 same rules, and `LIMIT` and `MIN` in the environment change the two sizes.
 Keep them at their defaults, so that unit names stay the same from run to
@@ -112,7 +113,7 @@ evidence, not a sample.
    deleted in a unit's current files since the commit its coverage row
    records, at least half of its current line count. Order by that ratio,
    highest first. A unit with no row, or a row that says `never`, is left to
-   pool 3.
+   the draw, pool 4.
 3. **Slow-test dives**, up to 3,000 lines, under "Slow-test dives" below.
 4. **A seeded random draw from the units read least recently.** Units never
    read first, then by the date of their last deep read, oldest first, in a
@@ -128,9 +129,9 @@ larger budget is the user's choice.
 
 The commands, in Git Bash on Windows or bash on Linux and macOS (macOS has no
 `shuf`: install GNU coreutils with `brew install coreutils` and write `gshuf`
-for `shuf`). Read
-the coverage table of the newest hygiene report that has one, or, when the
-last one was retired with no successor, the one in git history:
+for `shuf`). Read the coverage table of the newest hygiene report that has
+one, or, when the last one was retired with no successor, the one in git
+history:
 
 ```bash
 w=$(mktemp -d); echo "$w"
@@ -204,7 +205,7 @@ they are done; at most 3,000, and at most what the pulled-in units leave of
 the budget):
 
 ```bash
-SEED=$RANDOM; echo "seed $SEED"                                # record SEED in the report
+SEED=${SEED:-$RANDOM}; echo "seed $SEED"                       # record SEED in the report
 awk -F'\t' '{print ($3 == "never" ? "0000-00-00" : $3) "\t" $2 "\t" $1}' "$w/current.tsv" |
   shuf --random-source=<(yes "$SEED") | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1 > "$w/draw.tsv"
 BUDGET=15000; DIVE_LINES=0
@@ -218,8 +219,9 @@ awk -F'\t' -v B="$BUDGET" -v D="$DIVE_LINES" 'FILENAME == ARGV[1] {size[$2] = $1
 ```
 
 Run the fill once with `DIVE_LINES=0` to see what the pulled-in units leave,
-do the dives, then run it again with the dives' lines. The same seed gives the
-same draw from the same coverage table. Remove `$w` when the run is done.
+do the dives, then run it again with the dives' lines. The block keeps a
+`SEED` already set in the shell, and the same seed gives the same draw from
+the same coverage table. Remove `$w` when the run is done.
 
 ### Coverage
 
@@ -525,7 +527,8 @@ how this audit runs them.
    it holds; for a family of siblings, whether they parallel; and every
    standard. Give each one `specs/GLOSSARY.md` and the convention majorities
    from step 2, in that order of authority, so their naming findings are
-   comparable and none of them recommends converging onto a word the glossary has already retired.
+   comparable and none of them recommends converging onto a word the
+   glossary has already retired.
    Give each one `specs/STANDARDS.md` as well, so every unit is checked
    against the same standards, and the previous report's findings whose
    Location lies in its unit, so it re-measures them.
@@ -727,9 +730,9 @@ worth more than a paragraph.
     by up to a factor of two between runs, so compare per-test times with
     the last snapshot, not the suite's wall time. The limits only pick tests
     for a closer look; a test over them is not a finding by itself. Each run
-    reads three of them, chosen under "Slow-test dives" above, and reports
-    the rest by their numbers alone. For each one read: group the tests that run the same expensive call on the same
-    input, and note a test that lowers a size for the steps it checks but
+    reads up to three of them, chosen under "Slow-test dives" above, and
+    reports the rest by their numbers alone. For each one read: group the
+    tests that run the same expensive call on the same input, and note a test that lowers a size for the steps it checks but
     leaves an expensive step at its default. Keep only a test that one of
     the standard's ways (the smallest input that exercises the behaviour,
     one run for several tests, the call rather than the pipeline, a
