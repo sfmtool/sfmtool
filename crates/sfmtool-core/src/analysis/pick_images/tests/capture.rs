@@ -165,8 +165,14 @@ impl Synth {
 
     /// A camera that moves `speed` along x every frame for `frames` frames.
     pub(super) fn steady(seed: u64, frames: usize, speed: f64) -> Self {
+        Self::steady_with_density(seed, frames, speed, 80.0)
+    }
+
+    /// [`Synth::steady`] with `density` points per unit of x, about 12
+    /// times that many in view of each frame.
+    pub(super) fn steady_with_density(seed: u64, frames: usize, speed: f64, density: f64) -> Self {
         let length = speed * frames as f64;
-        Self::wall(seed, -12.0, length + 12.0, 80.0).along((0..frames).map(|t| speed * t as f64))
+        Self::wall(seed, -12.0, length + 12.0, density).along((0..frames).map(|t| speed * t as f64))
     }
 
     /// One sequence of this capture's frames, with its `.sift` files in

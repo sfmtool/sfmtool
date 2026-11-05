@@ -90,6 +90,7 @@ pub struct PickImagesOptions {
     pub target_step_percent: f64,  // 10.0, positive
     pub step_band: f64,            // 0.3, in (0, 1)
     pub blur_ratio: f64,           // 0.6, in (0, 1)
+    pub neighbour_blur_ratio: f64, // 0.8, in (0, 1)
     pub baseline_frames: usize,    // 200, at least 2
     pub min_inlier_share: f64,     // 0.5, in [0, 1]
     pub forest: KdForestParams,    // KdForestParams::balanced()
@@ -229,7 +230,8 @@ fast the source works. A `SequenceReport` holds:
   the segments between breaks as runs of them, every accepted step (from, to,
   its statistics, its rate, its `StepKind` and whether its band was halved in a region
   flagged for weak matches),
-  the swaps, the gaps filled in as runs of steps, the frames kept though
+  the swaps, each with its `SwapReason` (`Median` for a blurred candidate,
+  `Neighbours` for one blurred against its neighbours), the gaps filled in as runs of steps, the frames kept though
   blurred with the range searched, the breaks with where the walk resumed, the
   weak points, and the counts of frames the walk used and of those the
   baseline had already read.
@@ -387,13 +389,24 @@ frame:
    it. When no frame is left between them, they lie one frame apart on either
    side of the band, and the one below is settled on. After four re-aims
    without reaching the band, the step fails.
-6. **Settle** on a frame that is not blurred by accepting it. A blurred one is
+6. **Settle** on a frame that is neither blurred nor blurred against its
+   neighbours ([Blur](#blur)) by accepting it. A frame blurred against its
+   neighbours, which the walk has read for that judgement, is swapped for
+   one of them: the walk tries, sharpest first, the neighbours the candidate
+   is blurred against that lie after `f` and within the limit, are not
+   blurred and are not themselves blurred against the candidate on any
+   sensor, and accepts the first whose step matches well and is no longer
+   than the band and no shorter than the band or the candidate's own step.
+   The sharpest is the neighbour whose sharpness over the candidate's, the
+   least over the sensors, is highest; ties go to the nearer, then the
+   earlier. The swap is reported with the reason `Neighbours`. When no
+   neighbour qualifies, the candidate is accepted. A blurred frame is
    swapped: the walk reads its neighbours nearest first (`c − 1`, `c + 1`,
    `c − 2`, …) among the frames whose step, at the candidate's measured rate,
    would be in the band, and accepts the first that is sharp, matches well
    (a neighbour beyond `f + 1` with few matches does not), and has a step no
    longer than the band and no shorter than the band or the candidate's own
-   step. The swap is reported.
+   step. The swap is reported with the reason `Median`.
 7. **A blurred run.** When no neighbour qualifies, the walk reads every frame
    from `f + 1` to the band's upper edge at the candidate's rate in one batch,
    and accepts the farthest sharp one that matches well, by the same rule,
@@ -434,7 +447,9 @@ with fewer than twice `min_matches` matches, or with an F-inlier share within
 **What is never read.** Outside regions flagged for weak matches, a frame the
 walk does not read lies between two chosen frames whose step matched well.
 Inside such a region the halved steps still pass over frames, which are then
-not read either. Every frame of a break is read. A frame the walk predicted
+not read either. Every frame of a break is read. A frame within 2 positions
+of a candidate judged against its neighbours is read, and may be measured
+only if it is tried in the candidate's place. A frame the walk predicted
 and did not read may still have been extracted ([Run-ahead](#run-ahead)).
 
 ### Blur
@@ -446,6 +461,34 @@ sequence tracks blur, since its frames show the same scene through the same
 lens, so a frame much less sharp than the median is most often one whose
 detail was smeared; a frame that shows mostly a plain surface reads low as
 well.
+
+A frame the walk is about to accept in step 6 is also judged against its
+**neighbours**, the frames within 2 positions of it on either side. Sharpness
+depends on what a frame shows as much as on how sharp it is, so a frame
+compared with the median of a whole sequence is judged against frames of
+other parts of the scene, and much of the blur in a capture leaves a frame
+above `blur_ratio` times the median. A frame a few positions away shows
+nearly the same scene, so the less sharp of two such frames is the blurrier
+one. A sensor image is **blurred against its neighbours** when its sharpness
+is below `neighbour_blur_ratio` times the sharpest neighbour's on that sensor,
+and a rig frame when any of its sensors' images is. Only a sensor image whose
+sharpness is below its sensor's median is judged this way: a frame sharper
+than the median on every sensor is never judged against its neighbours, and
+the walk does not read them for it, which keeps the reads to the frames that
+could be blurred. Otherwise the walk reads all the neighbours in one wait,
+before the swap of step 6 ([The walk](#the-walk)) looks for a sharper one
+among them. A frame accepted in a blurred run (step 7) or by halving a failed
+step is judged against the median alone: the blurred run has already
+searched every frame up to the band's upper edge for a sharp one, and a frame
+accepted by halving is taken for matching where the steps around it fail.
+
+The comparison is with the sharpest neighbour, not their median, because
+blur comes in runs: within a few positions of a blurred frame several
+neighbours are often blurred too, their median is then a blurred frame, and
+the sharpest is also the frame a swap would take. For the same reason a
+stretch whose frames are all equally blurred is not judged blurred against
+its neighbours, which share the blur; the comparison with the median, which
+the walk keeps, is what finds such a stretch.
 
 The report also carries each image's axis ratio and coherence, which
 `ImageReadings::axis_ratio` and `ImageReadings::coherence` derive from the
@@ -465,8 +508,9 @@ reference sensor's images only, the first of each frame, since their
 displacement and inlier shares describe the rig's motion as well as any
 sensor's and the sensors' images need not be the same size. Its sharpness is
 judged per sensor against that sensor's own baseline, since the sensors look
-at different parts of the scene; a rig frame is blurred when any of its
-sensors is.
+at different parts of the scene, and against each sensor's own images of
+its neighbouring frames; a rig frame is blurred, or blurred against its
+neighbours, when any of its sensors is.
 
 ## Sources
 
@@ -601,6 +645,7 @@ three digits; the medians and ratios are `f64` because
 | `target_step_percent` | `10` | the step aimed for, percent of the long side |
 | `step_band` | `0.3` | the band, `target × (1 ± step_band)` |
 | `blur_ratio` | `0.6` | below this times the median sharpness is blurred |
+| `neighbour_blur_ratio` | `0.8` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
 | `baseline_frames` | `200` | the samples, shared among the sequences |
 | `min_inlier_share` | `0.5` | the F-inlier share a pair that matches well has |
 | `pair.min_matches` | `30` | the matches a pair that matches well has |
@@ -613,8 +658,9 @@ three digits; the medians and ratios are `f64` because
 | recent rates | 3 | the accepted steps the prediction takes the median of |
 | weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
 | break read-ahead | `W` frames | how far the walk prefetches through a break, for a source of `W` workers |
+| neighbours | 2 positions on either side; below the median | the frames a candidate is judged against for blur against its neighbours, and which sensor images are judged |
 
-The last nine are constants of the module.
+The last ten are constants of the module.
 
 ## Python bindings
 
@@ -681,7 +727,13 @@ source whose workers, the extracting source's pool, write a frame's version 2
 `.sift` files only when it is prefetched or waited for, and which records
 every wait and prefetch. They cover a steady video chosen at about the
 target step, a change of speed that the stride follows, a blurred frame
-swapped for a neighbour, a sharp frame with gradients along one direction
+swapped for a neighbour, a frame above the median's blur threshold that is
+blurred against its neighbours swapped for the sharpest neighbour whose step
+fits, a frame sharper than the median whose neighbours are not read though
+it is far less sharp than they are, a uniformly blurred stretch none of
+whose frames is swapped against its neighbours, neighbours out of the band
+or with few matches not taken and the candidate kept when none qualifies, a
+sharp frame with gradients along one direction
 kept and not judged blurred, blur judged from the sharpness alone, a blurred
 run kept at its sharpest frames within the band, a long blurred stretch,
 flagged for blur alone, crossed with every step in the full band, a bad patch
@@ -694,14 +746,15 @@ frames, frames 6% apart that show the
 other three signs and a three-frame sequence that are not a video, a camera
 that only turns, one that barely moves and a moving scene that are not
 solvable, a rig whose second sensor's images match nothing
-and whose blur alone swaps a frame, several sequences sharing the baseline,
+and whose blur alone, against its median and against its neighbours, swaps a
+frame, several sequences sharing the baseline,
 every error variant, a worker's failure on a frame of each stage, which names
 the frame, and on a frame only predicted, which stops nothing, cancellation
 before and during the run, that a run repeats exactly, that every frame of
 the baseline and every frame read through a break after its first failing
 pair was prefetched, with no more than the workers' count extracted and not
 read, and that one capture with a change of
-speed, a swap, a blurred run, a gap and a break gives the same report and the
+speed, a swap for each reason, a blurred run, a gap and a break gives the same report and the
 same waits with prefetching off and on and with one and eight workers. Every
 test checks that the frames waited for are the frames the report lists as
 read, each once, that those have `.sift` files written in the run, and that

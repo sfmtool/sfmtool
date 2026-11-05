@@ -69,6 +69,18 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "sharpness is blurred.",
 )
 @click.option(
+    "--neighbour-blur-ratio",
+    "neighbour_blur_ratio",
+    type=float,
+    default=0.8,
+    metavar="RATIO",
+    show_default=True,
+    help="A frame about to be chosen whose sharpness is below its sequence's "
+    "median is blurred against its neighbours, and swapped for a sharper one, "
+    "when its sharpness is below RATIO times the sharpest of the frames up to "
+    "2 positions away.",
+)
+@click.option(
     "--baseline-frames",
     "baseline_frames",
     type=int,
@@ -104,6 +116,7 @@ def pick_images(
     target_step,
     step_band,
     blur_ratio,
+    neighbour_blur_ratio,
     baseline_frames,
     min_inlier_share,
     json_path,
@@ -185,6 +198,7 @@ def pick_images(
             "target_step_percent": target_step,
             "step_band": step_band,
             "blur_ratio": blur_ratio,
+            "neighbour_blur_ratio": neighbour_blur_ratio,
             "baseline_frames": baseline_frames,
             "min_inlier_share": min_inlier_share,
         },

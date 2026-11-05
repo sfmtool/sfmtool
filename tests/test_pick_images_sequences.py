@@ -1,8 +1,9 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""How `sfm pick-images` groups files into sequences and turns chosen frames
-into list entries (`sfmtool._pick_images`, `sfmtool._pick_images_report`).
+"""How `sfm pick-images` groups files into sequences, turns chosen frames
+into list entries and words the walk's swaps (`sfmtool._pick_images`,
+`sfmtool._pick_images_report`).
 
 The paths here need not exist: grouping reads names only.
 """
@@ -18,7 +19,7 @@ from sfmtool._pick_images import (
     frame_field,
     list_entries,
 )
-from sfmtool._pick_images_report import slice_suggestion
+from sfmtool._pick_images_report import slice_suggestion, walk_lines
 from sfmtool.reconstruction import RangeExpr
 
 ROOT = Path("/ws").absolute()
@@ -134,3 +135,41 @@ def test_slice_suggestion():
         "  For a quick test solve, try -r 'walk1[:30]', -r 'walk1[241:271]' or "
         "-r 'walk1[-30:]'"
     )
+
+
+def test_swaps_are_reported_by_reason():
+    # A walk of frames numbered 10 apart with one swap of each reason; the
+    # report names them by file number, each on its reason's line.
+    sequence = PickSequence(
+        patterns=["f_%d.jpg"],
+        numbers=[10 * t for t in range(1, 31)],
+        images=[[ROOT / f"f_{10 * t}.jpg"] for t in range(1, 31)],
+    )
+    stats = {"step_percent": 10.0, "matches": 500, "f_inlier_share": 0.9}
+    walk = {
+        "chosen": [0, 12, 21],
+        "segments": [{"start": 0, "len": 3}],
+        "steps": [
+            {"from": 0, "to": 12, "stats": stats, "rate": 0.8},
+            {"from": 12, "to": 21, "stats": stats, "rate": 1.1},
+        ],
+        "swaps": [
+            {"candidate": 11, "chosen": 12, "reason": "median"},
+            {"candidate": 22, "chosen": 21, "reason": "neighbours"},
+        ],
+        "gaps": [],
+        "kept_blurred": [],
+        "breaks": [],
+        "weak_points": [],
+        "frames_used": 5,
+        "frames_from_baseline": 0,
+    }
+    report = {"sequences": [{"walk": walk}], "frames": []}
+    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3)
+    assert "  Blurred frames swapped (1): 120->130" in lines
+    assert "  Frames blurred against their neighbours swapped (1): 230->220" in lines
+
+    walk["swaps"] = []
+    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3)
+    assert "  Blurred frames swapped: none" in lines
+    assert "  Frames blurred against their neighbours swapped: none" in lines

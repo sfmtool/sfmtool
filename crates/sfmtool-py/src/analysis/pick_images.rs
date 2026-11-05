@@ -475,6 +475,9 @@ impl PyCaptureSequence {
 ///         (0.3).
 ///     blur_ratio: A frame below this times its sequence's median sharpness
 ///         is blurred (0.6).
+///     neighbour_blur_ratio: A frame about to be accepted whose sharpness is
+///         below its median is blurred against its neighbours when it is
+///         below this times the sharpest neighbouring frame's (0.8).
 ///     baseline_frames: How many frames the baseline samples (200).
 ///     min_inlier_share: The fewest fundamental-matrix inliers a step that
 ///         matches well has, as a share of its matches (0.5).
@@ -520,10 +523,11 @@ impl PyCaptureSequence {
 #[pyfunction]
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
                     concurrent_images=None, target_step_percent=None, step_band=None,
-                    blur_ratio=None, baseline_frames=None, min_inlier_share=None, ratio=None,
-                    min_matches=None, fundamental_error_per_960px=None,
-                    homography_error_per_960px=None, seed=None, preset=None, num_trees=None,
-                    leaf_size=None, max_leaf_checks=None, progress=None))]
+                    blur_ratio=None, neighbour_blur_ratio=None, baseline_frames=None,
+                    min_inlier_share=None, ratio=None, min_matches=None,
+                    fundamental_error_per_960px=None, homography_error_per_960px=None,
+                    seed=None, preset=None, num_trees=None, leaf_size=None,
+                    max_leaf_checks=None, progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_images<'py>(
     py: Python<'py>,
@@ -534,6 +538,7 @@ pub fn pick_images<'py>(
     target_step_percent: Option<f64>,
     step_band: Option<f64>,
     blur_ratio: Option<f64>,
+    neighbour_blur_ratio: Option<f64>,
     baseline_frames: Option<usize>,
     min_inlier_share: Option<f64>,
     ratio: Option<f32>,
@@ -553,6 +558,7 @@ pub fn pick_images<'py>(
         target_step_percent: target_step_percent.unwrap_or(defaults.target_step_percent),
         step_band: step_band.unwrap_or(defaults.step_band),
         blur_ratio: blur_ratio.unwrap_or(defaults.blur_ratio),
+        neighbour_blur_ratio: neighbour_blur_ratio.unwrap_or(defaults.neighbour_blur_ratio),
         baseline_frames: baseline_frames.unwrap_or(defaults.baseline_frames),
         min_inlier_share: min_inlier_share.unwrap_or(defaults.min_inlier_share),
         forest: forest_params(preset, num_trees, leaf_size, max_leaf_checks, None)?,

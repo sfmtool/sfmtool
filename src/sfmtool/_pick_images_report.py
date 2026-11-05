@@ -274,12 +274,20 @@ def walk_lines(
     )
     lines.extend(_motion_rows(walk, numbers))
 
-    swaps = [f"{number(s['candidate'])}->{number(s['chosen'])}" for s in walk["swaps"]]
-    lines.append(
-        f"  Blurred frames swapped ({len(swaps)}): {_items(swaps)}"
-        if swaps
-        else "  Blurred frames swapped: none"
-    )
+    for reason, heading in (
+        ("median", "Blurred frames swapped"),
+        ("neighbours", "Frames blurred against their neighbours swapped"),
+    ):
+        swaps = [
+            f"{number(s['candidate'])}->{number(s['chosen'])}"
+            for s in walk["swaps"]
+            if s["reason"] == reason
+        ]
+        lines.append(
+            f"  {heading} ({len(swaps)}): {_items(swaps)}"
+            if swaps
+            else f"  {heading}: none"
+        )
 
     gaps = walk["gaps"]
     if gaps:

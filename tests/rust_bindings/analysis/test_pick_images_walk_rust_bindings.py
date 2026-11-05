@@ -158,6 +158,7 @@ def test_options_reach_the_walk(steady: _Capture):
         ("target_step_percent", 0.0),
         ("step_band", 1.0),
         ("blur_ratio", 0.0),
+        ("neighbour_blur_ratio", 1.0),
         ("baseline_frames", 1),
         ("min_inlier_share", 2.0),
         ("pair.ratio", 0.0),

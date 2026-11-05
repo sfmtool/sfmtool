@@ -49,6 +49,7 @@ pub use pick::pick_images;
 pub use report::{
     BaselineReport, Break, FlaggedRegion, FrameReading, Gap, KeptBlurred, MeasuredPair,
     PickImagesReport, SampleRate, Segment, SensorBaseline, SensorReading, SequenceReport,
-    SolvabilityCheck, Stage, StepKind, Swap, Verdict, VideoCheck, WalkReport, WalkStep, WeakPoint,
+    SolvabilityCheck, Stage, StepKind, Swap, SwapReason, Verdict, VideoCheck, WalkReport, WalkStep,
+    WeakPoint,
 };
 pub use source::{ExtractingSource, FrameSource, FrameSourceError, ReadOnlySource};

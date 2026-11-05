@@ -42,13 +42,14 @@ settled.
 - **An asymmetric band.** ±30% held on every capture, but a short step costs
   only a frame more and a long one can lose the match, so a band wider below
   the target than above it is still a choice.
-- **Blur against the neighbouring frames.** A frame is blurred when its
-  sharpness is below `blur_ratio` times the sequence's median
-  ([core/analysis/pick-images.md § Blur](../core/analysis/pick-images.md#blur)).
-  A frame could instead be judged against its neighbouring frames: one whose
-  sharpness is well below its neighbours' is blurred relative to them, even
-  where the whole stretch is sharper or softer than the median. The frames
-  such a rule picks are to be checked blind before it becomes a rule.
+- **Blur against the neighbouring frames.** The walk judges a frame it is
+  about to accept, when its sharpness is below the median, against the frames
+  within 2 positions of it, and swaps it for a sharper one when its
+  sharpness is below `neighbour_blur_ratio` (0.8) times the sharpest
+  neighbour's ([core/analysis/pick-images.md § Blur](../core/analysis/pick-images.md#blur)).
+  The rule is built; the frames it swaps and the candidates it keeps are to
+  be checked blind, which settles its ratio, its window of 2 positions, and
+  whether a frame sharper than the median needs judging too.
 - **Medians per sequence or per capture.** The walk takes the sharpness
   median per sequence, since separate sequences can differ in light and
   scene. For several sequences of one camera in one place, one median over the
