@@ -72,29 +72,24 @@ pub struct FrameReading {
     pub blurred: bool,
 }
 
-/// One image's readings and the blur judgement made from them against its
-/// sensor's baseline ([`SensorBaseline`]).
+/// One image's readings and the blur judgement made from its sharpness
+/// against its sensor's baseline ([`SensorBaseline`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SensorReading {
     /// The `.sift` file's sharpness.
     pub sharpness: f32,
     /// The `.sift` file's `[Exx, Eyy, Exy]`.
     pub gradient_structure_tensor_xx_yy_xy: [f32; 3],
-    /// `ImageReadings::axis_ratio`: `None` for a flat image.
+    /// `ImageReadings::axis_ratio`: `None` for a flat image. Reported as a
+    /// reading only; blur is not judged from it.
     pub axis_ratio: Option<f32>,
-    /// `ImageReadings::coherence`.
+    /// `ImageReadings::coherence`, likewise reported only.
     pub coherence: f32,
     /// The sharpness over its sensor's median sharpness; NaN when that median
     /// is 0.
     pub sharpness_ratio: f64,
-    /// The axis ratio's robust z-score against its sensor's baseline:
-    /// `(x − median) / spread` ([`SensorBaseline::axis_ratio_spread`]).
-    /// `None` for a flat image, or when the spread is 0.
-    pub axis_ratio_z: Option<f64>,
-    /// The coherence's robust z-score, likewise; `None` when the spread is 0.
-    pub coherence_z: Option<f64>,
     /// Whether the image is blurred: its sharpness is below `blur_ratio` times
-    /// the median, or a z-score is above 2.
+    /// the median.
     pub blurred: bool,
 }
 
@@ -127,7 +122,7 @@ pub struct BaselineReport {
     pub samples: Vec<usize>,
     /// The frames of this sequence the baseline read, in both batches.
     pub frames_read: usize,
-    /// The medians and spreads each sensor's frames are judged against.
+    /// The median sharpness each sensor's frames are judged against.
     pub sensors: Vec<SensorBaseline>,
     /// How many sampled frames are blurred.
     pub blurred_samples: usize,
@@ -147,22 +142,11 @@ pub struct BaselineReport {
     pub flagged_regions: Vec<FlaggedRegion>,
 }
 
-/// One sensor's baseline: the medians and median absolute deviations of its
-/// readings over the sampled frames.
+/// One sensor's baseline: the median sharpness of its images over the
+/// sampled frames.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SensorBaseline {
     pub sharpness_median: f64,
-    /// Over the sampled frames that are not flat.
-    pub axis_ratio_median: f64,
-    pub axis_ratio_mad: f64,
-    /// What an axis ratio's z-score divides by: `1.4826 · MAD`, or `1.4826`
-    /// times the smallest positive deviation from the median when the MAD is
-    /// 0, or 0 when every sampled value is the median.
-    pub axis_ratio_spread: f64,
-    pub coherence_median: f64,
-    pub coherence_mad: f64,
-    /// What a coherence's z-score divides by, likewise.
-    pub coherence_spread: f64,
 }
 
 /// The rate at one sampled frame.
@@ -276,7 +260,8 @@ pub struct WalkStep {
     /// The step per frame, `stats.step_percent / (to − from)`.
     pub rate: f64,
     pub kind: StepKind,
-    /// The step's band was halved because `from` lies in a flagged region.
+    /// The step's band was halved because `from` lies in a region flagged
+    /// for weak matches.
     pub flagged: bool,
 }
 
@@ -293,7 +278,7 @@ pub enum StepKind {
     /// wider than the band.
     Bracketed,
     /// Below the band at the last frame of the sequence or the first frame of
-    /// a flagged region, which a step does not pass.
+    /// a region flagged for weak matches, which a step does not pass.
     AtLimit,
     /// Below the band after a step failed: part of a gap filled in.
     GapFill,

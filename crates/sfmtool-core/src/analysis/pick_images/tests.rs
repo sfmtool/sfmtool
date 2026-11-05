@@ -208,39 +208,53 @@ fn unsampled_choice(run: &Run, after: usize) -> usize {
         .expect("a chosen frame that is not sampled")
 }
 
+/// The report's reading of `frame`, which was read.
+fn judged(run: &Run, frame: usize) -> FrameReading {
+    run.report()
+        .frames
+        .iter()
+        .find(|f| f.id.frame == frame)
+        .expect("the frame was read")
+        .clone()
+}
+
 #[test]
 fn a_blurred_frame_is_swapped_for_a_sharp_neighbour() {
-    // Blurred in every direction, and along one direction only, each a
-    // frame the walk chose before it was blurred. The swap of the first
-    // changes the walk after it, so the second is taken from that walk.
+    // A frame the walk chose, made less sharp than 0.6 of the median.
     let mut blurred = Synth::steady(3, 300, ONE_PERCENT);
     let soft = unsampled_choice(&run(&[&blurred]), 100);
     blurred.shots[soft].readings[0].0 = 0.3;
-    let streaked = unsampled_choice(&run(&[&blurred]), 200);
-    blurred.shots[streaked].readings[0].1 = [1.0, 0.2, 0.0];
     let run = run(&[&blurred]);
     let walk = run.walk(0);
-    for frame in [soft, streaked] {
-        assert!(!walk.chosen.contains(&frame), "{frame} was chosen");
-        let swap = walk
-            .swaps
-            .iter()
-            .find(|s| s.candidate == frame)
-            .unwrap_or_else(|| panic!("{frame} was not swapped: {:?}", walk.swaps));
-        assert!(swap.chosen.abs_diff(frame) <= 2);
-        assert!(walk.chosen.contains(&swap.chosen));
-    }
-    let judged = |frame| {
-        run.report()
-            .frames
-            .iter()
-            .find(|f| f.id.frame == frame)
-            .expect("the frame was read")
-            .clone()
-    };
-    assert!(judged(soft).sensors[0].sharpness_ratio < 0.6);
-    assert!(judged(streaked).sensors[0].axis_ratio_z.unwrap() > 2.0);
-    assert!(judged(soft).blurred && judged(streaked).blurred);
+    assert!(!walk.chosen.contains(&soft), "{soft} was chosen");
+    let swap = walk
+        .swaps
+        .iter()
+        .find(|s| s.candidate == soft)
+        .unwrap_or_else(|| panic!("{soft} was not swapped: {:?}", walk.swaps));
+    assert!(swap.chosen.abs_diff(soft) <= 2);
+    assert!(walk.chosen.contains(&swap.chosen));
+    assert!(judged(&run, soft).sensors[0].sharpness_ratio < 0.6);
+    assert!(judged(&run, soft).blurred);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn gradients_along_one_direction_do_not_blur_a_sharp_frame() {
+    // A frame the walk chose, given a strongly directional tensor at its
+    // usual sharpness, as a sharp frame of a slope or of a line-like subject
+    // reads. It is still chosen, not swapped, and not blurred.
+    let mut streaked = Synth::steady(3, 300, ONE_PERCENT);
+    let frame = unsampled_choice(&run(&[&streaked]), 100);
+    streaked.shots[frame].readings[0].1 = [1.0, 0.2, 0.0];
+    let run = run(&[&streaked]);
+    let walk = run.walk(0);
+    assert!(walk.chosen.contains(&frame), "{frame} was not chosen");
+    assert!(walk.swaps.iter().all(|s| s.candidate != frame));
+    let reading = judged(&run, frame);
+    assert!(reading.sensors[0].axis_ratio.unwrap() > 1.5);
+    assert!(reading.sensors[0].coherence > 0.6);
+    assert!(!reading.blurred);
     assert_read_is_asked(&run);
 }
 
@@ -290,6 +304,107 @@ fn a_blurred_run_keeps_its_sharpest_frames() {
     assert_read_is_asked(&run);
 }
 
+/// Every accepted step with fewer than twice `min_matches` matches goes to
+/// the next frame or fills in a gap; and the walk measured at least one such
+/// pair beyond the next frame from a chosen frame, so the rule was tested.
+fn assert_few_match_steps_only_where_allowed(run: &Run) {
+    let few = |matches: usize| matches < 2 * options().pair.min_matches;
+    let walk = run.walk(0);
+    for step in &walk.steps {
+        if few(step.stats.matches) {
+            assert!(
+                step.to == step.from + 1 || step.kind == StepKind::GapFill,
+                "{step:?}"
+            );
+        }
+    }
+    let chosen: BTreeSet<usize> = walk.chosen.iter().copied().collect();
+    assert!(
+        run.report().pairs.iter().any(|p| p.stage == Stage::Walk
+            && chosen.contains(&p.a.frame)
+            && p.b.frame > p.a.frame + 1
+            && p.stats.matches >= options().pair.min_matches
+            && few(p.stats.matches)),
+        "no pair with few matches was measured"
+    );
+}
+
+#[test]
+fn a_blurred_frame_is_not_swapped_for_a_neighbour_with_few_matches() {
+    // The frame the walk would choose is blurred, and its sharp neighbours
+    // show only one point in 20, so a step to one of them has few matches.
+    let mut synth = Synth::steady(29, 300, ONE_PERCENT);
+    let soft = unsampled_choice(&run(&[&synth]), 100);
+    synth.shots[soft].readings[0].0 = 0.3;
+    for t in soft - 4..=soft + 4 {
+        if t != soft {
+            synth.shots[t].content = Content::Subset { every: 20 };
+        }
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    assert!(!walk.chosen.contains(&soft));
+    assert!(walk.breaks.is_empty());
+    assert_few_match_steps_only_where_allowed(&run);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn a_blurred_run_does_not_take_a_sharp_frame_with_few_matches() {
+    // The frames around the one the walk would choose are blurred, so no
+    // neighbour can be swapped in, and the walk reads the blurred run. The
+    // only sharp frames in it past the next frame show one point in 20, so a
+    // step to one of them has few matches.
+    let mut synth = Synth::steady(30, 300, ONE_PERCENT);
+    let first = run(&[&synth]);
+    let target = unsampled_choice(&first, 100);
+    let walk = first.walk(0);
+    let from = walk.chosen[walk.chosen.iter().position(|&c| c == target).unwrap() - 1];
+    for t in from + 2..=from + 5 {
+        synth.shots[t].content = Content::Subset { every: 20 };
+    }
+    for t in from + 6..=target + 4 {
+        synth.shots[t].readings[0].0 = 0.3;
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    assert!(walk.chosen.contains(&from));
+    assert!(walk.breaks.is_empty());
+    assert_few_match_steps_only_where_allowed(&run);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn a_blurred_run_does_not_keep_a_sharper_blurred_frame_with_few_matches() {
+    // Every frame from the next one to past the frame the walk would choose
+    // is blurred, so the walk keeps the sharpest frame in the band. The
+    // frames past the next one that are less blurred than that frame show
+    // one point in 20, so a step to one of them has few matches.
+    let mut synth = Synth::steady(31, 300, ONE_PERCENT);
+    let first = run(&[&synth]);
+    let target = unsampled_choice(&first, 100);
+    let walk = first.walk(0);
+    let from = walk.chosen[walk.chosen.iter().position(|&c| c == target).unwrap() - 1];
+    for t in from + 1..=target + 4 {
+        synth.shots[t].readings[0].0 = 0.2;
+        if t > from + 1 && t != target {
+            synth.shots[t].readings[0].0 = 0.3;
+            synth.shots[t].content = Content::Subset { every: 20 };
+        }
+    }
+    let run = run(&[&synth]);
+    let walk = run.walk(0);
+    assert!(walk.chosen.contains(&from));
+    assert!(walk.breaks.is_empty());
+    assert_few_match_steps_only_where_allowed(&run);
+    assert!(
+        walk.kept_blurred.iter().any(|k| k.frame == target),
+        "{:?}",
+        walk.kept_blurred
+    );
+    assert_read_is_asked(&run);
+}
+
 /// The band a step was held to: halved with the target in a flagged region.
 fn band(step: &WalkStep) -> (f64, f64) {
     let o = options();
@@ -320,64 +435,42 @@ fn a_long_blurred_stretch_is_crossed_at_the_bands_spacing() {
         );
     }
     // Every frame chosen in the stretch is blurred, so it is kept though
-    // blurred, at the band's spacing rather than one frame at a time.
+    // blurred, at the band's spacing rather than one frame at a time. The
+    // stretch matches well, so it is flagged for blur alone and the band is
+    // not halved there: about 10 frames a step at 1% a frame.
     assert!(inside
         .iter()
         .all(|s| walk.kept_blurred.iter().any(|k| k.frame == s.to)));
+    let regions = &run.report().sequences[0].baseline.flagged_regions;
+    assert!(regions.iter().any(|r| r.blurred));
+    assert!(regions.iter().all(|r| !r.weak_matches), "{regions:?}");
+    assert!(inside.iter().all(|s| !s.flagged));
     assert!(
         median(&strides(walk, |s| stretch.contains(&s.from)
             && stretch.contains(&s.to)))
-            >= 4.0
+            >= 7.0
     );
     assert!(walk.breaks.is_empty());
     assert_read_is_asked(&run);
 }
 
 #[test]
-fn a_spread_of_zero_is_floored_at_the_smallest_deviation() {
-    let reading = |xx: f32| ImageReadings::new(1.0, [xx, 1.0, 0.0]).unwrap();
-    // Most readings equal the median, so the MAD is 0; the floor is 1.4826
-    // times the smallest positive deviation, here 0.01 in the axis ratio.
-    let readings: Vec<ImageReadings> = (0..10)
-        .map(|i| reading(if i < 7 { 1.0 } else { 0.01f32.exp() }))
+fn only_the_sharpness_judges_blur() {
+    let reading = |sharpness: f32, tensor: [f32; 3]| ImageReadings::new(sharpness, tensor).unwrap();
+    let readings: Vec<ImageReadings> = (0..9)
+        .map(|i| reading(0.9 + 0.025 * i as f32, [1.0, 1.0, 0.0]))
         .collect();
     let base = baseline::sensor_baseline(&readings);
-    assert_eq!(base.axis_ratio_mad, 0.0);
-    assert!((base.axis_ratio_spread - 1.4826 * 0.01).abs() < 1e-6);
-    let judged = |xx: f32| baseline::judge(&reading(xx), &base, 0.6);
-    // A deviation as small as the deviants' is not blurred; one well beyond
-    // two spreads is.
-    assert!(!judged(0.01f32.exp()).blurred);
-    assert!(judged(0.05f32.exp()).blurred);
-    assert!(judged(0.05f32.exp()).axis_ratio_z.unwrap() > 2.0);
-
-    // Every reading the same: no spread, so no z-score and no blur by it.
-    let same = baseline::sensor_baseline(&[reading(1.0); 10]);
-    assert_eq!(same.axis_ratio_spread, 0.0);
-    let streak = baseline::judge(&reading(5.0), &same, 0.6);
-    assert_eq!(streak.axis_ratio_z, None);
+    assert!((base.sharpness_median - 1.0).abs() < 1e-6);
+    let judge = |r: ImageReadings| baseline::judge(&r, &base, 0.6);
+    assert!(judge(reading(0.59, [1.0, 1.0, 0.0])).blurred);
+    assert!(!judge(reading(0.61, [1.0, 1.0, 0.0])).blurred);
+    // Gradients in one direction only, at the median sharpness: the readings
+    // are reported, and the image is not blurred.
+    let streak = judge(reading(1.0, [1.0, 0.01, 0.0]));
+    assert!(streak.axis_ratio.unwrap() > 4.0);
+    assert!(streak.coherence > 0.9);
     assert!(!streak.blurred);
-}
-
-#[test]
-fn readings_mostly_at_the_median_do_not_flag_the_rest() {
-    // Three frames in five read exactly [1, 1, 0] and two a tensor 2% apart:
-    // with no floor under a MAD of 0, those two in five would all be blurred.
-    let mut synth = Synth::steady(27, 300, ONE_PERCENT);
-    for (t, shot) in synth.shots.iter_mut().enumerate() {
-        shot.readings[0].1 = if t % 5 < 2 {
-            [1.02, 1.0, 0.0]
-        } else {
-            [1.0, 1.0, 0.0]
-        };
-    }
-    let run = run(&[&synth]);
-    let report = run.report();
-    assert_eq!(report.sequences[0].baseline.sensors[0].axis_ratio_mad, 0.0);
-    assert_eq!(report.sequences[0].baseline.blurred_samples, 0);
-    assert!(report.frames.iter().all(|f| !f.blurred));
-    let walk = run.walk(0);
-    assert!(walk.swaps.is_empty() && walk.kept_blurred.is_empty());
 }
 
 #[test]
@@ -401,6 +494,18 @@ fn a_bad_patch_is_filled_in_at_shorter_steps() {
             assert!(step.from >= 110 && step.to <= 182, "{step:?}");
         }
     }
+    // The patch is flagged for weak matches, and the steps from inside it
+    // have their band halved.
+    let regions = &run.report().sequences[0].baseline.flagged_regions;
+    let weak: Vec<&FlaggedRegion> = regions.iter().filter(|r| r.weak_matches).collect();
+    assert!(!weak.is_empty(), "{regions:?}");
+    for step in &walk.steps {
+        let in_weak = weak
+            .iter()
+            .any(|r| r.first <= step.from && step.from <= r.last);
+        assert_eq!(step.flagged, in_weak, "{step:?}");
+    }
+    assert!(walk.steps.iter().any(|s| s.flagged));
     // Dense across the patch, sparse elsewhere.
     let inside = walk.chosen.iter().filter(|c| patch.contains(c)).count();
     assert!(inside >= 20, "{inside} frames chosen in the patch");
@@ -477,6 +582,12 @@ fn a_break_starts_a_new_segment_and_weak_points_are_reported() {
     assert!(!few.is_empty());
     for step in few {
         assert!(step.to >= 220 && step.from <= 260, "{step:?}");
+        // A step with few matches is settled on only at the next frame, or
+        // when halving a failed step finds nothing better.
+        assert!(
+            step.to == step.from + 1 || step.kind == StepKind::GapFill,
+            "{step:?}"
+        );
     }
     // Every frame of a break was read: the walk looked for the first that
     // matches its next frame.
@@ -506,6 +617,25 @@ fn shuffled_frames_are_not_a_video() {
     // Nothing is read after the first batch.
     assert!(report.frames.iter().all(|f| f.stage == Stage::BaselineNear));
     assert_eq!(run.calls.len(), 1);
+    assert_read_is_asked(&run);
+}
+
+#[test]
+fn frames_whose_neighbours_are_far_apart_are_not_a_video() {
+    // Frames 6% of the long side apart: the motion adds up, the step is
+    // steady and neighbours match closely, but a step that large is no
+    // video's.
+    let synth = Synth::steady(28, 120, 6.0 * ONE_PERCENT);
+    let run = run(&[&synth]);
+    let report = run.report();
+    let video = &report.sequences[0].video;
+    assert!(
+        video.motion_adds_up && video.step_steady && video.neighbours_match,
+        "{video:?}"
+    );
+    assert!(!video.step_small, "{video:?}");
+    assert!(!video.is_video);
+    assert_eq!(report.verdict, Verdict::NotAVideo);
     assert_read_is_asked(&run);
 }
 
