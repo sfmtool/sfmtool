@@ -398,9 +398,10 @@ not read either. Every frame of a break is read.
 A frame's sensor image is **blurred** when its sharpness is below
 `blur_ratio` times its sensor's median sharpness over the sampled frames, the
 median from `sfmtool_core::numeric::median`. Sharpness compared within one
-capture tracks blur, since the capture's frames show the same scene through
-the same lens, so a frame much less sharp than the capture's median is one
-whose detail was smeared.
+sequence tracks blur, since its frames show the same scene through the same
+lens, so a frame much less sharp than the median is most often one whose
+detail was smeared; a frame that shows mostly a plain surface reads low as
+well.
 
 The report also carries each image's axis ratio and coherence, which
 `ImageReadings::axis_ratio` and `ImageReadings::coherence` derive from the
@@ -408,7 +409,9 @@ gradient structure tensor, but blur is not judged from them. They measure the
 direction of the gradients, which the scene sets as strongly as motion blur
 does: a fisheye's geometry, a slope seen at an angle or a subject made of
 lines gives a sharp frame strongly directional gradients, so against a
-capture-wide median those readings would call such sharp frames blurred.
+capture-wide median those readings would call such sharp frames blurred. A
+frame smeared along one direction whose sharpness stays near the median is so
+not judged blurred.
 
 ### Rigs
 
@@ -485,7 +488,7 @@ three digits; the medians and ratios are `f64` because
 | recent rates | 3 | the accepted steps the prediction takes the median of |
 | weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
 
-The last nine are constants of the module.
+The last eight are constants of the module.
 
 ## Python bindings
 
