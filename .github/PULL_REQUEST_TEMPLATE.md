@@ -24,8 +24,8 @@ If you added a test or changed code that a test runs, give the time of each
 test you added, and the before and after times of each existing test whose
 time you changed by more than a second, from the durations list at the end of
 `pixi run test`. Repeat a comparison before reporting it, since whole-suite
-times vary between runs. A test that needs more than 5 seconds says why it
-needs its input (see `specs/STANDARDS.md#tests-cost-what-their-assertions-need`).
+times vary between runs. For a test that takes more than 5 seconds, say why
+it needs its input (see `specs/STANDARDS.md#tests-cost-what-their-assertions-need`).
 -->
 
 ## Screenshots

@@ -670,9 +670,9 @@ Ways to cut a test's time while keeping what it checks:
   the test runs, not only for the steps it checks.
 - **One run for several tests:** a result that several tests only read is
   built once, in a module- or session-scoped fixture, and handed out read-only
-  where possible. Under `pytest -n`, each worker process builds such a fixture
-  once for the tests it runs, so it is built at most once per worker rather
-  than once per test.
+  where possible. Under `pytest -n`, each worker process builds its own copy
+  of such a fixture, so a session-scoped fixture is built at most once per
+  worker rather than once per test.
 - **The call, not the pipeline:** a test whose subject is that an argument
   reaches a step spies on that step instead of running the whole pipeline to
   see the effect.
@@ -707,5 +707,5 @@ one where a way above would cut its time with every case and assertion kept.
 Confirm before reporting: time the test alone (`pixi run test -- <node id>`,
 or `pixi run cargo test -p <crate> <test name>`), and name the way that would
 cut it and how each of its cases and assertions is kept. A test over the
-limits whose input is already the smallest that exercises its behaviour, and
-whose work no other test repeats, meets this standard.
+limits that none of the ways above would make faster without dropping a case
+or weakening an assertion meets this standard.
