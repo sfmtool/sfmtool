@@ -11,7 +11,8 @@
 //! observation a finer one covers, the cluster match census, the per-cluster
 //! feature radius and the coarsest-N cut over it, the join that names the
 //! selection clusters a member left behind, the track table of a
-//! reconstruction, and the motion statistics of a pair of video frames.
+//! reconstruction, the motion statistics of a pair of video frames, and the
+//! walk that picks the frames of a video a solve should use.
 
 use pyo3::prelude::*;
 

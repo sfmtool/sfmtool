@@ -10,8 +10,9 @@
 //! the reconstruction's measured reprojection noise and the point-or-bearing test
 //! over its points, the cluster match census, the
 //! per-cluster feature radius and the coarsest-N cut over it, the join that
-//! names the selection clusters a member left behind, and the motion between
-//! two frames of a video measured from their SIFT matches.
+//! names the selection clusters a member left behind, the motion between two
+//! frames of a video measured from their SIFT matches, and the walk that picks
+//! the frames of a video a solve should use.
 
 pub mod adjacency_surfel_normals;
 pub mod alignment;
