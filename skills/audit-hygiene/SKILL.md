@@ -1,6 +1,6 @@
 ---
 name: audit-hygiene
-description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail). Use when the user asks to clean up, reorganize, or review codebase structure.
+description: Survey the codebase for organizational drift — oversized files, files that should be split or merged, misleading names, inconsistent naming conventions, duplicated doc comments, directory structures that hurt navigation — and for code that breaks the quality standards in specs/STANDARDS.md (points at infinity, Progress on long-running work, no panics on caller input, no Python wrappers over bindings, medians and quantiles from sfmtool_core::numeric, the smallest numeric precision the use justifies, one I/O shape per file format, viewer item visibility, Python names and lazy loading, Rust module files and *Options settings structs, license headers, rustdoc, MSRV and mcp-less builds, no documented exceptions, tests that can fail, tests that cost only what their assertions need). Use when the user asks to clean up, reorganize, or review codebase structure.
 ---
 
 # Codebase hygiene audit
@@ -172,7 +172,7 @@ how this audit runs them.
 
 - **Check per function, not per convention split.** A breach is a finding
   even where the whole module is consistent with itself. Run the
-  mechanical checks 9–19 below, and the standards' tallies in check 5,
+  mechanical checks 9–21 below, and the standards' tallies in check 5,
   first, then read each hit against the standard it feeds.
 - **Cite the standard.** Each finding names the standard by its heading
   and links it (`specs/STANDARDS.md#caller-input-never-panics`).
@@ -341,6 +341,68 @@ worth more than a paragraph.
     reason or whose stated reason the values' range, the digits the use needs
     and the accumulation error do not support. Feeds STANDARDS.md § "Numeric
     precision is the smallest the use justifies".
+20. **Tests that cannot fail** — grep the test code with `rg -nP` for the
+    shapes STANDARDS.md § "Tests assert something that can fail" lists: an
+    `is not None` (`assert .* is not None` in `tests/`) or its Rust form
+    (`assert!\(.*\.is_some\(\)\)` in `crates/`, keeping the hits in test
+    code); a length or a value checked against itself
+    (`assert len\(([\w.\[\]]+)\) == len\(\1\)` and
+    `assert ([\w.\[\]]+) == \1\s*$` in `tests/`,
+    `assert_eq!\(([\w.]+), \1\)` in `crates/`); and work held, paused or
+    ordered in a test (`Barrier|\bsleep\(|threading\.Event|\.wait\(` in
+    `tests/`, and `Barrier|thread::sleep|Condvar|\.wait\(` in `crates/` with
+    `-g '**/tests/**' -g '**/tests.rs'`). Report the hit count per pattern,
+    then read each hit. Keep an `is not None` or `is_some()` only where the
+    value cannot be `None`, and a hold or ordering only where it also decides
+    the result the test's key assertion checks. The other two shapes, a value
+    compared with the result of the same call and a fixture that already
+    satisfies the assertion before the code under test runs, have no
+    pattern; look for them while reading these hits and the tests that
+    check 21 picks out. Before reporting a test, name the change to the
+    guarded code under which it still passes. The proposed fix makes the
+    assertion able to fail, or covers each ordering with its own
+    deterministic test; it never deletes a case. Feeds STANDARDS.md § "Tests
+    assert something that can fail".
+21. **Test time** — run the Python suite with every duration listed, then
+    list and sum the setup and call phases over 5 seconds:
+
+    ```bash
+    out=$(mktemp)
+    pixi run test -- --durations=0 > "$out" 2>&1
+    awk '/slowest durations/ {f=1} f && ($2 == "setup" || $2 == "call") && $1 + 0 > 5 {n++; s += $1; print} END {printf "%d phases, %.1f s\n", n, s}' "$out"
+    ```
+
+    The `test` task in `pixi.toml` runs `pytest -n auto --dist worksteal`,
+    so these are the times of a normal `pixi run test`, the run the
+    standard's 5-second limit is stated for. For Rust, read the "has been
+    running for over 60 seconds" lines of the `test-linux-rust` job in the
+    latest successful CI run on `main`:
+
+    ```bash
+    run=$(gh run list --repo sfmtool/sfmtool --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+    job=$(gh run view "$run" --repo sfmtool/sfmtool --json jobs --jq '.jobs[] | select(.name == "test-linux-rust") | .databaseId')
+    gh run view --repo sfmtool/sfmtool --job "$job" --log | grep "has been running for over 60 seconds"
+    ```
+
+    Report the number of Python phases over 5 seconds with their summed
+    seconds, and the number of Rust tests over 60 seconds, even when they
+    are zero, so the next snapshot can compare. Whole-suite times can differ
+    by up to a factor of two between runs, so compare per-test times with
+    the last snapshot, not the suite's wall time. The limits only pick tests
+    for a closer look; a test over them is not a finding by itself. Read
+    each one: group the tests that run the same expensive call on the same
+    input, and note a test that lowers a size for the steps it checks but
+    leaves an expensive step at its default. Keep only a test that one of
+    the standard's ways (the smallest input that exercises the behaviour,
+    one run for several tests, the call rather than the pipeline, a
+    measurement outside the suite) would make faster with every case and
+    assertion kept. Before reporting it, time it alone (`pixi run test --
+    <node id>`, or `pixi run cargo test -p <crate> <test name>`), and name
+    the way and how each of its cases and assertions is kept. A proposed fix
+    never drops a case, weakens or removes an assertion, or narrows what the
+    test covers. A test over the limits that no way would make faster
+    without doing one of those meets the standard and is not a finding.
+    Feeds STANDARDS.md § "Tests cost what their assertions need".
 
 ## Output
 
