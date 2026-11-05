@@ -350,9 +350,11 @@ worth more than a paragraph.
     `assert ([\w.\[\]]+) == \1\s*$` in `tests/`,
     `assert_eq!\(([\w.]+), \1\)` in `crates/`); and work held, paused or
     ordered in a test (`Barrier|\bsleep\(|threading\.Event|\.wait\(` in
-    `tests/`, and `Barrier|thread::sleep|Condvar|\.wait\(` in `crates/` with
-    `-g '**/tests/**' -g '**/tests.rs'`). Report the hit count per pattern,
-    then read each hit. Keep an `is not None` or `is_some()` only where the
+    `tests/`, and `Barrier|thread::sleep|Condvar|\.wait\(` in `crates/`,
+    keeping the hits in test code). In `crates/`, test code is `tests.rs`
+    files, `tests/` directories and the inline `mod tests { … }` blocks of
+    other files, so a path glob alone misses some of it. Report the hit
+    count per pattern, then read each hit. Keep an `is not None` or `is_some()` only where the
     value cannot be `None`, and a hold or ordering only where it also decides
     the result the test's key assertion checks. The other two shapes, a value
     compared with the result of the same call and a fixture that already
