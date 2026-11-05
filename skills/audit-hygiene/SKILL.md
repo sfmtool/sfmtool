@@ -7,7 +7,7 @@ description: Survey the codebase for organizational drift — oversized files, f
 
 As a project grows, files get bigger, coherent designs stretch, conventions fork
 at module boundaries, and names and comments drift away from contents. This skill
-surveys the whole codebase (Python and Rust) for those smells and produces a
+surveys the codebase (Python and Rust) for those smells and produces a
 prioritized list of structural fixes.
 
 ## Scope
@@ -15,6 +15,219 @@ prioritized list of structural fixes.
 - Python under `src/sfmtool/` and `tests/`
 - Rust crates under `crates/`
 - Top-level layout (`scripts/`, `specs/`)
+
+The code is about 700,000 lines (2026-11-04). Reading all of it in one run
+takes too long, so the audit runs at two depths, as `audit-specs` does:
+
+- **The whole tree, mechanically.** The mechanical checks below run over all
+  of it on every run. They cost little, they are the baselines one snapshot
+  compares with the next, and they acquit code that no one read in full.
+- **A sample, in full.** A set of audit units, chosen under "Choosing the
+  units to read" below and limited by a budget in lines, is read in full by
+  subagents. Repeated runs cover the whole tree, and each report's coverage
+  table records when each unit was last read.
+
+## Choosing the units to read
+
+### Audit units
+
+An audit unit is a part of the tree small enough for one subagent to read in
+full. The inventory is derived from the tracked files by
+[`units.sh`](units.sh), so every run gets the same units from the same tree
+and the units follow the tree as it changes:
+
+```bash
+bash skills/audit-hygiene/units.sh          # <lines>\t<unit>, one line per unit
+bash skills/audit-hygiene/units.sh --files  # <unit>\t<lines>\t<file>, one line per file
+```
+
+It counts the tracked `.rs` and `.wgsl` files under `crates/`, the `.py`
+files under `src/sfmtool/` and `tests/`, and the `.py`, `.sh` and `.ps1` files
+under `scripts/`. `specs/` has no units: this audit checks it only
+mechanically, and `audit-specs` reads it. The script starts from each crate,
+`src/sfmtool`, `tests` and `scripts`. A module is a file and the directory of the same name (`foo.rs`
+with `foo/`, `foo.py` with `foo/`). A module of at most 5,000 lines is one
+unit. A larger one is split: its own file, when that alone is over 5,000
+lines, is the unit `<module> (own file)`; its child modules of at least 1,000
+lines become units, largest first and each split the same way when it is
+over 5,000 lines, until what is left totals at most 5,000 lines; and what is
+left is the unit `<module> (rest)`, or `<module> (rest 1)`, `(rest 2)`, …
+of equal size in name order when it is still over 5,000 lines. A single file
+over 5,000 lines is a unit by itself. The script's header comment has the
+same rules, and `LIMIT` and `MIN` in the environment change the two sizes.
+Keep them at their defaults, so that unit names stay the same from run to
+run.
+
+A unit's name is the module path without an extension. The parts of a
+`(rest N)` unit are cut in name order, so a file added or removed before a
+part moves the boundaries of that part and the parts after it; their coverage
+rows are then a little less exact, and the churn rule below does not see the
+files that moved in.
+
+On 2026-11-04 (`8edb7c02`) the script listed 247 units with 702,520 lines,
+from 850 to 8,878 lines each and about 2,800 on average. 242 units are
+between 1,000 and 5,000 lines. Four single files are over 5,000 lines:
+`crates/sfmtool-core/src/geometry/bundle_adjust/tests (own file)` (8,878),
+`crates/sfmtool-core/src/bench/tests (own file)` (8,291),
+`crates/sfm-explorer/src/track_view/body/tests (own file)` (6,604) and
+`crates/sfmtool-core/src/geometry/bundle_adjust (own file)` (5,554). By
+start node: `sfmtool-core` 98 units, `sfm-explorer` 73, `sfmtool-py` 13, the
+format crates and the other small crates 16, `src/sfmtool` 17, `tests` 22 and
+`scripts` 8. At the default budget a full cycle takes about 47 runs.
+
+### Budget
+
+The budget is in lines read, 15,000 by default. Use another figure when the
+user asks for a deeper or a shorter pass, and state it in the report. Fill it
+unit by unit in the order below: take each unit that still fits in what is
+left of the budget and skip one that does not. The first unit is always
+taken, even when it alone is over the budget.
+
+### Selection order
+
+Three pools, in this order. The first two are evidence, not a sample.
+
+1. **Units with mechanical hits from this run.** A unit is pulled in when it
+   holds a hit that a mechanical check below kept after reading it: a kept
+   points-at-infinity hit (check 9), a public function without a `Progress`
+   or a `Progress::none()` inside a function with one in scope (check 10), a
+   progress variant (check 11), a kept caller-input panic (check 12), a
+   Python wrapper that repeats a binding (check 13), a bare `pub` field in the
+   viewer (check 16), a kept median or quantile (check 18), a kept precision
+   hit (check 19), a kept test that cannot fail (check 20), a test check 21
+   kept as slow, or a file of a duplicate pair from checks 3 and 4 that shares
+   20 or more lines. Map a hit's file to its unit with the `--files` output.
+   Order these units by the number of kept hits that no finding of the
+   previous report already lists, most first, then by the total number of
+   kept hits.
+2. **Units with churn since their last deep read.** Lines added plus lines
+   deleted in a unit's current files since the commit its coverage row
+   records, at least half of its current line count. Order by that ratio,
+   highest first. A unit with no row, or a row that says `never`, is left to
+   pool 3.
+3. **A seeded random draw from the units read least recently.** Units never
+   read first, then by the date of their last deep read, oldest first, in a
+   random order within each date. Record the seed.
+
+A unit the user names is read whatever the pools say, and goes first.
+
+When pools 1 and 2 hold more than the budget, the order above decides which
+are read. List the ones left out in the Sample block as *pulled in, not read:
+over budget*, so the reader sees them and the next run pulls them in again
+while their hits or churn remain. Do not exceed the budget to fit them; a
+larger budget is the user's choice.
+
+The commands, in Git Bash on Windows or bash on Linux and macOS (macOS has no
+`shuf`: install GNU coreutils with `brew install coreutils` and write `gshuf`
+for `shuf`). Read
+the coverage table of the newest hygiene report that has one, or, when the
+last one was retired with no successor, the one in git history:
+
+```bash
+w=$(mktemp -d); echo "$w"
+bash skills/audit-hygiene/units.sh > "$w/units.tsv"          # <lines> <unit>
+bash skills/audit-hygiene/units.sh --files > "$w/files.tsv"  # <unit> <lines> <file>
+prev=
+for f in $(ls reports/*-hygiene-audit.md 2>/dev/null | sort -r); do
+  grep -q '^## Coverage$' "$f" && { prev=$(cat "$f"); break; }
+done
+if [ -z "$prev" ]; then  # the last report was retired with no successor
+  c=$(git log -1 --format=%H --diff-filter=D -- 'reports/*-hygiene-audit.md')
+  [ -n "$c" ] && f=$(git show --format= --name-only --diff-filter=D "$c" -- 'reports/*-hygiene-audit.md' | sort -r | head -1) &&
+    prev=$(git show "$c^:$f")
+fi
+printf '%s\n' "$prev" | awk -F'|' '/^## Coverage$/ {f = 1; next} /^## / {f = 0}
+  f && /^\| `/ {u = $2; d = $4; c = $5; gsub(/^ *`|` *$/, "", u); gsub(/ /, "", d); gsub(/ /, "", c)
+                print u "\t" d "\t" c}' > "$w/coverage.tsv"
+# Every current unit with its last deep read; a new unit is "never", a unit
+# that is gone is dropped.
+awk -F'\t' 'FILENAME == ARGV[1] {last[$1] = $2 "\t" $3; next}
+  {print $2 "\t" $1 "\t" ($2 in last ? last[$2] : "never\t-")}' \
+  "$w/coverage.tsv" "$w/units.tsv" > "$w/current.tsv"          # <unit> <lines> <date> <commit>
+```
+
+An empty `coverage.tsv` means this is a first run; see "First run" below.
+Churn since each unit's last deep read (pool 2). When the recorded commit is
+no longer in the repository, as happens to a branch commit after a squash
+merge, the last commit on `HEAD` on or before that date stands in for it:
+
+```bash
+awk -F'\t' '$3 != "never" {print $3 "\t" $4}' "$w/current.tsv" | sort -u |
+while IFS=$'\t' read -r d c; do
+  base=$c
+  git cat-file -e "$c^{commit}" 2>/dev/null || base=$(git rev-list -1 --before="$d 23:59:59" HEAD)
+  git diff --numstat --no-renames "$base" HEAD | awk -F'\t' -v d="$d" -v c="$c" '{print d "\t" c "\t" $1 + $2 "\t" $3}'
+done > "$w/changes.tsv"
+awk -F'\t' 'FILENAME == ARGV[1] {size[$1] = $2; last[$1] = $3 "\t" $4; next}
+  FILENAME == ARGV[2] {unit[$3] = $1; next}
+  {u = unit[$4]; if (u != "" && last[u] == $1 "\t" $2) changed[u] += $3}
+  END {for (u in changed) if (2 * changed[u] >= size[u])
+         printf "%.2f\t%d\t%d\t%s\n", changed[u] / size[u], changed[u], size[u], u}' \
+  "$w/current.tsv" "$w/files.tsv" "$w/changes.tsv" |
+  sort -t "$(printf '\t')" -k1,1nr -k4,4 > "$w/churn.tsv"         # <ratio> <changed> <lines> <unit>
+cut -f4 "$w/churn.tsv"                                           # pool 2, in order
+```
+
+The draw (pool 3), then the fill. Write the units of pools 1 and 2, and any
+the user named, to `$w/pulled.txt`, one per line in their order (an empty
+file when there are none):
+
+```bash
+SEED=$RANDOM; echo "seed $SEED"                                # record SEED in the report
+awk -F'\t' '{print ($3 == "never" ? "0000-00-00" : $3) "\t" $2 "\t" $1}' "$w/current.tsv" |
+  shuf --random-source=<(yes "$SEED") | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1 > "$w/draw.tsv"
+BUDGET=15000
+awk -F'\t' -v B="$BUDGET" 'FILENAME == ARGV[1] {size[$2] = $1; next}
+  FILENAME == ARGV[2] {u = $0; why = "pulled in"} FILENAME == ARGV[3] {u = $3; why = "drawn"}
+  u in seen {next} {seen[u] = 1}
+  used == 0 || used + size[u] <= B {used += size[u]; print size[u] "\t" why "\t" u; next}
+  why == "pulled in" {print size[u] "\tover budget\t" u}
+  END {print used "\tlines read"}' "$w/units.tsv" "$w/pulled.txt" "$w/draw.tsv"
+```
+
+The same seed gives the same draw from the same coverage table. Remove `$w`
+when the run is done.
+
+### Coverage
+
+Every report carries a `## Coverage` section with one row per unit in the
+current inventory, in the inventory's order:
+
+```
+## Coverage
+
+| Unit | Lines | Last deep read | Commit |
+|---|---|---|---|
+| `crates/sfmtool-core/src/geometry/bundle_adjust (own file)` | 5554 | 2026-11-04 | 8edb7c02 |
+| `scripts (rest 2)` | 4547 | never | - |
+```
+
+Keep this format exactly: the commands above find the section by its
+heading, and read a row as a backticked unit name, the line count, the date in
+`YYYY-MM-DD` form or `never`, and the short commit or `-`. Put no other
+backticked table rows in the section. Copy every row forward from the
+previous report, write today's date and the commit read (`git rev-parse
+--short=8 HEAD`) on the rows of the units read in full this run, update every
+row's line count, add a unit that is new to the inventory as `never`, and drop
+a unit that is no longer in it. A run whose deep read does not finish a unit
+records it as not read. `current.tsv` already holds the copied rows, the
+current line counts and the new and dropped units, so the table is written
+from it and a list of the units read in full this run:
+
+```bash
+# $w/read.txt: the units read in full this run, one per line
+awk -F'\t' -v t="$(date +%F)" -v h="$(git rev-parse --short=8 HEAD)" \
+  'FILENAME == ARGV[1] {read[$0] = 1; next}
+   {d = $3; c = $4; if ($1 in read) {d = t; c = h}
+    print "| `" $1 "` | " $2 " | " d " | " c " |"}' "$w/read.txt" "$w/current.tsv"
+```
+
+### First run
+
+A run that finds no hygiene report with a coverage table, in the tree or in
+git history, reads every unit in full. The budget does not apply. Every row of
+its coverage table then carries that run's date and commit, and later runs
+sample from there.
 
 ## What to look for
 
@@ -184,19 +397,30 @@ how this audit runs them.
 
 ## How to work
 
-1. Get a size overview: file line counts per directory.
+1. Get a size overview: list the audit units with `units.sh`, and file line
+   counts per directory, the longest files and the longest functions over the
+   whole tree.
 2. Run the mechanical checks below and keep the raw numbers — they are the
    report's evidence and the next snapshot's baseline.
-3. Sample the largest files and skim their structure — count distinct top-level
-   concerns.
-4. Dispatch `Agent` subagents in parallel over subtrees (e.g., one for
-   `src/sfmtool/feature_match/`, one for `crates/sfmtool-core/`) to get focused
-   assessments. Give each one `specs/GLOSSARY.md` and the convention majorities
-   from step 2, in that order of authority, so their naming findings are
-   comparable and none of them recommends converging onto a word the glossary
-   has already retired. Give each one `specs/STANDARDS.md` as well, so every
-   subtree is checked against the same standards.
-5. Consolidate findings, removing duplicates and ranking.
+3. Read the previous report's coverage table and choose the units to read,
+   per "Choosing the units to read" above: pool 1 from step 2's kept hits,
+   pool 2 from the churn command, pool 3 from the seeded draw, filled up to
+   the budget. On a first run, take every unit. Write the selection down
+   before reading anything; the report's Sample block names it.
+4. Dispatch `Agent` subagents in parallel, one per selected unit or one per
+   few small units, each given the unit's file list from `units.sh --files`.
+   Each one reads its files in full and assesses them against "What to look
+   for": for a long file, how many distinct top-level concerns it holds; for
+   a family of siblings, whether they parallel; and every standard. Give each
+   one `specs/GLOSSARY.md` and the convention majorities from step 2, in that
+   order of authority, so their naming findings are comparable and none of
+   them recommends converging onto a word the glossary has already retired.
+   Give each one `specs/STANDARDS.md` as well, so every unit is checked
+   against the same standards, and the previous report's findings whose
+   Location lies in its unit, so it re-measures them.
+5. Carry the previous report's findings forward, per "Carried findings"
+   under Output.
+6. Consolidate findings, removing duplicates and ranking.
 
 ### Mechanical checks
 
@@ -408,7 +632,20 @@ worth more than a paragraph.
 
 ## Output
 
-One section per recommendation:
+Open with a **Sample** block, so a reader knows what this run read in full
+and what it did not:
+
+```
+**Sample:** N of M units read in full, L of T lines, against a budget of B
+lines (or: first run, every unit read). Seed `<seed>`; the draw's pool was
+<never read | last read on <date>> (P units). Pulled in by mechanical hits:
+<unit — check and hit count, per unit>. Pulled in by churn: <unit — lines
+changed / lines, per unit>. Named by the user: <units>. Drawn: <units>.
+Pulled in, not read, over budget: <units, or none>. The mechanical checks
+below cover all M units.
+```
+
+Then the mechanical numbers, then one section per recommendation:
 
 ```
 **<short title>**
@@ -423,7 +660,36 @@ For a breach of a standard in `specs/STANDARDS.md` or another rule in
 `AGENTS.md`, the proposed fix changes the code and names the standard; it is
 never a spec or doc edit that records the breach as how the code works.
 
-End with a **Top 3** section: the fixes with the best effort-to-value ratio.
+Then a **Top 3** section: the fixes with the best effort-to-value ratio. End
+the report with the `## Coverage` section, in the format under "Coverage"
+above.
+
+### Carried findings
+
+Every still-open finding of the previous report (one with no status line, or
+marked `Partially done`, `Not done` or `Needs decision`) appears in the new
+one, with its status lines. A finding is placed in the units that hold the
+files of its Location, found with the `--files` output.
+
+- **In a unit read this run**, the subagent reading it re-measures the
+  finding as the code is now, and the report states it in its current form
+  with no marker.
+- **In a unit not read this run**, it is carried forward with the date of the
+  last deep read of its unit in its title line:
+  `**<short title>** (carried, last read 2026-10-08)`. Its numbers are still
+  re-measured: re-run the mechanical check, grep or line count it cites at
+  the current `HEAD`, and update them. When its location spans several
+  units, it is re-measured when any of them is read, and carries the oldest
+  date otherwise.
+- **A finding the mechanical numbers show fixed** (the hit is gone, the count
+  is zero, the file was split) is closed without a deep read. List its title
+  under a **Closed since the last snapshot** heading with a status line
+  giving the number that closed it, `> _Status (<today>): **Done** — <the
+  number>._`, so `fix-report-findings` does not pick it up.
+
+Never write that a unit is clean because it was not read. A unit not read this
+run is acquitted only by the mechanical numbers, and the report says which
+ones.
 
 ### The "Explicitly not flagged" list
 
@@ -432,6 +698,7 @@ figure and the date it was taken, and the section opens by saying so: this repo
 has repeatedly grown a cleared file 30–90% within a month of clearing it. Prefer
 acquitting with a mechanical number (longest function, duplicate-line count) that
 the next snapshot can re-run, over a prose judgement it would have to re-derive.
+A prose judgement comes only from a unit read in full this run, and names it.
 
 ## Saving the report
 
@@ -439,8 +706,11 @@ Write the full report to `reports/<date>-hygiene-audit.md`, where `<date>` is
 today's date in `YYYY-MM-DD` form (get it with `date +%F`). Create the
 `reports/` directory if it doesn't exist. Each run is a dated snapshot — do not
 overwrite a prior day's report. Carry forward every still-open finding from the
-report being superseded, re-measured at the current HEAD rather than copied, and
-retire the old snapshot per the rules in `AGENTS.md`. After saving, tell the user
+report being superseded, per "Carried findings" above, and its coverage table,
+per "Coverage". The new report then holds everything the old one tracked, so
+it supersedes it: retire the old snapshot in the same commit, per the rules in
+`AGENTS.md`. When a hygiene report is retired with no successor, the next run
+reads its coverage table back from git history. After saving, tell the user
 the path and give a short summary of the Top 3 in the conversation; don't paste
 the whole report back.
 
@@ -465,4 +735,7 @@ the whole report back.
   a clippy `disallowed_methods` entry, a grep-based test — over fixes that end in
   a doc comment. This repo has a demonstrated pattern of re-breaking contracts
   that live only in prose.
+- Never imply the sample was the tree. Say "N of M units read in full"
+  wherever it could be misread; the mechanical checks acquit a unit, the
+  sample's silence does not.
 - Do not modify any code during this skill — it is read-only analysis.
