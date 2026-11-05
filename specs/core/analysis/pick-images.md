@@ -477,10 +477,11 @@ than the median on every sensor is never judged against its neighbours, and
 the walk does not read them for it, which keeps the reads to the frames that
 could be blurred. Otherwise the walk reads all the neighbours in one wait,
 before the swap of step 6 ([The walk](#the-walk)) looks for a sharper one
-among them. A frame accepted in a blurred run (step 7) or by halving a failed
-step is judged against the median alone: the blurred run has already
-searched every frame up to the band's upper edge for a sharp one, and a frame
-accepted by halving is taken for matching where the steps around it fail.
+among them. A frame accepted in a blurred run (step 7) or for a failing step
+([A failing step](#the-walk)) is judged against the median alone: the blurred
+run has already searched every frame up to the band's upper edge for a sharp
+one, and a frame accepted for a failing step is taken for matching where the
+steps around it fail.
 
 The comparison is with the sharpest neighbour, not their median, because
 blur comes in runs: within a few positions of a blurred frame several
