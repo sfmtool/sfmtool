@@ -73,7 +73,10 @@ between 1,000 and 5,000 lines. Four single files are over 5,000 lines:
 `crates/sfmtool-core/src/geometry/bundle_adjust (own file)` (5,554). By
 start node: `sfmtool-core` 98 units, `sfm-explorer` 73, `sfmtool-py` 13, the
 format crates and the other small crates 16, `src/sfmtool` 17, `tests` 22 and
-`scripts` 8. At the default budget a full cycle takes about 47 runs.
+`scripts` 8. At the default budget of 15,000 lines, of which slow-test dives
+take up to 3,000, reading every unit once takes from 47 to about 59 runs, and
+more when pools 1 and 2 read a unit again before every other unit has been
+read.
 
 ### Budget
 
@@ -85,27 +88,33 @@ taken, even when it alone is over the budget.
 
 ### Selection order
 
-Three pools, in this order. The first two are evidence, not a sample.
+The budget is filled in this order. Pools 1 and 2 and the dives are
+evidence, not a sample.
 
-1. **Units with mechanical hits from this run.** A unit is pulled in when it
-   holds a hit that a mechanical check below kept after reading it: a kept
-   points-at-infinity hit (check 9), a public function without a `Progress`
-   or a `Progress::none()` inside a function with one in scope (check 10), a
+1. **Units with mechanical hits from this run.** A kept hit is a hit that a
+   mechanical check below kept after reading it: a kept points-at-infinity
+   hit (check 9), a public function without a `Progress` or a
+   `Progress::none()` inside a function with one in scope (check 10), a
    progress variant (check 11), a kept caller-input panic (check 12), a
    Python wrapper that repeats a binding (check 13), a bare `pub` field in the
    viewer (check 16), a kept median or quantile (check 18), a kept precision
-   hit (check 19), a kept test that cannot fail (check 20), a test check 21
-   kept as slow, or a file of a duplicate pair from checks 3 and 4 that shares
-   20 or more lines. Map a hit's file to its unit with the `--files` output.
-   Order these units by the number of kept hits that no finding of the
-   previous report already lists, most first, then by the total number of
-   kept hits.
+   hit (check 19), a kept test that cannot fail (check 20), or a file of a
+   duplicate pair from checks 3 and 4 that shares 20 or more lines. A hit is
+   *new* when no finding of the previous report lists it. A unit is pulled in
+   when it holds a new kept hit, or holds any kept hit and its last deep read
+   is more than 30 days old or `never`. A unit whose kept hits are all known
+   and whose last deep read is within 30 days is left to the other pools, so
+   a known backlog does not take the budget run after run. Map a hit's file
+   to its unit with the `--files` output. Order these units by the number of
+   new kept hits, most first, then by the total number of kept hits.
+   Check 21's slow tests do not pull in their unit; they go to the dives.
 2. **Units with churn since their last deep read.** Lines added plus lines
    deleted in a unit's current files since the commit its coverage row
    records, at least half of its current line count. Order by that ratio,
    highest first. A unit with no row, or a row that says `never`, is left to
    pool 3.
-3. **A seeded random draw from the units read least recently.** Units never
+3. **Slow-test dives**, up to 3,000 lines, under "Slow-test dives" below.
+4. **A seeded random draw from the units read least recently.** Units never
    read first, then by the date of their last deep read, oldest first, in a
    random order within each date. Record the seed.
 
@@ -144,9 +153,29 @@ printf '%s\n' "$prev" | awk -F'|' '/^## Coverage$/ {f = 1; next} /^## / {f = 0}
 awk -F'\t' 'FILENAME == ARGV[1] {last[$1] = $2 "\t" $3; next}
   {print $2 "\t" $1 "\t" ($2 in last ? last[$2] : "never\t-")}' \
   "$w/coverage.tsv" "$w/units.tsv" > "$w/current.tsv"          # <unit> <lines> <date> <commit>
+# The slow tests examined, from the same report.
+printf '%s\n' "$prev" | awk -F'|' '/^## Slow tests examined$/ {f = 1; next} /^## / {f = 0}
+  f && /^\| `/ {for (i = 2; i <= 7; i++) gsub(/^ +| +$/, "", $i); gsub(/^`|`$/, "", $2)
+                print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7}' > "$w/examined.tsv"
+                # <test id> <seconds> <measured by> <date> <commit> <outcome>
+cutoff=$(date -d '30 days ago' +%F 2>/dev/null || date -v-30d +%F)  # GNU date, else BSD date
 ```
 
 An empty `coverage.tsv` means this is a first run; see "First run" below.
+Pool 1. Write the kept hits of this run's checks, except check 21's, to
+`$w/hits.tsv`, one per line as `<file>\t<new|known>`; a hit in a duplicate
+pair is one line for each of its two files:
+
+```bash
+awk -F'\t' -v cut="$cutoff" 'FILENAME == ARGV[1] {unit[$3] = $1; next}
+  FILENAME == ARGV[2] {last[$1] = $3; next}
+  {u = unit[$1]; if (u == "") next; total[u]++; if ($2 == "new") fresh[u]++}
+  END {for (u in total) if (fresh[u] > 0 || last[u] == "never" || last[u] < cut)
+         print fresh[u] + 0 "\t" total[u] "\t" u}' "$w/files.tsv" "$w/current.tsv" "$w/hits.tsv" |
+  sort -t "$(printf '\t')" -k1,1nr -k2,2nr -k3,3 > "$w/pool1.tsv"  # <new hits> <hits> <unit>
+cut -f3 "$w/pool1.tsv"                                           # pool 1, in order
+```
+
 Churn since each unit's last deep read (pool 2). When the recorded commit is
 no longer in the repository, as happens to a branch commit after a squash
 merge, the last commit on `HEAD` on or before that date stands in for it:
@@ -168,16 +197,19 @@ awk -F'\t' 'FILENAME == ARGV[1] {size[$1] = $2; last[$1] = $3 "\t" $4; next}
 cut -f4 "$w/churn.tsv"                                           # pool 2, in order
 ```
 
-The draw (pool 3), then the fill. Write the units of pools 1 and 2, and any
-the user named, to `$w/pulled.txt`, one per line in their order (an empty
-file when there are none):
+The draw (pool 4), then the fill. Write the units the user named and those of
+pools 1 and 2 to `$w/pulled.txt`, one per line in that order (an empty file
+when there are none). Set `DIVE_LINES` to the lines the dives read (0 before
+they are done; at most 3,000, and at most what the pulled-in units leave of
+the budget):
 
 ```bash
 SEED=$RANDOM; echo "seed $SEED"                                # record SEED in the report
 awk -F'\t' '{print ($3 == "never" ? "0000-00-00" : $3) "\t" $2 "\t" $1}' "$w/current.tsv" |
   shuf --random-source=<(yes "$SEED") | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1 > "$w/draw.tsv"
-BUDGET=15000
-awk -F'\t' -v B="$BUDGET" 'FILENAME == ARGV[1] {size[$2] = $1; next}
+BUDGET=15000; DIVE_LINES=0
+awk -F'\t' -v B="$BUDGET" -v D="$DIVE_LINES" 'FILENAME == ARGV[1] {size[$2] = $1; next}
+  FILENAME == ARGV[3] && !dived {dived = 1; used += D; print D "\tslow-test dives"}
   FILENAME == ARGV[2] {u = $0; why = "pulled in"} FILENAME == ARGV[3] {u = $3; why = "drawn"}
   u in seen {next} {seen[u] = 1}
   used == 0 || used + size[u] <= B {used += size[u]; print size[u] "\t" why "\t" u; next}
@@ -185,8 +217,9 @@ awk -F'\t' -v B="$BUDGET" 'FILENAME == ARGV[1] {size[$2] = $1; next}
   END {print used "\tlines read"}' "$w/units.tsv" "$w/pulled.txt" "$w/draw.tsv"
 ```
 
-The same seed gives the same draw from the same coverage table. Remove `$w`
-when the run is done.
+Run the fill once with `DIVE_LINES=0` to see what the pulled-in units leave,
+do the dives, then run it again with the dives' lines. The same seed gives the
+same draw from the same coverage table. Remove `$w` when the run is done.
 
 ### Coverage
 
@@ -222,12 +255,88 @@ awk -F'\t' -v t="$(date +%F)" -v h="$(git rev-parse --short=8 HEAD)" \
     print "| `" $1 "` | " $2 " | " d " | " c " |"}' "$w/read.txt" "$w/current.tsv"
 ```
 
+### Slow-test dives
+
+Check 21 lists the Python test phases over 5 seconds and the Rust tests over
+60 seconds. Its slow tests do not pull their unit into pool 1, since some of
+them sit in test files of 6,000 to 9,000 lines. Instead, once pools 1 and 2
+are placed, each run examines the 3 slowest of them in a dive:
+
+- **Ranking.** A Python test's time is its longest setup or call phase in
+  check 21's `pytest --durations` output. A Rust test's time is 60 seconds,
+  the least its "has been running for over 60 seconds" line in the CI log
+  says; that log gives no per-test time. Rank by that time, slowest first, a
+  Python test before a Rust test of the same time.
+- **Recently examined.** Skip a test the slow-tests table records as examined
+  in the last 30 days, unless its time has grown by more than half since that
+  examination. Name the skipped tests in the Sample block.
+- **The dive.** Read the test, its fixtures and the main code path it
+  exercises, not the whole unit. Count the lines actually read against the
+  budget, at most 3,000 for all of a run's dives together; when the dives
+  reach that, stop and leave the rest for the next run. Time the test alone
+  (`pixi run test -- <node id>`, or `pixi run cargo test -p <crate> <test
+  name>`). Report whether it meets STANDARDS.md § "Tests cost what their
+  assertions need", and if it does not, which of the standard's four ways
+  (the smallest input that exercises the behaviour, one run for several
+  tests, the call rather than the pipeline, a measurement outside the suite)
+  would cut its time with every case and assertion kept. A dive never
+  proposes fewer cases or weaker assertions.
+
+The candidates and the dives, with `$out` the pytest output of check 21 and
+`$w/rust_slow.txt` its `grep` of the CI log:
+
+```bash
+{ awk '/slowest durations/ {f = 1} f && ($2 == "setup" || $2 == "call") && $1 + 0 > 5 {
+         if ($1 + 0 > t[$3]) t[$3] = $1 + 0}
+       END {for (id in t) print t[id] "\tlocal pytest\t" id}' "$out"
+  sed -E 's/.*test (.+) has been running for over 60 seconds.*/60\tCI test-linux-rust, over 60 s\t\1/' "$w/rust_slow.txt"
+} > "$w/slow.tsv"                                                # <seconds> <measured by> <test id>
+: > "$w/skipped.tsv"
+awk -F'\t' -v cut="$cutoff" -v w="$w" 'FILENAME == ARGV[1] {when[$1] = $4; was[$1] = $2; next}
+  ($3 in when) && when[$3] >= cut && $1 <= 1.5 * was[$3] {print > (w "/skipped.tsv"); next}
+  {print}' "$w/examined.tsv" "$w/slow.tsv" |
+  LC_ALL=C sort -t "$(printf '\t')" -k1,1gr -k2,2r -k3,3 | head -3 > "$w/dives.tsv"
+cat "$w/dives.tsv"; echo "skipped:"; cat "$w/skipped.tsv"
+```
+
+### Slow tests examined
+
+Every report carries a `## Slow tests examined` section after the coverage
+table, one row per test examined in a dive that check 21 still lists:
+
+```
+## Slow tests examined
+
+| Test | Seconds | Measured by | Examined | Commit | Outcome |
+|---|---|---|---|---|---|
+| `tests/test_solve.py::test_solve_global` | 41.2 | local pytest | 2026-11-04 | 8edb7c02 | finding "Share one solve across the solve tests" |
+| `geometry::bundle_adjust::tests::large_problem` | 60 | CI test-linux-rust, over 60 s | 2026-11-04 | 8edb7c02 | meets the standard |
+```
+
+Keep this format exactly, as for the coverage table. Seconds is the time the
+test was ranked by, so the next run compares like with like; Outcome is `meets
+the standard` or `finding "<title>"`. Copy every row forward, replace the rows
+of the tests dived this run, and drop the rows of tests check 21 no longer
+lists. Write it from `$w/dived.tsv`, one line per dive as `<seconds>\t<measured
+by>\t<test id>\t<outcome>`:
+
+```bash
+awk -F'\t' -v t="$(date +%F)" -v h="$(git rev-parse --short=8 HEAD)" \
+  'FILENAME == ARGV[1] {slow[$3] = 1; next}
+   FILENAME == ARGV[2] {row[$1] = $0; next}
+   {row[$3] = $3 "\t" $1 "\t" $2 "\t" t "\t" h "\t" $4}
+   END {for (id in row) if (id in slow) {split(row[id], r, "\t")
+          print "| `" r[1] "` | " r[2] " | " r[3] " | " r[4] " | " r[5] " | " r[6] " |"}}' \
+  "$w/slow.tsv" "$w/examined.tsv" "$w/dived.tsv" | LC_ALL=C sort
+```
+
 ### First run
 
 A run that finds no hygiene report with a coverage table, in the tree or in
-git history, reads every unit in full. The budget does not apply. Every row of
-its coverage table then carries that run's date and commit, and later runs
-sample from there.
+git history, treats every unit as `never` read and no slow test as examined,
+and selects by the same order and budget: pools 1 and 2 and the dives as
+usual, then a draw from all the units. `current.tsv` already lists every
+unit as `never` in that case.
 
 ## What to look for
 
@@ -402,19 +511,21 @@ how this audit runs them.
    whole tree.
 2. Run the mechanical checks below and keep the raw numbers — they are the
    report's evidence and the next snapshot's baseline.
-3. Read the previous report's coverage table and choose the units to read,
-   per "Choosing the units to read" above: pool 1 from step 2's kept hits,
-   pool 2 from the churn command, pool 3 from the seeded draw, filled up to
-   the budget. On a first run, take every unit. Write the selection down
-   before reading anything; the report's Sample block names it.
+3. Read the previous report's coverage and slow-tests tables and choose what
+   to read, per "Choosing the units to read" above: pool 1 from step 2's
+   kept hits, pool 2 from the churn command, up to three slow-test dives from
+   check 21, then the seeded draw, filled up to the budget. Write the
+   selection down before reading anything; the report's Sample block names
+   it.
 4. Dispatch `Agent` subagents in parallel, one per selected unit or one per
-   few small units, each given the unit's file list from `units.sh --files`.
-   Each one reads its files in full and assesses them against "What to look
-   for": for a long file, how many distinct top-level concerns it holds; for
-   a family of siblings, whether they parallel; and every standard. Give each
-   one `specs/GLOSSARY.md` and the convention majorities from step 2, in that
-   order of authority, so their naming findings are comparable and none of
-   them recommends converging onto a word the glossary has already retired.
+   few small units, each given the unit's file list from `units.sh --files`,
+   and one per slow-test dive, given the test id and "Slow-test dives" above.
+   Each unit's subagent reads its files in full and assesses them against
+   "What to look for": for a long file, how many distinct top-level concerns
+   it holds; for a family of siblings, whether they parallel; and every
+   standard. Give each one `specs/GLOSSARY.md` and the convention majorities
+   from step 2, in that order of authority, so their naming findings are
+   comparable and none of them recommends converging onto a word the glossary has already retired.
    Give each one `specs/STANDARDS.md` as well, so every unit is checked
    against the same standards, and the previous report's findings whose
    Location lies in its unit, so it re-measures them.
@@ -615,8 +726,9 @@ worth more than a paragraph.
     are zero, so the next snapshot can compare. Whole-suite times can differ
     by up to a factor of two between runs, so compare per-test times with
     the last snapshot, not the suite's wall time. The limits only pick tests
-    for a closer look; a test over them is not a finding by itself. Read
-    each one: group the tests that run the same expensive call on the same
+    for a closer look; a test over them is not a finding by itself. Each run
+    reads three of them, chosen under "Slow-test dives" above, and reports
+    the rest by their numbers alone. For each one read: group the tests that run the same expensive call on the same
     input, and note a test that lowers a size for the steps it checks but
     leaves an expensive step at its default. Keep only a test that one of
     the standard's ways (the smallest input that exercises the behaviour,
@@ -636,11 +748,13 @@ Open with a **Sample** block, so a reader knows what this run read in full
 and what it did not:
 
 ```
-**Sample:** N of M units read in full, L of T lines, against a budget of B
-lines (or: first run, every unit read). Seed `<seed>`; the draw's pool was
-<never read | last read on <date>> (P units). Pulled in by mechanical hits:
-<unit — check and hit count, per unit>. Pulled in by churn: <unit — lines
-changed / lines, per unit>. Named by the user: <units>. Drawn: <units>.
+**Sample:** N of M units read in full, L of T lines (units and dives),
+against a budget of B lines. Seed `<seed>`; the draw's pool was <never read |
+last read on <date>> (P units). Pulled in by mechanical hits: <unit — new and
+total kept hits, the checks they came from, per unit>. Pulled in by churn:
+<unit — lines changed / lines, per unit>. Named by the user: <units>.
+Slow-test dives: <test id — seconds, measured by, lines read, per test>;
+skipped as examined in the last 30 days: <test ids, or none>. Drawn: <units>.
 Pulled in, not read, over budget: <units, or none>. The mechanical checks
 below cover all M units.
 ```
@@ -661,8 +775,9 @@ For a breach of a standard in `specs/STANDARDS.md` or another rule in
 never a spec or doc edit that records the breach as how the code works.
 
 Then a **Top 3** section: the fixes with the best effort-to-value ratio. End
-the report with the `## Coverage` section, in the format under "Coverage"
-above.
+the report with the `## Coverage` section and then the
+`## Slow tests examined` section, in the formats under "Coverage" and "Slow
+tests examined" above.
 
 ### Carried findings
 
@@ -706,11 +821,12 @@ Write the full report to `reports/<date>-hygiene-audit.md`, where `<date>` is
 today's date in `YYYY-MM-DD` form (get it with `date +%F`). Create the
 `reports/` directory if it doesn't exist. Each run is a dated snapshot — do not
 overwrite a prior day's report. Carry forward every still-open finding from the
-report being superseded, per "Carried findings" above, and its coverage table,
-per "Coverage". The new report then holds everything the old one tracked, so
-it supersedes it: retire the old snapshot in the same commit, per the rules in
+report being superseded, per "Carried findings" above, and its coverage and
+slow-tests tables, per "Coverage" and "Slow tests examined". The new report
+then holds everything the old one tracked, so it supersedes it: retire the
+old snapshot in the same commit, per the rules in
 `AGENTS.md`. When a hygiene report is retired with no successor, the next run
-reads its coverage table back from git history. After saving, tell the user
+reads its tables back from git history. After saving, tell the user
 the path and give a short summary of the Top 3 in the conversation; don't paste
 the whole report back.
 
