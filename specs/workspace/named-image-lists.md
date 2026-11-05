@@ -6,7 +6,8 @@ workspace can give such a set a name in a small JSON file in its root,
 `.sfm-named-image-lists.json`, which defines each set by image patterns and
 frame ranges. This spec describes that file, the rules it is checked against,
 how one list resolves to the workspace's image files or to the image names
-a reconstruction records, and the slice that takes part of a list by position.
+a reconstruction records, the slice that takes part of a list by position, and
+how lists are added to the file or replaced in it.
 The set is called a **named image list** ([GLOSSARY.md](../GLOSSARY.md)).
 
 The eight commands that take `-r/--range` accept a list's name there, with
@@ -305,6 +306,43 @@ ws/.sfm-named-image-lists.json: list 'walk1_sharp' entry 2: 'range' is a number,
   that does not parse, and a `range` on an entry whose pattern has no frame
   field are each an error.
 
+## Writing the file
+
+Lists are added to the file, or replaced in it, by
+[`NamedImageLists::write_lists`](#rust-api), which creates the file when the
+workspace has none. The new lists are checked first, by the rules of
+[Validation](#validation), and a name given twice among them is an error too;
+then the existing file is read and checked whole, as a command reads it. A
+name the file already defines is refused, naming every such list, unless the
+caller asks to replace it. Each refusal names the file, and nothing is written
+when any check fails, so a file that breaks the rules is left for a person to
+fix rather than replaced.
+
+**The file is rewritten whole.** Every list it held keeps its place and order,
+a replaced list takes the place of the one it replaces, and new lists follow in
+the order given. The text is written in one layout, the one of the example in
+[The file](#the-file): two-space indents and one line per entry, `pattern`
+before `range`, ending in a newline. A file in that layout, as the writer
+leaves it, is rewritten byte for byte except for the lists that change. A file
+laid out by hand loses its whitespace and its key order within an entry, and a
+byte order mark, but nothing it means: the format allows no other key, so the
+version, the lists and each entry's pattern and range are the whole of its
+content. Each existing range is written from its text in the file, never from
+its parsed form, so `1,2,3` stays `1,2,3` rather than becoming `1-3`. A new
+range is written as `RangeExpr`'s `Display` writes it, and that text must
+parse back as a range, so a range of more sub-ranges than a range expression
+may hold is refused rather than written.
+
+**A failed write leaves the old file.** The text is written to a temporary
+file beside the lists file and renamed over it, which replaces an existing file
+on every platform. A write that fails at any point removes the temporary file
+and leaves the old lists file as it was. On Windows, a lists file that another
+process holds open without sharing it for deletion cannot be replaced, and the
+write fails with an I/O error naming the file.
+
+The check for a defined name and the write are not one step: a list another
+process adds between them is lost when the file is written.
+
 ## Finding the file
 
 A command finds the workspace by the upward search for `.sfm-workspace.json`
@@ -341,8 +379,10 @@ The rules for telling a name from a range and the errors are in
 
 The reader, validator and resolver live in
 [named_image_lists.rs](../../crates/sfmtool-core/src/workspace/named_image_lists.rs),
-and the slice's parser and arithmetic in
+the slice's parser and arithmetic in
 [named_image_lists/slice.rs](../../crates/sfmtool-core/src/workspace/named_image_lists/slice.rs),
+and the writer in
+[named_image_lists/write.rs](../../crates/sfmtool-core/src/workspace/named_image_lists/write.rs),
 in `sfmtool_core::workspace`, bound as `sfmtool.workspace`.
 
 ```rust
@@ -387,6 +427,25 @@ impl NamedImageLists {
         slice: &NamedImageListSlice,
         items: Vec<T>,
     ) -> Result<Vec<T>, NamedImageListsError>;
+
+    /// Add `lists` to the workspace's lists file, or replace lists of the
+    /// same names when `replace`, creating the file when absent; the file's
+    /// path.
+    pub fn write_lists(
+        workspace_dir: &Path,
+        lists: &[NamedImageList],
+        replace: bool,
+    ) -> Result<PathBuf, NamedImageListsError>;
+}
+
+impl NamedImageList {
+    /// Checked when written, not here.
+    pub fn new(name: impl Into<String>, entries: Vec<NamedImageListEntry>) -> Self;
+}
+
+impl NamedImageListEntry {
+    /// Checked when written, not here; `range` is written by its `Display`.
+    pub fn new(pattern: impl Into<String>, range: Option<RangeExpr>) -> Self;
 }
 
 pub struct NamedImageListMember {
@@ -423,9 +482,10 @@ pub fn split_named_image_list_value(
 
 `NamedImageList` gives a list's `name()` and `entries()`, and
 `NamedImageListEntry` an entry's `pattern()`, `range()` and
-`has_frame_field()`. `RangeExpr` is `openjd_expr::RangeExpr`, the type the
-`sfmtool.reconstruction.RangeExpr` binding wraps, so a list's ranges and the
-CLI's `-r` values are one grammar.
+`has_frame_field()`. An entry read from the file also keeps its range's text
+as the file wrote it, which is what `write_lists` writes back. `RangeExpr` is
+`openjd_expr::RangeExpr`, the type the `sfmtool.reconstruction.RangeExpr`
+binding wraps, so a list's ranges and the CLI's `-r` values are one grammar.
 
 **Why it is shaped this way.** A `NamedImageLists` value exists only once the
 whole file has passed validation, so a resolver never meets a bad entry and
@@ -443,14 +503,28 @@ works where the image files are absent. Narrowing is an argument of the
 resolver, not a step after it, so that the frame-field check and the empty
 check see the narrowed list.
 
+`write_lists` takes the same `NamedImageList` and `NamedImageListEntry` types
+the reader gives, so a list read from one file can be written to another
+unchanged, range text included. Their `new` constructors do not check what
+they are given, because `write_lists` checks every new list by the reader's
+own entry check, on the text it will write, and reports every problem at once
+in one error that names the file; a constructor that checked would report the
+same problems without the file and one at a time. It is an associated function
+rather than a method on a value `read` returned, because it reads and checks
+the file itself just before writing, so a list another command added since a
+caller's earlier `read` is kept, and a name it added is still refused.
+
 `NamedImageListsError` is an enum whose every variant's message names the
 lists file: `NotAWorkspace`, `Io`, `InvalidJson` (with `line` and `column`),
-`UnsupportedVersion`, `Invalid` (with every problem), `UnknownList` (with the
-names the file defines), `NarrowedEntryWithoutFrameField`, `DuplicateMatches`
-(with every file two entries match), `FrameNumberTooLarge` (a frame field
-that captured a number beyond `i64`), `NoMatch`, `NarrowedToNothing` (with
-the narrowing range), `SlicedToNothing` (with the narrowing range, the slice
-and the number of items it was given) and `Cancelled`.
+`UnsupportedVersion`, `Invalid` (with every problem), `InvalidNewLists` (with
+every problem of the lists given to `write_lists`), `ListExists` (with every
+list `write_lists` was given that the file already defines), `UnknownList`
+(with the names the file defines), `NarrowedEntryWithoutFrameField`,
+`DuplicateMatches` (with every file two entries match), `FrameNumberTooLarge`
+(a frame field that captured a number beyond `i64`), `NoMatch`,
+`NarrowedToNothing` (with the narrowing range), `SlicedToNothing` (with the
+narrowing range, the slice and the number of items it was given) and
+`Cancelled`.
 
 `NamedImageListSliceError` is the error about a value's text, and names the
 value as given: `InvalidName` (a value with no `[` that breaks the name rule),
@@ -491,6 +565,10 @@ has no lists file), the `path`, `workspace_dir` and `names` properties,
 objects. Both resolvers return a list of `NamedImageListMember`, with `path`,
 `entry` and `frame`. `narrow` is a `sfmtool.reconstruction.RangeExpr`, and
 `progress` a `ProgressCounter` that counts the directory entries read. The
+static method `write_lists(workspace_dir, lists, replace=False)` writes the
+file as [Writing the file](#writing-the-file) says and returns its path;
+`lists` is a sequence of `(name, entries)` pairs, each entry a
+`(pattern, range)` pair whose range is a `RangeExpr` or `None`. The
 class `NamedImageListSlice` is built as `NamedImageListSlice(start=None,
 stop=None, step=None)` or read by its static method `parse(text)`, has the
 `start`, `stop` and `step` properties and `indices(length)`, compares and
@@ -498,9 +576,9 @@ hashes by its parts, and `str()` writes it back in brackets. The module also
 holds `is_named_image_list_name(name)`,
 `split_named_image_list_value(value)`, which returns the name and a
 `NamedImageListSlice` or `None`, and the constant
-`NAMED_IMAGE_LISTS_FILE_NAME`. An I/O failure raises the `OSError` subclass
-for its kind, a cancelled resolve `InterruptedError`, and every other error
-`ValueError`, with the Rust message.
+`NAMED_IMAGE_LISTS_FILE_NAME`. An I/O failure, of a read or of a write, raises
+the `OSError` subclass for its kind, a cancelled resolve `InterruptedError`,
+and every other error `ValueError`, with the Rust message.
 
 ```python
 from sfmtool.reconstruction import RangeExpr
@@ -512,6 +590,11 @@ paths = [m.path for m in members]
 
 name, walk_slice = split_named_image_list_value("walk1[:30]")
 first_30 = lists.slice_members(name, walk_slice, lists.resolve(name))
+
+NamedImageLists.write_lists(
+    workspace_dir,
+    [("walk1_picked", [("frames/walk1_%04d.jpg", RangeExpr("1-61:15,74"))])],
+)
 ```
 
 ## Implementation notes

@@ -3,8 +3,10 @@
 
 //! A workspace's named image lists: the `.sfm-named-image-lists.json` file in
 //! the workspace root, its validation, the resolution of one list to the
-//! workspace's image files or to a reconstruction's image names, and the slice
-//! that takes part of a resolved list by position ([`NamedImageListSlice`]).
+//! workspace's image files or to a reconstruction's image names, the slice that
+//! takes part of a resolved list by position ([`NamedImageListSlice`]), and
+//! the writer that adds or replaces lists in the file
+//! ([`NamedImageLists::write_lists`]).
 //!
 //! The file format, its rules and the order of a list's members are specified
 //! in `specs/workspace/named-image-lists.md`. A pattern is checked and matched
@@ -15,6 +17,7 @@
 mod json;
 mod slice;
 mod walk;
+mod write;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -62,11 +65,31 @@ pub fn is_named_image_list_name(name: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct NamedImageListEntry {
     pattern: String,
-    range: Option<RangeExpr>,
+    /// The range and its text: as the file wrote it for an entry read from a
+    /// file, so that [`NamedImageLists::write_lists`] writes it back
+    /// unchanged, and as `RangeExpr`'s `Display` writes it for one made by
+    /// [`Self::new`].
+    range: Option<(RangeExpr, String)>,
     has_frame_field: bool,
 }
 
 impl NamedImageListEntry {
+    /// An entry to write with [`NamedImageLists::write_lists`]: `pattern` and
+    /// `range` are checked by the reader's rules when it is written, not
+    /// here. The range is written as `RangeExpr`'s `Display` writes it.
+    pub fn new(pattern: impl Into<String>, range: Option<RangeExpr>) -> Self {
+        let pattern = pattern.into();
+        let has_frame_field = count_frame_fields(&pattern) == 1;
+        Self {
+            pattern,
+            range: range.map(|range| {
+                let text = range.to_string();
+                (range, text)
+            }),
+            has_frame_field,
+        }
+    }
+
     /// The image pattern, relative to the workspace root, in the `.camrig`
     /// pattern syntax.
     pub fn pattern(&self) -> &str {
@@ -76,7 +99,7 @@ impl NamedImageListEntry {
     /// The entry's range of frame numbers; `None` takes every frame number.
     /// Only an entry whose pattern has a frame field has one.
     pub fn range(&self) -> Option<&RangeExpr> {
-        self.range.as_ref()
+        self.range.as_ref().map(|(range, _)| range)
     }
 
     /// Whether the pattern has a frame field (`%d` or `%0Nd`).
@@ -97,10 +120,7 @@ impl NamedImageListEntry {
         let frame = pattern_frame_index(&self.pattern, relative_path, false)
             .and_then(|frame| i64::try_from(frame).ok())
             .ok_or(())?;
-        let in_range = self
-            .range
-            .as_ref()
-            .is_none_or(|range| range.contains(frame));
+        let in_range = self.range().is_none_or(|range| range.contains(frame));
         Ok(in_range.then_some(Some(frame)))
     }
 }
@@ -113,6 +133,16 @@ pub struct NamedImageList {
 }
 
 impl NamedImageList {
+    /// A list to write with [`NamedImageLists::write_lists`]: `name` and the
+    /// entries are checked by the reader's rules when it is written, not
+    /// here.
+    pub fn new(name: impl Into<String>, entries: Vec<NamedImageListEntry>) -> Self {
+        Self {
+            name: name.into(),
+            entries,
+        }
+    }
+
     /// The list's name.
     pub fn name(&self) -> &str {
         &self.name
@@ -154,7 +184,8 @@ pub enum NamedImageListsError {
     /// The directory given as the workspace root holds no
     /// `.sfm-workspace.json`, so it is not a workspace and has no lists.
     NotAWorkspace { workspace_dir: PathBuf },
-    /// Reading the lists file, or listing a directory while resolving, failed.
+    /// Reading or writing the lists file, or listing a directory while
+    /// resolving, failed.
     Io {
         /// The lists file.
         lists_path: PathBuf,
@@ -178,6 +209,17 @@ pub enum NamedImageListsError {
         path: PathBuf,
         problems: Vec<String>,
     },
+    /// Lists given to [`NamedImageLists::write_lists`] break the format's
+    /// rules, so nothing was written. `problems` holds every problem found,
+    /// each without the path.
+    InvalidNewLists {
+        path: PathBuf,
+        problems: Vec<String>,
+    },
+    /// [`NamedImageLists::write_lists`] was asked to write lists the file
+    /// already defines without being asked to replace them, so nothing was
+    /// written. `names` are those lists, in the order they were given.
+    ListExists { path: PathBuf, names: Vec<String> },
     /// No list has this name.
     UnknownList {
         path: PathBuf,
@@ -276,6 +318,29 @@ impl fmt::Display for NamedImageListsError {
                         writeln!(f)?;
                     }
                     write!(f, "{}: {problem}", path.display())?;
+                }
+                Ok(())
+            }
+            Self::InvalidNewLists { path, problems } => {
+                for (i, problem) in problems.iter().enumerate() {
+                    if i > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{}: nothing was written: {problem}", path.display())?;
+                }
+                Ok(())
+            }
+            Self::ListExists { path, names } => {
+                for (i, name) in names.iter().enumerate() {
+                    if i > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(
+                        f,
+                        "{}: the named image list '{name}' is already defined, so nothing \
+                         was written",
+                        path.display()
+                    )?;
                 }
                 Ok(())
             }
@@ -855,7 +920,7 @@ fn validate_entry(
     let range = match value_of("range") {
         None => None,
         Some(Json::String(text)) => match RangeExpr::from_str(text) {
-            Ok(range) => Some(range),
+            Ok(range) => Some((range, text.clone())),
             Err(e) => {
                 problems.push(format!(
                     "{at}: 'range' '{text}' is not a range expression: {e}"

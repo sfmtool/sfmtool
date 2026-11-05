@@ -12,18 +12,19 @@ use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
 use sfmtool_core::progress::{Event, Progress};
 use sfmtool_core::workspace::{
-    is_named_image_list_name, split_named_image_list_value, NamedImageListMember,
-    NamedImageListSlice, NamedImageLists, NamedImageListsError, NAMED_IMAGE_LISTS_FILE_NAME,
-    WORKSPACE_VERSION,
+    is_named_image_list_name, split_named_image_list_value, NamedImageList, NamedImageListEntry,
+    NamedImageListMember, NamedImageListSlice, NamedImageLists, NamedImageListsError,
+    NAMED_IMAGE_LISTS_FILE_NAME, WORKSPACE_VERSION,
 };
 
 use crate::helpers::{py_to_serde, serde_to_py};
 use crate::sift::image_readings::PyImageToGray;
 use crate::{ProgressCounter, PyRangeExpr};
 
-/// The Python exception for `e`: the `OSError` subclass for a failed read,
-/// `InterruptedError` for a cancelled resolve, and `ValueError` for a file
-/// that breaks the format's rules or a list that cannot be resolved.
+/// The Python exception for `e`: the `OSError` subclass for a failed read or
+/// write, `InterruptedError` for a cancelled resolve, and `ValueError` for a
+/// file or new lists that break the format's rules, a list that cannot be
+/// resolved, and a list the file already defines.
 fn to_py_err(e: NamedImageListsError) -> PyErr {
     match &e {
         NamedImageListsError::Io { source, .. } => {
@@ -156,6 +157,10 @@ impl PyNamedImageListSlice {
     }
 }
 
+/// One entry `write_lists` takes from Python: a pattern and a `RangeExpr` or
+/// `None`.
+type PyEntry = (String, Option<PyRangeExpr>);
+
 /// A workspace's named image lists, read from the
 /// `.sfm-named-image-lists.json` in its root and checked whole.
 ///
@@ -180,6 +185,48 @@ impl PyNamedImageLists {
     fn read(py: Python<'_>, workspace_dir: PathBuf) -> PyResult<Option<Self>> {
         py.detach(|| NamedImageLists::read(&workspace_dir))
             .map(|lists| lists.map(|inner| Self { inner }))
+            .map_err(to_py_err)
+    }
+
+    /// Add `lists` to the lists file of the workspace whose root is
+    /// `workspace_dir`, or replace lists of the same names in it, creating the
+    /// file when the workspace has none, and return the file's path.
+    ///
+    /// `lists` is a sequence of `(name, entries)` pairs, and each entry a
+    /// `(pattern, range)` pair whose range is a `RangeExpr` or `None`; a
+    /// dict's `items()` in a `list` will do. The file is rewritten whole:
+    /// every list it held keeps its place and order and its text, a replaced
+    /// list takes the place of the one it replaces, and new lists follow in
+    /// the order given. It is written to a temporary file beside it and
+    /// renamed over it, so a failed write leaves the old file.
+    ///
+    /// Raises `ValueError`, and writes nothing, for new lists that break the
+    /// format's rules or a name given twice, for a name the file already
+    /// defines unless `replace` is true, for a `workspace_dir` that holds no
+    /// `.sfm-workspace.json`, and for an existing file that fails the
+    /// reader's checks; and the `OSError` subclass for its kind when the file
+    /// cannot be read or written.
+    #[staticmethod]
+    #[pyo3(signature = (workspace_dir, lists, replace=false))]
+    fn write_lists(
+        py: Python<'_>,
+        workspace_dir: PathBuf,
+        lists: Vec<(String, Vec<PyEntry>)>,
+        replace: bool,
+    ) -> PyResult<PathBuf> {
+        let lists: Vec<NamedImageList> = lists
+            .into_iter()
+            .map(|(name, entries)| {
+                let entries = entries
+                    .into_iter()
+                    .map(|(pattern, range)| {
+                        NamedImageListEntry::new(pattern, range.map(|r| r.inner().clone()))
+                    })
+                    .collect();
+                NamedImageList::new(name, entries)
+            })
+            .collect();
+        py.detach(|| NamedImageLists::write_lists(&workspace_dir, &lists, replace))
             .map_err(to_py_err)
     }
 
