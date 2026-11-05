@@ -33,8 +33,9 @@ pub struct PickImagesReport {
     pub frames_extracted: Vec<bool>,
     /// How many frames the source wrote any `.sift` file for during the run
     /// that the walk never read: frames it predicted it would read and then
-    /// did not, a rig frame stopped between its images among them. Unlike everything else in the report, it depends on how far
-    /// ahead the walk predicts and on how fast the source works.
+    /// did not, a rig frame stopped between its images among them. Unlike
+    /// everything else in the report, it depends on how far ahead the walk
+    /// predicts and on how fast the source works.
     pub frames_extracted_unread: usize,
 }
 
