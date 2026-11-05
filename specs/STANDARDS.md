@@ -640,3 +640,72 @@ Look for:
 
 Confirm before reporting: name the change to the guarded code under which the
 test still passes.
+
+## Tests cost what their assertions need
+
+Every test takes only the time its assertions need, and a test is made faster
+only in ways that keep everything it checks. The suites run on every change.
+CI runs them under coverage instrumentation, which `scripts/coverage.sh`
+measured at nearly three times the time of a plain run, and spreads them over
+parallel workers, so the slowest tests set the wall time of the whole run. A
+test that runs longer than its assertions need costs every contributor that
+time on every push.
+
+Thoroughness comes first. A test is made faster by a cheaper input or by
+sharing work with other tests, never by dropping a case, weakening or removing
+an assertion, or narrowing what the test covers. A change that speeds up a
+test keeps every case, and each assertion can still fail as it could before
+(see [Tests assert something that can fail](#tests-assert-something-that-can-fail)).
+Do not write fewer or thinner tests to save time: when covering a behaviour
+needs a slow input, the test uses it, and the pull request that adds the test
+says why it needs that input. The time limits under "How to check" decide
+nothing by themselves. They pick out tests for a closer look, and each test
+is judged by the rule above.
+
+Ways to cut a test's time while keeping what it checks:
+
+- **The smallest input that exercises the behaviour:** a few points or
+  images, a low resolution, one round, a synthetic scene, where the assertion
+  does not depend on the input's size. Lower the size for every expensive step
+  the test runs, not only for the steps it checks.
+- **One run for several tests:** a result that several tests only read is
+  built once, in a module- or session-scoped fixture, and handed out read-only
+  where possible. Under `pytest -n`, each worker process builds its own copy
+  of such a fixture, so a session-scoped fixture is built at most once per
+  worker rather than once per test.
+- **The call, not the pipeline:** a test whose subject is that an argument
+  reaches a step spies on that step instead of running the whole pipeline to
+  see the effect.
+- **Measurements outside the suite:** accuracy or speed at a realistic size is
+  a measurement. It belongs in a measurements spec and the script that
+  produces it, such as
+  [grown-plane-normal-measurements.md](core/bench/grown-plane-normal-measurements.md),
+  not in a test.
+
+A pull request that adds a test or changes code that a test runs reports, in
+its Testing section, the time of each test it added and the before and after
+times of each existing test whose time it changed by more than a second, read
+from the durations list that `pixi run test` prints. Whole-suite times can
+differ by up to a factor of two between runs on one machine, so compare
+per-test times, and repeat a comparison before reporting it.
+
+How to check: `pyproject.toml` sets `--durations=15`, so pytest prints the 15
+slowest setup, call and teardown phases at the end of every run
+(`pixi run test -- --durations=0` prints all of them). A test, or a fixture's
+setup, that takes more than 5 seconds in `pixi run test` on a developer
+machine gets a closer look, and so does a Rust test that `cargo test` reports
+as "has been running for over 60 seconds" in CI's `test-linux-rust` job. Look
+for:
+
+- Phases over 5 seconds in the durations list.
+- Several tests that run the same expensive call on the same input.
+- A test that lowers a size or resolution for the steps it checks but leaves
+  an expensive step at its default.
+
+A finding is a test over those limits whose time its assertions do not need:
+one where a way above would cut its time with every case and assertion kept.
+Confirm before reporting: time the test alone (`pixi run test -- <node id>`,
+or `pixi run cargo test -p <crate> <test name>`), and name the way that would
+cut it and how each of its cases and assertions is kept. A test over the
+limits that none of the ways above would make faster without dropping a case
+or weakening an assertion meets this standard.

@@ -64,8 +64,10 @@ every file format has the same I/O shape in `sfmtool.fileio`, validated in its
 format crate; an `sfm-explorer` item is private or `pub(crate)` unless the
 crate's public interface exports it, which the `unreachable_pub` lint checks
 for every item but struct fields; a convention has no documented exceptions; a
-test asserts something that can fail. If code breaks a standard, fix the code;
-fix a spec or doc only where the code is right.
+test asserts something that can fail; a test takes only the time its
+assertions need, made faster by a cheaper input or shared work, never by
+dropping a case or an assertion. If code breaks a standard, fix the code; fix
+a spec or doc only where the code is right.
 
 The standards on names, layout and builds are the easiest to miss while
 editing:
