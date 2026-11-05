@@ -198,8 +198,8 @@ call: `pick_images` is given the workspace's `feature_options` and
 ([core/features/sift.md § Building `.sift` files](../../core/features/sift.md#building-sift-files)):
 the same files at the same paths, with the same content, a file at least as
 new as its image used as it is, and every file kept. The extraction runs on a
-pool of workers, one per core by default or `SFMTOOL_SIFT_EXTRACT_WORKERS`,
-ahead of the walk, on the frames the walk knows it will read: each batch of
+pool of workers, as many as `build_sift_files` runs (one per core, capped
+by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the frames the walk knows it will read: each batch of
 the baseline, and the frames ahead of it through a break
 ([core/analysis/pick-images.md § Run-ahead](../../core/analysis/pick-images.md#run-ahead)).
 The walk's steps wait for each frame they measure.

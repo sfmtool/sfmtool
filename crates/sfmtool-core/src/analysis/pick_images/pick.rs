@@ -36,8 +36,9 @@ use crate::progress::Progress;
 /// frame just before reading the frame and, unless `options.prefetch` is
 /// off, asks it to prefetch the frames it knows it will read: each batch of
 /// the baseline, and the frames ahead of the walk through a break, where it
-/// reads every frame. It decides only from frames it waited for, so the report is the same whatever the source does ahead of
-/// it, except for [`PickImagesReport::frames_extracted_unread`]. When the run
+/// reads every frame. It decides only from frames it waited for, so the
+/// report is the same whatever the source does ahead of it, except for
+/// [`PickImagesReport::frames_extracted_unread`]. When the run
 /// ends, with a report or an error, the source's work is stopped with
 /// [`FrameSource::finish`].
 ///

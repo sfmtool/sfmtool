@@ -282,6 +282,12 @@ fn a_wait_goes_ahead_of_prefetched_frames_and_a_prefetch_replaces_the_last() {
         pool.wait(&requests(&frames, &[9]), &Progress::none())
     })
     .unwrap();
+    // The worker goes on to the prefetched frames in their order; a wait
+    // made before it started them would put them in the wait's order.
+    let start = Instant::now();
+    while ran.lock().unwrap().len() < 4 && start.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
     pool.wait(&requests(&frames, &[10, 3]), &Progress::none())
         .unwrap();
     assert_eq!(*ran.lock().unwrap(), vec![id(0), id(9), id(3), id(10)]);
