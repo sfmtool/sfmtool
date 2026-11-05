@@ -3,8 +3,9 @@
 
 //! The walk along one sequence: predict the next frame from the recent rate,
 //! measure the step to it, accept it, re-aim, or swap a blurred frame, or one
-//! blurred against its neighbouring frames, for a sharper neighbour; halve the gap where a step fails, and start a new segment
-//! after a break, reading ahead through the break. See
+//! blurred against its neighbouring frames, for a sharper neighbour; halve
+//! the gap where a step fails, and start a new segment after a break, reading
+//! ahead through the break. See
 //! `specs/core/analysis/pick-images.md` § "The walk" and § "Run-ahead".
 
 use std::collections::{BTreeSet, VecDeque};

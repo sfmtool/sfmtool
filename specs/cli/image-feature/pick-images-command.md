@@ -56,8 +56,8 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 
 The six numeric options reach `sfmtool.analysis.pick_images` unchanged, as
 `target_step_percent`, `step_band`, `blur_ratio`, `neighbour_blur_ratio`,
-`baseline_frames` and `min_inlier_share`, which checks their ranges before it reads anything; a
-value out of range is an error with the binding's message
+`baseline_frames` and `min_inlier_share`, which checks their ranges before
+it reads anything; a value out of range is an error with the binding's message
 ([core/analysis/pick-images.md § Parameters](../../core/analysis/pick-images.md#parameters)).
 
 **Why `--write-list` and not a positional name or `--name`.** On the commands
@@ -386,10 +386,11 @@ first eight and the count of the rest.
   equal runs of positions, each with the median step, rate and stride of the
   steps that start in it, leaving out a run where no step starts; the swaps
   of blurred frames and, on a line of their own, the swaps of frames blurred
-  against their neighbours, each as candidate and chosen frame, or `none`; each gap filled in with its span, its
-  steps' range and its lowest F-inlier share; each frame kept though blurred
-  with the frames searched and its sharpness over the median; each break with
-  where the walk resumed, or that the sequence ends there; and each weak point,
+  against their neighbours, each as candidate and chosen frame, or `none`;
+  each gap filled in with its span, its steps' range and its lowest F-inlier
+  share; each frame kept though blurred with the frames searched and its
+  sharpness over the median; each break with where the walk resumed, or that
+  the sequence ends there; and each weak point,
   a step with its matches or F-inlier share, or a short segment with its span.
 - **Extracted and never read.** The last line of the report, whatever the
   verdict: how many frames had a `.sift` file written in the run that the walk

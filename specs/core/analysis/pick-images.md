@@ -231,10 +231,10 @@ fast the source works. A `SequenceReport` holds:
   its statistics, its rate, its `StepKind` and whether its band was halved in a region
   flagged for weak matches),
   the swaps, each with its `SwapReason` (`Median` for a blurred candidate,
-  `Neighbours` for one blurred against its neighbours), the gaps filled in as runs of steps, the frames kept though
-  blurred with the range searched, the breaks with where the walk resumed, the
-  weak points, and the counts of frames the walk used and of those the
-  baseline had already read.
+  `Neighbours` for one blurred against its neighbours), the gaps filled in as
+  runs of steps, the frames kept though blurred with the range searched, the
+  breaks with where the walk resumed, the weak points, and the counts of
+  frames the walk used and of those the baseline had already read.
 
 Every type serializes with `serde`, a number that is not finite as `null`, so
 a caller writes the whole report as JSON as it is.
@@ -753,9 +753,9 @@ the frame, and on a frame only predicted, which stops nothing, cancellation
 before and during the run, that a run repeats exactly, that every frame of
 the baseline and every frame read through a break after its first failing
 pair was prefetched, with no more than the workers' count extracted and not
-read, and that one capture with a change of
-speed, a swap for each reason, a blurred run, a gap and a break gives the same report and the
-same waits with prefetching off and on and with one and eight workers. Every
+read, and that one capture with a change of speed, a swap for each reason, a
+blurred run, a gap and a break gives the same report and the same waits with
+prefetching off and on and with one and eight workers. Every
 test checks that the frames waited for are the frames the report lists as
 read, each once, that those have `.sift` files written in the run, and that
 every other frame with files was predicted, as many as
