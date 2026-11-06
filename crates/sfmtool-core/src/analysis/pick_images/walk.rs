@@ -31,10 +31,6 @@ const RECENT_RATES: usize = 3;
 /// point, and a step to a frame beyond the next one fails with it.
 const WEAK_MATCH_FACTOR: usize = 2;
 
-/// A step whose F-inlier share is within this of `min_inlier_share` is a weak
-/// point.
-const WEAK_SHARE_MARGIN: f64 = 0.1;
-
 /// A segment of fewer chosen frames than this is a weak point.
 const MIN_SEGMENT_FRAMES: usize = 3;
 
@@ -214,7 +210,7 @@ fn find_start(
 /// Whether a pair has fewer than [`WEAK_MATCH_FACTOR`] times `min_matches`
 /// matches.
 fn few_matches(stats: &FramePairStats, options: &PickImagesOptions) -> bool {
-    stats.matches < WEAK_MATCH_FACTOR * options.pair.min_matches
+    stats.matches < options.min_matches.saturating_mul(WEAK_MATCH_FACTOR)
 }
 
 /// Fill in what the walk's report derives at the end: the weak points and
@@ -227,17 +223,8 @@ fn finish(
     options: &PickImagesOptions,
 ) {
     for (i, step) in report.steps.iter().enumerate() {
-        let few_matches = few_matches(&step.stats, options);
-        let low_inlier_share = step
-            .stats
-            .f_inlier_share
-            .is_some_and(|s| s < options.min_inlier_share + WEAK_SHARE_MARGIN);
-        if few_matches || low_inlier_share {
-            report.weak_points.push(WeakPoint::Step {
-                step: i,
-                few_matches,
-                low_inlier_share,
-            });
+        if few_matches(&step.stats, options) {
+            report.weak_points.push(WeakPoint::Step { step: i });
         }
     }
     for (i, segment) in report.segments.iter().enumerate() {

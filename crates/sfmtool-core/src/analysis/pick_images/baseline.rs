@@ -3,25 +3,19 @@
 
 //! The baseline: the sampled frames of each sequence, the median sharpness
 //! its frames are judged against, the rate along it, the flagged regions, and
-//! the two judgements made from it, whether a sequence is a video and whether
-//! it can be solved. See `specs/core/analysis/pick-images.md` § "The
-//! baseline".
+//! the judgement made from it, whether a sequence is a video. See
+//! `specs/core/analysis/pick-images.md` § "The baseline".
 
 use super::capture::{FrameId, PickImagesOptions};
 use super::frame_pair::FramePairStats;
 use super::frames::Frames;
-use super::report::{
-    FlaggedRegion, SampleRate, SensorBaseline, SensorReading, SolvabilityCheck, VideoCheck,
-};
+use super::report::{FlaggedRegion, SampleRate, SensorBaseline, SensorReading, VideoCheck};
 use crate::features::sift::ImageReadings;
 use crate::numeric::{median, quantile};
 
-/// The gaps after each sampled frame the first batch reads: enough to tell a
+/// The gaps after each sampled frame the baseline reads: enough to tell a
 /// video from a set of photographs.
-pub(super) const NEAR_GAPS: [usize; 2] = [1, 3];
-
-/// The gaps the second batch reads, for the checks of solvability.
-pub(super) const FAR_GAPS: [usize; 2] = [10, 30];
+pub(super) const BASELINE_GAPS: [usize; 2] = [1, 3];
 
 /// The range of the 3-frame step over the 1-frame step in which the motion
 /// adds up.
@@ -34,26 +28,6 @@ const VIDEO_MAX_STEP_PERCENT: f64 = 5.0;
 /// The factor within which neighbouring samples' 1-frame steps lie when the
 /// step changes little.
 const VIDEO_MAX_STEP_FACTOR: f64 = 2.0;
-
-/// The 1-frame F-inlier share above which neighbours match closely.
-const VIDEO_MIN_SHARE: f64 = 0.8;
-
-/// How many of the three signs other than a small step make a video, with a
-/// small step, which every video has.
-const VIDEO_OTHER_SIGNS_NEEDED: usize = 2;
-
-/// The F-inlier share 10 frames apart below which the scene moves.
-const MOVING_SCENE_MAX_SHARE: f64 = 0.3;
-
-/// The H/F 30 frames apart above which, with a rotation error below
-/// [`PANORAMA_MAX_ROTATION_ERROR`], the camera only turned.
-const PANORAMA_MIN_H_OVER_F: f64 = 0.97;
-
-const PANORAMA_MAX_ROTATION_ERROR: f64 = 0.01;
-
-/// The total motion, in percent of the long side, below which the camera
-/// barely moves.
-const MIN_TOTAL_MOTION_PERCENT: f64 = 100.0;
 
 /// How many sampled frames each sequence gets: its share of
 /// `baseline_frames` by frame count, at least 2 (the first and last) and at
@@ -82,13 +56,9 @@ pub(super) fn sample_positions(len: usize, count: usize) -> Vec<usize> {
     positions
 }
 
-/// Whether a pair matches well: at least `min_matches` matches, and an
-/// F-inlier share of at least `min_inlier_share`.
+/// Whether a pair matches well: it has at least `min_matches` mutual matches.
 pub(super) fn matches_well(stats: &FramePairStats, options: &PickImagesOptions) -> bool {
-    stats.matches >= options.pair.min_matches
-        && stats
-            .f_inlier_share
-            .is_some_and(|share| share >= options.min_inlier_share)
+    stats.matches >= options.min_matches
 }
 
 /// One sensor's baseline over the readings of the sampled frames.
@@ -187,7 +157,7 @@ impl SequenceBaseline {
     }
 }
 
-/// The sequence's baseline from its first batch: the sensors' median
+/// The sequence's baseline from its pairs: the sensors' median
 /// sharpness over the sampled frames, the rate at each sample, and the regions
 /// a blurred sample or one that does not match the frame 1 or 3 after it
 /// well flags.
@@ -208,7 +178,7 @@ pub(super) fn sequence_baseline(
         })
         .collect();
 
-    let min_matches = options.pair.min_matches;
+    let min_matches = options.min_matches;
     let measured = |s: usize, gap: usize| frames.pair(id(s), id(s + gap));
     let mut sample_rates = Vec::new();
     for &s in &samples {
@@ -237,7 +207,7 @@ pub(super) fn sequence_baseline(
     let mut regions: Vec<FlaggedRegion> = Vec::new();
     for (i, &s) in baseline.samples.iter().enumerate() {
         let (blurred, _) = baseline.blur(frames.readings(id(s)), options.blur_ratio);
-        let weak = NEAR_GAPS
+        let weak = BASELINE_GAPS
             .iter()
             .filter_map(|&gap| measured(s, gap))
             .any(|stats| !matches_well(stats, options));
@@ -279,7 +249,7 @@ pub(super) fn rate_p90(baseline: &SequenceBaseline) -> f64 {
     quantile(&rates, 0.9)
 }
 
-/// Judge whether a sequence is a video from its first batch's pairs.
+/// Judge whether a sequence is a video from the baseline's pairs.
 pub(super) fn video_check(
     frames: &Frames,
     sequence: usize,
@@ -288,13 +258,12 @@ pub(super) fn video_check(
 ) -> VideoCheck {
     let id = |frame| FrameId { sequence, frame };
     let len = baseline.len;
-    let min_matches = options.pair.min_matches;
-    // Per sample with a frame 3 after it: the 1-frame step, the 3-to-1
-    // ratio and the 1-frame share, or a value that fails each sign when
-    // either pair has fewer than `min_matches` matches.
+    let min_matches = options.min_matches;
+    // Per sample with a frame 3 after it: the 1-frame step and the 3-to-1
+    // ratio, or a value that fails each sign when either pair has fewer than
+    // `min_matches` matches.
     let mut steps = Vec::new();
     let mut ratios = Vec::new();
-    let mut shares = Vec::new();
     for &s in baseline.samples.iter().filter(|&&s| s + 3 < len) {
         let one = frames.pair(id(s), id(s + 1));
         let three = frames.pair(id(s), id(s + 3));
@@ -304,12 +273,10 @@ pub(super) fn video_check(
             {
                 steps.push(Some(one.step_percent));
                 ratios.push(three.step_percent / one.step_percent);
-                shares.push(one.f_inlier_share.unwrap_or(0.0));
             }
             _ => {
                 steps.push(None);
                 ratios.push(f64::INFINITY);
-                shares.push(0.0);
             }
         }
     }
@@ -325,60 +292,16 @@ pub(super) fn video_check(
     let step_1_median = median(&step_values);
     let ratio_3_to_1_median = median(&ratios);
     let step_change_median = median(&changes);
-    let f_inlier_share_1_median = median(&shares);
     let motion_adds_up = (VIDEO_RATIO_RANGE.0..=VIDEO_RATIO_RANGE.1).contains(&ratio_3_to_1_median);
     let step_small = step_1_median < VIDEO_MAX_STEP_PERCENT;
     let step_steady = step_change_median < VIDEO_MAX_STEP_FACTOR.ln();
-    let neighbours_match = f_inlier_share_1_median > VIDEO_MIN_SHARE;
-    let other_signs = [motion_adds_up, step_steady, neighbours_match]
-        .iter()
-        .filter(|&&sign| sign)
-        .count();
     VideoCheck {
         step_1_median,
         ratio_3_to_1_median,
         step_change_median,
-        f_inlier_share_1_median,
         motion_adds_up,
         step_small,
         step_steady,
-        neighbours_match,
-        is_video: len >= 4 && step_small && other_signs >= VIDEO_OTHER_SIGNS_NEEDED,
-    }
-}
-
-/// Judge whether a sequence can be solved from its second batch's pairs.
-pub(super) fn solvability_check(
-    frames: &Frames,
-    sequence: usize,
-    baseline: &SequenceBaseline,
-) -> SolvabilityCheck {
-    let id = |frame| FrameId { sequence, frame };
-    let len = baseline.len;
-    let medians = |gap: usize, value: fn(&FramePairStats) -> Option<f64>| {
-        let values: Vec<f64> = baseline
-            .samples
-            .iter()
-            .filter_map(|&s| frames.pair(id(s), id(s + gap)).and_then(value))
-            .collect();
-        (!values.is_empty()).then(|| median(&values))
-    };
-    let f_inlier_share_10_median = medians(10, |s| s.f_inlier_share);
-    let h_over_f_30_median = medians(30, |s| s.h_over_f);
-    let rotation_error_30_median = medians(30, |s| s.rotation_error);
-    let total_motion_percent = baseline.rate_median * len as f64;
-    let moving_scene = f_inlier_share_10_median.is_some_and(|s| s < MOVING_SCENE_MAX_SHARE);
-    let panorama = h_over_f_30_median.is_some_and(|h| h > PANORAMA_MIN_H_OVER_F)
-        && rotation_error_30_median.is_some_and(|e| e < PANORAMA_MAX_ROTATION_ERROR);
-    let barely_moves = total_motion_percent < MIN_TOTAL_MOTION_PERCENT;
-    SolvabilityCheck {
-        f_inlier_share_10_median,
-        h_over_f_30_median,
-        rotation_error_30_median,
-        total_motion_percent,
-        moving_scene,
-        panorama,
-        barely_moves,
-        solvable: !(moving_scene || panorama || barely_moves),
+        is_video: len >= 4 && step_small && motion_adds_up && step_steady,
     }
 }

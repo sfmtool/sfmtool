@@ -79,18 +79,17 @@ pub struct PickImagesOptions {
     /// How many frames the baseline samples, spread evenly over the capture
     /// and shared among the sequences by their frame counts. At least 2.
     pub baseline_frames: usize,
-    /// A step whose matches fit a fundamental matrix with a smaller share of
-    /// inliers does not match well. In `[0, 1]`.
-    pub min_inlier_share: f64,
+    /// The fewest mutual matches a pair that matches well has. At least 1,
+    /// since a step is measured from the matches.
+    pub min_matches: usize,
     /// The forest each frame's descriptors are indexed with.
     pub forest: KdForestParams,
-    /// How each pair of frames is matched and fitted. Its `min_matches` is
-    /// also the fewest matches a step that matches well has.
+    /// How each pair of frames is matched.
     pub pair: FramePairOptions,
     /// Whether the walk asks the source to prefetch the frames it knows it
-    /// will read: each batch of the baseline, and the frames ahead through a
-    /// break. It changes how long a run takes and which frames get a
-    /// `.sift` file without being read, never what the walk chooses.
+    /// will read: the baseline, and the frames ahead through a break. It
+    /// changes how long a run takes and which frames get a `.sift` file
+    /// without being read, never what the walk chooses.
     pub prefetch: bool,
 }
 
@@ -102,7 +101,7 @@ impl Default for PickImagesOptions {
             blur_ratio: 0.6,
             neighbour_blur_ratio: 0.85,
             baseline_frames: 200,
-            min_inlier_share: 0.5,
+            min_matches: 30,
             forest: KdForestParams::balanced(),
             pair: FramePairOptions::default(),
             prefetch: true,
@@ -145,10 +144,10 @@ impl PickImagesOptions {
                 ),
             ));
         }
-        if !(0.0..=1.0).contains(&self.min_inlier_share) {
+        if self.min_matches < 1 {
             return Err(options(
-                "min_inlier_share",
-                format!("must be in [0, 1], got {}", self.min_inlier_share),
+                "min_matches",
+                "must be at least 1, since a step is measured from the matches, got 0".to_string(),
             ));
         }
         let nested = |prefix: &str, e: FramePairError| match e {

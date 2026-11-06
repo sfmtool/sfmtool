@@ -2,20 +2,21 @@
 
 A video of a walk around a scene has many more frames than a
 Structure-from-Motion solve should use. Neighbouring frames are nearly the same
-picture, some frames are blurred, and some stretches of a capture cannot be
-solved at all: the camera only turned on the spot, the scene itself moved, or
-the camera hardly moved. Picking images looks at a capture before it is solved
-and chooses the frames a solve should use: frames spaced so that the image
-moves by about a tenth of its width from one to the next, sharp ones in place
-of blurred ones, and more frames where the capture is hard to follow. It reads
-a sample spread over the whole capture first, decides from it whether each
-sequence is a video and whether the capture can be solved, and only then walks
-each sequence frame by frame, measuring each step rather than taking a stride
-fixed in advance.
+picture and some frames are blurred. Picking images looks at a capture before
+it is solved and chooses the frames a solve should use: frames spaced so that
+the image moves by about a tenth of its width from one to the next, sharp ones
+in place of blurred ones, and more frames where the capture is hard to follow.
+It reads a sample spread over the whole capture first, decides from it whether
+each sequence is a video, and only then walks each sequence frame by frame,
+measuring each step rather than taking a stride fixed in advance. It makes no
+judgement of whether a capture can be solved and fits no geometry: whether the
+frames it chooses describe one camera motion through a static scene, and
+whether the camera moved enough, is for the solve to find out.
 
 Everything is measured from SIFT features. The motion between two frames is
-the median displacement of the features that match between them
-([frame-pair-matching.md](frame-pair-matching.md)), and a frame's sharpness
+the median displacement of the features that match between them, and how well
+they match is how many mutual matches they have
+([frame-pair-matching.md](frame-pair-matching.md)); a frame's sharpness
 and gradient structure tensor come from its `.sift` file's metadata
 ([sift-file-format.md § The reading image](../../formats/sift-file-format.md#the-reading-image)).
 The walk reads only the frames it needs: the sample, the frames it chooses and
@@ -92,7 +93,7 @@ pub struct PickImagesOptions {
     pub blur_ratio: f64,           // 0.6, in (0, 1)
     pub neighbour_blur_ratio: f64, // 0.85, in (0, 1)
     pub baseline_frames: usize,    // 200, at least 2
-    pub min_inlier_share: f64,     // 0.5, in [0, 1]
+    pub min_matches: usize,        // 30, at least 1
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // FramePairOptions::default()
     pub prefetch: bool,            // true; changes no choice, only the work ahead
@@ -141,8 +142,8 @@ steps of 2 has the same rate as one numbered in steps of 1. The report names
 frames the same way; `sequences[id.sequence].frames[id.frame].number` is the
 file number.
 
-**A verdict is a report, not an error.** A sequence that is not a video, or a
-capture that cannot be solved, is what the caller asked to find out, so
+**A verdict is a report, not an error.** A sequence that is not a video is
+what the caller asked to find out, so
 `pick_images` returns a report with that verdict and no walk. An error is
 something the caller has to fix before the question can be answered.
 
@@ -170,8 +171,8 @@ leave possible. `Cancelled` is a set cancel flag. No caller input panics
 ([STANDARDS.md § Caller input never panics](../../STANDARDS.md#caller-input-never-panics)).
 
 **A `Progress`.** A walk over a long video runs for minutes, mostly in
-extraction. `pick_images` opens the phases `baseline`, `baseline far pairs`
-and `walk`, reports the count of frames read after each wait on the source,
+extraction. `pick_images` opens the phases `baseline` and `walk`, reports
+the count of frames read after each wait on the source,
 reports the count of pairs matched as the value `pairs_matched` after each
 pair, and checks for cancellation before every wait and every pair it
 matches. A wait that blocks reads the cancel flag and reports the value
@@ -197,7 +198,7 @@ use sfmtool_core::progress::Progress;
 let mut source = ExtractingSource::new(BuildSiftFilesOptions::sfmtool_defaults())?;
 let report = pick_images(&sequences, &mut source,
                          &PickImagesOptions::default(), &Progress::none())?;
-if report.verdict == Verdict::Solvable {
+if report.verdict == Verdict::Video {
     let walk = report.sequences[0].walk.as_ref().unwrap();
     let numbers: Vec<i64> = walk.chosen.iter()
         .map(|&p| sequences[0].frames[p].number).collect();
@@ -206,8 +207,8 @@ if report.verdict == Verdict::Solvable {
 
 ### The report
 
-`PickImagesReport` holds the `verdict` (`Solvable`, `NotAVideo` or
-`NotSolvable`), one `SequenceReport` per sequence, every frame read
+`PickImagesReport` holds the `verdict` (`Video` or `NotAVideo`), one
+`SequenceReport` per sequence, every frame read
 (`FrameReading`: its id, the stage that read it, and each sensor's readings
 with the blur judgement made from them) in the order read, every pair
 matched (`MeasuredPair`, with its `FramePairStats`) in the order matched,
@@ -222,11 +223,9 @@ fast the source works. A `SequenceReport` holds:
   sensor's median sharpness, the count of blurred samples, the rate at each
   sample, its median and 0.9 quantile, the total motion, and the flagged
   regions with what flagged them;
-- `video`: the four signs of a video, the medians behind them, and
+- `video`: the three signs of a video, the medians behind them, and
   `is_video`;
-- `solvability`: the three checks, their medians and `solvable`, or `None`
-  when some sequence is not a video;
-- `walk`: or `None` unless the verdict is `Solvable`. The chosen positions,
+- `walk`: or `None` unless the verdict is `Video`. The chosen positions,
   the segments between breaks as runs of them, every accepted step (from, to,
   its statistics, its rate, its `StepKind` and whether its band was halved in a region
   flagged for weak matches),
@@ -241,10 +240,9 @@ a caller writes the whole report as JSON as it is.
 
 ## The algorithm
 
-Picking runs in five stages: check the input, read the baseline's first batch
-and judge whether each sequence is a video, read its second batch and judge
-whether the capture can be solved, walk each sequence, and assemble the
-report. The sequences are walked one after another.
+Picking runs in five stages: check the input, read the baseline, judge whether
+each sequence is a video, walk each sequence, and assemble the report. The
+sequences are walked one after another.
 
 ### Words
 
@@ -257,8 +255,7 @@ report. The sequences are walked one after another.
   images ([frame-pair-matching.md § The step](frame-pair-matching.md#the-step)).
 - The **rate** is a step divided by the number of positions between the two
   frames.
-- A pair **matches well** when it has at least `pair.min_matches` mutual
-  matches and an F-inlier share of at least `min_inlier_share`.
+- A pair **matches well** when it has at least `min_matches` mutual matches.
 - The **band** is `target × (1 ± step_band)` around the target step: 7% to
   13% at the defaults.
 
@@ -278,16 +275,15 @@ fewer samples would put neighbouring samples further apart, and the sign that
 the step changes little compares neighbouring samples' steps
 ([Is it a video?](#is-it-a-video)).
 
-The baseline is read in two batches. Each is prefetched whole, then waited
-for and matched sample by sample in sample order, so that matching one
+The baseline reads the sampled frames and the frames 1 and 3 after each that
+exist, and matches each sample with them; that is enough to tell a video from
+a set of photographs and to measure the rate. It is prefetched whole, then
+waited for and matched sample by sample in sample order, so that matching one
 sample's pairs runs while the source works on the next ones; the frames are
-read, and the pairs matched, in the batch's order. The first reads the sampled frames and the frames 1 and 3 after each
-that exist, and matches each sample with them; that is enough to tell a video
-from a set of photographs. The second, read only when every sequence is a
-video, reads the frames 10 and 30 after each sample and matches each sample
-with them. A frame another sample already read is not read again.
+read, and the pairs matched, in the baseline's order. A frame another sample
+already read is not read again.
 
-From the first batch, per sequence:
+From the baseline, per sequence:
 
 - **Each sensor's baseline**: the median sharpness over the sampled frames.
 - **The rate at each sample**: the step to the frame 3 after it divided by 3,
@@ -304,52 +300,33 @@ From the first batch, per sequence:
 
 The walk assumes that neighbouring frames are close in time, so that the
 motion between them is small and changes smoothly. A folder of photographs
-numbered in the order they were taken does not behave that way. Each sequence
-is judged from the samples that have a frame 3 after them, by four signs,
-each a median over those samples. A sequence is a video when the step is
-small and at least two of the other three signs hold:
+numbered in the order they were taken often does not: consecutive photographs
+can be far apart. Each sequence is judged from the samples that have a frame 3
+after them, by three signs, each a median over those samples. A sequence is a
+video when all three hold:
 
+- **The step is small**: the step 1 frame apart is below 5%.
 - **The motion adds up**: the step 3 frames apart over the step 1 frame apart
   is between 2 and 4.
-- **The step is small**: the step 1 frame apart is below 5%.
 - **The step changes little**: the median of `|log(step_i / step_{i+1})|` over
   neighbouring samples' 1-frame steps is below `log 2`.
-- **Neighbours match closely**: the F-inlier share 1 frame apart is above 0.8.
 
-The small step is required, not one sign among four, because it is what makes
-a sequence worth walking: the walk thins a capture by passing over the frames
-between steps of the target, and neighbours already half a target step apart
-leave nothing to pass over. Photographs taken one after another around a
-subject can show the other three signs, since their motion adds up, changes
-little from one photograph to the next and leaves neighbours that match
-closely, and only the size of the step tells them from a video. The other
-three tolerate one failure, so that a video whose camera barely moves, whose
-sub-pixel jitter does not add up over 3 frames, is still judged a video and
-then stopped as a camera that barely moves.
+The small step is what makes a sequence worth walking: the walk thins a
+capture by passing over the frames between steps of the target, and
+neighbours already half a target step apart leave nothing to pass over.
+Photographs taken one after another around a subject can show the other two
+signs, since their motion adds up and changes little from one photograph to
+the next, and only the size of the step tells them from a video. Photographs
+taken close enough together that the step is small pass all three signs, and
+are walked like a video. A video from a tripod or a hand held still, whose sub-pixel jitter does not add up
+over 3 frames, is judged not a video, since there is no motion for the walk
+to follow.
 
 A sample whose 1-frame or 3-frame pair has fewer than `min_matches` matches
-counts against every sign it enters (its step and ratio as infinite, its share
-as 0), since photographs that barely overlap give that result. A sequence of
-fewer than 4 frames has no 3-frame pair and is not a video. When a sequence is
-not a video, nothing more is read and the verdict is `NotAVideo`.
-
-### Can it be solved?
-
-From the second batch, per sequence, each from the median over the samples
-whose pair has the value:
-
-- **A moving scene**: the F-inlier share 10 frames apart is below 0.3.
-- **A camera that only turns**: H/F 30 frames apart is above 0.97 and the
-  rotation error 30 frames apart is below 0.01
-  ([frame-pair-matching.md § The rotation error](frame-pair-matching.md#the-rotation-error)).
-  A solve of such a capture can look excellent and still be wrong, since
-  without translation there is no depth to measure.
-- **A camera that barely moves**: the total motion is below 100% of the long
-  side.
-
-A check with no sample to take its median from does not hold. When any check
-holds for any sequence, nothing more is read and the verdict is
-`NotSolvable`.
+counts against every sign it enters (its step and ratio as infinite), since
+photographs that barely overlap give that result. A sequence of fewer than 4
+frames has no 3-frame pair and is not a video. When a sequence is not a video,
+nothing more is read and the verdict is `NotAVideo`.
 
 ### The walk
 
@@ -441,8 +418,8 @@ recent rates. The frames in between are read and chosen for nothing. When no
 such frame remains, the sequence ends at the break.
 
 **Weak points** are where a solve is most likely to split: an accepted step
-with fewer than twice `min_matches` matches, or with an F-inlier share within
-0.1 of `min_inlier_share`, and a segment of fewer than 3 chosen frames.
+with fewer than twice `min_matches` matches, and a segment of fewer than 3
+chosen frames.
 
 **What is never read.** Outside regions flagged for weak matches, a frame the
 walk does not read lies between two chosen frames whose step matched well.
@@ -512,7 +489,7 @@ not judged blurred.
 A rig frame is read, judged and chosen with all its sensors, and reading it
 reads every sensor's `.sift` metadata. Its motion is measured from the
 reference sensor's images only, the first of each frame, since their
-displacement and inlier shares describe the rig's motion as well as any
+displacement describes the rig's motion as well as any
 sensor's and the sensors' images need not be the same size. Its sharpness is
 judged per sensor against that sensor's own baseline, since the sensors look
 at different parts of the scene, and against each sensor's own images of
@@ -551,7 +528,7 @@ file when a pair needs them, holding only the few forests of the pairs near
 the current one ([Implementation notes](#implementation-notes)). The pool
 holds a state of a few bytes per frame asked for, the error of a frame that
 failed, and the image paths of the frames queued, which are at most one
-prefetch's (a batch of the baseline, at most five frames per sample, or the
+prefetch's (the baseline, at most three frames per sample, or the
 `W` frames ahead through a break); each worker holds the one frame it extracts, as many as
 `build_sift_files` holds in flight under the same memory cap.
 
@@ -576,8 +553,8 @@ naming the first that does not (`Missing`). A caller whose feature tool is not
 The walk prefetches the frames it knows it will read, so that the source's
 workers extract them while it matches the frames already read.
 
-- **The baseline.** Each batch is one prefetch of all its frames, which the
-  workers extract while the walk waits for and matches the batch sample by
+- **The baseline.** It is one prefetch of all its frames, which the
+  workers extract while the walk waits for and matches them sample by
   sample.
 - **A break.** Once a pair the walk reads forward through does not match
   well, it reads every following frame until one matches its next frame, so
@@ -654,20 +631,16 @@ three digits; the medians and ratios are `f64` because
 | `blur_ratio` | `0.6` | below this times the median sharpness is blurred |
 | `neighbour_blur_ratio` | `0.85` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
 | `baseline_frames` | `200` | the samples, shared among the sequences |
-| `min_inlier_share` | `0.5` | the F-inlier share a pair that matches well has |
-| `pair.min_matches` | `30` | the matches a pair that matches well has |
-| baseline gaps | 1, 3; 10, 30 | the frames after each sample the two batches read |
-| video signs | 2 to 4; 5%; factor 2; 0.8; the small step and 2 of the other 3 | the four signs and which make a video |
-| moving scene | 0.3 | the F-inlier share 10 frames apart below which the scene moves |
-| panorama | 0.97, 0.01 | the H/F and rotation error 30 frames apart |
-| barely moves | 100% | the total motion below which the camera barely moves |
+| `min_matches` | `30` | the mutual matches a pair that matches well has |
+| baseline gaps | 1, 3 | the frames after each sample the baseline reads |
+| video signs | 5%; 2 to 4; factor 2; all three | the three signs, all of which make a video |
 | re-aims | 4 | before a step fails |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
-| weak point | 2 × `min_matches`; `min_inlier_share` + 0.1; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
+| weak point | 2 × `min_matches`; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
 | break read-ahead | `W` frames | how far the walk prefetches through a break, for a source of `W` workers |
 | neighbours | 2 positions on either side; below the median | the frames a candidate is judged against for blur against its neighbours, and which sensor images are judged |
 
-The last ten are constants of the module.
+The last seven are constants of the module.
 
 ## Python bindings
 
@@ -690,7 +663,7 @@ report = pick_images([sequence], feature_options=config["feature_options"],
                      target_step_percent=10.0)
 # Or read .sift files that already exist.
 report = pick_images([sequence])
-report["verdict"]                         # "solvable"
+report["verdict"]                         # "video"
 report["sequences"][0]["walk"]["chosen"]  # positions of the chosen frames
 ```
 
@@ -750,9 +723,9 @@ a gap filled in, a blurred frame whose sharp neighbours, a
 blurred run whose sharp frames and a wholly blurred run whose least blurred
 frames have few matches, none of them taken, shuffled
 frames, frames 6% apart that show the
-other three signs and a three-frame sequence that are not a video, a camera
-that only turns, one that barely moves and a moving scene that are not
-solvable, a rig whose second sensor's images match nothing
+other two signs and a three-frame sequence that are not a video, a rig
+whose second sensor's images
+match nothing
 and whose blur alone, against its median and against its neighbours, swaps a
 frame, several sequences sharing the baseline,
 every error variant, a worker's failure on a frame of each stage, which names
@@ -798,5 +771,8 @@ equal `build_sift_files`', and which a second run reads without extracting.
   [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
 - Choosing among photographs. A sequence that is not a video stops the run;
   nothing chooses frames from it.
-- Choosing frames for a rotation-only solve. A capture whose camera only turns
-  is not solvable here.
+- Judging whether a capture can be solved. Neither the walk nor the verdict
+  fits geometry to the matches or asks whether the camera moved enough, so a
+  camera that only turned, a scene that moved on its own and a camera that
+  moved little but steadily are walked like any other video, and the solve
+  that follows finds out.

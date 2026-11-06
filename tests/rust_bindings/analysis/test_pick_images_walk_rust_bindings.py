@@ -122,7 +122,7 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     capture = steady
     counter = ProgressCounter()
     report = pick_images([capture.sequence], baseline_frames=20, progress=counter)
-    assert report["verdict"] == "solvable"
+    assert report["verdict"] == "video"
     walk = report["sequences"][0]["walk"]
     chosen = walk["chosen"]
     assert chosen[0] == 0 and chosen[-1] == 149
@@ -160,9 +160,8 @@ def test_options_reach_the_walk(steady: _Capture):
         ("blur_ratio", 0.0),
         ("neighbour_blur_ratio", 1.0),
         ("baseline_frames", 1),
-        ("min_inlier_share", 2.0),
         ("pair.ratio", 0.0),
-        ("pair.min_matches", 3),
+        ("min_matches", 0),
     ]:
         key = name.split(".")[-1]
         with pytest.raises(ValueError, match=name.replace(".", r"\.")):

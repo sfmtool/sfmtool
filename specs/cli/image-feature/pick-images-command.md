@@ -2,14 +2,13 @@
 
 A video of a walk around a scene has many more frames than a
 Structure-from-Motion solve should use. Neighbouring frames are nearly the same
-picture, some frames are blurred, and some stretches of a capture cannot be
-solved at all: the camera only turned on the spot, the scene itself moved, or
-the camera hardly moved. `sfm pick-images` looks at a capture before it is
-solved and chooses the frames a solve should use: frames spaced so that the
-image moves by about a tenth of its width from one to the next, sharp ones in
-place of blurred ones, more frames where the capture is hard to follow and
-fewer where it is easy. It prints what it found, including a verdict on whether
-the capture can be solved, and when given a name it writes the frames it chose
+picture and some frames are blurred. `sfm pick-images` looks at a capture
+before it is solved and chooses the frames a solve should use: frames spaced
+so that the image moves by about a tenth of its width from one to the next,
+sharp ones in place of blurred ones, more frames where the capture is hard to
+follow and fewer where it is easy. It prints what it found, including a
+verdict on whether each sequence is a video, and when given a name it writes
+the frames it chose
 as a named image list ([workspace/named-image-lists.md](../../workspace/named-image-lists.md)),
 which `sfm solve -r NAME` and the other commands that take `-r` then use.
 
@@ -51,12 +50,11 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--blur-ratio RATIO` | `0.6` | A frame whose sharpness is below `RATIO` times its sequence's median sharpness counts as blurred. |
 | `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen whose sharpness is below its sequence's median is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
 | `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. The default suits long captures of 10,000 frames or more; on a capture of a few hundred frames the baseline reads most of them ([core/analysis/pick-images.md § The baseline](../../core/analysis/pick-images.md#the-baseline)). |
-| `--min-inlier-share SHARE` | `0.5` | A step whose matches fit a fundamental matrix with a smaller share of inliers fails. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 
-The six numeric options reach `sfmtool.analysis.pick_images` unchanged, as
-`target_step_percent`, `step_band`, `blur_ratio`, `neighbour_blur_ratio`,
-`baseline_frames` and `min_inlier_share`, which checks their ranges before
+The five numeric options reach `sfmtool.analysis.pick_images` unchanged, as
+`target_step_percent`, `step_band`, `blur_ratio`, `neighbour_blur_ratio` and
+`baseline_frames`, which checks their ranges before
 it reads anything; a value out of range is an error with the binding's message
 ([core/analysis/pick-images.md § Parameters](../../core/analysis/pick-images.md#parameters)).
 
@@ -96,8 +94,8 @@ chosen.
 every folder and sequence it was given ([Writing the list](#writing-the-list)).
 
 **Exit status.** The command exits 0 when it finishes, whatever it found, as
-`sfm motion` does. When the verdict says a sequence is not a video or the
-capture cannot be solved, it writes no list; with `--write-list` it then says
+`sfm motion` does. When the verdict says a sequence is not a video, it writes
+no list; with `--write-list` it then says
 so on standard error and exits 1, since the list it was asked for does not
 exist. An error that stops the run exits 1, and a usage error 2.
 
@@ -139,7 +137,7 @@ In order, it:
    options, which extracts the `.sift` files itself; with another tool,
    extracts every input frame first and calls it to read them
    ([Extraction](#extraction)).
-6. Prints the report, writes the list when the verdict is solvable and a name
+6. Prints the report, writes the list when every sequence is a video and a name
    was given, and writes the JSON file when asked.
 
 ### Collecting the frames
@@ -200,7 +198,7 @@ call: `pick_images` is given the workspace's `feature_options` and
 the same files at the same paths, with the same content, a file at least as
 new as its image used as it is, and every file kept. The extraction runs on a
 pool of workers, as many as `build_sift_files` runs (one per core, capped
-by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the frames the walk knows it will read: each batch of
+by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the frames the walk knows it will read:
 the baseline, and the frames ahead of it through a break
 ([core/analysis/pick-images.md § Run-ahead](../../core/analysis/pick-images.md#run-ahead)).
 The walk's steps wait for each frame they measure.
@@ -231,7 +229,7 @@ describes.
 
 **Cost.** Reading a frame costs one SIFT extraction when its `.sift` file is
 missing, and nothing more than reading the file otherwise. The baseline reads
-each sampled frame and the frames 1, 3, 10 and 30 after it, so up to five
+each sampled frame and the frames 1 and 3 after it, so up to three
 frames per sample, fewer where two samples share a frame. The walk reads each
 frame it chooses and the candidates it measures on the way, usually two or
 three per choice, and skips the frames between; a choice less sharp than the
@@ -307,7 +305,7 @@ Resolved with `-r NAME`, the list gives exactly the chosen frames' images.
 
 The command prints the workspace, the sequences it collected, a baseline
 section per sequence ending in the verdict, a walk section per sequence when
-the verdict is solvable, and the list it wrote. For one sequence:
+every sequence is a video, and the list it wrote. For one sequence:
 
 ```text
 Using workspace: /captures/garden
@@ -315,15 +313,13 @@ Using workspace: /captures/garden
 Given 1 path(s), 6120 image file(s) in 1 sequence:
   frames/walk1_%04d.jpg, 6120 frames (1-6120)
 
-Baseline: 200 frames sampled, 984 frames read (972 extracted, 12 reused)
+Baseline: 200 frames sampled, 590 frames read (578 extracted, 12 reused)
   Sharpness: median 0.0123; 9 sampled frames blurred
   Motion per frame: median 0.72%, p90 1.31% of the long side; total 4400%
-  A video (4 of 4 signs): 1 frame apart step 0.72%, F-inlier share 0.93; 3 frames apart
-    2.9 times as far; neighbouring samples' steps within a factor of 1.3
-  10 frames apart: F-inlier share 0.84
-  30 frames apart: H/F 0.41, rotation error 0.210
+  A video (3 of 3 signs): 1 frame apart step 0.72%; 3 frames apart 2.9 times as far
+    neighbouring samples' steps within a factor of 1.3
   Flagged regions: 2210-2271 (blurred), 4381-4442 (weak matches)
-Verdict: solvable
+Verdict: video
 
 Walk: target step 10% (band 7-13%), 1 break, 2 segments
   Chosen: 512 frames; read: 1307 frames (1250 extracted, 0 reused, 57 from the baseline)
@@ -334,12 +330,12 @@ Walk: target step 10% (band 7-13%), 1 break, 2 segments
   Blurred frames swapped (23): 1415->1417, 1890->1889, 2224->2226, ... and 15 more
   Frames blurred against their neighbours swapped (6): 377->376, 1066->1068, ... and 1 more
   Gaps filled in (2):
-    2210-2290: 14 frames, steps 2.1-5.0%, F-inlier share down to 0.41
-    4380-4410: 9 frames, steps 1.0-3.3%, F-inlier share down to 0.38
+    2210-2290: 14 frames, steps 2.1-5.0%, down to 41 matches
+    4380-4410: 9 frames, steps 1.0-3.3%, down to 33 matches
   Kept though blurred (1):
     2244, the sharpest of 2236-2251 (0.31 of the median)
   Breaks (1): 4411->4416: frames 4411-4415 do not match their next frame
-  Weak points (2): 4410->4411 (32 matches), 4416->4421 (F-inlier share 0.52)
+  Weak points (2): 4410->4411 (32 matches), 4416->4421 (51 matches)
 
 Extracted and never read: 12 frames
 
@@ -360,22 +356,17 @@ first eight and the count of the rest.
 - **Baseline.** The samples, the frames the baseline read with how many were
   extracted and reused, each sensor's median sharpness (one per sensor prefix
   for a rig) and the count of blurred samples, the rate's median and 0.9
-  quantile and the total motion, the four signs of a video with how many hold,
-  the checks 10 and 30 frames apart when they were read, and the flagged
+  quantile and the total motion, the three signs of a video with how many
+  hold, and the flagged
   regions with what flagged each. A value the binding could not measure, for
   too few matches, prints as `unmeasured`.
 - **Verdict.** The last line of the baseline sections, in the shape of the
   `Verdict:` line [`sfm motion`](../reconstruction/motion-command.md) prints.
-  `solvable`; or `not a video:` naming each sequence that is not one with the
-  signs it failed, ending "sfm pick-images picks from video sequences only";
-  or `not solvable:` naming each sequence that failed with the checks it
-  failed:
+  `video`; or `not a video:` naming each sequence that is not one with the
+  signs it failed, ending "sfm pick-images picks from video sequences only":
 
   ```text
   Verdict: not a video: photos/DSC_%04d.JPG: steps 1 frame apart median 18.40%, 3 frames apart 1.2 times as far; sfm pick-images picks from video sequences only
-  Verdict: not solvable: panorama/pan_%04d.jpg: panorama: 30 frames apart, 0.991 of the F-matrix inliers fit one homography and it is a pure rotation (error 0.004)
-  Verdict: not solvable: walk2/frame_%04d.jpg: moving scene: only 0.21 of the matches 10 frames apart fit one camera motion
-  Verdict: not solvable: desk/f_%03d.jpg: the camera barely moves: 50% of the long side in all
   ```
 
   A sequence of fewer than 4 frames is named as too short to tell a video from
@@ -387,11 +378,11 @@ first eight and the count of the rest.
   steps that start in it, leaving out a run where no step starts; the swaps
   of blurred frames and, on a line of their own, the swaps of frames blurred
   against their neighbours, each as candidate and chosen frame, or `none`;
-  each gap filled in with its span, its steps' range and its lowest F-inlier
-  share; each frame kept though blurred with the frames searched and its
+  each gap filled in with its span, its steps' range and the fewest matches
+  of its steps; each frame kept though blurred with the frames searched and its
   sharpness over the median; each break with where the walk resumed, or that
   the sequence ends there; and each weak point,
-  a step with its matches or F-inlier share, or a short segment with its span.
+  a step with its matches, or a short segment with its span.
 - **Extracted and never read.** The last line of the report, whatever the
   verdict: how many frames had a `.sift` file written in the run that the walk
   never read, the report's `frames_extracted_unread`. With the `sfmtool` tool
@@ -404,7 +395,7 @@ first eight and the count of the rest.
   the first 30, the 30 from the middle starting at `(n − 30) // 2` for a list
   of `n` images, and the last 30. A smaller list's first and last 30 would
   overlap or be the whole list, and a rig list's slices would take one sensor's
-  images, since its entries go one per sensor. When the verdict is solvable and
+  images, since its entries go one per sensor. When every sequence is a video and
   no name was given, a line gives the count of frames chosen and says to pass
   `--write-list NAME`.
 
@@ -421,7 +412,7 @@ positions, not numbers), with these keys added:
 | Key | Holds |
 |-----|-------|
 | `workspace` | the workspace folder |
-| `options` | the six numeric options, under the binding's names |
+| `options` | the five numeric options, under the binding's names |
 | `capture` | per sequence: `patterns`, `sensors` (the sensor prefixes, or `null`), `numbers` (the file number at each position) and `images` (each frame's workspace-relative image paths) |
 | `chosen_numbers` | per sequence, the chosen frames' file numbers, or `null` when it was not walked |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
@@ -435,7 +426,7 @@ With a tool other than `sfmtool`, `frames_extracted` and
 [test_pick_images_command.py](../../../tests/test_pick_images_command.py)
 runs the command with click's runner on scratch workspaces. Its video is a
 synthetic pan: crops sliding a few pixels per frame across one checked-in
-photograph, so it is a video that can be solved. It covers a report-only run
+photograph, so it is a video. It covers a report-only run
 that writes nothing but `.sift` files and prints the count of frames
 extracted and never read; an `opencv` workspace, whose every input frame gets a
 `.sift` file before the walk reads them; a written list that `-r NAME` and
@@ -443,7 +434,7 @@ extracted and never read; an `opencv` workspace, whose every input frame gets a
 second run that reuses every `.sift` file; the refusal of a defined name before
 any image is read, and `--force` replacing a list in place; a list with a
 slice as input, and the input list's own name as output only with `--force`;
-a range narrowing a folder; a capture that barely moves and the seoul_bull
+a range narrowing a folder; the seoul_bull
 photographs, which write no list and exit 1 with `--write-list`; a version 1
 workspace; no workspace; files with no number or a shared number; a rig whose
 reference sensor is listed second, written one entry per sensor; a rig frame
@@ -456,14 +447,21 @@ error, the list entries, a range split in parts, and the slice suggestion.
 
 ## Non-goals
 
-- Choosing among photographs. A set of separate photographs has no motion a
-  step can follow. Files with no number are an error, and a numbered set is
-  judged not to be a video by the baseline
+- Choosing among photographs as photographs. Files with no number are an
+  error. A numbered set whose consecutive images are far apart, with a median
+  step 1 frame apart of 5% of the long side or more, is judged not a video by
+  the baseline
   ([core/analysis/pick-images.md § Is it a video?](../../core/analysis/pick-images.md#is-it-a-video)),
-  which stops the command. How photographs could be chosen from is an open
-  question of [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
-- A rotation-only solve. The command stops a panorama capture rather than
-  choosing frames for a solver that would accept it.
+  which stops the command. Photographs taken close together in sequence can
+  pass all three signs, and are then walked like a video. How photographs
+  could be chosen from is an open question of
+  [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
+- Judging whether a capture's frames describe one camera motion through a
+  static scene, or whether its camera moved enough to be solved. The command
+  fits no geometry and judges only whether each sequence is a video, so a
+  camera that only turned, a scene that moved on its own or a camera that
+  moved little is walked like any other video
+  ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
 
 The choices of this command that are still open, among them the size of the

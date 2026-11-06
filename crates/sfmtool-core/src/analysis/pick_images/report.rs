@@ -18,8 +18,8 @@ use super::frame_pair::FramePairStats;
 /// What [`super::pick_images`] found.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PickImagesReport {
-    /// Whether the capture can be solved, and if not, the first check that
-    /// stopped it.
+    /// Whether every sequence is a video, which decides whether the capture
+    /// was walked.
     pub verdict: Verdict,
     /// One report per sequence, in the order the sequences were given.
     pub sequences: Vec<SequenceReport>,
@@ -39,32 +39,23 @@ pub struct PickImagesReport {
     pub frames_extracted_unread: usize,
 }
 
-/// Whether the capture can be solved.
+/// Whether every sequence of the capture is a video, and so was walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
-    /// Every sequence is a video and passed every check of solvability; every
-    /// sequence was walked.
-    Solvable,
+    /// Every sequence is a video; every sequence was walked.
+    Video,
     /// A sequence is not a video ([`VideoCheck::is_video`]). Nothing was read
-    /// after the baseline's first batch, and nothing was walked.
+    /// after the baseline, and nothing was walked.
     NotAVideo,
-    /// Every sequence is a video, and a sequence failed a check of
-    /// solvability ([`SolvabilityCheck::solvable`]). Nothing was read after
-    /// the baseline, and nothing was walked.
-    NotSolvable,
 }
 
 /// Which stage of [`super::pick_images`] read a frame or matched a pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stage {
-    /// The baseline's first batch: the sampled frames and the frames 1 and 3
-    /// after them.
-    BaselineNear,
-    /// The baseline's second batch: the frames 10 and 30 after the sampled
-    /// frames.
-    BaselineFar,
+    /// The baseline: the sampled frames and the frames 1 and 3 after them.
+    Baseline,
     /// The walk.
     Walk,
 }
@@ -112,15 +103,13 @@ pub struct MeasuredPair {
     pub stage: Stage,
 }
 
-/// One sequence's baseline, its two judgements and its walk.
+/// One sequence's baseline, the judgement of whether it is a video, and its
+/// walk.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SequenceReport {
     pub baseline: BaselineReport,
     pub video: VideoCheck,
-    /// `None` when some sequence of the capture is not a video, since the
-    /// checks read pairs 10 and 30 frames apart, which are then not read.
-    pub solvability: Option<SolvabilityCheck>,
-    /// `None` unless the verdict is [`Verdict::Solvable`].
+    /// `None` unless the verdict is [`Verdict::Video`].
     pub walk: Option<WalkReport>,
 }
 
@@ -129,7 +118,7 @@ pub struct SequenceReport {
 pub struct BaselineReport {
     /// The positions of the sampled frames, first and last included.
     pub samples: Vec<usize>,
-    /// The frames of this sequence the baseline read, in both batches.
+    /// The frames of this sequence the baseline read.
     pub frames_read: usize,
     /// The median sharpness each sensor's frames are judged against.
     pub sensors: Vec<SensorBaseline>,
@@ -179,7 +168,7 @@ pub struct FlaggedRegion {
     pub weak_matches: bool,
 }
 
-/// The four signs of a video, each the median over the sampled frames with a
+/// The three signs of a video, each the median over the sampled frames with a
 /// frame 3 after them. A sample whose 1-frame or 3-frame pair has fewer than
 /// `min_matches` matches counts against every sign it enters.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -191,42 +180,15 @@ pub struct VideoCheck {
     /// The median of `|log(step_i / step_{i+1})|` over neighbouring sampled
     /// frames' 1-frame steps.
     pub step_change_median: f64,
-    /// The median F-inlier share of the 1-frame pairs.
-    pub f_inlier_share_1_median: f64,
     /// `ratio_3_to_1_median` is between 2 and 4.
     pub motion_adds_up: bool,
     /// `step_1_median` is below 5%.
     pub step_small: bool,
     /// `step_change_median` is below `log 2`.
     pub step_steady: bool,
-    /// `f_inlier_share_1_median` is above 0.8.
-    pub neighbours_match: bool,
-    /// At least three of the four signs hold. False for a sequence of fewer
-    /// than 4 frames, which has no 3-frame pair.
+    /// All three signs hold. False for a sequence of fewer than 4 frames,
+    /// which has no 3-frame pair.
     pub is_video: bool,
-}
-
-/// The three checks of solvability, from the pairs 10 and 30 frames apart.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SolvabilityCheck {
-    /// The median F-inlier share 10 frames apart, over the samples whose pair
-    /// has a share; `None` when none has.
-    pub f_inlier_share_10_median: Option<f64>,
-    /// The median H/F 30 frames apart, likewise.
-    pub h_over_f_30_median: Option<f64>,
-    /// The median rotation error 30 frames apart, likewise.
-    pub rotation_error_30_median: Option<f64>,
-    /// [`BaselineReport::total_motion_percent`].
-    pub total_motion_percent: f64,
-    /// `f_inlier_share_10_median` is below 0.3.
-    pub moving_scene: bool,
-    /// `h_over_f_30_median` is above 0.97 and `rotation_error_30_median` is
-    /// below 0.01.
-    pub panorama: bool,
-    /// `total_motion_percent` is below 100.
-    pub barely_moves: bool,
-    /// None of the three holds.
-    pub solvable: bool,
 }
 
 /// One sequence's walk.
@@ -351,13 +313,10 @@ pub struct Break {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum WeakPoint {
-    /// An accepted step with fewer than twice `min_matches` matches, or an
-    /// F-inlier share within 0.1 of `min_inlier_share`.
+    /// An accepted step with fewer than twice `min_matches` matches.
     Step {
         /// The index in [`WalkReport::steps`].
         step: usize,
-        few_matches: bool,
-        low_inlier_share: bool,
     },
     /// A segment of fewer than 3 chosen frames.
     ShortSegment {

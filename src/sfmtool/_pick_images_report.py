@@ -35,10 +35,6 @@ def _pct(value) -> str:
     return "unmeasured" if value is None else f"{value:.2f}%"
 
 
-def _share(value) -> str:
-    return "unmeasured" if value is None else f"{value:.2f}"
-
-
 def _span(first: int, last: int) -> str:
     return str(first) if first == last else f"{first}-{last}"
 
@@ -63,56 +59,23 @@ def _not_a_video_reasons(video: dict, frame_count: int) -> str:
             if ratio is None
             else f"3 frames apart {ratio:.1f} times as far"
         )
-    if not video["neighbours_match"]:
-        reasons.append(
-            f"F-inlier share 1 frame apart {_share(video['f_inlier_share_1_median'])}"
-        )
     return ", ".join(reasons)
-
-
-def _not_solvable_reasons(check: dict) -> str:
-    reasons = []
-    if check["panorama"]:
-        reasons.append(
-            f"panorama: 30 frames apart, {check['h_over_f_30_median']:.3f} of the "
-            "F-matrix inliers fit one homography and it is a pure rotation "
-            f"(error {check['rotation_error_30_median']:.3f})"
-        )
-    if check["moving_scene"]:
-        reasons.append(
-            f"moving scene: only {check['f_inlier_share_10_median']:.2f} of the "
-            "matches 10 frames apart fit one camera motion"
-        )
-    if check["barely_moves"]:
-        reasons.append(
-            "the camera barely moves: "
-            f"{check['total_motion_percent']:.0f}% of the long side in all"
-        )
-    return "; ".join(reasons)
 
 
 def verdict_line(report: dict, sequences: list[PickSequence]) -> str:
     """The `Verdict:` line, naming each sequence that stopped the run."""
-    verdict = report["verdict"]
-    if verdict == "solvable":
-        return "Verdict: solvable"
-    if verdict == "not_a_video":
-        parts = [
-            f"{s.name}: {_not_a_video_reasons(r['video'], len(s.numbers))}"
-            for s, r in zip(sequences, report["sequences"])
-            if not r["video"]["is_video"]
-        ]
-        return (
-            "Verdict: not a video: "
-            + "; ".join(parts)
-            + "; sfm pick-images picks from video sequences only"
-        )
+    if report["verdict"] == "video":
+        return "Verdict: video"
     parts = [
-        f"{s.name}: {_not_solvable_reasons(r['solvability'])}"
+        f"{s.name}: {_not_a_video_reasons(r['video'], len(s.numbers))}"
         for s, r in zip(sequences, report["sequences"])
-        if r["solvability"] is not None and not r["solvability"]["solvable"]
+        if not r["video"]["is_video"]
     ]
-    return "Verdict: not solvable: " + "; ".join(parts)
+    return (
+        "Verdict: not a video: "
+        + "; ".join(parts)
+        + "; sfm pick-images picks from video sequences only"
+    )
 
 
 def _counts(report: dict, sequence: int, stages: tuple[str, ...], extracted: dict):
@@ -137,7 +100,7 @@ def baseline_lines(
     seq = report["sequences"][index]
     base = seq["baseline"]
     numbers = sequence.numbers
-    read, written = _counts(report, index, ("baseline_near", "baseline_far"), extracted)
+    read, written = _counts(report, index, ("baseline",), extracted)
     lines = [
         f"Baseline{label}: {len(base['samples'])} frames sampled, "
         f"{base['frames_read']} frames read ({written} extracted, "
@@ -166,33 +129,18 @@ def baseline_lines(
         )
     )
     video = seq["video"]
-    signs = sum(
-        video[k]
-        for k in ("motion_adds_up", "step_small", "step_steady", "neighbours_match")
-    )
+    signs = sum(video[k] for k in ("motion_adds_up", "step_small", "step_steady"))
     change = video["step_change_median"]
     ratio = video["ratio_3_to_1_median"]
     lines.append(
-        f"  {'A video' if video['is_video'] else 'Not a video'} ({signs} of 4 signs): "
-        f"1 frame apart step {_pct(video['step_1_median'])}, "
-        f"F-inlier share {_share(video['f_inlier_share_1_median'])}; 3 frames apart"
+        f"  {'A video' if video['is_video'] else 'Not a video'} ({signs} of 3 signs): "
+        f"1 frame apart step {_pct(video['step_1_median'])}; 3 frames apart "
+        + ("unmeasured" if ratio is None else f"{ratio:.1f} times as far")
     )
     lines.append(
-        "    "
-        + ("unmeasured" if ratio is None else f"{ratio:.1f} times as far")
-        + "; neighbouring samples' steps within a factor of "
+        "    neighbouring samples' steps within a factor of "
         + ("unmeasured" if change is None else f"{math.exp(change):.1f}")
     )
-    check = seq["solvability"]
-    if check is not None:
-        lines.append(
-            f"  10 frames apart: F-inlier share {_share(check['f_inlier_share_10_median'])}"
-        )
-        error = check["rotation_error_30_median"]
-        lines.append(
-            f"  30 frames apart: H/F {_share(check['h_over_f_30_median'])}, "
-            f"rotation error {'unmeasured' if error is None else f'{error:.3f}'}"
-        )
     regions = []
     for region in base["flagged_regions"]:
         why = [
@@ -295,12 +243,7 @@ def walk_lines(
         for gap in gaps[:_SHOWN]:
             run = steps[gap["first_step"] : gap["end_step"]]
             percents = [s["stats"]["step_percent"] for s in run]
-            shares = [
-                s["stats"]["f_inlier_share"]
-                for s in run
-                if s["stats"]["f_inlier_share"] is not None
-            ]
-            share = f", F-inlier share down to {min(shares):.2f}" if shares else ""
+            fewest = min(s["stats"]["matches"] for s in run)
             low_step, high_step = f"{min(percents):.1f}", f"{max(percents):.1f}"
             steps_text = (
                 f"step {low_step}%"
@@ -309,7 +252,8 @@ def walk_lines(
             )
             lines.append(
                 f"    {_span(number(run[0]['from']), number(run[-1]['to']))}: "
-                f"{len(run)} frame{'s' if len(run) != 1 else ''}, {steps_text}" + share
+                f"{len(run)} frame{'s' if len(run) != 1 else ''}, {steps_text}, "
+                f"down to {fewest} matches"
             )
         if len(gaps) > _SHOWN:
             lines.append(f"    ... and {len(gaps) - _SHOWN} more")
@@ -355,13 +299,7 @@ def walk_lines(
     for point in walk["weak_points"]:
         if point["kind"] == "step":
             step = steps[point["step"]]
-            stats = step["stats"]
-            why = []
-            if point["few_matches"]:
-                why.append(f"{stats['matches']} matches")
-            if point["low_inlier_share"]:
-                why.append(f"F-inlier share {_share(stats['f_inlier_share'])}")
-            weak.append(f"{step_text(step)} ({', '.join(why)})")
+            weak.append(f"{step_text(step)} ({step['stats']['matches']} matches)")
         else:
             segment = segments[point["segment"]]
             chosen = walk["chosen"][
