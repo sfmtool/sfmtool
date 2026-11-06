@@ -515,7 +515,15 @@ impl WorkerPool {
     }
 
     fn stop_workers(&mut self) {
-        self.shared.stop.store(true, Ordering::Relaxed);
+        // Set under the lock a worker checks the flag under before it waits,
+        // so a worker either sees the flag or is already waiting when the
+        // notification comes; set without it, a worker that checked the flag
+        // just before could miss the notification and sleep forever, and the
+        // join below would never return.
+        {
+            let _state = lock(&self.shared);
+            self.shared.stop.store(true, Ordering::Relaxed);
+        }
         self.shared.work.notify_all();
         for handle in self.handles.drain(..) {
             // A worker catches a job's panic, so joining it does not fail.

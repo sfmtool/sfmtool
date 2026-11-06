@@ -717,8 +717,9 @@ settings; the read-only source's missing file; and the pool's order (a wait
 ahead of prefetched frames, a prefetch replacing the last), a cancelled wait
 that stops its workers promptly, a panicking job reported as an error, a
 two-image frame cancelled between its images, which reports the file it
-wrote, and a frame whose work wrote and was then stopped or failed, which the
-pool counts as written.
+wrote, a frame whose work wrote and was then stopped or failed, which the
+pool counts as written, and workers stopped as they start, over many rounds,
+every one of which stops.
 
 [test_pick_images_walk_rust_bindings.py](../../../tests/rust_bindings/analysis/test_pick_images_walk_rust_bindings.py)
 checks the bindings on a synthetic capture whose files are written first and
