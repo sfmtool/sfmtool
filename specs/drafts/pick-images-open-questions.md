@@ -9,7 +9,8 @@ and writes a list when given a name), that a written list records nothing
 about how it was picked, the refusal to overwrite without `--force`, one list
 per run across every sequence, the workspace and `.sift` version 2
 requirement, SIFT matching through a KD-forest as the measure of motion, the
-detection of a sequence of photographs, which stops the command, the target
+detection of a sequence of photographs whose consecutive images are far
+apart, which stops the command, the target
 step of 10% and the blur ratio of 0.6, the walk, the baseline size of 200,
 that blur is judged from the sharpness alone, and the judgement of a frame
 below the median against its neighbouring frames, with its window of 2
@@ -74,7 +75,7 @@ mutual matches alone. This draft holds what is not settled.
 - **A way to choose among photographs.** How a set of photographs should be
   chosen from, for example by how much of the scene each one's matches cover
   and by sharpness alone, without steps, is a design of its own and would be
-  proposed in its own draft. The command only detects such a sequence and
-  stops.
+  proposed in its own draft. The command stops a set whose consecutive images
+  are far apart, and walks one taken close together like a video.
 - **The JSON schema** of `--json`, which is the binding's report with the
   command's keys added and has no version of its own.

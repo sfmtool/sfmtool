@@ -300,9 +300,10 @@ From the baseline, per sequence:
 
 The walk assumes that neighbouring frames are close in time, so that the
 motion between them is small and changes smoothly. A folder of photographs
-numbered in the order they were taken does not behave that way. Each sequence
-is judged from the samples that have a frame 3 after them, by three signs,
-each a median over those samples. A sequence is a video when all three hold:
+numbered in the order they were taken often does not: consecutive photographs
+can be far apart. Each sequence is judged from the samples that have a frame 3
+after them, by three signs, each a median over those samples. A sequence is a
+video when all three hold:
 
 - **The step is small**: the step 1 frame apart is below 5%.
 - **The motion adds up**: the step 3 frames apart over the step 1 frame apart
@@ -315,8 +316,9 @@ capture by passing over the frames between steps of the target, and
 neighbours already half a target step apart leave nothing to pass over.
 Photographs taken one after another around a subject can show the other two
 signs, since their motion adds up and changes little from one photograph to
-the next, and only the size of the step tells them from a video. A video
-from a tripod or a hand held still, whose sub-pixel jitter does not add up
+the next, and only the size of the step tells them from a video. Photographs
+taken close enough together that the step is small pass all three signs, and
+are walked like a video. A video from a tripod or a hand held still, whose sub-pixel jitter does not add up
 over 3 frames, is judged not a video, since there is no motion for the walk
 to follow.
 

@@ -447,12 +447,15 @@ error, the list entries, a range split in parts, and the slice suggestion.
 
 ## Non-goals
 
-- Choosing among photographs. A set of separate photographs has no motion a
-  step can follow. Files with no number are an error, and a numbered set is
-  judged not to be a video by the baseline
+- Choosing among photographs as photographs. Files with no number are an
+  error. A numbered set whose consecutive images are far apart, with a median
+  step 1 frame apart of 5% of the long side or more, is judged not a video by
+  the baseline
   ([core/analysis/pick-images.md § Is it a video?](../../core/analysis/pick-images.md#is-it-a-video)),
-  which stops the command. How photographs could be chosen from is an open
-  question of [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
+  which stops the command. Photographs taken close together in sequence can
+  pass all three signs, and are then walked like a video. How photographs
+  could be chosen from is an open question of
+  [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
 - Judging whether a capture's frames describe one camera motion through a
   static scene, or whether its camera moved enough to be solved. The command
   fits no geometry and judges only whether each sequence is a video, so a
