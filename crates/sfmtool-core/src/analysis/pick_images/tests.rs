@@ -1095,10 +1095,22 @@ fn the_same_capture_gives_the_same_report() {
     assert_eq!(a.waits, b.waits);
 }
 
+/// The point density of [`eventful`]: the lowest at which its bad patch is
+/// still filled in by halving, with steps of few matches, rather than broken
+/// across, its blurred run lies outside every region flagged for weak
+/// matches, and a candidate lands on a frame blurred against its neighbours.
+const EVENTFUL_DENSITY: f64 = 40.0;
+
 /// A capture with something of everything the walk does: a change of speed,
-/// a blurred frame, a frame blurred against its neighbours, a blurred run, a
-/// bad patch filled in and a break.
+/// blurred frames, a frame blurred against its neighbours, a blurred run, a
+/// bad patch filled in and a break. [`assert_eventful`] checks that a walk
+/// of it shows each.
 fn eventful() -> Synth {
+    eventful_at(EVENTFUL_DENSITY)
+}
+
+/// [`eventful`] at `density` points per unit of x.
+fn eventful_at(density: f64) -> Synth {
     let mut x = 0.0;
     let xs: Vec<f64> = (0..200)
         .map(|t| {
@@ -1108,7 +1120,7 @@ fn eventful() -> Synth {
         })
         .collect();
     let length = *xs.last().unwrap();
-    let mut synth = Synth::wall(32, -12.0, length + 12.0, NEIGHBOUR_DENSITY).along(xs);
+    let mut synth = Synth::wall(32, -12.0, length + 12.0, density).along(xs);
     // Every third frame blurred, so a candidate that lands on one is
     // swapped for a sharp neighbour.
     for t in (15..=45).step_by(3) {
@@ -1132,6 +1144,94 @@ fn eventful() -> Synth {
     synth
 }
 
+/// What a walk of [`eventful`] is meant to show, each named with whether it
+/// does: the stride follows the change of speed, a blurred frame in the
+/// stretch of every third frame and one in the blurred run are swapped, a
+/// frame blurred against its neighbours is swapped, a step crosses the
+/// blurred run in the full band outside every flagged region to a frame kept
+/// though blurred, the bad patch is filled in by a run of halved steps with
+/// a step of few matches among them, and the junk frames break the walk.
+fn eventful_events(run: &Run) -> Vec<(&'static str, bool)> {
+    let walk = run.walk(0);
+    let o = options();
+    let (low, high) = (
+        o.target_step_percent * (1.0 - o.step_band),
+        o.target_step_percent * (1.0 + o.step_band),
+    );
+    let rates = |keep: &dyn Fn(&WalkStep) -> bool| {
+        let r: Vec<f64> = walk
+            .steps
+            .iter()
+            .filter(|s| keep(s))
+            .map(|s| s.rate)
+            .collect();
+        median(&r)
+    };
+    let swapped = |reason: SwapReason, frames: std::ops::RangeInclusive<usize>| {
+        walk.swaps
+            .iter()
+            .any(|s| s.reason == reason && frames.contains(&s.candidate))
+    };
+    let in_patch = |s: &WalkStep| s.from >= 82 && s.to <= 117;
+    vec![
+        (
+            "the stride follows the change of speed",
+            rates(&|s| s.from >= 140) > 1.3 * rates(&|s| s.to <= 80),
+        ),
+        (
+            "a blurred frame of every third is swapped",
+            swapped(SwapReason::Median, 15..=45),
+        ),
+        (
+            "a blurred frame of the blurred run is swapped",
+            swapped(SwapReason::Median, 52..=72),
+        ),
+        (
+            "a frame blurred against its neighbours is swapped",
+            swapped(SwapReason::Neighbours, 118..=129),
+        ),
+        (
+            "the blurred run is crossed in the full band, unflagged",
+            walk.steps.iter().any(|s| {
+                s.kind == StepKind::BlurredRun
+                    && !s.flagged
+                    && (52..=72).contains(&s.to)
+                    && (low..=high).contains(&s.stats.step_percent)
+                    && walk.kept_blurred.iter().any(|k| k.frame == s.to)
+            }),
+        ),
+        (
+            "the bad patch is filled in by a run of halved steps",
+            walk.gaps.iter().any(|g| {
+                g.end_step - g.first_step >= 3
+                    && walk.steps[g.first_step..g.end_step].iter().all(in_patch)
+            }),
+        ),
+        (
+            "a halved step in the bad patch has few matches",
+            walk.steps.iter().any(|s| {
+                s.kind == StepKind::GapFill
+                    && in_patch(s)
+                    && s.stats.matches < 2 * o.pair.min_matches
+            }),
+        ),
+        (
+            "the junk frames break the walk",
+            walk.breaks.iter().any(|b| (155..=170).contains(&b.after)),
+        ),
+    ]
+}
+
+/// Every event of [`eventful_events`] happened.
+fn assert_eventful(run: &Run) {
+    let missing: Vec<&str> = eventful_events(run)
+        .into_iter()
+        .filter(|(_, happened)| !happened)
+        .map(|(name, _)| name)
+        .collect();
+    assert!(missing.is_empty(), "missing: {missing:?}");
+}
+
 #[test]
 fn the_report_is_the_same_for_any_lookahead_and_thread_count() {
     let synth = eventful();
@@ -1140,17 +1240,8 @@ fn the_report_is_the_same_for_any_lookahead_and_thread_count() {
         ..options()
     };
     let reference = run_on(&[&synth], &off, Fault::None, None, 1);
-    let walk = reference.walk(0);
     // The capture exercises what it is meant to.
-    for reason in [SwapReason::Median, SwapReason::Neighbours] {
-        assert!(
-            walk.swaps.iter().any(|s| s.reason == reason),
-            "no swap for {reason:?}"
-        );
-    }
-    assert!(!walk.gaps.is_empty(), "no gap");
-    assert!(!walk.breaks.is_empty(), "no break");
-    assert!(!walk.kept_blurred.is_empty(), "nothing kept though blurred");
+    assert_eventful(&reference);
     assert!(reference.prefetched.is_empty());
     assert_eq!(reference.report().frames_extracted_unread, 0);
     assert_read_is_asked(&reference);
