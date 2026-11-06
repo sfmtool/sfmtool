@@ -656,6 +656,12 @@ sharing work with other tests, never by dropping a case, weakening or removing
 an assertion, or narrowing what the test covers. A change that speeds up a
 test keeps every case, and each assertion can still fail as it could before
 (see [Tests assert something that can fail](#tests-assert-something-that-can-fail)).
+A cut can leave every assertion passing while the input no longer exercises
+what the test was written to cover: a sparser synthetic scene can keep a
+determinism test passing while the run no longer takes the code paths whose
+output the test compares. So a test whose value is that its input exercises
+particular events names those events and asserts that each one happens, and a
+change that cuts its input checks that each still happens.
 Do not write fewer or thinner tests to save time: when covering a behaviour
 needs a slow input, the test uses it, and the pull request that adds the test
 says why it needs that input. The time limits under "How to check" decide
@@ -665,9 +671,26 @@ is judged by the rule above.
 Ways to cut a test's time while keeping what it checks:
 
 - **The smallest input that exercises the behaviour:** a few points or
-  images, a low resolution, one round, a synthetic scene, where the assertion
-  does not depend on the input's size. Lower the size for every expensive step
-  the test runs, not only for the steps it checks.
+  images, a synthetic scene, where the assertion does not depend on the
+  input's size. Size means every dimension that sets the test's cost, not only
+  the count of items, and which dimensions apply depends on what the test
+  runs:
+  - a test that extracts features from real images: the image size, the
+    feature cap (`max_num_features`) and whether the image is doubled first
+    (`double_image`); in the `sfmtool` extractor the image size and the
+    doubling together also set the octave count;
+  - a test on synthetic features or points, such as a `.sift` capture
+    written directly with no image decoded: the features per item, such as a
+    synthetic scene's point density, since indexing and matching scale with
+    it. The image size of such a test is a geometry parameter, not a cost;
+  - any test: iteration counts (RANSAC iterations, solver rounds, refinement
+    passes), sample counts, worker counts, and how many times the test
+    repeats a full run.
+
+  Lower each for every expensive step the test runs, not only for the steps
+  it checks. Scale linked parameters together: in a walk over frames, raising
+  the motion per frame while lowering the target step keeps the same events
+  in far fewer frames.
 - **One run for several tests:** a result that several tests only read is
   built once, in a module- or session-scoped fixture, and handed out read-only
   where possible. Under `pytest -n`, each worker process builds its own copy
@@ -681,6 +704,16 @@ Ways to cut a test's time while keeping what it checks:
   produces it, such as
   [grown-plane-normal-measurements.md](core/bench/grown-plane-normal-measurements.md),
   not in a test.
+
+A test that hangs costs without limit and reports nothing, so a hang must
+become a failure. A test of code that could hang, such as one that waits for
+worker threads to stop, runs that code on another thread and waits for it
+with a timeout well above its normal time, failing with a message that says
+where it stopped; `workers_stopped_as_they_start_all_stop` in
+[`pick_images/source/tests.rs`](../crates/sfmtool-core/src/analysis/pick_images/source/tests.rs)
+does this. A test of such code that waits with no timeout is a finding,
+whatever its time. A long test command run by hand or by an agent runs under
+a time limit too, so a hang stops it rather than leaving it idle.
 
 A pull request that adds a test or changes code that a test runs reports, in
 its Testing section, the time of each test it added and the before and after
@@ -701,11 +734,15 @@ for:
 - Several tests that run the same expensive call on the same input.
 - A test that lowers a size or resolution for the steps it checks but leaves
   an expensive step at its default.
+- A dimension of the input, from the list above, left at a size the
+  assertions do not need.
 
-A finding is a test over those limits whose time its assertions do not need:
-one where a way above would cut its time with every case and assertion kept.
+Besides a wait with no timeout on code that could hang (above), a finding is
+a test over those limits whose time its assertions do not need: one where a
+way above would cut its time with every case and assertion kept.
 Confirm before reporting: time the test alone (`pixi run test -- <node id>`,
 or `pixi run cargo test -p <crate> <test name>`), and name the way that would
-cut it and how each of its cases and assertions is kept. A test over the
-limits that none of the ways above would make faster without dropping a case
-or weakening an assertion meets this standard.
+cut it, how each of its cases and assertions is kept, and how each event its
+input exercises still happens. A test over the limits that none of the ways
+above would make faster without dropping a case or weakening an assertion
+meets this standard.
