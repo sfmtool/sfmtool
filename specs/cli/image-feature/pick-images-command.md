@@ -49,14 +49,15 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--target-step PERCENT` | `10` | The step to aim for between two chosen frames: the median feature displacement, in percent of the image's long side. |
 | `--step-band FRACTION` | `0.3` | How far a step may be from the target and still be accepted: within `target × (1 ± FRACTION)`, 7% to 13% at the defaults. |
 | `--blur-ratio RATIO` | `0.6` | A frame whose sharpness is below `RATIO` times its sequence's median sharpness counts as blurred. |
+| `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen whose sharpness is below its sequence's median is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
 | `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. The default suits long captures of 10,000 frames or more; on a capture of a few hundred frames the baseline reads most of them ([core/analysis/pick-images.md § The baseline](../../core/analysis/pick-images.md#the-baseline)). |
 | `--min-inlier-share SHARE` | `0.5` | A step whose matches fit a fundamental matrix with a smaller share of inliers fails. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 
-The five numeric options reach `sfmtool.analysis.pick_images` unchanged, as
-`target_step_percent`, `step_band`, `blur_ratio`, `baseline_frames` and
-`min_inlier_share`, which checks their ranges before it reads anything; a
-value out of range is an error with the binding's message
+The six numeric options reach `sfmtool.analysis.pick_images` unchanged, as
+`target_step_percent`, `step_band`, `blur_ratio`, `neighbour_blur_ratio`,
+`baseline_frames` and `min_inlier_share`, which checks their ranges before
+it reads anything; a value out of range is an error with the binding's message
 ([core/analysis/pick-images.md § Parameters](../../core/analysis/pick-images.md#parameters)).
 
 **Why `--write-list` and not a positional name or `--name`.** On the commands
@@ -233,7 +234,9 @@ missing, and nothing more than reading the file otherwise. The baseline reads
 each sampled frame and the frames 1, 3, 10 and 30 after it, so up to five
 frames per sample, fewer where two samples share a frame. The walk reads each
 frame it chooses and the candidates it measures on the way, usually two or
-three per choice, and skips the frames between; with the `sfmtool` tool the
+three per choice, and skips the frames between; a choice less sharp than the
+sequence's median also reads the frames within 2 positions of it, to judge it
+against its neighbours; with the `sfmtool` tool the
 frames prefetched past the end of a break are extracted too, which the last
 line of the report counts. A later `sfm solve -r NAME` finds every `.sift`
 file it needs already written, and a second run of the command reads the same
@@ -329,6 +332,7 @@ Walk: target step 10% (band 7-13%), 1 break, 2 segments
     frames      613-1224    10.1%    0.71%     14
     ...
   Blurred frames swapped (23): 1415->1417, 1890->1889, 2224->2226, ... and 15 more
+  Frames blurred against their neighbours swapped (6): 377->376, 1066->1068, ... and 1 more
   Gaps filled in (2):
     2210-2290: 14 frames, steps 2.1-5.0%, F-inlier share down to 0.41
     4380-4410: 9 frames, steps 1.0-3.3%, F-inlier share down to 0.38
@@ -380,10 +384,13 @@ first eight and the count of the rest.
   and the frames the walk used, split into those it extracted, those it
   reused and those the baseline had read; a table of the sequence in ten
   equal runs of positions, each with the median step, rate and stride of the
-  steps that start in it, leaving out a run where no step starts; the swaps; each gap filled in with its span, its
-  steps' range and its lowest F-inlier share; each frame kept though blurred
-  with the frames searched and its sharpness over the median; each break with
-  where the walk resumed, or that the sequence ends there; and each weak point,
+  steps that start in it, leaving out a run where no step starts; the swaps
+  of blurred frames and, on a line of their own, the swaps of frames blurred
+  against their neighbours, each as candidate and chosen frame, or `none`;
+  each gap filled in with its span, its steps' range and its lowest F-inlier
+  share; each frame kept though blurred with the frames searched and its
+  sharpness over the median; each break with where the walk resumed, or that
+  the sequence ends there; and each weak point,
   a step with its matches or F-inlier share, or a short segment with its span.
 - **Extracted and never read.** The last line of the report, whatever the
   verdict: how many frames had a `.sift` file written in the run that the walk
@@ -414,7 +421,7 @@ positions, not numbers), with these keys added:
 | Key | Holds |
 |-----|-------|
 | `workspace` | the workspace folder |
-| `options` | the five numeric options, under the binding's names |
+| `options` | the six numeric options, under the binding's names |
 | `capture` | per sequence: `patterns`, `sensors` (the sensor prefixes, or `null`), `numbers` (the file number at each position) and `images` (each frame's workspace-relative image paths) |
 | `chosen_numbers` | per sequence, the chosen frames' file numbers, or `null` when it was not walked |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |

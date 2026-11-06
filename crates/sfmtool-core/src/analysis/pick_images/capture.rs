@@ -71,6 +71,11 @@ pub struct PickImagesOptions {
     /// A frame whose sharpness is below `blur_ratio` times its sequence's
     /// median sharpness counts as blurred. In `(0, 1)`.
     pub blur_ratio: f64,
+    /// A frame the walk is about to accept whose sharpness is below its
+    /// sensor's median is compared with its neighbouring frames, and is
+    /// blurred against them when its sharpness is below
+    /// `neighbour_blur_ratio` times the sharpest neighbour's. In `(0, 1)`.
+    pub neighbour_blur_ratio: f64,
     /// How many frames the baseline samples, spread evenly over the capture
     /// and shared among the sequences by their frame counts. At least 2.
     pub baseline_frames: usize,
@@ -95,6 +100,7 @@ impl Default for PickImagesOptions {
             target_step_percent: 10.0,
             step_band: 0.3,
             blur_ratio: 0.6,
+            neighbour_blur_ratio: 0.85,
             baseline_frames: 200,
             min_inlier_share: 0.5,
             forest: KdForestParams::balanced(),
@@ -124,6 +130,7 @@ impl PickImagesOptions {
         for (name, value) in [
             ("step_band", self.step_band),
             ("blur_ratio", self.blur_ratio),
+            ("neighbour_blur_ratio", self.neighbour_blur_ratio),
         ] {
             if !(value > 0.0 && value < 1.0) {
                 return Err(options(name, format!("must be in (0, 1), got {value}")));

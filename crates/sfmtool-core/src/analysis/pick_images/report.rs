@@ -296,11 +296,26 @@ pub enum StepKind {
     BlurredRun,
 }
 
-/// A blurred candidate and the sharp neighbour chosen in its place.
+/// A blurred candidate and the sharper neighbour chosen in its place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Swap {
     pub candidate: usize,
     pub chosen: usize,
+    /// What the candidate's sharpness was judged against.
+    pub reason: SwapReason,
+}
+
+/// Why a candidate was swapped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwapReason {
+    /// The candidate is blurred: its sharpness is below `blur_ratio` times its
+    /// sensor's median sharpness.
+    Median,
+    /// The candidate is blurred against its neighbours: its sharpness is
+    /// below `neighbour_blur_ratio` times the sharpest neighbouring frame's,
+    /// on a sensor whose sharpness is below its median.
+    Neighbours,
 }
 
 /// A run of [`StepKind::GapFill`] steps: `steps[first_step..end_step]`.

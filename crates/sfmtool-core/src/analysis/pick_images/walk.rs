@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The walk along one sequence: predict the next frame from the recent rate,
-//! measure the step to it, accept it, re-aim, or swap a blurred frame for a
-//! sharp neighbour; halve the gap where a step fails, and start a new segment
-//! after a break, reading ahead through the break. See
+//! measure the step to it, accept it, re-aim, or swap a blurred frame, or one
+//! blurred against its neighbouring frames, for a sharper neighbour; halve
+//! the gap where a step fails, and start a new segment after a break, reading
+//! ahead through the break. See
 //! `specs/core/analysis/pick-images.md` § "The walk" and § "Run-ahead".
 
 use std::collections::{BTreeSet, VecDeque};
@@ -14,7 +15,8 @@ use super::capture::{FrameId, PickImagesError, PickImagesOptions};
 use super::frame_pair::{FrameFeatures, FramePairStats};
 use super::frames::Frames;
 use super::report::{
-    Break, Gap, KeptBlurred, Segment, Stage, StepKind, Swap, WalkReport, WalkStep, WeakPoint,
+    Break, Gap, KeptBlurred, Segment, Stage, StepKind, Swap, SwapReason, WalkReport, WalkStep,
+    WeakPoint,
 };
 use crate::numeric::median;
 use crate::progress::Progress;
@@ -35,6 +37,10 @@ const WEAK_SHARE_MARGIN: f64 = 0.1;
 
 /// A segment of fewer chosen frames than this is a weak point.
 const MIN_SEGMENT_FRAMES: usize = 3;
+
+/// How many positions on either side of a candidate lie the frames it is
+/// compared with for blur against its neighbours.
+const NEIGHBOUR_WINDOW: usize = 2;
 
 /// The bounds one step works within.
 #[derive(Clone, Copy)]
@@ -405,8 +411,8 @@ impl Walker<'_, '_> {
         }
     }
 
-    /// Accept `c`, which `step` reached with `stats`, or a sharp frame in its
-    /// place when it is blurred.
+    /// Accept `c`, which `step` reached with `stats`, or a sharper frame in
+    /// its place when it is blurred or blurred against its neighbours.
     fn settle(
         &mut self,
         b: StepBounds,
@@ -415,6 +421,19 @@ impl Walker<'_, '_> {
         kind: StepKind,
     ) -> Result<Outcome, PickImagesError> {
         if !self.blurred(c) {
+            if let Some((n, s)) = self.sharper_neighbour(b, c, &stats)? {
+                self.report.swaps.push(Swap {
+                    candidate: c,
+                    chosen: n,
+                    reason: SwapReason::Neighbours,
+                });
+                return self.accept(Choice {
+                    frame: n,
+                    stats: s,
+                    kind,
+                    kept_blurred: None,
+                });
+            }
             return self.accept(Choice {
                 frame: c,
                 stats,
@@ -448,6 +467,7 @@ impl Walker<'_, '_> {
                     self.report.swaps.push(Swap {
                         candidate: c,
                         chosen: n,
+                        reason: SwapReason::Median,
                     });
                     return self.accept(Choice {
                         frame: n,
@@ -517,6 +537,108 @@ impl Walker<'_, '_> {
         self.fill_gap(b, c, None)
     }
 
+    /// The neighbour to accept in place of `c`, which `step` reached with
+    /// `stats` and which is not blurred, when `c` is blurred against its
+    /// neighbours; `None` when it is not, or when no neighbour qualifies.
+    ///
+    /// Only a sensor whose sharpness in `c` is below its median is judged, so
+    /// a frame sharper than the median on every sensor is never compared and
+    /// its neighbours are not read. Otherwise every frame within
+    /// [`NEIGHBOUR_WINDOW`] positions of `c` is read, in one wait, and `c` is
+    /// blurred against a neighbour when, on a judged sensor, its sharpness is
+    /// below `neighbour_blur_ratio` times the neighbour's; so `c` is blurred
+    /// against its neighbours when it is against the sharpest of them on some
+    /// judged sensor. A neighbour `c` is blurred against qualifies when it is
+    /// after the last chosen frame and within the step's limit, is not
+    /// blurred, is not itself blurred against `c` on any sensor, and its step
+    /// matches well and is no longer than the band and no shorter than the
+    /// band or `c`'s own step, as a blurred candidate's swap requires. They
+    /// are tried sharpest first: by the least, over the sensors, of the
+    /// neighbour's sharpness over `c`'s, then nearest first, then earliest.
+    fn sharper_neighbour(
+        &mut self,
+        b: StepBounds,
+        c: usize,
+        stats: &FramePairStats,
+    ) -> Result<Option<(usize, FramePairStats)>, PickImagesError> {
+        let judged: Vec<usize> = self
+            .baseline
+            .judge_frame(self.frames.readings(self.id(c)), self.options.blur_ratio)
+            .iter()
+            .enumerate()
+            .filter(|(_, j)| j.sharpness_ratio < 1.0)
+            .map(|(k, _)| k)
+            .collect();
+        if judged.is_empty() {
+            return Ok(None);
+        }
+        let window: Vec<usize> = (c.saturating_sub(NEIGHBOUR_WINDOW)
+            ..=(c + NEIGHBOUR_WINDOW).min(self.last))
+            .filter(|&n| n != c)
+            .collect();
+        self.read(&window)?;
+        let ratio = self.options.neighbour_blur_ratio;
+        let sharpness = |walker: &Self, n: usize| -> Vec<f64> {
+            walker
+                .frames
+                .readings(walker.id(n))
+                .iter()
+                .map(|r| f64::from(r.sharpness))
+                .collect()
+        };
+        // Whether `a` is blurred against `b` on one of `sensors`.
+        let blurred_against =
+            |a: &[f64], b: &[f64], sensors: &[usize]| sensors.iter().any(|&k| a[k] < ratio * b[k]);
+        let own = sharpness(self, c);
+        let every: Vec<usize> = (0..own.len()).collect();
+        let f = b.from;
+        let mut blurred = false;
+        let mut sharper: Vec<(usize, f64)> = Vec::new();
+        for &n in &window {
+            let theirs = sharpness(self, n);
+            if !blurred_against(&own, &theirs, &judged) {
+                continue;
+            }
+            blurred = true;
+            if n <= f || n > b.limit || self.blurred(n) || blurred_against(&theirs, &own, &every) {
+                continue;
+            }
+            // The least gain over the sensors. A sensor at 0 in `c` gains
+            // without bound where the neighbour's is above 0, and nothing
+            // where it is 0 too.
+            let gain = own
+                .iter()
+                .zip(&theirs)
+                .map(|(&a, &t)| {
+                    if a > 0.0 {
+                        t / a
+                    } else if t > 0.0 {
+                        f64::INFINITY
+                    } else {
+                        1.0
+                    }
+                })
+                .fold(f64::INFINITY, f64::min);
+            sharper.push((n, gain));
+        }
+        if !blurred {
+            return Ok(None);
+        }
+        sharper.sort_by(|x, y| {
+            y.1.total_cmp(&x.1)
+                .then(x.0.abs_diff(c).cmp(&y.0.abs_diff(c)))
+                .then(x.0.cmp(&y.0))
+        });
+        let floor = stats.step_percent.min(b.low);
+        for (n, _) in sharper {
+            let s = self.measure(n)?;
+            if self.holds(f, n, &s) && s.step_percent >= floor && s.step_percent <= b.high {
+                return Ok(Some((n, s)));
+            }
+        }
+        Ok(None)
+    }
+
     /// The step to `failed` did not match well or could not be brought into
     /// the band: accept the largest candidate below the band that matched
     /// well, or else halve the gap until a frame matches well, down to the
@@ -569,6 +691,7 @@ impl Walker<'_, '_> {
                     self.report.swaps.push(Swap {
                         candidate: h,
                         chosen: n,
+                        reason: SwapReason::Median,
                     });
                     return self.accept(Choice {
                         frame: n,

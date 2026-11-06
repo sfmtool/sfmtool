@@ -146,6 +146,7 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     assert set(a) >= {"sequences", "frames", "pairs", "capture", "options"}
     assert a["options"]["target_step_percent"] == 10.0
     assert a["options"]["baseline_frames"] == 10
+    assert a["options"]["neighbour_blur_ratio"] == 0.85
     assert a["capture"][0]["patterns"] == ["frames/pan_%03d.jpg"]
     assert a["capture"][0]["numbers"] == list(range(1, PAN_FRAMES + 1))
     assert a["capture"][0]["images"][4] == ["frames/pan_005.jpg"]
