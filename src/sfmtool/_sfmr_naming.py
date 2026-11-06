@@ -50,8 +50,19 @@ def get_next_sfm_filename(
     return base_path / filename
 
 
+# The most UTF-8 bytes an image descriptor takes, so that a generated name stays
+# well inside the 255-byte (or 255 UTF-16 unit) limit file systems put on one
+# path component.
+_MAX_DESCRIPTOR_BYTES = 100
+
+
 def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
-    """Generate a descriptor string characterizing the source images."""
+    """Generate a descriptor string characterizing the source images.
+
+    The result is at most `_MAX_DESCRIPTOR_BYTES` UTF-8 bytes long. A range
+    that would be longer becomes `{prefix}_{first}-{last}-total-{n}-images`,
+    and a prefix or stem that still does not fit is cut short.
+    """
     if not image_paths:
         return ""
 
@@ -61,14 +72,23 @@ def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
     if len(summaries) == 1 and summaries[0].index_set:
         summary = summaries[0]
         prefix = summary.path.split("%")[0].rstrip("_-")
-        range_str = str(RangeExpr.from_list(sorted(summary.index_set)))
+        indexes = sorted(summary.index_set)
+        range_str = str(RangeExpr.from_list(indexes))
         range_str = range_str.replace(":", "x")
-        return f"{prefix}_{range_str}"
+        descriptor = f"{prefix}_{range_str}"
+        if len(descriptor.encode("utf-8")) <= _MAX_DESCRIPTOR_BYTES:
+            return descriptor
+        suffix = f"_{indexes[0]}-{indexes[-1]}-total-{len(indexes)}-images"
+        return _truncate_utf8(prefix, _MAX_DESCRIPTOR_BYTES - len(suffix)) + suffix
 
-    first_image = Path(filenames[0])
-    first_name = first_image.stem
-    total_count = len(image_paths)
-    return f"{first_name}-total-{total_count}-images"
+    first_name = Path(filenames[0]).stem
+    suffix = f"-total-{len(image_paths)}-images"
+    return _truncate_utf8(first_name, _MAX_DESCRIPTOR_BYTES - len(suffix)) + suffix
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Cut `text` to at most `max_bytes` UTF-8 bytes, never splitting a character."""
+    return text.encode("utf-8")[: max(max_bytes, 0)].decode("utf-8", errors="ignore")
 
 
 def get_image_hint_message(
