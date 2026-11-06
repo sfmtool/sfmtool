@@ -122,7 +122,6 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     capture = steady
     counter = ProgressCounter()
     report = pick_images([capture.sequence], baseline_frames=20, progress=counter)
-    assert report["verdict"] == "video"
     walk = report["sequences"][0]["walk"]
     chosen = walk["chosen"]
     assert chosen[0] == 0 and chosen[-1] == 149
@@ -154,6 +153,10 @@ def test_options_reach_the_walk(steady: _Capture):
     )
     strides = np.diff(report["sequences"][0]["walk"]["chosen"])
     assert 16 <= np.median(strides) <= 24
+    # A floor above the matches of neighbouring frames keeps every frame.
+    first = CaptureSequence(["frame_%04d.jpg"], capture.sequence.frames[:10])
+    report = pick_images([first], baseline_frames=2, min_step_matches=5000)
+    assert report["sequences"][0]["walk"]["chosen"] == list(range(10))
     for name, value in [
         ("target_step_percent", 0.0),
         ("step_band", 1.0),
@@ -162,6 +165,7 @@ def test_options_reach_the_walk(steady: _Capture):
         ("baseline_frames", 1),
         ("pair.ratio", 0.0),
         ("min_matches", 0),
+        ("min_step_matches", 29),
     ]:
         key = name.split(".")[-1]
         with pytest.raises(ValueError, match=name.replace(".", r"\.")):
@@ -273,13 +277,13 @@ def test_capture_classes():
         CaptureFrame(1, ["not an image"])
 
 
-def test_photographs_extracted_by_the_walk_are_not_a_video(
+def test_photographs_extracted_by_the_walk_are_every_one_kept(
     isolated_seoul_bull_17_images: list[Path], tmp_path: Path
 ):
     """Real images extracted by the walk with the workspace's settings: the
-    17 photographs of a walk around a sculpture are judged not a video, each
-    file is the one ``build_sift_files`` writes, and a second run extracts
-    nothing."""
+    17 photographs of a walk around a sculpture match their neighbours with
+    fewer matches than the floor, so every one is kept; each file is the one
+    ``build_sift_files`` writes, and a second run extracts nothing."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     images = []
@@ -301,9 +305,9 @@ def test_photographs_extracted_by_the_walk_are_not_a_video(
         "concurrent_images": 4,
     }
     report = pick_images([sequence], **extract)
-    assert report["verdict"] == "not_a_video"
-    assert report["sequences"][0]["video"]["is_video"] is False
-    assert report["sequences"][0]["walk"] is None
+    baseline = report["sequences"][0]["baseline"]
+    assert baseline["next_frame_matches_median"] < 500
+    assert report["sequences"][0]["walk"]["chosen"] == list(range(17))
     read = _read(report)
     # Every frame is sampled, so every frame is read, and each was extracted.
     assert sorted(read) == list(range(17))

@@ -82,6 +82,11 @@ pub struct PickImagesOptions {
     /// The fewest mutual matches a pair that matches well has. At least 1,
     /// since a step is measured from the matches.
     pub min_matches: usize,
+    /// The match floor: the fewest mutual matches a step beyond the next
+    /// frame keeps. A step to the next frame needs only to match well, so a
+    /// capture whose neighbouring frames have fewer matches than this keeps
+    /// every frame. At least `min_matches`.
+    pub min_step_matches: usize,
     /// The forest each frame's descriptors are indexed with.
     pub forest: KdForestParams,
     /// How each pair of frames is matched.
@@ -102,6 +107,7 @@ impl Default for PickImagesOptions {
             neighbour_blur_ratio: 0.85,
             baseline_frames: 200,
             min_matches: 30,
+            min_step_matches: 500,
             forest: KdForestParams::balanced(),
             pair: FramePairOptions::default(),
             prefetch: true,
@@ -148,6 +154,15 @@ impl PickImagesOptions {
             return Err(options(
                 "min_matches",
                 "must be at least 1, since a step is measured from the matches, got 0".to_string(),
+            ));
+        }
+        if self.min_step_matches < self.min_matches {
+            return Err(options(
+                "min_step_matches",
+                format!(
+                    "must be at least min_matches ({}), since every step must match well, got {}",
+                    self.min_matches, self.min_step_matches
+                ),
             ));
         }
         let nested = |prefix: &str, e: FramePairError| match e {

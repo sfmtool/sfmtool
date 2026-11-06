@@ -2,32 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The baseline: the sampled frames of each sequence, the median sharpness
-//! its frames are judged against, the rate along it, the flagged regions, and
-//! the judgement made from it, whether a sequence is a video. See
+//! its frames are judged against, the rate along it, the matches with the
+//! next frame, and the flagged regions. See
 //! `specs/core/analysis/pick-images.md` § "The baseline".
 
 use super::capture::{FrameId, PickImagesOptions};
 use super::frame_pair::FramePairStats;
 use super::frames::Frames;
-use super::report::{FlaggedRegion, SampleRate, SensorBaseline, SensorReading, VideoCheck};
+use super::report::{FlaggedRegion, SampleRate, SensorBaseline, SensorReading};
 use crate::features::sift::ImageReadings;
 use crate::numeric::{median, quantile};
 
-/// The gaps after each sampled frame the baseline reads: enough to tell a
-/// video from a set of photographs.
+/// The gaps after each sampled frame the baseline reads: the rate is
+/// measured over 3 frames, or over 1 where 3 do not match well, and a sampled
+/// frame that does not match either well flags a region.
 pub(super) const BASELINE_GAPS: [usize; 2] = [1, 3];
-
-/// The range of the 3-frame step over the 1-frame step in which the motion
-/// adds up.
-const VIDEO_RATIO_RANGE: (f64, f64) = (2.0, 4.0);
-
-/// The 1-frame step, in percent of the long side, below which the step is
-/// small.
-const VIDEO_MAX_STEP_PERCENT: f64 = 5.0;
-
-/// The factor within which neighbouring samples' 1-frame steps lie when the
-/// step changes little.
-const VIDEO_MAX_STEP_FACTOR: f64 = 2.0;
 
 /// How many sampled frames each sequence gets: its share of
 /// `baseline_frames` by frame count, at least 2 (the first and last) and at
@@ -95,6 +84,7 @@ pub(super) struct SequenceBaseline {
     pub(super) sensors: Vec<SensorBaseline>,
     pub(super) sample_rates: Vec<SampleRate>,
     pub(super) rate_median: f64,
+    pub(super) next_frame_matches_median: f64,
     pub(super) flagged_regions: Vec<FlaggedRegion>,
 }
 
@@ -158,9 +148,9 @@ impl SequenceBaseline {
 }
 
 /// The sequence's baseline from its pairs: the sensors' median
-/// sharpness over the sampled frames, the rate at each sample, and the regions
-/// a blurred sample or one that does not match the frame 1 or 3 after it
-/// well flags.
+/// sharpness over the sampled frames, the rate at each sample, the median
+/// matches with the next frame, and the regions a blurred sample or one that
+/// does not match the frame 1 or 3 after it well flags.
 pub(super) fn sequence_baseline(
     frames: &Frames,
     sequence: usize,
@@ -195,6 +185,11 @@ pub(super) fn sequence_baseline(
     }
     let rates: Vec<f64> = sample_rates.iter().map(|r| r.rate).collect();
     let rate_median = median(&rates);
+    let next_frame_matches: Vec<f64> = samples
+        .iter()
+        .filter_map(|&s| measured(s, 1).map(|st| st.matches as f64))
+        .collect();
+    let next_frame_matches_median = median(&next_frame_matches);
 
     let mut baseline = SequenceBaseline {
         len,
@@ -202,6 +197,7 @@ pub(super) fn sequence_baseline(
         sensors,
         sample_rates,
         rate_median,
+        next_frame_matches_median,
         flagged_regions: Vec::new(),
     };
     let mut regions: Vec<FlaggedRegion> = Vec::new();
@@ -247,61 +243,4 @@ pub(super) fn sequence_baseline(
 pub(super) fn rate_p90(baseline: &SequenceBaseline) -> f64 {
     let rates: Vec<f64> = baseline.sample_rates.iter().map(|r| r.rate).collect();
     quantile(&rates, 0.9)
-}
-
-/// Judge whether a sequence is a video from the baseline's pairs.
-pub(super) fn video_check(
-    frames: &Frames,
-    sequence: usize,
-    baseline: &SequenceBaseline,
-    options: &PickImagesOptions,
-) -> VideoCheck {
-    let id = |frame| FrameId { sequence, frame };
-    let len = baseline.len;
-    let min_matches = options.min_matches;
-    // Per sample with a frame 3 after it: the 1-frame step and the 3-to-1
-    // ratio, or a value that fails each sign when either pair has fewer than
-    // `min_matches` matches.
-    let mut steps = Vec::new();
-    let mut ratios = Vec::new();
-    for &s in baseline.samples.iter().filter(|&&s| s + 3 < len) {
-        let one = frames.pair(id(s), id(s + 1));
-        let three = frames.pair(id(s), id(s + 3));
-        match (one, three) {
-            (Some(one), Some(three))
-                if one.matches >= min_matches && three.matches >= min_matches =>
-            {
-                steps.push(Some(one.step_percent));
-                ratios.push(three.step_percent / one.step_percent);
-            }
-            _ => {
-                steps.push(None);
-                ratios.push(f64::INFINITY);
-            }
-        }
-    }
-    let changes: Vec<f64> = steps
-        .windows(2)
-        .map(|w| match (w[0], w[1]) {
-            (Some(a), Some(b)) => (a / b).ln().abs(),
-            _ => f64::INFINITY,
-        })
-        .collect();
-    let step_values: Vec<f64> = steps.iter().map(|s| s.unwrap_or(f64::INFINITY)).collect();
-
-    let step_1_median = median(&step_values);
-    let ratio_3_to_1_median = median(&ratios);
-    let step_change_median = median(&changes);
-    let motion_adds_up = (VIDEO_RATIO_RANGE.0..=VIDEO_RATIO_RANGE.1).contains(&ratio_3_to_1_median);
-    let step_small = step_1_median < VIDEO_MAX_STEP_PERCENT;
-    let step_steady = step_change_median < VIDEO_MAX_STEP_FACTOR.ln();
-    VideoCheck {
-        step_1_median,
-        ratio_3_to_1_median,
-        step_change_median,
-        motion_adds_up,
-        step_small,
-        step_steady,
-        is_video: len >= 4 && step_small && motion_adds_up && step_steady,
-    }
 }

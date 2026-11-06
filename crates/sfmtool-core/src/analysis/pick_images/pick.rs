@@ -1,23 +1,21 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! [`pick_images`]: the checks of the input, the baseline, the verdict, and
-//! the walk of each sequence.
+//! [`pick_images`]: the checks of the input, the baseline, and the walk of
+//! each sequence.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::baseline::{
-    rate_p90, sample_counts, sample_positions, sequence_baseline, video_check, SequenceBaseline,
-    BASELINE_GAPS,
+    rate_p90, sample_counts, sample_positions, sequence_baseline, SequenceBaseline, BASELINE_GAPS,
 };
 use super::capture::{
     validate_sequences, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
 use super::frames::Frames;
 use super::report::{
-    BaselineReport, FrameReading, PickImagesReport, SequenceReport, Stage, Verdict, VideoCheck,
-    WalkReport,
+    BaselineReport, FrameReading, PickImagesReport, SequenceReport, Stage, WalkReport,
 };
 use super::source::FrameSource;
 use super::walk::walk_sequence;
@@ -26,11 +24,11 @@ use crate::progress::Progress;
 
 /// Choose the frames of a capture a solve should use.
 ///
-/// Reads a baseline sample of each sequence, judges from it whether each
-/// sequence is a video, and, when every one is, walks each sequence choosing
-/// frames about `target_step_percent` of the image's long side apart, sharp
-/// ones in place of blurred ones. A verdict that stops the capture is a
-/// report, not an error.
+/// Reads a baseline sample of each sequence, then walks each sequence
+/// choosing frames about `target_step_percent` of the image's long side
+/// apart, with no step beyond the next frame keeping fewer than
+/// `min_step_matches` mutual matches, and sharp frames in place of blurred
+/// ones.
 ///
 /// Every frame is read through `source`: [`pick_images`] waits on it for each
 /// frame just before reading the frame and, unless `options.prefetch` is
@@ -77,13 +75,11 @@ pub fn pick_images(
 
 /// What [`decide`] found, for [`assemble`].
 struct Decided {
-    verdict: Verdict,
     baselines: Vec<SequenceBaseline>,
-    videos: Vec<VideoCheck>,
-    walks: Option<Vec<WalkReport>>,
+    walks: Vec<WalkReport>,
 }
 
-/// The baseline, the verdict, and the walk of each sequence.
+/// The baseline and the walk of each sequence.
 fn decide(
     frames: &mut Frames,
     sequences: &[CaptureSequence],
@@ -108,19 +104,6 @@ fn decide(
         .enumerate()
         .map(|(s, positions)| sequence_baseline(frames, s, positions, lengths[s], options))
         .collect();
-    let videos: Vec<VideoCheck> = baselines
-        .iter()
-        .enumerate()
-        .map(|(s, b)| video_check(frames, s, b, options))
-        .collect();
-    if videos.iter().any(|v| !v.is_video) {
-        return Ok(Decided {
-            verdict: Verdict::NotAVideo,
-            baselines,
-            videos,
-            walks: None,
-        });
-    }
 
     let mut walks = Vec::with_capacity(sequences.len());
     {
@@ -131,12 +114,7 @@ fn decide(
             )?);
         }
     }
-    Ok(Decided {
-        verdict: Verdict::Video,
-        baselines,
-        videos,
-        walks: Some(walks),
-    })
+    Ok(Decided { baselines, walks })
 }
 
 /// Read the baseline: prefetch all its frames, then wait for and match each
@@ -220,12 +198,7 @@ fn assemble(
     written: &[FrameId],
     options: &PickImagesOptions,
 ) -> PickImagesReport {
-    let Decided {
-        verdict,
-        baselines,
-        videos,
-        walks,
-    } = decided;
+    let Decided { baselines, walks } = decided;
     let readings: Vec<FrameReading> = frames
         .read_frames()
         .iter()
@@ -239,12 +212,11 @@ fn assemble(
             }
         })
         .collect();
-    let mut walks = walks.map(Vec::into_iter);
     let sequences = baselines
         .into_iter()
-        .zip(videos)
+        .zip(walks)
         .enumerate()
-        .map(|(s, (baseline, video))| {
+        .map(|(s, (baseline, walk))| {
             let sampled: BTreeSet<usize> = baseline.samples.iter().copied().collect();
             let in_sequence = |f: &&FrameReading| f.id.sequence == s;
             let frames_read = readings
@@ -264,13 +236,13 @@ fn assemble(
                     frames_read,
                     sensors: baseline.sensors,
                     blurred_samples,
+                    next_frame_matches_median: baseline.next_frame_matches_median,
                     sample_rates: baseline.sample_rates,
                     rate_median: baseline.rate_median,
                     total_motion_percent: baseline.rate_median * baseline.len as f64,
                     flagged_regions: baseline.flagged_regions,
                 },
-                video,
-                walk: walks.as_mut().and_then(Iterator::next),
+                walk,
             }
         })
         .collect();
@@ -278,7 +250,6 @@ fn assemble(
     let frames_extracted: Vec<bool> = readings.iter().map(|f| written.contains(&f.id)).collect();
     let extracted_read = frames_extracted.iter().filter(|&&w| w).count();
     PickImagesReport {
-        verdict,
         sequences,
         frames: readings,
         pairs: frames.into_pairs(),

@@ -90,6 +90,17 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     help="How many frames the baseline samples, spread evenly over the capture.",
 )
 @click.option(
+    "--min-step-matches",
+    "min_step_matches",
+    type=int,
+    default=500,
+    metavar="N",
+    show_default=True,
+    help="The match floor: a step past the next frame keeps at least N mutual "
+    "matches, so a capture whose neighbouring frames match with fewer keeps "
+    "every frame.",
+)
+@click.option(
     "--json",
     "json_path",
     type=click.Path(dir_okay=False),
@@ -108,14 +119,16 @@ def pick_images(
     blur_ratio,
     neighbour_blur_ratio,
     baseline_frames,
+    min_step_matches,
     json_path,
 ):
     """Choose the frames of a video a solve should use, and write them as a named image list.
 
-    Reads a sample of each sequence's frames, judges whether each sequence is
-    a video, and then walks each sequence, choosing frames about --target-step
-    percent of the image's long side apart and sharp frames in place of
-    blurred ones. Each frame read, or predicted to be read, gets a .sift
+    Reads a sample of each sequence's frames, then walks each sequence,
+    choosing frames about --target-step percent of the image's long side
+    apart, with no step past the next frame keeping fewer than
+    --min-step-matches mutual matches, and sharp frames in place of blurred
+    ones. Each frame read, or predicted to be read, gets a .sift
     file, extracted with the workspace's settings; with a feature tool other
     than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
     the named image list NAME, for `sfm solve -r NAME`.
@@ -188,6 +201,7 @@ def pick_images(
             "blur_ratio": blur_ratio,
             "neighbour_blur_ratio": neighbour_blur_ratio,
             "baseline_frames": baseline_frames,
+            "min_step_matches": min_step_matches,
         },
         json_path=Path(json_path) if json_path is not None else None,
     )
@@ -310,16 +324,16 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         extracted,
         options["target_step_percent"],
         options["step_band"],
+        options["min_step_matches"],
     ):
         click.echo(line)
 
-    walked = report["verdict"] == "video"
     chosen = [
-        [s.numbers[p] for p in r["walk"]["chosen"]] if r["walk"] is not None else None
+        [s.numbers[p] for p in r["walk"]["chosen"]]
         for s, r in zip(sequences, report["sequences"])
     ]
     written_list = None
-    if walked and write_list is not None:
+    if write_list is not None:
         entries = [
             entry
             for sequence, numbers in zip(sequences, chosen)
@@ -349,7 +363,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             suggestion = slice_suggestion(write_list, image_count)
             if suggestion is not None:
                 click.echo(suggestion)
-    elif walked:
+    else:
         click.echo("")
         click.echo(
             f"Chose {sum(len(n) for n in chosen)} frames; pass --write-list NAME to "
@@ -373,11 +387,3 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         data["named_image_list"] = written_list
         json_path.write_text(json.dumps(data, indent=1) + "\n")
         click.echo(f"Wrote the report to {json_path}")
-
-    if write_list is not None and not walked:
-        click.echo(
-            f"No named image list was written: the verdict is "
-            f"{report['verdict'].replace('_', ' ')}.",
-            err=True,
-        )
-        click.get_current_context().exit(1)

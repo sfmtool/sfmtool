@@ -5,11 +5,12 @@
 //! should use, from the SIFT features of the frames, before anything is
 //! solved.
 //!
-//! [`pick_images`] reads a baseline sample of each sequence, judges whether
-//! each is a video, and walks each sequence choosing frames whose **step**,
-//! the median displacement of their mutual matches in percent of the image's
-//! long side, is near a target, with sharp frames in place of blurred ones
-//! and shorter steps where the capture is hard to follow. A [`FrameSource`]
+//! [`pick_images`] reads a baseline sample of each sequence and walks each
+//! sequence choosing frames whose **step**, the median displacement of their
+//! mutual matches in percent of the image's long side, is near a target,
+//! with no step beyond the next frame keeping fewer mutual matches than the
+//! match floor, sharp frames in place of blurred ones and shorter steps where
+//! the capture is hard to follow. A [`FrameSource`]
 //! makes each frame's `.sift` files exist: an [`ExtractingSource`] extracts
 //! them on a pool of workers ahead of the walk, from the frames it knows it
 //! will read, and a [`ReadOnlySource`] reads files that already exist. The
@@ -46,6 +47,6 @@ pub use pick::pick_images;
 pub use report::{
     BaselineReport, Break, FlaggedRegion, FrameReading, Gap, KeptBlurred, MeasuredPair,
     PickImagesReport, SampleRate, Segment, SensorBaseline, SensorReading, SequenceReport, Stage,
-    StepKind, Swap, SwapReason, Verdict, VideoCheck, WalkReport, WalkStep, WeakPoint,
+    StepKind, Swap, SwapReason, WalkReport, WalkStep, WeakPoint,
 };
 pub use source::{ExtractingSource, FrameSource, FrameSourceError, ReadOnlySource};
