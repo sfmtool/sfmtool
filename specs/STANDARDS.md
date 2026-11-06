@@ -675,9 +675,10 @@ Ways to cut a test's time while keeping what it checks:
   input's size. Size means every dimension that sets the test's cost, not only
   the count of items, and which dimensions apply depends on what the test
   runs:
-  - a test that extracts features from real images: the image size (which
-    also sets the octave count), the feature cap (`max_num_features`) and
-    whether the image is doubled first (`double_image`);
+  - a test that extracts features from real images: the image size, the
+    feature cap (`max_num_features`) and whether the image is doubled first
+    (`double_image`); in the `sfmtool` extractor the image size and the
+    doubling together also set the octave count;
   - a test on synthetic features or points, such as a `.sift` capture
     written directly with no image decoded: the features per item, such as a
     synthetic scene's point density, since indexing and matching scale with
@@ -736,8 +737,9 @@ for:
 - A dimension of the input, from the list above, left at a size the
   assertions do not need.
 
-A finding is a test over those limits whose time its assertions do not need:
-one where a way above would cut its time with every case and assertion kept.
+Besides a wait with no timeout on code that could hang (above), a finding is
+a test over those limits whose time its assertions do not need: one where a
+way above would cut its time with every case and assertion kept.
 Confirm before reporting: time the test alone (`pixi run test -- <node id>`,
 or `pixi run cargo test -p <crate> <test name>`), and name the way that would
 cut it, how each of its cases and assertions is kept, and how each event its
