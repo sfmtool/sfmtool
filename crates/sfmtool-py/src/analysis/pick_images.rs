@@ -222,61 +222,36 @@ impl PyFrameFeatures {
 ///
 /// The matches are the mutual best matches of a k = 2 query each way that
 /// pass Lowe's ratio test both ways. Options left as ``None`` take the
-/// defaults of the Rust ``FramePairOptions``: ``ratio`` 0.8, ``min_matches``
-/// 30, the queried forest's own ``max_leaf_checks``,
-/// ``fundamental_error_per_960px`` 1.0, ``homography_error_per_960px`` 2.0
-/// and ``seed`` 0.
+/// defaults of the Rust ``FramePairOptions``: ``ratio`` 0.8 and the queried
+/// forest's own ``max_leaf_checks``.
 ///
 /// Args:
 ///     a: The first frame's ``FrameFeatures``.
 ///     b: The second frame's, of the same image size.
 ///     ratio: Lowe's ratio on descriptor distances, in (0, 1].
-///     min_matches: The fewest matches the shares are computed from, at
-///         least 7.
 ///     max_leaf_checks: The per-query budget of distance computations.
-///     fundamental_error_per_960px: The fundamental matrix's inlier bound,
-///         in pixels per 960 pixels of the long side.
-///     homography_error_per_960px: The homography's inlier bound, likewise.
-///     seed: The RANSAC seed.
 ///
 /// Returns:
-///     A dict: ``matches`` (int), ``step_percent`` (float, the median
-///     displacement in percent of the long side, NaN with no matches),
-///     ``f_inlier_share`` (float, None under ``min_matches`` matches),
-///     ``h_over_f`` (float, None under ``min_matches`` matches or
-///     ``min_matches`` F-inliers) and ``rotation_error`` (float, None where
-///     ``h_over_f`` is None, where no homography fits the F-inliers, or where
-///     no focal length tried gives a finite, non-singular ``K⁻¹ H K``).
+///     A dict: ``matches`` (int, the number of mutual matches) and
+///     ``step_percent`` (float, their median displacement in percent of the
+///     long side, NaN with no matches).
 ///
 /// Raises:
 ///     ValueError: an option out of range, or frames of different sizes.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
-#[pyo3(signature = (a, b, *, ratio=None, min_matches=None, max_leaf_checks=None,
-                    fundamental_error_per_960px=None, homography_error_per_960px=None,
-                    seed=None))]
-#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (a, b, *, ratio=None, max_leaf_checks=None))]
 pub fn match_frame_pair<'py>(
     py: Python<'py>,
     a: PyRef<'py, PyFrameFeatures>,
     b: PyRef<'py, PyFrameFeatures>,
     ratio: Option<f32>,
-    min_matches: Option<usize>,
     max_leaf_checks: Option<usize>,
-    fundamental_error_per_960px: Option<f64>,
-    homography_error_per_960px: Option<f64>,
-    seed: Option<u64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let defaults = FramePairOptions::default();
     let options = FramePairOptions {
         ratio: ratio.unwrap_or(defaults.ratio),
-        min_matches: min_matches.unwrap_or(defaults.min_matches),
         max_leaf_checks: max_leaf_checks.or(defaults.max_leaf_checks),
-        fundamental_error_per_960px: fundamental_error_per_960px
-            .unwrap_or(defaults.fundamental_error_per_960px),
-        homography_error_per_960px: homography_error_per_960px
-            .unwrap_or(defaults.homography_error_per_960px),
-        seed: seed.unwrap_or(defaults.seed),
     };
     let (a, b) = (&a.inner, &b.inner);
     let stats = py
@@ -285,9 +260,6 @@ pub fn match_frame_pair<'py>(
     let out = PyDict::new(py);
     out.set_item("matches", stats.matches)?;
     out.set_item("step_percent", stats.step_percent)?;
-    out.set_item("f_inlier_share", stats.f_inlier_share)?;
-    out.set_item("h_over_f", stats.h_over_f)?;
-    out.set_item("rotation_error", stats.rotation_error)?;
     Ok(out)
 }
 
@@ -446,10 +418,10 @@ impl PyCaptureSequence {
 /// use, from the SIFT features of the frames.
 ///
 /// Reads a baseline sample of each sequence, judges whether each is a video
-/// and whether the capture can be solved, and when it can, walks each
-/// sequence choosing frames about ``target_step_percent`` of the image's long
-/// side apart, sharp ones in place of blurred ones. Options left as ``None``
-/// take the defaults of the Rust ``PickImagesOptions``.
+/// and whether its camera moves enough to be solved, and when it can, walks
+/// each sequence choosing frames about ``target_step_percent`` of the image's
+/// long side apart, sharp ones in place of blurred ones. Options left as
+/// ``None`` take the defaults of the Rust ``PickImagesOptions``.
 ///
 /// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
 /// settings for the ``sfmtool`` feature tool, each frame's ``.sift`` files
@@ -479,11 +451,10 @@ impl PyCaptureSequence {
 ///         below its median is blurred against its neighbours when it is
 ///         below this times the sharpest neighbouring frame's (0.85).
 ///     baseline_frames: How many frames the baseline samples (200).
-///     min_inlier_share: The fewest fundamental-matrix inliers a step that
-///         matches well has, as a share of its matches (0.5).
-///     ratio, min_matches, fundamental_error_per_960px,
-///         homography_error_per_960px, seed: How each pair is matched, as
-///         for ``match_frame_pair``.
+///     min_matches: The fewest mutual matches a step that matches well has
+///         (30), at least 1.
+///     ratio: Lowe's ratio on descriptor distances, as for
+///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,
 ///         as for ``FrameFeatures``.
 ///     progress: A ``ProgressCounter``, set to the number of frames read.
@@ -524,10 +495,8 @@ impl PyCaptureSequence {
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
                     concurrent_images=None, target_step_percent=None, step_band=None,
                     blur_ratio=None, neighbour_blur_ratio=None, baseline_frames=None,
-                    min_inlier_share=None, ratio=None, min_matches=None,
-                    fundamental_error_per_960px=None, homography_error_per_960px=None,
-                    seed=None, preset=None, num_trees=None, leaf_size=None,
-                    max_leaf_checks=None, progress=None))]
+                    min_matches=None, ratio=None, preset=None, num_trees=None,
+                    leaf_size=None, max_leaf_checks=None, progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_images<'py>(
     py: Python<'py>,
@@ -540,12 +509,8 @@ pub fn pick_images<'py>(
     blur_ratio: Option<f64>,
     neighbour_blur_ratio: Option<f64>,
     baseline_frames: Option<usize>,
-    min_inlier_share: Option<f64>,
-    ratio: Option<f32>,
     min_matches: Option<usize>,
-    fundamental_error_per_960px: Option<f64>,
-    homography_error_per_960px: Option<f64>,
-    seed: Option<u64>,
+    ratio: Option<f32>,
     preset: Option<&str>,
     num_trees: Option<usize>,
     leaf_size: Option<usize>,
@@ -560,17 +525,11 @@ pub fn pick_images<'py>(
         blur_ratio: blur_ratio.unwrap_or(defaults.blur_ratio),
         neighbour_blur_ratio: neighbour_blur_ratio.unwrap_or(defaults.neighbour_blur_ratio),
         baseline_frames: baseline_frames.unwrap_or(defaults.baseline_frames),
-        min_inlier_share: min_inlier_share.unwrap_or(defaults.min_inlier_share),
+        min_matches: min_matches.unwrap_or(defaults.min_matches),
         forest: forest_params(preset, num_trees, leaf_size, max_leaf_checks, None)?,
         pair: FramePairOptions {
             ratio: ratio.unwrap_or(pair.ratio),
-            min_matches: min_matches.unwrap_or(pair.min_matches),
             max_leaf_checks: pair.max_leaf_checks,
-            fundamental_error_per_960px: fundamental_error_per_960px
-                .unwrap_or(pair.fundamental_error_per_960px),
-            homography_error_per_960px: homography_error_per_960px
-                .unwrap_or(pair.homography_error_per_960px),
-            seed: seed.unwrap_or(pair.seed),
         },
         prefetch: defaults.prefetch,
     };

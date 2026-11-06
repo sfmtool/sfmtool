@@ -59,8 +59,6 @@ pub(super) enum Content {
 #[derive(Clone, Debug)]
 pub(super) struct Shot {
     pub(super) x: f64,
-    /// The camera's turn about its vertical axis, radians.
-    pub(super) yaw: f64,
     pub(super) content: Content,
     /// The readings of each sensor: sharpness and `[Exx, Eyy, Exy]`.
     pub(super) readings: Vec<(f32, [f32; 3])>,
@@ -71,8 +69,6 @@ pub(super) struct Shot {
 pub(super) struct Synth {
     points: Vec<[f64; 3]>,
     descriptors: Vec<[u8; DESCRIPTOR_DIM]>,
-    /// Each point's own velocity per frame, for a moving scene.
-    velocities: Vec<[f64; 3]>,
     pub(super) shots: Vec<Shot>,
     pub(super) sensors: usize,
 }
@@ -106,46 +102,17 @@ impl Synth {
         Self::with_points(&mut rng, points)
     }
 
-    /// Points in every direction around the camera's vertical axis, at
-    /// depths from 5 to 20, for a camera that only turns.
-    pub(super) fn surround(seed: u64, n: usize) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let points = (0..n)
-            .map(|_| {
-                let angle: f64 = rng.random_range(-1.0..4.0);
-                let depth: f64 = rng.random_range(5.0..20.0);
-                [
-                    depth * angle.sin(),
-                    rng.random_range(-4.0..4.0),
-                    depth * angle.cos(),
-                ]
-            })
-            .collect();
-        Self::with_points(&mut rng, points)
-    }
-
     fn with_points(rng: &mut StdRng, points: Vec<[f64; 3]>) -> Self {
         let descriptors = points
             .iter()
             .map(|_| std::array::from_fn(|_| rng.random::<u8>()))
             .collect();
-        let velocities = points.iter().map(|_| [0.0; 3]).collect();
         Self {
             points,
             descriptors,
-            velocities,
             shots: Vec::new(),
             sensors: 1,
         }
-    }
-
-    /// Give every point its own random velocity of about `speed` per frame.
-    pub(super) fn moving(mut self, seed: u64, speed: f64) -> Self {
-        let mut rng = StdRng::seed_from_u64(seed);
-        for v in &mut self.velocities {
-            *v = std::array::from_fn(|_| speed * rng.sample::<f64, _>(StandardNormal));
-        }
-        self
     }
 
     /// Frames along x at the positions `xs`, all sharp and showing the scene.
@@ -155,7 +122,6 @@ impl Synth {
             .enumerate()
             .map(|(t, x)| Shot {
                 x,
-                yaw: 0.0,
                 content: Content::Scene,
                 readings: vec![sharp(t, 0), sharp(t, 1)],
             })
@@ -222,7 +188,6 @@ impl Synth {
                 .collect();
             return (positions, descriptors, w, h);
         }
-        let (sin, cos) = shot.yaw.sin_cos();
         let mut positions = Vec::new();
         let mut descriptors = Vec::new();
         for (p, point) in self.points.iter().enumerate() {
@@ -234,21 +199,10 @@ impl Synth {
             if !shown {
                 continue;
             }
-            let v = self.velocities[p];
-            let world = [
-                point[0] + v[0] * t as f64 - shot.x,
-                point[1] + v[1] * t as f64,
-                point[2] + v[2] * t as f64,
-            ];
-            // The camera turned by `yaw` about y: rotate the world by −yaw.
-            let x = cos * world[0] - sin * world[2];
-            let z = sin * world[0] + cos * world[2];
-            if z < 0.5 {
-                continue;
-            }
+            let (x, y, z) = (point[0] - shot.x, point[1], point[2]);
             let noise = |rng: &mut StdRng| 0.2 * rng.sample::<f64, _>(StandardNormal);
             let u = FOCAL * x / z + f64::from(WIDTH) / 2.0 + noise(&mut rng);
-            let v = FOCAL * world[1] / z + f64::from(HEIGHT) / 2.0 + noise(&mut rng);
+            let v = FOCAL * y / z + f64::from(HEIGHT) / 2.0 + noise(&mut rng);
             if u > 1.0 && u < f64::from(WIDTH) - 1.0 && v > 1.0 && v < f64::from(HEIGHT) - 1.0 {
                 positions.push([u as f32, v as f32]);
                 descriptors.extend_from_slice(&self.descriptors[p]);

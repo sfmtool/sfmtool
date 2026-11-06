@@ -145,7 +145,7 @@ def test_swaps_are_reported_by_reason():
         numbers=[10 * t for t in range(1, 31)],
         images=[[ROOT / f"f_{10 * t}.jpg"] for t in range(1, 31)],
     )
-    stats = {"step_percent": 10.0, "matches": 500, "f_inlier_share": 0.9}
+    stats = {"step_percent": 10.0, "matches": 500}
     walk = {
         "chosen": [0, 12, 21],
         "segments": [{"start": 0, "len": 3}],

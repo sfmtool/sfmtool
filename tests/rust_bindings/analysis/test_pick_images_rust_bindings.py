@@ -32,20 +32,11 @@ def _translated_pair(n=200, shift=(48.0, -24.0), seed=0):
 def test_a_known_translation_gives_its_step():
     a, b = _translated_pair()
     stats = match_frame_pair(a, b)
-    assert set(stats) == {
-        "matches",
-        "step_percent",
-        "f_inlier_share",
-        "h_over_f",
-        "rotation_error",
-    }
+    assert set(stats) == {"matches", "step_percent"}
     assert stats["matches"] == 200
     assert stats["step_percent"] == pytest.approx(
         100 * np.hypot(48, 24) / 960, abs=1e-4
     )
-    # Every match fits one homography, a translation.
-    assert stats["f_inlier_share"] == pytest.approx(1.0)
-    assert stats["h_over_f"] == pytest.approx(1.0)
 
 
 def test_frame_features_reports_its_size():
@@ -63,17 +54,6 @@ def test_float64_positions_are_accepted():
     assert match_frame_pair(a, b)["step_percent"] == 0.0
 
 
-def test_fewer_than_min_matches_give_no_shares():
-    a, b = _translated_pair(n=20)
-    stats = match_frame_pair(a, b)
-    assert stats["matches"] == 20
-    assert stats["f_inlier_share"] is None
-    assert stats["h_over_f"] is None
-    assert stats["rotation_error"] is None
-    stats = match_frame_pair(a, b, min_matches=20)
-    assert stats["f_inlier_share"] == pytest.approx(1.0)
-
-
 def test_options_reach_the_kernel():
     a, b = _translated_pair()
     # A ratio this strict rejects nothing here, since each descriptor's twin
@@ -81,12 +61,6 @@ def test_options_reach_the_kernel():
     assert match_frame_pair(a, b, ratio=0.1)["matches"] == 200
     with pytest.raises(ValueError, match="ratio"):
         match_frame_pair(a, b, ratio=1.5)
-    with pytest.raises(ValueError, match="min_matches"):
-        match_frame_pair(a, b, min_matches=6)
-    with pytest.raises(ValueError, match="fundamental_error_per_960px"):
-        match_frame_pair(a, b, fundamental_error_per_960px=0.0)
-    with pytest.raises(ValueError, match="homography_error_per_960px"):
-        match_frame_pair(a, b, homography_error_per_960px=float("nan"))
 
 
 def test_frames_of_different_sizes_are_refused():
@@ -133,7 +107,7 @@ def _seoul_bull_sift_files(workspace: Path) -> list[Path]:
 def test_neighbouring_seoul_bull_images_match(seoul_bull_workspace_once: Path):
     """Real `.sift` files, extracted by the workspace's tool into the
     fixture's own copy of the images: neighbouring images of the walk around
-    the sculpture match, and their matches fit one camera motion."""
+    the sculpture match."""
     files = _seoul_bull_sift_files(seoul_bull_workspace_once)
     frames = [FrameFeatures.from_sift(path) for path in files[:3]]
     with SiftFile(files[0]) as sift:
@@ -145,10 +119,7 @@ def test_neighbouring_seoul_bull_images_match(seoul_bull_workspace_once: Path):
         stats = match_frame_pair(a, b)
         assert stats["matches"] >= 100, stats
         assert 0.5 < stats["step_percent"] < 50, stats
-        assert stats["f_inlier_share"] > 0.5, stats
-        assert 0.0 < stats["h_over_f"] <= 1.0, stats
-        assert stats["rotation_error"] > 0.0, stats
-        # The same seed gives the same statistics.
+        # The same frames give the same statistics.
         assert match_frame_pair(a, b) == stats
 
     # A frame matched with itself moves by nothing.

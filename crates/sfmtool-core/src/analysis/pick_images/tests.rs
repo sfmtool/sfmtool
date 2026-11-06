@@ -343,7 +343,7 @@ fn swap_fits(stats: &FramePairStats, from: usize, n: usize, own: f64) -> bool {
         o.target_step_percent * (1.0 + o.step_band),
     );
     baseline::matches_well(stats, &o)
-        && (n == from + 1 || stats.matches >= 2 * o.pair.min_matches)
+        && (n == from + 1 || stats.matches >= 2 * o.min_matches)
         && stats.step_percent >= own.min(low)
         && stats.step_percent <= high
 }
@@ -517,7 +517,7 @@ fn a_neighbour_whose_step_does_not_fit_is_not_swapped_in() {
     assert!(step(soft + 2).step_percent > high, "{:?}", step(soft + 2));
     let few = step(soft + 1);
     assert!((low..=high).contains(&few.step_percent), "{few:?}");
-    assert!(few.matches < 2 * o.pair.min_matches, "{few:?}");
+    assert!(few.matches < 2 * o.min_matches, "{few:?}");
     assert_read_is_asked(&swapped);
 
     // With the frame before it as soft as the candidate, no neighbour
@@ -599,7 +599,7 @@ fn a_blurred_run_keeps_its_sharpest_frames() {
 /// the next frame or fills in a gap; and the walk measured at least one such
 /// pair beyond the next frame from a chosen frame, so the rule was tested.
 fn assert_few_match_steps_only_where_allowed(run: &Run) {
-    let few = |matches: usize| matches < 2 * options().pair.min_matches;
+    let few = |matches: usize| matches < 2 * options().min_matches;
     let walk = run.walk(0);
     for step in &walk.steps {
         if few(step.stats.matches) {
@@ -614,7 +614,7 @@ fn assert_few_match_steps_only_where_allowed(run: &Run) {
         run.report().pairs.iter().any(|p| p.stage == Stage::Walk
             && chosen.contains(&p.a.frame)
             && p.b.frame > p.a.frame + 1
-            && p.stats.matches >= options().pair.min_matches
+            && p.stats.matches >= options().min_matches
             && few(p.stats.matches)),
         "no pair with few matches was measured"
     );
@@ -858,20 +858,26 @@ fn a_break_starts_a_new_segment_and_weak_points_are_reported() {
     assert!(walk
         .weak_points
         .contains(&WeakPoint::ShortSegment { segment: 0 }));
+    // Every weak step has fewer than twice `min_matches` matches, and every
+    // accepted step with that few is a weak point.
     let few: Vec<&WalkStep> = walk
         .weak_points
         .iter()
         .filter_map(|w| match w {
-            WeakPoint::Step {
-                step,
-                few_matches: true,
-                ..
-            } => Some(&walk.steps[*step]),
+            WeakPoint::Step { step } => Some(&walk.steps[*step]),
             _ => None,
         })
         .collect();
+    let min_matches = options().min_matches;
+    let with_few = walk
+        .steps
+        .iter()
+        .filter(|s| s.stats.matches < 2 * min_matches)
+        .count();
+    assert_eq!(few.len(), with_few);
     assert!(!few.is_empty());
     for step in few {
+        assert!(step.stats.matches < 2 * min_matches, "{step:?}");
         assert!(step.to >= 220 && step.from <= 260, "{step:?}");
         // A step with few matches is settled on only at the next frame, or
         // when halving a failed step finds nothing better.
@@ -901,12 +907,12 @@ fn shuffled_frames_are_not_a_video() {
     assert!(report.sequences[0].video.is_video);
     let photos = &report.sequences[1].video;
     assert!(!photos.is_video);
-    assert!(!photos.step_small && !photos.neighbours_match);
+    assert!(!photos.step_small && !photos.is_video);
     for sequence in &report.sequences {
         assert!(sequence.solvability.is_none() && sequence.walk.is_none());
     }
-    // Nothing is read, or asked for, after the first batch.
-    assert!(report.frames.iter().all(|f| f.stage == Stage::BaselineNear));
+    // Nothing is read, or asked for, after the baseline.
+    assert!(report.frames.iter().all(|f| f.stage == Stage::Baseline));
     assert!(run.prefetched.iter().all(|id| was_read(&run, id)));
     assert_read_is_asked(&run);
 }
@@ -914,16 +920,12 @@ fn shuffled_frames_are_not_a_video() {
 #[test]
 fn frames_whose_neighbours_are_far_apart_are_not_a_video() {
     // Frames 6% of the long side apart: the motion adds up, the step is
-    // steady and neighbours match closely, but a step that large is no
-    // video's.
+    // steady, but a step that large is no video's.
     let synth = Synth::steady(28, 120, 6.0 * ONE_PERCENT);
     let run = run(&[&synth]);
     let report = run.report();
     let video = &report.sequences[0].video;
-    assert!(
-        video.motion_adds_up && video.step_steady && video.neighbours_match,
-        "{video:?}"
-    );
+    assert!(video.motion_adds_up && video.step_steady, "{video:?}");
     assert!(!video.step_small, "{video:?}");
     assert!(!video.is_video);
     assert_eq!(report.verdict, Verdict::NotAVideo);
@@ -938,46 +940,20 @@ fn a_sequence_of_three_frames_is_not_a_video() {
     assert!(!run.report().sequences[0].video.is_video);
 }
 
-fn assert_not_solvable(run: &Run) -> &SolvabilityCheck {
-    let report = run.report();
-    assert_eq!(report.verdict, Verdict::NotSolvable);
-    assert!(report.sequences[0].video.is_video);
-    assert!(report.sequences[0].walk.is_none());
-    assert!(report.frames.iter().all(|f| f.stage != Stage::Walk));
-    assert!(report.frames.iter().any(|f| f.stage == Stage::BaselineFar));
-    assert_read_is_asked(run);
-    report.sequences[0].solvability.as_ref().unwrap()
-}
-
-#[test]
-fn a_camera_that_only_turns_is_not_solvable() {
-    let mut synth = Synth::surround(9, 2500).along((0..300).map(|_| 0.0));
-    for (t, shot) in synth.shots.iter_mut().enumerate() {
-        shot.yaw = (0.5 * t as f64).to_radians();
-    }
-    let run = run(&[&synth]);
-    let check = assert_not_solvable(&run);
-    assert!(check.panorama && !check.moving_scene && !check.barely_moves);
-    assert!(check.h_over_f_30_median.unwrap() > 0.97);
-    assert!(check.rotation_error_30_median.unwrap() < 0.01);
-}
-
 #[test]
 fn a_camera_that_barely_moves_is_not_solvable() {
     let synth = Synth::steady(10, 300, 0.25 * ONE_PERCENT);
     let run = run(&[&synth]);
-    let check = assert_not_solvable(&run);
-    assert!(check.barely_moves && !check.panorama && !check.moving_scene);
+    let report = run.report();
+    assert_eq!(report.verdict, Verdict::NotSolvable);
+    assert!(report.sequences[0].video.is_video);
+    assert!(report.sequences[0].walk.is_none());
+    // Nothing is read after the baseline.
+    assert!(report.frames.iter().all(|f| f.stage == Stage::Baseline));
+    let check = report.sequences[0].solvability.as_ref().unwrap();
+    assert!(check.barely_moves && !check.solvable);
     assert!(check.total_motion_percent < 100.0);
-}
-
-#[test]
-fn a_moving_scene_is_not_solvable() {
-    let synth = Synth::steady(11, 300, ONE_PERCENT).moving(11, 0.03);
-    let run = run(&[&synth]);
-    let check = assert_not_solvable(&run);
-    assert!(check.moving_scene && !check.panorama);
-    assert!(check.f_inlier_share_10_median.unwrap() < 0.3);
+    assert_read_is_asked(&run);
 }
 
 #[test]
@@ -1213,9 +1189,7 @@ fn eventful_events(run: &Run) -> Vec<(&'static str, bool)> {
         (
             "a halved step in the bad patch has few matches",
             walk.steps.iter().any(|s| {
-                s.kind == StepKind::GapFill
-                    && in_patch(s)
-                    && s.stats.matches < 2 * o.pair.min_matches
+                s.kind == StepKind::GapFill && in_patch(s) && s.stats.matches < 2 * o.min_matches
             }),
         ),
         (
@@ -1274,7 +1248,7 @@ fn the_baseline_and_a_break_are_read_ahead_and_a_frame_failing_unread_stops_noth
     let report = run.report();
     let walk = run.walk(0);
     assert_eq!(walk.breaks.len(), 1, "{:?}", walk.breaks);
-    // Every frame of both batches of the baseline was prefetched.
+    // Every frame of the baseline was prefetched.
     for frame in report.frames.iter().filter(|f| f.stage != Stage::Walk) {
         assert!(run.prefetched.contains(&frame.id), "{:?}", frame.id);
     }
@@ -1401,13 +1375,6 @@ fn every_option_out_of_range_is_refused() {
             },
         ),
         (
-            "min_inlier_share",
-            PickImagesOptions {
-                min_inlier_share: 1.5,
-                ..options()
-            },
-        ),
-        (
             "forest.num_trees",
             PickImagesOptions {
                 forest: crate::features::kdforest::KdForestParams {
@@ -1428,12 +1395,9 @@ fn every_option_out_of_range_is_refused() {
             },
         ),
         (
-            "pair.min_matches",
+            "min_matches",
             PickImagesOptions {
-                pair: FramePairOptions {
-                    min_matches: 6,
-                    ..FramePairOptions::default()
-                },
+                min_matches: 0,
                 ..options()
             },
         ),
@@ -1449,7 +1413,7 @@ fn every_option_out_of_range_is_refused() {
     // The bounds themselves are accepted.
     let edges = PickImagesOptions {
         baseline_frames: 2,
-        min_inlier_share: 1.0,
+        min_matches: 1,
         ..options()
     };
     assert!(run_with(&[&synth], &edges, Fault::None, None)
@@ -1559,8 +1523,8 @@ fn a_folder_that_cannot_be_listed_is_refused() {
 fn a_worker_s_failure_on_a_frame_read_is_the_error_naming_the_frame() {
     let synth = Synth::steady(22, 150, ONE_PERCENT);
     let clean = run(&[&synth]);
-    // A frame of the first batch, of the second, and of the walk.
-    for stage in [Stage::BaselineNear, Stage::BaselineFar, Stage::Walk] {
+    // A frame of the baseline and of the walk.
+    for stage in [Stage::Baseline, Stage::Walk] {
         let frame = clean
             .report()
             .frames

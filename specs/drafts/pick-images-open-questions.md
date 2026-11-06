@@ -20,18 +20,17 @@ videos, slow orbits of an object, shaky videos with long blurred runs, a video
 of a moving animal, rotation-only panoramas, videos from a tripod or a hand
 held still, a numbered set of photographs of an object beside a video in one
 run, and a two-sensor fisheye rig, with the lists of the solvable pinhole
-videos judged by solving them. The verdicts were right on every capture; the
-target step, the band, the inlier share and the panorama and barely-moves
-thresholds held, and no capture came near the moving-scene threshold, whose
-value is still untested. Three rules changed, and the
-standing specs describe them: a small step is required of a video, a region
-flagged for blur alone no longer shortens the walk's steps, and the walk takes
-a step with fewer than twice `min_matches` matches only at the next frame or
-when halving a failed step finds nothing better. Raising `min_matches` from 30
-to 100 instead, which also mended the solve that broke at steps with few
-matches, doubled the frames chosen on a shaky video, since it also flags more
-of the baseline's samples for weak matches. This draft holds what is not
-settled.
+videos judged by solving them. The target step, the band and the barely-moves
+threshold held. Three rules changed, and the standing specs describe them: a
+small step is required of a video, a region flagged for blur alone no longer
+shortens the walk's steps, and the walk takes a step with fewer than twice
+`min_matches` matches only at the next frame or when halving a failed step
+finds nothing better. Raising `min_matches` from 30 to 100 instead, which also
+mended the solve that broke at steps with few matches, doubled the frames
+chosen on a shaky video, since it also flags more of the baseline's samples
+for weak matches. The command fits no geometry to the matches, so it no longer
+judges a moving scene or a camera that only turns; whether a pair matches well
+is its count of mutual matches alone. This draft holds what is not settled.
 
 ## Open questions
 
@@ -55,12 +54,7 @@ settled.
   its own median, and a frame blurred when any sensor is. Whether a sensor
   pointing at a featureless view should be allowed to make every frame look
   blurred, and whether `.camrig` files, as well as `rig_config.json`, should
-  define the rigs. A fundamental matrix does not describe two fisheye images:
-  on a fisheye rig the share of matches it fits 1 frame apart was about 0.7,
-  against 0.98 or more on the pinhole videos, and the walk broke 14 times and
-  reported 132 weak points. Undistorting the keypoints with the rig's
-  intrinsics before the fit, where `rig_config.json` gives them, would remove
-  that.
+  define the rigs.
 - **Rig list entries.** One entry per sensor with the same range keeps each
   pattern literal but orders the list by sensor and then frame, so a slice of
   the list ([named-image-lists.md § Slices](../workspace/named-image-lists.md#slices))
@@ -68,8 +62,7 @@ settled.
   suggests no slices for a rig list. One entry with a `*` segment would keep
   the sensors of a frame together but can match folders that are not sensors.
 - **The exit status** when the verdict stops a run that was asked to write a
-  list: the command exits 1. A flag to choose frames anyway, for a person who
-  means to solve a panorama with a rotation-only tool, is not proposed.
+  list: the command exits 1.
 - **The command's category.** *Image Feature*, beside `sift` and `match`, since
   it reads images and extracts features. *Workspace* is the other candidate,
   since it writes a workspace file.

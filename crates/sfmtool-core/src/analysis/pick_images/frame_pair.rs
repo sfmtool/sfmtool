@@ -2,49 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! One frame's features with its forest, and the statistics of a pair of
-//! frames: the step, the fundamental-matrix inlier share, the share of those
-//! inliers that fit one homography, and that homography's distance from a
-//! pure rotation. See `specs/core/analysis/frame-pair-matching.md`.
+//! frames: the number of mutual matches and the step. See
+//! `specs/core/analysis/frame-pair-matching.md`.
 //!
 //! Precision: positions stay `f32`, as a `.sift` file stores them, and
-//! descriptors `u8`. They are widened to `f64` once, per match, because the
-//! two RANSAC kernels and [`crate::numeric::median`] take `f64`; widening an
-//! `f32` is exact, and the per-match arithmetic is a few thousand values per
-//! pair. The forest's squared descriptor distances are `f32`, and exact: the
-//! largest, `128 · 255²`, is below `2²⁴`.
+//! descriptors `u8`. A match's displacement is computed in `f64`, from the
+//! two positions widened, because [`crate::numeric::median`] takes `f64`;
+//! widening an `f32` is exact, and the per-match arithmetic is a few thousand
+//! values per pair. The forest's squared descriptor distances are `f32`, and
+//! exact: the largest, `128 · 255²`, is below `2²⁴`.
 
-use nalgebra::Matrix3;
 use sfmtool_sift_format::{SiftFeatures, SiftMetadata, DESCRIPTOR_DIM};
 
 use crate::features::kdforest::{KdForestParams, KdForestU8};
-use crate::geometry::epipolar_estimation::{estimate_fundamental, FundamentalOptions};
-use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
 use crate::numeric::median;
 use crate::progress::Progress;
 
 #[cfg(test)]
 mod tests;
-
-/// The long side, in pixels, that the inlier bounds of [`FramePairOptions`]
-/// are stated against.
-const REFERENCE_LONG_SIDE_PX: f64 = 960.0;
-
-/// The focal lengths [`FramePairStats::rotation_error`] tries, as multiples of
-/// the image's long side: from the first to the second, inclusive.
-const ROTATION_FOCAL_RANGE: (f64, f64) = (0.3, 3.0);
-
-/// How many focal lengths [`FramePairStats::rotation_error`] tries on its
-/// grid, spaced evenly in `log f`.
-const ROTATION_FOCAL_STEPS: usize = 80;
-
-/// The golden-section steps that refine the best grid value. Each shrinks the
-/// bracket of two grid steps (about 6% in `f`) by 0.618, so 40 leave it about
-/// `10⁻¹⁰` wide.
-const ROTATION_REFINE_ITERATIONS: usize = 40;
-
-/// The fewest correspondences a fundamental matrix is fitted from (the
-/// seven-point solver's sample), and so the least `min_matches` may be.
-const FUNDAMENTAL_SAMPLE: usize = 7;
 
 /// One frame's features, with the forest over its descriptors built once, so
 /// that a frame matched with several others is indexed once.
@@ -182,39 +157,23 @@ impl FrameFeatures {
     }
 }
 
-/// How [`match_frame_pair`] matches and what it fits.
+/// How [`match_frame_pair`] matches.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FramePairOptions {
     /// Lowe's ratio on descriptor distances: a feature's nearest neighbour is
     /// kept when it is closer than `ratio` times the second nearest. In
     /// `(0, 1]`.
     pub ratio: f32,
-    /// The fewest mutual matches the shares are computed from; fewer gives
-    /// `None` shares. At least 7, the sample a fundamental matrix is fitted
-    /// from.
-    pub min_matches: usize,
     /// The per-query budget of distance computations, or `None` for the
     /// queried forest's own `max_leaf_checks`.
     pub max_leaf_checks: Option<usize>,
-    /// The fundamental matrix's inlier bound on the Sampson distance, in
-    /// pixels per 960 pixels of the image's long side.
-    pub fundamental_error_per_960px: f64,
-    /// The homography's inlier bound on the symmetric transfer error, in
-    /// pixels per 960 pixels of the image's long side.
-    pub homography_error_per_960px: f64,
-    /// The seed of both RANSAC samplers, so a pair's statistics repeat.
-    pub seed: u64,
 }
 
 impl Default for FramePairOptions {
     fn default() -> Self {
         Self {
             ratio: 0.8,
-            min_matches: 30,
             max_leaf_checks: None,
-            fundamental_error_per_960px: 1.0,
-            homography_error_per_960px: 2.0,
-            seed: 0,
         }
     }
 }
@@ -249,33 +208,6 @@ impl FramePairOptions {
                 reason: format!("must be in (0, 1], got {}", self.ratio),
             });
         }
-        if self.min_matches < FUNDAMENTAL_SAMPLE {
-            return Err(FramePairError::Options {
-                name: "min_matches",
-                reason: format!(
-                    "must be at least {FUNDAMENTAL_SAMPLE}, the matches a fundamental matrix \
-                     is fitted from, got {}",
-                    self.min_matches
-                ),
-            });
-        }
-        for (name, value) in [
-            (
-                "fundamental_error_per_960px",
-                self.fundamental_error_per_960px,
-            ),
-            (
-                "homography_error_per_960px",
-                self.homography_error_per_960px,
-            ),
-        ] {
-            if !(value.is_finite() && value > 0.0) {
-                return Err(FramePairError::Options {
-                    name,
-                    reason: format!("must be positive and finite, got {value}"),
-                });
-            }
-        }
         Ok(())
     }
 }
@@ -283,8 +215,7 @@ impl FramePairOptions {
 /// Why [`FrameFeatures::new`] or [`match_frame_pair`] refused its input.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FramePairError {
-    /// An option out of range: a ratio outside `(0, 1]`, a `min_matches`
-    /// below 7, an error bound that is not positive and finite, or a forest
+    /// An option out of range: a ratio outside `(0, 1]`, or a forest
     /// parameter of 0, which the forest's build asserts against. `name` is
     /// the field.
     Options { name: &'static str, reason: String },
@@ -328,32 +259,13 @@ pub struct FramePairStats {
     /// The median length of the mutual matches' displacements, in percent of
     /// the image's long side. NaN when there are no matches.
     pub step_percent: f64,
-    /// The share of the matches that are inliers of one fundamental matrix,
-    /// 0 when no fundamental matrix fits them. `None` under `min_matches`.
-    pub f_inlier_share: Option<f64>,
-    /// The share of the fundamental matrix's inliers that also fit one
-    /// homography, 0 when no homography fits them. `None` under
-    /// `min_matches` matches or `min_matches` inliers.
-    pub h_over_f: Option<f64>,
-    /// How far that homography is from a pure rotation: the smallest
-    /// `‖M Mᵀ − I‖` (Frobenius) over focal lengths from 0.3 to 3 times the
-    /// long side, with
-    /// `M = K⁻¹ H K` scaled to determinant 1. `None` where `h_over_f` is
-    /// `None`, where no homography fits, or where no focal length on the grid
-    /// gives a finite `M` with a non-zero determinant.
-    pub rotation_error: Option<f64>,
 }
 
 /// Match two frames and measure the motion between them.
 ///
 /// The matches are the mutual best matches of two `k = 2` queries, each
 /// frame's descriptors against the other's forest, that pass the ratio test
-/// both ways. The fundamental matrix is fitted to all of them, and the
-/// homography to its inliers, by LO-RANSAC with `options.seed`; a homography
-/// fitted to all of them at the fundamental matrix's bound stands in for the
-/// fundamental matrix when it has more inliers, since matches that fit one
-/// homography fit a whole family of fundamental matrices, which the
-/// seven-point solver cannot single out.
+/// both ways. The step is the median length of their displacements.
 ///
 /// # Errors
 ///
@@ -373,113 +285,17 @@ pub fn match_frame_pair(
     }
     let pairs = mutual_matches(a, b, options);
     let long_side = f64::from(a.width.max(a.height));
-
-    let x1: Vec<[f64; 2]> = pairs
+    let lengths: Vec<f64> = pairs
         .iter()
-        .map(|&(i, _)| widen(a.positions_xy[i]))
+        .map(|&(i, j)| {
+            let (p, q) = (widen(a.positions_xy[i]), widen(b.positions_xy[j]));
+            (q[0] - p[0]).hypot(q[1] - p[1])
+        })
         .collect();
-    let x2: Vec<[f64; 2]> = pairs
-        .iter()
-        .map(|&(_, j)| widen(b.positions_xy[j]))
-        .collect();
-    let lengths: Vec<f64> = x1
-        .iter()
-        .zip(&x2)
-        .map(|(p, q)| (q[0] - p[0]).hypot(q[1] - p[1]))
-        .collect();
-    let step_percent = 100.0 * median(&lengths) / long_side;
-
-    let mut stats = FramePairStats {
+    Ok(FramePairStats {
         matches: pairs.len(),
-        step_percent,
-        f_inlier_share: None,
-        h_over_f: None,
-        rotation_error: None,
-    };
-    if pairs.len() < options.min_matches {
-        return Ok(stats);
-    }
-
-    let scale = long_side / REFERENCE_LONG_SIDE_PX;
-    let fundamental_error_px = options.fundamental_error_per_960px * scale;
-    let f_inliers = fundamental_consensus(&x1, &x2, fundamental_error_px, options.seed);
-    let (y1, y2): (Vec<[f64; 2]>, Vec<[f64; 2]>) = f_inliers
-        .iter()
-        .zip(x1.iter().zip(&x2))
-        .filter(|(&inlier, _)| inlier)
-        .map(|(_, (&p, &q))| (p, q))
-        .unzip();
-    stats.f_inlier_share = Some(y1.len() as f64 / pairs.len() as f64);
-    if y1.len() < options.min_matches {
-        return Ok(stats);
-    }
-
-    let homography = estimate_homography(
-        &y1,
-        &y2,
-        &HomographyOptions {
-            max_error_px: options.homography_error_per_960px * scale,
-            seed: options.seed,
-            ..HomographyOptions::default()
-        },
-    );
-    let Some(homography) = homography else {
-        stats.h_over_f = Some(0.0);
-        return Ok(stats);
-    };
-    let h_inliers = homography.inliers.iter().filter(|&&inlier| inlier).count();
-    stats.h_over_f = Some(h_inliers as f64 / y1.len() as f64);
-    stats.rotation_error = rotation_error(&homography.h_matrix, a.width, a.height);
-    Ok(stats)
-}
-
-/// The inliers of the fundamental matrix with the largest consensus.
-///
-/// Matches that all fit one homography fit every fundamental matrix
-/// `[e']ₓ H`, and the seven-point solver finds none of them: its sample has
-/// fewer than seven independent constraints. A homography fitted at the same
-/// bound is therefore a fundamental matrix's consensus too, and the larger of
-/// the two inlier sets is the one returned, the fundamental matrix's on a
-/// tie. All `false` when neither fits.
-fn fundamental_consensus(
-    x1: &[[f64; 2]],
-    x2: &[[f64; 2]],
-    max_error_px: f64,
-    seed: u64,
-) -> Vec<bool> {
-    let fundamental = estimate_fundamental(
-        x1,
-        x2,
-        &FundamentalOptions {
-            max_error_px,
-            // A minimal sample fits its own seven matches exactly, so with
-            // this floor the share reports the best consensus however small.
-            min_inliers: FUNDAMENTAL_SAMPLE,
-            seed,
-            ..FundamentalOptions::default()
-        },
-    )
-    .map(|estimate| estimate.inliers);
-    let homography = estimate_homography(
-        x1,
-        x2,
-        &HomographyOptions {
-            max_error_px,
-            seed,
-            ..HomographyOptions::default()
-        },
-    )
-    .map(|estimate| estimate.inliers);
-    let count = |mask: &Option<Vec<bool>>| {
-        mask.as_ref()
-            .map_or(0, |mask| mask.iter().filter(|&&inlier| inlier).count())
-    };
-    let best = if count(&homography) > count(&fundamental) {
-        homography
-    } else {
-        fundamental
-    };
-    best.unwrap_or_else(|| vec![false; x1.len()])
+        step_percent: 100.0 * median(&lengths) / long_side,
+    })
 }
 
 fn widen(p: [f32; 2]) -> [f64; 2] {
@@ -534,75 +350,4 @@ fn best_passing(
             passes.then_some(index[0] as usize)
         })
         .collect()
-}
-
-/// The smallest `‖M Mᵀ − I‖` over focal lengths `f` in the tried range, with
-/// `K` the camera matrix of focal `f` and the principal point at the image
-/// centre, and `M = K⁻¹ H K` scaled to determinant 1.
-///
-/// The grid of `ROTATION_FOCAL_STEPS` values finds the basin, and a
-/// golden-section search in `log f` between the best value's two neighbours
-/// finds its floor, so a pure rotation scores near 0 whatever its focal
-/// length, not only on a grid value.
-fn rotation_error(h: &Matrix3<f64>, width: u32, height: u32) -> Option<f64> {
-    let long_side = f64::from(width.max(height));
-    let centre = (f64::from(width) / 2.0, f64::from(height) / 2.0);
-    let (low, high) = ROTATION_FOCAL_RANGE;
-    let log_low = (long_side * low).ln();
-    let log_step = (high / low).ln() / (ROTATION_FOCAL_STEPS - 1) as f64;
-    let at = |k: usize| log_low + k as f64 * log_step;
-
-    let mut best: Option<(usize, f64)> = None;
-    for k in 0..ROTATION_FOCAL_STEPS {
-        if let Some(error) = rotation_error_at(h, at(k).exp(), centre) {
-            if best.is_none_or(|(_, e)| error < e) {
-                best = Some((k, error));
-            }
-        }
-    }
-    let (k, mut error) = best?;
-
-    // Golden-section search over the bracket the neighbours give, kept
-    // within the range. A focal length whose M is degenerate scores +inf, so
-    // the search never moves towards one.
-    let score = |log_f: f64| rotation_error_at(h, log_f.exp(), centre).unwrap_or(f64::INFINITY);
-    let (mut a, mut b) = (
-        at(k.saturating_sub(1)),
-        at((k + 1).min(ROTATION_FOCAL_STEPS - 1)),
-    );
-    let ratio = (5f64.sqrt() - 1.0) / 2.0;
-    let mut c = b - ratio * (b - a);
-    let mut d = a + ratio * (b - a);
-    let (mut fc, mut fd) = (score(c), score(d));
-    for _ in 0..ROTATION_REFINE_ITERATIONS {
-        if fc < fd {
-            b = d;
-            d = c;
-            fd = fc;
-            c = b - ratio * (b - a);
-            fc = score(c);
-        } else {
-            a = c;
-            c = d;
-            fc = fd;
-            d = a + ratio * (b - a);
-            fd = score(d);
-        }
-    }
-    error = error.min(fc).min(fd);
-    Some(error)
-}
-
-/// `‖M Mᵀ − I‖` at focal `f`, or `None` when `M` is not finite or singular.
-fn rotation_error_at(h: &Matrix3<f64>, f: f64, (cx, cy): (f64, f64)) -> Option<f64> {
-    let k_mat = Matrix3::new(f, 0.0, cx, 0.0, f, cy, 0.0, 0.0, 1.0);
-    let k_inv = Matrix3::new(1.0 / f, 0.0, -cx / f, 0.0, 1.0 / f, -cy / f, 0.0, 0.0, 1.0);
-    let m = k_inv * h * k_mat;
-    let det = m.determinant();
-    if !det.is_finite() || det == 0.0 {
-        return None;
-    }
-    let m = m / det.cbrt();
-    let error = (m * m.transpose() - Matrix3::identity()).norm();
-    error.is_finite().then_some(error)
 }

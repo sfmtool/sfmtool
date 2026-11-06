@@ -1,15 +1,15 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! [`pick_images`]: the checks of the input, the baseline in its two batches,
-//! the verdict, and the walk of each sequence.
+//! [`pick_images`]: the checks of the input, the baseline, the verdict, and
+//! the walk of each sequence.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::baseline::{
     rate_p90, sample_counts, sample_positions, sequence_baseline, solvability_check, video_check,
-    SequenceBaseline, FAR_GAPS, NEAR_GAPS,
+    SequenceBaseline, BASELINE_GAPS,
 };
 use super::capture::{
     validate_sequences, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
@@ -27,16 +27,17 @@ use crate::progress::Progress;
 /// Choose the frames of a capture a solve should use.
 ///
 /// Reads a baseline sample of each sequence, judges from it whether each
-/// sequence is a video and whether the capture can be solved, and, when it
-/// can, walks each sequence choosing frames about `target_step_percent` of
-/// the image's long side apart, sharp ones in place of blurred ones. A
-/// verdict that stops the capture is a report, not an error.
+/// sequence is a video and whether its camera moves enough to be solved,
+/// and, when it can, walks each sequence choosing frames about
+/// `target_step_percent` of the image's long side apart, sharp ones in place
+/// of blurred ones. A verdict that stops the capture is a report, not an
+/// error.
 ///
 /// Every frame is read through `source`: [`pick_images`] waits on it for each
 /// frame just before reading the frame and, unless `options.prefetch` is
-/// off, asks it to prefetch the frames it knows it will read: each batch of
-/// the baseline, and the frames ahead of the walk through a break, where it
-/// reads every frame. It decides only from frames it waited for, so the
+/// off, asks it to prefetch the frames it knows it will read: the baseline,
+/// and the frames ahead of the walk through a break, where it reads every
+/// frame. It decides only from frames it waited for, so the
 /// report is the same whatever the source does ahead of it, except for
 /// [`PickImagesReport::frames_extracted_unread`]. When the run
 /// ends, with a report or an error, the source's work is stopped with
@@ -84,8 +85,7 @@ struct Decided {
     walks: Option<Vec<WalkReport>>,
 }
 
-/// The baseline in its two batches, the verdict, and the walk of each
-/// sequence.
+/// The baseline, the verdict, and the walk of each sequence.
 fn decide(
     frames: &mut Frames,
     sequences: &[CaptureSequence],
@@ -99,11 +99,11 @@ fn decide(
         .map(|(count, &len)| sample_positions(len, count))
         .collect();
 
-    // The first batch: the sampled frames and the frames 1 and 3 after them.
+    // The baseline: the sampled frames and the frames 1 and 3 after them.
     {
         let phase = progress.phase("baseline");
-        let groups = batch(&samples, &lengths, &NEAR_GAPS, true);
-        read_batch(frames, &groups, Stage::BaselineNear, &phase)?;
+        let groups = baseline_groups(&samples, &lengths, &BASELINE_GAPS);
+        read_baseline(frames, &groups, &phase)?;
     }
     let baselines: Vec<SequenceBaseline> = samples
         .into_iter()
@@ -125,18 +125,7 @@ fn decide(
         });
     }
 
-    // The second batch: the frames 10 and 30 after the sampled frames.
-    let sampled: Vec<Vec<usize>> = baselines.iter().map(|b| b.samples.clone()).collect();
-    {
-        let phase = progress.phase("baseline far pairs");
-        let groups = batch(&sampled, &lengths, &FAR_GAPS, false);
-        read_batch(frames, &groups, Stage::BaselineFar, &phase)?;
-    }
-    let checks: Vec<SolvabilityCheck> = baselines
-        .iter()
-        .enumerate()
-        .map(|(s, b)| solvability_check(frames, s, b))
-        .collect();
+    let checks: Vec<SolvabilityCheck> = baselines.iter().map(solvability_check).collect();
     if checks.iter().any(|c| !c.solvable) {
         return Ok(Decided {
             verdict: Verdict::NotSolvable,
@@ -165,14 +154,13 @@ fn decide(
     })
 }
 
-/// Read one batch of the baseline: prefetch all its frames, then wait for
-/// and match each sampled frame's in turn, so that matching one sample's
-/// pairs overlaps the source's work on the next ones. The frames are read,
-/// and the pairs matched, in the batch's order.
-fn read_batch(
+/// Read the baseline: prefetch all its frames, then wait for and match each
+/// sampled frame's in turn, so that matching one sample's pairs overlaps the
+/// source's work on the next ones. The frames are read, and the pairs
+/// matched, in the baseline's order.
+fn read_baseline(
     frames: &mut Frames,
     groups: &[SampleGroup],
-    stage: Stage,
     progress: &Progress,
 ) -> Result<(), PickImagesError> {
     let all: Vec<FrameId> = groups
@@ -181,8 +169,8 @@ fn read_batch(
         .collect();
     frames.prefetch(&all);
     for group in groups {
-        frames.ensure(&group.frames, stage, progress)?;
-        frames.match_pairs(&group.pairs, stage, progress)?;
+        frames.ensure(&group.frames, Stage::Baseline, progress)?;
+        frames.match_pairs(&group.pairs, Stage::Baseline, progress)?;
     }
     Ok(())
 }
@@ -208,33 +196,25 @@ fn check_folders(sequences: &[CaptureSequence]) -> Result<(), PickImagesError> {
     Ok(())
 }
 
-/// One sampled frame's part of a batch of the baseline: the frames it reads
+/// One sampled frame's part of the baseline: the frames it reads
 /// and the pairs it matches.
 struct SampleGroup {
     frames: Vec<FrameId>,
     pairs: Vec<(FrameId, FrameId)>,
 }
 
-/// One batch of the baseline, per sampled frame in sample order: the frames
-/// `gaps` after it that exist, after the sampled frame itself when
-/// `with_samples`, and the pairs from the sampled frame to them.
-fn batch(
-    samples: &[Vec<usize>],
-    lengths: &[usize],
-    gaps: &[usize],
-    with_samples: bool,
-) -> Vec<SampleGroup> {
+/// The baseline, per sampled frame in sample order: the sampled frame, the
+/// frames `gaps` after it that exist, and the pairs from the sampled frame to
+/// them.
+fn baseline_groups(samples: &[Vec<usize>], lengths: &[usize], gaps: &[usize]) -> Vec<SampleGroup> {
     let mut groups = Vec::new();
     for (sequence, positions) in samples.iter().enumerate() {
         let id = |frame| FrameId { sequence, frame };
         for &s in positions {
             let mut group = SampleGroup {
-                frames: Vec::new(),
+                frames: vec![id(s)],
                 pairs: Vec::new(),
             };
-            if with_samples {
-                group.frames.push(id(s));
-            }
             for &gap in gaps {
                 if s + gap < lengths[sequence] {
                     group.frames.push(id(s + gap));

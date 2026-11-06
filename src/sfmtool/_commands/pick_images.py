@@ -90,16 +90,6 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     help="How many frames the baseline samples, spread evenly over the capture.",
 )
 @click.option(
-    "--min-inlier-share",
-    "min_inlier_share",
-    type=float,
-    default=0.5,
-    metavar="SHARE",
-    show_default=True,
-    help="A step whose matches fit a fundamental matrix with a smaller share of "
-    "inliers fails.",
-)
-@click.option(
     "--json",
     "json_path",
     type=click.Path(dir_okay=False),
@@ -118,15 +108,14 @@ def pick_images(
     blur_ratio,
     neighbour_blur_ratio,
     baseline_frames,
-    min_inlier_share,
     json_path,
 ):
     """Choose the frames of a video a solve should use, and write them as a named image list.
 
     Reads a sample of each sequence's frames, judges whether each sequence is
-    a video and whether the capture can be solved, and then walks each
-    sequence, choosing frames about --target-step percent of the image's long
-    side apart and sharp frames in place of blurred ones. Each frame read, or
+    a video and whether its camera moves enough to be solved, and then walks
+    each sequence, choosing frames about --target-step percent of the image's
+    long side apart and sharp frames in place of blurred ones. Each frame read, or
     predicted to be read, gets a .sift file, extracted with the workspace's
     settings; with a feature tool other than sfmtool, every input frame is
     extracted first. With --write-list NAME the chosen frames are written as
@@ -200,7 +189,6 @@ def pick_images(
             "blur_ratio": blur_ratio,
             "neighbour_blur_ratio": neighbour_blur_ratio,
             "baseline_frames": baseline_frames,
-            "min_inlier_share": min_inlier_share,
         },
         json_path=Path(json_path) if json_path is not None else None,
     )
