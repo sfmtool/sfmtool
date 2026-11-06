@@ -1041,7 +1041,8 @@ fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     // against that sensor's neighbours, and swapped. Of the two nearest
     // neighbours, the one after it gains more on its least improved sensor
     // (1.36 against 1.31) and the one before it more on the reference
-    // sensor (1.55 against 1.36), so the frame after it is taken.
+    // sensor (1.55 against 1.36) and on its most improved sensor (1.55
+    // against 1.39), so the frame after it is taken.
     steady.shots[frame].readings[1] = sharp(frame, 1);
     for n in guarded - 2..=guarded + 2 {
         steady.shots[n].readings = vec![sharp(n, 0), sharp(n, 1)];
@@ -1050,7 +1051,7 @@ fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     steady.shots[other].readings[0].0 = 1.1;
     steady.shots[other].readings[1].0 = 3.6;
     steady.shots[other + 1].readings[0].0 = 1.5;
-    steady.shots[other + 1].readings[1].0 = 5.8;
+    steady.shots[other + 1].readings[1].0 = 5.0;
     steady.shots[other - 1].readings[0].0 = 1.7;
     steady.shots[other - 1].readings[1].0 = 4.7;
     let local = run_sparse(&[&steady]);
