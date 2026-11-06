@@ -411,3 +411,29 @@ fn a_frame_stopped_after_writing_is_counted_as_written() {
         .is_err());
     assert_eq!(pool.finish(), vec![id(0), id(1)]);
 }
+
+#[test]
+fn workers_stopped_as_they_start_all_stop() {
+    // Workers asked to stop just as they start, before or after they first
+    // find no work, all see the stop, so `finish` joins every one. A worker
+    // that missed the stop's wake-up would sleep forever, and the watchdog
+    // reports the hang.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let frames: Vec<CaptureFrame> = (0..1).map(frame).collect();
+        for round in 0..500 {
+            let job: Arc<Job> = Arc::new(|_id, _images, _progress, _wrote| Ok(()));
+            let mut pool = WorkerPool::new(job, Threads::Fixed(8));
+            pool.prefetch(&requests(&frames, &[0]));
+            pool.finish();
+            let _ = done.send(round);
+        }
+    });
+    let mut rounds = 0;
+    while rounds < 500 {
+        match finished.recv_timeout(Duration::from_secs(20)) {
+            Ok(_) => rounds += 1,
+            Err(_) => panic!("finish hung in round {rounds}: a worker missed the stop"),
+        }
+    }
+}
