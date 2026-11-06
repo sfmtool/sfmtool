@@ -151,10 +151,9 @@ fn a_steady_video_is_chosen_at_about_the_target_step() {
     let synth = Synth::steady(1, 300, ONE_PERCENT);
     let run = run(&[&synth]);
     let report = run.report();
-    assert_eq!(report.verdict, Verdict::Solvable);
+    assert_eq!(report.verdict, Verdict::Video);
     let sequence = &report.sequences[0];
     assert!(sequence.video.is_video);
-    assert!(sequence.solvability.as_ref().unwrap().solvable);
     assert!((sequence.baseline.rate_median - 1.0).abs() < 0.15);
     let walk = run.walk(0);
     assert_eq!(walk.chosen.first(), Some(&0));
@@ -909,7 +908,7 @@ fn shuffled_frames_are_not_a_video() {
     assert!(!photos.is_video);
     assert!(!photos.step_small && !photos.is_video);
     for sequence in &report.sequences {
-        assert!(sequence.solvability.is_none() && sequence.walk.is_none());
+        assert!(sequence.walk.is_none());
     }
     // Nothing is read, or asked for, after the baseline.
     assert!(report.frames.iter().all(|f| f.stage == Stage::Baseline));
@@ -941,28 +940,12 @@ fn a_sequence_of_three_frames_is_not_a_video() {
 }
 
 #[test]
-fn a_camera_that_barely_moves_is_not_solvable() {
-    let synth = Synth::steady(10, 300, 0.25 * ONE_PERCENT);
-    let run = run(&[&synth]);
-    let report = run.report();
-    assert_eq!(report.verdict, Verdict::NotSolvable);
-    assert!(report.sequences[0].video.is_video);
-    assert!(report.sequences[0].walk.is_none());
-    // Nothing is read after the baseline.
-    assert!(report.frames.iter().all(|f| f.stage == Stage::Baseline));
-    let check = report.sequences[0].solvability.as_ref().unwrap();
-    assert!(check.barely_moves && !check.solvable);
-    assert!(check.total_motion_percent < 100.0);
-    assert_read_is_asked(&run);
-}
-
-#[test]
 fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     let mut steady = Synth::steady_with_density(12, 200, ONE_PERCENT, NEIGHBOUR_DENSITY);
     steady.sensors = 2;
     let first = run_sparse(&[&steady]);
     let report = first.report();
-    assert_eq!(report.verdict, Verdict::Solvable);
+    assert_eq!(report.verdict, Verdict::Video);
     // The second sensor sees only random features of another size, so the
     // walk matched the reference sensor's images alone.
     let walk = first.walk(0);
@@ -1302,7 +1285,7 @@ fn several_sequences_share_the_baseline_and_are_walked_in_turn() {
     let two = Synth::steady(15, 150, ONE_PERCENT);
     let run = run(&[&one, &two]);
     let report = run.report();
-    assert_eq!(report.verdict, Verdict::Solvable);
+    assert_eq!(report.verdict, Verdict::Video);
     // 30 samples shared 2 to 1.
     assert_eq!(report.sequences[0].baseline.samples.len(), 20);
     assert_eq!(report.sequences[1].baseline.samples.len(), 10);

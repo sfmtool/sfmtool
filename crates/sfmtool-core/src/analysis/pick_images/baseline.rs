@@ -3,16 +3,13 @@
 
 //! The baseline: the sampled frames of each sequence, the median sharpness
 //! its frames are judged against, the rate along it, the flagged regions, and
-//! the two judgements made from it, whether a sequence is a video and whether
-//! its camera moves enough to be solved. See
+//! the judgement made from it, whether a sequence is a video. See
 //! `specs/core/analysis/pick-images.md` § "The baseline".
 
 use super::capture::{FrameId, PickImagesOptions};
 use super::frame_pair::FramePairStats;
 use super::frames::Frames;
-use super::report::{
-    FlaggedRegion, SampleRate, SensorBaseline, SensorReading, SolvabilityCheck, VideoCheck,
-};
+use super::report::{FlaggedRegion, SampleRate, SensorBaseline, SensorReading, VideoCheck};
 use crate::features::sift::ImageReadings;
 use crate::numeric::{median, quantile};
 
@@ -31,10 +28,6 @@ const VIDEO_MAX_STEP_PERCENT: f64 = 5.0;
 /// The factor within which neighbouring samples' 1-frame steps lie when the
 /// step changes little.
 const VIDEO_MAX_STEP_FACTOR: f64 = 2.0;
-
-/// The total motion, in percent of the long side, below which the camera
-/// barely moves.
-const MIN_TOTAL_MOTION_PERCENT: f64 = 100.0;
 
 /// How many sampled frames each sequence gets: its share of
 /// `baseline_frames` by frame count, at least 2 (the first and last) and at
@@ -310,17 +303,5 @@ pub(super) fn video_check(
         step_small,
         step_steady,
         is_video: len >= 4 && step_small && motion_adds_up && step_steady,
-    }
-}
-
-/// Judge whether a sequence's camera moves enough to be solved, from its
-/// baseline's rate.
-pub(super) fn solvability_check(baseline: &SequenceBaseline) -> SolvabilityCheck {
-    let total_motion_percent = baseline.rate_median * baseline.len as f64;
-    let barely_moves = total_motion_percent < MIN_TOTAL_MOTION_PERCENT;
-    SolvabilityCheck {
-        total_motion_percent,
-        barely_moves,
-        solvable: !barely_moves,
     }
 }

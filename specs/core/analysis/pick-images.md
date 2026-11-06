@@ -2,17 +2,16 @@
 
 A video of a walk around a scene has many more frames than a
 Structure-from-Motion solve should use. Neighbouring frames are nearly the same
-picture, some frames are blurred, and a capture whose camera hardly moved
-cannot be solved at all. Picking images looks at a capture before it is solved
-and chooses the frames a solve should use: frames spaced so that the image
-moves by about a tenth of its width from one to the next, sharp ones in place
-of blurred ones, and more frames where the capture is hard to follow. It reads
-a sample spread over the whole capture first, decides from it whether each
-sequence is a video and whether its camera moves enough to be solved, and only
-then walks each sequence frame by frame, measuring each step rather than
-taking a stride fixed in advance. It fits no geometry: whether the frames it
-chooses describe one camera motion through a static scene is for the solve to
-find out.
+picture and some frames are blurred. Picking images looks at a capture before
+it is solved and chooses the frames a solve should use: frames spaced so that
+the image moves by about a tenth of its width from one to the next, sharp ones
+in place of blurred ones, and more frames where the capture is hard to follow.
+It reads a sample spread over the whole capture first, decides from it whether
+each sequence is a video, and only then walks each sequence frame by frame,
+measuring each step rather than taking a stride fixed in advance. It makes no
+judgement of whether a capture can be solved and fits no geometry: whether the
+frames it chooses describe one camera motion through a static scene, and
+whether the camera moved enough, is for the solve to find out.
 
 Everything is measured from SIFT features. The motion between two frames is
 the median displacement of the features that match between them, and how well
@@ -143,8 +142,8 @@ steps of 2 has the same rate as one numbered in steps of 1. The report names
 frames the same way; `sequences[id.sequence].frames[id.frame].number` is the
 file number.
 
-**A verdict is a report, not an error.** A sequence that is not a video, or a
-capture that cannot be solved, is what the caller asked to find out, so
+**A verdict is a report, not an error.** A sequence that is not a video is
+what the caller asked to find out, so
 `pick_images` returns a report with that verdict and no walk. An error is
 something the caller has to fix before the question can be answered.
 
@@ -199,7 +198,7 @@ use sfmtool_core::progress::Progress;
 let mut source = ExtractingSource::new(BuildSiftFilesOptions::sfmtool_defaults())?;
 let report = pick_images(&sequences, &mut source,
                          &PickImagesOptions::default(), &Progress::none())?;
-if report.verdict == Verdict::Solvable {
+if report.verdict == Verdict::Video {
     let walk = report.sequences[0].walk.as_ref().unwrap();
     let numbers: Vec<i64> = walk.chosen.iter()
         .map(|&p| sequences[0].frames[p].number).collect();
@@ -208,8 +207,8 @@ if report.verdict == Verdict::Solvable {
 
 ### The report
 
-`PickImagesReport` holds the `verdict` (`Solvable`, `NotAVideo` or
-`NotSolvable`), one `SequenceReport` per sequence, every frame read
+`PickImagesReport` holds the `verdict` (`Video` or `NotAVideo`), one
+`SequenceReport` per sequence, every frame read
 (`FrameReading`: its id, the stage that read it, and each sensor's readings
 with the blur judgement made from them) in the order read, every pair
 matched (`MeasuredPair`, with its `FramePairStats`) in the order matched,
@@ -226,9 +225,7 @@ fast the source works. A `SequenceReport` holds:
   regions with what flagged them;
 - `video`: the three signs of a video, the medians behind them, and
   `is_video`;
-- `solvability`: the total motion, whether the camera barely moves and
-  `solvable`, or `None` when some sequence is not a video;
-- `walk`: or `None` unless the verdict is `Solvable`. The chosen positions,
+- `walk`: or `None` unless the verdict is `Video`. The chosen positions,
   the segments between breaks as runs of them, every accepted step (from, to,
   its statistics, its rate, its `StepKind` and whether its band was halved in a region
   flagged for weak matches),
@@ -244,9 +241,8 @@ a caller writes the whole report as JSON as it is.
 ## The algorithm
 
 Picking runs in five stages: check the input, read the baseline, judge whether
-each sequence is a video and whether its camera moves enough to be solved,
-walk each sequence, and assemble the report. The sequences are walked one
-after another.
+each sequence is a video, walk each sequence, and assemble the report. The
+sequences are walked one after another.
 
 ### Words
 
@@ -320,28 +316,15 @@ neighbours already half a target step apart leave nothing to pass over.
 Photographs taken one after another around a subject can show the other two
 signs, since their motion adds up and changes little from one photograph to
 the next, and only the size of the step tells them from a video. A video
-whose camera barely moves, whose sub-pixel jitter does not add up over 3
-frames, is judged not a video; one whose motion does add up is judged a video
-and then stopped as a camera that barely moves.
+from a tripod or a hand held still, whose sub-pixel jitter does not add up
+over 3 frames, is judged not a video, since there is no motion for the walk
+to follow.
 
 A sample whose 1-frame or 3-frame pair has fewer than `min_matches` matches
 counts against every sign it enters (its step and ratio as infinite), since
 photographs that barely overlap give that result. A sequence of fewer than 4
 frames has no 3-frame pair and is not a video. When a sequence is not a video,
 nothing more is read and the verdict is `NotAVideo`.
-
-### Does the camera move enough?
-
-From the baseline, per sequence: **the camera barely moves** when the total
-motion, the baseline's median rate times the frame count, is below 100% of
-the long side, so the whole capture moves the image by less than its own
-width. When it holds for any sequence, nothing more is read and the verdict
-is `NotSolvable`.
-
-Nothing else about solvability is judged. Whether the matches describe one
-camera motion through a static scene, as they do not for a camera that only
-turns or a scene that moves on its own, is not measured: the solve that
-follows finds out.
 
 ### The walk
 
@@ -649,14 +632,13 @@ three digits; the medians and ratios are `f64` because
 | `min_matches` | `30` | the mutual matches a pair that matches well has |
 | baseline gaps | 1, 3 | the frames after each sample the baseline reads |
 | video signs | 5%; 2 to 4; factor 2; all three | the three signs, all of which make a video |
-| barely moves | 100% | the total motion below which the camera barely moves |
 | re-aims | 4 | before a step fails |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
 | weak point | 2 × `min_matches`; 3 frames | a weak step, which beyond the next frame fails, and a short segment |
 | break read-ahead | `W` frames | how far the walk prefetches through a break, for a source of `W` workers |
 | neighbours | 2 positions on either side; below the median | the frames a candidate is judged against for blur against its neighbours, and which sensor images are judged |
 
-The last eight are constants of the module.
+The last seven are constants of the module.
 
 ## Python bindings
 
@@ -679,7 +661,7 @@ report = pick_images([sequence], feature_options=config["feature_options"],
                      target_step_percent=10.0)
 # Or read .sift files that already exist.
 report = pick_images([sequence])
-report["verdict"]                         # "solvable"
+report["verdict"]                         # "video"
 report["sequences"][0]["walk"]["chosen"]  # positions of the chosen frames
 ```
 
@@ -739,8 +721,8 @@ a gap filled in, a blurred frame whose sharp neighbours, a
 blurred run whose sharp frames and a wholly blurred run whose least blurred
 frames have few matches, none of them taken, shuffled
 frames, frames 6% apart that show the
-other two signs and a three-frame sequence that are not a video, a camera
-that barely moves, which is not solvable, a rig whose second sensor's images
+other two signs and a three-frame sequence that are not a video, a rig
+whose second sensor's images
 match nothing
 and whose blur alone, against its median and against its neighbours, swaps a
 frame, several sequences sharing the baseline,
@@ -787,7 +769,8 @@ equal `build_sift_files`', and which a second run reads without extracting.
   [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
 - Choosing among photographs. A sequence that is not a video stops the run;
   nothing chooses frames from it.
-- Fitting geometry to the matches. Neither the walk nor the verdict tells a
-  camera that moved through a static scene from one that only turned, or from
-  a scene that moved on its own; a capture of either is walked like any other
-  video, and the solve that follows finds out.
+- Judging whether a capture can be solved. Neither the walk nor the verdict
+  fits geometry to the matches or asks whether the camera moved enough, so a
+  camera that only turned, a scene that moved on its own and a camera that
+  moved little but steadily are walked like any other video, and the solve
+  that follows finds out.

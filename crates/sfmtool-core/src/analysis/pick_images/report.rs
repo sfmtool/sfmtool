@@ -18,8 +18,8 @@ use super::frame_pair::FramePairStats;
 /// What [`super::pick_images`] found.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PickImagesReport {
-    /// Whether the capture can be solved, and if not, the first check that
-    /// stopped it.
+    /// Whether every sequence is a video, which decides whether the capture
+    /// was walked.
     pub verdict: Verdict,
     /// One report per sequence, in the order the sequences were given.
     pub sequences: Vec<SequenceReport>,
@@ -39,20 +39,15 @@ pub struct PickImagesReport {
     pub frames_extracted_unread: usize,
 }
 
-/// Whether the capture can be solved.
+/// Whether every sequence of the capture is a video, and so was walked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
-    /// Every sequence is a video and passed the check of solvability; every
-    /// sequence was walked.
-    Solvable,
+    /// Every sequence is a video; every sequence was walked.
+    Video,
     /// A sequence is not a video ([`VideoCheck::is_video`]). Nothing was read
     /// after the baseline, and nothing was walked.
     NotAVideo,
-    /// Every sequence is a video, and a sequence failed the check of
-    /// solvability ([`SolvabilityCheck::solvable`]). Nothing was read after
-    /// the baseline, and nothing was walked.
-    NotSolvable,
 }
 
 /// Which stage of [`super::pick_images`] read a frame or matched a pair.
@@ -108,15 +103,13 @@ pub struct MeasuredPair {
     pub stage: Stage,
 }
 
-/// One sequence's baseline, its two judgements and its walk.
+/// One sequence's baseline, the judgement of whether it is a video, and its
+/// walk.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SequenceReport {
     pub baseline: BaselineReport,
     pub video: VideoCheck,
-    /// `None` when some sequence of the capture is not a video, since the
-    /// verdict then stops at the video check.
-    pub solvability: Option<SolvabilityCheck>,
-    /// `None` unless the verdict is [`Verdict::Solvable`].
+    /// `None` unless the verdict is [`Verdict::Video`].
     pub walk: Option<WalkReport>,
 }
 
@@ -196,17 +189,6 @@ pub struct VideoCheck {
     /// All three signs hold. False for a sequence of fewer than 4 frames,
     /// which has no 3-frame pair.
     pub is_video: bool,
-}
-
-/// The check of solvability: whether the camera moves enough.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SolvabilityCheck {
-    /// [`BaselineReport::total_motion_percent`].
-    pub total_motion_percent: f64,
-    /// `total_motion_percent` is below 100.
-    pub barely_moves: bool,
-    /// `barely_moves` does not hold.
-    pub solvable: bool,
 }
 
 /// One sequence's walk.

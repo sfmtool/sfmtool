@@ -19,18 +19,20 @@ The other defaults were run on a collection of captures: handheld walking
 videos, slow orbits of an object, shaky videos with long blurred runs, a video
 of a moving animal, rotation-only panoramas, videos from a tripod or a hand
 held still, a numbered set of photographs of an object beside a video in one
-run, and a two-sensor fisheye rig, with the lists of the solvable pinhole
-videos judged by solving them. The target step, the band and the barely-moves
-threshold held. Three rules changed, and the standing specs describe them: a
-small step is required of a video, a region flagged for blur alone no longer
-shortens the walk's steps, and the walk takes a step with fewer than twice
-`min_matches` matches only at the next frame or when halving a failed step
-finds nothing better. Raising `min_matches` from 30 to 100 instead, which also
-mended the solve that broke at steps with few matches, doubled the frames
-chosen on a shaky video, since it also flags more of the baseline's samples
-for weak matches. The command fits no geometry to the matches, so it no longer
-judges a moving scene or a camera that only turns; whether a pair matches well
-is its count of mutual matches alone. This draft holds what is not settled.
+run, and a two-sensor fisheye rig, with the lists of the pinhole videos judged
+by solving them. The target step and the band held. Three rules changed, and
+the standing specs describe them: a small step is required of a video, a
+region flagged for blur alone no longer shortens the walk's steps, and the
+walk takes a step with fewer than twice `min_matches` matches only at the next
+frame or when halving a failed step finds nothing better. Raising
+`min_matches` from 30 to 100 instead, which also mended the solve that broke
+at steps with few matches, doubled the frames chosen on a shaky video, since
+it also flags more of the baseline's samples for weak matches. The command
+makes no judgement of whether a capture can be solved: it fits no geometry to
+the matches, so it does not judge a moving scene or a camera that only turns,
+and it does not refuse a capture whose camera moves little, which refused a
+26-photograph capture that solves; whether a pair matches well is its count of
+mutual matches alone. This draft holds what is not settled.
 
 ## Open questions
 

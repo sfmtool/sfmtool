@@ -2,14 +2,13 @@
 
 A video of a walk around a scene has many more frames than a
 Structure-from-Motion solve should use. Neighbouring frames are nearly the same
-picture, some frames are blurred, and a capture whose camera hardly moved
-cannot be solved at all. `sfm pick-images` looks at a capture before it is
-solved and chooses the frames a solve should use: frames spaced so that the
-image moves by about a tenth of its width from one to the next, sharp ones in
-place of blurred ones, more frames where the capture is hard to follow and
-fewer where it is easy. It prints what it found, including a verdict on whether
-each sequence is a video whose camera moves enough to be solved, and when
-given a name it writes the frames it chose
+picture and some frames are blurred. `sfm pick-images` looks at a capture
+before it is solved and chooses the frames a solve should use: frames spaced
+so that the image moves by about a tenth of its width from one to the next,
+sharp ones in place of blurred ones, more frames where the capture is hard to
+follow and fewer where it is easy. It prints what it found, including a
+verdict on whether each sequence is a video, and when given a name it writes
+the frames it chose
 as a named image list ([workspace/named-image-lists.md](../../workspace/named-image-lists.md)),
 which `sfm solve -r NAME` and the other commands that take `-r` then use.
 
@@ -95,8 +94,8 @@ chosen.
 every folder and sequence it was given ([Writing the list](#writing-the-list)).
 
 **Exit status.** The command exits 0 when it finishes, whatever it found, as
-`sfm motion` does. When the verdict says a sequence is not a video or the
-capture cannot be solved, it writes no list; with `--write-list` it then says
+`sfm motion` does. When the verdict says a sequence is not a video, it writes
+no list; with `--write-list` it then says
 so on standard error and exits 1, since the list it was asked for does not
 exist. An error that stops the run exits 1, and a usage error 2.
 
@@ -138,7 +137,7 @@ In order, it:
    options, which extracts the `.sift` files itself; with another tool,
    extracts every input frame first and calls it to read them
    ([Extraction](#extraction)).
-6. Prints the report, writes the list when the verdict is solvable and a name
+6. Prints the report, writes the list when every sequence is a video and a name
    was given, and writes the JSON file when asked.
 
 ### Collecting the frames
@@ -306,7 +305,7 @@ Resolved with `-r NAME`, the list gives exactly the chosen frames' images.
 
 The command prints the workspace, the sequences it collected, a baseline
 section per sequence ending in the verdict, a walk section per sequence when
-the verdict is solvable, and the list it wrote. For one sequence:
+every sequence is a video, and the list it wrote. For one sequence:
 
 ```text
 Using workspace: /captures/garden
@@ -320,7 +319,7 @@ Baseline: 200 frames sampled, 590 frames read (578 extracted, 12 reused)
   A video (3 of 3 signs): 1 frame apart step 0.72%; 3 frames apart 2.9 times as far
     neighbouring samples' steps within a factor of 1.3
   Flagged regions: 2210-2271 (blurred), 4381-4442 (weak matches)
-Verdict: solvable
+Verdict: video
 
 Walk: target step 10% (band 7-13%), 1 break, 2 segments
   Chosen: 512 frames; read: 1307 frames (1250 extracted, 0 reused, 57 from the baseline)
@@ -363,14 +362,11 @@ first eight and the count of the rest.
   too few matches, prints as `unmeasured`.
 - **Verdict.** The last line of the baseline sections, in the shape of the
   `Verdict:` line [`sfm motion`](../reconstruction/motion-command.md) prints.
-  `solvable`; or `not a video:` naming each sequence that is not one with the
-  signs it failed, ending "sfm pick-images picks from video sequences only";
-  or `not solvable:` naming each sequence whose camera barely moves, with its
-  total motion:
+  `video`; or `not a video:` naming each sequence that is not one with the
+  signs it failed, ending "sfm pick-images picks from video sequences only":
 
   ```text
   Verdict: not a video: photos/DSC_%04d.JPG: steps 1 frame apart median 18.40%, 3 frames apart 1.2 times as far; sfm pick-images picks from video sequences only
-  Verdict: not solvable: desk/f_%03d.jpg: the camera barely moves: 50% of the long side in all
   ```
 
   A sequence of fewer than 4 frames is named as too short to tell a video from
@@ -399,7 +395,7 @@ first eight and the count of the rest.
   the first 30, the 30 from the middle starting at `(n − 30) // 2` for a list
   of `n` images, and the last 30. A smaller list's first and last 30 would
   overlap or be the whole list, and a rig list's slices would take one sensor's
-  images, since its entries go one per sensor. When the verdict is solvable and
+  images, since its entries go one per sensor. When every sequence is a video and
   no name was given, a line gives the count of frames chosen and says to pass
   `--write-list NAME`.
 
@@ -430,7 +426,7 @@ With a tool other than `sfmtool`, `frames_extracted` and
 [test_pick_images_command.py](../../../tests/test_pick_images_command.py)
 runs the command with click's runner on scratch workspaces. Its video is a
 synthetic pan: crops sliding a few pixels per frame across one checked-in
-photograph, so it is a video that can be solved. It covers a report-only run
+photograph, so it is a video. It covers a report-only run
 that writes nothing but `.sift` files and prints the count of frames
 extracted and never read; an `opencv` workspace, whose every input frame gets a
 `.sift` file before the walk reads them; a written list that `-r NAME` and
@@ -438,7 +434,7 @@ extracted and never read; an `opencv` workspace, whose every input frame gets a
 second run that reuses every `.sift` file; the refusal of a defined name before
 any image is read, and `--force` replacing a list in place; a list with a
 slice as input, and the input list's own name as output only with `--force`;
-a range narrowing a folder; a capture that barely moves and the seoul_bull
+a range narrowing a folder; the seoul_bull
 photographs, which write no list and exit 1 with `--write-list`; a version 1
 workspace; no workspace; files with no number or a shared number; a rig whose
 reference sensor is listed second, written one entry per sensor; a rig frame
@@ -458,9 +454,11 @@ error, the list entries, a range split in parts, and the slice suggestion.
   which stops the command. How photographs could be chosen from is an open
   question of [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
 - Judging whether a capture's frames describe one camera motion through a
-  static scene. The command fits no geometry, so a camera that only turned, or
-  a scene that moved on its own, is walked like any other video
-  ([core/analysis/pick-images.md § Does the camera move enough?](../../core/analysis/pick-images.md#does-the-camera-move-enough)).
+  static scene, or whether its camera moved enough to be solved. The command
+  fits no geometry and judges only whether each sequence is a video, so a
+  camera that only turned, a scene that moved on its own or a camera that
+  moved little is walked like any other video
+  ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
 
 The choices of this command that are still open, among them the size of the

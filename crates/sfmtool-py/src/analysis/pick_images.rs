@@ -417,11 +417,11 @@ impl PyCaptureSequence {
 /// Choose the frames of a video capture a Structure-from-Motion solve should
 /// use, from the SIFT features of the frames.
 ///
-/// Reads a baseline sample of each sequence, judges whether each is a video
-/// and whether its camera moves enough to be solved, and when it can, walks
-/// each sequence choosing frames about ``target_step_percent`` of the image's
-/// long side apart, sharp ones in place of blurred ones. Options left as
-/// ``None`` take the defaults of the Rust ``PickImagesOptions``.
+/// Reads a baseline sample of each sequence, judges whether each is a video,
+/// and when every one is, walks each sequence choosing frames about
+/// ``target_step_percent`` of the image's long side apart, sharp ones in
+/// place of blurred ones. Options left as ``None`` take the defaults of the
+/// Rust ``PickImagesOptions``.
 ///
 /// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
 /// settings for the ``sfmtool`` feature tool, each frame's ``.sift`` files
@@ -461,12 +461,11 @@ impl PyCaptureSequence {
 ///
 /// Returns:
 ///     The report as a dict of plain values, which ``json.dump`` writes as
-///     it is: ``verdict`` (``"solvable"``, ``"not_a_video"`` or
-///     ``"not_solvable"``), ``sequences`` (per sequence: ``baseline``,
-///     ``video``, ``solvability`` and ``walk``), ``frames`` (every frame
-///     read, with its readings), ``pairs`` (every pair matched, with its
-///     statistics), ``frames_extracted`` (per entry of ``frames``, whether
-///     its ``.sift`` files were written in this call) and
+///     it is: ``verdict`` (``"video"`` or ``"not_a_video"``), ``sequences``
+///     (per sequence: ``baseline``, ``video`` and ``walk``), ``frames``
+///     (every frame read, with its readings), ``pairs`` (every pair matched,
+///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
+///     whether its ``.sift`` files were written in this call) and
 ///     ``frames_extracted_unread`` (how many frames had ``.sift`` files
 ///     written ahead of the walk that it never read). A number that is not
 ///     finite is ``None``.

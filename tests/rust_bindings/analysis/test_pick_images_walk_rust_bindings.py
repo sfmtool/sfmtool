@@ -122,7 +122,7 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     capture = steady
     counter = ProgressCounter()
     report = pick_images([capture.sequence], baseline_frames=20, progress=counter)
-    assert report["verdict"] == "solvable"
+    assert report["verdict"] == "video"
     walk = report["sequences"][0]["walk"]
     chosen = walk["chosen"]
     assert chosen[0] == 0 and chosen[-1] == 149

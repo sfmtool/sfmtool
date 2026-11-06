@@ -62,35 +62,20 @@ def _not_a_video_reasons(video: dict, frame_count: int) -> str:
     return ", ".join(reasons)
 
 
-def _not_solvable_reasons(check: dict) -> str:
-    return (
-        "the camera barely moves: "
-        f"{check['total_motion_percent']:.0f}% of the long side in all"
-    )
-
-
 def verdict_line(report: dict, sequences: list[PickSequence]) -> str:
     """The `Verdict:` line, naming each sequence that stopped the run."""
-    verdict = report["verdict"]
-    if verdict == "solvable":
-        return "Verdict: solvable"
-    if verdict == "not_a_video":
-        parts = [
-            f"{s.name}: {_not_a_video_reasons(r['video'], len(s.numbers))}"
-            for s, r in zip(sequences, report["sequences"])
-            if not r["video"]["is_video"]
-        ]
-        return (
-            "Verdict: not a video: "
-            + "; ".join(parts)
-            + "; sfm pick-images picks from video sequences only"
-        )
+    if report["verdict"] == "video":
+        return "Verdict: video"
     parts = [
-        f"{s.name}: {_not_solvable_reasons(r['solvability'])}"
+        f"{s.name}: {_not_a_video_reasons(r['video'], len(s.numbers))}"
         for s, r in zip(sequences, report["sequences"])
-        if r["solvability"] is not None and not r["solvability"]["solvable"]
+        if not r["video"]["is_video"]
     ]
-    return "Verdict: not solvable: " + "; ".join(parts)
+    return (
+        "Verdict: not a video: "
+        + "; ".join(parts)
+        + "; sfm pick-images picks from video sequences only"
+    )
 
 
 def _counts(report: dict, sequence: int, stages: tuple[str, ...], extracted: dict):

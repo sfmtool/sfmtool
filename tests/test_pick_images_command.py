@@ -78,10 +78,10 @@ def pan_workspace(tmp_path: Path, pan_source, monkeypatch) -> Path:
     return workspace
 
 
-def _assert_solvable(data: dict, output: str) -> None:
+def _assert_walked(data: dict, output: str) -> None:
     """Fail with the report when a run that should walk did not reach the
     walk, so the failure names the reading that blocked it."""
-    assert data["verdict"] == "solvable", output
+    assert data["verdict"] == "video", output
     assert None not in data["chosen_numbers"], output
 
 
@@ -101,7 +101,7 @@ def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
     result = _invoke(["pick-images", "frames", *FAST])
     assert result.exit_code == 0, result.output
     assert "frames/pan_%03d.jpg, 100 frames (1-100)" in result.output
-    assert "Verdict: solvable" in result.output, result.output
+    assert "Verdict: video" in result.output, result.output
     assert "Walk: target step 10% (band 7-13%)" in result.output
     assert "pass --write-list NAME" in result.output
     added = _files(pan_workspace) - before
@@ -118,7 +118,7 @@ def test_write_list_writes_the_chosen_frames(pan_workspace: Path):
     )
     assert result.exit_code == 0, result.output
     data = json.loads((pan_workspace / "r.json").read_text())
-    _assert_solvable(data, result.output)
+    _assert_walked(data, result.output)
     (chosen,) = data["chosen_numbers"]
     assert len(chosen) > 5
     walk = data["sequences"][0]["walk"]
@@ -142,7 +142,7 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     first = _invoke(["pick-images", "frames", *FAST, "--json", "a.json"])
     assert first.exit_code == 0, first.output
     a = json.loads((pan_workspace / "a.json").read_text())
-    _assert_solvable(a, first.output)
+    _assert_walked(a, first.output)
     assert set(a) >= {"sequences", "frames", "pairs", "capture", "options"}
     assert a["options"]["target_step_percent"] == 10.0
     assert a["options"]["baseline_frames"] == 10
@@ -212,7 +212,7 @@ def test_force_replaces_a_list_in_place(pan_workspace: Path):
     )
     assert result.exit_code == 0, result.output
     data = json.loads((pan_workspace / "r.json").read_text())
-    _assert_solvable(data, result.output)
+    _assert_walked(data, result.output)
     (chosen,) = data["chosen_numbers"]
     lists = json.loads(lists_path.read_text())["named_image_lists"]
     assert list(lists) == ["pan", "other"]
@@ -230,15 +230,12 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
             }
         )
     )
-    # 90 frames at 1.25% per frame move 112.5% of the long side, clear of the
-    # 100% below which the camera barely moves. (80 frames would sit on that
-    # floor, and a rate measured a hundredth of a percent low fails it.)
     result = _invoke(["pick-images", "-r", "pan_all[5:95]", *FAST, "--json", "r.json"])
     assert result.exit_code == 0, result.output
     assert "Given named image list 'pan_all' sliced by [5:95]" in result.output
     data = json.loads((pan_workspace / "r.json").read_text())
     assert data["capture"][0]["numbers"] == list(range(6, 96))
-    _assert_solvable(data, result.output)
+    _assert_walked(data, result.output)
     (chosen,) = data["chosen_numbers"]
     assert chosen and all(6 <= n <= 95 for n in chosen)
 
@@ -262,7 +259,7 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
         ]
     )
     assert replaced.exit_code == 0, replaced.output
-    _assert_solvable(
+    _assert_walked(
         json.loads((pan_workspace / "replaced.json").read_text()), replaced.output
     )
     entries = json.loads(lists_path.read_text())["named_image_lists"]["pan_all"]
@@ -276,33 +273,6 @@ def test_a_range_narrows_the_folder(pan_workspace: Path):
     assert "frames/pan_%03d.jpg, 70 frames (1-70)" in result.output
     data = json.loads((pan_workspace / "r.json").read_text())
     assert data["capture"][0]["numbers"] == list(range(1, 71))
-
-
-def test_a_capture_that_barely_moves_writes_no_list(
-    tmp_path: Path, pan_source, monkeypatch
-):
-    workspace = tmp_path / "ws"
-    # 40 frames at 1.25% per frame: 50% of the long side in all.
-    _copy_frames(pan_source["top"], workspace / "frames", count=40)
-    _init_workspace(workspace)
-    monkeypatch.chdir(workspace)
-
-    report_only = _invoke(["pick-images", "frames", *FAST])
-    assert report_only.exit_code == 0, report_only.output
-    assert (
-        "Verdict: not solvable: frames/pan_%03d.jpg: the camera barely moves: 50% "
-        "of the long side in all" in report_only.output
-    )
-    assert "Walk" not in report_only.output
-
-    asked = CliRunner().invoke(
-        main, ["pick-images", "frames", *FAST, "--write-list", "short"]
-    )
-    assert asked.exit_code == 1, asked.output
-    assert (
-        "No named image list was written: the verdict is not solvable." in asked.output
-    )
-    assert not (workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
 
 
 def test_another_feature_tool_extracts_every_frame_first(
@@ -459,7 +429,7 @@ def test_a_rig_writes_every_sensor_of_each_chosen_frame(
     )
     assert "For a quick test solve" not in result.output
     data = json.loads((workspace / "r.json").read_text())
-    _assert_solvable(data, result.output)
+    _assert_walked(data, result.output)
     (capture,) = data["capture"]
     assert capture["sensors"] == ["rig/cam_a/", "rig/cam_b/"]
     assert capture["images"][0] == ["rig/cam_a/pan_001.jpg", "rig/cam_b/pan_001.jpg"]

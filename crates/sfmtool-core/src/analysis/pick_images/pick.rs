@@ -8,16 +8,16 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::baseline::{
-    rate_p90, sample_counts, sample_positions, sequence_baseline, solvability_check, video_check,
-    SequenceBaseline, BASELINE_GAPS,
+    rate_p90, sample_counts, sample_positions, sequence_baseline, video_check, SequenceBaseline,
+    BASELINE_GAPS,
 };
 use super::capture::{
     validate_sequences, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
 use super::frames::Frames;
 use super::report::{
-    BaselineReport, FrameReading, PickImagesReport, SequenceReport, SolvabilityCheck, Stage,
-    Verdict, VideoCheck, WalkReport,
+    BaselineReport, FrameReading, PickImagesReport, SequenceReport, Stage, Verdict, VideoCheck,
+    WalkReport,
 };
 use super::source::FrameSource;
 use super::walk::walk_sequence;
@@ -27,11 +27,10 @@ use crate::progress::Progress;
 /// Choose the frames of a capture a solve should use.
 ///
 /// Reads a baseline sample of each sequence, judges from it whether each
-/// sequence is a video and whether its camera moves enough to be solved,
-/// and, when it can, walks each sequence choosing frames about
-/// `target_step_percent` of the image's long side apart, sharp ones in place
-/// of blurred ones. A verdict that stops the capture is a report, not an
-/// error.
+/// sequence is a video, and, when every one is, walks each sequence choosing
+/// frames about `target_step_percent` of the image's long side apart, sharp
+/// ones in place of blurred ones. A verdict that stops the capture is a
+/// report, not an error.
 ///
 /// Every frame is read through `source`: [`pick_images`] waits on it for each
 /// frame just before reading the frame and, unless `options.prefetch` is
@@ -81,7 +80,6 @@ struct Decided {
     verdict: Verdict,
     baselines: Vec<SequenceBaseline>,
     videos: Vec<VideoCheck>,
-    checks: Option<Vec<SolvabilityCheck>>,
     walks: Option<Vec<WalkReport>>,
 }
 
@@ -120,18 +118,6 @@ fn decide(
             verdict: Verdict::NotAVideo,
             baselines,
             videos,
-            checks: None,
-            walks: None,
-        });
-    }
-
-    let checks: Vec<SolvabilityCheck> = baselines.iter().map(solvability_check).collect();
-    if checks.iter().any(|c| !c.solvable) {
-        return Ok(Decided {
-            verdict: Verdict::NotSolvable,
-            baselines,
-            videos,
-            checks: Some(checks),
             walks: None,
         });
     }
@@ -146,10 +132,9 @@ fn decide(
         }
     }
     Ok(Decided {
-        verdict: Verdict::Solvable,
+        verdict: Verdict::Video,
         baselines,
         videos,
-        checks: Some(checks),
         walks: Some(walks),
     })
 }
@@ -239,7 +224,6 @@ fn assemble(
         verdict,
         baselines,
         videos,
-        checks,
         walks,
     } = decided;
     let readings: Vec<FrameReading> = frames
@@ -255,7 +239,6 @@ fn assemble(
             }
         })
         .collect();
-    let mut checks = checks.map(Vec::into_iter);
     let mut walks = walks.map(Vec::into_iter);
     let sequences = baselines
         .into_iter()
@@ -287,7 +270,6 @@ fn assemble(
                     flagged_regions: baseline.flagged_regions,
                 },
                 video,
-                solvability: checks.as_mut().and_then(Iterator::next),
                 walk: walks.as_mut().and_then(Iterator::next),
             }
         })
