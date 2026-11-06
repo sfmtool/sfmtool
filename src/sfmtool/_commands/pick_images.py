@@ -72,7 +72,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "--neighbour-blur-ratio",
     "neighbour_blur_ratio",
     type=float,
-    default=0.8,
+    default=0.85,
     metavar="RATIO",
     show_default=True,
     help="A frame about to be chosen whose sharpness is below its sequence's "

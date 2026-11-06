@@ -11,7 +11,9 @@ per run across every sequence, the workspace and `.sift` version 2
 requirement, SIFT matching through a KD-forest as the measure of motion, the
 detection of a sequence of photographs, which stops the command, the target
 step of 10% and the blur ratio of 0.6, the walk, the baseline size of 200,
-and that blur is judged from the sharpness alone.
+that blur is judged from the sharpness alone, and the judgement of a frame
+below the median against its neighbouring frames, with its window of 2
+positions and its ratio of 0.85.
 
 The other defaults were run on a collection of captures: handheld walking
 videos, slow orbits of an object, shaky videos with long blurred runs, a video
@@ -42,14 +44,6 @@ settled.
 - **An asymmetric band.** ±30% held on every capture, but a short step costs
   only a frame more and a long one can lose the match, so a band wider below
   the target than above it is still a choice.
-- **Blur against the neighbouring frames.** The walk judges a frame it is
-  about to accept, when its sharpness is below the median, against the frames
-  within 2 positions of it, and swaps it for a sharper one when its
-  sharpness is below `neighbour_blur_ratio` (0.8) times the sharpest
-  neighbour's ([core/analysis/pick-images.md § Blur](../core/analysis/pick-images.md#blur)).
-  The rule is built; the frames it swaps and the candidates it keeps are to
-  be checked blind, which settles its ratio, its window of 2 positions, and
-  whether a frame sharper than the median needs judging too.
 - **Medians per sequence or per capture.** The walk takes the sharpness
   median per sequence, since separate sequences can differ in light and
   scene. For several sequences of one camera in one place, one median over the

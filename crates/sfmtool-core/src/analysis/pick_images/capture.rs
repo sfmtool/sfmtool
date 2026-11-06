@@ -100,7 +100,7 @@ impl Default for PickImagesOptions {
             target_step_percent: 10.0,
             step_band: 0.3,
             blur_ratio: 0.6,
-            neighbour_blur_ratio: 0.8,
+            neighbour_blur_ratio: 0.85,
             baseline_frames: 200,
             min_inlier_share: 0.5,
             forest: KdForestParams::balanced(),

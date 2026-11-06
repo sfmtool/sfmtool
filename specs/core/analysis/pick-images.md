@@ -90,7 +90,7 @@ pub struct PickImagesOptions {
     pub target_step_percent: f64,  // 10.0, positive
     pub step_band: f64,            // 0.3, in (0, 1)
     pub blur_ratio: f64,           // 0.6, in (0, 1)
-    pub neighbour_blur_ratio: f64, // 0.8, in (0, 1)
+    pub neighbour_blur_ratio: f64, // 0.85, in (0, 1)
     pub baseline_frames: usize,    // 200, at least 2
     pub min_inlier_share: f64,     // 0.5, in [0, 1]
     pub forest: KdForestParams,    // KdForestParams::balanced()
@@ -491,6 +491,12 @@ stretch whose frames are all equally blurred is not judged blurred against
 its neighbours, which share the blur; the comparison with the median, which
 the walk keeps, is what finds such a stretch.
 
+The ratio errs towards judging a frame blurred against its neighbours. A
+swap moves only to a neighbouring frame that is sharper on a judged sensor
+by the ratio and passes the match and band checks, so judging a sharp frame
+blurred against its neighbours costs little, while a higher ratio swaps more
+of the frames that are blurrier than a neighbour.
+
 The report also carries each image's axis ratio and coherence, which
 `ImageReadings::axis_ratio` and `ImageReadings::coherence` derive from the
 gradient structure tensor, but blur is not judged from them. They measure the
@@ -646,7 +652,7 @@ three digits; the medians and ratios are `f64` because
 | `target_step_percent` | `10` | the step aimed for, percent of the long side |
 | `step_band` | `0.3` | the band, `target × (1 ± step_band)` |
 | `blur_ratio` | `0.6` | below this times the median sharpness is blurred |
-| `neighbour_blur_ratio` | `0.8` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
+| `neighbour_blur_ratio` | `0.85` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
 | `baseline_frames` | `200` | the samples, shared among the sequences |
 | `min_inlier_share` | `0.5` | the F-inlier share a pair that matches well has |
 | `pair.min_matches` | `30` | the matches a pair that matches well has |

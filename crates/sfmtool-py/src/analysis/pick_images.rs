@@ -477,7 +477,7 @@ impl PyCaptureSequence {
 ///         is blurred (0.6).
 ///     neighbour_blur_ratio: A frame about to be accepted whose sharpness is
 ///         below its median is blurred against its neighbours when it is
-///         below this times the sharpest neighbouring frame's (0.8).
+///         below this times the sharpest neighbouring frame's (0.85).
 ///     baseline_frames: How many frames the baseline samples (200).
 ///     min_inlier_share: The fewest fundamental-matrix inliers a step that
 ///         matches well has, as a share of its matches (0.5).

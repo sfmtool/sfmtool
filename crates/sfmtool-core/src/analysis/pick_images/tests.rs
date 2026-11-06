@@ -351,7 +351,7 @@ fn swap_fits(stats: &FramePairStats, from: usize, n: usize, own: f64) -> bool {
 #[test]
 fn a_frame_blurred_against_its_neighbours_is_swapped_for_the_sharpest_that_fits() {
     // A frame the walk chose, made less sharp than its neighbours by more
-    // than 0.8 while staying above 0.6 of the median, so only the comparison
+    // than 0.85 while staying above 0.6 of the median, so only the comparison
     // with its neighbours finds it blurred. The two frames 2 positions away
     // are the sharpest, the later one sharper: one of their steps is always
     // in the band, and neither is the frame a nearest-first order would
