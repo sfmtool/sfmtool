@@ -115,9 +115,9 @@ def pick_images(
     Reads a sample of each sequence's frames, judges whether each sequence is
     a video, and then walks each sequence, choosing frames about --target-step
     percent of the image's long side apart and sharp frames in place of
-    blurred ones. Each frame read, or predicted to be read, gets a .sift file, extracted with the workspace's
-    settings; with a feature tool other than sfmtool, every input frame is
-    extracted first. With --write-list NAME the chosen frames are written as
+    blurred ones. Each frame read, or predicted to be read, gets a .sift
+    file, extracted with the workspace's settings; with a feature tool other
+    than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
     the named image list NAME, for `sfm solve -r NAME`.
     """
     from .._sfmtool.workspace import is_named_image_list_name

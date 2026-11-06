@@ -906,7 +906,7 @@ fn shuffled_frames_are_not_a_video() {
     assert!(report.sequences[0].video.is_video);
     let photos = &report.sequences[1].video;
     assert!(!photos.is_video);
-    assert!(!photos.step_small && !photos.is_video);
+    assert!(!photos.step_small, "{photos:?}");
     for sequence in &report.sequences {
         assert!(sequence.walk.is_none());
     }
