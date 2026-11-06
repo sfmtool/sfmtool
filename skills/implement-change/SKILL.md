@@ -315,7 +315,14 @@ and hosts the pictures:
 > reverted before committing, and say what you changed. Report the time of
 > each test you add and the before and after times of each test whose time you
 > change by more than a second, as `specs/STANDARDS.md` § "Tests cost what
-> their assertions need" asks. Check every writer and checked-in file before
+> their assertions need" asks. When cutting a test's time, consider every
+> dimension of its input that section lists, not only the count of items,
+> and keep coverage as well as assertions: a test whose input must exercise
+> particular events names them and asserts each one happens, and a cut
+> checks that each still does. Guard a test of code that could hang with a
+> timeout, as that section says, and run every long test command under a
+> time limit (in the Bash shell, `timeout`) so a hang ends as a failure
+> instead of stalling you. Check every writer and checked-in file before
 > making a reader stricter. Commit with a
 > plain-language message, signed off (`git commit -s`), with no attribution
 > lines. Do not push.
@@ -395,7 +402,11 @@ and hosts the pictures:
 >    showed it for a fix to a flaky or weak test, and where it is cheap,
 >    repeat the check with a temporary change to the guarded code, reverted
 >    afterwards. An assertion that cannot fail is SUBSTANTIVE, and so is a
->    test made faster by dropping a case or weakening an assertion. Check the
+>    test made faster by dropping a case or weakening an assertion, or by an
+>    input that no longer exercises an event the test was written to cover,
+>    even with every assertion passing. When judging a slow test, check every
+>    dimension of its input that `specs/STANDARDS.md` § "Tests cost what their
+>    assertions need" lists, not only the count of items. Check the
 >    implementer's VISIBLE claim against the diff:
 >    a change to anything the viewer draws, an image a CLI command writes, or
 >    a docs page is visible however small, such as a new menu entry or a
@@ -407,8 +418,10 @@ and hosts the pictures:
 >    it edits: a full `pixi run test` after a `sfmtool-py` change,
 >    `pixi run -e ui ui-test` after a `sfm-explorer` change, and
 >    `cargo test` and `cargo clippy` with `--workspace` after any Rust change.
->    A failing suite is SUBSTANTIVE unless the fix is SIMPLE, with one
->    exception: on Windows, the real-mouse `ui_basic` test
+>    Run each long test command under a time limit (in the Bash shell,
+>    `timeout`) so a hang ends as a failure instead of stalling you; a hang
+>    is a failing suite. A failing suite is SUBSTANTIVE unless the fix is
+>    SIMPLE, with one exception: on Windows, the real-mouse `ui_basic` test
 >    `a_real_right_click_opens_the_reconstruction_rows_context_menu` failing
 >    with "could not aim at the viewer's own window" (a locked desktop) is
 >    not SUBSTANTIVE and does not stop you returning CLEAN, as long as every

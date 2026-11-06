@@ -281,8 +281,12 @@ are placed, each run examines the 3 slowest of them in a dive:
   assertions need", and if it does not, which of the standard's four ways
   (the smallest input that exercises the behaviour, one run for several
   tests, the call rather than the pipeline, a measurement outside the suite)
-  would cut its time with every case and assertion kept. A dive never
-  proposes fewer cases or weaker assertions.
+  would cut its time with every case and assertion kept. Look along every
+  dimension of its input that the standard lists (for real images their
+  size, `max_num_features` and `double_image`; for synthetic features the
+  features per item; iteration, sample, worker and repeat counts), not only
+  the count of items, and name each event the input must still exercise. A
+  dive never proposes fewer cases or weaker assertions.
 
 The candidates and the dives, with `$out` the pytest output of check 21 and
 `$w/rust_slow.txt` its `grep` of the CI log:
@@ -702,7 +706,10 @@ worth more than a paragraph.
     guarded code under which it still passes. The proposed fix makes the
     assertion able to fail, or covers each ordering with its own
     deterministic test; it never deletes a case. Feeds STANDARDS.md § "Tests
-    assert something that can fail".
+    assert something that can fail". While reading the hold and wait hits,
+    also keep a wait on code that could hang, such as a join of worker
+    threads, that has no timeout; that feeds STANDARDS.md § "Tests cost what
+    their assertions need".
 21. **Test time** — run the Python suite with every duration listed, then
     list and sum the setup and call phases over 5 seconds:
 
@@ -732,14 +739,17 @@ worth more than a paragraph.
     for a closer look; a test over them is not a finding by itself. Each run
     reads up to three of them, chosen under "Slow-test dives" above, and
     reports the rest by their numbers alone. For each one read: group the
-    tests that run the same expensive call on the same input, and note a test that lowers a size for the steps it checks but
-    leaves an expensive step at its default. Keep only a test that one of
-    the standard's ways (the smallest input that exercises the behaviour,
-    one run for several tests, the call rather than the pipeline, a
-    measurement outside the suite) would make faster with every case and
-    assertion kept. Before reporting it, time it alone (`pixi run test --
-    <node id>`, or `pixi run cargo test -p <crate> <test name>`), and name
-    the way and how each of its cases and assertions is kept. A proposed fix
+    tests that run the same expensive call on the same input, note a test
+    that lowers a size for the steps it checks but leaves an expensive step
+    at its default, and note any dimension of its input, from the
+    standard's list, left at a size its assertions do not need. Keep only
+    a test that one of the standard's ways (the smallest input that
+    exercises the behaviour, one run for several tests, the call rather than
+    the pipeline, a measurement outside the suite) would make faster with
+    every case and assertion kept. Before reporting it, time it alone
+    (`pixi run test -- <node id>`, or `pixi run cargo test -p <crate> <test
+    name>`), and name the way, how each of its cases and assertions is kept,
+    and how each event its input exercises still happens. A proposed fix
     never drops a case, weakens or removes an assertion, or narrows what the
     test covers. A test over the limits that no way would make faster
     without doing one of those meets the standard and is not a finding.
