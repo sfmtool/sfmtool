@@ -1002,11 +1002,29 @@ fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     assert_read_is_asked(&first);
 
     // The second sensor's image of a chosen frame blurred makes the frame
-    // blurred, and it is swapped.
+    // blurred, and it is swapped. In the same run, an earlier chosen frame
+    // is blurred against its neighbours on the second sensor, but the one
+    // neighbour sharper there by the ratio is less sharp than it by the ratio
+    // on the reference sensor, though not blurred: no neighbour qualifies,
+    // and it is kept, so the walk after it is the clean run's.
     let frame = unsampled_choice(&first, 60);
+    let (_, guarded) = unsampled_window_step(&first, 20, None);
+    assert!(guarded + 5 < frame, "{guarded} {frame}");
+    steady.shots[guarded].readings[0].0 = 1.1;
+    steady.shots[guarded].readings[1].0 = 3.6;
+    for n in [guarded - 2, guarded - 1, guarded + 2] {
+        steady.shots[n].readings[1].0 = 4.0;
+    }
+    steady.shots[guarded + 1].readings[0].0 = 0.85;
+    steady.shots[guarded + 1].readings[1].0 = 6.5;
     steady.shots[frame].readings[1] = (1.0, sharp(frame, 1).1);
     let run = run_sparse(&[&steady]);
     let walk = run.walk(0);
+    assert!(walk.chosen.contains(&guarded), "{guarded} was not kept");
+    assert!(walk.swaps.iter().all(|s| s.candidate != guarded));
+    let id = |frame| FrameId { sequence: 0, frame };
+    assert!(was_read(&run, &id(guarded + 1)));
+    assert!(!judged(&run, guarded + 1).blurred);
     assert!(!walk.chosen.contains(&frame));
     assert!(walk.swaps.iter().any(|s| s.candidate == frame));
     let read = run
@@ -1020,18 +1038,33 @@ fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     // The second sensor's image of another chosen frame below its own
     // neighbours', the reference sensor's above its median: the frame is
     // blurred against its neighbours on the second sensor alone, judged
-    // against that sensor's neighbours, and swapped.
+    // against that sensor's neighbours, and swapped. Of the two nearest
+    // neighbours, the one after it gains more on its least improved sensor
+    // (1.36 against 1.31) and the one before it more on the reference
+    // sensor (1.55 against 1.36), so the frame after it is taken.
     steady.shots[frame].readings[1] = sharp(frame, 1);
+    for n in guarded - 2..=guarded + 2 {
+        steady.shots[n].readings = vec![sharp(n, 0), sharp(n, 1)];
+    }
     let (_, other) = unsampled_window_step(&first, 130, None);
     steady.shots[other].readings[0].0 = 1.1;
     steady.shots[other].readings[1].0 = 3.6;
+    steady.shots[other + 1].readings[0].0 = 1.5;
+    steady.shots[other + 1].readings[1].0 = 5.8;
+    steady.shots[other - 1].readings[0].0 = 1.7;
+    steady.shots[other - 1].readings[1].0 = 4.7;
     let local = run_sparse(&[&steady]);
     let walk = local.walk(0);
     assert!(!walk.chosen.contains(&other));
-    assert!(walk
-        .swaps
-        .iter()
-        .any(|s| s.candidate == other && s.reason == SwapReason::Neighbours));
+    assert!(
+        walk.swaps.contains(&Swap {
+            candidate: other,
+            chosen: other + 1,
+            reason: SwapReason::Neighbours,
+        }),
+        "{:?}",
+        walk.swaps
+    );
     let read = judged(&local, other);
     assert!(!read.blurred, "{read:?}");
     assert!(read.sensors[0].sharpness_ratio > 1.0 && read.sensors[1].sharpness_ratio > 0.6);
@@ -1074,7 +1107,7 @@ fn eventful() -> Synth {
         })
         .collect();
     let length = *xs.last().unwrap();
-    let mut synth = Synth::wall(32, -12.0, length + 12.0, 80.0).along(xs);
+    let mut synth = Synth::wall(32, -12.0, length + 12.0, NEIGHBOUR_DENSITY).along(xs);
     // Every third frame blurred, so a candidate that lands on one is
     // swapped for a sharp neighbour.
     for t in (15..=45).step_by(3) {
