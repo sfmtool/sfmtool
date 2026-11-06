@@ -69,7 +69,13 @@ describes the input images. The descriptor comes from
 function a generated `.sfmr` name uses, so both artifacts of one run describe
 their inputs identically: `<prefix>_<range>` when the images form a single
 numbered sequence (`frame_1-50`), and `<first stem>-total-<n>-images`
-otherwise. The cluster matcher appends `-clusters` to the stem.
+otherwise. The descriptor is at most 100 UTF-8 bytes, so the whole name stays
+inside the 255-byte or 255-character limit file systems put on one path
+component: a sequence whose range would be longer, such as an irregular list
+of picked frames, becomes `<prefix>_<first>-<last>-total-<n>-images`
+(`DinoLedge_1-1177-total-96-images`), and a prefix or first stem that still
+does not fit is cut short at a character boundary. The cluster matcher appends
+`-clusters` to the stem.
 
 ## Options
 

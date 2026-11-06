@@ -138,7 +138,10 @@ it cannot register every image into a single one). `sfm solve` writes one
   — not the mapper's internal model index — decides output naming: with an
   explicit `--output`, the largest model takes that exact path and the rest get
   `{stem}-{N}{suffix}` siblings; without it, each model is auto-named from the
-  images it actually contains. This keeps a small fragment that happened to land
+  images it actually contains, as `<YYYYMMDD>-<NN>-solve-<descriptor>.sfmr`
+  with the length-bounded image descriptor that
+  [`sfm match`](../image-feature/match-command.md#the-generated-default-name)
+  names its output with. This keeps a small fragment that happened to land
   at a lower model index from claiming the requested output name.
 - **Each point is seen once per image.** A model is converted to `.sfmr`
   through the COLMAP import, which drops a track's observations beyond one per
