@@ -1095,10 +1095,13 @@ fn the_same_capture_gives_the_same_report() {
     assert_eq!(a.waits, b.waits);
 }
 
-/// The point density of [`eventful`]: the lowest at which its bad patch is
-/// still filled in by halving, with steps of few matches, rather than broken
-/// across, its blurred run lies outside every region flagged for weak
-/// matches, and a candidate lands on a frame blurred against its neighbours.
+/// The point density of [`eventful`]: one at which its bad patch is filled
+/// in by halving, with steps of few matches, rather than broken across, its
+/// blurred run lies outside every region flagged for weak matches, and a
+/// candidate lands on a frame blurred against its neighbours. At 20 the
+/// first two fail; whether a candidate lands on that frame changes with the
+/// density (it does at 36 to 40 and 50, not at 30, 35 or 45), so a change of
+/// density is checked against [`assert_eventful`].
 const EVENTFUL_DENSITY: f64 = 40.0;
 
 /// A capture with something of everything the walk does: a change of speed,
