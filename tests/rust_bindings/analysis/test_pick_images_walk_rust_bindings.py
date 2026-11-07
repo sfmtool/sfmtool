@@ -121,17 +121,17 @@ def _read(report: dict) -> list[int]:
 def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     capture = steady
     counter = ProgressCounter()
-    report = pick_images([capture.sequence], baseline_frames=20, progress=counter)
-    walk = report["sequences"][0]["walk"]
+    report = pick_images([capture.sequence], progress=counter)
+    walk = report["sequences"][0]
     chosen = walk["chosen"]
     assert chosen[0] == 0 and chosen[-1] == 149
     strides = np.diff(chosen)
     assert 8 <= np.median(strides) <= 12
     steps = [s["stats"]["step_percent"] for s in walk["steps"]]
     assert 7 <= np.median(steps) <= 13
-    assert walk["breaks"] == [] and walk["swaps"] == []
+    assert walk["swaps"] == []
     read = _read(report)
-    assert len(set(read)) == len(read) < 150
+    assert len(set(read)) == len(read) == walk["frames_read"] < 150
     assert counter.value == len(read)
     # Nothing was extracted: the files were there.
     assert report["frames_extracted"] == [False] * len(read)
@@ -143,29 +143,24 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
 def test_a_missing_sift_file_is_a_file_not_found_error(tmp_path: Path):
     capture = _Capture(tmp_path / "frames", frames=40).write_all(skip={1})
     with pytest.raises(FileNotFoundError, match="frame_0002.jpg.sift"):
-        pick_images([capture.sequence], baseline_frames=20)
+        pick_images([capture.sequence])
 
 
 def test_options_reach_the_walk(steady: _Capture):
     capture = steady
-    report = pick_images(
-        [capture.sequence], baseline_frames=20, target_step_percent=20.0
-    )
-    strides = np.diff(report["sequences"][0]["walk"]["chosen"])
+    report = pick_images([capture.sequence], target_step_percent=20.0)
+    strides = np.diff(report["sequences"][0]["chosen"])
     assert 16 <= np.median(strides) <= 24
     # A floor above the matches of neighbouring frames keeps every frame.
     first = CaptureSequence(["frame_%04d.jpg"], capture.sequence.frames[:10])
-    report = pick_images([first], baseline_frames=2, min_step_matches=5000)
-    assert report["sequences"][0]["walk"]["chosen"] == list(range(10))
+    report = pick_images([first], min_step_matches=5000)
+    assert report["sequences"][0]["chosen"] == list(range(10))
     for name, value in [
         ("target_step_percent", 0.0),
         ("step_band", 1.0),
-        ("blur_ratio", 0.0),
         ("neighbour_blur_ratio", 1.0),
-        ("baseline_frames", 1),
         ("pair.ratio", 0.0),
-        ("min_matches", 0),
-        ("min_step_matches", 29),
+        ("min_step_matches", 0),
     ]:
         key = name.split(".")[-1]
         with pytest.raises(ValueError, match=name.replace(".", r"\.")):
@@ -207,8 +202,8 @@ def test_a_signal_while_the_walk_runs_stops_it(steady: _Capture):
     counter = ProgressCounter()
 
     def interrupt():
-        # The baseline's pairs take far longer to match than reading the
-        # first frame does.
+        # The walk's 150 frames take far longer to read and match than
+        # reading the first frame does.
         deadline = time.monotonic() + 60
         while counter.value == 0 and time.monotonic() < deadline:
             time.sleep(0.001)
@@ -217,7 +212,7 @@ def test_a_signal_while_the_walk_runs_stops_it(steady: _Capture):
     thread = threading.Thread(target=interrupt)
     thread.start()
     with pytest.raises(KeyboardInterrupt):
-        pick_images([capture.sequence], baseline_frames=100, progress=counter)
+        pick_images([capture.sequence], progress=counter)
     thread.join()
     assert 0 < counter.value < 150
 
@@ -305,11 +300,13 @@ def test_photographs_extracted_by_the_walk_are_every_one_kept(
         "concurrent_images": 4,
     }
     report = pick_images([sequence], **extract)
-    baseline = report["sequences"][0]["baseline"]
-    assert baseline["next_frame_matches_median"] < 600
-    assert report["sequences"][0]["walk"]["chosen"] == list(range(17))
+    walk = report["sequences"][0]
+    # Every step to the next frame keeps fewer matches than the floor, so
+    # every frame is chosen.
+    assert all(s["stats"]["matches"] < 600 for s in walk["steps"])
+    assert walk["chosen"] == list(range(17))
     read = _read(report)
-    # Every frame is sampled, so every frame is read, and each was extracted.
+    # Every frame is read, and each was extracted.
     assert sorted(read) == list(range(17))
     assert report["frames_extracted"] == [True] * 17
     assert report["frames_extracted_unread"] == 0

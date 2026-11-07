@@ -115,9 +115,11 @@ def test_list_entries_are_one_per_sensor_with_one_range():
         ("rig/left/f_%02d.jpg", "1-9:4,10,11"),
         ("rig/right/f_%02d.jpg", "1-9:4,10,11"),
     ]
-    # A sequence the walk chose no frame of, such as a lone frame, which has
-    # no next frame to match, has no entries.
-    assert list_entries(sequence, []) == []
+    # A lone chosen frame is one entry per sensor.
+    assert [(p, str(r)) for p, r in list_entries(sequence, [2])] == [
+        ("rig/left/f_%02d.jpg", "2"),
+        ("rig/right/f_%02d.jpg", "2"),
+    ]
 
 
 def test_a_range_too_long_for_one_expression_is_split_in_order():
@@ -141,42 +143,43 @@ def test_slice_suggestion():
 
 
 def test_swaps_and_steps_at_the_floor_are_reported():
-    # A walk of frames numbered 10 apart with one swap of each reason and a
-    # step stopped at the match floor; the report names the swaps by file
-    # number, each on its reason's line, and counts the steps at the floor.
+    # A walk of frames numbered 10 apart with a swap, a step stopped at the
+    # match floor beyond the next frame and one to a next frame that matches
+    # nothing; the report names the swap by file number and counts the steps
+    # at the floor, and those at the next frame among them.
     sequence = PickSequence(
         patterns=["f_%d.jpg"],
         numbers=[10 * t for t in range(1, 31)],
         images=[[ROOT / f"f_{10 * t}.jpg"] for t in range(1, 31)],
     )
-    stats = {"step_percent": 10.0, "matches": 500}
+    stats = {"step_percent": 10.0, "matches": 700}
+    nothing = {"step_percent": None, "matches": 0}
     walk = {
-        "chosen": [0, 12, 21],
-        "segments": [{"start": 0, "len": 3}],
+        "chosen": [0, 12, 21, 22],
         "steps": [
             {"from": 0, "to": 12, "stats": stats, "rate": 0.8, "kind": "in_band"},
             {"from": 12, "to": 21, "stats": stats, "rate": 1.1, "kind": "at_floor"},
+            {"from": 21, "to": 22, "stats": nothing, "rate": None, "kind": "at_floor"},
         ],
-        "swaps": [
-            {"candidate": 11, "chosen": 12, "reason": "median"},
-            {"candidate": 22, "chosen": 21, "reason": "neighbours"},
-        ],
-        "gaps": [],
-        "kept_blurred": [],
-        "breaks": [],
-        "weak_points": [],
-        "frames_used": 5,
-        "frames_from_baseline": 0,
+        "swaps": [{"candidate": 22, "chosen": 21}],
+        "frames_read": 9,
     }
-    report = {"sequences": [{"walk": walk}], "frames": []}
-    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3)
-    assert "  Blurred frames swapped (1): 120->130" in lines
+    report = {"sequences": [walk], "frames": []}
+    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
+    assert "Walk: target step 10% (band 7-13%), match floor 600" in lines
+    assert "  Chosen: 4 of 30 frames; read: 9 frames (0 extracted, 9 reused)" in lines
     assert "  Frames blurred against their neighbours swapped (1): 230->220" in lines
-    assert "  Steps stopped at the match floor: 1 of 2" in lines
+    assert (
+        "  Steps stopped at the match floor: 2 of 3, 1 of them at the next frame"
+        in (lines)
+    )
+    # The run of positions whose only step matches nothing has no step or
+    # rate to report.
+    assert any(line.endswith("unmeasured      1") for line in lines), lines
 
     walk["swaps"] = []
-    walk["steps"][1]["kind"] = "bracketed"
-    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3)
-    assert "  Blurred frames swapped: none" in lines
+    for step in walk["steps"][1:]:
+        step["kind"] = "bracketed"
+    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
     assert "  Frames blurred against their neighbours swapped: none" in lines
     assert "  Steps stopped at the match floor: none" in lines

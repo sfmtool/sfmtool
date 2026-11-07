@@ -9,32 +9,24 @@ and writes a list when given a name), that a written list records nothing
 about how it was picked, the refusal to overwrite without `--force`, one list
 per run across every sequence, the workspace and `.sift` version 2
 requirement, SIFT matching through a KD-forest as the measure of motion, the
-match floor, an absolute count of mutual matches that every step beyond the
-next frame keeps, at 600, with no check of whether a sequence is a video, the
-target step of 10% and the blur ratio of 0.6, the walk, the baseline size of
-200,
-that blur is judged from the sharpness alone, and the judgement of a frame
-below the median against its neighbouring frames, with its window of 2
-positions and its ratio of 0.85.
+target step of 10%, the walk, which starts at the first frame with no sample
+of the capture ahead of it and always takes the step to the next frame, the
+match floor as its one count of matches, an absolute count of mutual matches
+that every step beyond the next frame keeps, at 600, with no check of whether
+a sequence is a video, that blur is judged from the sharpness alone, and only
+against the neighbouring frames, with a window of 2 positions and a ratio of
+0.85.
 
-The other defaults were run on a collection of captures: handheld walking
-videos, slow orbits of an object, shaky videos with long blurred runs, a video
-of a moving animal, rotation-only panoramas, videos from a tripod or a hand
-held still, a numbered set of photographs of an object beside a video in one
-run, and a two-sensor fisheye rig, with the lists of the pinhole videos judged
-by solving them. The target step and the band held. The rules the standing
-specs describe changed with them: a region flagged for blur alone no longer
-shortens the walk's steps, and a step beyond the next frame keeps the match
-floor, which also keeps every frame of a capture already subsampled from a
-video. Raising `min_matches` from 30 to 100 instead, which also mended the
-solve that broke at steps with few matches, doubled the frames chosen on a
-shaky video, since it also flags more of the baseline's samples for weak
-matches. The command makes no judgement of whether a capture can be solved:
-it fits no geometry to the matches, so it does not judge a moving scene or a
-camera that only turns, and it does not refuse a capture whose camera moves
-little, which refused a 26-photograph capture that solves; whether a pair
-matches well is its count of mutual matches alone. This draft holds what is
-not settled.
+The defaults were run on a collection of captures: handheld walking videos,
+slow orbits of an object, shaky videos with long blurred runs, a video of a
+moving animal, rotation-only panoramas, videos from a tripod or a hand held
+still, a numbered set of photographs of an object beside a video in one run,
+and a two-sensor fisheye rig, with the lists of the pinhole videos judged by
+solving them. The target step and the band held. The command makes no
+judgement of whether a capture can be solved: it fits no geometry to the
+matches, so it does not judge a moving scene or a camera that only turns, and
+it does not refuse a capture whose camera moves little, which refused a
+26-photograph capture that solves. This draft holds what is not settled.
 
 ## Open questions
 
@@ -47,15 +39,12 @@ not settled.
 - **An asymmetric band.** ±30% held on every capture, but a short step costs
   only a frame more and a long one can lose the match, so a band wider below
   the target than above it is still a choice.
-- **Medians per sequence or per capture.** The walk takes the sharpness
-  median per sequence, since separate sequences can differ in light and
-  scene. For several sequences of one camera in one place, one median over the
-  capture may be better.
 - **Rigs.** Motion from the reference sensor only, sharpness per sensor against
-  its own median, and a frame blurred when any sensor is. Whether a sensor
-  pointing at a featureless view should be allowed to make every frame look
-  blurred, and whether `.camrig` files, as well as `rig_config.json`, should
-  define the rigs.
+  that sensor's images of the neighbouring frames, and a frame blurred against
+  its neighbours when any sensor is. Whether a sensor pointing at a
+  featureless view should be allowed to make a frame look blurred against its
+  neighbours, and whether `.camrig` files, as well as `rig_config.json`,
+  should define the rigs.
 - **Rig list entries.** One entry per sensor with the same range keeps each
   pattern literal but orders the list by sensor and then frame, so a slice of
   the list ([named-image-lists.md § Slices](../workspace/named-image-lists.md#slices))

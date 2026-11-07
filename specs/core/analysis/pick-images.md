@@ -6,12 +6,12 @@ picture and some frames are blurred. Picking images looks at a capture before
 it is solved and chooses the frames a solve should use: frames spaced so that
 the image moves by about a tenth of its width from one to the next, but never
 so far apart that two consecutive chosen frames keep fewer mutual matches than
-a floor, sharp ones in place of blurred ones, and more frames where the
-capture is hard to follow. It reads a sample spread over the whole capture
-first, then walks each sequence frame by frame, measuring each step rather
-than taking a stride fixed in advance. A capture whose neighbouring frames
-already match with fewer matches than the floor, such as one subsampled from
-a video or a set of photographs taken one after another, keeps every frame.
+a floor, sharper ones in place of frames blurred against their neighbours,
+and more frames where the capture is hard to follow. It walks each sequence
+from its first frame, measuring each step rather than taking a stride fixed
+in advance. A capture whose neighbouring frames already match with fewer
+matches than the floor, such as one subsampled from a video or a set of
+photographs taken one after another, keeps every frame.
 It makes no judgement of whether a capture can be solved and fits no
 geometry: whether the frames it chooses describe one camera motion through a
 static scene, and whether the camera moved enough, is for the solve to find
@@ -23,8 +23,8 @@ they match is how many mutual matches they have
 ([frame-pair-matching.md](frame-pair-matching.md)); a frame's sharpness
 and gradient structure tensor come from its `.sift` file's metadata
 ([sift-file-format.md § The reading image](../../formats/sift-file-format.md#the-reading-image)).
-The walk reads only the frames it needs: the sample, the frames it chooses and
-the frames it tries on the way. A source makes each frame's `.sift` files
+The walk reads only the frames it needs: the frames it chooses, the frames it
+tries on the way and the frames around each frame it chooses. A source makes each frame's `.sift` files
 exist: the extracting source extracts them on a pool of workers that runs
 ahead of the walk, on the frames the walk predicts it will read, so a frame
 gets a `.sift` file when the walk reads it or predicts it. The walk decides
@@ -94,11 +94,8 @@ pub enum FrameSourceError {
 pub struct PickImagesOptions {
     pub target_step_percent: f64,  // 10.0, positive
     pub step_band: f64,            // 0.3, in (0, 1)
-    pub blur_ratio: f64,           // 0.6, in (0, 1)
     pub neighbour_blur_ratio: f64, // 0.85, in (0, 1)
-    pub baseline_frames: usize,    // 200, at least 2
-    pub min_matches: usize,        // 30, at least 1
-    pub min_step_matches: usize,   // 600, at least min_matches: the match floor
+    pub min_step_matches: usize,   // 600, at least 1: the match floor
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // FramePairOptions::default()
     pub prefetch: bool,            // true; changes no choice, only the work ahead
@@ -171,7 +168,7 @@ leave possible. `Cancelled` is a set cancel flag. No caller input panics
 ([STANDARDS.md § Caller input never panics](../../STANDARDS.md#caller-input-never-panics)).
 
 **A `Progress`.** A walk over a long video runs for minutes, mostly in
-extraction. `pick_images` opens the phases `baseline` and `walk`, reports
+extraction. `pick_images` opens the phase `walk`, reports
 the count of frames read after each wait on the source,
 reports the count of pairs matched as the value `pairs_matched` after each
 pair, and checks for cancellation before every wait and every pair it
@@ -196,47 +193,35 @@ use sfmtool_core::progress::Progress;
 let mut source = ExtractingSource::new(BuildSiftFilesOptions::sfmtool_defaults())?;
 let report = pick_images(&sequences, &mut source,
                          &PickImagesOptions::default(), &Progress::none())?;
-let numbers: Vec<i64> = report.sequences[0].walk.chosen.iter()
+let numbers: Vec<i64> = report.sequences[0].chosen.iter()
     .map(|&p| sequences[0].frames[p].number).collect();
 ```
 
 ### The report
 
 `PickImagesReport` holds one `SequenceReport` per sequence, every frame read
-(`FrameReading`: its id, the stage that read it, and each sensor's readings
-with the blur judgement made from them) in the order read, every pair
-matched (`MeasuredPair`, with its `FramePairStats`) in the order matched,
-`frames_extracted`, per frame read, whether the source wrote its `.sift`
-files in this run rather than finding them up to date, and
-`frames_extracted_unread`, how many frames the source wrote files for that
-the walk never read, the predictions it did not follow. That count is the one
-part of the report that depends on how far ahead the walk predicts and how
-fast the source works. A `SequenceReport` holds:
-
-- `baseline`: the sampled positions, the frames the baseline read, each
-  sensor's median sharpness, the count of blurred samples, the median of the
-  sampled frames' matches with their next frame, the rate at each sample, its
-  median and 0.9 quantile, the total motion, and the flagged regions with
-  what flagged them;
-- `walk`: the chosen positions,
-  the segments between breaks as runs of them, every accepted step (from, to,
-  its statistics, its rate, its `StepKind` (`InBand`, `AboveBand`,
-  `Bracketed`, `AtLimit`, `AtFloor`, `GapFill` or `BlurredRun`) and whether
-  its band was halved in a region flagged for weak matches),
-  the swaps, each with its `SwapReason` (`Median` for a blurred candidate,
-  `Neighbours` for one blurred against its neighbours), the gaps filled in as
-  runs of steps, the frames kept though blurred with the range searched, the
-  breaks with where the walk resumed, the weak points, and the counts of
-  frames the walk used and of those the baseline had already read.
+(`FrameReading`: its id and each sensor's readings, the sharpness, the
+gradient structure tensor and the axis ratio and coherence derived from it)
+in the order read, every pair matched (`MeasuredPair`, with its
+`FramePairStats`) in the order matched, `frames_extracted`, per frame read,
+whether the source wrote its `.sift` files in this run rather than finding
+them up to date, and `frames_extracted_unread`, how many frames the source
+wrote files for that the walk never read, the predictions it did not follow.
+That count is the one part of the report that depends on how far ahead the
+walk predicts and how fast the source works. A `SequenceReport` holds the
+chosen positions, every accepted step (from, to, its statistics, its rate
+and its `StepKind`: `InBand`, `AboveBand`, `Bracketed`, `AtLimit`,
+`AtFloor` or `BelowBand`), the swaps of frames blurred against their
+neighbours, each as candidate and chosen frame, and the count of frames the
+walk read.
 
 Every type serializes with `serde`, a number that is not finite as `null`, so
 a caller writes the whole report as JSON as it is.
 
 ## The algorithm
 
-Picking runs in four stages: check the input, read the baseline, walk each
-sequence, and assemble the report. The sequences are walked one after
-another.
+Picking runs in three stages: check the input, walk each sequence, and
+assemble the report. The sequences are walked one after another.
 
 ### Words
 
@@ -249,55 +234,12 @@ another.
   images ([frame-pair-matching.md § The step](frame-pair-matching.md#the-step)).
 - The **rate** is a step divided by the number of positions between the two
   frames.
-- A pair **matches well** when it has at least `min_matches` mutual matches.
-- The **match floor** is `min_step_matches` mutual matches. A step **holds**
-  when its pair matches well and, when it goes beyond the next frame, keeps
-  at least the match floor; a step beyond the next frame that matches well
-  and keeps fewer is **short of the floor**.
+- The **match floor** is `min_step_matches` mutual matches. A step
+  **holds** when it goes to the next frame, whatever its matches, or when it
+  goes beyond the next frame and keeps at least the match floor; a step
+  beyond the next frame that keeps fewer is **short of the floor**.
 - The **band** is `target × (1 ± step_band)` around the target step: 7% to
   13% at the defaults.
-
-### The baseline
-
-`baseline_frames` is shared among the sequences in proportion to their frame
-counts: a sequence gets `round(baseline_frames × len / total)` samples, at
-least 2 and at most its frame count. Its samples are spread evenly over it, at
-positions `round(i (len − 1) / (n − 1))`, so the first and last frames are
-sampled.
-
-The default of 200 samples is sized for what the command is for, subsampling
-long captures of 10,000 to 100,000 frames, where the baseline reads a small
-share of the frames. On a short capture of a few hundred frames the samples
-and the frames read after them are most of the capture, which is accepted:
-fewer samples would put neighbouring samples further apart, so the walk
-would start each segment from a rate measured further away and the flagged
-regions, which reach from one sample to the next, would be longer.
-
-The baseline reads the sampled frames and the frames 1 and 3 after each that
-exist, and matches each sample with them; that is enough to measure the rate
-and to flag the regions that do not match well. It is prefetched whole, then
-waited for and matched sample by sample in sample order, so that matching one
-sample's pairs runs while the source works on the next ones; the frames are
-read, and the pairs matched, in the baseline's order. A frame another sample
-already read is not read again.
-
-From the baseline, per sequence:
-
-- **Each sensor's baseline**: the median sharpness over the sampled frames.
-- **The matches with the next frame**: the median, over the sampled frames
-  that have a next frame, of their pair's mutual matches. The walk does not
-  read it; the report sets it beside the match floor, since a capture whose
-  neighbouring frames keep fewer matches than the floor has most of its
-  steps stop at the next frame ([The match floor](#the-match-floor)).
-- **The rate at each sample**: the step to the frame 3 after it divided by 3,
-  or, when that pair has fewer than `min_matches` matches, the step to the
-  next frame; a sample with neither has no rate. The baseline's rate is the
-  median of these, and the total motion that median times the frame count.
-- **The flagged regions**: a sampled frame that is blurred, or that does not
-  match the frame 1 or 3 after it well, flags the frames from the sampled
-  frame before it to the sampled frame after it. Overlapping regions are
-  merged, keeping what flagged each. Only a region flagged for weak matches
-  changes the walk's steps ([The walk](#the-walk)).
 
 ### The match floor
 
@@ -316,167 +258,112 @@ target keeps differs widely from one capture to another, and a fraction that
 leaves a video's steps alone passes over the frames of a capture whose
 matches fall fast.
 
-The step to the next frame is not held to the floor: it is the shortest step
-there is, and passing over no frame it loses nothing a shorter step would
-keep. A capture whose neighbouring frames match with fewer matches than the
-floor so keeps every frame its walk reaches, as a capture already subsampled
+The step to the next frame is not held to the floor, and is always taken: it
+is the shortest step there is, and passing over no frame it loses nothing a
+shorter step would keep. A capture whose neighbouring frames match with fewer
+matches than the floor so keeps every frame, as a capture already subsampled
 from a video, or a set of photographs taken one after another, needs. In a
 video the floor binds only where its matches fall fast: elsewhere a step of
 the target keeps more than the floor, and the floor changes nothing.
 
+Since the next frame is always taken, a stretch of frames that match nothing,
+such as frames of a covered lens or of a camera swung too fast, is walked one
+frame at a time, and every one of its frames goes into the list. Nothing
+breaks the walk or restarts it, and nothing is left out of the list for
+matching badly: the solve ignores the frames that do not connect to the
+others, and a solve that splits there splits whatever the list holds. The
+floor is the walk's one count of matches.
+
 ### The walk
 
-The walk starts at the first frame that matches its next frame well and
-repeats from the last chosen frame `f` until it chooses the sequence's last
-frame:
+The walk chooses the sequence's first frame and repeats from the last chosen
+frame `f` until it chooses the sequence's last frame. The **recent rates**
+are the rates of the last three accepted steps that kept the match floor.
 
-1. **Bounds.** When `f` lies in a region flagged for weak matches, the target
-   and the band are halved, so the walk goes through the region in short
-   steps. Otherwise the step's **limit** is the first frame of the next region
-   flagged for weak matches, which a step lands on rather than passes, so a
-   problem the walk could step over is still walked through; the limit is
-   never past the last frame. A region flagged for blur alone sets no bound:
-   the walk swaps a blurred candidate for a sharp neighbour (steps 6 and 7) and
-   measures every step, so a blurred stretch whose frames match well is
-   crossed at the full target, and one whose frames do not is filled in by the
-   steps that fail there.
-2. **Predict.** The candidate is `c = f + target / rate`, rounded, at least
-   `f + 1` and at most the limit, with the rate the median of the last three
-   accepted steps' rates, or at the start of a segment the rate of the nearest
-   sample that has one.
-3. **Measure** the step `m` from `f` to `c`.
-4. **Decide.** Here and in steps 6 and 7 a step must hold, so a pair beyond
-   `f + 1` must keep the match floor as well as match well.
-   - The pair is short of the floor: `c` is too far, whatever its step, since
-     matches fall with the distance. Halve towards the floor (step 5).
-   - `m` in the band and the step holds: settle on `c`.
-   - `m` above the band: re-aim. When `c` is `f + 1`, the motion per frame is
-     wider than the band, and `c` is settled on if it matches well.
-   - `m` below the band and the step holds: settle on `c` when it is the
-     limit; otherwise re-aim.
-   - The pair does not match well, in or below the band, or above it at
-     `f + 1`: the step fails.
-5. **Re-aim** to `c' = f + (c − f) · target / m`, kept strictly between the
-   largest candidate measured below the band that held and the smallest
-   measured above the band or short of the floor. After a candidate short of
-   the floor, the next is instead the middle of the frames left between them,
+1. **Predict.** With recent rates, the candidate is `c = f + target / rate`,
+   rounded, at least `f + 1` and at most the sequence's last frame, with the
+   rate their median. With none, at the start of the sequence and after a
+   step to the next frame that kept fewer matches than the floor, the
+   candidate is `f + 1`: the walk measures the step to the next frame first,
+   and when that step holds and is below the band, its first re-aim (step 4)
+   aims from the next frame's rate, which is the step's prediction and does
+   not count as a re-aim.
+2. **Measure** the step `m` from `f` to `c`.
+3. **Decide.**
+   - `c` is `f + 1` and keeps fewer matches than the floor: settle on it,
+     as stopped at the floor. Matches fall with the distance, so every step
+     beyond it would keep fewer too.
+   - The step is short of the floor: `c` is too far, whatever its step.
+     Search towards the floor (step 4).
+   - `m` in the band: settle on `c`.
+   - `m` above the band: re-aim. When `c` is `f + 1`, the motion per frame
+     is wider than the band, and `c` is settled on.
+   - `m` below the band: settle on `c` when it is the last frame; otherwise
+     re-aim.
+4. **Re-aim** to `c' = f + (c − f) · target / m`, kept strictly between the
+   largest candidate measured below the band and the smallest measured
+   above the band or short of the floor. After a candidate short of the
+   floor, the next is instead the middle of the frames left between them,
    rounded up, so that the walk finds the farthest frame that keeps the floor
    in a few tries rather than one frame at a time; those tries do not count
    as re-aims. When no frame is left between them, they lie one frame apart,
    and the one below is settled on: as stopped at the floor when the one
    above it is short of the floor, and otherwise as bracketed, the two lying
    on either side of the band. After four re-aims without reaching the band,
-   the step fails.
-6. **Settle** on a frame that is neither blurred nor blurred against its
-   neighbours ([Blur](#blur)) by accepting it. A frame blurred against its
-   neighbours, which the walk has read for that judgement, is swapped for
-   one of them: the walk tries, sharpest first, the neighbours the candidate
-   is blurred against that lie after `f` and within the limit, are not
-   blurred and are not themselves blurred against the candidate on any
-   sensor, and accepts the first whose step holds and is no longer than the
-   band and no shorter than the band or the candidate's own step. Here, and
-   in the swap of a blurred frame and in a blurred run, the limit is also
-   before the nearest candidate measured short of the floor.
-   The sharpest is the neighbour whose sharpness over the candidate's, the
-   least over the sensors, is highest; ties go to the nearer, then the
-   earlier. The swap is reported with the reason `Neighbours`. When no
-   neighbour qualifies, the candidate is accepted. A blurred frame is
-   swapped: the walk reads its neighbours nearest first (`c − 1`, `c + 1`,
-   `c − 2`, …) among the frames whose step, at the candidate's measured rate,
-   would be in the band, and accepts the first that is sharp, whose step
-   holds (a neighbour beyond `f + 1` short of the floor does not), and whose
-   step is no longer than the band and no shorter than the band or the
-   candidate's own step. The swap is reported with the reason `Median`.
-7. **A blurred run.** When no neighbour qualifies, the walk reads every frame
-   from `f + 1` to the band's upper edge at the candidate's rate in one batch,
-   and accepts the farthest sharp one whose step holds, by the same rule,
-   within the band's upper edge, which may be a step below the band. When no sharp frame there
-   does, it accepts the sharpest of the frames whose step holds within
-   the band, the sharpest being the frame whose least sharp sensor has the
-   highest ratio to its median, and reports it as kept though blurred. A
-   stretch where every frame is blurred is so crossed at the band's spacing,
-   with the least blurred frame at each step, and the chosen frames are no
-   denser there than the band makes them elsewhere; taking the sharpest of all
-   the frames up to the upper edge would let the next frame win and walk the
-   stretch one frame at a time. Only when no frame in the band holds
-   does it take the sharpest that holds below the band. The next frame
-   always qualifies when it matches well, and the candidate itself held,
-   so the search always accepts a frame.
+   the walk settles on the largest candidate measured below the band, or,
+   when it measured none, on `f + 1`.
+5. **Settle** on the frame by judging it against its neighbours
+   ([Blur](#blur)). When it is not blurred against them, it is accepted.
+   When it is, the walk tries, sharpest first, the neighbours it is blurred
+   against that lie after `f` and before the nearest candidate measured short
+   of the floor and are not themselves blurred against it on any sensor, and
+   accepts the first whose step holds and is no longer than the band and no
+   shorter than the band or the candidate's own step. The sharpest is the
+   neighbour whose sharpness over the candidate's, the least over the
+   sensors, is highest; ties go to the nearer, then the earlier. The swap is
+   reported. When no neighbour qualifies, the candidate is accepted.
+6. **Accept** the frame. A step that keeps the floor adds its rate to the
+   recent rates; a step to the next frame that keeps fewer clears them, so
+   the next step measures its next frame first rather than aiming from a
+   rate measured before the matches fell.
 
-**A failing step.** When a step fails, the largest candidate measured below the
-band that held is accepted, since halving would reach it. When there
-is none, the walk halves the gap: it measures the frame halfway between `f`
-and the failed candidate and accepts it if its step holds, even though its
-step is below the band; otherwise it halves again, down to `f + 1`, whose
-step needs only to match well. A blurred
-frame accepted this way is swapped for its sharp neighbour on either side
-inside the gap when that neighbour's step holds, and otherwise kept though blurred. Each
-run of consecutive steps accepted this way is reported as a gap filled in, so
-the chosen frames become dense across a bad patch and stay sparse where
-nothing goes wrong.
+**Every step holds.** A step to the next frame always holds, and the search
+of step 4 only settles beyond the next frame on a frame whose step keeps the
+floor, so a step cannot fail: no step is retried, no gap is filled in by
+halving, and the walk never stops before the last frame. Where the matches
+fall fast, the floor search shortens the steps; where the next frame itself
+keeps fewer than the floor, the walk takes every frame.
 
-**A break.** When even the step from `f` to `f + 1` does not match well, the
-walk records a break after `f`, reads forward one frame at a time to the first
-frame that matches its next frame well, and starts a new segment there with no
-recent rates. The frames in between are read and chosen for nothing. When no
-such frame remains, the sequence ends at the break.
-
-**Weak points** are where a solve is most likely to split: an accepted step
-with fewer than twice `min_matches` matches, and a segment of fewer than 3
-chosen frames. At the defaults the floor is far above twice `min_matches`, so
-such a step goes to the next frame: it is where the capture's neighbouring
-frames themselves barely match.
-
-**What is never read.** Outside regions flagged for weak matches, a frame the
-walk does not read lies between two chosen frames whose step held.
-Inside such a region the halved steps still pass over frames, which are then
-not read either. Every frame of a break is read. A frame within 2 positions
-of a candidate judged against its neighbours is read, and may be measured
-only if it is tried in the candidate's place. A frame the walk predicted
-and did not read may still have been extracted ([Run-ahead](#run-ahead)).
+**What is never read.** A frame the walk does not read lies between two
+chosen frames, inside a step that held. A frame within 2 positions of a
+chosen candidate is read, and is measured only if it is tried in the
+candidate's place. A frame the walk predicted and did not read may still
+have been extracted ([Run-ahead](#run-ahead)).
 
 ### Blur
 
-A frame's sensor image is **blurred** when its sharpness is below
-`blur_ratio` times its sensor's median sharpness over the sampled frames, the
-median from `sfmtool_core::numeric::median`. Sharpness compared within one
-sequence tracks blur, since its frames show the same scene through the same
-lens, so a frame much less sharp than the median is most often one whose
-detail was smeared; a frame that shows mostly a plain surface reads low as
-well.
-
-A frame the walk is about to accept in step 6 is also judged against its
-**neighbours**, the frames within 2 positions of it on either side. Sharpness
+A frame the walk is about to accept is judged against its **neighbours**,
+the frames within 2 positions of it on either side, which the walk reads in
+one wait. A sensor image is **blurred against its neighbours** when its
+sharpness is below `neighbour_blur_ratio` times the sharpest neighbour's on
+that sensor, and a rig frame when any of its sensors' images is. Sharpness
 depends on what a frame shows as much as on how sharp it is, so a frame
-compared with the median of a whole sequence is judged against frames of
-other parts of the scene, and much of the blur in a capture leaves a frame
-above `blur_ratio` times the median. A frame a few positions away shows
-nearly the same scene, so the less sharp of two such frames is the blurrier
-one. A sensor image is **blurred against its neighbours** when its sharpness
-is below `neighbour_blur_ratio` times the sharpest neighbour's on that sensor,
-and a rig frame when any of its sensors' images is. Only a sensor image whose
-sharpness is below its sensor's median is judged this way: a frame sharper
-than the median on every sensor is never judged against its neighbours, and
-the walk does not read them for it, which keeps the reads to the frames that
-could be blurred. Otherwise the walk reads all the neighbours in one wait,
-before the swap of step 6 ([The walk](#the-walk)) looks for a sharper one
-among them. A frame accepted in a blurred run (step 7) or for a failing step
-([A failing step](#the-walk)) is judged against the median alone: the blurred
-run has already searched every frame up to the band's upper edge for a sharp
-one, and a frame accepted for a failing step is taken for matching where the
-steps around it fail.
+compared with frames of other parts of the scene is judged against other
+pictures; a frame a few positions away shows nearly the same scene, so the
+less sharp of two such frames is the blurrier one. Every frame about to be
+accepted is judged this way, whatever its sharpness.
 
 The comparison is with the sharpest neighbour, not their median, because
 blur comes in runs: within a few positions of a blurred frame several
 neighbours are often blurred too, their median is then a blurred frame, and
-the sharpest is also the frame a swap would take. For the same reason a
-stretch whose frames are all equally blurred is not judged blurred against
-its neighbours, which share the blur; the comparison with the median, which
-the walk keeps, is what finds such a stretch.
+the sharpest is also the frame a swap would take. A stretch whose frames are
+all equally blurred is not judged blurred against its neighbours, which
+share the blur: the walk crosses it at the band's spacing, and the solve
+gets the frames the capture has there.
 
 The ratio errs towards judging a frame blurred against its neighbours. A
-swap moves only to a neighbouring frame that is sharper on a judged sensor
-by the ratio and passes the match and band checks, so judging a sharp frame
+swap moves only to a neighbouring frame that is sharper on a sensor by the
+ratio and passes the match and band checks, so judging a sharp frame
 blurred against its neighbours costs little, while a higher ratio swaps more
 of the frames that are blurrier than a neighbour.
 
@@ -485,10 +372,8 @@ The report also carries each image's axis ratio and coherence, which
 gradient structure tensor, but blur is not judged from them. They measure the
 direction of the gradients, which the scene sets as strongly as motion blur
 does: a fisheye's geometry, a slope seen at an angle or a subject made of
-lines gives a sharp frame strongly directional gradients, so against a
-capture-wide median those readings would call such sharp frames blurred. A
-frame smeared along one direction whose sharpness stays near the median is so
-not judged blurred.
+lines gives a sharp frame strongly directional gradients, so those readings
+would call such sharp frames blurred.
 
 ### Rigs
 
@@ -497,10 +382,9 @@ reads every sensor's `.sift` metadata. Its motion is measured from the
 reference sensor's images only, the first of each frame, since their
 displacement describes the rig's motion as well as any
 sensor's and the sensors' images need not be the same size. Its sharpness is
-judged per sensor against that sensor's own baseline, since the sensors look
-at different parts of the scene, and against each sensor's own images of
-its neighbouring frames; a rig frame is blurred, or blurred against its
-neighbours, when any of its sensors is.
+judged per sensor against that sensor's own images of its neighbouring
+frames, since the sensors look at different parts of the scene; a rig frame
+is blurred against its neighbours when any of its sensors is.
 
 ## Sources
 
@@ -534,9 +418,10 @@ file when a pair needs them, holding only the few forests of the pairs near
 the current one ([Implementation notes](#implementation-notes)). The pool
 holds a state of a few bytes per frame asked for, the error of a frame that
 failed, and the image paths of the frames queued, which are at most one
-prefetch's (the baseline, at most three frames per sample, or the
-`W` frames ahead through a break); each worker holds the one frame it extracts, as many as
-`build_sift_files` holds in flight under the same memory cap.
+prediction's, five frames or, for a source of `W` workers, `W`
+([Run-ahead](#run-ahead)), and a wait's; each worker holds the one frame it
+extracts, as many as `build_sift_files` holds in flight under the same memory
+cap.
 
 **Cancellation.** A wait that sees the cancel flag sets the pool's stop flag,
 drops the queued work, joins the workers and returns `Cancelled`. A worker
@@ -556,21 +441,38 @@ naming the first that does not (`Missing`). A caller whose feature tool is not
 
 ## Run-ahead
 
-The walk prefetches the frames it knows it will read, so that the source's
-workers extract them while it matches the frames already read.
+The walk waits for one candidate at a time, or for the frames around a
+candidate in one wait. Each frame's extraction already runs on every core,
+so the workers the walk can keep busy ahead of it are worth having only for
+frames it will read: a frame extracted on a guess that the walk then does
+not read takes cores from the frame it is waiting for, and on a capture
+whose motion or matches change from step to step most guesses along the
+predicted strides are wrong. So the walk predicts only frames it is about to
+read in most cases:
 
-- **The baseline.** It is one prefetch of all its frames, which the
-  workers extract while the walk waits for and matches them sample by
-  sample.
-- **A break.** Once a pair the walk reads forward through does not match
-  well, it reads every following frame until one matches its next frame, so
-  after each such pair it prefetches the next `W` frames, for a source of `W`
-  workers. At most `W` frames past the end of a break are extracted and not
-  read.
-- **The steps.** A step's candidates are not prefetched: its second candidate
-  is aimed from what its first measured, and a frame prefetched on a guess
-  takes a worker and cores from the frame the walk is waiting for, so a step
-  waits for each frame it measures, with every worker free for it.
+- **The next step's first candidate and its neighbours.** When the walk
+  settles on a candidate `c`, before it waits for `c`'s neighbours it
+  computes the first candidate of the step that would follow if `c` is
+  accepted, from the recent rates that accepting `c` would leave (step 1 of
+  [The walk](#the-walk)), and prefetches it with the frames within 2
+  positions of it, so that they are extracted while the walk reads and
+  judges `c`'s neighbours. Unless a neighbour is swapped in, that candidate
+  is the next frame the walk measures, and where the motion is steady it is
+  accepted and its neighbours read.
+- **The frames after a step below the floor.** When accepting `c` would
+  leave no recent rates, the walk goes on to read the frames after `c` one
+  after another for as long as each keeps fewer matches than the floor with
+  the one before, as through a stretch that matches nothing or a set of
+  photographs. So it prefetches the `W` frames after `c`, for a source of
+  `W` workers; at the end of such a stretch at most `W` of them are
+  extracted and not read.
+- **The floor search's next tries.** When a candidate is short of the floor
+  and the walk moves to the middle of the frames left, it prefetches the
+  middles of the two halves on either side of that try, one of which the
+  search tries next unless it ends there.
+
+Each prediction replaces the one before. The walk prefetches nothing ahead
+of a re-aim, whose candidate depends on the step just measured.
 
 **The determinism rule.** The walk decides only from frames it explicitly
 waited for, never from what happens to be ready: every decision reads the
@@ -600,21 +502,19 @@ in its folder after the check, is `Version1Sift`, with the same advice.
 
 - **One forest per frame, held only while it has a pair to match.** A frame's
   features are read from its `.sift` file and its forest built
-  (`FrameFeatures::from_sift`) when a pair needs it. The baseline counts each
-  frame's pairs and drops its features after its last, matching the pairs in
-  sample order, so only the frames near the current sample are held. The walk
-  holds the last chosen frame's features and the last candidate's, which
-  become the chosen frame's when it is accepted. A frame's readings, a few
-  numbers per sensor, are kept for every frame read. A pair's statistics are
-  kept, so a pair the baseline matched is not matched again by the walk.
+  (`FrameFeatures::from_sift`) when a pair needs it. The walk holds the last
+  chosen frame's features and the last candidate's, which become the chosen
+  frame's when it is accepted. A frame's readings, a few numbers per sensor,
+  are kept for every frame read. A pair's statistics are kept, so a pair is
+  never matched twice.
 - **Each frame is waited for once.** Every frame passes through one reading
   step that waits on the source for the frames not yet read and reads all
   their `.sift` metadata, which is what makes the report's frame list the
   exact list of frames waited for, in order. The prefetch step only passes on
   the frames not yet read.
 - **No duplicate derivations.** The axis ratio and coherence are
-  `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, the
-  medians and the rate's 0.9 quantile `sfmtool_core::numeric`'s.
+  `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, and
+  the median of the recent rates `sfmtool_core::numeric`'s.
 
 ## Determinism and precision
 
@@ -625,8 +525,8 @@ iterated for an output. It is the same for any source, lookahead and worker
 count too, but for `frames_extracted_unread`, by the
 [determinism rule](#run-ahead). The readings are kept as `f32`, as `ImageReadings`
 holds them, which is enough for readings compared within a capture to about
-three digits; the medians and ratios are `f64` because
-`sfmtool_core::numeric` takes `f64`, and widening is exact.
+three digits; the sharpness ratios are compared in `f64`, and widening is
+exact.
 
 ## Parameters
 
@@ -634,19 +534,15 @@ three digits; the medians and ratios are `f64` because
 |-------|---------|---------|
 | `target_step_percent` | `10` | the step aimed for, percent of the long side |
 | `step_band` | `0.3` | the band, `target × (1 ± step_band)` |
-| `blur_ratio` | `0.6` | below this times the median sharpness is blurred |
 | `neighbour_blur_ratio` | `0.85` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
-| `baseline_frames` | `200` | the samples, shared among the sequences |
-| `min_matches` | `30` | the mutual matches a pair that matches well has |
-| `min_step_matches` | `600` | the match floor, the mutual matches a step beyond the next frame keeps; at least `min_matches` |
-| baseline gaps | 1, 3 | the frames after each sample the baseline reads |
-| re-aims | 4 | before a step fails; the tries towards the floor are not counted |
+| `min_step_matches` | `600` | the match floor, the mutual matches a step beyond the next frame keeps; at least 1 |
+| re-aims | 4 | before the walk settles below the band; the tries towards the floor and the aim from the next frame's rate are not counted |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
-| weak point | 2 × `min_matches`; 3 frames | a weak step and a short segment |
-| break read-ahead | `W` frames | how far the walk prefetches through a break, for a source of `W` workers |
-| neighbours | 2 positions on either side; below the median | the frames a candidate is judged against for blur against its neighbours, and which sensor images are judged |
+| neighbours | 2 positions on either side | the frames a candidate is judged against for blur against its neighbours |
+| prediction below the floor | `W` frames | how far the walk prefetches where it reads every frame, for a source of `W` workers |
 
-The last six are constants of the module.
+The re-aims, the recent rates and the neighbours are constants of the
+module; the prediction below the floor is the source's `concurrency`.
 
 ## Python bindings
 
@@ -669,7 +565,7 @@ report = pick_images([sequence], feature_options=config["feature_options"],
                      target_step_percent=10.0)
 # Or read .sift files that already exist.
 report = pick_images([sequence])
-report["sequences"][0]["walk"]["chosen"]  # positions of the chosen frames
+report["sequences"][0]["chosen"]  # positions of the chosen frames
 ```
 
 `CaptureImage`, `CaptureFrame` and `CaptureSequence` mirror the Rust structs;
@@ -679,7 +575,8 @@ a frame's `images` and a sequence's `frames` are tuples, built once, so
 extracting source, with `concurrent_images` its worker count; with neither,
 the source is the read-only one, and one without the other, or
 `concurrent_images` without them, is a `ValueError`. `pick_images` takes the
-fields of `PickImagesOptions` as keyword-only arguments, with the pair options
+fields of `PickImagesOptions` but `prefetch`, which it leaves on, as
+keyword-only arguments, with the pair options
 under the names `match_frame_pair` uses and the forest under the names
 `FrameFeatures` uses (`preset`, `num_trees`, `leaf_size`, `max_leaf_checks`);
 one left out takes the Rust default. `progress`, a `ProgressCounter`, holds
@@ -711,36 +608,30 @@ path with known motion per frame, with readings set per frame, served by a
 source whose workers, the extracting source's pool, write a frame's version 2
 `.sift` files only when it is prefetched or waited for, and which records
 every wait and prefetch. They cover a steady video chosen at about the
-target step, a change of speed that the stride follows, a blurred frame
-swapped for a neighbour, a frame above the median's blur threshold that is
-blurred against its neighbours swapped for the sharpest neighbour whose step
-fits, a frame sharper than the median whose neighbours are not read though
-it is far less sharp than they are, a uniformly blurred stretch none of
-whose frames is swapped against its neighbours, neighbours out of the band
-or short of the floor not taken and the candidate kept when none qualifies, a
-sharp frame with gradients along one direction
-kept and not judged blurred, blur judged from the sharpness alone, a blurred
-run kept at its sharpest frames within the band, a long blurred stretch,
-flagged for blur alone, crossed with every step in the full band, a bad patch
-flagged for weak matches and filled in at halved steps, two breaks with a
-short segment and steps with few matches taken only at the next frame, a
-blurred frame whose sharp neighbours, a
-blurred run whose sharp frames and a wholly blurred run whose least blurred
-frames are short of the floor, none of them taken, a capture whose
-neighbouring frames match below the floor, every frame of which is kept, a
-capture whose matches fall with the distance, whose steps stop at the
-farthest frame that keeps the floor short of the target, a rig
-whose second sensor's images
-match nothing
-and whose blur alone, against its median and against its neighbours, swaps a
-frame, several sequences sharing the baseline,
-every error variant, a worker's failure on a frame of each stage, which names
-the frame, and on a frame only predicted, which stops nothing, cancellation
-before and during the run, that a run repeats exactly, that every frame of
-the baseline and every frame read through a break after its first failing
-pair was prefetched, with no more than the workers' count extracted and not
-read, and that one capture with a change of speed, a swap for each reason, a
-blurred run, a gap and a break gives the same report and the same waits with
+target step, whose first step measures the next frame; a change of speed
+that the stride follows; a frame blurred against its neighbours swapped for
+the sharpest neighbour whose step fits; a frame sharper than every other
+frame of the capture but its neighbours, swapped all the same; a uniformly
+blurred stretch none of whose frames is swapped against its neighbours,
+crossed at the band's spacing; neighbours out of the band or short of the
+floor not taken and the candidate kept when none qualifies; a sharp frame
+with gradients along one direction kept; a capture whose neighbouring frames
+match below the floor, every frame of which is kept with one pair matched
+per frame; a capture whose matches fall with the distance, whose steps stop
+at the farthest frame that keeps the floor short of the target; stretches
+that match nothing, at the start and in the middle, walked one frame at a
+time; a rig whose second sensor's images match nothing and whose blur
+against its neighbours alone swaps a frame; several sequences walked in turn
+and a lone frame; every error variant; a worker's failure on a frame read,
+which names the frame; cancellation before and during the run; that a run repeats exactly; that
+every step of a steady walk after the first starts at a predicted frame, that
+the floor search's tries are predicted, with at most five frames per step
+and one per try extracted and not read, that every frame of a capture walked
+frame by frame is predicted, and that a worker failing on a frame predicted
+and never read stops nothing; and that one capture
+with a change of speed, a frame swapped for a neighbour, steps stopped at the
+floor beyond the next frame and a stretch walked one frame at a time, each
+named and checked to happen, gives the same report and the same waits with
 prefetching off and on and with one and eight workers. Every
 test checks that the frames waited for are the frames the report lists as
 read, each once, that those have `.sift` files written in the run, and that

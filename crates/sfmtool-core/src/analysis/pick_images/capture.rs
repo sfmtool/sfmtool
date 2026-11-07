@@ -68,33 +68,24 @@ pub struct PickImagesOptions {
     /// How far a step may be from the target and still be accepted: within
     /// `target × (1 ± step_band)`. In `(0, 1)`.
     pub step_band: f64,
-    /// A frame whose sharpness is below `blur_ratio` times its sequence's
-    /// median sharpness counts as blurred. In `(0, 1)`.
-    pub blur_ratio: f64,
-    /// A frame the walk is about to accept whose sharpness is below its
-    /// sensor's median is compared with its neighbouring frames, and is
-    /// blurred against them when its sharpness is below
+    /// A frame the walk is about to accept is compared with its neighbouring
+    /// frames, and is blurred against them when its sharpness is below
     /// `neighbour_blur_ratio` times the sharpest neighbour's. In `(0, 1)`.
     pub neighbour_blur_ratio: f64,
-    /// How many frames the baseline samples, spread evenly over the capture
-    /// and shared among the sequences by their frame counts. At least 2.
-    pub baseline_frames: usize,
-    /// The fewest mutual matches a pair that matches well has. At least 1,
-    /// since a step is measured from the matches.
-    pub min_matches: usize,
     /// The match floor: the fewest mutual matches a step beyond the next
-    /// frame keeps. A step to the next frame needs only to match well, so a
-    /// capture whose neighbouring frames have fewer matches than this keeps
-    /// every frame. At least `min_matches`.
+    /// frame keeps. The step to the next frame is always taken, so a capture
+    /// whose neighbouring frames have fewer matches than this keeps every
+    /// frame. At least 1.
     pub min_step_matches: usize,
     /// The forest each frame's descriptors are indexed with.
     pub forest: KdForestParams,
     /// How each pair of frames is matched.
     pub pair: FramePairOptions,
-    /// Whether the walk asks the source to prefetch the frames it knows it
-    /// will read: the baseline, and the frames ahead through a break. It
-    /// changes how long a run takes and which frames get a `.sift` file
-    /// without being read, never what the walk chooses.
+    /// Whether the walk asks the source to prefetch the frames it predicts it
+    /// will read: the next step's first candidate and its neighbours, the
+    /// floor search's next tries and, where it reads every frame, the frames
+    /// ahead. It changes how long a run takes and which frames get a `.sift`
+    /// file without being read, never what the walk chooses.
     pub prefetch: bool,
 }
 
@@ -103,10 +94,7 @@ impl Default for PickImagesOptions {
         Self {
             target_step_percent: 10.0,
             step_band: 0.3,
-            blur_ratio: 0.6,
             neighbour_blur_ratio: 0.85,
-            baseline_frames: 200,
-            min_matches: 30,
             min_step_matches: 600,
             forest: KdForestParams::balanced(),
             pair: FramePairOptions::default(),
@@ -134,35 +122,16 @@ impl PickImagesOptions {
         }
         for (name, value) in [
             ("step_band", self.step_band),
-            ("blur_ratio", self.blur_ratio),
             ("neighbour_blur_ratio", self.neighbour_blur_ratio),
         ] {
             if !(value > 0.0 && value < 1.0) {
                 return Err(options(name, format!("must be in (0, 1), got {value}")));
             }
         }
-        if self.baseline_frames < 2 {
-            return Err(options(
-                "baseline_frames",
-                format!(
-                    "must be at least 2, the first and last frames, got {}",
-                    self.baseline_frames
-                ),
-            ));
-        }
-        if self.min_matches < 1 {
-            return Err(options(
-                "min_matches",
-                "must be at least 1, since a step is measured from the matches, got 0".to_string(),
-            ));
-        }
-        if self.min_step_matches < self.min_matches {
+        if self.min_step_matches < 1 {
             return Err(options(
                 "min_step_matches",
-                format!(
-                    "must be at least min_matches ({}), since every step must match well, got {}",
-                    self.min_matches, self.min_step_matches
-                ),
+                "must be at least 1, since a step is measured from the matches, got 0".to_string(),
             ));
         }
         let nested = |prefix: &str, e: FramePairError| match e {

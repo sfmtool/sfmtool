@@ -59,46 +59,26 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "target x (1 +/- FRACTION).",
 )
 @click.option(
-    "--blur-ratio",
-    "blur_ratio",
-    type=float,
-    default=0.6,
-    metavar="RATIO",
-    show_default=True,
-    help="A frame whose sharpness is below RATIO times its sequence's median "
-    "sharpness is blurred.",
-)
-@click.option(
     "--neighbour-blur-ratio",
     "neighbour_blur_ratio",
     type=float,
     default=0.85,
     metavar="RATIO",
     show_default=True,
-    help="A frame about to be chosen whose sharpness is below its sequence's "
-    "median is blurred against its neighbours, and swapped for a sharper one, "
-    "when its sharpness is below RATIO times the sharpest of the frames up to "
-    "2 positions away.",
-)
-@click.option(
-    "--baseline-frames",
-    "baseline_frames",
-    type=click.IntRange(min=0),
-    default=200,
-    metavar="N",
-    show_default=True,
-    help="How many frames the baseline samples, spread evenly over the capture.",
+    help="A frame about to be chosen is blurred against its neighbours, and "
+    "swapped for a sharper one, when its sharpness is below RATIO times the "
+    "sharpest of the frames up to 2 positions away.",
 )
 @click.option(
     "--min-step-matches",
     "min_step_matches",
-    type=click.IntRange(min=0),
+    type=click.IntRange(min=1),
     default=600,
     metavar="N",
     show_default=True,
     help="The match floor: a step past the next frame keeps at least N mutual "
-    "matches, so a capture whose neighbouring frames match with fewer keeps "
-    "every frame.",
+    "matches. The step to the next frame is always taken, so a capture whose "
+    "neighbouring frames match with fewer keeps every frame.",
 )
 @click.option(
     "--json",
@@ -116,19 +96,17 @@ def pick_images(
     named_image_list,
     target_step,
     step_band,
-    blur_ratio,
     neighbour_blur_ratio,
-    baseline_frames,
     min_step_matches,
     json_path,
 ):
     """Choose the frames of a video a solve should use, and write them as a named image list.
 
-    Reads a sample of each sequence's frames, then walks each sequence,
-    choosing frames about --target-step percent of the image's long side
-    apart, with no step past the next frame keeping fewer than
-    --min-step-matches mutual matches, and sharp frames in place of blurred
-    ones. Each frame read, or predicted to be read, gets a .sift
+    Walks each sequence from its first frame, choosing frames about
+    --target-step percent of the image's long side apart, with no step past
+    the next frame keeping fewer than --min-step-matches mutual matches, and
+    a frame blurred against its neighbours swapped for a sharper one. Each
+    frame read, or predicted to be read, gets a .sift
     file, extracted with the workspace's settings; with a feature tool other
     than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
     the named image list NAME, for `sfm solve -r NAME`.
@@ -198,9 +176,7 @@ def pick_images(
         options={
             "target_step_percent": target_step,
             "step_band": step_band,
-            "blur_ratio": blur_ratio,
             "neighbour_blur_ratio": neighbour_blur_ratio,
-            "baseline_frames": baseline_frames,
             "min_step_matches": min_step_matches,
         },
         json_path=Path(json_path) if json_path is not None else None,
@@ -331,7 +307,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         click.echo(line)
 
     chosen = [
-        [s.numbers[p] for p in r["walk"]["chosen"]]
+        [s.numbers[p] for p in r["chosen"]]
         for s, r in zip(sequences, report["sequences"])
     ]
     written_list = None

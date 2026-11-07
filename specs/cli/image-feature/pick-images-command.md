@@ -6,10 +6,10 @@ picture and some frames are blurred. `sfm pick-images` looks at a capture
 before it is solved and chooses the frames a solve should use: frames spaced
 so that the image moves by about a tenth of its width from one to the next,
 but no further apart than keeps 600 mutual matches between consecutive
-chosen frames, sharp ones in place of blurred ones, more frames where the
-capture is hard to follow and fewer where it is easy. A capture whose
-neighbouring frames already match with fewer than that, such as frames
-already subsampled from a video, keeps every frame. It prints what it found,
+chosen frames, sharper ones in place of frames blurred against their
+neighbours, more frames where the capture is hard to follow and fewer where
+it is easy. A capture whose neighbouring frames already match with fewer than
+that, such as frames already subsampled from a video, keeps every frame. It prints what it found,
 and when given a name it writes the frames it chose
 as a named image list ([workspace/named-image-lists.md](../../workspace/named-image-lists.md)),
 which `sfm solve -r NAME` and the other commands that take `-r` then use.
@@ -19,10 +19,9 @@ predicts it will read, gets a `.sift` file, extracted with the workspace's own
 settings and stored where `sfm sift --extract` would store it, so a later
 `sfm sift`, `sfm match` or `sfm solve` finds the file and extracts nothing for
 it; in a workspace whose feature tool is not `sfmtool`, every input frame gets
-one ([Extraction](#extraction)). It reads only the frames it needs: a sample
-spread over the whole capture, the frames it chooses, and the frames it tries
-on the way. The sample and the
-walk that chooses the frames are
+one ([Extraction](#extraction)). It reads only the frames it needs: the
+frames it chooses, the frames it tries on the way and the frames around each
+frame it chooses. The walk that chooses the frames is
 [core/analysis/pick-images.md](../../core/analysis/pick-images.md)'s; this
 spec covers the command around them: collecting the frames, the options, the
 report it prints and the list it writes.
@@ -49,15 +48,13 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--named-image-list NAME` | | Read the input frames from this named image list, in place of `PATHS`. |
 | `--target-step PERCENT` | `10` | The step to aim for between two chosen frames: the median feature displacement, in percent of the image's long side. |
 | `--step-band FRACTION` | `0.3` | How far a step may be from the target and still be accepted: within `target × (1 ± FRACTION)`, 7% to 13% at the defaults. |
-| `--blur-ratio RATIO` | `0.6` | A frame whose sharpness is below `RATIO` times its sequence's median sharpness counts as blurred. |
-| `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen whose sharpness is below its sequence's median is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
-| `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. The default suits long captures of 10,000 frames or more; on a capture of a few hundred frames the baseline reads most of them ([core/analysis/pick-images.md § The baseline](../../core/analysis/pick-images.md#the-baseline)). |
-| `--min-step-matches N` | `600` | The match floor: a step past the next frame keeps at least `N` mutual matches, whatever its step, so a capture whose neighbouring frames match with fewer keeps every frame ([core/analysis/pick-images.md § The match floor](../../core/analysis/pick-images.md#the-match-floor)). At least 30, the matches a pair that matches well has. |
+| `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
+| `--min-step-matches N` | `600` | The match floor: a step past the next frame keeps at least `N` mutual matches, whatever its step. The step to the next frame is always taken, so a capture whose neighbouring frames match with fewer keeps every frame ([core/analysis/pick-images.md § The match floor](../../core/analysis/pick-images.md#the-match-floor)). At least 1. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 
-The six numeric options reach `sfmtool.analysis.pick_images` unchanged, as
-`target_step_percent`, `step_band`, `blur_ratio`, `neighbour_blur_ratio`,
-`baseline_frames` and `min_step_matches`, which checks their ranges before
+The four numeric options reach `sfmtool.analysis.pick_images` unchanged, as
+`target_step_percent`, `step_band`, `neighbour_blur_ratio` and
+`min_step_matches`, which checks their ranges before
 it reads anything; a value out of range is an error with the binding's message
 ([core/analysis/pick-images.md § Parameters](../../core/analysis/pick-images.md#parameters)).
 
@@ -183,9 +180,8 @@ sequences. `.camrig` files do not define rigs here.
 Each frame becomes one `CaptureFrame` with its file number, each image a
 `CaptureImage` with the path its `.sift` file has under the workspace's
 `feature_prefix_dir`, and each sequence one `CaptureSequence` whose patterns
-are the ones its list entries use. The baseline sample is shared among the
-sequences in proportion to their frame counts, and the sequences are walked
-one after another.
+are the ones its list entries use. The sequences are walked one after
+another.
 
 ### Extraction
 
@@ -199,10 +195,11 @@ call: `pick_images` is given the workspace's `feature_options` and
 the same files at the same paths, with the same content, a file at least as
 new as its image used as it is, and every file kept. The extraction runs on a
 pool of workers, as many as `build_sift_files` runs (one per core, capped
-by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the frames the walk knows it will read:
-the baseline, and the frames ahead of it through a break
+by memory, or `SFMTOOL_SIFT_EXTRACT_WORKERS`), ahead of the walk, on the
+frames the walk predicts it will read: the next step's first candidate and
+its neighbours, the floor search's next tries and, where it reads every
+frame, the frames ahead
 ([core/analysis/pick-images.md § Run-ahead](../../core/analysis/pick-images.md#run-ahead)).
-The walk's steps wait for each frame they measure.
 The walk decides only from frames it waited for, so the frames chosen are the
 same whatever the workers did ahead of it; a predicted frame the walk does not
 read keeps its `.sift` file.
@@ -229,15 +226,13 @@ workers, as
 describes.
 
 **Cost.** Reading a frame costs one SIFT extraction when its `.sift` file is
-missing, and nothing more than reading the file otherwise. The baseline reads
-each sampled frame and the frames 1 and 3 after it, so up to three
-frames per sample, fewer where two samples share a frame. The walk reads each
-frame it chooses and the candidates it measures on the way, usually two or
-three per choice, and skips the frames between; a choice less sharp than the
-sequence's median also reads the frames within 2 positions of it, to judge it
-against its neighbours; with the `sfmtool` tool the
-frames prefetched past the end of a break are extracted too, which the last
-line of the report counts. A later `sfm solve -r NAME` finds every `.sift`
+missing, and nothing more than reading the file otherwise. The walk reads
+each frame it chooses, the frames within 2 positions of it, to judge it
+against its neighbours, and the candidates it measures on the way, usually
+one or two per choice, and skips the frames between; where the next frame
+keeps fewer matches than the floor, it reads every frame. With the `sfmtool`
+tool the frames it predicted and did not read are extracted too, which the
+last line of the report counts. A later `sfm solve -r NAME` finds every `.sift`
 file it needs already written, and a second run of the command reads the same
 files and extracts none of them.
 
@@ -276,9 +271,8 @@ expression holds at most 10,000 sub-ranges, so when the chosen numbers of one
 sequence need more, the command splits them into halves, again until each
 half's range parses back from its text, and writes one entry of the same
 pattern per part, in increasing order of number; the list's members are then
-the same, in the same order. A sequence the walk chose no frame of, such as a
-lone frame, which has no next frame to match, or one none of whose frames
-matches its next frame well, has no entry.
+the same, in the same order. Every sequence has an entry, since the walk
+chooses each sequence's first frame, a lone frame included.
 
 A rig sequence becomes one entry per sensor, the sensor's prefix followed by
 the frame key's pattern, each with the same range, so the list holds every
@@ -306,9 +300,8 @@ Resolved with `-r NAME`, the list gives exactly the chosen frames' images.
 
 ## Report
 
-The command prints the workspace, the sequences it collected, a baseline
-section per sequence, a walk section per sequence, and the list it wrote. For
-one sequence:
+The command prints the workspace, the sequences it collected, a walk section
+per sequence, and the list it wrote. For one sequence:
 
 ```text
 Using workspace: /captures/garden
@@ -316,30 +309,16 @@ Using workspace: /captures/garden
 Given 1 path(s), 6120 image file(s) in 1 sequence:
   frames/walk1_%04d.jpg, 6120 frames (1-6120)
 
-Baseline: 200 frames sampled, 590 frames read (578 extracted, 12 reused)
-  Sharpness: median 0.0123; 9 sampled frames blurred
-  Motion per frame: median 0.72%, p90 1.31% of the long side; total 4400%
-  Matches with the next frame: median 1840; match floor 600
-  Flagged regions: 2210-2271 (blurred), 4381-4442 (weak matches)
-
-Walk: target step 10% (band 7-13%), 1 break, 2 segments
-  Chosen: 512 frames; read: 1307 frames (1250 extracted, 0 reused, 57 from the baseline)
+Walk: target step 10% (band 7-13%), match floor 600
+  Chosen: 512 of 6120 frames; read: 2730 frames (2718 extracted, 12 reused)
   Motion along the capture (median step, rate per frame, frames per step):
     frames         1-612     9.9%    0.64%     15
     frames      613-1224    10.1%    0.71%     14
     ...
-  Steps stopped at the match floor: 31 of 510
-  Blurred frames swapped (23): 1415->1417, 1890->1889, 2224->2226, ... and 15 more
-  Frames blurred against their neighbours swapped (6): 377->376, 1066->1068, ... and 1 more
-  Gaps filled in (2):
-    2210-2290: 14 frames, steps 2.1-5.0%, down to 41 matches
-    4380-4410: 9 frames, steps 1.0-3.3%, down to 33 matches
-  Kept though blurred (1):
-    2244, the sharpest of 2236-2251 (0.31 of the median)
-  Breaks (1): 4411->4416: frames 4411-4415 do not match their next frame
-  Weak points (2): 4410->4411 (32 matches), 4416->4421 (51 matches)
+  Steps stopped at the match floor: 31 of 511, 6 of them at the next frame
+  Frames blurred against their neighbours swapped (29): 377->376, 1066->1068, ... and 21 more
 
-Extracted and never read: 12 frames
+Extracted and never read: 40 frames
 
 Wrote the named image list walk1 (512 images) to /captures/garden/.sfm-named-image-lists.json
   For a quick test solve, try -r 'walk1[:30]', -r 'walk1[241:271]' or -r 'walk1[-30:]'
@@ -350,42 +329,27 @@ Every line is built from the dict `pick_images` returns
 ([core/analysis/pick-images.md § The report](../../core/analysis/pick-images.md#the-report)),
 which names frames by their position in their sequence; the command prints
 them as file numbers through the sequences it built. With several sequences,
-each baseline and walk heading names its sequence by its first pattern
-(`Baseline of walk2/frame_%04d.jpg: …`). A list of more than eight items
-(regions, swaps, gaps, frames kept though blurred, weak points) shows the
-first eight and the count of the rest.
+each heading names its sequence by its first pattern
+(`Walk of walk2/frame_%04d.jpg: …`), with a blank line between the sections.
+A list of more than eight swaps shows the first eight and the count of the
+rest.
 
-- **Baseline.** The samples, the frames the baseline read with how many were
-  extracted and reused, each sensor's median sharpness (one per sensor prefix
-  for a rig) and the count of blurred samples, the rate's median and 0.9
-  quantile and the total motion, the median matches of the sampled frames
-  with their next frame beside the match floor, and the flagged regions with
-  what flagged each. A value the binding could not measure, for too few
-  matches, prints as `unmeasured`. When the median matches with the next
-  frame are below the floor, the line says that most steps go to the next
-  frame, which is why such a capture keeps most or all of its frames:
-
-  ```text
-  Matches with the next frame: median 412, below the match floor of 600, so most steps go to the next frame
-  ```
-- **Walk.** The target and band, the breaks and segments; the frames chosen
-  and the frames the walk used, split into those it extracted, those it
-  reused and those the baseline had read; a table of the sequence in ten
-  equal runs of positions, each with the median step, rate and stride of the
-  steps that start in it, leaving out a run where no step starts; how many
-  steps stopped at the match floor, short of the target (`StepKind::AtFloor`),
-  or `none`; the swaps
-  of blurred frames and, on a line of their own, the swaps of frames blurred
-  against their neighbours, each as candidate and chosen frame, or `none`;
-  each gap filled in with its span, its steps' range and the fewest matches
-  of its steps; each frame kept though blurred with the frames searched and its
-  sharpness over the median; each break with where the walk resumed, or that
-  the sequence ends there; and each weak point,
-  a step with its matches, or a short segment with its span.
+- **Walk.** The target, the band and the match floor; the frames chosen out
+  of the sequence's frames and the frames the walk read, split into those it
+  extracted and those it reused; a table of the sequence in ten equal runs
+  of positions, each with the median step, rate and stride of the steps that
+  start in it, leaving out a run where no step starts, and printing
+  `unmeasured` for the step and rate of a run whose steps all go between
+  frames that match nothing; how many steps stopped at the match floor
+  (`StepKind::AtFloor`), and how many of those are steps to the next frame
+  that itself keeps fewer matches than the floor, which is where the walk
+  takes every frame, or `none`; and the swaps of frames blurred against their
+  neighbours, each as candidate and chosen frame, or `none`.
 - **Extracted and never read.** The last line of the report: how many frames
-  had a `.sift` file written in the run that the walk never read, the report's `frames_extracted_unread`. With the `sfmtool` tool
-  these are frames prefetched past the end of a break; with
-  another tool, the input frames extracted first that the walk did not read.
+  had a `.sift` file written in the run that the walk never read, the
+  report's `frames_extracted_unread`. With the `sfmtool` tool these are
+  frames the walk predicted and did not read; with another tool, the input
+  frames extracted first that the walk did not read.
 - **The list.** When a list is written, its name, its number of images and the
   file. A list of more than 60 images that holds no rig gets a line of three
   slices of 30 images to try as quick test solves, in the syntax of
@@ -406,7 +370,7 @@ positions, not numbers), with these keys added:
 | Key | Holds |
 |-----|-------|
 | `workspace` | the workspace folder |
-| `options` | the six numeric options, under the binding's names |
+| `options` | the four numeric options, under the binding's names |
 | `capture` | per sequence: `patterns`, `sensors` (the sensor prefixes, or `null`), `numbers` (the file number at each position) and `images` (each frame's workspace-relative image paths) |
 | `chosen_numbers` | per sequence, the chosen frames' file numbers |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
@@ -429,20 +393,23 @@ second run that reuses every `.sift` file; the refusal of a defined name before
 any image is read, and `--force` replacing a list in place; a list with a
 slice as input, and the input list's own name as output only with `--force`;
 a range narrowing a folder; the seoul_bull
-photographs, whose neighbouring frames match below the floor and every one of
-which the written list holds; a version 1
+photographs, whose neighbouring frames match below the floor, every step
+stopped at the floor at the next frame, and every one of which the written
+list holds; a version 1
 workspace; no workspace; files with no number or a shared number; a rig whose
 reference sensor is listed second, written one entry per sensor; a rig frame
-missing a sensor; a match floor below `min_matches` or too large for the
-binding, refused naming the option, and a negative one, a usage error; an
+missing a sensor; a match floor too large for the binding, refused naming
+the option, and one below 1, a usage error; an
 invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the rig order, every
-error, the list entries, a sequence with no chosen frame, a range split in
-parts, the slice suggestion, and the report's lines of swaps and of steps
-stopped at the match floor.
+error, the list entries, a lone chosen frame, a range split in parts, the
+slice suggestion, and the report's walk section: its heading, the frames
+chosen and read, the swaps, the steps stopped at the match floor and those
+at the next frame among them, and a run of the motion table whose steps
+match nothing.
 
 ## Non-goals
 
@@ -460,6 +427,5 @@ stopped at the match floor.
   ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
 
-The choices of this command that are still open, among them the size of the
-baseline, are in
+The choices of this command that are still open are in
 [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
