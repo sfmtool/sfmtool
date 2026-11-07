@@ -39,7 +39,7 @@ def collect_report(sfmtool: dict) -> dict:
     the version and the two git describes."""
     from ._sfmtool import _machine_facts
 
-    # The GPU adapter request is the slowest probe after the pycolmap import,
+    # The GPU adapter request and the pycolmap import are the slowest probes,
     # and the binding releases the GIL while it waits, so the two overlap.
     machine: dict = {}
     thread = threading.Thread(

@@ -158,7 +158,7 @@ slowest probes overlap.
 
 | Line | JSON key | What it is | Source |
 |------|----------|------------|--------|
-| `Build` | `sfmtool` | The extension's Cargo profile, `release` or `debug`, then the two `git describe` strings of the version line, each `unknown` when it is. | `build_profile()`, `_build_git_describe()`, `checkout_describe` |
+| `Build` | `sfmtool` | The extension's Cargo profile, `release` or `debug`, then the two `git describe` strings of the version line, either written `unknown` when it is not known. | `build_profile()`, `_build_git_describe()`, `checkout_describe` |
 | `Install` | `install` | `editable` for an editable install of a checkout, `installed` otherwise, or `no package metadata`; then the directory the `sfmtool` package is run from. | `direct_url.json` of the `sfmtool` distribution ([PEP 610](https://peps.python.org/pep-0610/)): editable when its `dir_info.editable` is true |
 | `Python` | `python` | The interpreter's version and path. | `platform.python_version()`, `sys.executable` |
 | `OS` | `os` | The OS and its version, then the machine architecture. | `platform.platform()`, `platform.machine()` |
