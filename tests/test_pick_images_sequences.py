@@ -20,6 +20,7 @@ from sfmtool._pick_images import (
     list_entries,
 )
 from sfmtool._pick_images_report import slice_suggestion, walk_lines
+from sfmtool.camrig.resolver import CamrigRig
 from sfmtool.reconstruction import RangeExpr
 
 ROOT = Path("/ws").absolute()
@@ -98,6 +99,67 @@ def test_rig_frames_group_by_frame_key_with_the_reference_sensor_first():
     assert sequence.sensors == ["rig/left/", "rig/right/"]
     assert sequence.numbers == [1, 2]
     assert sequence.images[1] == [Path("rig/left/f_02.jpg"), Path("rig/right/f_02.jpg")]
+
+
+def _camrig_collect(rels: list[str], frames: list[tuple[int, int]]) -> list:
+    """`collect_sequences` of `rels` with a `.camrig` in `cap 5%/` whose
+    sensor 0 is `right/` and sensor 1 `left/`, each image assigned the
+    `(sensor, frame)` in `frames`."""
+    folder = ROOT / "cap 5%"
+    paths = [folder / rel for rel in rels]
+    rig = CamrigRig(
+        camrig_file=folder / "rig.camrig",
+        data={"sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"]},
+        assignments={p.resolve(): f for p, f in zip(paths, frames)},
+    )
+    return collect_sequences(paths, ROOT, None, rig)
+
+
+def test_camrig_rig_frames_group_by_frame_index_with_sensor_0_first():
+    (sequence,) = _camrig_collect(
+        ["left/f_02.jpg", "right/f_02.jpg", "left/f_01.jpg", "right/f_01.jpg"],
+        [(1, 2), (0, 2), (1, 1), (0, 1)],
+    )
+    # The patterns are the .camrig's behind its folder, with its `%` escaped.
+    assert sequence.patterns == ["cap 5%%/right/f_%02d.jpg", "cap 5%%/left/f_%02d.jpg"]
+    assert sequence.sensors == ["right/f_%02d.jpg", "left/f_%02d.jpg"]
+    assert sequence.numbers == [1, 2]
+    assert sequence.images[1] == [
+        Path("cap 5%/right/f_02.jpg"),
+        Path("cap 5%/left/f_02.jpg"),
+    ]
+
+
+def test_camrig_rig_errors_name_the_files():
+    with pytest.raises(PickImagesInputError) as e:
+        _camrig_collect(
+            ["right/f_01.jpg", "left/f_01.jpg", "right/f_02.jpg", "Left/f_03.jpg"],
+            [(0, 1), (1, 1), (0, 2), (1, 3)],
+        )
+    message = str(e.value)
+    # A file the .camrig matches only ignoring case, which a list cannot hold.
+    assert (
+        "1 image file(s) match the patterns of" in message
+        and "cap 5%/Left/f_03.jpg" in message
+    )
+    assert (
+        "2 rig frame(s) of cap 5%%/right/f_%02d.jpg lack the image of a sensor"
+        in message
+    )
+    assert "cap 5%/right/f_02.jpg (no image of cap 5%%/left/f_%02d.jpg)" in message
+    assert "cap 5%/Left/f_03.jpg (no image of cap 5%%/right/f_%02d.jpg)" in message
+
+
+def test_a_camrig_in_a_folder_with_a_star_is_an_error():
+    folder = ROOT / "cap*"
+    paths = [folder / "right/f_01.jpg", folder / "left/f_01.jpg"]
+    rig = CamrigRig(
+        camrig_file=folder / "rig.camrig",
+        data={"sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"]},
+        assignments={p.resolve(): f for p, f in zip(paths, [(0, 1), (1, 1)])},
+    )
+    with pytest.raises(PickImagesInputError, match=r"has a '\*' in its path"):
+        collect_sequences(paths, ROOT, None, rig)
 
 
 def test_list_entries_are_one_per_sensor_with_one_range():

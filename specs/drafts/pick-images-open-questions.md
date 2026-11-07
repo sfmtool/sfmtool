@@ -43,8 +43,7 @@ it does not refuse a capture whose camera moves little, which refused a
   that sensor's images of the neighbouring frames, and a frame blurred against
   its neighbours when any sensor is. Whether a sensor pointing at a
   featureless view should be allowed to make a frame look blurred against its
-  neighbours, and whether `.camrig` files, as well as `rig_config.json`,
-  should define the rigs.
+  neighbours.
 - **Rig list entries.** One entry per sensor with the same range keeps each
   pattern literal but orders the list by sensor and then frame, so a slice of
   the list ([named-image-lists.md § Slices](../workspace/named-image-lists.md#slices))

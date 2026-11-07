@@ -15,10 +15,14 @@ import shutil
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pytest
 from click.testing import CliRunner
 
+from sfmtool._pick_images import collect_sequences, find_rigs
+from sfmtool.camrig.resolver import resolve_camrig_for_solve
 from sfmtool.cli import main
+from sfmtool.fileio import write_camrig
 from sfmtool.reconstruction import RangeExpr
 from sfmtool.workspace import NAMED_IMAGE_LISTS_FILE_NAME, NamedImageLists
 
@@ -464,6 +468,163 @@ def test_a_rig_frame_missing_a_sensor_is_an_error(
         result.output
     )
     assert "rig/cam_a/pan_006.jpg (no image under rig/cam_b/)" in result.output
+
+
+def _write_camrig(path: Path, patterns: list[str]) -> None:
+    """A `.camrig` of one sensor per pattern, sharing one camera the size of
+    the pan's crops."""
+    count = len(patterns)
+    write_camrig(
+        path=str(path),
+        name=path.stem,
+        rig_type="generic",
+        cameras=[
+            {
+                "model": "PINHOLE",
+                "width": PAN_WIDTH,
+                "height": PAN_HEIGHT,
+                "parameters": {
+                    "focal_length_x": 300.0,
+                    "focal_length_y": 300.0,
+                    "principal_point_x": PAN_WIDTH / 2,
+                    "principal_point_y": PAN_HEIGHT / 2,
+                },
+            }
+        ],
+        sensor_image_patterns=patterns,
+        camera_indexes=[0] * count,
+        quaternions_wxyz=np.tile([1.0, 0.0, 0.0, 0.0], (count, 1)),
+        translations_xyz=np.array([[0.1 * i, 0.0, 0.0] for i in range(count)]),
+    )
+
+
+# The rig `.camrig` of the tests below sits in `rig/`, and its sensor 0, the
+# reference, is cam_b, which sorts after cam_a.
+CAMRIG_PATTERNS = ["cam_b/pan_%03d.jpg", "cam_a/pan_%03d.jpg"]
+
+
+def test_a_camrig_rig_writes_every_sensor_of_each_chosen_frame(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    workspace = tmp_path / "ws"
+    count = 30
+    _copy_frames(pan_source["top"], workspace / "rig" / "cam_b", count=count)
+    _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_a", count=count)
+    _write_camrig(workspace / "rig" / "pan.camrig", CAMRIG_PATTERNS)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = _invoke(
+        ["pick-images", "rig", *FAST, "--write-list", "rig_pick", "--json", "r.json"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "pan.camrig (2 sensors)" in result.output
+    assert (
+        f"rig/cam_b/pan_%03d.jpg and rig/cam_a/pan_%03d.jpg, {count} rig frames of 2 "
+        "sensors" in result.output
+    )
+    data = json.loads((workspace / "r.json").read_text())
+    (capture,) = data["capture"]
+    assert capture["sensors"] == CAMRIG_PATTERNS
+    assert capture["images"][0] == ["rig/cam_b/pan_001.jpg", "rig/cam_a/pan_001.jpg"]
+    assert all(len(frame["sensors"]) == 2 for frame in data["frames"])
+    (chosen,) = data["chosen_numbers"]
+    assert 1 < len(chosen) < count
+    entries = json.loads((workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())[
+        "named_image_lists"
+    ]["rig_pick"]
+    assert [e["pattern"] for e in entries] == [
+        "rig/cam_b/pan_%03d.jpg",
+        "rig/cam_a/pan_%03d.jpg",
+    ]
+    assert (
+        entries[0]["range"] == entries[1]["range"] == str(RangeExpr.from_list(chosen))
+    )
+
+    # What `sfm solve -r rig_pick` solves: the list's images, which the
+    # .camrig covers as a rig of both sensors at the chosen frames.
+    listed = _resolve(workspace, "rig_pick")
+    solve = resolve_camrig_for_solve(
+        [workspace / p for p in listed], workspace, camera_model=None
+    )
+    assert solve is not None and solve.is_multi_sensor
+    assert sorted(solve.rig.assignments.values()) == sorted(
+        (sensor, n) for sensor in (0, 1) for n in chosen
+    )
+
+
+def _touch(workspace: Path, rels: list[str]) -> list[Path]:
+    """Empty files at `rels`: finding the rigs reads names only."""
+    paths = []
+    for rel in rels:
+        path = workspace / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        paths.append(path)
+    return paths
+
+
+RIG_FILES = [f"rig/{cam}/pan_00{n}.jpg" for cam in ("cam_a", "cam_b") for n in (1, 2)]
+
+
+def test_a_camrig_covering_the_images_takes_precedence_over_rig_config(
+    tmp_path: Path,
+):
+    workspace = tmp_path / "ws"
+    paths = _touch(workspace, RIG_FILES)
+    _write_rig_config(workspace)
+    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
+    assert rig_configs is not None and camrig_rig is None and notes == []
+
+    _write_camrig(workspace / "rig" / "pan.camrig", CAMRIG_PATTERNS)
+    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
+    assert rig_configs is None
+    assert sorted(camrig_rig.assignments.values()) == [
+        (s, n) for s in (0, 1) for n in (1, 2)
+    ]
+    assert "rig_config.json is ignored (the .camrig takes precedence)" in notes[-1]
+    (sequence,) = collect_sequences(paths, workspace, rig_configs, camrig_rig)
+    assert sequence.patterns == ["rig/cam_b/pan_%03d.jpg", "rig/cam_a/pan_%03d.jpg"]
+
+
+def test_a_single_sensor_camrig_defines_no_rig(tmp_path: Path):
+    # A one-sensor .camrig is a camera only; covering every image, it still
+    # takes precedence over rig_config.json, as in `sfm solve`.
+    workspace = tmp_path / "ws"
+    paths = _touch(workspace, RIG_FILES)
+    _write_rig_config(workspace)
+    _write_camrig(workspace / "rig" / "one.camrig", ["*/pan_%03d.jpg"])
+    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
+    assert rig_configs is None and camrig_rig is None
+    assert len(notes) == 1 and "rig_config.json is ignored" in notes[0]
+    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rig)
+    assert [s.patterns for s in sequences] == [
+        ["rig/cam_a/pan_%03d.jpg"],
+        ["rig/cam_b/pan_%03d.jpg"],
+    ]
+
+
+def test_images_a_camrig_covers_only_in_part_are_refused(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    # `sfm solve` refuses a set of images a .camrig covers only in part, so
+    # the command refuses it before reading any image.
+    workspace = tmp_path / "ws"
+    _copy_frames(pan_source["top"], workspace / "rig" / "cam_b", count=3)
+    _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_a", count=3)
+    _copy_frames(pan_source["top"], workspace / "frames", count=3)
+    _write_camrig(workspace / "rig" / "pan.camrig", CAMRIG_PATTERNS)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["pick-images", "rig", "frames"])
+    assert result.exit_code == 1, result.output
+    assert "pan.camrig matches only 6 of 9 images given" in result.output
+    assert "Pick only the images the .camrig covers" in result.output
+    assert not any(p.suffix == ".sift" for p in workspace.rglob("*"))
+
+    result = CliRunner().invoke(main, ["pick-images", "rig"])
+    assert result.exit_code == 0, result.output
 
 
 def test_an_invalid_output_name_is_a_usage_error(pan_workspace: Path):

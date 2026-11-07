@@ -213,6 +213,10 @@ discovered `.camrig` files cannot be used:
 - a `.camrig` covers only some of the images being solved;
 - `--camera-model` is given alongside a matching `.camrig`.
 
+`sfm pick-images` finds its rigs by the same rule, so a list it writes is
+covered by the same `.camrig`
+([pick-images-command.md § Collecting the frames](../image-feature/pick-images-command.md#collecting-the-frames)).
+
 See [`../../formats/camrig-file-format.md`](../../formats/camrig-file-format.md).
 
 ## Usage Examples

@@ -10,8 +10,10 @@ The walk itself is `sfmtool.analysis.pick_images`
 `sfmtool` feature tool itself. This module groups a command's image files
 into sequences by folder and by the name apart from the file number
 `number_from_filename` reads, which is the number `-r` selects a file by, so
-the pattern each sequence's list entry uses is built from the same rule; and
-for the other feature tools it extracts every frame's `.sift` files through
+the pattern each sequence's list entry uses is built from the same rule. A
+rig's images are grouped into frames by the multi-sensor `.camrig` that
+covers them, found as `sfm solve` finds it, or else by `rig_config.json`.
+For the other feature tools it extracts every frame's `.sift` files through
 `image_files_to_sift_files` with the workspace's settings. See
 specs/cli/image-feature/pick-images-command.md.
 """
@@ -40,8 +42,9 @@ class PickSequence:
     patterns: list[str]
     numbers: list[int]
     images: list[list[Path]]
-    # The sensors' `image_prefix` values for a rig sequence, in the order of
-    # each frame's images; `None` for a sequence of single images.
+    # What names each sensor of a rig sequence, in the order of each frame's
+    # images: its `image_prefix` in `rig_config.json`, or its image pattern
+    # as the `.camrig` stores it; `None` for a sequence of single images.
     sensors: list[str] | None = None
 
     @property
@@ -91,10 +94,69 @@ class _Group:
     digit_counts: set[int] = field(default_factory=set)
 
 
+def find_rigs(image_paths: list[Path], workspace_dir: Path):
+    """The rigs that group `image_paths` into rig frames, found as `sfm solve`
+    finds them: `(rig_configs, camrig_rig, notes)`.
+
+    A `.camrig` that covers every one of the images takes precedence over
+    `rig_config.json`: a multi-sensor one is returned as a `CamrigRig` whose
+    assignments hold the images, and a single-sensor one, a camera only,
+    defines no rig. With no `.camrig` covering any of the images,
+    `rig_configs` is the workspace's `rig_config.json`, or `None`. `notes`
+    are the lines to print about the choice.
+
+    Raises `PickImagesInputError` when the images span several `.camrig`
+    files or a `.camrig` covers only some of them, which `sfm solve` refuses,
+    or when a `.camrig` or `rig_config.json` cannot be used.
+    """
+    from .camrig.resolver import (
+        CamrigRig,
+        CamrigSolveError,
+        _build_rig_assignments,
+        find_covering_camrig,
+    )
+    from .rig.config import RigConfigError, _load_rig_config
+
+    try:
+        rig_configs = _load_rig_config(workspace_dir)
+        found = find_covering_camrig(
+            image_paths, workspace_dir, images="images given", act="pick"
+        )
+    except (RigConfigError, CamrigSolveError) as e:
+        raise PickImagesInputError(str(e)) from None
+    if found is None:
+        return rig_configs, None, []
+
+    camrig_file, data = found
+    sensor_count = data["metadata"]["sensor_count"]
+    notes = []
+    if sensor_count > 1:
+        notes.append(f"  Camera rig: {camrig_file} ({sensor_count} sensors)")
+    if rig_configs is not None:
+        notes.append(
+            "Note: a .camrig covers these images; rig_config.json is ignored "
+            "(the .camrig takes precedence)."
+        )
+    if sensor_count == 1:
+        return None, None, notes
+    try:
+        assignments = _build_rig_assignments(camrig_file, data)
+    except (CamrigSolveError, ValueError) as e:
+        raise PickImagesInputError(str(e)) from None
+    given = {Path(p).resolve() for p in image_paths}
+    rig = CamrigRig(
+        camrig_file=camrig_file,
+        data=data,
+        assignments={p: a for p, a in assignments.items() if p in given},
+    )
+    return None, rig, notes
+
+
 def collect_sequences(
     image_paths: list[Path],
     workspace_dir: Path,
     rig_configs: list[dict] | None,
+    camrig_rig=None,
 ) -> list[PickSequence]:
     """Group `image_paths`, all under `workspace_dir`, into sequences.
 
@@ -103,14 +165,23 @@ def collect_sequences(
     `rig_configs` (a workspace's `rig_config.json`), an image under a sensor's
     `image_prefix` belongs to that rig, and the images of one rig that share a
     frame key, the path after the prefix, are one frame, as `sfm solve`
-    groups them; the sequence is then formed from the frame keys. The
-    sequences are ordered by their first pattern.
+    groups them; the sequence is then formed from the frame keys. With
+    `camrig_rig` (a `CamrigRig` from `find_rigs`, whose assignments hold
+    every one of `image_paths`), the images are instead one rig sequence,
+    framed by the `.camrig`'s frame indexes. The sequences are ordered by
+    their first pattern.
 
     Raises `PickImagesInputError` naming the files with no number, the files
     of one sequence that share a number, the rig frames that lack a sensor
     another frame of their sequence has, and the names a pattern cannot hold.
     """
     from .rig.config import _infer_frame_key, _match_image_to_sensor
+
+    if camrig_rig is not None:
+        sequence, problems = _camrig_sequence(image_paths, workspace_dir, camrig_rig)
+        if problems:
+            raise PickImagesInputError("\n".join(problems))
+        return [sequence]
 
     root = Path(os.path.abspath(workspace_dir))
     groups: dict[tuple, _Group] = {}
@@ -234,6 +305,77 @@ def _sequence(
             numbers=numbers,
             images=[[Path(group.frames[n][s][0]) for s in sensors] for n in numbers],
             sensors=prefixes,
+        ),
+        problems,
+    )
+
+
+def _camrig_sequence(
+    image_paths: list[Path], workspace_dir: Path, camrig_rig
+) -> tuple[PickSequence | None, list[str]]:
+    """The rig sequence of images a multi-sensor `.camrig` covers, or the
+    problems that stop it.
+
+    A frame is the images of one frame index, its sensors ordered by index,
+    so the lowest-indexed sensor present, the reference `sfm solve` uses,
+    comes first. Each sensor's list pattern is its `.camrig` pattern behind
+    the `.camrig`'s folder, relative to the workspace, so it matches the same
+    files and reads the same frame number from them.
+    """
+    from ._sfmtool.fileio import camrig_pattern_matches
+
+    root = Path(workspace_dir).resolve()
+    folder = camrig_rig.camrig_file.parent.relative_to(root).as_posix()
+    prefix = "" if folder == "." else _escape(folder + "/")
+    stored = camrig_rig.data["sensor_image_patterns"]
+    frames: dict[int, dict[int, str]] = {}
+    for path in image_paths:
+        resolved = Path(path).resolve()
+        sensor, frame = camrig_rig.assignments[resolved]
+        frames.setdefault(frame, {})[sensor] = resolved.relative_to(root).as_posix()
+    sensors = sorted({s for frame in frames.values() for s in frame})
+    patterns = [prefix + stored[s] for s in sensors]
+    numbers = sorted(frames)
+
+    problems: list[str] = []
+    if "*" in prefix:
+        problems.append(
+            f"The folder of {camrig_rig.camrig_file} has a '*' in its path, which "
+            "a named image list pattern reads as a wildcard."
+        )
+    # The `.camrig` matches letter case as the file system does, and a named
+    # image list pattern matches it exactly.
+    other_case = [
+        rel
+        for frame in frames.values()
+        for s, rel in frame.items()
+        if not camrig_pattern_matches(prefix + stored[s], rel, False)
+    ]
+    if other_case:
+        problems.append(
+            f"{len(other_case)} image file(s) match the patterns of "
+            f"{camrig_rig.camrig_file} only when letter case is ignored, and a "
+            f"named image list pattern matches case exactly: {_names(other_case)}"
+        )
+    incomplete = []
+    for n in numbers:
+        frame = frames[n]
+        missing = [patterns[i] for i, s in enumerate(sensors) if s not in frame]
+        if missing:
+            incomplete.append(f"{frame[min(frame)]} (no image of {', '.join(missing)})")
+    if incomplete:
+        problems.append(
+            f"{len(incomplete)} rig frame(s) of {patterns[0]} lack the image of a "
+            "sensor that other frames have: " + _names(incomplete)
+        )
+    if problems:
+        return None, problems
+    return (
+        PickSequence(
+            patterns=patterns,
+            numbers=numbers,
+            images=[[Path(frames[n][s]) for s in sensors] for n in numbers],
+            sensors=[stored[s] for s in sensors],
         ),
         problems,
     )
