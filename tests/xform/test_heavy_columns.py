@@ -53,19 +53,45 @@ def _xform(input_path: Path, output_path: Path, *steps: str):
     return _run(["xform", str(input_path), str(output_path), *steps])
 
 
-@pytest.fixture
-def embedded_sfmr(seoul_bull_workspace) -> Path:
+@pytest.fixture(scope="module")
+def embedded_sfmr_once(seoul_bull_workspace_once, tmp_path_factory) -> Path:
     """An ``embedded_patches`` reconstruction carrying thumbnails (copied from
-    the ``.sift`` files when the fixture was built) and 16x16 patch bitmaps."""
-    out = seoul_bull_workspace.with_name("embedded.sfmr")
+    the ``.sift`` files when the fixture was built) and 16x16 patch bitmaps.
+
+    Built once, in a copy of the session workspace of its own. Read it; a test
+    that writes beside it or changes its workspace takes :func:`embedded_sfmr`.
+
+    The file records no relative workspace path, so a load of it, or of a copy
+    of it, falls back to the absolute path it records. That directory is
+    renamed after the build, so the path names nothing and each copy finds its
+    own workspace by the marker beside it rather than this one.
+    """
+    build_dir = tmp_path_factory.mktemp("embedded_build")
+    shutil.copytree(seoul_bull_workspace_once.parent, build_dir, dirs_exist_ok=True)
     _xform(
-        seoul_bull_workspace,
-        out,
+        build_dir / seoul_bull_workspace_once.name,
+        build_dir / "embedded.sfmr",
         "--to-embedded-patches",
         "--add-patch-bitmaps",
         "resolution=16",
     )
+    workspace_dir = tmp_path_factory.mktemp("embedded_workspace")
+    workspace_dir.rmdir()
+    build_dir.rename(workspace_dir)
+    out = workspace_dir / "embedded.sfmr"
+    assert Path(SfmrReconstruction.load(out).workspace_dir).resolve() == (
+        workspace_dir.resolve()
+    )
     return out
+
+
+@pytest.fixture
+def embedded_sfmr(embedded_sfmr_once, tmp_path_factory) -> Path:
+    """A per-test copy of :func:`embedded_sfmr_once`'s whole workspace, which
+    loads with the copied workspace as its own."""
+    workspace_dir = tmp_path_factory.mktemp("embedded_workspace")
+    shutil.copytree(embedded_sfmr_once.parent, workspace_dir, dirs_exist_ok=True)
+    return workspace_dir / embedded_sfmr_once.name
 
 
 # ── Argument grammar ────────────────────────────────────────────────────────
@@ -186,10 +212,10 @@ def test_add_thumbnails_on_sift_files_reproduces_the_bytes(
     np.testing.assert_array_equal(np.asarray(rebuilt.thumbnails_y_x_rgb), original)
 
 
-def test_drop_thumbnails_keeps_every_row(embedded_sfmr, tmp_path):
+def test_drop_thumbnails_keeps_every_row(embedded_sfmr_once, tmp_path):
     out = tmp_path / "dropped.sfmr"
-    _xform(embedded_sfmr, out, "--drop-thumbnails")
-    before, after = read_sfmr(embedded_sfmr), read_sfmr(out)
+    _xform(embedded_sfmr_once, out, "--drop-thumbnails")
+    before, after = read_sfmr(embedded_sfmr_once), read_sfmr(out)
     for key in (
         "positions_xyzw",
         "keypoints_xy",
@@ -202,8 +228,8 @@ def test_drop_thumbnails_keeps_every_row(embedded_sfmr, tmp_path):
     assert after["image_names"] == before["image_names"]
 
 
-def test_add_thumbnails_is_a_no_op_when_present(embedded_sfmr, capsys):
-    recon = SfmrReconstruction.load(embedded_sfmr)
+def test_add_thumbnails_is_a_no_op_when_present(embedded_sfmr_once, capsys):
+    recon = SfmrReconstruction.load(embedded_sfmr_once)
     out = AddThumbnailsTransform().apply(recon)
     assert "already present" in capsys.readouterr().out
     np.testing.assert_array_equal(
@@ -281,10 +307,10 @@ def test_a_different_photograph_fails_naming_it(embedded_sfmr):
 # ── Patch bitmaps ───────────────────────────────────────────────────────────
 
 
-def test_drop_patch_bitmaps_keeps_frames_and_normals(embedded_sfmr, tmp_path):
+def test_drop_patch_bitmaps_keeps_frames_and_normals(embedded_sfmr_once, tmp_path):
     out = tmp_path / "no_bitmaps.sfmr"
-    _xform(embedded_sfmr, out, "--drop-patch-bitmaps")
-    before, after = read_sfmr(embedded_sfmr), read_sfmr(out)
+    _xform(embedded_sfmr_once, out, "--drop-patch-bitmaps")
+    before, after = read_sfmr(embedded_sfmr_once), read_sfmr(out)
     assert after["patch_bitmaps_y_x_rgba"] is None
     # The references stay: they name the observation each bitmap is to be
     # rendered from again.
@@ -303,12 +329,12 @@ def test_drop_patch_bitmaps_keeps_frames_and_normals(embedded_sfmr, tmp_path):
     assert ok, errors
 
 
-def test_drop_then_add_patch_bitmaps_reproduces_them(embedded_sfmr, tmp_path):
+def test_drop_then_add_patch_bitmaps_reproduces_them(embedded_sfmr_once, tmp_path):
     dropped = tmp_path / "dropped.sfmr"
     again = tmp_path / "again.sfmr"
-    _xform(embedded_sfmr, dropped, "--drop-patch-bitmaps")
+    _xform(embedded_sfmr_once, dropped, "--drop-patch-bitmaps")
     _xform(dropped, again, "--add-patch-bitmaps", "resolution=16")
-    before, after = read_sfmr(embedded_sfmr), read_sfmr(again)
+    before, after = read_sfmr(embedded_sfmr_once), read_sfmr(again)
     np.testing.assert_array_equal(
         after["reference_observations"], before["reference_observations"]
     )
@@ -317,10 +343,10 @@ def test_drop_then_add_patch_bitmaps_reproduces_them(embedded_sfmr, tmp_path):
     )
 
 
-def test_add_patch_bitmaps_renders_from_the_stored_references(embedded_sfmr):
+def test_add_patch_bitmaps_renders_from_the_stored_references(embedded_sfmr_once):
     """A point with a stored reference is rendered from it and keeps it; only
     a point at -1 gets the reference-view rule's pick."""
-    recon = SfmrReconstruction.load(embedded_sfmr)
+    recon = SfmrReconstruction.load(embedded_sfmr_once)
     picked = np.asarray(recon.reference_observations)
     counts = np.asarray(recon.observation_counts).astype(np.int64)
     # Every other picked point names another observation of its track; the
@@ -351,12 +377,12 @@ def test_drop_patch_bitmaps_is_a_no_op_without_them(seoul_bull_workspace, capsys
 
 
 def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
-    embedded_sfmr,
+    embedded_sfmr_once,
 ):
     """The step stores each point's reference-view render and names its
     reference observation, as the sub-pixel refiner does when it takes no
     Gauss-Newton step and so moves no keypoint."""
-    recon = SfmrReconstruction.load(embedded_sfmr)
+    recon = SfmrReconstruction.load(embedded_sfmr_once)
     # The fixture's file, written through the CLI, names an observation of each
     # point's own track.
     assert_references_name_track_observations(recon)
@@ -407,8 +433,8 @@ def test_add_patch_bitmaps_moves_nothing_and_stores_the_reference_view_render(
     np.testing.assert_array_equal(np.asarray(added.patch_bitmaps), expected)
 
 
-def test_add_patch_bitmaps_is_a_no_op_when_present(embedded_sfmr, capsys):
-    recon = SfmrReconstruction.load(embedded_sfmr)
+def test_add_patch_bitmaps_is_a_no_op_when_present(embedded_sfmr_once, capsys):
+    recon = SfmrReconstruction.load(embedded_sfmr_once)
     out = AddPatchBitmapsTransform().apply(recon)
     assert "already present" in capsys.readouterr().out
     assert out.patch_bitmap_resolution == 16
@@ -466,8 +492,9 @@ def test_minimal_writes_the_whole_reconstruction_and_no_history(embedded_sfmr):
     ok, errors = verify_sfmr(out)
     assert ok, errors
     # The relative path alone finds the workspace.
-    assert Path(SfmrReconstruction.load(out).workspace_dir) == Path(
-        before["metadata"]["workspace"]["absolute_path"]
+    assert (
+        Path(SfmrReconstruction.load(out).workspace_dir).resolve()
+        == embedded_sfmr.parent.resolve()
     )
 
 

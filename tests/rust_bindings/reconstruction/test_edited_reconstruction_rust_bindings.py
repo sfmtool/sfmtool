@@ -9,6 +9,7 @@ gives under the row map, the row map is a bijection on the survivors, and a
 materialised value's hash is the file's after a save.
 """
 
+import shutil
 import time
 
 import numpy as np
@@ -31,6 +32,20 @@ def base(seoul_bull_sfmr_only):
 @pytest.fixture
 def edited(base):
     return EditedReconstruction(base)
+
+
+@pytest.fixture(scope="module")
+def embedded_base(seoul_bull_workspace_once, tmp_path_factory):
+    """The seoul_bull reconstruction converted to embedded patches, built once
+    from a copy of the session workspace of its own.
+
+    Each test wraps it in a new ``EditedReconstruction``, which takes a copy of
+    it, so no edit a test makes reaches another test.
+    """
+    workspace_dir = tmp_path_factory.mktemp("embedded_base")
+    shutil.copytree(seoul_bull_workspace_once.parent, workspace_dir, dirs_exist_ok=True)
+    recon = SfmrReconstruction.load(workspace_dir / seoul_bull_workspace_once.name)
+    return recon.to_embedded_patches()
 
 
 def moved(record, dx):
@@ -290,9 +305,8 @@ class TestResectImageInPlace:
     """The bulk edit: one image re-posed against structure held out from it."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
-        return EditedReconstruction(recon.to_embedded_patches())
+    def embedded(self, embedded_base):
+        return EditedReconstruction(embedded_base)
 
     def test_an_image_past_the_table_is_refused(self, embedded):
         with pytest.raises(ValueError, match="out of range"):
@@ -340,9 +354,8 @@ class TestBundleAdjust:
     """The bulk edit that moves every pose and every point at once."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
-        return EditedReconstruction(recon.to_embedded_patches())
+    def embedded(self, embedded_base):
+        return EditedReconstruction(embedded_base)
 
     def test_the_poses_move_and_the_residuals_do_not_get_worse(self, embedded):
         before = embedded.materialize()[0]
@@ -922,9 +935,8 @@ class TestMoveCamera:
     """The bulk edit: one image put at a pose, and its tracks settled around it."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
-        return EditedReconstruction(recon.to_embedded_patches())
+    def embedded(self, embedded_base):
+        return EditedReconstruction(embedded_base)
 
     def test_an_image_past_the_table_is_refused(self, embedded):
         with pytest.raises(ValueError, match="past the"):
@@ -1010,9 +1022,8 @@ class TestPruneCoveredObservations:
     """The bulk edit: a coarse observation handed over to the finer feature."""
 
     @pytest.fixture
-    def embedded(self, seoul_bull_workspace):
-        recon = SfmrReconstruction.load(seoul_bull_workspace)
-        return EditedReconstruction(recon.to_embedded_patches())
+    def embedded(self, embedded_base):
+        return EditedReconstruction(embedded_base)
 
     def test_a_value_with_no_patch_frames_is_refused(self, base):
         # The stored reconstruction is sift_files, whose points carry no patch
