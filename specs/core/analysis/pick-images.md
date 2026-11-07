@@ -541,7 +541,8 @@ exact.
 | neighbours | 2 positions on either side | the frames a candidate is judged against for blur against its neighbours |
 | prediction below the floor | `W` frames | how far the walk prefetches where it reads every frame, for a source of `W` workers |
 
-The last four are constants of the module.
+The re-aims, the recent rates and the neighbours are constants of the
+module; the prediction below the floor is the source's `concurrency`.
 
 ## Python bindings
 
@@ -574,7 +575,8 @@ a frame's `images` and a sequence's `frames` are tuples, built once, so
 extracting source, with `concurrent_images` its worker count; with neither,
 the source is the read-only one, and one without the other, or
 `concurrent_images` without them, is a `ValueError`. `pick_images` takes the
-fields of `PickImagesOptions` as keyword-only arguments, with the pair options
+fields of `PickImagesOptions` but `prefetch`, which it leaves on, as
+keyword-only arguments, with the pair options
 under the names `match_frame_pair` uses and the forest under the names
 `FrameFeatures` uses (`preset`, `num_trees`, `leaf_size`, `max_leaf_checks`);
 one left out takes the Rust default. `progress`, a `ProgressCounter`, holds

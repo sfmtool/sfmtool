@@ -166,6 +166,10 @@ fn a_steady_video_is_chosen_at_about_the_target_step() {
     let walk = run.walk(0);
     assert_eq!(walk.chosen.first(), Some(&0));
     assert_eq!(walk.chosen.last(), Some(&299));
+    // The last step is below the band at the last frame, which a step does
+    // not pass.
+    let last = walk.steps.last().expect("steps");
+    assert_eq!((last.to, last.kind), (299, StepKind::AtLimit), "{last:?}");
     // With no recent step, the walk measures the next frame first and aims
     // from its rate: the first frame waited for after frame 0 is frame 1.
     assert_eq!(run.asked[0].frame, 0);

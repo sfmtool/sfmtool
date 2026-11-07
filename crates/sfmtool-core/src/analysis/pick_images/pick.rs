@@ -28,8 +28,9 @@ use crate::progress::Progress;
 /// frame just before reading the frame and, unless `options.prefetch` is
 /// off, asks it to prefetch the frames it predicts it will read: the next
 /// step's first candidate and its neighbours, the floor search's next tries
-/// and, where it reads every frame, the frames ahead. It decides only from frames it waited for, so the report is the
-/// same whatever the source does ahead of it, except for
+/// and, where it reads every frame, the frames ahead. It decides only from
+/// frames it waited for, so the report is the same whatever the source does
+/// ahead of it, except for
 /// [`PickImagesReport::frames_extracted_unread`]. When the run ends, with a
 /// report or an error, the source's work is stopped with
 /// [`FrameSource::finish`].
