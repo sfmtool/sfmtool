@@ -230,7 +230,8 @@ fn build_git_describe() -> Option<&'static str> {
 /// The GPU adapter request waits at most `gpu_timeout_s` seconds, so a driver
 /// that hangs cannot hang the caller, and the GIL is released while it runs.
 ///
-/// Raises `ValueError` when `gpu_timeout_s` is negative or not finite.
+/// Raises `ValueError` when `gpu_timeout_s` is negative, not finite, or too
+/// large to be a duration.
 ///
 /// Registered as `_machine_facts`: it is internal to the package, and
 /// `sfm version` is how users read it.
@@ -239,12 +240,11 @@ fn machine_facts<'py>(py: Python<'py>, gpu_timeout_s: f64) -> PyResult<Bound<'py
     use sfmtool_core::machine::{self, GpuProbe};
     use sfmtool_core::Progress;
 
-    if !gpu_timeout_s.is_finite() || gpu_timeout_s < 0.0 {
-        return Err(PyValueError::new_err(format!(
-            "gpu_timeout_s must be a finite number of seconds, at least 0, not {gpu_timeout_s}"
-        )));
-    }
-    let timeout = std::time::Duration::from_secs_f64(gpu_timeout_s);
+    let timeout = std::time::Duration::try_from_secs_f64(gpu_timeout_s).map_err(|_| {
+        PyValueError::new_err(format!(
+            "gpu_timeout_s must be a finite number of seconds, at least 0 and              representable as a duration, not {gpu_timeout_s}"
+        ))
+    })?;
     // `Progress::none()` is never cancelled, so the probe always answers.
     let probe = py
         .detach(|| machine::probe_gpu_adapter(timeout, &Progress::none()))

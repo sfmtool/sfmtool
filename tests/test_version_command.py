@@ -413,7 +413,7 @@ def test_ffmpeg_facts(monkeypatch, tmp_path):
 
 
 def test_machine_facts_refuses_a_bad_timeout():
-    for bad in (-1.0, float("nan"), float("inf")):
+    for bad in (-1.0, float("nan"), float("inf"), 1e300):
         with pytest.raises(ValueError, match="gpu_timeout_s"):
             _machine_facts(bad)
 

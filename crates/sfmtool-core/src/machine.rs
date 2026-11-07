@@ -353,14 +353,21 @@ where
     if spawned.is_err() {
         return Ok(GpuProbe::Failed);
     }
-    let deadline = Instant::now() + timeout;
+    // A timeout too long to add to the current instant waits with no deadline.
+    let deadline = Instant::now().checked_add(timeout);
     loop {
         progress.check_cancel()?;
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(GpuProbe::TimedOut(timeout));
-        }
-        match receiver.recv_timeout(POLL.min(deadline - now)) {
+        let wait = match deadline {
+            Some(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Ok(GpuProbe::TimedOut(timeout));
+                }
+                POLL.min(deadline - now)
+            }
+            None => POLL,
+        };
+        match receiver.recv_timeout(wait) {
             Ok(Ok(adapter)) => return Ok(GpuProbe::Found(adapter)),
             Ok(Err(reason)) => return Ok(GpuProbe::NoAdapter(reason)),
             // The thread ended without sending: the request panicked.

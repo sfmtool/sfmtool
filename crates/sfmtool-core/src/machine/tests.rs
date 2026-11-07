@@ -117,3 +117,9 @@ fn wait_for_stops_when_cancelled() {
     );
     assert_eq!(result, Err(Cancelled));
 }
+
+#[test]
+fn wait_for_takes_a_timeout_too_long_for_a_deadline() {
+    let found = wait_for(|| Ok(adapter()), Duration::MAX, &Progress::none());
+    assert_eq!(found, Ok(GpuProbe::Found(adapter())));
+}
