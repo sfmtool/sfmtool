@@ -27,103 +27,6 @@ def _items(items: list[str]) -> str:
     return text
 
 
-def _pct(value) -> str:
-    """A step or a motion in percent; `None` is a value the report could not
-    measure (too few matches)."""
-    return "unmeasured" if value is None else f"{value:.2f}%"
-
-
-def _span(first: int, last: int) -> str:
-    return str(first) if first == last else f"{first}-{last}"
-
-
-def _counts(report: dict, sequence: int, stages: tuple[str, ...], extracted: dict):
-    """How many frames of `sequence` the given stages read, and how many of
-    them had a `.sift` file written."""
-    read = written = 0
-    for frame in report["frames"]:
-        if frame["id"]["sequence"] == sequence and frame["stage"] in stages:
-            read += 1
-            written += bool(extracted.get(frame["id"]["frame"]))
-    return read, written
-
-
-def baseline_lines(
-    report: dict,
-    index: int,
-    sequence: PickSequence,
-    extracted: dict,
-    label: str,
-    min_step_matches: int,
-) -> list[str]:
-    """The baseline section of one sequence."""
-    seq = report["sequences"][index]
-    base = seq["baseline"]
-    numbers = sequence.numbers
-    read, written = _counts(report, index, ("baseline",), extracted)
-    lines = [
-        f"Baseline{label}: {len(base['samples'])} frames sampled, "
-        f"{base['frames_read']} frames read ({written} extracted, "
-        f"{read - written} reused)"
-    ]
-    medians = [s["sharpness_median"] for s in base["sensors"]]
-    if sequence.sensors is None:
-        sharpness = f"median {medians[0]:.4g}"
-    else:
-        sharpness = "median " + ", ".join(
-            f"{m:.4g} ({p})" for m, p in zip(medians, sequence.sensors)
-        )
-    blurred = base["blurred_samples"]
-    lines.append(
-        f"  Sharpness: {sharpness}; {blurred} sampled "
-        f"frame{'' if blurred == 1 else 's'} blurred"
-    )
-    lines.append(
-        f"  Motion per frame: median {_pct(base['rate_median'])}, "
-        f"p90 {_pct(base['rate_p90'])} of the long side; "
-        "total "
-        + (
-            "unmeasured"
-            if base["total_motion_percent"] is None
-            else f"{base['total_motion_percent']:.0f}%"
-        )
-    )
-    lines.append(
-        "  Matches with the next frame: "
-        + _next_frame_matches(base["next_frame_matches_median"], min_step_matches)
-    )
-    regions = []
-    for region in base["flagged_regions"]:
-        why = [
-            name
-            for name, flag in (
-                ("blurred", region["blurred"]),
-                ("weak matches", region["weak_matches"]),
-            )
-            if flag
-        ]
-        regions.append(
-            f"{_span(numbers[region['first']], numbers[region['last']])} "
-            f"({', '.join(why)})"
-        )
-    lines.append(f"  Flagged regions: {_items(regions) if regions else 'none'}")
-    return lines
-
-
-def _next_frame_matches(median, floor: int) -> str:
-    """The baseline's median matches with the next frame against the match
-    floor; below it, most steps past the next frame keep fewer matches than
-    the floor, and the walk takes most frames."""
-    if median is None:
-        return f"unmeasured; match floor {floor}"
-    if median < floor:
-        return (
-            f"median {median:g}, below the match floor of {floor}, so most steps "
-            "go to the next frame"
-        )
-    return f"median {median:g}; match floor {floor}"
-
-
 def _motion_rows(walk: dict, numbers: list[int]) -> list[str]:
     """The motion table: the sequence in up to ten runs of positions, each
     with the median step, rate and stride of the steps that start in it."""
@@ -140,11 +43,17 @@ def _motion_rows(walk: dict, numbers: list[int]) -> list[str]:
         inside = [s for s in steps if first <= s["from"] <= last]
         if not inside:
             continue
-        step = np.median([s["stats"]["step_percent"] for s in inside])
-        rate = np.median([s["rate"] for s in inside])
+        # A step whose frames match nothing has no step or rate (`None`).
+        measured = [s for s in inside if s["rate"] is not None]
         stride = np.median([s["to"] - s["from"] for s in inside])
         frames = f"{numbers[first]}-{numbers[last]}"
-        rows.append(f"    frames {frames:>13}  {step:6.1f}%  {rate:6.2f}%  {stride:5g}")
+        if measured:
+            step = np.median([s["stats"]["step_percent"] for s in measured])
+            rate = np.median([s["rate"] for s in measured])
+            motion = f"{step:6.1f}%  {rate:6.2f}%"
+        else:
+            motion = f"{'unmeasured':>16}"
+        rows.append(f"    frames {frames:>13}  {motion}  {stride:5g}")
     return rows
 
 
@@ -156,134 +65,48 @@ def walk_lines(
     label: str,
     target_step: float,
     step_band: float,
+    min_step_matches: int,
 ) -> list[str]:
-    """The walk section of one sequence."""
-    walk = report["sequences"][index]["walk"]
+    """The section of one sequence."""
+    walk = report["sequences"][index]
     numbers = sequence.numbers
     steps = walk["steps"]
-
-    def number(position: int) -> int:
-        return numbers[position]
-
-    def step_text(step: dict) -> str:
-        return f"{number(step['from'])}->{number(step['to'])}"
-
     low, high = target_step * (1 - step_band), target_step * (1 + step_band)
-    breaks = walk["breaks"]
-    segments = walk["segments"]
     lines = [
         f"Walk{label}: target step {target_step:g}% (band {low:.3g}-{high:.3g}%), "
-        f"{len(breaks)} break{'s' if len(breaks) != 1 else ''}, "
-        f"{len(segments)} segment{'s' if len(segments) != 1 else ''}"
+        f"match floor {min_step_matches}"
     ]
-    read, written = _counts(report, index, ("walk",), extracted)
+    written = sum(
+        bool(extracted.get(frame["id"]["frame"]))
+        for frame in report["frames"]
+        if frame["id"]["sequence"] == index
+    )
+    read = walk["frames_read"]
     lines.append(
-        f"  Chosen: {len(walk['chosen'])} frames; read: {walk['frames_used']} frames "
-        f"({written} extracted, {read - written} reused, "
-        f"{walk['frames_from_baseline']} from the baseline)"
+        f"  Chosen: {len(walk['chosen'])} of {len(numbers)} frames; read: {read} "
+        f"frames ({written} extracted, {read - written} reused)"
     )
     lines.append(
         "  Motion along the capture (median step, rate per frame, frames per step):"
     )
     lines.extend(_motion_rows(walk, numbers))
-    at_floor = sum(s["kind"] == "at_floor" for s in steps)
-    lines.append(
-        f"  Steps stopped at the match floor: {at_floor} of {len(steps)}"
-        if at_floor
-        else "  Steps stopped at the match floor: none"
-    )
-
-    for reason, heading in (
-        ("median", "Blurred frames swapped"),
-        ("neighbours", "Frames blurred against their neighbours swapped"),
-    ):
-        swaps = [
-            f"{number(s['candidate'])}->{number(s['chosen'])}"
-            for s in walk["swaps"]
-            if s["reason"] == reason
-        ]
+    at_floor = [s for s in steps if s["kind"] == "at_floor"]
+    next_frame = sum(s["to"] == s["from"] + 1 for s in at_floor)
+    if at_floor:
         lines.append(
-            f"  {heading} ({len(swaps)}): {_items(swaps)}"
-            if swaps
-            else f"  {heading}: none"
+            f"  Steps stopped at the match floor: {len(at_floor)} of {len(steps)}, "
+            f"{next_frame} of them at the next frame"
         )
-
-    gaps = walk["gaps"]
-    if gaps:
-        lines.append(f"  Gaps filled in ({len(gaps)}):")
-        for gap in gaps[:_SHOWN]:
-            run = steps[gap["first_step"] : gap["end_step"]]
-            percents = [s["stats"]["step_percent"] for s in run]
-            fewest = min(s["stats"]["matches"] for s in run)
-            low_step, high_step = f"{min(percents):.1f}", f"{max(percents):.1f}"
-            steps_text = (
-                f"step {low_step}%"
-                if low_step == high_step
-                else f"steps {low_step}-{high_step}%"
-            )
-            lines.append(
-                f"    {_span(number(run[0]['from']), number(run[-1]['to']))}: "
-                f"{len(run)} frame{'s' if len(run) != 1 else ''}, {steps_text}, "
-                f"down to {fewest} matches"
-            )
-        if len(gaps) > _SHOWN:
-            lines.append(f"    ... and {len(gaps) - _SHOWN} more")
     else:
-        lines.append("  Gaps filled in: none")
-
-    kept = [
-        f"{number(k['frame'])}, the sharpest of "
-        f"{_span(number(k['searched_first']), number(k['searched_last']))} "
-        f"({k['sharpness_ratio']:.2f} of the median)"
-        for k in walk["kept_blurred"]
+        lines.append("  Steps stopped at the match floor: none")
+    swaps = [
+        f"{numbers[s['candidate']]}->{numbers[s['chosen']]}" for s in walk["swaps"]
     ]
-    if kept:
-        lines.append(f"  Kept though blurred ({len(kept)}):")
-        lines.extend(f"    {k}" for k in kept[:_SHOWN])
-        if len(kept) > _SHOWN:
-            lines.append(f"    ... and {len(kept) - _SHOWN} more")
-    else:
-        lines.append("  Kept though blurred: none")
-
-    break_texts = []
-    for b in breaks:
-        after = number(b["after"])
-        if b["resumes_at"] is None:
-            break_texts.append(
-                f"after {after}: no later frame matches its next frame, so the "
-                "sequence ends there"
-            )
-        else:
-            resumes = number(b["resumes_at"])
-            stuck = number(b["resumes_at"] - 1)
-            break_texts.append(
-                f"{after}->{resumes}: frames {_span(after, stuck)} do not match "
-                "their next frame"
-            )
+    heading = "Frames blurred against their neighbours swapped"
     lines.append(
-        f"  Breaks ({len(break_texts)}): " + "; ".join(break_texts)
-        if break_texts
-        else "  Breaks: none"
-    )
-
-    weak = []
-    for point in walk["weak_points"]:
-        if point["kind"] == "step":
-            step = steps[point["step"]]
-            weak.append(f"{step_text(step)} ({step['stats']['matches']} matches)")
-        else:
-            segment = segments[point["segment"]]
-            chosen = walk["chosen"][
-                segment["start"] : segment["start"] + segment["len"]
-            ]
-            weak.append(
-                f"the segment {_span(number(chosen[0]), number(chosen[-1]))} "
-                f"({len(chosen)} frame{'s' if len(chosen) != 1 else ''})"
-            )
-    lines.append(
-        f"  Weak points ({len(weak)}): {_items(weak)}"
-        if weak
-        else "  Weak points: none"
+        f"  {heading} ({len(swaps)}): {_items(swaps)}"
+        if swaps
+        else f"  {heading}: none"
     )
     return lines
 
@@ -309,8 +132,8 @@ def report_lines(
     step_band: float,
     min_step_matches: int,
 ) -> list[str]:
-    """Every section of the report before the list is written: the baseline
-    of each sequence, then the walk of each sequence.
+    """Every section of the report before the list is written: the walk of
+    each sequence, then the count of frames extracted and never read.
 
     `extracted[i]` maps a frame position of sequence `i` to whether a `.sift`
     file was written for it; the last line counts the frames that had a
@@ -319,14 +142,19 @@ def report_lines(
     lines: list[str] = []
     for i, sequence in enumerate(sequences):
         label = f" of {sequence.name}" if several else ""
+        if i:
+            lines.append("")
         lines.extend(
-            baseline_lines(report, i, sequence, extracted[i], label, min_step_matches)
-        )
-    for i, sequence in enumerate(sequences):
-        label = f" of {sequence.name}" if several else ""
-        lines.append("")
-        lines.extend(
-            walk_lines(report, i, sequence, extracted[i], label, target_step, step_band)
+            walk_lines(
+                report,
+                i,
+                sequence,
+                extracted[i],
+                label,
+                target_step,
+                step_band,
+                min_step_matches,
+            )
         )
     unread = report["frames_extracted_unread"]
     lines.append("")

@@ -10,7 +10,6 @@
 //! will read are passed to the source's prefetch, which only starts work:
 //! nothing here reads a frame it did not wait for.
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use sfmtool_sift_format::{
@@ -19,7 +18,7 @@ use sfmtool_sift_format::{
 
 use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
 use super::frame_pair::{match_frame_pair, FrameFeatures, FramePairStats};
-use super::report::{MeasuredPair, Stage};
+use super::report::MeasuredPair;
 use super::source::FrameSource;
 use crate::features::sift::ImageReadings;
 use crate::progress::Progress;
@@ -27,7 +26,6 @@ use crate::progress::Progress;
 /// One frame read.
 pub(super) struct ReadFrame {
     pub(super) id: FrameId,
-    pub(super) stage: Stage,
     /// One per sensor, the reference sensor's first.
     pub(super) readings: Vec<ImageReadings>,
     /// The reference sensor's metadata, for building its features.
@@ -88,9 +86,9 @@ impl<'a> Frames<'a> {
             .collect()
     }
 
-    /// How many frames ahead the walk prefetches through a break, where it
-    /// reads every frame: as many as the source works on at once. 0 when the
-    /// options turn prefetching off or the source does no work ahead.
+    /// How many frames the source works on at once when the walk prefetches,
+    /// and 0 when the options turn prefetching off or the source does no
+    /// work ahead.
     pub(super) fn prefetch_window(&self) -> usize {
         if self.options.prefetch {
             self.source.concurrency()
@@ -116,7 +114,6 @@ impl<'a> Frames<'a> {
     pub(super) fn ensure(
         &mut self,
         ids: &[FrameId],
-        stage: Stage,
         progress: &Progress,
     ) -> Result<(), PickImagesError> {
         let new = self.unread(ids);
@@ -139,7 +136,6 @@ impl<'a> Frames<'a> {
             self.index[id.sequence][id.frame] = Some(self.read.len());
             self.read.push(ReadFrame {
                 id,
-                stage,
                 readings,
                 metadata,
             });
@@ -190,7 +186,6 @@ impl<'a> Frames<'a> {
         fa: &FrameFeatures,
         b: FrameId,
         fb: &FrameFeatures,
-        stage: Stage,
         progress: &Progress,
     ) -> Result<FramePairStats, PickImagesError> {
         if let Some(stats) = self.pair(a, b) {
@@ -215,52 +210,9 @@ impl<'a> Frames<'a> {
             a,
             b,
             stats: stats.clone(),
-            stage,
         });
         progress.value("pairs_matched", self.pairs.len() as f64);
         Ok(stats)
-    }
-
-    /// Match every pair of `pairs` not yet matched, in order. A frame's
-    /// features are built when its first pair comes up and dropped after its
-    /// last, so only the frames of the pairs near the current one are held.
-    /// Every frame of `pairs` has been read.
-    pub(super) fn match_pairs(
-        &mut self,
-        pairs: &[(FrameId, FrameId)],
-        stage: Stage,
-        progress: &Progress,
-    ) -> Result<(), PickImagesError> {
-        let todo: Vec<(FrameId, FrameId)> = pairs
-            .iter()
-            .copied()
-            .filter(|&(a, b)| self.pair(a, b).is_none())
-            .collect();
-        let mut uses: HashMap<FrameId, usize> = HashMap::new();
-        for &(a, b) in &todo {
-            *uses.entry(a).or_default() += 1;
-            *uses.entry(b).or_default() += 1;
-        }
-        let mut live: HashMap<FrameId, FrameFeatures> = HashMap::new();
-        for (a, b) in todo {
-            if self.pair(a, b).is_some() {
-                continue;
-            }
-            for id in [a, b] {
-                if let Entry::Vacant(slot) = live.entry(id) {
-                    slot.insert(self.features(id)?);
-                }
-            }
-            self.match_pair(a, &live[&a], b, &live[&b], stage, progress)?;
-            for id in [a, b] {
-                let left = uses.get_mut(&id).expect("counted above");
-                *left -= 1;
-                if *left == 0 {
-                    live.remove(&id);
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Stop the source's work and return every frame it wrote `.sift` files

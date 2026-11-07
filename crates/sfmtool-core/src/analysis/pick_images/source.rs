@@ -36,8 +36,8 @@ const WAIT_POLL: Duration = Duration::from_millis(50);
 /// walk changes how long a run takes and never what it chooses.
 pub trait FrameSource {
     /// How many frames the source works on at once, which sizes how far the
-    /// walk predicts ahead; 0 for a source that does no work ahead, whose
-    /// [`prefetch`](Self::prefetch) does nothing.
+    /// walk predicts ahead where it reads every frame; 0 for a source that
+    /// does no work ahead, whose [`prefetch`](Self::prefetch) does nothing.
     fn concurrency(&self) -> usize;
 
     /// Start making the `.sift` files of `frames` exist, in this order and

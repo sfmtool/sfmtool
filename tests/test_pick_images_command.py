@@ -26,11 +26,15 @@ from .conftest import SEOUL_BULL_DIR, TEST_DATA_DIR
 
 PAN_FRAMES = 100
 PAN_WIDTH, PAN_HEIGHT, PAN_STEP = 320, 240, 4
-# A small baseline keeps each run to a few seconds. The pan's small crops
-# have a few hundred features, so its neighbouring frames match with fewer
-# matches than the default match floor and every frame would be chosen; a
-# floor of 60 lets the walk thin the pan, as it thins a video.
-FAST = ["--baseline-frames", "10", "--min-step-matches", "60"]
+# The pan's small crops have a few hundred features, so its neighbouring
+# frames match with fewer matches than the default match floor and every
+# frame would be chosen; a floor of 60 lets the walk thin the pan, as it thins
+# a video, and keeps each run to a few seconds.
+FAST = ["--min-step-matches", "60"]
+# The opencv tool finds fewer features on the crops, so that its pan's
+# neighbouring frames keep fewer than 60 matches; a floor of 20 lets the walk
+# pass over frames there too.
+OPENCV_FAST = ["--min-step-matches", "20"]
 
 
 def _invoke(args: list[str]):
@@ -115,8 +119,8 @@ def test_write_list_writes_the_chosen_frames(pan_workspace: Path):
     data = json.loads((pan_workspace / "r.json").read_text())
     (chosen,) = data["chosen_numbers"]
     assert len(chosen) > 5
-    walk = data["sequences"][0]["walk"]
-    assert chosen == [data["capture"][0]["numbers"][p] for p in walk["chosen"]]
+    positions = data["sequences"][0]["chosen"]
+    assert chosen == [data["capture"][0]["numbers"][p] for p in positions]
 
     lists = json.loads((pan_workspace / NAMED_IMAGE_LISTS_FILE_NAME).read_text())
     (entry,) = lists["named_image_lists"]["pan"]
@@ -137,18 +141,21 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     assert first.exit_code == 0, first.output
     a = json.loads((pan_workspace / "a.json").read_text())
     assert set(a) >= {"sequences", "frames", "pairs", "capture", "options"}
-    assert a["options"]["target_step_percent"] == 10.0
-    assert a["options"]["baseline_frames"] == 10
-    assert a["options"]["neighbour_blur_ratio"] == 0.85
-    assert a["options"]["min_step_matches"] == 60
+    assert a["options"] == {
+        "target_step_percent": 10.0,
+        "step_band": 0.3,
+        "neighbour_blur_ratio": 0.85,
+        "min_step_matches": 60,
+    }
     assert a["capture"][0]["patterns"] == ["frames/pan_%03d.jpg"]
     assert a["capture"][0]["numbers"] == list(range(1, PAN_FRAMES + 1))
     assert a["capture"][0]["images"][4] == ["frames/pan_005.jpg"]
     assert a["named_image_list"] is None
     assert len(a["frames_extracted"]) == len(a["frames"])
     assert all(a["frames_extracted"])
-    read = a["sequences"][0]["baseline"]["frames_read"]
-    assert f"{read} frames read ({read} extracted, 0 reused)" in first.output
+    read = a["sequences"][0]["frames_read"]
+    assert read == len(a["frames"])
+    assert f"read: {read} frames ({read} extracted, 0 reused)" in first.output
     # The frames predicted and never read have .sift files, and are counted.
     unread = a["frames_extracted_unread"]
     sift_files = list((pan_workspace / "frames").rglob("*.jpg.sift"))
@@ -161,7 +168,7 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     b = json.loads((pan_workspace / "b.json").read_text())
     assert b["chosen_numbers"] == a["chosen_numbers"]
     assert not any(b["frames_extracted"])
-    assert f"{read} frames read (0 extracted, {read} reused)" in second.output
+    assert f"read: {read} frames (0 extracted, {read} reused)" in second.output
 
 
 def test_an_existing_name_is_refused_before_any_image_is_read(pan_workspace: Path):
@@ -268,14 +275,14 @@ def test_another_feature_tool_extracts_every_frame_first(
     tmp_path: Path, pan_source, monkeypatch
 ):
     workspace = tmp_path / "ws"
-    # 70 frames: few to extract, and more than the baseline reads, so some
-    # are extracted first and never read.
+    # 70 frames: few to extract, and more than the walk reads, so some are
+    # extracted first and never read.
     _copy_frames(pan_source["top"], workspace / "frames", count=70)
     result = _invoke(["ws", "init", "--feature-tool", "opencv", str(workspace)])
     assert result.exit_code == 0, result.output
     monkeypatch.chdir(workspace)
 
-    result = _invoke(["pick-images", "frames", *FAST, "--json", "r.json"])
+    result = _invoke(["pick-images", "frames", *OPENCV_FAST, "--json", "r.json"])
     assert result.exit_code == 0, result.output
     assert "with the opencv tool before the walk" in result.output
     data = json.loads((workspace / "r.json").read_text())
@@ -289,7 +296,7 @@ def test_another_feature_tool_extracts_every_frame_first(
     assert f"Extracted and never read: {70 - read} frames" in result.output
 
     # A second run reads the same files and extracts none.
-    again = _invoke(["pick-images", "frames", *FAST, "--json", "b.json"])
+    again = _invoke(["pick-images", "frames", *OPENCV_FAST, "--json", "b.json"])
     assert again.exit_code == 0, again.output
     b = json.loads((workspace / "b.json").read_text())
     assert b["frames"] == data["frames"]
@@ -312,11 +319,12 @@ def test_photographs_below_the_match_floor_keep_every_frame(
     )
     assert result.exit_code == 0, result.output
     data = json.loads((workspace / "r.json").read_text())
-    median = data["sequences"][0]["baseline"]["next_frame_matches_median"]
-    assert median < 600
+    # Every step is to a next frame that keeps fewer matches than the floor.
+    steps = data["sequences"][0]["steps"]
+    assert all(s["stats"]["matches"] < 600 for s in steps)
     assert (
-        f"Matches with the next frame: median {median:g}, below the match floor of "
-        "600, so most steps go to the next frame" in result.output
+        "Steps stopped at the match floor: 16 of 16, 16 of them at the next frame"
+        in result.output
     )
     assert data["options"]["min_step_matches"] == 600
     assert data["chosen_numbers"] == [list(range(1, 18))]
@@ -477,17 +485,16 @@ def test_force_without_a_list_and_paths_with_a_list_are_usage_errors(
 
 
 def test_an_out_of_range_match_floor_is_refused(pan_workspace: Path):
-    # A negative floor is a usage error; one below min_matches, or too large
-    # for the binding, is refused with the option's name before a frame is
-    # read.
-    result = CliRunner().invoke(
-        main, ["pick-images", "frames", "--min-step-matches", "-1"]
-    )
-    assert result.exit_code == 2, result.output
-    for value in ("10", str(2**70)):
+    # A floor below 1 is a usage error; one too large for the binding is
+    # refused with the option's name before a frame is read.
+    for value in ("-1", "0"):
         result = CliRunner().invoke(
             main, ["pick-images", "frames", "--min-step-matches", value]
         )
-        assert result.exit_code == 1, result.output
-        assert "min_step_matches" in result.output, result.output
-        assert "Traceback" not in result.output
+        assert result.exit_code == 2, result.output
+    result = CliRunner().invoke(
+        main, ["pick-images", "frames", "--min-step-matches", str(2**70)]
+    )
+    assert result.exit_code == 1, result.output
+    assert "min_step_matches" in result.output, result.output
+    assert "Traceback" not in result.output

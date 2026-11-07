@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! What [`super::pick_images`] found: the baseline's readings and the walk's
-//! choices and decisions, per sequence. Every type serializes
+//! What [`super::pick_images`] found: the readings of every frame read and
+//! the walk's choices and decisions, per sequence. Every type serializes
 //! with `serde`, a non-finite number as `null`, so a caller can write the
 //! whole report as JSON.
 //!
@@ -36,33 +36,18 @@ pub struct PickImagesReport {
     pub frames_extracted_unread: usize,
 }
 
-/// Which stage of [`super::pick_images`] read a frame or matched a pair.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Stage {
-    /// The baseline: the sampled frames and the frames 1 and 3 after them.
-    Baseline,
-    /// The walk.
-    Walk,
-}
-
 /// One frame read, with the readings of each of its sensors.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FrameReading {
     pub id: FrameId,
-    /// The stage that read it first.
-    pub stage: Stage,
     /// One reading per sensor, the reference sensor's first.
     pub sensors: Vec<SensorReading>,
-    /// Whether any sensor's image is blurred.
-    pub blurred: bool,
 }
 
-/// One image's readings and the blur judgement made from its sharpness
-/// against its sensor's baseline ([`SensorBaseline`]).
+/// One image's readings, from its `.sift` file's metadata.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SensorReading {
-    /// The `.sift` file's sharpness.
+    /// The `.sift` file's sharpness, which judges blur.
     pub sharpness: f32,
     /// The `.sift` file's `[Exx, Eyy, Exy]`.
     pub gradient_structure_tensor_xx_yy_xy: [f32; 3],
@@ -71,12 +56,6 @@ pub struct SensorReading {
     pub axis_ratio: Option<f32>,
     /// `ImageReadings::coherence`, likewise reported only.
     pub coherence: f32,
-    /// The sharpness over its sensor's median sharpness; NaN when that median
-    /// is 0.
-    pub sharpness_ratio: f64,
-    /// Whether the image is blurred: its sharpness is below `blur_ratio` times
-    /// the median.
-    pub blurred: bool,
 }
 
 /// One pair of frames matched.
@@ -85,106 +64,21 @@ pub struct MeasuredPair {
     pub a: FrameId,
     pub b: FrameId,
     pub stats: FramePairStats,
-    /// The stage that matched it.
-    pub stage: Stage,
-}
-
-/// One sequence's baseline and its walk.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SequenceReport {
-    pub baseline: BaselineReport,
-    pub walk: WalkReport,
-}
-
-/// One sequence's baseline: what the sampled frames and their pairs read.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct BaselineReport {
-    /// The positions of the sampled frames, first and last included.
-    pub samples: Vec<usize>,
-    /// The frames of this sequence the baseline read.
-    pub frames_read: usize,
-    /// The median sharpness each sensor's frames are judged against.
-    pub sensors: Vec<SensorBaseline>,
-    /// How many sampled frames are blurred.
-    pub blurred_samples: usize,
-    /// The median, over the sampled frames that have a next frame, of the
-    /// mutual matches with it; NaN when no sampled frame has one. Below
-    /// `min_step_matches`, most steps beyond the next frame keep fewer
-    /// matches than the match floor, and the walk takes most frames.
-    pub next_frame_matches_median: f64,
-    /// The rate at each sampled frame that has one, in percent of the long
-    /// side per frame: the step to the frame 3 after it divided by 3, or the
-    /// step to the next frame when the frame 3 after it has fewer than
-    /// `min_matches` matches.
-    pub sample_rates: Vec<SampleRate>,
-    /// The median of `sample_rates`; NaN when there are none.
-    pub rate_median: f64,
-    /// The 0.9 quantile of `sample_rates`; NaN when there are none.
-    pub rate_p90: f64,
-    /// The median rate times the frame count, in percent of the long side.
-    pub total_motion_percent: f64,
-    /// The stretches the walk goes through in short steps, in order, merged
-    /// where they overlap.
-    pub flagged_regions: Vec<FlaggedRegion>,
-}
-
-/// One sensor's baseline: the median sharpness of its images over the
-/// sampled frames.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SensorBaseline {
-    pub sharpness_median: f64,
-}
-
-/// The rate at one sampled frame.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct SampleRate {
-    /// The sampled frame's position.
-    pub frame: usize,
-    /// The step per frame, in percent of the long side.
-    pub rate: f64,
-}
-
-/// A stretch of frames, from the sampled frame before a flagging sample to
-/// the sampled frame after it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct FlaggedRegion {
-    pub first: usize,
-    pub last: usize,
-    /// A sampled frame in it is blurred.
-    pub blurred: bool,
-    /// A sampled frame in it does not match the frame 1 or 3 after it well.
-    pub weak_matches: bool,
 }
 
 /// One sequence's walk.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct WalkReport {
-    /// The chosen frames' positions, in order.
+pub struct SequenceReport {
+    /// The chosen frames' positions, in order: the first frame, then one per
+    /// step.
     pub chosen: Vec<usize>,
-    /// The segments between breaks, as runs of `chosen`.
-    pub segments: Vec<Segment>,
-    /// Every accepted step, in order: one per chosen frame after the first of
-    /// each segment.
+    /// Every accepted step, in order: one per chosen frame after the first.
     pub steps: Vec<WalkStep>,
-    /// The blurred candidates swapped for a sharp neighbour.
+    /// The candidates blurred against their neighbours that were swapped for
+    /// a sharper neighbour.
     pub swaps: Vec<Swap>,
-    /// The runs of steps accepted below the band after a step failed.
-    pub gaps: Vec<Gap>,
-    /// The frames chosen though blurred.
-    pub kept_blurred: Vec<KeptBlurred>,
-    pub breaks: Vec<Break>,
-    pub weak_points: Vec<WeakPoint>,
-    /// The frames of this sequence the walk read or reused.
-    pub frames_used: usize,
-    /// How many of `frames_used` the baseline had already read.
-    pub frames_from_baseline: usize,
-}
-
-/// A run of [`WalkReport::chosen`]: `chosen[start..start + len]`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Segment {
-    pub start: usize,
-    pub len: usize,
+    /// How many frames of this sequence the walk read.
+    pub frames_read: usize,
 }
 
 /// One accepted step.
@@ -196,9 +90,6 @@ pub struct WalkStep {
     /// The step per frame, `stats.step_percent / (to − from)`.
     pub rate: f64,
     pub kind: StepKind,
-    /// The step's band was halved because `from` lies in a region flagged
-    /// for weak matches.
-    pub flagged: bool,
 }
 
 /// Why a step was accepted where it was.
@@ -213,82 +104,22 @@ pub enum StepKind {
     /// Below the band, with the frame after it above: the motion per frame is
     /// wider than the band.
     Bracketed,
-    /// Below the band at the last frame of the sequence or the first frame of
-    /// a region flagged for weak matches, which a step does not pass.
+    /// Below the band at the sequence's last frame, which a step does not
+    /// pass.
     AtLimit,
-    /// Below the band, with the step to the frame after it short of the
-    /// match floor: it keeps fewer than `min_step_matches` matches.
+    /// Stopped by the match floor: the step to the frame after it keeps fewer
+    /// than `min_step_matches` matches, or it is the step to the next frame
+    /// and keeps fewer itself, so every step beyond it would too.
     AtFloor,
-    /// Below the band after a step failed: part of a gap filled in.
-    GapFill,
-    /// Below the band to land on a sharp frame, or on the sharpest, in a
-    /// blurred run.
-    BlurredRun,
+    /// Below the band after four re-aims did not reach it: the farthest
+    /// candidate measured below the band, or the next frame when none was.
+    BelowBand,
 }
 
-/// A blurred candidate and the sharper neighbour chosen in its place.
+/// A candidate blurred against its neighbours and the sharper neighbour
+/// chosen in its place.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Swap {
     pub candidate: usize,
     pub chosen: usize,
-    /// What the candidate's sharpness was judged against.
-    pub reason: SwapReason,
-}
-
-/// Why a candidate was swapped.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SwapReason {
-    /// The candidate is blurred: its sharpness is below `blur_ratio` times its
-    /// sensor's median sharpness.
-    Median,
-    /// The candidate is blurred against its neighbours: its sharpness is
-    /// below `neighbour_blur_ratio` times the sharpest neighbouring frame's,
-    /// on a sensor whose sharpness is below its median.
-    Neighbours,
-}
-
-/// A run of [`StepKind::GapFill`] steps: `steps[first_step..end_step]`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Gap {
-    pub first_step: usize,
-    pub end_step: usize,
-}
-
-/// A frame chosen though blurred, the sharpest that matched well among the
-/// frames searched.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct KeptBlurred {
-    pub frame: usize,
-    /// The first and last positions searched.
-    pub searched_first: usize,
-    pub searched_last: usize,
-    /// The frame's sharpness over its sensor's median, the smallest over its
-    /// sensors.
-    pub sharpness_ratio: f64,
-}
-
-/// Even the step from `after` to the next frame did not match well. The walk
-/// resumed at `resumes_at`, the first later frame that matches its next frame
-/// well, or not at all.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Break {
-    pub after: usize,
-    pub resumes_at: Option<usize>,
-}
-
-/// Where a solve is most likely to split.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum WeakPoint {
-    /// An accepted step with fewer than twice `min_matches` matches.
-    Step {
-        /// The index in [`WalkReport::steps`].
-        step: usize,
-    },
-    /// A segment of fewer than 3 chosen frames.
-    ShortSegment {
-        /// The index in [`WalkReport::segments`].
-        segment: usize,
-    },
 }

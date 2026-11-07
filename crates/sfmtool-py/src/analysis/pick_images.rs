@@ -417,11 +417,11 @@ impl PyCaptureSequence {
 /// Choose the frames of a video capture a Structure-from-Motion solve should
 /// use, from the SIFT features of the frames.
 ///
-/// Reads a baseline sample of each sequence, then walks each sequence
-/// choosing frames about ``target_step_percent`` of the image's long side
-/// apart, with no step beyond the next frame keeping fewer than
-/// ``min_step_matches`` mutual matches, and sharp frames in place of blurred
-/// ones. Options left as ``None`` take the defaults of the Rust
+/// Walks each sequence from its first frame, choosing frames about
+/// ``target_step_percent`` of the image's long side apart, with no step
+/// beyond the next frame keeping fewer than ``min_step_matches`` mutual
+/// matches, and a frame blurred against its neighbouring frames swapped for
+/// a sharper one. Options left as ``None`` take the defaults of the Rust
 /// ``PickImagesOptions``.
 ///
 /// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
@@ -446,16 +446,11 @@ impl PyCaptureSequence {
 ///         side (10).
 ///     step_band: How far a step may be from the target, as a fraction
 ///         (0.3).
-///     blur_ratio: A frame below this times its sequence's median sharpness
-///         is blurred (0.6).
-///     neighbour_blur_ratio: A frame about to be accepted whose sharpness is
-///         below its median is blurred against its neighbours when it is
-///         below this times the sharpest neighbouring frame's (0.85).
-///     baseline_frames: How many frames the baseline samples (200).
-///     min_matches: The fewest mutual matches a step that matches well has
-///         (30), at least 1.
+///     neighbour_blur_ratio: A frame about to be accepted is blurred against
+///         its neighbours when its sharpness is below this times the sharpest
+///         frame's within 2 positions (0.85).
 ///     min_step_matches: The match floor, the fewest mutual matches a step
-///         beyond the next frame keeps (600), at least ``min_matches``.
+///         beyond the next frame keeps (600), at least 1.
 ///     ratio: Lowe's ratio on descriptor distances, as for
 ///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,
@@ -464,7 +459,8 @@ impl PyCaptureSequence {
 ///
 /// Returns:
 ///     The report as a dict of plain values, which ``json.dump`` writes as
-///     it is: ``sequences`` (per sequence: ``baseline`` and ``walk``), ``frames``
+///     it is: ``sequences`` (per sequence: ``chosen``, ``steps``, ``swaps`` and
+///     ``frames_read``), ``frames``
 ///     (every frame read, with its readings), ``pairs`` (every pair matched,
 ///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
 ///     whether its ``.sift`` files were written in this call) and
@@ -495,9 +491,8 @@ impl PyCaptureSequence {
 #[pyfunction]
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
                     concurrent_images=None, target_step_percent=None, step_band=None,
-                    blur_ratio=None, neighbour_blur_ratio=None, baseline_frames=None,
-                    min_matches=None, min_step_matches=None, ratio=None, preset=None, num_trees=None,
-                    leaf_size=None, max_leaf_checks=None, progress=None))]
+                    neighbour_blur_ratio=None, min_step_matches=None, ratio=None, preset=None,
+                    num_trees=None, leaf_size=None, max_leaf_checks=None, progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_images<'py>(
     py: Python<'py>,
@@ -507,10 +502,7 @@ pub fn pick_images<'py>(
     concurrent_images: Option<usize>,
     target_step_percent: Option<f64>,
     step_band: Option<f64>,
-    blur_ratio: Option<f64>,
     neighbour_blur_ratio: Option<f64>,
-    baseline_frames: Option<usize>,
-    min_matches: Option<usize>,
     min_step_matches: Option<usize>,
     ratio: Option<f32>,
     preset: Option<&str>,
@@ -524,10 +516,7 @@ pub fn pick_images<'py>(
     let options = PickImagesOptions {
         target_step_percent: target_step_percent.unwrap_or(defaults.target_step_percent),
         step_band: step_band.unwrap_or(defaults.step_band),
-        blur_ratio: blur_ratio.unwrap_or(defaults.blur_ratio),
         neighbour_blur_ratio: neighbour_blur_ratio.unwrap_or(defaults.neighbour_blur_ratio),
-        baseline_frames: baseline_frames.unwrap_or(defaults.baseline_frames),
-        min_matches: min_matches.unwrap_or(defaults.min_matches),
         min_step_matches: min_step_matches.unwrap_or(defaults.min_step_matches),
         forest: forest_params(preset, num_trees, leaf_size, max_leaf_checks, None)?,
         pair: FramePairOptions {
