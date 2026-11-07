@@ -211,8 +211,10 @@ which asks for every backend compiled in, the high-performance adapter, no
 surface and no forced software fallback. The probe makes the request on a
 thread of its own and waits at most `timeout`, ten seconds from
 `sfm version`, so a driver that hangs cannot hang the command; the thread is
-left behind and ends with the process. It never panics: a panic inside wgpu
-or the driver ends that thread and is reported as a failed request. The
+left behind and ends with the process. A `timeout` too long to add to the
+current instant means waiting with no deadline. It never panics: a panic
+inside wgpu or the driver ends that thread and is reported as a failed
+request. The
 binding passes `Progress::none()`, so only the timeout ends the wait. The
 line is one of:
 

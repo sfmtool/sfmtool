@@ -287,7 +287,8 @@ pub enum GpuProbe {
 /// `GpuContext::new` makes (every backend compiled in, the high-performance
 /// adapter, no forced software fallback), made on a thread of its own and
 /// waited for at most `timeout`, so a driver that hangs cannot hang the
-/// caller.
+/// caller. A `timeout` too long to add to the current instant, such as
+/// [`Duration::MAX`], means waiting with no deadline.
 ///
 /// It never panics: a panic inside wgpu or the driver is reported as
 /// [`GpuProbe::Failed`]. The viewer requests its adapter with its window's

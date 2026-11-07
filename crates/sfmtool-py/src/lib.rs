@@ -242,7 +242,8 @@ fn machine_facts<'py>(py: Python<'py>, gpu_timeout_s: f64) -> PyResult<Bound<'py
 
     let timeout = std::time::Duration::try_from_secs_f64(gpu_timeout_s).map_err(|_| {
         PyValueError::new_err(format!(
-            "gpu_timeout_s must be a finite number of seconds, at least 0 and              representable as a duration, not {gpu_timeout_s}"
+            "gpu_timeout_s must be a finite number of seconds, at least 0 and \
+             representable as a duration, not {gpu_timeout_s}"
         ))
     })?;
     // `Progress::none()` is never cancelled, so the probe always answers.
