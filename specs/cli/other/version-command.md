@@ -28,7 +28,7 @@ when the package metadata is not installed). What follows it depends on two
   `sfmtool` package is run from (see below);
 - **the extension's**, recorded when the compiled extension
   `sfmtool._sfmtool` was built, in the source tree it was built from, and read
-  through `sfmtool.build_git_describe()`.
+  through the extension's internal `_build_git_describe()`.
 
 Either may be unknown. Its form is `<tag>-<n>-g<hash>`: the nearest tag, the
 number of commits since it and the commit's abbreviated hash, with `-dirty`
@@ -87,7 +87,7 @@ and the line is formatted by `version_text` in the same file.
 [`build.rs`](../../../crates/sfmtool-py/build.rs) of the `sfmtool-py` crate
 runs the same two commands in the repository root two directories above the crate,
 when that root holds `.git`, and records its output in the compile-time
-variable `SFMTOOL_BUILD_GIT_DESCRIBE`, which `build_git_describe()` in
+variable `SFMTOOL_BUILD_GIT_DESCRIBE`, which `_build_git_describe()` in
 [`lib.rs`](../../../crates/sfmtool-py/src/lib.rs) returns (`None` for the
 empty string). It records the empty string, and the build goes on, when there
 is no `.git` (a build from the sdist, which carries none), when git is not

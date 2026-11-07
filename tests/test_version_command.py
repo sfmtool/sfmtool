@@ -11,7 +11,7 @@ import subprocess
 import pytest
 from click.testing import CliRunner
 
-import sfmtool
+from sfmtool._sfmtool import _build_git_describe
 from sfmtool._version import checkout_describe, version_text
 from sfmtool.cli import main
 
@@ -147,7 +147,7 @@ def test_checkout_describe_reads_a_real_checkout(tmp_path):
 def test_extension_records_its_build_describe():
     """The extension under test was built from this repository's git
     checkout, so `build.rs` recorded a describe."""
-    describe = sfmtool.build_git_describe()
+    describe = _build_git_describe()
     assert isinstance(describe, str)
     assert DESCRIBE.fullmatch(describe), describe
 

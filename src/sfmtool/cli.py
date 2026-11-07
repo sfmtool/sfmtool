@@ -269,7 +269,7 @@ def version():
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as _pkg_version
 
-    from ._sfmtool import build_git_describe
+    from ._sfmtool import _build_git_describe
     from ._version import checkout_describe, version_text
 
     try:
@@ -277,7 +277,7 @@ def version():
     except PackageNotFoundError:
         pkg_version = "unknown"
     checkout = checkout_describe(Path(__file__).resolve().parent)
-    click.echo(version_text(pkg_version, checkout, build_git_describe()))
+    click.echo(version_text(pkg_version, checkout, _build_git_describe()))
 
 
 def deduce_workspace(paths: set[Path]) -> Path:

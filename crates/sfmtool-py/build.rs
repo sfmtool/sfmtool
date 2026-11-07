@@ -7,7 +7,7 @@
 //! the output of `git describe --tags --long --always` run in the repository
 //! root, two directories above this crate, with `-dirty` added when
 //! `git status --porcelain --untracked-files=no` lists a change there, and
-//! `build_git_describe` in `src/lib.rs` returns it. `git describe --dirty`
+//! `_build_git_describe` in `src/lib.rs` returns it. `git describe --dirty`
 //! would say the same, but it rewrites the index when the index's file times
 //! are out of date, and a build should not write to the repository;
 //! `git status` with `GIT_OPTIONAL_LOCKS=0` leaves it. The variable is the

@@ -42,6 +42,10 @@ ALLOWED_COUNTS = {
     # `run_explorer` is a root-level extension function with no public home,
     # since `sfm explorer` is how users reach it, and it is what this tests.
     "tests/test_explorer_command.py": 1,
+    # `_build_git_describe` is a root-level extension function with no public
+    # home, since `sfm version` is how users reach it, and it is what this
+    # tests.
+    "tests/test_version_command.py": 1,
     # Replaces `read_colmap_binary` where `_incremental_sfm` looks it up at
     # call time, on the extension submodule. Patching `sfmtool.fileio` would leave
     # the solve calling the real binding.

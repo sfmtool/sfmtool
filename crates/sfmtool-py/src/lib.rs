@@ -17,15 +17,16 @@
 //! re-exports it (`sfmtool/sift/__init__.py` for `sift`). Each submodule's
 //! `__name__` reads as that public name, so binding objects report the public
 //! location in tracebacks, IPython and Sphinx.
-//! The only root-level registrations are `build_profile` and
-//! `build_git_describe` (build introspection of this extension),
-//! `ProgressCounter` (cross-cutting
+//! The only root-level registrations are `build_profile` (build
+//! introspection of this extension), `ProgressCounter` (cross-cutting
 //! progress instrumentation shared by patch and matching kernels),
 //! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
-//! extractors resize to) and `run_explorer` (the viewer, which `sfm explorer`
-//! calls from `sfmtool/_commands/explorer.py`). The first four are
-//! re-exported by `sfmtool/__init__.py`; `run_explorer` is not. The package
-//! root re-exports no other binding.
+//! extractors resize to), `run_explorer` (the viewer, which `sfm explorer`
+//! calls from `sfmtool/_commands/explorer.py`) and `_build_git_describe`
+//! (the commit the extension was built from, which `sfm version` reads in
+//! `sfmtool/cli.py`). The first three are re-exported by
+//! `sfmtool/__init__.py`; `run_explorer` and `_build_git_describe` are not.
+//! The package root re-exports no other binding.
 //!
 //! # Example
 //!
@@ -197,7 +198,10 @@ fn build_profile() -> &'static str {
 /// prints it beside the package version, and beside the describe of the
 /// checkout it runs from when the two differ, which shows an extension that
 /// was not rebuilt after a change.
-#[pyfunction]
+///
+/// Registered as `_build_git_describe`: it is internal to the package, and
+/// `sfm version` is how users read it.
+#[pyfunction(name = "_build_git_describe")]
 fn build_git_describe() -> Option<&'static str> {
     match env!("SFMTOOL_BUILD_GIT_DESCRIBE") {
         "" => None,
@@ -243,6 +247,8 @@ fn run_explorer(py: Python<'_>, args: Vec<String>) -> i32 {
 fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Build introspection
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
+    // Internal (`_build_git_describe`): `sfm version` reads it in
+    // `sfmtool/cli.py`. Not re-exported by `sfmtool/__init__.py`.
     m.add_function(wrap_pyfunction!(build_git_describe, m)?)?;
 
     // The viewer. Root-level because it is not a binding of any one area of

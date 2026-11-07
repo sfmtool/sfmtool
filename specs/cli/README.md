@@ -17,7 +17,7 @@ category from that table, so `sfm --help` imports no command module, and
 `sfm explorer` does not import the modules of the commands that need numpy,
 OpenCV or pycolmap. The package root works the same way:
 [`sfmtool/__init__.py`](../../src/sfmtool/__init__.py) binds the extension's
-four root-level names on import, which takes about 10 ms, and the names of its
+three root-level names on import, which takes about 10 ms, and the names of its
 Python submodules and the binding modules such as `sfmtool.fileio` on first use,
 through a module `__getattr__`. For an unknown
 command name `CategoryGroup` suggests the close matches among every command

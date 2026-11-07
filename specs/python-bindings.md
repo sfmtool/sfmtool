@@ -18,14 +18,19 @@ column reads *none* is a binding that no spec describes.
 [`lib.rs`](../crates/sfmtool-py/src/lib.rs) registers thirteen submodules, each
 through the `register` function of its source module, and sets each
 submodule's `__name__` to the public `sfmtool.<name>`, so tracebacks and help
-text name the public location. Four names are registered at the root for
-the package, and a fifth, `run_explorer`, is the viewer that `sfm explorer`
-calls ([explorer-command.md](cli/visualization/explorer-command.md)):
+text name the public location. Three names are registered at the root for
+the package, and two more for one command each: `run_explorer`, the viewer
+that `sfm explorer` calls
+([explorer-command.md](cli/visualization/explorer-command.md)), and
+`_build_git_describe()`, the `git describe` of the source tree the extension
+was built from, which [`build.rs`](../crates/sfmtool-py/build.rs) records
+(`None` when the build found no git checkout) and `sfm version` prints
+([version-command.md](cli/other/version-command.md)). Its leading `_` marks
+it internal, and the package root re-exports neither of the two:
 
 | Name | What it is | Spec |
 |------|------------|------|
 | `build_profile()` | `"debug"` or `"release"`, the Cargo profile the extension was built with; benchmarks refuse a debug build | none |
-| `build_git_describe()` | the `git describe` of the source tree the extension was built from, which [`build.rs`](../crates/sfmtool-py/build.rs) records, or `None` when the build found no git checkout; `sfm version` prints it | [version-command.md](cli/other/version-command.md) |
 | `THUMBNAIL_SIZE` | the thumbnail edge length both on-disk formats store, which the Python SIFT extractors resize to | [sift-file-format.md](formats/sift-file-format.md), [sfmr-file-format.md](formats/sfmr-file-format.md) |
 | `ProgressCounter` ([source](../crates/sfmtool-py/src/py_progress.rs)) | a thread-safe counter a long GIL-releasing kernel increments and Python polls from another thread | none (used in [cluster-patches-command.md](cli/image-feature/cluster-patches-command.md)) |
 
@@ -85,7 +90,7 @@ and a module named `io` would replace the standard library's `io` in the
 importing namespace.
 
 The package root [`sfmtool/__init__.py`](../src/sfmtool/__init__.py) imports
-the four root names of the extension and no binding from a submodule, so a
+the three root names of the extension and no binding from a submodule, so a
 binding is always read through its module: `sfmtool.fileio.read_sfmr`, or
 `bench.commit(…)` after `from sfmtool import bench`. One name means one thing
 this way, where a flat root surface would hold the binding
@@ -100,7 +105,7 @@ Python names, none of them a binding: `_LAZY_NAMES` maps eight Python
 submodules to the names the root reads from each on first use, such as
 `get_sift_path_for_image` from `sfmtool.sift.file`, `extract_sift_with_colmap`
 from `sfmtool.sift.extract_colmap` and `init_workspace` from
-`sfmtool._workspace`. The root's `__all__` is the four extension names, the
+`sfmtool._workspace`. The root's `__all__` is the three extension names, the
 `_LAZY_NAMES` names and the `_LAZY_SUBPACKAGES` modules, so
 `from sfmtool import *` imports and binds exactly those, and no other
 subpackage: not `sfmtool.align`, `sfmtool.analyze` or `sfmtool.camera`. Since
