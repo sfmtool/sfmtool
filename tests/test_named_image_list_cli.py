@@ -8,8 +8,9 @@ small workspace of six seoul_bull images with a lists file; their expensive
 work is replaced by a function that records the images it was handed, except
 for one real `sfm sift --extract`. `sfm solve` from a `.matches` file runs on
 six images of which the file holds four, and sets up its real COLMAP database,
-which a stand-in for the global mapper reads in place of solving. The reconstruction commands (`analyze
---metrics`, `panorama`, `to-colmap-bin`, `to-nerfstudio`) run on the
+which a stand-in for the global mapper reads in place of solving. The
+reconstruction commands (`analyze --metrics`, `panorama`, `to-colmap-bin`,
+`to-nerfstudio`) run on the
 seoul_bull ground truth, whose workspace holds no image files, or on the
 SIFT-backed seoul_bull workspace where they need the images.
 """
@@ -22,7 +23,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool.cli import main
-from sfmtool.fileio import read_colmap_binary
+from sfmtool.fileio import read_colmap_binary, read_matches
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.workspace import NAMED_IMAGE_LISTS_FILE_NAME
 
@@ -377,19 +378,24 @@ def matches_workspace(tmp_path_factory) -> Path:
 
 @pytest.fixture
 def recorded_mapper_input(monkeypatch, tmp_path) -> list:
-    """The images and the number of verified pairs of the database the global
-    mapper is handed, in place of running it; the solve then fails as one that
-    registered nothing does. The current directory is outside the workspace,
-    so a list is found from the .matches file, not from it."""
+    """The images and the two-view geometry pairs, as pairs of image names, of
+    the database the global mapper is handed, in place of running it; the
+    solve then fails as one that registered nothing does. The current
+    directory is outside the workspace, so a list is found from the .matches
+    file, not from it."""
     import pycolmap
 
     calls = []
 
     def record(db_path, *args, **kwargs):
         with pycolmap.Database.open(db_path) as db:
-            names = sorted(Path(img.name).name for img in db.read_all_images())
+            images = {img.image_id: Path(img.name).name for img in db.read_all_images()}
             pair_ids, _ = db.read_two_view_geometries()
-        calls.append((names, len(pair_ids)))
+        pairs = {
+            frozenset(images[i] for i in pycolmap.pair_id_to_image_pair(pair_id))
+            for pair_id in pair_ids
+        }
+        calls.append((sorted(images.values()), pairs))
         return {}
 
     monkeypatch.setattr(pycolmap, "global_mapping", record)
@@ -405,14 +411,26 @@ def _bull(*numbers: int) -> list[str]:
     return [f"seoul_bull_sculpture_{i:02d}.jpg" for i in numbers]
 
 
-def _assert_mapper_got(result, calls, numbers) -> None:
+def _file_pairs_among(workspace: Path, names: list[str]) -> set[frozenset]:
+    """The image pairs of `pairs.matches` whose images are both in `names`."""
+    data = read_matches(workspace / "pairs.matches")
+    file_names = [Path(n).name for n in data["image_names"]]
+    pairs = {
+        frozenset((file_names[i], file_names[j])) for i, j in data["image_index_pairs"]
+    }
+    return {pair for pair in pairs if pair <= set(names)}
+
+
+def _assert_mapper_got(result, calls, workspace, numbers) -> None:
     # The mapper was reached, so the stand-in's empty result is the failure.
     assert "Global mapping failed" in result.output, result.output
     assert len(calls) == 1
-    names, pair_count = calls[0]
+    names, pairs = calls[0]
     assert names == _bull(*numbers)
-    # The pairs between kept images stay.
-    assert pair_count > 0, "no verified pair reached the database"
+    # Exactly the file's pairs between kept images stay, between the right
+    # images: none involves a dropped image or lands on the wrong one.
+    assert pairs, "no verified pair reached the database"
+    assert pairs == _file_pairs_among(workspace, names)
 
 
 @pytest.mark.parametrize(
@@ -436,7 +454,7 @@ def test_solve_keeps_the_matches_images_in_a_list_or_range(
     matches_workspace, recorded_mapper_input, args, numbers, label
 ):
     result = _solve_matches(matches_workspace, *args)
-    _assert_mapper_got(result, recorded_mapper_input, numbers)
+    _assert_mapper_got(result, recorded_mapper_input, matches_workspace, numbers)
     assert f"Images: {len(numbers)} (filtered from 4 via {label})" in result.output
 
 
@@ -454,7 +472,7 @@ def test_solve_slices_the_list_then_keeps_the_matches_images(
     matches_workspace, recorded_mapper_input, value, numbers, ignored
 ):
     result = _solve_matches(matches_workspace, "-r", value)
-    _assert_mapper_got(result, recorded_mapper_input, numbers)
+    _assert_mapper_got(result, recorded_mapper_input, matches_workspace, numbers)
     output = " ".join(result.output.split())
     if ignored is None:
         assert "are not in" not in output

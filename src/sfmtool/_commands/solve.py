@@ -44,7 +44,8 @@ _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "or from the images of a .matches file.",
     on="paths",
     list_help_extra=" With a .matches file, use only the file's images that "
-    "are among the list's images.",
+    "are among the list's images, with the list read from the file's "
+    "workspace.",
 )
 @click.option(
     "--incremental",
