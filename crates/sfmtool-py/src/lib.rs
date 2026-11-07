@@ -22,11 +22,13 @@
 //! progress instrumentation shared by patch and matching kernels),
 //! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
 //! extractors resize to), `run_explorer` (the viewer, which `sfm explorer`
-//! calls from `sfmtool/_commands/explorer.py`) and `_build_git_describe`
+//! calls from `sfmtool/_commands/explorer.py`), `_build_git_describe`
 //! (the commit the extension was built from, which `sfm version` reads in
-//! `sfmtool/cli.py`). The first three are re-exported by
-//! `sfmtool/__init__.py`; `run_explorer` and `_build_git_describe` are not.
-//! The package root re-exports no other binding.
+//! `sfmtool/cli.py`) and `_machine_facts` (the SIMD level, CPU, thread pool,
+//! memory and GPU adapter, which `sfm version` reads in
+//! `sfmtool/_machine_report.py`). The first three are re-exported by
+//! `sfmtool/__init__.py`; `run_explorer`, `_build_git_describe` and
+//! `_machine_facts` are not. The package root re-exports no other binding.
 //!
 //! # Example
 //!
@@ -38,7 +40,9 @@
 //! valid, errors = verify_sfmr("reconstruction.sfmr")
 //! ```
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 /// Try zero-copy `as_slice()` for C-contiguous arrays, fall back to copying
 /// in logical (row-major) order otherwise. The C-contiguity guard matters:
@@ -209,6 +213,70 @@ fn build_git_describe() -> Option<&'static str> {
     }
 }
 
+/// The facts about this machine that `sfm version` reports, read in Rust the
+/// way the code that depends on them reads them (`sfmtool_core::machine`), as
+/// a dict:
+///
+/// - `simd`: the SIMD level the kernels dispatch to, `"AVX2+FMA"`, `"AVX2"`,
+///   `"SSE2"` or `"none (scalar)"`;
+/// - `cpu_model`: the CPU's model name, or `None`;
+/// - `logical_cores`: the logical CPUs this process may run on, or `None`;
+/// - `rayon_threads`: the threads of the rayon pool the kernels run on;
+/// - `memory_bytes`: physical memory, or `None`;
+/// - `gpu`: a dict whose `status` is `"found"` (with `name`, `backend` and
+///   `device_type`), `"no_adapter"` (with wgpu's `reason`), `"timed_out"`,
+///   `"failed"` (the request panicked) or `"not_built"`.
+///
+/// The GPU adapter request waits at most `gpu_timeout_s` seconds, so a driver
+/// that hangs cannot hang the caller, and the GIL is released while it runs.
+///
+/// Raises `ValueError` when `gpu_timeout_s` is negative or not finite.
+///
+/// Registered as `_machine_facts`: it is internal to the package, and
+/// `sfm version` is how users read it.
+#[pyfunction(name = "_machine_facts")]
+fn machine_facts<'py>(py: Python<'py>, gpu_timeout_s: f64) -> PyResult<Bound<'py, PyDict>> {
+    use sfmtool_core::machine::{self, GpuProbe};
+    use sfmtool_core::Progress;
+
+    if !gpu_timeout_s.is_finite() || gpu_timeout_s < 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "gpu_timeout_s must be a finite number of seconds, at least 0, not {gpu_timeout_s}"
+        )));
+    }
+    let timeout = std::time::Duration::from_secs_f64(gpu_timeout_s);
+    // `Progress::none()` is never cancelled, so the probe always answers.
+    let probe = py
+        .detach(|| machine::probe_gpu_adapter(timeout, &Progress::none()))
+        .unwrap_or(GpuProbe::Failed);
+
+    let gpu = PyDict::new(py);
+    match probe {
+        GpuProbe::Found(adapter) => {
+            gpu.set_item("status", "found")?;
+            gpu.set_item("name", adapter.name)?;
+            gpu.set_item("backend", adapter.backend)?;
+            gpu.set_item("device_type", adapter.device_type.label())?;
+        }
+        GpuProbe::NoAdapter(reason) => {
+            gpu.set_item("status", "no_adapter")?;
+            gpu.set_item("reason", reason)?;
+        }
+        GpuProbe::TimedOut(_) => gpu.set_item("status", "timed_out")?,
+        GpuProbe::Failed => gpu.set_item("status", "failed")?,
+        GpuProbe::NotBuilt => gpu.set_item("status", "not_built")?,
+    }
+
+    let facts = PyDict::new(py);
+    facts.set_item("simd", machine::simd_level().label())?;
+    facts.set_item("cpu_model", machine::cpu_model())?;
+    facts.set_item("logical_cores", machine::logical_cores())?;
+    facts.set_item("rayon_threads", machine::rayon_threads())?;
+    facts.set_item("memory_bytes", machine::physical_memory_bytes())?;
+    facts.set_item("gpu", gpu)?;
+    Ok(facts)
+}
+
 /// Run SfM Explorer, the 3D viewer, with the command line `args` (without a
 /// program name), and return its exit status when its window closes: 0 when
 /// the viewer ran and its window was closed, or `--help` printed the usage.
@@ -250,6 +318,9 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Internal (`_build_git_describe`): `sfm version` reads it in
     // `sfmtool/cli.py`. Not re-exported by `sfmtool/__init__.py`.
     m.add_function(wrap_pyfunction!(build_git_describe, m)?)?;
+    // Internal (`_machine_facts`): `sfm version` reads it in
+    // `sfmtool/_machine_report.py`. Not re-exported by `sfmtool/__init__.py`.
+    m.add_function(wrap_pyfunction!(machine_facts, m)?)?;
 
     // The viewer. Root-level because it is not a binding of any one area of
     // the library; it is the program `sfm explorer` runs (see
