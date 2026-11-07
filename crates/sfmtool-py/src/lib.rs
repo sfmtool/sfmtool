@@ -193,7 +193,7 @@ fn build_profile() -> &'static str {
 /// without git).
 ///
 /// `build.rs` records it when the crate is compiled, and runs again when the
-/// commit, the index or a Rust source of the workspace changes. `sfm version`
+/// commit or a Rust source of the workspace changes. `sfm version`
 /// prints it beside the package version, and beside the describe of the
 /// checkout it runs from when the two differ, which shows an extension that
 /// was not rebuilt after a change.

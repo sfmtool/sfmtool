@@ -9,22 +9,25 @@
 //! `git status --porcelain --untracked-files=no` lists a change there, and
 //! `build_git_describe` in `src/lib.rs` returns it. `git describe --dirty`
 //! would say the same, but it rewrites the index when the index's file times
-//! are out of date, and the index is one of the paths below whose change runs
-//! this script again; `git status` with `GIT_OPTIONAL_LOCKS=0` leaves it. The variable is the empty string when there is
-//! no `.git` there (a build from the sdist), when git is not installed, and
-//! when git fails or takes longer than `GIT_TIMEOUT`, so none of those stops
-//! the build. `specs/cli/other/version-command.md` says how `sfm version` uses it.
+//! are out of date, and a build should not write to the repository;
+//! `git status` with `GIT_OPTIONAL_LOCKS=0` leaves it. The variable is the
+//! empty string when there is no `.git` there (a build from the sdist), when
+//! git is not installed, and when git fails or takes longer than
+//! `GIT_TIMEOUT`, so none of those stops the build.
+//! `specs/cli/other/version-command.md` says how `sfm version` uses it.
 //!
 //! The script asks Cargo to run it again when the commit or the tag it
 //! describes changes (the `HEAD` file, the branch's ref, `packed-refs`, the tag
-//! refs), when the index changes, and when a file the extension is compiled
-//! from changes (each crate's `Cargo.toml`, `build.rs` and `src/`, and the
-//! workspace's `Cargo.toml` and `Cargo.lock`), so that `-dirty` follows edits
-//! to the Rust sources. An edit elsewhere in the tree, such as to a Python
-//! file, does not run it again, so the recorded `-dirty` reflects such an edit
-//! only once one of those has changed. A missing path is never listed, since
-//! Cargo runs a script again on every build while a path it watches is
-//! missing.
+//! refs), and when a file the extension is compiled from changes (each crate's
+//! `Cargo.toml`, `build.rs` and `src/`, and the workspace's `Cargo.toml` and
+//! `Cargo.lock`), so that `-dirty` follows edits to the Rust sources. The git
+//! index is not watched: `git add`, and a plain `git status` whenever file
+//! times are out of date, rewrite it without changing the describe, and each
+//! run of this script recompiles the crate. An edit elsewhere in the tree,
+//! such as to a Python file, does not run it again, so the recorded `-dirty`
+//! reflects such an edit only once one of those has changed. A missing path is
+//! never listed, since Cargo runs a script again on every build while a path
+//! it watches is missing.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -104,7 +107,6 @@ fn watch_sources(root: &Path) {
                 }
             }
             paths.push(head);
-            paths.push(git_dir.join("index"));
             paths.push(common_dir.join("packed-refs"));
             paths.push(common_dir.join("refs").join("tags"));
         }
@@ -121,8 +123,8 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(root)
         .args(args)
-        // Read-only queries: `git status` then leaves the index as it is,
-        // which would otherwise make Cargo run this script again.
+        // Read-only queries: `git status` then leaves the index as it is
+        // rather than writing to the repository during a build.
         .env("GIT_OPTIONAL_LOCKS", "0")
         // `-C` picks the repository; a GIT_DIR or GIT_WORK_TREE inherited
         // from a git hook would override it.

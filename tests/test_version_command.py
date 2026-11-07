@@ -137,6 +137,12 @@ def test_checkout_describe_reads_a_real_checkout(tmp_path):
     assert dirty == f"{describe}-dirty"
     assert version_text("0.3", dirty, None) == f"sfmtool 0.3 ({dirty})"
 
+    # A linked worktree, whose `.git` is a file rather than a directory.
+    worktree = tmp_path / "worktree"
+    git("worktree", "add", "-q", "--detach", str(worktree), "v0.3")
+    assert (worktree / ".git").is_file()
+    assert checkout_describe(worktree / "src" / "sfmtool") == describe
+
 
 def test_extension_records_its_build_describe():
     """The extension under test was built from this repository's git

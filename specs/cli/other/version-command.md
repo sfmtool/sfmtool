@@ -35,9 +35,9 @@ number of commits since it and the commit's abbreviated hash, with `-dirty`
 added when a tracked file differed from that commit, staged or not
 (untracked files do not count). This is what `git describe --dirty` prints;
 it is computed with `git status` because `git describe --dirty` rewrites the
-git index when the index's file times are out of date, and the index is a path
-whose change makes Cargo run `build.rs` again (below), while `git status` run
-with `GIT_OPTIONAL_LOCKS=0` leaves it unchanged. With no tag
+git index when the index's file times are out of date, so printing the
+version or building the extension would write to the repository, while
+`git status` run with `GIT_OPTIONAL_LOCKS=0` leaves it unchanged. With no tag
 reachable, as in a shallow clone, it is the abbreviated hash alone (that is
 what `--always` adds).
 
@@ -99,12 +99,14 @@ string, when one of these changes:
 
 - the git `HEAD` file, the ref of the branch it names, `packed-refs` and the
   `refs/tags` directory, so a commit, a checkout or a new tag is seen;
-- the git index, so staging a change is seen;
 - each crate's `Cargo.toml`, `build.rs` and `src/` directory, and the
   workspace's `Cargo.toml` and `Cargo.lock`, so `-dirty` follows an edit to
   any source the extension is compiled from, staged or not.
 
-An edit to any other file, such as a Python module, does not run it again by
-itself, so the recorded string marks such an edit `-dirty` only from the next
-time the script runs. Only paths that exist are watched, since Cargo runs a
-build script on every build while a path it watches is missing.
+The git index is not watched: `git add`, and a plain `git status` whenever
+file times are out of date, rewrite it without changing the describe, and each
+run of the script recompiles `sfmtool-py`. An edit to any other file, such as
+a Python module, does not run it again by itself, so the recorded string
+marks such an edit `-dirty` only from the next time the script runs. Only
+paths that exist are watched, since Cargo runs a build script on every build
+while a path it watches is missing.
