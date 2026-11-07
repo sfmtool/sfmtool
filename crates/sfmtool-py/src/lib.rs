@@ -17,12 +17,13 @@
 //! re-exports it (`sfmtool/sift/__init__.py` for `sift`). Each submodule's
 //! `__name__` reads as that public name, so binding objects report the public
 //! location in tracebacks, IPython and Sphinx.
-//! The only root-level registrations are `build_profile` (build
-//! introspection of this extension), `ProgressCounter` (cross-cutting
+//! The only root-level registrations are `build_profile` and
+//! `build_git_describe` (build introspection of this extension),
+//! `ProgressCounter` (cross-cutting
 //! progress instrumentation shared by patch and matching kernels),
 //! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
 //! extractors resize to) and `run_explorer` (the viewer, which `sfm explorer`
-//! calls from `sfmtool/_commands/explorer.py`). The first three are
+//! calls from `sfmtool/_commands/explorer.py`). The first four are
 //! re-exported by `sfmtool/__init__.py`; `run_explorer` is not. The package
 //! root re-exports no other binding.
 //!
@@ -185,6 +186,25 @@ fn build_profile() -> &'static str {
     }
 }
 
+/// The output of `git describe --tags --long --always` for the source tree this
+/// extension was built from, with `-dirty` added when a tracked file differed
+/// from that commit, such as `"v0.3-385-g276e8d986"`, or `None` when the build
+/// found no git checkout or git failed (a build from the sdist, or a machine
+/// without git).
+///
+/// `build.rs` records it when the crate is compiled, and runs again when the
+/// commit, the index or a Rust source of the workspace changes. `sfm version`
+/// prints it beside the package version, and beside the describe of the
+/// checkout it runs from when the two differ, which shows an extension that
+/// was not rebuilt after a change.
+#[pyfunction]
+fn build_git_describe() -> Option<&'static str> {
+    match env!("SFMTOOL_BUILD_GIT_DESCRIBE") {
+        "" => None,
+        describe => Some(describe),
+    }
+}
+
 /// Run SfM Explorer, the 3D viewer, with the command line `args` (without a
 /// program name), and return its exit status when its window closes: 0 when
 /// the viewer ran and its window was closed, or `--help` printed the usage.
@@ -223,6 +243,7 @@ fn run_explorer(py: Python<'_>, args: Vec<String>) -> i32 {
 fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Build introspection
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(build_git_describe, m)?)?;
 
     // The viewer. Root-level because it is not a binding of any one area of
     // the library; it is the program `sfm explorer` runs (see

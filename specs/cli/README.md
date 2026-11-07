@@ -17,7 +17,7 @@ category from that table, so `sfm --help` imports no command module, and
 `sfm explorer` does not import the modules of the commands that need numpy,
 OpenCV or pycolmap. The package root works the same way:
 [`sfmtool/__init__.py`](../../src/sfmtool/__init__.py) binds the extension's
-three root-level names on import, which takes about 10 ms, and the names of its
+four root-level names on import, which takes about 10 ms, and the names of its
 Python submodules and the binding modules such as `sfmtool.fileio` on first use,
 through a module `__getattr__`. For an unknown
 command name `CategoryGroup` suggests the close matches among every command
@@ -260,3 +260,12 @@ The COLMAP file reading and writing these commands share is described in
 | `sfm to-colmap-db` | [to-colmap-db-command.md](colmap-interop/to-colmap-db-command.md) |
 | `sfm from-colmap-bin` | [from-colmap-bin-command.md](colmap-interop/from-colmap-bin-command.md) |
 | `sfm to-nerfstudio` | [to-nerfstudio-command.md](colmap-interop/to-nerfstudio-command.md) |
+
+## Other
+
+`sfm version` is the one command not in `COMMANDS`; `sfm --help` lists it
+under this heading.
+
+| Command | Spec |
+|---------|------|
+| `sfm version` | [version-command.md](other/version-command.md) |

@@ -8,9 +8,9 @@ internal; each of its submodules has a public home, a module of the same name
 on this package: ``sfmtool.geometry``, ``sfmtool.fileio``, ``sfmtool.reconstruction``
 and so on, and ``sfmtool.sift`` for the SIFT bindings. Read a binding from its
 module (``from sfmtool.fileio import read_sfmr``). The package root binds only the
-three root-level names of the extension, ``THUMBNAIL_SIZE``, ``ProgressCounter``
-and ``build_profile``, when it is imported, since loading the extension takes
-about 10 ms.
+four root-level names of the extension, ``THUMBNAIL_SIZE``, ``ProgressCounter``,
+``build_profile`` and ``build_git_describe``, when it is imported, since loading
+the extension takes about 10 ms.
 
 The names defined in the Python submodules are bound on first use, through the
 module ``__getattr__`` below (PEP 562): those submodules import numpy, OpenCV
@@ -28,7 +28,12 @@ from typing import TYPE_CHECKING
 
 # The root-level `_sfmtool` names; every other binding is read from its module.
 # `run_explorer`, also root-level, is left out: `sfm explorer` calls it.
-from sfmtool._sfmtool import THUMBNAIL_SIZE, ProgressCounter, build_profile  # noqa: F401
+from sfmtool._sfmtool import (  # noqa: F401
+    THUMBNAIL_SIZE,
+    ProgressCounter,
+    build_git_describe,
+    build_profile,
+)
 
 # Each name bound on first use, and the submodule it is read from.
 _LAZY_NAMES = {

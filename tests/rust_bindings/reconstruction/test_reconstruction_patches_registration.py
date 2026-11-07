@@ -85,17 +85,24 @@ def test_submodule_public_names():
 
 def test_root_surface_is_deliberate_and_minimal():
     """The `_sfmtool` root registers only its deliberate root-level names:
-    `build_profile`, `ProgressCounter` and `THUMBNAIL_SIZE`, which the package
+    `build_profile`, `build_git_describe`, `ProgressCounter` and
+    `THUMBNAIL_SIZE`, which the package
     root re-exports, and `run_explorer`, the viewer entry point that `sfm
     explorer` calls and the package root does not re-export. Every other
     binding is registered on a submodule, and the package root does not
     re-export it flat."""
     assert callable(_sfmtool.build_profile)
+    assert callable(_sfmtool.build_git_describe)
     assert isinstance(_sfmtool.ProgressCounter, type)
     assert isinstance(_sfmtool.THUMBNAIL_SIZE, int)
     assert callable(_sfmtool.run_explorer)
     assert not hasattr(sfmtool, "run_explorer")
-    for name in ("ProgressCounter", "build_profile", "THUMBNAIL_SIZE"):
+    for name in (
+        "ProgressCounter",
+        "build_profile",
+        "build_git_describe",
+        "THUMBNAIL_SIZE",
+    ):
         assert getattr(sfmtool, name) is getattr(_sfmtool, name), name
     for stale in (
         "SfmrReconstruction",

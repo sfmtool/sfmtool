@@ -79,6 +79,7 @@ def test_star_import_and_sample_public_names():
         "ProgressCounter",
         "THUMBNAIL_SIZE",
         "build_profile",
+        "build_git_describe",
         "expand_paths",
         "find_workspace_for_path",
         "get_sift_path_for_image",
@@ -94,7 +95,7 @@ def test_star_import_and_sample_public_names():
 
 def test_root_binds_no_binding_flat():
     """A binding is read from its module, not from the package root: once
-    imported, the root binds the three root-level extension names and nothing
+    imported, the root binds the four root-level extension names and nothing
     else public, and `__all__` adds only the names of `_LAZY_NAMES` and the
     submodules of `_LAZY_SUBPACKAGES`. Run in a fresh interpreter, since any
     submodule imported earlier in this process is bound on the root too."""
@@ -107,7 +108,12 @@ def test_root_binds_no_binding_flat():
     )
     assert result.returncode == 0, result.stderr
     bound = eval(result.stdout.strip().splitlines()[-1])
-    assert bound == ["ProgressCounter", "THUMBNAIL_SIZE", "build_profile"]
+    assert bound == [
+        "ProgressCounter",
+        "THUMBNAIL_SIZE",
+        "build_git_describe",
+        "build_profile",
+    ]
     assert set(sfmtool.__all__) == (
         set(bound) | set(sfmtool._LAZY) | set(sfmtool._LAZY_SUBPACKAGES)
     )

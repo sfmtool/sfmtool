@@ -221,8 +221,8 @@ empty-handed". Name the thing and say what it does.
   - `cli/` — one file per command, grouped by the `--help` category the command
     is registered under in `cli.py` (`workspace/`, `image-feature/`,
     `reconstruction/`, `visualization/`, `automation/`,
-    `image-processing/`, `colmap-interop/`); the `xform` sub-commands nest in
-    `cli/reconstruction/xform/`
+    `image-processing/`, `colmap-interop/`, and `other/` for `sfm version`);
+    the `xform` sub-commands nest in `cli/reconstruction/xform/`
   - `core/` — algorithm design, one subdir per `sfmtool-core` module
     (`analysis/`, `camera/`, `features/`, `geometry/`, `patch/`,
     `reconstruction/`, `spherical/`)
