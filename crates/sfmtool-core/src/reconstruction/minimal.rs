@@ -107,7 +107,9 @@ impl SfmrReconstruction {
 
     /// The `workspace.relative_path` a save of this value to `output` measures:
     /// the path from `output`'s directory to [`Self::workspace_dir`], in POSIX
-    /// form.
+    /// form. An `output` in the workspace directory itself measures `"."`, the
+    /// path a reader joins to the file's directory to reach that directory,
+    /// since the field's empty value means no path was recorded.
     ///
     /// The measurement [`Self::stamp_save`] performs when the caller states no
     /// path, offered on its own so that a caller about to state one can show what
@@ -124,6 +126,9 @@ impl SfmrReconstruction {
         let parent = output.parent()?;
         let (workspace, parent) = comparable(&self.workspace_dir, parent);
         let relative = pathdiff::diff_paths(workspace, parent)?;
+        if relative.as_os_str().is_empty() {
+            return Some(".".to_string());
+        }
         Some(relative.to_string_lossy().replace('\\', "/"))
     }
 

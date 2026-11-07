@@ -1008,8 +1008,8 @@ file does ([Writing a `.sfmr`](../../README.md#writing-a-sfmr)).
 The save measures `workspace.relative_path` from the output's directory to the
 workspace, resolving both directories to their real locations first so that a
 symlinked or aliased output gives the step or two between them rather than a walk
-from the filesystem root. `wspath=<path>` records `<path>` instead and measures
-nothing:
+from the filesystem root. An output in the workspace directory itself records
+`.`. `wspath=<path>` records `<path>` instead and measures nothing:
 
 ```bash
 sfm xform in.sfmr ws/ground_truth.sfmr --minimal wspath=.
