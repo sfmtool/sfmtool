@@ -8,7 +8,9 @@ the camera-config source, dispatch to the per-source builders in
 :mod:`db_builders`, and drive feature matching / match writing.
 """
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pycolmap
 
@@ -21,6 +23,19 @@ from .db_builders import (
     _setup_db_with_camrig,
     _setup_db_with_rigs,
 )
+
+
+class MatchesImageFilter(NamedTuple):
+    """Which images of a `.matches` file a solve keeps.
+
+    `keep(workspace_dir, image_names)` gets the workspace the file resolves to
+    and the file's image names, and returns the indices of the names to keep,
+    in the file's order; it raises when it keeps none. `label` names the
+    filter in the summary line, such as `--range 5-12`.
+    """
+
+    label: str
+    keep: Callable[[Path, list[str]], list[int]]
 
 
 def _setup_for_sfm(
@@ -196,15 +211,15 @@ def _setup_for_sfm_from_matches(
     matches_file: str | Path,
     colmap_dir: str | Path,
     camera_model: str | None = None,
-    range_expr: str | None = None,
+    image_filter: MatchesImageFilter | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
     matches_data: dict | None = None,
 ) -> tuple[Path, Path, list[Path], bool]:
     """Prepare a COLMAP database from a .matches file for running the mapper.
 
-    If `range_expr` is provided, restrict the solve to images whose filename
-    number falls within the range; dropped images are excluded from the DB
-    and any pairs that reference them are skipped.
+    If `image_filter` is given, restrict the solve to the images it keeps;
+    dropped images are excluded from the DB and any pairs that reference them
+    are skipped.
 
     `matches_data` lets a caller that has already parsed the file hand the
     dict over instead of paying for a second parse; it must be the contents of
@@ -217,8 +232,6 @@ def _setup_for_sfm_from_matches(
     """
     import numpy as np
 
-    from .._filenames import number_from_filename
-    from .._sfmtool.reconstruction import RangeExpr
     from .._sfmtool.fileio import read_matches
     from .._workspace import find_workspace_for_path
     from ..feature_match import pairs_from_matches
@@ -238,28 +251,6 @@ def _setup_for_sfm_from_matches(
     ws_meta = metadata["workspace"]
     all_image_names = matches_data["image_names"]
     full_image_count = metadata["image_count"]
-
-    if range_expr:
-        numbers = RangeExpr(range_expr)
-        kept_old_indices = [
-            i
-            for i, name in enumerate(all_image_names)
-            if (n := number_from_filename(Path(name).name)) is not None and n in numbers
-        ]
-        if not kept_old_indices:
-            raise RuntimeError(
-                f"Range '{range_expr}' excludes all {full_image_count} images "
-                f"in {matches_file}"
-            )
-        image_names = [all_image_names[i] for i in kept_old_indices]
-        old_to_new: dict[int, int] | None = {
-            old: new for new, old in enumerate(kept_old_indices)
-        }
-    else:
-        image_names = list(all_image_names)
-        old_to_new = None
-
-    image_count = len(image_names)
 
     # Resolve workspace directory
     workspace_dir = None
@@ -287,6 +278,18 @@ def _setup_for_sfm_from_matches(
             "Ensure the workspace exists and contains .sfm-workspace.json."
         )
 
+    if image_filter is not None:
+        kept_old_indices = image_filter.keep(workspace_dir, list(all_image_names))
+        image_names = [all_image_names[i] for i in kept_old_indices]
+        old_to_new: dict[int, int] | None = {
+            old: new for new, old in enumerate(kept_old_indices)
+        }
+    else:
+        image_names = list(all_image_names)
+        old_to_new = None
+
+    image_count = len(image_names)
+
     total_pairs = len(pairs_data["image_index_pairs"])
     total_matches = len(pairs_data["match_feature_indexes"])
     pairs_label = "Pairs (derived)" if matches_data.get("has_clusters") else "Pairs"
@@ -307,7 +310,7 @@ def _setup_for_sfm_from_matches(
         kept_matches = int(counts_arr[pair_mask].sum())
         print(
             f"Images: {image_count} (filtered from {full_image_count} "
-            f"via --range {range_expr}), "
+            f"via {image_filter.label}), "
             f"{pairs_label}: {kept_pairs} (filtered from {total_pairs}), "
             f"Matches: {kept_matches} (filtered from {total_matches})"
         )

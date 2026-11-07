@@ -108,8 +108,9 @@ way:
 
 **The image-directory commands.** For `sift`, `match`, `motion`, `pick-images`
 and `solve`, a list replaces the image path arguments: the command takes either
-paths (or, for `motion` and `solve`, a `.sfmr` or `.matches` file) or a list,
-and giving both is an error. The workspace is the one the upward search from
+paths (or, for `motion`, a `.sfmr` file) or a list, and giving both is an
+error. `solve` given a single `.matches` file takes a list as a filter
+instead, described below. The workspace is the one the upward search from
 the current directory finds, and the images are the list's members, in the
 list's order, as absolute paths. Only the members that are image files are
 used, by the same extension test the command's own directory expansion applies
@@ -121,6 +122,17 @@ skips them, and a list none of whose members is an image file is an error
 naming the list. A slice indexes the image files that test leaves, and the
 command takes them in the slice's order. `match`, `pick-images` and `solve` use
 the list's workspace as theirs.
+
+**`solve` with a `.matches` file.** A list given with a single `.matches` file
+keeps the file's images that are among the list's images, and the pairs
+between them; no matching runs again. The list is resolved in the workspace
+the `.matches` file resolves to, with the extension test, the range and the
+slice applied as for image paths, so a slice counts positions in the list,
+not among the file's images. The images of the list the file does not hold
+are ignored, and the command prints how many; when the file holds none of
+them, it is an error naming the lists file, the list and the `.matches`
+file. The kept images stay in the file's order. A range given alone keeps the
+file's images whose file number it holds.
 
 **The reconstruction commands.** For `analyze --metrics`, `panorama`,
 `to-colmap-bin` and `to-nerfstudio`, the list is resolved in the
@@ -143,6 +155,7 @@ as it records nothing about a range.
 sfm solve -i -r walk1_sharp            # the list's images
 sfm sift --extract -r rig_sharp -r 10-20   # the list, narrowed to frames 10-20
 sfm solve -i -r 'walk1_sharp[:30]'     # the list's first 30 images
+sfm solve -g pairs.matches -r 'walk1_sharp[:30]'  # the same 30, from the pairs file
 sfm to-colmap-bin result.sfmr out/ --named-image-list hero_shots
 ```
 

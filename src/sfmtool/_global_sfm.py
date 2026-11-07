@@ -9,6 +9,7 @@ import pycolmap
 
 from ._incremental_sfm import _save_reconstructions
 from ._solve_setup import prepare_solve_inputs
+from .colmap.db_setup import MatchesImageFilter
 from ._workspace import load_workspace_config
 
 
@@ -26,7 +27,7 @@ def run_global_sfm(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
-    range_expr: str | None = None,
+    image_filter: MatchesImageFilter | None = None,
     detect_infinity: bool = True,
 ):
     """Run global Structure from Motion on a list of images using GLOMAP."""
@@ -45,7 +46,7 @@ def run_global_sfm(
         flow_preset=flow_preset,
         flow_wide_baseline_skip=flow_wide_baseline_skip,
         matches_file=matches_file,
-        range_expr=range_expr,
+        image_filter=image_filter,
     )
 
     reconstruction_path = colmap_dir / "reconstruction"
