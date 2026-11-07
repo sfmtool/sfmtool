@@ -96,8 +96,8 @@ geometric information. Cross-frame pairs are matched normally.
 
 `_load_rig_config` in `src/sfmtool/rig/config.py` validates the whole
 document before any command consumes it and raises `RigConfigError` on the
-first violation. Every consumer — `sfm solve`, `sfm match`, `sfm to-colmap-db`
-— surfaces that as a plain CLI error and stops.
+first violation. Every consumer — `sfm solve`, `sfm match`, `sfm to-colmap-db`,
+`sfm pick-images` — surfaces that as a plain CLI error and stops.
 
 Because the schema is COLMAP's verbatim, **any key outside it is an error**
 rather than something to ignore: a key sfmtool skips is a key COLMAP would
@@ -270,7 +270,9 @@ For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
 - `test-data/images/kerry_park/rig_config.json` — back-to-back 180° FOV
   fisheye stereo pair (`OPENCV_FISHEYE`, 480×480, 30.7 mm baseline).
 
-`rig_config.json` is consumed as an *input* by the solving commands, but
-sfmtool no longer *produces* it. The rig builders (`sfm pano2rig`,
+`rig_config.json` is consumed as an *input* by the solving commands and by
+`sfm pick-images`, but sfmtool no longer *produces* it. In `sfm solve` and
+`sfm pick-images`, a `.camrig` that covers every image given takes precedence
+over it ([solve-command.md § Camera Rig Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)). The rig builders (`sfm pano2rig`,
 `sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
 `specs/formats/camrig-file-format.md` and `specs/cli/workspace/pano2rig-command.md`.

@@ -192,6 +192,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         collect_sequences,
         echo_frames_read,
         extract_every_frame,
+        find_rigs,
         list_entries,
     )
     from .._pick_images_report import report_lines, slice_suggestion
@@ -199,7 +200,6 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     from .._sfmtool.analysis import pick_images as walk
     from .._sfmtool.workspace import NamedImageLists
     from .._workspace import load_workspace_config
-    from ..rig.config import RigConfigError, _load_rig_config
     from ..sift.extract import SiftExtractionError, _check_versions_never_mix
 
     try:
@@ -233,13 +233,12 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             )
 
     try:
-        rig_configs = _load_rig_config(workspace_dir)
-    except RigConfigError as e:
-        raise click.ClickException(str(e))
-    try:
-        sequences = collect_sequences(filenames, workspace_dir, rig_configs)
+        rig_configs, camrig_rig, notes = find_rigs(filenames, workspace_dir)
+        sequences = collect_sequences(filenames, workspace_dir, rig_configs, camrig_rig)
     except PickImagesInputError as e:
         raise click.ClickException(str(e))
+    for note in notes:
+        click.echo(note)
 
     noun = "sequence" if len(sequences) == 1 else "sequences"
     click.echo(f"{given}, {len(filenames)} image file(s) in {len(sequences)} {noun}:")
