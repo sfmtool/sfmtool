@@ -126,7 +126,8 @@ statistics mean.
 **What counts as enough matches is the caller's.** `match_frame_pair` reports
 the count and leaves the threshold to the caller, since how many matches make
 a step worth following depends on what the step is for;
-[pick-images.md](pick-images.md) takes 30 by default.
+[pick-images.md](pick-images.md) takes 30 by default for a pair that matches
+well and 600 for a step that passes over frames.
 
 **Example.**
 

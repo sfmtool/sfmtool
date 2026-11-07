@@ -417,11 +417,12 @@ impl PyCaptureSequence {
 /// Choose the frames of a video capture a Structure-from-Motion solve should
 /// use, from the SIFT features of the frames.
 ///
-/// Reads a baseline sample of each sequence, judges whether each is a video,
-/// and when every one is, walks each sequence choosing frames about
-/// ``target_step_percent`` of the image's long side apart, sharp ones in
-/// place of blurred ones. Options left as ``None`` take the defaults of the
-/// Rust ``PickImagesOptions``.
+/// Reads a baseline sample of each sequence, then walks each sequence
+/// choosing frames about ``target_step_percent`` of the image's long side
+/// apart, with no step beyond the next frame keeping fewer than
+/// ``min_step_matches`` mutual matches, and sharp frames in place of blurred
+/// ones. Options left as ``None`` take the defaults of the Rust
+/// ``PickImagesOptions``.
 ///
 /// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
 /// settings for the ``sfmtool`` feature tool, each frame's ``.sift`` files
@@ -453,6 +454,8 @@ impl PyCaptureSequence {
 ///     baseline_frames: How many frames the baseline samples (200).
 ///     min_matches: The fewest mutual matches a step that matches well has
 ///         (30), at least 1.
+///     min_step_matches: The match floor, the fewest mutual matches a step
+///         beyond the next frame keeps (600), at least ``min_matches``.
 ///     ratio: Lowe's ratio on descriptor distances, as for
 ///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,
@@ -461,8 +464,7 @@ impl PyCaptureSequence {
 ///
 /// Returns:
 ///     The report as a dict of plain values, which ``json.dump`` writes as
-///     it is: ``verdict`` (``"video"`` or ``"not_a_video"``), ``sequences``
-///     (per sequence: ``baseline``, ``video`` and ``walk``), ``frames``
+///     it is: ``sequences`` (per sequence: ``baseline`` and ``walk``), ``frames``
 ///     (every frame read, with its readings), ``pairs`` (every pair matched,
 ///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
 ///     whether its ``.sift`` files were written in this call) and
@@ -494,7 +496,7 @@ impl PyCaptureSequence {
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
                     concurrent_images=None, target_step_percent=None, step_band=None,
                     blur_ratio=None, neighbour_blur_ratio=None, baseline_frames=None,
-                    min_matches=None, ratio=None, preset=None, num_trees=None,
+                    min_matches=None, min_step_matches=None, ratio=None, preset=None, num_trees=None,
                     leaf_size=None, max_leaf_checks=None, progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_images<'py>(
@@ -509,6 +511,7 @@ pub fn pick_images<'py>(
     neighbour_blur_ratio: Option<f64>,
     baseline_frames: Option<usize>,
     min_matches: Option<usize>,
+    min_step_matches: Option<usize>,
     ratio: Option<f32>,
     preset: Option<&str>,
     num_trees: Option<usize>,
@@ -525,6 +528,7 @@ pub fn pick_images<'py>(
         neighbour_blur_ratio: neighbour_blur_ratio.unwrap_or(defaults.neighbour_blur_ratio),
         baseline_frames: baseline_frames.unwrap_or(defaults.baseline_frames),
         min_matches: min_matches.unwrap_or(defaults.min_matches),
+        min_step_matches: min_step_matches.unwrap_or(defaults.min_step_matches),
         forest: forest_params(preset, num_trees, leaf_size, max_leaf_checks, None)?,
         pair: FramePairOptions {
             ratio: ratio.unwrap_or(pair.ratio),

@@ -26,8 +26,11 @@ from .conftest import SEOUL_BULL_DIR, TEST_DATA_DIR
 
 PAN_FRAMES = 100
 PAN_WIDTH, PAN_HEIGHT, PAN_STEP = 320, 240, 4
-# A small baseline keeps each run to a few seconds.
-FAST = ["--baseline-frames", "10"]
+# A small baseline keeps each run to a few seconds. The pan's small crops
+# have a few hundred features, so its neighbouring frames match with fewer
+# matches than the default match floor and every frame would be chosen; a
+# floor of 60 lets the walk thin the pan, as it thins a video.
+FAST = ["--baseline-frames", "10", "--min-step-matches", "60"]
 
 
 def _invoke(args: list[str]):
@@ -78,13 +81,6 @@ def pan_workspace(tmp_path: Path, pan_source, monkeypatch) -> Path:
     return workspace
 
 
-def _assert_walked(data: dict, output: str) -> None:
-    """Fail with the report when a run that should walk did not reach the
-    walk, so the failure names the reading that blocked it."""
-    assert data["verdict"] == "video", output
-    assert None not in data["chosen_numbers"], output
-
-
 def _files(workspace: Path) -> set[str]:
     return {
         p.relative_to(workspace).as_posix() for p in workspace.rglob("*") if p.is_file()
@@ -101,7 +97,6 @@ def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
     result = _invoke(["pick-images", "frames", *FAST])
     assert result.exit_code == 0, result.output
     assert "frames/pan_%03d.jpg, 100 frames (1-100)" in result.output
-    assert "Verdict: video" in result.output, result.output
     assert "Walk: target step 10% (band 7-13%)" in result.output
     assert "pass --write-list NAME" in result.output
     added = _files(pan_workspace) - before
@@ -118,7 +113,6 @@ def test_write_list_writes_the_chosen_frames(pan_workspace: Path):
     )
     assert result.exit_code == 0, result.output
     data = json.loads((pan_workspace / "r.json").read_text())
-    _assert_walked(data, result.output)
     (chosen,) = data["chosen_numbers"]
     assert len(chosen) > 5
     walk = data["sequences"][0]["walk"]
@@ -142,11 +136,11 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     first = _invoke(["pick-images", "frames", *FAST, "--json", "a.json"])
     assert first.exit_code == 0, first.output
     a = json.loads((pan_workspace / "a.json").read_text())
-    _assert_walked(a, first.output)
     assert set(a) >= {"sequences", "frames", "pairs", "capture", "options"}
     assert a["options"]["target_step_percent"] == 10.0
     assert a["options"]["baseline_frames"] == 10
     assert a["options"]["neighbour_blur_ratio"] == 0.85
+    assert a["options"]["min_step_matches"] == 60
     assert a["capture"][0]["patterns"] == ["frames/pan_%03d.jpg"]
     assert a["capture"][0]["numbers"] == list(range(1, PAN_FRAMES + 1))
     assert a["capture"][0]["images"][4] == ["frames/pan_005.jpg"]
@@ -212,7 +206,6 @@ def test_force_replaces_a_list_in_place(pan_workspace: Path):
     )
     assert result.exit_code == 0, result.output
     data = json.loads((pan_workspace / "r.json").read_text())
-    _assert_walked(data, result.output)
     (chosen,) = data["chosen_numbers"]
     lists = json.loads(lists_path.read_text())["named_image_lists"]
     assert list(lists) == ["pan", "other"]
@@ -235,7 +228,6 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
     assert "Given named image list 'pan_all' sliced by [5:95]" in result.output
     data = json.loads((pan_workspace / "r.json").read_text())
     assert data["capture"][0]["numbers"] == list(range(6, 96))
-    _assert_walked(data, result.output)
     (chosen,) = data["chosen_numbers"]
     assert chosen and all(6 <= n <= 95 for n in chosen)
 
@@ -259,9 +251,6 @@ def test_a_list_with_a_slice_as_input(pan_workspace: Path):
         ]
     )
     assert replaced.exit_code == 0, replaced.output
-    _assert_walked(
-        json.loads((pan_workspace / "replaced.json").read_text()), replaced.output
-    )
     entries = json.loads(lists_path.read_text())["named_image_lists"]["pan_all"]
     assert len(entries) == 1 and "range" in entries[0]
     assert len(_resolve(pan_workspace, "pan_all")) < PAN_FRAMES
@@ -307,7 +296,9 @@ def test_another_feature_tool_extracts_every_frame_first(
     assert not any(b["frames_extracted"]) and b["frames_extracted_unread"] == 0
 
 
-def test_photographs_are_not_a_video(tmp_path: Path, monkeypatch):
+def test_photographs_below_the_match_floor_keep_every_frame(
+    tmp_path: Path, monkeypatch
+):
     workspace = tmp_path / "ws"
     images = workspace / "photos"
     images.mkdir(parents=True)
@@ -316,21 +307,22 @@ def test_photographs_are_not_a_video(tmp_path: Path, monkeypatch):
     _init_workspace(workspace)
     monkeypatch.chdir(workspace)
 
-    result = CliRunner().invoke(
-        main, ["pick-images", "photos", "--write-list", "bull", "--json", "r.json"]
+    result = _invoke(
+        ["pick-images", "photos", "--write-list", "bull", "--json", "r.json"]
     )
-    assert result.exit_code == 1, result.output
-    assert (
-        "Verdict: not a video: photos/seoul_bull_sculpture_%02d.jpg: " in result.output
-    )
-    assert "sfm pick-images picks from video sequences only" in result.output
-    assert (
-        "No named image list was written: the verdict is not a video." in result.output
-    )
-    assert not (workspace / NAMED_IMAGE_LISTS_FILE_NAME).exists()
+    assert result.exit_code == 0, result.output
     data = json.loads((workspace / "r.json").read_text())
-    assert data["verdict"] == "not_a_video"
-    assert data["chosen_numbers"] == [None]
+    median = data["sequences"][0]["baseline"]["next_frame_matches_median"]
+    assert median < 600
+    assert (
+        f"Matches with the next frame: median {median:g}, below the match floor of "
+        "600, so most steps go to the next frame" in result.output
+    )
+    assert data["options"]["min_step_matches"] == 600
+    assert data["chosen_numbers"] == [list(range(1, 18))]
+    assert _resolve(workspace, "bull") == [
+        f"photos/seoul_bull_sculpture_{n:02d}.jpg" for n in range(1, 18)
+    ]
 
 
 def test_a_version_1_workspace_is_refused(tmp_path: Path, monkeypatch):
@@ -429,7 +421,6 @@ def test_a_rig_writes_every_sensor_of_each_chosen_frame(
     )
     assert "For a quick test solve" not in result.output
     data = json.loads((workspace / "r.json").read_text())
-    _assert_walked(data, result.output)
     (capture,) = data["capture"]
     assert capture["sensors"] == ["rig/cam_a/", "rig/cam_b/"]
     assert capture["images"][0] == ["rig/cam_a/pan_001.jpg", "rig/cam_b/pan_001.jpg"]
@@ -483,3 +474,20 @@ def test_force_without_a_list_and_paths_with_a_list_are_usage_errors(
     assert result.exit_code == 2, result.output
     assert "give paths or a list, not both" in result.output
     assert not (pan_workspace / "frames" / "features").exists()
+
+
+def test_an_out_of_range_match_floor_is_refused(pan_workspace: Path):
+    # A negative floor is a usage error; one below min_matches, or too large
+    # for the binding, is refused with the option's name before a frame is
+    # read.
+    result = CliRunner().invoke(
+        main, ["pick-images", "frames", "--min-step-matches", "-1"]
+    )
+    assert result.exit_code == 2, result.output
+    for value in ("10", str(2**70)):
+        result = CliRunner().invoke(
+            main, ["pick-images", "frames", "--min-step-matches", value]
+        )
+        assert result.exit_code == 1, result.output
+        assert "min_step_matches" in result.output, result.output
+        assert "Traceback" not in result.output

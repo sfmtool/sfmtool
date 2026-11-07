@@ -8,8 +8,6 @@ names them by file number, through the command's sequences. See
 specs/cli/image-feature/pick-images-command.md § "Report".
 """
 
-import math
-
 import numpy as np
 
 from ._pick_images import PickSequence
@@ -39,45 +37,6 @@ def _span(first: int, last: int) -> str:
     return str(first) if first == last else f"{first}-{last}"
 
 
-def _not_a_video_reasons(video: dict, frame_count: int) -> str:
-    if frame_count < 4:
-        return f"{frame_count} frames, too few to tell a video from photographs"
-    reasons = []
-    if not video["step_small"]:
-        reasons.append(f"steps 1 frame apart median {_pct(video['step_1_median'])}")
-    if not video["step_steady"]:
-        change = video["step_change_median"]
-        reasons.append(
-            "neighbouring samples' steps erratic"
-            if change is None
-            else f"neighbouring samples' steps differ by a factor of {math.exp(change):.1f}"
-        )
-    if not video["motion_adds_up"]:
-        ratio = video["ratio_3_to_1_median"]
-        reasons.append(
-            "3 frames apart unmeasured"
-            if ratio is None
-            else f"3 frames apart {ratio:.1f} times as far"
-        )
-    return ", ".join(reasons)
-
-
-def verdict_line(report: dict, sequences: list[PickSequence]) -> str:
-    """The `Verdict:` line, naming each sequence that stopped the run."""
-    if report["verdict"] == "video":
-        return "Verdict: video"
-    parts = [
-        f"{s.name}: {_not_a_video_reasons(r['video'], len(s.numbers))}"
-        for s, r in zip(sequences, report["sequences"])
-        if not r["video"]["is_video"]
-    ]
-    return (
-        "Verdict: not a video: "
-        + "; ".join(parts)
-        + "; sfm pick-images picks from video sequences only"
-    )
-
-
 def _counts(report: dict, sequence: int, stages: tuple[str, ...], extracted: dict):
     """How many frames of `sequence` the given stages read, and how many of
     them had a `.sift` file written."""
@@ -95,6 +54,7 @@ def baseline_lines(
     sequence: PickSequence,
     extracted: dict,
     label: str,
+    min_step_matches: int,
 ) -> list[str]:
     """The baseline section of one sequence."""
     seq = report["sequences"][index]
@@ -128,18 +88,9 @@ def baseline_lines(
             else f"{base['total_motion_percent']:.0f}%"
         )
     )
-    video = seq["video"]
-    signs = sum(video[k] for k in ("motion_adds_up", "step_small", "step_steady"))
-    change = video["step_change_median"]
-    ratio = video["ratio_3_to_1_median"]
     lines.append(
-        f"  {'A video' if video['is_video'] else 'Not a video'} ({signs} of 3 signs): "
-        f"1 frame apart step {_pct(video['step_1_median'])}; 3 frames apart "
-        + ("unmeasured" if ratio is None else f"{ratio:.1f} times as far")
-    )
-    lines.append(
-        "    neighbouring samples' steps within a factor of "
-        + ("unmeasured" if change is None else f"{math.exp(change):.1f}")
+        "  Matches with the next frame: "
+        + _next_frame_matches(base["next_frame_matches_median"], min_step_matches)
     )
     regions = []
     for region in base["flagged_regions"]:
@@ -157,6 +108,20 @@ def baseline_lines(
         )
     lines.append(f"  Flagged regions: {_items(regions) if regions else 'none'}")
     return lines
+
+
+def _next_frame_matches(median, floor: int) -> str:
+    """The baseline's median matches with the next frame against the match
+    floor; below it, most steps past the next frame keep fewer matches than
+    the floor, and the walk takes most frames."""
+    if median is None:
+        return f"unmeasured; match floor {floor}"
+    if median < floor:
+        return (
+            f"median {median:g}, below the match floor of {floor}, so most steps "
+            "go to the next frame"
+        )
+    return f"median {median:g}; match floor {floor}"
 
 
 def _motion_rows(walk: dict, numbers: list[int]) -> list[str]:
@@ -221,6 +186,12 @@ def walk_lines(
         "  Motion along the capture (median step, rate per frame, frames per step):"
     )
     lines.extend(_motion_rows(walk, numbers))
+    at_floor = sum(s["kind"] == "at_floor" for s in steps)
+    lines.append(
+        f"  Steps stopped at the match floor: {at_floor} of {len(steps)}"
+        if at_floor
+        else "  Steps stopped at the match floor: none"
+    )
 
     for reason, heading in (
         ("median", "Blurred frames swapped"),
@@ -336,9 +307,10 @@ def report_lines(
     extracted: list[dict],
     target_step: float,
     step_band: float,
+    min_step_matches: int,
 ) -> list[str]:
     """Every section of the report before the list is written: the baseline
-    of each sequence, the verdict, and the walk of each sequence.
+    of each sequence, then the walk of each sequence.
 
     `extracted[i]` maps a frame position of sequence `i` to whether a `.sift`
     file was written for it; the last line counts the frames that had a
@@ -347,11 +319,10 @@ def report_lines(
     lines: list[str] = []
     for i, sequence in enumerate(sequences):
         label = f" of {sequence.name}" if several else ""
-        lines.extend(baseline_lines(report, i, sequence, extracted[i], label))
-    lines.append(verdict_line(report, sequences))
+        lines.extend(
+            baseline_lines(report, i, sequence, extracted[i], label, min_step_matches)
+        )
     for i, sequence in enumerate(sequences):
-        if report["sequences"][i]["walk"] is None:
-            continue
         label = f" of {sequence.name}" if several else ""
         lines.append("")
         lines.extend(

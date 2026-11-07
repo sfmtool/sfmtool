@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! What [`super::pick_images`] found: the verdict, the baseline's readings,
-//! and the walk's choices and decisions, per sequence. Every type serializes
+//! What [`super::pick_images`] found: the baseline's readings and the walk's
+//! choices and decisions, per sequence. Every type serializes
 //! with `serde`, a non-finite number as `null`, so a caller can write the
 //! whole report as JSON.
 //!
@@ -18,9 +18,6 @@ use super::frame_pair::FramePairStats;
 /// What [`super::pick_images`] found.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PickImagesReport {
-    /// Whether every sequence is a video, which decides whether the capture
-    /// was walked.
-    pub verdict: Verdict,
     /// One report per sequence, in the order the sequences were given.
     pub sequences: Vec<SequenceReport>,
     /// Every frame read, in the order it was read, with its readings. The
@@ -37,17 +34,6 @@ pub struct PickImagesReport {
     /// everything else in the report, it depends on how far ahead the walk
     /// predicts and on how fast the source works.
     pub frames_extracted_unread: usize,
-}
-
-/// Whether every sequence of the capture is a video, and so was walked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    /// Every sequence is a video; every sequence was walked.
-    Video,
-    /// A sequence is not a video ([`VideoCheck::is_video`]). Nothing was read
-    /// after the baseline, and nothing was walked.
-    NotAVideo,
 }
 
 /// Which stage of [`super::pick_images`] read a frame or matched a pair.
@@ -103,14 +89,11 @@ pub struct MeasuredPair {
     pub stage: Stage,
 }
 
-/// One sequence's baseline, the judgement of whether it is a video, and its
-/// walk.
+/// One sequence's baseline and its walk.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SequenceReport {
     pub baseline: BaselineReport,
-    pub video: VideoCheck,
-    /// `None` unless the verdict is [`Verdict::Video`].
-    pub walk: Option<WalkReport>,
+    pub walk: WalkReport,
 }
 
 /// One sequence's baseline: what the sampled frames and their pairs read.
@@ -124,6 +107,11 @@ pub struct BaselineReport {
     pub sensors: Vec<SensorBaseline>,
     /// How many sampled frames are blurred.
     pub blurred_samples: usize,
+    /// The median, over the sampled frames that have a next frame, of the
+    /// mutual matches with it; NaN when no sampled frame has one. Below
+    /// `min_step_matches`, most steps beyond the next frame keep fewer
+    /// matches than the match floor, and the walk takes most frames.
+    pub next_frame_matches_median: f64,
     /// The rate at each sampled frame that has one, in percent of the long
     /// side per frame: the step to the frame 3 after it divided by 3, or the
     /// step to the next frame when the frame 3 after it has fewer than
@@ -166,29 +154,6 @@ pub struct FlaggedRegion {
     pub blurred: bool,
     /// A sampled frame in it does not match the frame 1 or 3 after it well.
     pub weak_matches: bool,
-}
-
-/// The three signs of a video, each the median over the sampled frames with a
-/// frame 3 after them. A sample whose 1-frame or 3-frame pair has fewer than
-/// `min_matches` matches counts against every sign it enters.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct VideoCheck {
-    /// The median step to the next frame, in percent of the long side.
-    pub step_1_median: f64,
-    /// The median of the step 3 frames apart over the step 1 frame apart.
-    pub ratio_3_to_1_median: f64,
-    /// The median of `|log(step_i / step_{i+1})|` over neighbouring sampled
-    /// frames' 1-frame steps.
-    pub step_change_median: f64,
-    /// `ratio_3_to_1_median` is between 2 and 4.
-    pub motion_adds_up: bool,
-    /// `step_1_median` is below 5%.
-    pub step_small: bool,
-    /// `step_change_median` is below `log 2`.
-    pub step_steady: bool,
-    /// All three signs hold. False for a sequence of fewer than 4 frames,
-    /// which has no 3-frame pair.
-    pub is_video: bool,
 }
 
 /// One sequence's walk.
@@ -251,6 +216,9 @@ pub enum StepKind {
     /// Below the band at the last frame of the sequence or the first frame of
     /// a region flagged for weak matches, which a step does not pass.
     AtLimit,
+    /// Below the band, with the step to the frame after it short of the
+    /// match floor: it keeps fewer than `min_step_matches` matches.
+    AtFloor,
     /// Below the band after a step failed: part of a gap filled in.
     GapFill,
     /// Below the band to land on a sharp frame, or on the sharpest, in a

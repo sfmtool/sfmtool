@@ -115,6 +115,9 @@ def test_list_entries_are_one_per_sensor_with_one_range():
         ("rig/left/f_%02d.jpg", "1-9:4,10,11"),
         ("rig/right/f_%02d.jpg", "1-9:4,10,11"),
     ]
+    # A sequence the walk chose no frame of, such as a lone frame, which has
+    # no next frame to match, has no entries.
+    assert list_entries(sequence, []) == []
 
 
 def test_a_range_too_long_for_one_expression_is_split_in_order():
@@ -137,9 +140,10 @@ def test_slice_suggestion():
     )
 
 
-def test_swaps_are_reported_by_reason():
-    # A walk of frames numbered 10 apart with one swap of each reason; the
-    # report names them by file number, each on its reason's line.
+def test_swaps_and_steps_at_the_floor_are_reported():
+    # A walk of frames numbered 10 apart with one swap of each reason and a
+    # step stopped at the match floor; the report names the swaps by file
+    # number, each on its reason's line, and counts the steps at the floor.
     sequence = PickSequence(
         patterns=["f_%d.jpg"],
         numbers=[10 * t for t in range(1, 31)],
@@ -150,8 +154,8 @@ def test_swaps_are_reported_by_reason():
         "chosen": [0, 12, 21],
         "segments": [{"start": 0, "len": 3}],
         "steps": [
-            {"from": 0, "to": 12, "stats": stats, "rate": 0.8},
-            {"from": 12, "to": 21, "stats": stats, "rate": 1.1},
+            {"from": 0, "to": 12, "stats": stats, "rate": 0.8, "kind": "in_band"},
+            {"from": 12, "to": 21, "stats": stats, "rate": 1.1, "kind": "at_floor"},
         ],
         "swaps": [
             {"candidate": 11, "chosen": 12, "reason": "median"},
@@ -168,8 +172,11 @@ def test_swaps_are_reported_by_reason():
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3)
     assert "  Blurred frames swapped (1): 120->130" in lines
     assert "  Frames blurred against their neighbours swapped (1): 230->220" in lines
+    assert "  Steps stopped at the match floor: 1 of 2" in lines
 
     walk["swaps"] = []
+    walk["steps"][1]["kind"] = "bracketed"
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3)
     assert "  Blurred frames swapped: none" in lines
     assert "  Frames blurred against their neighbours swapped: none" in lines
+    assert "  Steps stopped at the match floor: none" in lines

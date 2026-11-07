@@ -358,6 +358,9 @@ def list_entries(sequence: PickSequence, numbers: list[int]) -> list[tuple]:
     """The list entries that hold the images of `sequence`'s frames numbered
     `numbers`: one entry per sensor, its pattern with the range of the
     numbers. A range too long for one range expression is split into several
-    entries of the same pattern, in increasing order of number."""
+    entries of the same pattern, in increasing order of number. A sequence
+    with no chosen frames has no entries."""
+    if not numbers:
+        return []
     pieces = _range_pieces(sorted(numbers))
     return [(pattern, piece) for pattern in sequence.patterns for piece in pieces]

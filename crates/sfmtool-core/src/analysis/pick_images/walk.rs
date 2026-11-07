@@ -3,8 +3,9 @@
 
 //! The walk along one sequence: predict the next frame from the recent rate,
 //! measure the step to it, accept it, re-aim, or swap a blurred frame, or one
-//! blurred against its neighbouring frames, for a sharper neighbour; halve
-//! the gap where a step fails, and start a new segment after a break, reading
+//! blurred against its neighbouring frames, for a sharper neighbour; keep
+//! every step beyond the next frame at or above the match floor; halve the
+//! gap where a step fails, and start a new segment after a break, reading
 //! ahead through the break. See
 //! `specs/core/analysis/pick-images.md` § "The walk" and § "Run-ahead".
 
@@ -27,8 +28,8 @@ const MAX_REAIMS: usize = 4;
 /// How many accepted steps' rates predict the next step.
 const RECENT_RATES: usize = 3;
 
-/// A step with fewer than this many times `min_matches` matches is a weak
-/// point, and a step to a frame beyond the next one fails with it.
+/// An accepted step with fewer than this many times `min_matches` matches is
+/// a weak point.
 const WEAK_MATCH_FACTOR: usize = 2;
 
 /// A segment of fewer chosen frames than this is a weak point.
@@ -85,7 +86,7 @@ struct Walker<'w, 'a> {
     in_gap: bool,
 }
 
-/// Walk one sequence that passed the verdict.
+/// Walk one sequence.
 pub(super) fn walk_sequence(
     frames: &mut Frames,
     baseline: &SequenceBaseline,
@@ -207,9 +208,9 @@ fn find_start(
     Ok(None)
 }
 
-/// Whether a pair has fewer than [`WEAK_MATCH_FACTOR`] times `min_matches`
-/// matches.
-fn few_matches(stats: &FramePairStats, options: &PickImagesOptions) -> bool {
+/// Whether an accepted step is a weak point: it has fewer than
+/// [`WEAK_MATCH_FACTOR`] times `min_matches` matches.
+fn weak_step(stats: &FramePairStats, options: &PickImagesOptions) -> bool {
     stats.matches < options.min_matches.saturating_mul(WEAK_MATCH_FACTOR)
 }
 
@@ -223,7 +224,7 @@ fn finish(
     options: &PickImagesOptions,
 ) {
     for (i, step) in report.steps.iter().enumerate() {
-        if few_matches(&step.stats, options) {
+        if weak_step(&step.stats, options) {
             report.weak_points.push(WeakPoint::Step { step: i });
         }
     }
@@ -272,13 +273,14 @@ impl Walker<'_, '_> {
         self.blur(frame).0
     }
 
-    /// Whether the step from `f` to `n`, measured as `stats`, can be taken
-    /// by choice: it matches well and, beyond the next frame, has no fewer
-    /// than [`WEAK_MATCH_FACTOR`] times `min_matches` matches. A step with
-    /// few matches is where a solve is most likely to split, so only halving
-    /// a failed step takes one beyond the next frame.
+    /// Whether the step from `f` to `n`, measured as `stats`, can be taken:
+    /// it matches well and, beyond the next frame, keeps at least
+    /// `min_step_matches` matches, the match floor. A solve follows a capture
+    /// through the tracks consecutive chosen frames share, which the mutual
+    /// matches count, so no step passes over frames to keep fewer.
     fn holds(&self, f: usize, n: usize, stats: &FramePairStats) -> bool {
-        matches_well(stats, self.options) && (n == f + 1 || !few_matches(stats, self.options))
+        matches_well(stats, self.options)
+            && (n == f + 1 || stats.matches >= self.options.min_step_matches)
     }
 
     /// Read `frame` and match it with the last chosen frame.
@@ -344,27 +346,34 @@ impl Walker<'_, '_> {
         let b = self.bounds();
         let f = b.from;
         let mut c = Self::aim(f, b.target / self.predicted_rate(), f + 1, b.limit);
-        // The largest candidate below the band that matched well, and the
-        // smallest above it.
+        // The largest candidate below the band that held, the smallest above
+        // it, and the smallest that matched well but kept fewer matches than
+        // the floor.
         let mut below: Option<(usize, FramePairStats)> = None;
         let mut above: Option<usize> = None;
+        let mut short: Option<usize> = None;
         let mut reaims = 0;
         loop {
             let stats = self.measure(c)?;
             let m = stats.step_percent;
             let well = self.holds(f, c, &stats);
-            if m > b.high {
+            // Matches fall with the distance, so a candidate short of the
+            // floor is too far, whatever its step.
+            let short_of_floor = !well && matches_well(&stats, self.options);
+            if short_of_floor {
+                short = Some(short.map_or(c, |s| s.min(c)));
+            } else if m > b.high {
                 above = Some(above.map_or(c, |a| a.min(c)));
                 if c == f + 1 {
                     return if well {
-                        self.settle(b, c, stats, StepKind::AboveBand)
+                        self.settle(Self::within_floor(b, short), c, stats, StepKind::AboveBand)
                     } else {
                         self.fill_gap(b, c, below)
                     };
                 }
             } else if m >= b.low {
                 return if well {
-                    self.settle(b, c, stats, StepKind::InBand)
+                    self.settle(Self::within_floor(b, short), c, stats, StepKind::InBand)
                 } else {
                     self.fill_gap(b, c, below)
                 };
@@ -381,20 +390,49 @@ impl Walker<'_, '_> {
                 }
             }
             let low = below.as_ref().map_or(f + 1, |(x, _)| x + 1);
-            let high = above.map_or(b.limit, |a| a - 1);
+            let high = [above, short]
+                .into_iter()
+                .flatten()
+                .min()
+                .map_or(b.limit, |a| a - 1);
             if low > high {
                 // Two candidates one frame apart lie on either side of the
-                // band: the motion per frame is wider than the band.
+                // band, where the motion per frame is wider than the band, or
+                // on either side of the floor.
                 return match below {
-                    Some((x, s)) => self.settle(b, x, s, StepKind::Bracketed),
+                    Some((x, s)) => {
+                        let kind = if short == Some(x + 1) {
+                            StepKind::AtFloor
+                        } else {
+                            StepKind::Bracketed
+                        };
+                        self.settle(Self::within_floor(b, short), x, s, kind)
+                    }
                     None => self.fill_gap(b, c, None),
                 };
+            }
+            if short_of_floor {
+                // The farthest frame that keeps the floor lies in
+                // `[low, high]`: try its middle, rounded up. The range
+                // shrinks with every candidate, so these tries need no
+                // limit of their own.
+                c = low + (high - low).div_ceil(2);
+                continue;
             }
             if reaims == MAX_REAIMS {
                 return self.fill_gap(b, c, below);
             }
             reaims += 1;
             c = Self::aim(f, (c - f) as f64 * b.target / m, low, high);
+        }
+    }
+
+    /// `b` with its limit before `short`, the nearest candidate measured short
+    /// of the floor, so that a swap does not look at or past it.
+    fn within_floor(b: StepBounds, short: Option<usize>) -> StepBounds {
+        StepBounds {
+            limit: short.map_or(b.limit, |s| (s - 1).min(b.limit)),
+            ..b
         }
     }
 
@@ -627,9 +665,9 @@ impl Walker<'_, '_> {
     }
 
     /// The step to `failed` did not match well or could not be brought into
-    /// the band: accept the largest candidate below the band that matched
-    /// well, or else halve the gap until a frame matches well, down to the
-    /// next frame. A break when even that fails.
+    /// the band: accept the largest candidate below the band that held, or
+    /// else halve the gap until a frame's step holds, down to the next
+    /// frame. A break when even that does not match well.
     fn fill_gap(
         &mut self,
         b: StepBounds,
@@ -647,7 +685,7 @@ impl Walker<'_, '_> {
                 return Ok(Outcome::Break);
             }
             let stats = self.measure(h)?;
-            if matches_well(&stats, self.options) {
+            if self.holds(f, h, &stats) {
                 return self.accept_gap(f, h, failed, stats);
             }
             failed = h;
@@ -655,7 +693,7 @@ impl Walker<'_, '_> {
     }
 
     /// Accept `h` as a gap fill, or a sharp neighbour of it before `bound`
-    /// when it is blurred, or `h` kept though blurred.
+    /// whose step holds when `h` is blurred, or `h` kept though blurred.
     fn accept_gap(
         &mut self,
         f: usize,
@@ -674,7 +712,7 @@ impl Walker<'_, '_> {
                     continue;
                 }
                 let s = self.measure(n)?;
-                if matches_well(&s, self.options) {
+                if self.holds(f, n, &s) {
                     self.report.swaps.push(Swap {
                         candidate: h,
                         chosen: n,
