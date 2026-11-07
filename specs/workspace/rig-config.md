@@ -273,6 +273,7 @@ For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
 `rig_config.json` is consumed as an *input* by the solving commands and by
 `sfm pick-images`, but sfmtool no longer *produces* it. In `sfm solve` and
 `sfm pick-images`, a `.camrig` that covers every image given takes precedence
-over it ([solve-command.md § Camera Rig Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)). The rig builders (`sfm pano2rig`,
-`sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
+over it
+([solve-command.md § Camera Rig Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)).
+The rig builders (`sfm pano2rig`, `sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
 `specs/formats/camrig-file-format.md` and `specs/cli/workspace/pano2rig-command.md`.

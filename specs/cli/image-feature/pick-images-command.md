@@ -447,15 +447,15 @@ written one entry per sensor, whose list `resolve_camrig_for_solve` takes as
 a rig of both sensors at the chosen frames; a `.camrig` taking precedence over
 `rig_config.json`, and a single-sensor one defining no rig; input files a
 `.camrig` covers only in part, refused before any image is read; a match
-floor too large for the binding, refused naming the option, and one below 1, a usage error; an
-invalid output name; and `--force` without `--write-list`
+floor too large for the binding, refused naming the option, and one below 1,
+a usage error; an invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the rig order, a
 `.camrig` rig's frames, patterns and sensor order, every error, the list
-entries, a lone chosen frame, a range split in parts, the slice suggestion, and the report's walk section: its heading, the frames
-chosen and read, the swaps, the steps stopped at the match floor and those
+entries, a lone chosen frame, a range split in parts, the slice suggestion,
+and the report's walk section: its heading, the frames chosen and read, the swaps, the steps stopped at the match floor and those
 at the next frame among them, and a run of the motion table whose steps
 match nothing.
 

@@ -150,6 +150,18 @@ def test_camrig_rig_errors_name_the_files():
     assert "cap 5%/Left/f_03.jpg (no image of cap 5%%/right/f_%02d.jpg)" in message
 
 
+def test_a_camrig_in_a_folder_with_a_star_is_an_error():
+    folder = ROOT / "cap*"
+    paths = [folder / "right/f_01.jpg", folder / "left/f_01.jpg"]
+    rig = CamrigRig(
+        camrig_file=folder / "rig.camrig",
+        data={"sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"]},
+        assignments={p.resolve(): f for p, f in zip(paths, [(0, 1), (1, 1)])},
+    )
+    with pytest.raises(PickImagesInputError, match=r"has a '\*' in its path"):
+        collect_sequences(paths, ROOT, None, rig)
+
+
 def test_list_entries_are_one_per_sensor_with_one_range():
     (sequence,) = _collect(
         [
