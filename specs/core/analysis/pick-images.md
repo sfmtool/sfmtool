@@ -98,7 +98,7 @@ pub struct PickImagesOptions {
     pub neighbour_blur_ratio: f64, // 0.85, in (0, 1)
     pub baseline_frames: usize,    // 200, at least 2
     pub min_matches: usize,        // 30, at least 1
-    pub min_step_matches: usize,   // 500, at least min_matches: the match floor
+    pub min_step_matches: usize,   // 600, at least min_matches: the match floor
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // FramePairOptions::default()
     pub prefetch: bool,            // true; changes no choice, only the work ahead
@@ -638,7 +638,7 @@ three digits; the medians and ratios are `f64` because
 | `neighbour_blur_ratio` | `0.85` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
 | `baseline_frames` | `200` | the samples, shared among the sequences |
 | `min_matches` | `30` | the mutual matches a pair that matches well has |
-| `min_step_matches` | `500` | the match floor, the mutual matches a step beyond the next frame keeps; at least `min_matches` |
+| `min_step_matches` | `600` | the match floor, the mutual matches a step beyond the next frame keeps; at least `min_matches` |
 | baseline gaps | 1, 3 | the frames after each sample the baseline reads |
 | re-aims | 4 | before a step fails; the tries towards the floor are not counted |
 | recent rates | 3 | the accepted steps the prediction takes the median of |

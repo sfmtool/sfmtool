@@ -306,7 +306,7 @@ def test_photographs_extracted_by_the_walk_are_every_one_kept(
     }
     report = pick_images([sequence], **extract)
     baseline = report["sequences"][0]["baseline"]
-    assert baseline["next_frame_matches_median"] < 500
+    assert baseline["next_frame_matches_median"] < 600
     assert report["sequences"][0]["walk"]["chosen"] == list(range(17))
     read = _read(report)
     # Every frame is sampled, so every frame is read, and each was extracted.

@@ -93,7 +93,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "--min-step-matches",
     "min_step_matches",
     type=int,
-    default=500,
+    default=600,
     metavar="N",
     show_default=True,
     help="The match floor: a step past the next frame keeps at least N mutual "

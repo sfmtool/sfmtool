@@ -455,7 +455,7 @@ impl PyCaptureSequence {
 ///     min_matches: The fewest mutual matches a step that matches well has
 ///         (30), at least 1.
 ///     min_step_matches: The match floor, the fewest mutual matches a step
-///         beyond the next frame keeps (500), at least ``min_matches``.
+///         beyond the next frame keeps (600), at least ``min_matches``.
 ///     ratio: Lowe's ratio on descriptor distances, as for
 ///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,

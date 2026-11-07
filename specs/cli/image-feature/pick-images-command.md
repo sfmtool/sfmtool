@@ -5,7 +5,7 @@ Structure-from-Motion solve should use. Neighbouring frames are nearly the same
 picture and some frames are blurred. `sfm pick-images` looks at a capture
 before it is solved and chooses the frames a solve should use: frames spaced
 so that the image moves by about a tenth of its width from one to the next,
-but no further apart than keeps 500 mutual matches between consecutive
+but no further apart than keeps 600 mutual matches between consecutive
 chosen frames, sharp ones in place of blurred ones, more frames where the
 capture is hard to follow and fewer where it is easy. A capture whose
 neighbouring frames already match with fewer than that, such as frames
@@ -52,7 +52,7 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--blur-ratio RATIO` | `0.6` | A frame whose sharpness is below `RATIO` times its sequence's median sharpness counts as blurred. |
 | `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen whose sharpness is below its sequence's median is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
 | `--baseline-frames N` | `200` | How many frames the baseline sample takes, spread evenly over the capture. The default suits long captures of 10,000 frames or more; on a capture of a few hundred frames the baseline reads most of them ([core/analysis/pick-images.md § The baseline](../../core/analysis/pick-images.md#the-baseline)). |
-| `--min-step-matches N` | `500` | The match floor: a step past the next frame keeps at least `N` mutual matches, whatever its step, so a capture whose neighbouring frames match with fewer keeps every frame ([core/analysis/pick-images.md § The match floor](../../core/analysis/pick-images.md#the-match-floor)). At least 30, the matches a pair that matches well has. |
+| `--min-step-matches N` | `600` | The match floor: a step past the next frame keeps at least `N` mutual matches, whatever its step, so a capture whose neighbouring frames match with fewer keeps every frame ([core/analysis/pick-images.md § The match floor](../../core/analysis/pick-images.md#the-match-floor)). At least 30, the matches a pair that matches well has. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 
 The six numeric options reach `sfmtool.analysis.pick_images` unchanged, as
@@ -319,7 +319,7 @@ Given 1 path(s), 6120 image file(s) in 1 sequence:
 Baseline: 200 frames sampled, 590 frames read (578 extracted, 12 reused)
   Sharpness: median 0.0123; 9 sampled frames blurred
   Motion per frame: median 0.72%, p90 1.31% of the long side; total 4400%
-  Matches with the next frame: median 1840; match floor 500
+  Matches with the next frame: median 1840; match floor 600
   Flagged regions: 2210-2271 (blurred), 4381-4442 (weak matches)
 
 Walk: target step 10% (band 7-13%), 1 break, 2 segments
@@ -366,7 +366,7 @@ first eight and the count of the rest.
   frame, which is why such a capture keeps most or all of its frames:
 
   ```text
-  Matches with the next frame: median 412, below the match floor of 500, so most steps go to the next frame
+  Matches with the next frame: median 412, below the match floor of 600, so most steps go to the next frame
   ```
 - **Walk.** The target and band, the breaks and segments; the frames chosen
   and the frames the walk used, split into those it extracted, those it

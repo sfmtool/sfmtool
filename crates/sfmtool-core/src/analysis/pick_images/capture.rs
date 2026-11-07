@@ -107,7 +107,7 @@ impl Default for PickImagesOptions {
             neighbour_blur_ratio: 0.85,
             baseline_frames: 200,
             min_matches: 30,
-            min_step_matches: 500,
+            min_step_matches: 600,
             forest: KdForestParams::balanced(),
             pair: FramePairOptions::default(),
             prefetch: true,

@@ -10,7 +10,7 @@ about how it was picked, the refusal to overwrite without `--force`, one list
 per run across every sequence, the workspace and `.sift` version 2
 requirement, SIFT matching through a KD-forest as the measure of motion, the
 match floor, an absolute count of mutual matches that every step beyond the
-next frame keeps, at 500, with no check of whether a sequence is a video, the
+next frame keeps, at 600, with no check of whether a sequence is a video, the
 target step of 10% and the blur ratio of 0.6, the walk, the baseline size of
 200,
 that blur is judged from the sharpness alone, and the judgement of a frame

@@ -313,12 +313,12 @@ def test_photographs_below_the_match_floor_keep_every_frame(
     assert result.exit_code == 0, result.output
     data = json.loads((workspace / "r.json").read_text())
     median = data["sequences"][0]["baseline"]["next_frame_matches_median"]
-    assert median < 500
+    assert median < 600
     assert (
         f"Matches with the next frame: median {median:g}, below the match floor of "
-        "500, so most steps go to the next frame" in result.output
+        "600, so most steps go to the next frame" in result.output
     )
-    assert data["options"]["min_step_matches"] == 500
+    assert data["options"]["min_step_matches"] == 600
     assert data["chosen_numbers"] == [list(range(1, 18))]
     assert _resolve(workspace, "bull") == [
         f"photos/seoul_bull_sculpture_{n:02d}.jpg" for n in range(1, 18)
