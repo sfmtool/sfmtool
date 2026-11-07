@@ -656,7 +656,7 @@ pub(crate) fn default_concurrent_images(first_image: &Path, progress: &Progress)
     let pixels = image_dimensions(first_image)
         .ok()
         .map(|(w, h)| u64::from(w) * u64::from(h));
-    let budget = crate::camera::photograph_cache::physical_memory_bytes()
+    let budget = crate::machine::physical_memory_bytes()
         .unwrap_or(4 << 30)
         .div_euclid(2)
         .max(1);
