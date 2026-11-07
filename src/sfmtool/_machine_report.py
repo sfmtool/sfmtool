@@ -233,7 +233,7 @@ def _ffmpeg_text(facts: dict) -> str:
         return "not found on PATH"
     if facts["version"] is None:
         return f"{facts['path']} ({facts['error']})"
-    return f"{facts['version']} ({facts['path']})"
+    return f"{facts['version']}, {facts['path']}"
 
 
 def _memory_text(memory_bytes: int | None) -> str:

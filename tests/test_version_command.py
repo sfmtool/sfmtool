@@ -270,7 +270,7 @@ def test_report_text_prints_one_aligned_line_per_fact():
             "pycolmap: 4.2.1, COLMAP 4.2.1, CPU only",
             "numpy:    2.5.4",
             "OpenCV:   5.0.0",
-            "ffmpeg:   7.1 (/usr/bin/ffmpeg)",
+            "ffmpeg:   7.1, /usr/bin/ffmpeg",
         ]
     )
 

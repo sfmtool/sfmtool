@@ -41,7 +41,7 @@ GPU:      NVIDIA GeForce RTX 4090 Laptop GPU (vulkan, discrete)
 pycolmap: 4.2.1, COLMAP 4.2.1, CPU only
 numpy:    2.5.4
 OpenCV:   5.0.0
-ffmpeg:   9.0.2 (C:\Dev\prod\sfmtool\.pixi\envs\default\Library\bin\ffmpeg.EXE)
+ffmpeg:   9.0.2, C:\Dev\prod\sfmtool\.pixi\envs\default\Library\bin\ffmpeg.EXE
 ```
 
 The first line is the version line, described next, and is all that
