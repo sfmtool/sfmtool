@@ -70,20 +70,7 @@ impl GpuContext {
     }
 
     async fn new_async() -> Option<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-                ..Default::default()
-            })
-            .await
-            .ok()?;
+        let adapter = request_compute_adapter().await.ok()?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -102,6 +89,25 @@ impl GpuContext {
     pub fn from_existing(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         Self { device, queue }
     }
+}
+
+/// Request the adapter [`GpuContext::new`] runs on: every backend compiled in,
+/// the high-performance adapter, with no surface and no forced software
+/// fallback. `machine::probe_gpu_adapter` makes the same request to report
+/// which adapter a run would get, so the two cannot drift apart.
+pub(crate) async fn request_compute_adapter() -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    });
+    instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            ..Default::default()
+        })
+        .await
 }
 
 // --- Helper functions ---

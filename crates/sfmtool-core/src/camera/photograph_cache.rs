@@ -43,12 +43,11 @@ const GIB: u64 = 1 << 30;
 /// megabytes (10^6 bytes); `0` there gives a cache that keeps nothing. A value
 /// that does not parse as a whole number is ignored.
 ///
-/// Physical memory is read with `GlobalMemoryStatusEx` on Windows and with
-/// `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` on Linux and macOS. Other
-/// targets take the 4 GiB fallback.
+/// Physical memory is read by [`crate::machine::physical_memory_bytes`], and a
+/// target where it cannot be read takes the 4 GiB fallback.
 pub fn default_budget_bytes() -> u64 {
     let env = std::env::var(BUDGET_ENV_VAR).ok();
-    budget_from(env.as_deref(), physical_memory_bytes())
+    budget_from(env.as_deref(), crate::machine::physical_memory_bytes())
 }
 
 /// [`default_budget_bytes`] with its two inputs passed in, so it can be tested
@@ -61,45 +60,6 @@ fn budget_from(env_megabytes: Option<&str>, physical_bytes: Option<u64>) -> u64 
         Some(bytes) => (bytes / 4).clamp(GIB, 16 * GIB),
         None => 4 * GIB,
     }
-}
-
-#[cfg(windows)]
-pub(crate) fn physical_memory_bytes() -> Option<u64> {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    // SAFETY: MEMORYSTATUSEX is plain data, so all zeroes is a valid value, and
-    // GlobalMemoryStatusEx only writes into the struct it is handed, whose
-    // `dwLength` it requires to be set to its size.
-    unsafe {
-        let mut status: MEMORYSTATUSEX = std::mem::zeroed();
-        status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-        if GlobalMemoryStatusEx(&mut status) != 0 && status.ullTotalPhys > 0 {
-            Some(status.ullTotalPhys)
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn physical_memory_bytes() -> Option<u64> {
-    // SAFETY: sysconf takes an integer name and returns an integer; it touches
-    // no memory of ours.
-    let (pages, page_size) = unsafe {
-        (
-            libc::sysconf(libc::_SC_PHYS_PAGES),
-            libc::sysconf(libc::_SC_PAGESIZE),
-        )
-    };
-    if pages > 0 && page_size > 0 {
-        (pages as u64).checked_mul(page_size as u64)
-    } else {
-        None
-    }
-}
-
-#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-pub(crate) fn physical_memory_bytes() -> Option<u64> {
-    None
 }
 
 /// What [`PhotographCache::stats`] reports.

@@ -73,6 +73,32 @@ def is_release_describe(describe: str, package_version: str) -> bool:
     return re.fullmatch(rf"v?{tag}-0-g[0-9a-f]+", describe) is not None
 
 
+def sfmtool_facts() -> dict:
+    """The version facts `sfm version --bare` prints, as the `sfmtool` object
+    of the JSON report: the package metadata version (`"unknown"` without
+    metadata), the checkout's and the extension's `git describe` (each None
+    when unknown), the extension's build profile and the line `version_text`
+    makes of them. It runs git, but imports nothing beyond the extension."""
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as package_version
+
+    from ._sfmtool import _build_git_describe, build_profile
+
+    try:
+        version = package_version("sfmtool")
+    except PackageNotFoundError:
+        version = "unknown"
+    checkout = checkout_describe(Path(__file__).resolve().parent)
+    extension = _build_git_describe()
+    return {
+        "version": version,
+        "line": version_text(version, checkout, extension),
+        "checkout_describe": checkout,
+        "extension_describe": extension,
+        "build_profile": build_profile(),
+    }
+
+
 def version_text(
     package_version: str, checkout: str | None, extension: str | None
 ) -> str:

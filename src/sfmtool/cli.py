@@ -260,24 +260,48 @@ for _name, _category, _module, _attribute, _short_help in COMMANDS:
 
 
 @main.command()
-def version():
-    """Print the version.
+@click.option(
+    "--bare",
+    is_flag=True,
+    help="Print only the version line, which reads no other fact and is fast.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Print the same facts as one JSON object. With --bare, only its "
+    "`sfmtool` key.",
+)
+def version(bare, as_json):
+    """Print the version and the facts that decide how sfmtool runs here.
 
-    After the package version it names the commit the code comes from, as
-    `git describe` gives it, unless that is the release the version names.
+    The first line is the package version and, unless the code is the release
+    that version names, the commit it comes from, as `git describe` gives it.
+    After it come the build, the install, Python, the OS, the CPU, the thread
+    count, the SIMD level, memory, the GPU adapter, pycolmap with its CUDA
+    support, numpy, OpenCV and ffmpeg, one per line, for bug reports.
     """
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as _pkg_version
+    from ._version import sfmtool_facts
 
-    from ._sfmtool import _build_git_describe
-    from ._version import checkout_describe, version_text
+    facts = sfmtool_facts()
+    if bare:
+        if as_json:
+            import json
 
-    try:
-        pkg_version = _pkg_version("sfmtool")
-    except PackageNotFoundError:
-        pkg_version = "unknown"
-    checkout = checkout_describe(Path(__file__).resolve().parent)
-    click.echo(version_text(pkg_version, checkout, _build_git_describe()))
+            click.echo(json.dumps({"sfmtool": facts}, indent=2))
+        else:
+            click.echo(facts["line"])
+        return
+
+    from ._machine_report import collect_report, report_text
+
+    report = collect_report(facts)
+    if as_json:
+        import json
+
+        click.echo(json.dumps(report, indent=2))
+    else:
+        click.echo(report_text(report))
 
 
 def deduce_workspace(paths: set[Path]) -> Path:

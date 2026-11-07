@@ -19,14 +19,17 @@ column reads *none* is a binding that no spec describes.
 through the `register` function of its source module, and sets each
 submodule's `__name__` to the public `sfmtool.<name>`, so tracebacks and help
 text name the public location. Three names are registered at the root for
-the package, and two more for one command each: `run_explorer`, the viewer
+the package, and three more for one command each: `run_explorer`, the viewer
 that `sfm explorer` calls
-([explorer-command.md](cli/visualization/explorer-command.md)), and
+([explorer-command.md](cli/visualization/explorer-command.md));
 `_build_git_describe()`, the `git describe` of the source tree the extension
 was built from, which [`build.rs`](../crates/sfmtool-py/build.rs) records
-(`None` when the build found no git checkout) and `sfm version` prints
-([version-command.md](cli/other/version-command.md)). Its leading `_` marks
-it internal, and the package root re-exports neither of the two:
+(`None` when the build found no git checkout) and `sfm version` prints; and
+`_machine_facts(gpu_timeout_s)`, the SIMD level, CPU, thread count, memory
+and GPU adapter that `sfm version` reports
+([version-command.md](cli/other/version-command.md) gives both). Their
+leading `_` marks them internal, and the package root re-exports none of the
+three:
 
 | Name | What it is | Spec |
 |------|------------|------|

@@ -74,9 +74,10 @@ wgpu = { version = "30", features = ["dx12", "vulkan"], optional = true }
 pollster = { version = "1", optional = true }
 bytemuck = { version = "1.25", features = ["derive"], optional = true }
 
-# Physical memory size, for the photograph cache's default budget
-# (`camera::photograph_cache::default_budget_bytes`). Both are already in the
-# lockfile through other crates of the workspace.
+# Physical memory size (`machine::physical_memory_bytes`), which the photograph
+# cache's default budget and `sfm version` read, and on Apple silicon the CPU
+# model (`machine::cpu_model`). Both are already in the lockfile through other
+# crates of the workspace.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 

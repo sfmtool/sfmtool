@@ -18,7 +18,15 @@ The crate-level module
 [`numeric`](../../crates/sfmtool-core/src/numeric.rs) has no directory here: it
 holds the shared median and quantile, whose contract is in
 [STANDARDS.md § "Medians and quantiles come from one module"](../STANDARDS.md#medians-and-quantiles-come-from-one-module),
-and `splitmix64`, the RNG step the deterministic samplers share.
+and `splitmix64`, the RNG step the deterministic samplers share. Nor does
+the crate-level module [`machine`](../../crates/sfmtool-core/src/machine.rs),
+which reads the facts about the machine that decide how the code runs on it
+(the SIMD level the kernels dispatch to, the CPU, the rayon thread count,
+physical memory and the GPU adapter). `sfm version` reports them all, and
+the photograph cache and SIFT extraction size their memory budgets from its
+`physical_memory_bytes`;
+[version-command.md](../cli/other/version-command.md) gives what each
+function returns and how.
 
 | Directory | Module | Contents |
 |-----------|--------|----------|

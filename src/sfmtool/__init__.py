@@ -27,8 +27,8 @@ from importlib import import_module as _import_module
 from typing import TYPE_CHECKING
 
 # The root-level `_sfmtool` names; every other binding is read from its module.
-# `run_explorer` and `_build_git_describe`, also root-level, are left out:
-# `sfm explorer` calls the first and `sfm version` the second.
+# `run_explorer`, `_build_git_describe` and `_machine_facts`, also root-level,
+# are left out: `sfm explorer` calls the first and `sfm version` the others.
 from sfmtool._sfmtool import THUMBNAIL_SIZE, ProgressCounter, build_profile  # noqa: F401
 
 # Each name bound on first use, and the submodule it is read from.

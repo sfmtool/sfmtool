@@ -31,6 +31,8 @@ mod variational;
 use super::variational::VariationalParams;
 
 pub use context::GpuContext;
+
+pub(crate) use context::request_compute_adapter;
 pub use variational::GpuVariationalRefiner;
 
 pub(crate) use dis_pipeline::GpuDisPipeline;

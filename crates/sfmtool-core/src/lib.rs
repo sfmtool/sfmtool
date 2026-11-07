@@ -19,6 +19,9 @@
 //! - [`bench`](mod@bench): the bench beside a reconstruction and the editable
 //!   track on it: the item list, its labels, and the steps that work a track up
 //!   to a point and commit it
+//! - [`machine`]: what the machine offers the code that runs on it: the SIMD
+//!   level the kernels dispatch to, the CPU, the thread pool, memory and the
+//!   GPU adapter, which `sfm version` reports
 //! - [`spatial`] — generic KD-tree point-cloud utility used across groups, and
 //!   the per-image keypoint reach enumeration in the pixel domain
 //! - [`progress`] — the parameter a long-running call reports its phases,
@@ -36,6 +39,7 @@ pub mod bench;
 pub mod camera;
 pub mod features;
 pub mod geometry;
+pub mod machine;
 pub mod numeric;
 pub mod patch;
 mod profiling;
