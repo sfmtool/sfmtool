@@ -21,10 +21,12 @@
 //! introspection of this extension), `ProgressCounter` (cross-cutting
 //! progress instrumentation shared by patch and matching kernels),
 //! `THUMBNAIL_SIZE` (the edge both on-disk formats pin, which the Python
-//! extractors resize to) and `run_explorer` (the viewer, which `sfm explorer`
-//! calls from `sfmtool/_commands/explorer.py`). The first three are
-//! re-exported by `sfmtool/__init__.py`; `run_explorer` is not. The package
-//! root re-exports no other binding.
+//! extractors resize to), `run_explorer` (the viewer, which `sfm explorer`
+//! calls from `sfmtool/_commands/explorer.py`) and `_build_git_describe`
+//! (the commit the extension was built from, which `sfm version` reads in
+//! `sfmtool/cli.py`). The first three are re-exported by
+//! `sfmtool/__init__.py`; `run_explorer` and `_build_git_describe` are not.
+//! The package root re-exports no other binding.
 //!
 //! # Example
 //!
@@ -185,6 +187,28 @@ fn build_profile() -> &'static str {
     }
 }
 
+/// The output of `git describe --tags --long --always` for the source tree this
+/// extension was built from, with `-dirty` added when a tracked file differed
+/// from that commit, such as `"v0.3-385-g276e8d986"`, or `None` when the build
+/// found no git checkout or git failed (a build from the sdist, or a machine
+/// without git).
+///
+/// `build.rs` records it when the crate is compiled, and runs again when the
+/// commit or a Rust source of the workspace changes. `sfm version`
+/// prints it beside the package version, and beside the describe of the
+/// checkout it runs from when the two differ, which shows an extension that
+/// was not rebuilt after a change.
+///
+/// Registered as `_build_git_describe`: it is internal to the package, and
+/// `sfm version` is how users read it.
+#[pyfunction(name = "_build_git_describe")]
+fn build_git_describe() -> Option<&'static str> {
+    match env!("SFMTOOL_BUILD_GIT_DESCRIBE") {
+        "" => None,
+        describe => Some(describe),
+    }
+}
+
 /// Run SfM Explorer, the 3D viewer, with the command line `args` (without a
 /// program name), and return its exit status when its window closes: 0 when
 /// the viewer ran and its window was closed, or `--help` printed the usage.
@@ -223,6 +247,9 @@ fn run_explorer(py: Python<'_>, args: Vec<String>) -> i32 {
 fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Build introspection
     m.add_function(wrap_pyfunction!(build_profile, m)?)?;
+    // Internal (`_build_git_describe`): `sfm version` reads it in
+    // `sfmtool/cli.py`. Not re-exported by `sfmtool/__init__.py`.
+    m.add_function(wrap_pyfunction!(build_git_describe, m)?)?;
 
     // The viewer. Root-level because it is not a binding of any one area of
     // the library; it is the program `sfm explorer` runs (see

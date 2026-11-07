@@ -260,3 +260,12 @@ The COLMAP file reading and writing these commands share is described in
 | `sfm to-colmap-db` | [to-colmap-db-command.md](colmap-interop/to-colmap-db-command.md) |
 | `sfm from-colmap-bin` | [from-colmap-bin-command.md](colmap-interop/from-colmap-bin-command.md) |
 | `sfm to-nerfstudio` | [to-nerfstudio-command.md](colmap-interop/to-nerfstudio-command.md) |
+
+## Other
+
+`sfm version` is the one command not in `COMMANDS`; `sfm --help` lists it
+under this heading.
+
+| Command | Spec |
+|---------|------|
+| `sfm version` | [version-command.md](other/version-command.md) |

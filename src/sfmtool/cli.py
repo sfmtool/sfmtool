@@ -261,15 +261,23 @@ for _name, _category, _module, _attribute, _short_help in COMMANDS:
 
 @main.command()
 def version():
-    """Print the version."""
+    """Print the version.
+
+    After the package version it names the commit the code comes from, as
+    `git describe` gives it, unless that is the release the version names.
+    """
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as _pkg_version
+
+    from ._sfmtool import _build_git_describe
+    from ._version import checkout_describe, version_text
 
     try:
         pkg_version = _pkg_version("sfmtool")
     except PackageNotFoundError:
         pkg_version = "unknown"
-    click.echo(f"sfmtool {pkg_version}")
+    checkout = checkout_describe(Path(__file__).resolve().parent)
+    click.echo(version_text(pkg_version, checkout, _build_git_describe()))
 
 
 def deduce_workspace(paths: set[Path]) -> Path:
