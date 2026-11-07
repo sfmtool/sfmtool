@@ -13,7 +13,14 @@ from .._cli_utils import timed_command
 from .._filenames import expand_paths
 from .._sfmtool.reconstruction import RangeExpr
 from ..camera.cameras import CAMERA_MODEL_NAMES
-from ._range_options import parse_image_selection, range_option, resolve_list_images
+from ._range_options import (
+    matches_image_filter,
+    parse_image_selection,
+    range_option,
+    resolve_list_images,
+)
+
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 
 
 @click.command("solve")
@@ -36,6 +43,8 @@ from ._range_options import parse_image_selection, range_option, resolve_list_im
     "A range expression of file numbers to use from the input directories, "
     "or from the images of a .matches file.",
     on="paths",
+    list_help_extra=" With a .matches file, use only the file's images that "
+    "are among the list's images.",
 )
 @click.option(
     "--incremental",
@@ -157,16 +166,21 @@ def solve(
 
         # The images of a named image list of the workspace
         sfm solve -i -r walk1_sharp
+
+        # The first 30 images of the list, from its pre-computed matches
+        sfm solve -g tvg-matches/walk1_sharp.matches -r 'walk1_sharp[:30]'
     """
     from ..cli import deduce_workspace
     from .._solve_driver import _run_sequential_overlap_sfm, _run_sfm
 
     selection = parse_image_selection(range_expr, named_image_list)
     range_expr = selection.range_expr
-    if selection.list_name is not None and paths:
+    given_matches = len(paths) == 1 and paths[0].endswith(".matches")
+    if selection.list_name is not None and paths and not given_matches:
         raise click.UsageError(
-            "A named image list replaces the image paths; give image paths, a "
-            ".matches file or a list, not more than one."
+            "A named image list replaces the image paths; give image paths or "
+            "a list, not both. A list given with a single .matches file keeps "
+            "the file's images that are among the list's images."
         )
     if not paths and selection.list_name is None:
         raise click.UsageError("Must provide image paths or a .matches file.")
@@ -192,7 +206,7 @@ def solve(
 
     # Detect whether input is a single .matches file or image paths
     matches_file = None
-    if len(paths) == 1 and paths[0].endswith(".matches"):
+    if given_matches:
         matches_file = Path(paths[0])
         if not matches_file.exists():
             raise click.UsageError(f"Matches file not found: {matches_file}")
@@ -226,6 +240,10 @@ def solve(
                 "solve from the .matches file it writes."
             )
 
+        image_filter = matches_image_filter(
+            selection, matches_file, extensions=_IMAGE_EXTENSIONS
+        )
+
         try:
             if colmap_dir:
                 _run_sfm(
@@ -240,7 +258,7 @@ def solve(
                     refine_rig=refine_rig,
                     camera_model=camera_model,
                     matches_file=matches_file,
-                    range_expr=range_expr,
+                    image_filter=image_filter,
                     detect_infinity=detect_infinity,
                 )
             else:
@@ -257,17 +275,17 @@ def solve(
                         refine_rig=refine_rig,
                         camera_model=camera_model,
                         matches_file=matches_file,
-                        range_expr=range_expr,
+                        image_filter=image_filter,
                         detect_infinity=detect_infinity,
                     )
-        except click.UsageError:
+        except click.ClickException:
             raise
         except Exception as e:
             raise click.ClickException(str(e))
         return
 
     # Standard path: solve from image paths, or from a named image list
-    extensions = (".png", ".jpg", ".jpeg")
+    extensions = _IMAGE_EXTENSIONS
     if selection.list_name is not None:
         list_images = resolve_list_images(selection, extensions=extensions)
         absolute_paths = [Path(os.path.normpath(p)) for p in list_images.paths]

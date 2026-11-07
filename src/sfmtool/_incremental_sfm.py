@@ -8,6 +8,7 @@ from pathlib import Path
 import pycolmap
 
 from ._solve_setup import prepare_solve_inputs
+from .colmap.db_setup import MatchesImageFilter
 from .colmap.io import (
     build_metadata,
     colmap_binary_to_rust_sfmr,
@@ -31,7 +32,7 @@ def run_incremental_sfm(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
-    range_expr: str | None = None,
+    image_filter: MatchesImageFilter | None = None,
     detect_infinity: bool = True,
 ) -> Path:
     """Run incremental Structure from Motion on a list of images."""
@@ -50,7 +51,7 @@ def run_incremental_sfm(
         flow_preset=flow_preset,
         flow_wide_baseline_skip=flow_wide_baseline_skip,
         matches_file=matches_file,
-        range_expr=range_expr,
+        image_filter=image_filter,
     )
 
     reconstruction_path = Path(colmap_dir) / "reconstruction"

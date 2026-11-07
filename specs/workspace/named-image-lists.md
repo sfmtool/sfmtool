@@ -123,7 +123,10 @@ first by a range when one is given, and reduced to what the command uses:
   `sfm solve`, the members that are image files, after the extension test
   those commands apply ([the commands](#the-commands)), so `walk1[:30]` is 30
   images whenever the list has 30, even when its patterns also match files
-  that are not images.
+  that are not images. `sfm solve` with a `.matches` file takes the same
+  array, resolved in the file's workspace, and then keeps the images the
+  slice selects that the file holds, so `walk1[:30]` means the same 30 images
+  with or without the file and is fewer when the file lacks some of them.
 - For `sfm analyze --metrics`, `sfm panorama`, `sfm to-colmap-bin` and
   `sfm to-nerfstudio`, the members among the reconstruction's image names, in
   the list's order, as `resolve_in_names` returns them. The images the slice
@@ -373,6 +376,12 @@ range as `narrow`. A value with a slice is split into the name and the slice by
 applied with `slice_members` to the images the command takes from the resolved
 list: the image paths after the extension test, or the members
 `resolve_in_names` returns, before they are put in the reconstruction's order.
+`sfm solve` given a `.matches` file and a list resolves the list with
+`resolve` in the workspace the `.matches` file resolves to, applies the
+extension test and the slice as for image paths, and then keeps the file's
+images whose names, workspace-relative, are among the images left; it drops
+the other images and every pair that involves one of them
+([solve-command.md](../cli/reconstruction/solve-command.md#from-a-matches-file)).
 The rules for telling a name from a range and the errors are in
 [`../cli/README.md`](../cli/README.md#the-shared--r--range-option). `sfm
 pick-images --write-list NAME` writes the frames it chooses as a list with

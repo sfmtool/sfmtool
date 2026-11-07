@@ -10,7 +10,11 @@ from typing import NamedTuple
 from ._path_summary import summarize_path_list
 from ._workspace import load_workspace_config
 from .camera.config import CameraConfigResolver
-from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
+from .colmap.db_setup import (
+    MatchesImageFilter,
+    _setup_for_sfm,
+    _setup_for_sfm_from_matches,
+)
 from .rig.config import _load_rig_config
 
 
@@ -33,7 +37,7 @@ def prepare_solve_inputs(
     flow_preset: str,
     flow_wide_baseline_skip: int,
     matches_file: str | Path | None,
-    range_expr: str | None,
+    image_filter: MatchesImageFilter | None,
 ) -> SolveInputs:
     """Prepare the database and resolve the images used by either mapper."""
     if matches_file is not None:
@@ -41,7 +45,7 @@ def prepare_solve_inputs(
             matches_file,
             colmap_dir,
             camera_model=camera_model,
-            range_expr=range_expr,
+            image_filter=image_filter,
         )
         workspace_dir = Path(image_dir).absolute()
     else:

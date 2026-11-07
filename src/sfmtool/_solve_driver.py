@@ -5,12 +5,16 @@
 
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from ._filenames import number_from_filename
 from ._path_summary import summarize_paths_by_sequence
 from ._sfmtool.reconstruction import RangeExpr
+
+if TYPE_CHECKING:
+    from .colmap.db_setup import MatchesImageFilter
 
 
 def _run_sequential_overlap_sfm(
@@ -151,7 +155,7 @@ def _run_sfm(
     flow_preset: str = "default",
     flow_wide_baseline_skip: int = 5,
     matches_file: str | Path | None = None,
-    range_expr: str | None = None,
+    image_filter: "MatchesImageFilter | None" = None,
     detect_infinity: bool = True,
 ):
     """Run SfM with the given colmap_dir."""
@@ -172,7 +176,7 @@ def _run_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             matches_file=matches_file,
-            range_expr=range_expr,
+            image_filter=image_filter,
             detect_infinity=detect_infinity,
         )
     else:
@@ -192,6 +196,6 @@ def _run_sfm(
             flow_preset=flow_preset,
             flow_wide_baseline_skip=flow_wide_baseline_skip,
             matches_file=matches_file,
-            range_expr=range_expr,
+            image_filter=image_filter,
             detect_infinity=detect_infinity,
         )

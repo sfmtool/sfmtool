@@ -19,9 +19,10 @@ A range on its own reaches each command as the string it always took
 and is unchanged. A list is resolved here: against the workspace's files for
 the image-directory commands (`resolve_list_images`), and against a
 reconstruction's image names for the others
-(`reconstruction_list_indices`). The `sfmtool.workspace` bindings split a value
-into a name and a slice and apply the slice, and hold the rules and the
-messages for both.
+(`reconstruction_list_indices`). `sfm solve` with a `.matches` file filters
+the file's images by a range or a list through `matches_image_filter`. The
+`sfmtool.workspace` bindings split a value into a name and a slice and apply
+the slice, and hold the rules and the messages for both.
 
 The filter for `to-colmap-bin` and `to-nerfstudio` takes its own `echo`
 callable rather than choosing one, because the two commands report through
@@ -39,7 +40,8 @@ import click
 from .._filenames import has_extension, number_from_filename
 
 if TYPE_CHECKING:
-    from .._sfmtool.workspace import NamedImageListSlice
+    from .._sfmtool.workspace import NamedImageLists, NamedImageListSlice
+    from ..colmap.db_setup import MatchesImageFilter
 
 RANGE_OR_NAME_SENTENCE = (
     "A --range value with a letter in it is read as a named image list; "
@@ -105,17 +107,21 @@ class ImageSelection:
         return text
 
 
-def range_option(range_help: str, *, on: str) -> Callable[[Callable], Callable]:
+def range_option(
+    range_help: str, *, on: str, list_help_extra: str = ""
+) -> Callable[[Callable], Callable]:
     """Attach `-r/--range` and `--named-image-list` to a command.
 
     `range_help` is what the command's range does; the sentence about list
     names is added to it. `on` is `"paths"` for a command that picks images
     from image directories and `"reconstruction"` for one that picks them from
-    a reconstruction. The command receives `range_expr`, a tuple of the `-r`
-    values, and `named_image_list`, and turns them into an `ImageSelection`
-    with `parse_image_selection`.
+    a reconstruction. `list_help_extra` is added to the help of
+    `--named-image-list`, for what a list does in the command beyond that. The
+    command receives `range_expr`, a tuple of the `-r` values, and
+    `named_image_list`, and turns them into an `ImageSelection` with
+    `parse_image_selection`.
     """
-    list_help = _LIST_HELP[on]
+    list_help = _LIST_HELP[on] + list_help_extra
 
     def attach(f: Callable) -> Callable:
         f = click.option(
@@ -256,6 +262,35 @@ class ListImages:
     workspace_dir: Path
 
 
+def _list_image_members(
+    selection: ImageSelection, workspace_dir: Path, extensions: tuple[str, ...]
+) -> tuple["NamedImageLists", list[str]]:
+    """The workspace's lists, and the workspace-relative paths of the images
+    `selection` takes from its list there.
+
+    The images are the list's members, narrowed by the selection's range,
+    that have one of `extensions`, in the list's order; the selection's slice
+    then indexes them and keeps them in the slice's order.
+    """
+    name = selection.list_name
+    assert name is not None
+    lists = _read_lists(workspace_dir, name)
+    narrow = _narrow(selection)
+    try:
+        members = lists.resolve(name, narrow=narrow)
+    except (ValueError, OSError, InterruptedError) as e:
+        raise _resolution_error(lists, name, e)
+
+    images = [m.path for m in members if has_extension(Path(m.path), extensions)]
+    if not images:
+        raise click.ClickException(
+            f"{lists.path}: none of the {len(members)} members of "
+            f"{selection.describe_list()} is an image file "
+            f"({', '.join(extensions)})."
+        )
+    return lists, _slice(lists, selection, narrow, images)
+
+
 def resolve_list_images(
     selection: ImageSelection, *, extensions: tuple[str, ...]
 ) -> ListImages:
@@ -276,24 +311,71 @@ def resolve_list_images(
     workspace_dir = find_workspace_for_path(cwd)
     if workspace_dir is None:
         raise _no_workspace_error(f"from the current directory {cwd}", name)
-    lists = _read_lists(workspace_dir, name)
-    narrow = _narrow(selection)
-    try:
-        members = lists.resolve(name, narrow=narrow)
-    except (ValueError, OSError, InterruptedError) as e:
-        raise _resolution_error(lists, name, e)
-
+    lists, images = _list_image_members(selection, workspace_dir, extensions)
     root = Path(lists.workspace_dir).absolute()
-    paths = [root / m.path for m in members]
-    images = [p for p in paths if has_extension(p, extensions)]
-    if not images:
-        raise click.ClickException(
-            f"{lists.path}: none of the {len(paths)} members of "
-            f"{selection.describe_list()} is an image file "
-            f"({', '.join(extensions)})."
-        )
-    images = _slice(lists, selection, narrow, images)
-    return ListImages(paths=images, workspace_dir=root)
+    return ListImages(paths=[root / p for p in images], workspace_dir=root)
+
+
+def matches_image_filter(
+    selection: ImageSelection,
+    matches_file: str | Path,
+    *,
+    extensions: tuple[str, ...],
+) -> "MatchesImageFilter | None":
+    """The filter `selection` puts on the images of a `.matches` file, or
+    None when it asks for none.
+
+    A range alone keeps the file's images whose file number it holds. A list
+    keeps the file's images that are among the images `resolve_list_images`
+    would take from it, with the same range, slice and `extensions`, but
+    resolved in the `.matches` file's workspace: so a slice counts positions
+    in the list, and the list's images the file does not hold are then
+    ignored. Either way the kept images stay in the file's order, and keeping
+    none is an error naming the range or the list and the file.
+    """
+    from ..colmap.db_setup import MatchesImageFilter
+
+    if not selection.given:
+        return None
+    if selection.list_name is None:
+        range_expr = selection.range_expr
+        numbers = _narrow(selection)
+
+        def keep_range(workspace_dir: Path, image_names: list[str]) -> list[int]:
+            kept = [
+                i
+                for i, name in enumerate(image_names)
+                if (n := number_from_filename(Path(name).name)) is not None
+                and n in numbers
+            ]
+            if not kept:
+                raise click.ClickException(
+                    f"Range '{range_expr}' excludes all {len(image_names)} images "
+                    f"in {matches_file}"
+                )
+            return kept
+
+        return MatchesImageFilter(label=f"--range {range_expr}", keep=keep_range)
+
+    def keep_list(workspace_dir: Path, image_names: list[str]) -> list[int]:
+        lists, images = _list_image_members(selection, workspace_dir, extensions)
+        wanted = set(images)
+        kept = [i for i, name in enumerate(image_names) if name in wanted]
+        if not kept:
+            raise click.ClickException(
+                f"{lists.path}: none of the {len(images)} images of "
+                f"{selection.describe_list()} is among the {len(image_names)} "
+                f"images of {matches_file}."
+            )
+        if len(kept) < len(images):
+            print(
+                f"{len(images) - len(kept)} of the {len(images)} images of "
+                f"{selection.describe_list()} are not in {matches_file} and "
+                "are ignored."
+            )
+        return kept
+
+    return MatchesImageFilter(label=selection.describe_list(), keep=keep_list)
 
 
 def reconstruction_list_indices(

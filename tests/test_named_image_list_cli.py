@@ -6,7 +6,9 @@
 The image-directory commands (`sift`, `match`, `motion`, `solve`) run in a
 small workspace of six seoul_bull images with a lists file; their expensive
 work is replaced by a function that records the images it was handed, except
-for one real `sfm sift --extract`. The reconstruction commands (`analyze
+for one real `sfm sift --extract`. `sfm solve` from a `.matches` file runs on
+six images of which the file holds four, and sets up its real COLMAP database,
+which a stand-in for the global mapper reads in place of solving. The reconstruction commands (`analyze
 --metrics`, `panorama`, `to-colmap-bin`, `to-nerfstudio`) run on the
 seoul_bull ground truth, whose workspace holds no image files, or on the
 SIFT-backed seoul_bull workspace where they need the images.
@@ -110,7 +112,7 @@ def recorded_solve(monkeypatch) -> list:
     calls = []
 
     def record(paths, workspace_dir, *args, **kwargs):
-        calls.append((list(paths), workspace_dir, kwargs.get("range_expr")))
+        calls.append((list(paths), workspace_dir, kwargs.get("image_filter")))
 
     monkeypatch.setattr("sfmtool._solve_driver._run_sfm", record)
     return calls
@@ -335,6 +337,158 @@ def test_solve_with_neither_paths_nor_a_list_is_unchanged(list_workspace):
     result = _invoke(["solve", "-i"])
     assert result.exit_code != 0
     assert "Must provide image paths or a .matches file." in result.output
+
+
+# ── solve from a .matches file ──────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def matches_workspace(tmp_path_factory) -> Path:
+    """Six seoul_bull images with `.sift` files of at most 512 features, a
+    `pairs.matches` of the first four only, and the lists of `_LISTS`.
+
+    Shared by the tests below, which read it and write nothing into it: each
+    solve sets up its COLMAP database in a temporary directory of its own.
+    """
+    workspace = tmp_path_factory.mktemp("matches_ws")
+    images = workspace / "images"
+    images.mkdir()
+    for i in range(1, 7):
+        name = f"seoul_bull_sculpture_{i:02d}.jpg"
+        shutil.copy(SEOUL_BULL_DIR / name, images / name)
+    for args in (
+        ["ws", "init", "--max-features", "512", str(workspace)],
+        ["sift", "--extract", str(images)],
+        [
+            "match",
+            "--exhaustive",
+            "-r",
+            "1-4",
+            "-o",
+            str(workspace / "pairs.matches"),
+            str(images),
+        ],
+    ):
+        result = _invoke(args)
+        assert result.exit_code == 0, result.output
+    _write_lists(workspace, _LISTS)
+    return workspace
+
+
+@pytest.fixture
+def recorded_mapper_input(monkeypatch, tmp_path) -> list:
+    """The images and the number of verified pairs of the database the global
+    mapper is handed, in place of running it; the solve then fails as one that
+    registered nothing does. The current directory is outside the workspace,
+    so a list is found from the .matches file, not from it."""
+    import pycolmap
+
+    calls = []
+
+    def record(db_path, *args, **kwargs):
+        with pycolmap.Database.open(db_path) as db:
+            names = sorted(Path(img.name).name for img in db.read_all_images())
+            pair_ids, _ = db.read_two_view_geometries()
+        calls.append((names, len(pair_ids)))
+        return {}
+
+    monkeypatch.setattr(pycolmap, "global_mapping", record)
+    monkeypatch.chdir(tmp_path)
+    return calls
+
+
+def _solve_matches(workspace: Path, *args: str):
+    return _invoke(["solve", "-g", str(workspace / "pairs.matches"), *args])
+
+
+def _bull(*numbers: int) -> list[str]:
+    return [f"seoul_bull_sculpture_{i:02d}.jpg" for i in numbers]
+
+
+def _assert_mapper_got(result, calls, numbers) -> None:
+    # The mapper was reached, so the stand-in's empty result is the failure.
+    assert "Global mapping failed" in result.output, result.output
+    assert len(calls) == 1
+    names, pair_count = calls[0]
+    assert names == _bull(*numbers)
+    # The pairs between kept images stay.
+    assert pair_count > 0, "no verified pair reached the database"
+
+
+@pytest.mark.parametrize(
+    "args, numbers, label",
+    [
+        (["-r", "hero"], (2, 4), "named image list 'hero'"),
+        (
+            ["--named-image-list", "bull_all"],
+            (1, 2, 3, 4),
+            "named image list 'bull_all'",
+        ),
+        (
+            ["-r", "bull_all", "-r", "2-3,5"],
+            (2, 3),
+            "named image list 'bull_all' narrowed by the range '2-3,5'",
+        ),
+        (["-r", "2-3,5"], (2, 3), "--range 2-3,5"),
+    ],
+)
+def test_solve_keeps_the_matches_images_in_a_list_or_range(
+    matches_workspace, recorded_mapper_input, args, numbers, label
+):
+    result = _solve_matches(matches_workspace, *args)
+    _assert_mapper_got(result, recorded_mapper_input, numbers)
+    assert f"Images: {len(numbers)} (filtered from 4 via {label})" in result.output
+
+
+@pytest.mark.parametrize(
+    "value, numbers, ignored",
+    [
+        ("bull_all[:3]", (1, 2, 3), None),
+        # Positions in the list, not among the file's images: [-4:-1] is
+        # images 3-5, of which the file holds 3 and 4. Among the file's
+        # images it would be 1-3.
+        ("bull_all[-4:-1]", (3, 4), "1 of the 3 images"),
+    ],
+)
+def test_solve_slices_the_list_then_keeps_the_matches_images(
+    matches_workspace, recorded_mapper_input, value, numbers, ignored
+):
+    result = _solve_matches(matches_workspace, "-r", value)
+    _assert_mapper_got(result, recorded_mapper_input, numbers)
+    output = " ".join(result.output.split())
+    if ignored is None:
+        assert "are not in" not in output
+    else:
+        assert (
+            f"{ignored} of named image list 'bull_all' sliced by [-4:-1] are not in"
+            in (output)
+        )
+
+
+def test_solve_with_a_list_none_of_whose_images_the_matches_holds_names_both(
+    matches_workspace, recorded_mapper_input
+):
+    result = _solve_matches(matches_workspace, "-r", "bull_all[-2:]")
+    assert result.exit_code == 1, result.output
+    assert recorded_mapper_input == []
+    output = " ".join(result.output.split())
+    assert NAMED_IMAGE_LISTS_FILE_NAME in output
+    assert (
+        "none of the 2 images of named image list 'bull_all' sliced by [-2:] is "
+        "among the 4 images of"
+    ) in output
+    assert "pairs.matches" in output
+
+
+def test_solve_refuses_a_list_with_image_paths_beside_a_matches_file(
+    list_workspace, recorded_solve
+):
+    Path("x.matches").write_bytes(b"")
+    images = str(list_workspace / "images")
+    result = _invoke(["solve", "-g", "x.matches", images, "-r", "hero"])
+    assert result.exit_code == 2, result.output
+    assert "give image paths or a list, not both" in " ".join(result.output.split())
+    assert recorded_solve == []
 
 
 def test_motion_takes_a_list(list_workspace, recorded_motion):

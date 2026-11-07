@@ -66,8 +66,8 @@ Exactly one is required:
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
 | `--max-features` | int | | Maximum features per image |
 | `--camera-model` | choice | auto | Camera model override; one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
-| `--range / -r` | string | | Range expression for file numbers, from the input directories or the images of a `.matches` file; or a named image list's name |
-| `--named-image-list` | name | | Use the images of this named image list of the workspace in place of image paths or a `.matches` file; with `-r RANGE`, only its members whose frame number is in `RANGE` |
+| `--range / -r` | string | | Range expression for file numbers, from the input directories or the images of a `.matches` file; or a named image list's name, optionally with a slice (`'NAME[:30]'`) |
+| `--named-image-list` | name | | Use the images of this named image list of the workspace in place of image paths, or, with a `.matches` file, only the file's images that are among the list's images; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../../formats/sfmr-file-format.md). |
 
 ## Input Modes
@@ -89,15 +89,39 @@ members of that named image list of the workspace found from the current
 directory, in the list's order, keeping only the members that are image files;
 a range given with the name narrows the list, and a slice after the name takes
 part of it by position, in the slice's order (`-r 'walk1_sharp[:30]'` is its
-first 30 images).
-Giving image paths or a
-`.matches` file as well is an error, and the list's workspace is the solve's
-workspace. The rules and errors are in [the shared `-r/--range` option](../README.md#the-shared--r--range-option).
+first 30 images). Giving image paths as well is an error, and the list's
+workspace is the solve's workspace. A list given with a `.matches` file
+filters the file's images instead
+([From a `.matches` file](#from-a-matches-file)). The rules and errors are in
+[the shared `-r/--range` option](../README.md#the-shared--r--range-option).
 
-### From `.matches` file
+### From a `.matches` file
 
 When a single `.matches` file is provided, pre-computed matches are loaded directly into the
 COLMAP database, skipping feature extraction and matching.
+
+`-r` and `--named-image-list` choose which of the file's images to solve. The
+images left out are not written to the database, and neither is any pair that
+involves one of them; the kept images stay in the file's order.
+
+- **A range** keeps the images whose file number it holds. A range that keeps
+  none is an error naming the range and the file.
+- **A named image list** keeps the images that are among the list's images.
+  The list is read from the workspace the `.matches` file resolves to, not
+  the one found from the current directory, and resolved as it is without a
+  `.matches` file: its members that are image files, in the list's order,
+  narrowed first by a range given beside the name, then sliced. Each of the
+  file's images, named by its workspace-relative path, is kept when it is
+  among the images that leaves. So a slice counts positions in the list:
+  `-r 'walk1_sharp[:30]'` is the same 30 images with the `.matches` file as
+  without it, and fewer when the file lacks some of them. The list's images
+  the file does not hold are ignored, and the command prints how many; when
+  the file holds none of them, it is an error naming the lists file, the
+  list and the `.matches` file.
+
+This lets one `.matches` file, matched once for a whole list, serve test
+solves on parts of it: `-r 'walk1_sharp[:30]'`, `-r 'walk1_sharp[-30:]'`, or
+`-r 'walk1_sharp[100:130]'` for 30 from the middle.
 
 The file must carry two-view geometries: the mapper reads its correspondence
 graph from the database's two-view geometry table, so a file without them
@@ -211,4 +235,7 @@ sfm solve images/ --incremental --range 1-200 --max-features 8192
 
 # Solve the images of a named image list
 sfm solve --incremental -r walk1_sharp
+
+# Solve the first 30 images of the list from a .matches file of the whole list
+sfm solve --global tvg-matches/walk1_sharp.matches -r 'walk1_sharp[:30]'
 ```
