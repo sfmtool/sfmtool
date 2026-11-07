@@ -242,6 +242,22 @@ def _memory_text(memory_bytes: int | None) -> str:
     return f"{memory_bytes / 2**30:.1f} GiB"
 
 
+def _describes_text(sfmtool: dict) -> str:
+    """The commits of the `Build` line: the describe once when the extension's
+    and the checkout's are equal, both labelled when they differ or only one
+    is known, and `commit unknown` when neither is."""
+    extension = sfmtool["extension_describe"]
+    checkout = sfmtool["checkout_describe"]
+    if extension is None and checkout is None:
+        return "commit unknown"
+    if extension == checkout:
+        return extension
+    return (
+        f"extension built from {extension or 'unknown'}, "
+        f"checkout {checkout or 'unknown'}"
+    )
+
+
 def report_text(report: dict) -> str:
     """The text `sfm version` prints for `report`, as `collect_report` returns
     it: the `--bare` line, then one line per fact with its label padded."""
@@ -259,12 +275,8 @@ def report_text(report: dict) -> str:
     threads_text = str(threads["rayon"])
     if threads["rayon_num_threads_env"] is not None:
         threads_text += f" (RAYON_NUM_THREADS={threads['rayon_num_threads_env']})"
-    describes = (
-        f"extension built from {sfmtool['extension_describe'] or 'unknown'}, "
-        f"checkout {sfmtool['checkout_describe'] or 'unknown'}"
-    )
     lines = [
-        ("Build", f"{sfmtool['build_profile']}, {describes}"),
+        ("Build", f"{sfmtool['build_profile']}, {_describes_text(sfmtool)}"),
         ("Install", f"{install_kind}, {install['location']}"),
         ("Python", f"{report['python']['version']}, {report['python']['executable']}"),
         ("OS", f"{report['os']['platform']}, {report['os']['machine']}"),

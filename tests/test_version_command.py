@@ -258,8 +258,7 @@ def test_report_text_prints_one_aligned_line_per_fact():
     assert report_text(_report()) == "\n".join(
         [
             "sfmtool 0.3 (v0.3-385-g276e8d986)",
-            "Build:    release, extension built from v0.3-385-g276e8d986, "
-            "checkout v0.3-385-g276e8d986",
+            "Build:    release, v0.3-385-g276e8d986",
             "Install:  editable, /src/sfmtool/src/sfmtool",
             "Python:   3.14.9, /env/bin/python",
             "OS:       Linux-6.8-x86_64-with-glibc2.39, x86_64",
@@ -281,6 +280,37 @@ def _line(report, label):
         line for line in report_text(report).splitlines() if line.startswith(label)
     ]
     return line
+
+
+@pytest.mark.parametrize(
+    ("extension", "checkout", "text"),
+    [
+        (
+            "v0.3-385-g276e8d986",
+            "v0.3-386-g1a2b3c4d5",
+            "extension built from v0.3-385-g276e8d986, checkout v0.3-386-g1a2b3c4d5",
+        ),
+        (
+            "v0.3-385-g276e8d986",
+            None,
+            "extension built from v0.3-385-g276e8d986, checkout unknown",
+        ),
+        (
+            None,
+            "v0.3-386-g1a2b3c4d5",
+            "extension built from unknown, checkout v0.3-386-g1a2b3c4d5",
+        ),
+        (None, None, "commit unknown"),
+    ],
+)
+def test_build_line_labels_the_commits_unless_they_agree(extension, checkout, text):
+    sfmtool = {
+        **_report()["sfmtool"],
+        "extension_describe": extension,
+        "checkout_describe": checkout,
+        "build_profile": "debug",
+    }
+    assert _line(_report(sfmtool=sfmtool), "Build:") == f"Build:    debug, {text}"
 
 
 def test_report_text_states_what_is_missing():

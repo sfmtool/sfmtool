@@ -28,8 +28,8 @@ sfm version [--bare] [--json]
 ## Output
 
 ```text
-sfmtool 0.3 (v0.3-388-ge10b06192-dirty)
-Build:    release, extension built from v0.3-388-ge10b06192-dirty, checkout v0.3-388-ge10b06192-dirty
+sfmtool 0.3 (v0.3-391-g670fa90f5)
+Build:    release, v0.3-391-g670fa90f5
 Install:  editable, C:\Dev\prod\sfmtool\src\sfmtool
 Python:   3.14.9, C:\Dev\prod\sfmtool\.pixi\envs\default\python.exe
 OS:       Windows-11-10.0.26300-SP0, AMD64
@@ -158,7 +158,7 @@ slowest probes overlap.
 
 | Line | JSON key | What it is | Source |
 |------|----------|------------|--------|
-| `Build` | `sfmtool` | The extension's Cargo profile, `release` or `debug`, then the two `git describe` strings of the version line, either written `unknown` when it is not known. | `build_profile()`, `_build_git_describe()`, `checkout_describe` |
+| `Build` | `sfmtool` | The extension's Cargo profile, `release` or `debug`, then the commits: the extension's and the checkout's `git describe` once when they are equal; both, labelled `extension built from <describe>, checkout <describe>`, when they differ or only one is known, the other written `unknown`; and `commit unknown` when neither is known. | `build_profile()`, `_build_git_describe()`, `checkout_describe` |
 | `Install` | `install` | `editable` for an editable install of a checkout, `installed` otherwise, or `no package metadata`; then the directory the `sfmtool` package is run from. | `direct_url.json` of the `sfmtool` distribution ([PEP 610](https://peps.python.org/pep-0610/)): editable when its `dir_info.editable` is true |
 | `Python` | `python` | The interpreter's version and path. | `platform.python_version()`, `sys.executable` |
 | `OS` | `os` | The OS and its version, then the machine architecture. | `platform.platform()`, `platform.machine()` |
@@ -248,9 +248,9 @@ keys are stable, and a value that is unknown is `null`:
 {
   "sfmtool": {
     "version": "0.3",
-    "line": "sfmtool 0.3 (v0.3-388-ge10b06192)",
-    "checkout_describe": "v0.3-388-ge10b06192",
-    "extension_describe": "v0.3-388-ge10b06192",
+    "line": "sfmtool 0.3 (v0.3-391-g670fa90f5)",
+    "checkout_describe": "v0.3-391-g670fa90f5",
+    "extension_describe": "v0.3-391-g670fa90f5",
     "build_profile": "release"
   },
   "install": {"editable": true, "location": "C:\\Dev\\prod\\sfmtool\\src\\sfmtool"},
