@@ -433,7 +433,9 @@ photographs, whose neighbouring frames match below the floor and every one of
 which the written list holds; a version 1
 workspace; no workspace; files with no number or a shared number; a rig whose
 reference sensor is listed second, written one entry per sensor; a rig frame
-missing a sensor; an invalid output name; and `--force` without `--write-list`
+missing a sensor; a match floor below `min_matches` or too large for the
+binding, refused naming the option, and a negative one, a usage error; an
+invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,

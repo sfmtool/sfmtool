@@ -83,7 +83,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 @click.option(
     "--baseline-frames",
     "baseline_frames",
-    type=int,
+    type=click.IntRange(min=0),
     default=200,
     metavar="N",
     show_default=True,
@@ -92,7 +92,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 @click.option(
     "--min-step-matches",
     "min_step_matches",
-    type=int,
+    type=click.IntRange(min=0),
     default=600,
     metavar="N",
     show_default=True,
@@ -303,8 +303,10 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     try:
         with echo_frames_read(counter, click.echo):
             report = walk(capture, progress=counter, **source, **options)
-    except (ValueError, OSError) as e:
-        raise click.ClickException(str(e))
+    except (ValueError, OverflowError, OSError) as e:
+        # An option too large for the binding is an OverflowError whose note
+        # names the option.
+        raise click.ClickException("\n".join([str(e), *getattr(e, "__notes__", [])]))
 
     if written_first is not None:
         # The walk extracted nothing; what this run wrote, it wrote first.

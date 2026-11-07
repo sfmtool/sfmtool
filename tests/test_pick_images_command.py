@@ -474,3 +474,20 @@ def test_force_without_a_list_and_paths_with_a_list_are_usage_errors(
     assert result.exit_code == 2, result.output
     assert "give paths or a list, not both" in result.output
     assert not (pan_workspace / "frames" / "features").exists()
+
+
+def test_an_out_of_range_match_floor_is_refused(pan_workspace: Path):
+    # A negative floor is a usage error; one below min_matches, or too large
+    # for the binding, is refused with the option's name before a frame is
+    # read.
+    result = CliRunner().invoke(
+        main, ["pick-images", "frames", "--min-step-matches", "-1"]
+    )
+    assert result.exit_code == 2, result.output
+    for value in ("10", str(2**70)):
+        result = CliRunner().invoke(
+            main, ["pick-images", "frames", "--min-step-matches", value]
+        )
+        assert result.exit_code == 1, result.output
+        assert "min_step_matches" in result.output, result.output
+        assert "Traceback" not in result.output
