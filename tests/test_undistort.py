@@ -6,6 +6,7 @@
 import json
 import shutil
 from pathlib import Path
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -89,12 +90,44 @@ class TestUndistortCLI:
 # =============================================================================
 
 
-def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
+class _Undistortion(NamedTuple):
+    """Everything one undistort run produced, with the source it read."""
+
+    source_sfmr: Path
+    recon: SfmrReconstruction
+    image_count: int
+    output_dir: Path
+    sfmr_out_path: str | None
+    undistorted_recon: SfmrReconstruction | None
+    progress_calls: tuple
+
+    def outputs(self):
+        """(recon, output_dir, sfmr_out_path, undistorted_recon), as
+        :func:`_run_undistort` returns them."""
+        return self.recon, self.output_dir, self.sfmr_out_path, self.undistorted_recon
+
+
+def _run_undistort(sfmr_path, tmp_path, fit="inside", images=None, **kwargs):
     """Run undistort and return (recon, output_dir, sfmr_path, undistorted_recon)."""
+    return _undistort(sfmr_path, tmp_path, fit=fit, images=images, **kwargs).outputs()
+
+
+def _undistort(sfmr_path, tmp_path, fit="inside", images=None, **kwargs):
+    """Run undistort into ``tmp_path / "undistorted"``, recording its progress.
+
+    With ``images``, only those image indexes of the reconstruction are
+    undistorted, in that order.
+    """
     from sfmtool._workspace import find_workspace_for_path
 
     recon = SfmrReconstruction.load(sfmr_path)
+    if images is not None:
+        recon = recon.subset_by_image_indices(np.asarray(images, dtype=np.uint32))
     output_dir = tmp_path / "undistorted"
+    progress_calls = []
+
+    def progress_callback(current, total, image_name):
+        progress_calls.append((current, total, image_name))
 
     source_workspace_dir = find_workspace_for_path(sfmr_path)
     source_sfmr_path = None
@@ -113,6 +146,7 @@ def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
         output_dir=output_dir,
         fit=fit,
         source_sfmr_path=source_sfmr_path,
+        progress_callback=progress_callback,
         **kwargs,
     )
 
@@ -121,7 +155,46 @@ def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
     if sfmr_out_path:
         undistorted_recon = SfmrReconstruction.load(Path(sfmr_out_path))
 
-    return recon, output_dir_path, sfmr_out_path, undistorted_recon
+    return _Undistortion(
+        source_sfmr=sfmr_path,
+        recon=recon,
+        image_count=image_count,
+        output_dir=output_dir_path,
+        sfmr_out_path=sfmr_out_path,
+        undistorted_recon=undistorted_recon,
+        progress_calls=tuple(progress_calls),
+    )
+
+
+def _undistort_a_private_copy(seoul_bull_workspace_once, tmp_path_factory, fit):
+    """Undistort a copy of the session workspace made for this run alone, so
+    nothing the run writes lands in the session's directory."""
+    source = seoul_bull_workspace_once
+    workspace_dir = tmp_path_factory.mktemp(f"undistort_source_{fit}")
+    shutil.copytree(source.parent, workspace_dir, dirs_exist_ok=True)
+    return _undistort(
+        workspace_dir / source.name,
+        tmp_path_factory.mktemp(f"undistort_output_{fit}"),
+        fit=fit,
+    )
+
+
+@pytest.fixture(scope="module")
+def undistorted_inside(seoul_bull_workspace_once, tmp_path_factory) -> _Undistortion:
+    """One default undistort (``fit="inside"``) of the seoul_bull workspace,
+    built once for the tests that only read its outputs. Read it; do not
+    modify it, its source workspace or its output directory."""
+    return _undistort_a_private_copy(
+        seoul_bull_workspace_once, tmp_path_factory, "inside"
+    )
+
+
+@pytest.fixture(scope="module")
+def undistorted_outside(seoul_bull_workspace_once, tmp_path_factory) -> _Undistortion:
+    """As :func:`undistorted_inside`, with ``fit="outside"``."""
+    return _undistort_a_private_copy(
+        seoul_bull_workspace_once, tmp_path_factory, "outside"
+    )
 
 
 # =============================================================================
@@ -130,17 +203,13 @@ def _run_undistort(sfmr_path, tmp_path, fit="inside", **kwargs):
 
 
 class TestUndistortReconstructionImages:
-    def test_basic_undistortion(self, seoul_bull_workspace, tmp_path):
+    def test_basic_undistortion(self, undistorted_inside):
         """Test undistorting images from a reconstruction."""
-        sfmr_path = seoul_bull_workspace
-        recon = SfmrReconstruction.load(sfmr_path)
-        output_dir = tmp_path / "undistorted"
+        recon = undistorted_inside.recon
+        image_count = undistorted_inside.image_count
+        sfmr_out_path = undistorted_inside.sfmr_out_path
 
-        image_count, output_dir_str, sfmr_out_path = undistort_reconstruction_images(
-            recon=recon, output_dir=output_dir
-        )
-
-        output_dir_path = Path(output_dir_str)
+        output_dir_path = undistorted_inside.output_dir
         assert output_dir_path.exists()
         assert image_count > 0
 
@@ -170,15 +239,10 @@ class TestUndistortReconstructionImages:
             assert img is not None, f"Failed to load undistorted image: {image_name}"
             assert img.shape[0] > 0 and img.shape[1] > 0
 
-    def test_fit_outside(self, seoul_bull_workspace, tmp_path):
+    def test_fit_outside(self, undistorted_outside):
         """Test undistortion with fit=outside produces valid output."""
-        sfmr_path = seoul_bull_workspace
-        recon = SfmrReconstruction.load(sfmr_path)
-        output_dir = tmp_path / "undistorted_outside"
-
-        image_count, output_dir_str, sfmr_out_path = undistort_reconstruction_images(
-            recon=recon, output_dir=output_dir, fit="outside"
-        )
+        image_count = undistorted_outside.image_count
+        sfmr_out_path = undistorted_outside.sfmr_out_path
 
         assert image_count > 0
         assert sfmr_out_path is not None
@@ -205,20 +269,11 @@ class TestUndistortReconstructionImages:
         undist_recon = SfmrReconstruction.load(Path(sfmr_out_path))
         assert not np.asarray(undist_recon.point_is_at_infinity).any()
 
-    def test_progress_callback(self, seoul_bull_workspace, tmp_path):
+    def test_progress_callback(self, undistorted_inside):
         """Test that progress callback is called correctly."""
-        sfmr_path = seoul_bull_workspace
-        recon = SfmrReconstruction.load(sfmr_path)
-        output_dir = tmp_path / "undistorted"
-
-        progress_calls = []
-
-        def progress_callback(current, total, image_name):
-            progress_calls.append((current, total, image_name))
-
-        image_count, _, _ = undistort_reconstruction_images(
-            recon=recon, output_dir=output_dir, progress_callback=progress_callback
-        )
+        # The shared run records every call of its progress callback.
+        progress_calls = undistorted_inside.progress_calls
+        image_count = undistorted_inside.image_count
 
         # Should be called once per image + final call
         assert len(progress_calls) >= image_count
@@ -231,17 +286,10 @@ class TestUndistortReconstructionImages:
                 prev_current = progress_calls[i - 1][0]
                 assert current >= prev_current
 
-    def test_image_dimensions_preserved(self, seoul_bull_workspace, tmp_path):
+    def test_image_dimensions_preserved(self, undistorted_inside):
         """Test that undistorted images maintain reasonable dimensions."""
-        sfmr_path = seoul_bull_workspace
-        recon = SfmrReconstruction.load(sfmr_path)
-        output_dir = tmp_path / "undistorted"
-
-        _, output_dir_str, sfmr_out_path = undistort_reconstruction_images(
-            recon=recon, output_dir=output_dir
-        )
-
-        undist_recon = SfmrReconstruction.load(Path(sfmr_out_path))
+        recon = undistorted_inside.recon
+        undist_recon = undistorted_inside.undistorted_recon
         workspace_dir = Path(recon.workspace_dir)
         cam_idxs = np.asarray(undist_recon.camera_indexes)
         cameras = undist_recon.cameras
@@ -257,11 +305,9 @@ class TestUndistortReconstructionImages:
                 assert cam.width == orig_width
                 assert cam.height == orig_height
 
-    def test_actually_modifies_images(self, seoul_bull_workspace, tmp_path):
+    def test_actually_modifies_images(self, undistorted_inside):
         """Test that undistortion actually modifies pixel values for distorted cameras."""
-        sfmr_path = seoul_bull_workspace
-        recon = SfmrReconstruction.load(sfmr_path)
-        output_dir = tmp_path / "undistorted"
+        recon = undistorted_inside.recon
 
         # Check if any camera has distortion parameters
         cameras = recon.cameras
@@ -270,10 +316,7 @@ class TestUndistortReconstructionImages:
         if not has_distortion:
             pytest.skip("Test reconstruction has no lens distortion")
 
-        _, output_dir_str, _ = undistort_reconstruction_images(
-            recon=recon, output_dir=output_dir
-        )
-        output_dir_path = Path(output_dir_str)
+        output_dir_path = undistorted_inside.output_dir
 
         workspace_dir = Path(recon.workspace_dir)
         image_name = recon.image_names[0]
@@ -289,26 +332,18 @@ class TestUndistortReconstructionImages:
         assert pixel_diff > 0.1, "Expected pixel differences after undistortion"
 
     def test_inside_and_outside_produce_different_focals(
-        self, seoul_bull_workspace, tmp_path
+        self, undistorted_inside, undistorted_outside
     ):
         """Test that inside and outside fit modes produce different focal lengths."""
-        sfmr_path = seoul_bull_workspace
-        recon = SfmrReconstruction.load(sfmr_path)
+        recon = undistorted_inside.recon
 
         cameras = recon.cameras
         has_distortion = any(cam.has_distortion for cam in cameras)
         if not has_distortion:
             pytest.skip("Test reconstruction has no lens distortion")
 
-        inside_dir = tmp_path / "inside"
-        outside_dir = tmp_path / "outside"
-
-        _, _, inside_sfmr_path = undistort_reconstruction_images(
-            recon=recon, output_dir=inside_dir, fit="inside"
-        )
-        _, _, outside_sfmr_path = undistort_reconstruction_images(
-            recon=recon, output_dir=outside_dir, fit="outside"
-        )
+        inside_sfmr_path = undistorted_inside.sfmr_out_path
+        outside_sfmr_path = undistorted_outside.sfmr_out_path
 
         inside_recon = SfmrReconstruction.load(Path(inside_sfmr_path))
         outside_recon = SfmrReconstruction.load(Path(outside_sfmr_path))
@@ -329,9 +364,9 @@ class TestUndistortReconstructionImages:
 
 
 class TestUndistortWorkspace:
-    def test_workspace_created(self, seoul_bull_workspace, tmp_path):
+    def test_workspace_created(self, undistorted_inside):
         """Workspace config exists with correct feature_tool."""
-        _, output_dir, _, _ = _run_undistort(seoul_bull_workspace, tmp_path)
+        _, output_dir, _, _ = undistorted_inside.outputs()
         config_path = output_dir / ".sfm-workspace.json"
         assert config_path.exists()
 
@@ -382,11 +417,9 @@ class TestUndistortWorkspace:
         )
         assert undistorted_recon.image_count == recon.image_count
 
-    def test_sfmr_output(self, seoul_bull_workspace, tmp_path):
+    def test_sfmr_output(self, undistorted_inside):
         """.sfmr exists, is loadable, has pinhole cameras and same image count."""
-        recon, output_dir, sfmr_path, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
-        )
+        recon, output_dir, sfmr_path, undistorted_recon = undistorted_inside.outputs()
 
         assert sfmr_path is not None
         sfmr_file = Path(sfmr_path)
@@ -401,11 +434,9 @@ class TestUndistortWorkspace:
         for cam in undistorted_recon.cameras:
             assert cam.model == "PINHOLE"
 
-    def test_sift_files_created(self, seoul_bull_workspace, tmp_path):
+    def test_sift_files_created(self, undistorted_inside):
         """One .sift file per image, readable."""
-        recon, output_dir, _, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
-        )
+        recon, output_dir, _, undistorted_recon = undistorted_inside.outputs()
 
         with open(output_dir / ".sfm-workspace.json") as f:
             config = json.load(f)
@@ -429,14 +460,14 @@ class TestUndistortWorkspace:
                 assert positions.shape[1] == 2
 
     def test_sift_files_are_version_2_with_readings_of_the_written_images(
-        self, seoul_bull_workspace, tmp_path
+        self, undistorted_inside
     ):
         """Each .sift is version 2, records the source's conversion, and holds
         the readings of the undistorted image file written beside it."""
         from sfmtool.fileio import read_image_rgb
         from sfmtool.sift import ImageToGray, image_readings_from_rgb
 
-        recon, output_dir, _, _ = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, output_dir, _, _ = undistorted_inside.outputs()
         config = json.loads((output_dir / ".sfm-workspace.json").read_text())
         image_to_gray = config["feature_options"]["image_to_gray"]
         source = recon.metadata()["workspace"]["contents"]["feature_options"]
@@ -462,11 +493,9 @@ class TestUndistortWorkspace:
                 expected.gradient_structure_tensor_xx_yy_xy
             )
 
-    def test_feature_positions_in_bounds(self, seoul_bull_workspace, tmp_path):
+    def test_feature_positions_in_bounds(self, undistorted_inside):
         """All feature positions are within pinhole image dimensions."""
-        recon, output_dir, _, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
-        )
+        recon, output_dir, _, undistorted_recon = undistorted_inside.outputs()
 
         with open(output_dir / ".sfm-workspace.json") as f:
             config = json.load(f)
@@ -492,12 +521,12 @@ class TestUndistortWorkspace:
                 assert np.all(positions[:, 1] >= 0)
                 assert np.all(positions[:, 1] < cam.height)
 
-    def test_affine_shapes_transformed(self, seoul_bull_workspace, tmp_path):
+    def test_affine_shapes_transformed(self, undistorted_inside):
         """Affine shapes differ from source (transformation applied)."""
         from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        sfmr_path = seoul_bull_workspace
-        recon, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path)
+        sfmr_path = undistorted_inside.source_sfmr
+        recon, output_dir, _, _ = undistorted_inside.outputs()
 
         source_workspace_dir = find_workspace_for_path(sfmr_path)
         source_config = load_workspace_config(source_workspace_dir)
@@ -539,12 +568,12 @@ class TestUndistortWorkspace:
                     src_shapes[:min_len], undist_shapes[:min_len], atol=1e-6
                 )
 
-    def test_feature_count_leq_original(self, seoul_bull_workspace, tmp_path):
+    def test_feature_count_leq_original(self, undistorted_inside):
         """Undistorted features <= original feature count per image."""
         from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        sfmr_path = seoul_bull_workspace
-        recon, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path)
+        sfmr_path = undistorted_inside.source_sfmr
+        recon, output_dir, _, _ = undistorted_inside.outputs()
 
         source_workspace_dir = find_workspace_for_path(sfmr_path)
         source_config = load_workspace_config(source_workspace_dir)
@@ -575,12 +604,12 @@ class TestUndistortWorkspace:
 
             assert undist_count <= src_count
 
-    def test_descriptors_unchanged(self, seoul_bull_workspace, tmp_path):
+    def test_descriptors_unchanged(self, undistorted_inside):
         """Surviving descriptors match source descriptors."""
         from sfmtool._workspace import find_workspace_for_path, load_workspace_config
 
-        sfmr_path = seoul_bull_workspace
-        recon, output_dir, _, _ = _run_undistort(sfmr_path, tmp_path)
+        sfmr_path = undistorted_inside.source_sfmr
+        recon, output_dir, _, _ = undistorted_inside.outputs()
 
         source_workspace_dir = find_workspace_for_path(sfmr_path)
         source_config = load_workspace_config(source_workspace_dir)
@@ -624,11 +653,9 @@ class TestUndistortWorkspace:
                     break
             assert found, "First undistorted descriptor not found in source"
 
-    def test_tracks_valid(self, seoul_bull_workspace, tmp_path):
+    def test_tracks_valid(self, undistorted_inside):
         """Track feature indexes are valid, observation counts sum matches."""
-        recon, output_dir, _, undistorted_recon = _run_undistort(
-            seoul_bull_workspace, tmp_path
-        )
+        recon, output_dir, _, undistorted_recon = undistorted_inside.outputs()
 
         track_img_idxs = np.asarray(undistorted_recon.track_image_indexes)
         track_pt3d_idxs = np.asarray(undistorted_recon.track_point_indexes)
@@ -649,16 +676,16 @@ class TestUndistortWorkspace:
         )
         np.testing.assert_array_equal(obs_counts, computed_counts)
 
-    def test_no_orphan_points(self, seoul_bull_workspace, tmp_path):
+    def test_no_orphan_points(self, undistorted_inside):
         """Every 3D point has at least one observation."""
-        _, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        _, _, _, undistorted_recon = undistorted_inside.outputs()
 
         obs_counts = np.asarray(undistorted_recon.observation_counts)
         assert np.all(obs_counts > 0), "Found 3D points with zero observations"
 
-    def test_poses_preserved(self, seoul_bull_workspace, tmp_path):
+    def test_poses_preserved(self, undistorted_inside):
         """Quaternions and translations are unchanged by undistortion."""
-        recon, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, _, _, undistorted_recon = undistorted_inside.outputs()
 
         np.testing.assert_array_almost_equal(
             np.asarray(recon.quaternions_wxyz),
@@ -671,9 +698,9 @@ class TestUndistortWorkspace:
             decimal=10,
         )
 
-    def test_3d_points_subset(self, seoul_bull_workspace, tmp_path):
+    def test_3d_points_subset(self, undistorted_inside):
         """Output 3D points are a subset of input 3D points."""
-        recon, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, _, _, undistorted_recon = undistorted_inside.outputs()
 
         assert undistorted_recon.point_count <= recon.point_count
 
@@ -685,9 +712,9 @@ class TestUndistortWorkspace:
             dists = np.linalg.norm(src_positions - pos, axis=1)
             assert np.min(dists) < 1e-10, f"Output point {pos} not found in input"
 
-    def test_thumbnail_128x128(self, seoul_bull_workspace, tmp_path):
+    def test_thumbnail_128x128(self, undistorted_inside):
         """Thumbnails in .sift files are 128x128x3."""
-        recon, output_dir, _, _ = _run_undistort(seoul_bull_workspace, tmp_path)
+        recon, output_dir, _, _ = undistorted_inside.outputs()
 
         with open(output_dir / ".sfm-workspace.json") as f:
             config = json.load(f)
@@ -708,9 +735,9 @@ class TestUndistortWorkspace:
         assert thumbnail.shape == (128, 128, 3)
         assert thumbnail.dtype == np.uint8
 
-    def test_camera_indexes_valid(self, seoul_bull_workspace, tmp_path):
+    def test_camera_indexes_valid(self, undistorted_inside):
         """All camera_indexes reference valid cameras."""
-        _, _, _, undistorted_recon = _run_undistort(seoul_bull_workspace, tmp_path)
+        _, _, _, undistorted_recon = undistorted_inside.outputs()
 
         cam_indexes = np.asarray(undistorted_recon.camera_indexes)
         num_cameras = undistorted_recon.camera_count
@@ -841,6 +868,9 @@ class TestUndistortE2E:
 # =============================================================================
 # PNG sources: alpha is kept, a 16-bit source is written at 8 bits
 # =============================================================================
+#
+# Each test undistorts only image 0, the PNG, and image 1, a JPEG: the other 15
+# images take the JPEG path image 1 already takes, and no assertion reads them.
 
 
 def _as_png(sfmr_path: Path, index: int, pixels_bgr: np.ndarray) -> Path:
@@ -880,7 +910,7 @@ def test_undistorting_an_rgba_png_keeps_its_alpha(seoul_bull_workspace, tmp_path
     bgra[: h // 2, :, 3] = 0  # the top half carries no data
     sfmr = _as_png(seoul_bull_workspace, 0, bgra)
 
-    recon, output_dir, _, undistorted = _run_undistort(sfmr, tmp_path)
+    recon, output_dir, _, undistorted = _run_undistort(sfmr, tmp_path, images=[0, 1])
 
     out = output_dir / recon.image_names[0]
     assert out.suffix == ".png"
@@ -903,7 +933,7 @@ def test_undistorting_an_rgb_png_keeps_its_colour(seoul_bull_workspace, tmp_path
     bgr[...] = rgb[::-1]  # cv2.imwrite takes BGR
     sfmr = _as_png(seoul_bull_workspace, 0, bgr)
 
-    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path)
+    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path, images=[0, 1])
 
     out = output_dir / recon.image_names[0]
     assert not image_has_alpha(out)
@@ -922,7 +952,7 @@ def test_undistorting_a_16_bit_png_writes_8_bits(seoul_bull_workspace, tmp_path)
     bgr16 = np.full((h, w, 3), 40000, dtype=np.uint16)
     sfmr = _as_png(seoul_bull_workspace, 0, bgr16)
 
-    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path)
+    recon, output_dir, _, _ = _run_undistort(sfmr, tmp_path, images=[0, 1])
 
     written = cv2.imread(str(output_dir / recon.image_names[0]), cv2.IMREAD_UNCHANGED)
     assert written.dtype == np.uint8
