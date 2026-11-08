@@ -103,7 +103,9 @@ fn find_workspace_from(
     // A relative `path` goes under the current directory, and the empty path,
     // which is a bare file name's parent, names the current directory itself.
     // A Windows path with a drive but no root (`D:x`) is still relative after
-    // the join, and only `std::path::absolute` knows that drive's directory.
+    // the join, and only `std::path::absolute` knows that drive's directory:
+    // it is given the drive alone, and the rest of the path is joined to the
+    // result, so a `..` in the rest stays as written.
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else if path.as_os_str().is_empty() {
@@ -114,7 +116,9 @@ fn find_workspace_from(
     let absolute = if joined.is_absolute() {
         joined
     } else {
-        std::path::absolute(joined).ok()?
+        let mut components = joined.components();
+        let drive = components.next()?;
+        std::path::absolute(drive).ok()?.join(components.as_path())
     };
     // Collecting the components drops `.` and repeated separators, as a Python
     // `Path` does, and keeps `..` as written: the walk goes up the path's text

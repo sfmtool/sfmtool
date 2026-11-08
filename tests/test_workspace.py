@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,21 @@ class TestFindWorkspaceForPath:
 
         assert found == Path.cwd() / ".."
         assert (image_dir / "a.jpg").relative_to(found).as_posix() == "images/a.jpg"
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="drive-relative paths")
+    def test_drive_relative_path_keeps_parent_components(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A Windows path with a drive but no root (`C:..\\images`) is taken
+        against that drive's current directory, with its `..` kept as written."""
+        _write_workspace_config(tmp_path)
+        (tmp_path / "colmap").mkdir()
+        (tmp_path / "images").mkdir()
+        monkeypatch.chdir(tmp_path / "colmap")
+
+        found = find_workspace_for_path(Path(tmp_path.drive + "..\\images"))
+
+        assert str(found) == str(tmp_path / "colmap") + "\\.."
 
     def test_linked_directory_belongs_to_workspace_around_link(self, tmp_path: Path):
         """The search walks the path as given, without resolving links: a
