@@ -679,6 +679,92 @@ fn a_seed_frame_is_the_patch_slid_onto_the_seed() {
     assert!(zero[0].abs() < 1e-9 && zero[1].abs() < 1e-9, "{zero:?}");
 }
 
+/// The axes a keypoint's offset is read on face the camera, and are finite,
+/// however nearly the patch already faces it or faces away from it. A normal a
+/// few nanoradians from the direction to the camera, or from its opposite, has
+/// a dot with it of `±1.0` to the last bit or nearly so, and a rotation that
+/// reads its angle as `acos` of that dot turns by `NaN` or by the wrong amount
+/// there. Each case but the first is one `nalgebra`'s `rotation_between` got
+/// wrong, its name saying how; the headings were chosen so that each side has
+/// one case of each kind. Exactly behind, it gave the patch's own axes, whose
+/// normal faces away from the camera.
+#[test]
+fn facing_axes_face_the_camera_from_a_few_nanoradians_off_and_from_behind() {
+    use super::seed::facing_axes;
+
+    let camera = pinhole();
+    let pyramid = ImageU8Pyramid::build(&ImageU8::new(1, 1, 1, vec![0]), 1);
+    // A normal off the world's axes, so the cross products rounding makes are
+    // not exact.
+    let patch = OrientedPatch::from_center_normal(
+        Point3::new(0.3, -0.2, 4.0),
+        Vector3::new(0.2, -0.3, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [HALF_EXTENT; 2],
+    );
+    let (n, u, v) = (patch.normal(), patch.u_axis, patch.v_axis);
+    // The facing axes for a camera at `eye`, and the direction to it.
+    let facing_from = |eye: Point3<f64>| {
+        let pose =
+            RigidTransform::from_wxyz_translation([1.0, 0.0, 0.0, 0.0], (-eye.coords).into());
+        let view = ProjectedImage {
+            camera: &camera,
+            cam_from_world: &pose,
+            pyramid: &pyramid,
+        };
+        let to_camera = (pose.inverse_translation_origin() - patch.center).normalize();
+        (facing_axes(&patch, &view), to_camera)
+    };
+    let quarter = std::f64::consts::FRAC_PI_4;
+    // (case, +1 in front of the patch or -1 behind it, nanoradians off the
+    // normal's line, heading from `u` toward `v`)
+    let cases = [
+        ("along the normal", 1.0, 0.0, 0.0),
+        ("3 nrad off, NaN by acos", 1.0, 3.0, 0.0),
+        ("3 nrad off, no turn by acos", 1.0, 3.0, quarter),
+        ("3 nrad from behind, NaN by acos", -1.0, 3.0, 0.0),
+        (
+            "3 nrad from behind, a full half turn by acos",
+            -1.0,
+            3.0,
+            4.0 * quarter,
+        ),
+        ("exactly behind", -1.0, 0.0, 0.0),
+    ];
+    for (case, side, nanoradians, heading) in cases {
+        let angle: f64 = nanoradians * 1e-9;
+        let toward = u * heading.cos() + v * heading.sin();
+        let eye = patch.center + (n * angle.cos() + toward * angle.sin()) * (3.0 * side);
+        let ((fu, fv), to_camera) = facing_from(eye);
+        assert!(
+            fu.iter().chain(fv.iter()).all(|c| c.is_finite()),
+            "{case}: axes {fu:?}, {fv:?}"
+        );
+        assert!(
+            (fu.norm() - 1.0).abs() < 1e-15
+                && (fv.norm() - 1.0).abs() < 1e-15
+                && fu.dot(&fv).abs() < 1e-15,
+            "{case}: axes {fu:?}, {fv:?} are not orthonormal"
+        );
+        let off = (fu.cross(&fv) - to_camera).norm();
+        assert!(
+            off < 1e-15,
+            "{case}: the turned normal is {off:e} off the camera"
+        );
+        if side > 0.0 {
+            // The least rotation moves each axis by no more than the angle.
+            let moved = (fu - u).norm().max((fv - v).norm());
+            assert!(moved < angle + 1e-15, "{case}: the axes moved {moved:e}");
+        }
+    }
+    // Exactly behind, the half turn is about `v`.
+    let ((fu, fv), _) = facing_from(patch.center - n * 3.0);
+    assert!(
+        (fu + u).norm() < 1e-15 && (fv - v).norm() < 1e-15,
+        "exactly behind: {fu:?}, {fv:?} against {u:?}, {v:?}"
+    );
+}
+
 #[test]
 fn all_none_seeds_match_the_unseeded_run() {
     // A seed table of all `None` says "every view seeds at its projection", which
