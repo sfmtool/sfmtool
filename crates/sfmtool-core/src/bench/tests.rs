@@ -5955,9 +5955,10 @@ fn a_tilt_is_the_least_rotation_and_moves_no_keypoint() {
 
 /// A turn just over the nanoradian bar is still a turn, and the patch it leaves
 /// is a patch: its axes are finite and its normal is the one asked for. The
-/// cosine of such a turn is `1.0` to the last bit, so a rotation that reads its
-/// angle as `acos` of the dot of the two normals turns by nothing where that
-/// dot rounds to one, and by `NaN` where it rounds a bit over.
+/// cosine of such a turn is `1.0` to the last bit or nearly so, so a rotation
+/// that reads its angle as `acos` of the dot of the two normals turns by
+/// nothing where that dot rounds to one, by `NaN` where it rounds a bit over,
+/// and by the wrong amount where it rounds just under.
 #[test]
 fn a_tilt_of_a_few_nanoradians_leaves_a_finite_patch() {
     let scene = Scene::new();
@@ -5966,49 +5967,65 @@ fn a_tilt_of_a_few_nanoradians_leaves_a_finite_patch() {
     let fixture = track_of(&bench, &label);
     let base = patch_frame_of(&fixture);
 
-    // The fixture's own patch, which faces along an axis, and the same patch
-    // turned by hand a few degrees off it, whose normals have no zero
-    // component to round cleanly.
-    for (lean_deg, lean_heading) in [(0.0_f64, 0.0_f64), (3.0, 0.4), (7.0, 2.1), (11.0, 4.0)] {
+    // The fixture's patch leaned by hand `lean_deg` degrees off its normal,
+    // toward the heading `lean_heading` (radians from its `u` axis).
+    let leaned = |lean_deg: f64, lean_heading: f64| {
         let (sin, cos) = lean_deg.to_radians().sin_cos();
         let lean = base.u_axis.normalize() * lean_heading.cos()
             + base.v_axis.normalize() * lean_heading.sin();
-        let track = facing(&fixture, base.normal() * cos + lean * sin);
-        let was = patch_frame_of(&track);
+        facing(&fixture, base.normal() * cos + lean * sin)
+    };
+    // Tilts `track` by `nanoradians` toward `heading` (radians from its `u`
+    // axis) and checks the patch that comes back.
+    let check = |track: &EditableTrack, heading: f64, nanoradians: f64, case: &str| {
+        let was = patch_frame_of(track);
         let n = was.normal();
         let u = was.u_axis.normalize();
-        let v = n.cross(&u);
-        for step in 0..64 {
-            let heading = f64::from(step) * std::f64::consts::TAU / 64.0;
-            let toward = u * heading.cos() + v * heading.sin();
-            for nanoradians in [1.2_f64, 2.0, 5.0, 20.0] {
-                let angle = nanoradians * 1e-9;
-                let asked = n * angle.cos() + toward * angle.sin();
-                let (next, report) =
-                    tilt_patch(&track, &edited, asked).expect("a finite direction");
-                let case = format!(
-                    "{nanoradians} nrad toward {heading} from {lean_deg} degrees off the fixture"
-                );
-                assert!(report.changed, "{case} was no turn");
-                let turned = patch_frame_of(&next);
-                assert!(
-                    turned
-                        .u_axis
-                        .iter()
-                        .chain(turned.v_axis.iter())
-                        .all(|c| c.is_finite()),
-                    "{case} left the axes {:?}, {:?}",
-                    turned.u_axis,
-                    turned.v_axis,
-                );
-                assert!(
-                    (turned.normal() - asked.normalize()).norm() < 1e-12,
-                    "{case} faces {:?}, not {:?}",
-                    turned.normal(),
-                    asked.normalize(),
-                );
-            }
-        }
+        let toward = u * heading.cos() + n.cross(&u) * heading.sin();
+        let angle = nanoradians * 1e-9;
+        let asked = n * angle.cos() + toward * angle.sin();
+        let (next, report) = tilt_patch(track, &edited, asked).expect("a finite direction");
+        assert!(report.changed, "{case} was no turn");
+        let turned = patch_frame_of(&next);
+        assert!(
+            turned
+                .u_axis
+                .iter()
+                .chain(turned.v_axis.iter())
+                .all(|c| c.is_finite()),
+            "{case} left the axes {:?}, {:?}",
+            turned.u_axis,
+            turned.v_axis,
+        );
+        assert!(
+            (turned.normal() - asked.normalize()).norm() < 1e-12,
+            "{case} faces {:?}, not {:?}",
+            turned.normal(),
+            asked.normalize(),
+        );
+    };
+
+    // The dot of the two normals rounds to exactly `1.0` here, so a rotation
+    // read from it leaves the patch facing where it was.
+    check(&fixture, 0.0, 2.0, "2 nrad toward u on the fixture's patch");
+
+    // The dot rounds a bit over `1.0` here, so a rotation read from it has a
+    // `NaN` angle and gives the patch `NaN` axes.
+    check(
+        &leaned(11.0, 4.0),
+        0.0,
+        2.0,
+        "2 nrad toward u on a patch leaned 11 degrees",
+    );
+
+    // Both cases above hang on how one dot rounds. These hang on no single
+    // rounding: at 20 nrad the dot rounds just under `1.0`, and its `acos`
+    // lands about a nanoradian off the turn asked for, in every direction.
+    let track = leaned(7.0, 2.1);
+    for step in 0..8 {
+        let heading = f64::from(step) * std::f64::consts::TAU / 8.0;
+        let case = format!("20 nrad toward {heading} on a patch leaned 7 degrees");
+        check(&track, heading, 20.0, &case);
     }
 }
 
