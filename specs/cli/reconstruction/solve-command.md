@@ -205,6 +205,17 @@ A fit that is refused, such as a perspective model for a fisheye camera whose im
 reaches past 90°, stops the command with an error naming the camera and the reason. For
 images no file covers, `--camera-model` replaces the model EXIF inference would pick.
 
+A `.camrig` camera can be `EQUIDISTANT_FISHEYE`, the model
+`sfm estimate-intrinsics --write-camrig` writes for a fisheye lens. COLMAP has no such
+model, so the camera goes into the COLMAP database as `SIMPLE_RADIAL_FISHEYE` with
+`radial_distortion_k1 = 0`, which is the same projection
+([colmap-interop.md § Camera models](../../formats/colmap-interop.md#camera-models)).
+Both `-i` and `-g` refine that `k1` along with the focal length, so the solved camera is
+`SIMPLE_RADIAL_FISHEYE`, read back as `EQUIDISTANT_FISHEYE` only if `k1` comes out
+exactly `0`. The solve therefore starts exactly as it does with
+`--camera-model SIMPLE_RADIAL_FISHEYE`, whose refit of an `EQUIDISTANT_FISHEYE` camera
+is that same `k1 = 0` camera.
+
 ## Camera Rig Files (`.camrig`)
 
 `sfm solve` auto-discovers `.camrig` files in the workspace and uses the one

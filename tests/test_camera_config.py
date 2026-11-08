@@ -516,6 +516,35 @@ class TestBuildIntrinsicsFromCameraConfig:
                 block, isolated_test_image, camera_model_override=None
             )
 
+    def test_model_with_no_colmap_representation_raises(
+        self, isolated_test_image: Path
+    ):
+        """A `.camrig` camera of an sfmtool model with no COLMAP carrier, such
+        as `EQUIRECTANGULAR`, is a clean error naming the model."""
+        from sfmtool.fileio import read_image_rgb
+
+        from sfmtool.camera.setup import build_intrinsics_from_camera_config
+
+        img = read_image_rgb(isolated_test_image)
+        actual_h, actual_w = img.shape[:2]
+        block = {
+            "model": "EQUIRECTANGULAR",
+            "width": actual_w,
+            "height": actual_h,
+            "parameters": {
+                "focal_length_x": 100.0,
+                "focal_length_y": 100.0,
+                "principal_point_x": actual_w / 2.0,
+                "principal_point_y": actual_h / 2.0,
+            },
+        }
+        with pytest.raises(
+            CameraConfigError, match="EQUIRECTANGULAR has no COLMAP representation"
+        ):
+            build_intrinsics_from_camera_config(
+                block, isolated_test_image, camera_model_override=None
+            )
+
 
 # ---------------------------------------------------------------------------
 # intrinsics_for_image with --camera-model: the camera_config.json camera is

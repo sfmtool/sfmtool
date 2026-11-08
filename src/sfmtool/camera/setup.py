@@ -11,6 +11,7 @@ import pycolmap
 from .config import CameraConfigError, CameraConfigResolver
 from .cameras import (
     _CAMERA_PARAM_NAMES,
+    _NATIVE_CAMERA_PARAM_NAMES,
     FOCAL_PRINCIPAL_PARAM_NAMES,
     pycolmap_camera_to_intrinsics,
 )
@@ -133,7 +134,10 @@ def build_intrinsics_from_camera_config(
     - `camera_config` has full `parameters + width + height` — build directly,
       scaling focal+principal if the actual image resolution differs from the
       calibration resolution (uniform scale only). Aspect-ratio mismatch
-      raises `CameraConfigError`.
+      raises `CameraConfigError`. The model may be a COLMAP model or
+      `EQUIDISTANT_FISHEYE`, which a `.camrig` can hold; the camera keeps it,
+      and `colmap_camera_from_intrinsics` writes it to COLMAP as its carrier.
+      Any other model raises `CameraConfigError`.
     """
     if camera_config is None:
         cam = _infer_camera(image_path, camera_model_override)
@@ -189,8 +193,14 @@ def build_intrinsics_from_camera_config(
             )
         scale = actual_w / calib_w
 
+    param_names = {**_CAMERA_PARAM_NAMES, **_NATIVE_CAMERA_PARAM_NAMES}.get(model)
+    if param_names is None:
+        raise CameraConfigError(
+            f"camera model {model} has no COLMAP representation; "
+            "--camera-model can refit it to a COLMAP model"
+        )
     scaled_params: dict[str, float] = {}
-    for name in _CAMERA_PARAM_NAMES[model]:
+    for name in param_names:
         value = float(parameters[name])
         if name in FOCAL_PRINCIPAL_PARAM_NAMES:
             scaled_params[name] = value * scale
