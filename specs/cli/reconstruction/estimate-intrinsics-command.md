@@ -372,8 +372,10 @@ they stop `sfm pick-images`.
   ([Where each file goes](#one-camera-per-sequence)). Every such sequence
   gets none, and the message names the others and says to write each one
   with `-r` and `--write-camrig`;
-- a single-sensor `.camrig` other than its own already covers any of its
-  images, since `sfm solve` refuses an image two `.camrig` files match;
+- a `.camrig` other than its own, single-sensor or multi-sensor, already
+  covers any of its images, since `sfm solve` refuses an image two `.camrig`
+  files match (a rig's pattern can cover a frame `-r` left out whose name
+  puts it in the sequence);
 - its file exists and `--force` was not given;
 - its pattern matches no file in its folder;
 - its pattern matches an image of the `.matches` file that is not the

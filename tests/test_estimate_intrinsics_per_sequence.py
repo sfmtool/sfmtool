@@ -372,6 +372,47 @@ def test_a_sequence_another_camrig_covers_gets_no_file(stub_run):
     )
 
 
+def test_a_sequence_a_rig_camrig_partly_covers_gets_no_file(stub_run):
+    """The rig's patterns cover frames 1 to 9 of each sensor. With -r keeping
+    frames 10 and 11 of cam0, those form a sequence of single images whose
+    pattern, f_%02d.jpg, also covers the rig's cam0/f_01.jpg, which -r left
+    out and whose name puts it in that sequence."""
+    names = ["rig/cam0/f_01.jpg", "rig/cam1/f_01.jpg"]
+    names += ["rig/cam0/f_10.jpg", "rig/cam0/f_11.jpg"]
+    rig = stub_run.workspace / "rig"
+    rig.mkdir()
+    write_camrig(
+        path=str(rig / "pair.camrig"),
+        name="pair",
+        rig_type="generic",
+        cameras=[
+            {
+                "model": "SIMPLE_PINHOLE",
+                "width": 640,
+                "height": 480,
+                "parameters": {
+                    "focal_length": 500.0,
+                    "principal_point_x": 320.0,
+                    "principal_point_y": 240.0,
+                },
+            }
+        ],
+        sensor_image_patterns=["cam0/f_0%d.jpg", "cam1/f_0%d.jpg"],
+        camera_indexes=[0, 0],
+        quaternions_wxyz=np.tile([1.0, 0.0, 0.0, 0.0], (2, 1)),
+        translations_xyz=np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
+    )
+    out = stub_run(names, kept=["rig/cam0/f_10.jpg", "rig/cam0/f_11.jpg"])
+    assert out.exit_code == 1, out.output
+    # The rig, none of whose images -r keeps, is not a sequence of the run.
+    assert "1 sequence of " in out.output
+    assert "Sequence rig/cam0/f_%02d.jpg (3 images)" in out.output
+    assert f"No .camrig: {rig / 'pair.camrig'} already covers 1 of its images" in (
+        out.output
+    )
+    assert not (rig / "cam0" / "f.camrig").exists()
+
+
 def test_a_pattern_covering_another_sequence_is_refused(stub_run, monkeypatch):
     """A pattern is checked against the file's images of the other sequences.
     Two sequences' patterns differ in their literal text, so the matcher can

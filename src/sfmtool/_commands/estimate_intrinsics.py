@@ -682,6 +682,10 @@ def _plan_sequences(matches_path: Path, image_selection) -> tuple:
     runs: list[_SequenceRun] = []
     for sequence in sequences:
         chosen = [by_rel[p.as_posix()] for frame in sequence.images for p in frame]
+        if not chosen:
+            # A rig `.camrig` none of whose images `-r` keeps still gives
+            # `collect_sequences` a rig sequence, of no frames.
+            continue
         if sequence.sensors is not None:
             runs.append(
                 _SequenceRun(
@@ -753,7 +757,7 @@ def _finish_sequence(
     run: _SequenceRun,
     file_image_names: list[str],
     workspace_dir: Path,
-    single_sensor_hits: list,
+    camrig_hits: list,
     matches_path: Path,
     force: bool,
 ) -> None:
@@ -766,7 +770,9 @@ def _finish_sequence(
         return
     own = {(workspace_dir / name).resolve() for name in run.names}
     target = run.camrig_path.resolve()
-    for camrig_file, _data, covered in single_sensor_hits:
+    # A rig's `.camrig` counts too: its pattern can cover a frame that `-r`
+    # left out of the rig's selection and that the name puts in this sequence.
+    for camrig_file, _data, covered in camrig_hits:
         if camrig_file.resolve() != target and covered & own:
             run.reason = (
                 f"{camrig_file} already covers {len(covered & own)} of its "
@@ -846,7 +852,6 @@ def _write_camrig_per_sequence(
         )
     except CamrigSolveError as e:
         raise click.ClickException(str(e)) from None
-    single_sensor_hits = [h for h in hits if h[1]["metadata"]["sensor_count"] == 1]
 
     _name_camrigs(runs)
     for run in runs:
@@ -872,7 +877,7 @@ def _write_camrig_per_sequence(
             run,
             file_image_names,
             workspace_dir,
-            single_sensor_hits,
+            hits,
             matches_path,
             force,
         )
