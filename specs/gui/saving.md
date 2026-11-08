@@ -274,17 +274,25 @@ dirty nodes is one thing the user asked for, and three prompts in a row is a
 sequence they answer without reading.
 
 **Quitting is File ▸ Quit or a close request from the window system**: the
-window's close button, Alt+F4, and Close on the taskbar, each of which winit
-reports as `WindowEvent::CloseRequested`. Both ask `AppState::request_quit`
+window's close button, Alt+F4, Close on the taskbar, and on macOS the
+application menu's Quit item (Cmd+Q), each of which winit reports as
+`WindowEvent::CloseRequested`. Both ask `AppState::request_quit`
 ([state/save.rs](../../crates/sfm-explorer/src/state/save.rs)): with no dirty
 node the viewer ends, and with one the prompt goes up on a quit, so its Save or
 Don't Save ends the viewer and its Cancel leaves it running. A close request
 that puts the prompt up also restores the window if it is minimized and gives it
 the focus, so the prompt can be seen. While the prompt is up, a second close
 request or File ▸ Quit keeps the question already asked rather than stacking a
-second prompt, and does not quit. On macOS the application menu's Quit item
-(Cmd+Q), which winit adds, ends the application without a close request, so it
-does not ask.
+second prompt, and does not quit.
+
+On macOS, winit adds an application menu whose Quit item sends `terminate:`,
+which would end the application without a close request.
+[platform/macos.rs](../../crates/sfm-explorer/src/platform/macos.rs) points
+that item at the window's `performClose:` once the window exists, keeping its
+title and Cmd+Q. `performClose:` is what the close button sends, so Cmd+Q asks
+exactly what the close button asks. A quit that macOS sends as `terminate:`
+without going through that item, such as Quit in the Dock's menu for the
+application or logging out, still ends the viewer without asking.
 
 ## The Action Log
 

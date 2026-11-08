@@ -170,6 +170,21 @@ windows = { version = "0.62", features = [
 ] }
 windows-core = "0.62"
 
+# The application menu's Quit item is pointed at the window's close request
+# (`platform::macos`). The versions and features are ones winit 0.30 already
+# builds on macOS, so these add nothing to what is compiled.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSEnumerator", "NSThread"] }
+objc2-app-kit = { version = "0.2.2", features = [
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSView",
+    "NSWindow",
+] }
+
 [build-dependencies]
 winres = "0.1"
 
