@@ -18,6 +18,16 @@ from .cameras import (
 _ASPECT_RATIO_TOLERANCE = 1e-3
 
 
+class IntrinsicsRefitError(ValueError):
+    """`refit_intrinsics_to_model` refused to fit the camera it was given.
+
+    A subclass of `ValueError`, so a caller that only reports a bad input can
+    catch that; a caller that turns a refused fit into its own error catches
+    this, and so does not mistake another `ValueError` raised on the way, such
+    as a `UnicodeEncodeError` from printing the report, for a refused fit.
+    """
+
+
 def _wrap_descriptors(descriptors):
     """Wrap numpy descriptors as FeatureDescriptors for pycolmap 4.x."""
     if isinstance(descriptors, np.ndarray):
@@ -226,14 +236,14 @@ def refit_intrinsics_to_model(intrinsics, camera_model: str, camera_name: str):
     `intrinsics`. Prints one line naming `camera_name` (a phrase such as
     `camera 0 of rig.camrig`), the two models and the fit's rms and max, then
     one line per term the target model cannot represent. A refused fit raises
-    `ValueError` naming `camera_name` and the reason.
+    `IntrinsicsRefitError` naming `camera_name` and the reason.
     """
     target = camera_model.upper()
     source = intrinsics.model
     try:
         refit, report = intrinsics.refit(target)
     except ValueError as e:
-        raise ValueError(
+        raise IntrinsicsRefitError(
             f"--camera-model {target}: cannot switch {camera_name} from "
             f"{source} to {target}: {e}"
         ) from None

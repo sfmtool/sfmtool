@@ -170,7 +170,7 @@ def _refit_camera(
 ) -> dict:
     """The `.camrig` camera dict `camera` refit to `camera_model`, as a dict."""
     from .._sfmtool.geometry import CameraIntrinsics
-    from ..camera.setup import refit_intrinsics_to_model
+    from ..camera.setup import IntrinsicsRefitError, refit_intrinsics_to_model
 
     try:
         refit = refit_intrinsics_to_model(
@@ -178,7 +178,7 @@ def _refit_camera(
             camera_model,
             f"camera {camera_index} of {camrig_file}",
         )
-    except ValueError as e:
+    except IntrinsicsRefitError as e:
         raise CamrigSolveError(str(e)) from None
     return refit.to_dict()
 

@@ -180,6 +180,27 @@ def test_resolve_camrig_refused_refit_names_the_camera(tmp_path: Path):
     assert "90" in message
 
 
+def test_resolve_camrig_report_print_failure_is_not_a_refused_refit(
+    tmp_path: Path, monkeypatch
+):
+    # The refit succeeds, but printing its report fails, as it does on a stdout
+    # that cannot encode θ. `UnicodeEncodeError` is a `ValueError`; it must
+    # come through as itself, not as a "cannot switch" refusal.
+    import sfmtool.camera.setup as camera_setup
+
+    def failing_print(*args, **kwargs):
+        raise UnicodeEncodeError("charmap", "θ", 0, 1, "character maps to <undefined>")
+
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 1)
+    imgs = sorted((tmp_path / "imgs").glob("*.jpg"))
+    _make_camrig(
+        tmp_path / "rig.camrig", ["imgs/*.jpg"], camera=_simple_pinhole_camera()
+    )
+    monkeypatch.setattr(camera_setup, "print", failing_print, raising=False)
+    with pytest.raises(UnicodeEncodeError):
+        resolve_camrig_for_solve(imgs, tmp_path, "SIMPLE_RADIAL_FISHEYE")
+
+
 def test_resolve_camrig_resolves_multi_sensor(tmp_path: Path):
     # A multi-sensor .camrig resolves to a rig with a per-image sensor/frame
     # assignment; the two sensors are paired by the captured frame index.
