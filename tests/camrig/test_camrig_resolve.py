@@ -101,11 +101,104 @@ def test_resolve_camrig_rejects_partial_coverage(tmp_path: Path):
         resolve_camrig_for_solve(covered + stray, tmp_path, None)
 
 
-def test_resolve_camrig_rejects_camera_model(tmp_path: Path):
-    imgs = _touch_images(tmp_path / "imgs", ["a.jpg"])
-    _make_camrig(tmp_path / "rig.camrig", ["imgs/*.jpg"])
-    with pytest.raises(CamrigSolveError, match="camera-model"):
+def _simple_pinhole_camera(focal: float = 300.0) -> dict:
+    """A SIMPLE_PINHOLE camera at seoul_bull_sculpture's 270x480, as
+    `sfm estimate-intrinsics --write-camrig` writes a pinhole verdict."""
+    return {
+        "model": "SIMPLE_PINHOLE",
+        "width": 270,
+        "height": 480,
+        "parameters": {
+            "focal_length": focal,
+            "principal_point_x": 135.0,
+            "principal_point_y": 240.0,
+        },
+    }
+
+
+def test_resolve_camrig_refits_camera_to_camera_model(tmp_path: Path, capsys):
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 2)
+    imgs = sorted((tmp_path / "imgs").glob("*.jpg"))
+    camrig_file = tmp_path / "rig.camrig"
+    _make_camrig(camrig_file, ["imgs/*.jpg"], camera=_simple_pinhole_camera())
+    before = camrig_file.read_bytes()
+
+    result = resolve_camrig_for_solve(imgs, tmp_path, "simple_radial")
+
+    assert result is not None and not result.is_multi_sensor
+    assert result.camera == {
+        "model": "SIMPLE_RADIAL",
+        "width": 270,
+        "height": 480,
+        "parameters": {
+            "focal_length": 300.0,
+            "principal_point_x": 135.0,
+            "principal_point_y": 240.0,
+            "radial_distortion_k1": 0.0,
+        },
+    }
+    # The refit camera is the solve's start; the file on disk is unchanged.
+    assert camrig_file.read_bytes() == before
+    out = capsys.readouterr().out
+    assert (
+        f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL, "
+        "fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px"
+    ) in out
+
+
+def test_resolve_camrig_refit_reports_a_lossy_fit(tmp_path: Path, capsys):
+    # A pinhole switched to a fisheye model cannot be matched exactly; the
+    # report line carries the fit's rms.
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 1)
+    imgs = sorted((tmp_path / "imgs").glob("*.jpg"))
+    _make_camrig(
+        tmp_path / "rig.camrig", ["imgs/*.jpg"], camera=_simple_pinhole_camera()
+    )
+    result = resolve_camrig_for_solve(imgs, tmp_path, "SIMPLE_RADIAL_FISHEYE")
+    assert result.camera["model"] == "SIMPLE_RADIAL_FISHEYE"
+    out = capsys.readouterr().out
+    assert "SIMPLE_PINHOLE -> SIMPLE_RADIAL_FISHEYE" in out
+    assert "rms 0.532 px" in out
+
+
+def test_resolve_camrig_refused_refit_names_the_camera(tmp_path: Path):
+    # An equidistant fisheye whose image corner is past 90 degrees has no
+    # perspective fit.
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 1)
+    imgs = sorted((tmp_path / "imgs").glob("*.jpg"))
+    camrig_file = tmp_path / "rig.camrig"
+    fisheye = _simple_pinhole_camera(focal=150.0)
+    fisheye["model"] = "EQUIDISTANT_FISHEYE"
+    _make_camrig(camrig_file, ["imgs/*.jpg"], camera=fisheye)
+    with pytest.raises(CamrigSolveError) as excinfo:
         resolve_camrig_for_solve(imgs, tmp_path, "PINHOLE")
+    message = str(excinfo.value)
+    assert (
+        f"cannot switch camera 0 of {camrig_file.resolve()} from "
+        "EQUIDISTANT_FISHEYE to PINHOLE"
+    ) in message
+    assert "90" in message
+
+
+def test_resolve_camrig_report_print_failure_is_not_a_refused_refit(
+    tmp_path: Path, monkeypatch
+):
+    # The refit succeeds, but printing its report fails, as it does on a stdout
+    # that cannot encode θ. `UnicodeEncodeError` is a `ValueError`; it must
+    # come through as itself, not as a "cannot switch" refusal.
+    import sfmtool.camera.setup as camera_setup
+
+    def failing_print(*args, **kwargs):
+        raise UnicodeEncodeError("charmap", "θ", 0, 1, "character maps to <undefined>")
+
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 1)
+    imgs = sorted((tmp_path / "imgs").glob("*.jpg"))
+    _make_camrig(
+        tmp_path / "rig.camrig", ["imgs/*.jpg"], camera=_simple_pinhole_camera()
+    )
+    monkeypatch.setattr(camera_setup, "print", failing_print, raising=False)
+    with pytest.raises(UnicodeEncodeError):
+        resolve_camrig_for_solve(imgs, tmp_path, "SIMPLE_RADIAL_FISHEYE")
 
 
 def test_resolve_camrig_resolves_multi_sensor(tmp_path: Path):
@@ -133,23 +226,43 @@ def test_resolve_camrig_resolves_multi_sensor(tmp_path: Path):
     assert {a[1] for a in rig.assignments.values()} == {1, 2}
 
 
-def test_resolve_camrig_multi_sensor_rejects_camera_model(tmp_path: Path):
+def test_resolve_camrig_multi_sensor_refits_each_camera(tmp_path: Path, capsys):
+    # Two sensors with their own pool cameras: each is refit, and the rig the
+    # solve gets carries the refit cameras in place of the file's.
     _copy_images(tmp_path / "left", "seoul_bull_sculpture", 2)
     _copy_images(tmp_path / "right", "seoul_bull_sculpture", 2)
     imgs = sorted((tmp_path / "left").glob("*.jpg")) + sorted(
         (tmp_path / "right").glob("*.jpg")
     )
-    _make_camrig(
-        tmp_path / "rig.camrig",
-        [
+    camrig_file = tmp_path / "rig.camrig"
+    write_camrig(
+        path=str(camrig_file),
+        name="rig",
+        rig_type="generic",
+        cameras=[_simple_pinhole_camera(300.0), _simple_pinhole_camera(310.0)],
+        sensor_image_patterns=[
             "left/seoul_bull_sculpture_%d.jpg",
             "right/seoul_bull_sculpture_%d.jpg",
         ],
-        sensor_count=2,
-        camera=_camera(270, 480),
+        camera_indexes=[0, 1],
+        quaternions_wxyz=np.array([[1.0, 0.0, 0.0, 0.0]] * 2),
+        translations_xyz=np.zeros((2, 3)),
     )
-    with pytest.raises(CamrigSolveError, match="camera-model"):
-        resolve_camrig_for_solve(imgs, tmp_path, "PINHOLE")
+    before = camrig_file.read_bytes()
+
+    result = resolve_camrig_for_solve(imgs, tmp_path, "RADIAL")
+
+    assert result.is_multi_sensor
+    cameras = result.rig.data["cameras"]
+    assert [c["model"] for c in cameras] == ["RADIAL", "RADIAL"]
+    assert [c["parameters"]["focal_length"] for c in cameras] == [300.0, 310.0]
+    for camera in cameras:
+        assert camera["parameters"]["radial_distortion_k1"] == 0.0
+        assert camera["parameters"]["radial_distortion_k2"] == 0.0
+    assert camrig_file.read_bytes() == before
+    out = capsys.readouterr().out
+    assert f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> RADIAL" in out
+    assert f"Camera 1 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> RADIAL" in out
 
 
 def test_resolve_camrig_rejects_same_sensor_frame_collision(tmp_path: Path):

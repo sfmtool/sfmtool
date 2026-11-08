@@ -518,54 +518,97 @@ class TestBuildIntrinsicsFromCameraConfig:
 
 
 # ---------------------------------------------------------------------------
-# _check_camera_model_conflict — Phase 4
+# intrinsics_for_image with --camera-model: the camera_config.json camera is
+# refit to the model
 # ---------------------------------------------------------------------------
 
 
-class TestCheckCameraModelConflict:
-    def test_no_camera_model_no_conflict(self, tmp_path: Path):
-        from sfmtool.camera.setup import _check_camera_model_conflict
+def _seoul_simple_radial_block() -> dict:
+    """A SIMPLE_RADIAL calibration at seoul_bull_sculpture's 270x480."""
+    return {
+        "model": "SIMPLE_RADIAL",
+        "width": 270,
+        "height": 480,
+        "parameters": {
+            "focal_length": 344.0,
+            "principal_point_x": 136.0,
+            "principal_point_y": 241.0,
+            "radial_distortion_k1": 0.035,
+        },
+    }
 
-        block = _full_opencv_block(100, 80)
+
+class TestIntrinsicsForImageCameraModel:
+    def test_camera_config_is_refit_to_camera_model(
+        self, isolated_test_image: Path, capsys
+    ):
+        from sfmtool.camera.setup import intrinsics_for_image
+
+        config_path = isolated_test_image.parent / "camera_config.json"
         _write_config(
-            tmp_path / "camera_config.json",
-            {"version": 1, "camera_intrinsics": block},
+            config_path,
+            {"version": 1, "camera_intrinsics": _seoul_simple_radial_block()},
         )
-        img = tmp_path / "img.jpg"
-        img.touch()
-        resolver = CameraConfigResolver(tmp_path)
-        # Should not raise
-        _check_camera_model_conflict([img], resolver, None)
+        resolver = CameraConfigResolver(isolated_test_image.parent)
+        intrinsics, prior = intrinsics_for_image(
+            isolated_test_image, resolver, "opencv"
+        )
 
-    def test_no_camera_config_no_conflict(self, tmp_path: Path):
-        from sfmtool.camera.setup import _check_camera_model_conflict
+        d = intrinsics.to_dict()
+        assert d["model"] == "OPENCV"
+        assert (d["width"], d["height"]) == (270, 480)
+        params = d["parameters"]
+        # The refit keeps the file's focal and principal point and carries
+        # its k1 over; nothing was inferred from EXIF.
+        assert params["focal_length_x"] == pytest.approx(344.0, rel=1e-6)
+        assert params["focal_length_y"] == pytest.approx(344.0, rel=1e-6)
+        assert params["principal_point_x"] == 136.0
+        assert params["principal_point_y"] == 241.0
+        assert params["radial_distortion_k1"] == pytest.approx(0.035, rel=1e-4)
+        assert prior is True
 
-        img = tmp_path / "img.jpg"
-        img.touch()
-        resolver = CameraConfigResolver(tmp_path)
-        # Should not raise — no camera_config.json present
-        _check_camera_model_conflict([img], resolver, "OPENCV")
+        out = capsys.readouterr().out
+        assert f"The camera of {config_path}: SIMPLE_RADIAL -> OPENCV" in out
+        assert "rms 0.000 px" in out
 
-    def test_conflict_raises(self, tmp_path: Path):
-        import click
+    def test_without_camera_model_the_file_is_used_as_is(
+        self, isolated_test_image: Path, capsys
+    ):
+        from sfmtool.camera.setup import intrinsics_for_image
 
-        from sfmtool.camera.setup import _check_camera_model_conflict
-
-        block = _full_opencv_block(100, 80)
         _write_config(
-            tmp_path / "camera_config.json",
-            {"version": 1, "camera_intrinsics": block},
+            isolated_test_image.parent / "camera_config.json",
+            {"version": 1, "camera_intrinsics": _seoul_simple_radial_block()},
         )
-        img = tmp_path / "img.jpg"
-        img.touch()
-        resolver = CameraConfigResolver(tmp_path)
-        with pytest.raises(click.UsageError, match="--camera-model cannot be used"):
-            _check_camera_model_conflict([img], resolver, "OPENCV")
+        resolver = CameraConfigResolver(isolated_test_image.parent)
+        intrinsics, prior = intrinsics_for_image(isolated_test_image, resolver, None)
 
-    def test_no_resolver_no_conflict(self, tmp_path: Path):
-        from sfmtool.camera.setup import _check_camera_model_conflict
+        assert intrinsics.to_dict() == _seoul_simple_radial_block()
+        assert prior is True
+        assert "->" not in capsys.readouterr().out
 
-        img = tmp_path / "img.jpg"
-        img.touch()
-        # No resolver (e.g., no workspace) — flag works as before
-        _check_camera_model_conflict([img], None, "OPENCV")
+    def test_refused_refit_names_the_camera(self, isolated_test_image: Path):
+        from sfmtool.camera.setup import intrinsics_for_image
+
+        # An equidistant-like fisheye whose image corner is past 90 degrees,
+        # which a perspective model cannot reach.
+        block = {
+            "model": "SIMPLE_RADIAL_FISHEYE",
+            "width": 270,
+            "height": 480,
+            "parameters": {
+                "focal_length": 100.0,
+                "principal_point_x": 135.0,
+                "principal_point_y": 240.0,
+                "radial_distortion_k1": 0.0,
+            },
+        }
+        config_path = isolated_test_image.parent / "camera_config.json"
+        _write_config(config_path, {"version": 1, "camera_intrinsics": block})
+        resolver = CameraConfigResolver(isolated_test_image.parent)
+        with pytest.raises(ValueError) as excinfo:
+            intrinsics_for_image(isolated_test_image, resolver, "PINHOLE")
+        message = str(excinfo.value)
+        assert f"cannot switch the camera of {config_path}" in message
+        assert "SIMPLE_RADIAL_FISHEYE to PINHOLE" in message
+        assert "90" in message

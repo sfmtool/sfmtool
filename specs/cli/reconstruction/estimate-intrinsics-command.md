@@ -148,6 +148,15 @@ glob; the derivation then keeps a single level and validation hands the
 caller a message naming `--pattern`. The pattern is validated the way
 `camrig create` validates one.
 
+A `SIMPLE_PINHOLE` camera written here has no distortion term, so a solve
+that starts from it as written cannot model a lens's radial distortion.
+`sfm solve --camera-model SIMPLE_RADIAL` (or another perspective model with
+distortion terms; for an `EQUIDISTANT_FISHEYE` camera, a fisheye model such as
+`SIMPLE_RADIAL_FISHEYE`) starts instead from this camera refit to that
+model, at the same focal and principal point with zero distortion, which the
+solve then refines; the `.camrig` is not changed
+([solve-command.md § Camera Intrinsics](solve-command.md#camera-intrinsics)).
+
 The write refuses -- with the report still printed -- when:
 
 - there is no focal consensus;

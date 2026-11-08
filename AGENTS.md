@@ -488,6 +488,7 @@ backlog and keep them honest as findings get addressed:
 - A workspace can supply per-directory camera intrinsics via
   `camera_config.json` files; resolution is closest-ancestor-wins, capped at
   the workspace root. See `src/sfmtool/camera/config.py` and
-  `specs/workspace/camera-config.md`. When such a file resolves for any image
-  in a `solve` / `match` / `to-colmap-db` invocation, `--camera-model` is
-  rejected up front.
+  `specs/workspace/camera-config.md`. When such a file (or a covering
+  `.camrig`, or a `rig_config.json` sensor's `camera_params`) supplies the
+  camera in a `solve` / `match` / `to-colmap-db` invocation, `--camera-model`
+  refits that camera to the model it names rather than replacing it.

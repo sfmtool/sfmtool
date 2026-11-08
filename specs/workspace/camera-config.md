@@ -214,29 +214,38 @@ them into subfolders before solving.
 
 ## Interaction with `--camera-model`
 
-The rule is presence-based, not content-based: if any image being processed
-resolves a `camera_config.json`, that file is the sole source of camera setup
-for those images, and passing `--camera-model` for the same invocation is an
-error.
+`--camera-model` changes the model of the camera a `camera_config.json` supplies; it does
+not replace the camera. The camera is built from the file as usual (full, partial, or
+model-only, whatever it specifies) and then refit to the named model by the lens-only fit
+`CameraIntrinsics.refit`
+([../core/camera/refit-camera-intrinsics.md](../core/camera/refit-camera-intrinsics.md)),
+which keeps its principal point and image size. The refit camera is the starting camera,
+with the `has_prior_focal_length` setting the file gives it, and the file is not changed.
 
 | Situation | Behavior |
 |-----------|----------|
-| No image resolves a `camera_config.json` | `--camera-model` applies as today; EXIF inference fills in parameters |
-| All resolved images share a `camera_config.json`, no `--camera-model` flag | File is used (full, partial, or model-only — whatever it specifies) |
-| Any resolved image has a `camera_config.json` AND `--camera-model` is set | Command exits with an error before doing any work |
+| No image resolves a `camera_config.json` | `--camera-model` replaces the model EXIF inference picks |
+| An image resolves a `camera_config.json`, no `--camera-model` flag | File is used (full, partial, or model-only — whatever it specifies) |
+| An image resolves a `camera_config.json` AND `--camera-model` is set | The file's camera is refit to the model, and one line reports the fit |
 
-This makes the outcome predictable from the caller's side: looking at the
-filesystem (and the input image set) is enough to know whether `--camera-model`
-will apply. The two mechanisms never interleave.
+The report line names the file and gives both models and the fit's rms and max in
+pixels, followed by a line for each term the new model cannot represent:
 
-To force EXIF inference with a CLI override, delete or rename the file. To
-change the model permanently, edit the file. Mixing is intentionally not
-supported.
+```
+The camera of /ws/camera_config.json: SIMPLE_RADIAL -> OPENCV, fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px
+```
+
+A fit that is refused, such as a perspective model for a fisheye camera whose image
+reaches past 90°, stops the command with an error naming the file and the reason. To
+change the model permanently, edit the file.
 
 If different images in one invocation resolve to different `camera_config.json`
-files (e.g. multiple cameras in one workspace), each image uses its own
-resolved file. `--camera-model` is still rejected if *any* of them resolves a
-file — it would be ambiguous which subset the flag was meant to override.
+files (e.g. multiple cameras in one workspace), each image uses its own resolved file.
+
+A covering `.camrig`, which takes precedence over this file, and a `rig_config.json`
+sensor's `camera_params` follow the same rule
+([../cli/reconstruction/solve-command.md § Camera
+Intrinsics](../cli/reconstruction/solve-command.md#camera-intrinsics)).
 
 ## Interaction with `rig_config.json`
 

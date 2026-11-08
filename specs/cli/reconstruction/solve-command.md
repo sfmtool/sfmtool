@@ -65,7 +65,7 @@ Exactly one is required:
 | `--flow-preset` | `fast` \| `default` \| `high_quality` | `default` | Flow quality preset |
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
 | `--max-features` | int | | Maximum features per image |
-| `--camera-model` | choice | auto | Camera model override; one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
+| `--camera-model` | choice | auto | Camera model to start from: it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig`, `camera_config.json` or `rig_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)); one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
 | `--range / -r` | string | | Range expression for file numbers, from the input directories or the images of a `.matches` file; or a named image list's name, optionally with a slice (`'NAME[:30]'`) |
 | `--named-image-list` | name | | Use the images of this named image list of the workspace in place of image paths, or, with a `.matches` file, only the file's images that are among the list's images; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../../formats/sfmr-file-format.md). |
@@ -182,9 +182,28 @@ are refined during bundle adjustment.
 ## Camera Intrinsics
 
 If any image being processed resolves a `camera_config.json` (closest-ancestor walk from
-its parent directory up to the workspace root), the file's intrinsics are used and
-`--camera-model` is rejected with an error before any solve work begins. See
-[`../../workspace/camera-config.md`](../../workspace/camera-config.md).
+its parent directory up to the workspace root), the file's intrinsics are the starting
+camera. See [`../../workspace/camera-config.md`](../../workspace/camera-config.md).
+
+With `--camera-model`, the camera a covering `.camrig`, a `camera_config.json` or a
+`rig_config.json` sensor's `camera_params` supplies is refit to that model by the
+lens-only fit `CameraIntrinsics.refit`
+([`../../core/camera/refit-camera-intrinsics.md`](../../core/camera/refit-camera-intrinsics.md)),
+and the refit camera is the starting camera, used exactly where the supplied one would
+have been. Every camera of a multi-sensor `.camrig` that the solve uses is refit. The
+files are not changed. The fit keeps the principal point and image size, so a
+`SIMPLE_PINHOLE` camera refit to `SIMPLE_RADIAL` keeps its focal and gains
+`radial_distortion_k1 = 0`, a term the solve's bundle adjustment then refines. One line
+per refit camera names it, the two models, and the fit's rms and max in pixels, followed
+by a line for each term the target model cannot represent:
+
+```
+Camera 0 of /ws/cam.camrig: SIMPLE_PINHOLE -> SIMPLE_RADIAL, fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px
+```
+
+A fit that is refused, such as a perspective model for a fisheye camera whose image
+reaches past 90°, stops the command with an error naming the camera and the reason. For
+images no file covers, `--camera-model` replaces the model EXIF inference would pick.
 
 ## Camera Rig Files (`.camrig`)
 
@@ -194,8 +213,9 @@ covering every image being solved. A `.camrig` takes precedence over
 printed when it overrides one.
 
 - A **single-sensor** `.camrig` (such as one written by `sfm camrig create`)
-  supplies the camera intrinsics prior for the images its stored image pattern
-  matches.
+  supplies the starting camera intrinsics for the images its stored image
+  pattern matches, refit to `--camera-model` when that is given
+  ([Camera Intrinsics](#camera-intrinsics)).
 - A **multi-sensor** `.camrig` (such as one written by `sfm insv2rig`) drives
   rig-aware SfM. Each sensor's image pattern carries a frame field, and images
   from different sensors that share a frame index form one rig frame. The
@@ -211,7 +231,7 @@ discovered `.camrig` files cannot be used:
 
 - the images being solved span more than one `.camrig`;
 - a `.camrig` covers only some of the images being solved;
-- `--camera-model` is given alongside a matching `.camrig`.
+- `--camera-model` is given and the refit of a camera the solve uses is refused.
 
 `sfm pick-images` finds its rigs by the same rule, so a list it writes is
 covered by the same `.camrig`

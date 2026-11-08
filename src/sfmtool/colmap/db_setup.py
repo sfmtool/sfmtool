@@ -339,10 +339,6 @@ def _setup_for_sfm_from_matches(
     if camera_config_resolver is None:
         camera_config_resolver = CameraConfigResolver(workspace_dir)
 
-    from ..camera.setup import _check_camera_model_conflict
-
-    _check_camera_model_conflict(image_paths, camera_config_resolver, camera_model)
-
     camrig = resolve_camrig_for_solve(
         image_paths, workspace_dir, camera_model, camera_config_resolver
     )

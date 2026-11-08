@@ -636,7 +636,7 @@ A workspace can commit known-good camera intrinsics through optional
 `camera_config.json` files. Resolution is closest-ancestor-wins from the image's
 parent directory up to the workspace root. When present, the file is the sole
 source of camera setup for those images, and `--camera-model` on the command
-line is rejected for the invocation. See
+line refits the file's camera to the model it names. See
 [`camera-config.md`](camera-config.md) for the file format and semantics.
 
 Multi-sensor rigs are described by an optional `rig_config.json` at the

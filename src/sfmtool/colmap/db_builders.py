@@ -16,8 +16,12 @@ from ..camera.setup import (
     _wrap_descriptors,
     build_intrinsics_from_camera_config,
     intrinsics_for_image,
+    refit_intrinsics_to_model,
 )
-from ..camera.cameras import colmap_camera_from_intrinsics
+from ..camera.cameras import (
+    colmap_camera_from_intrinsics,
+    pycolmap_camera_to_intrinsics,
+)
 from ..camrig.resolver import CamrigRig
 from ..rig.config import (
     _infer_frame_key,
@@ -110,6 +114,11 @@ def _camera_from_sensor_entry(
     ``camera_params`` when present; otherwise falls back to ``_infer_camera``
     with the model name as a hint. Image dimensions always come from the
     image itself (the COLMAP rig config carries no width/height).
+
+    ``camera_model_override`` (``--camera-model``) refits a sensor's
+    ``camera_params`` calibration to that model
+    (``refit_intrinsics_to_model``); for a sensor without one it replaces
+    ``camera_model_name`` as the model inference uses.
     """
     model_name = cam_config.get("camera_model_name")
     camera_params = cam_config.get("camera_params")
@@ -117,21 +126,26 @@ def _camera_from_sensor_entry(
     if camera_params is not None and not model_name:
         raise ValueError("rig_config.json: camera_params requires camera_model_name")
 
-    effective_model = camera_model_override or model_name
-    cam = _infer_camera(str(image_path), effective_model)
+    if camera_params is None:
+        return _infer_camera(str(image_path), camera_model_override or model_name)
 
-    # An explicit --camera-model override takes precedence over the config's
-    # calibrated parameters.
-    if camera_model_override is None and camera_params is not None:
-        # The inferred camera already carries the correct parameter count for
-        # this model; use it to validate the config's positional array.
-        if len(camera_params) != len(cam.params):
-            raise ValueError(
-                f"rig_config.json: camera_params for {model_name} expects "
-                f"{len(cam.params)} values, got {len(camera_params)}"
-            )
-        cam.params = [float(p) for p in camera_params]
-        cam.has_prior_focal_length = True
+    cam = _infer_camera(str(image_path), model_name)
+    # The inferred camera already carries the correct parameter count for
+    # this model; use it to validate the config's positional array.
+    if len(camera_params) != len(cam.params):
+        raise ValueError(
+            f"rig_config.json: camera_params for {model_name} expects "
+            f"{len(cam.params)} values, got {len(camera_params)}"
+        )
+    cam.params = [float(p) for p in camera_params]
+    if camera_model_override is not None:
+        intrinsics = refit_intrinsics_to_model(
+            pycolmap_camera_to_intrinsics(cam),
+            camera_model_override,
+            f"the camera of rig_config.json sensor {cam_config.get('image_prefix')!r}",
+        )
+        cam = colmap_camera_from_intrinsics(intrinsics)
+    cam.has_prior_focal_length = True
     return cam
 
 
