@@ -217,6 +217,37 @@ def _read_image_size(image_path: Path) -> tuple[int, int]:
     return int(width), int(height)
 
 
+def refit_intrinsics_to_model(intrinsics, camera_model: str, camera_name: str):
+    """Fit a camera of `camera_model` to `intrinsics`, as `--camera-model` asks.
+
+    This is how `--camera-model` switches the model of intrinsics a `.camrig`,
+    a `camera_config.json` or a `rig_config.json` supplies: the lens-only fit
+    `CameraIntrinsics.refit`, whose principal point and image size are those of
+    `intrinsics`. Prints one line naming `camera_name` (a phrase such as
+    `camera 0 of rig.camrig`), the two models and the fit's rms and max, then
+    one line per term the target model cannot represent. A refused fit raises
+    `ValueError` naming `camera_name` and the reason.
+    """
+    target = camera_model.upper()
+    source = intrinsics.model
+    try:
+        refit, report = intrinsics.refit(target)
+    except ValueError as e:
+        raise ValueError(
+            f"--camera-model {target}: cannot switch {camera_name} from "
+            f"{source} to {target}: {e}"
+        ) from None
+    name = camera_name[:1].upper() + camera_name[1:]
+    print(
+        f"{name}: {source} -> {target}, fit over "
+        f"θ ≤ {report['theta_fit_deg']:.1f}° ({report['theta_fit_source']}): "
+        f"rms {report['rms_px']:.3f} px, max {report['max_px']:.3f} px"
+    )
+    for dropped in report["dropped"]:
+        print(f"  {dropped}")
+    return refit
+
+
 def intrinsics_for_image(
     image_path: Path,
     camera_config_resolver: CameraConfigResolver | None,
@@ -226,36 +257,27 @@ def intrinsics_for_image(
 
     `camera_config_resolver` may be `None` (no workspace), in which case the function
     behaves as if no camera_config exists. Returns `(intrinsics, prior_flag)`.
+
+    With no `camera_config.json`, `camera_model_override` replaces the model
+    EXIF inference would pick. When a `camera_config.json` resolves, the camera
+    it describes is built first and then, given `camera_model_override`, refit
+    to that model (`refit_intrinsics_to_model`); `prior_flag` is the file's.
     """
     camera_config: dict | None = None
+    config_path = None
     if camera_config_resolver is not None:
         resolved = camera_config_resolver.resolve_for_image(Path(image_path))
         if resolved is not None:
-            camera_config = resolved[1]
-    return build_intrinsics_from_camera_config(
-        camera_config, Path(image_path), camera_model_override
+            config_path, camera_config = resolved
+    if camera_config is None:
+        return build_intrinsics_from_camera_config(
+            None, Path(image_path), camera_model_override
+        )
+    intrinsics, prior = build_intrinsics_from_camera_config(
+        camera_config, Path(image_path), None
     )
-
-
-def _check_camera_model_conflict(
-    image_paths,
-    camera_config_resolver: CameraConfigResolver | None,
-    camera_model_override: str | None,
-) -> None:
-    """Raise click.UsageError if any image resolves a camera_config.json AND
-    `--camera-model` was supplied. The two mechanisms are not allowed to mix.
-    """
-    if camera_model_override is None or camera_config_resolver is None:
-        return
-    import click
-
-    for image_path in image_paths:
-        resolved = camera_config_resolver.resolve_for_image(Path(image_path))
-        if resolved is not None:
-            config_path, _ = resolved
-            raise click.UsageError(
-                f"--camera-model cannot be used together with "
-                f"camera_config.json. Image {image_path} resolves to "
-                f"{config_path}. Either remove --camera-model or delete the "
-                f"camera_config.json."
-            )
+    if camera_model_override is not None:
+        intrinsics = refit_intrinsics_to_model(
+            intrinsics, camera_model_override, f"the camera of {config_path}"
+        )
+    return intrinsics, prior

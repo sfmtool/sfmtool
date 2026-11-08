@@ -136,6 +136,44 @@ def test_rig_intrinsics_used_directly_when_fully_specified(
     assert float(cam.params[0]) == pytest.approx(expected_focal_x, rel=1e-9)
 
 
+def test_rig_intrinsics_refit_to_camera_model(
+    isolated_kerry_park_rig: Path, capsys
+) -> None:
+    """With ``--camera-model``, a sensor's ``camera_params`` calibration is refit
+    to that model rather than replaced by an inferred camera."""
+    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
+
+    rig_config = json.loads((isolated_kerry_park_rig / "rig_config.json").read_text())[
+        0
+    ]
+    sensor = rig_config["cameras"][0]
+    image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
+
+    cam = _camera_from_sensor_entry(
+        sensor, image, camera_model_override="THIN_PRISM_FISHEYE"
+    )
+
+    assert cam.model.name == "THIN_PRISM_FISHEYE"
+    assert cam.has_prior_focal_length is True
+    # THIN_PRISM_FISHEYE: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1.
+    fx, fy, cx, cy, k1, k2, _p1, _p2, k3, k4, _sx1, _sy1 = (
+        float(v) for v in cam.params
+    )
+    expected = sensor["camera_params"]
+    # THIN_PRISM_FISHEYE holds every OPENCV_FISHEYE term, so the fit carries
+    # the calibration over instead of the ~152.8 px an inference would give.
+    assert fx == pytest.approx(expected[0], rel=1e-6)
+    assert fy == pytest.approx(expected[1], rel=1e-6)
+    assert (cx, cy) == (expected[2], expected[3])
+    assert k1 == pytest.approx(expected[4], abs=1e-6)
+    assert k4 == pytest.approx(expected[7], abs=1e-6)
+    out = capsys.readouterr().out
+    assert (
+        "The camera of rig_config.json sensor 'fisheye_left/': "
+        "OPENCV_FISHEYE -> THIN_PRISM_FISHEYE"
+    ) in out
+
+
 def test_rig_intrinsics_wrong_length_rejected(
     isolated_kerry_park_rig: Path,
 ) -> None:

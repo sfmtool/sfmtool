@@ -14,6 +14,10 @@ reports how close that is, and names what the target cannot represent.
 The fit knows only the lens. Switching the cameras of a reconstruction, which
 adds the observations and compares their reprojection errors before and after,
 is [`../reconstruction/switch-camera-model.md`](../reconstruction/switch-camera-model.md).
+The fit alone is how `sfm solve --camera-model` changes the model of a starting
+camera that a `.camrig`, a `camera_config.json` or a `rig_config.json` supplies
+([`../../cli/reconstruction/solve-command.md` § Camera
+Intrinsics](../../cli/reconstruction/solve-command.md#camera-intrinsics)).
 The spline models themselves are specified in
 [`../../formats/sfmtool-camera-models.md`](../../formats/sfmtool-camera-models.md).
 

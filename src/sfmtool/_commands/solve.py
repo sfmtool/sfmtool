@@ -119,7 +119,9 @@ _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     "camera_model",
     type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
-    help="Camera model to use (overrides auto-detection).",
+    help="Camera model to use: overrides auto-detection, and refits to this "
+    "model the cameras a .camrig, camera_config.json or rig_config.json "
+    "supplies.",
 )
 @click.option(
     "--detect-infinity/--no-detect-infinity",
@@ -308,12 +310,6 @@ def solve(
         absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
 
         workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
-
-    from ..camera.config import CameraConfigResolver
-    from ..camera.setup import _check_camera_model_conflict
-
-    camera_config_resolver = CameraConfigResolver(workspace_dir)
-    _check_camera_model_conflict(absolute_paths, camera_config_resolver, camera_model)
 
     if seq_overlap:
         try:

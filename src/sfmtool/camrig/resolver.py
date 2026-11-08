@@ -13,7 +13,9 @@ stored patterns match. `sfm solve` auto-discovers these:
   `sensor_from_rig` poses — and drives rig-aware SfM.
 
 When every image being solved is covered by one `.camrig`, that file is used,
-taking precedence over `camera_config.json` and `rig_config.json`.
+taking precedence over `camera_config.json` and `rig_config.json`. With
+`--camera-model`, each of its cameras the solve uses is refit to that model
+and the refit camera is the starting intrinsics; the file is not changed.
 `sfm pick-images` finds its rig with the same rule, through
 `find_covering_camrig`, so the list it writes is one `sfm solve` takes.
 """
@@ -163,6 +165,24 @@ def _build_rig_assignments(
     return assignments
 
 
+def _refit_camera(
+    camera: dict, camera_model: str, camera_index: int, camrig_file: Path
+) -> dict:
+    """The `.camrig` camera dict `camera` refit to `camera_model`, as a dict."""
+    from .._sfmtool.geometry import CameraIntrinsics
+    from ..camera.setup import refit_intrinsics_to_model
+
+    try:
+        refit = refit_intrinsics_to_model(
+            CameraIntrinsics.from_dict(camera),
+            camera_model,
+            f"camera {camera_index} of {camrig_file}",
+        )
+    except ValueError as e:
+        raise CamrigSolveError(str(e)) from None
+    return refit.to_dict()
+
+
 def _resolve_single_sensor(
     camrig_file: Path,
     data: dict,
@@ -171,16 +191,13 @@ def _resolve_single_sensor(
     camera_config_resolver,
 ) -> CamrigSolveResult:
     """Validate and resolve a single-sensor `.camrig` covering a solve."""
-    if camera_model is not None:
-        raise CamrigSolveError(
-            "--camera-model cannot be used together with a .camrig; "
-            f"{camrig_file} already provides the camera. Remove --camera-model."
-        )
-
-    camera = data["cameras"][data["camera_indexes"][0]]
+    camera_index = data["camera_indexes"][0]
+    camera = data["cameras"][camera_index]
     _check_image_resolution(image_paths, camera, camrig_file)
     _camera_config_note(camrig_file, image_paths, camera_config_resolver)
     print(f"Camera intrinsics: using {camrig_file}")
+    if camera_model is not None:
+        camera = _refit_camera(camera, camera_model, camera_index, camrig_file)
     return CamrigSolveResult(camrig_file=camrig_file, camera=camera)
 
 
@@ -193,12 +210,6 @@ def _resolve_multi_sensor(
 ) -> CamrigSolveResult:
     """Validate and resolve a multi-sensor `.camrig` covering a solve."""
     assignments = _build_rig_assignments(camrig_file, data)
-    if camera_model is not None:
-        raise CamrigSolveError(
-            "--camera-model cannot be used together with a .camrig; "
-            f"{camrig_file} already provides the rig cameras. "
-            "Remove --camera-model."
-        )
 
     # Per-sensor resolution check: each sensor's solve images must suit that
     # sensor's pool camera.
@@ -218,6 +229,16 @@ def _resolve_multi_sensor(
         f"Camera rig: using {camrig_file} "
         f"({sensor_count} sensors, {len(by_sensor)} present in this solve)"
     )
+    if camera_model is not None:
+        # Refit each pool camera a present sensor uses, once, and hand the
+        # solve a copy of the rig data holding the refit cameras.
+        cameras = list(data["cameras"])
+        used = sorted({data["camera_indexes"][s] for s in by_sensor})
+        for camera_index in used:
+            cameras[camera_index] = _refit_camera(
+                cameras[camera_index], camera_model, camera_index, camrig_file
+            )
+        data = {**data, "cameras": cameras}
     return CamrigSolveResult(
         camrig_file=camrig_file,
         rig=CamrigRig(
@@ -310,9 +331,13 @@ def resolve_camrig_for_solve(
     applies. A single-sensor `.camrig` yields a `.camera`; a multi-sensor
     `.camrig` yields a `.rig`.
 
+    With `camera_model` (the solve's `--camera-model`), each `.camrig` camera
+    the solve uses is refit to that model, and the result carries the refit
+    cameras in place of the file's.
+
     Raises `CamrigSolveError` when the discovered `.camrig` files cannot be
     used: the images span multiple `.camrig` files, a `.camrig` covers only
-    some of them, or `--camera-model` was given alongside a matching `.camrig`.
+    some of them, or a camera's refit to `camera_model` is refused.
     """
     found = find_covering_camrig(image_paths, workspace_dir)
     if found is None:

@@ -166,7 +166,9 @@ def _reject_stray_mode_options(selected: str) -> None:
     "camera_model",
     type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
-    help="Camera model to use (overrides auto-detection).",
+    help="Camera model to use: overrides auto-detection, and refits to this "
+    "model the cameras a camera_config.json or rig_config.json supplies "
+    "(with --derive-pairs, a .camrig's too).",
 )
 @click.option(
     "--merge",
@@ -312,12 +314,7 @@ def match(
         absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
         workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
 
-    from ..camera.config import CameraConfigResolver
-    from ..camera.setup import _check_camera_model_conflict
     from ..feature_match._run import _run_matching
-
-    camera_config_resolver = CameraConfigResolver(workspace_dir)
-    _check_camera_model_conflict(absolute_paths, camera_config_resolver, camera_model)
 
     try:
         _run_matching(

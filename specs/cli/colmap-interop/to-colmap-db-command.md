@@ -40,7 +40,7 @@ required positional argument (matching the positional `OUTPUT` convention of
 |--------|------|---------|-------------|
 | `--max-features` | int | all | Maximum features per image (`.sfmr` only) |
 | `--no-guided-matching` | flag | | Disable two-view geometry pre-population (`.sfmr` only) |
-| `--camera-model` | choice | auto | Camera model override (`.matches` only); one of the 11 shared COLMAP model names (same vocabulary as `solve` / `match` / `camrig create`) |
+| `--camera-model` | choice | auto | Camera model to use (`.matches` only): it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig`, `camera_config.json` or `rig_config.json` supplies; one of the 11 shared COLMAP model names (same vocabulary as `solve` / `match` / `camrig create`) |
 
 > **Known gap (cross-exporter parity):** unlike `to-colmap-bin` and
 > `to-nerfstudio`, this exporter has no `--range` image-subsetting option.
@@ -106,10 +106,16 @@ correspondence graph from the two-view geometry table — verify first with
 
 ## Camera Intrinsics (`.matches` mode only)
 
-If any image referenced by the `.matches` file resolves a `camera_config.json` (closest-ancestor
-walk from its parent directory up to the workspace root), the file's intrinsics are used and
-`--camera-model` is rejected with an error before any database work begins. See
-[`../../workspace/camera-config.md`](../../workspace/camera-config.md).
+The cameras are set up as `sfm solve` sets them up from a `.matches` file: a `.camrig`
+covering the file's images supplies them, else a `camera_config.json` that an image
+resolves (closest-ancestor walk from its parent directory up to the workspace root) or a
+`rig_config.json`, else EXIF inference. See
+[`../../workspace/camera-config.md`](../../workspace/camera-config.md). With
+`--camera-model`, a camera one of those files supplies is refit to that model and the
+refit camera is written to the database, with one report line per refit camera and an
+error naming the camera when the fit is refused, exactly as
+[solve-command.md § Camera Intrinsics](../reconstruction/solve-command.md#camera-intrinsics)
+describes.
 
 ## Usage Examples
 

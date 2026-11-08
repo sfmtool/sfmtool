@@ -228,20 +228,18 @@ rectilinear EXIF guess, which is wrong for fisheye and wide-FOV sensors.
 
 ## Interaction with `--camera-model`
 
-`--camera-model` is accepted alongside `rig_config.json` rather than
-rejected, but when supplied it takes precedence over the config. If
-`--camera-model` is given, every sensor is built by
-`pycolmap.infer_camera_from_image()` under that model — even sensors that
-carry a full `camera_model_name` + `camera_params` calibration, whose
-`camera_params` are then ignored. With no `--camera-model`, each sensor
-uses its own `camera_model_name` / `camera_params`, falling back to
-inference (with `camera_model_name` as a hint) when those are absent.
+With no `--camera-model`, each sensor uses its own `camera_model_name` /
+`camera_params`, falling back to `pycolmap.infer_camera_from_image()` (with
+`camera_model_name` as a hint) when `camera_params` is absent.
 
-This is intentionally laxer than the `camera_config.json` interaction
-(which hard-rejects `--camera-model`), because rig configs commonly omit
-intrinsics for cameras that don't yet have a calibration. The trade-off is
-that an explicit `--camera-model` overrides calibrated rig intrinsics; pass
-it only when you want to re-infer every sensor.
+With `--camera-model`, a sensor that carries a `camera_model_name` +
+`camera_params` calibration has that camera refit to the named model by the
+lens-only fit `CameraIntrinsics.refit`, which keeps its principal point, and
+the refit camera is the sensor's starting camera; the file is not changed. A
+sensor without `camera_params` is inferred under the named model. This is the
+rule `camera_config.json` and a `.camrig` follow too, with the same report line
+per refit camera and the same error when a fit is refused
+([camera-config.md § Interaction with `--camera-model`](camera-config.md#interaction-with---camera-model)).
 
 ## Fisheye and Wide-FOV Notes
 
