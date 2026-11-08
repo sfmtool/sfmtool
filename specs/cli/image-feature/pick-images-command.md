@@ -451,8 +451,9 @@ reference sensor is listed second, written one entry per sensor; a rig frame
 missing a sensor; a `.camrig` rig in a subfolder whose sensor 0 sorts last,
 written one entry per sensor, whose list `resolve_camrig_for_solve` takes as
 a rig of both sensors at the chosen frames; a `.camrig` taking precedence over
-`rig_config.json`, and a single-sensor one defining no rig; input files a
-`.camrig` covers only in part, refused before any image is read; a match
+`rig_config.json`, and a single-sensor one defining no rig, whether it covers
+every input file or only some; input files a multi-sensor `.camrig` covers
+only in part, refused before any image is read; a match
 floor too large for the binding, refused naming the option, and one below 1,
 a usage error; an invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.
