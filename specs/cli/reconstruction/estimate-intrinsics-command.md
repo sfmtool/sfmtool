@@ -17,7 +17,10 @@ estimate to the workspace as a one-sensor `.camrig`
 ([camrig-file-format.md](../../formats/camrig-file-format.md)), the same
 shape `sfm camrig create` writes -- which `sfm solve` auto-discovers as the
 intrinsics prior for the images its stored pattern matches, taking
-precedence over `camera_config.json`.
+precedence over `camera_config.json`. With `--write-camrig-per-sequence` it
+estimates each image sequence of the file from that sequence's images and
+writes one `.camrig` per sequence beside it
+([One camera per sequence](#one-camera-per-sequence)).
 
 ## Command Syntax
 
@@ -33,7 +36,8 @@ sfm estimate-intrinsics -i MATCHES [OPTIONS...]
 | `--model [auto\|pinhole\|fisheye]` | `auto` | Which camera-model columns to run: `auto` votes pinhole-only and adds the second column, arbitrating between them, only when that vote comes back weak; the named forms run one column and skip arbitration |
 | `--write-camrig PATH` | off | Write the estimate as a one-sensor `.camrig` at PATH (see below) |
 | `--pattern PATTERN` | derived | Image pattern stored in the `.camrig`; defaults to the selected images' common directory plus one `*` segment per directory level below it, ending `*<ext>` for the extension their names share (`*` when they mix), narrowed to `<prefix>*<ext>` when it would match images `-r` left out (see [`--write-camrig`](#--write-camrig)) |
-| `--force` | off | Allow `--write-camrig` to overwrite an existing file |
+| `--write-camrig-per-sequence` | off | Write one one-sensor `.camrig` per image sequence of the file, each estimated from that sequence's images only, in the sequence's folder (see [One camera per sequence](#one-camera-per-sequence)); not with `--write-camrig` or `--pattern` |
+| `--force` | off | Allow `--write-camrig` or `--write-camrig-per-sequence` to overwrite existing files |
 | `--json` | off | Emit the full vote result as JSON on stdout instead of the report |
 | `--seed N` | `0` | RANSAC / pair-sampling seed; same inputs + seed + `--draws` give bit-identical output |
 | `--draws N` | `1` | RANSAC draws behind each pair's vote, at least 1 (see [Draws per pair](#draws-per-pair)) |
@@ -272,10 +276,145 @@ The write refuses -- with the report still printed -- when:
 - the output file already exists and `--force` was not given;
 - the pattern matches an image of the file that `-r` left out.
 
+### One camera per sequence
+
+`--write-camrig-per-sequence` gives each video of a capture its own camera
+in one run, without a named image list per video. The command groups the
+file's images into **sequences** exactly as `sfm pick-images` does
+([pick-images-command.md § Collecting the frames](../image-feature/pick-images-command.md#collecting-the-frames)):
+the files of one folder whose names are the same apart from the file number
+`number_from_filename` reads. The vote then runs once per sequence, on
+`select_clusters(restrict_images=...)` of that sequence's images, so each
+estimate is the one `-r` gives for the same images, and the sequence's
+`.camrig` holds it, in the one-sensor shape
+[`--write-camrig`](#--write-camrig) writes. Both layouts of a capture of two
+videos work:
+
+```bash
+# A name prefix per video, in one folder:
+#   images/shopA_00001.jpg ... images/shopB_00001.jpg ...
+sfm estimate-intrinsics -i matches/clusters.matches --write-camrig-per-sequence
+# writes images/shopA.camrig (pattern shopA_%05d.jpg)
+#    and images/shopB.camrig (pattern shopB_%05d.jpg)
+
+# A folder per video:
+#   shopA/00001.jpg ... shopB/00001.jpg ...
+sfm estimate-intrinsics -i matches/clusters.matches --write-camrig-per-sequence
+# writes shopA/shopA.camrig (pattern %05d.jpg)
+#    and shopB/shopB.camrig (pattern %05d.jpg)
+```
+
+`sfm solve` over the whole capture then gives each sequence's images the
+camera of its `.camrig`
+([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig)).
+
+**Where each file goes.** The `.camrig` of a sequence is in the sequence's
+folder. Its name is the part of the sequence's file names before the file
+number, less the separators it ends in (spaces, `_`, `-`, `.`, `(` and
+`)`), so `shopA_00001.jpg`, `shopA-00001.jpg` and `shopA (1).jpg` all give
+`shopA.camrig`. When nothing is left, as for `00001.jpg`, the file is named
+after the folder, and a sequence in the workspace root is named after the
+workspace's folder.
+
+When two or more sequences of the run would get the same file, compared
+without regard to letter case (the file systems of Windows and macOS do not
+tell `x.camrig` from `X.camrig`), each of them is named instead from that
+name, `_`, and the part of its file names after the file number, with the
+same separators stripped from both its ends, when that part is not empty.
+`number_from_filename` reads the digits at the end of a name, or in
+parentheses there, so the part after the number is the extension, behind a
+`)` for a number in parentheses: `x_01.jpg` beside `x_01.png` give
+`x_jpg.camrig` and `x_png.camrig`, and `cams/01.jpg` beside `cams/01.png`
+give `cams/cams_jpg.camrig` and `cams/cams_png.camrig`. The renamed files
+are compared again with every file of the run, and the sequences that still
+share one get none (see the refusals below): `v (1).jpg` beside
+`v1.jpg` both give `v_jpg.camrig`.
+
+**The pattern.** The stored pattern is relative to the `.camrig`'s folder:
+the sequence's file names with the file number as a frame field, `%0Nd`
+when every number of the sequence is written with the same `N > 1` digits
+and `%d` otherwise, and `%%` for a `%` in a name. It is the sequence's list
+pattern in `sfm pick-images` without its folder. So it covers every file of
+the sequence in the folder, including frames the `.matches` file does not
+hold, and no file whose name differs anywhere else: `shot1_%04d.jpg` does
+not cover `shot10_0001.jpg`.
+
+**`-r`.** With `-r` only the selected images take part, and only they are
+grouped into sequences, so an image `-r` leaves out cannot stop the run,
+even one with no number or one that shares its number with another file of
+its sequence. Each sequence votes on its selected images, and its pattern
+still names the whole sequence, since the frames `-r` left out are the same
+video's: the file's images that `-r` left out whose names differ from the
+sequence's only in the file number count as the sequence's (its
+`image_count` in `--json`), not as another sequence's.
+
+**Rigs.** The images a multi-sensor `.camrig` covers, found as `sfm solve`
+finds it, form one rig sequence, as in `sfm pick-images`. It gets no file,
+since its `.camrig` already gives its images their cameras, and the report
+says so. When no `.camrig` covers any of the file's images, an image of a
+rig of `rig_config.json` anywhere in the file stops the command before any
+vote, whatever `-r` selects, with a message naming the image, because
+`sfm solve` ignores `rig_config.json` once any `.camrig` covers an image it
+solves
+([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig)),
+so writing any sequence's file would undo the rig. Selected images that
+cannot be grouped (a file with no number, two files of one sequence with the
+same number) stop the command, with a message naming the files at fault, as
+they stop `sfm pick-images`.
+
+**Refusals.** A sequence gets no file, with the reason in the report, when:
+
+- its vote has no focal consensus, or its verdict is an UNCONFIRMED Fisheye
+  (the same two refusals as `--write-camrig`);
+- its images have more than one resolution (the message lists them);
+- another sequence of the run would get the same file even when named
+  with the part of the file names after the number
+  ([Where each file goes](#one-camera-per-sequence)). Every such sequence
+  gets none, and the message names the others and says to write each one
+  with `-r` and `--write-camrig`;
+- a `.camrig` other than its own, single-sensor or multi-sensor, already
+  covers any of its images, since `sfm solve` refuses an image two `.camrig`
+  files match (a rig's pattern can cover a frame `-r` left out whose name
+  puts it in the sequence);
+- its file exists and `--force` was not given;
+- its pattern matches no file in its folder;
+- its pattern matches an image of the `.matches` file that is not the
+  sequence's, as a matcher that ignores letter case can (on Windows and
+  macOS `a_%02d.jpg` matches an `A_03.jpg` that `-r` left out); the message
+  names the pattern and one such image.
+
+The other sequences' files are still written. The command exits 0 when it
+writes at least one file, and 1, after the report, with
+`no .camrig was written.` when it writes none.
+
+**Report.** One block per sequence, in the order of the sequences'
+patterns: `Sequence <pattern> (<N> images)`, the sequence's report as above,
+then the summary of the written file (its path, camera, focal and stored
+pattern) or `No .camrig: <reason>`.
+
+**`--json`** prints one object:
+
+- `workspace_dir`, `image_count` (the file's images) and
+  `selected_image_count` (the images `-r` keeps, all of them without `-r`);
+- `sequences`, one entry per sequence of the run: `pattern` (the
+  workspace-relative list pattern, a rig sequence's patterns joined by
+  ` and `), `image_count` (the file's images in the sequence),
+  `selected_image_count`, `camrig_path` (workspace-relative, `null` for a
+  rig sequence), `camrig_pattern` (the stored pattern, `null` for a rig
+  sequence), `written`, `reason` (`null` when written), and `estimate`, the
+  payload `--json` prints for a single estimate, here of the sequence's
+  images, or `null` when no vote ran.
+
+The report blocks then go to stderr, so stdout holds the JSON alone.
+
 ## Implementation Notes
 
 - Registered under the Reconstruction category in `cli.py`; source in
   `src/sfmtool/_commands/estimate_intrinsics.py`.
+- `--write-camrig-per-sequence` groups the images with `find_rigs` and
+  `collect_sequences` in
+  [`_pick_images.py`](../../../src/sfmtool/_pick_images.py), the functions
+  `sfm pick-images` uses, so the two commands' sequences are the same.
 - The `.matches` read goes through `sfmtool.fileio.MatchesFile`. The
   command passes the selection handle itself (`select_clusters()`,
   restricted to the `-r` images when given) to the kernel's object form,
