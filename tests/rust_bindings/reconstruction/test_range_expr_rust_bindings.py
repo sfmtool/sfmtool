@@ -238,5 +238,8 @@ class TestDisplayNormalization:
         assert str(RangeExpr.from_list([5, 1, 3])) == "1-5:2"
         assert str(RangeExpr("1,3,5")) == "1-5:2"
         assert RangeExpr.from_list([5, 1, 3]) == RangeExpr("1,3,5")
+        assert hash(RangeExpr.from_list([5, 1, 3])) == hash(RangeExpr("1,3,5"))
+        assert RangeExpr("1-3") == RangeExpr("1,2,3")
+        assert RangeExpr("1-3") != RangeExpr("1-4")
         assert str(RangeExpr("1,3,5-7")) == "1-5:2,6,7"
         assert str(RangeExpr.from_list([1, 2, 4, 6])) == "1,2-6:2"
