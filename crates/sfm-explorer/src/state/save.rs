@@ -14,9 +14,10 @@
 //!   the value that reached the disk is a version the cursor is sitting on, not
 //!   a thing assembled on the way out and forgotten -- which is what lets
 //!   [`crate::document::History::set_disk_serial`] name it and the dirty marker
-//!   mean something. A Save As that states a workspace path materialises for
-//!   the same reason, whether or not there is an overlay: the stated path is
-//!   metadata, and the hash covers the metadata. So does a save of a value
+//!   mean something. A Save As that changes the recorded workspace path, the
+//!   one a caller states or the one measured from where the file lands,
+//!   materialises for the same reason, whether or not there is an overlay: the
+//!   path is metadata, and the hash covers the metadata. So does a save of a value
 //!   that lacks some image's readings, such as one opened from a file below
 //!   `.sfmr` version 15: the readings are gathered, through the save's
 //!   progress, into the materialised value before it becomes a version, so
@@ -124,12 +125,16 @@ impl AppState {
     /// Write `id` to `path` and re-point the node at it.
     ///
     /// `workspace_path` states the `workspace.relative_path` the file records,
-    /// in place of the one the value already carries. That is a change to the
-    /// metadata, which sits inside the content hash, so the value carrying it is
-    /// folded into a version of its own exactly as a value with point edits is
-    /// (see [`Self::save_minimal_copy`] for the copy that states it without
-    /// touching the node). `None` writes the path the value has, which is right
-    /// for the dialog's save: nobody typed a workspace path into it.
+    /// in place of the one the value already carries. `None` measures it from
+    /// `path`'s directory to the workspace, which is right for the dialog's
+    /// save: nobody typed a workspace path into it, and the value's own path
+    /// was measured from the file it was read from. Either is a change to the
+    /// metadata whenever it differs from the value's, and the metadata sits
+    /// inside the content hash, so the value carrying it is folded into a
+    /// version of its own exactly as a value with point edits is (see
+    /// [`Self::save_minimal_copy`] for the copy that states it without touching
+    /// the node). A measured path equal to the value's changes nothing, and the
+    /// value is written as it stands.
     pub(crate) fn save_node_as(
         &mut self,
         id: ReconId,
@@ -332,6 +337,17 @@ impl AppState {
             ));
         }
 
+        // A Save As that states no workspace path records the one measured
+        // from where the file lands: the value's own was measured from the file
+        // it was read from, and is wrong from anywhere else.
+        let measured;
+        let workspace_path = match workspace_path {
+            None if repoint => {
+                measured = remeasured_workspace_path(&self.scene[index], path);
+                measured.as_deref()
+            }
+            stated => stated,
+        };
         self.materialize_for_save(index, path, workspace_path, &save)?;
 
         let node = &self.scene[index];
@@ -433,6 +449,22 @@ impl AppState {
         self.follow_selection_forward(id);
         Ok(())
     }
+}
+
+/// The `workspace.relative_path` a Save As of `node` to `path` records in place
+/// of the one its value carries, or `None` when that one stands.
+///
+/// The path from `path`'s directory to the workspace, as
+/// [`SfmrReconstruction::measured_workspace_path`](sfmtool_core::SfmrReconstruction::measured_workspace_path)
+/// measures it for every other save. `None` when it equals the recorded path,
+/// so a Save As that leaves the path as it was writes the value as it stands
+/// and mints no version, and when there is nothing to measure (a value with no
+/// workspace directory, such as demo data, or two paths with no common root),
+/// where the recorded path is all there is.
+fn remeasured_workspace_path(node: &SceneNode, path: &Path) -> Option<String> {
+    let base = &node.history.current().base;
+    base.measured_workspace_path(path)
+        .filter(|measured| *measured != base.metadata.workspace.relative_path)
 }
 
 /// Whether `a` and `b` name one file: compared canonically where both exist,

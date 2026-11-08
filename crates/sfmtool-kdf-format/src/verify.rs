@@ -273,32 +273,22 @@ pub fn verify_sift_sources(path: &Path, options: KdfOpenOptions) -> Result<Verif
     })
 }
 
+/// The workspace `kdf` records, found by the rule `.sfmr` uses
+/// ([`sfmtool_archive_io::resolve_workspace_dir`]): a recorded directory counts
+/// only when it holds `.sfm-workspace.json`. `MissingSource` names the
+/// `.kdf`'s directory when no lookup finds one.
 fn resolve_workspace(
     kdf: &Path,
     workspace: &crate::KdfWorkspaceMetadata,
 ) -> Result<PathBuf, KdfError> {
-    let parent = kdf.parent().unwrap_or_else(|| Path::new("."));
-    if !workspace.relative_path.is_empty() {
-        let p = parent.join(&workspace.relative_path);
-        if p.is_dir() {
-            return Ok(p);
-        }
-    }
-    if !workspace.absolute_path.is_empty() {
-        let p = PathBuf::from(&workspace.absolute_path);
-        if p.is_dir() {
-            return Ok(p);
-        }
-    }
-    let mut at = parent;
-    loop {
-        if at.join(".sfm-workspace.json").is_file() {
-            return Ok(at.to_path_buf());
-        }
-        let Some(next) = at.parent() else { break };
-        at = next;
-    }
-    Err(KdfError::MissingSource(parent.to_path_buf()))
+    sfmtool_archive_io::resolve_workspace_dir(
+        kdf,
+        &workspace.relative_path,
+        &workspace.absolute_path,
+    )
+    .ok_or_else(|| {
+        KdfError::MissingSource(kdf.parent().unwrap_or_else(|| Path::new(".")).to_path_buf())
+    })
 }
 
 impl From<sfmtool_sift_format::SiftError> for KdfError {
@@ -312,3 +302,6 @@ impl KdfFile<u8> {
         self.vector(id)
     }
 }
+
+#[cfg(test)]
+mod tests;

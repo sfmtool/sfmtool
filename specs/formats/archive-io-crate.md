@@ -14,7 +14,9 @@ covers the Rust interface and why it is shaped that way.
 ## Rust API
 
 The primitives live in
-[sfmtool-archive-io/src/lib.rs](../../crates/sfmtool-archive-io/src/lib.rs). The
+[sfmtool-archive-io/src/lib.rs](../../crates/sfmtool-archive-io/src/lib.rs), and
+the workspace lookup in
+[sfmtool-archive-io/src/workspace.rs](../../crates/sfmtool-archive-io/src/workspace.rs). The
 five format crates
 ([sfmtool-sift-format](../../crates/sfmtool-sift-format/),
 [sfmtool-matches-format](../../crates/sfmtool-matches-format/),
@@ -48,6 +50,11 @@ pub struct WorkspaceMetadata { pub absolute_path: String, pub relative_path: Str
 pub struct WorkspaceContents { pub feature_tool: String, pub feature_type: String,
                                pub feature_options: serde_json::Value,
                                pub feature_prefix_dir: String }
+
+// How a reader finds the workspace a file records (src/workspace.rs).
+pub const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
+pub fn resolve_workspace_dir(file: &Path, relative_path: &str, absolute_path: &str)
+    -> Option<PathBuf>;
 
 // Whole-file content identity: push section digests in format-defined order.
 pub struct SectionDigests { /* streaming XXH128 hasher */ }
@@ -109,6 +116,18 @@ pub fn parse_hash_bytes(hex: &str) -> Result<[u8; 16], HashParseError>;
                                                               // byte i = hex pair [2i, 2i+2)
 pub struct HashParseError;                                    // not 32 lowercase hex digits
 ```
+
+**A file's workspace is found by one rule.** `resolve_workspace_dir` takes the
+`relative_path` and `absolute_path` a file records and tries, in order, the
+relative path joined to the file's directory (both resolved to their real
+locations), the absolute path, and the nearest directory at or above the file's
+directory. A candidate counts only when it holds `WORKSPACE_MARKER`; one that
+exists without it is skipped, and an empty path is skipped as none recorded.
+`None` means no step found one, and each caller turns that into its own error.
+The `.sfmr` reader (`resolve_workspace_dir` in `sfmtool-sfmr-format`) and the
+`.kdf` source verification both call it, so the two cannot disagree about which
+directory a file names. The paths are arguments rather than a
+`WorkspaceMetadata` because `.kdf` records them in a type of its own.
 
 **Hash strings are parsed strictly.** `parse_hash` accepts exactly 32
 characters from `0-9a-f` and nothing else: no uppercase, no sign, no other
@@ -334,7 +353,9 @@ tests.
   metadata it defines is the `workspace` object (`WorkspaceMetadata` and
   `WorkspaceContents`), because `.sfmr` and `.matches` embed the same object and
   keep one definition of it here. `.kdf` defines its own
-  `KdfWorkspaceMetadata`.
+  `KdfWorkspaceMetadata`. The rule a reader finds that workspace by
+  (`resolve_workspace_dir`) is here for the same reason: every format that
+  records a workspace resolves it the same way.
 - **No verification.** Recomputing and comparing digests is each format crate's
   `verify_*` function, since only the format knows its sections and its
   structural constraints.

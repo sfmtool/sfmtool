@@ -9,7 +9,9 @@
 //! XXH128 content hashes computed over the *uncompressed* bytes.
 //!
 //! Each format crate owns its own schema, validation rules and error type;
-//! this crate owns only the container primitives they share.
+//! this crate owns only the container primitives they share, and the
+//! `workspace` metadata object with the rule a reader finds that workspace by
+//! ([`resolve_workspace_dir`]).
 //!
 //! See `specs/formats/archive-container.md` for the container contract and
 //! `specs/formats/archive-io-crate.md` for this crate's interface.
@@ -28,6 +30,10 @@ use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::Xxh3;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
+
+mod workspace;
+
+pub use workspace::{resolve_workspace_dir, WORKSPACE_MARKER};
 
 /// Workspace contents configuration embedded in archive metadata.
 ///

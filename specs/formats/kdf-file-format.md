@@ -147,7 +147,11 @@ save time), `relative_path` (POSIX path from the KDF parent to that workspace),
 and `contents` (embedded workspace configuration). Contents includes string
 `feature_tool`, string `feature_type`, object `feature_options`, and relative
 POSIX `feature_prefix_dir`. Resolve the workspace by trying relative_path first,
-then absolute_path, then a containing workspace, matching SFMR. Image paths
+then absolute_path, then a containing workspace, matching SFMR: a recorded
+directory is the workspace only when it holds `.sfm-workspace.json`, and one that
+exists without it is skipped for the next step. Source verification resolves it
+through `sfmtool_archive_io::resolve_workspace_dir`, the function the `.sfmr`
+reader uses. Image paths
 resolve against that workspace, never directly against the KDF's parent.
 For image `frames/a.jpg` and prefix `features/sift-example`, its source is
 `frames/features/sift-example/a.jpg.sift` within the workspace. All images use

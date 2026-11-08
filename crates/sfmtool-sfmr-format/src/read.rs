@@ -18,8 +18,6 @@ use crate::observation_readings::{
 use crate::types::*;
 use crate::{validate_image_readings, ImageReadingColumns, ObservationReadingColumns};
 
-const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
-
 /// Read only the top-level metadata from a `.sfmr` file (fast, no binary data).
 pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
     let file = std::fs::File::open(path).map_err(|e| SfmrError::IoPath {
@@ -1185,43 +1183,26 @@ pub(crate) fn images_meta_has_thumbnails(images_meta: &serde_json::Value) -> boo
 
 /// Resolve the workspace directory for a `.sfmr` file.
 ///
-/// Strategy (from the spec):
+/// Strategy (from the spec), the one
+/// [`sfmtool_archive_io::resolve_workspace_dir`] holds for every format that
+/// records a workspace:
 /// 1. Try `workspace.relative_path` from the `.sfmr` file's directory
 /// 2. Fall back to `workspace.absolute_path`
 /// 3. Fall back to searching upward from the `.sfmr` file for `.sfm-workspace.json`
 ///
-/// An empty `relative_path` or `absolute_path` means none was recorded, and
-/// its step is skipped.
+/// A recorded directory counts only when it holds `.sfm-workspace.json`. An
+/// empty `relative_path` or `absolute_path` means none was recorded, and its
+/// step is skipped.
 pub fn resolve_workspace_dir(
     sfmr_path: &Path,
     metadata: &SfmrMetadata,
 ) -> Result<PathBuf, SfmrError> {
-    let sfmr_dir = dunce::canonicalize(sfmr_path.parent().unwrap_or_else(|| Path::new(".")))
-        .unwrap_or_else(|_| sfmr_path.parent().unwrap_or(Path::new(".")).to_path_buf());
-
-    // Strategy 1: Try relative path from .sfmr file's directory
     let relative_path = &metadata.workspace.relative_path;
-    if !relative_path.is_empty() {
-        let candidate = sfmr_dir.join(relative_path);
-        if let Ok(candidate) = dunce::canonicalize(&candidate) {
-            if candidate.join(WORKSPACE_MARKER).exists() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    // Strategy 2: Fall back to absolute path
     let absolute_path = &metadata.workspace.absolute_path;
-    if !absolute_path.is_empty() {
-        let candidate = PathBuf::from(absolute_path);
-        if candidate.exists() && candidate.join(WORKSPACE_MARKER).exists() {
-            return Ok(candidate);
-        }
-    }
-
-    // Strategy 3: Search upward from the .sfmr file for .sfm-workspace.json
-    if let Some(candidate) = find_workspace_for_path(&sfmr_dir) {
-        return Ok(candidate);
+    if let Some(dir) =
+        sfmtool_archive_io::resolve_workspace_dir(sfmr_path, relative_path, absolute_path)
+    {
+        return Ok(dir);
     }
 
     Err(SfmrError::InvalidFormat(format!(
@@ -1241,17 +1222,4 @@ pub fn resolve_workspace_dir(
             absolute_path
         },
     )))
-}
-
-/// Search upward from a path for a directory containing `.sfm-workspace.json`.
-fn find_workspace_for_path(start: &Path) -> Option<PathBuf> {
-    let mut current = start.to_path_buf();
-    loop {
-        if current.join(WORKSPACE_MARKER).exists() {
-            return Some(current);
-        }
-        if !current.pop() {
-            return None;
-        }
-    }
 }

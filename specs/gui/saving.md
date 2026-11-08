@@ -74,24 +74,40 @@ sits on, and it can be undone, jumped away from and returned to like every other
 version.
 
 **A value whose overlay is empty is written exactly as it stands**, provenance
-and all, and mints no version, unless it states a workspace path or lacks some
-image's readings (both below). It is already the content its hash names: a
+and all, and mints no version, unless its save changes the recorded workspace
+path or it lacks some image's readings (both below). It is already the content its hash names: a
 second stamping would change the content the hash was taken over, and a version
 identical to the one before it would say that something happened when nothing
 did.
 
-**A stated workspace path materialises whatever the overlay holds.**
-`AppState::save_node_as` takes a `workspace_path`, which replaces the
-`workspace.relative_path` the value carries with the one the caller states, in
-POSIX form. That is a change to the metadata and so to the content hash, which is
-the same reason the provenance is stamped before the hash: there has to be a
-version carrying what the file says. So a save that states one folds, pushes and
-marks a version even where there was nothing to fold, and a save with an empty
-overlay that states nothing is still written as it stands. Save and Save As state
-nothing, since neither asks: measuring from where the file lands is what those two
-want, and only the minimal copy has reason to record a path for somewhere else.
-The callers that state one here are that copy's prompt and the MCP surface
-([mcp-server.md](mcp-server.md) § "`save_reconstruction`").
+**Save As records the workspace path from where the file lands.** The
+`workspace.relative_path` a value carries is the path from the file it was read
+from to its workspace, so it is wrong from any other directory. Save As replaces
+it with the path from the new file's directory to the value's workspace,
+measured by `SfmrReconstruction::measured_workspace_path`, the measurement every
+other save makes. Where that equals the path the value carries, as it does for a
+file written beside the one it was read from, nothing changes; where there is
+nothing to measure (demo data has no workspace directory, and two paths on
+different drives have no path between them) the value's path stays. Save writes
+over the file the path was measured from, so it keeps the path the value
+carries. Neither changes the recorded `workspace.absolute_path`, which names the
+workspace rather than a path from the file.
+
+**A changed workspace path materialises whatever the overlay holds.**
+`AppState::save_node_as` also takes a `workspace_path`, which a caller states in
+place of the measured one and which is recorded in POSIX form. A measured or
+stated path that differs from the value's is a change to the metadata and so to
+the content hash, which is the same reason the provenance is stamped before the
+hash: there has to be a version carrying what the file says. So such a save
+folds, pushes and marks a version even where there was nothing to fold, and a
+save with an empty overlay that leaves the path as it was is still written as it
+stands. The dialog's Save As states nothing, since it does not ask: measuring from
+where the file lands is what it wants, and only the minimal copy has reason to
+record a path for somewhere else. The callers that state one here are that copy's
+prompt and the MCP surface ([mcp-server.md](mcp-server.md) §
+"`save_reconstruction`"). A `.kdf` the viewer builds for the node afterwards is
+written beside the new file and records the same path
+([kdf-file-format.md](../formats/kdf-file-format.md)).
 
 **A save never leaves a partial file at the node's path.** The write goes to a
 temporary file in the target's directory and is renamed over the target only once
@@ -282,9 +298,14 @@ materialises into a version the cursor sits on and stamps the provenance it
 hashed; that a point id minted
 before a save still resolves after it through the version graph, while the id
 the panels *show* moves onto the file just written; that a save with no overlay writes the value and mints nothing; that
-Save As writes elsewhere and re-points the node; that a Save As stating a
-workspace path records it and mints the version that carries it, so the value the
-session holds hashes to the file; that a save of a value without image readings
+Save As writes elsewhere and re-points the node; that a Save As to another
+directory records the workspace path measured from the new file and mints the
+version that carries it, and that the file still finds its workspace once the
+whole tree has moved and its absolute path names nothing; that a Save As beside
+the file it was read from measures the same path and mints nothing; that a Save
+As stating a workspace path records it in place of the measured one and mints
+the version that carries it, so the value the session holds hashes to the file;
+that a save of a value without image readings
 gathers them into the version it mints, whose hash is the written file's; that a
 save writes one log entry
 naming the path and the version; that a failed write is refused with a reason and
