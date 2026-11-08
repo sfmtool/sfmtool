@@ -9,8 +9,9 @@ end-to-end tests split the seoul bull images into sequences of both layouts,
 a folder per sequence and a name prefix per sequence in one folder, match
 them once with `sfm match --cluster`, and check that each sequence gets
 a `.camrig` holding the estimate `-r` gives for its images when that
-estimate can be written, and no file when it cannot, and that the database `sfm solve` builds from the
-`.matches` file gives each sequence with a `.camrig` its own camera.
+estimate can be written, and no file when it cannot, and that the database
+`sfm solve` builds from the `.matches` file gives each sequence with a
+`.camrig` its own camera.
 """
 
 import importlib
