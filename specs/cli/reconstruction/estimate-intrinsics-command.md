@@ -351,10 +351,11 @@ sequence's only in the file number count as the sequence's (its
 **Rigs.** The images a multi-sensor `.camrig` covers, found as `sfm solve`
 finds it, form one rig sequence, as in `sfm pick-images`. It gets no file,
 since its `.camrig` already gives its images their cameras, and the report
-says so. An image of a rig of `rig_config.json` anywhere in the file stops
-the command before any vote, whatever `-r` selects, with a message naming
-the image, because `sfm solve` ignores `rig_config.json` once any `.camrig`
-covers an image it solves
+says so. When no `.camrig` covers any of the file's images, an image of a
+rig of `rig_config.json` anywhere in the file stops the command before any
+vote, whatever `-r` selects, with a message naming the image, because
+`sfm solve` ignores `rig_config.json` once any `.camrig` covers an image it
+solves
 ([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig)),
 so writing any sequence's file would undo the rig. Selected images that
 cannot be grouped (a file with no number, two files of one sequence with the
@@ -374,9 +375,11 @@ they stop `sfm pick-images`.
 - a single-sensor `.camrig` other than its own already covers any of its
   images, since `sfm solve` refuses an image two `.camrig` files match;
 - its file exists and `--force` was not given;
-- its pattern matches an image of the `.matches` file in another sequence,
-  as a matcher that ignores letter case can; the message names the pattern
-  and one such image.
+- its pattern matches no file in its folder;
+- its pattern matches an image of the `.matches` file that is not the
+  sequence's, as a matcher that ignores letter case can (on Windows and
+  macOS `a_%02d.jpg` matches an `A_03.jpg` that `-r` left out); the message
+  names the pattern and one such image.
 
 The other sequences' files are still written. The command exits 0 when it
 writes at least one file, and 1, after the report, with
