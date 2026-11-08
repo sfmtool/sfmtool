@@ -167,8 +167,9 @@ empty-handed". Name the thing and say what it does.
   - `sfmtool-sift-format`, `sfmtool-matches-format`, `sfmtool-sfmr-format`,
     `sfmtool-camrig-format`, `sfmtool-kdf-format` — on-disk formats (all ZIP + zstd)
   - `sfmtool-archive-io` — the ZIP + zstd container primitives those five share
-    (entry read/write, XXH128 section hashing); each format crate keeps its own
-    schema, validation and error type
+    (entry read/write, XXH128 section hashing), and the `workspace` metadata
+    object with the rule a reader finds that workspace by; each format crate
+    keeps its own schema, validation and error type
   - `sfmtool-colmap` — COLMAP binary + SQLite interop
   - `sfmtool-core` — algorithms: camera, alignment, distortion, epipolar, matching, frustum, optical flow, transforms, spatial indexing
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
