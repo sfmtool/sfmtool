@@ -139,20 +139,23 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     through the ``w = 0`` path, not a zero row. Every other kept point carries
     one too: culled points are dropped instead of kept with an all-black bitmap.
 
-    The point is point 575 and the pair its observations in images 11 and 12.
-    It is a background point about 50 m from cameras within 3 m of their
-    centroid, so the mean of the pair's two viewing rays projects within half
-    of the localizer's ``max_shift_px`` of both keypoints; its third
-    observation, in image 10, lands about 5 px off and the localizer drops it.
-    A point on the sculpture, 2 to 3 m from the cameras, cannot stand in: its
-    rays differ by tens of degrees, so no direction projects near its
-    keypoints in more than one view, and with fewer than two views the point
-    has no bitmap and is dropped."""
+    For each pair of a point's observations, the candidate direction is the
+    mean of their two viewing rays. The test takes the pair, over every point,
+    whose two keypoints land closest to where that direction projects, and
+    requires both within half of the localizer's ``max_shift_px``. The test
+    searches rather than naming a point, because the fixture extracts SIFT on
+    each platform and its point indexes differ between them. On Linux and
+    Windows the search finds a background point about 50 m from cameras within
+    3 m of their centroid; its third observation lands about 5 px off and the
+    localizer drops it. A point on the sculpture, 2 to 3 m from the cameras,
+    cannot stand in: its rays differ by tens of degrees, so no direction
+    projects near its keypoints in more than one view, the localizer drops the
+    other views, and with fewer than two views the point has no bitmap and is
+    dropped."""
     import inspect
 
     from sfmtool.fileio import read_image_rgb
 
-    pi, pair_images = 575, (11, 12)
     max_shift_px = (
         inspect.signature(ep.embed_patches).parameters["max_shift_px"].default
     )
@@ -165,18 +168,10 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     centres = -np.einsum("nji,nj->ni", rotations, np.asarray(recon.translations))
     cameras = recon.cameras
     camera_indexes = np.asarray(recon.camera_indexes)
-
-    pair = []
-    for image in pair_images:
-        obs = np.flatnonzero((points == pi) & (obs_images == image))
-        assert len(obs) == 1, f"point {pi} is not observed once in image {image}"
-        pair.append(int(obs[0]))
-    rays = pos[pi, :3] - centres[list(pair_images)]
+    rays = pos[points, :3] - centres[obs_images]
     rays /= np.linalg.norm(rays, axis=1, keepdims=True)
-    direction = rays.sum(axis=0)
-    direction /= np.linalg.norm(direction)
 
-    def offset_px(obs):
+    def offset_px(direction, obs):
         """Pixels from observation ``obs``'s keypoint to where ``direction``
         projects in its image; infinite behind the camera."""
         image = int(obs_images[obs])
@@ -186,12 +181,20 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
         uv = cameras[int(camera_indexes[image])].project(x[0] / -x[2], x[1] / -x[2])
         return float(np.linalg.norm(np.asarray(uv) - keypoints[obs]))
 
-    offsets = [offset_px(o) for o in pair]
-    assert max(offsets) <= max_shift_px / 2, (
-        f"the fixture no longer fits point {pi} at infinity from images "
-        f"{pair_images}: its keypoints land {offsets} px from the mean ray, "
-        f"more than {max_shift_px / 2} px"
-    )
+    # (worse of the pair's two offsets, point, pair, direction)
+    best = (np.inf, -1, (), None)
+    for p in range(recon.point_count):
+        obs = np.flatnonzero(points == p)
+        for i, a in enumerate(obs):
+            for b in obs[i + 1 :]:
+                d = rays[a] + rays[b]
+                d /= np.linalg.norm(d)
+                worse = max(offset_px(d, a), offset_px(d, b))
+                if worse < best[0]:
+                    best = (worse, p, (int(a), int(b)), d)
+    worse, pi, pair, direction = best
+    assert worse <= max_shift_px / 2, f"no pair fits a point at infinity ({worse} px)"
+    pair_images = {int(obs_images[o]) for o in pair}
     pos[pi] = np.append(direction, 0.0)
     recon = recon.clone_with_changes(positions=pos)
     # Every eighth point and the one at infinity.
@@ -215,7 +218,7 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
             np.asarray(out.track_point_indexes) == inf
         ].tolist()
     )
-    assert set(pair_images) <= kept, f"kept track {sorted(kept)} lacks {pair_images}"
+    assert pair_images <= kept, f"kept track {sorted(kept)} lacks {pair_images}"
 
     # Every kept point, the one at infinity among them, has a stored bitmap
     # with cross-view agreement somewhere (alpha > 0): no all-black rows.
