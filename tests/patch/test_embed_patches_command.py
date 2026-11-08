@@ -144,8 +144,8 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     centroid, so the mean of the pair's two viewing rays projects within half
     of the localizer's ``max_shift_px`` of both keypoints; its third
     observation, in image 10, lands about 5 px off and the localizer drops it.
-    A point near the sculpture, about 1.4 m from the cameras, cannot stand in:
-    its rays differ by tens of degrees, so no direction projects near its
+    A point on the sculpture, 2 to 3 m from the cameras, cannot stand in: its
+    rays differ by tens of degrees, so no direction projects near its
     keypoints in more than one view, and with fewer than two views the point
     has no bitmap and is dropped."""
     import inspect
