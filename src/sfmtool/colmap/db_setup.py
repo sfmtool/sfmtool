@@ -44,11 +44,15 @@ def _write_image_features(
     camrigs: CamrigSolveResult | None,
     camera_model: str | None,
     camera_config_resolver: CameraConfigResolver | None,
+    include_descriptors: bool = True,
 ) -> bool:
     """Write the cameras, rigs, frames and features of `image_paths` into a
     new database at `db_path`, from the `.camrig` files covering any of them
     when there are some, else from `camera_config.json` / EXIF inference
-    alone.
+    alone. `sfm solve` and `sfm match` both set up their databases here.
+
+    `include_descriptors=False` skips the descriptor blocks (see
+    `_setup_db_single_sensor`).
 
     Returns whether a multi-sensor rig was set up, so the caller runs the
     rig-aware matching and mapper paths.
@@ -63,6 +67,7 @@ def _write_image_features(
             camrigs,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
+            include_descriptors=include_descriptors,
         )
         return camrigs.is_multi_sensor
     _setup_db_single_sensor(
@@ -73,6 +78,7 @@ def _write_image_features(
         max_feature_count,
         camera_model=camera_model,
         camera_config_resolver=camera_config_resolver,
+        include_descriptors=include_descriptors,
     )
     return False
 

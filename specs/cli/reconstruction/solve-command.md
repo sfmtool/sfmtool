@@ -228,7 +228,8 @@ is that same `k1 = 0` camera.
 image patterns match any of the images being solved. One rule holds for every
 image: it takes its camera from the `.camrig` that covers it, else from the
 `camera_config.json` it resolves, else from EXIF inference
-([Camera Intrinsics](#camera-intrinsics)). Any number of `.camrig` files, single-sensor
+([Camera Intrinsics](#camera-intrinsics)). `sfm match` and `sfm to-colmap-db` set up
+the cameras of their COLMAP databases by the same rule. Any number of `.camrig` files, single-sensor
 and multi-sensor, can be used in one solve, and each image may be covered by at
 most one of them. A `.camrig` takes precedence over `camera_config.json` for the
 images it covers, and a note is printed when it overrides one.

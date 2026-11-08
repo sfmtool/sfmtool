@@ -20,9 +20,11 @@ would with no `.camrig`, and are single-image frames beside the rig frames. An
 image matched by more than one `.camrig` is refused. The `.camrig` files take
 precedence over `camera_config.json` for the images they cover. With
 `--camera-model`, each of their cameras the solve uses is refit to that model
-and the refit camera is the starting intrinsics; the files are not changed. `sfm pick-images` applies the
-same rule, through `find_covering_camrigs`, so the list it writes is one
-`sfm solve` takes.
+and the refit camera is the starting intrinsics; the files are not changed.
+`sfm match` and `sfm to-colmap-db` set up the cameras of their databases
+through `resolve_camrig_for_solve` too, and `sfm pick-images` applies the same
+rule through `find_covering_camrigs`, so the list it writes is one `sfm solve`
+takes.
 """
 
 from dataclasses import dataclass, field

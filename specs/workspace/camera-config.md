@@ -188,7 +188,8 @@ Any command that creates camera entries from images consults
 `camera_config.json` during camera setup. This currently includes:
 
 - `sfm solve` (incremental and global, from images or `.matches`)
-- `sfm match` (when computing two-view geometries)
+- `sfm match` (every mode that builds a COLMAP database: all but `--cluster`,
+  which needs no camera, and `--merge`)
 - `sfm to-colmap-db` (`.matches` input only; the `.sfmr` path uses the
   reconstruction's embedded intrinsics)
 
