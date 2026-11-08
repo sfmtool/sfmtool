@@ -69,7 +69,7 @@ def test_embed_patches_default_is_two_rounds_with_subpixel(default_embed_patches
     # resolution=12 (vs the resolution=24 default) keeps this a comparison of
     # default-vs-explicit kwargs at a cheaper sampling grid — both sides use the
     # same grid, so the equivalence being pinned is unaffected. The default
-    # side is the run the sibling test_embed_patches_command.py tests share.
+    # side is default_embed_patches_run, which other patch tests also read.
     default = run.out
     explicit = embed_patches(recon, images, subpixel=True, rounds=2, resolution=12)
 
