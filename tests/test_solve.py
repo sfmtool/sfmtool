@@ -171,8 +171,8 @@ def _cluster_matches_workspace(images: list[Path]) -> tuple[Path, Path]:
     """Set up the dataset-script front half: workspace, SIFT, cluster match."""
     workspace_dir = images[0].parent
 
-    # The committed camera_config.json would reject --camera-model, but the
-    # cluster recipe uses auto-detected intrinsics — leave it in place.
+    # The committed camera_config.json stays in place; the cluster recipe
+    # passes no --camera-model.
     result = CliRunner().invoke(
         main, ["ws", "init", "--feature-tool", "sfmtool", str(workspace_dir)]
     )
