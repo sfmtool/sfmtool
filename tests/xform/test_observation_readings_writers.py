@@ -15,7 +15,6 @@ from sfmtool.xform import (
     FindPointsAtInfinityTransform,
     LocalizeKeypointsTransform,
     RefineKeypointsTransform,
-    RefineNormalsTransform,
 )
 
 OPTIONS = {
@@ -89,13 +88,12 @@ def test_localize_keypoints_reads_every_observation_at_its_resolution(
     assert np.isnan(readings["plain_bitmap_zncc"]).all()
 
 
-def test_refine_normals_reads_the_turned_points_again(seoul_bull_workspace):
+def test_refine_normals_reads_the_turned_points_again(seoul_bull_normals_refined):
     # The input has no readings column, so the run adds one: the observations
     # of each point it turned and rewrote are read at the value's patch
     # resolution, and every other row is not measured.
-    recon = _embedded(seoul_bull_workspace)
+    recon, out = seoul_bull_normals_refined
     assert recon.observation_readings is None
-    out = RefineNormalsTransform().apply(recon)
     readings = out.observation_readings
     assert readings["options"]["resolution"] == 24
     assert readings["options"]["sampler"] == "per_view"

@@ -6,6 +6,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from sfmtool.geometry import RotQuaternion
 from sfmtool.reconstruction import SfmrReconstruction
@@ -109,3 +110,17 @@ def positions_are_translated(
     """Check if transformed positions are correctly translated."""
     expected = original + translation
     return np.allclose(transformed, expected, atol=atol)
+
+
+@pytest.fixture(scope="session")
+def seoul_bull_normals_refined(seoul_bull_workspace_once: Path):
+    """The seoul_bull workspace converted to ``embedded_patches`` (mean-viewing
+    normals, no bitmaps) and ``RefineNormalsTransform()``'s output on it, built
+    once for the tests that only read them. Read them; do not modify them or
+    their source workspace."""
+    from sfmtool.xform import RefineNormalsTransform
+
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
+    return recon, RefineNormalsTransform().apply(recon)
