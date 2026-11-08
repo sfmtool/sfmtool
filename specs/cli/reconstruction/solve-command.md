@@ -231,7 +231,11 @@ and multi-sensor, can be used in one solve, and each image may be covered by at
 most one of them. A `.camrig` takes precedence over `camera_config.json` for the
 images it covers, and a note is printed when it overrides one. When any `.camrig`
 is used, `rig_config.json` is ignored for every image being solved, and a note
-says so.
+says so. `sfm estimate-intrinsics --write-camrig-per-sequence` writes one
+single-sensor `.camrig` per image sequence of a capture, each estimated from
+its own sequence's images, so a solve over the whole capture gives each
+sequence its own camera
+([estimate-intrinsics-command.md § One camera per sequence](estimate-intrinsics-command.md#one-camera-per-sequence)).
 
 The images no `.camrig` covers take their cameras as they would with no
 `.camrig`: one camera per `camera_config.json` they resolve, and one camera

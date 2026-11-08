@@ -53,6 +53,7 @@ ALLOWED_COUNTS = {
     # Replaces `estimate_intrinsics` where `sfm estimate-intrinsics` imports
     # it at call time, on the extension submodule, for the same reason.
     "tests/test_estimate_intrinsics.py": 1,
+    "tests/test_estimate_intrinsics_per_sequence.py": 1,
 }
 
 
