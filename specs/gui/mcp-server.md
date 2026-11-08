@@ -107,9 +107,9 @@ transport is stateless — no session, no standing connection, every call a fres
 POST — a viewer restarted afterwards is picked up with no reconnection at all,
 since the next call simply lands in the new process. So an agent that has the
 tools can own the viewer's lifecycle from then on: end it with `quit`
-(§ "`quit`"), rebuild, relaunch on the same port, keep calling. Launching it detached from the agent's own session
-is what keeps it alive across the client restart that registered it in the first
-place.
+(§ "`quit`"), rebuild, relaunch on the same port, keep calling. Launching it
+detached from the agent's own session is what keeps it alive across the client
+restart that registered it in the first place.
 
 **Without a registered client**, `sfm explorer-call TOOL ARGS` calls one tool
 from the command line
@@ -6965,8 +6965,8 @@ matching the catalog, a `tools/call` reaching the stand-in GUI and returning
 `structuredContent`, a viewer refusal arriving as `isError: true`, a malformed
 argument arriving as a JSON-RPC error instead, a foreign `Origin` getting
 `403` while the endpoint's own origin and a missing one both pass, and a call
-in flight when the endpoint is stopped still getting its reply before the port
-closes.
+in flight when the endpoint is stopped still getting its reply after the port
+has closed to new calls.
 
 `crates/sfm-explorer/src/cli.rs` carries its own tests for the flag, including
 the case that matters most: `--mcp scene.sfmr` must not eat the path as a port,

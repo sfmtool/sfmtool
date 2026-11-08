@@ -215,8 +215,8 @@ fn a_viewer_refusal_arrives_as_an_is_error_result() {
 }
 
 /// A `quit`'s reply is in the server's hands when the viewer stops its
-/// endpoint, and the caller still gets it: the stop lets a call in flight write
-/// its reply, then closes the port.
+/// endpoint, and the caller still gets it: the stop closes the port to new
+/// calls at once and lets a call in flight write its reply.
 #[test]
 fn a_call_in_flight_is_answered_before_the_endpoint_stops() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::super::Request>();
@@ -224,15 +224,23 @@ fn a_call_in_flight_is_answered_before_the_endpoint_stops() {
         .expect("an ephemeral port is bindable");
     let address = endpoint.address;
     let (received_tx, received_rx) = std::sync::mpsc::channel::<()>();
-    let (stopping_tx, stopping_rx) = std::sync::mpsc::channel::<()>();
-    // The GUI stand-in holds the call until the stop has been asked for, so
-    // the reply can only arrive through a server that is already stopping.
+    // The GUI stand-in holds the call until the listener has closed, so the
+    // reply can only arrive through a server that is already stopping.
+    // Binding the port again is the check that the listener is gone: a
+    // refused connect takes Windows about two seconds to report, a bind does
+    // not wait.
     let gui = std::thread::spawn(move || {
         let (mut state, mut viewer) = two_reconstructions();
         let super::super::Request { command, reply } = rx.blocking_recv().expect("the call");
         received_tx.send(()).expect("the test is waiting");
-        stopping_rx.recv().expect("the test asks for the stop");
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let asked = std::time::Instant::now();
+        while std::net::TcpListener::bind(address).is_err() {
+            assert!(
+                asked.elapsed() < std::time::Duration::from_secs(20),
+                "the port is still held while the endpoint stops"
+            );
+            std::thread::yield_now();
+        }
         let answer = match apply(&mut state, &mut viewer, command) {
             Outcome::Quit(value) => Ok(ToolOutput::Json(value)),
             _ => Err(ToolError::new("quit did not answer with Outcome::Quit")),
@@ -251,7 +259,6 @@ fn a_call_in_flight_is_answered_before_the_endpoint_stops() {
     received_rx
         .recv_timeout(std::time::Duration::from_secs(20))
         .expect("the call reached the GUI stand-in");
-    stopping_tx.send(()).expect("the GUI stand-in is waiting");
     assert!(
         endpoint.stop(std::time::Duration::from_secs(20)),
         "the endpoint did not stop"
@@ -265,13 +272,6 @@ fn a_call_in_flight_is_answered_before_the_endpoint_stops() {
         result["structuredContent"]["quitting"],
         json!(true),
         "{result}"
-    );
-    // Binding the port again is the check that the listener is gone: a
-    // refused connect takes Windows about two seconds to report, a bind does
-    // not wait.
-    assert!(
-        std::net::TcpListener::bind(address).is_ok(),
-        "the port is still held after the stop"
     );
 }
 
