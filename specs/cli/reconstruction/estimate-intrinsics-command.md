@@ -277,10 +277,11 @@ The write refuses -- with the report still printed -- when:
 - Registered under the Reconstruction category in `cli.py`; source in
   `src/sfmtool/_commands/estimate_intrinsics.py`.
 - The `.matches` read goes through `sfmtool.fileio.MatchesFile`. The
-  command passes the selection handle itself (`select_clusters()`, restricted
-  to the `-r` images when given) to the kernel's object form, which reads the backbone's own CSR index, member images and
-  member positions off it; the command derives nothing from those arrays but
-  the cluster and observation counts the report prints.
+  command passes the selection handle itself (`select_clusters()`,
+  restricted to the `-r` images when given) to the kernel's object form,
+  which reads the backbone's own CSR index, member images and member
+  positions off it; the command derives nothing from those arrays but the
+  cluster and observation counts the report prints.
 - Keypoint positions come from the file's `member_positions` — the backbone's
   own array, whose content is whatever stage the file is at: the detections of
   a matcher output, the refinement's answer in a cluster-patches one. There is
@@ -297,9 +298,9 @@ The write refuses -- with the report still printed -- when:
   file is read once.
 - The shared-camera rule is the kernel's, and the command checks it first
   anyway, on the selected images: both refuse images of more than one
-  resolution, and
-  going through the command's own check is what turns the refusal into a
-  message listing the resolutions found and an example image for each.
+  resolution, and going through the command's own check is what turns the
+  refusal into a message listing the resolutions found and an example image
+  for each.
 - An explicit `--model pinhole` runs no scan, so its result carries no
   per-column block (the closed-form kernel is the whole answer); the same is
   true of an `auto` run whose pinhole vote stood. The report's Columns
