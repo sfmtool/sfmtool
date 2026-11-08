@@ -181,32 +181,29 @@ sensors are those that appear in the input files, so a rig given one sensor's
 folder is walked as a rig of that sensor alone.
 
 - **`.camrig` files that cover any input file** take precedence over
-  `rig_config.json`, and a line notes that `rig_config.json` is ignored when
-  the workspace has one. A **multi-sensor** `.camrig`, such as `sfm insv2rig`
-  writes, covers all of the input files, alone, and makes them one rig
-  sequence: each sensor's image pattern, relative to the `.camrig`'s folder,
-  gives each file it matches its sensor and
+  `rig_config.json` for every input file, and a line notes that
+  `rig_config.json` is ignored when the workspace has one. Each
+  **multi-sensor** `.camrig`, such as `sfm insv2rig` writes, makes the input
+  files it covers one rig sequence: each sensor's image pattern, relative to
+  the `.camrig`'s folder, gives each file it matches its sensor and
   its frame index, the number the pattern's frame field captures, and the files
   of one frame index are one rig frame (`_build_rig_assignments`, which
   `sfm solve` groups a rig's images with). The frame index is the frame's
   number in the report and in the list. The reference sensor is the
   lowest-indexed sensor present, the one `sfm solve` makes the rig's
   reference, which is sensor 0, the `.camrig`'s primary sensor, whenever its
-  images are given. The report names the `.camrig` and its count of sensors
-  under the workspace's lines
+  images are given. The report names each such `.camrig` and its count of
+  sensors under the workspace's lines
   (`  Camera rig: /captures/kp/kp.camrig (2 sensors)`). A **single-sensor**
-  `.camrig` describes a camera, not a rig, so one or more single-sensor
-  `.camrig` files, such as one per video of a capture shot with two lenses,
-  leave the files grouped into ordinary sequences, whether or not they cover
-  every input file: `sfm solve` gives the images they do not cover cameras
-  from `camera_config.json` or EXIF inference.
-- **A multi-sensor `.camrig` that covers only some of the input files**, an
-  input file that more than one `.camrig` matches, and a multi-sensor
-  `.camrig` together with another `.camrig` are refused before any image is
-  read, naming the `.camrig` files, since `sfm solve` refuses the same images
-  and a list holding them would be of no use to it. Such a capture is picked
-  in parts, each made of the images of one multi-sensor `.camrig`, or of
-  images no multi-sensor `.camrig` covers.
+  `.camrig` describes a camera, not a rig. The input files no multi-sensor
+  `.camrig` covers are grouped into ordinary sequences, whether a
+  single-sensor `.camrig` covers them or not, as `sfm solve` takes them as
+  single images beside the rig frames. So a capture of a rig's videos and
+  other photographs is picked in one run, and the list it writes holds the
+  rig's chosen frames and the other sequences' chosen images.
+- **An input file that more than one `.camrig` matches** is refused before any
+  image is read, naming the `.camrig` files, since `sfm solve` refuses the
+  same images and a list holding them would be of no use to it.
 - **With no `.camrig` covering any input file**, the workspace's
   `rig_config.json` ([workspace/rig-config.md](../../workspace/rig-config.md))
   defines the rigs, when it has one. An image under one of a rig's sensor
@@ -323,8 +320,8 @@ pattern. With a `.camrig` it is the sensor's own image pattern behind the
 `.camrig`'s folder, relative to the workspace, with `%%` for a `%` in the
 folder (`rig/` and `cam_b/pan_%03d.jpg` give `rig/cam_b/pan_%03d.jpg`), so it
 matches the files the `.camrig` gives the sensor and reads the same frame
-index from them, and `sfm solve -r NAME` finds the `.camrig` covering every
-image of the list. A list orders its members by entry first, so such a list
+index from them, and `sfm solve -r NAME` finds the `.camrig` covering those
+images of the list. A list orders its members by entry first, so such a list
 holds all of the reference sensor's images before any other sensor's.
 
 ```json
@@ -452,8 +449,11 @@ missing a sensor; a `.camrig` rig in a subfolder whose sensor 0 sorts last,
 written one entry per sensor, whose list `resolve_camrig_for_solve` takes as
 a rig of both sensors at the chosen frames; a `.camrig` taking precedence over
 `rig_config.json`, and a single-sensor one defining no rig, whether it covers
-every input file or only some; input files a multi-sensor `.camrig` covers
-only in part, refused before any image is read; a match
+every input file or only some; a `.camrig` rig covering some of the input
+files, walked as its rig sequence beside an ordinary sequence of the others,
+whose list `resolve_camrig_for_solve` takes as the rig at its chosen frames
+beside the other chosen images; two `.camrig` rigs, each its own sequence; a
+match
 floor too large for the binding, refused naming the option, and one below 1,
 a usage error; an invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.

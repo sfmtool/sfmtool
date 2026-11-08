@@ -112,7 +112,7 @@ def _camrig_collect(rels: list[str], frames: list[tuple[int, int]]) -> list:
         data={"sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"]},
         assignments={p.resolve(): f for p, f in zip(paths, frames)},
     )
-    return collect_sequences(paths, ROOT, None, rig)
+    return collect_sequences(paths, ROOT, None, [rig])
 
 
 def test_camrig_rig_frames_group_by_frame_index_with_sensor_0_first():
@@ -159,7 +159,7 @@ def test_a_camrig_in_a_folder_with_a_star_is_an_error():
         assignments={p.resolve(): f for p, f in zip(paths, [(0, 1), (1, 1)])},
     )
     with pytest.raises(PickImagesInputError, match=r"has a '\*' in its path"):
-        collect_sequences(paths, ROOT, None, rig)
+        collect_sequences(paths, ROOT, None, [rig])
 
 
 def test_list_entries_are_one_per_sensor_with_one_range():

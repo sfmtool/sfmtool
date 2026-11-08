@@ -210,9 +210,9 @@ per resolved file. This matches the typical case (one physical camera produces
 one `nikon_z6/` directory of photos). The images that resolve no file share
 one more camera, inferred from EXIF of the first of them. Each camera is built
 from the first of its images, so the images of one camera are expected to
-share a resolution. An image a single-sensor `.camrig` covers takes that
-file's camera instead, and the images no `.camrig` covers are grouped as
-above.
+share a resolution. An image a `.camrig` covers takes its camera from that
+file instead, a single-sensor file's camera or the camera of its sensor in a
+multi-sensor one, and the images no `.camrig` covers are grouped as above.
 
 If you have two distinct cameras whose images live in the same folder, separate
 them into subfolders before solving, or give each its own single-sensor

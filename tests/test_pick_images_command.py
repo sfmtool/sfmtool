@@ -548,7 +548,8 @@ def test_a_camrig_rig_writes_every_sensor_of_each_chosen_frame(
         [workspace / p for p in listed], workspace, camera_model=None
     )
     assert solve is not None and solve.is_multi_sensor
-    assert sorted(solve.rig.assignments.values()) == sorted(
+    (rig,) = solve.rigs
+    assert sorted(rig.assignments.values()) == sorted(
         (sensor, n) for sensor in (0, 1) for n in chosen
     )
 
@@ -573,17 +574,18 @@ def test_a_camrig_covering_the_images_takes_precedence_over_rig_config(
     workspace = tmp_path / "ws"
     paths = _touch(workspace, RIG_FILES)
     _write_rig_config(workspace)
-    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
-    assert rig_configs is not None and camrig_rig is None and notes == []
+    rig_configs, camrig_rigs, notes = find_rigs(paths, workspace)
+    assert rig_configs is not None and camrig_rigs == [] and notes == []
 
     _write_camrig(workspace / "rig" / "pan.camrig", CAMRIG_PATTERNS)
-    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
+    rig_configs, camrig_rigs, notes = find_rigs(paths, workspace)
     assert rig_configs is None
+    (camrig_rig,) = camrig_rigs
     assert sorted(camrig_rig.assignments.values()) == [
         (s, n) for s in (0, 1) for n in (1, 2)
     ]
     assert "rig_config.json is ignored (the .camrig takes precedence)" in notes[-1]
-    (sequence,) = collect_sequences(paths, workspace, rig_configs, camrig_rig)
+    (sequence,) = collect_sequences(paths, workspace, rig_configs, camrig_rigs)
     assert sequence.patterns == ["rig/cam_b/pan_%03d.jpg", "rig/cam_a/pan_%03d.jpg"]
 
 
@@ -594,10 +596,10 @@ def test_a_single_sensor_camrig_defines_no_rig(tmp_path: Path):
     paths = _touch(workspace, RIG_FILES)
     _write_rig_config(workspace)
     _write_camrig(workspace / "rig" / "one.camrig", ["*/pan_%03d.jpg"])
-    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
-    assert rig_configs is None and camrig_rig is None
+    rig_configs, camrig_rigs, notes = find_rigs(paths, workspace)
+    assert rig_configs is None and camrig_rigs == []
     assert len(notes) == 1 and "rig_config.json is ignored" in notes[0]
-    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rig)
+    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rigs)
     assert [s.patterns for s in sequences] == [
         ["rig/cam_a/pan_%03d.jpg"],
         ["rig/cam_b/pan_%03d.jpg"],
@@ -614,10 +616,10 @@ def test_a_single_sensor_camrig_covering_some_images_is_not_refused(
     paths = _touch(workspace, RIG_FILES)
     _write_rig_config(workspace)
     _write_camrig(workspace / "rig" / "cam_a" / "a.camrig", ["pan_%03d.jpg"])
-    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
-    assert rig_configs is None and camrig_rig is None
+    rig_configs, camrig_rigs, notes = find_rigs(paths, workspace)
+    assert rig_configs is None and camrig_rigs == []
     assert len(notes) == 1 and "rig_config.json is ignored" in notes[0]
-    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rig)
+    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rigs)
     assert [s.patterns for s in sequences] == [
         ["rig/cam_a/pan_%03d.jpg"],
         ["rig/cam_b/pan_%03d.jpg"],
@@ -648,11 +650,12 @@ def test_several_single_sensor_camrigs_walk_each_sequence(
     ]
 
 
-def test_images_a_multi_sensor_camrig_covers_only_in_part_are_refused(
+def test_a_camrig_rig_covering_some_images_walks_them_beside_the_others(
     tmp_path: Path, pan_source, monkeypatch
 ):
-    # `sfm solve` refuses a set of images a multi-sensor .camrig covers only
-    # in part, so the command refuses it before reading any image.
+    # The images a rig .camrig covers are its rig sequence, and the others
+    # ordinary sequences, as `sfm solve` takes them: the rig's images as its
+    # rig frames and the others as single images.
     workspace = tmp_path / "ws"
     _copy_frames(pan_source["top"], workspace / "rig" / "cam_b", count=3)
     _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_a", count=3)
@@ -661,15 +664,51 @@ def test_images_a_multi_sensor_camrig_covers_only_in_part_are_refused(
     _init_workspace(workspace)
     monkeypatch.chdir(workspace)
 
-    result = CliRunner().invoke(main, ["pick-images", "rig", "frames"])
-    assert result.exit_code == 1, result.output
-    assert "pan.camrig matches only 6 of 9 images given" in result.output
-    assert "A multi-sensor .camrig must cover all of the images given" in result.output
-    assert "pick only the images it covers, or remove it" in result.output
-    assert not any(p.suffix == ".sift" for p in workspace.rglob("*"))
-
-    result = CliRunner().invoke(main, ["pick-images", "rig"])
+    result = _invoke(
+        ["pick-images", "rig", "frames", "--write-list", "mixed", "--json", "r.json"]
+    )
     assert result.exit_code == 0, result.output
+    assert "pan.camrig (2 sensors)" in result.output
+    assert "9 image file(s) in 2 sequences" in result.output
+    data = json.loads((workspace / "r.json").read_text())
+    assert [c["sensors"] for c in data["capture"]] == [None, CAMRIG_PATTERNS]
+    assert [c["images"][0] for c in data["capture"]] == [
+        ["frames/pan_001.jpg"],
+        ["rig/cam_b/pan_001.jpg", "rig/cam_a/pan_001.jpg"],
+    ]
+    frames_chosen, rig_chosen = data["chosen_numbers"]
+
+    listed = _resolve(workspace, "mixed")
+    solve = resolve_camrig_for_solve(
+        [workspace / p for p in listed], workspace, camera_model=None
+    )
+    (rig,) = solve.rigs
+    assert sorted(rig.assignments.values()) == sorted(
+        (sensor, n) for sensor in (0, 1) for n in rig_chosen
+    )
+    assert sorted(p for p in listed if p.startswith("frames/")) == [
+        f"frames/pan_{n:03d}.jpg" for n in frames_chosen
+    ]
+
+
+def test_each_camrig_rig_is_its_own_sequence(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    paths = _touch(workspace, RIG_FILES)
+    paths += _touch(workspace, [p.replace("rig/", "two/") for p in RIG_FILES])
+    paths += _touch(workspace, ["frames/pan_001.jpg", "frames/pan_002.jpg"])
+    _write_camrig(workspace / "rig" / "pan.camrig", CAMRIG_PATTERNS)
+    _write_camrig(workspace / "two" / "pan.camrig", CAMRIG_PATTERNS)
+    rig_configs, camrig_rigs, notes = find_rigs(paths, workspace)
+    assert [r.camrig_file.parent.name for r in camrig_rigs] == ["rig", "two"]
+    assert [len(r.assignments) for r in camrig_rigs] == [4, 4]
+    assert len(notes) == 2
+    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rigs)
+    assert [s.patterns for s in sequences] == [
+        ["frames/pan_%03d.jpg"],
+        ["rig/cam_b/pan_%03d.jpg", "rig/cam_a/pan_%03d.jpg"],
+        ["two/cam_b/pan_%03d.jpg", "two/cam_a/pan_%03d.jpg"],
+    ]
+    assert [s.numbers for s in sequences] == [[1, 2]] * 3
 
 
 def test_an_invalid_output_name_is_a_usage_error(pan_workspace: Path):

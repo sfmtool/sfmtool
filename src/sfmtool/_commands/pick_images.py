@@ -233,8 +233,10 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             )
 
     try:
-        rig_configs, camrig_rig, notes = find_rigs(filenames, workspace_dir)
-        sequences = collect_sequences(filenames, workspace_dir, rig_configs, camrig_rig)
+        rig_configs, camrig_rigs, notes = find_rigs(filenames, workspace_dir)
+        sequences = collect_sequences(
+            filenames, workspace_dir, rig_configs, camrig_rigs
+        )
     except PickImagesInputError as e:
         raise click.ClickException(str(e))
     for note in notes:

@@ -147,12 +147,13 @@ If any image being processed resolves a `camera_config.json` (closest-ancestor w
 its parent directory up to the workspace root), the file's intrinsics are used, one camera
 per resolved file. See
 [`../../workspace/camera-config.md`](../../workspace/camera-config.md). `--derive-pairs`
-sets up its cameras as `sfm solve` does from a `.matches` file, so the `.camrig` files
-covering the file's images supply them there, one camera per single-sensor `.camrig`, and
-the images no `.camrig` covers take their cameras from `camera_config.json` or EXIF
-inference
-([solve-command.md § Camera Rig Files](../reconstruction/solve-command.md#camera-rig-files-camrig));
-matching an image set reads no `.camrig`.
+sets up its cameras as `sfm solve` does from a `.matches` file, so each image takes its
+camera from the `.camrig` covering it there, one camera per single-sensor `.camrig` and
+one rig per multi-sensor `.camrig`, and the images no `.camrig` covers take their cameras
+from `camera_config.json` or EXIF inference
+([solve-command.md § Camera Rig Files](../reconstruction/solve-command.md#camera-rig-files-camrig)).
+Its `.camrig` lines and messages call them the `images of the .matches file`. Matching an
+image set reads no `.camrig`.
 
 With `--camera-model`, the camera a `camera_config.json`, a `rig_config.json` sensor's
 `camera_params` or, for `--derive-pairs`, a `.camrig` supplies is refit to that model and

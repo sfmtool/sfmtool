@@ -167,23 +167,90 @@ def test_resolve_camrig_leaves_uncovered_images_to_camera_config(
     ) in out
 
 
-def test_resolve_camrig_rejects_a_rig_with_another_camrig(tmp_path: Path):
-    _copy_images(tmp_path / "left", "seoul_bull_sculpture", 1)
-    _copy_images(tmp_path / "right", "seoul_bull_sculpture", 1)
-    _copy_images(tmp_path / "solo", "seoul_bull_sculpture", 1)
-    imgs = sorted(tmp_path.glob("*/*.jpg"))
+def _make_seoul_rig(tmp_path: Path, folders: tuple[str, str], name: str) -> None:
+    """A two-sensor `.camrig` `name` in `tmp_path` over two seoul_bull images
+    in each of `folders`, paired by file number."""
+    for folder in folders:
+        _copy_images(tmp_path / folder, "seoul_bull_sculpture", 2)
     _make_camrig(
-        tmp_path / "rig.camrig",
-        [
-            "left/seoul_bull_sculpture_%d.jpg",
-            "right/seoul_bull_sculpture_%d.jpg",
-        ],
+        tmp_path / name,
+        [f"{folder}/seoul_bull_sculpture_%d.jpg" for folder in folders],
         sensor_count=2,
         camera=_camera(270, 480),
     )
+
+
+def test_resolve_camrig_a_rig_beside_another_camrig(tmp_path: Path, capsys):
+    # A rig and a single-sensor .camrig each take the images they cover, and
+    # the images neither covers fall back, here to EXIF inference.
+    _make_seoul_rig(tmp_path, ("left", "right"), "rig.camrig")
+    _copy_images(tmp_path / "solo", "seoul_bull_sculpture", 1)
+    _copy_images(tmp_path / "loose", "seoul_bull_sculpture", 1)
     _make_camrig(tmp_path / "solo.camrig", ["solo/*.jpg"], camera=_camera(270, 480))
-    with pytest.raises(CamrigSolveError, match="rig.camrig is a multi-sensor rig"):
+    imgs = sorted(tmp_path.glob("*/*.jpg"))
+    result = resolve_camrig_for_solve(imgs, tmp_path, None)
+    assert result.is_multi_sensor
+    (rig,) = result.rigs
+    assert rig.camrig_file.name == "rig.camrig"
+    assert {p.parent.name for p in rig.assignments} == {"left", "right"}
+    assert sorted(rig.assignments.values()) == [(0, 1), (0, 2), (1, 1), (1, 2)]
+    (camera,) = result.cameras
+    assert camera.images == {(tmp_path / "solo" / imgs[0].name).resolve()}
+    loose = (tmp_path / "loose" / imgs[0].name).resolve()
+    assert (
+        f"Camera intrinsics: 1 of 6 images being solved are covered by no "
+        f".camrig, e.g. {loose}; they use EXIF inference.\n"
+    ) in capsys.readouterr().out
+
+
+def test_resolve_camrig_a_rig_covering_some_images(tmp_path: Path, capsys):
+    # A rig covering only some of the images is the rig of those images; the
+    # others fall back as they do beside a single-sensor .camrig, and the
+    # message names the caller's images.
+    _make_seoul_rig(tmp_path, ("left", "right"), "rig.camrig")
+    _copy_images(tmp_path / "solo", "seoul_bull_sculpture", 1)
+    imgs = sorted(tmp_path.glob("*/*.jpg"))
+    result = resolve_camrig_for_solve(
+        imgs, tmp_path, None, images="images of the .matches file"
+    )
+    assert result.cameras == []
+    (rig,) = result.rigs
+    assert len(rig.assignments) == 4
+    stray = (tmp_path / "solo" / imgs[0].name).resolve()
+    assert stray not in rig.assignments
+    assert (
+        f"Camera intrinsics: 1 of 5 images of the .matches file are covered by no "
+        f".camrig, e.g. {stray}; they use EXIF inference.\n"
+    ) in capsys.readouterr().out
+
+
+def test_resolve_camrig_two_rigs(tmp_path: Path):
+    # Each multi-sensor .camrig is its own rig of the images it covers.
+    _make_seoul_rig(tmp_path, ("a_left", "a_right"), "a.camrig")
+    _make_seoul_rig(tmp_path, ("b_left", "b_right"), "b.camrig")
+    imgs = sorted(tmp_path.glob("*/*.jpg"))
+    result = resolve_camrig_for_solve(imgs, tmp_path, None)
+    assert [r.camrig_file.name for r in result.rigs] == ["a.camrig", "b.camrig"]
+    assert [{p.parent.name for p in r.assignments} for r in result.rigs] == [
+        {"a_left", "a_right"},
+        {"b_left", "b_right"},
+    ]
+    assert result.cameras == []
+
+
+def test_resolve_camrig_rejects_an_image_in_a_rig_and_another_camrig(
+    tmp_path: Path,
+):
+    # An image a rig's sensor matches and a single-sensor .camrig matches too
+    # is refused, as two single-sensor files matching one image are.
+    _make_seoul_rig(tmp_path, ("left", "right"), "rig.camrig")
+    _make_camrig(tmp_path / "left.camrig", ["left/*.jpg"], camera=_camera(270, 480))
+    imgs = sorted(tmp_path.glob("*/*.jpg"))
+    with pytest.raises(CamrigSolveError) as excinfo:
         resolve_camrig_for_solve(imgs, tmp_path, None)
+    message = str(excinfo.value)
+    assert "2 of the 4 images being solved are matched by more than one" in message
+    assert "left.camrig and" in message and "rig.camrig" in message
 
 
 def test_resolve_camrig_refits_each_file_camera(tmp_path: Path, capsys):
@@ -225,23 +292,6 @@ def test_resolve_camrig_one_file_covering_some_images(tmp_path: Path, capsys):
         "Camera intrinsics: 1 of 3 images being solved are covered by no "
         f".camrig, e.g. {b[0].resolve()}; they use EXIF inference.\n"
     ) in out
-
-
-def test_resolve_camrig_rejects_a_rig_covering_some_images(tmp_path: Path):
-    # A multi-sensor .camrig defines the frames of its images, so it must
-    # cover every image being solved.
-    imgs = _touch_images(tmp_path / "left", ["f_1.jpg"])
-    imgs += _touch_images(tmp_path / "right", ["f_1.jpg"])
-    stray = _touch_images(tmp_path / "solo", ["s.jpg"])
-    _make_camrig(
-        tmp_path / "rig.camrig", ["left/f_%d.jpg", "right/f_%d.jpg"], sensor_count=2
-    )
-    with pytest.raises(CamrigSolveError) as excinfo:
-        resolve_camrig_for_solve(imgs + stray, tmp_path, None)
-    message = str(excinfo.value)
-    assert "rig.camrig matches only 2 of 3 images being solved" in message
-    assert f"e.g. {stray[0].resolve()} is not matched by any sensor" in message
-    assert "A multi-sensor .camrig must cover all of the images" in message
 
 
 def _simple_pinhole_camera(focal: float = 300.0) -> dict:
@@ -364,7 +414,7 @@ def test_resolve_camrig_resolves_multi_sensor(tmp_path: Path):
     result = resolve_camrig_for_solve(imgs, tmp_path, None)
     assert result is not None
     assert result.is_multi_sensor
-    rig = result.rig
+    (rig,) = result.rigs
     assert {a[0] for a in rig.assignments.values()} == {0, 1}
     assert {a[1] for a in rig.assignments.values()} == {1, 2}
 
@@ -396,7 +446,8 @@ def test_resolve_camrig_multi_sensor_refits_each_camera(tmp_path: Path, capsys):
     result = resolve_camrig_for_solve(imgs, tmp_path, "RADIAL")
 
     assert result.is_multi_sensor
-    cameras = result.rig.data["cameras"]
+    (rig,) = result.rigs
+    cameras = rig.data["cameras"]
     assert [c["model"] for c in cameras] == ["RADIAL", "RADIAL"]
     assert [c["parameters"]["focal_length"] for c in cameras] == [300.0, 310.0]
     for camera in cameras:
