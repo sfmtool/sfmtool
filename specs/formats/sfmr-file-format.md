@@ -314,7 +314,8 @@ JSON structure describing the reconstruction:
   - `absolute_path`: Absolute path to workspace directory (at time of save), or
     empty when none was recorded
   - `relative_path`: Path from `.sfmr` file's directory to workspace (POSIX
-    format), or empty when none was recorded
+    format), or empty when none was recorded. A file in the workspace
+    directory itself records `"."`
   - `contents`: Embedded workspace configuration (mirrors `.sfm-workspace.json` content)
     - `feature_tool`: Feature extraction tool used in workspace (e.g. `"colmap"`, `"opencv"`)
     - `feature_type`: Feature type (e.g. `"sift"`)

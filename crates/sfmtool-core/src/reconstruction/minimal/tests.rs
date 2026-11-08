@@ -210,6 +210,56 @@ fn the_relative_path_is_resolved_before_it_is_measured() {
     assert_eq!(recon.metadata.workspace.relative_path, "../ws");
 }
 
+/// A file saved beside its workspace marker measures `"."`, not the empty
+/// string two equal directories differ by, which the format reads as no path
+/// recorded. The file reads back to that workspace from the path alone.
+#[test]
+fn a_save_in_the_workspace_root_records_dot() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dir.path().join("ws");
+    let recon = heavy(&workspace);
+    let out = workspace.join("a.sfmr");
+    assert_eq!(recon.measured_workspace_path(&out), Some(".".to_string()));
+
+    let minimal = recon.to_minimal(&out, &STAMP, BTreeMap::new());
+    assert_eq!(minimal.metadata.workspace.relative_path, ".");
+    minimal.save(&out, &Progress::none()).unwrap();
+    let read = SfmrReconstruction::load(&out, &Progress::none()).unwrap();
+    assert_eq!(read.metadata.workspace.relative_path, ".");
+    assert_eq!(
+        std::fs::canonicalize(&read.workspace_dir).unwrap(),
+        std::fs::canonicalize(&workspace).unwrap()
+    );
+}
+
+/// A workspace copied with a file saved at its root: the copy's file resolves
+/// to the copy, while the original directory is still there to be found through
+/// the absolute path the file also records.
+#[test]
+fn a_copied_workspace_resolves_to_the_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("ws");
+    let mut recon = heavy(&original);
+    let out = original.join("a.sfmr");
+    recon.stamp_save(&out, &STAMP);
+    recon.save(&out, &Progress::none()).unwrap();
+
+    let copy = dir.path().join("copy");
+    std::fs::create_dir_all(&copy).unwrap();
+    for name in [".sfm-workspace.json", "a.sfmr"] {
+        std::fs::copy(original.join(name), copy.join(name)).unwrap();
+    }
+    let read = SfmrReconstruction::load(&copy.join("a.sfmr"), &Progress::none()).unwrap();
+    assert_eq!(
+        read.metadata.workspace.absolute_path,
+        original.to_string_lossy()
+    );
+    assert_eq!(
+        std::fs::canonicalize(&read.workspace_dir).unwrap(),
+        std::fs::canonicalize(&copy).unwrap()
+    );
+}
+
 /// The same value written minimal from two machines' worth of absolute paths,
 /// to the same place relative to its workspace, is the same content.
 #[test]

@@ -480,13 +480,9 @@ impl ClusterPlan {
         let images = &recon.image_set.images;
         let mut workspace = recon.metadata.workspace.clone();
         workspace.absolute_path = recon.workspace_dir.display().to_string();
-        workspace.relative_path = match recon.measured_workspace_path(&path) {
-            // `os.path.relpath` spells a directory beside itself `.`, and the
-            // file the CLI writes records that.
-            Some(relative) if relative.is_empty() => ".".to_string(),
-            Some(relative) => relative,
-            None => workspace.relative_path,
-        };
+        if let Some(relative) = recon.measured_workspace_path(&path) {
+            workspace.relative_path = relative;
+        }
         Ok(Self {
             path,
             image_names: images.iter().map(|image| image.name.clone()).collect(),
