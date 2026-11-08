@@ -359,94 +359,41 @@ def test_kerry_park_camrig_solve_registers_all_frames(
     kerry_park_camrig_workspace: Path,
 ) -> None:
     """A global solve driven by the multi-sensor ``.camrig`` should register
-    every image of the 8-frame prefix subset (16 images) with one camera per
-    sensor — the same outcome as the ``rig_config.json`` path.
+    every rig image of the 8-frame prefix subset (16 images) with one camera
+    per sensor — the same outcome as the ``rig_config.json`` path. The
+    fixture's solve also holds single images, which are left out here.
     """
     recon = SfmrReconstruction.load(kerry_park_camrig_workspace)
-    assert recon.image_count == 16
-    assert recon.camera_count == 2  # one camera per sensor
+    rig_cameras = {
+        int(camera)
+        for name, camera in zip(recon.image_names, recon.camera_indexes)
+        if not name.startswith("solo/")
+    }
+    rig_images = [n for n in recon.image_names if not n.startswith("solo/")]
+    assert len(rig_images) == 16
+    assert len(rig_cameras) == 2  # one camera per sensor
     assert recon.point_count >= 150
     errors = recon.rms_reprojection_errors
     assert errors.size > 0
     assert float(np.median(errors)) < 1.5
 
 
-def test_kerry_park_solve_mixes_rig_frames_and_single_images(tmp_path: Path) -> None:
-    """A global solve of rig frames beside single images: the multi-sensor
-    ``kerry_park.camrig`` covers frames 1-8 of both lenses, and frames 9-12 of
-    the left lens, moved to ``solo/``, are single images under a single-sensor
-    ``.camrig`` holding the left lens's camera. The ``.sfmr`` holds the rig and
-    a one-sensor rig for the single images, and ``sfm inspect`` and
-    ``sfm motion`` read it.
+def test_kerry_park_solve_mixes_rig_frames_and_single_images(
+    kerry_park_camrig_workspace: Path,
+) -> None:
+    """The ``.camrig`` fixture's global solve of rig frames beside single
+    images: ``kerry_park.camrig`` covers frames 1-8 of both lenses, and frames
+    9-12 of the left lens, in ``solo/``, are single images under a
+    single-sensor ``.camrig`` holding the left lens's camera. The ``.sfmr``
+    holds the rig and a one-sensor rig for the single images, and
+    ``sfm inspect`` and ``sfm motion`` read it.
     """
     from click.testing import CliRunner
 
-    from sfmtool._workspace import init_workspace
     from sfmtool.cli import main
-    from sfmtool.fileio import read_camrig, write_camrig
 
-    from ..conftest import (
-        KERRY_PARK_DIR,
-        _canonicalize_best,
-        _copy_kerry_park_camrig_into,
-        _solve_in_child,
-        _solve_with_retries,
-    )
-
-    workspace_dir = tmp_path / "ws"
-    _copy_kerry_park_camrig_into(workspace_dir)
-    init_workspace(workspace_dir, feature_tool="sfmtool", max_num_features=2000)
-    (workspace_dir / "solo").mkdir()
-    for n in range(9, 13):
-        (workspace_dir / "fisheye_left" / f"frame_{n:02d}.jpg").rename(
-            workspace_dir / "solo" / f"frame_{n:02d}.jpg"
-        )
-    rig = read_camrig(str(KERRY_PARK_DIR / "kerry_park.camrig"))
-    write_camrig(
-        path=str(workspace_dir / "solo" / "solo.camrig"),
-        name="solo",
-        rig_type="generic",
-        cameras=[rig["cameras"][rig["camera_indexes"][0]]],
-        sensor_image_patterns=["frame_%02d.jpg"],
-        camera_indexes=[0],
-        quaternions_wxyz=np.array([[1.0, 0.0, 0.0, 0.0]]),
-        translations_xyz=np.zeros((1, 3)),
-    )
-    image_paths: list[Path] = []
-    for folder in ("fisheye_left", "fisheye_right"):
-        image_paths += sorted((workspace_dir / folder).glob("frame_*.jpg"))[:8]
-    image_paths += sorted((workspace_dir / "solo").glob("frame_*.jpg"))
-
-    output_sfm_file = workspace_dir / "mixed.sfmr"
-    colmap_dir = workspace_dir / "colmap"
-
-    def _attempt(seed: int | None) -> Path:
-        _solve_in_child(
-            "global",
-            image_paths,
-            workspace_dir,
-            colmap_dir,
-            output_sfm_file=output_sfm_file,
-            random_seed=seed,
-            matching_mode="cluster",
-        )
-        return output_sfm_file
-
-    # GLOMAP is not seed-deterministic and the back-to-back fisheyes can
-    # degenerate a solve, so it is retried as the kerry_park fixtures are.
-    best, _count, accepted = _solve_with_retries(
-        _attempt,
-        colmap_dir=colmap_dir,
-        output_sfm_file=output_sfm_file,
-        stash_path=workspace_dir / "_best_mixed.sfmr",
-        max_attempts=5,
-        rank=lambda recon: recon.image_count,
-        accept=lambda recon: recon.image_count == 20,
-    )
-    assert accepted, "no attempt registered all 20 images"
-    _canonicalize_best(best, output_sfm_file)
-
-    recon = SfmrReconstruction.load(output_sfm_file)
+    recon = SfmrReconstruction.load(kerry_park_camrig_workspace)
+    assert recon.image_count == 20
     assert recon.camera_count == 3  # the two lenses of the rig and solo.camrig
     camera_of = dict(zip(recon.image_names, (int(c) for c in recon.camera_indexes)))
     assert len({camera_of[f"solo/frame_{n:02d}.jpg"] for n in range(9, 13)}) == 1
@@ -472,9 +419,9 @@ def test_kerry_park_solve_mixes_rig_frames_and_single_images(tmp_path: Path) -> 
     assert len(frame_rigs) == 12
 
     runner = CliRunner()
-    inspect = runner.invoke(main, ["inspect", str(output_sfm_file)])
+    inspect = runner.invoke(main, ["inspect", str(kerry_park_camrig_workspace)])
     assert inspect.exit_code == 0, inspect.output
     assert "Cameras:        3" in inspect.output
-    motion = runner.invoke(main, ["motion", str(output_sfm_file)])
+    motion = runner.invoke(main, ["motion", str(kerry_park_camrig_workspace)])
     assert motion.exit_code == 0, motion.output
     assert "solo" in motion.output and "fisheye_right" in motion.output
