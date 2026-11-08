@@ -298,6 +298,104 @@ fn save_as_states_the_workspace_path_and_keeps_the_hash_honest() {
     assert!(!node.is_dirty());
 }
 
+/// A state holding one node read from `root/ws/a/recon.sfmr`, over a workspace
+/// at `root/ws` that holds its marker: the value records `..`, the path from
+/// that file to its workspace, and the workspace's absolute path.
+fn state_in_workspace(root: &std::path::Path) -> (AppState, ReconId, PathBuf) {
+    let workspace = root.join("ws");
+    std::fs::create_dir_all(workspace.join("a")).expect("a writable temp dir");
+    std::fs::write(workspace.join(".sfm-workspace.json"), "{}").expect("a writable temp dir");
+    let workspace = std::fs::canonicalize(&workspace).expect("an existing workspace");
+    let mut recon = SfmrReconstruction::demo(16);
+    recon.workspace_dir = workspace.clone();
+    recon.metadata.workspace.relative_path = "..".into();
+    recon.metadata.workspace.absolute_path = workspace.to_string_lossy().into_owned();
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(
+        &workspace.join("a").join("recon.sfmr"),
+        recon,
+    ));
+    (state, id, workspace)
+}
+
+/// A Save As to another directory records the workspace path measured from
+/// where the file lands, not the one the value was read with, and folds it into
+/// a version so the session's hash is the file's. The proof that the path is
+/// right is a reader's: once the whole tree is moved, the absolute path names
+/// nothing, and the file finds its workspace through the relative path alone.
+#[test]
+fn save_as_elsewhere_records_the_workspace_path_from_the_new_file() {
+    let root = temp_dir("save_as_measured");
+    let (mut state, id, _) = state_in_workspace(&root);
+    let versions_before = state.scene[0].history.versions().len();
+    let path = root.join("elsewhere").join("deep").join("moved.sfmr");
+    std::fs::create_dir_all(path.parent().unwrap()).expect("a writable temp dir");
+
+    state
+        .save_node_as(id, &path, None)
+        .expect("a writable path");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
+    assert_eq!(written.metadata.workspace.relative_path, "../../ws");
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), versions_before + 1);
+    assert_eq!(
+        node.edited()
+            .base_content_hash()
+            .expect("hashable")
+            .content_xxh128,
+        written.content_hash.content_xxh128
+    );
+    assert!(!node.is_dirty());
+
+    let moved = root.with_file_name("sfm_explorer_save_save_as_measured_moved");
+    let _ = std::fs::remove_dir_all(&moved);
+    std::fs::rename(&root, &moved).expect("a movable temp dir");
+    let read = sfmtool_sfmr_format::read_sfmr(&moved.join("elsewhere/deep/moved.sfmr"))
+        .expect("a readable file");
+    assert_eq!(
+        read.workspace_dir
+            .map(|dir| std::fs::canonicalize(dir).unwrap()),
+        Some(std::fs::canonicalize(moved.join("ws")).unwrap())
+    );
+}
+
+/// A Save As into the directory the value's workspace path was measured from
+/// measures the same path, so the value is written as it stands and mints no
+/// version.
+#[test]
+fn save_as_beside_the_file_keeps_the_value_as_it_stands() {
+    let root = temp_dir("save_as_beside");
+    let (mut state, id, workspace) = state_in_workspace(&root);
+    let versions_before = state.scene[0].history.versions().len();
+    let path = workspace.join("a").join("renamed.sfmr");
+
+    state
+        .save_node_as(id, &path, None)
+        .expect("a writable path");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
+    assert_eq!(written.metadata.workspace.relative_path, "..");
+    assert_eq!(state.scene[0].history.versions().len(), versions_before);
+}
+
+/// A workspace path the caller states is recorded in place of the one the
+/// Save As would measure.
+#[test]
+fn a_stated_workspace_path_wins_over_the_measured_one() {
+    let root = temp_dir("save_as_stated_wins");
+    let (mut state, id, _) = state_in_workspace(&root);
+    let path = root.join("elsewhere").join("stated.sfmr");
+    std::fs::create_dir_all(path.parent().unwrap()).expect("a writable temp dir");
+
+    state
+        .save_node_as(id, &path, Some("."))
+        .expect("a writable path");
+
+    let written = sfmtool_sfmr_format::read_sfmr(&path).expect("a readable file");
+    assert_eq!(written.metadata.workspace.relative_path, ".");
+}
+
 #[test]
 fn a_save_writes_one_log_entry_naming_the_path_and_the_version() {
     let dir = temp_dir("log");
