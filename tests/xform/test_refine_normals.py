@@ -189,14 +189,17 @@ def _embedded(workspace) -> SfmrReconstruction:
     )
 
 
-def test_refine_normals_renders_bitmaps_only_where_stored(seoul_bull_workspace):
+def test_refine_normals_renders_bitmaps_only_where_stored(seoul_bull_normals_refined):
     """A value with no bitmaps gets none; one that stores them has the
     rewritten points' bitmaps rendered again and every other row kept."""
-    recon = _embedded(seoul_bull_workspace)
+    recon, refined = seoul_bull_normals_refined
     assert recon.patch_bitmaps is None
-    assert RefineNormalsTransform().apply(recon).patch_bitmaps is None
+    assert refined.patch_bitmaps is None
 
-    with_bitmaps = AddPatchBitmapsTransform().apply(recon)
+    # Bitmaps at R = 12 rather than the default 24: the refinement runs at the
+    # value's patch resolution, so this pass costs about a third as much, and
+    # it still rewrites most points but not all of them (707 of 792).
+    with_bitmaps = AddPatchBitmapsTransform(resolution=12).apply(recon)
     out = RefineNormalsTransform().apply(with_bitmaps)
     before = np.asarray(with_bitmaps.patch_bitmaps)
     after = np.asarray(out.patch_bitmaps)

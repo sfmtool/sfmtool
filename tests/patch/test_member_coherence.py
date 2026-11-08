@@ -242,18 +242,16 @@ def test_min_support_pixels_fails_open_on_the_whole_track(scene):
 
 
 @pytest.fixture(scope="module")
-def embedded_scene(scene):
-    """The same cloud over an ``embedded_patches`` reconstruction — the mode that
-    carries inline per-observation keypoints, and so the only one in which
-    keypoint anchoring is anything but a no-op."""
-    from sfmtool import _embed_patches as ep
-
-    recon, _cloud, images = scene
-    emb = ep.embed_patches(recon, images, resolution=12)
+def embedded_scene(default_embed_patches_run):
+    """The same reconstruction converted to ``embedded_patches`` (the
+    ``embed_patches`` run the patch tests share) — the mode that carries inline
+    per-observation keypoints, and so the only one in which keypoint anchoring
+    is anything but a no-op."""
+    emb = default_embed_patches_run.out
     assert emb.feature_source == "embedded_patches"
     # The embedded recon carries its own cloud; rebuilding one would need the
     # .sift scales the embed just replaced.
-    return emb, emb.patches, images
+    return emb, emb.patches, default_embed_patches_run.images
 
 
 def test_keypoint_anchoring_is_on_by_default_and_moves_the_matrix(embedded_scene):

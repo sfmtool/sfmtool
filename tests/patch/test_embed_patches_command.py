@@ -20,7 +20,6 @@ import pytest
 from click.testing import CliRunner
 
 import sfmtool._embed_patches as ep
-import sfmtool._patch_compaction as pc
 from sfmtool._patch_compaction import (
     image_file_hashes_from_images,
     image_file_hashes_from_sift,
@@ -31,6 +30,20 @@ from sfmtool.cli import main
 
 from ..conftest import assert_references_name_track_observations
 from .conftest import rotation_matrices
+
+
+def _stub_embed_patches(monkeypatch, captured: dict | None = None) -> None:
+    """Stand in for ``embed_patches`` in a test of the command's own work:
+    record the keyword arguments it was called with and return the baseline
+    ``embedded_patches`` conversion, which costs a fraction of the full run."""
+
+    def stub(recon, images, **kwargs):
+        assert len(images) == recon.image_count
+        if captured is not None:
+            captured.update(kwargs)
+        return recon.to_embedded_patches()
+
+    monkeypatch.setattr(ep, "embed_patches", stub)
 
 
 def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_path):
@@ -65,13 +78,9 @@ def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_pa
 
 
 def test_embed_patches_default_output_path(monkeypatch, seoul_bull_workspace):
-    """Omitting OUTPUT writes <stem>-embedded.sfmr next to the input."""
-    real = ep.embed_patches
-    monkeypatch.setattr(
-        ep,
-        "embed_patches",
-        lambda recon, images, **kw: real(recon, images, **{**kw, "resolution": 12}),
-    )
+    """Omitting OUTPUT writes <stem>-embedded.sfmr next to the input. The
+    conversion is stubbed: this checks where the command writes."""
+    _stub_embed_patches(monkeypatch)
     src = Path(seoul_bull_workspace)
     expected = src.with_name(f"{src.stem}-embedded.sfmr")
     try:
@@ -159,77 +168,31 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
 
 
 def test_embed_patches_sources_hashes_from_embedded_not_sift(
-    monkeypatch, seoul_bull_workspace
+    default_embed_patches_run,
 ):
     """The re-layered pipeline's only ``.sift`` read is the ``to_embedded_patches``
     bridge; it sources image hashes from the embedded recon, not by re-reading the
-    ``.sift`` files. Make the sift-hash helper blow up — the run must still succeed.
+    ``.sift`` files. The run spies on the sift-hash helper, which it never calls.
     """
-    from sfmtool.fileio import read_image_rgb
-
-    def _boom(_recon):
-        raise AssertionError("embed_patches should not re-read .sift for hashes")
-
-    monkeypatch.setattr(pc, "image_file_hashes_from_sift", _boom)
-
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    ws = recon.workspace_dir
-    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
-    out = ep.embed_patches(recon, images, resolution=12)
+    run = default_embed_patches_run
+    recon, out = run.recon, run.out
     assert out.feature_source == "embedded_patches"
+    assert run.sift_hash_reads == 0, "embed_patches re-read .sift for hashes"
     # The hashes are exactly the bridge's (images aren't culled, only points), so
     # they match what to_embedded_patches set — not a re-hash or a .sift re-read.
     expected = recon.to_embedded_patches(extent_value=5.0).image_file_hashes
     assert [bytes(h) for h in out.image_file_hashes] == [bytes(h) for h in expected]
 
 
-def _normals(cloud) -> list[np.ndarray]:
-    return [np.asarray(cloud[i].normal, np.float64) for i in range(len(cloud))]
-
-
-def test_embed_patches_normal_step_is_the_grown_plane(
-    monkeypatch, seoul_bull_workspace
-):
+def test_embed_patches_normal_step_is_the_grown_plane(default_embed_patches_run):
     """Each round's normal step is the grown plane (``sfmtool.bench.refine_normals``),
     at the patch resolution embed_patches was given,
     run over an embedded_patches value whose tracks carry keypoints. From round 2
     the tracks it reads hold the views view selection added. The turned frames
-    are the ones view selection reads."""
-    from sfmtool.fileio import read_image_rgb
-
-    from sfmtool.patches import PatchCloud
-
-    calls: list[dict] = []
-    real_refine = ep.refine_normals
-
-    def spy_refine(recon, images, **kwargs):
-        out, report = real_refine(recon, images, **kwargs)
-        calls.append(
-            {
-                "recon": recon,
-                "kwargs": kwargs,
-                "turned": report["turned"],
-                "normals": _normals(out.patches),
-            }
-        )
-        return out, report
-
-    monkeypatch.setattr(ep, "refine_normals", spy_refine)
-
-    selected_normals: list = []
-    real_select = PatchCloud.select_views
-
-    def spy_select(self, recon, images, **kwargs):
-        selected_normals.extend(_normals(self))
-        return real_select(self, recon, images, **kwargs)
-
-    monkeypatch.setattr(PatchCloud, "select_views", spy_select)
-
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    ws = recon.workspace_dir
-    images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
-    out = ep.embed_patches(recon, images, resolution=12, rounds=2)
-    assert out.feature_source == "embedded_patches"
+    are the ones view selection reads. The run is the default, two rounds."""
+    run = default_embed_patches_run
+    calls, selected_normals = run.refine_normals_calls, run.selected_normals
+    assert run.out.feature_source == "embedded_patches"
 
     assert len(calls) == 2, "one grown-plane normal step per round"
     for call in calls:
@@ -253,18 +216,11 @@ def test_embed_patches_cli_subpixel_and_rounds_forward(
     monkeypatch, seoul_bull_workspace, tmp_path
 ):
     """End-to-end CLI plumbing for the round knobs: the values parsed from the
-    command line reach `embed_patches`'s kwargs. Spying on
+    command line reach `embed_patches`'s kwargs. Stubbing
     the function rather than running the full pipeline keeps this test cheap
     while covering the Click choice validation + kwarg threading."""
     captured: dict = {}
-    real = ep.embed_patches
-
-    def spy(recon, images, **kwargs):
-        captured["subpixel"] = kwargs.get("subpixel")
-        captured["rounds"] = kwargs.get("rounds")
-        return real(recon, images, **{**kwargs, "resolution": 12})
-
-    monkeypatch.setattr(ep, "embed_patches", spy)
+    _stub_embed_patches(monkeypatch, captured)
 
     out = tmp_path / "out.sfmr"
     args = [
@@ -421,23 +377,17 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
     )
 
 
-def _rgb_images(recon) -> list[np.ndarray]:
-    from sfmtool.fileio import read_image_rgb
-
-    ws = recon.workspace_dir
-    return [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
-
-
-def test_embed_patches_keeps_a_stored_reference_observation(seoul_bull_workspace):
+def test_embed_patches_keeps_a_stored_reference_observation(
+    default_embed_patches_run,
+):
     """An ``embedded_patches`` input's stored reference observation is the one
     every round aligns the point's views to: where its image is still in the
     output track, the output names the same image as the reference, and its
     keypoint has not moved. A stored reference whose core does not render at
     its keypoint aligns nothing, so the views are aligned to the
     reference-view rule's pick and the output records that; few are."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = _rgb_images(recon)
-    first = ep.embed_patches(recon, images, resolution=12)
+    images = default_embed_patches_run.images
+    first = default_embed_patches_run.out
 
     # Point each reference at another observation of its point, so the test
     # does not pass on the pick the first run already made.
@@ -495,20 +445,14 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
     `--max-zncc-self-similarity-radius` parse and reach `embed_patches` as their
     matching kwargs, and the written file records them in its own `tool_options`
     (the merge would otherwise leave only the upstream operation's options
-    there)."""
+    there). The conversion is stubbed: this checks the command's own work."""
     captured: dict = {}
-    real = ep.embed_patches
+    _stub_embed_patches(monkeypatch, captured)
     keys = (
         "min_absolute_zncc",
         "max_member_zncc_self_similarity_radius",
         "max_zncc_self_similarity_radius",
     )
-
-    def spy(recon, images, **kwargs):
-        captured.update({k: kwargs.get(k) for k in keys})
-        return real(recon, images, **{**kwargs, "resolution": 12})
-
-    monkeypatch.setattr(ep, "embed_patches", spy)
 
     out = tmp_path / "gates.sfmr"
     args = [
@@ -525,7 +469,7 @@ def test_embed_patches_cli_absolute_localizer_gates_forward(
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
-    assert captured == {
+    assert {k: captured.get(k) for k in keys} == {
         "min_absolute_zncc": 0.25,
         "max_member_zncc_self_similarity_radius": 0.5,
         "max_zncc_self_similarity_radius": 2.75,

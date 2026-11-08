@@ -354,7 +354,7 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     assert checked > 0, "no admitted infinity views were checked"
 
 
-def test_select_views_keypoint_anchor_is_opt_in(seoul_bull_workspace: Path):
+def test_select_views_keypoint_anchor_is_opt_in(default_embed_patches_run):
     """``keypoint_anchor`` defaults to OFF and changes the numbers when turned on.
 
     Anchoring changes the reference every score is taken against, so callers that
@@ -362,13 +362,11 @@ def test_select_views_keypoint_anchor_is_opt_in(seoul_bull_workspace: Path):
     default and that the flag is not inert; the score *direction* is covered by
     the Rust test that injects a known residual. It needs an
     ``embedded_patches`` reconstruction: only that mode carries the inline
-    per-observation keypoints there is anything to anchor at.
+    per-observation keypoints there is anything to anchor at, and it reads the
+    ``embed_patches`` run the patch tests share.
     """
-    from sfmtool import _embed_patches as ep
-
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
-    emb = ep.embed_patches(recon, images, resolution=12)
+    images = default_embed_patches_run.images
+    emb = default_embed_patches_run.out
     # The embedded recon carries its own cloud; rebuilding one would need the
     # .sift scales the embed just replaced.
     cloud = emb.patches

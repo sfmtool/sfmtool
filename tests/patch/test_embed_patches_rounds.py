@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.fileio import verify_sfmr
@@ -20,9 +21,36 @@ from sfmtool.fileio import verify_sfmr
 from .conftest import load_images
 
 
-def test_embed_patches_default_is_two_rounds_with_subpixel(
-    seoul_bull_workspace: Path, tmp_path: Path
-):
+@pytest.fixture(scope="module")
+def scene(seoul_bull_workspace_once: Path):
+    """The seoul_bull reconstruction and its images. Read them; do not modify
+    them or their workspace."""
+    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    return recon, load_images(recon)
+
+
+@pytest.fixture(scope="module")
+def one_round(scene):
+    """One round with the sub-pixel pass, at ``patch_size=10`` and
+    ``resolution=12``, and its ``progress`` lines. Read them; do not modify
+    them."""
+    from sfmtool._embed_patches import embed_patches
+
+    recon, images = scene
+    lines: list[str] = []
+    out = embed_patches(
+        recon,
+        images,
+        patch_size=10.0,
+        subpixel=True,
+        rounds=1,
+        resolution=12,
+        progress=lines.append,
+    )
+    return out, lines
+
+
+def test_embed_patches_default_is_two_rounds_with_subpixel(default_embed_patches_run):
     """The default ``embed_patches`` call (no ``subpixel=`` / ``rounds=`` kwargs) is
     bit-for-bit equivalent to passing ``subpixel=True, rounds=2``. Pins the default so
     flipping it in code can't slip in silently.
@@ -34,18 +62,16 @@ def test_embed_patches_default_is_two_rounds_with_subpixel(
     """
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    run = default_embed_patches_run
+    recon, images = run.recon, run.images
     assert recon.feature_source == "sift_files"
-    images = load_images(recon)
 
     # resolution=12 (vs the resolution=24 default) keeps this a comparison of
     # default-vs-explicit kwargs at a cheaper sampling grid — both sides use the
-    # same grid, so the equivalence being pinned is unaffected. The sibling
-    # test_embed_patches_command.py tests run at this same low resolution.
-    default = embed_patches(recon, images, patch_size=10.0, resolution=12)
-    explicit = embed_patches(
-        recon, images, patch_size=10.0, subpixel=True, rounds=2, resolution=12
-    )
+    # same grid, so the equivalence being pinned is unaffected. The default
+    # side is default_embed_patches_run, which other patch tests also read.
+    default = run.out
+    explicit = embed_patches(recon, images, subpixel=True, rounds=2, resolution=12)
 
     assert default.point_count == explicit.point_count
     np.testing.assert_array_equal(
@@ -53,9 +79,7 @@ def test_embed_patches_default_is_two_rounds_with_subpixel(
     )
 
 
-def test_embed_patches_subpixel_lk_round_trips(
-    seoul_bull_workspace: Path, tmp_path: Path
-):
+def test_embed_patches_subpixel_lk_round_trips(scene, one_round, tmp_path: Path):
     """``embed_patches(subpixel=True)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
     keypoints differ from the no-refinement baseline (``subpixel=False``) — the
@@ -63,8 +87,7 @@ def test_embed_patches_subpixel_lk_round_trips(
     """
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
+    recon, images = scene
 
     # Pin rounds=1 so the subpixel pass is the terminal step: it feeds nothing
     # downstream, so the only membership change it can cause is its own.
@@ -76,9 +99,7 @@ def test_embed_patches_subpixel_lk_round_trips(
     baseline = embed_patches(
         recon, images, patch_size=10.0, subpixel=False, rounds=1, resolution=12
     )
-    refined = embed_patches(
-        recon, images, patch_size=10.0, subpixel=True, rounds=1, resolution=12
-    )
+    refined, _ = one_round
 
     assert baseline.feature_source == refined.feature_source == "embedded_patches"
 
@@ -174,9 +195,7 @@ def _self_similarity_culled(lines: list[str]) -> int:
     return counts[0] if counts else 0
 
 
-def test_embed_patches_multiple_rounds_round_trips(
-    seoul_bull_workspace: Path, tmp_path: Path
-):
+def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: Path):
     """``rounds > 1`` alternates normal- and keypoint-refinement, feeding each
     round into the next and re-pruning grazing observations. The output is a valid
     ``embedded_patches`` recon. Every point a one-round or a three-round run keeps
@@ -193,21 +212,11 @@ def test_embed_patches_multiple_rounds_round_trips(
     then keeps a point the one-round run drops."""
     from sfmtool._embed_patches import embed_patches
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
-    images = load_images(recon)
+    recon, images = scene
 
     # resolution=12 (vs default 24) is a cheaper sampling grid; both runs use
     # it, so the comparison between them is unaffected.
-    one_lines: list[str] = []
-    one = embed_patches(
-        recon,
-        images,
-        patch_size=10.0,
-        subpixel=True,
-        rounds=1,
-        resolution=12,
-        progress=one_lines.append,
-    )
+    one, one_lines = one_round
 
     lines: list[str] = []
     three = embed_patches(
