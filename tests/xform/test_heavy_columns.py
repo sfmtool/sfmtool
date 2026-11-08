@@ -58,27 +58,23 @@ def embedded_sfmr_once(seoul_bull_workspace_once, tmp_path_factory) -> Path:
     """An ``embedded_patches`` reconstruction carrying thumbnails (copied from
     the ``.sift`` files when the fixture was built) and 16x16 patch bitmaps.
 
-    Built once, in a copy of the session workspace of its own. Read it; a test
-    that writes beside it or changes its workspace takes :func:`embedded_sfmr`.
-
-    The file records no relative workspace path, so a load of it, or of a copy
-    of it, falls back to the absolute path it records. That directory is
-    renamed after the build, so the path names nothing and each copy finds its
-    own workspace by the marker beside it rather than this one.
+    Built once, at the root of a copy of the session workspace of its own. Read
+    it; a test that writes beside it or changes its workspace takes
+    :func:`embedded_sfmr`.
     """
-    build_dir = tmp_path_factory.mktemp("embedded_build")
-    shutil.copytree(seoul_bull_workspace_once.parent, build_dir, dirs_exist_ok=True)
+    workspace_dir = tmp_path_factory.mktemp("embedded_workspace")
+    shutil.copytree(seoul_bull_workspace_once.parent, workspace_dir, dirs_exist_ok=True)
+    out = workspace_dir / "embedded.sfmr"
     _xform(
-        build_dir / seoul_bull_workspace_once.name,
-        build_dir / "embedded.sfmr",
+        workspace_dir / seoul_bull_workspace_once.name,
+        out,
         "--to-embedded-patches",
         "--add-patch-bitmaps",
         "resolution=16",
     )
-    workspace_dir = tmp_path_factory.mktemp("embedded_workspace")
-    workspace_dir.rmdir()
-    build_dir.rename(workspace_dir)
-    out = workspace_dir / "embedded.sfmr"
+    # The file records its workspace as the directory it is in, so a copy of
+    # that directory loads with the copy as its workspace.
+    assert read_sfmr_metadata(out)["workspace"]["relative_path"] == "."
     assert Path(SfmrReconstruction.load(out).workspace_dir).resolve() == (
         workspace_dir.resolve()
     )
@@ -254,6 +250,8 @@ def test_a_verified_sift_is_read_before_the_photograph(embedded_sfmr, capsys):
 
 def test_a_missing_photograph_is_read_from_its_verified_sift(embedded_sfmr):
     recon = SfmrReconstruction.load(embedded_sfmr)
+    # The copy is its own workspace, not the shared file's, which still exists.
+    assert Path(recon.workspace_dir).resolve() == embedded_sfmr.parent.resolve()
     original = np.asarray(recon.thumbnails_y_x_rgb).copy()
     (Path(recon.workspace_dir) / recon.image_names[3]).unlink()
     rebuilt = AddThumbnailsTransform().apply(DropThumbnailsTransform().apply(recon))
