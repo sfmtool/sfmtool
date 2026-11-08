@@ -133,8 +133,9 @@ extension):
 
 A JSON **array** of exactly `camera_count` camera objects. Each object has the same shape as a `.sfmr` camera:
 
-* `model`: (string) COLMAP camera model name, e.g. `"PINHOLE"`,
-  `"OPENCV_FISHEYE"`, `"EQUIRECTANGULAR"`.
+* `model`: (string) Camera model name: a COLMAP model such as `"PINHOLE"`
+  or `"OPENCV_FISHEYE"`, or one of sfmtool's own models such as
+  `"EQUIDISTANT_FISHEYE"` or `"EQUIRECTANGULAR"`.
 * `width`: (integer) Image width in pixels.
 * `height`: (integer) Image height in pixels.
 * `parameters`: (object) Named model parameters as a string→number map. The
