@@ -815,7 +815,11 @@ fn a_file_another_entry_takes_is_no_padding_miss() {
     }
     let lists = write_lists(
         dir.path(),
-        r#"{"both": [{"pattern": "f/a_%d.jpg"}, {"pattern": "f/a_%02d.jpg"}]}"#,
+        r#"{
+            "both": [{"pattern": "f/a_%d.jpg"}, {"pattern": "f/a_%02d.jpg"}],
+            "ranged": [{"pattern": "f/a_%d.jpg"}, {"pattern": "f/a_%02d.jpg", "range": "2"}],
+            "other": [{"pattern": "f/a_%02d.jpg"}]
+        }"#,
     );
     // `f/a_003.jpg` is taken by neither entry; both miss it by its padding.
     let e = resolve(&lists, "both", None).unwrap_err();
@@ -828,6 +832,21 @@ fn a_file_another_entry_takes_is_no_padding_miss() {
 
     // Without it, each file is taken by one entry, so the list resolves.
     std::fs::remove_file(dir.path().join("f/a_003.jpg")).unwrap();
+    // An entry takes only the files in its range, so `f/a_01.jpg` is still
+    // the first entry's padding miss.
+    let e = resolve(&lists, "ranged", None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries.len() == 1 && entries[0].0 == 0 && entries[0].2 == ["f/a_01.jpg"]),
+        "{e}"
+    );
+    // A file an entry of another list takes is still left out of this one.
+    let e = resolve(&lists, "other", None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries[0].2 == ["f/a_1.jpg", "f/a_2.jpg"]),
+        "{e}"
+    );
     assert_eq!(
         paths(&resolve(&lists, "both", None).unwrap()),
         ["f/a_1.jpg", "f/a_2.jpg", "f/a_01.jpg", "f/a_02.jpg"]
