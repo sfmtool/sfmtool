@@ -604,6 +604,30 @@ def test_a_single_sensor_camrig_defines_no_rig(tmp_path: Path):
     ]
 
 
+def test_several_single_sensor_camrigs_walk_each_sequence(
+    tmp_path: Path, pan_source, monkeypatch
+):
+    # Two single-sensor .camrig files describe two cameras, not a rig: the
+    # command walks each folder's sequence as it does with no .camrig.
+    workspace = tmp_path / "ws"
+    _copy_frames(pan_source["top"], workspace / "rig" / "cam_a", count=3)
+    _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_b", count=3)
+    _write_camrig(workspace / "rig" / "cam_a" / "a.camrig", ["pan_%03d.jpg"])
+    _write_camrig(workspace / "rig" / "cam_b" / "b.camrig", ["pan_%03d.jpg"])
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["pick-images", "rig", "--json", "r.json"])
+    assert result.exit_code == 0, result.output
+    assert "Camera rig:" not in result.output
+    data = json.loads((workspace / "r.json").read_text())
+    assert [c["sensors"] for c in data["capture"]] == [None, None]
+    assert [c["images"][0] for c in data["capture"]] == [
+        ["rig/cam_a/pan_001.jpg"],
+        ["rig/cam_b/pan_001.jpg"],
+    ]
+
+
 def test_images_a_camrig_covers_only_in_part_are_refused(
     tmp_path: Path, pan_source, monkeypatch
 ):

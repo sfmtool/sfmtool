@@ -19,7 +19,7 @@ from ..camrig.resolver import resolve_camrig_for_solve
 from ..rig.frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
 from ..sift.extract import image_files_to_sift_files
 from .db_builders import (
-    _setup_db_single_camera,
+    _setup_db_single_sensor,
     _setup_db_with_camrig,
     _setup_db_with_rigs,
 )
@@ -109,7 +109,7 @@ def _setup_for_sfm(
             camera_config_resolver=camera_config_resolver,
         )
     else:
-        _setup_db_single_camera(
+        _setup_db_single_sensor(
             image_paths,
             sift_paths,
             image_dir,
@@ -117,7 +117,7 @@ def _setup_for_sfm(
             max_feature_count,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
-            camrig_camera=camrig.camera if camrig is not None else None,
+            camrig_cameras=camrig.cameras if camrig is not None else None,
         )
 
     # Build same-frame exclusion data for multi-sensor rigs
@@ -353,7 +353,7 @@ def _setup_for_sfm_from_matches(
             camera_config_resolver=camera_config_resolver,
         )
     else:
-        _setup_db_single_camera(
+        _setup_db_single_sensor(
             image_paths,
             sift_paths,
             image_dir,
@@ -361,7 +361,7 @@ def _setup_for_sfm_from_matches(
             max_feature_count=None,
             camera_model=camera_model,
             camera_config_resolver=camera_config_resolver,
-            camrig_camera=camrig.camera if camrig is not None else None,
+            camrig_cameras=camrig.cameras if camrig is not None else None,
         )
 
     # Write matches and TVGs to the database

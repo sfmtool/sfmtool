@@ -30,7 +30,7 @@ def _populate_db_features(
     the database for geometric verification never read the descriptors back,
     and they are by far the largest rows."""
     from ..camera.config import CameraConfigResolver
-    from ..colmap.db_builders import _setup_db_single_camera, _setup_db_with_rigs
+    from ..colmap.db_builders import _setup_db_single_sensor, _setup_db_with_rigs
     from ..rig.config import _load_rig_config
 
     if camera_config_resolver is None:
@@ -51,7 +51,7 @@ def _populate_db_features(
             include_descriptors=include_descriptors,
         )
     else:
-        _setup_db_single_camera(
+        _setup_db_single_sensor(
             image_paths,
             sift_paths,
             workspace_dir,

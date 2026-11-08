@@ -22,7 +22,7 @@ from ..camera.cameras import (
     colmap_camera_from_intrinsics,
     pycolmap_camera_to_intrinsics,
 )
-from ..camrig.resolver import CamrigRig
+from ..camrig.resolver import CamrigCamera, CamrigRig
 from ..rig.config import (
     _infer_frame_key,
     _match_image_to_sensor,
@@ -31,7 +31,130 @@ from ..rig.config import (
 from ..fileio import SiftFile
 
 
-def _setup_db_single_camera(
+def _single_sensor_cameras(
+    image_paths: list[str | Path],
+    camera_model: str | None,
+    camera_config_resolver: CameraConfigResolver | None,
+    camrig_cameras: list[CamrigCamera] | None,
+) -> list[tuple[pycolmap.Camera, list[int]]]:
+    """The COLMAP cameras for images that each form a frame of their own.
+
+    Returns `(camera, positions)` pairs, one per camera, in the order of each
+    camera's first image; `positions` index `image_paths`. With
+    `camrig_cameras` (the single-sensor `.camrig` files covering every image),
+    each file is one camera and an image takes the camera of the file that
+    covers it. Otherwise the images that resolve the same `camera_config.json`
+    share one camera built from that file, and the images that resolve none
+    share one camera inferred from EXIF. A camera is built from its first
+    image, so its focal length and principal point are scaled to that image's
+    resolution, and with `camera_model` a camera a file supplies is refit to
+    it (one report line per camera).
+    """
+    groups: dict[object, list[int]] = {}
+    if camrig_cameras is not None:
+        camera_of = {
+            path: index
+            for index, camrig_camera in enumerate(camrig_cameras)
+            for path in camrig_camera.images
+        }
+        for position, image_path in enumerate(image_paths):
+            key = camera_of[Path(image_path).resolve()]
+            groups.setdefault(key, []).append(position)
+    else:
+        for position, image_path in enumerate(image_paths):
+            resolved = (
+                camera_config_resolver.resolve_for_image(Path(image_path))
+                if camera_config_resolver is not None
+                else None
+            )
+            key = resolved[0] if resolved is not None else None
+            groups.setdefault(key, []).append(position)
+
+    cameras: list[tuple[pycolmap.Camera, list[int]]] = []
+    for key, positions in groups.items():
+        first_image = Path(image_paths[positions[0]])
+        if camrig_cameras is not None:
+            intrinsics, prior = build_intrinsics_from_camera_config(
+                camrig_cameras[key].camera, first_image, None
+            )
+        else:
+            intrinsics, prior = intrinsics_for_image(
+                first_image, camera_config_resolver, camera_model
+            )
+        cam = colmap_camera_from_intrinsics(intrinsics)
+        if prior:
+            cam.has_prior_focal_length = True
+        cameras.append((cam, positions))
+    return cameras
+
+
+def _write_single_sensor_images(
+    db: pycolmap.Database,
+    image_paths: list[str | Path],
+    sift_paths: list[Path],
+    image_dir: Path,
+    max_feature_count: int | None,
+    camera_model: str | None,
+    camera_config_resolver: CameraConfigResolver | None,
+    camrig_cameras: list[CamrigCamera] | None,
+    include_descriptors: bool,
+) -> None:
+    """Write images that each form a frame of a single-sensor rig.
+
+    Writes one camera per camera source (`_single_sensor_cameras`), each with
+    a trivial rig whose only sensor it is, then each image, in the order
+    given, as a frame of its camera's rig, with its keypoints and (unless
+    `include_descriptors` is false) descriptors.
+    """
+    camera_ids: list[int] = [0] * len(image_paths)
+    rig_ids: list[int] = [0] * len(image_paths)
+    for cam, positions in _single_sensor_cameras(
+        image_paths, camera_model, camera_config_resolver, camrig_cameras
+    ):
+        camera_id = db.write_camera(cam)
+        rig = pycolmap.Rig()
+        rig.add_ref_sensor(
+            pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id)
+        )
+        rig_id = db.write_rig(rig)
+        for position in positions:
+            camera_ids[position] = camera_id
+            rig_ids[position] = rig_id
+
+    for image_path, sift_path, camera_id, rig_id in zip(
+        image_paths, sift_paths, camera_ids, rig_ids
+    ):
+        with SiftFile(sift_path) as reader:
+            image = pycolmap.Image(
+                name=os.path.relpath(image_path, image_dir).replace("\\", "/"),
+                camera_id=camera_id,
+            )
+            image_id = db.write_image(image)
+
+            frame = pycolmap.Frame()
+            frame.rig_id = rig_id
+            frame.add_data_id(
+                pycolmap.data_t(
+                    sensor_id=pycolmap.sensor_t(
+                        type=pycolmap.SensorType.CAMERA, id=camera_id
+                    ),
+                    id=image_id,
+                )
+            )
+            frame_id = db.write_frame(frame)
+
+            image.frame_id = frame_id
+            image.image_id = image_id
+            db.update_image(image)
+
+            keypoints = reader.read_positions(count=max_feature_count)
+            db.write_keypoints(image_id, keypoints)
+            if include_descriptors:
+                descriptors = reader.read_descriptors(count=max_feature_count)
+                db.write_descriptors(image_id, _wrap_descriptors(descriptors))
+
+
+def _setup_db_single_sensor(
     image_paths: list[str | Path],
     sift_paths: list[Path],
     image_dir: Path,
@@ -39,68 +162,33 @@ def _setup_db_single_camera(
     max_feature_count: int | None,
     camera_model: str | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
-    camrig_camera: dict | None = None,
+    camrig_cameras: list[CamrigCamera] | None = None,
     include_descriptors: bool = True,
 ) -> None:
-    """Set up COLMAP database with a single-camera trivial rig.
+    """Set up a COLMAP database whose images are single-sensor frames.
 
-    When `camrig_camera` (a `{model, width, height, parameters}` dict from a
-    discovered `.camrig`) is given, it supplies the camera; otherwise the
-    intrinsics come from `camera_config.json` / EXIF inference.
+    Each image is a frame of a trivial rig whose only sensor is its camera.
+    With `camrig_cameras` (from the single-sensor `.camrig` files covering
+    every image), each file supplies one camera; otherwise the cameras come
+    from `camera_config.json` / EXIF inference, one per resolved file and one
+    for the images that resolve none (`_single_sensor_cameras`).
     `include_descriptors=False` skips reading and writing the descriptor
     blocks — matchers that only use the database for pycolmap geometric
     verification (cluster, flow) never read them back, and they are by far
     the largest rows.
     """
     with pycolmap.Database.open(db_path) as db:
-        if camrig_camera is not None:
-            intrinsics, prior = build_intrinsics_from_camera_config(
-                camrig_camera, Path(image_paths[0]), None
-            )
-        else:
-            intrinsics, prior = intrinsics_for_image(
-                Path(image_paths[0]), camera_config_resolver, camera_model
-            )
-        cam = colmap_camera_from_intrinsics(intrinsics)
-        if prior:
-            cam.has_prior_focal_length = True
-        camera_id = db.write_camera(cam)
-
-        rig = pycolmap.Rig()
-        rig.add_ref_sensor(
-            pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id)
+        _write_single_sensor_images(
+            db,
+            image_paths,
+            sift_paths,
+            image_dir,
+            max_feature_count,
+            camera_model,
+            camera_config_resolver,
+            camrig_cameras,
+            include_descriptors,
         )
-        rig_id = db.write_rig(rig)
-
-        for image_path, sift_path in zip(image_paths, sift_paths):
-            with SiftFile(sift_path) as reader:
-                image = pycolmap.Image(
-                    name=os.path.relpath(image_path, image_dir).replace("\\", "/"),
-                    camera_id=camera_id,
-                )
-                image_id = db.write_image(image)
-
-                frame = pycolmap.Frame()
-                frame.rig_id = rig_id
-                frame.add_data_id(
-                    pycolmap.data_t(
-                        sensor_id=pycolmap.sensor_t(
-                            type=pycolmap.SensorType.CAMERA, id=camera_id
-                        ),
-                        id=image_id,
-                    )
-                )
-                frame_id = db.write_frame(frame)
-
-                image.frame_id = frame_id
-                image.image_id = image_id
-                db.update_image(image)
-
-                keypoints = reader.read_positions(count=max_feature_count)
-                db.write_keypoints(image_id, keypoints)
-                if include_descriptors:
-                    descriptors = reader.read_descriptors(count=max_feature_count)
-                    db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
 
 def _camera_from_sensor_entry(
@@ -163,7 +251,7 @@ def _setup_db_with_rigs(
     """Set up COLMAP database with multi-sensor rigs from rig_config.json.
 
     `include_descriptors=False` skips the descriptor blocks (see
-    `_setup_db_single_camera`).
+    `_setup_db_single_sensor`).
     """
     with pycolmap.Database.open(db_path) as db:
         # First pass: create cameras per sensor
@@ -210,13 +298,13 @@ def _setup_db_with_rigs(
 
         # Second pass: write images and group into frames
         frame_groups: dict[tuple[int, str], list[tuple[str, Path, int, int]]] = {}
-        unmatched_images: list[tuple[str, Path]] = []
+        unmatched_images: list[tuple[str | Path, Path]] = []
 
         for image_path, sift_path in zip(image_paths, sift_paths):
             rel_path = os.path.relpath(image_path, image_dir).replace("\\", "/")
             match = _match_image_to_sensor(rel_path, rig_configs)
             if match is None:
-                unmatched_images.append((rel_path, sift_path))
+                unmatched_images.append((image_path, sift_path))
                 continue
             rig_idx, sensor_idx = match
             prefix = rig_configs[rig_idx]["cameras"][sensor_idx]["image_prefix"]
@@ -263,48 +351,20 @@ def _setup_db_with_rigs(
                 image.image_id = image_id
                 db.update_image(image)
 
-        # Handle unmatched images with trivial single-camera rigs
+        # Images under no sensor prefix are single-sensor frames, their
+        # cameras from camera_config.json / EXIF inference.
         if unmatched_images:
-            first_unmatched = image_dir / unmatched_images[0][0]
-            intrinsics, prior = intrinsics_for_image(
-                first_unmatched, camera_config_resolver, camera_model
+            _write_single_sensor_images(
+                db,
+                [image_path for image_path, _sift in unmatched_images],
+                [sift_path for _image, sift_path in unmatched_images],
+                image_dir,
+                max_feature_count,
+                camera_model,
+                camera_config_resolver,
+                None,
+                include_descriptors,
             )
-            cam = colmap_camera_from_intrinsics(intrinsics)
-            if prior:
-                cam.has_prior_focal_length = True
-            camera_id = db.write_camera(cam)
-            fallback_rig = pycolmap.Rig()
-            fallback_rig.add_ref_sensor(
-                pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id)
-            )
-            fallback_rig_id = db.write_rig(fallback_rig)
-
-            for rel_path, sift_path in unmatched_images:
-                with SiftFile(sift_path) as reader:
-                    image = pycolmap.Image(name=rel_path, camera_id=camera_id)
-                    image_id = db.write_image(image)
-
-                    frame = pycolmap.Frame()
-                    frame.rig_id = fallback_rig_id
-                    frame.add_data_id(
-                        pycolmap.data_t(
-                            sensor_id=pycolmap.sensor_t(
-                                type=pycolmap.SensorType.CAMERA, id=camera_id
-                            ),
-                            id=image_id,
-                        )
-                    )
-                    frame_id = db.write_frame(frame)
-
-                    image.frame_id = frame_id
-                    image.image_id = image_id
-                    db.update_image(image)
-
-                    keypoints = reader.read_positions(count=max_feature_count)
-                    db.write_keypoints(image_id, keypoints)
-                    if include_descriptors:
-                        descriptors = reader.read_descriptors(count=max_feature_count)
-                        db.write_descriptors(image_id, _wrap_descriptors(descriptors))
 
 
 def _rigid3d_sensor_from_rig(rig_data: dict, sensor_idx: int) -> pycolmap.Rigid3d:
@@ -340,7 +400,7 @@ def _setup_db_with_camrig(
     """Set up a COLMAP database from a multi-sensor `.camrig`.
 
     `include_descriptors=False` skips the descriptor blocks (see
-    `_setup_db_single_camera`).
+    `_setup_db_single_sensor`).
 
     Builds one COLMAP camera per used sensor (intrinsics from the rig's camera
     pool, scaled to the actual image resolution), a single rig whose reference

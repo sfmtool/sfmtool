@@ -144,10 +144,12 @@ That filter and the pose-guided sweep matcher it runs inside are described in
 ## Camera Intrinsics
 
 If any image being processed resolves a `camera_config.json` (closest-ancestor walk from
-its parent directory up to the workspace root), the file's intrinsics are used. See
+its parent directory up to the workspace root), the file's intrinsics are used, one camera
+per resolved file. See
 [`../../workspace/camera-config.md`](../../workspace/camera-config.md). `--derive-pairs`
-sets up its cameras as `sfm solve` does from a `.matches` file, so a `.camrig` covering
-the file's images supplies them there; matching an image set reads no `.camrig`.
+sets up its cameras as `sfm solve` does from a `.matches` file, so the `.camrig` files
+covering the file's images supply them there, one camera per single-sensor `.camrig`;
+matching an image set reads no `.camrig`.
 
 With `--camera-model`, the camera a `camera_config.json`, a `rig_config.json` sensor's
 `camera_params` or, for `--derive-pairs`, a `.camrig` supplies is refit to that model and

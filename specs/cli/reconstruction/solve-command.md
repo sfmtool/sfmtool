@@ -183,18 +183,21 @@ are refined during bundle adjustment.
 
 If any image being processed resolves a `camera_config.json` (closest-ancestor walk from
 its parent directory up to the workspace root), the file's intrinsics are the starting
-camera. See [`../../workspace/camera-config.md`](../../workspace/camera-config.md).
+camera. Each resolved file is one camera, shared by the images that resolve it, and the
+images that resolve none share one camera inferred from EXIF. See
+[`../../workspace/camera-config.md`](../../workspace/camera-config.md).
 
 With `--camera-model`, the camera a covering `.camrig`, a `camera_config.json` or a
 `rig_config.json` sensor's `camera_params` supplies is refit to that model by the
 lens-only fit `CameraIntrinsics.refit`
 ([`../../core/camera/refit-camera-intrinsics.md`](../../core/camera/refit-camera-intrinsics.md)),
 and the refit camera is the starting camera, used exactly where the supplied one would
-have been. Every camera of a multi-sensor `.camrig` that the solve uses is refit. The
-files are not changed. The fit keeps the principal point and image size, so a
-`SIMPLE_PINHOLE` camera refit to `SIMPLE_RADIAL` keeps its focal and gains
-`radial_distortion_k1 = 0`, a term the solve's bundle adjustment then refines. One line
-per refit camera names it, the two models, and the fit's rms and max in pixels, followed
+have been. Every such camera the solve uses is refit: each camera of a multi-sensor
+`.camrig`, the camera of each single-sensor `.camrig` and of each `camera_config.json`,
+and the camera of each `rig_config.json` sensor with `camera_params`. The files are not
+changed. The fit keeps the principal point and image size, so a `SIMPLE_PINHOLE` camera
+refit to `SIMPLE_RADIAL` keeps its focal and gains `radial_distortion_k1 = 0`, a term the
+solve's bundle adjustment then refines. One line per refit camera names it, the two models, and the fit's rms and max in pixels, followed
 by a line for each term the target model cannot represent:
 
 ```
@@ -218,15 +221,21 @@ is that same `k1 = 0` camera.
 
 ## Camera Rig Files (`.camrig`)
 
-`sfm solve` auto-discovers `.camrig` files in the workspace and uses the one
-covering every image being solved. A `.camrig` takes precedence over
-`camera_config.json` and `rig_config.json` for the images it covers — a note is
-printed when it overrides one.
+`sfm solve` auto-discovers `.camrig` files in the workspace and uses them when
+they cover every image being solved: one multi-sensor `.camrig` covering all of
+the images, or one or more single-sensor `.camrig` files that each cover some of
+them, every image covered by exactly one file. The `.camrig` files take
+precedence over `camera_config.json` and `rig_config.json` for the images they
+cover — a note is printed when a `.camrig` overrides a `camera_config.json`, and
+when a `rig_config.json` is ignored.
 
 - A **single-sensor** `.camrig` (such as one written by `sfm camrig create`)
   supplies the starting camera intrinsics for the images its stored image
   pattern matches, refit to `--camera-model` when that is given
-  ([Camera Intrinsics](#camera-intrinsics)).
+  ([Camera Intrinsics](#camera-intrinsics)). Each single-sensor `.camrig` is
+  one camera of the solve, so two videos shot with different lenses, each with
+  its own `.camrig`, are solved together with a camera for each; the
+  `.sfmr` holds both cameras, and each image's camera is its file's.
 - A **multi-sensor** `.camrig` (such as one written by `sfm insv2rig`) drives
   rig-aware SfM. Each sensor's image pattern carries a frame field, and images
   from different sensors that share a frame index form one rig frame. The
@@ -240,12 +249,18 @@ printed when it overrides one.
 The command fails up front, with a message naming the offending files, when the
 discovered `.camrig` files cannot be used:
 
-- the images being solved span more than one `.camrig`;
-- a `.camrig` covers only some of the images being solved;
+- an image being solved is matched by more than one `.camrig`;
+- a multi-sensor `.camrig` covers some of the images being solved and another
+  `.camrig` covers others;
+- the `.camrig` files cover only some of the images being solved (an example
+  image no `.camrig` matches is named). The others do not fall back to
+  `camera_config.json` or EXIF inference: an image a `.camrig` pattern misses
+  among images the `.camrig` files cover is more often a pattern that is too
+  narrow than a camera of its own;
 - `--camera-model` is given and the refit of a camera the solve uses is refused.
 
 `sfm pick-images` finds its rigs by the same rule, so a list it writes is
-covered by the same `.camrig`
+covered by the same `.camrig` files
 ([pick-images-command.md § Collecting the frames](../image-feature/pick-images-command.md#collecting-the-frames)).
 
 See [`../../formats/camrig-file-format.md`](../../formats/camrig-file-format.md).

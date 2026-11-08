@@ -106,9 +106,10 @@ correspondence graph from the two-view geometry table — verify first with
 
 ## Camera Intrinsics (`.matches` mode only)
 
-The cameras are set up as `sfm solve` sets them up from a `.matches` file: a `.camrig`
-covering the file's images supplies them, else a `camera_config.json` that an image
-resolves (closest-ancestor walk from its parent directory up to the workspace root) or a
+The cameras are set up as `sfm solve` sets them up from a `.matches` file: the `.camrig`
+files covering the file's images supply them, one camera per single-sensor `.camrig`,
+else a `camera_config.json` that an image resolves (closest-ancestor walk from its parent
+directory up to the workspace root), one camera per resolved file, or a
 `rig_config.json`, else EXIF inference. See
 [`../../workspace/camera-config.md`](../../workspace/camera-config.md). With
 `--camera-model`, a camera one of those files supplies is refit to that model and the

@@ -148,9 +148,9 @@ intrinsics become `fx ≈ 1200.05`, `fy ≈ 1199.6`, `cx ≈ 749.9`, `cy ≈ 499
 distortion unchanged.
 
 Within one `camera_config.json` scope, all images are expected to share the
-same calibration. If individual images have different runtime resolutions
-(e.g. mixed full-res and thumbnail), each is scaled independently from the
-shared calibration.
+same calibration and the same runtime resolution: the images that resolve one
+file share one camera, scaled from the calibration to the resolution of the
+first of them (see *One Camera per File* below).
 
 ## Where to Place `camera_config.json`
 
@@ -201,16 +201,21 @@ Commands that operate on existing `.sfmr` files (`sfm xform`, `sfm inspect`,
 authoritative. To apply updated intrinsics to an existing reconstruction, use
 `sfm xform --camera-model` or re-solve.
 
-### One Camera per Source Directory
+### One Camera per File
 
 When several images map to the same `camera_config.json`, sfmtool creates a
-single COLMAP camera and assigns every matching image to it. This matches
-the typical case (one physical camera produces one `nikon_z6/` directory of
-photos) and is consistent with how `infer_camera_from_image()` is used today
-when the `--single-camera-per-folder` heuristic applies.
+single COLMAP camera and assigns every matching image to it, and images that
+resolve different files get different cameras: one invocation has one camera
+per resolved file. This matches the typical case (one physical camera produces
+one `nikon_z6/` directory of photos). The images that resolve no file share
+one more camera, inferred from EXIF of the first of them. Each camera is built
+from the first of its images, so the images of one camera are expected to
+share a resolution.
 
 If you have two distinct cameras whose images live in the same folder, separate
-them into subfolders before solving.
+them into subfolders before solving, or give each its own single-sensor
+`.camrig`, whose image pattern can tell them apart by name
+([../cli/reconstruction/solve-command.md § Camera Rig Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)).
 
 ## Interaction with `--camera-model`
 
@@ -240,7 +245,8 @@ reaches past 90°, stops the command with an error naming the file and the reaso
 change the model permanently, edit the file.
 
 If different images in one invocation resolve to different `camera_config.json`
-files (e.g. multiple cameras in one workspace), each image uses its own resolved file.
+files (e.g. multiple cameras in one workspace), each image uses the camera of its own
+resolved file, each file's camera is refit, and each refit prints its own report line.
 
 A covering `.camrig`, which takes precedence over this file, and a `rig_config.json`
 sensor's `camera_params` follow the same rule
