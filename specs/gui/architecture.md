@@ -174,6 +174,7 @@ sfmtool/
 │   │       ├── metrics.rs            # Reprojection error, ray angles, triangulation diagnostics
 │   │       ├── platform/
 │   │       │   ├── mod.rs
+│   │       │   ├── macos.rs      # The application menu's Quit made a close request
 │   │       │   └── windows.rs    # DirectManipulation touchpad integration
 │   │       └── shaders/
 │   │           ├── common.wgsl         # Prelude prepended to six scene shaders: ReconUniforms, PICK_TAG_*, INF_DEPTH, MASK_*

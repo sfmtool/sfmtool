@@ -95,7 +95,7 @@ impl AppState {
     }
 
     /// Quit, or ask first: what File ▸ Quit and a close request from the window
-    /// system (its close button, Alt+F4) both do.
+    /// system (its close button, Alt+F4, Cmd+Q on macOS) both do.
     ///
     /// `true` when no node is dirty, and the caller ends the viewer. Otherwise
     /// the close prompt is put up on a quit and the answer is `false`; the

@@ -689,7 +689,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         match event {
-            // The window's close button, Alt+F4 and the taskbar's Close: the
+            // The window's close button, Alt+F4, the taskbar's Close and, on
+            // macOS, the application menu's Quit (`platform::macos`): the
             // window system asking to close, which asks what File ▸ Quit asks
             // (`AppState::request_quit`). With nothing unsaved the viewer ends
             // now, as it would after the frame File ▸ Quit was pressed in;
@@ -791,6 +792,11 @@ impl App {
         );
 
         self.window = Some(window.clone());
+
+        // On macOS, make the application menu's Quit (Cmd+Q) a close request,
+        // so it asks `AppState::request_quit` as the close button does.
+        #[cfg(target_os = "macos")]
+        platform::macos::route_quit_to_window(&window);
 
         // Step 2: Raw wgpu setup. Pick the backend per platform: DX12 on
         // Windows (pairs with the DirectManipulation integration), Metal on

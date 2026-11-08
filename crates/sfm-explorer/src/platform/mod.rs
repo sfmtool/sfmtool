@@ -1,10 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Platform-specific gesture handling.
+//! Platform-specific gesture handling, and on macOS the application menu's
+//! Quit item.
 //!
 //! Provides cross-platform abstractions for precision touchpad gestures.
 
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 #[cfg(target_os = "windows")]
 pub(crate) mod windows;
 
