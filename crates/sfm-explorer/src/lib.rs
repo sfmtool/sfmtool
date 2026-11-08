@@ -541,7 +541,9 @@ pub(crate) struct App {
     pub(crate) prev_ray_source: Option<(PointRef, crate::document::VersionSerial)>,
     pub(crate) prev_hidden_image: Option<ImageRef>,
     /// Set by File > Quit and by an MCP `quit` that is not refused, and read by
-    /// the event loop right after the frame that set it, which then exits.
+    /// the event loop right after the frame that set it, which then exits; also
+    /// set by a close request from the window system that finds nothing
+    /// unsaved, which exits at once.
     /// Once it is set, `mcp::apply_as_agent` refuses every later tool call.
     pub(crate) quit_requested: bool,
     /// Why the window could not be created, set by `resumed` as it ends the
@@ -687,8 +689,21 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         match event {
+            // The window's close button, Alt+F4 and the taskbar's Close: the
+            // window system asking to close, which asks what File ▸ Quit asks
+            // (`AppState::request_quit`). With nothing unsaved the viewer ends
+            // now, as it would after the frame File ▸ Quit was pressed in;
+            // otherwise the close prompt is drawn in the next frame, in a
+            // window brought back from the taskbar so the prompt can be seen.
             WindowEvent::CloseRequested => {
-                event_loop.exit();
+                if self.state.request_quit() {
+                    self.quit_requested = true;
+                    event_loop.exit();
+                } else if let Some(window) = self.window.as_ref() {
+                    window.set_minimized(false);
+                    window.focus_window();
+                    window.request_redraw();
+                }
             }
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {

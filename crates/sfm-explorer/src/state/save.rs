@@ -94,6 +94,24 @@ impl AppState {
             .collect()
     }
 
+    /// Quit, or ask first: what File ▸ Quit and a close request from the window
+    /// system (its close button, Alt+F4) both do.
+    ///
+    /// `true` when no node is dirty, and the caller ends the viewer. Otherwise
+    /// the close prompt is put up on a quit and the answer is `false`; the
+    /// prompt's Save or Don't Save ends the viewer on a later frame, and its
+    /// Cancel leaves it running. A prompt that is already up keeps the question
+    /// it is asking ([`crate::close_prompt::ClosePrompt::ask`]), so a second
+    /// request while it is up neither stacks a prompt nor quits.
+    pub(crate) fn request_quit(&mut self) -> bool {
+        if !self.any_dirty() {
+            return true;
+        }
+        self.close_prompt
+            .ask(crate::close_prompt::PendingClose::Quit);
+        false
+    }
+
     /// The ids of the dirty nodes, for the close prompt's Save.
     pub(crate) fn dirty_ids(&self) -> Vec<ReconId> {
         self.scene

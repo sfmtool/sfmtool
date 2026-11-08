@@ -115,11 +115,10 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
                 .fail(crate::action_log::Kind::File, message);
         }
     }
-    if *quit_from_menu && app_state.any_dirty() {
+    // The window's close button asks the same question, from the event loop
+    // (`WindowEvent::CloseRequested` in `lib.rs`).
+    if *quit_from_menu && !app_state.request_quit() {
         *quit_requested = false;
-        app_state
-            .close_prompt
-            .ask(crate::close_prompt::PendingClose::Quit);
     }
 
     if app_state.show_demo_dialog {
