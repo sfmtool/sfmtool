@@ -84,7 +84,9 @@ number however padded, but does not take because the number is padded
 otherwise than the field writes it, is an error naming the entry, its pattern
 and the files: `frames/x_%d.jpg` with `frames/x_0999.jpg` beside
 `frames/x_1000.jpg`, or `frames/x_%04d.jpg` with `frames/x_007.jpg`. Only a
-file whose number is in the entry's range counts. Such a file is most likely
+file whose number is in the entry's range counts, and only one that no other
+entry of the list takes: `f/a_%d.jpg` beside `f/a_%02d.jpg` covers `f/a_1.jpg`
+and `f/a_01.jpg` alike, so neither is a padding error. Such a file is most likely
 one the list's author meant to include, so the list is refused rather than
 resolved without it; the fix is to change the pattern or rename the files.
 

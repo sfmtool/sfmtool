@@ -802,6 +802,44 @@ fn a_file_an_entry_misses_only_by_the_padding_of_its_number_is_an_error() {
 }
 
 #[test]
+fn a_file_another_entry_takes_is_no_padding_miss() {
+    let dir = workspace();
+    for path in [
+        "f/a_1.jpg",
+        "f/a_2.jpg",
+        "f/a_01.jpg",
+        "f/a_02.jpg",
+        "f/a_003.jpg",
+    ] {
+        touch(dir.path(), path);
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"both": [{"pattern": "f/a_%d.jpg"}, {"pattern": "f/a_%02d.jpg"}]}"#,
+    );
+    // `f/a_003.jpg` is taken by neither entry; both miss it by its padding.
+    let e = resolve(&lists, "both", None).unwrap_err();
+    let NamedImageListsError::FramePadding { entries, .. } = &e else {
+        panic!("expected FramePadding, got: {e}");
+    };
+    let missed: Vec<(usize, &[String])> = entries.iter().map(|(i, _, f)| (*i, &f[..])).collect();
+    let expected = ["f/a_003.jpg".to_string()];
+    assert_eq!(missed, [(0, &expected[..]), (1, &expected[..])]);
+
+    // Without it, each file is taken by one entry, so the list resolves.
+    std::fs::remove_file(dir.path().join("f/a_003.jpg")).unwrap();
+    assert_eq!(
+        paths(&resolve(&lists, "both", None).unwrap()),
+        ["f/a_1.jpg", "f/a_2.jpg", "f/a_01.jpg", "f/a_02.jpg"]
+    );
+    let names = ["f/a_1.jpg", "f/a_01.jpg"];
+    assert_eq!(
+        paths(&lists.resolve_in_names("both", &names, None).unwrap()),
+        ["f/a_1.jpg", "f/a_01.jpg"]
+    );
+}
+
+#[test]
 fn resolving_reports_progress_and_stops_when_cancelled() {
     let dir = workspace();
     for i in 1..=5 {

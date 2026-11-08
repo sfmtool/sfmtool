@@ -799,6 +799,13 @@ impl NamedImageLists {
                 });
             }
         }
+        // A file another entry of the list takes is not left out of the list,
+        // so it is no padding miss: `a_%d.jpg` beside `a_%02d.jpg` covers
+        // `a_1.jpg` and `a_01.jpg` alike.
+        for (_, _, missed) in &mut padding {
+            missed.retain(|file| !first_entry.contains_key(file));
+        }
+        padding.retain(|(_, _, missed)| !missed.is_empty());
         if !padding.is_empty() {
             return Err(NamedImageListsError::FramePadding {
                 path: self.path.clone(),
