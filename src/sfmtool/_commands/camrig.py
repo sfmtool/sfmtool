@@ -250,8 +250,9 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
         elif suffix == ".camrig":
             if rig_index is not None:
                 raise click.UsageError(
-                    "--rig applies to a .sfmr source; a .camrig holds exactly "
-                    "one rig — use --sensors to pick a subset of its sensors."
+                    "--rig applies to a .sfmr or rig_config.json source; a .camrig "
+                    "holds exactly one rig — use --sensors to pick a subset of "
+                    "its sensors."
                 )
             summary = copy_from_camrig(
                 src,

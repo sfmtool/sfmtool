@@ -255,8 +255,12 @@ def copy_from_rig_config(
         rig_configs = validate_rig_config(data, str(source))
     except json.JSONDecodeError as e:
         raise CamrigCpError(f"Invalid JSON in {source}: {e}") from None
-    except (OSError, RigConfigError) as e:
+    except OSError as e:
         raise CamrigCpError(str(e)) from None
+    except RigConfigError as e:
+        raise CamrigCpError(
+            f"a .json source is read as a rig_config.json, and this one is not one: {e}"
+        ) from None
 
     if rig_index is None:
         if len(rig_configs) != 1:

@@ -379,6 +379,16 @@ def test_an_unusable_rig_config_is_refused(tmp_path: Path):
     assert result.exit_code == 1
     assert "non-reference sensors need 'cam_from_rig_rotation'" in result.output
 
+    # A .json that is not a rig_config.json, such as a camera_config.json.
+    other = tmp_path / "camera_config.json"
+    other.write_text(json.dumps({"camera_model": "PINHOLE"}))
+    result = _cp(str(other), out)
+    assert result.exit_code == 1
+    assert "read as a rig_config.json, and this one is not one" in " ".join(
+        result.output.split()
+    )
+    assert "top level must be a JSON array of rig objects" in result.output
+
     _rig_config(tmp_path, _two_sensor_rig())
     result = _cp(str(source), out, "--rig", "1")
     assert result.exit_code == 1
