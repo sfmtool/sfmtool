@@ -2302,20 +2302,16 @@ pub fn tilt_patch(
         return Ok((track.clone(), unchanged));
     }
 
-    let reached = was * phi.cos() + perp * phi.sin();
-    // The least rotation, which is what this step means by a tilt, taken from
-    // `nalgebra` rather than built here. It is `None` only for the half turn,
-    // where the axis is genuinely undefined and the arc's own is taken; below
-    // that its axis *is* the arc's, `was x reached` being `sin(phi)` along
-    // `was x perp`. What the report states is `phi` and not this rotation's own
-    // angle, for the reason above: the two agree to the last bits of a turn
-    // anyone means, and only one of them can be trusted at a nanoradian.
-    let rotation = nalgebra::Rotation3::rotation_between(&was, &reached).unwrap_or_else(|| {
-        nalgebra::Rotation3::from_axis_angle(
-            &nalgebra::Unit::new_normalize(was.cross(&perp)),
-            std::f64::consts::PI,
-        )
-    });
+    // The least rotation, which is what this step means by a tilt: `phi` about
+    // the arc's own axis `was x perp`, a unit vector since `perp` is a unit
+    // vector perpendicular to `was`. It is built from the arc rather than
+    // from the two normals, as `nalgebra`'s `rotation_between` builds it,
+    // because that reads its angle as `acos` of their dot, which for a turn
+    // of a few nanoradians rounds to `1.0` (no turn) or a bit over it (`NaN`
+    // axes). At the half turn the axis is the arc's too, `perp` being the
+    // patch frame's own `u` there.
+    let rotation =
+        nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(was.cross(&perp)), phi);
 
     let u = rotation * patch_frame.u_axis;
     let v = rotation * patch_frame.v_axis;
