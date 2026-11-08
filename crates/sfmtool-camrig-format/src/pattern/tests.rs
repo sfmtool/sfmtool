@@ -52,8 +52,8 @@ fn unpadded_field_matches_a_number_without_leading_zeros() {
     assert!(m("cam_120.jpg"));
     assert!(!m("cam_07.jpg"));
     assert!(!m("cam_00.jpg"));
-    // `%0d` and `%01d` write what `%d` writes.
-    for pattern in ["cam_%0d.jpg", "cam_%01d.jpg"] {
+    // `%0d`, `%01d` and `%1d` write what `%d` writes.
+    for pattern in ["cam_%0d.jpg", "cam_%01d.jpg", "cam_%1d.jpg"] {
         assert!(pattern_matches(pattern, "cam_7.jpg", false));
         assert!(pattern_matches(pattern, "cam_0.jpg", false));
         assert!(pattern_matches(pattern, "cam_120.jpg", false));
@@ -62,22 +62,29 @@ fn unpadded_field_matches_a_number_without_leading_zeros() {
 }
 
 #[test]
-fn width_without_the_zero_flag_pads_with_spaces() {
-    let m = |p: &str| pattern_matches("cam_%3d.jpg", p, false);
-    assert!(m("cam_  7.jpg"));
-    assert!(m("cam_ 42.jpg"));
-    assert!(m("cam_123.jpg"));
-    assert!(m("cam_1234.jpg"));
-    assert!(!m("cam_7.jpg"));
-    assert!(!m("cam_007.jpg"));
-    assert!(!m("cam_   7.jpg"));
-    assert!(!m("cam_ 07.jpg"));
+fn a_width_without_the_zero_flag_is_refused() {
+    let e = validate_pattern("cam_%4d.jpg").unwrap_err();
     assert_eq!(
-        pattern_frame_index("cam_%3d.jpg", "cam_  7.jpg", false),
-        Some(7)
+        e,
+        "image pattern 'cam_%4d.jpg' has the frame field '%4d', which pads a number with \
+         spaces; use '%04d' for a number zero-padded to 4 digits or '%d' for a number \
+         without padding"
     );
-    // A wildcard before the field leaves the field all the spaces it needs.
-    assert!(pattern_matches("*%3d.jpg", "x  7.jpg", false));
+    assert!(validate_pattern("a/**/cam_%12d.jpg")
+        .unwrap_err()
+        .contains("'%12d'"));
+    // `%%` before the digits is a literal percent, not a field.
+    assert!(validate_pattern("cam_%%4d.jpg").is_ok());
+    // A width of 1 never pads, so `%1d` is `%d`, as are `%0d` and `%01d`.
+    for pattern in ["cam_%1d.jpg", "cam_%0d.jpg", "cam_%01d.jpg", "cam_%d.jpg"] {
+        assert!(validate_pattern(pattern).is_ok(), "{pattern}");
+        assert!(pattern_matches(pattern, "cam_7.jpg", false));
+        assert!(pattern_matches(pattern, "cam_120.jpg", false));
+        assert!(!pattern_matches(pattern, "cam_07.jpg", false));
+    }
+    // Matching a refused pattern does not panic; it reads the field as `%d`.
+    assert!(pattern_matches("cam_%4d.jpg", "cam_7.jpg", false));
+    assert!(!pattern_matches("cam_%4d.jpg", "cam_   7.jpg", false));
 }
 
 #[test]

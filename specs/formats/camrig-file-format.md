@@ -208,8 +208,9 @@ and combined, and for the hex encoding.
 - Quaternions are unit length (within tolerance).
 - Every image pattern is a relative forward-slash path: no leading `/`, no
   `..` component, and every `**` stands alone as a whole path segment.
-- Every image pattern contains at most one frame field (`%d` or `%0Nd`) —
-  see *How `.camrig` files fit into workspaces*.
+- Every image pattern contains at most one frame field (`%d` or `%0Nd`), and
+  no frame field with a width greater than 1 but no `0` flag (`%4d`) — see
+  *How `.camrig` files fit into workspaces*.
 - If `sensor_count > 1` and the rig is image-backed (non-empty
   `image_file_patterns`), every pattern contains exactly one frame field. A
   frame-field-less pattern is permitted only in a single-sensor rig.
@@ -332,11 +333,12 @@ more digits is written whole. So:
   video frame extractor writes it with `%04d`, is all matched by `%04d`.
 - `%d` matches `7`, `0` and `120`, and not `07` or `00`.
 
-The field is the printf conversion `%`, an optional `0` flag, an optional
-decimal width, then `d`, and the same rule holds for every such field:
-`%0d` and `%01d` match what `%d` matches, and a width without the `0` flag,
-`%3d`, pads with spaces, so it matches `  7` and `123`, not `7` or `007`.
-Outside a frame field, `%%` is a literal `%`.
+A frame field is written `%`, an optional `0` flag, an optional decimal
+width, then `d`. `%0d`, `%01d` and `%1d` write what `%d` writes, and match
+what it matches. A width greater than 1 without the `0` flag, such as `%4d`,
+pads with spaces, and a pattern holding one is invalid: the error names the
+pattern and the field, and says to use `%04d` or `%d`. Outside a frame
+field, `%%` is a literal `%`.
 
 The pattern does two things:
 

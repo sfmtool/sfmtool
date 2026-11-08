@@ -57,8 +57,10 @@ listing.
   `**` (whole segments), and at most one frame field, `%d` or `%0Nd`, with `%%`
   for a literal `%`. A frame field matches a number exactly as printf writes
   it with the field: `%04d` matches `0007` and `12345`, not `007` or `00007`,
-  and `%d` matches `7` and `0`, not `07`. One entry with a wildcard can cover
-  every sensor of a rig, as `rig/*/frame_%05d.jpg` does above.
+  and `%d` matches `7` and `0`, not `07`. A field with a width but no `0`
+  flag, such as `%4d`, pads with spaces and is refused, as the `.camrig`
+  checker refuses it. One entry with a wildcard can cover every sensor of a
+  rig, as `rig/*/frame_%05d.jpg` does above.
 - **`range`** (string, optional): a range expression (comma-separated integers,
   `a-b` spans and `a-b:s` stepped spans), applied to the number the pattern's
   frame field captures. An entry whose pattern has no frame field takes no

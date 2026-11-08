@@ -30,27 +30,21 @@ struct FrameField {
 }
 
 impl FrameField {
-    /// Whether printf, formatting a number with this field, writes `spaces`
-    /// spaces followed by `digits`, a non-empty run of ASCII digits.
+    /// Whether printf, formatting a number with this field, writes `digits`,
+    /// a non-empty run of ASCII digits.
     ///
     /// printf writes a number without leading zeros (`0` itself as one
-    /// digit), then pads it on the left to the field's width, with zeros
-    /// under the `0` flag and with spaces otherwise. So the text is exactly
-    /// the width when padding was added, and a number wider than the field
-    /// is written whole and unpadded.
-    fn writes(self, spaces: usize, digits: &[u8]) -> bool {
-        let len = spaces + digits.len();
-        let unpadded = digits.len() == 1 || digits[0] != b'0';
-        if self.zero_pad {
-            // A zero-padded field never writes a space; padding zeros make
-            // the text exactly the field's width.
-            let width = self.width.max(1);
-            spaces == 0 && (len == width || (len > width && unpadded))
-        } else if spaces > 0 {
-            unpadded && len == self.width
-        } else {
-            unpadded && len >= self.width
-        }
+    /// digit), then, under the `0` flag, pads it on the left with zeros to the
+    /// field's width. So the text is exactly the width when padding was
+    /// added, and a number wider than the field is written whole and
+    /// unpadded. A field without the `0` flag is read as `%d`: a width of 1
+    /// never pads, and [`validate_pattern`] refuses a wider one, which printf
+    /// would pad with spaces.
+    fn writes(self, digits: &[u8]) -> bool {
+        let len = digits.len();
+        let unpadded = len == 1 || digits[0] != b'0';
+        let width = if self.zero_pad { self.width.max(1) } else { 1 };
+        len == width || (len > width && unpadded)
     }
 }
 
@@ -157,7 +151,9 @@ pub fn pattern_literal(pattern: &str) -> Option<String> {
 ///
 /// Enforces the grammar from the format spec independent of sensor count: a
 /// non-empty relative forward-slash path, no `..` component, every `**` a
-/// whole path segment, and at most one frame field. The multi-sensor rule
+/// whole path segment, at most one frame field, and no frame field with a
+/// width but no `0` flag (`%4d`), which printf pads with spaces; `%1d` never
+/// pads and is accepted as `%d`. The multi-sensor rule
 /// (every pattern needs a frame field) depends on the rig and stays in
 /// [`CamRigData::validate`](crate::CamRigData::validate).
 ///
@@ -184,6 +180,25 @@ pub fn validate_pattern(pattern: &str) -> Result<(), String> {
                 "image pattern '{pattern}' has a '**' that is not a whole path \
                  segment; '**' must stand alone between '/' separators"
             ));
+        }
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && bytes.get(i + 1) == Some(&b'%') {
+            i += 2;
+        } else if let Some((len, field)) = frame_field_at(bytes, i) {
+            if !field.zero_pad && field.width > 1 {
+                let text = &pattern[i..i + len];
+                let digits = &text[1..len - 1];
+                return Err(format!(
+                    "image pattern '{pattern}' has the frame field '{text}', which pads \
+                     a number with spaces; use '%0{digits}d' for a number zero-padded to \
+                     {digits} digits or '%d' for a number without padding"
+                ));
+            }
+            i += len;
+        } else {
+            i += 1;
         }
     }
     let fields = count_frame_fields(pattern);
@@ -296,24 +311,12 @@ fn capture_tokens<'p>(
             .then(|| capture_tokens(rest, &path[1..], ci, padding))
             .flatten(),
         Tok::Frame(field) => {
-            // A space-padded field's text starts with every space before the
-            // digits, since printf writes the padding and the number together.
-            let spaces = if padding == Padding::Exact && !field.zero_pad {
-                path.iter().take_while(|&&b| b == b' ').count()
-            } else {
-                0
-            };
-            let digits = path[spaces..]
-                .iter()
-                .take_while(|b| b.is_ascii_digit())
-                .count();
+            let digits = path.iter().take_while(|b| b.is_ascii_digit()).count();
             (1..=digits)
                 .rev()
-                .filter(|&n| {
-                    padding == Padding::Any || field.writes(spaces, &path[spaces..spaces + n])
-                })
-                .find(|&n| capture_tokens(rest, &path[spaces + n..], ci, padding).is_some())
-                .map(|n| Some(&path[spaces..spaces + n]))
+                .filter(|&n| padding == Padding::Any || field.writes(&path[..n]))
+                .find(|&n| capture_tokens(rest, &path[n..], ci, padding).is_some())
+                .map(|n| Some(&path[..n]))
         }
         Tok::Star => {
             let seg = path.iter().take_while(|&&b| b != b'/').count();

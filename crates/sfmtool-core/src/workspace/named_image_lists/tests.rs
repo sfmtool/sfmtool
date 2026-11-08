@@ -236,7 +236,8 @@ fn bad_patterns_use_the_camrig_checker() {
             {"pattern": "frames/../x.jpg"},
             {"pattern": "f_%d_%04d.jpg"},
             {"pattern": "a**/x.jpg"},
-            {"pattern": ""}
+            {"pattern": ""},
+            {"pattern": "f_%4d.jpg"}
         ]}"#,
     ));
     let expected: Vec<String> = [
@@ -245,6 +246,7 @@ fn bad_patterns_use_the_camrig_checker() {
         "f_%d_%04d.jpg",
         "a**/x.jpg",
         "",
+        "f_%4d.jpg",
     ]
     .iter()
     .enumerate()

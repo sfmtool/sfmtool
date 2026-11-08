@@ -332,6 +332,21 @@ def test_camrig_create_rejects_two_frame_fields(tmp_path: Path):
     assert not out.exists()
 
 
+def test_camrig_create_rejects_a_space_padded_frame_field(tmp_path: Path):
+    # `%2d` pads with spaces, which no image name is meant to hold; `create`
+    # names the field and the fields to use instead.
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 2)
+    out = tmp_path / "rig.camrig"
+    result = CliRunner().invoke(
+        main, ["camrig", "create", "imgs/seoul_bull_sculpture_%2d.jpg", str(out)]
+    )
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "the frame field '%2d', which pads a number with spaces" in output
+    assert "use '%02d'" in output and "or '%d'" in output
+    assert not out.exists()
+
+
 def test_camrig_create_params_requires_camera_model(tmp_path: Path):
     _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 2)
     out = tmp_path / "rig.camrig"
