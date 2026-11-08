@@ -133,30 +133,70 @@ def test_image_file_hashes_from_sift_matches_metadata(seoul_bull_workspace):
 
 
 def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
-    """The full orchestration runs on an infinity-bearing input (feature_size
-    sizing doesn't choke on w=0 points) and produces a valid embedded_patches
-    reconstruction; any surviving infinity point stays at infinity. Every kept
-    point — finite or infinity — carries a real stored bitmap (nonzero alpha):
-    culled points are dropped instead of kept with an all-black bitmap, and
-    infinity points get a rendered texture, not a zero row."""
+    """The full orchestration keeps a point at infinity that two of its own
+    observations fit: it stays at infinity, in its direction, keeps those two
+    observations, and carries a real stored bitmap (nonzero alpha) rendered
+    through the ``w = 0`` path, not a zero row. Every other kept point carries
+    one too: culled points are dropped instead of kept with an all-black bitmap.
+
+    For each pair of a point's observations, the candidate direction is the
+    mean of their two viewing rays. The test takes the pair, over every point,
+    whose two keypoints land closest to where that direction projects, and
+    requires both within half of the localizer's ``max_shift_px``. The test
+    searches rather than naming a point, because the fixture extracts SIFT on
+    each platform and its point indexes differ between them. On Linux and
+    Windows the search finds a background point about 50 m from cameras within
+    3 m of their centroid; its third observation lands about 5 px off and the
+    localizer drops it. A point on the sculpture, 2 to 3 m from the cameras,
+    cannot stand in: its rays differ by tens of degrees, so no direction
+    projects near its keypoints in more than one view, the localizer drops the
+    other views, and with fewer than two views the point has no bitmap and is
+    dropped."""
+    import inspect
+
     from sfmtool.fileio import read_image_rgb
 
+    max_shift_px = (
+        inspect.signature(ep.embed_patches).parameters["max_shift_px"].default
+    )
     recon = SfmrReconstruction.load(seoul_bull_workspace)
-    # Turn one well-observed point into a point at infinity, in the direction the
-    # cameras see it: from the centroid of the camera centres, so the direction
-    # lands in some image whatever the frame's origin.
     pos = np.asarray(recon.positions_xyzw, dtype=np.float64).copy()
-    counts = np.bincount(
-        np.asarray(recon.track_point_indexes), minlength=recon.point_count
-    )
-    pi = int(np.argmax(counts))
-    centres = -np.einsum(
-        "nji,nj->ni", rotation_matrices(recon), np.asarray(recon.translations)
-    )
-    ray = pos[pi, :3] - centres.mean(axis=0)
-    pos[pi] = np.append(ray / np.linalg.norm(ray), 0.0)
+    points = np.asarray(recon.track_point_indexes)
+    obs_images = np.asarray(recon.track_image_indexes)
+    keypoints = np.asarray(recon.keypoints_xy, dtype=np.float64)
+    rotations = rotation_matrices(recon)
+    centres = -np.einsum("nji,nj->ni", rotations, np.asarray(recon.translations))
+    cameras = recon.cameras
+    camera_indexes = np.asarray(recon.camera_indexes)
+    rays = pos[points, :3] - centres[obs_images]
+    rays /= np.linalg.norm(rays, axis=1, keepdims=True)
+
+    def offset_px(direction, obs):
+        """Pixels from observation ``obs``'s keypoint to where ``direction``
+        projects in its image; infinite behind the camera."""
+        image = int(obs_images[obs])
+        x = rotations[image] @ direction
+        if x[2] >= 0:
+            return np.inf
+        uv = cameras[int(camera_indexes[image])].project(x[0] / -x[2], x[1] / -x[2])
+        return float(np.linalg.norm(np.asarray(uv) - keypoints[obs]))
+
+    # (worse of the pair's two offsets, point, pair, direction)
+    best = (np.inf, -1, (), None)
+    for p in range(recon.point_count):
+        obs = np.flatnonzero(points == p)
+        for i, a in enumerate(obs):
+            for b in obs[i + 1 :]:
+                d = rays[a] + rays[b]
+                d /= np.linalg.norm(d)
+                worse = max(offset_px(d, a), offset_px(d, b))
+                if worse < best[0]:
+                    best = (worse, p, (int(a), int(b)), d)
+    worse, pi, pair, direction = best
+    assert worse <= max_shift_px / 2, f"no pair fits a point at infinity ({worse} px)"
+    pair_images = {int(obs_images[o]) for o in pair}
+    pos[pi] = np.append(direction, 0.0)
     recon = recon.clone_with_changes(positions=pos)
-    assert bool(np.asarray(recon.point_is_at_infinity)[pi])
     # Every eighth point and the one at infinity.
     recon = every_nth_point(recon, SEOUL_BULL_POINT_STEP, keep=[pi])
     assert int(np.asarray(recon.point_is_at_infinity).sum()) == 1
@@ -166,14 +206,26 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
 
     out = ep.embed_patches(recon, images, resolution=12)
     assert out.feature_source == "embedded_patches"
-    # The run completed and verifies; any kept infinity point is still w = 0.
-    assert int(np.asarray(out.point_is_at_infinity).sum()) <= 1
+    # The point at infinity is kept (w = 0), in the direction it was given.
+    inf_rows = np.flatnonzero(np.asarray(out.point_is_at_infinity))
+    assert len(inf_rows) == 1, f"{len(inf_rows)} points at infinity kept, not 1"
+    inf = int(inf_rows[0])
+    xyzw = np.asarray(out.positions_xyzw, dtype=np.float64)[inf]
+    np.testing.assert_allclose(xyzw[:3], direction, atol=1e-6)
+    # Its track keeps the two observations the direction was fitted to.
+    kept = set(
+        np.asarray(out.track_image_indexes)[
+            np.asarray(out.track_point_indexes) == inf
+        ].tolist()
+    )
+    assert pair_images <= kept, f"kept track {sorted(kept)} lacks {pair_images}"
 
-    # The two-bugs invariant: every surviving point has a stored bitmap with
-    # cross-view agreement somewhere (alpha > 0) — no all-black rows survive.
+    # Every kept point, the one at infinity among them, has a stored bitmap
+    # with cross-view agreement somewhere (alpha > 0): no all-black rows.
     bitmaps = np.asarray(out.patch_bitmaps)
     assert bitmaps.shape[0] == out.point_count
     alpha_nonzero = bitmaps[..., 3].reshape(out.point_count, -1).any(axis=1)
+    assert alpha_nonzero[inf], "the point at infinity has an all-black bitmap"
     assert alpha_nonzero.all(), (
         f"{int((~alpha_nonzero).sum())} surviving points have an all-black bitmap"
     )
