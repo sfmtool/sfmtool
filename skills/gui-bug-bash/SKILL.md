@@ -31,7 +31,7 @@ directory start and stop it. Run the scripts with
 | tool | what it does |
 |---|---|
 | `viewer.py launch` | Picks a **random free port**, copies each `--copy` source into a `bugbash-<date>-<port>/` folder beside it, copies the viewer binary into a session directory, starts it detached with `--mcp <port> --no-default-layout`, waits for the endpoint, prints the session (port, pid, copies, labels, and `catalog`: whether `sfm explorer-call` can check calls to this viewer) and saves it as `session.json` |
-| `viewer.py status` / `stop` | Read or end the session a `--session <dir>` names |
+| `viewer.py status` / `stop` | Read or end the session a `--session <dir>` names. `stop` calls the viewer's `quit` tool with `force_quit_no_confirmation_no_save: true`, since the viewer holds only scratch copies and probe files and a forced quit writes nothing, and ends the process only when the call fails or the viewer has not exited 10 s later |
 | `sfm explorer-call --mcp P TOOL ARGS` | Call one tool. ARGS is a JSON object inline, `@file.json`, or `-` for standard input. Prints the reply's text whole, writes images to `--out-dir` as `--name`.png, and `--field a.0.b` prints one field of the reply. `--list-tools` and `--schema TOOL` read the catalog without a viewer. `get_background_tasks --wait-until-finished` waits until no task runs. Exit status 1 is a call refused before sending, 3 is the viewer's refusal, 4 is no endpoint |
 | `sfm explorer-call --mcp P TOOL --batch FILE` | Many calls in one process, one JSON line of arguments in and one JSON line of reply or error out per call |
 | `probes/schema_lint.py` | Checks the tool catalog for schemas that contradict their descriptions (alternatives marked required, required names that are not properties) |

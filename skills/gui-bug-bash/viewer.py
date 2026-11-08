@@ -14,6 +14,9 @@ viewer detached with `--mcp <port> --no-default-layout` on the copies, waits
 for the endpoint to answer, and prints the session as JSON. Every later call
 names the port; nothing is kept in shell state.
 
+`stop` ends the viewer through its `quit` tool, forced, and kills the process
+only when that call fails or the viewer has not exited 10 seconds later.
+
 The session's `catalog` says whether `sfm explorer-call` can check calls to
 this viewer: "matches" when the extension's tool catalog is the viewer's, or
 the refusal that names the difference, in which case rebuild the extension
@@ -202,17 +205,53 @@ def status(a: argparse.Namespace) -> None:
     print(json.dumps(info, indent=2))
 
 
+def wait_exited(pid: int, timeout_s: float) -> bool:
+    """Wait up to `timeout_s` for `pid` to exit; whether it did."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not alive(pid):
+            return True
+        time.sleep(0.25)
+    return not alive(pid)
+
+
+def quit_viewer(port: int) -> str | None:
+    """Ask the viewer to quit through its `quit` tool, or say why it did not.
+
+    Forced: a bug bash's viewer has open only the copies `launch` made and the
+    files `--open` named as probes, so what is unsaved is the bash's own edits
+    of scratch data, and a forced quit writes nothing, where a save would.
+    Only the tool name is checked, so a viewer built without `quit` refuses the
+    call and the caller falls back to ending the process.
+    """
+    done = explorer_call(
+        port,
+        "quit",
+        '{"force_quit_no_confirmation_no_save": true}',
+        "--validate-tool-names-only",
+    )
+    if done.returncode != 0:
+        return done.stderr.strip() or f"status {done.returncode}"
+    return None
+
+
 def stop(a: argparse.Namespace) -> None:
     info = load(a.session)
     pid = info["pid"]
+    port = info["port"]
     if not alive(pid):
         print(f"viewer {pid} is not running")
+        return
+    refusal = quit_viewer(port)
+    if refusal is None and wait_exited(pid, 10.0):
+        print(f"quit viewer {pid} on port {port}")
         return
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
     else:
         os.kill(pid, signal.SIGTERM)
-    print(f"stopped viewer {pid} on port {info['port']}")
+    why = refusal or "it did not exit within 10 s of quitting"
+    print(f"killed viewer {pid} on port {port}: quit failed: {why}")
 
 
 def main() -> None:

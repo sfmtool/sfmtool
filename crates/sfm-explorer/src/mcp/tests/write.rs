@@ -163,3 +163,225 @@ fn get_scene_survives_a_selection_that_has_gone_stale() {
     let scene = ok(&mut state, &mut viewer, Command::GetScene);
     assert_eq!(scene["selection"]["point"]["index"], 9999);
 }
+
+// ── Quitting ────────────────────────────────────────────────────────────
+
+/// Parse a `quit` call and apply it as the agent.
+fn quit(state: &mut AppState, viewer: &mut Viewer3D, arguments: Value) -> Outcome {
+    let map = arguments.as_object().cloned().expect("an object");
+    let command = tools::parse("quit", Some(&map)).expect("a quit call parses");
+    agent(state, viewer, command)
+}
+
+/// Delete a point of `alpha`, which leaves it with changes not on disk.
+fn dirty_alpha(state: &mut AppState, viewer: &mut Viewer3D) {
+    call(
+        state,
+        viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "alpha", "point": 3 }),
+    );
+    assert!(state.any_dirty(), "the delete left alpha dirty");
+}
+
+#[test]
+fn quit_parses_its_force_argument_and_refuses_a_non_boolean() {
+    let parse =
+        |arguments: Value| tools::parse("quit", Some(arguments.as_object().expect("an object")));
+    assert_eq!(
+        parse(json!({})),
+        Ok(Command::Quit {
+            discard_unsaved: false
+        })
+    );
+    assert_eq!(
+        parse(json!({ "force_quit_no_confirmation_no_save": true })),
+        Ok(Command::Quit {
+            discard_unsaved: true
+        })
+    );
+    let error = parse(json!({ "force_quit_no_confirmation_no_save": "yes" }))
+        .expect_err("a string is not a boolean");
+    assert!(
+        error.0.contains("force_quit_no_confirmation_no_save"),
+        "{error}"
+    );
+}
+
+#[test]
+fn quit_on_a_clean_scene_says_the_viewer_is_quitting() {
+    let (mut state, mut viewer) = two_reconstructions();
+    match quit(&mut state, &mut viewer, json!({})) {
+        Outcome::Quit(reply) => {
+            assert_eq!(reply["quitting"], json!(true), "{reply}");
+            assert_eq!(reply["discarded"], json!([]), "{reply}");
+            let message = reply["message"].as_str().expect("a message");
+            assert!(message.contains("The viewer is quitting"), "{message}");
+        }
+        _ => panic!("a quit with nothing unsaved must quit"),
+    }
+}
+
+/// File ▸ Quit puts up the close prompt where a node is dirty; the tool,
+/// which cannot answer a prompt, refuses in the prompt's words and leaves
+/// everything where it was.
+#[test]
+fn quit_with_unsaved_changes_is_refused_naming_them() {
+    let (mut state, mut viewer) = two_reconstructions();
+    dirty_alpha(&mut state, &mut viewer);
+    let map = json!({}).as_object().cloned().expect("an object");
+    let command = tools::parse("quit", Some(&map)).expect("a quit call parses");
+    let error = refused(&mut state, &mut viewer, command);
+    assert!(
+        error.0.contains("alpha has changes that are not on disk."),
+        "{error}"
+    );
+    assert!(!error.0.contains("beta"), "{error}");
+    assert!(error.0.contains("save_reconstruction"), "{error}");
+    assert!(
+        error.0.contains("force_quit_no_confirmation_no_save: true"),
+        "{error}"
+    );
+    assert_eq!(state.scene.len(), 2);
+    assert!(state.is_dirty(state.scene[0].id), "the refusal kept alpha");
+    let last = state.action_log.entries().last().expect("an entry");
+    assert!(last.failed, "{last:?}");
+    assert_eq!(last.actor, Actor::Mcp);
+    assert_eq!(last.kind, Kind::Session);
+    assert!(last.text.starts_with("quit failed: "), "{}", last.text);
+}
+
+#[test]
+fn a_forced_quit_with_unsaved_changes_quits_and_names_what_it_lost() {
+    let (mut state, mut viewer) = two_reconstructions();
+    dirty_alpha(&mut state, &mut viewer);
+    match quit(
+        &mut state,
+        &mut viewer,
+        json!({ "force_quit_no_confirmation_no_save": true }),
+    ) {
+        Outcome::Quit(reply) => {
+            assert_eq!(reply["quitting"], json!(true), "{reply}");
+            assert_eq!(reply["discarded"], json!(["alpha"]), "{reply}");
+        }
+        _ => panic!("a forced quit must quit"),
+    }
+}
+
+/// Parse a tool call the way the transport would, without applying it.
+fn parsed(name: &str, arguments: Value) -> Command {
+    tools::parse(name, Some(arguments.as_object().expect("an object"))).expect("the call parses")
+}
+
+/// Apply one frame's batch as the drain does, with the drain's quitting flag.
+fn batch(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    quitting: &mut bool,
+    commands: Vec<Command>,
+) -> Vec<Outcome> {
+    apply_as_agent(state, viewer, &mut NoWindow, commands, quitting).outcomes
+}
+
+/// The refusal an outcome carries, or a panic naming what it was instead.
+#[track_caller]
+fn refusal(outcome: &Outcome) -> &ToolError {
+    match outcome {
+        Outcome::Done(Err(error)) => error,
+        Outcome::Done(Ok(_)) => panic!("expected a refusal, got success"),
+        Outcome::Deferred(_) => panic!("expected a refusal, got a deferral"),
+        Outcome::Quit(_) => panic!("expected a refusal, got a quit"),
+    }
+}
+
+/// A write the same frame applies after a `quit` would be answered as done and
+/// then lost with the viewer, so it is refused and nothing changes.
+#[test]
+fn a_write_after_a_quit_in_the_same_batch_is_refused_and_not_applied() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let points = state.scene[0].point_count();
+    let mut quitting = false;
+    let outcomes = batch(
+        &mut state,
+        &mut viewer,
+        &mut quitting,
+        vec![
+            parsed("quit", json!({})),
+            parsed(
+                "delete_point",
+                json!({ "reconstruction_label": "alpha", "point": 3 }),
+            ),
+        ],
+    );
+    assert!(matches!(outcomes[0], Outcome::Quit(_)), "the quit quits");
+    assert!(quitting, "a quit that is not refused sets the flag");
+    assert_eq!(refusal(&outcomes[1]).0, super::super::write::QUITTING);
+    assert!(!state.any_dirty(), "the refused delete changed nothing");
+    assert_eq!(state.scene[0].point_count(), points);
+    let last = state.action_log.entries().last().expect("an entry");
+    assert!(last.failed, "{last:?}");
+    assert_eq!(last.actor, Actor::Mcp);
+    assert!(
+        last.text
+            .starts_with("delete_point failed: The viewer is quitting"),
+        "{}",
+        last.text
+    );
+}
+
+/// Every call, a read included, is refused once the viewer is quitting: the
+/// rest of the quit's batch, and a batch in a frame after it.
+#[test]
+fn a_read_after_a_quit_is_refused_in_its_batch_and_after_it() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let mut quitting = false;
+    let outcomes = batch(
+        &mut state,
+        &mut viewer,
+        &mut quitting,
+        vec![
+            parsed(
+                "quit",
+                json!({ "force_quit_no_confirmation_no_save": true }),
+            ),
+            Command::GetScene,
+        ],
+    );
+    assert!(matches!(outcomes[0], Outcome::Quit(_)), "the quit quits");
+    assert_eq!(refusal(&outcomes[1]).0, super::super::write::QUITTING);
+    let later = batch(
+        &mut state,
+        &mut viewer,
+        &mut quitting,
+        vec![Command::GetScene],
+    );
+    assert_eq!(refusal(&later[0]).0, super::super::write::QUITTING);
+}
+
+/// A refused `quit` leaves the viewer running, so the calls after it are
+/// applied as usual.
+#[test]
+fn a_call_after_a_refused_quit_is_applied() {
+    let (mut state, mut viewer) = two_reconstructions();
+    dirty_alpha(&mut state, &mut viewer);
+    let mut quitting = false;
+    let outcomes = batch(
+        &mut state,
+        &mut viewer,
+        &mut quitting,
+        vec![
+            parsed("quit", json!({})),
+            parsed(
+                "delete_point",
+                json!({ "reconstruction_label": "alpha", "point": 4 }),
+            ),
+        ],
+    );
+    assert!(refusal(&outcomes[0]).0.starts_with("Did not quit"));
+    assert!(!quitting, "a refused quit does not set the flag");
+    match &outcomes[1] {
+        Outcome::Done(Ok(_)) => {}
+        Outcome::Done(Err(error)) => panic!("the delete was refused: {error}"),
+        _ => panic!("the delete answers in this frame"),
+    }
+}

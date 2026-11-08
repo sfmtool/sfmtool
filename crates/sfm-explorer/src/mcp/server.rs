@@ -51,7 +51,7 @@ use rmcp::{RoleServer, ServerHandler};
 use tokio::sync::{mpsc, oneshot};
 
 use super::tools::{self, ToolKind};
-use super::{Reply, Request, ToolOutput};
+use super::{Reply, Request, ToolError, ToolOutput};
 
 /// How long a tool call waits for the GUI thread before giving up.
 ///
@@ -129,13 +129,14 @@ impl std::error::Error for ServeError {}
 /// Returns once the socket is **bound and listening**, or with the bind error;
 /// the runtime lives on its own thread from there. Binding before the thread is
 /// spawned is what lets a port collision be reported to the caller at all — a
-/// bind inside the spawned task could only log.
+/// bind inside the spawned task could only log. The [`Endpoint`] says where it
+/// listens, and stops it.
 pub(crate) fn serve(
     port: u16,
     tx: mpsc::UnboundedSender<Request>,
     busy: crate::background::BusyNotice,
     wake: impl Fn() + Send + Sync + 'static,
-) -> Result<SocketAddr, ServeError> {
+) -> Result<Endpoint, ServeError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .thread_name("sfm-explorer-mcp")
@@ -178,16 +179,63 @@ pub(crate) fn serve(
         StreamableHttpService::new(move || Ok(handler.clone()), Default::default(), config);
     let router = axum::Router::new().nest_service("/mcp", service);
 
+    // The stop signal, and the word back that the server has finished. A
+    // dropped `Endpoint` is not a stop: the server then runs until the process
+    // ends, as a test that keeps only the address relies on.
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel::<()>();
     std::thread::Builder::new()
         .name("sfm-explorer-mcp".into())
         .spawn(move || {
-            if let Err(e) = runtime.block_on(axum::serve(listener, router).into_future()) {
+            let stop = async move {
+                if stop_rx.await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            };
+            let served = runtime.block_on(
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(stop)
+                    .into_future(),
+            );
+            if let Err(e) = served {
                 log::error!("MCP server stopped: {e}");
             }
+            let _ = stopped_tx.send(());
         })
         .map_err(ServeError::Runtime)?;
 
-    Ok(address)
+    Ok(Endpoint {
+        address,
+        stop: stop_tx,
+        stopped: stopped_rx,
+    })
+}
+
+/// A listening endpoint: where it is, and how to stop it.
+pub(crate) struct Endpoint {
+    pub(crate) address: SocketAddr,
+    stop: oneshot::Sender<()>,
+    stopped: std::sync::mpsc::Receiver<()>,
+}
+
+impl Endpoint {
+    /// Stop the endpoint once every call it holds has been answered, waiting
+    /// up to `within` for that; `false` when the time ran out first.
+    ///
+    /// The listener closes at once, so a later call is refused a connection,
+    /// while a call already in flight is let finish and write its reply. That
+    /// is what lets `quit` answer: its reply is in the server's hands when the
+    /// event loop ends, and the process must not end before it is written. A
+    /// call still waiting on the GUI thread is answered too, with an error,
+    /// once the viewer that held it has been dropped, which is why the caller
+    /// drops the viewer first.
+    pub(crate) fn stop(self, within: Duration) -> bool {
+        let _ = self.stop.send(());
+        !matches!(
+            self.stopped.recv_timeout(within),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        )
+    }
 }
 
 /// The MCP server handler: a channel to the GUI thread, and the wake that
@@ -210,12 +258,16 @@ impl Viewer {
     /// Hand one command to the GUI thread and wait for its answer.
     async fn dispatch(&self, command: super::Command) -> Result<Reply, ErrorData> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(Request {
-                command,
-                reply: reply_tx,
-            })
-            .map_err(|_| ErrorData::internal_error("The viewer has shut down.", None))?;
+        // The GUI thread closes its end only once its event loop has ended
+        // (`App::refuse_mcp_after_quit`), so a call that finds it closed came
+        // in while the viewer quits, and is refused as one after a `quit` is.
+        let sent = self.tx.send(Request {
+            command,
+            reply: reply_tx,
+        });
+        if sent.is_err() {
+            return Ok(Err(ToolError::new(super::write::QUITTING)));
+        }
         // Wake the GUI thread. `App::user_event` requests a redraw, and
         // `run_ui_and_paint` drains the queue before it does anything else, so
         // an idle viewer answers on the frame this wakes.
@@ -352,18 +404,21 @@ impl ServerHandler for Viewer {
 /// process on this machine and nothing else — and the writes
 /// `destructiveHint: false`, because none of them touches a file on disk:
 /// `close_reconstruction` unloads a reconstruction, it does not delete one, and
-/// an edit makes a new version the human can undo. Two kinds are annotated
+/// an edit makes a new version the human can undo. Three kinds are annotated
 /// `destructiveHint: true`: `save_reconstruction`, which can overwrite a file,
-/// and the input tools, which can press the menu items that save, quit or open
-/// a file chooser.
+/// the input tools, which can press the menu items that save, quit or open a
+/// file chooser, and `quit`, which with its force argument loses every change
+/// that is not on disk.
 pub(super) fn advertise(spec: &tools::ToolSpec) -> Tool {
     let read_only = spec.kind == ToolKind::Read;
     let mut annotations = ToolAnnotations::new()
         .read_only(read_only)
         .open_world(false);
     if !read_only {
-        annotations =
-            annotations.destructive(matches!(spec.kind, ToolKind::Save | ToolKind::Input));
+        annotations = annotations.destructive(matches!(
+            spec.kind,
+            ToolKind::Save | ToolKind::Input | ToolKind::Quit
+        ));
     }
     Tool::new(
         spec.name,

@@ -74,14 +74,7 @@ impl ClosePrompt {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label(match dirty {
-                    [one] => format!("{one} has changes that are not on disk."),
-                    many => format!(
-                        "{} reconstructions have changes that are not on disk: {}.",
-                        many.len(),
-                        many.join(", ")
-                    ),
-                });
+                ui.label(unsaved_changes_sentence(dirty));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Save").clicked() {
@@ -101,5 +94,19 @@ impl ClosePrompt {
             self.pending = None;
         }
         answer
+    }
+}
+
+/// The sentence naming the reconstructions whose changes are not on disk:
+/// the prompt's own line, and the MCP `quit` tool's refusal, so the two say it
+/// alike.
+pub(crate) fn unsaved_changes_sentence(dirty: &[String]) -> String {
+    match dirty {
+        [one] => format!("{one} has changes that are not on disk."),
+        many => format!(
+            "{} reconstructions have changes that are not on disk: {}.",
+            many.len(),
+            many.join(", ")
+        ),
     }
 }

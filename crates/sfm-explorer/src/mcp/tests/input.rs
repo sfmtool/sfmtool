@@ -350,6 +350,7 @@ impl Harness {
             &mut self.viewer,
             &mut NoWindow,
             vec![command],
+            &mut false,
         )
         .outcomes
         .pop()
@@ -358,6 +359,7 @@ impl Harness {
             Outcome::Done(reply) => return reply,
             Outcome::Deferred(Deferred::Input(pending)) => pending,
             Outcome::Deferred(_) => panic!("{name} deferred as something other than input"),
+            Outcome::Quit(_) => panic!("{name} quit"),
         };
         // A scroll waits out egui's smoothing, which at the 1/60 s egui
         // assumes for a frame with no time of its own is about twenty frames.

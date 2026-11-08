@@ -451,14 +451,18 @@ backlog and keep them honest as findings get addressed:
   A viewer must be listening on that port at the moment a session starts, or
   the server registers as failed and its tools are absent for the whole
   session — `/mcp` says which. **After that the agent can restart the viewer
-  freely**: the transport is stateless HTTP, so killing it, rebuilding, and
+  freely**: the transport is stateless HTTP, so ending it, rebuilding, and
   relaunching on the same port leaves the registered tools working, since the
   next call is just a new POST into the new process. Launch it *detached* when
   doing that (on Windows, `cmd /c start "" target/release/sfm-explorer.exe
   --mcp 8787 <file>.sfmr`) so it outlives the session that spawned it and is
-  still there for the next one. Kill it **before** rebuilding: a running
+  still there for the next one. End it **before** rebuilding, since a running
   `.exe` is locked on Windows and `cargo build` fails with `Access is denied
-  (os error 5)`.
+  (os error 5)`. End it with the `quit` tool (`pixi run sfm explorer-call
+  --mcp PORT quit` from the shell), which answers before the viewer exits and
+  is refused while a reconstruction has unsaved changes; its
+  `force_quit_no_confirmation_no_save: true` loses them. Kill the process
+  (`taskkill`) only when the viewer does not answer.
 
   **Without the registration**, or on another port, `pixi run sfm
   explorer-call --mcp PORT TOOL ARGS` calls one tool from the shell and writes

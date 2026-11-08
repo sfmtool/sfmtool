@@ -48,6 +48,9 @@ pub(crate) enum ToolKind {
     /// items that open a file chooser, so these are advertised as destructive
     /// with `Save`.
     Input,
+    /// Ends the viewer. One tool, `quit`, and destructive with `Save` and
+    /// `Input`: a forced quit loses every change that is not on disk.
+    Quit,
 }
 
 /// One advertised tool.
@@ -336,6 +339,11 @@ pub(crate) fn parse(
         },
         "hide_panel" => Command::HidePanel {
             panel: args.panel("panel_name")?,
+        },
+        "quit" => Command::Quit {
+            discard_unsaved: args
+                .optional_bool("force_quit_no_confirmation_no_save")?
+                .unwrap_or(false),
         },
         "get_reconstruction_history" => Command::GetReconstructionHistory {
             reconstruction_label: args.required_string("reconstruction_label")?,

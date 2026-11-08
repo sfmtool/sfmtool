@@ -21,7 +21,8 @@ struct RunningServer {
 fn running_server() -> RunningServer {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::super::Request>();
     let address = super::super::serve(0, tx, Default::default(), || {})
-        .expect("an ephemeral port is bindable");
+        .expect("an ephemeral port is bindable")
+        .address;
 
     // The stand-in for `App::drain_mcp`: one owner of the state, applying one
     // command at a time. Exactly the discipline the real frame keeps, which is
@@ -34,6 +35,7 @@ fn running_server() -> RunningServer {
                 // No frame here to render, so the one deferred tool says so
                 // rather than hanging the caller until the timeout.
                 Outcome::Deferred(_) => Err(ToolError::new("no frame in this harness")),
+                Outcome::Quit(value) => Ok(ToolOutput::Json(value)),
             };
             let _ = reply.send(answer);
         }
@@ -210,6 +212,98 @@ fn a_viewer_refusal_arrives_as_an_is_error_result() {
     assert_eq!(result["isError"], json!(true), "{result}");
     let text = result["content"][0]["text"].as_str().expect("a message");
     assert!(text.contains("gamma") && text.contains("alpha"), "{text}");
+}
+
+/// A `quit`'s reply is in the server's hands when the viewer stops its
+/// endpoint, and the caller still gets it: the stop closes the port to new
+/// calls at once and lets a call in flight write its reply.
+#[test]
+fn a_call_in_flight_is_answered_before_the_endpoint_stops() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::super::Request>();
+    let endpoint = super::super::serve(0, tx, Default::default(), || {})
+        .expect("an ephemeral port is bindable");
+    let address = endpoint.address;
+    let (received_tx, received_rx) = std::sync::mpsc::channel::<()>();
+    // The GUI stand-in holds the call until the listener has closed, so the
+    // reply can only arrive through a server that is already stopping.
+    // Binding the port again is the check that the listener is gone: a
+    // refused connect takes Windows about two seconds to report, a bind does
+    // not wait.
+    let gui = std::thread::spawn(move || {
+        let (mut state, mut viewer) = two_reconstructions();
+        let super::super::Request { command, reply } = rx.blocking_recv().expect("the call");
+        received_tx.send(()).expect("the test is waiting");
+        let asked = std::time::Instant::now();
+        while std::net::TcpListener::bind(address).is_err() {
+            assert!(
+                asked.elapsed() < std::time::Duration::from_secs(20),
+                "the port is still held while the endpoint stops"
+            );
+            std::thread::yield_now();
+        }
+        let answer = match apply(&mut state, &mut viewer, command) {
+            Outcome::Quit(value) => Ok(ToolOutput::Json(value)),
+            _ => Err(ToolError::new("quit did not answer with Outcome::Quit")),
+        };
+        let _ = reply.send(answer);
+    });
+    let client = std::thread::spawn(move || {
+        let server = RunningServer { address, _gui: gui };
+        post(
+            &server,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"quit","arguments":{}}}"#,
+            &[("MCP-Protocol-Version", PROTOCOL_VERSION)],
+        )
+    });
+
+    received_rx
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the call reached the GUI stand-in");
+    assert!(
+        endpoint.stop(std::time::Duration::from_secs(20)),
+        "the endpoint did not stop"
+    );
+
+    let (status, body) = client.join().expect("the client thread");
+    assert_eq!(status, 200, "{body}");
+    let result = rpc_result(&body);
+    assert_ne!(result["isError"], json!(true), "{result}");
+    assert_eq!(
+        result["structuredContent"]["quitting"],
+        json!(true),
+        "{result}"
+    );
+}
+
+/// Once the viewer's event loop has ended it closes its end of the channel, and
+/// a call that comes in before the endpoint stops is refused as quitting, as a
+/// tool-level error rather than a transport failure.
+#[test]
+fn a_call_after_the_viewer_closed_its_queue_is_refused_as_quitting() {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<super::super::Request>();
+    drop(rx);
+    let address = super::super::serve(0, tx, Default::default(), || {})
+        .expect("an ephemeral port is bindable")
+        .address;
+    let server = RunningServer {
+        address,
+        _gui: std::thread::spawn(|| {}),
+    };
+    post(&server, &initialize_body(), &[]);
+
+    let (status, body) = post(
+        &server,
+        r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_scene","arguments":{}}}"#,
+        &[("MCP-Protocol-Version", PROTOCOL_VERSION)],
+    );
+    assert_eq!(status, 200, "{body}");
+    let result = rpc_result(&body);
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert_eq!(
+        result["content"][0]["text"],
+        json!(super::super::write::QUITTING),
+        "{result}"
+    );
 }
 
 /// A page the user has open must not be able to drive their viewer. The

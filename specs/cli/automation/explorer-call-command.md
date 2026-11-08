@@ -206,6 +206,9 @@ sfm explorer-call --mcp 9000 get_scene --validate-tool-names-only
 
 # Many reads in one process
 sfm explorer-call --mcp 9000 get_point --batch points.jsonl > replies.jsonl
+
+# End the viewer, which it refuses while a reconstruction has unsaved changes
+sfm explorer-call --mcp 9000 quit
 ```
 
 ## Testing
