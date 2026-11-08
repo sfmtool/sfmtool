@@ -30,10 +30,43 @@ def _collect(names: list[str], rig_configs=None) -> list[PickSequence]:
     return collect_sequences([ROOT / n for n in names], ROOT, rig_configs)
 
 
-def test_frame_field_pads_only_a_fixed_width():
-    assert frame_field({4}) == "%04d"
-    assert frame_field({1}) == "%d"
-    assert frame_field({1, 2}) == "%d"
+def test_frame_field_writes_every_number_as_the_names_write_it():
+    # One width, padded or not.
+    assert frame_field({"0001", "0002"}) == ("%04d", [])
+    assert frame_field({"1000", "1001"}) == ("%04d", [])
+    assert frame_field({"1", "2"}) == ("%d", [])
+    # Unpadded numbers of several widths.
+    assert frame_field({"8", "9", "10", "100"}) == ("%d", [])
+    # A zero-padded sequence that runs past its width, as ffmpeg writes
+    # frame 10000 under %04d.
+    assert frame_field({"0001", "0999", "9999", "10000", "123456"}) == ("%04d", [])
+    assert frame_field({"0", "1"}) == ("%d", [])
+
+
+def test_frame_field_names_the_numbers_no_one_field_writes():
+    # Zero-padded to two widths: the field that writes the most of them.
+    assert frame_field({"01", "02", "003"}) == ("%02d", ["003"])
+    assert frame_field({"01", "003", "004"}) == ("%03d", ["01"])
+    # A tie goes to the wider field.
+    assert frame_field({"01", "003"}) == ("%03d", ["01"])
+    # A number shorter than the padded width.
+    assert frame_field({"5", "0010", "0011"}) == ("%04d", ["5"])
+    # A number wider than the padded width that has a leading zero.
+    assert frame_field({"0010", "00011"}) == ("%05d", ["0010"])
+
+
+def test_a_sequence_crossing_its_padded_width_is_one_sequence():
+    (sequence,) = _collect(["v/f_0001.jpg", "v/f_9999.jpg", "v/f_10000.jpg"])
+    assert sequence.patterns == ["v/f_%04d.jpg"]
+    assert sequence.numbers == [1, 9999, 10000]
+
+
+def test_a_sequence_padded_to_different_widths_is_an_error_naming_the_files():
+    with pytest.raises(PickImagesInputError) as e:
+        _collect(["v/f_01.jpg", "v/f_02.jpg", "v/f_003.jpg", "v/f_4.jpg"])
+    message = str(e.value)
+    assert "v/f_%02d.jpg are zero-padded in ways no one frame field writes" in message
+    assert "2 file(s) do not match v/f_%02d.jpg: v/f_003.jpg, v/f_4.jpg" in message
 
 
 def test_sequences_are_split_by_folder_and_name_and_ordered_by_number():

@@ -161,7 +161,8 @@ pub fn camrig_pattern_to_glob(pattern: &str) -> String {
 }
 
 /// Whether `relative_path` (a forward-slash relative path) matches a
-/// `.camrig` image `pattern` under the exact pattern grammar.
+/// `.camrig` image `pattern` under the exact pattern grammar, in which a
+/// frame field matches a number only as printf writes it with that field.
 ///
 /// Set `case_insensitive` to mirror the filesystem that produced the glob
 /// hits — case-insensitive filesystems (Windows) glob case-insensitively, so
@@ -169,6 +170,23 @@ pub fn camrig_pattern_to_glob(pattern: &str) -> String {
 #[pyfunction]
 pub fn camrig_pattern_matches(pattern: &str, relative_path: &str, case_insensitive: bool) -> bool {
     sfmtool_camrig_format::pattern_matches(pattern, relative_path, case_insensitive)
+}
+
+/// Whether `relative_path` matches a `.camrig` image `pattern` with its frame
+/// field read as any run of digits, however padded: `cam_%04d.jpg` then
+/// matches `cam_007.jpg` too.
+///
+/// This is not the pattern grammar, which `camrig_pattern_matches` applies. It
+/// finds the files a pattern misses only because their number is padded
+/// otherwise than its frame field writes it, so a caller can name them.
+/// `case_insensitive` mirrors `camrig_pattern_matches`.
+#[pyfunction]
+pub fn camrig_pattern_matches_any_padding(
+    pattern: &str,
+    relative_path: &str,
+    case_insensitive: bool,
+) -> bool {
+    sfmtool_camrig_format::pattern_matches_any_padding(pattern, relative_path, case_insensitive)
 }
 
 /// The frame index a `.camrig` image `pattern`'s frame field captures from
@@ -194,6 +212,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_camrig_pattern, m)?)?;
     m.add_function(wrap_pyfunction!(camrig_pattern_to_glob, m)?)?;
     m.add_function(wrap_pyfunction!(camrig_pattern_matches, m)?)?;
+    m.add_function(wrap_pyfunction!(camrig_pattern_matches_any_padding, m)?)?;
     m.add_function(wrap_pyfunction!(camrig_pattern_frame_index, m)?)?;
     Ok(())
 }

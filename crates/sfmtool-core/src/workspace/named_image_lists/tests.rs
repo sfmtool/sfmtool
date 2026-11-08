@@ -236,7 +236,8 @@ fn bad_patterns_use_the_camrig_checker() {
             {"pattern": "frames/../x.jpg"},
             {"pattern": "f_%d_%04d.jpg"},
             {"pattern": "a**/x.jpg"},
-            {"pattern": ""}
+            {"pattern": ""},
+            {"pattern": "f_%4d.jpg"}
         ]}"#,
     ));
     let expected: Vec<String> = [
@@ -245,6 +246,7 @@ fn bad_patterns_use_the_camrig_checker() {
         "f_%d_%04d.jpg",
         "a**/x.jpg",
         "",
+        "f_%4d.jpg",
     ]
     .iter()
     .enumerate()
@@ -726,6 +728,133 @@ fn a_frame_number_too_large_is_an_error() {
             NamedImageListsError::FrameNumberTooLarge { entry: 0, .. }
         ),
         "{e}"
+    );
+}
+
+#[test]
+fn a_file_an_entry_misses_only_by_the_padding_of_its_number_is_an_error() {
+    // A pattern written when a frame field matched any run of digits: `%d`
+    // over an ffmpeg sequence that crosses from 0999 to 1000.
+    let dir = workspace();
+    for path in [
+        "f/x_0998.jpg",
+        "f/x_0999.jpg",
+        "f/x_1000.jpg",
+        "f/x_12345.jpg",
+        "f/y_007.jpg",
+    ] {
+        touch(dir.path(), path);
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"loose": [{"pattern": "f/x_%d.jpg"}],
+            "padded": [{"pattern": "f/x_%04d.jpg"}],
+            "ranged": [{"pattern": "f/x_%d.jpg", "range": "1000-2000"}],
+            "y": [{"pattern": "f/y_%04d.jpg"}]}"#,
+    );
+    let e = resolve(&lists, "loose", None).unwrap_err();
+    let NamedImageListsError::FramePadding { entries, .. } = &e else {
+        panic!("expected FramePadding, got: {e}");
+    };
+    assert_eq!(
+        entries,
+        &[(
+            0,
+            "f/x_%d.jpg".to_string(),
+            vec!["f/x_0998.jpg".to_string(), "f/x_0999.jpg".to_string()]
+        )]
+    );
+    let message = e.to_string();
+    assert!(
+        message.contains("entry 1 leaves out 'f/x_0998.jpg' and 1 other file"),
+        "{message}"
+    );
+    // The same list against a reconstruction's names.
+    let names = ["f/x_0999.jpg", "f/x_1000.jpg"];
+    let e = lists.resolve_in_names("loose", &names, None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries[0].2 == ["f/x_0999.jpg"]),
+        "{e}"
+    );
+    // `%04d` writes every number of the sequence, 12345 included.
+    assert_eq!(
+        paths(&resolve(&lists, "padded", None).unwrap()),
+        [
+            "f/x_0998.jpg",
+            "f/x_0999.jpg",
+            "f/x_1000.jpg",
+            "f/x_12345.jpg"
+        ]
+    );
+    // A file outside the entry's range was never the entry's to take.
+    assert_eq!(
+        paths(&resolve(&lists, "ranged", None).unwrap()),
+        ["f/x_1000.jpg"]
+    );
+    // A list that only misses files names them rather than matching nothing.
+    let e = resolve(&lists, "y", None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries[0].2 == ["f/y_007.jpg"]),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_file_another_entry_takes_is_no_padding_miss() {
+    let dir = workspace();
+    for path in [
+        "f/a_1.jpg",
+        "f/a_2.jpg",
+        "f/a_01.jpg",
+        "f/a_02.jpg",
+        "f/a_003.jpg",
+    ] {
+        touch(dir.path(), path);
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{
+            "both": [{"pattern": "f/a_%d.jpg"}, {"pattern": "f/a_%02d.jpg"}],
+            "ranged": [{"pattern": "f/a_%d.jpg"}, {"pattern": "f/a_%02d.jpg", "range": "2"}],
+            "other": [{"pattern": "f/a_%02d.jpg"}]
+        }"#,
+    );
+    // `f/a_003.jpg` is taken by neither entry; both miss it by its padding.
+    let e = resolve(&lists, "both", None).unwrap_err();
+    let NamedImageListsError::FramePadding { entries, .. } = &e else {
+        panic!("expected FramePadding, got: {e}");
+    };
+    let missed: Vec<(usize, &[String])> = entries.iter().map(|(i, _, f)| (*i, &f[..])).collect();
+    let expected = ["f/a_003.jpg".to_string()];
+    assert_eq!(missed, [(0, &expected[..]), (1, &expected[..])]);
+
+    // Without it, each file is taken by one entry, so the list resolves.
+    std::fs::remove_file(dir.path().join("f/a_003.jpg")).unwrap();
+    // An entry takes only the files in its range, so `f/a_01.jpg` is still
+    // the first entry's padding miss.
+    let e = resolve(&lists, "ranged", None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries.len() == 1 && entries[0].0 == 0 && entries[0].2 == ["f/a_01.jpg"]),
+        "{e}"
+    );
+    // A file an entry of another list takes is still left out of this one.
+    let e = resolve(&lists, "other", None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries[0].2 == ["f/a_1.jpg", "f/a_2.jpg"]),
+        "{e}"
+    );
+    assert_eq!(
+        paths(&resolve(&lists, "both", None).unwrap()),
+        ["f/a_1.jpg", "f/a_2.jpg", "f/a_01.jpg", "f/a_02.jpg"]
+    );
+    let names = ["f/a_1.jpg", "f/a_01.jpg"];
+    assert_eq!(
+        paths(&lists.resolve_in_names("both", &names, None).unwrap()),
+        ["f/a_1.jpg", "f/a_01.jpg"]
     );
 }
 

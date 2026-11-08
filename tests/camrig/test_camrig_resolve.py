@@ -19,6 +19,7 @@ from sfmtool.camrig.resolver import (
 )
 from sfmtool.fileio import (
     camrig_pattern_matches,
+    camrig_pattern_matches_any_padding,
     write_camrig,
 )
 
@@ -174,7 +175,7 @@ def _make_seoul_rig(tmp_path: Path, folders: tuple[str, str], name: str) -> None
         _copy_images(tmp_path / folder, "seoul_bull_sculpture", 2)
     _make_camrig(
         tmp_path / name,
-        [f"{folder}/seoul_bull_sculpture_%d.jpg" for folder in folders],
+        [f"{folder}/seoul_bull_sculpture_%02d.jpg" for folder in folders],
         sensor_count=2,
         camera=_camera(270, 480),
     )
@@ -405,8 +406,8 @@ def test_resolve_camrig_resolves_multi_sensor(tmp_path: Path):
     _make_camrig(
         tmp_path / "rig.camrig",
         [
-            "left/seoul_bull_sculpture_%d.jpg",
-            "right/seoul_bull_sculpture_%d.jpg",
+            "left/seoul_bull_sculpture_%02d.jpg",
+            "right/seoul_bull_sculpture_%02d.jpg",
         ],
         sensor_count=2,
         camera=_camera(270, 480),
@@ -434,8 +435,8 @@ def test_resolve_camrig_multi_sensor_refits_each_camera(tmp_path: Path, capsys):
         rig_type="generic",
         cameras=[_simple_pinhole_camera(300.0), _simple_pinhole_camera(310.0)],
         sensor_image_patterns=[
-            "left/seoul_bull_sculpture_%d.jpg",
-            "right/seoul_bull_sculpture_%d.jpg",
+            "left/seoul_bull_sculpture_%02d.jpg",
+            "right/seoul_bull_sculpture_%02d.jpg",
         ],
         camera_indexes=[0, 1],
         quaternions_wxyz=np.array([[1.0, 0.0, 0.0, 0.0]] * 2),
@@ -460,20 +461,20 @@ def test_resolve_camrig_multi_sensor_refits_each_camera(tmp_path: Path, capsys):
 
 
 def test_resolve_camrig_rejects_same_sensor_frame_collision(tmp_path: Path):
-    # A variable-width `%d` field can capture the same frame index from two
-    # files of one sensor (`frame_1.jpg` and `frame_001.jpg` both -> 1); the
-    # resolver must reject this rather than build a rig frame carrying two
-    # images for one sensor.
+    # A wildcard beside the frame field can capture the same frame index from
+    # two files of one sensor (`a_1.jpg` and `b_1.jpg` both -> 1 under
+    # `*_%d.jpg`); the resolver must reject this rather than build a rig frame
+    # carrying two images for one sensor.
     src = sorted((_IMAGE_DATA / "seoul_bull_sculpture").glob("*.jpg"))[0]
     left = tmp_path / "left"
     left.mkdir()
-    shutil.copy(src, left / "frame_1.jpg")
-    shutil.copy(src, left / "frame_001.jpg")
+    shutil.copy(src, left / "a_1.jpg")
+    shutil.copy(src, left / "b_1.jpg")
     _copy_images(tmp_path / "right", "seoul_bull_sculpture", 1)
     imgs = sorted(left.glob("*.jpg")) + sorted((tmp_path / "right").glob("*.jpg"))
     _make_camrig(
         tmp_path / "rig.camrig",
-        ["left/frame_%d.jpg", "right/seoul_bull_sculpture_%d.jpg"],
+        ["left/*_%d.jpg", "right/seoul_bull_sculpture_%02d.jpg"],
         sensor_count=2,
         camera=_camera(270, 480),
     )
@@ -539,6 +540,42 @@ def test_pattern_matches_frame_field_is_digits_only():
     assert not m("cam_x.jpg")
     assert not m("cam_.jpg")
     assert not m("cam_007a.jpg")
+    # Only the number as printf writes it with %04d.
+    assert not m("cam_007.jpg")
+    assert not m("cam_00007.jpg")
+    assert camrig_pattern_matches_any_padding("cam_%04d.jpg", "cam_007.jpg", False)
+    assert not camrig_pattern_matches_any_padding("cam_%04d.jpg", "cam_x.jpg", False)
+
+
+def test_an_image_a_camrig_misses_only_by_padding_is_refused(tmp_path: Path):
+    # A pattern written when a frame field matched any run of digits: `%d`
+    # over a sequence that crosses from 0999 to 1000 now matches only 1000 on.
+    imgs = _touch_images(
+        tmp_path / "imgs", ["x_0998.jpg", "x_0999.jpg", "x_1000.jpg", "x_1001.jpg"]
+    )
+    _make_camrig(tmp_path / "old.camrig", ["imgs/x_%d.jpg"])
+    with pytest.raises(CamrigSolveError) as e:
+        find_covering_camrigs(imgs, tmp_path)
+    message = str(e.value)
+    assert "2 of the 4 images being solved are matched by no .camrig" in message
+    assert str(imgs[0].resolve()) in message
+    assert "'imgs/x_%d.jpg'" in message and str(tmp_path / "old.camrig") in message
+    # Also when the .camrig covers none of the images at all.
+    with pytest.raises(CamrigSolveError, match="1 of the 1 images"):
+        find_covering_camrigs(imgs[:1], tmp_path)
+
+
+def test_an_image_another_camrig_covers_is_not_a_padding_miss(tmp_path: Path):
+    # Two cameras told apart by the padding of their numbers: each image is
+    # covered by one .camrig, so the other's near miss is no loss.
+    imgs = _touch_images(tmp_path / "imgs", ["x_7.jpg", "x_8.jpg", "x_007.jpg"])
+    _make_camrig(tmp_path / "a.camrig", ["imgs/x_%d.jpg"])
+    _make_camrig(tmp_path / "b.camrig", ["imgs/x_%03d.jpg"])
+    hits = find_covering_camrigs(imgs, tmp_path)
+    assert [(f.name, sorted(p.name for p in c)) for f, _d, c in hits] == [
+        ("a.camrig", ["x_7.jpg", "x_8.jpg"]),
+        ("b.camrig", ["x_007.jpg"]),
+    ]
 
 
 def test_pattern_matches_star_stays_within_segment():

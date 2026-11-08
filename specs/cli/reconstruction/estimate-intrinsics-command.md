@@ -331,13 +331,20 @@ share one get none (see the refusals below): `v (1).jpg` beside
 `v1.jpg` both give `v_jpg.camrig`.
 
 **The pattern.** The stored pattern is relative to the `.camrig`'s folder:
-the sequence's file names with the file number as a frame field, `%0Nd`
-when every number of the sequence is written with the same `N > 1` digits
-and `%d` otherwise, and `%%` for a `%` in a name. It is the sequence's list
-pattern in `sfm pick-images` without its folder. So it covers every file of
-the sequence in the folder, including frames the `.matches` file does not
-hold, and no file whose name differs anywhere else: `shot1_%04d.jpg` does
-not cover `shot10_0001.jpg`.
+the sequence's file names with the file number as a frame field, and `%%`
+for a `%` in a name. A frame field matches a number only as printf writes it
+with the field
+([camrig-file-format.md](../../formats/camrig-file-format.md#how-camrig-files-fit-into-workspaces)),
+so the field is chosen by the rule `sfm pick-images` writes a list pattern by
+([pick-images-command.md § Writing the list](../image-feature/pick-images-command.md#writing-the-list)),
+from the numbers of every image of the sequence in the `.matches` file:
+`%0Nd` when a number is zero-padded to `N` digits, or, with no zero-padded
+number, when every number has the same `N > 1` digits, and `%d` otherwise;
+`shot1_0001.jpg` to `shot1_10000.jpg` give `shot1_%04d.jpg`. So it covers
+every file of the sequence in the folder whose number is written the same
+way, including frames the `.matches` file does not hold, and no file whose
+name differs anywhere else: `shot1_%04d.jpg` does not cover
+`shot10_0001.jpg` or `shot1_007.jpg`.
 
 **`-r`.** With `-r` only the selected images take part, and only they are
 grouped into sequences, so an image `-r` leaves out cannot stop the run,
@@ -346,7 +353,11 @@ its sequence. Each sequence votes on its selected images, and its pattern
 still names the whole sequence, since the frames `-r` left out are the same
 video's: the file's images that `-r` left out whose names differ from the
 sequence's only in the file number count as the sequence's (its
-`image_count` in `--json`), not as another sequence's.
+`image_count` in `--json`), not as another sequence's, and its frame field
+is chosen from their numbers too. `-r 10000-10500` over `shot1_0001.jpg` to
+`shot1_10500.jpg` stores `shot1_%04d.jpg`, not the `shot1_%05d.jpg` the
+selected numbers alone would give, which would leave frames 1 to 9999
+uncovered.
 
 **Rigs.** The images a multi-sensor `.camrig` covers, found as `sfm solve`
 finds it, form one rig sequence, as in `sfm pick-images`. It gets no file,
@@ -359,13 +370,19 @@ solves
 ([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig)),
 so writing any sequence's file would undo the rig. Selected images that
 cannot be grouped (a file with no number, two files of one sequence with the
-same number) stop the command, with a message naming the files at fault, as
-they stop `sfm pick-images`.
+same number, numbers of one sequence zero-padded in ways no one frame field
+writes) stop the command, with a message naming the files at fault, as they
+stop `sfm pick-images`.
 
 **Refusals.** A sequence gets no file, with the reason in the report, when:
 
 - its vote has no focal consensus, or its verdict is an UNCONFIRMED Fisheye
   (the same two refusals as `--write-camrig`);
+- the numbers of its images in the `.matches` file, those `-r` left out
+  included, are zero-padded in ways no one frame field writes (to two
+  widths, or a number shorter than the padded width), so no one frame field
+  matches them all; the message names the images the stored pattern would
+  leave out;
 - its images have more than one resolution (the message lists them);
 - another sequence of the run would get the same file even when named
   with the part of the file names after the number

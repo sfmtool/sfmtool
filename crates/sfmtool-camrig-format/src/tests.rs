@@ -575,6 +575,23 @@ fn read_rejects_out_of_range_camera_index() {
 }
 
 #[test]
+fn write_and_read_reject_a_space_padded_frame_field() {
+    // `%4d` pads with spaces; a pattern takes `%04d` or `%d` instead.
+    let mut data = single_camera_rig();
+    data.sensor_image_patterns = vec!["cam_%4d.jpg".into()];
+    let path = std::env::temp_dir().join("camrig_space_padded_field.camrig");
+    let err = write_camrig(&path, &data, 3).unwrap_err();
+    assert!(
+        format!("{err}").contains("the frame field '%4d', which pads a number with spaces"),
+        "{err}"
+    );
+    crate::write::write_camrig_unchecked(&path, &data, 3).unwrap();
+    let err = read_camrig(&path).unwrap_err();
+    assert!(format!("{err}").contains("use '%04d'"), "{err}");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn read_rejects_non_unit_quaternion() {
     let mut data = cubemap_rig(256);
     data.quaternions_wxyz[[2, 1]] = 0.5; // breaks unit length on sensor 2

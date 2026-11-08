@@ -387,7 +387,7 @@ def test_files_with_no_number_or_a_shared_number_are_errors(
     assert "1 image file(s) have no file number" in result.output
     assert "frames/cover.jpg" in result.output
     assert (
-        "1 file number(s) of the sequence frames/shot_%d.jpg name more than one file"
+        "1 file number(s) of the sequence frames/shot_%02d.jpg name more than one file"
         in (result.output)
     )
     assert (

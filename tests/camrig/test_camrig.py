@@ -211,8 +211,8 @@ def test_camrig_create_from_directory(tmp_path: Path):
 
 
 def test_camrig_create_frame_field_pattern(tmp_path: Path):
-    # `camrig create` interprets a `%d` frame field the same way `sfm solve`
-    # does: it matches digit-named frames only, so a non-digit sibling image
+    # `camrig create` interprets a `%02d` frame field the same way `sfm solve`
+    # does: it matches numbered frames only, so a non-digit sibling image
     # is excluded rather than swept in by a literal-`%` glob.
     imgs = tmp_path / "imgs"
     _copy_images(imgs, "seoul_bull_sculpture", 4)
@@ -220,15 +220,15 @@ def test_camrig_create_frame_field_pattern(tmp_path: Path):
     out = tmp_path / "rig.camrig"
     result = CliRunner().invoke(
         main,
-        ["camrig", "create", "imgs/seoul_bull_sculpture_%d.jpg", str(out)],
+        ["camrig", "create", "imgs/seoul_bull_sculpture_%02d.jpg", str(out)],
     )
     assert result.exit_code == 0, result.output
     assert "images:   4" in result.output
-    assert "pattern:  imgs/seoul_bull_sculpture_%d.jpg" in result.output
+    assert "pattern:  imgs/seoul_bull_sculpture_%02d.jpg" in result.output
 
     # The stored pattern round-trips into the solve resolver unchanged.
     data = read_camrig(str(out))
-    assert data["sensor_image_patterns"] == ["imgs/seoul_bull_sculpture_%d.jpg"]
+    assert data["sensor_image_patterns"] == ["imgs/seoul_bull_sculpture_%02d.jpg"]
     frames = sorted(p for p in imgs.glob("*.jpg") if "extra" not in p.name)
     camera = resolve_camrig_for_solve(frames, tmp_path, None)
     assert camera is not None
@@ -329,6 +329,21 @@ def test_camrig_create_rejects_two_frame_fields(tmp_path: Path):
     )
     assert result.exit_code != 0
     assert "at most one" in result.output
+    assert not out.exists()
+
+
+def test_camrig_create_rejects_a_space_padded_frame_field(tmp_path: Path):
+    # `%2d` pads with spaces, which no image name is meant to hold; `create`
+    # names the field and the fields to use instead.
+    _copy_images(tmp_path / "imgs", "seoul_bull_sculpture", 2)
+    out = tmp_path / "rig.camrig"
+    result = CliRunner().invoke(
+        main, ["camrig", "create", "imgs/seoul_bull_sculpture_%2d.jpg", str(out)]
+    )
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "the frame field '%2d', which pads a number with spaces" in output
+    assert "use '%02d'" in output and "or '%d'" in output
     assert not out.exists()
 
 

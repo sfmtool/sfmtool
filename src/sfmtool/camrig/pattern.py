@@ -17,8 +17,9 @@ PyO3 bindings, so the grammar has exactly one implementation.
 
 Matching is a two-pass operation: a pattern is globbed *loosely* (every frame
 field widened to `*`) so `pathlib.glob` can enumerate candidates, then each
-candidate is confirmed by the Rust `camrig_pattern_matches` so a frame field
-matches digits only and `*` / `**` respect path-segment boundaries.
+candidate is confirmed by the Rust `camrig_pattern_matches` so a frame
+field matches a number only as printf writes it with that field and `*` /
+`**` respect path-segment boundaries.
 """
 
 import sys
@@ -27,6 +28,7 @@ from pathlib import Path
 from .._sfmtool.fileio import (
     camrig_pattern_frame_index,
     camrig_pattern_matches,
+    camrig_pattern_matches_any_padding,
     camrig_pattern_to_glob,
 )
 
@@ -41,18 +43,32 @@ def match_pattern(root: Path, pattern: str) -> list[Path]:
 
     `pattern` is globbed loosely, then every hit is confirmed against the
     pattern's exact grammar by the Rust `camrig_pattern_matches` binding so a
-    frame field matches digits only. Only files are returned; the result is
-    sorted.
+    frame field matches a number only as printf writes it. Only files are
+    returned; the result is sorted.
+    """
+    return match_pattern_and_padding_misses(root, pattern)[0]
+
+
+def match_pattern_and_padding_misses(
+    root: Path, pattern: str
+) -> tuple[list[Path], list[Path]]:
+    """The files under `root` that `pattern` matches, as `match_pattern`
+    returns them, and the files it misses only because their number is padded
+    otherwise than its frame field writes it (`cam_007.jpg` for
+    `cam_%04d.jpg`), resolved and sorted the same way, from one glob.
     """
     root = Path(root)
     matches: list[Path] = []
+    misses: list[Path] = []
     for hit in root.glob(camrig_pattern_to_glob(pattern)):
         if not hit.is_file():
             continue
         rel = hit.relative_to(root).as_posix()
         if camrig_pattern_matches(pattern, rel, _CASE_INSENSITIVE):
             matches.append(hit.resolve())
-    return sorted(matches)
+        elif camrig_pattern_matches_any_padding(pattern, rel, _CASE_INSENSITIVE):
+            misses.append(hit.resolve())
+    return sorted(matches), sorted(misses)
 
 
 def match_pattern_with_frames(root: Path, pattern: str) -> list[tuple[Path, int]]:
