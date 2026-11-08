@@ -23,8 +23,30 @@ bound the same way, so ``sfmtool.fileio`` works after ``import sfmtool`` alone.
 ``dir(sfmtool)`` all see the same names either way.
 """
 
+import os as _os
+import sys as _sys
 from importlib import import_module as _import_module
 from typing import TYPE_CHECKING
+
+# TODO(2027-05): re-evaluate this workaround. On Windows, MKL 2026.1 from
+# conda-forge uses its Intel threading layer by default, and that layer's
+# mkl_intel_thread.3.dll delay-imports `__atomic_compare_exchange` and
+# `__atomic_load` from libiomp5md.dll, which the libiomp5md.dll of llvm-openmp
+# 23.1.5 does not export. When the environment's Library\bin is not on PATH, as
+# when its sfm.exe or python.exe runs without `pixi run`, an MKL call that
+# uses threads, such as the one in `pycolmap.match_exhaustive` that `sfm solve`
+# makes or a numpy matrix product, ends the process with exception 0xc06d007f
+# and no Python error. MKL's TBB layer does not use libiomp5md.dll. MKL reads
+# the variable by the time numpy is imported, so it is set here, before any
+# submodule imports numpy or pycolmap, and a value already set is kept. Before
+# removing this, run `pycolmap.match_exhaustive` with the environment's
+# python.exe, not through `pixi run`, with MKL_THREADING_LAYER unset, on a
+# COLMAP database whose images have features but no matches yet, and check
+# that it does not crash. It is Windows only because only the win-64
+# environment links numpy and COLMAP to MKL; linux-64 and osx-arm64 use
+# OpenBLAS.
+if _sys.platform == "win32":
+    _os.environ.setdefault("MKL_THREADING_LAYER", "TBB")
 
 # The root-level `_sfmtool` names; every other binding is read from its module.
 # `run_explorer`, `_build_git_describe` and `_machine_facts`, also root-level,
