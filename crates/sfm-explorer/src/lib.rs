@@ -540,8 +540,9 @@ pub(crate) struct App {
     /// `app::track_ray_source`.
     pub(crate) prev_ray_source: Option<(PointRef, crate::document::VersionSerial)>,
     pub(crate) prev_hidden_image: Option<ImageRef>,
-    /// Set by File > Quit and read by the event loop right after the frame it
-    /// was clicked in, which then exits.
+    /// Set by File > Quit and by an MCP `quit` that is not refused, and read by
+    /// the event loop right after the frame that set it, which then exits.
+    /// Once it is set, `mcp::apply_as_agent` refuses every later tool call.
     pub(crate) quit_requested: bool,
     /// Why the window could not be created, set by `resumed` as it ends the
     /// event loop, and returned by [`run_with_args`] once `run_app` has
