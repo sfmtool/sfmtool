@@ -222,7 +222,8 @@ def _inspect_strips_cmd(target, specs, output, strips_views, context):
 def _inspect_point(point_id, hash_prefix, point_index, location, verbose):
     """Resolve a pt3d_ point ID to its .sfmr and print the point summary."""
     from .._sfmtool.reconstruction import SfmrReconstruction
-    from .._workspace import find_sfmr_by_content_hash, find_workspace_for_path
+    from .._workspace import find_sfmr_by_content_hash
+    from ..workspace import find_workspace_for_path
 
     base = Path(location) if location else Path.cwd()
     if not base.exists():

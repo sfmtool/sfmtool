@@ -129,10 +129,22 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
 }
 
 /// Read a complete .matches file, returning a dict with numpy arrays and metadata.
+///
+/// `workspace_dir` is the workspace directory the file records, as a string,
+/// found by the rule the `.sfmr` reader uses (the recorded relative path, then
+/// the recorded absolute path, then the nearest directory above the file, each
+/// only when it holds `.sfm-workspace.json`), or `None` when none is found.
+/// `write_matches` ignores it.
 #[pyfunction]
 pub fn read_matches(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let data = sfmtool_matches_format::read_matches(&path).map_err(read_err)?;
-    matches_data_to_py(py, data)
+    let workspace_dir = sfmtool_matches_format::resolve_workspace_dir(&path, &data.metadata);
+    let dict = matches_data_to_py(py, data)?;
+    dict.bind(py).set_item(
+        "workspace_dir",
+        workspace_dir.map(|dir| dir.to_string_lossy().into_owned()),
+    )?;
+    Ok(dict)
 }
 
 /// Read only metadata from a .matches file (fast, no binary data).

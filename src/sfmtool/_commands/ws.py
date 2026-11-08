@@ -9,10 +9,10 @@ import click
 
 from .._workspace import (
     WorkspaceUpgradeError,
-    find_workspace_for_path,
     init_workspace,
     upgrade_workspace,
 )
+from ..workspace import find_workspace_for_path
 
 
 @click.group("ws")

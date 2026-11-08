@@ -80,7 +80,6 @@ def test_star_import_and_sample_public_names():
         "THUMBNAIL_SIZE",
         "build_profile",
         "expand_paths",
-        "find_workspace_for_path",
         "get_sift_path_for_image",
         "image_files_to_sift_files",
         "extract_sift_with_colmap",

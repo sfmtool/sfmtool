@@ -506,7 +506,7 @@ every command that reads the file reports the same problems. The value holds
 the workspace root it was read from, so `resolve` takes no second path that
 could disagree with the file's. The workspace root is the caller's argument
 rather than something `read` searches for, because the upward search already
-exists, in `sfmtool._workspace.find_workspace_for_path`, and the lists file
+exists, in `sfmtool.workspace.find_workspace_for_path`, and the lists file
 must sit beside the workspace that search finds; `read` refuses a directory
 with no `.sfm-workspace.json` in it. The two resolvers return the same
 member type because a command on image directories and a command on a

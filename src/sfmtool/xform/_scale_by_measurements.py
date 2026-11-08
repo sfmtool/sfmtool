@@ -426,7 +426,8 @@ class ScaleByMeasurementsTransform:
         # No explicit `sfmr` path: search the workspace for a reconstruction
         # whose content hash matches the Point ID hash prefix, following the
         # sfmtool-sfmr-format resolution strategy (shared with `sfm inspect`).
-        from .._workspace import find_sfmr_by_content_hash, find_workspace_for_path
+        from .._workspace import find_sfmr_by_content_hash
+        from ..workspace import find_workspace_for_path
 
         base = self.yaml_path.parent
         workspace = find_workspace_for_path(base) or base

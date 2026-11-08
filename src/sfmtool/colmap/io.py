@@ -10,7 +10,8 @@ import numpy as np
 from ..camera.cameras import pycolmap_camera_to_intrinsics
 from ..sift.file import get_sift_path_for_image
 from ..fileio import SiftFile
-from .._workspace import find_workspace_for_path, load_workspace_config
+from .._workspace import load_workspace_config
+from ..workspace import find_workspace_for_path
 
 
 def _get_feature_prefix_dir(workspace_config: dict) -> str:

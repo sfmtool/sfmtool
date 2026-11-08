@@ -33,7 +33,7 @@ use zip::{ZipArchive, ZipWriter};
 
 mod workspace;
 
-pub use workspace::{resolve_workspace_dir, WORKSPACE_MARKER};
+pub use workspace::{find_workspace_for_path, resolve_workspace_dir, WORKSPACE_MARKER};
 
 /// Workspace contents configuration embedded in archive metadata.
 ///

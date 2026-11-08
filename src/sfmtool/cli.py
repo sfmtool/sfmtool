@@ -9,7 +9,6 @@ from pathlib import Path
 import click
 
 from ._cli_group import CategoryGroup
-from ._workspace import find_workspace_for_path
 
 
 @click.help_option("--help", "-h")
@@ -318,6 +317,8 @@ def deduce_workspace(paths: set[Path]) -> Path:
     """
     if not paths:
         raise click.ClickException("No input paths provided to deduce workspace.")
+
+    from .workspace import find_workspace_for_path
 
     common_parent = Path(os.path.commonpath([str(p.absolute()) for p in paths]))
 

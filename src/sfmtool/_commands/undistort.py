@@ -78,7 +78,7 @@ def undistort(
 
     try:
         from .._sfmtool.reconstruction import SfmrReconstruction
-        from .._workspace import find_workspace_for_path
+        from ..workspace import find_workspace_for_path
 
         # Load reconstruction
         recon = SfmrReconstruction.load(reconstruction_path)

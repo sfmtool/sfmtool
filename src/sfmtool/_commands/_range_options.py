@@ -303,7 +303,7 @@ def resolve_list_images(
     word, as a directory listing skips them. A slice indexes the images that
     test leaves, and keeps them in the slice's order.
     """
-    from .._workspace import find_workspace_for_path
+    from ..workspace import find_workspace_for_path
 
     name = selection.list_name
     assert name is not None

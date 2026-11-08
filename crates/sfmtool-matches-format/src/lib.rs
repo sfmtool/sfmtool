@@ -27,7 +27,9 @@ mod verify;
 mod write;
 
 pub use cells::{ClusterCellStatus, MemberCellData};
-pub use read::{read_matches, read_matches_image_names, read_matches_metadata};
+pub use read::{
+    read_matches, read_matches_image_names, read_matches_metadata, resolve_workspace_dir,
+};
 pub use select::ClusterSelect;
 pub use types::*;
 pub use verify::verify_matches;

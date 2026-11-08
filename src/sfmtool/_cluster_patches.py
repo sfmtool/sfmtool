@@ -13,32 +13,6 @@ from pathlib import Path
 import click
 
 
-def _resolve_workspace(matches_file: Path, ws_meta: dict) -> Path:
-    """Resolve the workspace directory a .matches file references (the
-    relative-path candidate first, then the absolute path, then an ancestor
-    search from the file's directory)."""
-    from ._workspace import find_workspace_for_path
-
-    matches_dir = matches_file.parent.absolute()
-    rel_path = ws_meta.get("relative_path", "")
-    if rel_path:
-        candidate = (matches_dir / rel_path).resolve()
-        if (candidate / ".sfm-workspace.json").exists():
-            return candidate
-    abs_path = ws_meta.get("absolute_path", "")
-    if abs_path:
-        candidate = Path(abs_path)
-        if (candidate / ".sfm-workspace.json").exists():
-            return candidate
-    workspace_dir = find_workspace_for_path(matches_dir)
-    if workspace_dir is None:
-        raise RuntimeError(
-            f"Cannot resolve workspace for {matches_file}. "
-            "Ensure the workspace exists and contains .sfm-workspace.json."
-        )
-    return workspace_dir
-
-
 def _run_cluster_patches(
     in_path: Path,
     output_path: str | None,
@@ -85,7 +59,12 @@ def _run_cluster_patches(
     metadata = data["metadata"]
     ws_meta = metadata["workspace"]
     image_names = list(data["image_names"])
-    workspace_dir = _resolve_workspace(in_path, ws_meta)
+    if data["workspace_dir"] is None:
+        raise RuntimeError(
+            f"Cannot resolve workspace for {in_path}. "
+            "Ensure the workspace exists and contains .sfm-workspace.json."
+        )
+    workspace_dir = Path(data["workspace_dir"])
     cluster_count = int(metadata["cluster_count"])
     member_count = int(metadata["cluster_member_count"])
     click.echo(f"Workspace: {workspace_dir}")

@@ -13,7 +13,7 @@ from ..rig.pano2rig import (
     convert_panoramas,
     write_pano_camrig,
 )
-from .._workspace import find_workspace_for_path
+from ..workspace import find_workspace_for_path
 
 
 @click.command("pano2rig")

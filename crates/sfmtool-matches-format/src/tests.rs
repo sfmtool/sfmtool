@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 mod cells;
 mod clusters_write;
+mod workspace;
 
 /// Create minimal valid MatchesData without TVGs for testing.
 fn make_test_data() -> MatchesData {

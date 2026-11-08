@@ -67,6 +67,61 @@ class TestToColmapDbCLI:
         result = runner.invoke(main, ["to-colmap-db", "nonexistent.sfmr", "db.db"])
         assert result.exit_code != 0
 
+    def test_matches_without_a_workspace_is_rejected(self, tmp_path):
+        """A .matches file whose recorded workspace has no marker, with none
+        above it, names the file in the error."""
+        from sfmtool.fileio import write_matches
+
+        path = tmp_path / "pairs.matches"
+        write_matches(
+            path,
+            {
+                "metadata": {
+                    "version": 4,
+                    "matching_method": "exhaustive",
+                    "matching_tool": "test",
+                    "matching_tool_version": "0",
+                    "matching_options": {},
+                    "workspace": {
+                        "absolute_path": str(tmp_path),
+                        "relative_path": ".",
+                        "contents": {
+                            "feature_tool": "opencv",
+                            "feature_type": "sift",
+                            "feature_options": {},
+                            "feature_prefix_dir": "",
+                        },
+                    },
+                    "timestamp": "2026-11-07T10:00:00Z",
+                    "image_count": 2,
+                    "image_pair_count": 1,
+                    "match_count": 1,
+                    "has_two_view_geometries": False,
+                    "has_clusters": False,
+                    "has_cluster_patches": False,
+                },
+                "image_names": ["a.jpg", "b.jpg"],
+                "feature_tool_hashes": np.zeros((2, 16), dtype=np.uint8),
+                "sift_content_hashes": np.zeros((2, 16), dtype=np.uint8),
+                "feature_counts": np.array([1, 1], dtype=np.uint32),
+                "image_dims": np.array([[64, 48], [64, 48]], dtype=np.uint32),
+                "image_index_pairs": np.array([[0, 1]], dtype=np.uint32),
+                "match_counts": np.array([1], dtype=np.uint32),
+                "match_feature_indexes": np.array([[0, 0]], dtype=np.uint32),
+                "match_descriptor_distances": np.array([1.0], dtype=np.float32),
+                "has_clusters": False,
+                "has_cluster_patches": False,
+                "has_two_view_geometries": False,
+            },
+        )
+
+        result = CliRunner().invoke(
+            main, ["to-colmap-db", str(path), str(tmp_path / "db.db")]
+        )
+
+        assert result.exit_code != 0
+        assert f"Cannot resolve workspace for {path}" in result.output
+
     def test_out_db_required(self, tmp_path):
         fake = tmp_path / "test.sfmr"
         fake.write_bytes(b"fake")

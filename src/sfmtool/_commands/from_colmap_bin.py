@@ -76,7 +76,8 @@ def from_colmap_bin(
             --tool-name glomap
     """
     from ..colmap.io import build_metadata, colmap_binary_to_rust_sfmr
-    from .._workspace import find_workspace_for_path, load_workspace_config
+    from .._workspace import load_workspace_config
+    from ..workspace import find_workspace_for_path
 
     colmap_reconstruction_path = Path(colmap_reconstruction_path)
     image_dir = Path(image_dir)

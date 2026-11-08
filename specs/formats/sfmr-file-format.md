@@ -364,7 +364,8 @@ The workspace is the root directory for an SfM project, containing:
 
    A recorded path fails when the directory it names does not hold
    `.sfm-workspace.json`, whether or not the directory exists. The rule is
-   `sfmtool_archive_io::resolve_workspace_dir`, which the `.kdf` reader shares.
+   `sfmtool_archive_io::resolve_workspace_dir`, which the `.matches` and
+   `.kdf` readers share.
 2. All image paths are then resolved relative to the workspace directory
 
 **An empty `absolute_path` means none was recorded**, and resolution skips that
