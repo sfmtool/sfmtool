@@ -134,7 +134,8 @@ directory a file names. The paths are arguments rather than a
 
 **The upward search walks the path as given.** `find_workspace_for_path` makes
 its path absolute against the current directory, so a relative path or a bare
-file name is searched above the current directory, and walks up it without
+file name is searched above the current directory, and walks up it as written,
+keeping `..` (the parent of `ws/colmap/..` is `ws/colmap`) and without
 resolving links: a directory reached through a link belongs to the workspace
 around the link, and the directory returned is an ancestor of the absolute path
 given. A file or a path that does not exist yet holds no marker, so either

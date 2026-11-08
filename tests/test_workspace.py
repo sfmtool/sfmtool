@@ -96,6 +96,21 @@ class TestFindWorkspaceForPath:
         monkeypatch.chdir(current)
         assert find_workspace_for_path(Path(relative)) == tmp_path
 
+    def test_parent_components_stay_as_given(self, tmp_path: Path, monkeypatch):
+        """A `..` in the path is walked as written, so the workspace comes back
+        spelled as given and an image path built from the same `..` path is
+        measured against it as `images/a.jpg`, as `colmap/io.py` measures it."""
+        _write_workspace_config(tmp_path)
+        (tmp_path / "colmap").mkdir()
+        (tmp_path / "images").mkdir()
+        monkeypatch.chdir(tmp_path / "colmap")
+        image_dir = Path("../images").absolute()
+
+        found = find_workspace_for_path(image_dir)
+
+        assert found == Path.cwd() / ".."
+        assert (image_dir / "a.jpg").relative_to(found).as_posix() == "images/a.jpg"
+
     def test_linked_directory_belongs_to_workspace_around_link(self, tmp_path: Path):
         """The search walks the path as given, without resolving links: a
         workspace's image folder that links to storage outside it is in the

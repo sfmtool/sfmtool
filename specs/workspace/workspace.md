@@ -448,8 +448,9 @@ directory tree until it finds a `.sfm-workspace.json` file.
 This is analogous to how `git` finds the `.git` directory.
 
 The search walks up the path as given, made absolute against the current directory, so a
-relative path such as a bare file name is searched above the current directory too. Links are
-not resolved: a directory reached through a link belongs to the workspace around the link, not
+relative path such as a bare file name is searched above the current directory too. A `..` is
+kept as written, so the walk goes up the path's text (the parent of `ws/colmap/..` is
+`ws/colmap`), and links are not resolved: a directory reached through a link belongs to the workspace around the link, not
 to one around its target, so a workspace whose image folder links to storage outside it is the
 workspace of those images, and the directory found is an ancestor of the path as given. The
 search starts at the path itself, which may be a directory, a file or a path that does not

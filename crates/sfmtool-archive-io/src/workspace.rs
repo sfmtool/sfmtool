@@ -74,8 +74,8 @@ pub fn resolve_workspace_dir(
 /// the current directory, so the search goes on above it.
 ///
 /// The search walks up `path` as given, made absolute but with no link
-/// resolved: a directory reached through a link belongs to the workspace
-/// around the link, not to one around its target. That keeps a workspace
+/// resolved and no `..` collapsed: a directory reached through a link belongs
+/// to the workspace around the link, not to one around its target. That keeps a workspace
 /// whose image folder is a link to storage outside it a workspace for those
 /// images, and keeps a path measured against the result in the form the
 /// caller gave. The result is spelled the same way, as an ancestor of the
@@ -89,25 +89,41 @@ pub fn resolve_workspace_dir(
 /// let workspace = find_workspace_for_path(image);
 /// ```
 pub fn find_workspace_for_path(path: &Path) -> Option<PathBuf> {
-    let current_dir = std::env::current_dir().ok()?;
-    find_workspace_from(path, &current_dir)
+    find_workspace_from(path, || std::env::current_dir().ok())
 }
 
 /// [`find_workspace_for_path`] with the directory a relative `path` is taken
 /// against given, so a test can name one without changing the process's
-/// current directory.
-fn find_workspace_from(path: &Path, current_dir: &Path) -> Option<PathBuf> {
-    // Joining puts a relative `path` under `current_dir`, and the empty path,
-    // which is a bare file name's parent, names `current_dir` itself.
-    // `absolute` then removes `.` components (and on Windows resolves `..` as
-    // text), without touching links.
-    let joined = if path.as_os_str().is_empty() {
-        current_dir.to_path_buf()
+/// current directory. `current_dir` is called only for a relative `path`, so an
+/// absolute one is searched even where the current directory cannot be read.
+fn find_workspace_from(
+    path: &Path,
+    current_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    // A relative `path` goes under the current directory, and the empty path,
+    // which is a bare file name's parent, names the current directory itself.
+    // A Windows path with a drive but no root (`D:x`) is still relative after
+    // the join, and only `std::path::absolute` knows that drive's directory.
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else if path.as_os_str().is_empty() {
+        current_dir()?
     } else {
-        current_dir.join(path)
+        current_dir()?.join(path)
     };
-    std::path::absolute(joined)
-        .ok()?
+    let absolute = if joined.is_absolute() {
+        joined
+    } else {
+        std::path::absolute(joined).ok()?
+    };
+    // Collecting the components drops `.` and repeated separators, as a Python
+    // `Path` does, and keeps `..` as written: the walk goes up the path's text
+    // (the parent of `ws/colmap/..` is `ws/colmap`), so the directory returned
+    // is spelled as the caller gave it and a path measured against it with
+    // `relative_to` keeps its form. `std::path::absolute` is not used on an
+    // absolute path because on Windows it resolves `..` as text.
+    let absolute: PathBuf = absolute.components().collect();
+    absolute
         .ancestors()
         .find(|dir| dir.join(WORKSPACE_MARKER).exists())
         .map(Path::to_path_buf)

@@ -71,7 +71,7 @@ fn a_relative_path_is_searched_above_the_current_directory() {
 
     for path in ["x.matches", "", ".", "deeper/x.sfmr"] {
         assert_eq!(
-            find_workspace_from(Path::new(path), &current_dir),
+            find_workspace_from(Path::new(path), || Some(current_dir.clone())),
             Some(ws.clone()),
             "{path:?}"
         );
@@ -101,4 +101,37 @@ fn a_linked_directory_belongs_to_the_workspace_around_the_link() {
         find_workspace_for_path(&dir.path().join("out/link/a.jpg")),
         None
     );
+}
+
+/// A `..` in the path stays as written: the walk goes up the path's text, so
+/// the directory found is spelled as given, and an image path built from the
+/// same `..` path is measured against it as `images/a.jpg`.
+#[test]
+fn a_path_with_parent_components_finds_the_ancestor_spelled_as_given() {
+    let dir = layout();
+    let ws = dir.path().join("ws");
+    let image_dir = ws.join("sub").join("..").join("images");
+    let expected = ws.join("sub").join("..");
+
+    let found = find_workspace_for_path(&image_dir);
+
+    assert_eq!(found.as_deref(), Some(expected.as_path()));
+    assert_eq!(
+        image_dir.join("a.jpg").strip_prefix(&expected).unwrap(),
+        Path::new("images").join("a.jpg")
+    );
+}
+
+/// The current directory is read only for a relative path: an absolute path is
+/// searched where it cannot be read.
+#[test]
+fn an_absolute_path_needs_no_current_directory() {
+    let dir = layout();
+    let ws = dir.path().join("ws");
+
+    assert_eq!(
+        find_workspace_from(&ws.join("images/a.jpg"), || None),
+        Some(ws.clone())
+    );
+    assert_eq!(find_workspace_from(Path::new("x.matches"), || None), None);
 }
