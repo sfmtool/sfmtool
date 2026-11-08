@@ -2,33 +2,25 @@
 
 ## Overview
 
-`rig_config.json` is an optional file that describes multi-sensor camera rigs —
-sets of cameras that move together as a single physical assembly. Common
-examples: a stereo pair, a 360° back-to-back fisheye rig, a vehicle-mounted
-multi-camera array, a cubemap derived from a panorama via `sfm pano2rig`.
+`rig_config.json` is COLMAP's
+[`rig_configurator` rig config](https://colmap.github.io/rigs.html) file: a
+description of one or more multi-sensor camera rigs, sets of cameras that move
+together as a single physical assembly, such as a stereo pair or a 360°
+back-to-back fisheye rig. Each sensor is named by the path prefix of its
+images and carries its pose in the rig and, optionally, its intrinsics.
 
-Without `rig_config.json`, every image in a workspace is treated as an
-independent free-floating camera. With it, sfmtool can:
+sfmtool describes a workspace's rigs only by `.camrig` files
+([camrig-file-format.md](../formats/camrig-file-format.md)), and reads a
+`rig_config.json` in one place: `sfm camrig cp rig_config.json OUTPUT.camrig
+[--rig N]` converts one of its rigs to a `.camrig`
+([camrig-command.md § A `rig_config.json` source](../cli/workspace/camrig-command.md#a-rig_configjson-source)).
+This spec describes the file as that converter reads it, and the error the
+other commands give when a workspace still holds one
+([*A `rig_config.json` in a workspace*](#a-rig_configjson-in-a-workspace)).
 
-- Use the calibrated sensor-to-rig poses as priors during reconstruction.
-- Group same-instant captures into rig **frames** and skip same-frame image
-  pairs during matching (their relative pose is fixed by the rig).
-- Optionally refine the rig poses themselves (`refine_rig=True` is the
-  default for both incremental and global solves).
-
-A single file may declare multiple independent rigs.
-
-The file lives at the workspace root: commands read only
-`{workspace_dir}/rig_config.json`. Unlike `camera_config.json`, there is no
-closest-ancestor search in subdirectories.
-
-`rig_config.json` **is** COLMAP's
-[`rig_configurator` rig config](https://colmap.github.io/rigs.html) file —
-sfmtool reads and writes exactly that format, with no sfmtool-specific
-extensions. See [*Relationship to the COLMAP Rig Format*](#relationship-to-the-colmap-rig-format)
-below. That includes the coordinate convention: unlike sfmtool's own
-formats, this file stays in **COLMAP convention** — see
-[*Coordinate Convention*](#coordinate-convention).
+The file is COLMAP's format verbatim, with no sfmtool-specific extensions,
+and it stays in COLMAP's coordinate convention
+([*Coordinate Convention*](#coordinate-convention)).
 
 ## File Format
 
@@ -57,11 +49,14 @@ formats, this file stays in **COLMAP convention** — see
 ]
 ```
 
+This is the rig of the kerry_park dataset, which `test-data/images/kerry_park`
+describes by `kerry_park.camrig`, the conversion of this file.
+
 ### Top-Level Shape
 
 The file is a JSON **array** of rig objects, even when only one rig is
-present. This matches the COLMAP rig file shape and lets a workspace declare
-multiple rigs that share the same image tree.
+present. This matches the COLMAP rig file shape and lets a file declare
+several rigs that share the same image tree.
 
 ### The Rig Object
 
@@ -73,41 +68,40 @@ multiple rigs that share the same image tree.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `image_prefix` | string | Path prefix (relative to the workspace) that identifies images captured by this sensor. Forward slashes only. |
+| `image_prefix` | string | Path prefix, relative to the folder of the file, that identifies images captured by this sensor. Forward slashes only. |
 | `ref_sensor` | boolean | `true` for exactly one sensor per rig. The reference sensor defines the rig coordinate frame; its `cam_from_rig` is the identity. |
 | `cam_from_rig_rotation` | array of 4 floats | **WXYZ** quaternion (see *Quaternion Convention*). Required for non-reference sensors. Omitted for the reference sensor. |
 | `cam_from_rig_translation` | array of 3 floats | Translation in metres. Defaults to `[0, 0, 0]` if omitted. |
 | `camera_model_name` | string | Optional COLMAP camera model name (e.g. `PINHOLE`, `OPENCV_FISHEYE`). See *Per-Sensor Intrinsics* below. |
 | `camera_params` | array of floats | Optional positional camera parameter array for `camera_model_name`. See *Per-Sensor Intrinsics* below. |
 
-### Frame Grouping
+### Images and Frames
 
-Same-instant captures are grouped into a **frame** by their shared
-*frame key* — the part of the image path that remains after stripping the
-sensor's `image_prefix`. In the kerry_park example, `fisheye_left/frame_07.jpg`
-and `fisheye_right/frame_07.jpg` both strip down to `frame_07.jpg` and are
-joined into one frame.
-
-Within a frame, image pairs are excluded from feature matching: their
-relative pose is fixed by the rig and the match would not contribute new
-geometric information. Cross-frame pairs are matched normally.
+An image belongs to the first sensor in the file whose `image_prefix` its
+path, relative to the folder of the file, starts with. Same-instant captures
+are grouped into a **frame** by their shared *frame key*, the part of the
+image path that remains after stripping the sensor's `image_prefix`:
+`fisheye_left/frame_07.jpg` and `fisheye_right/frame_07.jpg` both strip down
+to `frame_07.jpg` and are one frame. A `.camrig` groups the images of a frame
+by the number its sensors' image patterns read instead, so the converter
+checks that the patterns it derives give the same frames
+([camrig-command.md § A `rig_config.json` source](../cli/workspace/camrig-command.md#a-rig_configjson-source)).
 
 ## Validation
 
-`_load_rig_config` in `src/sfmtool/rig/config.py` validates the whole
-document before any command consumes it and raises `RigConfigError` on the
-first violation. Every consumer — `sfm solve`, `sfm match`, `sfm to-colmap-db`,
-`sfm pick-images` — surfaces that as a plain CLI error and stops.
+`validate_rig_config` in
+[`rig/config.py`](../../src/sfmtool/rig/config.py) validates the whole
+document before the converter uses any of it and raises `RigConfigError` on
+the first violation, which `sfm camrig cp` reports as a plain CLI error.
 
 Because the schema is COLMAP's verbatim, **any key outside it is an error**
-rather than something to ignore: a key sfmtool skips is a key COLMAP would
-skip too, and skipped intrinsics leave a reconstruction built on EXIF guesses
-with nothing in the output to mark it. The message names the offending key,
-its location (rig index, camera index), and the schema key that replaces it
-when the intent is recognizable — a rig-level `camera_intrinsics` block is
-answered with per-sensor `camera_model_name` + `camera_params`.
+rather than something to ignore: a skipped key would leave intrinsics out of
+the `.camrig` with nothing in the output to mark it. The message names the
+offending key, its location (rig index, camera index), and the schema key that
+replaces it when the intent is recognizable — a rig-level `camera_intrinsics`
+block is answered with per-sensor `camera_model_name` + `camera_params`.
 
-The rules enforced at load:
+The rules enforced:
 
 | Scope | Rule |
 |---|---|
@@ -125,59 +119,37 @@ The rules enforced at load:
 
 ## Relationship to the COLMAP Rig Format
 
-`rig_config.json` is the COLMAP
-[`rig_configurator` rig config](https://colmap.github.io/rigs.html) file
-verbatim. Every field documented here — the top-level array of rig objects,
-`cameras`, `image_prefix`, `ref_sensor`, `cam_from_rig_rotation`,
+Every field documented here — the top-level array of rig objects, `cameras`,
+`image_prefix`, `ref_sensor`, `cam_from_rig_rotation`,
 `cam_from_rig_translation`, `camera_model_name`, `camera_params` — has the
-same name, type, and semantics as in COLMAP. A file authored for one tool is
-accepted unchanged by the other.
-
-Two consequences of matching COLMAP exactly:
+same name, type, and semantics as in COLMAP, so a file authored for COLMAP is
+read unchanged. Two consequences:
 
 - **Intrinsics are per sensor**, given by `camera_model_name` (a COLMAP
   camera model name) and `camera_params` (a flat positional float array in
   COLMAP's parameter order). There is no rig-level intrinsics block, and the
-  config carries no image `width`/`height` — COLMAP and sfmtool both take
-  image dimensions from the images themselves. A file that carries either is
-  refused; see [*Validation*](#validation).
+  file carries no image `width`/`height`: the image dimensions come from the
+  images themselves. A file that carries either is refused; see
+  [*Validation*](#validation).
 - **The WXYZ quaternion convention is COLMAP's.** COLMAP's documented
   example `[0.7071, 0, 0.7071, 0]` is a 90° rotation about Y in
   `[w, x, y, z]` order.
 
-sfmtool does not invoke `colmap rig_configurator`; it builds rigs directly
-through pycolmap. Matching the format exactly means the same
-`rig_config.json` can be fed to either tool.
-
 ## Coordinate Convention
 
-`rig_config.json` remains in **COLMAP convention** — its `cam_from_rig`
-poses map into COLMAP-style camera frames (camera looks down **+Z** with
-**Y down**), *not* the canonical −Z-forward frames used by `.sfmr` and
-`.camrig` (see the "Coordinate System Conventions" section of
-[`sfmr-file-format.md`](../formats/sfmr-file-format.md)). This is
-deliberate: the file mirrors COLMAP's own rig-config schema and exists to
-feed COLMAP database setup, so it is treated as a COLMAP-side artifact and
-converted at ingestion like every other COLMAP input (conjugation with the
-camera-frame flip `S = diag(1, −1, −1)`; rig-relative poses never touch
-the world frame). Keeping the file COLMAP-convention means a
-`rig_config.json` authored for COLMAP — including
-`test-data/images/kerry_park/rig_config.json` — stays valid unchanged.
-
-`rig_config.json` is therefore treated as a COLMAP-side artifact and converted
-at ingestion like every other COLMAP input; contrast `.camrig`, sfmtool's own
-rig format, which adopts the canonical convention (see
-[`camrig-file-format.md`](../formats/camrig-file-format.md) and the
-[canonical convention](../formats/sfmr-file-format.md#coordinate-system-conventions)).
+`rig_config.json` is in **COLMAP convention**: its `cam_from_rig` poses map
+into COLMAP-style camera frames (camera looks down **+Z** with **Y down**),
+*not* the canonical −Z-forward frames used by `.sfmr` and `.camrig` (see the
+"Coordinate System Conventions" section of
+[`sfmr-file-format.md`](../formats/sfmr-file-format.md)). The converter
+conjugates each pose with the camera-frame flip `S = diag(1, −1, −1)` into
+the canonical `sensor_from_rig` a `.camrig` holds; rig-relative poses never
+touch the world frame.
 
 ## Quaternion Convention
 
 `cam_from_rig_rotation` is stored as **WXYZ** to match the COLMAP rig file
-format. sfmtool converts to **XYZW** internally when handing the value to
-pycolmap. The conversion lives in `_sensor_from_rig_pose` in
-`src/sfmtool/rig/config.py`.
-
-Examples:
+format.
 
 | Rotation | WXYZ |
 |---|---|
@@ -187,11 +159,11 @@ Examples:
 | 180° about Z | `[0, 0, 0, 1]` |
 
 A back-to-back rig (right sensor pointing opposite the left) flips the
-optical axis with `[0, 0, 1, 0]` (180° about Y, "look behind"). This is
-the value used by the kerry_park dataset. (A 180° rotation about Y happens
-to read the same in both camera-frame conventions — `S · Ry(180°) · S =
-Ry(180°)` — but the translation does not: `[0, 0, -0.0307]` here is the
-COLMAP-convention value; see [*Coordinate Convention*](#coordinate-convention).)
+optical axis with `[0, 0, 1, 0]` (180° about Y, "look behind"), as in the
+example above. (A 180° rotation about Y reads the same in both camera-frame
+conventions — `S · Ry(180°) · S = Ry(180°)` — but the translation does not:
+`[0, 0, -0.0307]` there is the COLMAP-convention value; see
+[*Coordinate Convention*](#coordinate-convention).)
 
 ## Per-Sensor Intrinsics
 
@@ -203,78 +175,45 @@ Each sensor entry may carry its own intrinsics, exactly as in COLMAP:
   COLMAP's parameter order. For `OPENCV_FISHEYE` that order is
   `fx, fy, cx, cy, k1, k2, k3, k4`.
 
-Two tiers are supported, mirroring COLMAP:
+The converter builds each sensor's camera on the sensor's first image:
 
-- **Model only** (`camera_model_name`, no `camera_params`) — the model is a
-  hint; focal length, principal point, and distortion are inferred from
-  EXIF (or seeded — see *Fisheye and Wide-FOV Notes*).
 - **Full calibration** (`camera_model_name` + `camera_params`) — the
-  parameters are used directly and the camera is flagged with a prior focal
-  length. `camera_params` must have the exact length COLMAP expects for the
-  model, or loading fails.
+  parameters are the camera, at that image's size.
+- **Model only** (`camera_model_name`, no `camera_params`) — the camera is
+  inferred from the image's EXIF with that model. For a fisheye model the
+  focal length is seeded to about `min(width, height) / π` rather than the
+  EXIF-derived guess, which is far too long for a ~180° projection.
+- **Neither** — the camera is inferred from the image's EXIF, usually a
+  rectilinear guess.
 
-Unlike `camera_config.json`, there is no distortion-only tier: COLMAP's
-`camera_params` is all-or-nothing positional.
+There is no distortion-only tier: COLMAP's `camera_params` is all-or-nothing
+positional.
 
-If a sensor entry has neither field, that sensor falls back to
-`pycolmap.infer_camera_from_image()` on its first image — usually a
-rectilinear EXIF guess, which is wrong for fisheye and wide-FOV sensors.
+## A `rig_config.json` in a Workspace
 
-## Interaction with `camera_config.json`
+A workspace's rigs are described only by `.camrig` files. Every command that
+sets up the cameras and rig frames of a workspace's images — `sfm solve`,
+`sfm match` (every mode but `--merge`), `sfm to-colmap-db` from a `.matches`
+file, `sfm pick-images` and `sfm estimate-intrinsics
+--write-camrig-per-sequence` — stops before it reads any image when the
+workspace root holds a `rig_config.json`, rather than solving its rigs' images
+as single images. The rule looks only at the workspace root and does not
+look at `.camrig` files: a workspace whose rig a `.camrig` already describes
+is refused too, until the `rig_config.json` is deleted. The check is
+`_refuse_rig_config` in [`rig/config.py`](../../src/sfmtool/rig/config.py).
 
-`rig_config.json` wins for any image whose path matches one of its
-`image_prefix` entries. `camera_config.json` then handles the remainder. See
-[camera-config.md § Interaction with `rig_config.json`](camera-config.md#interaction-with-rig_configjson).
+The error names the file and gives the command line that converts it, with
+an output `.camrig` beside it named after the workspace folder:
 
-## Interaction with `--camera-model`
+```
+Error: /captures/kp/rig_config.json: sfm takes a workspace's rigs only from .camrig files and does not read rig_config.json. Convert it with
+  sfm camrig cp /captures/kp/rig_config.json /captures/kp/kp.camrig
+and then delete it. If a .camrig already describes its rigs, delete it.
+```
 
-With no `--camera-model`, each sensor uses its own `camera_model_name` /
-`camera_params`, falling back to `pycolmap.infer_camera_from_image()` (with
-`camera_model_name` as a hint) when `camera_params` is absent.
-
-With `--camera-model`, a sensor that carries a `camera_model_name` +
-`camera_params` calibration has that camera refit to the named model by the
-lens-only fit `CameraIntrinsics.refit`, which keeps its principal point, and
-the refit camera is the sensor's starting camera; the file is not changed. A
-sensor without `camera_params` is inferred under the named model. This is the
-rule `camera_config.json` and a `.camrig` follow too, with the same report line
-per refit camera and the same error when a fit is refused
-([camera-config.md § Interaction with `--camera-model`](camera-config.md#interaction-with---camera-model)).
-
-## Fisheye and Wide-FOV Notes
-
-For ~180° FOV fisheye rigs (e.g. OPENCV_FISHEYE with k1–k4):
-
-- **Undistortion blends to identity past ~90°** off-axis. See
-  `crates/sfmtool-core/src/camera/distortion/kernels/blend.rs` (search for
-  `blend_fisheye_ray`). The k1–k4 polynomial is unreliable at extreme
-  angles; sfmtool smoothstep-blends the recovered ray to the identity
-  (small-angle) ray over 90°–100°. Solver output near the image border
-  reflects this — features projected behind a sensor produce
-  `Ignoring feature because it failed to project` log lines from
-  pycolmap; this is benign cull-back, not a numerical error.
-- **Focal-length inference is fisheye-aware.** When inferring intrinsics
-  for an OPENCV_FISHEYE camera without an explicit focal length,
-  `camera.setup._infer_camera` seeds the focal length to roughly
-  `min(width, height) / π` instead of the EXIF-derived 1.2× image-size
-  guess, which is far too long for a ~180° projection.
-- **Same-frame matching is skipped.** For back-to-back fisheye rigs the
-  two sensors share no field of view; matching them would be wasteful
-  even without the rig pose constraint. The cross-frame pair builder in
-  `rig.frames._build_cross_frame_pairs` handles this naturally.
-
-## Examples in the Repository
-
-- `test-data/images/kerry_park/rig_config.json` — back-to-back 180° FOV
-  fisheye stereo pair (`OPENCV_FISHEYE`, 480×480, 30.7 mm baseline).
-
-`rig_config.json` is consumed as an *input* by the solving commands and by
-`sfm pick-images`, but sfmtool no longer *produces* it. In `sfm solve` and
-`sfm pick-images`, `.camrig` files that cover any of the images given take precedence
-over it
-([solve-command.md § Camera Rig Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)).
-The rig builders (`sfm pano2rig`, `sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
-`specs/formats/camrig-file-format.md` and `specs/cli/workspace/pano2rig-command.md`.
+A file of several rigs gets one line per rig, each with `--rig N` and an
+output named `<folder>_rig<N>.camrig`, and a path with a space is written in
+double quotes.
 
 ## Converting to a `.camrig`
 

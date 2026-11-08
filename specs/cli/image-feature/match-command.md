@@ -91,7 +91,7 @@ does not fit is cut short at a character boundary. The cluster matcher appends
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
 | `--range / -r` | string | | Range expression for file numbers, or a named image list's name |
 | `--named-image-list` | name | | Use the images of this named image list of the workspace in place of `PATHS`; with `-r RANGE`, only its members whose frame number is in `RANGE` |
-| `--camera-model` | choice | auto | Camera model to use (e.g., `SIMPLE_RADIAL`, `OPENCV`): it replaces the model EXIF inference picks, and refits to this model the camera a `camera_config.json` or `rig_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
+| `--camera-model` | choice | auto | Camera model to use (e.g., `SIMPLE_RADIAL`, `OPENCV`): it replaces the model EXIF inference picks, and refits to this model the camera a `camera_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
 
 `--cluster` has one more matcher option with no flag: the minimum cluster
 size, fixed at 2. A cluster is kept only when it spans at least two images,
@@ -153,10 +153,14 @@ one rig per multi-sensor `.camrig`, and the images no `.camrig` covers take thei
 from `camera_config.json` or EXIF inference
 ([solve-command.md § Camera Rig Files](../reconstruction/solve-command.md#camera-rig-files-camrig)).
 Its `.camrig` lines and messages call them the `images of the .matches file`. Matching an
-image set reads no `.camrig`.
+image set reads no `.camrig`, so its images take their cameras from `camera_config.json`
+or EXIF inference, each image a frame of its own. Every mode but `--merge` stops before
+it reads any image when the workspace root holds a `rig_config.json`, naming the
+`sfm camrig cp` command that converts it
+([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
 
-With `--camera-model`, the camera a `camera_config.json`, a `rig_config.json` sensor's
-`camera_params` or, for `--derive-pairs`, a `.camrig` supplies is refit to that model and
+With `--camera-model`, the camera a `camera_config.json` or, for `--derive-pairs`, a
+`.camrig` supplies is refit to that model and
 the refit camera is used in its place, with one report line per refit camera and an
 error naming the camera when the fit is refused, exactly as
 [solve-command.md § Camera Intrinsics](../reconstruction/solve-command.md#camera-intrinsics)

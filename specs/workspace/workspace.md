@@ -654,8 +654,11 @@ source of camera setup for those images, and `--camera-model` on the command
 line refits the file's camera to the model it names. See
 [`camera-config.md`](camera-config.md) for the file format and semantics.
 
-Multi-sensor rigs are described by an optional `rig_config.json` at the
-workspace root; see [`rig-config.md`](rig-config.md).
+Multi-sensor rigs are described by `.camrig` files
+([`../formats/camrig-file-format.md`](../formats/camrig-file-format.md)). The
+commands refuse a workspace whose root holds a `rig_config.json`, COLMAP's rig
+config, and name the `sfm camrig cp` command that converts it to a `.camrig`;
+see [`rig-config.md`](rig-config.md).
 
 ## Design Principles
 

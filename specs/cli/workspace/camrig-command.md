@@ -182,11 +182,14 @@ root — normally the workspace root.
 
 ### A `rig_config.json` source
 
-`cp` converts one rig of a `rig_config.json`
-([rig-config.md](../../workspace/rig-config.md)) into a `.camrig` that the
-commands use as they use that rig of the `rig_config.json`: the same images
-for each sensor, the same frames, the same cameras and the same
-`sensor_from_rig` poses. The conversion is `copy_from_rig_config` in
+`cp` converts one rig of a `rig_config.json`, COLMAP's rig config
+([rig-config.md](../../workspace/rig-config.md)), into a `.camrig` that gives
+each sensor the same images, groups them into the same frames, and holds the
+same cameras and `sensor_from_rig` poses. It is the one command that reads the
+file: the others take a workspace's rigs only from `.camrig` files and refuse
+a workspace whose root holds a `rig_config.json`, naming this conversion
+([rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
+The conversion is `copy_from_rig_config` in
 [`camrig/from_rig_config.py`](../../../src/sfmtool/camrig/from_rig_config.py).
 
 - **Where the file goes.** The image prefixes are relative to the folder of
@@ -198,8 +201,8 @@ for each sensor, the same frames, the same cameras and the same
   `.jpeg`, the files `sfm solve` takes from a directory) whose path relative
   to the workspace starts with its `image_prefix`. An image whose path starts
   with the prefixes of several sensors belongs to the first of them in the
-  file, as in `sfm solve`. A sensor with no images is refused: there is
-  nothing to derive its pattern and camera from.
+  file. A sensor with no images is refused: there is nothing to derive its
+  pattern and camera from.
 - **Patterns.** A sensor's images must form one sequence by the rule
   `sfm pick-images` groups files by: one folder, names that are the same
   apart from the file number, every image numbered and no number naming two
@@ -227,10 +230,9 @@ for each sensor, the same frames, the same cameras and the same
   Written into a COLMAP database, the `.camrig` gives back the same
   `cam_from_rig` poses
   ([camrig-file-format.md](../../formats/camrig-file-format.md#relationship-to-the-colmap-rig-format)).
-- **Cameras.** Each sensor's camera is built as `sfm solve` builds it from
-  `rig_config.json`, on the sensor's first image in path order: with
-  `camera_params`, the parameters for `camera_model_name` at that image's
-  size; without them, EXIF inference with `camera_model_name`, if any, as the
+- **Cameras.** Each sensor's camera is built on the sensor's first image in
+  path order: with `camera_params`, the parameters for `camera_model_name` at
+  that image's size; without them, EXIF inference with `camera_model_name`, if any, as the
   model, including the fisheye focal-length seed. A `.camrig` camera is a
   full calibration, so an inferred camera is stored as one, and `cp` prints a
   note naming each sensor whose camera was inferred. Every image of a sensor
@@ -256,15 +258,6 @@ Wrote kerry_park.camrig
   sensor 0: fisheye_left/ -> fisheye_left/frame_%02d.jpg  (24 images, OPENCV_FISHEYE 480x480)
   sensor 1: fisheye_right/ -> fisheye_right/frame_%02d.jpg  (24 images, OPENCV_FISHEYE 480x480)
 ```
-
-The COLMAP database `sfm solve` writes from the `.camrig` differs in two ways
-from the one it writes from `rig_config.json`, both for a sensor without
-`camera_params`:
-
-- Its inferred camera is written with `has_prior_focal_length` set, since it
-  is a `.camrig` calibration; from `rig_config.json` it is written without.
-- With `--camera-model`, its camera is the stored inferred camera refit to
-  the model, where from `rig_config.json` it is inferred under that model.
 
 ### Behaviour
 

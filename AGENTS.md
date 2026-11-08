@@ -151,7 +151,7 @@ empty-handed". Name the thing and say what it does.
   - `feature_match/` — descriptor matching, polar/rectified sweep, flow matching, geometric filtering
   - `merge/` — merge aligned reconstructions (point correspondences + pose refinement)
   - `motion/` — camera-motion discontinuity analysis (image sequences + reconstructions)
-  - `rig/` — multi-sensor rig ingestion/rendering: `rig_config.json`, frame grouping, insv2rig/pano2rig, equirect render
+  - `rig/` — multi-sensor rig ingestion/rendering: the `rig_config.json` format `sfm camrig cp` converts, frame grouping, insv2rig/pano2rig, equirect render
   - `sift/` — SIFT feature extraction (COLMAP, OpenCV, and `sfmtool` Rust
     backends) and `.sift` path helpers; the file I/O itself is
     `sfmtool.fileio`'s `SiftFile`, `write_sift` and `SiftWriteQueue`
@@ -233,7 +233,7 @@ empty-handed". Name the thing and say what it does.
 - `test-data/images/` — four checked-in datasets:
   `seoul_bull_sculpture` (17 @ 270×480), `dino_dog_toy` (85 @ 2040×1536),
   `seattle_backyard` (26 @ 360×640), `kerry_park` (24 rig frames × 2 fisheyes
-  @ 480×480, with `rig_config.json`). Bootstrap with `scripts/init_dataset_*.sh`.
+  @ 480×480, with `kerry_park.camrig`). Bootstrap with `scripts/init_dataset_*.sh`.
   `seoul_bull_sculpture` also holds
   `seoul_bull_sculpture_ground_truth_v01.sfmr`, a reference reconstruction of
   its 17 images, in metres. A
@@ -493,6 +493,11 @@ backlog and keep them honest as findings get addressed:
   `camera_config.json` files; resolution is closest-ancestor-wins, capped at
   the workspace root. See `src/sfmtool/camera/config.py` and
   `specs/workspace/camera-config.md`. When such a file (or a covering
-  `.camrig`, or a `rig_config.json` sensor's `camera_params`) supplies the
-  camera in a `solve` / `match` / `to-colmap-db` invocation, `--camera-model`
-  refits that camera to the model it names rather than replacing it.
+  `.camrig`) supplies the camera in a `solve` / `match` / `to-colmap-db`
+  invocation, `--camera-model` refits that camera to the model it names rather
+  than replacing it.
+- A workspace's rigs are described only by `.camrig` files. `solve`, `match`,
+  `to-colmap-db`, `pick-images` and `estimate-intrinsics
+  --write-camrig-per-sequence` stop on a `rig_config.json` at the workspace
+  root, naming the `sfm camrig cp` command that converts it; that converter is
+  the file's only reader (`specs/workspace/rig-config.md`).
