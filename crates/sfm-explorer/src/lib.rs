@@ -388,10 +388,13 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
 
     let ran = event_loop.run_app(&mut app);
     let startup_error = app.startup_error.take();
-    // The viewer first, then the endpoint. Dropping the viewer drops every
-    // call it was still holding, which answers each with an error, and the
-    // endpoint then stops once it has written every reply in its hands: a
-    // `quit`'s among them, which was sent on the frame that ended the loop.
+    // The viewer first, then the endpoint. A call queued for a frame that will
+    // not come is refused as quitting, dropping the viewer drops every call it
+    // was still holding, which answers each with an error, and the endpoint
+    // then stops once it has written every reply in its hands: a `quit`'s
+    // among them, which was sent on the frame that ended the loop.
+    #[cfg(feature = "mcp")]
+    app.refuse_mcp_after_quit();
     drop(app);
     #[cfg(feature = "mcp")]
     if let Some(endpoint) = mcp_endpoint {

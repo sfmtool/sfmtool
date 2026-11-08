@@ -123,7 +123,16 @@ impl App {
             replies.push(reply);
         }
         let mut host = window.clone();
-        let applied = apply_as_agent(&mut self.state, &mut self.viewer_3d, &mut host, commands);
+        // The flag the event loop ends on is the one that says the viewer is
+        // quitting: a `quit` in this batch sets it, and every call after that
+        // is refused rather than applied.
+        let applied = apply_as_agent(
+            &mut self.state,
+            &mut self.viewer_3d,
+            &mut host,
+            commands,
+            &mut self.quit_requested,
+        );
         // A bulk edit or a cursor move renumbers, so what the panels cached
         // about the image set they had -- rendered patches, prepared track rows,
         // per-camera derived quantities -- describes a geometry the node no
@@ -146,18 +155,33 @@ impl App {
                 }
                 Outcome::Deferred(Deferred::Input(input)) => self.mcp_input.push(input, reply),
                 Outcome::Deferred(deferred) => self.mcp_deferred.push((deferred, reply)),
-                // The reply first, then the request to end, which the event
+                // `apply_as_agent` has set the request to end, which the event
                 // loop acts on after this frame as it does on File ▸ Quit's.
                 // `run_with_args` stops the endpoint only once it has written
                 // the replies it holds, so this one reaches the caller.
                 Outcome::Quit(answer) => {
                     let _ = reply.send(Ok(ToolOutput::Json(answer)));
-                    self.quit_requested = true;
                 }
             }
             if let Some(status) = self.state.mcp.as_mut() {
                 status.requests += 1;
             }
+        }
+    }
+
+    /// Refuse every call still queued once the event loop has ended, and every
+    /// one sent after, as a call after a `quit` is refused.
+    ///
+    /// Called by `run_with_args` before it drops the viewer. Closing the
+    /// channel first means a call the server sends from here on is refused by
+    /// the server itself, so none is left to be dropped unanswered.
+    pub(crate) fn refuse_mcp_after_quit(&mut self) {
+        let Some(rx) = self.mcp_rx.as_mut() else {
+            return;
+        };
+        rx.close();
+        while let Ok(Request { reply, .. }) = rx.try_recv() {
+            let _ = reply.send(Err(ToolError::new(super::write::QUITTING)));
         }
     }
 

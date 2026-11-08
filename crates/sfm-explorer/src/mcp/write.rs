@@ -258,6 +258,10 @@ pub(super) fn solo_reconstruction(state: &mut AppState, label: Option<&str>) -> 
     }))
 }
 
+/// The refusal of every call handled after a `quit` has succeeded, while the
+/// viewer ends: it is not applied, since nothing it changed would be saved.
+pub(super) const QUITTING: &str = "The viewer is quitting, so this call was not applied.";
+
 /// `quit`: agree to end the viewer, or refuse because something would be lost.
 ///
 /// The refusal asks what File ▸ Quit asks before it puts up the close prompt,

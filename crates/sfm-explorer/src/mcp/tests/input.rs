@@ -350,6 +350,7 @@ impl Harness {
             &mut self.viewer,
             &mut NoWindow,
             vec![command],
+            &mut false,
         )
         .outcomes
         .pop()

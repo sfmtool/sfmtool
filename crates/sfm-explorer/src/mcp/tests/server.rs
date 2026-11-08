@@ -275,6 +275,37 @@ fn a_call_in_flight_is_answered_before_the_endpoint_stops() {
     );
 }
 
+/// Once the viewer's event loop has ended it closes its end of the channel, and
+/// a call that comes in before the endpoint stops is refused as quitting, as a
+/// tool-level error rather than a transport failure.
+#[test]
+fn a_call_after_the_viewer_closed_its_queue_is_refused_as_quitting() {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<super::super::Request>();
+    drop(rx);
+    let address = super::super::serve(0, tx, Default::default(), || {})
+        .expect("an ephemeral port is bindable")
+        .address;
+    let server = RunningServer {
+        address,
+        _gui: std::thread::spawn(|| {}),
+    };
+    post(&server, &initialize_body(), &[]);
+
+    let (status, body) = post(
+        &server,
+        r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_scene","arguments":{}}}"#,
+        &[("MCP-Protocol-Version", PROTOCOL_VERSION)],
+    );
+    assert_eq!(status, 200, "{body}");
+    let result = rpc_result(&body);
+    assert_eq!(result["isError"], json!(true), "{result}");
+    assert_eq!(
+        result["content"][0]["text"],
+        json!(super::super::write::QUITTING),
+        "{result}"
+    );
+}
+
 /// A page the user has open must not be able to drive their viewer. The
 /// allowlist is the endpoint's own loopback origins, so any other `Origin` is
 /// rejected before the request reaches a tool.

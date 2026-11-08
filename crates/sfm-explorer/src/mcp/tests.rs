@@ -147,7 +147,7 @@ fn agent_with(
     host: &mut dyn WindowHost,
     command: Command,
 ) -> Outcome {
-    apply_as_agent(state, viewer, host, vec![command])
+    apply_as_agent(state, viewer, host, vec![command], &mut false)
         .outcomes
         .pop()
         .expect("one command, one outcome")

@@ -51,7 +51,7 @@ use rmcp::{RoleServer, ServerHandler};
 use tokio::sync::{mpsc, oneshot};
 
 use super::tools::{self, ToolKind};
-use super::{Reply, Request, ToolOutput};
+use super::{Reply, Request, ToolError, ToolOutput};
 
 /// How long a tool call waits for the GUI thread before giving up.
 ///
@@ -258,12 +258,16 @@ impl Viewer {
     /// Hand one command to the GUI thread and wait for its answer.
     async fn dispatch(&self, command: super::Command) -> Result<Reply, ErrorData> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(Request {
-                command,
-                reply: reply_tx,
-            })
-            .map_err(|_| ErrorData::internal_error("The viewer has shut down.", None))?;
+        // The GUI thread closes its end only once its event loop has ended
+        // (`App::refuse_mcp_after_quit`), so a call that finds it closed came
+        // in while the viewer quits, and is refused as one after a `quit` is.
+        let sent = self.tx.send(Request {
+            command,
+            reply: reply_tx,
+        });
+        if sent.is_err() {
+            return Ok(Err(ToolError::new(super::write::QUITTING)));
+        }
         // Wake the GUI thread. `App::user_event` requests a redraw, and
         // `run_ui_and_paint` drains the queue before it does anything else, so
         // an idle viewer answers on the frame this wakes.

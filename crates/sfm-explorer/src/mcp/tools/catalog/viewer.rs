@@ -663,7 +663,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           rather than ending the process. Refused when a reconstruction has \
                           changes that are not on disk, naming them, where File ▸ Quit would ask \
                           whether to save. The reply comes back before the viewer ends; a call \
-                          made after it finds no endpoint.",
+                          made after it is refused, not applied, and once the viewer has ended \
+                          finds no endpoint.",
             kind: Quit,
             schema: object(
                 &[(

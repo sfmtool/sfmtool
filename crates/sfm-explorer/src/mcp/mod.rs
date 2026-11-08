@@ -1213,8 +1213,9 @@ pub(crate) enum Outcome {
     /// A `quit` that was not refused, with its reply.
     ///
     /// Its own variant because the quit is the frame's to carry out, after the
-    /// reply has been handed to the server: `App::drain_mcp` sends the reply and
-    /// then asks the event loop to end, the way File ▸ Quit does, and
+    /// reply has been handed to the server: [`apply_as_agent`] asks the event
+    /// loop to end after this frame, the way File ▸ Quit does, and refuses every
+    /// call after it; `App::drain_mcp` sends the reply; and
     /// `run_with_args` lets the server finish writing it before the endpoint
     /// stops. A process exit here would end the call with no answer.
     Quit(Value),
@@ -2530,6 +2531,13 @@ fn loaded_list(state: &AppState) -> String {
 /// batch's application recorded none, which is what keeps one failure to one
 /// entry.
 ///
+/// **Once the viewer is quitting, nothing more is applied.** `quitting` is the
+/// caller's flag that the event loop ends after this frame: a `quit` that is not
+/// refused sets it, and from then on every command, the rest of this batch and
+/// any in a later one, reads included, is refused with `write::QUITTING` and
+/// recorded as any refusal is. A write answered as done would otherwise be lost
+/// with the viewer, never saved.
+///
 /// A fourth thing happens before an **editing** command is applied: a camera the
 /// human is holding on the node it names ([`crate::camera_lock`]) is ended, as a
 /// commit when it has been moved, and a camera model proposal open on that node
@@ -2543,6 +2551,7 @@ pub(crate) fn apply_as_agent(
     viewer: &mut Viewer3D,
     host: &mut dyn crate::window::WindowHost,
     commands: Vec<Command>,
+    quitting: &mut bool,
 ) -> Applied {
     debug_assert_eq!(
         state.action_log.actor(),
@@ -2557,6 +2566,13 @@ pub(crate) fn apply_as_agent(
             log::debug!("MCP: applying {command:?}");
             let tool = command.tool_name();
             let kind = command.kind();
+            if *quitting {
+                let error = ToolError::new(write::QUITTING);
+                state
+                    .action_log
+                    .fail(kind, format!("{tool} failed: {error}"));
+                return Outcome::Done(Err(error));
+            }
             let run = command.run();
             let query = query_text(state, viewer, &command);
             let renumbers = command.renumbers().map(str::to_string);
@@ -2594,6 +2610,7 @@ pub(crate) fn apply_as_agent(
             }
             let before = state.action_log.revision();
             let outcome = apply_with_window(state, viewer, host, command);
+            *quitting |= matches!(outcome, Outcome::Quit(_));
             if matches!(outcome, Outcome::Done(Ok(_))) {
                 stale.extend(
                     renumbers

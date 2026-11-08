@@ -180,6 +180,7 @@ fn show_panel_then_a_screenshot_of_it_is_accepted_in_one_batch() {
             },
             screenshot(Some(Tab::IntrinsicsDetail), true, None),
         ],
+        &mut false,
     )
     .outcomes;
     assert!(

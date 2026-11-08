@@ -3781,16 +3781,26 @@ on purpose, so that no agent sets it without having read what it does. It
 defaults to `false`.
 
 **The reply arrives before the viewer ends.** `apply_with_window` answers a
-`quit` it does not refuse with `Outcome::Quit` rather than ending anything, and
-`App::drain_mcp` sends the reply and then sets the flag File ▸ Quit sets, which
-ends the event loop after that frame. `run_with_args` then drops the viewer,
-which answers any call it was still holding with "The viewer dropped the request
-without answering.", and stops the endpoint (`server::Endpoint::stop`): the
-listener closes, so a later call is refused a connection, and the server writes
-the replies it holds, waiting at most two seconds, before the call returns.
-Calls the same frame applied after the `quit` are applied as usual. What runs in
-the background is abandoned, as on any quit
-([background-tasks.md](background-tasks.md)).
+`quit` it does not refuse with `Outcome::Quit` rather than ending anything;
+`apply_as_agent` then sets the flag File ▸ Quit sets, which ends the event loop
+after that frame, and `App::drain_mcp` sends the reply. `run_with_args` then
+drops the viewer, which answers any call it was still holding with "The viewer
+dropped the request without answering.", and stops the endpoint
+(`server::Endpoint::stop`): the listener closes, so a later call is refused a
+connection, and the server writes the replies it holds, waiting at most two
+seconds, before the call returns. What runs in the background is abandoned, as
+on any quit ([background-tasks.md](background-tasks.md)).
+
+**Every call handled after a `quit` that succeeded is refused**, reads included,
+with "The viewer is quitting, so this call was not applied." (`write::QUITTING`),
+and is not applied: a write answered as done would be lost with the viewer,
+never saved. That covers the rest of the quit's own batch and a batch in any
+frame after it, each refusal a failed row under the tool's own kind, `{tool}
+failed: …`, as any refusal is. A call that reaches the queue after the last
+frame gets the same answer, with no row: `run_with_args` closes the queue and
+answers what is in it (`App::refuse_mcp_after_quit`) before it drops the viewer,
+and the server answers a call it can no longer queue the same way. A `quit` that
+is refused changes nothing, so the calls after it are applied as usual.
 
 ### The window block
 
@@ -6575,7 +6585,10 @@ where a test hands no host over.
   and nothing discarded; with a dirty node it is refused naming that node, the
   node stays loaded and dirty, and the refusal is a failed `Session` row; forced,
   it quits and names the node in `discarded`; a non-boolean force is refused by
-  the parse.
+  the parse. A `delete_point` after a `quit` in one batch is refused as
+  quitting, deletes nothing and is a failed row; a `get_scene` after it is
+  refused in that batch and in a later one; after a refused `quit` a
+  `delete_point` in the same batch is applied.
 - **The panel writes record the menu's own entries** — `Closed …`, `Opened …`,
   `Raised …`, and `Reset layout` for `"default"` — each under `Kind::Layout` as
   actor `MCP`, and a document records `Set layout`. A call carrying both portions
@@ -6964,9 +6977,10 @@ it answers with, `tools/list`
 matching the catalog, a `tools/call` reaching the stand-in GUI and returning
 `structuredContent`, a viewer refusal arriving as `isError: true`, a malformed
 argument arriving as a JSON-RPC error instead, a foreign `Origin` getting
-`403` while the endpoint's own origin and a missing one both pass, and a call
+`403` while the endpoint's own origin and a missing one both pass, a call
 in flight when the endpoint is stopped still getting its reply after the port
-has closed to new calls.
+has closed to new calls, and a call made after the GUI's end of the queue has
+closed being refused as quitting with `isError: true`.
 
 `crates/sfm-explorer/src/cli.rs` carries its own tests for the flag, including
 the case that matters most: `--mcp scene.sfmr` must not eat the path as a port,
