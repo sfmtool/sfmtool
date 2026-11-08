@@ -278,7 +278,14 @@ reaches `±search` grid px around wherever it starts, the search made again at
 the found keypoint included, and `max_shift_px` then judges where the view
 ended. `keypoint_grid_offset` gives how far a keypoint sits from the projection
 in grid px on the params' own grid: the length of the patch's slide onto it,
-read on the patch's axes turned to face the camera.
+read on the patch's axes turned to face the camera. The turn is the least
+rotation taking the patch's normal onto the direction to the camera, built
+from `atan2` of the sine and cosine of the angle between them so that it stays
+finite and exact for a normal a few nanoradians from that direction or from
+its opposite. A patch facing exactly away from the camera, where every half
+turn about an axis in its plane is a least rotation, is turned by the half turn
+about its own `v̂`, the one a bench tilt by a half turn makes, so its axes are
+read as `(−û, v̂)`.
 
 ## Mapping a shift to a keypoint
 

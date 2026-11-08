@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Rotation primitives: skew-symmetric matrices, axis-angle conversions, the
-//! rotation angle, and the two projections of a near-rotation onto SO(3).
+//! rotation angle, the least rotation between two directions, and the two
+//! projections of a near-rotation onto SO(3).
 
 use nalgebra::{Matrix3, Vector3};
 
@@ -64,6 +65,48 @@ pub(crate) fn axis_angle_to_rotation_matrix(axis: &Vector3<f64>, angle: f64) -> 
 /// Rotation angle of `r` in radians.
 pub(crate) fn rotation_angle(r: &Matrix3<f64>) -> f64 {
     (((r.trace() - 1.0) / 2.0).clamp(-1.0, 1.0)).acos()
+}
+
+/// The least rotation taking the unit vector `from` onto the unit vector `to`:
+/// the turn by the angle between them about their common perpendicular
+/// `from × to`.
+///
+/// The angle is `atan2(|from × to|, from · to)`, not `acos(from · to)` as
+/// `nalgebra`'s `rotation_between` reads it. For two directions a few
+/// nanoradians apart that dot rounds to `1.0`, which loses the turn, or past
+/// it, which makes the rotation `NaN`, and the same happens at `-1.0` for two
+/// directions a few nanoradians short of opposite. The axis has the component
+/// along `from` that rounding leaves in `from × to` removed, so near the half
+/// turn, where `from × to` is short, the rotation still takes `from` onto `to`.
+///
+/// Where `from × to`, less that component, is no longer than `f64::EPSILON`,
+/// `from` and `to` are parallel or opposite to the last bit. Parallel is no
+/// turn. Opposite has no single least rotation, since every half turn about
+/// an axis perpendicular to `from` is one, so the half turn is taken about
+/// `half_turn_axis` with its component along `from` removed; where that leaves
+/// less than a millionth of it, about the coordinate axis furthest from `from`,
+/// with the same component removed. Near the half turn the axis, and so where
+/// the rotation takes any vector other than `from`, swings with the smallest
+/// change in `to`, as the least rotation itself does; the result is still a
+/// rotation and still takes `from` onto `to`.
+pub(crate) fn least_rotation_between(
+    from: &Vector3<f64>,
+    to: &Vector3<f64>,
+    half_turn_axis: &Vector3<f64>,
+) -> Matrix3<f64> {
+    let across = |v: Vector3<f64>| v - from * from.dot(&v);
+    let cross = from.cross(to);
+    let cos = from.dot(to);
+    if let Some(axis) = across(cross).try_normalize(f64::EPSILON) {
+        return axis_angle_to_rotation_matrix(&axis, cross.norm().atan2(cos));
+    }
+    if cos > 0.0 {
+        return Matrix3::identity();
+    }
+    let axis = across(*half_turn_axis)
+        .try_normalize(1e-6 * half_turn_axis.norm())
+        .unwrap_or_else(|| across(Vector3::ith(from.iamin(), 1.0)).normalize());
+    axis_angle_to_rotation_matrix(&axis, std::f64::consts::PI)
 }
 
 /// Nearest rotation to `m` by polar decomposition (`U Vᵀ` from the SVD).

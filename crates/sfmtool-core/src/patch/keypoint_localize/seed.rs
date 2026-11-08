@@ -4,9 +4,10 @@
 //! Where a keypoint puts the patch: the frame a view's search starts from, and
 //! the keypoint's distance from the point's projection on the patch grid.
 
-use nalgebra::{Rotation3, Vector3};
+use nalgebra::Vector3;
 
 use super::KeypointLocalizeParams;
+use crate::geometry::rotation::least_rotation_between;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::ProjectedImage;
 
@@ -89,9 +90,19 @@ pub(in crate::patch) fn seed_offset(
 
 /// The patch's `u` and `v` axes turned by the least rotation that takes its
 /// normal onto the unit direction from its centre to `view`'s camera; the
-/// axes themselves for a direction patch, or where the patch faces exactly
-/// away from the camera.
-fn facing_axes(patch: &OrientedPatch, view: &ProjectedImage<'_>) -> (Vector3<f64>, Vector3<f64>) {
+/// axes themselves for a direction patch, or for a camera at the centre.
+///
+/// Where the patch faces exactly away from the camera every half turn about an
+/// axis in its plane is a least rotation, and the one taken is about its `v`
+/// axis, giving `(−u, v)`: the turned normal faces the camera there too, as it
+/// does for every other patch, and the half turn is the one `tilt_patch` makes.
+/// The rotation is [`least_rotation_between`]'s, which stays finite and exact
+/// for a normal a few nanoradians from the direction to the camera or from
+/// its opposite.
+pub(super) fn facing_axes(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+) -> (Vector3<f64>, Vector3<f64>) {
     let own = (patch.u_axis, patch.v_axis);
     if patch.w == 0.0 {
         return own;
@@ -100,10 +111,8 @@ fn facing_axes(patch: &OrientedPatch, view: &ProjectedImage<'_>) -> (Vector3<f64
     let Some(to_camera) = (eye - patch.center).try_normalize(1e-12) else {
         return own;
     };
-    match Rotation3::rotation_between(&patch.normal(), &to_camera) {
-        Some(turn) => (turn * patch.u_axis, turn * patch.v_axis),
-        None => own,
-    }
+    let turn = least_rotation_between(&patch.normal(), &to_camera, &patch.v_axis);
+    (turn * patch.u_axis, turn * patch.v_axis)
 }
 
 /// The patch frame one view's search is stated on: `patch` slid onto the

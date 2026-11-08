@@ -198,3 +198,31 @@ fn test_polar_rotation_rejects_non_finite() {
     m[(1, 1)] = f64::NAN;
     assert!(polar_rotation(&m).is_none());
 }
+
+/// Opposite directions take the half turn about the axis offered, less its
+/// part along `from`, and about a coordinate axis when the axis offered is
+/// `from` itself or nothing; each is a rotation that takes `from` onto `to`.
+#[test]
+fn test_least_rotation_between_opposite_directions() {
+    let from = Vector3::new(0.2, -0.3, 0.9).normalize();
+    let to = -from;
+    let offered = Vector3::new(1.0, 0.0, 0.0);
+    let r = least_rotation_between(&from, &to, &offered);
+    assert_rotation_matrix(&r);
+    assert!((r * from - to).norm() < 1e-15, "{:?}", r * from);
+    let axis = (offered - from * from.dot(&offered)).normalize();
+    assert!(
+        (r * axis - axis).norm() < 1e-15,
+        "the half turn is about {axis:?}"
+    );
+
+    for unusable in [from * 2.0, Vector3::zeros()] {
+        let r = least_rotation_between(&from, &to, &unusable);
+        assert_rotation_matrix(&r);
+        assert!(
+            (r * from - to).norm() < 1e-15,
+            "{unusable:?} took {from:?} to {:?}",
+            r * from
+        );
+    }
+}
