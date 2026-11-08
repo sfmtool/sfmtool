@@ -55,8 +55,10 @@ listing.
   relative to the workspace root: a forward-slash path with no leading `/` and
   no `..`, literal text, the glob wildcards `*` (within one path segment) and
   `**` (whole segments), and at most one frame field, `%d` or `%0Nd`, with `%%`
-  for a literal `%`. One entry with a wildcard can cover every sensor of a rig,
-  as `rig/*/frame_%05d.jpg` does above.
+  for a literal `%`. A frame field matches a number exactly as printf writes
+  it with the field: `%04d` matches `0007` and `12345`, not `007` or `00007`,
+  and `%d` matches `7` and `0`, not `07`. One entry with a wildcard can cover
+  every sensor of a rig, as `rig/*/frame_%05d.jpg` does above.
 - **`range`** (string, optional): a range expression (comma-separated integers,
   `a-b` spans and `a-b:s` stepped spans), applied to the number the pattern's
   frame field captures. An entry whose pattern has no frame field takes no
@@ -69,11 +71,20 @@ The file holds nothing else: no other top-level key and no other entry key.
 **Membership.** A list's members are the union of its entries' matches. An
 entry matches a file when the file's workspace-relative, forward-slash path
 matches the pattern and the frame number the frame field captures is in the
-entry's range. A frame field is greedy, as in `printf`: it takes the longest
-run of digits after which the rest of the pattern still matches. A file that
-two entries of one list match is an error naming the file and both entries,
-since it would leave the list's order ambiguous. Entries match files, not
-directories.
+entry's range. A frame field is greedy: of the numbers printf could have
+written there, it takes the longest after which the rest of the pattern still
+matches. A file that two entries of one list match is an error naming the
+file and both entries, since it would leave the list's order ambiguous.
+Entries match files, not directories.
+
+**Padding.** A file that an entry would take if its frame field matched a
+number however padded, but does not take because the number is padded
+otherwise than the field writes it, is an error naming the entry, its pattern
+and the files: `frames/x_%d.jpg` with `frames/x_0999.jpg` beside
+`frames/x_1000.jpg`, or `frames/x_%04d.jpg` with `frames/x_007.jpg`. Only a
+file whose number is in the entry's range counts. Such a file is most likely
+one the list's author meant to include, so the list is refused rather than
+resolved without it; the fix is to change the pattern or rename the files.
 
 **Case.** A pattern matches case-sensitively, against the paths as the
 filesystem lists them or as a reconstruction records them, the same on every
@@ -536,8 +547,10 @@ lists file: `NotAWorkspace`, `Io`, `InvalidJson` (with `line` and `column`),
 every problem of the lists given to `write_lists`), `ListExists` (with every
 list `write_lists` was given that the file already defines), `UnknownList`
 (with the names the file defines), `NarrowedEntryWithoutFrameField`,
-`DuplicateMatches` (with every file two entries match), `FrameNumberTooLarge`
-(a frame field that captured a number beyond `i64`), `NoMatch`,
+`DuplicateMatches` (with every file two entries match), `FramePadding` (with
+every entry that leaves out files only by the padding of their number, and
+those files), `FrameNumberTooLarge` (a frame field that captured a number
+beyond `i64`), `NoMatch`,
 `NarrowedToNothing` (with the narrowing range), `SlicedToNothing` (with the
 narrowing range, the slice and the number of items it was given) and
 `Cancelled`.
@@ -638,8 +651,12 @@ NamedImageLists.write_lists(
   comparison with every name the folder holds. A `**`
   does not descend through a symbolic link to a directory, so a link back up
   the tree cannot make the walk endless; a named or `*` segment does follow
-  one. Names that are not UTF-8 cannot match a pattern and are skipped. Every
-  candidate is confirmed against the whole pattern before it is a member.
+  one. Names that are not UTF-8 cannot match a pattern and are skipped. A
+  segment with a frame field is compared with the field read as any run of
+  digits (`sfmtool_camrig_format::pattern_matches_any_padding`), so the
+  candidates include the files that are a [padding](#members-and-their-order)
+  error. Every candidate is confirmed against the whole pattern before it is
+  a member.
 - **Literal entries in `resolve_in_names`.** An entry whose whole pattern has
   no wildcard and no frame field (`sfmtool_camrig_format::pattern_literal`
   gives its text) is looked up in a set of the reconstruction's names built
@@ -647,4 +664,5 @@ NamedImageLists.write_lists(
   compared with every name.
 - **Duplicates are found before narrowing.** Two entries that match one file
   are an error whether or not a narrowing range would keep that file, since
-  the list itself is ambiguous.
+  the list itself is ambiguous. A padding error is likewise found before
+  narrowing, and is reported before duplicates.

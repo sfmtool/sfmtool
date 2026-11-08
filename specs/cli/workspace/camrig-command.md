@@ -60,7 +60,8 @@ later applies to it, so what `create` scans is exactly what `solve` covers.
 ### Behaviour
 
 The pattern is matched relative to the rig root: a frame field (`%d`, `%0Nd`)
-matches digit-named frames only, and `*` / `**` respect path-segment
+matches a number only as printf writes it with the field (`%04d` matches
+`0007` and `12345`, not `007`), and `*` / `**` respect path-segment
 boundaries. The set of matched files is the sensor's images; every match must
 be an image file, or the command fails and asks the caller to narrow the
 pattern.

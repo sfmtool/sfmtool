@@ -29,7 +29,7 @@ same rule, through `find_covering_camrigs`, so the list it writes is one
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .pattern import match_pattern, match_pattern_with_frames
+from .pattern import match_pattern_and_padding_misses, match_pattern_with_frames
 
 # Allowed relative difference between an image's aspect ratio and the
 # `.camrig` camera's aspect ratio before the rig is rejected.
@@ -89,12 +89,20 @@ class CamrigSolveResult:
         return bool(self.rigs)
 
 
-def _covered_paths(camrig_dir: Path, patterns: list[str]) -> set[Path]:
-    """Resolved absolute paths the `.camrig`'s patterns match from its directory."""
+def _covered_paths(
+    camrig_dir: Path, patterns: list[str]
+) -> tuple[set[Path], dict[Path, str]]:
+    """Resolved absolute paths the `.camrig`'s patterns match from its
+    directory, and the paths a pattern misses only because their number is
+    padded otherwise than its frame field writes it, each with that pattern."""
     covered: set[Path] = set()
+    missed: dict[Path, str] = {}
     for pattern in patterns:
-        covered.update(match_pattern(camrig_dir, pattern))
-    return covered
+        matches, misses = match_pattern_and_padding_misses(camrig_dir, pattern)
+        covered.update(matches)
+        for path in misses:
+            missed.setdefault(path, pattern)
+    return covered, missed
 
 
 def _check_image_resolution(
@@ -158,8 +166,8 @@ def _build_rig_assignments(
     (each file must belong to exactly one sensor) or if two files of one
     sensor capture the same frame index (each sensor contributes at most one
     image per rig frame — otherwise a COLMAP frame would carry two images for
-    one sensor). The latter can happen with variable-width frame fields, e.g.
-    `frame_%d.jpg` matching both `frame_1.jpg` and `frame_001.jpg`.
+    one sensor). The latter can happen with a wildcard beside the frame
+    field, e.g. `*_%d.jpg` matching both `a_1.jpg` and `b_1.jpg`.
     """
     camrig_dir = camrig_file.parent
     patterns = data["sensor_image_patterns"]
@@ -279,8 +287,10 @@ def find_covering_camrigs(
     those images' cameras from `camera_config.json` or EXIF inference.
     `images` names the images in a message ("images being solved").
 
-    Raises `CamrigSolveError` when a `.camrig` cannot be read or an image is
-    matched by more than one `.camrig`.
+    Raises `CamrigSolveError` when a `.camrig` cannot be read, an image is
+    matched by more than one `.camrig`, or an image no `.camrig` matches is
+    matched by a `.camrig`'s pattern apart from the zero-padding of its
+    number, since its frame field matches a number only as printf writes it.
     """
     if workspace_dir is None:
         return []
@@ -296,6 +306,9 @@ def find_covering_camrigs(
     # Each .camrig that covers at least one of the images, with its data and
     # the images it covers.
     hits: list[tuple[Path, dict, set[Path]]] = []
+    # The images a .camrig's pattern misses only by the padding of their
+    # number, each with the first such .camrig and pattern.
+    padding_missed: dict[Path, tuple[Path, str]] = {}
     for camrig_file in camrig_files:
         try:
             data = read_camrig(str(camrig_file))
@@ -304,10 +317,25 @@ def find_covering_camrigs(
         patterns = data["sensor_image_patterns"]
         if not patterns:
             continue  # geometry-only rig, not backed by workspace images
-        covered = _covered_paths(camrig_file.parent, patterns) & given
+        covered, missed = _covered_paths(camrig_file.parent, patterns)
+        covered &= given
+        for path in missed.keys() & given:
+            padding_missed.setdefault(path, (camrig_file, missed[path]))
         if covered:
             hits.append((camrig_file, data, covered))
 
+    covered_any = set().union(*(covered for _f, _d, covered in hits))
+    lost = sorted(padding_missed.keys() - covered_any)
+    if lost:
+        camrig_file, pattern = padding_missed[lost[0]]
+        raise CamrigSolveError(
+            f"{len(lost)} of the {len(given)} {images} are matched by no "
+            f".camrig only because of the zero-padding of their number; e.g. "
+            f"{lost[0]} is matched by the pattern {pattern!r} of {camrig_file} "
+            "apart from its padding. A frame field matches a number only as "
+            "printf writes it (%04d matches 0007 and 12345, not 007), so "
+            "change the pattern or rename the files."
+        )
     if not hits:
         return []
 

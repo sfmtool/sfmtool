@@ -730,6 +730,76 @@ fn a_frame_number_too_large_is_an_error() {
 }
 
 #[test]
+fn a_file_an_entry_misses_only_by_the_padding_of_its_number_is_an_error() {
+    // A pattern written when a frame field matched any run of digits: `%d`
+    // over an ffmpeg sequence that crosses from 0999 to 1000.
+    let dir = workspace();
+    for path in [
+        "f/x_0998.jpg",
+        "f/x_0999.jpg",
+        "f/x_1000.jpg",
+        "f/x_12345.jpg",
+        "f/y_007.jpg",
+    ] {
+        touch(dir.path(), path);
+    }
+    let lists = write_lists(
+        dir.path(),
+        r#"{"loose": [{"pattern": "f/x_%d.jpg"}],
+            "padded": [{"pattern": "f/x_%04d.jpg"}],
+            "ranged": [{"pattern": "f/x_%d.jpg", "range": "1000-2000"}],
+            "y": [{"pattern": "f/y_%04d.jpg"}]}"#,
+    );
+    let e = resolve(&lists, "loose", None).unwrap_err();
+    let NamedImageListsError::FramePadding { entries, .. } = &e else {
+        panic!("expected FramePadding, got: {e}");
+    };
+    assert_eq!(
+        entries,
+        &[(
+            0,
+            "f/x_%d.jpg".to_string(),
+            vec!["f/x_0998.jpg".to_string(), "f/x_0999.jpg".to_string()]
+        )]
+    );
+    let message = e.to_string();
+    assert!(
+        message.contains("entry 1 leaves out 'f/x_0998.jpg' and 1 other file"),
+        "{message}"
+    );
+    // The same list against a reconstruction's names.
+    let names = ["f/x_0999.jpg", "f/x_1000.jpg"];
+    let e = lists.resolve_in_names("loose", &names, None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries[0].2 == ["f/x_0999.jpg"]),
+        "{e}"
+    );
+    // `%04d` writes every number of the sequence, 12345 included.
+    assert_eq!(
+        paths(&resolve(&lists, "padded", None).unwrap()),
+        [
+            "f/x_0998.jpg",
+            "f/x_0999.jpg",
+            "f/x_1000.jpg",
+            "f/x_12345.jpg"
+        ]
+    );
+    // A file outside the entry's range was never the entry's to take.
+    assert_eq!(
+        paths(&resolve(&lists, "ranged", None).unwrap()),
+        ["f/x_1000.jpg"]
+    );
+    // A list that only misses files names them rather than matching nothing.
+    let e = resolve(&lists, "y", None).unwrap_err();
+    assert!(
+        matches!(&e, NamedImageListsError::FramePadding { entries, .. }
+            if entries[0].2 == ["f/y_007.jpg"]),
+        "{e}"
+    );
+}
+
+#[test]
 fn resolving_reports_progress_and_stops_when_cancelled() {
     let dir = workspace();
     for i in 1..=5 {

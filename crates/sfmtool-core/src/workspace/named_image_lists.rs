@@ -26,7 +26,8 @@ use std::str::FromStr;
 
 use openjd_expr::RangeExpr;
 use sfmtool_camrig_format::{
-    count_frame_fields, pattern_frame_index, pattern_literal, pattern_matches,
+    count_frame_fields, pattern_frame_index, pattern_frame_index_any_padding, pattern_literal,
+    pattern_matches, pattern_matches_any_padding,
 };
 use sfmtool_progress::Progress;
 
@@ -122,6 +123,23 @@ impl NamedImageListEntry {
             .ok_or(())?;
         let in_range = self.range().is_none_or(|range| range.contains(frame));
         Ok(in_range.then_some(Some(frame)))
+    }
+
+    /// Whether this entry would take the file at `relative_path`, which it
+    /// does not take, if its frame field matched a number however padded:
+    /// the path matches the pattern apart from the padding of its number, and
+    /// that number is in the entry's range. A number too large for an `i64`
+    /// counts as in the range.
+    fn misses_by_padding(&self, relative_path: &str) -> bool {
+        self.has_frame_field
+            && pattern_matches_any_padding(&self.pattern, relative_path, false)
+            && !pattern_matches(&self.pattern, relative_path, false)
+            && match pattern_frame_index_any_padding(&self.pattern, relative_path, false)
+                .and_then(|frame| i64::try_from(frame).ok())
+            {
+                Some(frame) => self.range().is_none_or(|range| range.contains(frame)),
+                None => true,
+            }
     }
 }
 
@@ -239,6 +257,14 @@ pub enum NamedImageListsError {
         path: PathBuf,
         list: String,
         duplicates: Vec<DuplicateMatch>,
+    },
+    /// Entries whose pattern leaves out files only because their number is
+    /// padded otherwise than the frame field writes it:
+    /// `(entry index from 0, pattern, the files)`, the files sorted.
+    FramePadding {
+        path: PathBuf,
+        list: String,
+        entries: Vec<(usize, String, Vec<String>)>,
     },
     /// An entry matched a file whose frame number does not fit an `i64`.
     FrameNumberTooLarge {
@@ -397,6 +423,33 @@ impl fmt::Display for NamedImageListsError {
                         d.file,
                         d.first_entry + 1,
                         d.second_entry + 1
+                    )?;
+                }
+                Ok(())
+            }
+            Self::FramePadding {
+                path,
+                list,
+                entries,
+            } => {
+                for (i, (entry, pattern, files)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        writeln!(f)?;
+                    }
+                    let more = match files.len() {
+                        1 => String::new(),
+                        2 => " and 1 other file".to_string(),
+                        n => format!(" and {} other files", n - 1),
+                    };
+                    write!(
+                        f,
+                        "{}: list '{list}' entry {} leaves out '{}'{more}, which its pattern \
+                         '{pattern}' matches apart from the zero-padding of the number. A frame \
+                         field matches a number only as printf writes it (%04d matches 0007 and \
+                         12345, not 007), so change the pattern or rename the files",
+                        path.display(),
+                        entry + 1,
+                        files[0],
                     )?;
                 }
                 Ok(())
@@ -562,7 +615,8 @@ impl NamedImageLists {
     /// `narrow`, when given, keeps only the members whose frame number it
     /// also holds; it is an error when an entry of the list has no frame
     /// field. A list that matches no file is an error, as is a file two of its
-    /// entries match.
+    /// entries match and a file an entry leaves out only because its number
+    /// is padded otherwise than the entry's frame field writes it.
     ///
     /// The walk lists only the directories the patterns' segments lead into,
     /// and every directory below a `**`. It reports the directory entries it
@@ -695,12 +749,18 @@ impl NamedImageLists {
         let mut narrowed_away = false;
         let mut first_entry: BTreeMap<String, usize> = BTreeMap::new();
         let mut duplicates = Vec::new();
+        let mut padding = Vec::new();
         for (index, entry) in list.entries.iter().enumerate() {
             let mut taken: Vec<(Option<i64>, &str)> = Vec::new();
+            let mut missed: Vec<String> = Vec::new();
             for candidate in candidates(index) {
                 match entry.take(candidate) {
                     Ok(Some(frame)) => taken.push((frame, candidate)),
-                    Ok(None) => {}
+                    Ok(None) => {
+                        if entry.misses_by_padding(candidate) {
+                            missed.push(candidate.to_string());
+                        }
+                    }
                     Err(()) => {
                         return Err(NamedImageListsError::FrameNumberTooLarge {
                             path: self.path.clone(),
@@ -710,6 +770,10 @@ impl NamedImageLists {
                         })
                     }
                 }
+            }
+            if !missed.is_empty() {
+                missed.sort();
+                padding.push((index, entry.pattern.clone(), missed));
             }
             taken.sort();
             for (frame, file) in taken {
@@ -734,6 +798,13 @@ impl NamedImageLists {
                     frame,
                 });
             }
+        }
+        if !padding.is_empty() {
+            return Err(NamedImageListsError::FramePadding {
+                path: self.path.clone(),
+                list: list.name.clone(),
+                entries: padding,
+            });
         }
         if !duplicates.is_empty() {
             return Err(NamedImageListsError::DuplicateMatches {

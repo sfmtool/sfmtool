@@ -9,8 +9,10 @@
 //! place it descends into every directory below. Each segment is compared
 //! with the camrig matcher against the names the directory lists, never by
 //! asking the filesystem whether a name exists, so a literal segment matches
-//! case-sensitively on a case-insensitive filesystem too. The caller confirms
-//! every candidate against the whole pattern.
+//! case-sensitively on a case-insensitive filesystem too. A frame field is
+//! compared as any run of digits, so the candidates include the files the
+//! pattern misses only by the padding of their number, which the caller
+//! reports. The caller confirms every candidate against the whole pattern.
 //!
 //! A directory's listing is kept for the rest of the walk, with a map from
 //! each name to its entry, so a list of many entries in one folder
@@ -22,7 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use sfmtool_camrig_format::{pattern_literal, pattern_matches};
+use sfmtool_camrig_format::{pattern_literal, pattern_matches_any_padding};
 use sfmtool_progress::{Cancelled, Progress};
 
 /// What a directory entry is, with a symbolic link classified by its target.
@@ -200,7 +202,7 @@ impl<'a> Walker<'a> {
                         None => listing
                             .items
                             .iter()
-                            .filter(|item| pattern_matches(segment, &item.name, false))
+                            .filter(|item| pattern_matches_any_padding(segment, &item.name, false))
                             .for_each(take),
                     }
                 }

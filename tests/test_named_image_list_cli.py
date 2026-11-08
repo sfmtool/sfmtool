@@ -206,6 +206,25 @@ def test_a_narrowing_range_that_leaves_nothing_says_so(list_workspace):
     )
 
 
+def test_a_list_that_misses_files_by_the_padding_of_their_number_says_so(
+    list_workspace,
+):
+    # `%d` matches 1 to 6 written unpadded, not the files' `01` to `06`; the
+    # list names them rather than resolving to fewer images.
+    _write_lists(
+        list_workspace,
+        {"loose": [{"pattern": "images/seoul_bull_sculpture_%d.jpg"}]},
+    )
+    result = _invoke(["sift", "--extract", "-r", "loose"])
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert (
+        "list 'loose' entry 1 leaves out 'images/seoul_bull_sculpture_01.jpg' "
+        "and 5 other files" in output
+    )
+    assert "apart from the zero-padding of the number" in output
+
+
 def test_narrowing_an_entry_without_a_frame_field_is_an_error(list_workspace):
     result = _invoke(["sift", "--extract", "-r", "hero", "-r", "2"])
     assert result.exit_code != 0

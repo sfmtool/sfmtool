@@ -341,6 +341,42 @@ def test_r_is_applied_before_the_images_are_grouped(stub_run):
     assert _camrig(stub_run.workspace / "a.camrig")[0] == "a_%02d.jpg"
 
 
+def test_under_r_the_frame_field_comes_from_the_whole_sequence(stub_run):
+    """The selected numbers alone are written with 5 digits, but the
+    sequence's other frame is zero-padded to 4, so the stored pattern is
+    `%04d`, which matches every frame of the sequence."""
+    from sfmtool.camrig.pattern import match_pattern
+
+    names = ["x_0005.jpg", "x_10000.jpg", "x_10001.jpg"]
+    out = stub_run(names, "--json", kept=["x_10000.jpg", "x_10001.jpg"])
+    assert out.exit_code == 0, out.output
+    (entry,) = json.loads(out.stdout)["sequences"]
+    assert entry["pattern"] == "x_%04d.jpg"
+    assert entry["camrig_pattern"] == "x_%04d.jpg"
+    assert entry["image_count"] == 3
+    ws = stub_run.workspace
+    pattern = _camrig(ws / "x.camrig")[0]
+    assert pattern == "x_%04d.jpg"
+    assert [p.name for p in match_pattern(ws, pattern)] == names
+
+
+def test_a_sequence_zero_padded_to_two_widths_gets_no_file(stub_run):
+    """Under `-r` the selected images are padded alike, but a frame `-r` left
+    out is padded otherwise: no frame field matches them all, so the
+    sequence gets no `.camrig` and the reason names the frame."""
+    names = ["a_01.jpg", "a_02.jpg", "a_003.jpg", "b_01.jpg", "b_02.jpg"]
+    kept = ["a_01.jpg", "a_02.jpg", "b_01.jpg", "b_02.jpg"]
+    out = stub_run(names, "--json", kept=kept)
+    assert out.exit_code == 0, out.output
+    a, b = json.loads(out.stdout)["sequences"]
+    assert a["pattern"] == "a_%02d.jpg"
+    assert a["written"] is False
+    assert "zero-padded in ways no one frame field writes" in a["reason"]
+    assert "1 of them do not match a_%02d.jpg: a_003.jpg" in a["reason"]
+    assert b["written"] is True
+    assert not (stub_run.workspace / "a.camrig").exists()
+
+
 def test_existing_files_are_kept_unless_forced(stub_run):
     names = ["a_01.jpg", "a_02.jpg", "b_01.jpg", "b_02.jpg"]
     ws = stub_run.workspace

@@ -20,7 +20,7 @@ specs/cli/image-feature/pick-images-command.md.
 
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,15 +71,44 @@ def _escape(text: str) -> str:
     return text.replace("%", "%%")
 
 
-def frame_field(digit_counts: set[int]) -> str:
-    """The frame field for a sequence whose numbers are written with these
-    counts of digits: `%0Nd` when every number has the same `N > 1` digits,
-    `%d` otherwise."""
-    if len(digit_counts) == 1:
-        (count,) = digit_counts
-        if count > 1:
-            return f"%0{count}d"
-    return "%d"
+def _zero_padded(digits: str) -> bool:
+    """Whether a number written as `digits` has a leading zero."""
+    return len(digits) > 1 and digits[0] == "0"
+
+
+def _writes(width: int, digits: str) -> bool:
+    """Whether printf's `%0Nd` with `N = width` (`%d` for a width of 1)
+    writes a number as `digits`: padded with zeros to exactly the width, or
+    wider than it and unpadded."""
+    return len(digits) == width or (len(digits) > width and digits[0] != "0")
+
+
+def frame_field(numbers: Iterable[str]) -> tuple[str, list[str]]:
+    """The frame field for a sequence whose file numbers are written as
+    `numbers`, the digits as the names hold them, and the numbers of
+    `numbers` it does not write, sorted.
+
+    A frame field matches a number only as printf writes it with the field,
+    so the field is chosen to write every number: `%0Nd` when a number is
+    zero-padded to `N` digits, or, with no zero-padded number, when every
+    number has the same `N > 1` digits, and `%d` otherwise. `%04d` so writes
+    `0001` to `9999` and `10000` on. Numbers zero-padded to different widths,
+    or a number shorter than the padded width (`01` beside `5`), have no
+    field that writes them all; the field is then the `%0Nd` that writes the
+    most of them, the wider on a tie, and the others are returned.
+    """
+    numbers = set(numbers)
+    padded = {len(digits) for digits in numbers if _zero_padded(digits)}
+    if padded:
+        width = max(
+            padded,
+            key=lambda w: (sum(_writes(w, digits) for digits in numbers), w),
+        )
+    else:
+        lengths = {len(digits) for digits in numbers}
+        width = lengths.pop() if len(lengths) == 1 else 1
+    field_text = f"%0{width}d" if width > 1 else "%d"
+    return field_text, sorted(d for d in numbers if not _writes(width, d))
 
 
 @dataclass
@@ -91,7 +120,8 @@ class _Group:
     tail: str
     # number -> {sensor index -> [workspace-relative path, ...]}
     frames: dict[int, dict[int, list[str]]] = field(default_factory=dict)
-    digit_counts: set[int] = field(default_factory=set)
+    # The number as the names write it -> [workspace-relative path, ...]
+    numbers: dict[str, list[str]] = field(default_factory=dict)
 
 
 def find_rigs(image_paths: list[Path], workspace_dir: Path):
@@ -224,7 +254,7 @@ def collect_sequences(
         group.frames.setdefault(int(digits), {}).setdefault(
             sensor if sensor is not None else 0, []
         ).append(rel)
-        group.digit_counts.add(len(digits))
+        group.numbers.setdefault(digits, []).append(rel)
 
     if no_number:
         problems.append(
@@ -256,10 +286,19 @@ def _sequence(
         cameras = rig_configs[group.rig]["cameras"]
         # The reference sensor first, then the others in the file's order.
         sensors.sort(key=lambda s: (not cameras[s].get("ref_sensor", False), s))
-    field_text = frame_field(group.digit_counts)
+    field_text, unwritten = frame_field(group.numbers)
     name_pattern = _escape(group.folder + group.head) + field_text + _escape(group.tail)
 
     problems: list[str] = []
+    if unwritten:
+        files = sorted(rel for digits in unwritten for rel in group.numbers[digits])
+        problems.append(
+            f"the numbers of the sequence {_escape(group.prefix) + name_pattern} "
+            "are zero-padded in ways no one frame field writes, and a frame "
+            "field matches a number only as printf writes it, so "
+            f"{len(files)} file(s) do not match "
+            f"{_escape(group.prefix) + name_pattern}: {_names(files)}"
+        )
     duplicates = [
         paths
         for frame in group.frames.values()

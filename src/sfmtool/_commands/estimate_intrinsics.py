@@ -591,21 +591,43 @@ def _sequence_run(
     `.camrig` goes in, the name parts the file is named from, and the
     pattern it stores, relative to that folder.
 
-    The pattern is the sequence's list pattern less its folder: the names
-    with the file number as a frame field, and `%%` for a `%`. The list
-    pattern is the escaped folder and a `/`, then the escaped name pattern;
-    a file name holds no `/`, so the name pattern is what follows the last
-    one.
+    The pattern is the names with the file number as a frame field, and `%%`
+    for a `%`, as `sfm pick-images` writes a list pattern less its folder. Its
+    frame field is chosen from the numbers of all of `names`, the file's
+    images of the sequence, not only from those `-r` keeps, so that it
+    matches every one. When no frame field writes every number, the run
+    gets the reason it has no `.camrig`.
     """
+    from .._filenames import file_number_span
+    from .._pick_images import _escape, _names, frame_field
+
     folder, before, after = _name_key(Path(sequence.images[0][0]).as_posix())
+    numbers: dict[str, list[str]] = {}
+    for name in names:
+        file_name = Path(name).name
+        start, end = file_number_span(file_name)
+        numbers.setdefault(file_name[start:end], []).append(name)
+    field_text, unwritten = frame_field(numbers)
+    camrig_pattern = _escape(before) + field_text + _escape(after)
+    pattern = (_escape(folder + "/") if folder else "") + camrig_pattern
+    reason = None
+    if unwritten:
+        files = sorted(name for digits in unwritten for name in numbers[digits])
+        reason = (
+            "the numbers of its file names are zero-padded in ways no one "
+            "frame field writes, and a frame field matches a number only as "
+            f"printf writes it, so {len(files)} of them do not match "
+            f"{camrig_pattern}: {_names(files)}"
+        )
     return _SequenceRun(
-        pattern=sequence.name,
+        pattern=pattern,
         names=names,
         chosen=chosen,
         camrig_folder=workspace_dir / folder,
         name_before=before.rstrip(_SEPARATORS),
         name_after=after.strip(_SEPARATORS),
-        camrig_pattern=sequence.name.rpartition("/")[2],
+        camrig_pattern=camrig_pattern,
+        reason=reason,
     )
 
 

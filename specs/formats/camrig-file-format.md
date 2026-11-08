@@ -318,9 +318,25 @@ contain any number of them:
 
 The **frame field** is optional and may appear **at most once**:
 
-- `%0Nd` — a zero-padded integer `N` digits wide (`%04d` matches `0007`).
-- `%d` — an unpadded integer.
-- `%%` — a literal `%`.
+- `%0Nd` — an integer zero-padded to `N` digits.
+- `%d` — an integer without padding.
+
+A frame field matches a number exactly when the text equals that number
+written as printf writes it with the field. printf writes the number's digits
+with no leading zero (`0` itself is one digit), then, when that is shorter
+than `N`, pads it on the left with zeros to `N` digits; a number of `N` or
+more digits is written whole. So:
+
+- `%04d` matches `0007`, `0000`, `9999` and `12345`, and not `007`, `7` or
+  `00007`. A sequence numbered `0001` to `9999` and then `10000` on, as a
+  video frame extractor writes it with `%04d`, is all matched by `%04d`.
+- `%d` matches `7`, `0` and `120`, and not `07` or `00`.
+
+The field is the printf conversion `%`, an optional `0` flag, an optional
+decimal width, then `d`, and the same rule holds for every such field:
+`%0d` and `%01d` match what `%d` matches, and a width without the `0` flag,
+`%3d`, pads with spaces, so it matches `  7` and `123`, not `7` or `007`.
+Outside a frame field, `%%` is a literal `%`.
 
 The pattern does two things:
 
@@ -331,7 +347,8 @@ The pattern does two things:
    instant make up one rig **frame**; their relative pose is fixed by the
    rig. Each image's **frame index** is what assigns it to a frame:
    - If the pattern has a frame field, the integer it captures is the frame
-     index. Glob wildcards capture nothing and never contribute to it.
+     index: the value of the number it matched, so `0007` captures 7. Glob
+     wildcards capture nothing and never contribute to it.
    - If the pattern has no frame field, the sensor's matched files are
      sorted by relative path and assigned frame indices `0, 1, 2, …` by
      position. A pattern with neither a frame field nor a wildcard matches a

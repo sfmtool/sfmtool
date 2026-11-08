@@ -284,6 +284,12 @@ discovered `.camrig` files cannot be used:
 
 - an image being solved is matched by more than one `.camrig`, or by two
   sensors of one `.camrig`;
+- an image being solved is matched by no `.camrig`, and a `.camrig`'s pattern
+  matches it apart from the zero-padding of its number (`shot_007.jpg` for
+  `shot_%04d.jpg`): a frame field matches a number only as printf writes it
+  ([camrig-file-format.md](../../formats/camrig-file-format.md#how-camrig-files-fit-into-workspaces)),
+  and the image would otherwise take its camera from elsewhere without a
+  word;
 - two images of one sensor of a multi-sensor `.camrig` share a frame index;
 - the images of a `.camrig` camera have mixed resolutions, or a resolution whose
   aspect ratio differs from the camera's;

@@ -159,6 +159,12 @@ and names the files:
   order;
 - two files of one sequence with the same number (`shot_1.jpg` and
   `shot_01.jpg`), which have no order;
+- the files of a sequence whose numbers are zero-padded in ways no one frame
+  field writes: padded to two widths, such as `shot_01.jpg` beside
+  `shot_003.jpg`, or a number shorter than the padded width, such as
+  `shot_5.jpg` beside `shot_0010.jpg`. No one frame field matches them all
+  ([Writing the list](#writing-the-list)), and the error names the files
+  that the pattern matching the most of them leaves out;
 - a file with a `*` in its workspace-relative path, which a list pattern reads
   as a wildcard and cannot hold as text;
 - a rig frame that lacks the image of a sensor another frame of its sequence
@@ -203,7 +209,9 @@ folder is walked as a rig of that sensor alone.
   rig's chosen frames and the other sequences' chosen images.
 - **An input file that more than one `.camrig` matches** is refused before any
   image is read, naming the `.camrig` files, since `sfm solve` refuses the
-  same images and a list holding them would be of no use to it.
+  same images and a list holding them would be of no use to it. So is an
+  input file that no `.camrig` matches but a `.camrig`'s pattern matches
+  apart from the zero-padding of its number, as `sfm solve` refuses it.
 - **With no `.camrig` covering any input file**, the workspace's
   `rig_config.json` ([workspace/rig-config.md](../../workspace/rig-config.md))
   defines the rigs, when it has one. An image under one of a rig's sensor
@@ -302,9 +310,15 @@ workspace.
 
 Each sequence becomes one entry of the list: a pattern made from the sequence's
 file names, with the file number replaced by a frame field and `%%` for a `%`
-in the path, and a range of the chosen frames' numbers. The frame field is
-`%0Nd` when every number in the sequence is written with the same `N > 1`
-digits, and `%d` otherwise. The range is `RangeExpr.from_list` of the numbers,
+in the path, and a range of the chosen frames' numbers. A frame field matches
+a number only as printf writes it with the field
+([camrig-file-format.md](../../formats/camrig-file-format.md#how-camrig-files-fit-into-workspaces)):
+`%04d` matches `0007` and `12345`, not `007`, and `%d` matches `7`, not
+`07`. So the frame field is chosen to match every number of the sequence as
+its name writes it: `%0Nd` when a number is zero-padded to `N` digits, or,
+with no zero-padded number, when every number has the same `N > 1` digits,
+and `%d` otherwise. A sequence numbered `0001` to `9999` and then `10000`
+on is one sequence with `%04d`, and `8`, `9`, `10` get `%d`. The range is `RangeExpr.from_list` of the numbers,
 written as its `str`, which joins runs into `a-b` and `a-b:s` spans. A range
 expression holds at most 10,000 sub-ranges, so when the chosen numbers of one
 sequence need more, the command splits them into halves, again until each
@@ -459,7 +473,9 @@ a usage error; an invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,
-parenthesized numbers, padded and unpadded numbers, the rig order, a
+parenthesized numbers, padded and unpadded numbers, the frame field chosen
+for numbers that run past their padded width and the error for numbers
+padded in ways no one frame field writes, the rig order, a
 `.camrig` rig's frames, patterns and sensor order, every error, the list
 entries, a lone chosen frame, a range split in parts, the slice suggestion,
 and the report's walk section: its heading, the frames chosen and read, the swaps, the steps stopped at the match floor and those
