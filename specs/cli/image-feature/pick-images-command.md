@@ -318,8 +318,9 @@ a number only as printf writes it with the field
 its name writes it: `%0Nd` when a number is zero-padded to `N` digits, or,
 with no zero-padded number, when every number has the same `N > 1` digits,
 and `%d` otherwise. A sequence numbered `0001` to `9999` and then `10000`
-on is one sequence with `%04d`, and `8`, `9`, `10` get `%d`. The range is `RangeExpr.from_list` of the numbers,
-written as its `str`, which joins runs into `a-b` and `a-b:s` spans. A range
+on is one sequence with `%04d`, and `8`, `9`, `10` get `%d`. The range is
+`RangeExpr.from_list` of the numbers, written as its `str`, which joins runs
+into `a-b` and `a-b:s` spans. A range
 expression holds at most 10,000 sub-ranges, so when the chosen numbers of one
 sequence need more, the command splits them into halves, again until each
 half's range parses back from its text, and writes one entry of the same

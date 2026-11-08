@@ -78,9 +78,11 @@ def _zero_padded(digits: str) -> bool:
 
 def _writes(width: int, digits: str) -> bool:
     """Whether printf's `%0Nd` with `N = width` (`%d` for a width of 1)
-    writes a number as `digits`: padded with zeros to exactly the width, or
-    wider than it and unpadded."""
-    return len(digits) == width or (len(digits) > width and digits[0] != "0")
+    writes a number as `digits`, as the `.camrig` pattern matcher decides it."""
+    from ._sfmtool.fileio import camrig_pattern_matches
+
+    field_text = f"%0{width}d" if width > 1 else "%d"
+    return camrig_pattern_matches(field_text, digits, False)
 
 
 def frame_field(numbers: Iterable[str]) -> tuple[str, list[str]]:

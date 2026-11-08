@@ -79,9 +79,9 @@ def find_images(rig_root: Path, pattern: str) -> list[str]:
     `pattern` is interpreted with the shared `.camrig` pattern semantics, so a
     frame field matches a number only as printf writes it with the field and
     `*` / `**` respect path-segment boundaries — the same matching `sfm solve`
-    later applies to the stored pattern. Raises `CamrigCreateError` if nothing matches, or if a match is
-    not an image file — the stored pattern must identify exactly the sensor's
-    images.
+    later applies to the stored pattern. Raises `CamrigCreateError` if
+    nothing matches, or if a match is not an image file — the stored pattern
+    must identify exactly the sensor's images.
     """
     rig_root = Path(rig_root).resolve()
     matches = match_pattern(rig_root, pattern)
