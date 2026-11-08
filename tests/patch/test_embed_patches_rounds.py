@@ -204,7 +204,7 @@ def test_embed_patches_multiple_rounds_round_trips(scene, tmp_path: Path):
     is an input point that survived round 1's self-similarity cull, and a point
     both runs keep is observed by the three-round run in a subset of the images
     the one-round run observes it in. A per-round ``progress`` callback fires
-    once per round.
+    once per round, and each reports a normal change that is a number.
 
     The point count is not monotone in the number of rounds. The final cull
     drops each point the last sub-pixel pass rendered no valid bitmap for, but a
@@ -255,6 +255,9 @@ def test_embed_patches_multiple_rounds_round_trips(scene, tmp_path: Path):
     # One per-round summary line (the "normal Δ ..." metric line) per round.
     # Phase lines share the "round N/M:" prefix, so match the summary distinctly.
     assert sum("normal Δ" in line for line in lines) == 3
+    # Each round's normal change is a number: a patch turned by a few
+    # nanoradians once came back with NaN axes, and round 3 reported `nan°`.
+    assert not any("nan°" in line for line in lines), lines
 
     out = tmp_path / "rounds.sfmr"
     three.save(str(out), operation="embed-patches rounds=3")

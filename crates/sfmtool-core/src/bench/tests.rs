@@ -5953,6 +5953,65 @@ fn a_tilt_is_the_least_rotation_and_moves_no_keypoint() {
     assert_eq!(patch_frame_of(&again).u_axis, patch_frame.u_axis);
 }
 
+/// A turn just over the nanoradian bar is still a turn, and the patch it leaves
+/// is a patch: its axes are finite and its normal is the one asked for. The
+/// cosine of such a turn is `1.0` to the last bit, so a rotation that reads its
+/// angle as `acos` of the dot of the two normals turns by nothing where that
+/// dot rounds to one, and by `NaN` where it rounds a bit over.
+#[test]
+fn a_tilt_of_a_few_nanoradians_leaves_a_finite_patch() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let fixture = track_of(&bench, &label);
+    let base = patch_frame_of(&fixture);
+
+    // The fixture's own patch, which faces along an axis, and the same patch
+    // turned by hand a few degrees off it, whose normals have no zero
+    // component to round cleanly.
+    for (lean_deg, lean_heading) in [(0.0_f64, 0.0_f64), (3.0, 0.4), (7.0, 2.1), (11.0, 4.0)] {
+        let (sin, cos) = lean_deg.to_radians().sin_cos();
+        let lean = base.u_axis.normalize() * lean_heading.cos()
+            + base.v_axis.normalize() * lean_heading.sin();
+        let track = facing(&fixture, base.normal() * cos + lean * sin);
+        let was = patch_frame_of(&track);
+        let n = was.normal();
+        let u = was.u_axis.normalize();
+        let v = n.cross(&u);
+        for step in 0..64 {
+            let heading = f64::from(step) * std::f64::consts::TAU / 64.0;
+            let toward = u * heading.cos() + v * heading.sin();
+            for nanoradians in [1.2_f64, 2.0, 5.0, 20.0] {
+                let angle = nanoradians * 1e-9;
+                let asked = n * angle.cos() + toward * angle.sin();
+                let (next, report) =
+                    tilt_patch(&track, &edited, asked).expect("a finite direction");
+                let case = format!(
+                    "{nanoradians} nrad toward {heading} from {lean_deg} degrees off the fixture"
+                );
+                assert!(report.changed, "{case} was no turn");
+                let turned = patch_frame_of(&next);
+                assert!(
+                    turned
+                        .u_axis
+                        .iter()
+                        .chain(turned.v_axis.iter())
+                        .all(|c| c.is_finite()),
+                    "{case} left the axes {:?}, {:?}",
+                    turned.u_axis,
+                    turned.v_axis,
+                );
+                assert!(
+                    (turned.normal() - asked.normalize()).norm() < 1e-12,
+                    "{case} faces {:?}, not {:?}",
+                    turned.normal(),
+                    asked.normalize(),
+                );
+            }
+        }
+    }
+}
+
 /// A keypoint far off the centre's projection is a sighting's own error, and a
 /// tilt leaves it there however far the square turns: the centre the keypoint
 /// marks has not moved.

@@ -2475,7 +2475,12 @@ against the cosine rather than from the rotation's reading of itself: a turn is
 judged no turn below a nanoradian, and an `acos` of a cosine alone cannot
 resolve that -- a turn of a nanoradian leaves the cosine `1.0` to the last bit,
 and near the half turn the error in a cosine that *is* resolved lands on the
-answer divided by its sine.
+answer divided by its sine. The rotation is built from that arc as well, the
+angle about the arc's own axis `n_old x perp`, where `perp` is the unit
+direction the arc leaves `n_old` in. A rotation built from the two normals,
+with its angle read as `acos` of their dot, turns a patch asked to move a few
+nanoradians by nothing where the dot rounds to `1.0`, and gives it `NaN` axes
+where the dot rounds a bit over.
 
 A **bearing** (`w == 0`) is refused as `TrackEditError::AtInfinity`, a direction
 patch's normal being its own bearing, so there is no normal standing off it to
