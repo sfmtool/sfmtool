@@ -139,6 +139,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ("set_window_layout", json!({ "layout": "default" })),
         ("show_panel", json!({ "panel_name": "scene" })),
         ("hide_panel", json!({ "panel_name": "scene" })),
+        (
+            "quit",
+            json!({ "force_quit_no_confirmation_no_save": true }),
+        ),
         ("undo", json!({ "reconstruction_label": "alpha" })),
         ("redo", json!({ "reconstruction_label": "alpha" })),
         (
@@ -1269,8 +1273,9 @@ fn only_the_reads_are_annotated_read_only() {
         ]
     );
     // Nineteen JSON reads, the one read that hands back a picture, seventy-six
-    // writes, six input tools, and the one that writes a file.
-    assert_eq!(catalog.len(), 103, "the catalog has grown or shrunk");
+    // writes, six input tools, the one that writes a file, and the one that
+    // quits.
+    assert_eq!(catalog.len(), 104, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
@@ -1278,9 +1283,9 @@ fn only_the_reads_are_annotated_read_only() {
             .count(),
         76
     );
-    // One tool can overwrite a file by name, and six can press what a person
-    // can press, File ▸ Save included; those seven are the ones annotated
-    // destructive.
+    // One tool can overwrite a file by name, six can press what a person can
+    // press, File ▸ Save included, and one ends the viewer, losing what is not
+    // on disk when forced; those eight are the ones annotated destructive.
     let saves: Vec<&str> = catalog
         .iter()
         .filter(|spec| spec.kind == ToolKind::Save)
@@ -1295,6 +1300,35 @@ fn only_the_reads_are_annotated_read_only() {
     assert_eq!(
         inputs,
         ["click", "hover", "drag", "scroll", "press_key", "type_text"]
+    );
+    let quits: Vec<&str> = catalog
+        .iter()
+        .filter(|spec| spec.kind == ToolKind::Quit)
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(quits, ["quit"]);
+    // And the annotation a client reads says the same.
+    let destructive: Vec<&str> = catalog
+        .iter()
+        .filter(|spec| {
+            let advertised = serde_json::to_value(super::super::server::advertise(spec))
+                .expect("an advertised tool serializes");
+            advertised["annotations"]["destructiveHint"] == json!(true)
+        })
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(
+        destructive,
+        [
+            "quit",
+            "save_reconstruction",
+            "click",
+            "hover",
+            "drag",
+            "scroll",
+            "press_key",
+            "type_text",
+        ]
     );
 }
 
@@ -1342,7 +1376,7 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
         .count();
     for sentence in [
         format!(
-            "{} write, {} send input, and one writes a file",
+            "{} write, {} send input, one writes a file, and one quits the viewer",
             spelled(writes),
             spelled(inputs)
         ),

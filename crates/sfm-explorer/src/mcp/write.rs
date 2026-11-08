@@ -257,3 +257,31 @@ pub(super) fn solo_reconstruction(state: &mut AppState, label: Option<&str>) -> 
             .collect::<Vec<_>>(),
     }))
 }
+
+/// `quit`: agree to end the viewer, or refuse because something would be lost.
+///
+/// The refusal asks what File ▸ Quit asks before it puts up the close prompt,
+/// [`AppState::dirty_labels`], and names the same reconstructions in the
+/// prompt's own sentence. The agent cannot answer a modal, so where the menu
+/// would ask, this says no and names the two ways on. With `discard_unsaved`
+/// the answer is the prompt's Don't Save, given in advance.
+///
+/// Nothing ends here: the caller carries the quit out once the reply is on its
+/// way (`Outcome::Quit`).
+pub(super) fn quit(state: &AppState, discard_unsaved: bool) -> JsonReply {
+    let dirty = state.dirty_labels();
+    if !dirty.is_empty() && !discard_unsaved {
+        return Err(ToolError::new(format!(
+            "Did not quit: {} File ▸ Quit would ask whether to save first. Save with \
+             save_reconstruction, or pass force_quit_no_confirmation_no_save: true to quit and \
+             lose those changes.",
+            crate::close_prompt::unsaved_changes_sentence(&dirty)
+        )));
+    }
+    Ok(json!({
+        "quitting": true,
+        "discarded": dirty,
+        "message": "The viewer is quitting: its window closes and this endpoint stops once this \
+                    reply has been sent.",
+    }))
+}

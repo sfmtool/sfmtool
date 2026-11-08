@@ -106,8 +106,8 @@ that was not up yet registers as a failed server with no tools. But because the
 transport is stateless — no session, no standing connection, every call a fresh
 POST — a viewer restarted afterwards is picked up with no reconnection at all,
 since the next call simply lands in the new process. So an agent that has the
-tools can own the viewer's lifecycle from then on: kill it, rebuild, relaunch on
-the same port, keep calling. Launching it detached from the agent's own session
+tools can own the viewer's lifecycle from then on: end it with `quit`
+(§ "`quit`"), rebuild, relaunch on the same port, keep calling. Launching it detached from the agent's own session
 is what keeps it alive across the client restart that registered it in the first
 place.
 
@@ -124,13 +124,14 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and three tools. Twenty read -- nineteen that answer with JSON, and
+One hundred and four tools. Twenty read -- nineteen that answer with JSON, and
 `screenshot`, which closes the loop by handing back a picture -- seventy-six
-write, six send input, and one writes a file. `get_widgets` and the six input
-tools, `click`, `hover`, `drag`, `scroll`, `press_key` and `type_text`, read
-and press the viewer's widgets the way a person's eyes, mouse and keyboard do
-(§ "`get_widgets`", § "`click` / `hover`", § "`drag`", § "`scroll`",
-§ "`press_key` / `type_text`").
+write, six send input, one writes a file, and one quits the viewer. `get_widgets`
+and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
+`type_text`, read and press the viewer's widgets the way a person's eyes, mouse
+and keyboard do (§ "`get_widgets`", § "`click` / `hover`", § "`drag`",
+§ "`scroll`", § "`press_key` / `type_text`"). `quit` ends the viewer, as File ▸
+Quit does (§ "`quit`").
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -171,6 +172,7 @@ and press the viewer's widgets the way a person's eyes, mouse and keyboard do
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
+| `quit` | quit | Close the window and end the viewer, as File ▸ Quit does; refused while a reconstruction has changes that are not on disk, unless forced |
 | `undo` / `redo` | write | Step one reconstruction's history back or forward a version |
 | `jump_to_version` | write | Move its cursor straight to a version |
 | `delete_point` | write | Delete one 3D point and its track |
@@ -250,9 +252,9 @@ photographs. Every one of these files can be built again from the photographs), 
 of them `openWorldHint: false`. Every
 `inputSchema` is closed (`additionalProperties: false`).
 
-**Seven tools are annotated `destructiveHint: true`**, and a client that
+**Eight tools are annotated `destructiveHint: true`**, and a client that
 treats a destructive tool differently, with a confirmation or a stricter
-policy, should treat these seven differently and none of the others:
+policy, should treat these eight differently and none of the others:
 
 - **`save_reconstruction`**, the one tool whose `ToolKind` is `Save`. It is the
   only call that names a file and can overwrite what no undo brings back.
@@ -266,6 +268,9 @@ policy, should treat these seven differently and none of the others:
   human answers it, so every call waits behind it (§ "Non-goals"). A sequence
   of them can reach anything the menus can, so the annotation is on each call
   rather than on the few that land on those items.
+- **`quit`**, the one tool whose `ToolKind` is `Quit`. It ends the viewer, and
+  with `force_quit_no_confirmation_no_save` it loses every change that is not
+  on disk.
 
 ### The wire vocabulary
 
@@ -3745,6 +3750,48 @@ the entry differently. None of them coalesce, so two panels closed in a row are
 two rows. `get_window_layout` is a `Query` entry and never reaches the status
 line. The texts are listed in [action-log.md](action-log.md).
 
+### `quit`
+
+```jsonc
+// quit  {}
+// → { "quitting": true, "discarded": [],
+//     "message": "The viewer is quitting: its window closes and this endpoint stops once this reply has been sent." }
+
+// quit  { "force_quit_no_confirmation_no_save": true }
+// → { "quitting": true, "discarded": ["alpha"], "message": "…" }
+```
+
+Closes the window and ends the viewer, as File ▸ Quit does. It is how an agent
+ends a viewer it launched; ending the process from outside is the fallback for a
+viewer that does not answer.
+
+**It is refused while a reconstruction has changes that are not on disk**, where
+File ▸ Quit would put up the close prompt ([saving.md](saving.md) § "The close
+prompt"). The test is the menu's own, `AppState::dirty_labels`, and the refusal
+names the reconstructions in the prompt's sentence (`close_prompt::
+unsaved_changes_sentence`), then the two ways on: save them with
+`save_reconstruction`, or quit with `force_quit_no_confirmation_no_save: true`.
+An agent cannot answer a modal, so where the menu asks, the tool says no. The
+refusal is a failed `Session` row in the Action Log, `quit failed: …`.
+
+**`force_quit_no_confirmation_no_save`** is the prompt's Don't Save, given in
+advance: the viewer quits with no prompt and writes nothing, and the reply's
+`discarded` lists the reconstructions whose changes were lost. The name is long
+on purpose, so that no agent sets it without having read what it does. It
+defaults to `false`.
+
+**The reply arrives before the viewer ends.** `apply_with_window` answers a
+`quit` it does not refuse with `Outcome::Quit` rather than ending anything, and
+`App::drain_mcp` sends the reply and then sets the flag File ▸ Quit sets, which
+ends the event loop after that frame. `run_with_args` then drops the viewer,
+which answers any call it was still holding with "The viewer dropped the request
+without answering.", and stops the endpoint (`server::Endpoint::stop`): the
+listener closes, so a later call is refused a connection, and the server writes
+the replies it holds, waiting at most two seconds, before the call returns.
+Calls the same frame applied after the `quit` are applied as usual. What runs in
+the background is abandoned, as on any quit
+([background-tasks.md](background-tasks.md)).
+
 ### The window block
 
 `get_scene` carries this beside `window_title`, and `get_window_layout` returns
@@ -6524,6 +6571,11 @@ where a test hands no host over.
   hiding a closed panel succeeds and changes nothing; showing after hiding lands
   the panel in its default group-mate's node and in front; showing an open panel
   raises it and moves nothing else; an unknown name lists every panel name.
+- **`quit`**: on a clean scene it answers `Outcome::Quit` with `quitting: true`
+  and nothing discarded; with a dirty node it is refused naming that node, the
+  node stays loaded and dirty, and the refusal is a failed `Session` row; forced,
+  it quits and names the node in `discarded`; a non-boolean force is refused by
+  the parse.
 - **The panel writes record the menu's own entries** — `Closed …`, `Opened …`,
   `Raised …`, and `Reset layout` for `"default"` — each under `Kind::Layout` as
   actor `MCP`, and a document records `Set layout`. A call carrying both portions
@@ -6794,9 +6846,9 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and three tools**, twenty of them reads, six of the
-  `Input` kind and one of the `Save` kind, those seven carrying
-  `destructiveHint: true`;
+- **The catalog is one hundred and four tools**, twenty of them reads, six of the
+  `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
+  carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
   advertises `panel_name`, `hud`, `max_dimension`, `crop_px` and `widgets`.
@@ -6911,8 +6963,10 @@ wire are the point. That covers the `initialize` handshake and the `serverInfo`
 it answers with, `tools/list`
 matching the catalog, a `tools/call` reaching the stand-in GUI and returning
 `structuredContent`, a viewer refusal arriving as `isError: true`, a malformed
-argument arriving as a JSON-RPC error instead, and a foreign `Origin` getting
-`403` while the endpoint's own origin and a missing one both pass.
+argument arriving as a JSON-RPC error instead, a foreign `Origin` getting
+`403` while the endpoint's own origin and a missing one both pass, and a call
+in flight when the endpoint is stopped still getting its reply before the port
+closes.
 
 `crates/sfm-explorer/src/cli.rs` carries its own tests for the flag, including
 the case that matters most: `--mcp scene.sfmr` must not eat the path as a port,

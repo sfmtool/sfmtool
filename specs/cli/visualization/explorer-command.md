@@ -106,8 +106,8 @@ process ends when it returns:
   open a window. `sfm explorer` makes one call.
 - It sets process-wide state that outlives the call: it initializes the global
   `env_logger` logger, unless one is already installed, and on Windows it sets
-  the process's DPI awareness. An MCP endpoint's server thread also keeps
-  running after the window closes, until the process ends.
+  the process's DPI awareness. An MCP endpoint it started is stopped before it
+  returns, once the endpoint has written the replies it holds.
 
 The command imports little beyond what the viewer needs.
 `sfmtool/__init__.py` binds the names of its Python submodules on first use,

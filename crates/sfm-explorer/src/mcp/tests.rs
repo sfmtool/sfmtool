@@ -125,6 +125,7 @@ fn deferred_screenshot(
         }
         Outcome::Done(Ok(_)) => panic!("a screenshot must defer, not answer in the frame"),
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        Outcome::Quit(_) => panic!("expected a deferral, got a quit"),
     }
 }
 
@@ -171,6 +172,7 @@ fn ok_with(
         Outcome::Done(Ok(ToolOutput::Png { .. })) => panic!("expected JSON, got an image"),
         Outcome::Done(Err(e)) => panic!("expected success, got refusal: {e}"),
         Outcome::Deferred(_) => panic!("expected an answer in this frame"),
+        Outcome::Quit(_) => panic!("expected an answer, got a quit"),
     }
 }
 
@@ -192,6 +194,7 @@ fn refused_with(
         Outcome::Done(Err(e)) => e,
         Outcome::Done(Ok(_)) => panic!("expected a refusal, got success"),
         Outcome::Deferred(_) => panic!("expected a refusal, got a deferral"),
+        Outcome::Quit(_) => panic!("expected a refusal, got a quit"),
     }
 }
 

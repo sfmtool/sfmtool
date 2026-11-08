@@ -29,7 +29,7 @@ fn answered(state: &mut AppState, viewer: &mut Viewer3D, arguments: Value) -> Va
                 Err(e) => panic!("expected success, got refusal: {e}"),
             }
         }
-        Outcome::Done(Ok(_)) | Outcome::Deferred(_) => panic!("expected JSON"),
+        Outcome::Done(Ok(_)) | Outcome::Deferred(_) | Outcome::Quit(_) => panic!("expected JSON"),
     }
 }
 

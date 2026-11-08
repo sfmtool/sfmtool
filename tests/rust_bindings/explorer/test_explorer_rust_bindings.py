@@ -20,6 +20,13 @@ def test_the_catalog_lists_each_tool_with_its_kind_and_advertised_entry():
     assert kinds["select_point"] == "write"
     assert kinds["save_reconstruction"] == "save"
     assert kinds["click"] == "input"
+    assert kinds["quit"] == "quit"
+    destructive = {
+        tool["name"]
+        for tool in catalog
+        if tool["advertised"]["annotations"].get("destructiveHint") is True
+    }
+    assert "quit" in destructive
     for tool in catalog:
         advertised = tool["advertised"]
         assert advertised["name"] == tool["name"]

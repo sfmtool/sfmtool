@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use ToolKind::Write;
+use ToolKind::{Quit, Write};
 
 pub(super) fn specs() -> Vec<ToolSpec> {
     vec![
@@ -656,6 +656,26 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           brings it back.",
             kind: Write,
             schema: object(&[], &[("panel_name", panel_name_schema())]),
+        },
+        ToolSpec {
+            name: "quit",
+            description: "Close the window and end the viewer, as File ▸ Quit does. Use this \
+                          rather than ending the process. Refused when a reconstruction has \
+                          changes that are not on disk, naming them, where File ▸ Quit would ask \
+                          whether to save. The reply comes back before the viewer ends; a call \
+                          made after it finds no endpoint.",
+            kind: Quit,
+            schema: object(
+                &[(
+                    "force_quit_no_confirmation_no_save",
+                    flag(
+                        "Quit even when a reconstruction has changes that are not on disk, \
+                         losing them, with no prompt. Default false. Long on purpose, so it is \
+                         not set by accident.",
+                    ),
+                )],
+                &[],
+            ),
         },
     ]
 }

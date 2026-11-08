@@ -24,7 +24,8 @@ pub struct CatalogTool {
     /// The tool's name, which is what `tools/call` takes.
     pub name: &'static str,
     /// What the tool does to the viewer: `"read"`, `"write"`, `"save"` (writes
-    /// a file) or `"input"` (presses what a person could press).
+    /// a file), `"input"` (presses what a person could press) or `"quit"` (ends
+    /// the viewer).
     pub kind: &'static str,
     /// The tool's entry in a `tools/list` reply, as this viewer serves it:
     /// `name`, `description`, `inputSchema` and `annotations`.
@@ -42,6 +43,7 @@ pub fn tool_catalog() -> Vec<CatalogTool> {
                 ToolKind::Write => "write",
                 ToolKind::Save => "save",
                 ToolKind::Input => "input",
+                ToolKind::Quit => "quit",
             },
             advertised: serde_json::to_value(super::server::advertise(spec))
                 .expect("an advertised tool serializes to JSON"),

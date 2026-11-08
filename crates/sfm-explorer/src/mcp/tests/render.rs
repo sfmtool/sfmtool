@@ -443,6 +443,7 @@ fn deferred_view(
         Outcome::Deferred(_) => panic!("expected the view's deferral, got another tool's"),
         Outcome::Done(Ok(_)) => panic!("expected the call to wait for a drawn frame"),
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        Outcome::Quit(_) => panic!("expected a deferral, got a quit"),
     }
 }
 

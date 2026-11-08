@@ -234,8 +234,8 @@ impl std::error::Error for RunError {}
 /// call reports as a [`RunError`]. It also sets process-wide state that
 /// outlives the call: it initializes the global `env_logger` logger, unless a
 /// logger is already installed, and on Windows it sets the process's DPI
-/// awareness. A running MCP endpoint's server thread is not stopped when the
-/// window closes either.
+/// awareness. An MCP endpoint it started is stopped before it returns, once
+/// the endpoint has written the replies it holds.
 pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunError> {
     let args = cli::parse(args).map_err(RunError::usage)?;
     if args.help {
@@ -285,7 +285,7 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
     #[cfg(feature = "mcp")]
     let mcp_proxy = Arc::new(std::sync::OnceLock::new());
     #[cfg(feature = "mcp")]
-    let mcp_rx = start_mcp(&mut state, args.mcp_port, &mcp_proxy)?;
+    let (mcp_rx, mcp_endpoint) = start_mcp(&mut state, args.mcp_port, &mcp_proxy)?.unzip();
 
     // Create DirectManipulation manager BEFORE the winit EventLoop so that
     // DM_POINTERHITTEST messages are generated for precision touchpad contacts.
@@ -387,9 +387,24 @@ pub fn run_with_args(args: impl IntoIterator<Item = String>) -> Result<(), RunEr
     };
 
     let ran = event_loop.run_app(&mut app);
+    let startup_error = app.startup_error.take();
+    // The viewer first, then the endpoint. Dropping the viewer drops every
+    // call it was still holding, which answers each with an error, and the
+    // endpoint then stops once it has written every reply in its hands: a
+    // `quit`'s among them, which was sent on the frame that ended the loop.
+    drop(app);
+    #[cfg(feature = "mcp")]
+    if let Some(endpoint) = mcp_endpoint {
+        if !endpoint.stop(MCP_STOP_WITHIN) {
+            log::warn!(
+                "The MCP endpoint did not stop within {} seconds of the window closing.",
+                MCP_STOP_WITHIN.as_secs()
+            );
+        }
+    }
     // A window that could not be created ends the event loop cleanly, so its
     // error is the one to report rather than the loop's own result.
-    if let Some(error) = app.startup_error.take() {
+    if let Some(error) = startup_error {
         return Err(error);
     }
     ran.map_err(|e| RunError::startup(format!("The viewer's event loop failed: {e}")))
@@ -410,6 +425,13 @@ fn event_loop_error(error: winit::error::EventLoopError) -> RunError {
     }
 }
 
+/// How long the closing viewer waits for its MCP endpoint to write the replies
+/// it holds. A reply on loopback is written in well under a millisecond; this
+/// is the bound on a client that stops reading, so it cannot hold the viewer
+/// open.
+#[cfg(feature = "mcp")]
+const MCP_STOP_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Bring the MCP endpoint up, or return `None` because it was not asked for.
 ///
 /// **A bind failure stops the viewer from starting.** Two viewers on one port
@@ -427,7 +449,13 @@ fn start_mcp(
     state: &mut AppState,
     port: Option<u16>,
     proxy: &Arc<std::sync::OnceLock<EventLoopProxy<UserEvent>>>,
-) -> Result<Option<tokio::sync::mpsc::UnboundedReceiver<mcp::Request>>, RunError> {
+) -> Result<
+    Option<(
+        tokio::sync::mpsc::UnboundedReceiver<mcp::Request>,
+        mcp::server::Endpoint,
+    )>,
+    RunError,
+> {
     let Some(port) = port else {
         return Ok(None);
     };
@@ -439,21 +467,22 @@ fn start_mcp(
     // for the first frame.
     let proxy = Arc::clone(proxy);
     let busy = std::sync::Arc::clone(&state.busy_notice);
-    let address = mcp::serve(port, tx, busy, move || {
+    let endpoint = mcp::serve(port, tx, busy, move || {
         if let Some(proxy) = proxy.get() {
             let _ = proxy.send_event(UserEvent::McpRequest);
         }
     })
     .map_err(|e| RunError::startup(e.to_string()))?;
+    let address = endpoint.address;
     println!("SfM Explorer MCP endpoint: http://{address}/mcp");
     state.mcp = Some(state::McpStatus::new(address.port()));
-    let endpoint = state.mcp.as_ref().expect("just set").endpoint();
+    let url = state.mcp.as_ref().expect("just set").endpoint();
     state.action_log.record_as(
         action_log::Actor::Viewer,
         action_log::Kind::Session,
-        format!("MCP endpoint listening on {endpoint}"),
+        format!("MCP endpoint listening on {url}"),
     );
-    Ok(Some(rx))
+    Ok(Some((rx, endpoint)))
 }
 
 pub(crate) struct App {

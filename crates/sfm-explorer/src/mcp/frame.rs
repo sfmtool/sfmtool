@@ -146,6 +146,14 @@ impl App {
                 }
                 Outcome::Deferred(Deferred::Input(input)) => self.mcp_input.push(input, reply),
                 Outcome::Deferred(deferred) => self.mcp_deferred.push((deferred, reply)),
+                // The reply first, then the request to end, which the event
+                // loop acts on after this frame as it does on File ▸ Quit's.
+                // `run_with_args` stops the endpoint only once it has written
+                // the replies it holds, so this one reaches the caller.
+                Outcome::Quit(answer) => {
+                    let _ = reply.send(Ok(ToolOutput::Json(answer)));
+                    self.quit_requested = true;
+                }
             }
             if let Some(status) = self.state.mcp.as_mut() {
                 status.requests += 1;

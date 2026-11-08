@@ -284,6 +284,13 @@ pub(crate) enum Command {
     HidePanel {
         panel: crate::dock::Tab,
     },
+    /// Close the window and end the viewer, as File ▸ Quit does.
+    Quit {
+        /// Quit even when a reconstruction has changes that are not on disk,
+        /// losing them, where File ▸ Quit would ask first. The wire's
+        /// `force_quit_no_confirmation_no_save`.
+        discard_unsaved: bool,
+    },
     /// One node's version list, its cursor, and what a save would find.
     GetReconstructionHistory {
         reconstruction_label: String,
@@ -1198,10 +1205,19 @@ pub(crate) type Reply = Result<ToolOutput, ToolError>;
 /// name the shape it is not.
 pub(super) type JsonReply = Result<Value, ToolError>;
 
-/// Whether [`apply_with_window`] finished the job, or needs the frame to complete first.
+/// Whether [`apply_with_window`] finished the job, needs the frame to complete
+/// first, or ends the viewer.
 pub(crate) enum Outcome {
     Done(Reply),
     Deferred(Deferred),
+    /// A `quit` that was not refused, with its reply.
+    ///
+    /// Its own variant because the quit is the frame's to carry out, after the
+    /// reply has been handed to the server: `App::drain_mcp` sends the reply and
+    /// then asks the event loop to end, the way File ▸ Quit does, and
+    /// `run_with_args` lets the server finish writing it before the endpoint
+    /// stops. A process exit here would end the call with no answer.
+    Quit(Value),
 }
 
 /// A command whose answer cannot exist yet.
@@ -1526,6 +1542,10 @@ pub(crate) fn apply_with_window(
         }
         Command::ShowPanel { panel } => done(layout::show_panel(state, host, panel)),
         Command::HidePanel { panel } => done(layout::hide_panel(state, host, panel)),
+        Command::Quit { discard_unsaved } => match write::quit(state, discard_unsaved) {
+            Ok(reply) => Outcome::Quit(reply),
+            Err(refusal) => Outcome::Done(Err(refusal)),
+        },
         Command::GetReconstructionHistory {
             reconstruction_label,
         } => done(edit::get_reconstruction_history(

@@ -63,6 +63,7 @@ impl Command {
             Command::SetWindowLayout { .. } => "set_window_layout",
             Command::ShowPanel { .. } => "show_panel",
             Command::HidePanel { .. } => "hide_panel",
+            Command::Quit { .. } => "quit",
             Command::GetReconstructionHistory { .. } => "get_reconstruction_history",
             Command::Undo { .. } => "undo",
             Command::Redo { .. } => "redo",
@@ -478,6 +479,8 @@ impl Command {
             // for a person, under whatever kind that is.
             Command::Input(_) => Kind::Input,
             Command::ShowPanel { .. } | Command::HidePanel { .. } => Kind::Layout,
+            // The session the viewer started with is the one it ends.
+            Command::Quit { .. } => Kind::Session,
             // One call, two portions, and a refusal has to be filed somewhere:
             // under the panels when it carried a panel portion — the coarser of
             // the two, and the one a reader looks for a layout refusal in —

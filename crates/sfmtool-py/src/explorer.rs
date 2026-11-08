@@ -23,7 +23,8 @@ fn to_python<'py>(py: Python<'py>, value: &serde_json::Value) -> PyResult<Bound<
 /// them, as a list of dicts.
 ///
 /// Each dict has `name`; `kind`, which is `"read"`, `"write"`, `"save"` (the
-/// tool writes a file) or `"input"` (it presses what a person could press);
+/// tool writes a file), `"input"` (it presses what a person could press) or
+/// `"quit"` (it ends the viewer);
 /// and `advertised`, the tool's entry in a `tools/list` reply as this build of
 /// the viewer serves it, with `name`, `description`, `inputSchema` and
 /// `annotations`.
