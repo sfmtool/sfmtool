@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The cameras `_setup_db_single_sensor` writes to a COLMAP database: one per
-single-sensor `.camrig`, or one per resolved `camera_config.json` plus one for
-the images that resolve none."""
+single-sensor `.camrig`, then, for the images no `.camrig` covers, one per
+resolved `camera_config.json` and one for the images that resolve none."""
 
 import json
 import shutil
@@ -193,3 +193,68 @@ def test_one_camera_per_camera_config_and_one_for_exif(
     for folder in ("gopro", "drone"):
         line = f"The camera of {(tmp_path / folder).resolve() / 'camera_config.json'}: "
         assert out.count(line + "SIMPLE_PINHOLE -> SIMPLE_RADIAL") == 1
+
+
+def test_images_no_camrig_covers_fall_back(tmp_path: Path, sample_sift_data, capsys):
+    # Two videos with a .camrig each beside a folder with a camera_config.json
+    # and one with neither, as when `sfm estimate-intrinsics` finds no
+    # consensus for some sequences: one camera per .camrig, one for the
+    # camera_config.json and one from EXIF, each image on its own source's.
+    videos = _copy_seoul(
+        tmp_path / "images",
+        ["shopA_00001.jpg", "shopB_00001.jpg", "shopA_00002.jpg"],
+        first=1,
+    )
+    gopro = _copy_seoul(tmp_path / "gopro", ["g1.jpg", "g2.jpg"], first=4)
+    phone = _copy_seoul(tmp_path / "phone", ["p1.jpg"], first=6)
+    (tmp_path / "gopro" / "camera_config.json").write_text(
+        json.dumps({"version": 1, "camera_intrinsics": _simple_pinhole(344.0)})
+    )
+    _write_single_sensor_camrig(
+        tmp_path / "camera-shopA.camrig", "images/shopA_%05d.jpg", _simple_pinhole(747)
+    )
+    _write_single_sensor_camrig(
+        tmp_path / "camera-shopB.camrig",
+        "images/shopB_%05d.jpg",
+        _simple_pinhole(1141),
+    )
+    images = [gopro[0], *videos, phone[0], gopro[1]]
+    sift_paths = _write_sifts(images, sample_sift_data)
+    resolver = CameraConfigResolver(tmp_path)
+    camrig = resolve_camrig_for_solve(images, tmp_path, None, resolver)
+    out = capsys.readouterr().out
+    assert (
+        "Camera intrinsics: 3 of 6 images being solved are covered by no .camrig, "
+        f"e.g. {gopro[0].resolve()}; they use camera_config.json (2) and EXIF "
+        "inference (1).\n"
+    ) in out
+    db_path = tmp_path / "database.db"
+    _setup_db_single_sensor(
+        images,
+        sift_paths,
+        tmp_path,
+        db_path,
+        None,
+        camera_config_resolver=resolver,
+        camrig_cameras=camrig.cameras,
+    )
+
+    cameras, by_image = _cameras_by_image(db_path)
+    assert len(cameras) == 4
+    ids = {name: camera_id for name, (camera_id, _rig) in by_image.items()}
+    assert ids["images/shopA_00002.jpg"] == ids["images/shopA_00001.jpg"]
+    assert ids["gopro/g2.jpg"] == ids["gopro/g1.jpg"]
+    focal = {name: cameras[camera_id].params[0] for name, camera_id in ids.items()}
+    assert focal["images/shopA_00001.jpg"] == 747.0
+    assert focal["images/shopB_00001.jpg"] == 1141.0
+    assert focal["gopro/g1.jpg"] == 344.0
+    # The EXIF camera is the fourth, distinct from the files' cameras.
+    exif_id = ids["phone/p1.jpg"]
+    assert exif_id not in {
+        ids["images/shopA_00001.jpg"],
+        ids["images/shopB_00001.jpg"],
+        ids["gopro/g1.jpg"],
+    }
+    assert not cameras[exif_id].has_prior_focal_length
+    for camera_id, rig_sensor_id in by_image.values():
+        assert rig_sensor_id == camera_id

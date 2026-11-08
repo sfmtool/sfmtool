@@ -604,6 +604,26 @@ def test_a_single_sensor_camrig_defines_no_rig(tmp_path: Path):
     ]
 
 
+def test_a_single_sensor_camrig_covering_some_images_is_not_refused(
+    tmp_path: Path,
+):
+    # `sfm solve` gives the images no single-sensor .camrig covers cameras
+    # from camera_config.json or EXIF, so the command takes them too, ignoring
+    # rig_config.json for every image as `sfm solve` does.
+    workspace = tmp_path / "ws"
+    paths = _touch(workspace, RIG_FILES)
+    _write_rig_config(workspace)
+    _write_camrig(workspace / "rig" / "cam_a" / "a.camrig", ["pan_%03d.jpg"])
+    rig_configs, camrig_rig, notes = find_rigs(paths, workspace)
+    assert rig_configs is None and camrig_rig is None
+    assert len(notes) == 1 and "rig_config.json is ignored" in notes[0]
+    sequences = collect_sequences(paths, workspace, rig_configs, camrig_rig)
+    assert [s.patterns for s in sequences] == [
+        ["rig/cam_a/pan_%03d.jpg"],
+        ["rig/cam_b/pan_%03d.jpg"],
+    ]
+
+
 def test_several_single_sensor_camrigs_walk_each_sequence(
     tmp_path: Path, pan_source, monkeypatch
 ):
@@ -628,11 +648,11 @@ def test_several_single_sensor_camrigs_walk_each_sequence(
     ]
 
 
-def test_images_a_camrig_covers_only_in_part_are_refused(
+def test_images_a_multi_sensor_camrig_covers_only_in_part_are_refused(
     tmp_path: Path, pan_source, monkeypatch
 ):
-    # `sfm solve` refuses a set of images a .camrig covers only in part, so
-    # the command refuses it before reading any image.
+    # `sfm solve` refuses a set of images a multi-sensor .camrig covers only
+    # in part, so the command refuses it before reading any image.
     workspace = tmp_path / "ws"
     _copy_frames(pan_source["top"], workspace / "rig" / "cam_b", count=3)
     _copy_frames(pan_source["bottom"], workspace / "rig" / "cam_a", count=3)
@@ -644,7 +664,8 @@ def test_images_a_camrig_covers_only_in_part_are_refused(
     result = CliRunner().invoke(main, ["pick-images", "rig", "frames"])
     assert result.exit_code == 1, result.output
     assert "pan.camrig matches only 6 of 9 images given" in result.output
-    assert "Pick only the images the .camrig covers" in result.output
+    assert "A multi-sensor .camrig must cover all of the images given" in result.output
+    assert "pick only the images it covers, or remove it" in result.output
     assert not any(p.suffix == ".sift" for p in workspace.rglob("*"))
 
     result = CliRunner().invoke(main, ["pick-images", "rig"])

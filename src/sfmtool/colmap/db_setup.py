@@ -68,8 +68,8 @@ def _setup_for_sfm(
     rig_used = use_rigs or camrig_multi
     if rig_config is not None and camrig is not None:
         print(
-            "Note: a .camrig covers these images; rig_config.json is ignored "
-            "(the .camrig takes precedence)."
+            "Note: a .camrig covers some or all of these images; rig_config.json "
+            "is ignored (the .camrig takes precedence)."
         )
 
     sift_paths = image_files_to_sift_files(
@@ -327,8 +327,8 @@ def _setup_for_sfm_from_matches(
     rig_used = use_rigs or camrig_multi
     if rig_config is not None and camrig is not None:
         print(
-            "Note: a .camrig covers these images; rig_config.json is ignored "
-            "(the .camrig takes precedence)."
+            "Note: a .camrig covers some or all of these images; rig_config.json "
+            "is ignored (the .camrig takes precedence)."
         )
 
     # Populate DB with features

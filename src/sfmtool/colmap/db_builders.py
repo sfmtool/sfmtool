@@ -41,41 +41,37 @@ def _single_sensor_cameras(
     """The COLMAP cameras for images that each form a frame of their own.
 
     Returns `(camera, positions)` pairs, one per camera, in the order of each
-    camera's first image; `positions` index `image_paths`. With
-    `camrig_cameras` (the single-sensor `.camrig` files covering every image),
-    each file is one camera and an image takes the camera of the file that
-    covers it. Otherwise the images that resolve the same `camera_config.json`
-    share one camera built from that file, and the images that resolve none
-    share one camera inferred from EXIF. A camera is built from its first
-    image, so its focal length and principal point are scaled to that image's
-    resolution. With `camera_model`, the camera of each `camera_config.json`
-    is refit to it (one report line per camera) and the EXIF camera takes
-    that model; `.camrig` cameras arrive already refit by the resolver.
+    camera's first image; `positions` index `image_paths`. Each file of
+    `camrig_cameras` (the single-sensor `.camrig` files covering some or all
+    of the images) is one camera, and an image takes the camera of the file
+    that covers it. Of the images no such file covers, those that resolve the
+    same `camera_config.json` share one camera built from that file, and
+    those that resolve none share one camera inferred from EXIF. A camera is
+    built from its first image, so its focal length and principal point are
+    scaled to that image's resolution. With `camera_model`, the camera of
+    each `camera_config.json` is refit to it (one report line per camera) and
+    the EXIF camera takes that model; `.camrig` cameras arrive already refit
+    by the resolver.
     """
-    groups: dict[object, list[int]] = {}
-    if camrig_cameras is not None:
-        camera_of = {
-            path: index
-            for index, camrig_camera in enumerate(camrig_cameras)
-            for path in camrig_camera.images
-        }
-        for position, image_path in enumerate(image_paths):
-            key = camera_of[Path(image_path).resolve()]
-            groups.setdefault(key, []).append(position)
-    else:
-        for position, image_path in enumerate(image_paths):
-            resolved = (
-                camera_config_resolver.resolve_for_image(Path(image_path))
-                if camera_config_resolver is not None
-                else None
-            )
+    camrig_index_of = {
+        path: index
+        for index, camrig_camera in enumerate(camrig_cameras or [])
+        for path in camrig_camera.images
+    }
+    # A group key is the index of a `.camrig` camera, the path of a
+    # `camera_config.json`, or `None` for the images whose camera EXIF gives.
+    groups: dict[int | Path | None, list[int]] = {}
+    for position, image_path in enumerate(image_paths):
+        key = camrig_index_of.get(Path(image_path).resolve())
+        if key is None and camera_config_resolver is not None:
+            resolved = camera_config_resolver.resolve_for_image(Path(image_path))
             key = resolved[0] if resolved is not None else None
-            groups.setdefault(key, []).append(position)
+        groups.setdefault(key, []).append(position)
 
     cameras: list[tuple[pycolmap.Camera, list[int]]] = []
     for key, positions in groups.items():
         first_image = Path(image_paths[positions[0]])
-        if camrig_cameras is not None:
+        if isinstance(key, int):
             intrinsics, prior = build_intrinsics_from_camera_config(
                 camrig_cameras[key].camera, first_image, None
             )
@@ -170,10 +166,11 @@ def _setup_db_single_sensor(
     """Set up a COLMAP database whose images are single-sensor frames.
 
     Each image is a frame of a trivial rig whose only sensor is its camera.
-    With `camrig_cameras` (from the single-sensor `.camrig` files covering
-    every image), each file supplies one camera; otherwise the cameras come
-    from `camera_config.json` / EXIF inference, one per resolved file and one
-    for the images that resolve none (`_single_sensor_cameras`).
+    Each of `camrig_cameras` (from the single-sensor `.camrig` files covering
+    some or all of the images) supplies one camera; the images none of them
+    covers take cameras from `camera_config.json` / EXIF inference, one per
+    resolved file and one for the images that resolve none
+    (`_single_sensor_cameras`).
     `include_descriptors=False` skips reading and writing the descriptor
     blocks — matchers that only use the database for pycolmap geometric
     verification (cluster, flow) never read them back, and they are by far

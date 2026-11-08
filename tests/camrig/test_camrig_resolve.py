@@ -4,14 +4,17 @@
 """Tests for `resolve_camrig_for_solve` and the `.camrig` pattern-matching
 grammar (`camrig_pattern_matches`)."""
 
+import json
 import shutil
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from sfmtool.camera.config import CameraConfigResolver
 from sfmtool.camrig.resolver import (
     CamrigSolveError,
+    find_covering_camrigs,
     resolve_camrig_for_solve,
 )
 from sfmtool.fileio import (
@@ -134,16 +137,34 @@ def test_resolve_camrig_rejects_an_image_matched_twice(tmp_path: Path):
     assert "camera-all.camrig and" in message
 
 
-def test_resolve_camrig_rejects_partial_coverage_by_several_files(tmp_path: Path):
+def test_resolve_camrig_leaves_uncovered_images_to_camera_config(
+    tmp_path: Path, capsys
+):
+    # Images no .camrig covers keep the camera_config.json they resolve, and a
+    # line says how many there are and where their cameras come from.
     a, b = _split_seoul_images(tmp_path / "images")
-    stray = _touch_images(tmp_path / "other", ["c.jpg"])
-    _make_camrig(tmp_path / "camera-shopA.camrig", ["images/shopA_%05d.jpg"])
-    _make_camrig(tmp_path / "camera-shopB.camrig", ["images/shopB_%05d.jpg"])
-    with pytest.raises(CamrigSolveError) as excinfo:
-        resolve_camrig_for_solve(a + b + stray, tmp_path, None)
-    message = str(excinfo.value)
-    assert "match only 3 of 4 images being solved" in message
-    assert f"e.g. {stray[0].resolve()} is not matched by any of" in message
+    other = _touch_images(tmp_path / "other", ["c.jpg", "d.jpg"])
+    (tmp_path / "other" / "camera_config.json").write_text(
+        json.dumps({"version": 1, "camera_intrinsics": _simple_pinhole_camera()})
+    )
+    for video in ("shopA", "shopB"):
+        _make_camrig(
+            tmp_path / f"camera-{video}.camrig",
+            [f"images/{video}_%05d.jpg"],
+            camera=_camera(270, 480),
+        )
+    result = resolve_camrig_for_solve(
+        a + b + other, tmp_path, None, CameraConfigResolver(tmp_path)
+    )
+    assert [c.images for c in result.cameras] == [
+        {p.resolve() for p in a},
+        {p.resolve() for p in b},
+    ]
+    out = capsys.readouterr().out
+    assert (
+        "Camera intrinsics: 2 of 5 images being solved are covered by no "
+        f".camrig, e.g. {other[0].resolve()}; they use camera_config.json.\n"
+    ) in out
 
 
 def test_resolve_camrig_rejects_a_rig_with_another_camrig(tmp_path: Path):
@@ -186,12 +207,41 @@ def test_resolve_camrig_refits_each_file_camera(tmp_path: Path, capsys):
     assert f"Camera 0 of {shop_b.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL" in out
 
 
-def test_resolve_camrig_rejects_partial_coverage(tmp_path: Path):
-    covered = _touch_images(tmp_path / "imgs", ["a.jpg", "b.jpg"])
-    stray = _touch_images(tmp_path / "other", ["c.jpg"])
-    _make_camrig(tmp_path / "rig.camrig", ["imgs/*.jpg"])
-    with pytest.raises(CamrigSolveError, match="only"):
-        resolve_camrig_for_solve(covered + stray, tmp_path, None)
+def test_resolve_camrig_one_file_covering_some_images(tmp_path: Path, capsys):
+    # One single-sensor .camrig covering only some of the images follows the
+    # same rule as several: its images take its camera and the others fall
+    # back, here to EXIF inference.
+    a, b = _split_seoul_images(tmp_path / "images")
+    _make_camrig(
+        tmp_path / "camera-shopA.camrig",
+        ["images/shopA_%05d.jpg"],
+        camera=_simple_pinhole_camera(),
+    )
+    result = resolve_camrig_for_solve(a + b, tmp_path, None)
+    assert [c.camrig_file.name for c in result.cameras] == ["camera-shopA.camrig"]
+    assert result.cameras[0].images == {p.resolve() for p in a}
+    out = capsys.readouterr().out
+    assert (
+        "Camera intrinsics: 1 of 3 images being solved are covered by no "
+        f".camrig, e.g. {b[0].resolve()}; they use EXIF inference.\n"
+    ) in out
+
+
+def test_resolve_camrig_rejects_a_rig_covering_some_images(tmp_path: Path):
+    # A multi-sensor .camrig defines the frames of its images, so it must
+    # cover every image being solved.
+    imgs = _touch_images(tmp_path / "left", ["f_1.jpg"])
+    imgs += _touch_images(tmp_path / "right", ["f_1.jpg"])
+    stray = _touch_images(tmp_path / "solo", ["s.jpg"])
+    _make_camrig(
+        tmp_path / "rig.camrig", ["left/f_%d.jpg", "right/f_%d.jpg"], sensor_count=2
+    )
+    with pytest.raises(CamrigSolveError) as excinfo:
+        resolve_camrig_for_solve(imgs + stray, tmp_path, None)
+    message = str(excinfo.value)
+    assert "rig.camrig matches only 2 of 3 images being solved" in message
+    assert f"e.g. {stray[0].resolve()} is not matched by any sensor" in message
+    assert "A multi-sensor .camrig must cover all of the images" in message
 
 
 def _simple_pinhole_camera(focal: float = 300.0) -> dict:
@@ -405,11 +455,12 @@ def test_resolve_camrig_rejects_aspect_mismatch(tmp_path: Path):
 def test_resolve_camrig_frame_field_excludes_non_digit(tmp_path: Path):
     # A frame-field pattern must not cover a sibling whose name is not a frame
     # number, even though the loose glob (`cam_%04d.jpg` -> `cam_*.jpg`) hits
-    # it. Here the stray file makes coverage partial rather than complete.
+    # it.
     imgs = _touch_images(tmp_path / "imgs", ["cam_0001.jpg", "cam_extra.jpg"])
     _make_camrig(tmp_path / "rig.camrig", ["imgs/cam_%04d.jpg"])
-    with pytest.raises(CamrigSolveError, match="only"):
-        resolve_camrig_for_solve(imgs, tmp_path, None)
+    ((camrig_file, _data, covered),) = find_covering_camrigs(imgs, tmp_path)
+    assert camrig_file.name == "rig.camrig"
+    assert covered == {imgs[0].resolve()}
 
 
 def test_resolve_camrig_globstar_pattern(tmp_path: Path):

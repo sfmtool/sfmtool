@@ -98,18 +98,18 @@ def find_rigs(image_paths: list[Path], workspace_dir: Path):
     """The rigs that group `image_paths` into rig frames, found as `sfm solve`
     finds them: `(rig_configs, camrig_rig, notes)`.
 
-    `.camrig` files that together cover every one of the images take
-    precedence over `rig_config.json`: a multi-sensor one, which covers them
-    alone, is returned as a `CamrigRig` whose assignments hold the images, and
-    single-sensor ones, each a camera only, define no rig. With no `.camrig`
-    covering any of the images, `rig_configs` is the workspace's
-    `rig_config.json`, or `None`. `notes` are the lines to print about the
-    choice.
+    `.camrig` files covering any of the images take precedence over
+    `rig_config.json`: a multi-sensor one, which covers them all and alone, is
+    returned as a `CamrigRig` whose assignments hold the images, and
+    single-sensor ones, each a camera only, define no rig, whether or not
+    they cover every image. With no `.camrig` covering any of the images,
+    `rig_configs` is the workspace's `rig_config.json`, or `None`. `notes` are
+    the lines to print about the choice.
 
-    Raises `PickImagesInputError` when the `.camrig` files cover only some of
-    the images, an image is matched by more than one `.camrig`, or a
-    multi-sensor `.camrig` comes with another, which `sfm solve` refuses, or
-    when a `.camrig` or `rig_config.json` cannot be used.
+    Raises `PickImagesInputError` when an image is matched by more than one
+    `.camrig`, or a multi-sensor `.camrig` covers only some of the images or
+    comes with another `.camrig`, which `sfm solve` refuses, or when a
+    `.camrig` or `rig_config.json` cannot be used.
     """
     from .camrig.resolver import (
         CamrigRig,
@@ -136,8 +136,8 @@ def find_rigs(image_paths: list[Path], workspace_dir: Path):
         notes.append(f"  Camera rig: {camrig_file} ({sensor_count} sensors)")
     if rig_configs is not None:
         notes.append(
-            "Note: a .camrig covers these images; rig_config.json is ignored "
-            "(the .camrig takes precedence)."
+            "Note: a .camrig covers some or all of these images; rig_config.json "
+            "is ignored (the .camrig takes precedence)."
         )
     if sensor_count == 1:  # one or more single-sensor .camrig files
         return None, None, notes

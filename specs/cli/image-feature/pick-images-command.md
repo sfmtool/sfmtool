@@ -180,11 +180,12 @@ A frame's images are the reference sensor's first, then the others. The
 sensors are those that appear in the input files, so a rig given one sensor's
 folder is walked as a rig of that sensor alone.
 
-- **`.camrig` files that cover every input file** take precedence over
+- **`.camrig` files that cover any input file** take precedence over
   `rig_config.json`, and a line notes that `rig_config.json` is ignored when
   the workspace has one. A **multi-sensor** `.camrig`, such as `sfm insv2rig`
-  writes, covers the input files alone and makes them one rig sequence: each
-  sensor's image pattern, relative to the `.camrig`'s folder, gives each file it matches its sensor and
+  writes, covers all of the input files, alone, and makes them one rig
+  sequence: each sensor's image pattern, relative to the `.camrig`'s folder,
+  gives each file it matches its sensor and
   its frame index, the number the pattern's frame field captures, and the files
   of one frame index are one rig frame (`_build_rig_assignments`, which
   `sfm solve` groups a rig's images with). The frame index is the frame's
@@ -196,14 +197,16 @@ folder is walked as a rig of that sensor alone.
   (`  Camera rig: /captures/kp/kp.camrig (2 sensors)`). A **single-sensor**
   `.camrig` describes a camera, not a rig, so one or more single-sensor
   `.camrig` files, such as one per video of a capture shot with two lenses,
-  leave the files grouped into ordinary sequences.
-- **`.camrig` files that cover only some of the input files**, an input file
-  that more than one `.camrig` matches, and a multi-sensor `.camrig` together
-  with another `.camrig` are refused before any image is read, naming the
-  `.camrig` files, since `sfm solve` refuses the same images and a list holding
-  them would be of no use to it. Such a capture is picked in parts, each made
-  of images that one multi-sensor `.camrig` alone, or single-sensor `.camrig`
-  files together, cover.
+  leave the files grouped into ordinary sequences, whether or not they cover
+  every input file: `sfm solve` gives the images they do not cover cameras
+  from `camera_config.json` or EXIF inference.
+- **A multi-sensor `.camrig` that covers only some of the input files**, an
+  input file that more than one `.camrig` matches, and a multi-sensor
+  `.camrig` together with another `.camrig` are refused before any image is
+  read, naming the `.camrig` files, since `sfm solve` refuses the same images
+  and a list holding them would be of no use to it. Such a capture is picked
+  in parts, each made of the images of one multi-sensor `.camrig`, or of
+  images no multi-sensor `.camrig` covers.
 - **With no `.camrig` covering any input file**, the workspace's
   `rig_config.json` ([workspace/rig-config.md](../../workspace/rig-config.md))
   defines the rigs, when it has one. An image under one of a rig's sensor
