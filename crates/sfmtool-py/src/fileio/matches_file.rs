@@ -29,6 +29,9 @@ use crate::helpers::serde_to_py;
 #[pyclass(name = "MatchesFile", module = "sfmtool.fileio", frozen)]
 pub struct PyMatchesFile {
     inner: MatchesData,
+    /// The workspace of the file the handle was read from, resolved once when
+    /// it was opened; a `select_clusters` handle keeps its source's.
+    workspace_dir: Option<PathBuf>,
 }
 
 impl PyMatchesFile {
@@ -106,7 +109,11 @@ impl PyMatchesFile {
     #[new]
     fn new(path: PathBuf) -> PyResult<Self> {
         let inner = sfmtool_matches_format::read_matches(&path).map_err(read_err)?;
-        Ok(Self { inner })
+        let workspace_dir = sfmtool_matches_format::resolve_workspace_dir(&path, &inner.metadata);
+        Ok(Self {
+            inner,
+            workspace_dir,
+        })
     }
 
     /// Top-level metadata as a dict (same shape as `read_matches_metadata`).
@@ -120,6 +127,20 @@ impl PyMatchesFile {
     #[getter]
     fn content_xxh128(&self) -> &str {
         &self.inner.content_hash.content_xxh128
+    }
+
+    /// The workspace directory of the file the handle was opened from, as a
+    /// string, or `None` when none is found. It is the `workspace_dir` that
+    /// `read_matches` returns for the same path: the recorded relative path,
+    /// then the recorded absolute path, then the nearest directory above the
+    /// file, each only when it holds `.sfm-workspace.json`. It is found once,
+    /// when the file is opened, and a `select_clusters` handle keeps its
+    /// source's.
+    #[getter]
+    fn workspace_dir(&self) -> Option<String> {
+        self.workspace_dir
+            .as_ref()
+            .map(|dir| dir.to_string_lossy().into_owned())
     }
 
     /// Image paths relative to the workspace directory (POSIX format).
@@ -487,7 +508,10 @@ impl PyMatchesFile {
             .inner
             .select_clusters(&opts)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            workspace_dir: self.workspace_dir.clone(),
+        })
     }
 
     /// Write this handle's data to a new `.matches` file (content hashes

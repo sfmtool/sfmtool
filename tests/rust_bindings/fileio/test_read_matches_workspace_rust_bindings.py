@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests that `read_matches` returns the workspace directory a `.matches` file
-records, under the `workspace_dir` key.
+records, under the `workspace_dir` key, and that a `MatchesFile` opened from
+the same path reports the same directory as its `workspace_dir`.
 
 The rule (relative path, then absolute path, then the nearest marked directory
 above the file) is `resolve_workspace_dir` in `sfmtool-matches-format`, whose
-Rust tests cover each step; these check that the binding reports what that
+Rust tests cover each step; these check that the bindings report what that
 rule finds, and `None` when it finds nothing.
 """
 
@@ -15,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfmtool.fileio import read_matches, write_matches
+from sfmtool.fileio import MatchesFile, read_matches, write_matches
 
 
 def _matches_data(relative_path: str, absolute_path: Path) -> dict:
@@ -89,3 +90,4 @@ def test_read_matches_resolves_the_recorded_workspace(
         assert workspace_dir is None
     else:
         assert Path(workspace_dir).resolve() == (tmp_path / expected).resolve()
+    assert MatchesFile(path).workspace_dir == workspace_dir

@@ -1,17 +1,18 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The `-r/--range` and `--named-image-list` options shared by nine commands.
+"""The `-r/--range` and `--named-image-list` options shared by ten commands.
 
 `sfm sift`, `sfm match`, `sfm motion`, `sfm pick-images` and `sfm solve` pick
 images from image directories; `sfm analyze --metrics`, `sfm panorama`,
-`sfm to-colmap-bin` and `sfm to-nerfstudio` pick them from a reconstruction. Each takes `-r/--range`,
+`sfm to-colmap-bin` and `sfm to-nerfstudio` pick them from a reconstruction;
+`sfm estimate-intrinsics` picks them from a `.matches` file. Each takes `-r/--range`,
 whose value is either a range expression of file numbers or the name of a
 named image list of the workspace, optionally followed by a slice such as
 `[:30]`, and `--named-image-list NAME`, the long form for a list. One name and
 one range together narrow the list, and a slice then takes part of the
 narrowed list by position. The options, the rule that tells a name from a
-range, the errors and the resolution of a list all live here so that the nine
+range, the errors and the resolution of a list all live here so that the ten
 commands cannot drift apart.
 
 A range on its own reaches each command as the string it always took
@@ -19,8 +20,9 @@ A range on its own reaches each command as the string it always took
 and is unchanged. A list is resolved here: against the workspace's files for
 the image-directory commands (`resolve_list_images`), and against a
 reconstruction's image names for the others
-(`reconstruction_list_indices`). `sfm solve` with a `.matches` file filters
-the file's images by a range or a list through `matches_image_filter`. The
+(`reconstruction_list_indices`). `sfm solve` with a `.matches` file, and
+`sfm estimate-intrinsics`, filter the file's images by a range or a list
+through `matches_image_filter`. The
 `sfmtool.workspace` bindings split a value into a name and a slice and apply
 the slice, and hold the rules and the messages for both.
 
@@ -73,6 +75,14 @@ _LIST_HELP = {
         "'NAME[:30]', then takes part of the members the reconstruction holds "
         "by position."
     ),
+    "matches": (
+        "Use only the .matches file's images that are among this named image "
+        "list's images, with the list read from the "
+        ".sfm-named-image-lists.json of the file's workspace. With -r RANGE, "
+        "keep only the members whose frame number is in RANGE. A slice after "
+        "the name, such as 'NAME[:30]', takes part of the list's images by "
+        "position."
+    ),
 }
 
 
@@ -114,8 +124,9 @@ def range_option(
 
     `range_help` is what the command's range does; the sentence about list
     names is added to it. `on` is `"paths"` for a command that picks images
-    from image directories and `"reconstruction"` for one that picks them from
-    a reconstruction. `list_help_extra` is added to the help of
+    from image directories, `"reconstruction"` for one that picks them from
+    a reconstruction and `"matches"` for one that picks them from a
+    `.matches` file. `list_help_extra` is added to the help of
     `--named-image-list`, for what a list does in the command beyond that. The
     command receives `range_expr`, a tuple of the `-r` values, and
     `named_image_list`, and turns them into an `ImageSelection` with
@@ -321,6 +332,7 @@ def matches_image_filter(
     matches_file: str | Path,
     *,
     extensions: tuple[str, ...],
+    echo: Callable[[str], None] = print,
 ) -> "MatchesImageFilter | None":
     """The filter `selection` puts on the images of a `.matches` file, or
     None when it asks for none.
@@ -331,7 +343,8 @@ def matches_image_filter(
     resolved in the `.matches` file's workspace: so a slice counts positions
     in the list, and the list's images the file does not hold are then
     ignored. Either way the kept images stay in the file's order, and keeping
-    none is an error naming the range or the list and the file.
+    none is an error naming the range or the list and the file. `echo`
+    prints the count of the list's images the file does not hold.
     """
     from ..colmap.db_setup import MatchesImageFilter
 
@@ -368,7 +381,7 @@ def matches_image_filter(
                 f"images of {matches_file}."
             )
         if len(kept) < len(images):
-            print(
+            echo(
                 f"{len(images) - len(kept)} of the {len(images)} images of "
                 f"{selection.describe_list()} are not in {matches_file} and "
                 "are ignored."

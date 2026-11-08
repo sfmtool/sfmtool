@@ -25,6 +25,11 @@ from pathlib import Path
 
 import click
 
+from ._range_options import matches_image_filter, parse_image_selection, range_option
+
+# The extensions a named image list's members must carry to be selected, the
+# same test `sfm solve` applies to a list given with a `.matches` file.
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 
 # `--model` -> the `columns` the kernel evaluates. The named forms run a single
 # column, so the binding reports that column's own consensus and no arbitration
@@ -67,21 +72,24 @@ def _resolve_dimensions(image_dims, image_names: list[str]) -> tuple[int, int]:
             example = image_names[int(np.flatnonzero((dims == (w, h)).all(1))[0])]
             lines.append(f"  {w}x{h}  ({count} image(s))  e.g. {example}")
         raise click.UsageError(
-            "the images in this .matches file have more than one resolution, "
-            "and the vote estimates ONE shared camera:\n"
+            "the selected images of this .matches file have more than one "
+            "resolution, and the vote estimates ONE shared camera:\n"
             + "\n".join(lines)
-            + "\nSplit the images into per-camera .matches files and estimate "
-            "each separately."
+            + "\nSelect one camera's images with -r, or split the images into "
+            "per-camera .matches files, and estimate each separately."
         )
     return int(distinct[0][0]), int(distinct[0][1])
 
 
-def _load_selection(matches_path: Path) -> tuple:
+def _load_selection(matches_path: Path, image_selection) -> tuple:
     """The selection the vote runs on, and what the report says about it.
 
-    Every cluster the file admits votes: the selection is the unrestricted one
-    (all images, the format's own member admission), because the vote is a
-    referee over the capture's full pair graph. The selection handle goes
+    Without `-r` every cluster the file admits votes, on all its images, under
+    the format's own member admission. With `-r` the images are those
+    `matches_image_filter` keeps -- the same resolution `sfm solve` gives a
+    range or a named image list on a `.matches` file -- and the selection is
+    restricted to them, so only members on those images vote and a cluster
+    left spanning fewer than two of them drops. The selection handle goes
     straight to the kernel, which reads the backbone's own CSR arrays and
     member positions off it -- so nothing is re-derived here beyond the
     counts and the image size the report and the `.camrig` need.
@@ -96,23 +104,47 @@ def _load_selection(matches_path: Path) -> tuple:
             f"{matches_path} has no clusters section; run `sfm match --cluster` "
             "to produce a cluster-bearing .matches file"
         )
-    image_names = list(mfile.image_names)
+    file_image_names = list(mfile.image_names)
+    image_filter = matches_image_filter(
+        image_selection,
+        matches_path,
+        extensions=_IMAGE_EXTENSIONS,
+        echo=lambda line: click.echo(line, err=True),
+    )
+    if image_filter is None:
+        workspace_dir = None
+        selection = mfile.select_clusters()
+    else:
+        if mfile.workspace_dir is None:
+            raise click.ClickException(
+                f"Cannot resolve workspace for {matches_path}. "
+                "Ensure the workspace exists and contains .sfm-workspace.json."
+            )
+        workspace_dir = Path(mfile.workspace_dir)
+        kept = image_filter.keep(workspace_dir, file_image_names)
+        selection = mfile.select_clusters(
+            restrict_images=[file_image_names[i] for i in kept]
+        )
+    image_names = list(selection.image_names)
     # The kernel enforces the shared-camera rule too; resolving it here first
     # is what turns it into a message naming the offending resolutions.
-    width, height = _resolve_dimensions(mfile.image_dims, image_names)
+    width, height = _resolve_dimensions(selection.image_dims, image_names)
 
-    selection = mfile.select_clusters()
     starts = np.asarray(selection.cluster_starts, dtype=np.int64)
-    if len(starts) < 2 or starts[-1] == 0:
+    if image_filter is None and (len(starts) < 2 or starts[-1] == 0):
         raise click.UsageError(
             f"{matches_path} holds no cluster observations to vote on"
         )
     return selection, {
+        "matches_path": matches_path,
         "image_names": image_names,
+        "file_image_names": file_image_names,
+        "selection_label": None if image_filter is None else image_filter.label,
+        "workspace_dir": workspace_dir,
         "width": width,
         "height": height,
-        "cluster_count": len(starts) - 1,
-        "observation_count": int(starts[-1]),
+        "cluster_count": max(len(starts) - 1, 0),
+        "observation_count": int(starts[-1]) if len(starts) else 0,
     }
 
 
@@ -149,8 +181,16 @@ def _report_lines(estimate: dict, data: dict) -> list[str]:
     focal = estimate["focal_px"]
     confirmed = estimate["confirmed"]
 
+    n_images = len(data["image_names"])
+    if data["selection_label"] is None:
+        images = f"{n_images}"
+    else:
+        images = (
+            f"{n_images} of {len(data['file_image_names'])} selected "
+            f"({data['selection_label']})"
+        )
     lines = [
-        f"Images:        {len(data['image_names'])} @ {width}x{height}",
+        f"Images:        {images} @ {width}x{height}",
         f"Clusters:      {data['cluster_count']} "
         f"({data['observation_count']} observations)",
         "",
@@ -236,16 +276,20 @@ def _report_lines(estimate: dict, data: dict) -> list[str]:
     return lines
 
 
-def _derive_pattern(image_names: list[str]) -> str:
-    """The matches' common image directory plus one `*` per level below it.
+def _derive_pattern(image_names: list[str], *, name_prefix: bool = False) -> str:
+    """The images' common directory plus one `*` per level below it.
 
     The image table is POSIX workspace-relative, so the common prefix is taken
     on path segments -- never mid-name. A glob's `*` does not cross `/`, so
     names sitting a uniform depth below the common directory (a rig's
     per-sensor subdirectories, say) get one `*` segment per level. The final
-    glob keeps the extension the matches' names actually carry, so a flat
-    layout does not sweep up the workspace's own files; a mix of extensions
-    falls back to a bare `*`.
+    glob keeps the extension the names actually carry, so a flat layout does
+    not sweep up the workspace's own files; a mix of extensions falls back to
+    a bare `*`. With `name_prefix` the final glob also starts with the common
+    prefix of the names' stems (their file names less the extension), cut
+    before its first `*`, `?` or `[`, less any digits it then ends in, and
+    with each `%` written `%%`: so `shopA_00001.jpg` ... `shopA_01089.jpg`
+    give `shopA_*.jpg` rather than a pattern fixing part of the frame number.
     """
     import os.path
 
@@ -258,6 +302,18 @@ def _derive_pattern(image_names: list[str]) -> str:
         common = ""
     exts = {Path(name).suffix for name in image_names}
     glob = f"*{exts.pop()}" if len(exts) == 1 and "" not in exts else "*"
+    if name_prefix:
+        prefix = os.path.commonprefix([Path(name).stem for name in image_names])
+        # The prefix is literal text, so it stops before the first character
+        # a pattern cannot hold literally: `*` is always a wildcard, and `?`
+        # and `[` are read as wildcards by the filesystem walk that expands a
+        # pattern (`camrig/pattern.py` globs it with pathlib).
+        for i, c in enumerate(prefix):
+            if c in "*?[":
+                prefix = prefix[:i]
+                break
+        # A literal `%` is written `%%`, so it is not read as a frame field.
+        glob = prefix.rstrip("0123456789").replace("%", "%%") + glob
     common_depth = len(Path(common).parts) if common else 0
     depths = {len(Path(name).parts) - common_depth for name in image_names}
     # One "*" per directory level between the common dir and the file names;
@@ -266,6 +322,25 @@ def _derive_pattern(image_names: list[str]) -> str:
     levels = depths.pop() if len(depths) == 1 else 1
     segments = ["*"] * max(levels - 1, 0) + [glob]
     return "/".join(([common] if common else []) + segments)
+
+
+def _left_out_matches(rig_root: Path, found: list[str], data: dict) -> list[str]:
+    """The `.matches` file's images that `-r` left out of the estimate and
+    `found`, paths relative to `rig_root`, holds, as the file names them."""
+    import os.path
+
+    selected = set(data["image_names"])
+    left_out = [n for n in data["file_image_names"] if n not in selected]
+    if not left_out:
+        return []
+    workspace_dir = Path(data["workspace_dir"])
+
+    def key(path: Path) -> str:
+        return os.path.normcase(str(path.resolve()))
+
+    by_path = {key(workspace_dir / name): name for name in left_out}
+    root = rig_root.resolve()
+    return [by_path[k] for p in found if (k := key(root / p)) in by_path]
 
 
 def _write_camrig(
@@ -303,18 +378,38 @@ def _write_camrig(
         )
 
     # The `.camrig` pattern is resolved against the rig root, which the format
-    # defines as the file's own directory.
+    # defines as the file's own directory. A derived pattern that would also
+    # cover images of the file that `-r` left out is narrowed to the selected
+    # names' common prefix; a pattern that still covers one is refused, since
+    # the `.camrig` would give those images an estimate they took no part in.
     rig_root = output_path.parent
-    try:
-        stored_pattern = normalize_pattern(
-            pattern if pattern else _derive_pattern(data["image_names"])
-        )
-        find_images(rig_root, stored_pattern)
-    except CamrigCreateError as e:
+    if pattern:
+        candidates = [pattern]
+    else:
+        candidates = [_derive_pattern(data["image_names"])]
+        narrowed = _derive_pattern(data["image_names"], name_prefix=True)
+        if narrowed != candidates[0]:
+            candidates.append(narrowed)
+    for candidate in candidates:
+        try:
+            stored_pattern = normalize_pattern(candidate)
+            found = find_images(rig_root, stored_pattern)
+        except CamrigCreateError as e:
+            raise click.ClickException(
+                f"{e}\nPass --pattern to name the images this rig describes, "
+                f"relative to {rig_root}."
+            ) from None
+        left_out = _left_out_matches(rig_root, found, data)
+        if not left_out:
+            break
+    else:
         raise click.ClickException(
-            f"{e}\nPass --pattern to name the images this rig describes, "
-            f"relative to {rig_root}."
-        ) from None
+            f"pattern {stored_pattern!r} matches {len(left_out)} image(s) of "
+            f"{data['matches_path']} that -r left out of the estimate, such as "
+            f"{left_out[0]}, and the .camrig would give them this camera.\n"
+            "Pass --pattern to name only the selected images, relative to "
+            f"{rig_root}."
+        )
 
     camera = {
         "model": _CAMRIG_MODEL[verdict],
@@ -355,6 +450,11 @@ def _write_camrig(
     type=click.Path(exists=True, dir_okay=False),
     help="Cluster-bearing .matches file (from sfm match --cluster).",
 )
+@range_option(
+    "A range expression of file numbers: estimate from only the .matches "
+    "file's images whose file number it holds.",
+    on="matches",
+)
 @click.option(
     "--model",
     "model_option",
@@ -378,9 +478,11 @@ def _write_camrig(
     "--pattern",
     default=None,
     help=(
-        "Image pattern stored in the .camrig; defaults to the matches' common "
-        "image directory plus one '*' segment per directory level below it, "
-        "ending '*<ext>' for the extension the image names share."
+        "Image pattern stored in the .camrig; defaults to the selected images' "
+        "common directory plus one '*' segment per directory level below it, "
+        "ending '*<ext>' for the extension their names share, and narrowed "
+        "to their names' common prefix ('<prefix>*<ext>') when it would "
+        "otherwise match images of the file that -r left out."
     ),
 )
 @click.option(
@@ -418,6 +520,8 @@ def _write_camrig(
 )
 def estimate_intrinsics(
     input_path,
+    range_expr,
+    named_image_list,
     model_option,
     camrig_path,
     pattern,
@@ -437,6 +541,10 @@ def estimate_intrinsics(
     mass of model-informative scan votes -- only when that pinhole vote comes
     back weak. The report says which of the two happened, and why.
 
+    -r selects the file's images to estimate from, as `sfm solve -r` selects
+    them from a .matches file: only members on those images vote, so one
+    .matches file over a whole capture can be estimated per camera.
+
     The report is the product: a capture with no consensus still exits 0.
     Passing --write-camrig also commits the estimate as a one-sensor .camrig,
     which `sfm solve` picks up as the intrinsics prior for the images its
@@ -447,20 +555,23 @@ def estimate_intrinsics(
         sfm estimate-intrinsics -i matches/clusters.matches
         sfm estimate-intrinsics -i matches/clusters.matches \\
             --write-camrig images.camrig
+        sfm estimate-intrinsics -i matches/clusters.matches -r video1 \\
+            --write-camrig video1.camrig
     """
     import json as json_module
 
     from .._sfmtool.geometry import estimate_intrinsics as estimate
 
+    image_selection = parse_image_selection(range_expr, named_image_list)
     try:
-        selection, data = _load_selection(Path(input_path))
+        selection, data = _load_selection(Path(input_path), image_selection)
         result = estimate(
             selection,
             seed=seed,
             draws=draws,
             columns=_MODEL_COLUMNS[model_option.lower()],
         )
-    except click.UsageError:
+    except click.ClickException:
         raise
     except Exception as e:
         raise click.ClickException(str(e)) from None
@@ -472,6 +583,8 @@ def estimate_intrinsics(
         # the estimate adds beyond the vote is what gets added here.
         vote = result["vote"]
         payload = dict(vote)
+        payload["image_count"] = len(data["file_image_names"])
+        payload["selected_image_count"] = len(data["image_names"])
         payload["fisheye_confirmed"] = result["confirmed"]
         equidistant = next(
             (c for c in vote["columns"] if c["camera_model"] == _EQUIDISTANT), None
@@ -500,5 +613,7 @@ def estimate_intrinsics(
 
     if camrig_path is not None:
         summary = _write_camrig(Path(camrig_path), pattern, result, data, force)
-        click.echo("")
-        click.echo(summary)
+        # Under --json stdout holds the JSON alone, so the summary of the
+        # write goes to stderr.
+        click.echo("", err=as_json)
+        click.echo(summary, err=as_json)

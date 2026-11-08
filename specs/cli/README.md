@@ -36,7 +36,7 @@ numpy, OpenCV, pycolmap and the command modules.
 A helper that several commands share is a `_`-named module in
 `sfmtool._commands`, so it has no row in `COMMANDS`.
 [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py) holds
-the `-r/--range` and `--named-image-list` options that nine commands share
+the `-r/--range` and `--named-image-list` options that ten commands share
 ([below](#the-shared--r--range-option)), and the `--filter-points` option of
 `sfm to-colmap-bin` and `sfm to-nerfstudio`.
 [`_sfmr_path.py`](../../src/sfmtool/_commands/_sfmr_path.py) provides
@@ -52,18 +52,20 @@ they all report that mistake in the same words.
 
 ## The shared `-r/--range` option
 
-Nine commands take `-r/--range`:
+Ten commands take `-r/--range`:
 
 - On image directories, matched against each file's number by
   `number_from_filename`: `sfm sift`, `sfm match`, `sfm motion`,
   `sfm pick-images` and `sfm solve`.
 - On a reconstruction's images: `sfm analyze` (with `--metrics`),
   `sfm panorama`, `sfm to-colmap-bin` and `sfm to-nerfstudio`.
+- On a `.matches` file's images: `sfm estimate-intrinsics`, as `sfm solve`
+  does when given a `.matches` file.
 
 Its value is either a range expression of file numbers or the name of one of
 the workspace's named image lists
 ([`../workspace/named-image-lists.md`](../workspace/named-image-lists.md)),
-optionally followed by a slice. Each of the nine commands handles it the same
+optionally followed by a slice. Each of the ten commands handles it the same
 way:
 
 - **A value with a letter or a `[` in it is a list name; any other value is a
@@ -132,7 +134,11 @@ not among the file's images. The images of the list the file does not hold
 are ignored, and the command prints how many; when the file holds none of
 them, it is an error naming the lists file, the list and the `.matches`
 file. The kept images stay in the file's order. A range given alone keeps the
-file's images whose file number it holds.
+file's images whose file number it holds. `estimate-intrinsics` selects the
+images of its `.matches` file the same way, through the same function, and
+prints the count of the list's images the file does not hold on stderr, so
+its `--json` output stays parseable
+([estimate-intrinsics-command.md](reconstruction/estimate-intrinsics-command.md#selecting-images)).
 
 **The reconstruction commands.** For `analyze --metrics`, `panorama`,
 `to-colmap-bin` and `to-nerfstudio`, the list is resolved in the

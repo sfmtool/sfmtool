@@ -10,7 +10,7 @@ a reconstruction records, the slice that takes part of a list by position, and
 how lists are added to the file or replaced in it.
 The set is called a **named image list** ([GLOSSARY.md](../GLOSSARY.md)).
 
-The nine commands that take `-r/--range` accept a list's name there, with
+The ten commands that take `-r/--range` accept a list's name there, with
 `--named-image-list` as the long form, and a [slice](#slices) after the name
 (`-r 'walk1[:30]'`); how they reach a list and which of its members they use
 is in [the commands](#the-commands) below and in
@@ -123,9 +123,9 @@ first by a range when one is given, and reduced to what the command uses:
   `sfm solve`, the members that are image files, after the extension test
   those commands apply ([the commands](#the-commands)), so `walk1[:30]` is 30
   images whenever the list has 30, even when its patterns also match files
-  that are not images. `sfm solve` with a `.matches` file takes the same
-  array, resolved in the file's workspace, and then keeps the images the
-  slice selects that the file holds, so `walk1[:30]` means the same 30 images
+  that are not images. `sfm solve` with a `.matches` file, and
+  `sfm estimate-intrinsics`, take the same array, resolved in the file's
+  workspace, and then keep the images the slice selects that the file holds, so `walk1[:30]` means the same 30 images
   with or without the file and is fewer when the file lacks some of them.
 - For `sfm analyze --metrics`, `sfm panorama`, `sfm to-colmap-bin` and
   `sfm to-nerfstudio`, the members among the reconstruction's image names, in
@@ -382,6 +382,9 @@ extension test and the slice as for image paths, and then keeps the file's
 images whose names, workspace-relative, are among the images left; it drops
 the other images and every pair that involves one of them
 ([solve-command.md](../cli/reconstruction/solve-command.md#from-a-matches-file)).
+`sfm estimate-intrinsics` keeps the images of its `.matches` file the same
+way, and votes only on the cluster members on them
+([estimate-intrinsics-command.md](../cli/reconstruction/estimate-intrinsics-command.md#selecting-images)).
 The rules for telling a name from a range and the errors are in
 [`../cli/README.md`](../cli/README.md#the-shared--r--range-option). `sfm
 pick-images --write-list NAME` writes the frames it chooses as a list with
