@@ -7,10 +7,10 @@ The rules for grouping, naming and refusing are covered against synthetic
 estimates and image files of a few bytes, so those cases stay cheap. The
 end-to-end tests split the seoul bull images into sequences of both layouts,
 a folder per sequence and a name prefix per sequence in one folder, match
-them once with `sfm match --cluster`, and check that each sequence's
-`.camrig` holds the estimate `-r` gives for its images, and that the
-database `sfm solve` builds from the `.matches` file gives each sequence its
-own camera.
+them once with `sfm match --cluster`, and check that each sequence gets
+a `.camrig` holding the estimate `-r` gives for its images when that
+estimate can be written, and no file when it cannot, and that the database `sfm solve` builds from the
+`.matches` file gives each sequence with a `.camrig` its own camera.
 """
 
 import importlib
@@ -595,6 +595,31 @@ def _invoke(workspace: Path, *args: str):
     )
 
 
+def _vote(workspace: Path, *r_args: str) -> dict:
+    """The `--json` estimate `-r` gives the selected images."""
+    out = _invoke(workspace, *r_args, "--json")
+    assert out.exit_code == 0, out.output
+    return json.loads(out.stdout)
+
+
+def _refusal(vote: dict) -> str | None:
+    """The start of the reason a sequence whose vote is `vote` gets no
+    `.camrig`, or `None` when the vote is one the command writes.
+
+    The votes of these sequences of three to six images pool none to five
+    pair votes, against a minimum of two, and the orientations and
+    descriptors of the `.sift` files differ between platforms, so whether a
+    vote reaches a focal differs between platforms too: `-r 13-15` pools
+    three votes on Windows and one on Linux. The tests expect each
+    sequence's outcome to be the one its `-r` vote gives on the platform
+    they run on, rather than a written file."""
+    if vote["focal_px"] is None:
+        return "no focal consensus to write"
+    if vote["fisheye_confirmed"] is False:
+        return "refusing to write an UNCONFIRMED Fisheye estimate"
+    return None
+
+
 def test_each_sequence_gets_the_estimate_r_gives_its_images(split_capture, tmp_path):
     """Both cases share the one `sfm match --cluster` run of the module's
     fixture, which is most of the test's time."""
@@ -603,8 +628,15 @@ def test_each_sequence_gets_the_estimate_r_gives_its_images(split_capture, tmp_p
     )
 
     capture = _copy(split_capture, tmp_path / "ws")
+    selections = {
+        "images/shopB_%04d.jpg": ("-r", "7-12"),
+        "images/shopC_%04d.jpg": ("-r", "13-17"),
+        "vidA/%04d.jpg": ("-r", "vidA"),
+    }
+    votes = {pattern: _vote(capture, *r_args) for pattern, r_args in selections.items()}
     out = _invoke(capture, "--write-camrig-per-sequence", "--json")
-    assert out.exit_code == 0, out.output
+    writable = [p for p, vote in votes.items() if _refusal(vote) is None]
+    assert out.exit_code == (0 if writable else 1), out.output
     payload = json.loads(out.stdout)
     assert payload["image_count"] == 18
     assert payload["selected_image_count"] == 18
@@ -617,28 +649,25 @@ def test_each_sequence_gets_the_estimate_r_gives_its_images(split_capture, tmp_p
     assert lone["reason"].startswith("no focal consensus to write")
     assert not (capture / "images" / "lone.camrig").exists()
 
-    selections = {
-        "images/shopB_%04d.jpg": ("-r", "7-12"),
-        "images/shopC_%04d.jpg": ("-r", "13-17"),
-        "vidA/%04d.jpg": ("-r", "vidA"),
-    }
-    for pattern, r_args in selections.items():
+    for pattern, expected in votes.items():
         entry = entries[pattern]
         camrig_path, camrig_pattern = _SEQUENCES[pattern]
-        assert entry["written"] is True, entry["reason"]
         assert entry["camrig_path"] == camrig_path
         assert entry["camrig_pattern"] == camrig_pattern
         # The sequence's vote is the one `-r` runs on the same images; only
         # the count of the file's images differs, the sequence's against
         # the whole file's.
-        single = _invoke(capture, *r_args, "--json")
-        assert single.exit_code == 0, single.output
-        expected = json.loads(single.stdout)
-        assert expected["focal_px"] is not None
         assert entry["estimate"]["image_count"] == entry["image_count"]
         assert expected["image_count"] == 18
         del expected["image_count"], entry["estimate"]["image_count"]
         assert entry["estimate"] == expected, pattern
+        refusal = _refusal(expected)
+        if refusal is not None:
+            assert entry["written"] is False, pattern
+            assert entry["reason"].startswith(refusal), entry["reason"]
+            assert not (capture / camrig_path).exists()
+            continue
+        assert entry["written"] is True, entry["reason"]
         stored = read_camrig(capture / camrig_path)
         assert list(stored["sensor_image_patterns"]) == [camrig_pattern]
         assert stored["cameras"][0]["parameters"]["focal_length"] == pytest.approx(
@@ -647,8 +676,8 @@ def test_each_sequence_gets_the_estimate_r_gives_its_images(split_capture, tmp_p
         # Under --json the account of each written file goes to stderr.
         assert f"Wrote {capture / camrig_path}" in out.stderr
 
-    # The database `sfm solve` builds from the file gives each sequence's
-    # images the camera of its .camrig, and the lone image one of its own.
+    # The database `sfm solve` builds from the file gives each written
+    # sequence's images the camera of its .camrig, which no other image has.
     from sfmtool.colmap.db_setup import _setup_for_sfm_from_matches
 
     db_path, _, _, rig_used = _setup_for_sfm_from_matches(
@@ -658,25 +687,25 @@ def test_each_sequence_gets_the_estimate_r_gives_its_images(split_capture, tmp_p
     with pycolmap.Database.open(db_path) as db:
         cameras = {c.camera_id: c for c in db.read_all_cameras()}
         camera_of = {i.name: i.camera_id for i in db.read_all_images()}
-    assert len(cameras) == 4
-    for pattern, r_args in selections.items():
+    for pattern in writable:
         prefix = pattern.split("%")[0]
         ids = {cid for name, cid in camera_of.items() if name.startswith(prefix)}
         (camera_id,) = ids
-        assert cameras[camera_id].params[0] == pytest.approx(
-            entries[pattern]["estimate"]["focal_px"]
-        )
-    assert camera_of["images/lone_0001.jpg"] not in {
-        camera_of["vidA/0001.jpg"],
-        camera_of["images/shopB_0007.jpg"],
-        camera_of["images/shopC_0013.jpg"],
-    }
+        assert cameras[camera_id].params[0] == pytest.approx(votes[pattern]["focal_px"])
+        others = {cid for name, cid in camera_of.items() if not name.startswith(prefix)}
+        assert camera_id not in others, pattern
 
 
 def _check_r_selects_the_sequences_and_their_images(capture: Path) -> None:
     """With -r only the selected images vote, grouped into sequences."""
+    # The votes on the selected images alone.
+    votes = {
+        "images/shopB_%04d.jpg": _vote(capture, "-r", "8-12"),
+        "images/shopC_%04d.jpg": _vote(capture, "-r", "13-15"),
+    }
     out = _invoke(capture, "--write-camrig-per-sequence", "-r", "8-15")
-    assert out.exit_code == 0, out.output
+    writable = [p for p, vote in votes.items() if _refusal(vote) is None]
+    assert out.exit_code == (0 if writable else 1), out.output
     assert "2 sequences of " in out.output
     assert "Images:        5 of 6 selected (--range 8-15)" in out.output
     assert "Images:        3 of 5 selected (--range 8-15)" in out.output
@@ -684,15 +713,17 @@ def _check_r_selects_the_sequences_and_their_images(capture: Path) -> None:
     assert "Sequence images/lone_" not in out.output
     assert sorted(
         p.relative_to(capture).as_posix() for p in capture.rglob("*.camrig")
-    ) == [
-        "images/shopB.camrig",
-        "images/shopC.camrig",
-    ]
-    # The written camera is the vote on the selected images alone.
-    single = json.loads(_invoke(capture, "-r", "8-12", "--json").stdout)
-    assert _camrig(capture / "images" / "shopB.camrig")[1] == pytest.approx(
-        single["focal_px"]
-    )
-    # A frame of the sequence that -r left out is still covered by its
-    # pattern, which names the whole sequence.
-    assert _camrig(capture / "images" / "shopB.camrig")[0] == "shopB_%04d.jpg"
+    ) == sorted(_SEQUENCES[p][0] for p in writable), out.output
+    for pattern, vote in votes.items():
+        camrig_path, camrig_pattern = _SEQUENCES[pattern]
+        refusal = _refusal(vote)
+        if refusal is not None:
+            assert f"No .camrig: {refusal}" in out.output, out.output
+            continue
+        # The written camera is the vote on the selected images alone, and
+        # its pattern names the whole sequence, so it still covers the
+        # frames -r left out.
+        assert _camrig(capture / camrig_path) == (
+            camrig_pattern,
+            pytest.approx(vote["focal_px"]),
+        ), out.output
