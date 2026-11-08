@@ -361,20 +361,23 @@ def test_kerry_park_camrig_solve_registers_all_frames(
     """A global solve driven by the multi-sensor ``.camrig`` should register
     every rig image of the 8-frame prefix subset (16 images) with one camera
     per sensor — the same outcome as the ``rig_config.json`` path. The
-    fixture's solve also holds single images, which are left out here.
+    fixture's solve also holds single images, which are left out here: the
+    point floor and the error median count only the points that at least two
+    rig images observe.
     """
     recon = SfmrReconstruction.load(kerry_park_camrig_workspace)
-    rig_cameras = {
-        int(camera)
-        for name, camera in zip(recon.image_names, recon.camera_indexes)
-        if not name.startswith("solo/")
-    }
-    rig_images = [n for n in recon.image_names if not n.startswith("solo/")]
-    assert len(rig_images) == 16
+    is_rig = np.array([not n.startswith("solo/") for n in recon.image_names])
+    rig_cameras = {int(c) for c in np.asarray(recon.camera_indexes)[is_rig]}
+    assert int(is_rig.sum()) == 16
     assert len(rig_cameras) == 2  # one camera per sensor
-    assert recon.point_count >= 150
-    errors = recon.rms_reprojection_errors
-    assert errors.size > 0
+    track_images = np.asarray(recon.track_image_indexes)
+    track_points = np.asarray(recon.track_point_indexes)
+    rig_observations = np.bincount(
+        track_points[is_rig[track_images]], minlength=recon.point_count
+    )
+    rig_points = rig_observations >= 2
+    assert int(rig_points.sum()) >= 150
+    errors = recon.rms_reprojection_errors[rig_points]
     assert float(np.median(errors)) < 1.5
 
 
