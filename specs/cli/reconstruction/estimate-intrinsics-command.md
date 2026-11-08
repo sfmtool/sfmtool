@@ -362,13 +362,11 @@ uncovered.
 **Rigs.** The images a multi-sensor `.camrig` covers, found as `sfm solve`
 finds it, form one rig sequence, as in `sfm pick-images`. It gets no file,
 since its `.camrig` already gives its images their cameras, and the report
-says so. When no `.camrig` covers any of the file's images, an image of a
-rig of `rig_config.json` anywhere in the file stops the command before any
-vote, whatever `-r` selects, with a message naming the image, because
-`sfm solve` ignores `rig_config.json` once any `.camrig` covers an image it
-solves
-([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig)),
-so writing any sequence's file would undo the rig. Selected images that
+says so. A `rig_config.json` at the root of the file's workspace stops the
+command before any vote, whatever `-r` selects, with the error that names
+the `sfm camrig cp` command converting it, as it stops `sfm solve`
+([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
+Selected images that
 cannot be grouped (a file with no number, two files of one sequence with the
 same number, numbers of one sequence zero-padded in ways no one frame field
 writes) stop the command, with a message naming the files at fault, as they

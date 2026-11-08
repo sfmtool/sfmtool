@@ -4,8 +4,8 @@
 """Build a `.camrig` file by copying from an existing `.sfmr` or `.camrig`.
 
 Backs `sfm camrig cp`, whose third kind of source, a workspace's
-`rig_config.json`, is `from_rig_config`. Where `sfm camrig create` builds a rig from a directory
-of images on disk, `cp` builds one from a file that already carries cameras
+`rig_config.json`, is `from_rig_config`. Where `sfm camrig create` builds a
+rig from a directory of images on disk, `cp` builds one from a file that already carries cameras
 (and, for a rig, sensor poses): a solved `.sfmr` reconstruction or another
 `.camrig` file.
 

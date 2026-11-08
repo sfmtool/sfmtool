@@ -83,7 +83,7 @@ Four datasets are checked in under `test-data/images/`:
 - `seoul_bull_sculpture` — 17 @ 270×480 (the small fixture used in tests)
 - `dino_dog_toy` — 85 @ 2040×1536
 - `seattle_backyard` — 26 @ 360×640
-- `kerry_park` — 24 rig frames × 2 fisheyes @ 480×480, with `rig_config.json`
+- `kerry_park` — 24 rig frames × 2 fisheyes @ 480×480, with `kerry_park.camrig`
 
 Bootstrap a workspace with `scripts/init_dataset_*.sh`. Reuse these in bug
 reports and reproductions where possible.

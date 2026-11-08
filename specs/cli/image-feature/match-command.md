@@ -91,7 +91,7 @@ does not fit is cut short at a character boundary. The cluster matcher appends
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
 | `--range / -r` | string | | Range expression for file numbers, or a named image list's name |
 | `--named-image-list` | name | | Use the images of this named image list of the workspace in place of `PATHS`; with `-r RANGE`, only its members whose frame number is in `RANGE` |
-| `--camera-model` | choice | auto | Camera model to use (e.g., `SIMPLE_RADIAL`, `OPENCV`): it replaces the model EXIF inference picks, and refits to this model the camera a `camera_config.json` or `rig_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
+| `--camera-model` | choice | auto | Camera model to use (e.g., `SIMPLE_RADIAL`, `OPENCV`): it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig` or `camera_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
 
 `--cluster` has one more matcher option with no flag: the minimum cluster
 size, fixed at 2. A cluster is kept only when it spans at least two images,
@@ -143,21 +143,27 @@ That filter and the pose-guided sweep matcher it runs inside are described in
 
 ## Camera Intrinsics
 
-If any image being processed resolves a `camera_config.json` (closest-ancestor walk from
-its parent directory up to the workspace root), the file's intrinsics are used, one camera
-per resolved file. See
-[`../../workspace/camera-config.md`](../../workspace/camera-config.md). `--derive-pairs`
-sets up its cameras as `sfm solve` does from a `.matches` file, so each image takes its
-camera from the `.camrig` covering it there, one camera per single-sensor `.camrig` and
-one rig per multi-sensor `.camrig`, and the images no `.camrig` covers take their cameras
-from `camera_config.json` or EXIF inference
-([solve-command.md § Camera Rig Files](../reconstruction/solve-command.md#camera-rig-files-camrig)).
-Its `.camrig` lines and messages call them the `images of the .matches file`. Matching an
-image set reads no `.camrig`.
+Every mode that builds a COLMAP database with cameras (`--exhaustive`, `--sequential`,
+`--flow`, and `--derive-pairs` for the images of its `.matches` file) sets up the cameras
+by the rule `sfm solve` uses
+([solve-command.md § Camera Rig Files](../reconstruction/solve-command.md#camera-rig-files-camrig)),
+through the same `.camrig` resolution and database builders: each image takes its camera
+from the `.camrig` covering it, one camera per single-sensor `.camrig` and one rig per
+multi-sensor `.camrig`, whose sensors and frames the database holds as the solve's does;
+else from the `camera_config.json` it resolves (closest-ancestor walk from its parent
+directory up to the workspace root), one camera per resolved file
+([`../../workspace/camera-config.md`](../../workspace/camera-config.md)); else from EXIF
+inference, one camera that all such images share. The `.camrig` lines and messages call
+the images the `images being matched`, or for `--derive-pairs` the `images of the
+.matches file`, and when the `.camrig` files leave images uncovered, a line names how
+many. `--cluster` builds no database and needs no camera, so it reads no `.camrig` and no
+`camera_config.json`. Every mode but `--merge` stops before it reads any image when the
+workspace root holds a `rig_config.json`, naming the `sfm camrig cp` command that
+converts it
+([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
 
-With `--camera-model`, the camera a `camera_config.json`, a `rig_config.json` sensor's
-`camera_params` or, for `--derive-pairs`, a `.camrig` supplies is refit to that model and
-the refit camera is used in its place, with one report line per refit camera and an
+With `--camera-model`, the camera a `.camrig` or a `camera_config.json` supplies is refit
+to that model and the refit camera is used in its place, with one report line per refit camera and an
 error naming the camera when the fit is refused, exactly as
 [solve-command.md § Camera Intrinsics](../reconstruction/solve-command.md#camera-intrinsics)
 describes.

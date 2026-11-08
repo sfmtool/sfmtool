@@ -521,9 +521,10 @@ def test_a_rig_sequence_gets_no_file(stub_run):
     ]
 
 
-def test_a_rig_of_rig_config_json_is_refused(stub_run):
+def test_a_rig_config_json_is_refused(stub_run):
     names = ["rig/a/f_01.jpg", "rig/b/f_01.jpg", "solo_01.jpg", "solo_02.jpg"]
-    (stub_run.workspace / "rig_config.json").write_text(
+    rig_config = stub_run.workspace / "rig_config.json"
+    rig_config.write_text(
         json.dumps(
             [
                 {
@@ -539,15 +540,19 @@ def test_a_rig_of_rig_config_json_is_refused(stub_run):
             ]
         )
     )
-    out = stub_run(names)
-    assert out.exit_code == 1
-    assert "rig/a/f_01.jpg belongs to a rig of rig_config.json" in out.output
-    assert not list(stub_run.workspace.rglob("*.camrig"))
-    # A solve of the file would lose the rig whatever -r selects here.
-    out = stub_run(names, kept=["solo_01.jpg", "solo_02.jpg"])
-    assert out.exit_code == 1
-    assert "rig/a/f_01.jpg belongs to a rig of rig_config.json" in out.output
-    assert not list(stub_run.workspace.rglob("*.camrig"))
+    # Whatever -r selects, as a solve of the file would refuse it too.
+    for kept in (None, ["solo_01.jpg", "solo_02.jpg"]):
+        out = stub_run(names, kept=kept)
+        assert out.exit_code == 1
+        # The refusal itself, not a failure to group the images.
+        assert out.output.startswith(
+            f"Error: {rig_config}: sfm takes a workspace's rigs only from .camrig"
+        ), out.output
+        assert (
+            f"sfm camrig cp {rig_config} {stub_run.workspace / 'ws.camrig'}"
+            in out.output
+        )
+        assert not list(stub_run.workspace.rglob("*.camrig"))
 
 
 @pytest.mark.parametrize(

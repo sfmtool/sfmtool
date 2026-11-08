@@ -376,8 +376,8 @@ The [**COLMAP rig-configurator format**](https://colmap.github.io/rigs.html)
 is a JSON array of rigs, each a list of camera entries with `image_prefix`,
 `ref_sensor`, `cam_from_rig_rotation`,
 `cam_from_rig_translation`, `camera_model_name`, `camera_params`. sfmtool
-supports it in workspaces as `rig_config.json` (see
-`specs/workspace/rig-config.md`).
+describes a workspace's rigs only by `.camrig` files and reads a COLMAP rig
+file only to convert one of its rigs to a `.camrig` (`sfm camrig cp`).
 
 Structural differences:
 

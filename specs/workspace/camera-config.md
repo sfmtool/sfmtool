@@ -46,10 +46,7 @@ subsequent solves start from the right answer instead of re-discovering it.
 ### The `camera_intrinsics` Block
 
 This block is specific to `camera_config.json`. It uses a named-parameter
-shape (a `model` string plus a `parameters` object). `rig_config.json` is a
-separate, COLMAP-native format that instead carries per-sensor
-`camera_model_name` + positional `camera_params`; see
-[rig-config.md](rig-config.md).
+shape (a `model` string plus a `parameters` object).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -191,7 +188,8 @@ Any command that creates camera entries from images consults
 `camera_config.json` during camera setup. This currently includes:
 
 - `sfm solve` (incremental and global, from images or `.matches`)
-- `sfm match` (when computing two-view geometries)
+- `sfm match` (every mode that builds a COLMAP database: all but `--cluster`,
+  which needs no camera, and `--merge`)
 - `sfm to-colmap-db` (`.matches` input only; the `.sfmr` path uses the
   reconstruction's embedded intrinsics)
 
@@ -250,24 +248,19 @@ If different images in one invocation resolve to different `camera_config.json`
 files (e.g. multiple cameras in one workspace), each image uses the camera of its own
 resolved file, each file's camera is refit, and each refit prints its own report line.
 
-A covering `.camrig`, which takes precedence over this file, and a `rig_config.json`
-sensor's `camera_params` follow the same rule
+A covering `.camrig`, which takes precedence over this file, follows the same rule
 ([../cli/reconstruction/solve-command.md § Camera
 Intrinsics](../cli/reconstruction/solve-command.md#camera-intrinsics)).
 
-## Interaction with `rig_config.json`
+## Interaction with `.camrig` Files
 
-When both files are present, `rig_config.json` wins for any image whose path
-matches one of its `image_prefix` entries. This preserves rig semantics:
-sensor-to-rig poses, multi-camera frames, and per-sensor intrinsics are all
-defined together in `rig_config.json`. `camera_config.json` then handles the
-remainder — images that don't belong to any rig.
-
-The two files describe intrinsics differently: `camera_config.json` uses the
-named-parameter `camera_intrinsics` block defined here, while `rig_config.json`
-gives each sensor a COLMAP `camera_model_name` and positional `camera_params`.
 `camera_config.json` describes single-camera intrinsics only, with no sensors
-or sensor-from-rig poses.
+or sensor-from-rig poses. A workspace's rigs are described by multi-sensor
+`.camrig` files, which give the images they cover their cameras, sensors and
+rig frames; an image no `.camrig` covers takes its camera from the
+`camera_config.json` it resolves, or from EXIF inference when it resolves
+none ([../cli/reconstruction/solve-command.md § Camera Rig
+Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)).
 
 ## Workflows
 

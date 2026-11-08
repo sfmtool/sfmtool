@@ -18,12 +18,13 @@ one rig, with its sensors, cameras and rig frames. The images no `.camrig`
 covers take their cameras from `camera_config.json` or EXIF inference, as they
 would with no `.camrig`, and are single-image frames beside the rig frames. An
 image matched by more than one `.camrig` is refused. The `.camrig` files take
-precedence over `camera_config.json` for the images they cover, and over
-`rig_config.json` for every image. With `--camera-model`, each of their
-cameras the solve uses is refit to that model and the refit camera is the
-starting intrinsics; the files are not changed. `sfm pick-images` applies the
-same rule, through `find_covering_camrigs`, so the list it writes is one
-`sfm solve` takes.
+precedence over `camera_config.json` for the images they cover. With
+`--camera-model`, each of their cameras the solve uses is refit to that model
+and the refit camera is the starting intrinsics; the files are not changed.
+`sfm match` and `sfm to-colmap-db` set up the cameras of their databases
+through `resolve_camrig_for_solve` too, and `sfm pick-images` applies the same
+rule through `find_covering_camrigs`, so the list it writes is one `sfm solve`
+takes.
 """
 
 from dataclasses import dataclass, field
@@ -237,8 +238,10 @@ def _resolve_multi_sensor(
     solve_set: set[Path],
     camera_model,
     camera_config_resolver,
+    images: str,
 ) -> CamrigRig:
-    """Validate and resolve a multi-sensor `.camrig` covering `solve_set`."""
+    """Validate and resolve a multi-sensor `.camrig` covering `solve_set`,
+    the `images` its report line names."""
     assignments = _build_rig_assignments(camrig_file, data)
 
     # Per-sensor resolution check: each sensor's solve images must suit that
@@ -257,7 +260,7 @@ def _resolve_multi_sensor(
     sensor_count = data["metadata"]["sensor_count"]
     print(
         f"Camera rig: using {camrig_file} "
-        f"({sensor_count} sensors, {len(by_sensor)} present in this solve)"
+        f"({sensor_count} sensors, {len(by_sensor)} present in the {images})"
     )
     if camera_model is not None:
         # Refit each pool camera a present sensor uses, once, and hand the
@@ -417,7 +420,12 @@ def resolve_camrig_for_solve(
         if data["metadata"]["sensor_count"] > 1:
             result.rigs.append(
                 _resolve_multi_sensor(
-                    camrig_file, data, covered, camera_model, camera_config_resolver
+                    camrig_file,
+                    data,
+                    covered,
+                    camera_model,
+                    camera_config_resolver,
+                    images,
                 )
             )
         else:

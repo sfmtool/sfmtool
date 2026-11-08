@@ -3,15 +3,16 @@
 
 """Build a `.camrig` file from one rig of a workspace's `rig_config.json`.
 
-Backs `sfm camrig cp RIG_CONFIG.json OUTPUT.camrig [--rig N]`. The `.camrig`
-describes the rig the way the commands use `rig_config.json` today: the same
-images for each sensor, the same frames, the same cameras and the same
-`sensor_from_rig` poses.
+Backs `sfm camrig cp RIG_CONFIG.json OUTPUT.camrig [--rig N]`, the one
+reader of `rig_config.json`. The `.camrig` gives each sensor the images whose
+paths start with its `image_prefix`, groups them into the frames the file's
+frame keys define, and holds the cameras and the `sensor_from_rig` poses the
+file describes.
 
 - **Images.** A sensor's images are the image files under the folder of the
   `rig_config.json` whose workspace-relative path starts with its
   `image_prefix`, an image taking the first sensor in the file whose prefix it
-  starts with, as `sfm solve` assigns them.
+  starts with.
 - **Patterns.** Each sensor's images must form one sequence of
   `sfm pick-images` (`collect_sequences`): one folder, names that differ only
   in their file number. The sequence's pattern, relative to the output's
@@ -28,10 +29,10 @@ images for each sensor, the same frames, the same cameras and the same
   so each is conjugated by the camera-frame flip `S` into the canonical
   `sensor_from_rig` the `.camrig` holds, its quaternion made unit; the
   reference sensor is the identity.
-- **Cameras.** A sensor's camera is built as `sfm solve` builds it from
-  `rig_config.json` (`_camera_from_sensor_entry`) on the sensor's first image:
-  its `camera_params`, or EXIF inference with its `camera_model_name` as a
-  hint when it has none. Equal cameras share one entry of the pool.
+- **Cameras.** A sensor's camera is built on the sensor's first image
+  (`_camera_from_sensor_entry`): its `camera_params`, or EXIF inference with
+  its `camera_model_name` as a hint when it has none. Equal cameras share one
+  entry of the pool.
 """
 
 import json
@@ -79,6 +80,27 @@ def _sensor_images(root: Path, rig_configs: list[dict]) -> dict[tuple, list[str]
     return images
 
 
+def _camera_from_sensor_entry(sensor: dict, image_path: Path):
+    """The `pycolmap.Camera` of a validated `rig_config.json` sensor entry,
+    at the size of `image_path`.
+
+    With `camera_params`, the camera is the parameters for its
+    `camera_model_name`, flagged with a prior focal length; without them, it
+    is inferred from the image's EXIF with `camera_model_name`, if any, as the
+    model (`_infer_camera`, which seeds a fisheye focal length). The file
+    carries no image size, so the size is always the image's.
+    """
+    from ..camera.setup import _infer_camera
+
+    model_name = sensor.get("camera_model_name")
+    camera = _infer_camera(str(image_path), model_name)
+    camera_params = sensor.get("camera_params")
+    if camera_params is not None:
+        camera.params = [float(p) for p in camera_params]
+        camera.has_prior_focal_length = True
+    return camera
+
+
 def _sensor_pattern(rel_images: list[str], root: Path, out_dir: Path, prefix: str):
     """The pattern, relative to `out_dir`, of the one sequence the images of
     the sensor with `prefix` form."""
@@ -87,7 +109,7 @@ def _sensor_pattern(rel_images: list[str], root: Path, out_dir: Path, prefix: st
 
     paths = [root / rel for rel in rel_images]
     try:
-        sequences = collect_sequences(paths, out_dir, None)
+        sequences = collect_sequences(paths, out_dir)
     except PickImagesInputError as e:
         raise CamrigCpError(
             f"the images under {prefix!r} do not form one numbered sequence:\n{e}"
@@ -248,7 +270,6 @@ def copy_from_rig_config(
     inferred from EXIF (no `camera_params`), and the other `.camrig` files that
     already cover some of the rig's images.
     """
-    from ..colmap.db_builders import _camera_from_sensor_entry
     from ..camera.cameras import pycolmap_camera_to_intrinsics
     from ..rig.config import RigConfigError, _infer_frame_key, validate_rig_config
     from .resolver import CamrigSolveError, _check_image_resolution
@@ -337,7 +358,7 @@ def copy_from_rig_config(
             frame_keys[path] = _infer_frame_key(rel, prefix)
 
         try:
-            camera = _camera_from_sensor_entry(sensor, paths[0], None)
+            camera = _camera_from_sensor_entry(sensor, paths[0])
         except Exception as e:
             raise CamrigCpError(
                 f"could not build the camera of the sensor {prefix!r} from "

@@ -129,8 +129,8 @@ In order, it:
    ([The version 1 refusals](#the-version-1-refusals)).
 3. With `--write-list` and no `--force`, refuses a name the lists file already
    defines.
-4. Finds the rigs, from a `.camrig` or `rig_config.json`, groups the files
-   into sequences and prints them.
+4. Finds the rigs, from the `.camrig` files covering the input files,
+   groups the files into sequences and prints them.
 5. With the `sfmtool` feature tool, calls `sfmtool.analysis.pick_images`
    with one `CaptureSequence` per sequence and the workspace's feature
    options, which extracts the `.sift` files itself; with another tool,
@@ -186,9 +186,7 @@ A frame's images are the reference sensor's first, then the others. The
 sensors are those that appear in the input files, so a rig given one sensor's
 folder is walked as a rig of that sensor alone.
 
-- **`.camrig` files that cover any input file** take precedence over
-  `rig_config.json` for every input file, and a line notes that
-  `rig_config.json` is ignored when the workspace has one. Each
+- **`.camrig` files that cover any input file** define the rigs. Each
   **multi-sensor** `.camrig`, such as `sfm insv2rig` writes, makes the input
   files it covers one rig sequence: each sensor's image pattern, relative to
   the `.camrig`'s folder, gives each file it matches its sensor and
@@ -212,17 +210,10 @@ folder is walked as a rig of that sensor alone.
   same images and a list holding them would be of no use to it. So is an
   input file that no `.camrig` matches but a `.camrig`'s pattern matches
   apart from the zero-padding of its number, as `sfm solve` refuses it.
-- **With no `.camrig` covering any input file**, the workspace's
-  `rig_config.json` ([workspace/rig-config.md](../../workspace/rig-config.md))
-  defines the rigs, when it has one. An image under one of a rig's sensor
-  prefixes belongs to that sensor, and the images of one rig with the same
-  **frame key**, the path after the sensor prefix, are one rig frame, as
-  `sfm solve` groups them (`_match_image_to_sensor` and `_infer_frame_key` in
-  [`rig/config.py`](../../../src/sfmtool/rig/config.py)). The sequence is then
-  formed from the frame keys, with the file numbers of the frame keys as the
-  frames' numbers. The reference sensor is the one with `ref_sensor`, whatever
-  its place in the file, and the others follow in the file's order. Images
-  under no sensor prefix form ordinary sequences.
+- **A `rig_config.json` at the workspace root** stops the command before any
+  image is read, as it stops `sfm solve`, with the error that names the
+  `sfm camrig cp` command converting it
+  ([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
 
 Each frame becomes one `CaptureFrame` with its number, each image a
 `CaptureImage` with the path its `.sift` file has under the workspace's
@@ -329,9 +320,8 @@ the same, in the same order. Every sequence has an entry, since the walk
 chooses each sequence's first frame, a lone frame included.
 
 A rig sequence becomes one entry per sensor, each with the same range, so the
-list holds every sensor's image of each chosen frame. With `rig_config.json`
-the entry's pattern is the sensor's prefix followed by the frame key's
-pattern. With a `.camrig` it is the sensor's own image pattern behind the
+list holds every sensor's image of each chosen frame. The entry's pattern is
+the sensor's own image pattern behind the
 `.camrig`'s folder, relative to the workspace, with `%%` for a `%` in the
 folder (`rig/` and `cam_b/pan_%03d.jpg` give `rig/cam_b/pan_%03d.jpg`), so it
 matches the files the `.camrig` gives the sensor and reads the same frame
@@ -359,8 +349,7 @@ Resolved with `-r NAME`, the list gives exactly the chosen frames' images.
 
 ## Report
 
-The command prints the workspace, the `.camrig` that defines a rig and the
-note that it takes precedence over `rig_config.json`
+The command prints the workspace, the `.camrig` that defines a rig
 ([Collecting the frames](#collecting-the-frames)), the sequences it
 collected, a walk section per sequence, and the list it wrote. For one
 sequence:
@@ -433,7 +422,7 @@ positions, not numbers), with these keys added:
 |-----|-------|
 | `workspace` | the workspace folder |
 | `options` | the four numeric options, under the binding's names |
-| `capture` | per sequence: `patterns`, `sensors` (for a rig, each sensor's prefix in `rig_config.json` or its image pattern as the `.camrig` stores it; `null` otherwise), `numbers` (the frame's number at each position) and `images` (each frame's workspace-relative image paths) |
+| `capture` | per sequence: `patterns`, `sensors` (for a rig, each sensor's image pattern as the `.camrig` stores it; `null` otherwise), `numbers` (the frame's number at each position) and `images` (each frame's workspace-relative image paths) |
 | `chosen_numbers` | per sequence, the chosen frames' numbers |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
 
@@ -458,13 +447,14 @@ a range narrowing a folder; the seoul_bull
 photographs, whose neighbouring frames match below the floor, every step
 stopped at the floor at the next frame, and every one of which the written
 list holds; a version 1
-workspace; no workspace; files with no number or a shared number; a rig whose
-reference sensor is listed second, written one entry per sensor; a rig frame
-missing a sensor; a `.camrig` rig in a subfolder whose sensor 0 sorts last,
-written one entry per sensor, whose list `resolve_camrig_for_solve` takes as
-a rig of both sensors at the chosen frames; a `.camrig` taking precedence over
-`rig_config.json`, and a single-sensor one defining no rig, whether it covers
-every input file or only some; a `.camrig` rig covering some of the input
+workspace; no workspace; files with no number or a shared number; a
+`rig_config.json` at the workspace root, refused before any image is read even
+beside a `.camrig` of the same rig; kerry_park's rig, grouped into its 24
+frames by `kerry_park.camrig`; a `.camrig` rig in a subfolder whose sensor 0
+sorts last, written one entry per sensor, whose list
+`resolve_camrig_for_solve` takes as a rig of both sensors at the chosen
+frames; a single-sensor `.camrig` defining no rig, whether it covers every
+input file or only some; a `.camrig` rig covering some of the input
 files, walked as its rig sequence beside an ordinary sequence of the others,
 whose list `resolve_camrig_for_solve` takes as the rig at its chosen frames
 beside the other chosen images; two `.camrig` rigs, each its own sequence; a
@@ -476,7 +466,7 @@ and paths given with a list, which are usage errors.
 checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the frame field chosen
 for numbers that run past their padded width and the error for numbers
-padded in ways no one frame field writes, the rig order, a
+padded in ways no one frame field writes, a
 `.camrig` rig's frames, patterns and sensor order, every error, the list
 entries, a lone chosen frame, a range split in parts, the slice suggestion,
 and the report's walk section: its heading, the frames chosen and read, the swaps, the steps stopped at the match floor and those

@@ -26,8 +26,8 @@ from sfmtool.reconstruction import RangeExpr
 ROOT = Path("/ws").absolute()
 
 
-def _collect(names: list[str], rig_configs=None) -> list[PickSequence]:
-    return collect_sequences([ROOT / n for n in names], ROOT, rig_configs)
+def _collect(names: list[str]) -> list[PickSequence]:
+    return collect_sequences([ROOT / n for n in names], ROOT)
 
 
 def test_frame_field_writes_every_number_as_the_names_write_it():
@@ -108,32 +108,6 @@ def test_every_file_at_fault_is_named():
     assert "'*' in their path" in message and "b/s*_1.jpg" in message
 
 
-RIG = [
-    {
-        "cameras": [
-            {"image_prefix": "rig/right/"},
-            {"image_prefix": "rig/left/", "ref_sensor": True},
-        ]
-    }
-]
-
-
-def test_rig_frames_group_by_frame_key_with_the_reference_sensor_first():
-    (sequence,) = _collect(
-        [
-            "rig/right/f_02.jpg",
-            "rig/left/f_02.jpg",
-            "rig/left/f_01.jpg",
-            "rig/right/f_01.jpg",
-        ],
-        RIG,
-    )
-    assert sequence.patterns == ["rig/left/f_%02d.jpg", "rig/right/f_%02d.jpg"]
-    assert sequence.sensors == ["rig/left/", "rig/right/"]
-    assert sequence.numbers == [1, 2]
-    assert sequence.images[1] == [Path("rig/left/f_02.jpg"), Path("rig/right/f_02.jpg")]
-
-
 def _camrig_collect(rels: list[str], frames: list[tuple[int, int]]) -> list:
     """`collect_sequences` of `rels` with a `.camrig` in `cap 5%/` whose
     sensor 0 is `right/` and sensor 1 `left/`, each image assigned the
@@ -145,7 +119,7 @@ def _camrig_collect(rels: list[str], frames: list[tuple[int, int]]) -> list:
         data={"sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"]},
         assignments={p.resolve(): f for p, f in zip(paths, frames)},
     )
-    return collect_sequences(paths, ROOT, None, [rig])
+    return collect_sequences(paths, ROOT, [rig])
 
 
 def test_camrig_rig_frames_group_by_frame_index_with_sensor_0_first():
@@ -192,28 +166,23 @@ def test_a_camrig_in_a_folder_with_a_star_is_an_error():
         assignments={p.resolve(): f for p, f in zip(paths, [(0, 1), (1, 1)])},
     )
     with pytest.raises(PickImagesInputError, match=r"has a '\*' in its path"):
-        collect_sequences(paths, ROOT, None, [rig])
+        collect_sequences(paths, ROOT, [rig])
 
 
 def test_list_entries_are_one_per_sensor_with_one_range():
-    (sequence,) = _collect(
-        [
-            "rig/left/f_01.jpg",
-            "rig/right/f_01.jpg",
-            "rig/left/f_02.jpg",
-            "rig/right/f_02.jpg",
-        ],
-        RIG,
+    (sequence,) = _camrig_collect(
+        ["right/f_01.jpg", "left/f_01.jpg", "right/f_02.jpg", "left/f_02.jpg"],
+        [(0, 1), (1, 1), (0, 2), (1, 2)],
     )
     entries = list_entries(sequence, [1, 5, 9, 10, 11])
     assert [(p, str(r)) for p, r in entries] == [
-        ("rig/left/f_%02d.jpg", "1-9:4,10,11"),
-        ("rig/right/f_%02d.jpg", "1-9:4,10,11"),
+        ("cap 5%%/right/f_%02d.jpg", "1-9:4,10,11"),
+        ("cap 5%%/left/f_%02d.jpg", "1-9:4,10,11"),
     ]
     # A lone chosen frame is one entry per sensor.
     assert [(p, str(r)) for p, r in list_entries(sequence, [2])] == [
-        ("rig/left/f_%02d.jpg", "2"),
-        ("rig/right/f_%02d.jpg", "2"),
+        ("cap 5%%/right/f_%02d.jpg", "2"),
+        ("cap 5%%/left/f_%02d.jpg", "2"),
     ]
 
 

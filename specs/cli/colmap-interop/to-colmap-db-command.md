@@ -40,7 +40,7 @@ required positional argument (matching the positional `OUTPUT` convention of
 |--------|------|---------|-------------|
 | `--max-features` | int | all | Maximum features per image (`.sfmr` only) |
 | `--no-guided-matching` | flag | | Disable two-view geometry pre-population (`.sfmr` only) |
-| `--camera-model` | choice | auto | Camera model to use (`.matches` only): it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig`, `camera_config.json` or `rig_config.json` supplies; one of the 11 shared COLMAP model names (same vocabulary as `solve` / `match` / `camrig create`) |
+| `--camera-model` | choice | auto | Camera model to use (`.matches` only): it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig` or `camera_config.json` supplies; one of the 11 shared COLMAP model names (same vocabulary as `solve` / `match` / `camrig create`) |
 
 > **Known gap (cross-exporter parity):** unlike `to-colmap-bin` and
 > `to-nerfstudio`, this exporter has no `--range` image-subsetting option.
@@ -111,14 +111,15 @@ The cameras are set up as `sfm solve` sets them up from a `.matches` file
 each image takes its camera from the `.camrig` that covers it: each multi-sensor
 `.camrig` supplies a rig, with its cameras and rig frames, of the file's images it
 covers, and each single-sensor `.camrig` one camera for the images it covers. An image no
-`.camrig` covers is a frame of its own and takes, when no `.camrig` is in use, the
-camera of a `rig_config.json` sensor whose prefix it is under, else the camera of the
+`.camrig` covers is a frame of its own and takes the camera of the
 `camera_config.json` it resolves (closest-ancestor walk from its parent directory up to
 the workspace root), one camera per resolved file, else one camera inferred from EXIF
 that all such images share. An image more than one `.camrig` matches is refused. When
 the `.camrig` files leave images uncovered, a line names how many, calling them the
-`images of the .matches file`. See
-[`../../workspace/camera-config.md`](../../workspace/camera-config.md). With
+`images of the .matches file`. A `rig_config.json` at the workspace root stops the
+command, naming the `sfm camrig cp` command that converts it
+([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
+See [`../../workspace/camera-config.md`](../../workspace/camera-config.md). With
 `--camera-model`, a camera one of those files supplies is refit to that model and the
 refit camera is written to the database, with one report line per refit camera and an
 error naming the camera when the fit is refused, exactly as

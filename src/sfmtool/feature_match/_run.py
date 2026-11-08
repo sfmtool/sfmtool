@@ -53,8 +53,10 @@ def _run_matching(
     :func:`._derive_pairs._run_derive_pairs`.
     """
     from .._workspace import load_workspace_config
+    from ..rig.config import _refuse_rig_config
     from ..sift.extract import image_files_to_sift_files
 
+    _refuse_rig_config(workspace_dir)
     ws_config = load_workspace_config(workspace_dir)
     feature_tool = ws_config.get("feature_tool", "colmap")
     feature_options = ws_config.get("feature_options")

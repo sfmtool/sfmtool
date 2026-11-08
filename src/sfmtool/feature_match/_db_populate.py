@@ -25,42 +25,42 @@ def _populate_db_features(
     camera_config_resolver=None,
     include_descriptors: bool = True,
 ):
-    """Create a COLMAP DB and populate it with cameras, images, keypoints, and
-    (unless ``include_descriptors=False``) descriptors — matchers that only use
-    the database for geometric verification never read the descriptors back,
-    and they are by far the largest rows."""
+    """Create a COLMAP DB and populate it with cameras, rigs, frames, images,
+    keypoints, and (unless ``include_descriptors=False``) descriptors —
+    matchers that only use the database for geometric verification never read
+    the descriptors back, and they are by far the largest rows.
+
+    The cameras and rigs are set up as `sfm solve` sets them up from images
+    (`resolve_camrig_for_solve` and `_write_image_features`): each image takes
+    its camera from the `.camrig` covering it, each multi-sensor `.camrig`
+    giving its rig's sensors and frames, else from the `camera_config.json`
+    it resolves, else from EXIF inference, and `camera_model` refits the
+    cameras those files supply."""
     from ..camera.config import CameraConfigResolver
-    from ..colmap.db_builders import _setup_db_single_sensor, _setup_db_with_rigs
-    from ..rig.config import _load_rig_config
+    from ..camrig.resolver import resolve_camrig_for_solve
+    from ..colmap.db_setup import _write_image_features
 
     if camera_config_resolver is None:
         camera_config_resolver = CameraConfigResolver(workspace_dir)
 
-    rig_config = _load_rig_config(workspace_dir)
-
-    if rig_config is not None:
-        _setup_db_with_rigs(
-            image_paths,
-            sift_paths,
-            workspace_dir,
-            db_path,
-            max_feature_count,
-            rig_configs=rig_config,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-            include_descriptors=include_descriptors,
-        )
-    else:
-        _setup_db_single_sensor(
-            image_paths,
-            sift_paths,
-            workspace_dir,
-            db_path,
-            max_feature_count,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-            include_descriptors=include_descriptors,
-        )
+    camrigs = resolve_camrig_for_solve(
+        image_paths,
+        workspace_dir,
+        camera_model,
+        camera_config_resolver,
+        "images being matched",
+    )
+    _write_image_features(
+        image_paths,
+        sift_paths,
+        workspace_dir,
+        db_path,
+        max_feature_count,
+        camrigs,
+        camera_model,
+        camera_config_resolver,
+        include_descriptors=include_descriptors,
+    )
 
 
 def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):

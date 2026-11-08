@@ -65,7 +65,7 @@ Exactly one is required:
 | `--flow-preset` | `fast` \| `default` \| `high_quality` | `default` | Flow quality preset |
 | `--flow-skip` | int | 5 | Sliding window size for flow matching |
 | `--max-features` | int | | Maximum features per image |
-| `--camera-model` | choice | auto | Camera model to start from: it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig`, `camera_config.json` or `rig_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)); one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
+| `--camera-model` | choice | auto | Camera model to start from: it replaces the model EXIF inference picks, and refits to this model the camera a `.camrig` or `camera_config.json` supplies (see [Camera Intrinsics](#camera-intrinsics)); one of the 11 supported COLMAP model names (`PINHOLE`, `SIMPLE_PINHOLE`, `SIMPLE_RADIAL`, `RADIAL`, `OPENCV`, `OPENCV_FISHEYE`, `FULL_OPENCV`, `SIMPLE_RADIAL_FISHEYE`, `RADIAL_FISHEYE`, `THIN_PRISM_FISHEYE`, `RAD_TAN_THIN_PRISM_FISHEYE`). The same vocabulary is accepted by `match` and `camrig create`. |
 | `--range / -r` | string | | Range expression for file numbers, from the input directories or the images of a `.matches` file; or a named image list's name, optionally with a slice (`'NAME[:30]'`) |
 | `--named-image-list` | name | | Use the images of this named image list of the workspace in place of image paths, or, with a `.matches` file, only the file's images that are among the list's images; with `-r RANGE`, only its members whose frame number is in `RANGE` |
 | `--detect-infinity / --no-detect-infinity` | bool | `true` | Reclassify points whose depth the solve could not pin down as points at infinity (`w = 0`). See [sfmr file format §7](../../formats/sfmr-file-format.md). |
@@ -175,9 +175,12 @@ it cannot register every image into a single one). `sfm solve` writes one
 
 ## Rig Support
 
-If the workspace contains a rig configuration, the command automatically sets up rig
+A multi-sensor `.camrig` covering images being solved makes them a rig of the solve
+([Camera Rig Files](#camera-rig-files-camrig)), and the command sets up its rig
 constraints. Use `--refine-rig / --no-refine-rig` to control whether sensor-from-rig poses
-are refined during bundle adjustment.
+are refined during bundle adjustment. A `rig_config.json` at the workspace root stops the
+command before it reads any image, naming the `sfm camrig cp` command that converts it
+([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
 
 ## Camera Intrinsics
 
@@ -188,15 +191,14 @@ images that resolve it, and the images that resolve none share one camera inferr
 EXIF. See
 [`../../workspace/camera-config.md`](../../workspace/camera-config.md).
 
-With `--camera-model`, the camera a covering `.camrig`, a `camera_config.json` or a
-`rig_config.json` sensor's `camera_params` supplies is refit to that model by the
+With `--camera-model`, the camera a covering `.camrig` or a `camera_config.json`
+supplies is refit to that model by the
 lens-only fit `CameraIntrinsics.refit`
 ([`../../core/camera/refit-camera-intrinsics.md`](../../core/camera/refit-camera-intrinsics.md)),
 and the refit camera is the starting camera, used exactly where the supplied one would
 have been. Every such camera the solve uses is refit: each camera of a multi-sensor
-`.camrig`, the camera of each single-sensor `.camrig` and of each `camera_config.json`,
-and the camera of each `rig_config.json` sensor with `camera_params`. The files are not
-changed. The fit keeps the principal point and image size, so a `SIMPLE_PINHOLE` camera
+`.camrig`, and the camera of each single-sensor `.camrig` and of each
+`camera_config.json`. The files are not changed. The fit keeps the principal point and image size, so a `SIMPLE_PINHOLE` camera
 refit to `SIMPLE_RADIAL` keeps its focal and gains `radial_distortion_k1 = 0`, a term the
 solve's bundle adjustment then refines. One line per refit camera names it, the two models, and the fit's rms and max in pixels, followed
 by a line for each term the target model cannot represent:
@@ -226,12 +228,12 @@ is that same `k1 = 0` camera.
 image patterns match any of the images being solved. One rule holds for every
 image: it takes its camera from the `.camrig` that covers it, else from the
 `camera_config.json` it resolves, else from EXIF inference
-([Camera Intrinsics](#camera-intrinsics)). Any number of `.camrig` files, single-sensor
+([Camera Intrinsics](#camera-intrinsics)). `sfm match` and `sfm to-colmap-db` set up
+the cameras of their COLMAP databases by the same rule. Any number of `.camrig` files, single-sensor
 and multi-sensor, can be used in one solve, and each image may be covered by at
 most one of them. A `.camrig` takes precedence over `camera_config.json` for the
-images it covers, and a note is printed when it overrides one. When any `.camrig`
-is used, `rig_config.json` is ignored for every image being solved, and a note
-says so. `sfm estimate-intrinsics --write-camrig-per-sequence` writes one
+images it covers, and a note is printed when it overrides one.
+`sfm estimate-intrinsics --write-camrig-per-sequence` writes one
 single-sensor `.camrig` per image sequence of a capture, each estimated from
 its own sequence's images, so a solve over the whole capture gives each
 sequence its own camera
