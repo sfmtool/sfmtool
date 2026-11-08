@@ -39,7 +39,6 @@ _LAZY_NAMES = {
         "number_from_filename",
     ),
     "sfmtool._workspace": (
-        "find_workspace_for_path",
         "init_workspace",
         "load_workspace_config",
     ),
@@ -120,7 +119,6 @@ if TYPE_CHECKING:
         number_from_filename,
     )
     from sfmtool._workspace import (  # noqa: F401
-        find_workspace_for_path,
         init_workspace,
         load_workspace_config,
     )

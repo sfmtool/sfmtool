@@ -6,7 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+from sfmtool._workspace import load_workspace_config
+from sfmtool.workspace import find_workspace_for_path
+
+
+def _symlink_dir(target: Path, link: Path) -> None:
+    """A directory symlink at `link`, or a skip where this process may not make
+    one (Windows without Developer Mode or an administrator)."""
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as e:
+        pytest.skip(f"cannot create a directory symlink: {e}")
 
 
 def _write_workspace_config(workspace_dir: Path, config: dict | None = None) -> Path:
@@ -66,6 +76,69 @@ class TestFindWorkspaceForPath:
         subdir = inner_ws / "images"
         subdir.mkdir()
         assert find_workspace_for_path(subdir) == inner_ws
+
+    def test_finds_workspace_from_path_that_does_not_exist(self, tmp_path: Path):
+        """An output path not written yet is searched upward as given."""
+        _write_workspace_config(tmp_path)
+        assert find_workspace_for_path(tmp_path / "sfmr" / "new" / "out.sfmr") == (
+            tmp_path
+        )
+
+    @pytest.mark.parametrize("relative", ["x.matches", ".", "deeper/x.sfmr"])
+    def test_relative_path_searches_above_current_directory(
+        self, tmp_path: Path, monkeypatch, relative: str
+    ):
+        """A relative path is taken against the current directory, and the
+        search goes on above it."""
+        _write_workspace_config(tmp_path)
+        current = tmp_path / "images"
+        current.mkdir()
+        monkeypatch.chdir(current)
+        assert find_workspace_for_path(Path(relative)) == tmp_path
+
+    def test_linked_directory_belongs_to_workspace_around_link(self, tmp_path: Path):
+        """The search walks the path as given, without resolving links: a
+        workspace's image folder that links to storage outside it is in the
+        workspace, and a link outside any workspace into one is not."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _write_workspace_config(workspace)
+        outside = tmp_path / "photos"
+        outside.mkdir()
+        (workspace / "frames").mkdir()
+        (tmp_path / "out").mkdir()
+        _symlink_dir(outside, workspace / "images")
+        _symlink_dir(workspace / "frames", tmp_path / "out" / "link")
+
+        assert find_workspace_for_path(workspace / "images" / "a.jpg") == workspace
+        assert find_workspace_for_path(tmp_path / "out" / "link" / "a.jpg") is None
+
+
+class TestDeduceWorkspace:
+    """`sfm`'s commands find the workspace of their input images with
+    `cli.deduce_workspace`, over `find_workspace_for_path`."""
+
+    def test_images_in_a_linked_folder_belong_to_the_workspace(self, tmp_path: Path):
+        """A workspace whose image folder links to storage outside it is the
+        workspace of those images, spelled as the path given, so the images'
+        workspace-relative names stay `images/...`."""
+        import os
+
+        from sfmtool.cli import deduce_workspace
+
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _write_workspace_config(workspace)
+        outside = tmp_path / "photos"
+        outside.mkdir()
+        _symlink_dir(outside, workspace / "images")
+
+        found = deduce_workspace({workspace / "images"})
+
+        assert found == workspace
+        assert os.path.relpath(workspace / "images" / "a.jpg", found) == os.path.join(
+            "images", "a.jpg"
+        )
 
 
 class TestLoadWorkspaceConfig:

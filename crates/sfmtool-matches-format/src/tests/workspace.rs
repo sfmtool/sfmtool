@@ -90,30 +90,41 @@ fn no_marked_directory_is_no_workspace() {
     assert_eq!(found, None);
 }
 
-/// The search upward starts from the real location of the file's directory,
-/// not from the path it was reached by: a file reached through a link whose
-/// target is inside a workspace resolves to that workspace even though no
-/// directory above the link holds the marker.
+/// The search upward walks the file's path as given: a file reached through a
+/// link inside `ws` to `plain`, which has no marker above it, is in `ws`, and a
+/// file reached through a link in `out` to a directory inside `ws` is in no
+/// workspace.
 #[test]
-fn the_upward_search_follows_a_linked_directory_to_its_target() {
+fn the_upward_search_finds_the_workspace_around_a_link() {
     let dir = layout();
-    let link = dir.path().join("out").join("link");
-    let target = dir.path().join("ws").join("matches");
+    let ws = dir.path().join("ws");
+    let inside_link = ws.join("linked");
+    let outside_link = dir.path().join("out").join("link");
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-    #[cfg(windows)]
-    if let Err(error) = std::os::windows::fs::symlink_dir(&target, &link) {
-        // Creating a symbolic link on Windows needs Developer Mode or an
-        // administrator; without either there is nothing to test.
-        eprintln!("skipped: cannot create a directory symlink: {error}");
-        return;
+    {
+        std::os::unix::fs::symlink(dir.path().join("plain"), &inside_link).unwrap();
+        std::os::unix::fs::symlink(ws.join("matches"), &outside_link).unwrap();
     }
-    let file = link.join("x.matches");
-
-    let found = resolve_workspace_dir(&file, &recorded("", Path::new("")));
+    #[cfg(windows)]
+    {
+        if let Err(error) =
+            std::os::windows::fs::symlink_dir(dir.path().join("plain"), &inside_link)
+        {
+            // Creating a symbolic link on Windows needs Developer Mode or an
+            // administrator; without either there is nothing to test.
+            eprintln!("skipped: cannot create a directory symlink: {error}");
+            return;
+        }
+        std::os::windows::fs::symlink_dir(ws.join("matches"), &outside_link).unwrap();
+    }
+    let none = recorded("", Path::new(""));
 
     assert_eq!(
-        found.map(|f| canonical(&f)),
-        Some(canonical(&dir.path().join("ws")))
+        resolve_workspace_dir(&inside_link.join("x.matches"), &none),
+        Some(ws)
+    );
+    assert_eq!(
+        resolve_workspace_dir(&outside_link.join("x.matches"), &none),
+        None
     );
 }

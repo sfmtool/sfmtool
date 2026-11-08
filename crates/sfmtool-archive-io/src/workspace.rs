@@ -5,6 +5,9 @@
 //!
 //! `.sfmr`, `.matches` and `.kdf` record the same two paths and resolve them by
 //! the same rule, so the rule is here once rather than in each format crate.
+//! The rule's last step, the search upward from a path
+//! ([`find_workspace_for_path`]), is also how a command finds the workspace of
+//! an input path that records none.
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +25,7 @@ pub const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
 ///    real locations;
 /// 2. `absolute_path` as written;
 /// 3. the nearest directory at or above `file`'s directory that holds the
-///    marker.
+///    marker ([`find_workspace_for_path`]).
 ///
 /// An empty `relative_path` or `absolute_path` means none was recorded, and its
 /// lookup is skipped. The paths are separate arguments rather than one metadata
@@ -58,8 +61,57 @@ pub fn resolve_workspace_dir(
         }
     }
 
-    file_dir
+    find_workspace_for_path(file)
+}
+
+/// The nearest directory at or above `path` that holds [`WORKSPACE_MARKER`],
+/// or `None` when no directory up to the filesystem root holds one.
+///
+/// `path` may be a directory, a file, or a path that does not exist yet (an
+/// output about to be written, say): the search starts at `path` itself, and
+/// since a file or a missing path holds no marker, it finds the same directory
+/// a search from `path`'s directory does. A relative `path` is taken against
+/// the current directory, so the search goes on above it.
+///
+/// The search walks up `path` as given, made absolute but with no link
+/// resolved: a directory reached through a link belongs to the workspace
+/// around the link, not to one around its target. That keeps a workspace
+/// whose image folder is a link to storage outside it a workspace for those
+/// images, and keeps a path measured against the result in the form the
+/// caller gave. The result is spelled the same way, as an ancestor of the
+/// absolute `path`.
+///
+/// # Example
+///
+/// ```no_run
+/// use sfmtool_archive_io::find_workspace_for_path;
+/// let image = std::path::Path::new("/projects/ws/images/a.jpg");
+/// let workspace = find_workspace_for_path(image);
+/// ```
+pub fn find_workspace_for_path(path: &Path) -> Option<PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    find_workspace_from(path, &current_dir)
+}
+
+/// [`find_workspace_for_path`] with the directory a relative `path` is taken
+/// against given, so a test can name one without changing the process's
+/// current directory.
+fn find_workspace_from(path: &Path, current_dir: &Path) -> Option<PathBuf> {
+    // Joining puts a relative `path` under `current_dir`, and the empty path,
+    // which is a bare file name's parent, names `current_dir` itself.
+    // `absolute` then removes `.` components (and on Windows resolves `..` as
+    // text), without touching links.
+    let joined = if path.as_os_str().is_empty() {
+        current_dir.to_path_buf()
+    } else {
+        current_dir.join(path)
+    };
+    std::path::absolute(joined)
+        .ok()?
         .ancestors()
         .find(|dir| dir.join(WORKSPACE_MARKER).exists())
         .map(Path::to_path_buf)
 }
+
+#[cfg(test)]
+mod tests;

@@ -13,7 +13,8 @@ from .._cli_utils import timed_command
 from .._path_summary import summarize_path_list
 from .._filenames import expand_paths
 from .._sfmtool.reconstruction import RangeExpr
-from .._workspace import find_workspace_for_path, load_workspace_config
+from .._workspace import load_workspace_config
+from ..workspace import find_workspace_for_path
 from ._range_options import parse_image_selection, range_option, resolve_list_images
 from ..sift.file import get_used_features_from_reconstruction
 from ..sift.extract import SiftExtractionError, image_files_to_sift_files

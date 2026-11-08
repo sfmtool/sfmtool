@@ -11,7 +11,7 @@ import click
 from .._cli_utils import timed_command
 from ..rig.insv2rig import _INSV_FRAME_PATTERN, extract_insv_frames, write_insv_camrig
 from .._sfmtool.geometry import RotQuaternion
-from .._workspace import find_workspace_for_path
+from ..workspace import find_workspace_for_path
 
 # Insta360 X5 rig geometry (calibrated from SfM, validated against physical measurement).
 # The two fisheye lenses are back-to-back, with the right eye rotated 180 degrees

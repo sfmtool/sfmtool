@@ -489,8 +489,12 @@ def _image_conversion_for(path: Path):
     """The grey conversion an image's readings are taken through, and where it
     came from: the workspace's recorded conversion when the image is inside
     one, else the ``sfmtool`` feature tool's default."""
-    from .._workspace import find_workspace_for_path, load_workspace_config
-    from ..workspace import recorded_image_to_gray, tool_image_to_gray
+    from .._workspace import load_workspace_config
+    from ..workspace import (
+        find_workspace_for_path,
+        recorded_image_to_gray,
+        tool_image_to_gray,
+    )
 
     workspace_dir = find_workspace_for_path(path.resolve())
     if workspace_dir is None:

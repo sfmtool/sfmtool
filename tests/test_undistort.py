@@ -118,7 +118,7 @@ def _undistort(sfmr_path, tmp_path, fit="inside", images=None, **kwargs):
     With ``images``, only those image indexes of the reconstruction are
     undistorted, in that order.
     """
-    from sfmtool._workspace import find_workspace_for_path
+    from sfmtool.workspace import find_workspace_for_path
 
     recon = SfmrReconstruction.load(sfmr_path)
     if images is not None:
@@ -538,7 +538,8 @@ class TestUndistortWorkspace:
 
     def test_affine_shapes_transformed(self, undistorted_inside):
         """Affine shapes differ from source (transformation applied)."""
-        from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+        from sfmtool._workspace import load_workspace_config
+        from sfmtool.workspace import find_workspace_for_path
 
         sfmr_path = undistorted_inside.source_sfmr
         recon, output_dir, _, _ = undistorted_inside.outputs()
@@ -585,7 +586,8 @@ class TestUndistortWorkspace:
 
     def test_feature_count_leq_original(self, undistorted_inside):
         """Undistorted features <= original feature count per image."""
-        from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+        from sfmtool._workspace import load_workspace_config
+        from sfmtool.workspace import find_workspace_for_path
 
         sfmr_path = undistorted_inside.source_sfmr
         recon, output_dir, _, _ = undistorted_inside.outputs()
@@ -621,7 +623,8 @@ class TestUndistortWorkspace:
 
     def test_descriptors_unchanged(self, undistorted_inside):
         """Surviving descriptors match source descriptors."""
-        from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+        from sfmtool._workspace import load_workspace_config
+        from sfmtool.workspace import find_workspace_for_path
 
         sfmr_path = undistorted_inside.source_sfmr
         recon, output_dir, _, _ = undistorted_inside.outputs()

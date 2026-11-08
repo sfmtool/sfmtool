@@ -3,7 +3,8 @@
 
 //! Bindings for the files in a workspace root that configure the workspace as
 //! a whole (`sfmtool_core::workspace`): its named image lists and their slices,
-//! and the rules of the feature options its `.sfm-workspace.json` records.
+//! the rules of the feature options its `.sfm-workspace.json` records, and the
+//! upward search that finds the workspace a path is in.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -346,6 +347,19 @@ impl PyNamedImageLists {
     }
 }
 
+/// The nearest directory at or above `path` that holds `.sfm-workspace.json`,
+/// as a `pathlib.Path`, or `None` when none does.
+///
+/// The search walks up `path` as given, made absolute against the current
+/// directory but with no link resolved, so a directory reached through a link
+/// belongs to the workspace around the link. `path` may be a directory, a
+/// file, or a path that does not exist yet. The rule is the last step by which
+/// a `.sfmr`, `.matches` or `.kdf` file finds the workspace it records.
+#[pyfunction(name = "find_workspace_for_path")]
+fn find_workspace_for_path_py(path: PathBuf) -> Option<PathBuf> {
+    sfmtool_core::workspace::find_workspace_for_path(&path)
+}
+
 /// Whether `name` is a valid named image list name: one or more of the ASCII
 /// letters, the digits, `-`, `_` and `.`, with at least one letter.
 #[pyfunction(name = "is_named_image_list_name")]
@@ -443,6 +457,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNamedImageLists>()?;
     m.add_class::<PyNamedImageListMember>()?;
     m.add_class::<PyNamedImageListSlice>()?;
+    m.add_function(wrap_pyfunction!(find_workspace_for_path_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_named_image_list_name_py, m)?)?;
     m.add_function(wrap_pyfunction!(split_named_image_list_value_py, m)?)?;
     m.add_function(wrap_pyfunction!(tool_image_to_gray_py, m)?)?;

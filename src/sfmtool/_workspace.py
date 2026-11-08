@@ -146,7 +146,7 @@ def upgrade_workspace(path: str | Path) -> tuple[Path, dict, dict | None]:
             again), or a ``gray_formula`` that does not parse.
     """
     from sfmtool.sift.file import get_feature_tool_xxh128
-    from sfmtool.workspace import upgrade_feature_options
+    from sfmtool.workspace import find_workspace_for_path, upgrade_feature_options
 
     path = Path(path).resolve()
     workspace_dir = find_workspace_for_path(path)
@@ -191,35 +191,6 @@ def upgrade_workspace(path: str | Path) -> tuple[Path, dict, dict | None]:
     with open(config_path, "w") as f:
         json.dump(new_config, f, indent=2)
     return config_path, config, new_config
-
-
-def find_workspace_for_path(path: Path) -> Path | None:
-    """
-    Find the workspace directory by searching upward for .sfm-workspace.json.
-
-    Args:
-        path: A path within the workspace (file or directory)
-
-    Returns:
-        Workspace directory path, or None if no workspace found
-    """
-    # Start from the directory containing the path
-    if path.is_file():
-        current = path.parent
-    else:
-        current = path
-
-    # Search upward through parent directories
-    while True:
-        workspace_file = current / ".sfm-workspace.json"
-        if workspace_file.exists():
-            return current
-
-        # Check if we've reached the root
-        parent = current.parent
-        if parent == current:
-            return None
-        current = parent
 
 
 def find_sfmr_by_content_hash(workspace: Path, hash_prefix: str) -> Path | None:

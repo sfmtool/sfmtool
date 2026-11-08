@@ -136,7 +136,7 @@ def pick_images(
         given = f"Given {selection.describe_list()}"
     else:
         from .._sfmtool.reconstruction import RangeExpr
-        from .._workspace import find_workspace_for_path
+        from ..workspace import find_workspace_for_path
 
         if not paths:
             paths = (".",)

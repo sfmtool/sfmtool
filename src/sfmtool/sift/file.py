@@ -211,7 +211,8 @@ def get_sift_path_for_image(
     """
     image_filename = Path(image_filename).resolve()
 
-    from sfmtool._workspace import find_workspace_for_path, load_workspace_config
+    from sfmtool._workspace import load_workspace_config
+    from sfmtool.workspace import find_workspace_for_path
 
     workspace_dir = (
         None if ignore_workspace else find_workspace_for_path(image_filename)

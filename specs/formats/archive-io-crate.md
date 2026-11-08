@@ -55,6 +55,7 @@ pub struct WorkspaceContents { pub feature_tool: String, pub feature_type: Strin
 pub const WORKSPACE_MARKER: &str = ".sfm-workspace.json";
 pub fn resolve_workspace_dir(file: &Path, relative_path: &str, absolute_path: &str)
     -> Option<PathBuf>;
+pub fn find_workspace_for_path(path: &Path) -> Option<PathBuf>;  // the upward search
 
 // Whole-file content identity: push section digests in format-defined order.
 pub struct SectionDigests { /* streaming XXH128 hasher */ }
@@ -121,14 +122,26 @@ pub struct HashParseError;                                    // not 32 lowercas
 `relative_path` and `absolute_path` a file records and tries, in order, the
 relative path joined to the file's directory (both resolved to their real
 locations), the absolute path, and the nearest directory at or above the file's
-directory. A candidate counts only when it holds `WORKSPACE_MARKER`; one that
-exists without it is skipped, and an empty path is skipped as none recorded.
+directory (`find_workspace_for_path`). A candidate counts only when it holds
+`WORKSPACE_MARKER`; one that exists without it is skipped, and an empty path is
+skipped as none recorded.
 `None` means no step found one, and each caller turns that into its own error.
 The `.sfmr` reader (`resolve_workspace_dir` in `sfmtool-sfmr-format`), the
 `.matches` reader (`resolve_workspace_dir` in `sfmtool-matches-format`) and the
 `.kdf` source verification all call it, so they cannot disagree about which
 directory a file names. The paths are arguments rather than a
 `WorkspaceMetadata` because `.kdf` records them in a type of its own.
+
+**The upward search walks the path as given.** `find_workspace_for_path` makes
+its path absolute against the current directory, so a relative path or a bare
+file name is searched above the current directory, and walks up it without
+resolving links: a directory reached through a link belongs to the workspace
+around the link, and the directory returned is an ancestor of the absolute path
+given. A file or a path that does not exist yet holds no marker, so either
+finds the directory its parent would. Commands use it, through
+`sfmtool_core::workspace` and the `sfmtool.workspace` binding, to find the
+workspace of an input path that records none, so a recorded file and an input
+path find their workspace by one rule.
 
 **Hash strings are parsed strictly.** `parse_hash` accepts exactly 32
 characters from `0-9a-f` and nothing else: no uppercase, no sign, no other

@@ -9,12 +9,14 @@
 //! [`feature_options`] holds the rules of the feature options a
 //! `.sfm-workspace.json` records: each feature tool's grey conversion, the
 //! conversion of a version 1 record to version 2, and the name of the folder
-//! a new record's `.sift` files go in. Finding the workspace root, by the
-//! upward search for `.sfm-workspace.json`, and reading that file are the
-//! caller's (see `specs/workspace/workspace.md`).
+//! a new record's `.sift` files go in. [`find_workspace_for_path`], the
+//! upward search for `.sfm-workspace.json`, is `sfmtool-archive-io`'s, re-exported
+//! here; reading that file is the caller's (see `specs/workspace/workspace.md`).
 
 pub mod feature_options;
 pub mod named_image_lists;
+
+pub use sfmtool_archive_io::find_workspace_for_path;
 
 pub use feature_options::{
     feature_prefix_dir, has_image_to_gray, recorded_image_to_gray, tool_image_to_gray,
