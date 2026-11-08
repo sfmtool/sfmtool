@@ -47,8 +47,9 @@ def _single_sensor_cameras(
     share one camera built from that file, and the images that resolve none
     share one camera inferred from EXIF. A camera is built from its first
     image, so its focal length and principal point are scaled to that image's
-    resolution, and with `camera_model` a camera a file supplies is refit to
-    it (one report line per camera).
+    resolution. With `camera_model`, the camera of each `camera_config.json`
+    is refit to it (one report line per camera) and the EXIF camera takes
+    that model; `.camrig` cameras arrive already refit by the resolver.
     """
     groups: dict[object, list[int]] = {}
     if camrig_cameras is not None:
