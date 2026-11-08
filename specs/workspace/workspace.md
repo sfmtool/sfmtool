@@ -502,7 +502,9 @@ strategy:
    was moved to a new machine).
 
 Each step validates that the candidate directory actually contains `.sfm-workspace.json` before
-accepting it.
+accepting it. A `.kdf` file's source verification resolves the workspace it records by the same
+three steps, through the same function (`resolve_workspace_dir` in
+[archive-io-crate.md](../formats/archive-io-crate.md)).
 
 ### Why Both Relative and Absolute Paths?
 

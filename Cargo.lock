@@ -4893,6 +4893,7 @@ name = "sfmtool-archive-io"
 version = "0.3.0"
 dependencies = [
  "bytemuck",
+ "dunce",
  "rayon",
  "serde",
  "serde_json",
@@ -5039,7 +5040,6 @@ dependencies = [
  "approx",
  "bytemuck",
  "chrono",
- "dunce",
  "half",
  "nalgebra",
  "ndarray",

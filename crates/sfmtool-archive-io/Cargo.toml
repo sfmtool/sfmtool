@@ -11,6 +11,9 @@ description = "Shared ZIP + zstd container I/O for sfmtool's archive-based file 
 
 [dependencies]
 bytemuck = "1.25"
+# A recorded workspace resolved to its real location, without the `\\?\` prefix
+# `std::fs::canonicalize` gives on Windows.
+dunce = "1"
 rayon = "1.12"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.14"
