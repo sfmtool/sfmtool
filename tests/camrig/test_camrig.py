@@ -443,3 +443,70 @@ def test_solve_uses_camrig(isolated_seoul_bull_17_images: list[Path]):
     recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0
     assert recon.camera_count > 0
+
+
+def test_solve_uses_one_camera_per_camrig(isolated_seoul_bull_17_images: list[Path]):
+    """Two single-sensor .camrig files, each covering one name prefix, give a
+    solve of two cameras, each image solved with its own file's camera."""
+    workspace_dir = isolated_seoul_bull_17_images[0].parent
+    for index, image in enumerate(isolated_seoul_bull_17_images):
+        prefix = "shopA" if index < 9 else "shopB"
+        image.rename(workspace_dir / f"{prefix}_{index + 1:05d}.jpg")
+    runner = CliRunner()
+    assert runner.invoke(main, ["ws", "init", str(workspace_dir)]).exit_code == 0
+    assert runner.invoke(main, ["sift", "--extract", str(workspace_dir)]).exit_code == 0
+    for prefix, focal in (("shopA", "330"), ("shopB", "360")):
+        create = runner.invoke(
+            main,
+            [
+                "camrig",
+                "create",
+                f"{prefix}_%05d.jpg",
+                str(workspace_dir / f"camera-{prefix}.camrig"),
+                "--camera-model",
+                "simple_pinhole",
+                "--focal-length",
+                focal,
+            ],
+        )
+        assert create.exit_code == 0, create.output
+
+    output_path = workspace_dir / "two_cameras.sfmr"
+    result = runner.invoke(
+        main,
+        [
+            "solve",
+            "-g",
+            "--camera-model",
+            "simple_radial",
+            "--output",
+            str(output_path),
+            str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    for prefix in ("shopA", "shopB"):
+        assert f"Camera 0 of {workspace_dir.resolve() / f'camera-{prefix}.camrig'}" in (
+            result.output
+        )
+
+    from sfmtool.reconstruction import SfmrReconstruction
+
+    recon = SfmrReconstruction.load(output_path)
+    assert recon.camera_count == 2
+    assert recon.image_count == 17
+    camera_of_prefix: dict[str, set[int]] = {"shopA": set(), "shopB": set()}
+    for name, camera_index in zip(recon.image_names, recon.camera_indexes):
+        camera_of_prefix[name.split("_")[0]].add(int(camera_index))
+    assert len(camera_of_prefix["shopA"]) == 1
+    assert len(camera_of_prefix["shopB"]) == 1
+    assert camera_of_prefix["shopA"] != camera_of_prefix["shopB"]
+    assert {c.model for c in recon.cameras} == {"SIMPLE_RADIAL"}
+
+    inspect = runner.invoke(main, ["inspect", "-v", str(output_path)])
+    assert inspect.exit_code == 0, inspect.output
+    assert "  Cameras: 2" in inspect.output
+    assert "  Camera 0: SIMPLE_RADIAL 270x480" in inspect.output
+    assert "  Camera 1: SIMPLE_RADIAL 270x480" in inspect.output
+    motion = runner.invoke(main, ["motion", str(output_path)])
+    assert motion.exit_code == 0, motion.output

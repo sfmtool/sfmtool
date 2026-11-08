@@ -7,20 +7,26 @@ A `.camrig` dropped in a workspace describes the camera(s) for the images its
 stored patterns match. `sfm solve` auto-discovers these:
 
 - a **single-sensor** `.camrig` (such as one written by `sfm camrig create`)
-  supplies one camera used as the intrinsics prior;
+  supplies one camera, used as the intrinsics prior for the images it covers;
 - a **multi-sensor** `.camrig` (such as one written by `sfm insv2rig`)
   describes a rig — its sensors, their shared/per-sensor cameras, and their
   `sensor_from_rig` poses — and drives rig-aware SfM.
 
-When every image being solved is covered by one `.camrig`, that file is used,
-taking precedence over `camera_config.json` and `rig_config.json`. With
-`--camera-model`, each of its cameras the solve uses is refit to that model
-and the refit camera is the starting intrinsics; the file is not changed.
-`sfm pick-images` finds its rig with the same rule, through
-`find_covering_camrig`, so the list it writes is one `sfm solve` takes.
+Each image being solved takes its camera from the `.camrig` that covers it:
+each single-sensor file is one camera of the solve, and each multi-sensor file
+one rig, with its sensors, cameras and rig frames. The images no `.camrig`
+covers take their cameras from `camera_config.json` or EXIF inference, as they
+would with no `.camrig`, and are single-image frames beside the rig frames. An
+image matched by more than one `.camrig` is refused. The `.camrig` files take
+precedence over `camera_config.json` for the images they cover, and over
+`rig_config.json` for every image. With `--camera-model`, each of their
+cameras the solve uses is refit to that model and the refit camera is the
+starting intrinsics; the files are not changed. `sfm pick-images` applies the
+same rule, through `find_covering_camrigs`, so the list it writes is one
+`sfm solve` takes.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .pattern import match_pattern, match_pattern_with_frames
@@ -50,21 +56,37 @@ class CamrigRig:
 
 
 @dataclass
-class CamrigSolveResult:
-    """The `.camrig` covering a solve.
+class CamrigCamera:
+    """A single-sensor `.camrig` resolved for a solve.
 
-    Exactly one of `camera` / `rig` is set: `camera` for a single-sensor
-    `.camrig` (one camera dict, `{model, width, height, parameters}`), `rig`
-    for a multi-sensor `.camrig`.
+    `camera` is its camera dict (`{model, width, height, parameters}`), refit
+    to `--camera-model` when one is given, and `images` holds the resolved
+    paths of the images being solved that the file covers.
     """
 
     camrig_file: Path
-    camera: dict | None = None
-    rig: CamrigRig | None = None
+    camera: dict
+    images: set[Path]
+
+
+@dataclass
+class CamrigSolveResult:
+    """The `.camrig` files covering a solve.
+
+    `cameras` holds one `CamrigCamera` per single-sensor `.camrig` covering
+    some of the images and `rigs` one `CamrigRig` per multi-sensor `.camrig`
+    covering some of them, each in path order; either list may be empty. The
+    images neither holds take their cameras from `camera_config.json` or EXIF
+    inference.
+    """
+
+    cameras: list[CamrigCamera] = field(default_factory=list)
+    rigs: list[CamrigRig] = field(default_factory=list)
 
     @property
     def is_multi_sensor(self) -> bool:
-        return self.rig is not None
+        """Whether a multi-sensor `.camrig` covers any of the images."""
+        return bool(self.rigs)
 
 
 def _covered_paths(camrig_dir: Path, patterns: list[str]) -> set[Path]:
@@ -186,19 +208,19 @@ def _refit_camera(
 def _resolve_single_sensor(
     camrig_file: Path,
     data: dict,
-    image_paths,
+    covered: set[Path],
     camera_model,
     camera_config_resolver,
-) -> CamrigSolveResult:
-    """Validate and resolve a single-sensor `.camrig` covering a solve."""
+) -> CamrigCamera:
+    """Validate and resolve a single-sensor `.camrig` covering `covered`."""
     camera_index = data["camera_indexes"][0]
     camera = data["cameras"][camera_index]
-    _check_image_resolution(image_paths, camera, camrig_file)
-    _camera_config_note(camrig_file, image_paths, camera_config_resolver)
+    _check_image_resolution(sorted(covered), camera, camrig_file)
+    _camera_config_note(camrig_file, sorted(covered), camera_config_resolver)
     print(f"Camera intrinsics: using {camrig_file}")
     if camera_model is not None:
         camera = _refit_camera(camera, camera_model, camera_index, camrig_file)
-    return CamrigSolveResult(camrig_file=camrig_file, camera=camera)
+    return CamrigCamera(camrig_file=camrig_file, camera=camera, images=covered)
 
 
 def _resolve_multi_sensor(
@@ -207,8 +229,8 @@ def _resolve_multi_sensor(
     solve_set: set[Path],
     camera_model,
     camera_config_resolver,
-) -> CamrigSolveResult:
-    """Validate and resolve a multi-sensor `.camrig` covering a solve."""
+) -> CamrigRig:
+    """Validate and resolve a multi-sensor `.camrig` covering `solve_set`."""
     assignments = _build_rig_assignments(camrig_file, data)
 
     # Per-sensor resolution check: each sensor's solve images must suit that
@@ -239,38 +261,33 @@ def _resolve_multi_sensor(
                 cameras[camera_index], camera_model, camera_index, camrig_file
             )
         data = {**data, "cameras": cameras}
-    return CamrigSolveResult(
-        camrig_file=camrig_file,
-        rig=CamrigRig(
-            camrig_file=camrig_file, data=data, assignments=solve_assignments
-        ),
-    )
+    return CamrigRig(camrig_file=camrig_file, data=data, assignments=solve_assignments)
 
 
-def find_covering_camrig(
+def find_covering_camrigs(
     image_paths,
     workspace_dir,
     images: str = "images being solved",
-    act: str = "solve",
-) -> tuple[Path, dict] | None:
-    """Find the `.camrig` that covers every one of `image_paths`.
+) -> list[tuple[Path, dict, set[Path]]]:
+    """Find the `.camrig` files that cover any of `image_paths`.
 
-    Scans `workspace_dir` for `.camrig` files and returns the path and the
-    `read_camrig` dict of the one whose patterns match all of `image_paths`,
-    or `None` when no `.camrig` matches any of them. `images` names the
-    images in a message ("images being solved") and `act` is the verb that
-    advises what to do instead ("solve").
+    Scans `workspace_dir` for `.camrig` files and returns, in path order, the
+    path, the `read_camrig` dict and the covered images (resolved paths) of
+    each one whose patterns match any of `image_paths`; the list is empty when
+    no `.camrig` matches any of them. The files, single-sensor or
+    multi-sensor, may leave some of the images uncovered; `sfm solve` takes
+    those images' cameras from `camera_config.json` or EXIF inference.
+    `images` names the images in a message ("images being solved").
 
-    Raises `CamrigSolveError` when the images span more than one `.camrig`,
-    or when a `.camrig` covers only some of them: `sfm solve` takes one
-    `.camrig` for all of its images or none.
+    Raises `CamrigSolveError` when a `.camrig` cannot be read or an image is
+    matched by more than one `.camrig`.
     """
     if workspace_dir is None:
-        return None
+        return []
     workspace_dir = Path(workspace_dir).resolve()
     camrig_files = sorted(workspace_dir.rglob("*.camrig"))
     if not camrig_files:
-        return None
+        return []
 
     from .._sfmtool.fileio import read_camrig
 
@@ -292,30 +309,48 @@ def find_covering_camrig(
             hits.append((camrig_file, data, covered))
 
     if not hits:
-        return None
-    if len(hits) > 1:
-        names = ", ".join(str(c) for c, _, _ in sorted(hits, key=lambda h: h[0]))
-        raise CamrigSolveError(
-            f"the {images} are covered by multiple .camrig files "
-            f"({names}); {act} each .camrig's images separately."
-        )
+        return []
 
-    camrig_file, data, covered = hits[0]
-    uncovered = given - covered
-    if uncovered:
-        example = sorted(uncovered)[0]
-        by = (
-            "its pattern"
-            if data["metadata"]["sensor_count"] == 1
-            else "any sensor pattern"
-        )
+    # Each image takes its camera from one .camrig.
+    covered_by: dict[Path, list[Path]] = {}
+    for camrig_file, _data, covered in hits:
+        for path in covered:
+            covered_by.setdefault(path, []).append(camrig_file)
+    doubly = sorted(p for p, files in covered_by.items() if len(files) > 1)
+    if doubly:
+        example = doubly[0]
+        names = " and ".join(str(f) for f in covered_by[example])
         raise CamrigSolveError(
-            f"{camrig_file} matches only {len(covered)} of {len(given)} "
-            f"{images}; e.g. {example} is not matched by {by}. "
-            f"{act.capitalize()} only the images the .camrig covers, or remove "
-            "the .camrig."
+            f"{len(doubly)} of the {len(given)} {images} are matched by more "
+            f"than one .camrig; e.g. {example} is matched by {names}. Each "
+            "image must be matched by one .camrig only."
         )
-    return camrig_file, data
+    return hits
+
+
+def _uncovered_note(
+    uncovered: set[Path], total: int, camera_config_resolver, images: str
+):
+    """Print how many of the `images` no `.camrig` covers, with an example,
+    and the source of their cameras."""
+    from_config = 0
+    if camera_config_resolver is not None:
+        from_config = sum(
+            camera_config_resolver.resolve_for_image(path) is not None
+            for path in uncovered
+        )
+    from_exif = len(uncovered) - from_config
+    if from_exif == 0:
+        sources = "camera_config.json"
+    elif from_config == 0:
+        sources = "EXIF inference"
+    else:
+        sources = f"camera_config.json ({from_config}) and EXIF inference ({from_exif})"
+    print(
+        f"Camera intrinsics: {len(uncovered)} of {total} {images} "
+        f"are covered by no .camrig, e.g. {sorted(uncovered)[0]}; they use "
+        f"{sources}."
+    )
 
 
 def resolve_camrig_for_solve(
@@ -323,31 +358,50 @@ def resolve_camrig_for_solve(
     workspace_dir,
     camera_model,
     camera_config_resolver=None,
+    images: str = "images being solved",
 ) -> CamrigSolveResult | None:
-    """Find the `.camrig` covering every image being solved.
+    """Find the `.camrig` files covering the images being solved.
 
     Scans `workspace_dir` for `.camrig` files and returns a `CamrigSolveResult`
-    for the one that covers all of `image_paths`, or `None` when no `.camrig`
-    applies. A single-sensor `.camrig` yields a `.camera`; a multi-sensor
-    `.camrig` yields a `.rig`.
+    for the ones that cover any of `image_paths` (`find_covering_camrigs`), or
+    `None` when no `.camrig` applies. Each single-sensor `.camrig` yields one
+    of `.cameras` and each multi-sensor `.camrig` one of `.rigs`. When the
+    files leave some images uncovered, a line names how many, with an example,
+    and whether their cameras come from `camera_config.json` or EXIF
+    inference; `images` names the images in that line and in the messages
+    ("images being solved").
 
     With `camera_model` (the solve's `--camera-model`), each `.camrig` camera
     the solve uses is refit to that model, and the result carries the refit
-    cameras in place of the file's.
+    cameras in place of the files'.
 
     Raises `CamrigSolveError` when the discovered `.camrig` files cannot be
-    used: the images span multiple `.camrig` files, a `.camrig` covers only
-    some of them, or a camera's refit to `camera_model` is refused.
+    used: an image is matched by more than one `.camrig` or by two sensors of
+    one, two images of one sensor share a frame index, the images of a camera
+    do not suit its resolution, or a camera's refit to `camera_model` is
+    refused.
     """
-    found = find_covering_camrig(image_paths, workspace_dir)
-    if found is None:
+    hits = find_covering_camrigs(image_paths, workspace_dir, images)
+    if not hits:
         return None
-    camrig_file, data = found
-    if data["metadata"]["sensor_count"] == 1:
-        return _resolve_single_sensor(
-            camrig_file, data, image_paths, camera_model, camera_config_resolver
-        )
-    solve_set = {Path(p).resolve() for p in image_paths}
-    return _resolve_multi_sensor(
-        camrig_file, data, solve_set, camera_model, camera_config_resolver
+    result = CamrigSolveResult()
+    for camrig_file, data, covered in hits:
+        if data["metadata"]["sensor_count"] > 1:
+            result.rigs.append(
+                _resolve_multi_sensor(
+                    camrig_file, data, covered, camera_model, camera_config_resolver
+                )
+            )
+        else:
+            result.cameras.append(
+                _resolve_single_sensor(
+                    camrig_file, data, covered, camera_model, camera_config_resolver
+                )
+            )
+    given = {Path(p).resolve() for p in image_paths}
+    uncovered = given.difference(
+        *(c.images for c in result.cameras), *(r.assignments for r in result.rigs)
     )
+    if uncovered:
+        _uncovered_note(uncovered, len(given), camera_config_resolver, images)
+    return result

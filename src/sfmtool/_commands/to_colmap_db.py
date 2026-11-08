@@ -113,6 +113,7 @@ def _from_matches(input_path, output_db_path, camera_model):
             input_path,
             colmap_dir,
             camera_model=camera_model,
+            images="images of the .matches file",
         )
         # Rename if the caller specified a different output path
         if db_path.resolve() != output_db_path.resolve():

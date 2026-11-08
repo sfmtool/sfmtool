@@ -96,67 +96,68 @@ class _Group:
 
 def find_rigs(image_paths: list[Path], workspace_dir: Path):
     """The rigs that group `image_paths` into rig frames, found as `sfm solve`
-    finds them: `(rig_configs, camrig_rig, notes)`.
+    finds them: `(rig_configs, camrig_rigs, notes)`.
 
-    A `.camrig` that covers every one of the images takes precedence over
-    `rig_config.json`: a multi-sensor one is returned as a `CamrigRig` whose
-    assignments hold the images, and a single-sensor one, a camera only,
-    defines no rig. With no `.camrig` covering any of the images,
-    `rig_configs` is the workspace's `rig_config.json`, or `None`. `notes`
-    are the lines to print about the choice.
+    `.camrig` files covering any of the images take precedence over
+    `rig_config.json`: each multi-sensor one is returned in `camrig_rigs`, in
+    path order, as a `CamrigRig` whose assignments hold the images it covers,
+    and single-sensor ones, each a camera only, define no rig. The images no
+    multi-sensor `.camrig` covers are single images. With no `.camrig`
+    covering any of the images, `camrig_rigs` is empty and `rig_configs` is
+    the workspace's `rig_config.json`, or `None`. `notes` are the lines to
+    print about the choice.
 
-    Raises `PickImagesInputError` when the images span several `.camrig`
-    files or a `.camrig` covers only some of them, which `sfm solve` refuses,
-    or when a `.camrig` or `rig_config.json` cannot be used.
+    Raises `PickImagesInputError` when an image is matched by more than one
+    `.camrig`, which `sfm solve` refuses, or when a `.camrig` or
+    `rig_config.json` cannot be used.
     """
     from .camrig.resolver import (
         CamrigRig,
         CamrigSolveError,
         _build_rig_assignments,
-        find_covering_camrig,
+        find_covering_camrigs,
     )
     from .rig.config import RigConfigError, _load_rig_config
 
     try:
         rig_configs = _load_rig_config(workspace_dir)
-        found = find_covering_camrig(
-            image_paths, workspace_dir, images="images given", act="pick"
-        )
+        hits = find_covering_camrigs(image_paths, workspace_dir, images="images given")
     except (RigConfigError, CamrigSolveError) as e:
         raise PickImagesInputError(str(e)) from None
-    if found is None:
-        return rig_configs, None, []
+    if not hits:
+        return rig_configs, [], []
 
-    camrig_file, data = found
-    sensor_count = data["metadata"]["sensor_count"]
     notes = []
-    if sensor_count > 1:
+    rigs = []
+    for camrig_file, data, covered in hits:
+        sensor_count = data["metadata"]["sensor_count"]
+        if sensor_count == 1:  # a camera, not a rig
+            continue
         notes.append(f"  Camera rig: {camrig_file} ({sensor_count} sensors)")
+        try:
+            assignments = _build_rig_assignments(camrig_file, data)
+        except (CamrigSolveError, ValueError) as e:
+            raise PickImagesInputError(str(e)) from None
+        rigs.append(
+            CamrigRig(
+                camrig_file=camrig_file,
+                data=data,
+                assignments={p: a for p, a in assignments.items() if p in covered},
+            )
+        )
     if rig_configs is not None:
         notes.append(
-            "Note: a .camrig covers these images; rig_config.json is ignored "
-            "(the .camrig takes precedence)."
+            "Note: a .camrig covers some or all of these images; rig_config.json "
+            "is ignored (the .camrig takes precedence)."
         )
-    if sensor_count == 1:
-        return None, None, notes
-    try:
-        assignments = _build_rig_assignments(camrig_file, data)
-    except (CamrigSolveError, ValueError) as e:
-        raise PickImagesInputError(str(e)) from None
-    given = {Path(p).resolve() for p in image_paths}
-    rig = CamrigRig(
-        camrig_file=camrig_file,
-        data=data,
-        assignments={p: a for p, a in assignments.items() if p in given},
-    )
-    return None, rig, notes
+    return None, rigs, notes
 
 
 def collect_sequences(
     image_paths: list[Path],
     workspace_dir: Path,
     rig_configs: list[dict] | None,
-    camrig_rig=None,
+    camrig_rigs=(),
 ) -> list[PickSequence]:
     """Group `image_paths`, all under `workspace_dir`, into sequences.
 
@@ -165,11 +166,11 @@ def collect_sequences(
     `rig_configs` (a workspace's `rig_config.json`), an image under a sensor's
     `image_prefix` belongs to that rig, and the images of one rig that share a
     frame key, the path after the prefix, are one frame, as `sfm solve`
-    groups them; the sequence is then formed from the frame keys. With
-    `camrig_rig` (a `CamrigRig` from `find_rigs`, whose assignments hold
-    every one of `image_paths`), the images are instead one rig sequence,
-    framed by the `.camrig`'s frame indexes. The sequences are ordered by
-    their first pattern.
+    groups them; the sequence is then formed from the frame keys. Each of
+    `camrig_rigs` (the `CamrigRig`s from `find_rigs`) makes the images its
+    assignments hold one rig sequence instead, framed by the `.camrig`'s frame
+    indexes, and the other images form sequences as above. The sequences are
+    ordered by their first pattern.
 
     Raises `PickImagesInputError` naming the files with no number, the files
     of one sequence that share a number, the rig frames that lack a sensor
@@ -177,11 +178,20 @@ def collect_sequences(
     """
     from .rig.config import _infer_frame_key, _match_image_to_sensor
 
-    if camrig_rig is not None:
-        sequence, problems = _camrig_sequence(image_paths, workspace_dir, camrig_rig)
-        if problems:
-            raise PickImagesInputError("\n".join(problems))
-        return [sequence]
+    problems: list[str] = []
+    sequences: list[PickSequence] = []
+    in_rig: set[Path] = set()
+    for camrig_rig in camrig_rigs:
+        rig_images = [
+            p for p in image_paths if Path(p).resolve() in camrig_rig.assignments
+        ]
+        in_rig.update(Path(p).resolve() for p in rig_images)
+        sequence, rig_problems = _camrig_sequence(rig_images, workspace_dir, camrig_rig)
+        problems.extend(rig_problems)
+        if sequence is not None:
+            sequences.append(sequence)
+    if in_rig:
+        image_paths = [p for p in image_paths if Path(p).resolve() not in in_rig]
 
     root = Path(os.path.abspath(workspace_dir))
     groups: dict[tuple, _Group] = {}
@@ -216,7 +226,6 @@ def collect_sequences(
         ).append(rel)
         group.digit_counts.add(len(digits))
 
-    problems: list[str] = []
     if no_number:
         problems.append(
             f"{len(no_number)} image file(s) have no file number, so -r cannot "
@@ -227,7 +236,6 @@ def collect_sequences(
             f"{len(wildcard)} image file(s) have a '*' in their path, which a named "
             f"image list pattern reads as a wildcard: {_names(wildcard)}"
         )
-    sequences: list[PickSequence] = []
     for group in groups.values():
         sequence, group_problems = _sequence(group, rig_configs)
         problems.extend(group_problems)

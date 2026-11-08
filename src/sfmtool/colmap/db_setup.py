@@ -15,12 +15,12 @@ from typing import NamedTuple
 import pycolmap
 
 from ..camera.config import CameraConfigResolver
-from ..camrig.resolver import resolve_camrig_for_solve
+from ..camrig.resolver import CamrigSolveResult, resolve_camrig_for_solve
 from ..rig.frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
 from ..sift.extract import image_files_to_sift_files
 from .db_builders import (
-    _setup_db_single_camera,
-    _setup_db_with_camrig,
+    _setup_db_single_sensor,
+    _setup_db_with_camrigs,
     _setup_db_with_rigs,
 )
 
@@ -36,6 +36,82 @@ class MatchesImageFilter(NamedTuple):
 
     label: str
     keep: Callable[[Path, list[str]], list[int]]
+
+
+def _resolve_camrigs(
+    image_paths: list[str | Path],
+    workspace_dir: str | Path,
+    rig_config: list[dict] | None,
+    camera_model: str | None,
+    camera_config_resolver: CameraConfigResolver | None,
+    images: str,
+) -> CamrigSolveResult | None:
+    """The `.camrig` files covering `image_paths` (`resolve_camrig_for_solve`),
+    with a note when they make `rig_config.json` ignored."""
+    camrigs = resolve_camrig_for_solve(
+        image_paths, workspace_dir, camera_model, camera_config_resolver, images
+    )
+    if rig_config is not None and camrigs is not None:
+        print(
+            "Note: a .camrig covers some or all of these images; rig_config.json "
+            "is ignored (the .camrig takes precedence)."
+        )
+    return camrigs
+
+
+def _write_image_features(
+    image_paths: list[str | Path],
+    sift_paths: list[Path],
+    image_dir: Path,
+    db_path: Path,
+    max_feature_count: int | None,
+    camrigs: CamrigSolveResult | None,
+    rig_config: list[dict] | None,
+    camera_model: str | None,
+    camera_config_resolver: CameraConfigResolver | None,
+) -> bool:
+    """Write the cameras, rigs, frames and features of `image_paths` into a
+    new database at `db_path`, from the `.camrig` files covering any of them
+    when there are some, else from `rig_config.json`, else from
+    `camera_config.json` / EXIF inference alone.
+
+    Returns whether a multi-sensor rig was set up, so the caller runs the
+    rig-aware matching and mapper paths.
+    """
+    if camrigs is not None:
+        _setup_db_with_camrigs(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            max_feature_count,
+            camrigs,
+            camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
+        )
+        return camrigs.is_multi_sensor
+    if rig_config is not None:
+        _setup_db_with_rigs(
+            image_paths,
+            sift_paths,
+            image_dir,
+            db_path,
+            max_feature_count,
+            rig_config,
+            camera_model=camera_model,
+            camera_config_resolver=camera_config_resolver,
+        )
+        return True
+    _setup_db_single_sensor(
+        image_paths,
+        sift_paths,
+        image_dir,
+        db_path,
+        max_feature_count,
+        camera_model=camera_model,
+        camera_config_resolver=camera_config_resolver,
+    )
+    return False
 
 
 def _setup_for_sfm(
@@ -60,17 +136,14 @@ def _setup_for_sfm(
         multi-sensor rig (a multi-sensor `.camrig` or `rig_config.json`) was
         set up, so the caller runs the rig-aware mapper path.
     """
-    camrig = resolve_camrig_for_solve(
-        image_paths, workspace_dir, camera_model, camera_config_resolver
+    camrigs = _resolve_camrigs(
+        image_paths,
+        workspace_dir,
+        rig_config,
+        camera_model,
+        camera_config_resolver,
+        "images being solved",
     )
-    camrig_multi = camrig is not None and camrig.is_multi_sensor
-    use_rigs = rig_config is not None and camrig is None
-    rig_used = use_rigs or camrig_multi
-    if rig_config is not None and camrig is not None:
-        print(
-            "Note: a .camrig covers these images; rig_config.json is ignored "
-            "(the .camrig takes precedence)."
-        )
 
     sift_paths = image_files_to_sift_files(
         image_paths,
@@ -88,37 +161,17 @@ def _setup_for_sfm(
 
     image_dir = Path(workspace_dir)
 
-    if camrig_multi:
-        _setup_db_with_camrig(
-            image_paths,
-            sift_paths,
-            image_dir,
-            db_path,
-            max_feature_count,
-            camrig.rig,
-        )
-    elif use_rigs:
-        _setup_db_with_rigs(
-            image_paths,
-            sift_paths,
-            image_dir,
-            db_path,
-            max_feature_count,
-            rig_config,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-        )
-    else:
-        _setup_db_single_camera(
-            image_paths,
-            sift_paths,
-            image_dir,
-            db_path,
-            max_feature_count,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-            camrig_camera=camrig.camera if camrig is not None else None,
-        )
+    rig_used = _write_image_features(
+        image_paths,
+        sift_paths,
+        image_dir,
+        db_path,
+        max_feature_count,
+        camrigs,
+        rig_config,
+        camera_model,
+        camera_config_resolver,
+    )
 
     # Build same-frame exclusion data for multi-sensor rigs
     same_frame_index_pairs: set[tuple[int, int]] | None = None
@@ -214,6 +267,7 @@ def _setup_for_sfm_from_matches(
     image_filter: MatchesImageFilter | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
     matches_data: dict | None = None,
+    images: str = "images being solved",
 ) -> tuple[Path, Path, list[Path], bool]:
     """Prepare a COLMAP database from a .matches file for running the mapper.
 
@@ -224,6 +278,9 @@ def _setup_for_sfm_from_matches(
     `matches_data` lets a caller that has already parsed the file hand the
     dict over instead of paying for a second parse; it must be what
     `read_matches(matches_file)` returned, including its `workspace_dir`.
+
+    `images` names the file's images in the `.camrig` lines and messages: a
+    caller that solves nothing passes its own wording.
 
     Returns:
         tuple: (db_path, image_dir, image_paths, rig_used) — `rig_used` is True
@@ -319,50 +376,27 @@ def _setup_for_sfm_from_matches(
     if camera_config_resolver is None:
         camera_config_resolver = CameraConfigResolver(workspace_dir)
 
-    camrig = resolve_camrig_for_solve(
-        image_paths, workspace_dir, camera_model, camera_config_resolver
+    camrigs = _resolve_camrigs(
+        image_paths,
+        workspace_dir,
+        rig_config,
+        camera_model,
+        camera_config_resolver,
+        images,
     )
-    camrig_multi = camrig is not None and camrig.is_multi_sensor
-    use_rigs = rig_config is not None and camrig is None
-    rig_used = use_rigs or camrig_multi
-    if rig_config is not None and camrig is not None:
-        print(
-            "Note: a .camrig covers these images; rig_config.json is ignored "
-            "(the .camrig takes precedence)."
-        )
 
     # Populate DB with features
-    if camrig_multi:
-        _setup_db_with_camrig(
-            image_paths,
-            sift_paths,
-            image_dir,
-            db_path,
-            None,
-            camrig.rig,
-        )
-    elif use_rigs:
-        _setup_db_with_rigs(
-            image_paths,
-            sift_paths,
-            image_dir,
-            db_path,
-            max_feature_count=None,
-            rig_configs=rig_config,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-        )
-    else:
-        _setup_db_single_camera(
-            image_paths,
-            sift_paths,
-            image_dir,
-            db_path,
-            max_feature_count=None,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-            camrig_camera=camrig.camera if camrig is not None else None,
-        )
+    rig_used = _write_image_features(
+        image_paths,
+        sift_paths,
+        image_dir,
+        db_path,
+        None,
+        camrigs,
+        rig_config,
+        camera_model,
+        camera_config_resolver,
+    )
 
     # Write matches and TVGs to the database
     _write_matches_to_db(

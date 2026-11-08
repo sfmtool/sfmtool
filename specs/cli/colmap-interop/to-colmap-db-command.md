@@ -106,10 +106,18 @@ correspondence graph from the two-view geometry table — verify first with
 
 ## Camera Intrinsics (`.matches` mode only)
 
-The cameras are set up as `sfm solve` sets them up from a `.matches` file: a `.camrig`
-covering the file's images supplies them, else a `camera_config.json` that an image
-resolves (closest-ancestor walk from its parent directory up to the workspace root) or a
-`rig_config.json`, else EXIF inference. See
+The cameras are set up as `sfm solve` sets them up from a `.matches` file
+([solve-command.md § Camera Rig Files](../reconstruction/solve-command.md#camera-rig-files-camrig)):
+each image takes its camera from the `.camrig` that covers it: each multi-sensor
+`.camrig` supplies a rig, with its cameras and rig frames, of the file's images it
+covers, and each single-sensor `.camrig` one camera for the images it covers. An image no
+`.camrig` covers is a frame of its own and takes, when no `.camrig` is in use, the
+camera of a `rig_config.json` sensor whose prefix it is under, else the camera of the
+`camera_config.json` it resolves (closest-ancestor walk from its parent directory up to
+the workspace root), one camera per resolved file, else one camera inferred from EXIF
+that all such images share. An image more than one `.camrig` matches is refused. When
+the `.camrig` files leave images uncovered, a line names how many, calling them the
+`images of the .matches file`. See
 [`../../workspace/camera-config.md`](../../workspace/camera-config.md). With
 `--camera-model`, a camera one of those files supplies is refit to that model and the
 refit camera is written to the database, with one report line per refit camera and an

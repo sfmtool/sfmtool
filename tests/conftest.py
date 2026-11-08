@@ -871,6 +871,9 @@ KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
 # registered, both cameras, ~300 points, sub-pixel error) at a fraction of the
 # matching/solve cost. Disk-parsing/resolution fixtures still see all 24 frames.
 KERRY_PARK_PREFIX_FRAME_COUNT = 8
+# The left-lens frames after that prefix that the ``.camrig`` reconstruction
+# fixture solves as single images beside the rig frames.
+KERRY_PARK_SOLO_FRAME_COUNT = 4
 
 # Two patch tests assert a property of the kerry_park reconstruction that a
 # legitimate reconstruction can lack. Each floor below is a guarantee that
@@ -1285,7 +1288,14 @@ def kerry_park_solve_once(tmp_path_factory) -> Path:
 @pytest.fixture(scope="session")
 def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped: build a .sfmr reconstruction from the kerry_park rig,
-    with the rig described by a multi-sensor ``kerry_park.camrig``.
+    with the rig described by a multi-sensor ``kerry_park.camrig``, beside
+    single images.
+
+    The rig images are the 8-frame prefix of both lenses (16 images). The next
+    ``KERRY_PARK_SOLO_FRAME_COUNT`` frames of the left lens are moved to
+    ``solo/``, where no sensor pattern of the rig matches them, under a
+    single-sensor ``solo/solo.camrig`` holding the left lens's camera, so the
+    solve mixes rig frames with frames of single images.
 
     Unlike :func:`kerry_park_solve_once`, this fixture solves
     straight from the images through the ``_setup_for_sfm`` rig-aware path
@@ -1297,6 +1307,8 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     degenerating the solve, while retaining coverage of the from-images rig-aware
     solve path.
     """
+    from sfmtool.fileio import read_camrig, write_camrig
+
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
     _copy_kerry_park_camrig_into(workspace_dir)
     init_workspace(workspace_dir, feature_tool="sfmtool", max_num_features=2000)
@@ -1306,9 +1318,31 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
         frames = sorted((workspace_dir / sensor).glob("frame_*.jpg"))
         image_paths.extend(frames[:KERRY_PARK_PREFIX_FRAME_COUNT])
 
+    solo_dir = workspace_dir / "solo"
+    solo_dir.mkdir()
+    first = KERRY_PARK_PREFIX_FRAME_COUNT + 1
+    for n in range(first, first + KERRY_PARK_SOLO_FRAME_COUNT):
+        name = f"frame_{n:02d}.jpg"
+        (workspace_dir / KERRY_PARK_SENSORS[0] / name).rename(solo_dir / name)
+        image_paths.append(solo_dir / name)
+    rig = read_camrig(str(workspace_dir / "kerry_park.camrig"))
+    write_camrig(
+        path=str(solo_dir / "solo.camrig"),
+        name="solo",
+        rig_type="generic",
+        cameras=[rig["cameras"][rig["camera_indexes"][0]]],
+        sensor_image_patterns=["frame_%02d.jpg"],
+        camera_indexes=[0],
+        quaternions_wxyz=np.array([[1.0, 0.0, 0.0, 0.0]]),
+        translations_xyz=np.zeros((1, 3)),
+    )
+
     output_sfm_file = workspace_dir / "kerry_park.sfmr"
     colmap_dir = workspace_dir / "colmap"
-    expected_count = len(KERRY_PARK_SENSORS) * KERRY_PARK_PREFIX_FRAME_COUNT
+    expected_count = (
+        len(KERRY_PARK_SENSORS) * KERRY_PARK_PREFIX_FRAME_COUNT
+        + KERRY_PARK_SOLO_FRAME_COUNT
+    )
 
     # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
     # occasionally yields a degenerate solve — all frames register but few/no

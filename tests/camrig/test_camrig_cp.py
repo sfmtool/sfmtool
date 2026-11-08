@@ -79,7 +79,7 @@ def test_cp_sfmr_camera_roundtrips_into_resolver(
     assert images
     resolved = resolve_camrig_for_solve(images, workspace, None)
     assert resolved is not None
-    assert resolved.camera is not None
+    assert resolved.cameras is not None and len(resolved.cameras) == 1
 
 
 def test_cp_sfmr_rig(kerry_park_workspace: Path, tmp_path: Path):

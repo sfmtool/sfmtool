@@ -344,7 +344,8 @@ def test_kerry_park_camrig_resolves_to_rig(
 
     result = resolve_camrig_for_solve(image_paths, isolated_kerry_park_camrig, None)
     assert result is not None and result.is_multi_sensor
-    assignments = result.rig.assignments
+    (rig,) = result.rigs
+    assignments = rig.assignments
     assert len(assignments) == 48
 
     sensors = Counter(s for s, _f in assignments.values())
@@ -358,13 +359,72 @@ def test_kerry_park_camrig_solve_registers_all_frames(
     kerry_park_camrig_workspace: Path,
 ) -> None:
     """A global solve driven by the multi-sensor ``.camrig`` should register
-    every image of the 8-frame prefix subset (16 images) with one camera per
-    sensor — the same outcome as the ``rig_config.json`` path.
+    every rig image of the 8-frame prefix subset (16 images) with one camera
+    per sensor — the same outcome as the ``rig_config.json`` path. The
+    fixture's solve also holds single images, which are left out here: the
+    point floor and the error median count only the points that at least two
+    rig images observe.
     """
     recon = SfmrReconstruction.load(kerry_park_camrig_workspace)
-    assert recon.image_count == 16
-    assert recon.camera_count == 2  # one camera per sensor
-    assert recon.point_count >= 150
-    errors = recon.rms_reprojection_errors
-    assert errors.size > 0
+    is_rig = np.array([not n.startswith("solo/") for n in recon.image_names])
+    rig_cameras = {int(c) for c in np.asarray(recon.camera_indexes)[is_rig]}
+    assert int(is_rig.sum()) == 16
+    assert len(rig_cameras) == 2  # one camera per sensor
+    track_images = np.asarray(recon.track_image_indexes)
+    track_points = np.asarray(recon.track_point_indexes)
+    rig_observations = np.bincount(
+        track_points[is_rig[track_images]], minlength=recon.point_count
+    )
+    rig_points = rig_observations >= 2
+    assert int(rig_points.sum()) >= 150
+    errors = recon.rms_reprojection_errors[rig_points]
     assert float(np.median(errors)) < 1.5
+
+
+def test_kerry_park_solve_mixes_rig_frames_and_single_images(
+    kerry_park_camrig_workspace: Path,
+) -> None:
+    """The ``.camrig`` fixture's global solve of rig frames beside single
+    images: ``kerry_park.camrig`` covers frames 1-8 of both lenses, and frames
+    9-12 of the left lens, in ``solo/``, are single images under a
+    single-sensor ``.camrig`` holding the left lens's camera. The ``.sfmr``
+    holds the rig and a one-sensor rig for the single images, and
+    ``sfm inspect`` and ``sfm motion`` read it.
+    """
+    from click.testing import CliRunner
+
+    from sfmtool.cli import main
+
+    recon = SfmrReconstruction.load(kerry_park_camrig_workspace)
+    assert recon.image_count == 20
+    assert recon.camera_count == 3  # the two lenses of the rig and solo.camrig
+    camera_of = dict(zip(recon.image_names, (int(c) for c in recon.camera_indexes)))
+    assert len({camera_of[f"solo/frame_{n:02d}.jpg"] for n in range(9, 13)}) == 1
+    assert len(set(camera_of.values())) == 3
+
+    data = recon.rig_frame_data
+    rigs = data["rigs_metadata"]["rigs"]
+    assert sorted(r["sensor_count"] for r in rigs) == [1, 2]
+    frame_rigs = [int(r) for r in data["rig_indexes"]]
+    frame_of = dict(
+        zip(recon.image_names, (int(f) for f in data["image_frame_indexes"]))
+    )
+    # Each rig frame holds the two lenses' images of one frame number, in the
+    # two-sensor rig; each single image is a frame of its own, in the other.
+    two_sensor = next(i for i, r in enumerate(rigs) if r["sensor_count"] == 2)
+    for n in range(1, 9):
+        frame = frame_of[f"fisheye_left/frame_{n:02d}.jpg"]
+        assert frame_of[f"fisheye_right/frame_{n:02d}.jpg"] == frame
+        assert frame_rigs[frame] == two_sensor
+    solo_frames = [frame_of[f"solo/frame_{n:02d}.jpg"] for n in range(9, 13)]
+    assert len(set(solo_frames)) == 4
+    assert all(frame_rigs[f] != two_sensor for f in solo_frames)
+    assert len(frame_rigs) == 12
+
+    runner = CliRunner()
+    inspect = runner.invoke(main, ["inspect", str(kerry_park_camrig_workspace)])
+    assert inspect.exit_code == 0, inspect.output
+    assert "Cameras:        3" in inspect.output
+    motion = runner.invoke(main, ["motion", str(kerry_park_camrig_workspace)])
+    assert motion.exit_code == 0, motion.output
+    assert "solo" in motion.output and "fisheye_right" in motion.output

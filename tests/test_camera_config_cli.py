@@ -7,8 +7,9 @@ These exercise `camera_config.json` and `.camrig` intrinsics through the full
 `sfm` CLI: that a configured calibration flows into the solved `.sfmr`, that
 `--camera-model` refits the camera a `camera_config.json` or `.camrig`
 supplies into the COLMAP database, that a `.camrig`'s `EQUIDISTANT_FISHEYE`
-camera reaches the database as its COLMAP carrier, and that a refused refit is
-a clean error.
+camera reaches the database as its COLMAP carrier, that a refused refit is
+a clean error, and that the commands that solve nothing name their own images
+in the line about the images no `.camrig` covers.
 The `camera/config.py` and `camera/setup.py` unit tests live in
 `test_camera_config.py`.
 """
@@ -179,6 +180,62 @@ def test_to_colmap_db_refits_camrig_camera(seoul_bull_workspace: Path, tmp_path:
         f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL"
         in result.output
     )
+
+
+def test_commands_that_solve_nothing_name_their_own_images(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """`to-colmap-db` and `match --derive-pairs` call the images a `.camrig`
+    leaves uncovered the images of the `.matches` file, not images being
+    solved."""
+    from click.testing import CliRunner
+
+    from sfmtool.cli import main
+    from sfmtool.fileio import write_camrig
+
+    workspace_dir = seoul_bull_workspace.parent
+    # The pattern matches images 01-09 of the 17.
+    write_camrig(
+        path=str(workspace_dir / "test_17_image" / "cam.camrig"),
+        name="cam",
+        rig_type="generic",
+        cameras=[
+            {
+                "model": "SIMPLE_PINHOLE",
+                "width": 270,
+                "height": 480,
+                "parameters": {
+                    "focal_length": 330.0,
+                    "principal_point_x": 135.0,
+                    "principal_point_y": 240.0,
+                },
+            }
+        ],
+        sensor_image_patterns=["seoul_bull_sculpture_0%d.jpg"],
+        camera_indexes=[0],
+        quaternions_wxyz=np.array([[1.0, 0.0, 0.0, 0.0]]),
+        translations_xyz=np.zeros((1, 3)),
+    )
+    matches_path = workspace_dir / "matches" / "recon-clusters.matches"
+    line = "Camera intrinsics: 8 of 17 images of the .matches file are covered by no"
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["to-colmap-db", str(matches_path), str(tmp_path / "out.db")]
+    )
+    assert result.exit_code == 0, result.output
+    assert line in result.output
+    result = runner.invoke(
+        main,
+        [
+            "match",
+            "--derive-pairs",
+            str(matches_path),
+            "-o",
+            str(tmp_path / "pairs.matches"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert line in result.output
 
 
 def test_to_colmap_db_writes_equidistant_camrig_camera_as_carrier(

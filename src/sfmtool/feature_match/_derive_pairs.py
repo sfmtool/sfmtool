@@ -69,6 +69,7 @@ def _run_derive_pairs(
             colmap_dir,
             camera_model=camera_model,
             matches_data=source,
+            images="images of the .matches file",
         )
 
         # Verification is driven by an explicit pair list, so only the pairs
