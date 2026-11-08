@@ -14,6 +14,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
+
 
 def load_images(recon) -> list[np.ndarray]:
     """Every image of a reconstruction, decoded to contiguous RGB."""
@@ -85,7 +87,8 @@ def patch_normals(cloud) -> list[np.ndarray]:
 @pytest.fixture(scope="session")
 def default_embed_patches_run(seoul_bull_workspace_once: Path) -> EmbedPatchesRun:
     """``embed_patches`` at its defaults but for ``resolution=12``, run once on
-    the seoul_bull workspace for the tests that only read its output, with
+    every eighth point of the seoul_bull workspace (``SEOUL_BULL_POINT_STEP``)
+    for the tests that only read its output, with
     spies on the steps some of them look into. The spies pass every call
     through, so the output is the plain run's. Read it; do not modify it, its
     images or its source workspace.
@@ -95,7 +98,9 @@ def default_embed_patches_run(seoul_bull_workspace_once: Path) -> EmbedPatchesRu
     from sfmtool.patches import PatchCloud
     from sfmtool.reconstruction import SfmrReconstruction
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    recon = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace_once), SEOUL_BULL_POINT_STEP
+    )
     run = EmbedPatchesRun(recon=recon, images=load_images(recon))
 
     real_refine = ep.refine_normals

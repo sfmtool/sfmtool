@@ -30,6 +30,8 @@ from sfmtool.xform import (
 )
 from sfmtool.xform._images import load_workspace_images
 
+from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
+
 RESOLUTION = 16
 
 
@@ -51,6 +53,13 @@ def embedded(seoul_bull_workspace) -> SfmrReconstruction:
     )
     assert result.exit_code == 0, result.output
     return SfmrReconstruction.load(out)
+
+
+@pytest.fixture
+def embedded_subset(embedded) -> SfmrReconstruction:
+    """Every eighth point of :func:`embedded` (``SEOUL_BULL_POINT_STEP``), with
+    its references and bitmaps, for the tests that run ``embed_patches``."""
+    return every_nth_point(embedded, SEOUL_BULL_POINT_STEP)
 
 
 def _other_references(recon: SfmrReconstruction) -> np.ndarray:
@@ -212,9 +221,11 @@ def test_refine_normals_keeps_stored_references(embedded):
 
 
 @pytest.mark.parametrize("rounds", [1, 2])
-def test_embed_patches_on_an_embedded_input_keeps_stored_references(embedded, rounds):
-    stored = _other_references(embedded)
-    recon = embedded.clone_with_changes(reference_observations=stored)
+def test_embed_patches_on_an_embedded_input_keeps_stored_references(
+    embedded_subset, rounds
+):
+    stored = _other_references(embedded_subset)
+    recon = embedded_subset.clone_with_changes(reference_observations=stored)
     out = embed_patches(
         recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=rounds
     )
@@ -278,7 +289,7 @@ def _assert_output_records_the_reported_references(out, reported) -> int:
 
 
 def test_embed_patches_records_the_reference_the_views_were_aligned_to(
-    embedded, monkeypatch
+    embedded_subset, monkeypatch
 ):
     """Where the localizer reports no reference for a point (its stored
     reference did not render at its keypoint, so it aligned nothing), the
@@ -286,8 +297,8 @@ def test_embed_patches_records_the_reference_the_views_were_aligned_to(
     output records that pick, whose tile the bitmap is, not the stored
     reference the views were never aligned to, and dropping and adding the
     bitmaps gives the same bytes."""
-    stored = _other_references(embedded)
-    recon = embedded.clone_with_changes(reference_observations=stored)
+    stored = _other_references(embedded_subset)
+    recon = embedded_subset.clone_with_changes(reference_observations=stored)
     reported = _spy_final_references(monkeypatch, forget_every=3)
     out = embed_patches(
         recon, load_workspace_images(recon), resolution=RESOLUTION, rounds=1
@@ -310,7 +321,7 @@ def test_embed_patches_records_the_reference_the_views_were_aligned_to(
 
 @pytest.mark.parametrize("rounds", [1, 2])
 def test_embed_patches_records_a_new_reference_where_the_obliquity_cut_drops_it(
-    embedded, monkeypatch, rounds
+    embedded_subset, monkeypatch, rounds
 ):
     """The obliquity cut runs before each round's sub-pixel pass and drops a
     reference like any other view, so the pass's reference-view rule picks
@@ -319,19 +330,32 @@ def test_embed_patches_records_a_new_reference_where_the_obliquity_cut_drops_it(
     adding the bitmaps gives the same bytes."""
     reported = _spy_final_references(monkeypatch)
     out = embed_patches(
-        embedded,
-        load_workspace_images(embedded),
+        embedded_subset,
+        load_workspace_images(embedded_subset),
         resolution=RESOLUTION,
         rounds=rounds,
         max_obliquity_deg=30.0,
     )
-    assert out.observation_count < embedded.observation_count
+    assert out.observation_count < embedded_subset.observation_count
+    # The cut dropped some point's reference, and that point records the
+    # reference the pass picked from the views left. Points are matched by
+    # position, leaving out a position two points share.
+    before = _reference_images(embedded_subset)
+    positions = [tuple(p) for p in np.asarray(embedded_subset.positions)]
+    index = {p: i for i, p in enumerate(positions) if positions.count(p) == 1}
+    after = _reference_images(out)
+    repicked = 0
+    for k, position in enumerate(np.asarray(out.positions)):
+        i = index.get(tuple(position))
+        if i is not None and before[i] >= 0 and after[k] >= 0:
+            repicked += before[i] not in _point_images(out, k)
+    assert repicked > 0
     _assert_output_records_the_reported_references(out, reported)
     _assert_drop_then_add_reproduces(out)
 
 
 def test_embed_patches_rounds_keep_the_references_without_bitmaps(
-    embedded, monkeypatch
+    embedded_subset, monkeypatch
 ):
     """With the self-similarity cull off, round 1's sub-pixel pass renders no
     bitmaps. The references its views were aligned to are still recorded in
@@ -358,8 +382,8 @@ def test_embed_patches_rounds_keep_the_references_without_bitmaps(
 
     monkeypatch.setattr(ep, "compact_to_embedded_patches", spy)
     embed_patches(
-        embedded,
-        load_workspace_images(embedded),
+        embedded_subset,
+        load_workspace_images(embedded_subset),
         resolution=RESOLUTION,
         rounds=2,
         max_zncc_self_similarity_radius=0,

@@ -28,7 +28,11 @@ from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.fileio import verify_sfmr
 from sfmtool.cli import main
 
-from ..conftest import assert_references_name_track_observations
+from ..conftest import (
+    SEOUL_BULL_POINT_STEP,
+    assert_references_name_track_observations,
+    every_nth_point,
+)
 from .conftest import rotation_matrices
 
 
@@ -48,15 +52,20 @@ def _stub_embed_patches(monkeypatch, captured: dict | None = None) -> None:
 
 def test_embed_patches_cli_round_trips(monkeypatch, seoul_bull_workspace, tmp_path):
     """The CLI converts sift_files -> embedded_patches and the output loads + verifies
-    with no .sift companion."""
+    with no .sift companion. It reads every eighth point of the workspace's
+    reconstruction, saved beside it."""
     real = ep.embed_patches
     monkeypatch.setattr(
         ep,
         "embed_patches",
         lambda recon, images, **kw: real(recon, images, **{**kw, "resolution": 12}),
     )
+    src = seoul_bull_workspace.with_name("subset.sfmr")
+    every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace), SEOUL_BULL_POINT_STEP
+    ).save(str(src), operation="test subset")
     out = tmp_path / "out.sfmr"
-    args = ["embed-patches", str(seoul_bull_workspace), str(out)]
+    args = ["embed-patches", str(src), str(out)]
     with mock_patch("sys.argv", ["sfm"] + args):
         result = CliRunner().invoke(main, args)
     assert result.exit_code == 0, result.output
@@ -148,6 +157,9 @@ def test_embed_patches_handles_points_at_infinity(seoul_bull_workspace):
     pos[pi] = np.append(ray / np.linalg.norm(ray), 0.0)
     recon = recon.clone_with_changes(positions=pos)
     assert bool(np.asarray(recon.point_is_at_infinity)[pi])
+    # Every eighth point and the one at infinity.
+    recon = every_nth_point(recon, SEOUL_BULL_POINT_STEP, keep=[pi])
+    assert int(np.asarray(recon.point_is_at_infinity).sum()) == 1
 
     ws = recon.workspace_dir
     images = [read_image_rgb(f"{ws}/{name}") for name in recon.image_names]
@@ -338,7 +350,9 @@ def test_embed_patches_stores_rgb_bitmaps(seoul_bull_workspace):
     from sfmtool.flow import matcher_image_to_gray
     from sfmtool.sift import gray_from_rgb
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace)
+    recon = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace), SEOUL_BULL_POINT_STEP
+    )
     ws = recon.workspace_dir
 
     # Repaint each source image: red + green carry the grayscale texture, blue is

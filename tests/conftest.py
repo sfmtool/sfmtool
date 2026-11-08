@@ -858,6 +858,24 @@ def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
     return workspace_dir / src.name
 
 
+# The step of :func:`every_nth_point`'s subset for the tests that run a whole
+# ``embed_patches`` or normal refinement on the seoul_bull workspace: its 792
+# points become 99, and a run costs about an eighth as much. Those passes treat
+# each point on its own, so each test checks on the subset that the events it
+# covers still happen.
+SEOUL_BULL_POINT_STEP = 8
+
+
+def every_nth_point(
+    recon: "SfmrReconstruction", step: int, *, keep=()
+) -> "SfmrReconstruction":
+    """``recon`` with points ``0, step, 2 * step, ...`` and those in ``keep``,
+    in their order, with all of its images."""
+    mask = np.arange(recon.point_count) % step == 0
+    mask[list(keep)] = True
+    return recon.filter_points_by_mask(mask)
+
+
 KERRY_PARK_DIR = TEST_DATA_DIR / "images" / "kerry_park"
 KERRY_PARK_GROUND_TRUTH = KERRY_PARK_DIR / "kerry_park_ground_truth_v01.sfmr"
 KERRY_PARK_FRAME_COUNT = 24
