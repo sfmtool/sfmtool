@@ -18,34 +18,36 @@ import pytest
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.fileio import verify_sfmr
 
+from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
 from .conftest import load_images
 
 
 @pytest.fixture(scope="module")
 def scene(seoul_bull_workspace_once: Path):
-    """The seoul_bull reconstruction and its images. Read them; do not modify
-    them or their workspace."""
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once)
+    """Every eighth point of the seoul_bull reconstruction
+    (``SEOUL_BULL_POINT_STEP``) and its images. Read them; do not modify them
+    or their workspace."""
+    recon = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace_once), SEOUL_BULL_POINT_STEP
+    )
     return recon, load_images(recon)
 
 
-@pytest.fixture(scope="module")
-def one_round(scene):
-    """One round with the sub-pixel pass, at ``patch_size=10`` and
-    ``resolution=12``, and its ``progress`` lines. Read them; do not modify
-    them."""
+def _run(recon, images, rounds: int, **kwargs):
+    """``embed_patches`` with the sub-pixel pass at ``patch_size=10`` and
+    ``resolution=12``, and its ``progress`` lines."""
     from sfmtool._embed_patches import embed_patches
 
-    recon, images = scene
     lines: list[str] = []
     out = embed_patches(
         recon,
         images,
         patch_size=10.0,
         subpixel=True,
-        rounds=1,
+        rounds=rounds,
         resolution=12,
         progress=lines.append,
+        **kwargs,
     )
     return out, lines
 
@@ -79,7 +81,7 @@ def test_embed_patches_default_is_two_rounds_with_subpixel(default_embed_patches
     )
 
 
-def test_embed_patches_subpixel_lk_round_trips(scene, one_round, tmp_path: Path):
+def test_embed_patches_subpixel_lk_round_trips(scene, tmp_path: Path):
     """``embed_patches(subpixel=True)`` produces a valid ``embedded_patches``
     reconstruction that round-trips through ``.sfmr``, and its per-view
     keypoints differ from the no-refinement baseline (``subpixel=False``) — the
@@ -99,7 +101,7 @@ def test_embed_patches_subpixel_lk_round_trips(scene, one_round, tmp_path: Path)
     baseline = embed_patches(
         recon, images, patch_size=10.0, subpixel=False, rounds=1, resolution=12
     )
-    refined, _ = one_round
+    refined, _ = _run(recon, images, rounds=1)
 
     assert baseline.feature_source == refined.feature_source == "embedded_patches"
 
@@ -195,7 +197,7 @@ def _self_similarity_culled(lines: list[str]) -> int:
     return counts[0] if counts else 0
 
 
-def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: Path):
+def test_embed_patches_multiple_rounds_round_trips(scene, tmp_path: Path):
     """``rounds > 1`` alternates normal- and keypoint-refinement, feeding each
     round into the next and re-pruning grazing observations. The output is a valid
     ``embedded_patches`` recon. Every point a one-round or a three-round run keeps
@@ -210,24 +212,14 @@ def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: P
     the early cull keeps it and the later rounds carry it forward; at the normals
     and keypoints of round 3 its bitmap can be valid, and the three-round run
     then keeps a point the one-round run drops."""
-    from sfmtool._embed_patches import embed_patches
-
     recon, images = scene
 
     # resolution=12 (vs default 24) is a cheaper sampling grid; both runs use
-    # it, so the comparison between them is unaffected.
-    one, one_lines = one_round
-
-    lines: list[str] = []
-    three = embed_patches(
-        recon,
-        images,
-        patch_size=10.0,
-        subpixel=True,
-        rounds=3,
-        resolution=12,
-        progress=lines.append,
-    )
+    # it, so the comparison between them is unaffected. Both runs take a
+    # self-similarity bar low enough that round 1 culls some of the subset's
+    # points: at the default bar it culls none of them.
+    one, one_lines = _run(recon, images, rounds=1, max_zncc_self_similarity_radius=0.8)
+    three, lines = _run(recon, images, rounds=3, max_zncc_self_similarity_radius=0.8)
 
     assert three.feature_source == "embedded_patches"
     assert three.point_count > 0
@@ -237,6 +229,7 @@ def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: P
     # the two outputs hold input points only, and no more of them than that
     # cull left.
     n_culled = _self_similarity_culled(lines)
+    assert n_culled > 0
     assert _self_similarity_culled(one_lines) == n_culled
     input_counts = Counter(_positions(recon))
     one_counts = Counter(_positions(one))
@@ -247,8 +240,9 @@ def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: P
 
     # A point's views are fixed in round 1 and each later round's grazing cut
     # only removes views, so where both runs keep a point the three-round run
-    # observes it in no image the one-round run does not. Compared only for
-    # positions no other input point shares, so each names one point.
+    # observes it in no image the one-round run does not, and in fewer images
+    # for some point. Compared only for positions no other input point shares,
+    # so each names one point.
     unique = {key for key, n in input_counts.items() if n == 1}
     common = unique & one_counts.keys() & three_counts.keys()
     assert common
@@ -256,6 +250,7 @@ def test_embed_patches_multiple_rounds_round_trips(scene, one_round, tmp_path: P
     three_images = _observed_images(three, common)
     for key in common:
         assert three_images[key] <= one_images[key], key
+    assert any(three_images[key] < one_images[key] for key in common)
 
     # One per-round summary line (the "normal Δ ..." metric line) per round.
     # Phase lines share the "round N/M:" prefix, so match the summary distinctly.

@@ -24,7 +24,7 @@ from sfmtool.xform import AddPatchBitmapsTransform, RefineNormalsTransform
 from sfmtool.xform._arg_parser import parse_refine_normals_params
 from sfmtool.xform._refine_normals import _summary
 
-from ..conftest import SEOUL_BULL_GROUND_TRUTH
+from ..conftest import SEOUL_BULL_GROUND_TRUTH, SEOUL_BULL_POINT_STEP, every_nth_point
 
 
 # ── The option's value ──────────────────────────────────────────────────────
@@ -198,7 +198,7 @@ def test_refine_normals_renders_bitmaps_only_where_stored(seoul_bull_normals_ref
 
     # Bitmaps at R = 12 rather than the default 24: the refinement runs at the
     # value's patch resolution, so this pass costs about a third as much, and
-    # it still rewrites most points but not all of them (707 of 792).
+    # it still rewrites most points but not all of them (90 of 99).
     with_bitmaps = AddPatchBitmapsTransform(resolution=12).apply(recon)
     out = RefineNormalsTransform().apply(with_bitmaps)
     before = np.asarray(with_bitmaps.patch_bitmaps)
@@ -222,8 +222,13 @@ def test_missing_image_is_hard_error(seoul_bull_workspace):
 
 
 def test_cli_refine_normals(seoul_bull_workspace):
-    """``--to-embedded-patches --refine-normals`` writes turned normals."""
-    input_sfmr = seoul_bull_workspace
+    """``--to-embedded-patches --refine-normals`` writes turned normals. It
+    reads every eighth point of the workspace's reconstruction, saved beside
+    it."""
+    input_sfmr = seoul_bull_workspace.with_name("subset.sfmr")
+    every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace), SEOUL_BULL_POINT_STEP
+    ).save(str(input_sfmr), operation="test subset")
     output_sfmr = input_sfmr.with_name("refined.sfmr")
     result = CliRunner().invoke(
         main,

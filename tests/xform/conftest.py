@@ -12,6 +12,8 @@ from sfmtool.geometry import RotQuaternion
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import apply_transforms as _apply_transforms
 
+from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
+
 
 def apply_transforms_to_file(
     input_path: Path,
@@ -114,13 +116,13 @@ def positions_are_translated(
 
 @pytest.fixture(scope="session")
 def seoul_bull_normals_refined(seoul_bull_workspace_once: Path):
-    """The seoul_bull workspace converted to ``embedded_patches`` (mean-viewing
-    normals, no bitmaps) and ``RefineNormalsTransform()``'s output on it, built
-    once for the tests that only read them. Read them; do not modify them or
-    their source workspace."""
+    """Every eighth point of the seoul_bull workspace (``SEOUL_BULL_POINT_STEP``)
+    converted to ``embedded_patches`` (mean-viewing normals, no bitmaps) and
+    ``RefineNormalsTransform()``'s output on it, built once for the tests that
+    only read them. Read them; do not modify them or their source workspace."""
     from sfmtool.xform import RefineNormalsTransform
 
-    recon = SfmrReconstruction.load(seoul_bull_workspace_once).to_embedded_patches(
-        normal="mean_viewing", extent_value=5.0
-    )
+    recon = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace_once), SEOUL_BULL_POINT_STEP
+    ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
     return recon, RefineNormalsTransform().apply(recon)
