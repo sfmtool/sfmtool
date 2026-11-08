@@ -202,7 +202,12 @@ def _check_frames(
 
 def _covering_camrigs(output: Path, root: Path, images: set[Path]) -> list[Path]:
     """The `.camrig` files under `root`, other than `output`, whose patterns
-    match any of `images`."""
+    match any of `images`.
+
+    A file whose patterns miss an image only by the zero-padding of its number
+    does not cover it, so it is not named: `sfm solve` refuses an image two
+    `.camrig` files cover, and reports a padding miss only for an image no
+    `.camrig` covers, which `output` now does."""
     from .._sfmtool.fileio import read_camrig
     from .resolver import _covered_paths
 
@@ -214,7 +219,8 @@ def _covering_camrigs(output: Path, root: Path, images: set[Path]) -> list[Path]
             patterns = read_camrig(str(camrig_file))["sensor_image_patterns"]
         except Exception:
             continue
-        if _covered_paths(camrig_file.parent, patterns) & images:
+        covered, _padding_missed = _covered_paths(camrig_file.parent, patterns)
+        if covered & images:
             found.append(camrig_file)
     return found
 

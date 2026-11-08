@@ -245,7 +245,9 @@ prints the rig's sensor, frame and camera counts and, for each sensor, its
 prefix, its pattern, its image count and its camera, so the conversion can be
 checked, and a note naming any other `.camrig` file that already covers some
 of the rig's images, since `sfm solve` refuses an image two `.camrig` files
-cover.
+cover. A `.camrig` whose pattern misses an image only by the zero-padding of
+its number does not cover it and is not named; `sfm solve` reports such a miss
+only for an image no `.camrig` covers, and the new `.camrig` covers them all.
 
 ```
 $ sfm camrig cp rig_config.json kerry_park.camrig

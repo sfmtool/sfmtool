@@ -344,6 +344,29 @@ def test_a_camrig_already_covering_the_images_is_named(tmp_path: Path):
     assert "second.camrig already covers" not in result.output
 
 
+def test_a_camrig_missing_the_images_only_by_padding_is_not_named(tmp_path: Path):
+    """A `.camrig` whose patterns miss the images only by the zero-padding of
+    their numbers covers none of them, so `sfm solve` does not refuse them as
+    covered twice, and `cp` does not name it."""
+    _images(tmp_path, "a/f_1.jpg", "b/f_1.jpg")
+    source = _rig_config(tmp_path, _two_sensor_rig())
+    assert _cp(str(source), str(tmp_path / "first.camrig")).exit_code == 0
+    assert read_camrig(tmp_path / "first.camrig")["sensor_image_patterns"] == [
+        "a/f_%d.jpg",
+        "b/f_%d.jpg",
+    ]
+    for sensor in "ab":
+        (tmp_path / sensor / "f_1.jpg").rename(tmp_path / sensor / "f_01.jpg")
+
+    result = _cp(str(source), str(tmp_path / "second.camrig"))
+    assert result.exit_code == 0, result.output
+    assert read_camrig(tmp_path / "second.camrig")["sensor_image_patterns"] == [
+        "a/f_%02d.jpg",
+        "b/f_%02d.jpg",
+    ]
+    assert "already covers" not in result.output
+
+
 def test_frame_check_refuses_what_the_patterns_miss_or_split(tmp_path: Path):
     """The frame check against the files on disk, for differences that
     patterns derived from the images themselves do not produce."""
