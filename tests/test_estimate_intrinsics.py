@@ -29,6 +29,9 @@ from sfmtool.cli import main
 # module itself is reached through the import machinery.
 ei = importlib.import_module("sfmtool._commands.estimate_intrinsics")
 
+# No `-r`: the selection `_load_selection` gets when the command is run plainly.
+_NO_SELECTION = ei.parse_image_selection((), None)
+
 
 # ── Synthetic estimates ───────────────────────────────────────────────────
 
@@ -107,9 +110,14 @@ def _vote_result(
 
 def _observations(width=640, height=480, image_names=None) -> dict:
     """The report payload `_load_selection` returns beside the selection, for a
-    two-image, one-cluster capture."""
+    two-image, one-cluster capture with no `-r`."""
+    names = image_names or ["images/a.jpg", "images/b.jpg"]
     return {
-        "image_names": image_names or ["images/a.jpg", "images/b.jpg"],
+        "matches_path": Path("clusters.matches"),
+        "image_names": names,
+        "file_image_names": names,
+        "selection_label": None,
+        "workspace_dir": None,
         "width": width,
         "height": height,
         "cluster_count": 1,
@@ -133,7 +141,9 @@ def stub_estimate(monkeypatch, tmp_path):
         # The command hands the selection handle straight to the kernel, so a
         # canned run needs no `.matches` at all: the stub estimator ignores it.
         monkeypatch.setattr(
-            ei, "_load_selection", lambda path: (None, data or _observations())
+            ei,
+            "_load_selection",
+            lambda path, image_selection: (None, data or _observations()),
         )
 
         def stub(*a, **k):
@@ -311,6 +321,21 @@ def test_diagonal_fov_is_none_without_a_focal_or_verdict():
 )
 def test_pattern_derives_from_the_common_image_directory(names, expected):
     assert ei._derive_pattern(names) == expected
+
+
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        # The frame number's shared leading digits are dropped with the rest.
+        (["images/shopA_00001.jpg", "images/shopA_01089.jpg"], "images/shopA_*.jpg"),
+        (["images/x12.jpg", "images/x13.jpg"], "images/x*.jpg"),
+        # No shared prefix leaves the plain pattern.
+        (["images/a_01.jpg", "images/b_01.jpg"], "images/*.jpg"),
+        (["rig/cam0/f_01.jpg", "rig/cam1/f_02.jpg"], "rig/*/f_*.jpg"),
+    ],
+)
+def test_narrowed_pattern_takes_the_names_common_prefix(names, expected):
+    assert ei._derive_pattern(names, name_prefix=True) == expected
 
 
 def test_no_consensus_reports_the_rejection_counters(stub_estimate):
@@ -503,6 +528,104 @@ def test_write_camrig_rejects_a_pattern_that_matches_no_images(
     assert not out_path.exists()
 
 
+# ── --write-camrig after -r ─────────────────────────────────────────────────
+
+
+def _selected(workspace: Path, selected: list[str], file_names: list[str]) -> dict:
+    """The report payload of a `-r` run that kept `selected` of a `.matches`
+    file holding `file_names`, with every name created as an image file."""
+    for name in file_names:
+        (workspace / name).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / name).write_bytes(b"jpeg")
+    return {
+        **_observations(image_names=selected),
+        "file_image_names": file_names,
+        "selection_label": "named image list 'a'",
+        "workspace_dir": workspace,
+    }
+
+
+def test_selected_folder_derives_a_pattern_covering_that_folder(
+    stub_estimate, tmp_path
+):
+    from sfmtool.fileio import read_camrig
+
+    selected = ["videoA/f_01.jpg", "videoA/f_02.jpg"]
+    data = _selected(tmp_path, selected, [*selected, "videoB/f_01.jpg"])
+    # A frame of the folder the file does not hold is still the same camera's.
+    (tmp_path / "videoA" / "f_03.jpg").write_bytes(b"jpeg")
+    out_path = tmp_path / "a.camrig"
+    result = _estimate(camera_model="Pinhole", focal_px=300.0)
+    out = stub_estimate(result, "--write-camrig", str(out_path), data=data)
+    assert out.exit_code == 0, out.output
+    assert "2 of 3 selected (named image list 'a')" in out.output
+    assert list(read_camrig(out_path)["sensor_image_patterns"]) == ["videoA/*.jpg"]
+
+
+def test_shared_folder_narrows_the_pattern_to_the_names_prefix(stub_estimate, tmp_path):
+    from sfmtool.fileio import read_camrig
+
+    selected = ["images/shopA_00001.jpg", "images/shopA_00010.jpg"]
+    data = _selected(tmp_path, selected, [*selected, "images/shopB_00001.jpg"])
+    out_path = tmp_path / "a.camrig"
+    result = _estimate(camera_model="Pinhole", focal_px=300.0)
+    out = stub_estimate(result, "--write-camrig", str(out_path), data=data)
+    assert out.exit_code == 0, out.output
+    patterns = list(read_camrig(out_path)["sensor_image_patterns"])
+    assert patterns == ["images/shopA_*.jpg"]
+
+
+def test_without_r_the_pattern_is_not_narrowed(stub_estimate, tmp_path):
+    """No image of the file is left out, so the plain pattern stands even
+    though the folder holds images of another prefix."""
+    from sfmtool.fileio import read_camrig
+
+    names = ["images/shopA_00001.jpg", "images/shopA_00010.jpg"]
+    data = {**_selected(tmp_path, names, names), "selection_label": None}
+    (tmp_path / "images" / "shopB_00001.jpg").write_bytes(b"jpeg")
+    out_path = tmp_path / "a.camrig"
+    result = _estimate(camera_model="Pinhole", focal_px=300.0)
+    out = stub_estimate(result, "--write-camrig", str(out_path), data=data)
+    assert out.exit_code == 0, out.output
+    assert list(read_camrig(out_path)["sensor_image_patterns"]) == ["images/*.jpg"]
+
+
+def test_a_pattern_covering_left_out_images_is_refused(stub_estimate, tmp_path):
+    # The selection takes images of both prefixes, so narrowing to the common
+    # prefix "shop" still covers the left-out shopA_00002.
+    selected = ["images/shopA_00001.jpg", "images/shopB_00001.jpg"]
+    data = _selected(tmp_path, selected, [*selected, "images/shopA_00002.jpg"])
+    out_path = tmp_path / "a.camrig"
+    result = _estimate(camera_model="Pinhole", focal_px=300.0)
+    out = stub_estimate(result, "--write-camrig", str(out_path), data=data)
+    assert out.exit_code != 0
+    assert "Focal length:  300.00 px" in out.output
+    assert "'images/shop*.jpg' matches 1 image(s)" in out.output
+    assert "images/shopA_00002.jpg" in out.output
+    assert "--pattern" in out.output
+    assert not out_path.exists()
+
+    # An explicit --pattern is held to the same rule ...
+    out = stub_estimate(
+        result, "--write-camrig", str(out_path), "--pattern", "images/*", data=data
+    )
+    assert out.exit_code != 0
+    assert "images/shopA_00002.jpg" in out.output
+    assert not out_path.exists()
+
+    # ... and written when it names only selected images.
+    out = stub_estimate(
+        result,
+        "--write-camrig",
+        str(out_path),
+        "--pattern",
+        "images/shop*_00001.jpg",
+        data=data,
+    )
+    assert out.exit_code == 0, out.output
+    assert out_path.exists()
+
+
 # ── End to end ───────────────────────────────────────────────────────────────
 
 
@@ -541,7 +664,7 @@ def test_the_vote_reads_the_backbones_positions(cluster_matches_file):
     assert not hasattr(ei, "_positions_from_sift"), (
         "the legacy .sift lookup is gone; version <= 5 cluster files are refused"
     )
-    selection, data = ei._load_selection(cluster_matches_file)
+    selection, data = ei._load_selection(cluster_matches_file, _NO_SELECTION)
     positions = np.asarray(selection.member_positions(), dtype=np.float64)
     assert len(positions) == data["observation_count"] > 0
     assert np.isfinite(positions).all()
@@ -558,7 +681,7 @@ def test_the_object_form_is_the_array_form(cluster_matches_file):
     a caller spelling that out gets bit-identical numbers."""
     from sfmtool.geometry import estimate_intrinsics as estimate
 
-    selection, data = ei._load_selection(cluster_matches_file)
+    selection, data = ei._load_selection(cluster_matches_file, _NO_SELECTION)
     object_form = estimate(selection, seed=0, columns="auto")
     array_form = estimate(
         np.asarray(selection.cluster_starts, dtype=np.uint32),
@@ -577,7 +700,7 @@ def test_the_object_form_is_the_array_form(cluster_matches_file):
 def test_the_object_form_takes_no_observation_arrays(cluster_matches_file):
     from sfmtool.geometry import estimate_intrinsics as estimate
 
-    selection, data = ei._load_selection(cluster_matches_file)
+    selection, data = ei._load_selection(cluster_matches_file, _NO_SELECTION)
     with pytest.raises(ValueError, match="takes no observation arrays"):
         estimate(
             selection,
@@ -725,3 +848,96 @@ def test_estimate_intrinsics_draws_on_a_real_capture(cluster_matches_file: Path)
     assert default["focal_px"] is not None
     assert default == run("--seed", "0", "--draws", "1")
     assert run("--seed", "3", "--draws", "3") == run("--seed", "3", "--draws", "3")
+
+
+def test_r_restricts_the_vote_to_the_selected_images(cluster_matches_file: Path):
+    """`-r` takes a named image list or a range, as `sfm solve -r` does on a
+    `.matches` file, and the vote runs on the file's selection restricted to
+    those images: the same clusters and the same vote as a direct
+    `select_clusters(restrict_images=...)` call."""
+    from sfmtool.fileio import MatchesFile
+    from sfmtool.geometry import estimate_intrinsics as estimate
+
+    workspace_dir = cluster_matches_file.parent.parent
+    names = [f"seoul_bull_sculpture_{n:02d}.jpg" for n in range(1, 9)]
+    # Frame 99 is an image of the workspace the file does not hold.
+    (workspace_dir / "seoul_bull_sculpture_99.jpg").write_bytes(
+        (workspace_dir / names[0]).read_bytes()
+    )
+    (workspace_dir / ".sfm-named-image-lists.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "named_image_lists": {
+                    "front": [
+                        {"pattern": "seoul_bull_sculpture_%02d.jpg", "range": "1-8,99"}
+                    ]
+                },
+            }
+        )
+    )
+    runner = CliRunner()
+
+    def run(*args: str):
+        return runner.invoke(
+            main, ["estimate-intrinsics", "-i", str(cluster_matches_file), *args]
+        )
+
+    matches = MatchesFile(cluster_matches_file)
+    direct = matches.select_clusters(restrict_images=names)
+    # The selection keeps the workspace of the file it came from.
+    assert matches.workspace_dir is not None
+    assert Path(matches.workspace_dir).resolve() == workspace_dir.resolve()
+    assert direct.workspace_dir == matches.workspace_dir
+    direct_starts = np.asarray(direct.cluster_starts)
+    whole_starts = np.asarray(matches.select_clusters().cluster_starts)
+    assert 0 < direct_starts[-1] < whole_starts[-1]
+
+    selection, data = ei._load_selection(
+        cluster_matches_file, ei.parse_image_selection(("front",), None)
+    )
+    npt.assert_array_equal(np.asarray(selection.cluster_starts), direct_starts)
+    assert data["image_names"] == names
+
+    out = run("-r", "front")
+    assert out.exit_code == 0, out.output
+    assert "8 of 17 selected (named image list 'front') @ 270x480" in out.stdout
+    assert (
+        f"Clusters:      {len(direct_starts) - 1} ({direct_starts[-1]} observations)"
+        in out.stdout
+    )
+    assert "1 of the 9 images of named image list 'front' are not in" in out.stderr
+
+    out = run("-r", "front", "--json")
+    assert out.exit_code == 0, out.output
+    payload = json.loads(out.stdout)
+    assert payload["image_count"] == 17
+    assert payload["selected_image_count"] == 8
+    vote = estimate(direct, seed=0, columns="auto")["vote"]
+    for key in ("focal_px", "n_epipolar", "n_rotation", "n_pool"):
+        assert payload[key] == vote[key], key
+    # A range selecting the same frames is the same vote.
+    out = run("-r", "1-8", "--json")
+    assert out.exit_code == 0, out.output
+    assert json.loads(out.stdout) == payload
+
+    # One image leaves no cluster spanning two: no consensus, still exit 0,
+    # and nothing to write.
+    out = run("-r", "front[:1]")
+    assert out.exit_code == 0, out.output
+    assert "1 of 17 selected" in out.output
+    assert "Clusters:      0 (0 observations)" in out.output
+    assert "no consensus" in out.output
+    rig_path = workspace_dir / "front.camrig"
+    out = run("-r", "front[:1]", "--write-camrig", str(rig_path))
+    assert out.exit_code != 0
+    assert "no focal consensus to write" in out.output
+    assert not rig_path.exists()
+
+    # A selection holding none of the file's images, and an unknown name.
+    out = run("-r", "90-95")
+    assert out.exit_code != 0
+    assert "excludes all 17 images" in out.output
+    out = run("-r", "nosuch")
+    assert out.exit_code != 0
+    assert "no named image list is called 'nosuch'" in out.output

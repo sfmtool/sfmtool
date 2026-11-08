@@ -1412,7 +1412,10 @@ The code that reads, writes and verifies `.matches` files is:
   records as a string, or `None` when none is found, as `read_sfmr`'s does;
   `write_matches` ignores it.
   `sfmtool.fileio.MatchesFile` opens a file for the cluster queries
-  ([bindings](../../crates/sfmtool-py/src/fileio/matches_file.rs)).
+  ([bindings](../../crates/sfmtool-py/src/fileio/matches_file.rs)). Its
+  `workspace_dir` property is the `workspace_dir` that `read_matches` returns
+  for the same path, found once when the file is opened; a handle from
+  `select_clusters` keeps its source's.
 
 `write_clusters_matches` writes a clusters file, the cluster matcher's output:
 the cluster backbone with no pairs, cluster patches or two-view geometries. It
