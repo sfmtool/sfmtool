@@ -596,13 +596,6 @@ def undistort_reconstruction_images(
         rig_frame_data["sensor_camera_indexes"] = new_sensor_cam_idxs
 
     # === .sfmr metadata ===
-    try:
-        from importlib.metadata import version as get_version
-
-        tool_version = get_version("sfmtool")
-    except Exception:
-        tool_version = "unknown"
-
     workspace_contents = {
         "feature_tool": undistort_feature_tool,
         "feature_type": undistort_feature_type,
@@ -610,14 +603,17 @@ def undistort_reconstruction_images(
         "feature_prefix_dir": feature_prefix_dir,
     }
 
+    # The save below stamps `tool_version` and `workspace.relative_path`: the
+    # version of the sfmtool writing the file, and the path from the file's
+    # directory to `output_dir`, measured where the file is written.
     metadata = {
         "version": 2,
         "operation": "undistort",
         "tool": "sfmtool",
-        "tool_version": tool_version,
+        "tool_version": "",
         "workspace": {
             "absolute_path": str(output_dir.resolve()),
-            "relative_path": ".",
+            "relative_path": "",
             "contents": workspace_contents,
         },
         "timestamp": datetime.now().astimezone().isoformat(),
@@ -669,7 +665,7 @@ def undistort_reconstruction_images(
     sfmr_path = sfmr_out_dir / "undistorted.sfmr"
 
     new_recon = SfmrReconstruction.from_data(output_dir.resolve(), sfmr_dict)
-    new_recon.save(sfmr_path)
+    new_recon.save(sfmr_path, operation="undistort")
 
     # === Write workspace config ===
     workspace_config = {
