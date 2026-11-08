@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """COLMAP database feature population: the three per-camera-config-source
-builders (single camera, `rig_config.json` rigs, `.camrig`) and their sensor
-helpers. Driven by the orchestrators in :mod:`db_setup`."""
+builders (single-sensor frames, `rig_config.json` rigs, multi-sensor
+`.camrig`) and their sensor helpers. Driven by the orchestrators in
+:mod:`db_setup`."""
 
 import os
 from pathlib import Path
