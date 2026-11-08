@@ -124,8 +124,9 @@ locations), the absolute path, and the nearest directory at or above the file's
 directory. A candidate counts only when it holds `WORKSPACE_MARKER`; one that
 exists without it is skipped, and an empty path is skipped as none recorded.
 `None` means no step found one, and each caller turns that into its own error.
-The `.sfmr` reader (`resolve_workspace_dir` in `sfmtool-sfmr-format`) and the
-`.kdf` source verification both call it, so the two cannot disagree about which
+The `.sfmr` reader (`resolve_workspace_dir` in `sfmtool-sfmr-format`), the
+`.matches` reader (`resolve_workspace_dir` in `sfmtool-matches-format`) and the
+`.kdf` source verification all call it, so they cannot disagree about which
 directory a file names. The paths are arguments rather than a
 `WorkspaceMetadata` because `.kdf` records them in a type of its own.
 

@@ -4997,6 +4997,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sfmtool-archive-io",
+ "tempfile",
  "thiserror 2.0.21",
  "xxhash-rust",
  "zip",

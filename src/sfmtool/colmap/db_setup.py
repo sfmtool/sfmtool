@@ -222,8 +222,8 @@ def _setup_for_sfm_from_matches(
     are skipped.
 
     `matches_data` lets a caller that has already parsed the file hand the
-    dict over instead of paying for a second parse; it must be the contents of
-    `matches_file`.
+    dict over instead of paying for a second parse; it must be what
+    `read_matches(matches_file)` returned, including its `workspace_dir`.
 
     Returns:
         tuple: (db_path, image_dir, image_paths, rig_used) — `rig_used` is True
@@ -233,7 +233,6 @@ def _setup_for_sfm_from_matches(
     import numpy as np
 
     from .._sfmtool.fileio import read_matches
-    from .._workspace import find_workspace_for_path
     from ..feature_match import pairs_from_matches
 
     matches_file = Path(matches_file)
@@ -252,31 +251,12 @@ def _setup_for_sfm_from_matches(
     all_image_names = matches_data["image_names"]
     full_image_count = metadata["image_count"]
 
-    # Resolve workspace directory
-    workspace_dir = None
-    matches_dir = matches_file.parent.absolute()
-    rel_path = ws_meta.get("relative_path", "")
-    if rel_path:
-        candidate = (matches_dir / rel_path).resolve()
-        ws_marker = candidate / ".sfm-workspace.json"
-        if ws_marker.exists():
-            workspace_dir = candidate
-
-    if workspace_dir is None:
-        abs_path = ws_meta.get("absolute_path", "")
-        if abs_path:
-            candidate = Path(abs_path)
-            if (candidate / ".sfm-workspace.json").exists():
-                workspace_dir = candidate
-
-    if workspace_dir is None:
-        workspace_dir = find_workspace_for_path(matches_dir)
-
-    if workspace_dir is None:
+    if matches_data["workspace_dir"] is None:
         raise RuntimeError(
             f"Cannot resolve workspace for {matches_file}. "
             "Ensure the workspace exists and contains .sfm-workspace.json."
         )
+    workspace_dir = Path(matches_data["workspace_dir"])
 
     if image_filter is not None:
         kept_old_indices = image_filter.keep(workspace_dir, list(all_image_names))

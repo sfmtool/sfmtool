@@ -1086,7 +1086,13 @@ directory at the workspace root.
 When the file includes two-view geometries, the default output directory is `tvg-matches/`.
 These are default conventions, not requirements — commands that consume `.matches` files
 locate the workspace through the embedded workspace reference, not by assuming a fixed
-location.
+location. The workspace is resolved as for a `.sfmr` file: `workspace.relative_path` from the
+`.matches` file's directory, then `workspace.absolute_path`, then the nearest directory above
+the file, each only when it holds `.sfm-workspace.json`. The rule is
+`sfmtool_archive_io::resolve_workspace_dir`, which `resolve_workspace_dir` in
+`sfmtool-matches-format` applies to a file's metadata; it returns `None` when no step finds a
+workspace, since a file that names none is still a valid file, and a command that needs the
+workspace reports its absence.
 
 Example workspace layout:
 
@@ -1396,11 +1402,15 @@ The code that reads, writes and verifies `.matches` files is:
 
 - Rust: `read_matches`, `read_matches_metadata`, `write_matches`,
   `write_clusters_matches` and `verify_matches` in
-  [`sfmtool-matches-format`](../../crates/sfmtool-matches-format/src/lib.rs).
+  [`sfmtool-matches-format`](../../crates/sfmtool-matches-format/src/lib.rs),
+  with `resolve_workspace_dir`, which finds the workspace a file records.
 - Python: the same five functions in `sfmtool.fileio`
   ([bindings](../../crates/sfmtool-py/src/fileio/matches.rs)). The readers
   and `write_matches` take and return a dict of NumPy arrays and metadata;
   `write_clusters_matches` takes those values as keyword arguments.
+  `read_matches`'s dict also carries `workspace_dir`, the workspace the file
+  records as a string, or `None` when none is found, as `read_sfmr`'s does;
+  `write_matches` ignores it.
   `sfmtool.fileio.MatchesFile` opens a file for the cluster queries
   ([bindings](../../crates/sfmtool-py/src/fileio/matches_file.rs)).
 

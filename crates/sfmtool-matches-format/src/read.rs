@@ -3,7 +3,7 @@
 
 //! `.matches` file reading.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ndarray::{Array1, Array2, Array3, Array4};
 
@@ -23,6 +23,40 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
     })?;
     let mut archive = zip::ZipArchive::new(file)?;
     Ok(read_json_entry(&mut archive, entries::metadata())?)
+}
+
+/// The workspace directory a `.matches` file records, or `None` when none of
+/// the three lookups finds one.
+///
+/// The rule is [`sfmtool_archive_io::resolve_workspace_dir`], the one the
+/// `.sfmr` reader and `.kdf` source verification use:
+/// 1. `workspace.relative_path` joined to the `.matches` file's directory;
+/// 2. `workspace.absolute_path`;
+/// 3. the nearest directory at or above the `.matches` file's directory that
+///    holds `.sfm-workspace.json`.
+///
+/// A recorded directory counts only when it holds `.sfm-workspace.json`. An
+/// empty `relative_path` or `absolute_path` means none was recorded, and its
+/// step is skipped. A file that names no workspace is still a valid file, so
+/// `None` is not an error here; each caller that needs the workspace reports
+/// its absence in its own terms.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::path::Path;
+/// use sfmtool_matches_format::{read_matches_metadata, resolve_workspace_dir};
+/// let path = Path::new("/projects/ws/matches/pairs.matches");
+/// let metadata = read_matches_metadata(path)?;
+/// let workspace = resolve_workspace_dir(path, &metadata);
+/// # Ok::<(), sfmtool_matches_format::MatchesError>(())
+/// ```
+pub fn resolve_workspace_dir(matches_path: &Path, metadata: &MatchesMetadata) -> Option<PathBuf> {
+    sfmtool_archive_io::resolve_workspace_dir(
+        matches_path,
+        &metadata.workspace.relative_path,
+        &metadata.workspace.absolute_path,
+    )
 }
 
 /// Read the top-level metadata and the image names of a `.matches` file, and

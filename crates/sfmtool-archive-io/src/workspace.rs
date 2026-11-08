@@ -3,8 +3,8 @@
 
 //! How a reader finds the workspace a file's `workspace` metadata records.
 //!
-//! `.sfmr` and `.kdf` record the same two paths and resolve them by the same
-//! rule, so the rule is here once rather than in each format crate.
+//! `.sfmr`, `.matches` and `.kdf` record the same two paths and resolve them by
+//! the same rule, so the rule is here once rather than in each format crate.
 
 use std::path::{Path, PathBuf};
 

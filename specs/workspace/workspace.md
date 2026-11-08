@@ -502,9 +502,14 @@ strategy:
    was moved to a new machine).
 
 Each step validates that the candidate directory actually contains `.sfm-workspace.json` before
-accepting it. A `.kdf` file's source verification resolves the workspace it records by the same
-three steps, through the same function (`resolve_workspace_dir` in
+accepting it. A `.matches` file, and a `.kdf` file's source verification, resolve the workspace
+they record by the same three steps, through the same function (`resolve_workspace_dir` in
 [archive-io-crate.md](../formats/archive-io-crate.md)).
+
+The upward search starts from the real location of the file's directory, with links resolved,
+so a file reached through a link into a workspace finds that workspace. Python's
+`find_workspace_for_path`, which commands use to find the workspace of an input path that
+records none, walks up the path as given instead.
 
 ### Why Both Relative and Absolute Paths?
 
