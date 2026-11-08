@@ -284,7 +284,7 @@ def test_cp_rejects_non_recon_source(tmp_path: Path):
     out = tmp_path / "x.camrig"
     result = CliRunner().invoke(main, ["camrig", "cp", str(fake), str(out)])
     assert result.exit_code != 0
-    assert "must be a .sfmr or .camrig" in result.output
+    assert "must be a .sfmr, .camrig or rig_config.json file" in result.output
 
 
 def test_cp_camera_out_of_range(seoul_bull_workspace: Path, tmp_path: Path):
