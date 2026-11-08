@@ -241,9 +241,9 @@ and `[` as wildcards too), less the digits it then ends in, and with each `%`
 written `%%`, the pattern language's literal percent. So selected frames
 `images/shopA_00001.jpg` ... `images/shopA_01089.jpg` beside
 `images/shopB_*.jpg` give `images/shopA_*.jpg`, and frame 1 of a rig,
-`rig/cam0/f_01.jpg` and `rig/cam1/f_01.jpg`, gives `rig/*/f_*.jpg`. When the narrowed pattern still matches a left-out
-image, or `--pattern` matches one, the write refuses, naming the pattern, one
-such image and `--pattern`. Images the file does not hold are not checked: a
+`rig/cam0/f_01.jpg` and `rig/cam1/f_01.jpg`, gives `rig/*/f_*.jpg`. When
+the narrowed pattern still matches a left-out image, or `--pattern` matches
+one, the write refuses, naming the pattern, one such image and `--pattern`. Images the file does not hold are not checked: a
 video's frames that were not picked for matching are still that video's, and
 a pattern covering them is what a later solve on more of its frames needs.
 Without `-r` no image is left out, so the derived pattern is never narrowed.
