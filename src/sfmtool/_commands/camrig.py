@@ -156,7 +156,7 @@ def create(
     "rig_index",
     type=click.IntRange(min=0),
     default=None,
-    help="`.sfmr` source only: index of the rig to copy.",
+    help="`.sfmr` or `rig_config.json` source only: index of the rig to copy.",
 )
 @click.option(
     "--camera",
@@ -185,14 +185,23 @@ def create(
     "output file stem).",
 )
 def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name):
-    """Build a .camrig by copying from a .sfmr or .camrig file.
+    """Build a .camrig by copying from a .sfmr, .camrig or rig_config.json file.
 
-    SOURCE is a `.sfmr` reconstruction or a `.camrig` file; OUTPUT_FILE is the
-    `.camrig` to write. A selector chooses what to copy: `--rig` (a whole rig,
-    `.sfmr` only), `--camera` (one camera as a single-sensor rig), or
+    SOURCE is a `.sfmr` reconstruction, a `.camrig` file or a workspace's
+    `rig_config.json`; OUTPUT_FILE is the `.camrig` to write. A selector
+    chooses what to copy: `--rig` (a whole rig, `.sfmr` or `rig_config.json`),
+    `--camera` (one camera as a single-sensor rig, `.sfmr` or `.camrig`), or
     `--sensors` (a subset of sensors, `.camrig` only). With no selector, a
-    `.sfmr` falls back to its lone rig or lone camera and a `.camrig` is copied
-    whole.
+    `.sfmr` falls back to its lone rig or lone camera, a `rig_config.json` to
+    its lone rig, and a `.camrig` is copied whole.
+
+    A rig of a `rig_config.json` becomes a `.camrig` that groups the same
+    images into the same sensors and frames: each sensor's image pattern is
+    derived from the image files under its `image_prefix`, and the command
+    fails, naming the images, when no pattern can do that. Write OUTPUT_FILE
+    in the folder of the `rig_config.json` (or under it, in a folder that
+    holds all the rig's images); the patterns are relative to the folder of
+    OUTPUT_FILE.
 
     Example usage:
 
@@ -203,6 +212,8 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
         sfm camrig cp sfmr/rig_solve.sfmr studio.camrig --rig 0
         # Take three faces out of a six-face cubemap rig
         sfm camrig cp cubemap.camrig front.camrig --sensors 0-2
+        # Convert the rig of a workspace's rig_config.json
+        sfm camrig cp rig_config.json rig.camrig
     """
     from ..camrig.cp import CamrigCpError, copy_from_camrig, copy_from_sfmr
 
@@ -239,8 +250,9 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
         elif suffix == ".camrig":
             if rig_index is not None:
                 raise click.UsageError(
-                    "--rig applies to a .sfmr source; a .camrig holds exactly "
-                    "one rig — use --sensors to pick a subset of its sensors."
+                    "--rig applies to a .sfmr or rig_config.json source; a .camrig "
+                    "holds exactly one rig — use --sensors to pick a subset of "
+                    "its sensors."
                 )
             summary = copy_from_camrig(
                 src,
@@ -250,10 +262,25 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
                 pattern=pattern,
                 name=name,
             )
+        elif suffix == ".json":
+            if camera_index is not None or sensors_expr is not None:
+                raise click.UsageError(
+                    "a rig_config.json source takes only --rig; --camera and "
+                    "--sensors apply to .sfmr and .camrig sources."
+                )
+            from ..camrig.from_rig_config import copy_from_rig_config
+
+            summary = copy_from_rig_config(src, out, rig_index=rig_index, name=name)
         else:
-            raise click.UsageError(f"SOURCE must be a .sfmr or .camrig file: {src}")
+            raise click.UsageError(
+                f"SOURCE must be a .sfmr, .camrig or rig_config.json file: {src}"
+            )
     except CamrigCpError as e:
         raise click.ClickException(str(e))
+
+    if suffix == ".json":
+        _echo_rig_config_summary(summary)
+        return
 
     click.echo(f"Wrote {summary['output_file']}")
     click.echo(
@@ -284,6 +311,36 @@ def cp(source, output_file, rig_index, camera_index, sensors_expr, pattern, name
         click.echo(
             f"  note:     {which} copied without the rolling_shutter_scanlines "
             "setting: a .camrig has no place for it"
+        )
+
+
+def _echo_rig_config_summary(summary: dict) -> None:
+    """Print what a `rig_config.json` rig became: each sensor's pattern, image
+    count and camera, and the frame count, so the conversion can be checked."""
+    click.echo(f"Wrote {summary['output_file']}")
+    click.echo(
+        f"  rig {summary['rig_index']} (of {summary['rig_count']} in the file): "
+        f"{summary['sensor_count']} sensors, {summary['frame_count']} frames, "
+        f"{summary['camera_count']} camera(s)"
+    )
+    for index, sensor in enumerate(summary["sensors"]):
+        camera = sensor["camera"]
+        click.echo(
+            f"  sensor {index}: {sensor['image_prefix']} -> {sensor['pattern']}  "
+            f"({sensor['image_count']} images, {camera['model']} "
+            f"{camera['width']}x{camera['height']})"
+        )
+    for index, sensor in enumerate(summary["sensors"]):
+        if sensor["camera_inferred_from"] is not None:
+            click.echo(
+                f"  note:     sensor {index} has no camera_params; its camera was "
+                f"inferred from {sensor['camera_inferred_from']} as `sfm solve` "
+                "infers it, and the .camrig holds it as a calibration"
+            )
+    for other in summary["covering_camrigs"]:
+        click.echo(
+            f"  note:     {other} already covers some of these images; `sfm "
+            "solve` refuses an image that two .camrig files cover"
         )
 
 

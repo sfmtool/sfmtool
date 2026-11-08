@@ -275,3 +275,14 @@ over it
 ([solve-command.md § Camera Rig Files](../cli/reconstruction/solve-command.md#camera-rig-files-camrig)).
 The rig builders (`sfm pano2rig`, `sfm insv2rig`, `sfm camrig …`) all emit a `.camrig` file instead — see
 `specs/formats/camrig-file-format.md` and `specs/cli/workspace/pano2rig-command.md`.
+
+## Converting to a `.camrig`
+
+`sfm camrig cp rig_config.json OUTPUT.camrig [--rig N]` converts one rig of
+the file into a `.camrig` that groups the same images into the same sensors
+and frames, with the same cameras and `cam_from_rig` poses. Each sensor's
+image pattern is derived from the image files under its `image_prefix`, and
+the command fails, naming the images, when no pattern can reproduce the
+file's sensors and frames. Each rig of a file with several rigs becomes its
+own `.camrig`. See
+[camrig-command.md § A `rig_config.json` source](../cli/workspace/camrig-command.md#a-rig_configjson-source).
