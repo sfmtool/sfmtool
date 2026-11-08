@@ -310,11 +310,25 @@ camera of its `.camrig`
 
 **Where each file goes.** The `.camrig` of a sequence is in the sequence's
 folder. Its name is the part of the sequence's file names before the file
-number, less the separators it ends in (spaces, `_`, `-`, `.` and `(`), so
-`shopA_00001.jpg`, `shopA-00001.jpg` and `shopA (1).jpg` all give
+number, less the separators it ends in (spaces, `_`, `-`, `.`, `(` and
+`)`), so `shopA_00001.jpg`, `shopA-00001.jpg` and `shopA (1).jpg` all give
 `shopA.camrig`. When nothing is left, as for `00001.jpg`, the file is named
 after the folder, and a sequence in the workspace root is named after the
 workspace's folder.
+
+When two or more sequences of the run would get the same file, compared
+without regard to letter case (the file systems of Windows and macOS do not
+tell `x.camrig` from `X.camrig`), each of them is named instead from that
+name, `_`, and the part of its file names after the file number, with the
+same separators stripped from both its ends, when that part is not empty.
+`number_from_filename` reads the digits at the end of a name, or in
+parentheses there, so the part after the number is the extension, behind a
+`)` for a number in parentheses: `x_01.jpg` beside `x_01.png` give
+`x_jpg.camrig` and `x_png.camrig`, and `cams/01.jpg` beside `cams/01.png`
+give `cams/cams_jpg.camrig` and `cams/cams_png.camrig`. The renamed files
+are compared again with every file of the run, and the sequences that still
+share one get none (see the refusals below): `v (1).jpg` beside
+`v1.jpg` both give `v_jpg.camrig`.
 
 **The pattern.** The stored pattern is relative to the `.camrig`'s folder:
 the sequence's file names with the file number as a frame field, `%0Nd`
@@ -325,34 +339,38 @@ the sequence in the folder, including frames the `.matches` file does not
 hold, and no file whose name differs anywhere else: `shot1_%04d.jpg` does
 not cover `shot10_0001.jpg`.
 
-**`-r`.** With `-r` only the selected images take part. A sequence with no
-selected image is left out of the run; each other sequence votes on its
-selected images, and its pattern still names the whole sequence, since the
-frames `-r` left out are the same video's.
+**`-r`.** With `-r` only the selected images take part, and only they are
+grouped into sequences, so an image `-r` leaves out cannot stop the run,
+even one with no number or one that shares its number with another file of
+its sequence. Each sequence votes on its selected images, and its pattern
+still names the whole sequence, since the frames `-r` left out are the same
+video's: the file's images that `-r` left out whose names differ from the
+sequence's only in the file number count as the sequence's (its
+`image_count` in `--json`), not as another sequence's.
 
 **Rigs.** The images a multi-sensor `.camrig` covers, found as `sfm solve`
 finds it, form one rig sequence, as in `sfm pick-images`. It gets no file,
 since its `.camrig` already gives its images their cameras, and the report
-says so. A rig of `rig_config.json` among the file's images is refused
-before any vote, whatever `-r` selects, with a message naming the sequence:
-`sfm solve` ignores `rig_config.json` once any `.camrig` covers an image it
-solves
+says so. An image of a rig of `rig_config.json` anywhere in the file stops
+the command before any vote, whatever `-r` selects, with a message naming
+the image, because `sfm solve` ignores `rig_config.json` once any `.camrig`
+covers an image it solves
 ([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig)),
-so writing any sequence's file would undo the rig. Images that cannot be
-grouped (a file with no number, two files of one sequence with the same
-number) stop the command, with a message naming the files at fault, as they
-stop `sfm pick-images`.
+so writing any sequence's file would undo the rig. Selected images that
+cannot be grouped (a file with no number, two files of one sequence with the
+same number) stop the command, with a message naming the files at fault, as
+they stop `sfm pick-images`.
 
 **Refusals.** A sequence gets no file, with the reason in the report, when:
 
 - its vote has no focal consensus, or its verdict is an UNCONFIRMED Fisheye
   (the same two refusals as `--write-camrig`);
 - its images have more than one resolution (the message lists them);
-- another sequence of the run would get the same file, compared without
-  regard to letter case, since the file systems of Windows and macOS do not
-  tell `x.camrig` from `X.camrig`. Every such sequence gets none, and the
-  message names the others and says to write each one with `-r` and
-  `--write-camrig`. `x_0001.jpg` beside `x_0001.png` is one such case;
+- another sequence of the run would get the same file even when named
+  with the part of the file names after the number
+  ([Where each file goes](#one-camera-per-sequence)). Every such sequence
+  gets none, and the message names the others and says to write each one
+  with `-r` and `--write-camrig`;
 - a single-sensor `.camrig` other than its own already covers any of its
   images, since `sfm solve` refuses an image two `.camrig` files match;
 - its file exists and `--force` was not given;

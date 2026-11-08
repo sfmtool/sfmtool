@@ -534,11 +534,11 @@ def _write_camrig(
     return _store_camrig(output_path, stored_pattern, estimate, data)
 
 
-# The characters stripped from the end of a sequence's name prefix to name its
-# `.camrig`: the separators that commonly stand between a name and its file
-# number (`shopA_00001`, `shopA-00001`, `shopA.00001`, `shopA 00001`,
-# `shopA (1)`).
-_PREFIX_SEPARATORS = " _-.("
+# The characters stripped from the ends of the parts of a sequence's file
+# names that name its `.camrig`: the separators that commonly stand between a
+# name and its file number (`shopA_00001`, `shopA-00001`, `shopA.00001`,
+# `shopA 00001`, `shopA (1)`), and the `.` of the extension after it.
+_SEPARATORS = " _-.()"
 
 
 @dataclass
@@ -553,6 +553,13 @@ class _SequenceRun:
     # The file's images in the sequence, and those `-r` keeps.
     names: list[str]
     chosen: list[str]
+    # The folder the `.camrig` goes in, and the parts of the file names
+    # before and after the file number that name it, separators stripped
+    # (the part after is the extension, behind a `)` for a number in
+    # parentheses); `None` for a rig sequence.
+    camrig_folder: Path | None = None
+    name_before: str = ""
+    name_after: str = ""
     # The `.camrig` path and the pattern it stores; `None` for a rig sequence.
     camrig_path: Path | None = None
     camrig_pattern: str | None = None
@@ -563,43 +570,61 @@ class _SequenceRun:
     summary: str | None = None
 
 
-def _sequence_camrig(sequence, workspace_dir: Path) -> tuple[Path, str]:
-    """The `.camrig` path of a sequence of single images, and the pattern it
-    stores, relative to the file's folder.
-
-    The file goes in the sequence's folder. Its name is the part of the file
-    names before the file number, less the separators it ends in, or, when
-    that leaves nothing, the folder's name: the workspace's own name for a
-    sequence in the workspace root. The pattern is the sequence's list
-    pattern less its folder: the names with the file number as a frame
-    field, and `%%` for a `%`.
-    """
+def _name_key(rel: str) -> tuple[str, str, str] | None:
+    """The folder of a workspace-relative image name and the parts of its
+    file name before and after the file number, which are what
+    `collect_sequences` groups a sequence of single images by; `None` for a
+    name with no file number."""
     from .._filenames import file_number_span
 
-    first = Path(sequence.images[0][0])
-    start, _end = file_number_span(first.name)
-    folder = workspace_dir / first.parent
-    stem = first.name[:start].rstrip(_PREFIX_SEPARATORS)
-    if not stem:
-        stem = folder.resolve().name
-    # The list pattern is the escaped folder and a `/`, then the escaped name
-    # pattern; a file name holds no `/`, so the name pattern is what follows
-    # the last one.
-    return folder / f"{stem}.camrig", sequence.name.rpartition("/")[2]
+    folder, _slash, name = rel.rpartition("/")
+    span = file_number_span(name)
+    if span is None:
+        return None
+    return folder, name[: span[0]], name[span[1] :]
+
+
+def _sequence_run(
+    sequence, names: list[str], chosen: list[str], workspace_dir: Path
+) -> _SequenceRun:
+    """The planned run of a sequence of single images: the folder its
+    `.camrig` goes in, the name parts the file is named from, and the
+    pattern it stores, relative to that folder.
+
+    The pattern is the sequence's list pattern less its folder: the names
+    with the file number as a frame field, and `%%` for a `%`. The list
+    pattern is the escaped folder and a `/`, then the escaped name pattern;
+    a file name holds no `/`, so the name pattern is what follows the last
+    one.
+    """
+    folder, before, after = _name_key(Path(sequence.images[0][0]).as_posix())
+    return _SequenceRun(
+        pattern=sequence.name,
+        names=names,
+        chosen=chosen,
+        camrig_folder=workspace_dir / folder,
+        name_before=before.rstrip(_SEPARATORS),
+        name_after=after.strip(_SEPARATORS),
+        camrig_pattern=sequence.name.rpartition("/")[2],
+    )
 
 
 def _plan_sequences(matches_path: Path, image_selection) -> tuple:
-    """The sequences of the `.matches` file's images that `-r` keeps any of,
-    and the opened file: `(mfile, runs, file_image_names, kept, label,
+    """The sequences of the images `-r` keeps of the `.matches` file, and the
+    opened file: `(mfile, runs, file_image_names, kept, label,
     workspace_dir)`.
 
-    The images are grouped as `sfm pick-images` groups them
-    (`collect_sequences`, with the rigs `find_rigs` finds). A sequence of a
-    multi-sensor `.camrig` is planned with the reason it gets no `.camrig`;
-    each other sequence with the path and the pattern of its `.camrig`. A rig
-    of `rig_config.json` among the file's images is refused.
+    Only the kept images are grouped, as `sfm pick-images` groups them
+    (`collect_sequences`, with the rigs `find_rigs` finds), so an image `-r`
+    leaves out cannot stop the run. A sequence of a multi-sensor `.camrig` is
+    planned with the reason it gets no `.camrig`; each other sequence with
+    the name parts and the pattern of its `.camrig`, and with the file's
+    images left out by `-r` whose names differ from its own only in the file
+    number. An image of a rig of `rig_config.json` anywhere in the file is
+    refused.
     """
     from .._pick_images import PickImagesInputError, collect_sequences, find_rigs
+    from ..rig.config import _match_image_to_sensor
 
     mfile, file_image_names, kept, label, workspace_dir = _open_matches(
         matches_path, image_selection
@@ -611,38 +636,57 @@ def _plan_sequences(matches_path: Path, image_selection) -> tuple:
             "--write-camrig-per-sequence places each .camrig in its "
             "sequence's folder of that workspace."
         )
-    paths = [workspace_dir / name for name in file_image_names]
+    chosen_names = file_image_names if kept is None else kept
     try:
-        rig_configs, camrig_rigs, _notes = find_rigs(paths, workspace_dir)
-        sequences = collect_sequences(paths, workspace_dir, rig_configs, camrig_rigs)
+        rig_configs, camrig_rigs, _notes = find_rigs(
+            [workspace_dir / name for name in file_image_names], workspace_dir
+        )
+        if rig_configs is not None:
+            for name in file_image_names:
+                if (
+                    _match_image_to_sensor(Path(name).as_posix(), rig_configs)
+                    is not None
+                ):
+                    # `sfm solve` ignores rig_config.json once a `.camrig`
+                    # covers any image it solves, so a written `.camrig`
+                    # would undo the rig in a solve of the file, whatever
+                    # `-r` selects here.
+                    raise click.ClickException(
+                        f"the image {name} belongs to a rig of rig_config.json, "
+                        "and `sfm solve` ignores rig_config.json once a .camrig "
+                        "covers any image it solves.\n"
+                        "Give the rig a multi-sensor .camrig first."
+                    )
+        sequences = collect_sequences(
+            [workspace_dir / name for name in chosen_names],
+            workspace_dir,
+            rig_configs,
+            camrig_rigs,
+        )
     except PickImagesInputError as e:
         raise click.ClickException(
             f"the images of {matches_path} cannot be grouped into sequences:\n{e}"
         ) from None
 
     by_rel = {Path(name).as_posix(): name for name in file_image_names}
-    selected = set(file_image_names if kept is None else kept)
+    chosen_set = set(chosen_names)
+    # The file's images `-r` left out, by the name parts that would put them
+    # in a sequence of the kept images.
+    left_out: dict[tuple, list[str]] = {}
+    for name in file_image_names:
+        if name not in chosen_set:
+            key = _name_key(Path(name).as_posix())
+            if key is not None:
+                left_out.setdefault(key, []).append(name)
+
     runs: list[_SequenceRun] = []
     for sequence in sequences:
-        names = [by_rel[p.as_posix()] for frame in sequence.images for p in frame]
-        if sequence.sensors is not None and rig_configs is not None:
-            # `sfm solve` ignores rig_config.json once a `.camrig` covers any
-            # image it solves, so a written `.camrig` would undo the rig in a
-            # solve of the file, whatever `-r` selects here.
-            raise click.ClickException(
-                f"the sequence {' and '.join(sequence.patterns)} is a rig of "
-                "rig_config.json, and `sfm solve` ignores rig_config.json once "
-                "a .camrig covers any image it solves.\n"
-                "Give the rig a multi-sensor .camrig first."
-            )
-        chosen = [name for name in names if name in selected]
-        if not chosen:
-            continue
+        chosen = [by_rel[p.as_posix()] for frame in sequence.images for p in frame]
         if sequence.sensors is not None:
             runs.append(
                 _SequenceRun(
                     pattern=" and ".join(sequence.patterns),
-                    names=names,
+                    names=chosen,
                     chosen=chosen,
                     reason=(
                         "a rig sequence: the multi-sensor .camrig that covers "
@@ -651,36 +695,56 @@ def _plan_sequences(matches_path: Path, image_selection) -> tuple:
                 )
             )
             continue
-        camrig_path, camrig_pattern = _sequence_camrig(sequence, workspace_dir)
-        runs.append(
-            _SequenceRun(
-                pattern=sequence.name,
-                names=names,
-                chosen=chosen,
-                camrig_path=camrig_path,
-                camrig_pattern=camrig_pattern,
-            )
-        )
+        key = _name_key(Path(sequence.images[0][0]).as_posix())
+        names = chosen + left_out.get(key, [])
+        runs.append(_sequence_run(sequence, names, chosen, workspace_dir))
     return mfile, runs, file_image_names, kept, label, workspace_dir
 
 
-def _check_collisions(runs: list[_SequenceRun]) -> None:
-    """Give a reason to every sequence whose `.camrig` path another sequence
-    of the run shares. Paths are compared without regard to letter case,
-    since the file systems of Windows and macOS do not tell `x.camrig` from
-    `X.camrig`."""
+def _shared_paths(runs: list[_SequenceRun]) -> list[list[_SequenceRun]]:
+    """The groups of sequences that share a `.camrig` path. Paths are
+    compared without regard to letter case, since the file systems of
+    Windows and macOS do not tell `x.camrig` from `X.camrig`."""
     by_path: dict[str, list[_SequenceRun]] = {}
     for run in runs:
         if run.camrig_path is not None:
             key = str(run.camrig_path.resolve()).casefold()
             by_path.setdefault(key, []).append(run)
-    for shared in by_path.values():
-        if len(shared) < 2:
-            continue
+    return [shared for shared in by_path.values() if len(shared) > 1]
+
+
+def _name_camrigs(runs: list[_SequenceRun]) -> None:
+    """Give each sequence of single images its `.camrig` path, or the reason
+    it gets none.
+
+    A file is named from the part of the names before the file number, or
+    the folder's name when that part is empty. Sequences that would share a
+    file are named instead from that name, `_`, and the part of the names
+    after the number, when that part is not empty. `number_from_filename`
+    reads the digits at the end of a name, or in parentheses there, so the
+    part after the number is the extension, behind a `)` for a number in
+    parentheses: `x_01.jpg` and `x_01.png` give `x_jpg.camrig` and
+    `x_png.camrig`. The sequences that still share a file get none.
+    """
+
+    def path(run: _SequenceRun, after: bool) -> Path:
+        stem = run.name_before or run.camrig_folder.resolve().name
+        if after and run.name_after:
+            stem = f"{stem}_{run.name_after}"
+        return run.camrig_folder / f"{stem}.camrig"
+
+    for run in runs:
+        if run.camrig_folder is not None:
+            run.camrig_path = path(run, after=False)
+    for shared in _shared_paths(runs):
+        for run in shared:
+            run.camrig_path = path(run, after=True)
+    for shared in _shared_paths(runs):
         for run in shared:
             others = " and ".join(o.pattern for o in shared if o is not run)
             run.reason = (
-                f"{run.camrig_path} would also be the .camrig of {others}. "
+                f"{run.camrig_path} would also be the .camrig of {others}, "
+                "even named with the part of the file names after the number. "
                 "Write each sequence's .camrig with -r and --write-camrig."
             )
 
@@ -784,7 +848,7 @@ def _write_camrig_per_sequence(
         raise click.ClickException(str(e)) from None
     single_sensor_hits = [h for h in hits if h[1]["metadata"]["sensor_count"] == 1]
 
-    _check_collisions(runs)
+    _name_camrigs(runs)
     for run in runs:
         if run.camrig_path is None:
             continue

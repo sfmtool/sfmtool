@@ -272,18 +272,72 @@ def test_images_that_cannot_be_grouped_stop_the_command(stub_run):
     assert not list(stub_run.workspace.rglob("*.camrig"))
 
 
-def test_sequences_that_would_share_a_file_get_none(stub_run):
-    # x_%02d.jpg and x_%02d.png are two sequences, both named x.camrig.
-    names = ["x_01.jpg", "x_02.jpg", "x_01.png", "x_02.png", "y_01.jpg", "y_02.jpg"]
+def test_sequences_sharing_a_name_take_the_part_after_the_number(stub_run):
+    """`number_from_filename` reads the digits at the end of a name, so the
+    part after the number is the extension, behind a `)` for a number in
+    parentheses."""
+    names = [
+        # x.camrig for both, so each takes its extension: x_jpg, x_png.
+        "x_01.jpg",
+        "x_02.jpg",
+        "x_01.png",
+        "x_02.png",
+        # Named from the folder when nothing comes before the number.
+        "cams/01.jpg",
+        "cams/01.png",
+        # y_jpg.camrig, the renamed file of y_%02d.jpg, is already the file
+        # of y_jpg_%02d.jpg, so neither of those two gets one.
+        "y_01.jpg",
+        "y_01.png",
+        "y_jpg_01.jpg",
+        # Both v.camrig, and both still v_jpg.camrig after the number.
+        "v (1).jpg",
+        "v (2).jpg",
+        "v1.jpg",
+        "v2.jpg",
+        "w_01.jpg",
+    ]
     out = stub_run(names)
     assert out.exit_code == 0, out.output
     ws = stub_run.workspace
-    assert not (ws / "x.camrig").exists()
-    assert (ws / "y.camrig").exists()
-    assert f"No .camrig: {ws / 'x.camrig'} would also be the .camrig of x_%02d.png" in (
-        out.output
-    )
-    assert f"{ws / 'x.camrig'} would also be the .camrig of x_%02d.jpg" in out.output
+    written = {
+        p.relative_to(ws).as_posix(): _camrig(p)[0] for p in ws.rglob("*.camrig")
+    }
+    assert written == {
+        "x_jpg.camrig": "x_%02d.jpg",
+        "x_png.camrig": "x_%02d.png",
+        "cams/cams_jpg.camrig": "%02d.jpg",
+        "cams/cams_png.camrig": "%02d.png",
+        "y_png.camrig": "y_%02d.png",
+        "w.camrig": "w_%02d.jpg",
+    }
+    for pattern, other in (
+        ("y_%02d.jpg", "y_jpg_%02d.jpg"),
+        ("y_jpg_%02d.jpg", "y_%02d.jpg"),
+        ("v (%d).jpg", "v%d.jpg"),
+        ("v%d.jpg", "v (%d).jpg"),
+    ):
+        stem = "y_jpg" if pattern.startswith("y") else "v_jpg"
+        assert (
+            f"No .camrig: {ws / (stem + '.camrig')} would also be the .camrig of "
+            f"{other}, even named with the part of the file names after the "
+            "number." in out.output
+        ), pattern
+
+
+def test_r_is_applied_before_the_images_are_grouped(stub_run):
+    """Images `-r` leaves out need not form sequences: one with no number
+    and two with the same number do not stop the run."""
+    names = ["a_01.jpg", "a_02.jpg", "a_03.jpg", "notes.jpg", "b_1.jpg", "b_01.jpg"]
+    out = stub_run(names, "--json", kept=["a_01.jpg", "a_02.jpg"])
+    assert out.exit_code == 0, out.output
+    (entry,) = json.loads(out.stdout)["sequences"]
+    assert entry["pattern"] == "a_%02d.jpg"
+    # The frame -r left out is still the sequence's, and its pattern's.
+    assert entry["image_count"] == 3
+    assert entry["selected_image_count"] == 2
+    assert entry["written"] is True
+    assert _camrig(stub_run.workspace / "a.camrig")[0] == "a_%02d.jpg"
 
 
 def test_existing_files_are_kept_unless_forced(stub_run):
@@ -409,12 +463,12 @@ def test_a_rig_of_rig_config_json_is_refused(stub_run):
     )
     out = stub_run(names)
     assert out.exit_code == 1
-    assert "is a rig of rig_config.json" in out.output
+    assert "rig/a/f_01.jpg belongs to a rig of rig_config.json" in out.output
     assert not list(stub_run.workspace.rglob("*.camrig"))
     # A solve of the file would lose the rig whatever -r selects here.
     out = stub_run(names, kept=["solo_01.jpg", "solo_02.jpg"])
     assert out.exit_code == 1
-    assert "is a rig of rig_config.json" in out.output
+    assert "rig/a/f_01.jpg belongs to a rig of rig_config.json" in out.output
     assert not list(stub_run.workspace.rglob("*.camrig"))
 
 
