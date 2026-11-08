@@ -455,7 +455,8 @@ workspace around the link, not to one around its target, so a workspace whose im
 links to storage outside it is the workspace of those images, and the directory found is an
 ancestor of the path as given. The search starts at the path itself, which may be a directory,
 a file or a path that does not exist yet; a file or a missing path holds no marker, so the
-search finds the directory a search from its parent would. The rule is `find_workspace_for_path` in `sfmtool-archive-io`
+search finds the directory a search from its parent would. The rule is
+`find_workspace_for_path` in `sfmtool-archive-io`
 ([archive-io-crate.md](../formats/archive-io-crate.md)), which Python calls as
 `sfmtool.workspace.find_workspace_for_path`.
 
