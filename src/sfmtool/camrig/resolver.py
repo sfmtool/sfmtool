@@ -18,10 +18,9 @@ one rig, with its sensors, cameras and rig frames. The images no `.camrig`
 covers take their cameras from `camera_config.json` or EXIF inference, as they
 would with no `.camrig`, and are single-image frames beside the rig frames. An
 image matched by more than one `.camrig` is refused. The `.camrig` files take
-precedence over `camera_config.json` for the images they cover, and over
-`rig_config.json` for every image. With `--camera-model`, each of their
-cameras the solve uses is refit to that model and the refit camera is the
-starting intrinsics; the files are not changed. `sfm pick-images` applies the
+precedence over `camera_config.json` for the images they cover. With
+`--camera-model`, each of their cameras the solve uses is refit to that model
+and the refit camera is the starting intrinsics; the files are not changed. `sfm pick-images` applies the
 same rule, through `find_covering_camrigs`, so the list it writes is one
 `sfm solve` takes.
 """

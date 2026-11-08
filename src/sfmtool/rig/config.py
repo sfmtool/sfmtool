@@ -1,22 +1,27 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Rig configuration loading and image-to-sensor matching.
+"""The `rig_config.json` format, which `sfm camrig cp` converts to a `.camrig`.
 
 `rig_config.json` is COLMAP's `rig_configurator` rig config verbatim — there
-are no sfmtool-specific extensions. Loading is therefore **strict**: any key
-this schema does not define is refused rather than ignored, because a key
-sfmtool skips is a key COLMAP would skip too, and silently dropped intrinsics
-turn into a degenerate solve that nothing else flags.
+are no sfmtool-specific extensions. Validation is therefore **strict**: any
+key this schema does not define is refused rather than ignored, because
+silently dropped intrinsics would become a `.camrig` camera that nothing else
+flags.
 
-See `specs/workspace/rig-config.md` for the file format and semantics.
+No other command reads the file. A workspace's rigs are described by `.camrig`
+files, and the commands that set up a workspace's cameras and rig frames
+refuse a workspace whose root holds a `rig_config.json`
+(`_refuse_rig_config`), giving the `sfm camrig cp` command line that converts
+it.
+
+See `specs/workspace/rig-config.md` for the file format.
 """
 
 import difflib
 import json
+import os
 from pathlib import Path
-
-import numpy as np
 
 from ..camera.cameras import _CAMERA_PARAM_NAMES, CAMERA_MODEL_NAMES
 
@@ -256,23 +261,6 @@ def validate_rig_config(data, source: str) -> list[dict]:
     return data
 
 
-def _load_rig_config(workspace_dir: Path) -> list[dict] | None:
-    """Load and validate `rig_config.json` from a workspace directory.
-
-    Returns `None` when the file does not exist. Raises `RigConfigError` when
-    it exists but violates the schema.
-    """
-    rig_config_path = workspace_dir / "rig_config.json"
-    if not rig_config_path.exists():
-        return None
-    try:
-        with open(rig_config_path) as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise RigConfigError(f"Invalid JSON in {rig_config_path}: {e}") from None
-    return validate_rig_config(data, str(rig_config_path))
-
-
 def _match_image_to_sensor(
     image_rel_path: str,
     rig_configs: list[dict],
@@ -296,29 +284,52 @@ def _infer_frame_key(image_rel_path: str, prefix: str) -> str:
     return image_rel_path.replace("\\", "/").removeprefix(prefix)
 
 
-def _sensor_from_rig_pose(cam_config: dict):
-    """Build a pycolmap.Rigid3d sensor_from_rig pose from a rig config camera entry.
+def _command_argument(path: Path) -> str:
+    """`path` as one argument of a command line: in double quotes when it
+    holds a space."""
+    text = str(path)
+    return f'"{text}"' if " " in text else text
 
-    Per D4 of the coordinate-convention migration, ``rig_config.json`` stays in
-    COLMAP convention: it mirrors COLMAP's own rig-config schema and this loader
-    feeds COLMAP DB setup directly, so the pose is used verbatim with **no**
-    S-conjugation (unlike the canonical ``.camrig`` path). If a consumer ever
-    uses these poses on the ``.sfmr`` (canonical) side, it must convert.
 
-    Returns pycolmap.Rigid3d or None if no pose is specified.
+def _refuse_rig_config(workspace_dir: str | Path) -> None:
+    """Raise `RigConfigError` when the root of `workspace_dir` holds a
+    `rig_config.json`.
+
+    The commands read a workspace's rigs only from `.camrig` files, so a
+    `rig_config.json` left in a workspace stops them instead of being skipped,
+    which would solve its rig's images as single images. The message gives the
+    `sfm camrig cp` command line that converts each rig of the file, one per
+    rig when it holds several, and says to delete the file once a `.camrig`
+    describes its rigs.
     """
-    if "cam_from_rig_rotation" not in cam_config:
-        return None
-
-    import pycolmap
-
-    # rig_config.json stores quaternion as WXYZ, pycolmap uses XYZW
-    wxyz = cam_config["cam_from_rig_rotation"]
-    xyzw = np.array([wxyz[1], wxyz[2], wxyz[3], wxyz[0]], dtype=np.float64)
-    rotation = pycolmap.Rotation3d(xyzw)
-
-    translation = np.array(
-        cam_config.get("cam_from_rig_translation", [0.0, 0.0, 0.0]), dtype=np.float64
-    )
-
-    return pycolmap.Rigid3d(rotation, translation)
+    workspace_dir = Path(os.path.abspath(workspace_dir))
+    path = workspace_dir / "rig_config.json"
+    if not path.is_file():
+        return
+    rig_count = 1
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list) and len(data) > 1:
+            rig_count = len(data)
+    except OSError, ValueError:
+        pass
+    stem = workspace_dir.name or "rig"
+    source = _command_argument(path)
+    if rig_count == 1:
+        commands = [
+            f"  sfm camrig cp {source} "
+            f"{_command_argument(workspace_dir / f'{stem}.camrig')}"
+        ]
+    else:
+        commands = [
+            f"  sfm camrig cp {source} "
+            f"{_command_argument(workspace_dir / f'{stem}_rig{i}.camrig')} --rig {i}"
+            for i in range(rig_count)
+        ]
+    lines = [
+        f"{path}: sfm takes a workspace's rigs only from .camrig files and does "
+        "not read rig_config.json. Convert it with",
+        *commands,
+        "and then delete it. If a .camrig already describes its rigs, delete it.",
+    ]
+    raise RigConfigError("\n".join(lines))

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Initialize Kerry Park dataset workspace
-# This script creates a workspace, copies the rig images and rig_config.json,
+# This script creates a workspace, copies the rig images and kerry_park.camrig,
 # and sets up an sfm_solve.sh script
 #
 # Pipeline: sfmtool SIFT -> track-cluster matching -> derived pairs -> global
@@ -17,11 +17,11 @@ echo "Initializing Kerry Park dataset workspace..."
 mkdir -p "${WORKSPACE_DIR}/fisheye_left"
 mkdir -p "${WORKSPACE_DIR}/fisheye_right"
 
-# Copy images and rig configuration
+# Copy the images and the .camrig that describes their rig
 echo "Copying Kerry Park fisheye images..."
 cp "${DATA_SOURCE}"/fisheye_left/frame_*.jpg "${WORKSPACE_DIR}/fisheye_left/"
 cp "${DATA_SOURCE}"/fisheye_right/frame_*.jpg "${WORKSPACE_DIR}/fisheye_right/"
-cp "${DATA_SOURCE}/rig_config.json" "${WORKSPACE_DIR}/rig_config.json"
+cp "${DATA_SOURCE}/kerry_park.camrig" "${WORKSPACE_DIR}/kerry_park.camrig"
 
 # Count frames (each fisheye_{left,right}/frame_NN.jpg is one rig frame)
 NUM_FRAMES=$(ls -1 "${WORKSPACE_DIR}/fisheye_left"/*.jpg | wc -l)

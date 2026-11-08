@@ -2,15 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for `sfm camrig cp` with a `rig_config.json` source: the `.camrig`
-it writes groups the same images into the same sensors and frames, with the
-same cameras and poses, as `rig_config.json` does in the commands."""
+it writes groups the images into the sensors and frames the file describes,
+with its cameras and poses."""
 
 import json
 import shutil
 from pathlib import Path
 
 import numpy as np
-import pycolmap
 import pytest
 from click.testing import CliRunner
 
@@ -41,72 +40,54 @@ def _cp(*args: str):
     return CliRunner().invoke(main, ["camrig", "cp", *args])
 
 
-class _NoSift:
-    """Stands in for `SiftFile` so a database is written without `.sift`
-    files: one keypoint and descriptor per image."""
-
-    def __init__(self, path):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def read_positions(self, count=None):
-        return np.zeros((1, 2), np.float32)
-
-    def read_descriptors(self, count=None):
-        return np.zeros((1, 128), np.uint8)
-
-
-def _database_rig_tables(workspace: Path, db_path: Path) -> dict:
-    """The cameras, rigs, frames and images `sfm solve` writes to its COLMAP
-    database for every image of `workspace`, from whatever rig description the
-    workspace holds."""
-    from sfmtool.colmap.db_setup import _resolve_camrigs, _write_image_features
-    from sfmtool.rig.config import _load_rig_config
-
-    images = sorted(p.resolve() for p in workspace.rglob("*.jpg"))
-    rig_config = _load_rig_config(workspace)
-    camrigs = _resolve_camrigs(images, workspace, rig_config, None, None, "images")
-    sift_paths = [Path("unused.sift")] * len(images)
-    _write_image_features(
-        images, sift_paths, workspace, db_path, None, camrigs, rig_config, None, None
-    )
-    with pycolmap.Database.open(db_path) as db:
-        return {
-            "cameras": [
-                (c.camera_id, c.model.name, c.width, c.height, list(c.params))
-                + (c.has_prior_focal_length,)
-                for c in db.read_all_cameras()
-            ],
-            "rigs": [
-                (
-                    r.rig_id,
-                    r.ref_sensor_id.id,
-                    sorted(
-                        (s.id, list(p.rotation.quat), list(p.translation))
-                        for s, p in r.non_ref_sensors.items()
-                    ),
-                )
-                for r in db.read_all_rigs()
-            ],
-            "frames": [
-                (f.frame_id, f.rig_id, sorted(d.id for d in f.data_ids))
-                for f in db.read_all_frames()
-            ],
-            "images": [
-                (i.image_id, i.name, i.camera_id, i.frame_id)
-                for i in db.read_all_images()
-            ],
-        }
+# The rig_config.json kerry_park held before its kerry_park.camrig: the
+# back-to-back fisheye rig, in COLMAP convention.
+_KERRY_PARK_CAMERA_PARAMS = [
+    129.1499937015594,
+    129.2573627423474,
+    240.0,
+    240.0,
+    0.038113353966529886,
+    -0.00800851799065643,
+    0.008329720504707577,
+    -0.0026901578801066814,
+]
+_KERRY_PARK_RIG_CONFIG = [
+    {
+        "cameras": [
+            {
+                "image_prefix": "fisheye_left/",
+                "ref_sensor": True,
+                "camera_model_name": "OPENCV_FISHEYE",
+                "camera_params": _KERRY_PARK_CAMERA_PARAMS,
+            },
+            {
+                "image_prefix": "fisheye_right/",
+                "ref_sensor": False,
+                "cam_from_rig_rotation": [0, 0, 1, 0],
+                "cam_from_rig_translation": [0, 0, -0.0307],
+                "camera_model_name": "OPENCV_FISHEYE",
+                "camera_params": _KERRY_PARK_CAMERA_PARAMS,
+            },
+        ]
+    }
+]
 
 
-def test_kerry_park_rig_config_becomes_its_camrig(isolated_kerry_park_rig: Path):
-    out = isolated_kerry_park_rig / "kerry_park.camrig"
-    result = _cp(str(isolated_kerry_park_rig / "rig_config.json"), str(out))
+@pytest.fixture
+def kerry_park_rig_config(tmp_path: Path) -> Path:
+    """The 48 kerry_park images and the rig_config.json that described their
+    rig, in a workspace of their own; returns the rig_config.json."""
+    for sensor in ("fisheye_left", "fisheye_right"):
+        (tmp_path / sensor).mkdir()
+        for image in (_IMAGE_DATA / "kerry_park" / sensor).glob("frame_*.jpg"):
+            shutil.copy(image, tmp_path / sensor / image.name)
+    return _rig_config(tmp_path, _KERRY_PARK_RIG_CONFIG)
+
+
+def test_kerry_park_rig_config_becomes_its_camrig(kerry_park_rig_config: Path):
+    out = kerry_park_rig_config.parent / "kerry_park.camrig"
+    result = _cp(str(kerry_park_rig_config), str(out))
     assert result.exit_code == 0, result.output
     assert "2 sensors, 24 frames, 1 camera(s)" in result.output
     assert (
@@ -128,25 +109,6 @@ def test_kerry_park_rig_config_becomes_its_camrig(isolated_kerry_park_rig: Path)
     np.testing.assert_allclose(
         converted["translations_xyz"], expected["translations_xyz"], atol=1e-12
     )
-
-
-def test_kerry_park_database_is_the_same_from_either_file(
-    isolated_kerry_park_rig: Path, tmp_path: Path, monkeypatch
-):
-    monkeypatch.setattr("sfmtool.colmap.db_builders.SiftFile", _NoSift)
-    with_camrig = tmp_path / "with_camrig"
-    shutil.copytree(isolated_kerry_park_rig, with_camrig)
-    result = _cp(
-        str(with_camrig / "rig_config.json"), str(with_camrig / "converted.camrig")
-    )
-    assert result.exit_code == 0, result.output
-    (with_camrig / "rig_config.json").unlink()
-
-    from_rig_config = _database_rig_tables(isolated_kerry_park_rig, tmp_path / "a.db")
-    from_camrig = _database_rig_tables(with_camrig, tmp_path / "b.db")
-    assert len(from_rig_config["frames"]) == 24
-    assert len(from_rig_config["images"]) == 48
-    assert from_camrig == from_rig_config
 
 
 def test_each_rig_of_the_file_becomes_a_camrig(tmp_path: Path):

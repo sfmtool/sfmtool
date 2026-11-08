@@ -15,7 +15,6 @@ from .colmap.db_setup import (
     _setup_for_sfm,
     _setup_for_sfm_from_matches,
 )
-from .rig.config import _load_rig_config
 
 
 class SolveInputs(NamedTuple):
@@ -55,9 +54,6 @@ def prepare_solve_inputs(
 
         workspace_dir = Path(workspace_dir).absolute()
         config = load_workspace_config(workspace_dir)
-        rig_config = _load_rig_config(workspace_dir)
-        if rig_config is not None:
-            print(f"Rig config: {len(rig_config)} rig(s) detected")
 
         db_path, image_dir, has_rig = _setup_for_sfm(
             image_paths,
@@ -67,7 +63,6 @@ def prepare_solve_inputs(
             feature_tool=config["feature_tool"],
             feature_options=config["feature_options"],
             feature_prefix_dir=config["feature_prefix_dir"],
-            rig_config=rig_config,
             camera_model=camera_model,
             matching_mode=matching_mode,
             flow_preset=flow_preset,

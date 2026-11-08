@@ -120,8 +120,7 @@ _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
     help="Camera model to use: overrides auto-detection, and refits to this "
-    "model the cameras a .camrig, camera_config.json or rig_config.json "
-    "supplies.",
+    "model the cameras a .camrig or camera_config.json supplies.",
 )
 @click.option(
     "--detect-infinity/--no-detect-infinity",

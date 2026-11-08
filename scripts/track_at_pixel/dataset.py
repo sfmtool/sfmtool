@@ -94,9 +94,10 @@ def prepare(
     # one cache never write a file another is reading.
     _copy_if_stale(gt, sfmr)
     _copy_if_stale(marker, workspace / marker.name)
-    for extra in ("camera_config.json", "rig_config.json"):
-        if (source_ws / extra).is_file():
-            _copy_if_stale(source_ws / extra, workspace / extra)
+    extras = [source_ws / "camera_config.json", *source_ws.glob("*.camrig")]
+    for extra in extras:
+        if extra.is_file():
+            _copy_if_stale(extra, workspace / extra.name)
 
     recon = SfmrReconstruction.load(sfmr)
     # The copy must resolve its workspace to the cache. One that fell back to

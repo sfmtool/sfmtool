@@ -30,37 +30,21 @@ def _populate_db_features(
     the database for geometric verification never read the descriptors back,
     and they are by far the largest rows."""
     from ..camera.config import CameraConfigResolver
-    from ..colmap.db_builders import _setup_db_single_sensor, _setup_db_with_rigs
-    from ..rig.config import _load_rig_config
+    from ..colmap.db_builders import _setup_db_single_sensor
 
     if camera_config_resolver is None:
         camera_config_resolver = CameraConfigResolver(workspace_dir)
 
-    rig_config = _load_rig_config(workspace_dir)
-
-    if rig_config is not None:
-        _setup_db_with_rigs(
-            image_paths,
-            sift_paths,
-            workspace_dir,
-            db_path,
-            max_feature_count,
-            rig_configs=rig_config,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-            include_descriptors=include_descriptors,
-        )
-    else:
-        _setup_db_single_sensor(
-            image_paths,
-            sift_paths,
-            workspace_dir,
-            db_path,
-            max_feature_count,
-            camera_model=camera_model,
-            camera_config_resolver=camera_config_resolver,
-            include_descriptors=include_descriptors,
-        )
+    _setup_db_single_sensor(
+        image_paths,
+        sift_paths,
+        workspace_dir,
+        db_path,
+        max_feature_count,
+        camera_model=camera_model,
+        camera_config_resolver=camera_config_resolver,
+        include_descriptors=include_descriptors,
+    )
 
 
 def _compute_descriptor_distances(matches_data, sift_paths, max_feature_count):

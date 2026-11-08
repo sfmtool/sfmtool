@@ -1115,26 +1115,11 @@ def kerry_park_missing_guarantee(recon) -> str | None:
 
 
 def _copy_kerry_park_into(workspace_dir: Path) -> None:
-    """Copy the kerry_park rig images + rig_config.json into ``workspace_dir``.
-
-    Preserves the ``fisheye_left/`` / ``fisheye_right/`` subdirectory layout
-    so the rig_config.json ``image_prefix`` entries resolve correctly.
-    """
-    for sensor in KERRY_PARK_SENSORS:
-        src_dir = KERRY_PARK_DIR / sensor
-        dst_dir = workspace_dir / sensor
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        for img in sorted(src_dir.glob("frame_*.jpg")):
-            shutil.copy(img, dst_dir / img.name)
-    shutil.copy(KERRY_PARK_DIR / "rig_config.json", workspace_dir / "rig_config.json")
-
-
-def _copy_kerry_park_camrig_into(workspace_dir: Path) -> None:
     """Copy the kerry_park rig images + ``kerry_park.camrig`` into ``workspace_dir``.
 
-    The same back-to-back fisheye rig as :func:`_copy_kerry_park_into`, but
-    described by a multi-sensor ``.camrig`` file rather than ``rig_config.json``
-    — the layout `sfm insv2rig` now produces.
+    Preserves the ``fisheye_left/`` / ``fisheye_right/`` subdirectory layout
+    so the sensor image patterns of the multi-sensor ``kerry_park.camrig``
+    match the images.
     """
     for sensor in KERRY_PARK_SENSORS:
         src_dir = KERRY_PARK_DIR / sensor
@@ -1145,22 +1130,6 @@ def _copy_kerry_park_camrig_into(workspace_dir: Path) -> None:
     shutil.copy(
         KERRY_PARK_DIR / "kerry_park.camrig", workspace_dir / "kerry_park.camrig"
     )
-
-
-@pytest.fixture
-def isolated_kerry_park_rig(tmp_path_factory) -> Path:
-    """Function-scoped: all 48 kerry_park rig images + rig_config.json in a tmp dir.
-
-    Yields the workspace directory. Layout under it::
-
-        <workspace>/
-          rig_config.json
-          fisheye_left/frame_01.jpg ... frame_24.jpg
-          fisheye_right/frame_01.jpg ... frame_24.jpg
-    """
-    workspace_dir = tmp_path_factory.mktemp("kerry_park_rig")
-    _copy_kerry_park_into(workspace_dir)
-    return workspace_dir
 
 
 @pytest.fixture
@@ -1175,7 +1144,7 @@ def isolated_kerry_park_camrig(tmp_path_factory) -> Path:
           fisheye_right/frame_01.jpg ... frame_24.jpg
     """
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig")
-    _copy_kerry_park_camrig_into(workspace_dir)
+    _copy_kerry_park_into(workspace_dir)
     return workspace_dir
 
 
@@ -1207,7 +1176,7 @@ def kerry_park_ground_truth_sfmr(tmp_path_factory) -> Path:
 def kerry_park_workspace_once(tmp_path_factory) -> Path:
     """Session-scoped: a SIFT-backed kerry_park workspace at ground-truth poses.
 
-    All 48 images and ``rig_config.json`` are copied in, and the reconstruction
+    All 48 images and ``kerry_park.camrig`` are copied in, and the reconstruction
     covers the 8-frame prefix (``KERRY_PARK_PREFIX_FRAME_COUNT`` x 2 sensors = 16
     images). There is no solve: sfmtool SIFT and cluster matching run on those
     images and the tracks are triangulated at the checked-in ground truth's
@@ -1251,7 +1220,7 @@ def kerry_park_workspace(kerry_park_workspace_once: Path, tmp_path_factory) -> P
 @pytest.fixture(scope="session")
 def kerry_park_solve_once(tmp_path_factory) -> Path:
     """Session-scoped: a global solve of the kerry_park rig described by
-    ``rig_config.json``. Read it; do not modify it.
+    ``kerry_park.camrig``. Read it; do not modify it.
 
     Mirrors ``scripts/init_dataset_kerry_park.sh``: sfmtool SIFT + track-cluster
     matching + global SfM (GLOMAP) with a fixed seed, on the 8-frame prefix
@@ -1328,7 +1297,7 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     from sfmtool.fileio import read_camrig, write_camrig
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
-    _copy_kerry_park_camrig_into(workspace_dir)
+    _copy_kerry_park_into(workspace_dir)
     init_workspace(workspace_dir, feature_tool="sfmtool", max_num_features=2000)
 
     image_paths: list[Path] = []

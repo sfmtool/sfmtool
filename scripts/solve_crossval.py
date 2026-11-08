@@ -40,7 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA = REPO_ROOT / "test-data" / "images"
 
 # Per-dataset workspace layout. "flat" datasets are a single camera in images/;
-# "rig" datasets place each sensor in its own directory plus a rig_config.json.
+# "rig" datasets place each sensor in its own directory plus the .camrig that
+# describes the rig.
 DATASETS: dict[str, dict] = {
     "seoul": {
         "label": "seoul_bull (17)",
@@ -100,7 +101,8 @@ def setup_workspace(ds: dict, backend: str, root: Path) -> tuple[Path, list[str]
             (ws / sensor).mkdir(parents=True)
             for p in sorted((DATA / ds["src"] / sensor).glob("frame_*.jpg")):
                 shutil.copy(p, ws / sensor)
-        shutil.copy(DATA / ds["src"] / "rig_config.json", ws / "rig_config.json")
+        camrig = f"{ds['src']}.camrig"
+        shutil.copy(DATA / ds["src"] / camrig, ws / camrig)
         inputs = list(ds["sensors"])
     return ws, inputs
 

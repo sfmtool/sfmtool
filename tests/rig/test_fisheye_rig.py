@@ -4,13 +4,12 @@
 """Fisheye rig tests built on the kerry_park dataset.
 
 The kerry_park dataset is a 24-frame back-to-back OPENCV_FISHEYE stereo
-rig captured at 480x480, with a calibrated ``rig_config.json`` shipped
-alongside the images. These tests exercise the parts of sfmtool that
-diverge from the rectilinear / single-camera case: rig pose loading,
-fisheye-aware focal-length inference, and a full global SfM solve.
+rig captured at 480x480, described by the multi-sensor ``kerry_park.camrig``
+shipped alongside the images. These tests exercise the parts of sfmtool that
+diverge from the rectilinear / single-camera case: fisheye-aware focal-length
+inference, the ``.camrig`` rig, and a full global SfM solve.
 """
 
-import json
 import math
 from pathlib import Path
 
@@ -24,81 +23,13 @@ from sfmtool.reconstruction import SfmrReconstruction
 # --------------------------------------------------------------------------- #
 
 
-def test_rig_config_parses_back_to_back_fisheye(isolated_kerry_park_rig: Path) -> None:
-    """The kerry_park rig_config.json should declare two OPENCV_FISHEYE sensors
-    in COLMAP rig_configurator format, with the right sensor flipped 180° about Y.
-    """
-    rig_config_path = isolated_kerry_park_rig / "rig_config.json"
-    rig_configs = json.loads(rig_config_path.read_text())
-
-    assert len(rig_configs) == 1
-    rig = rig_configs[0]
-    # COLMAP format: no rig-level intrinsics block; each sensor is calibrated.
-    assert "camera_intrinsics" not in rig
-
-    cameras = rig["cameras"]
-    assert len(cameras) == 2
-    left, right = cameras
-    # Both sensors carry the calibrated OPENCV_FISHEYE intrinsics inline:
-    # camera_params order is fx, fy, cx, cy, k1, k2, k3, k4.
-    for cam in cameras:
-        assert cam["camera_model_name"] == "OPENCV_FISHEYE"
-        assert len(cam["camera_params"]) == 8
-
-    assert left["image_prefix"] == "fisheye_left/"
-    assert left["ref_sensor"] is True
-    # The reference sensor must not carry an explicit pose.
-    assert "cam_from_rig_rotation" not in left
-
-    assert right["image_prefix"] == "fisheye_right/"
-    assert right.get("ref_sensor", False) is False
-    # 180° about Y in WXYZ is [0, 0, 1, 0]. Translation is a ~3 cm baseline
-    # along the rig's -Z direction.
-    assert right["cam_from_rig_rotation"] == [0, 0, 1, 0]
-    tx, ty, tz = right["cam_from_rig_translation"]
-    assert (tx, ty) == (0, 0)
-    assert abs(tz) == pytest.approx(0.0307, abs=1e-4)
-
-
-def test_sensor_from_rig_pose_wxyz_to_xyzw() -> None:
-    """``_sensor_from_rig_pose`` must convert WXYZ → XYZW for pycolmap.
-
-    This guards the convention documented in
-    ``specs/workspace/rig-config.md``.
-    """
-    pycolmap = pytest.importorskip("pycolmap")
-    from sfmtool.rig.config import _sensor_from_rig_pose
-
-    # WXYZ = [0, 0, 1, 0] is a 180° rotation about Y.
-    cam_cfg = {
-        "cam_from_rig_rotation": [0.0, 0.0, 1.0, 0.0],
-        "cam_from_rig_translation": [0.0, 0.0, -0.0307],
-    }
-    pose = _sensor_from_rig_pose(cam_cfg)
-    assert isinstance(pose, pycolmap.Rigid3d)
-
-    # Apply to +Z (the optical axis). 180°-about-Y maps (0, 0, 1) -> (0, 0, -1)
-    # plus the translation.
-    out = pose * np.array([0.0, 0.0, 1.0])
-    assert out[0] == pytest.approx(0.0, abs=1e-9)
-    assert out[1] == pytest.approx(0.0, abs=1e-9)
-    assert out[2] == pytest.approx(-1.0 - 0.0307, abs=1e-9)
-
-
-def test_sensor_from_rig_pose_missing_rotation_returns_none() -> None:
-    """Reference sensors (no rotation field) should yield ``None``."""
-    from sfmtool.rig.config import _sensor_from_rig_pose
-
-    assert _sensor_from_rig_pose({"ref_sensor": True}) is None
-
-
-def test_fisheye_focal_length_inference(isolated_kerry_park_rig: Path) -> None:
+def test_fisheye_focal_length_inference(isolated_kerry_park_camrig: Path) -> None:
     """``_infer_camera`` should seed OPENCV_FISHEYE focal length to ~size/π,
     not the EXIF-derived 1.2× image-size guess used for rectilinear lenses.
     """
     from sfmtool.camera.setup import _infer_camera
 
-    image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
+    image = isolated_kerry_park_camrig / "fisheye_left" / "frame_01.jpg"
     cam = _infer_camera(str(image), "OPENCV_FISHEYE")
 
     assert cam.model.name == "OPENCV_FISHEYE"
@@ -109,97 +40,6 @@ def test_fisheye_focal_length_inference(isolated_kerry_park_rig: Path) -> None:
     assert fy == pytest.approx(expected, rel=1e-4)
     # And, crucially, far away from the rectilinear default of ~576.
     assert fx < 200
-
-
-def test_rig_intrinsics_used_directly_when_fully_specified(
-    isolated_kerry_park_rig: Path,
-) -> None:
-    """When a rig sensor entry carries ``camera_model_name`` + ``camera_params``,
-    ``_camera_from_sensor_entry`` should use those parameters directly rather
-    than falling back to pycolmap inference.
-    """
-    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
-
-    rig_config = json.loads((isolated_kerry_park_rig / "rig_config.json").read_text())[
-        0
-    ]
-    sensor = rig_config["cameras"][0]
-    image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
-
-    cam = _camera_from_sensor_entry(sensor, image, camera_model_override=None)
-
-    assert cam.model.name == "OPENCV_FISHEYE"
-    assert cam.width == 480 and cam.height == 480
-    assert cam.has_prior_focal_length is True
-
-    expected_focal_x = sensor["camera_params"][0]
-    assert float(cam.params[0]) == pytest.approx(expected_focal_x, rel=1e-9)
-
-
-def test_rig_intrinsics_refit_to_camera_model(
-    isolated_kerry_park_rig: Path, capsys
-) -> None:
-    """With ``--camera-model``, a sensor's ``camera_params`` calibration is refit
-    to that model rather than replaced by an inferred camera."""
-    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
-
-    rig_config = json.loads((isolated_kerry_park_rig / "rig_config.json").read_text())[
-        0
-    ]
-    sensor = rig_config["cameras"][0]
-    image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
-
-    cam = _camera_from_sensor_entry(
-        sensor, image, camera_model_override="THIN_PRISM_FISHEYE"
-    )
-
-    assert cam.model.name == "THIN_PRISM_FISHEYE"
-    assert cam.has_prior_focal_length is True
-    # THIN_PRISM_FISHEYE: fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, sx1, sy1.
-    fx, fy, cx, cy, k1, k2, _p1, _p2, k3, k4, _sx1, _sy1 = (
-        float(v) for v in cam.params
-    )
-    expected = sensor["camera_params"]
-    # THIN_PRISM_FISHEYE holds every OPENCV_FISHEYE term, so the fit carries
-    # the calibration over instead of the ~152.8 px an inference would give.
-    assert fx == pytest.approx(expected[0], rel=1e-6)
-    assert fy == pytest.approx(expected[1], rel=1e-6)
-    assert (cx, cy) == (expected[2], expected[3])
-    assert k1 == pytest.approx(expected[4], abs=1e-6)
-    assert k4 == pytest.approx(expected[7], abs=1e-6)
-    out = capsys.readouterr().out
-    assert (
-        "The camera of rig_config.json sensor 'fisheye_left/': "
-        "OPENCV_FISHEYE -> THIN_PRISM_FISHEYE"
-    ) in out
-
-
-def test_rig_intrinsics_wrong_length_rejected(
-    isolated_kerry_park_rig: Path,
-) -> None:
-    """``camera_params`` with the wrong length for its model must be rejected,
-    not silently fed to pycolmap.
-    """
-    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
-
-    image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
-    sensor = {"camera_model_name": "OPENCV_FISHEYE", "camera_params": [1.0, 2.0, 3.0]}
-
-    with pytest.raises(ValueError, match="expects 8 values, got 3"):
-        _camera_from_sensor_entry(sensor, image, camera_model_override=None)
-
-
-def test_rig_params_without_model_rejected(isolated_kerry_park_rig: Path) -> None:
-    """``camera_params`` is positional and meaningless without a model name;
-    a sensor entry carrying params but no ``camera_model_name`` is malformed.
-    """
-    from sfmtool.colmap.db_builders import _camera_from_sensor_entry
-
-    image = isolated_kerry_park_rig / "fisheye_left" / "frame_01.jpg"
-    sensor = {"camera_params": [1.0, 2.0, 3.0, 4.0]}
-
-    with pytest.raises(ValueError, match="requires camera_model_name"):
-        _camera_from_sensor_entry(sensor, image, camera_model_override=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -360,10 +200,9 @@ def test_kerry_park_camrig_solve_registers_all_frames(
 ) -> None:
     """A global solve driven by the multi-sensor ``.camrig`` should register
     every rig image of the 8-frame prefix subset (16 images) with one camera
-    per sensor — the same outcome as the ``rig_config.json`` path. The
-    fixture's solve also holds single images, which are left out here: the
-    point floor and the error median count only the points that at least two
-    rig images observe.
+    per sensor. The fixture's solve also holds single images, which are left
+    out here: the point floor and the error median count only the points that
+    at least two rig images observe.
     """
     recon = SfmrReconstruction.load(kerry_park_camrig_workspace)
     is_rig = np.array([not n.startswith("solo/") for n in recon.image_names])

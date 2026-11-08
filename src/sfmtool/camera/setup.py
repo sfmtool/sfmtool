@@ -240,8 +240,8 @@ def _read_image_size(image_path: Path) -> tuple[int, int]:
 def refit_intrinsics_to_model(intrinsics, camera_model: str, camera_name: str):
     """Fit a camera of `camera_model` to `intrinsics`, as `--camera-model` asks.
 
-    This is how `--camera-model` switches the model of intrinsics a `.camrig`,
-    a `camera_config.json` or a `rig_config.json` supplies: the lens-only fit
+    This is how `--camera-model` switches the model of intrinsics a `.camrig`
+    or a `camera_config.json` supplies: the lens-only fit
     `CameraIntrinsics.refit`, whose principal point and image size are those of
     `intrinsics`. Prints one line naming `camera_name` (a phrase such as
     `camera 0 of rig.camrig`), the two models and the fit's rms and max, then

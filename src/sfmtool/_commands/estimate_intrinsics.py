@@ -642,11 +642,11 @@ def _plan_sequences(matches_path: Path, image_selection) -> tuple:
     planned with the reason it gets no `.camrig`; each other sequence with
     the name parts and the pattern of its `.camrig`, and with the file's
     images left out by `-r` whose names differ from its own only in the file
-    number. An image of a rig of `rig_config.json` anywhere in the file is
-    refused.
+    number. A workspace whose root holds a `rig_config.json` is refused
+    (`_refuse_rig_config`).
     """
     from .._pick_images import PickImagesInputError, collect_sequences, find_rigs
-    from ..rig.config import _match_image_to_sensor
+    from ..rig.config import RigConfigError, _refuse_rig_config
 
     mfile, file_image_names, kept, label, workspace_dir = _open_matches(
         matches_path, image_selection
@@ -660,29 +660,16 @@ def _plan_sequences(matches_path: Path, image_selection) -> tuple:
         )
     chosen_names = file_image_names if kept is None else kept
     try:
-        rig_configs, camrig_rigs, _notes = find_rigs(
+        _refuse_rig_config(workspace_dir)
+    except RigConfigError as e:
+        raise click.ClickException(str(e)) from None
+    try:
+        camrig_rigs, _notes = find_rigs(
             [workspace_dir / name for name in file_image_names], workspace_dir
         )
-        if rig_configs is not None:
-            for name in file_image_names:
-                if (
-                    _match_image_to_sensor(Path(name).as_posix(), rig_configs)
-                    is not None
-                ):
-                    # `sfm solve` ignores rig_config.json once a `.camrig`
-                    # covers any image it solves, so a written `.camrig`
-                    # would undo the rig in a solve of the file, whatever
-                    # `-r` selects here.
-                    raise click.ClickException(
-                        f"the image {name} belongs to a rig of rig_config.json, "
-                        "and `sfm solve` ignores rig_config.json once a .camrig "
-                        "covers any image it solves.\n"
-                        "Give the rig a multi-sensor .camrig first."
-                    )
         sequences = collect_sequences(
             [workspace_dir / name for name in chosen_names],
             workspace_dir,
-            rig_configs,
             camrig_rigs,
         )
     except PickImagesInputError as e:

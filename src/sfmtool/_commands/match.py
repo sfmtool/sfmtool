@@ -167,8 +167,8 @@ def _reject_stray_mode_options(selected: str) -> None:
     type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
     help="Camera model to use: overrides auto-detection, and refits to this "
-    "model the cameras a camera_config.json or rig_config.json supplies "
-    "(with --derive-pairs, a .camrig's too).",
+    "model the cameras a camera_config.json supplies (with --derive-pairs, "
+    "a .camrig's too).",
 )
 @click.option(
     "--merge",

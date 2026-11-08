@@ -33,8 +33,8 @@ from ..camera.cameras import CAMERA_MODEL_NAMES
     type=click.Choice(CAMERA_MODEL_NAMES, case_sensitive=False),
     default=None,
     help="Camera model to use (e.g., OPENCV, PINHOLE): overrides "
-    "auto-detection, and refits to this model the cameras a .camrig, "
-    "camera_config.json or rig_config.json supplies. Only for .matches input.",
+    "auto-detection, and refits to this model the cameras a .camrig or "
+    "camera_config.json supplies. Only for .matches input.",
 )
 def to_colmap_db(
     input_path,
