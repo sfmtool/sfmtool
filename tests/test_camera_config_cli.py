@@ -6,7 +6,9 @@
 These exercise `camera_config.json` and `.camrig` intrinsics through the full
 `sfm` CLI: that a configured calibration flows into the solved `.sfmr`, that
 `--camera-model` refits the camera a `camera_config.json` or `.camrig`
-supplies into the COLMAP database, and that a refused refit is a clean error.
+supplies into the COLMAP database, that a `.camrig`'s `EQUIDISTANT_FISHEYE`
+camera reaches the database as its COLMAP carrier, and that a refused refit is
+a clean error.
 The `camera/config.py` and `camera/setup.py` unit tests live in
 `test_camera_config.py`.
 """
@@ -177,6 +179,54 @@ def test_to_colmap_db_refits_camrig_camera(seoul_bull_workspace: Path, tmp_path:
         f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL"
         in result.output
     )
+
+
+def test_to_colmap_db_writes_equidistant_camrig_camera_as_carrier(
+    seoul_bull_workspace: Path, tmp_path: Path
+):
+    """A covering `.camrig`'s EQUIDISTANT_FISHEYE camera, stated at twice the
+    images' resolution, reaches the database as its COLMAP carrier,
+    SIMPLE_RADIAL_FISHEYE at k = 0, scaled to the images, with the prior
+    flag."""
+    from click.testing import CliRunner
+
+    from sfmtool.cli import main
+    from sfmtool.fileio import write_camrig
+
+    workspace_dir = seoul_bull_workspace.parent
+    camrig_file = workspace_dir / "test_17_image" / "cam.camrig"
+    write_camrig(
+        path=str(camrig_file),
+        name="cam",
+        rig_type="generic",
+        cameras=[
+            {
+                "model": "EQUIDISTANT_FISHEYE",
+                "width": 540,
+                "height": 960,
+                "parameters": {
+                    "focal_length": 200.0,
+                    "principal_point_x": 270.0,
+                    "principal_point_y": 480.0,
+                },
+            }
+        ],
+        sensor_image_patterns=["seoul_bull_sculpture_%02d.jpg"],
+        camera_indexes=[0],
+        quaternions_wxyz=np.array([[1.0, 0.0, 0.0, 0.0]]),
+        translations_xyz=np.zeros((1, 3)),
+    )
+
+    matches_path = workspace_dir / "matches" / "recon-clusters.matches"
+    out_db = tmp_path / "out.db"
+    result = CliRunner().invoke(main, ["to-colmap-db", str(matches_path), str(out_db)])
+    assert result.exit_code == 0, result.output
+
+    (camera,) = _db_cameras(out_db)
+    assert camera.model.name == "SIMPLE_RADIAL_FISHEYE"
+    assert (camera.width, camera.height) == (270, 480)
+    assert [float(v) for v in camera.params] == [100.0, 135.0, 240.0, 0.0]
+    assert camera.has_prior_focal_length
 
 
 def test_solve_refused_refit_is_a_clean_error(isolated_seoul_bull_17_images):
