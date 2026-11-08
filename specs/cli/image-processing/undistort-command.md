@@ -313,6 +313,15 @@ The output `.sfmr`'s metadata block records:
 falls back to the file's basename, or to the literal string `"unknown"` if
 the source workspace cannot be located.
 
+`workspace` names the output directory as the file's workspace: its
+`absolute_path` is that directory, and its `relative_path` is the path from
+`sfmr/` to it, which the save measures, `".."` for this layout. A reader tries
+the relative path first, so a copy or move of the whole output directory
+resolves to the copy and not to the original. `tool_version` is the version
+of the sfmtool extension that wrote the file, as for the other commands that
+save a `.sfmr` with an operation stamp. `contents` holds the same four feature
+fields as the workspace config.
+
 ### Error behavior
 
 Any exception raised while the command runs is reported as a

@@ -251,6 +251,21 @@ class TestUndistortReconstructionImages:
         for cam in undist_recon.cameras:
             assert cam.model == "PINHOLE"
 
+    def test_copied_output_resolves_its_workspace_to_the_copy(
+        self, undistorted_inside, tmp_path
+    ):
+        """The .sfmr records the path from ``sfmr/`` up to the output
+        directory, so a copy of the whole output finds its workspace in the
+        copy rather than through the absolute path to the original."""
+        output_dir = undistorted_inside.output_dir
+        workspace = undistorted_inside.undistorted_recon.metadata()["workspace"]
+        assert workspace["relative_path"] == ".."
+
+        copy_dir = tmp_path / "moved"
+        shutil.copytree(output_dir, copy_dir)
+        copied = SfmrReconstruction.load(copy_dir / "sfmr" / "undistorted.sfmr")
+        assert Path(copied.workspace_dir).resolve() == copy_dir.resolve()
+
     def test_points_at_infinity_materialized(self, seoul_bull_workspace, tmp_path):
         """Undistortion materialises w=0 points to finite landmarks."""
         recon = SfmrReconstruction.load(seoul_bull_workspace)
