@@ -234,10 +234,14 @@ The pattern never matches an image of the file that `-r` left out: the
 `sfm solve` would use it. The images a pattern matches are found under the
 `.camrig`'s folder, as `sfm solve` finds them, and compared with the left-out
 images by path. When the derived pattern matches one, it is narrowed: its
-final glob starts with the selected names' common file-name prefix, less the
-digits that prefix ends in, so selected frames `images/shopA_00001.jpg` ...
-`images/shopA_01089.jpg` beside `images/shopB_*.jpg` give
-`images/shopA_*.jpg`. When the narrowed pattern still matches a left-out
+final glob starts with the common prefix of the selected names' stems (each
+file name less its extension), cut before its first `*`, `?` or `[` (`*` is
+always a wildcard, and the filesystem walk that expands a pattern reads `?`
+and `[` as wildcards too), less the digits it then ends in, and with each `%`
+written `%%`, the pattern language's literal percent. So selected frames
+`images/shopA_00001.jpg` ... `images/shopA_01089.jpg` beside
+`images/shopB_*.jpg` give `images/shopA_*.jpg`, and frame 1 of a rig,
+`rig/cam0/f_01.jpg` and `rig/cam1/f_01.jpg`, gives `rig/*/f_*.jpg`. When the narrowed pattern still matches a left-out
 image, or `--pattern` matches one, the write refuses, naming the pattern, one
 such image and `--pattern`. Images the file does not hold are not checked: a
 video's frames that were not picked for matching are still that video's, and
@@ -255,6 +259,10 @@ distortion, so a solve that starts from it as written already refines a
 radial term, and returns a `SIMPLE_RADIAL_FISHEYE` camera; `--camera-model`
 with another fisheye model, such as `RADIAL_FISHEYE`, starts from more
 terms ([solve-command.md § Camera Intrinsics](solve-command.md#camera-intrinsics)).
+
+The command prints a summary of the written file after the report: the path,
+the camera, the focal and the stored pattern. With `--json` the summary goes
+to stderr, so stdout holds the JSON alone.
 
 The write refuses -- with the report still printed -- when:
 

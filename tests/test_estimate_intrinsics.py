@@ -332,10 +332,30 @@ def test_pattern_derives_from_the_common_image_directory(names, expected):
         # No shared prefix leaves the plain pattern.
         (["images/a_01.jpg", "images/b_01.jpg"], "images/*.jpg"),
         (["rig/cam0/f_01.jpg", "rig/cam1/f_02.jpg"], "rig/*/f_*.jpg"),
+        # One frame of a rig: the same name in each sensor's folder. The
+        # prefix is taken over the stems, so the extension is not in it.
+        (["rig/cam0/f_01.jpg", "rig/cam1/f_01.jpg"], "rig/*/f_*.jpg"),
+        # `[` would be read as a wildcard, so the prefix stops before it.
+        (["images/x[1]_01.jpg", "images/x[1]_02.jpg"], "images/x*.jpg"),
+        # A literal `%` is written `%%`, not read as a frame field.
+        (["images/a%d_01.jpg", "images/a%d_02.jpg"], "images/a%%d_*.jpg"),
     ],
 )
-def test_narrowed_pattern_takes_the_names_common_prefix(names, expected):
-    assert ei._derive_pattern(names, name_prefix=True) == expected
+def test_narrowed_pattern_takes_the_names_common_prefix(names, expected, tmp_path):
+    from sfmtool.camrig.pattern import match_pattern
+
+    pattern = ei._derive_pattern(names, name_prefix=True)
+    assert pattern == expected
+    # The narrowed pattern still finds every file it was derived from, by the
+    # walk `--write-camrig` and `sfm solve` expand a pattern with.
+    for name in names:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(b"jpeg")
+    found = {
+        p.relative_to(tmp_path.resolve()).as_posix()
+        for p in match_pattern(tmp_path, pattern)
+    }
+    assert found == set(names)
 
 
 def test_no_consensus_reports_the_rejection_counters(stub_estimate):
@@ -469,6 +489,20 @@ def test_write_camrig_writes_the_verdict_model(stub_estimate, camrig_root):
     assert camera["parameters"]["principal_point_x"] == pytest.approx(320.0)
     assert camera["parameters"]["principal_point_y"] == pytest.approx(240.0)
     assert list(rig["sensor_image_patterns"]) == ["*.jpg"]
+
+
+def test_json_write_camrig_keeps_stdout_json(stub_estimate, camrig_root):
+    """Under --json the summary of the write goes to stderr, so a script can
+    parse stdout whole."""
+    result = _estimate(camera_model="Pinhole", focal_px=300.0)
+    out_path = camrig_root / "rig.camrig"
+    out = stub_estimate(
+        result, "--json", "--write-camrig", str(out_path), "--pattern", "*.jpg"
+    )
+    assert out.exit_code == 0, out.output
+    assert json.loads(out.stdout)["focal_px"] == pytest.approx(300.0)
+    assert f"Wrote {out_path}" in out.stderr
+    assert out_path.exists()
 
 
 def test_write_camrig_refuses_without_a_consensus(stub_estimate, camrig_root):

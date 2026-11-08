@@ -285,10 +285,11 @@ def _derive_pattern(image_names: list[str], *, name_prefix: bool = False) -> str
     per-sensor subdirectories, say) get one `*` segment per level. The final
     glob keeps the extension the names actually carry, so a flat layout does
     not sweep up the workspace's own files; a mix of extensions falls back to
-    a bare `*`. With `name_prefix` the final glob also starts with the file
-    names' common prefix, less any digits it ends in, so `shopA_00001.jpg` ...
-    `shopA_01089.jpg` give `shopA_*.jpg` rather than a pattern fixing part of
-    the frame number.
+    a bare `*`. With `name_prefix` the final glob also starts with the common
+    prefix of the names' stems (their file names less the extension), cut
+    before its first `*`, `?` or `[`, less any digits it then ends in, and
+    with each `%` written `%%`: so `shopA_00001.jpg` ... `shopA_01089.jpg`
+    give `shopA_*.jpg` rather than a pattern fixing part of the frame number.
     """
     import os.path
 
@@ -302,8 +303,17 @@ def _derive_pattern(image_names: list[str], *, name_prefix: bool = False) -> str
     exts = {Path(name).suffix for name in image_names}
     glob = f"*{exts.pop()}" if len(exts) == 1 and "" not in exts else "*"
     if name_prefix:
-        prefix = os.path.commonprefix([Path(name).name for name in image_names])
-        glob = prefix.rstrip("0123456789") + glob
+        prefix = os.path.commonprefix([Path(name).stem for name in image_names])
+        # The prefix is literal text, so it stops before the first character
+        # a pattern cannot hold literally: `*` is always a wildcard, and `?`
+        # and `[` are read as wildcards by the filesystem walk that expands a
+        # pattern (`camrig/pattern.py` globs it with pathlib).
+        for i, c in enumerate(prefix):
+            if c in "*?[":
+                prefix = prefix[:i]
+                break
+        # A literal `%` is written `%%`, so it is not read as a frame field.
+        glob = prefix.rstrip("0123456789").replace("%", "%%") + glob
     common_depth = len(Path(common).parts) if common else 0
     depths = {len(Path(name).parts) - common_depth for name in image_names}
     # One "*" per directory level between the common dir and the file names;
@@ -603,5 +613,7 @@ def estimate_intrinsics(
 
     if camrig_path is not None:
         summary = _write_camrig(Path(camrig_path), pattern, result, data, force)
-        click.echo("")
-        click.echo(summary)
+        # Under --json stdout holds the JSON alone, so the summary of the
+        # write goes to stderr.
+        click.echo("", err=as_json)
+        click.echo(summary, err=as_json)
