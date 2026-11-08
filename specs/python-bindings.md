@@ -119,6 +119,22 @@ format has no Python wrapper over its bindings: `sfmtool.fileio.write_sift`
 checks its own arguments, in Rust, and `sfmtool.fileio.SiftFile` is the
 `.sift` reader the package uses, as `MatchesFile` is the `.matches` one.
 
+On Windows, the package root also sets the environment variable
+`MKL_THREADING_LAYER` to `TBB` when it is unset, before anything imports
+numpy or pycolmap, and keeps a value that is already set. The win-64
+environment links numpy and COLMAP to MKL 2026.1 from conda-forge, whose
+default Intel threading layer calls two functions that the environment's
+`libiomp5md.dll`, from llvm-openmp 23.1.5, does not export. When the
+environment's `Library\bin` is not on `PATH`, as when its `sfm.exe` runs
+without `pixi run`, an MKL call that uses threads, such as the one in
+`pycolmap.match_exhaustive` that `sfm solve` makes, ends the process with no
+Python error. The TBB layer does not use `libiomp5md.dll`. The linux-64 and
+osx-arm64 environments use OpenBLAS, so the root sets nothing there. The
+comment above the line in `sfmtool/__init__.py` says when to re-evaluate it
+and how to check whether it is still needed, and
+[`tests/test_mkl_threading_layer.py`](../tests/test_mkl_threading_layer.py)
+checks both cases.
+
 Code inside `src/sfmtool/` may import from `._sfmtool` directly, as it may
 import any internal name. Tests, scripts, the docs and spec examples import
 from the public modules; [`tests/test_module_layout.py`](../tests/test_module_layout.py)
