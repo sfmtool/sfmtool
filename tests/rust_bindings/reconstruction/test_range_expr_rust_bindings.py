@@ -184,35 +184,33 @@ class TestNegativeValues:
 
 
 class TestValueBounds:
-    """openjd-expr bounds every endpoint and step to |v| < 2**62.
+    """openjd-expr accepts every i64 endpoint, step and value but i64's minimum.
 
-    The bound narrows the accepted syntax below the full i64 domain, so it is
-    pinned here: 2**62 is nine orders of magnitude past any real file number or
-    point index, but it is the edge at which a range expression stops parsing.
+    The minimum is refused because its negation overflows. The bound is pinned
+    here because it is the edge at which a range expression stops parsing.
     """
 
-    MAX_MAGNITUDE = 1 << 62
+    I64_MAX = (1 << 63) - 1
+    I64_MIN = -(1 << 63)
 
     def test_largest_accepted_magnitude(self):
-        largest = self.MAX_MAGNITUDE - 1
-        assert list(RangeExpr(str(largest))) == [largest]
-        assert list(RangeExpr(str(-largest))) == [-largest]
+        assert list(RangeExpr(str(self.I64_MAX))) == [self.I64_MAX]
+        assert list(RangeExpr(str(-self.I64_MAX))) == [-self.I64_MAX]
+        assert list(RangeExpr.from_list([self.I64_MAX])) == [self.I64_MAX]
 
-    def test_endpoint_at_the_bound_rejected(self):
-        with pytest.raises(ValueError, match="[Oo]verflow"):
-            RangeExpr(str(self.MAX_MAGNITUDE))
+    def test_endpoint_at_the_minimum_rejected(self):
+        # The parser reads the sign and the digits apart, and the digits of
+        # the minimum do not fit an i64.
+        with pytest.raises(ValueError, match="Invalid integer"):
+            RangeExpr(str(self.I64_MIN))
 
-    def test_negative_endpoint_at_the_bound_rejected(self):
-        with pytest.raises(ValueError, match="[Oo]verflow"):
-            RangeExpr(str(-self.MAX_MAGNITUDE))
+    def test_step_at_the_minimum_rejected(self):
+        with pytest.raises(ValueError, match="Invalid integer"):
+            RangeExpr(f"10-0:{self.I64_MIN}")
 
-    def test_step_at_the_bound_rejected(self):
+    def test_from_list_value_at_the_minimum_rejected(self):
         with pytest.raises(ValueError, match="[Oo]verflow"):
-            RangeExpr(f"0-10:{self.MAX_MAGNITUDE}")
-
-    def test_from_list_value_at_the_bound_rejected(self):
-        with pytest.raises(ValueError, match="[Oo]verflow"):
-            RangeExpr.from_list([self.MAX_MAGNITUDE])
+            RangeExpr.from_list([self.I64_MIN])
 
     def test_python_int_beyond_i64_rejected_by_conversion(self):
         # Caught converting the argument, before openjd-expr sees it.
@@ -233,10 +231,12 @@ class TestDisplayNormalization:
     def test_from_list_sorts_and_deduplicates(self):
         assert list(RangeExpr.from_list([5, 1, 3, 1])) == [1, 3, 5]
 
-    def test_from_list_collapses_an_arithmetic_run_into_a_step(self):
-        # from_list runs step detection over the sorted values, so it renders
-        # tighter than the parser does for the same members: "1,3,5" parses as
-        # three single-value chunks and stays that way.
+    def test_the_same_values_render_and_compare_alike_however_given(self):
+        # A range expression is its values: the parser and from_list both write
+        # the canonical form, which joins three or more values with a constant
+        # step into one run, across the commas of the text it was given too.
         assert str(RangeExpr.from_list([5, 1, 3])) == "1-5:2"
-        assert str(RangeExpr("1,3,5")) == "1,3,5"
-        assert RangeExpr.from_list([5, 1, 3]) != RangeExpr("1,3,5")
+        assert str(RangeExpr("1,3,5")) == "1-5:2"
+        assert RangeExpr.from_list([5, 1, 3]) == RangeExpr("1,3,5")
+        assert str(RangeExpr("1,3,5-7")) == "1-5:2,6,7"
+        assert str(RangeExpr.from_list([1, 2, 4, 6])) == "1,2-6:2"

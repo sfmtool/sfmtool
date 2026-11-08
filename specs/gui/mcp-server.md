@@ -6224,7 +6224,7 @@ Track View shows, rather than a second implementation of it.
 
 ## Transport and protocol
 
-**Streamable HTTP, via the official Rust SDK ([`rmcp`][rmcp] `~3.7`), mounted on
+**Streamable HTTP, via the official Rust SDK ([`rmcp`][rmcp] `~3.9`), mounted on
 `axum` 0.8, on a `tokio` current-thread runtime on one dedicated thread.**
 
 The SDK is here to absorb the protocol's revision history. MCP has run

@@ -95,7 +95,7 @@ skrifa = "0.44"
 raw-window-handle = "0.6"
 winit = "0.30.13"
 pollster = "1"
-rfd = "0.17"
+rfd = "0.18"
 rand = "0.10"
 image = "0.25"
 ndarray = "0.17"
@@ -127,8 +127,9 @@ serde_json = "1"
 # still answered with 2025-11-25 (the new `LATEST_WITH_INITIALIZE`), an older
 # known revision is still echoed back, and a 2026-07-28 client that sends no
 # `initialize` is still served at 2026-07-28: what a client negotiates is
-# unchanged.
-rmcp = { version = "~3.7", optional = true, default-features = false, features = [
+# unchanged. 3.7 -> 3.9 left `KNOWN_VERSIONS`, `LATEST` and
+# `LATEST_WITH_INITIALIZE` as they were, and the negotiation itself unchanged.
+rmcp = { version = "~3.9", optional = true, default-features = false, features = [
     "server",
     "transport-streamable-http-server",
 ] }

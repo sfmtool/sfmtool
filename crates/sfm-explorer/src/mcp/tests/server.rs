@@ -350,7 +350,7 @@ fn a_malformed_argument_is_a_protocol_error() {
 }
 
 /// The newest revision a real client asks for. The server may negotiate *down*
-/// from this — 2026-07-28 has no `initialize`, so `rmcp` 3.7 answers one that
+/// from this — 2026-07-28 has no `initialize`, so `rmcp` 3.9 answers one that
 /// names it with 2025-11-25 — which is the point:
 /// the test asks the way a current client asks and then works with whatever
 /// comes back, so an SDK bump changes what is exercised without breaking it.
