@@ -273,6 +273,19 @@ One modal for the whole gesture rather than one per node: closing all with three
 dirty nodes is one thing the user asked for, and three prompts in a row is a
 sequence they answer without reading.
 
+**Quitting is File ▸ Quit or a close request from the window system**: the
+window's close button, Alt+F4, and Close on the taskbar, each of which winit
+reports as `WindowEvent::CloseRequested`. Both ask `AppState::request_quit`
+([state/save.rs](../../crates/sfm-explorer/src/state/save.rs)): with no dirty
+node the viewer ends, and with one the prompt goes up on a quit, so its Save or
+Don't Save ends the viewer and its Cancel leaves it running. A close request
+that puts the prompt up also restores the window if it is minimized and gives it
+the focus, so the prompt can be seen. While the prompt is up, a second close
+request or File ▸ Quit keeps the question already asked rather than stacking a
+second prompt, and does not quit. On macOS the application menu's Quit item
+(Cmd+Q), which winit adds, ends the application without a close request, so it
+does not ask.
+
 ## The Action Log
 
 One entry per save, kind `File` ([action-log.md](action-log.md)):
@@ -324,6 +337,12 @@ and keeps the file's hash.
 asking twice keeps the first question, that a prompt never asked draws nothing
 and answers nothing, that a pending prompt stays up until it is answered, and
 that Escape cancels and leaves nothing pending.
+
+`crates/sfm-explorer/src/mcp/tests/input.rs` covers quitting through real egui
+frames of the viewer's menu bar and dialogs: that a close request with nothing
+unsaved quits and puts up no prompt, and that one with a dirty node puts up the
+prompt instead, whose Cancel leaves the viewer running, a second request while
+it is up does not quit, and Don't Save then quits.
 
 `crates/sfm-explorer/src/save_minimal_prompt/tests.rs` covers the workspace path
 prompt and the state on either side of it, running whole egui frames through

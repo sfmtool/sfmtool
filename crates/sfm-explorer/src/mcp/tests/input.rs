@@ -1411,6 +1411,57 @@ fn pointer_refusals_say_why_and_record_one_row() {
     assert!(error.0.starts_with("The window is minimized"), "{error}");
 }
 
+/// The close prompt's dialog in a window listing, if it is up.
+fn close_prompt(window: &Value) -> Option<&Value> {
+    window["dialogs"]
+        .as_array()
+        .expect("a dialogs array")
+        .iter()
+        .find(|dialog| dialog["title"] == json!("Unsaved changes"))
+}
+
+/// A close request from the window system (its close button, Alt+F4) is
+/// `AppState::request_quit`, which `WindowEvent::CloseRequested` calls; `true`
+/// is the event loop ending at once. With nothing unsaved it quits and puts up
+/// no prompt.
+#[test]
+fn a_close_request_with_nothing_unsaved_quits_without_a_prompt() {
+    let mut harness = Harness::new();
+    assert!(harness.state.request_quit());
+    let window = harness.listing(None);
+    assert!(close_prompt(&window).is_none(), "{window:#}");
+}
+
+/// With a dirty node the request puts up the close prompt instead of quitting;
+/// its Cancel keeps the viewer running, a second request while the prompt is up
+/// does not quit, and Don't Save then quits as File ▸ Quit's prompt does.
+#[test]
+fn a_close_request_with_unsaved_changes_asks_first() {
+    let mut harness = Harness::new();
+    let demo = harness.state.scene[0].id;
+    harness
+        .state
+        .delete_point(PointRef::new(demo, 3))
+        .expect("a live point");
+
+    assert!(!harness.state.request_quit(), "quit with demo dirty");
+    let window = harness.listing(None);
+    let prompt = close_prompt(&window).expect("the close prompt is up");
+    let cancel = the(&prompt["widgets"], "Cancel").clone();
+    harness.ok("click", json!({ "widget": cancel["widget"] }));
+    assert!(!harness.chrome.quit_requested, "Cancel quit");
+    let window = harness.listing(None);
+    assert!(close_prompt(&window).is_none(), "{window:#}");
+
+    assert!(!harness.state.request_quit(), "quit with demo dirty");
+    assert!(!harness.state.request_quit(), "a second request quit");
+    let window = harness.listing(None);
+    let prompt = close_prompt(&window).expect("the close prompt is up");
+    let discard = the(&prompt["widgets"], "Don't Save").clone();
+    harness.ok("click", json!({ "widget": discard["widget"] }));
+    assert!(harness.chrome.quit_requested, "Don't Save did not quit");
+}
+
 /// The parse refuses what no frame could answer: no target, two targets, a
 /// panel with a widget, a third click, an unknown button or modifier, and a
 /// malformed id.
