@@ -6019,8 +6019,9 @@ fn a_tilt_of_a_few_nanoradians_leaves_a_finite_patch() {
     );
 
     // Both cases above hang on how one dot rounds. These hang on no single
-    // rounding: at 20 nrad the dot rounds just under `1.0`, and its `acos`
-    // lands about a nanoradian off the turn asked for, in every direction.
+    // rounding: at 20 nrad the dot rounds one or two steps under `1.0`, and
+    // its `acos` lands 1 to 5 nanoradians off the turn asked for, in every
+    // direction.
     let track = leaned(7.0, 2.1);
     for step in 0..8 {
         let heading = f64::from(step) * std::f64::consts::TAU / 8.0;
