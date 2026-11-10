@@ -53,6 +53,47 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "create_bench_tracks",
+            description: "Put many 3D points of one reconstruction on the bench as track-stage \
+                          tracks, as one version, which one undo takes back: create_bench_track \
+                          for a list. Each entry of points is a point and, optionally, the \
+                          label its item goes on under; a label another item holds, or one an \
+                          earlier entry's item took, takes the \" (2)\" suffix. A point a track \
+                          already came from keeps that track and gets no second one, and a \
+                          point named twice counts once. The focus is left where it is: no \
+                          item is focused, so focus_bench_item one to edit it. The new track \
+                          of the viewed point (the selected point, with no item focused on its \
+                          node) takes Track View's read-only bars when they differ from the \
+                          defaults, as create_bench_track's does. Every entry is checked first, \
+                          and the whole list is refused, changing nothing, for an empty list, \
+                          a point the reconstruction does not hold, a label for a point already \
+                          on the bench other than the one its track has, and a point named \
+                          twice under two labels. The reply's points has one entry per entry \
+                          asked for, in order: the point, the item it names, and changed: \
+                          false where that item was on the bench already. A call that puts \
+                          nothing on pushes no version and replies changed: false.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "points",
+                        json!({
+                            "type": "array",
+                            "items": object(
+                                &[("label", new_item_label_schema())],
+                                &[("point", point_schema())],
+                            ),
+                            "description":
+                                "The points to put on the bench, each with the label its item \
+                                 goes on under when you name one.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "create_track_at_pixel",
             description: "Build a track at one pixel of a posed camera image and commit it as a \
                           new point: what Create Track Here does at the window, from Image \

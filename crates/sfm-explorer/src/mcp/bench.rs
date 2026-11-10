@@ -301,6 +301,69 @@ pub(super) fn create_bench_track(
     Ok(with_item(reply, &made))
 }
 
+/// `create_bench_tracks`: many points of the reconstruction put on the bench
+/// as track-stage tracks, as one version, with no item focused.
+///
+/// Every point is resolved before the step runs, and the step checks every
+/// entry before it touches the bench, so a refusal of any entry pushes
+/// nothing. A refusal of a point names its entry by its position in `points`.
+/// The reply is `create_bench_track`'s version reply with `points`, one entry
+/// per entry asked for: the point by index, the item it names, and `changed`,
+/// false where that item was on the bench already. A call that put nothing on
+/// pushes no version and writes no row of its own, so its reply carries a
+/// `report` saying so, as `create_bench_track`'s does.
+pub(super) fn create_bench_tracks(
+    state: &mut AppState,
+    label: &str,
+    entries: &[(crate::goto_point::PointQuery, Option<String>)],
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    let points = entries
+        .iter()
+        .enumerate()
+        .map(|(at, (query, named))| {
+            resolve_point_in(state, id, query)
+                .map(|point| (point.point, named.clone()))
+                .map_err(|error| ToolError::new(format!("points[{at}]: {}", error.0)))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut puts = Vec::new();
+    let mut reply = edit::edited(state, id, |state| {
+        state.put_points_on_bench(id, &points).map(|made| {
+            puts = made;
+        })
+    })?;
+    if reply["changed"] == json!(false) {
+        let mut distinct: Vec<u32> = points.iter().map(|(point, _)| *point).collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let text = match distinct.as_slice() {
+            [point] => format!(
+                "Put point {point} on the bench: no effect, it is on the bench already as {}",
+                puts[0].label
+            ),
+            many => format!(
+                "Put {} points on the bench: no effect, each is on the bench already",
+                many.len()
+            ),
+        };
+        insert(&mut reply, "report", json!(text));
+    }
+    let rows: Vec<Value> = points
+        .iter()
+        .zip(&puts)
+        .map(|((point, _), put)| {
+            json!({
+                "point": point,
+                "item": put.label,
+                "changed": put.made,
+            })
+        })
+        .collect();
+    insert(&mut reply, "points", json!(rows));
+    Ok(reply)
+}
+
 /// `create_track_at_pixel`: a track built at a pixel of one camera image by
 /// the track-at-pixel cascade, put on the bench and committed, on a worker.
 ///

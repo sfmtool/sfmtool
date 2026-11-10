@@ -469,6 +469,14 @@ pub(crate) enum Command {
         /// suffix a taken label gets; `None` mints one.
         label: Option<String>,
     },
+    /// Put many points of one reconstruction on the bench as track-stage
+    /// tracks, as one version.
+    CreateBenchTracks {
+        reconstruction_label: String,
+        /// Each point, with the label to put its item on the bench under
+        /// before the `" (n)"` suffix a taken label gets; `None` mints one.
+        points: Vec<(crate::goto_point::PointQuery, Option<String>)>,
+    },
     /// Build a track at a pixel of one camera image, put it on the bench and
     /// commit it, on a worker: Image Detail's *Create Track Here*.
     CreateTrackAtPixel {
@@ -1748,6 +1756,14 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &point,
             label.as_deref(),
+        )),
+        Command::CreateBenchTracks {
+            reconstruction_label,
+            points,
+        } => done(bench::create_bench_tracks(
+            state,
+            &reconstruction_label,
+            &points,
         )),
         Command::CreateTrackAtPixel {
             reconstruction_label,

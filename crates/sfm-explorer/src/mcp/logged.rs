@@ -90,6 +90,7 @@ impl Command {
             Command::GetBenchTrack { .. } => "get_bench_track",
             Command::CreateBenchCluster { .. } => "create_bench_cluster",
             Command::CreateBenchTrack { .. } => "create_bench_track",
+            Command::CreateBenchTracks { .. } => "create_bench_tracks",
             Command::CreateTrackAtPixel { .. } => "create_track_at_pixel",
             Command::FindNearbyTracks { .. } => "find_nearby_tracks",
             Command::FocusBenchItem { .. } => "focus_bench_item",
@@ -406,6 +407,7 @@ impl Command {
             // reconstruction, which is the kind the panel's own refusals carry.
             Command::CreateBenchCluster { .. }
             | Command::CreateBenchTrack { .. }
+            | Command::CreateBenchTracks { .. }
             // Its row puts the track on the bench; the commit that follows
             // writes its own `Edit` row.
             | Command::CreateTrackAtPixel { .. }
