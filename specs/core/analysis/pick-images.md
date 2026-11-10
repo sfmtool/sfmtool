@@ -164,7 +164,8 @@ whose readings or features break the format's rules, such as a negative
 sharpness or a feature count that disagrees with the metadata, each wrapped as
 the `SiftError::InvalidFormat` a damaged file is. `Pair` is two frames whose
 reference images differ in size, or an essential split camera of another size
-than the frames, the two `FramePairError`s the options checks leave possible. `Cancelled` is a set cancel flag. No caller input panics
+than the frames, the two `FramePairError`s the options checks leave
+possible. `Cancelled` is a set cancel flag. No caller input panics
 ([STANDARDS.md § Caller input never panics](../../STANDARDS.md#caller-input-never-panics)).
 
 **A `Progress`.** A walk over a long video runs for minutes, mostly in
