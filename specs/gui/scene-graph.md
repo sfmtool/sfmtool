@@ -1459,7 +1459,15 @@ bundle from `retain_nodes` on the next frame.
   that is focused it pushes no version and writes no `Bench` or `Selection`
   row; and a
   double-click made while the dock is swapped out for the placeholder still
-  raises the panel once the request is drained against the real dock.
+  raises the panel once the request is drained against the real dock. The
+  view move is tested in
+  [app/tests.rs](../../crates/sfm-explorer/src/app/tests.rs), on a node drawn
+  under a similarity with a scale of 2: a double-click on a staged point's row
+  ends the 3D view where the viewport's double-click on that point ends it, with
+  the same position, orientation and orbit target, and still focuses the item
+  and raises Track View; after a hand edit moves the patch, the orbit target
+  lands on the moved patch's centre and not on the stored point; and a
+  double-click on a cluster's row focuses it and leaves the view where it was.
 - **The Index Files rows**, through the same whole frames: the group row and
   both children are drawn, saying `0 of 2 current` and `none` twice on a node
   with neither file, `2 of 2 current` with the descriptor and cluster counts
