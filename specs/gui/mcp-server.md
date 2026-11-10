@@ -5277,16 +5277,16 @@ read-only bars: the batch moves no selection and no focus, so the viewed point
 is the same for every entry, and an entry that names it is the put
 `create_bench_track` would make of it.
 
-The version's label is the sentence of the one change when there is one, as
-`create_bench_track` writes it, and counts the changes otherwise: `Put 78
-points on the bench`, with `, point 1207 with min ZNCC 80%` when the viewed
-point's track took the bars, and `Rebuilt 3 items from their points, which now
-carry a patch frame` for rebuilds, the two phrases joined by `, and ` when the
-call made both ([bench.md](bench.md) § "What a step writes").
-The reply is the edit reply with `points`, one `{point, item, changed}` per
-entry in the order asked, the
-point by index, the item it names and `changed: false` where that item was on
-the bench already. A call whose every point is on the bench already pushes no
+The version's label names each kind of change, the puts and the rebuilds, by
+the sentence `create_bench_track` writes for it when the call made one of that
+kind, and counts it when the call made more: `Put 78 points on the bench`, with
+`, point 1207 with min ZNCC 80%` when the viewed point's track took the bars,
+and `Rebuilt 3 items from their points, which now carry a patch frame`, the two
+phrases joined by `, and ` when the call made both ([bench.md](bench.md) §
+"What a step writes"). The reply is the edit reply with `points`, one `{point,
+item, changed}` per entry in the order asked: the point by index, the item it
+names, and `changed: false` where that item was on the bench already and was not
+rebuilt. A call whose every point is on the bench already pushes no
 version and answers `changed: false` with a `report` of its own, `Put 3 points
 on the bench: no effect, each is on the bench already`.
 

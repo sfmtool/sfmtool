@@ -826,9 +826,11 @@ impl AppState {
     /// version label names them. The rows arrive pinned `in` either way, so
     /// the bars change no verdict until the rows are unpinned.
     ///
-    /// The version label is the sentence of the one change when there is one
-    /// (`Put point 7 on the bench as <label>`, or the rebuild's), and counts
-    /// the changes otherwise (`Put 78 points on the bench`). Returns one
+    /// The version label names each kind of change, the puts and the
+    /// rebuilds, by its own sentence when there is one of that kind (`Put
+    /// point 7 on the bench as <label>`, or the rebuild's) and counts it when
+    /// there are more (`Put 78 points on the bench`), joining the two kinds
+    /// with `, and `. Returns one
     /// [`PutPoint`] per entry, in the order of `points`.
     pub(crate) fn put_points_on_bench(
         &mut self,

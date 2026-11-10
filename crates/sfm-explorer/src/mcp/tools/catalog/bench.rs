@@ -70,8 +70,9 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           on the bench other than the one its track has, and a point named \
                           twice under two labels. The reply's points has one entry per entry \
                           asked for, in order: the point, the item it names, and changed: \
-                          false where that item was on the bench already. A call that puts \
-                          nothing on pushes no version and replies changed: false.",
+                          false where that item was on the bench already and was not rebuilt. \
+                          A call that puts nothing on pushes no version and replies changed: \
+                          false.",
             kind: Write,
             schema: object(
                 &[],

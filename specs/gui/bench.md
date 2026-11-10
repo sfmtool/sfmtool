@@ -507,7 +507,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 |---|---|
 | Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207`; a put of the viewed point that carries Track View's read-only bars names the bars that differ from the defaults: `Put point 1207 on the bench as pt3d_a1b2c3d4_1207, with min ZNCC 80%` (§ "Live evaluation") |
 | Put a point on the bench again, once it has a patch frame its item lacks (§ "A view-only bench") | `Rebuilt pt3d_a1b2c3d4_1207 from point 1207, which now carries a patch frame` |
-| Put many points on the bench (`create_bench_tracks`) | one of the two sentences above when one item was put on or rebuilt. Otherwise the puts are counted, `Put 78 points on the bench`, with `, point 1207 with min ZNCC 80%` when the viewed point's track took the bars, and so are the rebuilds, `Rebuilt 3 items from their points, which now carry a patch frame`; a call that did both joins its two phrases with `, and ` |
+| Put many points on the bench (`create_bench_tracks`) | each kind of change, the puts and the rebuilds, is its sentence above when the call made one of that kind, and is counted when it made more: `Put 78 points on the bench`, with `, point 1207 with min ZNCC 80%` when the viewed point's track took the bars, and `Rebuilt 3 items from their points, which now carry a patch frame`; a call that did both joins its two phrases with `, and `, the second starting in lower case |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
 | Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member: 9 observations in, median ZNCC 91% / 88%` (the version's own label stops before the colon; `, after constellation refused` follows where earlier members were refused) |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
@@ -640,8 +640,8 @@ that is not busy. The same sentence is given everywhere:
   with no handle on it. The 3D viewer's bench figure offers no handle either.
 
 **Not refused**: putting a point on the bench (`create_bench_track`,
-`create_bench_tracks`, *Edit on Bench*, a double-click), focusing and unfocusing, selecting rows, renaming,
-discarding and clearing the bench, none of which edits a track, and *Find
+`create_bench_tracks`, *Edit on Bench*, a double-click), focusing and
+unfocusing, selecting rows, renaming, discarding and clearing the bench, none of which edits a track, and *Find
 Nearby Tracks* without a commit, whose items are built with a patch frame and viewed
 like any other. *Create Track Here* and a committing find are refused as before
 (§ "Create Track Here").
@@ -1127,8 +1127,8 @@ the row once unpinned.
 *Edit on Bench*, a double-click on the point or one of its features, which
 select the point before putting it, or the wire's `create_bench_track` or
 `create_bench_tracks` naming it) while the read-only bars differ from the
-defaults gives the new track those bars, in the same version as the put. The rows arrive pinned `in` as always, so the bars
-change no verdict until rows are unpinned. The version label, and so the wire's
+defaults gives the new track those bars, in the same version as the put. The
+rows arrive pinned `in` as always, so the bars change no verdict until rows are unpinned. The version label, and so the wire's
 reply, names the bars that differ, in percent for the ZNCC bars and in
 patch-grid px for the shift and self-similarity bars (§ "What a step writes").
 A put of any other point, a cluster, and focusing a point's existing item (which

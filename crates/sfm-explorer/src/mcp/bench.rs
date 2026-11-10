@@ -309,8 +309,8 @@ pub(super) fn create_bench_track(
 /// nothing. A refusal of a point names its entry by its position in `points`.
 /// The reply is `create_bench_track`'s version reply with `points`, one entry
 /// per entry asked for: the point by index, the item it names, and `changed`,
-/// false where that item was on the bench already. A call that put nothing on
-/// pushes no version and writes no row of its own, so its reply carries a
+/// false where that item was on the bench already and was not rebuilt. A call
+/// that put nothing on pushes no version and writes no row of its own, so its reply carries a
 /// `report` saying so, as `create_bench_track`'s does.
 pub(super) fn create_bench_tracks(
     state: &mut AppState,
