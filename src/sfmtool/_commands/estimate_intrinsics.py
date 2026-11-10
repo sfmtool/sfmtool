@@ -664,7 +664,7 @@ def _plan_sequences(matches_path: Path, image_selection) -> tuple:
     except RigConfigError as e:
         raise click.ClickException(str(e)) from None
     try:
-        camrig_rigs, _notes = find_rigs(
+        camrig_rigs, _cameras, _notes = find_rigs(
             [workspace_dir / name for name in file_image_names], workspace_dir
         )
         sequences = collect_sequences(

@@ -7,6 +7,7 @@
 //! to prefetch or wait for.
 
 mod capture;
+mod density;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -953,6 +954,27 @@ fn every_option_out_of_range_is_refused() {
             },
         ),
         (
+            "max_density_gain",
+            PickImagesOptions {
+                max_density_gain: 0.99,
+                ..options()
+            },
+        ),
+        (
+            "max_density_gain",
+            PickImagesOptions {
+                max_density_gain: f64::NAN,
+                ..options()
+            },
+        ),
+        (
+            "max_density_gain",
+            PickImagesOptions {
+                max_density_gain: f64::INFINITY,
+                ..options()
+            },
+        ),
+        (
             "step_band",
             PickImagesOptions {
                 step_band: 0.0,
@@ -1012,6 +1034,7 @@ fn every_option_out_of_range_is_refused() {
     // The bounds themselves are accepted.
     let edges = PickImagesOptions {
         min_step_matches: 1,
+        max_density_gain: 1.0,
         ..options()
     };
     assert!(run_with(&[&synth], &edges, Fault::None, None)

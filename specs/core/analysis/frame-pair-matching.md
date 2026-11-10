@@ -406,7 +406,8 @@ into its own copy of the images, through a path and through a `SiftFile`.
 ## Non-goals
 
 - Choosing frames from a video, which [pick-images.md](pick-images.md) does
-  with these statistics.
+  with these statistics, measuring the essential split of each step it
+  chooses for its local density term.
 - Matching two cameras of different image sizes, such as two sensors of a
   rig. A rig's motion is measured from one sensor's frames.
 - Geometric verification of the matches for a solve. The essential split

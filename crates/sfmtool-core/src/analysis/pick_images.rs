@@ -9,7 +9,10 @@
 //! whose **step**, the median displacement of their mutual matches in percent
 //! of the image's long side, is near a target, with no step beyond the next
 //! frame keeping fewer mutual matches than the match floor, and a frame
-//! blurred against its neighbouring frames swapped for a sharper one. A
+//! blurred against its neighbouring frames swapped for a sharper one. Given a
+//! sequence's camera, the local density term divides the target by a gain
+//! where the essential splits of the last steps chosen show a near
+//! foreground in front of a distant view ([`DensityTerm`]). A
 //! [`FrameSource`] makes each frame's `.sift` files exist: an
 //! [`ExtractingSource`] extracts them on a pool of workers ahead of the walk,
 //! from the frames it predicts it will read, and a [`ReadOnlySource`] reads
@@ -28,6 +31,7 @@
 //! `specs/core/analysis/frame-pair-matching.md`.
 
 mod capture;
+mod density;
 mod essential_split;
 mod frame_pair;
 mod frames;
@@ -42,6 +46,7 @@ mod tests;
 pub use capture::{
     CaptureFrame, CaptureImage, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
+pub use density::{DensityTerm, DensityTermOff};
 pub use essential_split::{
     measure_essential_split, EssentialSplit, EssentialSplitOptions, EssentialSplitOutcome,
     SplitNotMeasured,
@@ -51,7 +56,7 @@ pub use frame_pair::{
 };
 pub use pick::pick_images;
 pub use report::{
-    FrameReading, MeasuredPair, PickImagesReport, SensorReading, SequenceReport, StepKind, Swap,
-    WalkStep,
+    FrameReading, MeasuredPair, PickImagesReport, SensorReading, SequenceReport, StepDensity,
+    StepKind, Swap, WalkStep,
 };
 pub use source::{ExtractingSource, FrameSource, FrameSourceError, ReadOnlySource};

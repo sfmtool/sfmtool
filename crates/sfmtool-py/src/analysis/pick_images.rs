@@ -418,11 +418,16 @@ impl PyCaptureFrame {
 }
 
 /// One sequence of a capture, in file-number order, with the pattern each
-/// sensor's list entry uses.
+/// sensor's list entry uses and the camera of its reference sensor.
 ///
 /// Args:
 ///     patterns: One pattern per sensor, in the order of each frame's images.
 ///     frames: The ``CaptureFrame`` objects, in file-number order.
+///     camera: The ``sfmtool.geometry.CameraIntrinsics`` the reference
+///         sensor's images were taken with, which ``pick_images``'s local
+///         density term measures with, or None to walk without the term.
+///         It may be of another size than the frames, of the same aspect;
+///         the walk scales it to theirs.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyclass(name = "CaptureSequence", module = "sfmtool.analysis", frozen)]
 pub struct PyCaptureSequence {
@@ -433,14 +438,17 @@ pub struct PyCaptureSequence {
 #[pymethods]
 impl PyCaptureSequence {
     #[new]
+    #[pyo3(signature = (patterns, frames, *, camera=None))]
     fn new(
         py: Python<'_>,
         patterns: Vec<String>,
         frames: Vec<Bound<'_, PyCaptureFrame>>,
+        camera: Option<PyRef<'_, PyCameraIntrinsics>>,
     ) -> PyResult<Self> {
         let inner = CaptureSequence {
             patterns,
             frames: frames.iter().map(|f| f.get().inner.clone()).collect(),
+            camera: camera.map(|c| c.inner.clone()),
         };
         Ok(Self {
             inner,
@@ -452,6 +460,15 @@ impl PyCaptureSequence {
     #[getter]
     fn patterns(&self) -> Vec<String> {
         self.inner.patterns.clone()
+    }
+
+    /// The camera of the reference sensor, or None.
+    #[getter]
+    fn camera(&self) -> Option<PyCameraIntrinsics> {
+        self.inner
+            .camera
+            .clone()
+            .map(|inner| PyCameraIntrinsics { inner })
     }
 
     /// The frames, a tuple of ``CaptureFrame``, so that
@@ -481,8 +498,11 @@ impl PyCaptureSequence {
 /// ``target_step_percent`` of the image's long side apart, with no step
 /// beyond the next frame keeping fewer than ``min_step_matches`` mutual
 /// matches, and a frame blurred against its neighbouring frames swapped for
-/// a sharper one. Options left as ``None`` take the defaults of the Rust
-/// ``PickImagesOptions``.
+/// a sharper one. For a sequence with a ``camera``, the local density term
+/// measures each chosen step's essential split, and where the last three
+/// show a near foreground in front of a distant view it divides the target
+/// by up to ``max_density_gain``. Options left as ``None`` take the defaults
+/// of the Rust ``PickImagesOptions``.
 ///
 /// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
 /// settings for the ``sfmtool`` feature tool, each frame's ``.sift`` files
@@ -502,8 +522,12 @@ impl PyCaptureSequence {
 ///     concurrent_images: How many frames the workers extract at once, with
 ///         ``feature_options``; ``None`` takes ``SFMTOOL_SIFT_EXTRACT_WORKERS``
 ///         or the core count capped by memory, as ``build_sift_files`` does.
-///     target_step_percent: The step to aim for, in percent of the long
-///         side (10).
+///     target_step_percent: The base target: the step to aim for, in
+///         percent of the long side, before the local density term divides
+///         it by its gain (10).
+///     max_density_gain: The most the local density term divides the base
+///         target by, finite and at least 1 (3). 1 turns the term off, and
+///         a sequence with no camera is walked without it.
 ///     step_band: How far a step may be from the target, as a fraction
 ///         (0.3).
 ///     neighbour_blur_ratio: A frame about to be accepted is blurred against
@@ -519,8 +543,10 @@ impl PyCaptureSequence {
 ///
 /// Returns:
 ///     The report as a dict of plain values, which ``json.dump`` writes as
-///     it is: ``sequences`` (per sequence: ``chosen``, ``steps``, ``swaps`` and
-///     ``frames_read``), ``frames``
+///     it is: ``sequences`` (per sequence: ``chosen``, ``steps``, each with
+///     its ``density``, the target it was walked with and the local density
+///     term's reading of it, ``swaps``, ``frames_read`` and
+///     ``density_term``, whether the term was on and why not), ``frames``
 ///     (every frame read, with its readings), ``pairs`` (every pair matched,
 ///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
 ///     whether its ``.sift`` files were written in this call) and
@@ -550,7 +576,8 @@ impl PyCaptureSequence {
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
-                    concurrent_images=None, target_step_percent=None, step_band=None,
+                    concurrent_images=None, target_step_percent=None,
+                    max_density_gain=None, step_band=None,
                     neighbour_blur_ratio=None, min_step_matches=None, ratio=None, preset=None,
                     num_trees=None, leaf_size=None, max_leaf_checks=None, progress=None))]
 #[allow(clippy::too_many_arguments)]
@@ -561,6 +588,7 @@ pub fn pick_images<'py>(
     feature_prefix_dir: Option<PathBuf>,
     concurrent_images: Option<usize>,
     target_step_percent: Option<f64>,
+    max_density_gain: Option<f64>,
     step_band: Option<f64>,
     neighbour_blur_ratio: Option<f64>,
     min_step_matches: Option<usize>,
@@ -575,6 +603,7 @@ pub fn pick_images<'py>(
     let pair = FramePairOptions::default();
     let options = PickImagesOptions {
         target_step_percent: target_step_percent.unwrap_or(defaults.target_step_percent),
+        max_density_gain: max_density_gain.unwrap_or(defaults.max_density_gain),
         step_band: step_band.unwrap_or(defaults.step_band),
         neighbour_blur_ratio: neighbour_blur_ratio.unwrap_or(defaults.neighbour_blur_ratio),
         min_step_matches: min_step_matches.unwrap_or(defaults.min_step_matches),

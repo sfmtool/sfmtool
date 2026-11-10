@@ -20,7 +20,7 @@ from sfmtool._pick_images import (
     list_entries,
 )
 from sfmtool._pick_images_report import slice_suggestion, walk_lines
-from sfmtool.camrig.resolver import CamrigRig
+from sfmtool.camrig.resolver import CamrigCamera, CamrigRig
 from sfmtool.reconstruction import RangeExpr
 
 ROOT = Path("/ws").absolute()
@@ -116,10 +116,21 @@ def _camrig_collect(rels: list[str], frames: list[tuple[int, int]]) -> list:
     paths = [folder / rel for rel in rels]
     rig = CamrigRig(
         camrig_file=folder / "rig.camrig",
-        data={"sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"]},
+        data={
+            "sensor_image_patterns": ["right/f_%02d.jpg", "left/f_%02d.jpg"],
+            "cameras": RIG_CAMERAS,
+            "camera_indexes": [1, 0],
+        },
         assignments={p.resolve(): f for p, f in zip(paths, frames)},
     )
     return collect_sequences(paths, ROOT, [rig])
+
+
+# The two cameras of `_camrig_collect`'s rig: sensor 0 takes the second.
+RIG_CAMERAS = [
+    {"model": "SIMPLE_PINHOLE", "width": 640, "height": 480, "parameters": {"f": 1}},
+    {"model": "SIMPLE_PINHOLE", "width": 640, "height": 480, "parameters": {"f": 2}},
+]
 
 
 def test_camrig_rig_frames_group_by_frame_index_with_sensor_0_first():
@@ -135,6 +146,34 @@ def test_camrig_rig_frames_group_by_frame_index_with_sensor_0_first():
         Path("cap 5%/right/f_02.jpg"),
         Path("cap 5%/left/f_02.jpg"),
     ]
+    # The camera is the reference sensor's, sensor 0's.
+    assert sequence.camera == RIG_CAMERAS[1]
+    assert sequence.camera_source == (
+        f"the camera of {ROOT / 'cap 5%' / 'rig.camrig'}, sensor right/f_%02d.jpg"
+    )
+
+
+def test_a_sequence_takes_the_camera_of_a_camrig_covering_all_its_frames():
+    rels = ["a/x_1.jpg", "a/x_2.jpg", "b/y_1.jpg", "b/y_2.jpg", "c/z_1.jpg"]
+    paths = [ROOT / r for r in rels]
+    cameras = [
+        CamrigCamera(
+            camrig_file=ROOT / "a.camrig",
+            camera=RIG_CAMERAS[0],
+            images={(ROOT / r).resolve() for r in rels[:2]},
+        ),
+        CamrigCamera(
+            camrig_file=ROOT / "b.camrig",
+            camera=RIG_CAMERAS[1],
+            images={(ROOT / "b/y_1.jpg").resolve()},
+        ),
+    ]
+    a, b, c = collect_sequences(paths, ROOT, camrig_cameras=cameras)
+    assert a.camera == RIG_CAMERAS[0]
+    assert a.camera_source == f"the camera of {ROOT / 'a.camrig'}"
+    assert b.camera is None
+    assert b.camera_source == f"{ROOT / 'b.camrig'} covers only 1 of its 2 frames"
+    assert c.camera is None and c.camera_source == "no .camrig covers its frames"
 
 
 def test_camrig_rig_errors_name_the_files():
@@ -206,6 +245,118 @@ def test_slice_suggestion():
     )
 
 
+def _density(target, gain, median, split, measure):
+    return {
+        "target_percent": target,
+        "gain": gain,
+        "median_measure": median,
+        "essential_split": split,
+        "measure": measure,
+    }
+
+
+def test_the_local_density_term_is_reported_by_step():
+    sequence = PickSequence(
+        patterns=["f_%d.jpg"],
+        numbers=[10 * t for t in range(1, 31)],
+        images=[[ROOT / f"f_{10 * t}.jpg"] for t in range(1, 31)],
+        camera_source="the camera of k8.camrig",
+    )
+    stats = {"step_percent": 10.0, "matches": 700}
+    near = {
+        "status": "measured",
+        "matches": 700,
+        "inliers": 690,
+        "rotation_deg": 8.0,
+        "parallax_p50_deg": 0.125,
+        "parallax_p90_deg": 1.5,
+    }
+    lost = {"status": "not_measured", "matches": 9, "reason": "too_few_matches"}
+    walk = {
+        "chosen": [0, 12, 16, 19],
+        "steps": [
+            {
+                "from": 0,
+                "to": 12,
+                "stats": stats,
+                "rate": 0.8,
+                "kind": "in_band",
+                "density": _density(10.0, 1.0, 1.0, near, 12.0),
+            },
+            {
+                "from": 12,
+                "to": 16,
+                "stats": stats,
+                "rate": 0.8,
+                "kind": "in_band",
+                "density": _density(10 / 3, 3.0, 12.0, near, 12.0),
+            },
+            {
+                "from": 16,
+                "to": 19,
+                "stats": stats,
+                "rate": 0.8,
+                "kind": "in_band",
+                "density": _density(10 / 3, 3.0, 12.0, lost, 1.0),
+            },
+        ],
+        "swaps": [],
+        "frames_read": 9,
+        "density_term": {"status": "on", "focal_px": 945.75},
+    }
+    report = {"sequences": [walk], "frames": []}
+    lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
+    assert (
+        "  Local density term: on, with the camera of k8.camrig (focal 945.8 px at "
+        "the frames' size); 2 of 3 steps walked with a gain above 1" in lines
+    )
+    rows = lines[lines.index(next(x for x in lines if "Local density by step" in x)) :]
+    assert rows[2].split() == [
+        "10-130",
+        "10.00%",
+        "1.00",
+        "1.00",
+        "0.125",
+        "12.00",
+        "12.00",
+    ]
+    assert rows[3].split() == [
+        "130-170",
+        "3.33%",
+        "3.00",
+        "12.00",
+        "0.125",
+        "12.00",
+        "12.00",
+    ]
+    assert rows[4].split() == [
+        "170-200",
+        "3.33%",
+        "3.00",
+        "12.00",
+        "not",
+        "measured",
+        "(too_few_matches)",
+    ]
+    # Each reason the term is off.
+    for term, why in [
+        ({"reason": "max_gain_one"}, "--max-density-gain is 1"),
+        (
+            {"reason": "camera_shape", "camera": [1080, 1920], "frames": [1920, 1080]},
+            "the camera of k8.camrig is 1080 x 1920, of another aspect than the "
+            "frames' 1920 x 1080",
+        ),
+        (
+            {"reason": "camera_refused", "problem": "a focal of 0"},
+            "the camera of k8.camrig cannot be measured with: a focal of 0",
+        ),
+    ]:
+        walk["density_term"] = {"status": "off", **term}
+        lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
+        assert f"  Local density term: off, {why}" in lines, lines
+        assert not any("Local density by step" in line for line in lines)
+
+
 def test_swaps_and_steps_at_the_floor_are_reported():
     # A walk of frames numbered 10 apart with a swap, a step stopped at the
     # match floor beyond the next frame and one to a next frame that matches
@@ -227,10 +378,13 @@ def test_swaps_and_steps_at_the_floor_are_reported():
         ],
         "swaps": [{"candidate": 22, "chosen": 21}],
         "frames_read": 9,
+        "density_term": {"status": "off", "reason": "no_camera"},
     }
     report = {"sequences": [walk], "frames": []}
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
     assert "Walk: target step 10% (band 7-13%), match floor 600" in lines
+    assert "  Local density term: off, no .camrig covers its frames" in lines
+    assert not any("Local density by step" in line for line in lines)
     assert "  Chosen: 4 of 30 frames; read: 9 frames (0 extracted, 9 reused)" in lines
     assert "  Frames blurred against their neighbours swapped (1): 230->220" in lines
     assert (

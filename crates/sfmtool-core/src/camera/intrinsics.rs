@@ -926,6 +926,68 @@ impl CameraIntrinsics {
         out
     }
 
+    /// This camera for images `scale` times its size, at `width` × `height`:
+    /// every focal and the principal point times `scale`. The distortion
+    /// parameters act on normalized image-plane coordinates or angles and the
+    /// rolling-shutter rates on short-side units, so none of them changes.
+    /// The caller chooses `width` and `height` of the same aspect, `scale`
+    /// times the camera's.
+    pub(crate) fn scaled(&self, scale: f64, width: u32, height: u32) -> CameraIntrinsics {
+        let (cx, cy) = self.principal_point();
+        let mut out = self.with_principal_point(cx * scale, cy * scale);
+        out.width = width;
+        out.height = height;
+        match &mut out.model {
+            CameraModel::SimplePinhole { focal_length, .. }
+            | CameraModel::SimpleRadial { focal_length, .. }
+            | CameraModel::Radial { focal_length, .. }
+            | CameraModel::SimpleRadialFisheye { focal_length, .. }
+            | CameraModel::RadialFisheye { focal_length, .. }
+            | CameraModel::EquidistantFisheye { focal_length, .. }
+            | CameraModel::SfmtoolFisheye { focal_length, .. }
+            | CameraModel::SfmtoolPinhole { focal_length, .. } => *focal_length *= scale,
+            CameraModel::Pinhole {
+                focal_length_x,
+                focal_length_y,
+                ..
+            }
+            | CameraModel::OpenCV {
+                focal_length_x,
+                focal_length_y,
+                ..
+            }
+            | CameraModel::OpenCVFisheye {
+                focal_length_x,
+                focal_length_y,
+                ..
+            }
+            | CameraModel::ThinPrismFisheye {
+                focal_length_x,
+                focal_length_y,
+                ..
+            }
+            | CameraModel::RadTanThinPrismFisheye {
+                focal_length_x,
+                focal_length_y,
+                ..
+            }
+            | CameraModel::FullOpenCV {
+                focal_length_x,
+                focal_length_y,
+                ..
+            }
+            | CameraModel::Equirectangular {
+                focal_length_x,
+                focal_length_y,
+                ..
+            } => {
+                *focal_length_x *= scale;
+                *focal_length_y *= scale;
+            }
+        }
+        out
+    }
+
     /// This camera with `adjustment` applied: every focal times
     /// `1 + adjustment.focal`, the principal point moved on each axis by its
     /// fraction of the camera's short side, `min(width, height)`, the radial

@@ -1902,6 +1902,33 @@ fn with_focal_moves_only_a_single_focal() {
     }
 }
 
+/// `scaled` gives a camera whose pixel `scale · (u, v)` has the ray the
+/// original's pixel `(u, v)` has, on every model, at the size it is given.
+#[test]
+fn scaled_maps_each_scaled_pixel_to_the_same_ray() {
+    for cam in all_cameras() {
+        let name = cam.model_name();
+        let scale = 0.5;
+        let (w, h) = (cam.width / 2, cam.height / 2);
+        let small = cam.scaled(scale, w, h);
+        assert_eq!((small.width, small.height), (w, h), "{name}");
+        let (cx, cy) = cam.principal_point();
+        for (du, dv) in [(0.0, 0.0), (40.0, -25.0), (-60.0, 30.0)] {
+            let (u, v) = (cx + du, cy + dv);
+            let a = cam.pixel_to_ray(u, v);
+            let b = small.pixel_to_ray(u * scale, v * scale);
+            for k in 0..3 {
+                assert!(
+                    (a[k] - b[k]).abs() < 1e-9,
+                    "{name} at ({u}, {v}): {a:?} vs {b:?}"
+                );
+            }
+        }
+        // A scale of 1 gives the camera back exactly.
+        assert_eq!(cam.scaled(1.0, cam.width, cam.height), cam, "{name}");
+    }
+}
+
 // -----------------------------------------------------------------------
 // Per-image radial correction and rolling-shutter rates
 // -----------------------------------------------------------------------

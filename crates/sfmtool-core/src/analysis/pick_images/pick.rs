@@ -23,6 +23,11 @@ use crate::progress::Progress;
 /// `target_step_percent` of the image's long side apart, with no step beyond
 /// the next frame keeping fewer than `min_step_matches` mutual matches, and
 /// a frame blurred against its neighbouring frames swapped for a sharper one.
+/// For a sequence with a [`CaptureSequence::camera`], the local density term
+/// measures each accepted step's essential split and divides the next step's
+/// target by up to `max_density_gain` where the last three show a near
+/// foreground in front of a distant view; the report says per sequence
+/// whether the term was on, and why not.
 ///
 /// Every frame is read through `source`: [`pick_images`] waits on it for each
 /// frame just before reading the frame and, unless `options.prefetch` is
@@ -79,7 +84,16 @@ fn walk_all(
     sequences
         .iter()
         .enumerate()
-        .map(|(s, sequence)| walk_sequence(frames, s, sequence.frames.len(), options, &phase))
+        .map(|(s, sequence)| {
+            walk_sequence(
+                frames,
+                s,
+                sequence.frames.len(),
+                sequence.camera.as_ref(),
+                options,
+                &phase,
+            )
+        })
         .collect()
 }
 
@@ -132,6 +146,7 @@ fn assemble(walked: Vec<Walked>, frames: Frames, written: &[FrameId]) -> PickIma
             steps: walk.steps,
             swaps: walk.swaps,
             frames_read: readings.iter().filter(|f| f.id.sequence == s).count(),
+            density_term: walk.density_term,
         })
         .collect();
     let written: BTreeSet<FrameId> = written.iter().copied().collect();

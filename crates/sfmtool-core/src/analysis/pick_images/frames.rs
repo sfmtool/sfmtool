@@ -17,7 +17,10 @@ use sfmtool_sift_format::{
 };
 
 use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
-use super::frame_pair::{match_frame_pair, FrameFeatures, FramePairStats};
+use super::essential_split::{EssentialSplitOptions, EssentialSplitOutcome};
+use super::frame_pair::{
+    match_frame_pair, FrameFeatures, FramePairError, FramePairOptions, FramePairStats,
+};
 use super::report::MeasuredPair;
 use super::source::FrameSource;
 use crate::features::sift::ImageReadings;
@@ -192,19 +195,8 @@ impl<'a> Frames<'a> {
             return Ok(stats.clone());
         }
         progress.check_cancel()?;
-        let stats = match_frame_pair(fa, fb, &self.options.pair).map_err(|error| {
-            let image = |id: FrameId| {
-                self.sequences[id.sequence].frames[id.frame].images[0]
-                    .image_path
-                    .clone()
-            };
-            PickImagesError::Pair {
-                a,
-                b,
-                images: Box::new([image(a), image(b)]),
-                error,
-            }
-        })?;
+        let stats = match_frame_pair(fa, fb, &self.options.pair)
+            .map_err(|error| self.pair_error(a, b, error))?;
         self.pair_index.insert((a, b), self.pairs.len());
         self.pairs.push(MeasuredPair {
             a,
@@ -213,6 +205,47 @@ impl<'a> Frames<'a> {
         });
         progress.value("pairs_matched", self.pairs.len() as f64);
         Ok(stats)
+    }
+
+    /// The essential split of `a` with `b`, whose features are `fa` and
+    /// `fb`, measured with `split`: the pair is matched again with the split
+    /// set, and its statistics are not kept, so the pairs of the report stay
+    /// the ones the walk matched to decide. Checks for cancellation first.
+    pub(super) fn measure_split(
+        &self,
+        a: FrameId,
+        fa: &FrameFeatures,
+        b: FrameId,
+        fb: &FrameFeatures,
+        split: &EssentialSplitOptions,
+        progress: &Progress,
+    ) -> Result<EssentialSplitOutcome, PickImagesError> {
+        progress.check_cancel()?;
+        let options = FramePairOptions {
+            essential_split: Some(split.clone()),
+            ..self.options.pair.clone()
+        };
+        let stats =
+            match_frame_pair(fa, fb, &options).map_err(|error| self.pair_error(a, b, error))?;
+        Ok(stats
+            .essential_split
+            .expect("a pair matched with a split's options measures one"))
+    }
+
+    /// The error of a pair that could not be matched, naming the reference
+    /// sensor's image of each frame.
+    fn pair_error(&self, a: FrameId, b: FrameId, error: FramePairError) -> PickImagesError {
+        let image = |id: FrameId| {
+            self.sequences[id.sequence].frames[id.frame].images[0]
+                .image_path
+                .clone()
+        };
+        PickImagesError::Pair {
+            a,
+            b,
+            images: Box::new([image(a), image(b)]),
+            error,
+        }
     }
 
     /// Stop the source's work and return every frame it wrote `.sift` files

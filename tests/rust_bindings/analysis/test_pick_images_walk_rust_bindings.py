@@ -23,6 +23,7 @@ from sfmtool.analysis import (
     pick_images,
 )
 from sfmtool.fileio import read_sift, write_sift
+from sfmtool.geometry import CameraIntrinsics
 from sfmtool.sift import build_sift_files
 
 WIDTH, HEIGHT, FOCAL = 640, 480, 500.0
@@ -129,8 +130,21 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     assert 8 <= np.median(strides) <= 12
     steps = [s["stats"]["step_percent"] for s in walk["steps"]]
     assert 7 <= np.median(steps) <= 13
-    # The walk is given no camera, so no pair has an essential split.
+    # The walk is given no camera, so no pair has an essential split, and
+    # the local density term is off, every step at the base target.
     assert all(p["stats"]["essential_split"] is None for p in report["pairs"])
+    assert walk["density_term"] == {"status": "off", "reason": "no_camera"}
+    assert {json.dumps(s["density"]) for s in walk["steps"]} == {
+        json.dumps(
+            {
+                "target_percent": 10.0,
+                "gain": 1.0,
+                "median_measure": 1.0,
+                "essential_split": None,
+                "measure": 1.0,
+            }
+        )
+    }
     assert walk["swaps"] == []
     read = _read(report)
     assert len(set(read)) == len(read) == walk["frames_read"] < 150
@@ -159,6 +173,8 @@ def test_options_reach_the_walk(steady: _Capture):
     assert report["sequences"][0]["chosen"] == list(range(10))
     for name, value in [
         ("target_step_percent", 0.0),
+        ("max_density_gain", 0.5),
+        ("max_density_gain", float("nan")),
         ("step_band", 1.0),
         ("neighbour_blur_ratio", 1.0),
         ("pair.ratio", 0.0),
@@ -172,6 +188,55 @@ def test_options_reach_the_walk(steady: _Capture):
         pick_images([capture.sequence], num_trees=0)
     with pytest.raises(ValueError, match="unknown preset"):
         pick_images([capture.sequence], preset="slow")
+
+
+def _camera(scale: float) -> CameraIntrinsics:
+    """The synthetic capture's pinhole camera at `scale` times its size."""
+    return CameraIntrinsics(
+        "SIMPLE_PINHOLE",
+        int(WIDTH * scale),
+        int(HEIGHT * scale),
+        {
+            "focal_length": FOCAL * scale,
+            "principal_point_x": WIDTH / 2 * scale,
+            "principal_point_y": HEIGHT / 2 * scale,
+        },
+    )
+
+
+def test_a_sequence_s_camera_reaches_the_local_density_term(steady: _Capture):
+    # A camera at twice the frames' size is scaled to them; the wall seen
+    # while moving sideways has a wide parallax everywhere, so no step's
+    # measure counts and the term leaves the walk as it is without it.
+    frames = steady.sequence.frames
+    with_camera = CaptureSequence(["frame_%04d.jpg"], frames, camera=_camera(2.0))
+    assert with_camera.camera == _camera(2.0)
+    assert steady.sequence.camera is None
+    report = pick_images([with_camera])
+    walk = report["sequences"][0]
+    assert walk["density_term"] == {"status": "on", "focal_px": FOCAL}
+    for step in walk["steps"]:
+        split = step["density"]["essential_split"]
+        assert split["status"] == "measured" and split["parallax_p50_deg"] > 0.5
+        assert step["density"]["gain"] == 1.0 and step["density"]["measure"] == 1.0
+    assert walk["chosen"] == pick_images([steady.sequence])["sequences"][0]["chosen"]
+    # A gain of 1 measures nothing; a camera of another aspect is named.
+    off = pick_images([with_camera], max_density_gain=1.0)["sequences"][0]
+    assert off["density_term"] == {"status": "off", "reason": "max_gain_one"}
+    assert off["steps"][0]["density"]["essential_split"] is None
+    tall = CameraIntrinsics(
+        "SIMPLE_PINHOLE",
+        HEIGHT,
+        WIDTH,
+        {"focal_length": FOCAL, "principal_point_x": 240, "principal_point_y": 320},
+    )
+    walk = pick_images([CaptureSequence(["f_%d.jpg"], frames[:20], camera=tall)])
+    assert walk["sequences"][0]["density_term"] == {
+        "status": "off",
+        "reason": "camera_shape",
+        "camera": [HEIGHT, WIDTH],
+        "frames": [WIDTH, HEIGHT],
+    }
 
 
 def test_the_source_options_are_checked(tmp_path: Path):

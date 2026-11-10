@@ -7,15 +7,18 @@ it is solved and chooses the frames a solve should use: frames spaced so that
 the image moves by about a tenth of its width from one to the next, but never
 so far apart that two consecutive chosen frames keep fewer mutual matches than
 a floor, sharper ones in place of frames blurred against their neighbours,
-and more frames where the capture is hard to follow. It walks each sequence
+and more frames where the capture is hard to follow. Given the camera of a
+sequence, it also takes shorter steps where the steps it has chosen show a
+near foreground in front of a distant view (the local density term). It walks each sequence
 from its first frame, measuring each step rather than taking a stride fixed
 in advance. A capture whose neighbouring frames already match with fewer
 matches than the floor, such as one subsampled from a video or a set of
 photographs taken one after another, keeps every frame.
-It makes no judgement of whether a capture can be solved and fits no
-geometry: whether the frames it chooses describe one camera motion through a
-static scene, and whether the camera moved enough, is for the solve to find
-out.
+It makes no judgement of whether a capture can be solved: whether the frames
+it chooses describe one camera motion through a static scene, and whether the
+camera moved enough, is for the solve to find out. The one geometry it fits
+is the essential matrix of each step it has chosen, for the local density
+term, which reads only how the parallax of the step's matches is spread.
 
 Everything is measured from SIFT features. The motion between two frames is
 the median displacement of the features that match between them, and how well
@@ -54,9 +57,13 @@ pub struct CaptureImage { pub image_path: PathBuf, pub sift_path: PathBuf }
 /// One instant: one image, or one per rig sensor, the reference sensor first.
 pub struct CaptureFrame { pub number: i64, pub images: Vec<CaptureImage> }
 
-/// One sequence, in file-number order, and the pattern each sensor's list
-/// entry uses.
-pub struct CaptureSequence { pub patterns: Vec<String>, pub frames: Vec<CaptureFrame> }
+/// One sequence, in file-number order, the pattern each sensor's list entry
+/// uses, and the reference sensor's camera, at any size of the frames' aspect.
+pub struct CaptureSequence {
+    pub patterns: Vec<String>,
+    pub frames: Vec<CaptureFrame>,
+    pub camera: Option<CameraIntrinsics>, // None: no local density term
+}
 
 /// A sequence's index and a frame's position in it, from 0.
 pub struct FrameId { pub sequence: usize, pub frame: usize }
@@ -92,7 +99,8 @@ pub enum FrameSourceError {
 }
 
 pub struct PickImagesOptions {
-    pub target_step_percent: f64,  // 10.0, positive
+    pub target_step_percent: f64,  // 10.0, positive: the base target
+    pub max_density_gain: f64,     // 3.0, finite, at least 1; 1 turns the term off
     pub step_band: f64,            // 0.3, in (0, 1)
     pub neighbour_blur_ratio: f64, // 0.85, in (0, 1)
     pub min_step_matches: usize,   // 600, at least 1: the match floor
@@ -137,6 +145,14 @@ wrote files for, which the report counts. The trait is public so a test, or
 another caller, can supply its own; the two sources here are the extracting
 one, for a workspace whose feature tool is `sfmtool`, and the read-only one,
 for files another tool already extracted.
+
+**The camera belongs to the sequence.** The local density term measures each
+chosen step with the camera its frames were taken with, and two sequences of
+one capture can come from two cameras, so the camera is a field of
+`CaptureSequence` rather than an option. It may be at another resolution than
+the frames, as a calibration often is, and the walk scales it to the frames'
+size ([The local density term](#the-local-density-term)). A sequence with no
+camera is walked without the term, the same walk as at a maximum gain of 1.
 
 **Positions, not file numbers.** A `FrameId` names a frame by its position in
 its sequence, and every rate is a step per position, so a sequence numbered in
@@ -212,9 +228,37 @@ That count is the one part of the report that depends on how far ahead the
 walk predicts and how fast the source works. A `SequenceReport` holds the
 chosen positions, every accepted step (from, to, its statistics, its rate
 and its `StepKind`: `InBand`, `AboveBand`, `Bracketed`, `AtLimit`,
-`AtFloor` or `BelowBand`), the swaps of frames blurred against their
-neighbours, each as candidate and chosen frame, and the count of frames the
-walk read.
+`AtFloor` or `BelowBand`, and its `StepDensity`), the swaps of frames blurred
+against their neighbours, each as candidate and chosen frame, the count of
+frames the walk read, and its `DensityTerm`.
+
+```rust
+/// One accepted step's target and the local density term's reading of it.
+pub struct StepDensity {
+    pub target_percent: f64,  // the target the step was walked with, base / gain
+    pub gain: f64,            // from median_measure; 1 with the term off
+    pub median_measure: f64,  // of the last three steps before this one; 1 before the first
+    pub essential_split: Option<EssentialSplitOutcome>, // the step's, None with the term off
+    pub measure: f64,         // the step's own measure, which later steps' medians take in
+}
+
+/// Whether a sequence's walk had the local density term.
+pub enum DensityTerm {
+    On { focal_px: f64 },     // the camera's focal at the frames' size
+    Off(DensityTermOff),
+}
+
+pub enum DensityTermOff {
+    MaxGainOne,                                       // max_density_gain is 1
+    NoCamera,                                         // the sequence has none
+    CameraShape { camera: [u32; 2], frames: [u32; 2] }, // another aspect ratio
+    CameraRefused { problem: String },                // the split refuses the camera
+}
+```
+
+`DensityTerm` serializes as `{"status": "on", "focal_px": …}` or
+`{"status": "off", "reason": "no_camera"}`, with a `CameraShape`'s `camera`
+and `frames` and a `CameraRefused`'s `problem` beside its reason.
 
 Every type serializes with `serde`, a number that is not finite as `null`, so
 a caller writes the whole report as JSON as it is.
@@ -223,9 +267,11 @@ Each `FramePairStats`, of a pair and of a step, carries the pair's essential
 split ([frame-pair-matching.md § The essential split](frame-pair-matching.md#the-essential-split))
 when `pair.essential_split` gives a camera, as `{"status": "measured", …}` or
 `{"status": "not_measured", "matches": …, "reason": …}`, and `null` when it
-gives none. The walk does not read the split, and `PickImagesOptions::default()`
-gives no camera, so a default walk measures none and `essential_split` is
-`null` in every pair.
+gives none. The walk decides nothing from those splits, and
+`PickImagesOptions::default()` gives no camera, so a default walk measures
+none there and `essential_split` is `null` in every pair. The local density
+term's split of a step is its `StepDensity::essential_split`, in the same
+form, measured with the sequence's camera.
 
 ## The algorithm
 
@@ -247,8 +293,12 @@ assemble the report. The sequences are walked one after another.
   **holds** when it goes to the next frame, whatever its matches, or when it
   goes beyond the next frame and keeps at least the match floor; a step
   beyond the next frame that keeps fewer is **short of the floor**.
-- The **band** is `target × (1 ± step_band)` around the target step: 7% to
-  13% at the defaults.
+- The **base target** is `target_step_percent`. A step's **target** is the
+  base target divided by the step's **gain**, which the local density term
+  sets from the steps chosen before it, and is 1 with the term off
+  ([The local density term](#the-local-density-term)).
+- The **band** is `target × (1 ± step_band)` around the step's target: 7% to
+  13% at the defaults and a gain of 1.
 
 ### The match floor
 
@@ -291,7 +341,9 @@ are the rates of the last three accepted steps that kept the match floor.
 
 1. **Predict.** With recent rates, the candidate is `c = f + target / rate`,
    rounded, at least `f + 1` and at most the sequence's last frame, with the
-   rate their median. With none, at the start of the sequence and after a
+   rate their median and the target the step's own. The rates are steps per
+   position whatever target their steps had, so a change of target moves the
+   prediction with it. With none, at the start of the sequence and after a
    step to the next frame that kept fewer matches than the floor, the
    candidate is `f + 1`: the walk measures the step to the next frame first,
    and when that step holds and is below the band, its first re-aim (step 4)
@@ -334,7 +386,9 @@ are the rates of the last three accepted steps that kept the match floor.
 6. **Accept** the frame. A step that keeps the floor adds its rate to the
    recent rates; a step to the next frame that keeps fewer clears them, so
    the next step measures its next frame first rather than aiming from a
-   rate measured before the matches fell.
+   rate measured before the matches fell. With the local density term, the
+   step's essential split is measured and the next step's target set
+   ([The local density term](#the-local-density-term)).
 
 **Every step holds.** A step to the next frame always holds, and the search
 of step 4 only settles beyond the next frame on a frame whose step keeps the
@@ -343,11 +397,86 @@ halving, and the walk never stops before the last frame. Where the matches
 fall fast, the floor search shortens the steps; where the next frame itself
 keeps fewer than the floor, the walk takes every frame.
 
+Every target and band of a step is the step's own, from step 1's prediction
+to the band a swap is held to in step 5; the match floor is the same for
+every step.
+
 **What is never read.** A frame the walk does not read lies between two
 chosen frames, inside a step that held. A frame within 2 positions of a
 chosen candidate is read, and is measured only if it is tried in the
 candidate's place. A frame the walk predicted and did not read may still
 have been extracted ([Run-ahead](#run-ahead)).
+
+### The local density term
+
+The step is the median displacement of a pair's matches, so it measures the
+bulk of what the frames show. Where a near foreground passes in front of a
+distant view, the distant points are most of the matches, and they move
+across the image mostly with the camera's turn, with almost no parallax; the
+near points move many times as far for the camera's travel, and leave the
+view, or change in appearance, within fewer frames. A step of the target then
+gives the near points few views each, at wide angles from one another, while
+a solve needs them in more frames to follow and place them. The local
+density term shortens the steps there.
+
+It reads each step's **essential split**
+([frame-pair-matching.md § The essential split](frame-pair-matching.md#the-essential-split)):
+the parallax of each match once the rotation between the frames is taken out,
+at the sequence's camera. A step's **measure** is its parallax P90 over its
+parallax P50 when the split was measured with at least 50 inliers, a P90 of
+at least 0.2° and a P50 above 0 and below 0.5°; otherwise it is 1. A measure
+well above 1 says that most matches have almost no parallax and a tenth of
+them or more have many times as much: a near foreground in front of a distant
+view. The three conditions keep the measure to that case:
+
+- the P50 below 0.5° leaves alone a step whose median match already has a
+  wide parallax, a scene near enough throughout for the base target;
+- the P90 of at least 0.2° leaves alone a camera turning on the spot, whose
+  parallax is the match noise everywhere and whose ratio is a ratio of noise;
+- the 50 inliers leave alone a step whose split rests on too few matches.
+
+After each step it accepts, the walk measures that step's split and takes
+the **median measure** `M` of the last three steps, or of as many as there
+are at the start; before the first step `M` is 1. The next step's **gain** is
+`g = clip(M / 2.5, 1, max_density_gain)` and its target the base target over
+`g`. A median of three keeps one step's reading from moving the target, and
+2.5 is the measure at which the gain starts to rise, so a scene whose parallax
+spreads by up to that factor keeps the base target. The gain reaches the
+maximum, 3 by default, at a measure of 7.5.
+
+The measure is read from steps already taken, and the median of three
+follows most of the last three: a near foreground shortens the steps once two
+of the last three steps read it, or the first step alone at the start of a
+sequence, and the shortening ends once two of them no longer do. A long step reads a lower measure
+than a short one over the same scene, since its near matches are the first to
+be lost, so where the gain is 1 a near foreground can read below 2.5 until a
+shorter step measures it.
+
+Only accepted steps are measured: the candidates the walk tries are matched
+without a split, and each accepted step is matched once more, with the split
+([frames.rs](../../../crates/sfmtool-core/src/analysis/pick_images/frames.rs)
+`measure_split`), so the term costs one match and one essential fit per
+chosen frame, a few milliseconds, against the extraction of the frames the
+shorter steps add. That second match is kept out of the report's `pairs`.
+
+**The camera.** The split measures with the sequence's camera scaled to the
+frames' size: every focal and the principal point times the frames' long
+side over the camera's, when the two aspect ratios are within 0.001 of each
+other, the bound `sfm solve` holds a `.camrig` camera's images to. Its
+distortion parameters act on normalized coordinates or angles and need no
+scaling. Every camera model the split maps rays with is measured with, the
+pinhole family and the fisheye models alike. The term is off, and the walk
+aims every step at the base target, when:
+
+- `max_density_gain` is 1 (`MaxGainOne`), and no split is measured;
+- the sequence has no camera (`NoCamera`);
+- the camera's aspect ratio is not the frames' (`CameraShape`);
+- the split refuses the camera, scaled (`CameraRefused`): a focal that is
+  not positive and finite, a principal point that is not finite, or
+  rolling-shutter rates on a model other than `SFMTOOL_PINHOLE`.
+
+With the term off, every gain is 1 and every target the base target, so the
+walk chooses exactly what it chooses with no camera.
 
 ### Blur
 
@@ -522,15 +651,23 @@ in its folder after the check, is `Version1Sift`, with the same advice.
   exact list of frames waited for, in order. The prefetch step only passes on
   the frames not yet read.
 - **No duplicate derivations.** The axis ratio and coherence are
-  `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, and
-  the median of the recent rates `sfmtool_core::numeric`'s.
+  `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, the
+  split of a step `measure_essential_split`'s through `match_frame_pair`,
+  and the medians of the recent rates and of the measures
+  `sfmtool_core::numeric`'s.
+- **The term's state.** The walk holds the measures of the last three
+  accepted steps and the next step's target, gain and median measure, and
+  records in each step the three it was walked with. The rule itself, the
+  measure, the gain and the camera's scaling, is in
+  [density.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density.rs).
 
 ## Determinism and precision
 
 The report is the same for the same capture and options: the frame pair
 statistics repeat exactly ([frame-pair-matching.md § Determinism and precision](frame-pair-matching.md#determinism-and-precision)),
 every decision reads them and the readings in a fixed order, and no hash map is
-iterated for an output. It is the same for any source, lookahead and worker
+iterated for an output. The essential split is seeded, so a step's measure,
+and the targets after it, repeat too. It is the same for any source, lookahead and worker
 count too, but for `frames_extracted_unread`, by the
 [determinism rule](#run-ahead). The readings are kept as `f32`, as `ImageReadings`
 holds them, which is enough for readings compared within a capture to about
@@ -541,17 +678,26 @@ exact.
 
 | Value | Default | Meaning |
 |-------|---------|---------|
-| `target_step_percent` | `10` | the step aimed for, percent of the long side |
+| `target_step_percent` | `10` | the base target, percent of the long side |
+| `max_density_gain` | `3` | the most the local density term divides the base target by; 1 turns it off |
 | `step_band` | `0.3` | the band, `target × (1 ± step_band)` |
 | `neighbour_blur_ratio` | `0.85` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
 | `min_step_matches` | `600` | the match floor, the mutual matches a step beyond the next frame keeps; at least 1 |
 | re-aims | 4 | before the walk settles below the band; the tries towards the floor and the aim from the next frame's rate are not counted |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
 | neighbours | 2 positions on either side | the frames a candidate is judged against for blur against its neighbours |
+| measured steps | 3 | the last accepted steps whose median measure sets the gain |
+| measure at a gain of 1 | 2.5 | the median measure the gain is `M / 2.5` of |
+| inliers | 50 | the fewest a step's split has for its measure to count |
+| parallax P90 | at least 0.2° | for a step's measure to count |
+| parallax P50 | below 0.5° | for a step's measure to count |
 | prediction below the floor | `W` frames | how far the walk prefetches where it reads every frame, for a source of `W` workers |
 
-The re-aims, the recent rates and the neighbours are constants of the
-module; the prediction below the floor is the source's `concurrency`.
+The re-aims, the recent rates, the neighbours and the local density term's
+values below them are constants of the module; the prediction below the
+floor is the source's `concurrency`. The split itself takes
+`EssentialSplitOptions::new`'s defaults: a 3-pixel bound, 512 samples and
+seed 0.
 
 ## Python bindings
 
@@ -580,6 +726,8 @@ report["sequences"][0]["chosen"]  # positions of the chosen frames
 `CaptureImage`, `CaptureFrame` and `CaptureSequence` mirror the Rust structs;
 a frame's `images` and a sequence's `frames` are tuples, built once, so
 `sequence.frames[id["frame"]]` is the frame a report's id names.
+`CaptureSequence` takes its camera as the keyword `camera`, a
+`sfmtool.geometry.CameraIntrinsics` or `None`.
 `feature_options` and `feature_prefix_dir`, given together, choose the
 extracting source, with `concurrent_images` its worker count; with neither,
 the source is the read-only one, and one without the other, or
@@ -588,8 +736,9 @@ fields of `PickImagesOptions` but `prefetch`, which it leaves on, as
 keyword-only arguments, with the pair options
 under the names `match_frame_pair` uses and the forest under the names
 `FrameFeatures` uses (`preset`, `num_trees`, `leaf_size`, `max_leaf_checks`);
-one left out takes the Rust default. It takes no camera, so its report's
-`essential_split` is `None` in every pair. `progress`, a `ProgressCounter`, holds
+one left out takes the Rust default; `max_density_gain` is among them. It
+gives the pair options no camera, so its report's `essential_split` is `None`
+in every pair; a step's split is in its `density`. `progress`, a `ProgressCounter`, holds
 the count of frames read. The report is returned as a dict of plain values,
 the report's serde form, with `None` for a number that is not finite.
 
@@ -648,6 +797,25 @@ read, each once, that those have `.sift` files written in the run, and that
 every other frame with files was predicted, as many as
 `frames_extracted_unread` counts.
 
+[tests/density.rs](../../../crates/sfmtool-core/src/analysis/pick_images/tests/density.rs)
+walks a capture whose camera turns while it moves a little, in front of a
+ring of distant points and a ring of near ones: with its camera every step is
+measured, each walked with the gain of the median of the last three
+measures before it, at a target that is the base over the gain and in its
+own band, each step in the band after the first is reached by its first
+try, every step after the first is walked with a gain above 1, and the walk
+takes over twice the frames it takes without a camera, with no split in the
+pairs it matched to decide. With a maximum gain of 1 it chooses and waits for
+what the walk with no camera does, and both report why the term is off; a wall seen while
+moving sideways, whose measures never count, chooses with the term on what
+it chooses with it off; a camera at twice the frames' size gives the report
+of one at their size; a camera of another aspect, and one with a focal of 0,
+turn the term off saying why; and a lone frame reports the term.
+[density/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density/tests.rs)
+checks the rule: each condition of the measure at its edge and past it, the
+median and its bounds, the scaling of a pinhole and an equidistant fisheye
+camera and each reason the term is off, and the term's JSON form.
+
 [source/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/source/tests.rs)
 checks the extracting source on seoul_bull images, writing the files
 `build_sift_files` writes and nothing for files up to date, extracting a
@@ -664,6 +832,7 @@ every one of which stops.
 [test_pick_images_walk_rust_bindings.py](../../../tests/rust_bindings/analysis/test_pick_images_walk_rust_bindings.py)
 checks the bindings on a synthetic capture whose files are written first and
 read, a missing file, the options and the source options and their errors,
+a sequence's camera and the term's fields in the report,
 a `KeyboardInterrupt` delivered while the walk runs, the exceptions of each
 error, the capture classes, and the seoul_bull photographs extracted by the
 walk with the workspace's settings, every one of which is kept, whose files
@@ -681,7 +850,10 @@ equal `build_sift_files`', and which a second run reads without extracting.
   consecutive photographs match with fewer matches than the floor, every
   one is kept.
 - Judging whether a capture can be solved. The walk fits no geometry to the
-  matches and does not ask whether the camera moved enough, so a
-  camera that only turned, a scene that moved on its own and a camera that
-  moved little but steadily are walked like any other video, and the solve
-  that follows finds out.
+  matches it decides from and does not ask whether the camera moved enough,
+  so a camera that only turned, a scene that moved on its own and a camera
+  that moved little but steadily are walked like any other video, and the
+  solve that follows finds out. The local density term's split reads only
+  how a chosen step's parallax is spread, to set the next target.
+- Finding the camera. The local density term measures with the camera it is
+  given, and a wrong focal or lens model reads a wrong parallax.

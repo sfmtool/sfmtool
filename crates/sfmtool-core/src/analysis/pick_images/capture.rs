@@ -13,6 +13,7 @@ use sfmtool_sift_format::SiftError;
 
 use super::frame_pair::{FramePairError, FramePairOptions};
 use super::source::FrameSourceError;
+use crate::camera::CameraIntrinsics;
 use crate::features::kdforest::KdForestParams;
 use crate::features::sift::Version1SiftFiles;
 
@@ -37,8 +38,8 @@ pub struct CaptureFrame {
 }
 
 /// One sequence of frames, in file-number order, with the pattern each
-/// sensor's list entry uses.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// sensor's list entry uses and the camera of its reference sensor.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CaptureSequence {
     /// One pattern per sensor, in the order of [`CaptureFrame::images`]. The
     /// walk does not read them; they say which sequence an error is about,
@@ -46,6 +47,11 @@ pub struct CaptureSequence {
     pub patterns: Vec<String>,
     /// The frames, in file-number order.
     pub frames: Vec<CaptureFrame>,
+    /// The camera the reference sensor's images were taken with, which the
+    /// local density term measures each chosen step's essential split with,
+    /// or `None` to walk without the term. It may be of another size than
+    /// the frames, of the same aspect: the walk scales it to theirs.
+    pub camera: Option<CameraIntrinsics>,
 }
 
 /// One frame of a capture: the index of its sequence and its position in that
@@ -62,9 +68,14 @@ pub struct FrameId {
 /// How [`super::pick_images`] chooses frames.
 #[derive(Clone, Debug)]
 pub struct PickImagesOptions {
-    /// The step to aim for between two chosen frames: the median feature
-    /// displacement, in percent of the image's long side. Positive.
+    /// The base target: the step to aim for between two chosen frames, the
+    /// median feature displacement in percent of the image's long side,
+    /// before the local density term divides it by its gain. Positive.
     pub target_step_percent: f64,
+    /// The most the local density term divides the base target by. 1 turns
+    /// the term off, and no essential split is measured. Finite and at
+    /// least 1.
+    pub max_density_gain: f64,
     /// How far a step may be from the target and still be accepted: within
     /// `target × (1 ± step_band)`. In `(0, 1)`.
     pub step_band: f64,
@@ -93,6 +104,7 @@ impl Default for PickImagesOptions {
     fn default() -> Self {
         Self {
             target_step_percent: 10.0,
+            max_density_gain: 3.0,
             step_band: 0.3,
             neighbour_blur_ratio: 0.85,
             min_step_matches: 600,
@@ -117,6 +129,15 @@ impl PickImagesOptions {
                 format!(
                     "must be positive and finite, got {}",
                     self.target_step_percent
+                ),
+            ));
+        }
+        if !(self.max_density_gain.is_finite() && self.max_density_gain >= 1.0) {
+            return Err(options(
+                "max_density_gain",
+                format!(
+                    "must be finite and at least 1, got {}",
+                    self.max_density_gain
                 ),
             ));
         }

@@ -45,8 +45,21 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     default=10.0,
     metavar="PERCENT",
     show_default=True,
-    help="The step to aim for between two chosen frames: the median displacement "
-    "of their matched features, in percent of the image's long side.",
+    help="The base target: the step to aim for between two chosen frames, the "
+    "median displacement of their matched features in percent of the image's long "
+    "side, before the local density term divides it by its gain.",
+)
+@click.option(
+    "--max-density-gain",
+    "max_density_gain",
+    type=float,
+    default=3.0,
+    metavar="GAIN",
+    show_default=True,
+    help="The most the local density term divides the base target by, where the "
+    "steps chosen show a near foreground in front of a distant view. The term "
+    "measures with the camera of the .camrig that covers a sequence's frames; 1 "
+    "turns it off.",
 )
 @click.option(
     "--step-band",
@@ -95,6 +108,7 @@ def pick_images(
     range_expr,
     named_image_list,
     target_step,
+    max_density_gain,
     step_band,
     neighbour_blur_ratio,
     min_step_matches,
@@ -105,7 +119,11 @@ def pick_images(
     Walks each sequence from its first frame, choosing frames about
     --target-step percent of the image's long side apart, with no step past
     the next frame keeping fewer than --min-step-matches mutual matches, and
-    a frame blurred against its neighbours swapped for a sharper one. Each
+    a frame blurred against its neighbours swapped for a sharper one. Where
+    the steps chosen show a near foreground in front of a distant view, the
+    local density term shortens the target by up to --max-density-gain
+    times, measuring with the camera of the .camrig that covers the frames;
+    with no .camrig it is off. Each
     frame read, or predicted to be read, gets a .sift
     file, extracted with the workspace's settings; with a feature tool other
     than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
@@ -175,6 +193,7 @@ def pick_images(
         force=force,
         options={
             "target_step_percent": target_step,
+            "max_density_gain": max_density_gain,
             "step_band": step_band,
             "neighbour_blur_ratio": neighbour_blur_ratio,
             "min_step_matches": min_step_matches,
@@ -233,8 +252,10 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             )
 
     try:
-        camrig_rigs, notes = find_rigs(filenames, workspace_dir)
-        sequences = collect_sequences(filenames, workspace_dir, camrig_rigs)
+        camrig_rigs, camrig_cameras, notes = find_rigs(filenames, workspace_dir)
+        sequences = collect_sequences(
+            filenames, workspace_dir, camrig_rigs, camrig_cameras
+        )
     except PickImagesInputError as e:
         raise click.ClickException(str(e))
     for note in notes:
@@ -357,6 +378,8 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
                 "sensors": s.sensors,
                 "numbers": s.numbers,
                 "images": [[p.as_posix() for p in images] for images in s.images],
+                "camera": s.camera,
+                "camera_source": s.camera_source,
             }
             for s in sequences
         ]
