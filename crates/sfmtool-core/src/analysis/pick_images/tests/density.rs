@@ -11,7 +11,7 @@ use super::*;
 use crate::camera::{CameraIntrinsics, CameraModel};
 
 /// The synthetic captures' camera, at `scale` times their size.
-fn camera(scale: f64) -> CameraIntrinsics {
+pub(super) fn camera(scale: f64) -> CameraIntrinsics {
     CameraIntrinsics {
         model: CameraModel::SimplePinhole {
             focal_length: FOCAL * scale,
@@ -25,7 +25,11 @@ fn camera(scale: f64) -> CameraIntrinsics {
 }
 
 /// Run `synth` as one sequence with `camera`.
-fn run_camera(synth: &Synth, camera: Option<CameraIntrinsics>, options: &PickImagesOptions) -> Run {
+pub(super) fn run_camera(
+    synth: &Synth,
+    camera: Option<CameraIntrinsics>,
+    options: &PickImagesOptions,
+) -> Run {
     let dir = tempfile::tempdir().expect("a temporary folder");
     let mut sequence = synth.sequence(&dir.path().join("seq0"));
     sequence.camera = camera;
@@ -49,7 +53,7 @@ fn run_camera(synth: &Synth, camera: Option<CameraIntrinsics>, options: &PickIma
 
 /// [`decisions`] without what the local density term reports: each step's
 /// density and the sequence's term.
-fn choices(run: &Run) -> serde_json::Value {
+pub(super) fn choices(run: &Run) -> serde_json::Value {
     let mut value = decisions(run);
     for sequence in value["sequences"].as_array_mut().expect("sequences") {
         sequence["density_term"] = serde_json::Value::Null;
@@ -82,7 +86,7 @@ fn assert_base_target_only(walk: &SequenceReport) {
 
 /// The panning capture with no camera, its walk shared by the tests that
 /// compare with it.
-fn panning() -> &'static (Synth, Run) {
+pub(super) fn panning() -> &'static (Synth, Run) {
     static PANNING: OnceLock<(Synth, Run)> = OnceLock::new();
     PANNING.get_or_init(|| {
         let synth = Synth::panning(41, 120);

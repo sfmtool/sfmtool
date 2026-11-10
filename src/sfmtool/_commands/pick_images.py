@@ -58,8 +58,9 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     show_default=True,
     help="The most the local density term divides the base target by, where the "
     "steps chosen show a near foreground in front of a distant view. The term "
-    "measures with the camera of the .camrig that covers a sequence's frames; 1 "
-    "turns it off.",
+    "measures with the camera of the .camrig that covers a sequence's frames, or, "
+    "with none, of a pilot focal vote on the sequence's first 30 chosen frames; 1 "
+    "turns it off and runs no pilot.",
 )
 @click.option(
     "--step-band",
@@ -122,8 +123,10 @@ def pick_images(
     a frame blurred against its neighbours swapped for a sharper one. Where
     the steps chosen show a near foreground in front of a distant view, the
     local density term shortens the target by up to --max-density-gain
-    times, measuring with the camera of the .camrig that covers the frames;
-    with no .camrig it is off. Each
+    times, measuring with the camera of the .camrig that covers the frames,
+    or, with no .camrig, with the camera a focal vote finds on the first 30
+    frames chosen without the term, as `sfm estimate-intrinsics` finds it on
+    a cluster match of them; the vote writes nothing. Each
     frame read, or predicted to be read, gets a .sift
     file, extracted with the workspace's settings; with a feature tool other
     than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
@@ -214,7 +217,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         find_rigs,
         list_entries,
     )
-    from .._pick_images_report import report_lines, slice_suggestion
+    from .._pick_images_report import pilot_source, report_lines, slice_suggestion
     from .._sfmtool import ProgressCounter
     from .._sfmtool.analysis import pick_images as walk
     from .._sfmtool.workspace import NamedImageLists
@@ -298,7 +301,9 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     counter = ProgressCounter()
     try:
         with echo_frames_read(counter, click.echo):
-            report = walk(capture, progress=counter, **source, **options)
+            report = walk(
+                capture, progress=counter, pilot_vote=True, **source, **options
+            )
     except (ValueError, OverflowError, OSError) as e:
         # An option too large for the binding is an OverflowError whose note
         # names the option.
@@ -313,6 +318,9 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         report["frames_extracted_unread"] = sum(map(len, written_first)) - sum(
             report["frames_extracted"]
         )
+    for sequence, walked in zip(sequences, report["sequences"]):
+        if walked["pilot_vote"] is not None:
+            sequence.camera_source = pilot_source(walked["pilot_vote"])
     extracted = [{} for _ in sequences]
     for frame, written in zip(report["frames"], report["frames_extracted"]):
         extracted[frame["id"]["sequence"]][frame["id"]["frame"]] = written

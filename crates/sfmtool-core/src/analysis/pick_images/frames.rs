@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use sfmtool_sift_format::{
-    read_sift_features, read_sift_metadata, SiftError, SiftMetadata, SIFT_READINGS_VERSION,
+    read_sift_features, read_sift_metadata, SiftError, SiftMetadata, DESCRIPTOR_DIM,
+    SIFT_READINGS_VERSION,
 };
 
 use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
@@ -156,6 +157,46 @@ impl<'a> Frames<'a> {
     /// Every frame read, in the order read.
     pub(super) fn read_frames(&self) -> &[ReadFrame] {
         &self.read
+    }
+
+    /// How many frames of sequence `sequence` have been read.
+    pub(super) fn read_count(&self, sequence: usize) -> usize {
+        self.index[sequence].iter().flatten().count()
+    }
+
+    /// The width and height of a frame read's reference image.
+    pub(super) fn image_size(&self, id: FrameId) -> (u32, u32) {
+        let i = self.index[id.sequence][id.frame].expect("the frame was read");
+        let metadata = &self.read[i].metadata;
+        (metadata.image_width, metadata.image_height)
+    }
+
+    /// The positions and descriptors of the first `count` features of a
+    /// frame's reference image, or all of them when it has fewer.
+    pub(super) fn first_features(
+        &self,
+        id: FrameId,
+        count: usize,
+    ) -> Result<(Vec<[f32; 2]>, Vec<u8>), PickImagesError> {
+        let path = &self.sequences[id.sequence].frames[id.frame].images[0].sift_path;
+        let mut features =
+            read_sift_features(path).map_err(|source| PickImagesError::ReadSift {
+                path: path.clone(),
+                source,
+            })?;
+        let n = count.min(features.positions_xy.len());
+        if features.descriptors.len() < n * DESCRIPTOR_DIM {
+            return Err(PickImagesError::ReadSift {
+                path: path.clone(),
+                source: SiftError::InvalidFormat(format!(
+                    "{} descriptor bytes for {n} features",
+                    features.descriptors.len()
+                )),
+            });
+        }
+        features.positions_xy.truncate(n);
+        features.descriptors.truncate(n * DESCRIPTOR_DIM);
+        Ok((features.positions_xy, features.descriptors))
     }
 
     /// The features of a frame read: its reference sensor's, with the forest

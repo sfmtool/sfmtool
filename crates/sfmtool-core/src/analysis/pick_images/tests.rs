@@ -8,6 +8,7 @@
 
 mod capture;
 mod density;
+mod pilot;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;

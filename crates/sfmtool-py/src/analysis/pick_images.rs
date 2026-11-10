@@ -425,7 +425,8 @@ impl PyCaptureFrame {
 ///     frames: The ``CaptureFrame`` objects, in file-number order.
 ///     camera: The ``sfmtool.geometry.CameraIntrinsics`` the reference
 ///         sensor's images were taken with, which ``pick_images``'s local
-///         density term measures with, or None to walk without the term.
+///         density term measures with, or None to walk without the term
+///         or, with ``pick_images``'s ``pilot_vote``, with the pilot vote's.
 ///         It may be of another size than the frames, of the same aspect;
 ///         the walk scales it to theirs.
 #[allow(rustdoc::invalid_rust_codeblocks)]
@@ -527,7 +528,8 @@ impl PyCaptureSequence {
 ///         it by its gain (10).
 ///     max_density_gain: The most the local density term divides the base
 ///         target by, finite and at least 1 (3). 1 turns the term off, and
-///         a sequence with no camera is walked without it.
+///         a sequence with no camera is walked without it, unless
+///         ``pilot_vote`` finds it one.
 ///     step_band: How far a step may be from the target, as a fraction
 ///         (0.3).
 ///     neighbour_blur_ratio: A frame about to be accepted is blurred against
@@ -535,6 +537,11 @@ impl PyCaptureSequence {
 ///         frame's within 2 positions (0.85).
 ///     min_step_matches: The match floor, the fewest mutual matches a step
 ///         beyond the next frame keeps (600), at least 1.
+///     pilot_vote: Whether a sequence with no ``camera`` takes one from a
+///         pilot vote, a focal vote on the first 30 frames the walk chooses
+///         without the local density term, before the walk starts again from
+///         its first frame (False). No pilot runs at a ``max_density_gain``
+///         of 1.
 ///     ratio: Lowe's ratio on descriptor distances, as for
 ///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,
@@ -546,7 +553,8 @@ impl PyCaptureSequence {
 ///     it is: ``sequences`` (per sequence: ``chosen``, ``steps``, each with
 ///     its ``density``, the target it was walked with and the local density
 ///     term's reading of it, ``swaps``, ``frames_read`` and
-///     ``density_term``, whether the term was on and why not), ``frames``
+///     ``density_term``, whether the term was on and why not, and
+///     ``pilot_vote``, what the pilot vote found, or ``None``), ``frames``
 ///     (every frame read, with its readings), ``pairs`` (every pair matched,
 ///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
 ///     whether its ``.sift`` files were written in this call) and
@@ -578,8 +586,9 @@ impl PyCaptureSequence {
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
                     concurrent_images=None, target_step_percent=None,
                     max_density_gain=None, step_band=None,
-                    neighbour_blur_ratio=None, min_step_matches=None, ratio=None, preset=None,
-                    num_trees=None, leaf_size=None, max_leaf_checks=None, progress=None))]
+                    neighbour_blur_ratio=None, min_step_matches=None, pilot_vote=None, ratio=None,
+                    preset=None, num_trees=None, leaf_size=None, max_leaf_checks=None,
+                    progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_images<'py>(
     py: Python<'py>,
@@ -592,6 +601,7 @@ pub fn pick_images<'py>(
     step_band: Option<f64>,
     neighbour_blur_ratio: Option<f64>,
     min_step_matches: Option<usize>,
+    pilot_vote: Option<bool>,
     ratio: Option<f32>,
     preset: Option<&str>,
     num_trees: Option<usize>,
@@ -614,6 +624,7 @@ pub fn pick_images<'py>(
             essential_split: None,
         },
         prefetch: defaults.prefetch,
+        pilot_vote: pilot_vote.unwrap_or(defaults.pilot_vote),
     };
     let mut source: Box<dyn FrameSource + Send> = match (feature_options, feature_prefix_dir) {
         (Some(feature_options), Some(feature_prefix_dir)) => Box::new(

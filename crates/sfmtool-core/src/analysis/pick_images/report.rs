@@ -16,6 +16,7 @@ use super::capture::FrameId;
 use super::density::DensityTerm;
 use super::essential_split::EssentialSplitOutcome;
 use super::frame_pair::FramePairStats;
+use super::pilot::PilotVote;
 
 /// What [`super::pick_images`] found.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -83,6 +84,9 @@ pub struct SequenceReport {
     pub frames_read: usize,
     /// Whether the walk had the local density term, and why not.
     pub density_term: DensityTerm,
+    /// The pilot vote that gave the sequence its camera, or failed to;
+    /// `None` when none ran.
+    pub pilot_vote: Option<PilotVote>,
 }
 
 /// One accepted step.

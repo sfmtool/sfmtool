@@ -19,7 +19,7 @@ from sfmtool._pick_images import (
     frame_field,
     list_entries,
 )
-from sfmtool._pick_images_report import slice_suggestion, walk_lines
+from sfmtool._pick_images_report import pilot_source, slice_suggestion, walk_lines
 from sfmtool.camrig.resolver import CamrigCamera, CamrigRig
 from sfmtool.reconstruction import RangeExpr
 
@@ -303,6 +303,7 @@ def test_the_local_density_term_is_reported_by_step():
         "swaps": [],
         "frames_read": 9,
         "density_term": {"status": "on", "focal_px": 945.75},
+        "pilot_vote": None,
     }
     report = {"sequences": [walk], "frames": []}
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
@@ -379,6 +380,7 @@ def test_swaps_and_steps_at_the_floor_are_reported():
         "swaps": [{"candidate": 22, "chosen": 21}],
         "frames_read": 9,
         "density_term": {"status": "off", "reason": "no_camera"},
+        "pilot_vote": None,
     }
     report = {"sequences": [walk], "frames": []}
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
@@ -401,3 +403,31 @@ def test_swaps_and_steps_at_the_floor_are_reported():
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
     assert "  Frames blurred against their neighbours swapped: none" in lines
     assert "  Steps stopped at the match floor: none" in lines
+
+
+def test_a_fisheye_pilot_vote_names_its_model():
+    vote = {
+        "frames": list(range(30)),
+        "camera_model": "EquidistantFisheye",
+        "confirmed": True,
+        "focal_px": 1034.84,
+        "pool_spread": 0.0912,
+        "n_pool": 11,
+        "outcome": {"status": "used"},
+    }
+    assert pilot_source(vote) == (
+        "the pilot vote's equidistant fisheye camera, focal 1034.8 px, "
+        "pool spread 0.091"
+    )
+    # An unconfirmed fisheye verdict is measured with as a fisheye, and says
+    # it is unconfirmed.
+    vote["confirmed"] = False
+    assert pilot_source(vote).startswith(
+        "the pilot vote's unconfirmed equidistant fisheye camera, "
+    )
+    vote["outcome"] = {"status": "wide_spread", "max_pool_spread": 0.35}
+    vote["pool_spread"] = 0.49
+    assert pilot_source(vote) == (
+        "the pilot vote's pool spread 0.490 is above 0.35 (unconfirmed "
+        "equidistant fisheye, focal 1034.8 px)"
+    )

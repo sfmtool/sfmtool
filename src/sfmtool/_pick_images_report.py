@@ -57,6 +57,55 @@ def _motion_rows(walk: dict, numbers: list[int]) -> list[str]:
     return rows
 
 
+def _vote_model(vote: dict) -> str:
+    """The camera model of a pilot vote's verdict, in words."""
+    if vote["camera_model"] == "EquidistantFisheye":
+        return (
+            "unconfirmed equidistant fisheye"
+            if vote["confirmed"] is False
+            else "equidistant fisheye"
+        )
+    return "pinhole"
+
+
+def pilot_source(vote: dict) -> str:
+    """What a sequence's camera source is after its pilot vote: the vote's
+    camera, with its model, focal and pool spread, or why the vote gave it
+    none."""
+    outcome = vote["outcome"]
+    status = outcome["status"]
+    if status == "used":
+        return (
+            f"the pilot vote's {_vote_model(vote)} camera, focal "
+            f"{vote['focal_px']:.1f} px, pool spread {vote['pool_spread']:.3f}"
+        )
+    if status == "wide_spread":
+        return (
+            f"the pilot vote's pool spread {vote['pool_spread']:.3f} is above "
+            f"{outcome['max_pool_spread']:g} ({_vote_model(vote)}, focal "
+            f"{vote['focal_px']:.1f} px)"
+        )
+    if status == "no_consensus":
+        pooled = vote["n_pool"]
+        return (
+            f"the pilot vote reached no consensus ({pooled} pooled "
+            f"vote{'' if pooled == 1 else 's'})"
+        )
+    return (
+        f"the pilot walk chose {len(vote['frames'])} frames, and a vote needs "
+        f"at least {outcome['min_frames']}"
+    )
+
+
+def _pilot_line(vote: dict) -> str:
+    """The line giving what the pilot vote read and how long it took."""
+    return (
+        f"  Pilot vote: {len(vote['frames'])} frames chosen, "
+        f"{vote['frames_read']} read, {vote['features']} features in "
+        f"{vote['clusters']} clusters; took {vote['seconds']:.1f} s"
+    )
+
+
 def _density_term_line(walk: dict, sequence: PickSequence) -> str:
     """The line saying whether the local density term was on, with the
     camera it measured with and how many steps it shortened, or why it was
@@ -65,9 +114,15 @@ def _density_term_line(walk: dict, sequence: PickSequence) -> str:
     if term["status"] == "on":
         steps = walk["steps"]
         gained = sum(s["density"]["gain"] > 1 for s in steps)
+        # The pilot vote's camera is at the frames' size, and its source
+        # names its focal.
+        focal = (
+            ""
+            if walk["pilot_vote"] is not None
+            else f" (focal {term['focal_px']:.1f} px at the frames' size)"
+        )
         return (
-            f"  Local density term: on, with {sequence.camera_source} "
-            f"(focal {term['focal_px']:.1f} px at the frames' size); "
+            f"  Local density term: on, with {sequence.camera_source}{focal}; "
             f"{gained} of {len(steps)} steps walked with a gain above 1"
         )
     reason = term["reason"]
@@ -142,6 +197,8 @@ def walk_lines(
         f"frames ({written} extracted, {read - written} reused)"
     )
     lines.append(_density_term_line(walk, sequence))
+    if walk["pilot_vote"] is not None:
+        lines.append(_pilot_line(walk["pilot_vote"]))
     lines.append(
         "  Motion along the capture (median step, rate per frame, frames per step):"
     )

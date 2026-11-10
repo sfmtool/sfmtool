@@ -7,18 +7,21 @@ it is solved and chooses the frames a solve should use: frames spaced so that
 the image moves by about a tenth of its width from one to the next, but never
 so far apart that two consecutive chosen frames keep fewer mutual matches than
 a floor, sharper ones in place of frames blurred against their neighbours,
-and more frames where the capture is hard to follow. Given the camera of a
-sequence, it also takes shorter steps where the steps it has chosen show a
-near foreground in front of a distant view (the local density term). It walks each sequence
+and more frames where the capture is hard to follow. With the camera of a
+sequence, given or found by a focal vote on the first frames it chooses (the
+pilot vote), it also takes shorter steps where the steps it has chosen show
+a near foreground in front of a distant view (the local density term). It
+walks each sequence
 from its first frame, measuring each step rather than taking a stride fixed
 in advance. A capture whose neighbouring frames already match with fewer
 matches than the floor, such as one subsampled from a video or a set of
 photographs taken one after another, keeps every frame.
 It makes no judgement of whether a capture can be solved: whether the frames
 it chooses describe one camera motion through a static scene, and whether the
-camera moved enough, is for the solve to find out. The one geometry it fits
-is the essential matrix of each step it has chosen, for the local density
-term, which reads only how the parallax of the step's matches is spread.
+camera moved enough, is for the solve to find out. The geometry it fits is
+the essential matrix of each step it has chosen, for the local density term,
+which reads only how the parallax of the step's matches is spread, and the
+pilot vote's focal, which sets only the camera that term measures with.
 
 Everything is measured from SIFT features. The motion between two frames is
 the median displacement of the features that match between them, and how well
@@ -62,7 +65,7 @@ pub struct CaptureFrame { pub number: i64, pub images: Vec<CaptureImage> }
 pub struct CaptureSequence {
     pub patterns: Vec<String>,
     pub frames: Vec<CaptureFrame>,
-    pub camera: Option<CameraIntrinsics>, // None: no local density term
+    pub camera: Option<CameraIntrinsics>, // None: the pilot vote's, or no term
 }
 
 /// A sequence's index and a frame's position in it, from 0.
@@ -107,6 +110,7 @@ pub struct PickImagesOptions {
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // FramePairOptions::default()
     pub prefetch: bool,            // true; changes no choice, only the work ahead
+    pub pilot_vote: bool,          // false; a sequence with no camera takes the pilot vote's
 }
 
 pub fn pick_images(
@@ -152,7 +156,11 @@ one capture can come from two cameras, so the camera is a field of
 `CaptureSequence` rather than an option. It may be at another resolution than
 the frames, as a calibration often is, and the walk scales it to the frames'
 size ([The local density term](#the-local-density-term)). A sequence with no
-camera is walked without the term, the same walk as at a maximum gain of 1.
+camera is walked without the term, the same walk as at a maximum gain of 1,
+unless `pilot_vote` asks for the pilot vote, which finds it a camera from its
+own frames ([The pilot vote](#the-pilot-vote)). The pilot is an option, off
+by default, so that a caller with no camera to give that wants the walk
+without the term gets it without a vote; the command turns it on.
 
 **Positions, not file numbers.** A `FrameId` names a frame by its position in
 its sequence, and every rate is a step per position, so a sequence numbered in
@@ -230,7 +238,8 @@ chosen positions, every accepted step (from, to, its statistics, its rate
 and its `StepKind`: `InBand`, `AboveBand`, `Bracketed`, `AtLimit`,
 `AtFloor` or `BelowBand`, and its `StepDensity`), the swaps of frames blurred
 against their neighbours, each as candidate and chosen frame, the count of
-frames the walk read, and its `DensityTerm`.
+frames the walk read, its `DensityTerm`, and its `PilotVote`, `None` when
+no pilot vote ran.
 
 ```rust
 /// One accepted step's target and the local density term's reading of it.
@@ -256,9 +265,39 @@ pub enum DensityTermOff {
 }
 ```
 
+```rust
+/// What a sequence's pilot vote found, and whether the walk measured with it.
+pub struct PilotVote {
+    pub frames: Vec<usize>,        // the positions voted on
+    pub frames_read: usize,        // the frames the pilot walk read
+    pub features: usize,           // the features clustered; 0 with no vote
+    pub clusters: usize,
+    pub camera_model: Option<&'static str>, // "Pinhole" or "EquidistantFisheye"
+    pub confirmed: Option<bool>,   // of a fisheye verdict only
+    pub focal_px: Option<f64>,     // the consensus, at the frames' size
+    pub pool_spread: Option<f64>,  // of the votes behind the consensus
+    pub n_pool: usize,
+    pub n_epipolar: usize,
+    pub n_rotation: usize,
+    pub outcome: PilotOutcome,
+    pub seconds: f64,              // wall time of the pilot's walk, matching and vote
+}
+
+pub enum PilotOutcome {
+    Used,                                 // the walk measured with the vote's camera
+    TooFewFrames { min_frames: usize },   // the pilot walk chose fewer, and no vote ran
+    NoConsensus,                          // the vote reached no consensus focal
+    WideSpread { max_pool_spread: f64 },  // the pool spread is above the bound
+}
+```
+
 `DensityTerm` serializes as `{"status": "on", "focal_px": …}` or
 `{"status": "off", "reason": "no_camera"}`, with a `CameraShape`'s `camera`
-and `frames` and a `CameraRefused`'s `problem` beside its reason.
+and `frames` and a `CameraRefused`'s `problem` beside its reason, and
+`PilotOutcome` as `{"status": "used"}`, `{"status": "too_few_frames",
+"min_frames": 3}`, `{"status": "no_consensus"}` or `{"status":
+"wide_spread", "max_pool_spread": 0.35}`. A sequence whose pilot vote is not
+used has no camera, and its term is off with the reason `no_camera`.
 
 Every type serializes with `serde`, a number that is not finite as `null`, so
 a caller writes the whole report as JSON as it is.
@@ -480,6 +519,70 @@ aims every step at the base target, when:
 With the term off, every gain is 1 and every target the base target, so the
 walk chooses exactly what it chooses with no camera.
 
+### The pilot vote
+
+With `pilot_vote` on and a maximum gain above 1, a sequence with no camera
+takes the camera of a focal vote on its own frames
+([pilot.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pilot.rs)).
+A sequence given a camera keeps it and runs no pilot, and at a maximum gain
+of 1 no pilot runs, since the term it would serve is off.
+
+1. **The pilot walk.** The walk runs from the sequence's first frame without
+   the local density term, every gain 1, and stops once it has chosen 30
+   frames, or at the sequence's last frame. Those are the first 30 frames the
+   walk with no camera chooses.
+2. **The vote.** The first 1,500 features of each of those frames' reference
+   images, the features a `.sift` file lists first, are clustered into tracks
+   by the background-floor matcher at its defaults
+   ([track-cluster-matching.md](../features/track-cluster-matching.md)), and
+   the tracks go to the focal vote with the camera-model columns chosen by the
+   evidence, seed 0 and one draw
+   ([estimate-intrinsics.md](../geometry/estimate-intrinsics.md)): the same
+   clusters and the same estimate as `sfm match --cluster --max-features
+   1500` followed by `sfm estimate-intrinsics --model auto` on them, made in
+   memory, with nothing written. The image size is the frames' size, as their
+   `.sift` files record it.
+3. **The camera.** The vote's camera is at its consensus focal, at the
+   frames' size, with the principal point at the image centre, where the
+   vote places it: an equidistant fisheye for a fisheye verdict, confirmed or
+   not, and a pinhole otherwise. A fisheye verdict with no certified rotation
+   votes is measured with as a fisheye all the same: the vote calls a pinhole
+   capture a fisheye only where its pinhole votes are weak, and the walk's
+   band and match floor bound what a wrong model changes.
+4. **The walk.** The walk then starts again from the sequence's first frame,
+   with the vote's camera as the sequence's. Every frame the pilot read stays
+   read and every pair it matched keeps its statistics, so where the walk
+   takes the pilot's steps again, as it does until a gain above 1 shortens
+   one, it waits for no frame and decides from no match a second time; it
+   matches each accepted step once more for its essential split, as every
+   walk with the term does. The report's frames and pairs hold the pilot's
+   with the walk's, each once.
+
+The camera is not used, the term is off with the reason `NoCamera`, and the
+walk is the one with no camera, when:
+
+- the pilot walk chose fewer than 3 frames (`TooFewFrames`). The consensus
+  needs two pooled votes, and two frames are one image pair, which casts at
+  most one, so no vote runs;
+- the vote reached no consensus focal (`NoConsensus`), among them a vote on
+  frames whose features form no tracks;
+- the vote's **pool spread**, the interquartile range of the log focals behind
+  its consensus, which `sfm estimate-intrinsics` reports as `pool spread (log
+  IQR)`, is above 0.35 (`WideSpread`). A spread that wide says the votes
+  disagree, as they do on a capture whose motion does not observe the focal,
+  such as a camera moving sideways with no turn, and a consensus taken from
+  them may be far from the camera's.
+
+A wrong focal changes how many frames the term adds, not whether the frames
+it keeps follow the capture: the walk still holds every step to the band and
+the match floor.
+
+The pilot costs the extraction and matching of its walk, which the walk
+after it reuses where it takes the same steps, one cluster match of at most
+30 × 1,500 features and one focal vote; `PilotVote::seconds` is its wall
+time, and the one figure of the report besides `frames_extracted_unread`
+that differs from run to run.
+
 ### Blur
 
 A frame the walk is about to accept is judged against its **neighbours**,
@@ -669,7 +772,8 @@ The report is the same for the same capture and options: the frame pair
 statistics repeat exactly ([frame-pair-matching.md § Determinism and precision](frame-pair-matching.md#determinism-and-precision)),
 every decision reads them and the readings in a fixed order, and no hash map is
 iterated for an output. The essential split is seeded, so a step's measure,
-and the targets after it, repeat too. It is the same for any source, lookahead and worker
+and the targets after it, repeat too, and so is the pilot vote, whose
+`seconds` alone differs from run to run. It is the same for any source, lookahead and worker
 count too, but for `frames_extracted_unread`, by the
 [determinism rule](#run-ahead). The readings are kept as `f32`, as `ImageReadings`
 holds them, which is enough for readings compared within a capture to about
@@ -694,9 +798,13 @@ exact.
 | parallax P90 | at least 0.2° | for a step's measure to count |
 | parallax P50 | below 0.5° | for a step's measure to count |
 | prediction below the floor | `W` frames | how far the walk prefetches where it reads every frame, for a source of `W` workers |
+| pilot frames | 30 | the frames the pilot walk chooses before the vote |
+| pilot features | 1,500 | the first features of each pilot frame the vote's clusters are formed from |
+| pilot frames for a vote | at least 3 | fewer run no vote |
+| pool spread | at most 0.35 | for the pilot vote's camera to be used |
 
 The re-aims, the recent rates, the neighbours and the local density term's
-values below them are constants of the module; the prediction below the
+and pilot vote's values below them are constants of the module; the prediction below the
 floor is the source's `concurrency`. The split itself takes
 `EssentialSplitOptions::new`'s defaults: a 3-pixel bound, 512 samples and
 seed 0.
@@ -738,7 +846,8 @@ fields of `PickImagesOptions` but `prefetch`, which it leaves on, as
 keyword-only arguments, with the pair options
 under the names `match_frame_pair` uses and the forest under the names
 `FrameFeatures` uses (`preset`, `num_trees`, `leaf_size`, `max_leaf_checks`);
-one left out takes the Rust default; `max_density_gain` is among them. It
+one left out takes the Rust default; `max_density_gain` and `pilot_vote`
+are among them. It
 gives the pair options no camera, so its report's `essential_split` is `None`
 in every pair; a step's split is in its `density`. `progress`, a `ProgressCounter`, holds
 the count of frames read. The report is returned as a dict of plain values,
@@ -818,6 +927,21 @@ checks the rule: each condition of the measure at its edge and past it, the
 median and its bounds, the scaling of a pinhole and an equidistant fisheye
 camera and each reason the term is off, and the term's JSON form.
 
+[tests/pilot.rs](../../../crates/sfmtool-core/src/analysis/pick_images/tests/pilot.rs)
+walks the same capture with no camera and the pilot vote on: the vote is on
+the first 30 frames the walk with no camera chooses, its pinhole focal is
+within 2% of the scene camera's, and the walk then chooses what the walk
+given that camera chooses, with steps walked with a gain above 1; a camera
+given runs no pilot and chooses what it chooses without the option, and a
+maximum gain of 1 runs none and chooses and waits for what the walk with no
+camera does. A camera moving sideways with no turn gives a pool spread above
+0.35, frames that match nothing a vote with no consensus, and two frames no
+vote, and each such sequence is walked as with no camera, its reason in the
+report.
+[pilot/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pilot/tests.rs)
+checks the outcome at the spread's bound and past it, the camera of each
+verdict, and the outcome's JSON form.
+
 [source/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/source/tests.rs)
 checks the extracting source on seoul_bull images, writing the files
 `build_sift_files` writes and nothing for files up to date, extracting a
@@ -857,5 +981,7 @@ equal `build_sift_files`', and which a second run reads without extracting.
   that moved little but steadily are walked like any other video, and the
   solve that follows finds out. The local density term's split reads only
   how a chosen step's parallax is spread, to set the next target.
-- Finding the camera. The local density term measures with the camera it is
-  given, and a wrong focal or lens model reads a wrong parallax.
+- Calibrating the camera. The local density term measures with the camera it
+  is given, or with the pilot vote's centred, distortion-free camera, and a
+  wrong focal or lens model reads a wrong parallax; the pilot's guards leave
+  the term off where its vote disagrees with itself, not where it is wrong.

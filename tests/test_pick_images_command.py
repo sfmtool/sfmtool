@@ -106,7 +106,13 @@ def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
     assert result.exit_code == 0, result.output
     assert "frames/pan_%03d.jpg, 100 frames (1-100)" in result.output
     assert "Walk: target step 10% (band 7-13%)" in result.output
-    assert "Local density term: off, no .camrig covers its frames" in result.output
+    # The pan slides crops of one photograph, an image motion no focal
+    # explains, so the pilot vote reaches no consensus, and runs all the same.
+    assert (
+        "Local density term: off, the pilot vote reached no consensus ("
+        in result.output
+    )
+    assert "  Pilot vote: 14 frames chosen, " in result.output
     assert "pass --write-list NAME" in result.output
     added = _files(pan_workspace) - before
     assert added
@@ -157,7 +163,12 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     assert a["capture"][0]["numbers"] == list(range(1, PAN_FRAMES + 1))
     assert a["capture"][0]["images"][4] == ["frames/pan_005.jpg"]
     assert a["capture"][0]["camera"] is None
-    assert a["capture"][0]["camera_source"] == "no .camrig covers its frames"
+    vote = a["sequences"][0]["pilot_vote"]
+    assert vote["outcome"] == {"status": "no_consensus"}
+    assert a["capture"][0]["camera_source"] == (
+        f"the pilot vote reached no consensus ({vote['n_pool']} pooled "
+        f"vote{'' if vote['n_pool'] == 1 else 's'})"
+    )
     assert a["sequences"][0]["density_term"] == {"status": "off", "reason": "no_camera"}
     assert a["named_image_list"] is None
     assert len(a["frames_extracted"]) == len(a["frames"])
@@ -337,9 +348,99 @@ def test_photographs_below_the_match_floor_keep_every_frame(
     )
     assert data["options"]["min_step_matches"] == 600
     assert data["chosen_numbers"] == [list(range(1, 18))]
+    # The pilot vote on the 17 photographs disagrees with itself: its pool
+    # spread is above the bound, and the term is off saying so.
+    vote = data["sequences"][0]["pilot_vote"]
+    assert vote["frames"] == list(range(17))
+    assert vote["outcome"] == {"status": "wide_spread", "max_pool_spread": 0.35}
+    assert vote["pool_spread"] > 0.35
+    assert data["sequences"][0]["density_term"]["status"] == "off"
+    assert (
+        f"Local density term: off, the pilot vote's pool spread "
+        f"{vote['pool_spread']:.3f} is above 0.35 (pinhole, focal "
+        f"{vote['focal_px']:.1f} px)" in result.output
+    )
     assert _resolve(workspace, "bull") == [
         f"photos/seoul_bull_sculpture_{n:02d}.jpg" for n in range(1, 18)
     ]
+
+
+def test_a_sequence_with_no_camrig_takes_the_pilot_vote_s_camera(
+    tmp_path: Path, monkeypatch
+):
+    # seattle_backyard's 26 photographs match below the floor, so every one
+    # is chosen and voted on, and the vote agrees with itself.
+    source = TEST_DATA_DIR / "images" / "seattle_backyard"
+    workspace = tmp_path / "ws"
+    images = workspace / "photos"
+    images.mkdir(parents=True)
+    for path in sorted(source.glob("seattle_backyard_*.jpg")):
+        shutil.copy(path, images / path.name)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+    before = _files(workspace)
+
+    result = _invoke(["pick-images", "photos", "--json", "r.json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((workspace / "r.json").read_text())
+    (walk,) = data["sequences"]
+    vote = walk["pilot_vote"]
+    assert vote["frames"] == list(range(26))
+    assert vote["frames_read"] == 26
+    assert vote["outcome"] == {"status": "used"}
+    assert vote["camera_model"] == "Pinhole" and vote["confirmed"] is None
+    assert vote["pool_spread"] <= 0.35
+    assert vote["n_pool"] == vote["n_epipolar"] + vote["n_rotation"] >= 2
+    assert vote["features"] <= 26 * 1500 and vote["clusters"] > 0
+    # The walk measured with the vote's camera.
+    assert walk["density_term"] == {"status": "on", "focal_px": vote["focal_px"]}
+    source_text = (
+        f"the pilot vote's pinhole camera, focal {vote['focal_px']:.1f} px, "
+        f"pool spread {vote['pool_spread']:.3f}"
+    )
+    assert data["capture"][0]["camera_source"] == source_text
+    assert data["capture"][0]["camera"] is None
+    assert f"Local density term: on, with {source_text}; " in result.output
+    assert (
+        f"  Pilot vote: 26 frames chosen, 26 read, {vote['features']} features "
+        f"in {vote['clusters']} clusters; took " in result.output
+    )
+    # The vote wrote nothing into the workspace: only .sift files and the
+    # report are new.
+    added = _files(workspace) - before
+    assert {p for p in added if not p.endswith(".jpg.sift")} == {"r.json"}
+
+    # A maximum gain of 1 runs no pilot vote.
+    off = _invoke(["pick-images", "photos", "--max-density-gain", "1"])
+    assert off.exit_code == 0, off.output
+    assert "Local density term: off, --max-density-gain is 1" in off.output
+    assert "Pilot vote" not in off.output
+
+
+def test_a_pilot_of_two_frames_runs_no_vote(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "ws"
+    images = workspace / "photos"
+    images.mkdir(parents=True)
+    for n in (1, 2):
+        name = f"seoul_bull_sculpture_{n:02d}.jpg"
+        shutil.copy(SEOUL_BULL_DIR / name, images / name)
+    _init_workspace(workspace)
+    monkeypatch.chdir(workspace)
+
+    result = _invoke(["pick-images", "photos", "--json", "r.json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads((workspace / "r.json").read_text())
+    vote = data["sequences"][0]["pilot_vote"]
+    assert vote["outcome"] == {"status": "too_few_frames", "min_frames": 3}
+    assert (vote["frames"], vote["features"], vote["focal_px"]) == ([0, 1], 0, None)
+    assert data["sequences"][0]["density_term"] == {
+        "status": "off",
+        "reason": "no_camera",
+    }
+    assert (
+        "Local density term: off, the pilot walk chose 2 frames, and a vote "
+        "needs at least 3" in result.output
+    )
 
 
 def test_a_version_1_workspace_is_refused(tmp_path: Path, monkeypatch):
@@ -642,6 +743,9 @@ def test_the_local_density_term_takes_a_camrig_camera_scaled_or_is_turned_off(
     )
     assert all(s["density"]["essential_split"] for s in walk["steps"])
     assert "Local density by step" in on.output
+    # The .camrig's camera is used, and no pilot vote runs.
+    assert walk["pilot_vote"] is None
+    assert "Pilot vote" not in on.output
 
     off = _invoke(["pick-images", "frames", *FAST, "--max-density-gain", "1"])
     assert off.exit_code == 0, off.output

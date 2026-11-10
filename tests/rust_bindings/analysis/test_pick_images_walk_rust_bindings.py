@@ -219,7 +219,21 @@ def test_a_sequence_s_camera_reaches_the_local_density_term(steady: _Capture):
         split = step["density"]["essential_split"]
         assert split["status"] == "measured" and split["parallax_p50_deg"] > 0.5
         assert step["density"]["gain"] == 1.0 and step["density"]["measure"] == 1.0
-    assert walk["chosen"] == pick_images([steady.sequence])["sequences"][0]["chosen"]
+    without = pick_images([steady.sequence])["sequences"][0]
+    assert walk["chosen"] == without["chosen"]
+    # No pilot vote runs unless asked for, and one asked for runs only for a
+    # sequence with no camera.
+    assert walk["pilot_vote"] is None and without["pilot_vote"] is None
+    assert (
+        pick_images([with_camera], pilot_vote=True)["sequences"][0]["pilot_vote"]
+        is None
+    )
+    short = CaptureSequence(["f_%d.jpg"], frames[:8])
+    piloted = pick_images([short], pilot_vote=True)["sequences"][0]
+    assert (
+        piloted["pilot_vote"]["frames"]
+        == (pick_images([short])["sequences"][0]["chosen"])
+    )
     # A gain of 1 measures nothing; a camera of another aspect is named.
     off = pick_images([with_camera], max_density_gain=1.0)["sequences"][0]
     assert off["density_term"] == {"status": "off", "reason": "max_gain_one"}

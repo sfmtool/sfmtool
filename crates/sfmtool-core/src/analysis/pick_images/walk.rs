@@ -17,6 +17,7 @@ use super::density::{self, DensityTerm};
 use super::essential_split::EssentialSplitOptions;
 use super::frame_pair::{FrameFeatures, FramePairStats};
 use super::frames::Frames;
+use super::pilot::PilotVote;
 use super::report::{StepDensity, StepKind, Swap, WalkStep};
 use crate::camera::CameraIntrinsics;
 use crate::numeric::median;
@@ -39,6 +40,7 @@ pub(super) struct Walked {
     pub(super) steps: Vec<WalkStep>,
     pub(super) swaps: Vec<Swap>,
     pub(super) density_term: DensityTerm,
+    pub(super) pilot_vote: Option<PilotVote>,
 }
 
 /// The bounds one step works within.
@@ -82,7 +84,8 @@ struct Walker<'w, 'a> {
 }
 
 /// Walk one sequence of `len` frames from its first frame to its last, with
-/// the local density term measuring with `camera` when it is given.
+/// the local density term measuring with `camera` when it is given, or, with
+/// `stop_at`, until it has chosen that many frames.
 pub(super) fn walk_sequence(
     frames: &mut Frames,
     sequence: usize,
@@ -90,6 +93,7 @@ pub(super) fn walk_sequence(
     camera: Option<&CameraIntrinsics>,
     options: &PickImagesOptions,
     progress: &Progress,
+    stop_at: Option<usize>,
 ) -> Result<Walked, PickImagesError> {
     let first = FrameId { sequence, frame: 0 };
     frames.ensure(&[first], progress)?;
@@ -114,6 +118,7 @@ pub(super) fn walk_sequence(
         steps: Vec::new(),
         swaps: Vec::new(),
         density_term,
+        pilot_vote: None,
     };
     if len == 1 {
         return Ok(walked);
@@ -134,7 +139,8 @@ pub(super) fn walk_sequence(
         median_measure: 1.0,
         walked,
     };
-    while walker.current.0 < walker.last {
+    let stop_at = stop_at.unwrap_or(usize::MAX);
+    while walker.current.0 < walker.last && walker.walked.chosen.len() < stop_at {
         walker.step()?;
     }
     Ok(walker.walked)

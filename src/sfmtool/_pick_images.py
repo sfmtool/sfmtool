@@ -14,7 +14,8 @@ the pattern each sequence's list entry uses is built from the same rule. A
 rig's images are grouped into frames by the multi-sensor `.camrig` that
 covers them, found as `sfm solve` finds it, and each sequence takes the
 camera of its reference sensor from the `.camrig` that covers its frames,
-for the walk's local density term.
+for the walk's local density term; the walk finds the camera of a sequence
+with none by its pilot vote.
 For the other feature tools it extracts every frame's `.sift` files through
 `image_files_to_sift_files` with the workspace's settings. See
 specs/cli/image-feature/pick-images-command.md.
