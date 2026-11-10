@@ -6859,7 +6859,8 @@ where a test hands no host over.
   answering `changed: true`, labelled with the puts and the rebuilds counted
   apart and joined by `, and `, and one undo takes the puts and the rebuilds
   back together; while the conversion holds the node, a batch that would
-  change anything is refused in the busy sentence and pushes nothing.
+  change anything is refused in the busy sentence and pushes nothing, and one
+  whose every point is on the bench already is not refused.
 - **The selected observations are the bench's, and do not outlive their
   track**: `select_bench_observations` replaces the set sorted and without
   repeats, `get_bench_track` reads it back, it writes one `Selection` row and
