@@ -4347,7 +4347,447 @@ fn create_bench_track_carries_the_read_only_bars_for_the_viewed_point_only() {
     assert_eq!(state.bench_track(id, item).expect("on").thresholds, bars);
 }
 
+/// The live points of the bench fixture other than [`BENCH_POINT`], in order.
+fn other_points(state: &AppState) -> Vec<u32> {
+    let edited = state.scene[0].edited();
+    (0..edited.point_count() as u32)
+        .filter(|&p| p != BENCH_POINT && edited.point(p).is_some())
+        .collect()
+}
+
+/// The labels on `run_a`'s bench, in order, and the focused item.
+fn bench_labels(state: &mut AppState, viewer: &mut Viewer3D) -> (Vec<String>, Value) {
+    let bench = call(
+        state,
+        viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let labels = bench["items"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|item| item["item"].as_str().expect("a label").to_string())
+        .collect();
+    (labels, bench["focused_item"].clone())
+}
+
+/// `create_bench_tracks` puts every new point on as one version that one undo
+/// takes back, answers one entry per entry asked for in order (a point already
+/// on the bench naming its item with `changed: false`, a point named twice
+/// counting once), and leaves the focus and the selection where they were.
+#[test]
+fn create_bench_tracks_puts_many_points_on_as_one_version() {
+    let (mut state, mut viewer) = benchable();
+    let id = state.scene[0].id;
+    let others = other_points(&state);
+    let (a, b) = (others[0], others[1]);
+    let held = on_the_bench(&mut state, &mut viewer);
+    let selected = state.selected_point;
+    let versions = version_count(&state);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [
+                { "point": a, "label": "ear" },
+                { "point": BENCH_POINT },
+                { "point": b },
+                { "point": a },
+            ],
+        }),
+    );
+    assert_eq!(version_count(&state), versions + 1, "one version: {reply}");
+    assert_eq!(reply["changed"], json!(true), "{reply}");
+    assert_eq!(
+        reply["label"],
+        json!("Put 2 points on the bench"),
+        "{reply}"
+    );
+    let rows = reply["points"].as_array().expect("one entry per point");
+    let b_item = crate::scene::point_id(&state.scene[0], b as usize);
+    assert_eq!(
+        rows,
+        &[
+            json!({ "point": a, "item": "ear", "changed": true }),
+            json!({ "point": BENCH_POINT, "item": held, "changed": false }),
+            json!({ "point": b, "item": b_item, "changed": true }),
+            json!({ "point": a, "item": "ear", "changed": true }),
+        ],
+        "{reply}"
+    );
+
+    let (labels, focused) = bench_labels(&mut state, &mut viewer);
+    assert_eq!(
+        labels,
+        [held.clone(), "ear".to_string(), b_item],
+        "{labels:?}"
+    );
+    assert_eq!(focused, json!(held), "the batch moved the focus");
+    assert_eq!(
+        state.selected_point, selected,
+        "the batch moved the selection"
+    );
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let (labels, _) = bench_labels(&mut state, &mut viewer);
+    assert_eq!(
+        labels,
+        std::slice::from_ref(&held),
+        "one undo took them all off"
+    );
+
+    // With nothing focused, the batch focuses nothing either.
+    call(&mut state, &mut viewer, "unfocus_bench_item", json!({}));
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({ "reconstruction_label": "run_a", "points": [{ "point": a }] }),
+    );
+    let a_item = crate::scene::point_id(&state.scene[0], a as usize);
+    assert_eq!(
+        reply["label"],
+        json!(format!("Put point {a} on the bench as {a_item}")),
+        "one put is named as create_bench_track names it: {reply}"
+    );
+    let (_, focused) = bench_labels(&mut state, &mut viewer);
+    assert_eq!(focused, Value::Null, "the batch focused a track");
+    assert!(state.focused_item.is_none());
+    assert_eq!(state.bench(id).expect("loaded").entries().len(), 2);
+
+    // Every point on the bench already: no version, and a report that says so.
+    let versions = version_count(&state);
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": a }, { "point": BENCH_POINT }],
+        }),
+    );
+    assert_eq!(version_count(&state), versions, "{again}");
+    assert_eq!(again["changed"], json!(false), "{again}");
+    assert_eq!(
+        again["report"],
+        json!("Put 2 points on the bench: no effect, each is on the bench already"),
+        "{again}"
+    );
+    assert_eq!(again["points"][1]["item"], json!(held), "{again}");
+}
+
+/// Every refusal of `create_bench_tracks` refuses the whole list: the bench is
+/// as it was, with no version pushed, even where the entries before the
+/// refused one could have gone on.
+#[test]
+fn create_bench_tracks_refuses_a_list_it_cannot_put_on_whole() {
+    let (mut state, mut viewer) = benchable();
+    let others = other_points(&state);
+    let (a, b, gone) = (others[0], others[1], others[2]);
+    let held = on_the_bench(&mut state, &mut viewer);
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": gone }),
+    );
+    let past = state.scene[0].edited().point_count() as u32 + 5;
+    let versions = version_count(&state);
+
+    let cases = [
+        (json!([]), "No points to put on the bench.".to_string()),
+        (
+            json!([{ "point": a }, { "point": past }]),
+            "points[1]: ".to_string(),
+        ),
+        (
+            json!([{ "point": a }, { "point": gone }]),
+            "points[1]: ".to_string(),
+        ),
+        (
+            json!([{ "point": a }, { "point": BENCH_POINT, "label": "horn" }]),
+            format!(
+                "Point {BENCH_POINT} is on the bench already as {held}, so it cannot go on as \
+                 horn; rename {held} to call it horn."
+            ),
+        ),
+        (
+            json!([{ "point": a, "label": "ear" }, { "point": b }, { "point": a, "label": "nose" }]),
+            format!("Point {a} is named twice, as ear and as nose; name it once."),
+        ),
+        (
+            json!([{ "point": a }, { "point": b, "label": "  " }]),
+            "other than whitespace".to_string(),
+        ),
+    ];
+    for (points, expected) in cases {
+        let refused = refused_call(
+            &mut state,
+            &mut viewer,
+            "create_bench_tracks",
+            json!({ "reconstruction_label": "run_a", "points": points }),
+        );
+        assert!(refused.0.contains(&expected), "{points}: {refused}");
+        assert_eq!(version_count(&state), versions, "{points} pushed a version");
+        let (labels, _) = bench_labels(&mut state, &mut viewer);
+        assert_eq!(
+            labels,
+            std::slice::from_ref(&held),
+            "{points} changed the bench"
+        );
+    }
+}
+
+/// The batch's new track of the viewed point takes the moved read-only bars,
+/// and the version label names them; another point's track starts at the
+/// defaults.
+#[test]
+fn create_bench_tracks_carries_the_read_only_bars_for_the_viewed_point_only() {
+    let (mut state, mut viewer) = benchable();
+    let id = state.scene[0].id;
+    let others = other_points(&state);
+    let (a, b) = (others[0], others[1]);
+    state.select_point(PointRef::new(id, BENCH_POINT as usize));
+    let bars = sfmtool_core::bench::Thresholds {
+        max_shift_px: 4.0,
+        ..Default::default()
+    };
+    state.set_viewed_thresholds(bars.clone());
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": a }, { "point": BENCH_POINT }, { "point": b }],
+        }),
+    );
+    assert_eq!(
+        reply["label"],
+        json!(format!(
+            "Put 3 points on the bench, point {BENCH_POINT} with max shift 4.0 px"
+        )),
+        "{reply}"
+    );
+    let item = |k: usize| reply["points"][k]["item"].as_str().expect("an item");
+    assert_eq!(state.bench_track(id, item(1)).expect("on").thresholds, bars);
+    for k in [0, 2] {
+        assert_eq!(
+            state.bench_track(id, item(k)).expect("on").thresholds,
+            sfmtool_core::bench::Thresholds::default(),
+            "{reply}"
+        );
+    }
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, BENCH_POINT as usize)),
+        "the batch moved the selection"
+    );
+    assert!(state.focused_item.is_none(), "the batch focused a track");
+}
+
 // ── A view-only bench ───────────────────────────────────────────────────
+
+/// `create_bench_tracks` rebuilds, inside its one version, an item put on the
+/// bench while the node was `sift_files`, beside the points it puts on. The
+/// label counts the puts and the rebuilds separately and joins them with
+/// `, and `; every rebuilt entry replies `changed: true`; one undo takes back
+/// the puts and the rebuilds together. While the conversion still holds the
+/// node, a batch that would change anything is refused whole, and one whose
+/// every point is on the bench already is not.
+#[test]
+fn create_bench_tracks_rebuilds_frameless_items_in_its_one_version() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
+    state.select_recon(id);
+    state.window = Some(FakeWindow::default().info());
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let first = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": 0 }, { "point": 1 }, { "point": 2 }],
+        }),
+    );
+    let item = |k: usize| {
+        first["points"][k]["item"]
+            .as_str()
+            .expect("an item")
+            .to_string()
+    };
+    let frameless =
+        |state: &AppState, label: &str| match &state.bench_track(id, label).expect("on").stage {
+            sfmtool_core::bench::Stage::Track(payload) => payload.patch_frame.is_none(),
+            sfmtool_core::bench::Stage::Cluster(_) => panic!("a point goes on at the track stage"),
+        };
+    for k in 0..3 {
+        assert!(frameless(&state, &item(k)), "{first}");
+    }
+    let labels = |state: &AppState| -> Vec<String> {
+        state
+            .bench(id)
+            .expect("loaded")
+            .entries()
+            .iter()
+            .map(|entry| entry.label.clone())
+            .collect()
+    };
+    let before = labels(&state);
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+
+    // The conversion holds the node: a batch that would rebuild or put on is
+    // refused whole, and a batch with nothing to change is not.
+    let versions = version_count(&state);
+    let busy = state
+        .busy_refusal(id)
+        .expect("the conversion holds the node");
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": 0 }, { "point": 3 }],
+        }),
+    );
+    assert_eq!(refused.0, busy, "{refused}");
+    assert_eq!(version_count(&state), versions);
+    assert_eq!(labels(&state), before);
+    let unchanged = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": 0 }, { "point": 1 }],
+        }),
+    );
+    assert_eq!(unchanged["changed"], json!(false), "{unchanged}");
+    assert_eq!(version_count(&state), versions);
+
+    state.finish_background_tasks();
+    let versions = version_count(&state);
+    let node = state.node(id).expect("loaded");
+    let minted = |point: usize| crate::scene::point_id(node, point);
+    let (three, four, five) = (minted(3), minted(4), minted(5));
+
+    // One put and two rebuilds: the put by its own sentence, the rebuilds
+    // counted.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": 0 }, { "point": 1 }, { "point": 3 }],
+        }),
+    );
+    assert_eq!(version_count(&state), versions + 1, "one version: {reply}");
+    assert_eq!(
+        reply["label"],
+        json!(format!(
+            "Put point 3 on the bench as {three}, and rebuilt 2 items from their points, \
+             which now carry a patch frame"
+        )),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["points"],
+        json!([
+            { "point": 0, "item": item(0), "changed": true },
+            { "point": 1, "item": item(1), "changed": true },
+            { "point": 3, "item": three, "changed": true },
+        ]),
+        "{reply}"
+    );
+    assert!(!frameless(&state, &item(0)) && !frameless(&state, &item(1)));
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(labels(&state), before, "one undo took the put back");
+    assert!(
+        frameless(&state, &item(0)) && frameless(&state, &item(1)),
+        "one undo took the rebuilds back"
+    );
+
+    // Two puts and one rebuild: the puts counted, the rebuild by its own
+    // sentence.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({
+            "reconstruction_label": "run_a",
+            "points": [{ "point": 2 }, { "point": 4 }, { "point": 5 }],
+        }),
+    );
+    assert_eq!(
+        reply["label"],
+        json!(format!(
+            "Put 2 points on the bench, and rebuilt {} from point 2, which now carries a \
+             patch frame",
+            item(2)
+        )),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["points"],
+        json!([
+            { "point": 2, "item": item(2), "changed": true },
+            { "point": 4, "item": four, "changed": true },
+            { "point": 5, "item": five, "changed": true },
+        ]),
+        "{reply}"
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(labels(&state), before, "one undo took the puts back");
+    assert!(
+        frameless(&state, &item(2)),
+        "one undo took the rebuild back"
+    );
+
+    // A rebuild alone is labelled as create_bench_track labels it.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_tracks",
+        json!({ "reconstruction_label": "run_a", "points": [{ "point": 0 }] }),
+    );
+    assert_eq!(
+        reply["label"],
+        json!(format!(
+            "Rebuilt {} from point 0, which now carries a patch frame",
+            item(0)
+        )),
+        "{reply}"
+    );
+    assert_eq!(reply["points"][0]["changed"], json!(true), "{reply}");
+}
 
 /// A `sift_files` node's bench is view-only: a point goes on the bench, and
 /// every tool that would edit it is refused up front with the sentence that

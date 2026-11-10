@@ -133,6 +133,18 @@ impl AppState {
     /// The gestures pass `None`, and the wire passes the call's `label`.
     pub(crate) fn put_point_on_bench(&mut self, point: PointRef, label: Option<&str>)
         -> Result<String, String>;
+    /// Many points, each with its label, as one version, focusing none: the
+    /// call `put_point_on_bench` makes with one entry before it focuses the
+    /// item. Every entry is checked before the bench is touched.
+    pub(crate) fn put_points_on_bench(&mut self, recon: ReconId,
+                                      points: &[(u32, Option<String>)])
+        -> Result<Vec<PutPoint>, String>;
+
+    /// The item one entry names, and whether the step put it on or rebuilt it.
+    pub(crate) struct PutPoint {
+        pub(crate) label: String,
+        pub(crate) made: bool,
+    }
     /// The pixel is brought inside the photograph before anything is seeded, and
     /// the answer says where the observation went and what was asked for.
     pub(crate) fn start_bench_cluster(&mut self, image: ImageRef, seed: &Seed,
@@ -495,6 +507,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 |---|---|
 | Put a point on the bench | `Put point 1207 on the bench as pt3d_a1b2c3d4_1207`; a put of the viewed point that carries Track View's read-only bars names the bars that differ from the defaults: `Put point 1207 on the bench as pt3d_a1b2c3d4_1207, with min ZNCC 80%` (§ "Live evaluation") |
 | Put a point on the bench again, once it has a patch frame its item lacks (§ "A view-only bench") | `Rebuilt pt3d_a1b2c3d4_1207 from point 1207, which now carries a patch frame` |
+| Put many points on the bench (`create_bench_tracks`) | each kind of change, the puts and the rebuilds, is its sentence above when the call made one of that kind, and is counted when it made more: `Put 78 points on the bench`, with `, point 1207 with min ZNCC 80%` when the viewed point's track took the bars, and `Rebuilt 3 items from their points, which now carry a patch frame`; a call that did both joins its two phrases with `, and `, the second starting in lower case |
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
 | Create a track at a pixel (the put; its commit is the commit's row) | `Created IMG_0042@142,198 at (142.0, 198.0) in IMG_0042.jpg with the clusters member: 9 observations in, median ZNCC 91% / 88%` (the version's own label stops before the colon; `, after constellation refused` follows where earlier members were refused) |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
@@ -626,9 +639,9 @@ that is not busy. The same sentence is given everywhere:
   with it (`BenchMenu::view_only`), and its bench layer draws the focused item
   with no handle on it. The 3D viewer's bench figure offers no handle either.
 
-**Not refused**: putting a point on the bench (`create_bench_track`, *Edit on
-Bench*, a double-click), focusing and unfocusing, selecting rows, renaming,
-discarding and clearing the bench, none of which edits a track, and *Find
+**Not refused**: putting a point on the bench (`create_bench_track`,
+`create_bench_tracks`, *Edit on Bench*, a double-click), focusing and
+unfocusing, selecting rows, renaming, discarding and clearing the bench, none of which edits a track, and *Find
 Nearby Tracks* without a commit, whose items are built with a patch frame and viewed
 like any other. *Create Track Here* and a committing find are refused as before
 (§ "Create Track Here").
@@ -1110,12 +1123,12 @@ core's `verdicts_if_unpinned` over a copy of the track carrying them
 the row once unpinned.
 
 **Moved bars carry onto the bench with the point.** A put of the viewed point
-(`put_point_on_bench` for the point that is `viewed_point`: ticking *Edit*, *Edit
-on Bench*, a double-click on the point or one of its features, which select the
-point before putting it, or the wire's `create_bench_track` naming it) while the
-read-only bars differ from the defaults gives the new track those bars, in the
-same version as the put. The rows arrive pinned `in` as always, so the bars
-change no verdict until rows are unpinned. The version label, and so the wire's
+(`put_points_on_bench` for the point that is `viewed_point`: ticking *Edit*,
+*Edit on Bench*, a double-click on the point or one of its features, which
+select the point before putting it, or the wire's `create_bench_track` or
+`create_bench_tracks` naming it) while the read-only bars differ from the
+defaults gives the new track those bars, in the same version as the put. The
+rows arrive pinned `in` as always, so the bars change no verdict until rows are unpinned. The version label, and so the wire's
 reply, names the bars that differ, in percent for the ZNCC bars and in
 patch-grid px for the shift and self-similarity bars (§ "What a step writes").
 A put of any other point, a cluster, and focusing a point's existing item (which
@@ -1437,7 +1450,7 @@ is drawn under, so the two groups' rows reach one list.
 
 ## The wire
 
-An agent gets the same bench a human does, through thirty-three MCP tools
+An agent gets the same bench a human does, through thirty-eight MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -1469,6 +1482,10 @@ when the focused item was already what the call asked for.
 //                        "pixel": [142.0, 197.5], "affine": [[7.1, -0.4], [0.4, 7.1]] }
 // create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4, "feature": 847 }
 // create_bench_track   { "reconstruction_label": "bull", "point": 1207 }
+//
+// Many points as one version, which one undo takes back. Nothing is focused.
+// create_bench_tracks  { "reconstruction_label": "bull",
+//                        "points": [{ "point": 1207 }, { "point": 88, "label": "ear" }] }
 //
 // Each create takes an optional label, so an item needs no rename after it. A
 // label another item holds takes the collision suffix: "bull-nose (2)".
@@ -2079,5 +2096,5 @@ refused in the call with no task.
   ([`viewer-3d-bench-layer.md`](viewer-3d-bench-layer.md)).
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The thirty-three tools for the steps that exist
+  proposed in the same draft. The thirty-eight tools for the steps that exist
   are § "The wire".

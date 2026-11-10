@@ -124,8 +124,8 @@ told to check only the tool name.
 
 ## The tool surface
 
-One hundred and four tools. Twenty read -- nineteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- seventy-six
+One hundred and five tools. Twenty read -- nineteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- seventy-seven
 write, six send input, one writes a file, and one quits the viewer. `get_widgets`
 and the six input tools, `click`, `hover`, `drag`, `scroll`, `press_key` and
 `type_text`, read and press the viewer's widgets the way a person's eyes, mouse
@@ -196,6 +196,7 @@ Quit does (§ "`quit`").
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
 | `create_bench_track` | write | Put a 3D point on the bench as a track-stage track |
+| `create_bench_tracks` | write | Put many 3D points of one reconstruction on the bench as track-stage tracks, as one version, focusing none |
 | `create_track_at_pixel` | write | Build a track at a pixel of one camera image, put it on the bench and commit it as a new point, on a worker thread: Image Detail's *Create Track Here* |
 | `find_nearby_tracks` | write | Find the tracks near a pixel of one camera image, put every usable one on the bench and commit the new ones as points, as one version, on a worker thread: Image Detail's *Find Nearby Tracks* |
 | `focus_bench_item` | write | Focus one item, the item Track View edits; no version |
@@ -240,7 +241,7 @@ Quit does (§ "`quit`").
 | `type_text` | input | Type a string into the focused text input or number box, or into one named by its widget id |
 
 Every tool is annotated: the nineteen reads and `screenshot` carry
-`readOnlyHint: true`, the seventy-six writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the seventy-seven writes `destructiveHint: false` (none of
 them deletes or overwrites a file the person made: `close_reconstruction`
 unloads, it does not delete; `set_window_layout` changes the window and the
 dock, not the layout file the menu saves; an **edit** makes a new version of a
@@ -5055,7 +5056,7 @@ image of which carries a pose projects nothing.
 
 ### The bench family
 
-Thirty-seven tools that read and work the **bench** beside a node
+Thirty-eight tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
@@ -5236,6 +5237,58 @@ takes those bars in the same version, and the reply's version `label` and its
 `report` name the bars that differ: `Put point 1207 on the bench as
 pt3d_a1b2c3d4_1207, with min ZNCC 80%`. A call naming any other point starts at
 the defaults ([bench.md](bench.md) § "The viewed track").
+
+**`create_bench_tracks` is many `create_bench_track`s as one version**, which
+one undo takes back, as `delete_points` is many `delete_point`s:
+
+```jsonc
+// create_bench_tracks { "reconstruction_label": "bull",
+//                       "points": [{ "point": 1207, "label": "nose" },
+//                                  { "point": 88 },
+//                                  { "point": "pt3d_a1b2c3d4_3410" }] }
+```
+
+It is `AppState::put_points_on_bench`, the call `create_bench_track` makes with
+a one-entry list before it focuses the track. `points` holds one object per
+point, each with `point`, an index or an id as `create_bench_track` takes it,
+and an optional `label`. The argument is `points` because what each entry names
+is a point, as in `delete_points`; the entries are objects because each carries
+its own label. Each entry goes on as `create_bench_track` would put it: a label
+another item holds, or one an earlier entry's item took, takes the ` (2)`
+suffix; a point a track already came from keeps that track and gets no second
+one, and an item with no patch frame is rebuilt with the point's, in the same
+version. A point named twice counts once; where both entries name a label they
+have to name the same one, and an entry with none takes the other's.
+
+**Every entry is checked first, and a refusal changes nothing.** An empty list,
+a point the reconstruction does not hold (named by its position, `points[3]:
+...`), a label refused by `check_label`, a label for a point already on the
+bench other than the one its track has, a point named twice under two labels,
+and, when anything would change, a busy node: each refuses the whole call, and
+nothing is put on. A refusal `create_bench_track` also has is in its words.
+
+**It focuses nothing.** The focus and the selection stay as they were, and a
+caller that wants to edit one of the tracks focuses it with `focus_bench_item`.
+Focusing each track in turn would leave only the last one focused, and focusing
+any one of them would pick a track the caller did not choose; a list put on the
+bench is put there to be worked through, and which one comes first is the
+caller's choice. The new track of the viewed point still takes Track View's
+read-only bars: the batch moves no selection and no focus, so the viewed point
+is the same for every entry, and an entry that names it is the put
+`create_bench_track` would make of it.
+
+The version's label names each kind of change, the puts and the rebuilds, by
+the sentence `create_bench_track` writes for it when the call made one of that
+kind, and counts it when the call made more: `Put 78 points on the bench`, with
+`, point 1207 with min ZNCC 80%` when the viewed point's track took the bars,
+and `Rebuilt 3 items from their points, which now carry a patch frame`, the two
+phrases joined by `, and ` when the call made both ([bench.md](bench.md) §
+"What a step writes"). The reply is the edit reply with `points`, one `{point,
+item, changed}` per entry in the order asked: the point by index, the item it
+names, and `changed: false` where that item was on the bench already and was not
+rebuilt. A call whose every point is on the bench already pushes no
+version and answers `changed: false` with a `report` of its own, `Put 3 points
+on the bench: no effect, each is on the bench already`.
 
 **`create_track_at_pixel` is Image Detail's *Create Track Here*.** It takes a
 `camera_image` and a `pixel` and runs `AppState::start_create_track_at_pixel`,
@@ -5592,7 +5645,7 @@ walk is accepted with `sight_bench_observation`**, passing `walked_to` as the
 the observation and drops the measurements read at the seed. No tool of its own
 carries it, because what it writes is exactly what that tool writes.
 
-**Eight of the thirty-seven are the patch a track is**, and they are the
+**Eight of the thirty-eight are the patch a track is**, and they are the
 wire's half of the handles the two panels offer
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). **Each is named for the part it acts on** -- the patch, one sighting,
@@ -5704,7 +5757,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the focused item and the reply names it, as a
 split's does.
 
-**Four of the thirty-seven are about the index files**, the node's SIFT index and
+**Four of the thirty-eight are about the index files**, the node's SIFT index and
 its cluster patches, which are the node's rather than any track's:
 `open_index_files` opens both, from the node's own paths or from a
 `sift_index_path` and a `cluster_patches_path` of the caller's;
@@ -6789,6 +6842,25 @@ where a test hands no host over.
   finite one comes back the other way round; and a fit of that track reports the
   classification in its sentence and, on the demo's forty-five-degree camera arc,
   promotes it, which `stage_data` then says.
+- **`create_bench_tracks` is one version that one undo takes back**: a list
+  holding new points, a point already on the bench and a point named twice
+  pushes one version labelled with the count, answers one entry per entry in
+  order, the benched point's naming its item with `changed: false`, and leaves
+  the focused item focused and the selection where it was; a one-point list is
+  labelled as `create_bench_track` labels it and leaves nothing focused when
+  nothing was; a list whose every point is on the bench pushes no version and
+  answers `changed: false` with its own `report`; an empty list, a point past
+  the end, a deleted point, another label for a benched point, a point named
+  twice under two labels and a blank label each refuse the whole list, leaving
+  the bench as it was with no version; and the viewed point's track takes the
+  read-only bars, named in the version label, while the others start at the
+  defaults. On a `sift_files` node converted after its points went on the
+  bench, a batch rebuilds the frameless items in its one version, each
+  answering `changed: true`, labelled with the puts and the rebuilds counted
+  apart and joined by `, and `, and one undo takes the puts and the rebuilds
+  back together; while the conversion holds the node, a batch that would
+  change anything is refused in the busy sentence and pushes nothing, and one
+  whose every point is on the bench already is not refused.
 - **The selected observations are the bench's, and do not outlive their
   track**: `select_bench_observations` replaces the set sorted and without
   repeats, `get_bench_track` reads it back, it writes one `Selection` row and
@@ -6859,7 +6931,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is one hundred and four tools**, twenty of them reads, six of the
+- **The catalog is one hundred and five tools**, twenty of them reads, six of the
   `Input` kind, one of the `Save` kind and one of the `Quit` kind, those eight
   carrying `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and

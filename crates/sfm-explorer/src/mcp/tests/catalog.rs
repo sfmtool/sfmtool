@@ -240,6 +240,13 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "point": 0 }),
         ),
         (
+            "create_bench_tracks",
+            json!({
+                "reconstruction_label": "alpha",
+                "points": [{ "point": 0, "label": "nose" }, { "point": "pt3d_a1b2c3d4_1" }],
+            }),
+        ),
+        (
             "create_track_at_pixel",
             json!({
                 "reconstruction_label": "alpha",
@@ -1272,16 +1279,16 @@ fn only_the_reads_are_annotated_read_only() {
             "get_widgets",
         ]
     );
-    // Nineteen JSON reads, the one read that hands back a picture, seventy-six
+    // Nineteen JSON reads, the one read that hands back a picture, seventy-seven
     // writes, six input tools, the one that writes a file, and the one that
     // quits.
-    assert_eq!(catalog.len(), 104, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 105, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        76
+        77
     );
     // One tool can overwrite a file by name, six can press what a person can
     // press, File ▸ Save included, and one ends the viewer, losing what is not

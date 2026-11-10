@@ -264,6 +264,18 @@ pub(crate) struct Seeded {
     pub(crate) clamped_from: Option<[f64; 2]>,
 }
 
+/// What putting one point on the bench left
+/// ([`AppState::put_points_on_bench`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PutPoint {
+    /// The label of the point's item: the one the step put on, or the one
+    /// already on the bench from that point.
+    pub(crate) label: String,
+    /// Whether the step put that item on or rebuilt it, rather than finding it
+    /// on the bench as it was.
+    pub(crate) made: bool,
+}
+
 /// What one patch edit did, as much of it as a reply needs.
 ///
 /// The core reports are five different shapes and a caller outside this module
@@ -748,25 +760,62 @@ impl AppState {
     }
 
     /// Put the point `point` names on its node's bench as a track-stage
-    /// editable track, and focus it.
+    /// editable track, and focus it: the one-point call of
+    /// [`Self::put_points_on_bench`], followed by the focus.
     ///
-    /// The label is `label` when the caller names one, and otherwise the
-    /// point's portable id ([`crate::point_ids::mint`]), which is what a log
-    /// row naming the item has to carry to be worth reading, and which core
+    /// The track it put on is focused, and so is the item already on the bench
+    /// when one came from that point: the person asked to work on that point,
+    /// and there it is. That case pushes no version, and so is not refused
+    /// while the node is busy, and its focus writes the `Editing` row
+    /// ([`Self::focus_bench_item`]); a put or a rebuild writes its own row and
+    /// focuses without one ([`Self::focus_put_item`]).
+    pub(crate) fn put_point_on_bench(
+        &mut self,
+        point: PointRef,
+        label: Option<&str>,
+    ) -> Result<String, String> {
+        let put = self
+            .put_points_on_bench(point.recon, &[(point.point, label.map(str::to_string))])?
+            .remove(0);
+        if put.made {
+            self.focus_put_item(point.recon, &put.label);
+        } else {
+            self.focus_bench_item(point.recon, &put.label)?;
+        }
+        Ok(put.label)
+    }
+
+    /// Put the points `points` of `recon` on its bench as track-stage
+    /// editable tracks, as one version, and focus none of them.
+    ///
+    /// Each entry is a point index and the label its item goes on under. The
+    /// label is the entry's when it names one, and otherwise the point's
+    /// portable id ([`crate::point_ids::mint`]), which is what a log row
+    /// naming the item has to carry to be worth reading, and which core
     /// cannot mint because it sees one value rather than the node's version
-    /// graph. Either way a label another item holds takes core's `" (n)"`
-    /// suffix. Putting on a point a track already came from focuses that
-    /// track instead of putting a second one on, under the label it already
-    /// has: the person asked to work on that point, and there it is. That
-    /// case pushes no version, and so is not refused while the node is busy.
-    /// The one exception is an item put on the bench while the node was
-    /// `sift_files`, which has no patch frame: once the point has one, the
-    /// item is rebuilt from it under its own label, keeping its edits, as one
-    /// version ([`Self::rebuilt_with_patch_frame`]). A caller that names a label
-    /// other than the one that track has is refused, naming the label it has,
-    /// rather than having the name it asked for dropped without a word: a
-    /// rename is its own step, and the item's label is what every earlier
-    /// version and log row calls it.
+    /// graph. Either way a label another item holds, or one an earlier entry's
+    /// item took, takes core's `" (n)"` suffix.
+    ///
+    /// A point a track already came from keeps that track, under the label it
+    /// has: no second one is put on. The one exception is an item put on the
+    /// bench while the node was `sift_files`, which has no patch frame: once
+    /// the point has one, the item is rebuilt from it under its own label,
+    /// keeping its edits ([`Self::rebuilt_with_patch_frame`]). An entry that
+    /// names a label other than the one that track has is refused, naming the
+    /// label it has, rather than having the name it asked for dropped without
+    /// a word: a rename is its own step, and the item's label is what every
+    /// earlier version and log row calls it.
+    ///
+    /// A point named twice counts once. Its entries have to agree on the label
+    /// where both name one, and an entry that names none takes the other's.
+    ///
+    /// Every entry is checked before the bench is touched, so a refusal pushes
+    /// nothing: an empty list, a point the version does not hold, a label core
+    /// refuses, a label refused for a point already on the bench, a point
+    /// named twice under two labels, and, when anything would change, a busy
+    /// node. A call in which every point is on the bench already pushes no
+    /// version and writes no row, and so is not refused while the node is
+    /// busy.
     ///
     /// Putting a point on the bench is allowed on a view-only bench
     /// ([`Self::bench_view_only_refusal`]): it is how the bench shows a point.
@@ -776,60 +825,139 @@ impl AppState {
     /// defaults gives the new track those bars, in the same version, and the
     /// version label names them. The rows arrive pinned `in` either way, so
     /// the bars change no verdict until the rows are unpinned.
-    pub(crate) fn put_point_on_bench(
+    ///
+    /// The version label names each kind of change, the puts and the
+    /// rebuilds, by its own sentence when there is one of that kind (`Put
+    /// point 7 on the bench as <label>`, or the rebuild's) and counts it when
+    /// there are more (`Put 78 points on the bench`), joining the two kinds
+    /// with `, and `. Returns one
+    /// [`PutPoint`] per entry, in the order of `points`.
+    pub(crate) fn put_points_on_bench(
         &mut self,
-        point: PointRef,
-        label: Option<&str>,
-    ) -> Result<String, String> {
-        let index = self.node_index(point.recon)?;
-        if let Some(existing) = self.bench_item_from_point(point) {
-            if let Some(asked) = label.filter(|asked| *asked != existing) {
-                return Err(format!(
-                    "Point {} is on the bench already as {existing}, so it cannot go on as \
-                     {asked}; rename {existing} to call it {asked}.",
-                    point.point
-                ));
-            }
-            let label = existing;
-            if let Some(track) = self.rebuilt_with_patch_frame(point, &label) {
-                return self.reinstall_rebuilt(point, &label, track);
-            }
-            self.focus_bench_item(point.recon, &label)?;
-            return Ok(label);
+        recon: ReconId,
+        points: &[(u32, Option<String>)],
+    ) -> Result<Vec<PutPoint>, String> {
+        let index = self.node_index(recon)?;
+        if points.is_empty() {
+            return Err("No points to put on the bench.".to_string());
         }
-        if let Some(why) = self.busy_refusal(point.recon) {
-            return Err(why);
+        // One request per point, in the order the points are first named.
+        let mut requests: Vec<(u32, Option<&str>)> = Vec::new();
+        for (point, label) in points {
+            let label = label.as_deref();
+            match requests.iter_mut().find(|(named, _)| named == point) {
+                None => requests.push((*point, label)),
+                Some((_, held)) => match (*held, label) {
+                    (Some(first), Some(second)) if first != second => {
+                        return Err(format!(
+                            "Point {point} is named twice, as {first} and as {second}; name \
+                             it once."
+                        ));
+                    }
+                    (None, Some(_)) => *held = label,
+                    _ => {}
+                },
+            }
         }
-        let carried = (self.viewed_point() == Some(point)
-            && self.viewed_thresholds != Thresholds::default())
-        .then(|| self.viewed_thresholds.clone());
+        let viewed = self.viewed_point();
+        let carried = (self.viewed_thresholds != Thresholds::default())
+            .then(|| self.viewed_thresholds.clone());
         let node = &self.scene[index];
         let serial = node.history.current_version().serial;
-        let bench = Arc::clone(node.history.current_bench());
-        let label = match label {
-            Some(label) => label.to_string(),
-            None => crate::scene::point_id(node, point.index()),
-        };
-        let options = CreateTrackOptions {
-            version: serial.as_u64(),
-            label: Some(label),
-        };
-        let (mut next, report) = bench::create_track(&bench, node.edited(), point.point, &options)
-            .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
-        let mut text = format!("Put point {} on the bench as {}", point.point, report.label);
-        if let Some(bars) = carried {
-            let mut with_bars = (**next.track(&report.label).expect("just put on")).clone();
-            with_bars.thresholds = bars;
-            text.push_str(&format!(
-                ", with {}",
-                viewed::bars_phrase(&with_bars.thresholds)
+        let mut next = (**node.history.current_bench()).clone();
+        let mut puts: Vec<(u32, PutPoint)> = Vec::with_capacity(requests.len());
+        let mut made: Vec<String> = Vec::new();
+        let mut rebuilt: Vec<String> = Vec::new();
+        let mut with_bars = String::new();
+        for (number, label) in requests {
+            let point = PointRef::new(recon, number as usize);
+            if let Some(existing) = self.bench_item_from_point(point) {
+                if let Some(asked) = label.filter(|asked| *asked != existing) {
+                    return Err(format!(
+                        "Point {number} is on the bench already as {existing}, so it cannot go \
+                         on as {asked}; rename {existing} to call it {asked}."
+                    ));
+                }
+                let track = self.rebuilt_with_patch_frame(point, &existing);
+                let made_here = track.is_some();
+                if let Some(track) = track {
+                    next = install(&next, &existing, track)?;
+                    rebuilt.push(format!(
+                        "rebuilt {existing} from point {number}, which now carries a patch frame"
+                    ));
+                }
+                puts.push((
+                    number,
+                    PutPoint {
+                        label: existing,
+                        made: made_here,
+                    },
+                ));
+                continue;
+            }
+            let options = CreateTrackOptions {
+                version: serial.as_u64(),
+                label: Some(match label {
+                    Some(label) => label.to_string(),
+                    None => crate::scene::point_id(node, point.index()),
+                }),
+            };
+            let (put, report) = bench::create_track(&next, node.edited(), number, &options)
+                .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
+            next = put;
+            let mut text = format!("put point {number} on the bench as {}", report.label);
+            if let Some(bars) = carried.as_ref().filter(|_| viewed == Some(point)) {
+                let mut track = (**next.track(&report.label).expect("just put on")).clone();
+                track.thresholds = bars.clone();
+                let phrase = viewed::bars_phrase(bars);
+                text.push_str(&format!(", with {phrase}"));
+                with_bars = format!(", point {number} with {phrase}");
+                next = install(&next, &report.label, track)?;
+            }
+            made.push(text);
+            puts.push((
+                number,
+                PutPoint {
+                    label: report.label,
+                    made: true,
+                },
             ));
-            next = install(&next, &report.label, with_bars)?;
         }
-        self.push_bench_step(index, next, text);
-        self.focus_put_item(point.recon, &report.label);
-        self.refresh_index_files(point.recon);
-        Ok(report.label)
+        let any_made = !made.is_empty();
+        let mut phrases = Vec::new();
+        match made.len() {
+            0 => {}
+            1 => phrases.append(&mut made),
+            many => phrases.push(format!("put {many} points on the bench{with_bars}")),
+        }
+        match rebuilt.len() {
+            0 => {}
+            1 => phrases.append(&mut rebuilt),
+            many => phrases.push(format!(
+                "rebuilt {many} items from their points, which now carry a patch frame"
+            )),
+        }
+        if !phrases.is_empty() {
+            if let Some(why) = self.busy_refusal(recon) {
+                return Err(why);
+            }
+            // Every phrase starts with a lower-case ASCII verb.
+            let mut text = phrases.join(", and ");
+            text[..1].make_ascii_uppercase();
+            self.push_bench_step(index, next, text);
+            if any_made {
+                self.refresh_index_files(recon);
+            }
+        }
+        Ok(points
+            .iter()
+            .map(|(point, _)| {
+                puts.iter()
+                    .find(|(named, _)| named == point)
+                    .map(|(_, put)| put.clone())
+                    .expect("every point named has a request")
+            })
+            .collect())
     }
 
     /// Why a step that edits `id`'s bench cannot run, or `None` when it can:
@@ -913,29 +1041,6 @@ impl AppState {
              {point} on the bench again to give {label} the patch frame the point now carries, then \
              duplicate it."
         ))
-    }
-
-    /// Replace the item `label`, which has no patch frame, with `track`, which carries the
-    /// patch frame of `point`, as one bench version, and focus it.
-    fn reinstall_rebuilt(
-        &mut self,
-        point: PointRef,
-        label: &str,
-        track: EditableTrack,
-    ) -> Result<String, String> {
-        if let Some(why) = self.busy_refusal(point.recon) {
-            return Err(why);
-        }
-        let index = self.node_index(point.recon)?;
-        let bench = Arc::clone(self.scene[index].history.current_bench());
-        let next = install(&bench, label, track)?;
-        let text = format!(
-            "Rebuilt {label} from point {}, which now carries a patch frame",
-            point.point
-        );
-        self.push_bench_step(index, next, text);
-        self.focus_put_item(point.recon, label);
-        Ok(label.to_string())
     }
 
     /// The label of the item on `point`'s node's bench that came from

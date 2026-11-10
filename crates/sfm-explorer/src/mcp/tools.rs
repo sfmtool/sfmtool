@@ -529,6 +529,10 @@ pub(crate) fn parse(
             point: args.point("point")?,
             label: args.new_item_label("label")?,
         },
+        "create_bench_tracks" => Command::CreateBenchTracks {
+            reconstruction_label: args.required_string("reconstruction_label")?,
+            points: args.bench_points("points")?,
+        },
         "create_track_at_pixel" => Command::CreateTrackAtPixel {
             reconstruction_label: args.required_string("reconstruction_label")?,
             camera_image: args.camera_image("camera_image")?,
@@ -1995,6 +1999,34 @@ impl Args<'_> {
                     .as_u64()
                     .and_then(|index| u32::try_from(index).ok())
                     .ok_or_else(|| self.wrong_type(key, expected, value))
+            })
+            .collect()
+    }
+
+    /// The entries of `create_bench_tracks`: each a point, read as
+    /// [`Self::point`] reads one, and the label its item goes on under, read as
+    /// [`Self::new_item_label`] reads one.
+    fn bench_points(&self, key: &str) -> Result<Vec<(PointQuery, Option<String>)>, ToolError> {
+        let expected = "an array of objects, each with point and optionally label";
+        let value = self
+            .map
+            .get(key)
+            .ok_or_else(|| self.error(format!("needs {key}: {expected}.")))?;
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        array
+            .iter()
+            .map(|element| {
+                let map = element
+                    .as_object()
+                    .ok_or_else(|| self.wrong_type(key, expected, value))?;
+                let inner = Args {
+                    tool: "create_bench_tracks.points",
+                    map,
+                };
+                inner.reject_unknown_nested()?;
+                Ok((inner.point("point")?, inner.new_item_label("label")?))
             })
             .collect()
     }
