@@ -389,20 +389,21 @@ def _camrig_sequence(
         )
     if problems:
         return None, problems
-    data = camrig_rig.data
-    return (
-        PickSequence(
-            patterns=patterns,
-            numbers=numbers,
-            images=[[Path(frames[n][s]) for s in sensors] for n in numbers],
-            sensors=[stored[s] for s in sensors],
-            camera=data["cameras"][data["camera_indexes"][sensors[0]]],
-            camera_source=(
-                f"the camera of {camrig_rig.camrig_file}, sensor {stored[sensors[0]]}"
-            ),
-        ),
-        problems,
+    sequence = PickSequence(
+        patterns=patterns,
+        numbers=numbers,
+        images=[[Path(frames[n][s]) for s in sensors] for n in numbers],
+        sensors=[stored[s] for s in sensors],
     )
+    # A rig given none of its images is a sequence of no frames, with no
+    # reference sensor to take a camera from.
+    if sensors:
+        data = camrig_rig.data
+        sequence.camera = data["cameras"][data["camera_indexes"][sensors[0]]]
+        sequence.camera_source = (
+            f"the camera of {camrig_rig.camrig_file}, sensor {stored[sensors[0]]}"
+        )
+    return sequence, problems
 
 
 def sift_path(image_path: Path, feature_prefix_dir: str) -> Path:
