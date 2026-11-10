@@ -472,3 +472,162 @@ fn ctrl_d_in_surface_tiling_mode_unpins_the_copy_and_drops_its_out_rows() {
         "no drop after the unpin: {rows:?}"
     );
 }
+
+// ── What a double-click on a Bench row does to the 3D view ──────────────
+
+/// The similarity the bench fixture's node is drawn under here, so a target
+/// read in the node's own coordinates misses where the point is drawn.
+fn framing() -> sfmtool_core::Se3Transform {
+    sfmtool_core::Se3Transform::new(
+        sfmtool_core::RotQuaternion::from_axis_angle(nalgebra::Vector3::new(0.3, -0.7, 0.6), 0.9)
+            .unwrap(),
+        nalgebra::Vector3::new(4.0, -2.5, 1.25),
+        2.0,
+    )
+}
+
+/// The bench fixture with its point staged and its node drawn under
+/// [`framing`], and the label the point took.
+fn staged_and_framed() -> (AppState, crate::scene::ReconId, String) {
+    let (mut state, id) = crate::bench::tests::state();
+    state.set_node_transform(id, framing()).expect("a reframe");
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    (state, id, label)
+}
+
+/// A viewer looking at `point` from a few units away, with `point` a little
+/// off the middle of the view: inside the middle where a pan alone reaches
+/// it, and off the target so that moving onto it is a motion.
+fn looking_near(point: nalgebra::Point3<f64>) -> crate::viewer_3d::Viewer3D {
+    let mut viewer = crate::viewer_3d::Viewer3D::new();
+    viewer.panel_size = [1600, 900];
+    viewer.camera.world_up = nalgebra::Vector3::z();
+    let eye = point + nalgebra::Vector3::new(0.0, -6.0, 0.5);
+    let aim = point + nalgebra::Vector3::new(0.4, 0.0, -0.3);
+    viewer.camera.camera = sfmtool_core::Camera::look_at(eye, aim, nalgebra::Vector3::z());
+    viewer
+}
+
+/// The track's own point on `id`'s bench, in the node's coordinates.
+fn bench_position(
+    state: &AppState,
+    id: crate::scene::ReconId,
+    label: &str,
+) -> nalgebra::Point3<f64> {
+    match &state.bench_track(id, label).expect("on the bench").stage {
+        sfmtool_core::bench::Stage::Track(payload) => payload.position.expect("triangulated"),
+        sfmtool_core::bench::Stage::Cluster(_) => panic!("{label} is a cluster"),
+    }
+}
+
+/// A double-click on a staged point's Bench row ends the 3D view where a
+/// double-click on that point in the viewport ends it -- the same position,
+/// orientation and orbit target -- with the point put through the node's
+/// transform, and still focuses the item and raises Track View on it.
+#[test]
+fn a_double_click_on_a_bench_row_moves_the_view_as_one_on_its_point_does() {
+    let (mut state, id, label) = staged_and_framed();
+    state.unfocus_bench_item();
+    state.hide_panel(crate::dock::Tab::TrackView);
+    let point = PointRef::new(id, crate::bench::tests::POINT as usize);
+    let Some(crate::scene::WorldPoint::At(drawn)) = crate::scene::world_point(&state.scene, point)
+    else {
+        panic!("the fixture's point is a place");
+    };
+
+    // The viewport's double-click on the point.
+    let mut in_viewport = looking_near(drawn);
+    let start = in_viewport.camera.camera.clone();
+    assert!(in_viewport.move_target_to(drawn, 0.0), "no viewport move");
+    in_viewport.finish_transition();
+
+    // The Scene tree's double-click on the point's Bench row.
+    let mut from_row = looking_near(drawn);
+    let position = state.bench(id).unwrap().entries().len() - 1;
+    super::apply_bench_edit(&mut state, &mut from_row, id, position, 0.0);
+    from_row.finish_transition();
+
+    let (a, b) = (&in_viewport.camera.camera, &from_row.camera.camera);
+    assert!(
+        (b.position - start.position).norm() > 1e-3,
+        "the view did not move"
+    );
+    assert!(
+        (b.target() - drawn).norm() < 1e-9,
+        "target {:?}",
+        b.target()
+    );
+    // With the target, these two are the whole end state: the orbit distance
+    // is the target's distance along the view direction.
+    assert!(b.orientation.angle_to(&a.orientation) < 1e-9, "turned");
+    assert!((b.position - a.position).norm() < 1e-9, "moved elsewhere");
+
+    assert_eq!(state.focused_item_label(id), Some(label.as_str()));
+    assert!(state.is_panel_open(crate::dock::Tab::TrackView));
+}
+
+/// The view goes to the bench track's own point, where the bench layer draws
+/// its patch, and not to the stored point it came from once a hand edit has
+/// moved the two apart.
+#[test]
+fn a_double_click_on_an_edited_bench_row_goes_to_the_moved_patch() {
+    let (mut state, id, label) = staged_and_framed();
+    let track = state.bench_track(id, &label).unwrap().clone();
+    let site = track.observations[0].site().expect("a sighting");
+    let edit = crate::bench::PatchEdit::TranslateToPixel {
+        viewpoint: sfmtool_core::bench::Viewpoint::Observation(0),
+        pixel: [site[0] + 4.0, site[1] - 3.0],
+    };
+    assert!(state.edit_bench_patch(id, &label, &edit).unwrap().changed);
+    let moved = framing().apply_to_point(&bench_position(&state, id, &label));
+    let point = PointRef::new(id, crate::bench::tests::POINT as usize);
+    let Some(crate::scene::WorldPoint::At(stored)) = crate::scene::world_point(&state.scene, point)
+    else {
+        panic!("the fixture's point is a place");
+    };
+    assert!(
+        (moved - stored).norm() > 1e-3,
+        "the edit did not move the patch"
+    );
+
+    let mut viewer = looking_near(moved);
+    let position = state.bench(id).unwrap().entries().len() - 1;
+    super::apply_bench_edit(&mut state, &mut viewer, id, position, 0.0);
+    viewer.finish_transition();
+
+    assert!((viewer.camera.camera.target() - moved).norm() < 1e-9);
+}
+
+/// A cluster-stage item has no place in the world, so a double-click on its
+/// row focuses it and leaves the 3D view where it was.
+#[test]
+fn a_double_click_on_a_cluster_row_leaves_the_view_alone() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: [120.0, 90.0],
+                radius_px: Some(6.0),
+            },
+            None,
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    state.unfocus_bench_item();
+    let mut viewer = looking_near(nalgebra::Point3::origin());
+    let start = viewer.camera.camera.clone();
+
+    super::apply_bench_edit(&mut state, &mut viewer, id, 0, 0.0);
+    viewer.finish_transition();
+
+    assert_eq!(
+        viewer.camera.camera.position, start.position,
+        "the view moved"
+    );
+    assert_eq!(
+        viewer.camera.camera.orientation, start.orientation,
+        "the view turned"
+    );
+    assert_eq!(state.focused_item_label(id), Some(label.as_str()));
+}

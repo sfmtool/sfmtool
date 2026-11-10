@@ -676,7 +676,9 @@ bench with nothing focused is refused and pushes nothing.
   this layer draws the one being worked on, as the Image Detail bench layer
   does. Clicking a track in the world to focus it is not something the
   layer offers; a track is focused by a double-click on its row in the Scene
-  tree, or by ticking *Edit* in Track View over a selected point
+  tree, which also moves the viewport onto the patch's centre
+  ([`scene-graph.md`](scene-graph.md) § "Tree rows"), or by ticking *Edit* in
+  Track View over a selected point
   ([`track-view.md`](track-view.md)). With nothing focused, which a bench holding
   items can be, the layer draws nothing.
 - **Putting the viewport on the patch.** The patch menu moves the world onto the

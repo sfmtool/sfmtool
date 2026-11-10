@@ -1163,21 +1163,18 @@ impl App {
                 // infinity is turned toward.
                 if let Some(point) = image_detail.take_target_point() {
                     let current_time = ui.input(|i| i.time);
-                    match crate::scene::world_point(&app_state.scene, point) {
-                        Some(crate::scene::WorldPoint::At(position)) => {
-                            viewer_3d.turn_and_move_target_to(position, current_time);
-                        }
-                        Some(crate::scene::WorldPoint::Toward(direction)) => {
-                            viewer_3d.turn_toward_bearing(direction, current_time);
-                        }
-                        None => {}
-                    }
+                    turn_and_move_onto(
+                        viewer_3d,
+                        crate::scene::world_point(&app_state.scene, point),
+                        current_time,
+                    );
                 }
                 if let Some((image, pixel)) = image_detail.take_cluster_start() {
                     app_state.start_cluster_here(image, pixel);
                 }
                 if let Some((id, position)) = scene_graph.take_bench_edit() {
-                    app_state.edit_bench_item_at(id, position);
+                    let current_time = ui.input(|i| i.time);
+                    apply_bench_edit(app_state, viewer_3d, id, position, current_time);
                 }
                 // A Camera Intrinsics row's `Switch Camera Model…`, which
                 // raises the Camera Intrinsics panel on the proposal.
@@ -1391,6 +1388,54 @@ fn note_upload(phase: &mut Phase<'_>, did: Uploaded, unit: &str, units: &str) {
             progress_note!(*phase, "{n} {}", if n == 1 { unit } else { units })
         }
     }
+}
+
+/// Move the 3D viewport's orbit target onto `target`, turning the camera
+/// first when it is far from the middle of the viewport
+/// ([`crate::viewer_3d::Viewer3D::turn_and_move_target_to`]), or turn toward
+/// it when it is a bearing ([`crate::viewer_3d::Viewer3D::turn_toward_bearing`]).
+/// `None` moves nothing.
+///
+/// The view move of the two double-clicks made outside the viewport on
+/// something it draws: a tracked feature in Image Detail, and a Bench row in
+/// the Scene tree. Either can name a point anywhere in the scene, which is why
+/// the move may turn; a point already in the middle of the viewport is panned
+/// to as the viewport's own double-click on it pans.
+fn turn_and_move_onto(
+    viewer_3d: &mut crate::viewer_3d::Viewer3D,
+    target: Option<crate::scene::WorldPoint>,
+    current_time: f64,
+) {
+    match target {
+        Some(crate::scene::WorldPoint::At(position)) => {
+            viewer_3d.turn_and_move_target_to(position, current_time);
+        }
+        Some(crate::scene::WorldPoint::Toward(direction)) => {
+            viewer_3d.turn_toward_bearing(direction, current_time);
+        }
+        None => {}
+    }
+}
+
+/// A Scene tree double-click on the Bench row at `position` on `id`'s bench:
+/// focus the item and raise Track View on it
+/// ([`crate::state::AppState::edit_bench_item_at`]), and move the 3D viewport
+/// onto the item's own point ([`crate::scene::bench_world_point`]). A
+/// cluster-stage item has no point, so for one the viewport stays where it is.
+///
+/// Applied by the frame once the dock is back in the state, since the raise is
+/// a layout operation.
+fn apply_bench_edit(
+    state: &mut crate::state::AppState,
+    viewer_3d: &mut crate::viewer_3d::Viewer3D,
+    id: crate::scene::ReconId,
+    position: usize,
+    current_time: f64,
+) {
+    state.edit_bench_item_at(id, position);
+    let target = crate::scene::node_by_id(&state.scene, id)
+        .and_then(|node| crate::scene::bench_world_point(node, position));
+    turn_and_move_onto(viewer_3d, target, current_time);
 }
 
 /// What a viewport click that picked a point does to the document: select it,
