@@ -323,15 +323,7 @@ fn unequal_lengths_use_the_shorter_prefix() {
 /// Correspondences of points in front of both cameras, `plus` of them seen
 /// from `(R, +t)` and `minus` from `(R, −t)`. Every one satisfies the same
 /// epipolar matrix `[t]×·R`, so only cheirality tells the two signs apart.
-fn mixed_sign_scene(
-    plus: usize,
-    minus: usize,
-) -> (
-    Vec<Vector3<f64>>,
-    Vec<Vector3<f64>>,
-    Matrix3<f64>,
-    Vector3<f64>,
-) {
+fn mixed_sign_scene(plus: usize, minus: usize) -> TwoViewScene {
     let rot = planted_rotation(0.2);
     let t = Vector3::new(0.6, 0.1, -0.2);
     let r1 = planted_rays(plus + minus, 1.2);
