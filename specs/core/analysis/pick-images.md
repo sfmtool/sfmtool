@@ -540,7 +540,9 @@ of 1 no pilot runs, since the term it would serve is off.
    ([estimate-intrinsics.md](../geometry/estimate-intrinsics.md)): the same
    clusters and the same estimate as `sfm match --cluster --max-features
    1500` followed by `sfm estimate-intrinsics --model auto` on them, made in
-   memory, with nothing written. The image size is the frames' size, as their
+   memory, with nothing written, but for the order of the frames: here their
+   order in the sequence, where `sfm match` sorts the images by name, the
+   same order when the file numbers are zero-padded. The image size is the frames' size, as their
    `.sift` files record it.
 3. **The camera.** The vote's camera is at its consensus focal, at the
    frames' size, with the principal point at the image centre, where the

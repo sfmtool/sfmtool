@@ -415,19 +415,36 @@ def test_a_fisheye_pilot_vote_names_its_model():
         "n_pool": 11,
         "outcome": {"status": "used"},
     }
-    assert pilot_source(vote) == (
+    rels = ["a/x_1.jpg", "a/x_2.jpg"]
+    # A .camrig covering one of the two frames gives the sequence no camera.
+    partial = CamrigCamera(
+        camrig_file=ROOT / "a.camrig",
+        camera=RIG_CAMERAS[0],
+        images={(ROOT / rels[0]).resolve()},
+    )
+    (sequence,) = collect_sequences([ROOT / r for r in rels], ROOT)
+    (covered,) = collect_sequences(
+        [ROOT / r for r in rels], ROOT, camrig_cameras=[partial]
+    )
+    assert pilot_source(vote, sequence) == (
         "the pilot vote's equidistant fisheye camera, focal 1034.8 px, "
         "pool spread 0.091"
     )
     # An unconfirmed fisheye verdict is measured with as a fisheye, and says
     # it is unconfirmed.
     vote["confirmed"] = False
-    assert pilot_source(vote).startswith(
+    assert pilot_source(vote, sequence).startswith(
         "the pilot vote's unconfirmed equidistant fisheye camera, "
     )
     vote["outcome"] = {"status": "wide_spread", "max_pool_spread": 0.35}
     vote["pool_spread"] = 0.49
-    assert pilot_source(vote) == (
+    assert pilot_source(vote, sequence) == (
         "the pilot vote's pool spread 0.490 is above 0.35 (unconfirmed "
         "equidistant fisheye, focal 1034.8 px)"
+    )
+    # The note of a .camrig that covers only some of the frames is kept.
+    assert pilot_source(vote, covered) == (
+        "the pilot vote's pool spread 0.490 is above 0.35 (unconfirmed "
+        f"equidistant fisheye, focal 1034.8 px); {ROOT / 'a.camrig'} covers "
+        "only 1 of its 2 frames"
     )

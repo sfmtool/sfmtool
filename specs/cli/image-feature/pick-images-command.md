@@ -261,7 +261,8 @@ the sequence's first 30 frames without the term, clusters the first 1,500
 features of each and runs the focal vote of
 [`sfm estimate-intrinsics`](../reconstruction/estimate-intrinsics-command.md)
 on the clusters, as `sfm match --cluster --max-features 1500` and
-`sfm estimate-intrinsics --model auto` would, in memory. It then walks the
+`sfm estimate-intrinsics --model auto` would, in memory, with the frames in
+file-number order where `sfm match` sorts them by name. It then walks the
 sequence again from its first frame, measuring with the vote's camera: a
 pinhole, or an equidistant fisheye for a fisheye verdict, confirmed or not,
 at the vote's focal with the principal point at the image centre
@@ -473,7 +474,10 @@ rest.
   `the pilot vote reached no consensus (1 pooled vote)`, `the pilot vote's
   pool spread 0.588 is above 0.35 (pinhole, focal 215.4 px)`); the camera's
   aspect is not the frames'; or the walk refuses the camera, with the reason
-  (`the camera of … cannot be measured with: …`). A fisheye verdict is named
+  (`the camera of … cannot be measured with: …`). For a sequence that a
+  single-sensor `.camrig` covers only in part, the pilot vote's text, used or
+  not, is followed by the `.camrig`'s and how many of the frames it covers
+  (`; /captures/a.camrig covers only 120 of its 3478 frames`). A fisheye verdict is named
   `equidistant fisheye`, or `unconfirmed equidistant fisheye` when it carries
   no certified rotation votes.
 - **The pilot vote.** When a pilot vote ran, the line after the term's gives

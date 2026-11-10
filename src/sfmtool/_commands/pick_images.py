@@ -320,7 +320,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         )
     for sequence, walked in zip(sequences, report["sequences"]):
         if walked["pilot_vote"] is not None:
-            sequence.camera_source = pilot_source(walked["pilot_vote"])
+            sequence.camera_source = pilot_source(walked["pilot_vote"], sequence)
     extracted = [{} for _ in sequences]
     for frame, written in zip(report["frames"], report["frames_extracted"]):
         extracted[frame["id"]["sequence"]][frame["id"]["frame"]] = written

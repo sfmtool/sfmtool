@@ -68,10 +68,19 @@ def _vote_model(vote: dict) -> str:
     return "pinhole"
 
 
-def pilot_source(vote: dict) -> str:
-    """What a sequence's camera source is after its pilot vote: the vote's
+def pilot_source(vote: dict, sequence: PickSequence) -> str:
+    """What `sequence`'s camera source is after its pilot vote: the vote's
     camera, with its model, focal and pool spread, or why the vote gave it
-    none."""
+    none, followed by the note of a `.camrig` that covers only some of its
+    frames."""
+    text = _vote_source(vote)
+    if sequence.camera_source != PickSequence.camera_source:
+        text = f"{text}; {sequence.camera_source}"
+    return text
+
+
+def _vote_source(vote: dict) -> str:
+    """The camera a pilot vote gave, or why it gave none."""
     outcome = vote["outcome"]
     status = outcome["status"]
     if status == "used":
