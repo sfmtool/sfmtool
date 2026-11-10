@@ -744,7 +744,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                              source-image px: reprojection_error where the track is \
                              triangulated, projection_offset_px before it is. Track stage only. \
                              It judges the point as much as the sighting, so a mis-triangulated \
-                             point fails it on every row. The bench's default is 3, and 0 \
+                             point fails it on every row. The bench's default is 40, and 0 \
                              turns it off. An observation with no reading clears it.",
                         ),
                     ),

@@ -1055,7 +1055,7 @@ pub const BENCH_MAX_SHIFT_PX: f64 = 6.0;
 /// that do not quite fit the point, and bundle adjustment then pulls the point
 /// and the cameras together. A tight bar would turn those observations out
 /// before that could happen.
-pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 15.0;
+pub const BENCH_MAX_PROJECTION_ERROR_PX: f64 = 40.0;
 
 /// The bench's default [`Thresholds::min_zncc`], the track stage's bar on the
 /// blur-matched score against the stored bitmap: `0.70`.
