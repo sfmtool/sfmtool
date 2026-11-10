@@ -50,8 +50,8 @@ pub use pose_verification::{
 };
 pub use reconstruction_growth::{grow_reconstruction, GrowOptions, ReconstructionGrowth};
 pub use relative_pose::{
-    estimate_essential_rays, fit_ray_rotation, EpipolarSide, RayEssential, RayEssentialOptions,
-    RayRotation, RayRotationOptions,
+    decompose_essential_rays, estimate_essential_rays, fit_ray_rotation, EpipolarSide,
+    RayEssential, RayEssentialOptions, RayRelativePose, RayRotation, RayRotationOptions,
 };
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_images::{

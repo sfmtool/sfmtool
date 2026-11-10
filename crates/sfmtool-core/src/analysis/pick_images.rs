@@ -18,7 +18,9 @@
 //! chooses.
 //!
 //! [`match_frame_pair`] matches the features of two frames through a KD-forest
-//! per frame and reports the number of mutual matches and the step.
+//! per frame and reports the number of mutual matches and the step and, given
+//! a camera, the essential split of the matches ([`measure_essential_split`]):
+//! the rotation between the frames and the parallax left once it is taken out.
 //! [`FrameFeatures`] holds one frame's features with its forest built once,
 //! so a frame matched with several others is indexed once.
 //!
@@ -26,6 +28,7 @@
 //! `specs/core/analysis/frame-pair-matching.md`.
 
 mod capture;
+mod essential_split;
 mod frame_pair;
 mod frames;
 mod pick;
@@ -38,6 +41,10 @@ mod tests;
 
 pub use capture::{
     CaptureFrame, CaptureImage, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
+};
+pub use essential_split::{
+    measure_essential_split, EssentialSplit, EssentialSplitOptions, EssentialSplitOutcome,
+    SplitNotMeasured,
 };
 pub use frame_pair::{
     match_frame_pair, FrameFeatures, FramePairError, FramePairOptions, FramePairStats,

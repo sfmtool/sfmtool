@@ -427,6 +427,9 @@ positions, not numbers), with these keys added:
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
 
 The file is written after the report and the list.
+Each pair's and each step's `stats` hold an `essential_split` key, which is
+`null`: the command gives the walk no camera, so it measures no essential
+split ([core/analysis/pick-images.md § The report](../../core/analysis/pick-images.md#the-report)).
 With a tool other than `sfmtool`, `frames_extracted` and
 `frames_extracted_unread` are the command's, from the extraction made first.
 

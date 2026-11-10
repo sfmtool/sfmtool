@@ -228,19 +228,27 @@ fn best_rows(normals: &[Vector3<f64>], direction: &Vector3<f64>, take: usize) ->
 fn cheiral_votes(ui: &[Vector3<f64>], uj: &[Vector3<f64>], d: &Vector3<f64>) -> usize {
     ui.iter()
         .zip(uj)
-        .filter(|(a, b)| {
-            // c_i = 0, c_j = d. Solve s u_i - t u_j = d in least squares.
-            let a11 = a.dot(a);
-            let a12 = -a.dot(b);
-            let a22 = b.dot(b);
-            let b1 = a.dot(d);
-            let b2 = -b.dot(d);
-            let det = a11 * a22 - a12 * a12;
-            let s = (a22 * b1 - a12 * b2) / det;
-            let t = (a11 * b2 - a12 * b1) / det;
-            s > 0.0 && t > 0.0
-        })
+        .filter(|(a, b)| in_front_of_both(a, b, d))
         .count()
+}
+
+/// Whether the closest approach of the ray along `a` from the origin and the
+/// ray along `b` from `d` lies at a positive depth along both rays: the point
+/// they triangulate is in front of both cameras. Depth is measured along each
+/// ray, not by the sign of a `z`, so a ray past 90° off a camera's axis counts
+/// like any other. Rays that are exactly parallel have no closest approach and
+/// are not in front.
+pub(crate) fn in_front_of_both(a: &Vector3<f64>, b: &Vector3<f64>, d: &Vector3<f64>) -> bool {
+    // c_i = 0, c_j = d. Solve s a - t b = d in least squares.
+    let a11 = a.dot(a);
+    let a12 = -a.dot(b);
+    let a22 = b.dot(b);
+    let b1 = a.dot(d);
+    let b2 = -b.dot(d);
+    let det = a11 * a22 - a12 * a12;
+    let s = (a22 * b1 - a12 * b2) / det;
+    let t = (a11 * b2 - a12 * b1) / det;
+    s > 0.0 && t > 0.0
 }
 
 /// Round half to even, so a trim fraction landing exactly on a half row does

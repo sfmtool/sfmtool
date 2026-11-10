@@ -183,7 +183,8 @@ pub enum PickImagesError {
     /// in its folder after the up-front check.
     Version1Sift { path: PathBuf },
     /// Two frames could not be matched: their reference sensor's images
-    /// differ in size.
+    /// differ in size, or the essential split's camera is of another size
+    /// than they are.
     Pair {
         a: FrameId,
         b: FrameId,

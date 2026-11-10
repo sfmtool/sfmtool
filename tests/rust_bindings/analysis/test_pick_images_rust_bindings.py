@@ -12,6 +12,7 @@ import pytest
 
 from sfmtool.analysis import FrameFeatures, match_frame_pair
 from sfmtool.fileio import SiftFile
+from sfmtool.geometry import CameraIntrinsics
 
 WIDTH, HEIGHT = 960, 540
 
@@ -32,11 +33,106 @@ def _translated_pair(n=200, shift=(48.0, -24.0), seed=0):
 def test_a_known_translation_gives_its_step():
     a, b = _translated_pair()
     stats = match_frame_pair(a, b)
-    assert set(stats) == {"matches", "step_percent"}
+    assert set(stats) == {"matches", "step_percent", "essential_split"}
+    assert stats["essential_split"] is None
     assert stats["matches"] == 200
     assert stats["step_percent"] == pytest.approx(
         100 * np.hypot(48, 24) / 960, abs=1e-4
     )
+
+
+def _camera(width=WIDTH, height=HEIGHT):
+    return CameraIntrinsics(
+        "SIMPLE_PINHOLE",
+        width,
+        height,
+        {
+            "focal_length": 700.0,
+            "principal_point_x": width / 2,
+            "principal_point_y": height / 2,
+        },
+    )
+
+
+def _turned_pair(camera, degrees, n=300, seed=3):
+    """Two frames of the same random descriptors, the second the first seen
+    by ``camera`` turned ``degrees`` about its vertical axis."""
+    rng = np.random.default_rng(seed)
+    angle = np.radians(degrees)
+    turn = np.array(
+        [
+            [np.cos(angle), 0, np.sin(angle)],
+            [0, 1, 0],
+            [-np.sin(angle), 0, np.cos(angle)],
+        ]
+    )
+    a, b = [], []
+    while len(a) < n:
+        u, v = rng.uniform([0, 0], [WIDTH, HEIGHT])
+        pixel = camera.ray_to_pixel(turn @ np.asarray(camera.pixel_to_ray(u, v)))
+        if pixel is not None and 0 < pixel[0] < WIDTH and 0 < pixel[1] < HEIGHT:
+            a.append((u, v))
+            b.append(pixel)
+    descriptors = rng.integers(0, 256, size=(n, 128), dtype=np.uint8)
+    return (
+        FrameFeatures(np.asarray(a), descriptors, WIDTH, HEIGHT),
+        FrameFeatures(np.asarray(b), descriptors, WIDTH, HEIGHT),
+    )
+
+
+def test_a_camera_measures_the_essential_split():
+    camera = _camera()
+    a, b = _turned_pair(camera, 5.0)
+    stats = match_frame_pair(a, b, camera=camera, seed=7)
+    split = stats["essential_split"]
+    assert set(split) == {
+        "status",
+        "matches",
+        "inliers",
+        "rotation_deg",
+        "parallax_p50_deg",
+        "parallax_p90_deg",
+    }
+    assert split["status"] == "measured"
+    assert split["matches"] == stats["matches"] == 300
+    assert split["inliers"] >= 290
+    assert split["rotation_deg"] == pytest.approx(5.0, abs=0.01)
+    assert split["parallax_p90_deg"] < 0.01
+    # The matches and the step are those of the pair without a camera, and
+    # the split repeats for its seed.
+    plain = match_frame_pair(a, b)
+    assert (stats["matches"], stats["step_percent"]) == (
+        plain["matches"],
+        plain["step_percent"],
+    )
+    assert match_frame_pair(a, b, camera=camera, seed=7) == stats
+
+
+def test_an_essential_split_that_cannot_be_measured_says_why():
+    camera = _camera()
+    a, b = _turned_pair(camera, 5.0, n=11)
+    split = match_frame_pair(a, b, camera=camera)["essential_split"]
+    assert split == {
+        "status": "not_measured",
+        "matches": 11,
+        "reason": "too_few_matches",
+    }
+    # With a lower floor the same eleven matches are measured.
+    split = match_frame_pair(a, b, camera=camera, min_inliers=8)["essential_split"]
+    assert split["status"] == "measured"
+
+
+def test_essential_split_options_are_checked():
+    camera = _camera()
+    a, b = _turned_pair(camera, 5.0, n=20)
+    with pytest.raises(ValueError, match="needs a camera"):
+        match_frame_pair(a, b, seed=1)
+    with pytest.raises(ValueError, match="tolerance_px"):
+        match_frame_pair(a, b, camera=camera, tolerance_px=0.0)
+    with pytest.raises(ValueError, match="min_inliers"):
+        match_frame_pair(a, b, camera=camera, min_inliers=7)
+    with pytest.raises(ValueError, match="480 x 270 but the frames are 960 x 540"):
+        match_frame_pair(a, b, camera=_camera(WIDTH // 2, HEIGHT // 2))
 
 
 def test_frame_features_reports_its_size():

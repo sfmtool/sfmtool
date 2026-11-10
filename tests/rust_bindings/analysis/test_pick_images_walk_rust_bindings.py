@@ -129,6 +129,8 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     assert 8 <= np.median(strides) <= 12
     steps = [s["stats"]["step_percent"] for s in walk["steps"]]
     assert 7 <= np.median(steps) <= 13
+    # The walk is given no camera, so no pair has an essential split.
+    assert all(p["stats"]["essential_split"] is None for p in report["pairs"])
     assert walk["swaps"] == []
     read = _read(report)
     assert len(set(read)) == len(read) == walk["frames_read"] < 150

@@ -163,8 +163,8 @@ whether a worker reached it depends on timing. `ReadSift` is a `.sift` file that
 whose readings or features break the format's rules, such as a negative
 sharpness or a feature count that disagrees with the metadata, each wrapped as
 the `SiftError::InvalidFormat` a damaged file is. `Pair` is two frames whose
-reference images differ in size, the one `FramePairError` the options checks
-leave possible. `Cancelled` is a set cancel flag. No caller input panics
+reference images differ in size, or an essential split camera of another size
+than the frames, the two `FramePairError`s the options checks leave possible. `Cancelled` is a set cancel flag. No caller input panics
 ([STANDARDS.md § Caller input never panics](../../STANDARDS.md#caller-input-never-panics)).
 
 **A `Progress`.** A walk over a long video runs for minutes, mostly in
@@ -217,6 +217,14 @@ walk read.
 
 Every type serializes with `serde`, a number that is not finite as `null`, so
 a caller writes the whole report as JSON as it is.
+
+Each `FramePairStats`, of a pair and of a step, carries the pair's essential
+split ([frame-pair-matching.md § The essential split](frame-pair-matching.md#the-essential-split))
+when `pair.essential_split` gives a camera, as `{"status": "measured", …}` or
+`{"status": "not_measured", "matches": …, "reason": …}`, and `null` when it
+gives none. The walk does not read the split, and `PickImagesOptions::default()`
+gives no camera, so a default walk measures none and `essential_split` is
+`null` in every pair.
 
 ## The algorithm
 
@@ -579,7 +587,8 @@ fields of `PickImagesOptions` but `prefetch`, which it leaves on, as
 keyword-only arguments, with the pair options
 under the names `match_frame_pair` uses and the forest under the names
 `FrameFeatures` uses (`preset`, `num_trees`, `leaf_size`, `max_leaf_checks`);
-one left out takes the Rust default. `progress`, a `ProgressCounter`, holds
+one left out takes the Rust default. It takes no camera, so its report's
+`essential_split` is `None` in every pair. `progress`, a `ProgressCounter`, holds
 the count of frames read. The report is returned as a dict of plain values,
 the report's serde form, with `None` for a number that is not finite.
 
