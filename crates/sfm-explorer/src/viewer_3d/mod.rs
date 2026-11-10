@@ -1150,9 +1150,9 @@ impl Viewer3D {
     /// other point, including one behind the camera, first has the camera turn
     /// in place until the point is inside the middle [`TURN_INTO_FRACTION`],
     /// and the pan is then made with that orientation. What a double-click on a
-    /// tracked feature in Image Detail does: the point may be anywhere in the
-    /// scene, and a pan alone across a large angle would carry the camera far
-    /// from where it was.
+    /// tracked feature in Image Detail, or on a track's Bench row in the Scene
+    /// tree, does: the point may be anywhere in the scene, and a pan alone
+    /// across a large angle would carry the camera far from where it was.
     ///
     /// Returns whether a transition was started; not when a camera is in hand,
     /// for the reason [`Self::move_target_to`] gives.

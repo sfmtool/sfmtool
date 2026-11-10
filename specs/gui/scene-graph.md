@@ -595,7 +595,8 @@ does nothing to the bench, the pair the node row follows (click to select,
 double-click to act), so a pass of clicks down the tree pushes no versions. A
 **double-click** focuses the item, which is not a step of the node's history and
 pushes no version, selects the node, and raises Track View on it; on the item
-that is focused already it writes no row. A secondary click
+that is focused already it writes no row. On a track-stage item it also moves
+the 3D viewport onto the item's point (below). A secondary click
 offers *Discard*. An item is named by its position in the whole bench, so both
 groups' rows reach the same list.
 
@@ -613,9 +614,48 @@ So the double-click travels in the response as `edit_bench_item`, the panel
 keeps it for `SceneGraphPanel::take_bench_edit`, and `app.rs` applies it through
 `AppState::edit_bench_item_at` after the dock is back, the path Image Detail's
 *Edit on Bench* takes. The click's node selection is the ordinary
-`select_recon`, applied by the dock with the rest of the response. Nothing here is drawn in the 3D viewport, which is why the rows have
-no eye, and the groups are per node because an item names that node's images and
-poses. The panel that edits a track on it is [track-view.md](track-view.md).
+`select_recon`, applied by the dock with the rest of the response.
+
+**The double-click also moves the 3D viewport onto a track-stage item**, as a
+double-click on a point in the viewport moves onto that point
+([viewport-navigation.md](viewport-navigation.md) § "The point context menu"):
+the orbit target lands on the item's point over the viewport's ~200ms eased
+transition, and camera view is left (for a track at infinity, see below).
+`app.rs` applies the move beside the raise, in `apply_bench_edit`.
+
+- **The point is the track's own** (`TrackPayload::position`, the centre of its
+  patch), not the stored point the track came from. Until a hand edit moves the
+  patch the two are the same point; after one, the track's own is what Track View
+  edits and where the 3D viewport draws the focused item's patch
+  ([viewer-3d-bench-layer.md](viewer-3d-bench-layer.md)), so it is the one the
+  person is looking for. An item that started as a cluster has no stored point
+  at all.
+- **It is put through the node's transform**, the whole transform for a place
+  and the rotation alone for a bearing, as the viewport's double-click puts a
+  stored point through it (`scene::bench_world_point` beside
+  `scene::world_point`), so the view lands where the point is drawn.
+- **The move may turn the camera.** A row can name a point anywhere in the
+  scene, off screen or behind the camera, where a pan alone would carry the
+  camera far or do nothing. So the move is the one Image Detail's double-click on
+  a tracked feature makes (`Viewer3D::turn_and_move_target_to`,
+  [multi-panel-image-browser.md](multi-panel-image-browser.md)): a point already
+  inside the middle 2/3 of the viewport on both axes is panned to by the code
+  the viewport's double-click pans with, to the same end state, and any other
+  point first has the camera turn in place until it is inside the middle 1/2.
+  A track at infinity is turned toward instead
+  (`Viewer3D::turn_toward_bearing`), which keeps camera view, as the viewport's
+  double-click on a point at infinity does.
+- **Nothing moves** for a cluster-stage item, which has no place in the world,
+  for a track whose observations have not been triangulated, or while a camera
+  is held for Move Camera.
+
+Only the double-click moves the view. The other ways to focus an item -- a chip
+in Track View's recent items strip, its *Edit* box, and the wire's
+`focus_bench_item` -- leave the viewport where it is.
+
+The rows have no eye, since there is no row to show or hide: the 3D viewport
+draws the focused item and no other bench item, whatever the tree shows. The
+groups are per node because an item names that node's images and poses. The panel that edits a track on it is [track-view.md](track-view.md).
 
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).

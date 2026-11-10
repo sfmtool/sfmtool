@@ -138,6 +138,10 @@ transition and target flash as Alt + Click. Being a pan, it leaves camera view.
 It moves nothing when a camera is in hand (the motion would move the held
 camera, which the double-click does not ask for), for a point behind the camera,
 or with Alt held, where the Alt + Click depth pick has already set the target.
+A double-click on a track's Bench row in the Scene tree moves the viewport onto
+the track's own point with the same pan when that point is in the middle of the
+view, turning first when it is not ([scene-graph.md](scene-graph.md) § "Tree
+rows").
 
 **A double-click on a point at infinity turns the camera toward its bearing**
 (`Viewer3D::turn_toward_bearing`). Its stored coordinates are a direction rather

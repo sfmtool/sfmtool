@@ -299,7 +299,7 @@ split, a track whose origin was deleted) is focused with no point selected.
 | Editing | Select an image or a camera of the focused item's node (a row click, a thumbnail, a frustum) | The item stays focused | Edited mode, same item |
 | Editing | Select another node, or an image, camera or point of another node (a Scene tree click, the Image Browser, the 3D viewer, `[` and `]`, opening a file, the wire) | The item is unfocused, and the selection is what the gesture made it | Viewed mode, on the new selection |
 | Either | Click a chip in the recent items strip | That item is focused, with no version, and its node and its origin are selected (or the point selection cleared) | Edited mode, on that item |
-| Either | Double-click a Bench row in the Scene tree | The same as a chip, and the panel is raised | Edited mode, on that item |
+| Either | Double-click a Bench row in the Scene tree | The same as a chip, and the panel is raised; the 3D viewport moves onto a track's point | Edited mode, on that item |
 | Either | *Edit on Bench* in the 3D viewport or Image Detail, or a double-click on a point or a feature | The point is selected (which unfocuses any other item), then as the ticked box from that point, and the panel is raised, unless it shares a node with the panel the gesture was made in ([panel-layout.md](panel-layout.md) § "A raise from a gesture") | Edited mode |
 | Either | *Start cluster on the bench here* in Image Detail | A cluster is put on the bench and focused, the point selection is cleared, and the panel is raised, unless it shares a node with Image Detail | Edited mode, on the cluster |
 | Either | *Create Track Here* in Image Detail, or its Control+Shift click, once its worker lands a track | The track is put on the bench and focused, then committed; the point it wrote is the item's re-seated origin and is selected, so the item stays focused. No panel is raised | Edited mode, on the new item |
@@ -2206,7 +2206,9 @@ item drawn as a selected row, *Discard* on the secondary click
   (`AppState::edit_bench_item_at`), with no version. The node is selected
   because Track View shows the selected node's bench. On an item already
   focused it writes no row: the gesture asked for the panel, and the panel is
-  what it gets.
+  what it gets. On a track-stage item it also moves the 3D viewport onto the
+  track's own point, the centre of its patch
+  ([`scene-graph.md`](scene-graph.md) § "Tree rows").
 
 **Every raise is applied after the dock is back in the state.** The frame swaps
 the dock out of `AppState` while a tab body draws, so a raise from inside one

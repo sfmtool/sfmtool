@@ -1417,7 +1417,9 @@ as a click on the node's own row selects it, so a pass of clicks down the tree
 pushes no versions. A **double-click** focuses the item, selects the node and
 raises Track View on it (`AppState::edit_bench_item_at`), with no version and
 the one `Selection` row a focus writes; on the item that is focused already it
-writes no row, since the gesture asked for the panel. A secondary click offers
+writes no row, since the gesture asked for the panel. On a track-stage item the
+double-click also moves the 3D viewport onto the track's own point
+([scene-graph.md](scene-graph.md) § "Tree rows"). A secondary click offers
 *Discard*, and one on either group's header offers *Clear the Bench*, which
 takes off every item of both groups in one version (`AppState::clear_bench`).
 The bench is in the tree

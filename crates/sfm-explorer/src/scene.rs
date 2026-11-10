@@ -674,12 +674,43 @@ pub(crate) fn world_point(scene: &[SceneNode], point: PointRef) -> Option<WorldP
     let edited = node.edited();
     let view = edited.point(point.point)?;
     let stored = view.point();
-    let transform = node.transform();
-    Some(if stored.is_at_infinity() {
-        WorldPoint::Toward(transform.rotation.as_nalgebra() * stored.position.coords)
+    Some(placed(
+        node.transform(),
+        stored.position,
+        stored.is_at_infinity(),
+    ))
+}
+
+/// Where the bench item at `position` on `node`'s bench is drawn, in the
+/// shared world space: the track's own point (its patch's centre, wherever the
+/// bench has moved it) put through the node's transform as [`world_point`]
+/// puts a stored point.
+///
+/// What a Scene tree double-click on a Bench row moves the 3D viewport onto.
+/// `None` for a cluster-stage item, which has no place in the world, for a
+/// track whose observations have not been triangulated, and for a position
+/// the bench does not hold.
+pub(crate) fn bench_world_point(node: &SceneNode, position: usize) -> Option<WorldPoint> {
+    let bench = node.history.current_bench();
+    let track = bench.entries().get(position)?.item.as_track()?;
+    let sfmtool_core::bench::Stage::Track(payload) = &track.stage else {
+        return None;
+    };
+    Some(placed(
+        node.transform(),
+        payload.position?,
+        payload.at_infinity,
+    ))
+}
+
+/// `xyz`, in a node's own coordinates, put through that node's `transform`:
+/// the whole transform for a place, the rotation alone for a bearing.
+fn placed(transform: &Se3Transform, xyz: nalgebra::Point3<f64>, at_infinity: bool) -> WorldPoint {
+    if at_infinity {
+        WorldPoint::Toward(transform.rotation.as_nalgebra() * xyz.coords)
     } else {
-        WorldPoint::At(transform.apply_to_point(&stored.position))
-    })
+        WorldPoint::At(transform.apply_to_point(&xyz))
+    }
 }
 
 /// The centres of the node's images taken through camera `index`, in the
