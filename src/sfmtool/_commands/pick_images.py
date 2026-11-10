@@ -301,9 +301,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     counter = ProgressCounter()
     try:
         with echo_frames_read(counter, click.echo):
-            report = walk(
-                capture, progress=counter, pilot_vote=True, **source, **options
-            )
+            report = walk(capture, progress=counter, **source, **options)
     except (ValueError, OverflowError, OSError) as e:
         # An option too large for the binding is an OverflowError whose note
         # names the option.

@@ -49,8 +49,8 @@ pub struct CaptureSequence {
     pub frames: Vec<CaptureFrame>,
     /// The camera the reference sensor's images were taken with, which the
     /// local density term measures each chosen step's essential split with,
-    /// or `None` to walk without the term or, with
-    /// [`PickImagesOptions::pilot_vote`], with the pilot vote's camera. It may
+    /// or `None` to walk with the pilot vote's camera, or without the term
+    /// when [`PickImagesOptions::pilot_vote`] is off. It may
     /// be of another size than the frames, of the same aspect: the walk
     /// scales it to theirs.
     pub camera: Option<CameraIntrinsics>,
@@ -103,7 +103,8 @@ pub struct PickImagesOptions {
     /// Whether a sequence with no camera takes one from a pilot vote: a focal
     /// vote on the first frames the walk chooses without the local density
     /// term, which the walk then starts again from the first frame with.
-    /// Never with a `max_density_gain` of 1, which leaves the term off.
+    /// On by default; off, a sequence with no camera is walked without the
+    /// term. Never with a `max_density_gain` of 1, which leaves the term off.
     pub pilot_vote: bool,
 }
 
@@ -118,7 +119,7 @@ impl Default for PickImagesOptions {
             forest: KdForestParams::balanced(),
             pair: FramePairOptions::default(),
             prefetch: true,
-            pilot_vote: false,
+            pilot_vote: true,
         }
     }
 }

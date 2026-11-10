@@ -110,7 +110,7 @@ pub struct PickImagesOptions {
     pub forest: KdForestParams,    // KdForestParams::balanced()
     pub pair: FramePairOptions,    // FramePairOptions::default()
     pub prefetch: bool,            // true; changes no choice, only the work ahead
-    pub pilot_vote: bool,          // false; a sequence with no camera takes the pilot vote's
+    pub pilot_vote: bool,          // true; a sequence with no camera takes the pilot vote's
 }
 
 pub fn pick_images(
@@ -156,11 +156,11 @@ one capture can come from two cameras, so the camera is a field of
 `CaptureSequence` rather than an option. It may be at another resolution than
 the frames, as a calibration often is, and the walk scales it to the frames'
 size ([The local density term](#the-local-density-term)). A sequence with no
-camera is walked without the term, the same walk as at a maximum gain of 1,
-unless `pilot_vote` asks for the pilot vote, which finds it a camera from its
-own frames ([The pilot vote](#the-pilot-vote)). The pilot is an option, off
-by default, so that a caller with no camera to give that wants the walk
-without the term gets it without a vote; the command turns it on.
+camera first runs the pilot vote, which finds it a camera from its own
+frames ([The pilot vote](#the-pilot-vote)), so the library and the command
+choose the same frames for it. A caller that wants such a sequence walked
+without the term, the same walk as at a maximum gain of 1, turns
+`pilot_vote` off.
 
 **Positions, not file numbers.** A `FrameId` names a frame by its position in
 its sequence, and every rate is a step per position, so a sequence numbered in
@@ -521,8 +521,8 @@ walk chooses exactly what it chooses with no camera.
 
 ### The pilot vote
 
-With `pilot_vote` on and a maximum gain above 1, a sequence with no camera
-takes the camera of a focal vote on its own frames
+With `pilot_vote` on, its default, and a maximum gain above 1, a sequence
+with no camera takes the camera of a focal vote on its own frames
 ([pilot.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pilot.rs)).
 A sequence given a camera keeps it and runs no pilot, and at a maximum gain
 of 1 no pilot runs, since the term it would serve is off.
@@ -879,8 +879,10 @@ a scene of points with random descriptors seen by a pinhole camera along a
 path with known motion per frame, with readings set per frame, served by a
 source whose workers, the extracting source's pool, write a frame's version 2
 `.sift` files only when it is prefetched or waited for, and which records
-every wait and prefetch. They cover a steady video chosen at about the
-target step, whose first step measures the next frame; a change of speed
+every wait and prefetch. The walk's tests turn the pilot vote off, so a
+sequence with no camera is walked without the local density term; the
+pilot's tests leave it at its default. They cover a steady video chosen at
+about the target step, whose first step measures the next frame; a change of speed
 that the stride follows; a frame blurred against its neighbours swapped for
 the sharpest neighbour whose step fits; a frame sharper than every other
 frame of the capture but its neighbours, swapped all the same; a uniformly
@@ -930,11 +932,12 @@ median and its bounds, the scaling of a pinhole and an equidistant fisheye
 camera and each reason the term is off, and the term's JSON form.
 
 [tests/pilot.rs](../../../crates/sfmtool-core/src/analysis/pick_images/tests/pilot.rs)
-walks the same capture with no camera and the pilot vote on: the vote is on
+walks the same capture with no camera and the default options, which run
+the pilot vote: the vote is on
 the first 30 frames the walk with no camera chooses, its pinhole focal is
 within 2% of the scene camera's, and the walk then chooses what the walk
 given that camera chooses, with steps walked with a gain above 1; a camera
-given runs no pilot and chooses what it chooses without the option, and a
+given runs no pilot and chooses what it chooses with the pilot off, and a
 maximum gain of 1 runs none and chooses and waits for what the walk with no
 camera does. A camera moving sideways with no turn gives a pool spread above
 0.35, frames that match nothing a vote with no consensus, and two frames no

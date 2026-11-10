@@ -12,10 +12,12 @@ use super::*;
 use crate::analysis::pick_images::pilot::{verdict_camera, MAX_POOL_SPREAD, PILOT_FRAMES};
 use crate::geometry::focal_vote::CameraModel as VoteModel;
 
+/// The default options, whose pilot vote is on, with the match floor of
+/// [`options`].
 fn pilot_options() -> PickImagesOptions {
     PickImagesOptions {
-        pilot_vote: true,
-        ..options()
+        min_step_matches: FLOOR,
+        ..PickImagesOptions::default()
     }
 }
 
@@ -30,6 +32,8 @@ fn walked(walk: &SequenceReport) -> serde_json::Value {
     })
 }
 
+/// With the default options, which do not name the pilot vote, a sequence
+/// with no camera runs it.
 #[test]
 fn a_sequence_with_no_camera_is_walked_with_the_pilot_vote_s_camera() {
     let (synth, off) = panning();

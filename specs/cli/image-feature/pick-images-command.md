@@ -145,9 +145,9 @@ In order, it:
    files, groups the files into sequences, each with the camera of its
    reference sensor, and prints them.
 5. With the `sfmtool` feature tool, calls `sfmtool.analysis.pick_images`
-   with one `CaptureSequence` per sequence, `pilot_vote=True` and the
-   workspace's feature options, which extracts the `.sift` files itself;
-   with another tool, extracts every input frame first and calls it to read
+   with one `CaptureSequence` per sequence and the workspace's feature
+   options, which extracts the `.sift` files itself, and with the pilot vote
+   at its default, on; with another tool, extracts every input frame first and calls it to read
    them ([Extraction](#extraction)).
 6. Prints the report, writes the list when a name was given, and writes the
    JSON file when asked.

@@ -28,10 +28,10 @@ use crate::progress::Progress;
 /// measures each accepted step's essential split and divides the next step's
 /// target by up to `max_density_gain` where the last three show a near
 /// foreground in front of a distant view; the report says per sequence
-/// whether the term was on, and why not. With `options.pilot_vote` and a
-/// `max_density_gain` above 1, a sequence with no camera first runs the
-/// pilot vote ([`super::PilotVote`]): the walk without the term until it has
-/// chosen 30 frames, a cluster match and focal vote on them, and the walk
+/// whether the term was on, and why not. With `options.pilot_vote` on, its
+/// default, and a `max_density_gain` above 1, a sequence with no camera first
+/// runs the pilot vote ([`super::PilotVote`]): the walk without the term until
+/// it has chosen 30 frames, a cluster match and focal vote on them, and the walk
 /// again from the first frame with the vote's camera when the vote is used.
 ///
 /// Every frame is read through `source`: [`pick_images`] waits on it for each

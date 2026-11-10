@@ -26,9 +26,14 @@ use crate::progress::Progress;
 /// real frame's features.
 const FLOOR: usize = 60;
 
+/// The options of the walk tests: the defaults with the match floor at
+/// [`FLOOR`] and the pilot vote off, so that a sequence with no camera is
+/// walked without the local density term and no test of the walk pays for a
+/// pilot it does not assert on. The pilot's tests use the default, on.
 fn options() -> PickImagesOptions {
     PickImagesOptions {
         min_step_matches: FLOOR,
+        pilot_vote: false,
         ..PickImagesOptions::default()
     }
 }

@@ -425,8 +425,9 @@ impl PyCaptureFrame {
 ///     frames: The ``CaptureFrame`` objects, in file-number order.
 ///     camera: The ``sfmtool.geometry.CameraIntrinsics`` the reference
 ///         sensor's images were taken with, which ``pick_images``'s local
-///         density term measures with, or None to walk without the term
-///         or, with ``pick_images``'s ``pilot_vote``, with the pilot vote's.
+///         density term measures with, or None to walk with the pilot
+///         vote's, or without the term when ``pick_images``'s ``pilot_vote``
+///         is False.
 ///         It may be of another size than the frames, of the same aspect;
 ///         the walk scales it to theirs.
 #[allow(rustdoc::invalid_rust_codeblocks)]
@@ -528,8 +529,8 @@ impl PyCaptureSequence {
 ///         it by its gain (10).
 ///     max_density_gain: The most the local density term divides the base
 ///         target by, finite and at least 1 (3). 1 turns the term off, and
-///         a sequence with no camera is walked without it, unless
-///         ``pilot_vote`` finds it one.
+///         a sequence with no camera is walked without it unless the pilot
+///         vote finds it one.
 ///     step_band: How far a step may be from the target, as a fraction
 ///         (0.3).
 ///     neighbour_blur_ratio: A frame about to be accepted is blurred against
@@ -540,8 +541,8 @@ impl PyCaptureSequence {
 ///     pilot_vote: Whether a sequence with no ``camera`` takes one from a
 ///         pilot vote, a focal vote on the first 30 frames the walk chooses
 ///         without the local density term, before the walk starts again from
-///         its first frame (False). No pilot runs at a ``max_density_gain``
-///         of 1.
+///         its first frame (True). False walks such a sequence without the
+///         local density term. No pilot runs at a ``max_density_gain`` of 1.
 ///     ratio: Lowe's ratio on descriptor distances, as for
 ///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,

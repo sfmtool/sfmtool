@@ -122,7 +122,7 @@ def _read(report: dict) -> list[int]:
 def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     capture = steady
     counter = ProgressCounter()
-    report = pick_images([capture.sequence], progress=counter)
+    report = pick_images([capture.sequence], progress=counter, pilot_vote=False)
     walk = report["sequences"][0]
     chosen = walk["chosen"]
     assert chosen[0] == 0 and chosen[-1] == 149
@@ -130,8 +130,9 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
     assert 8 <= np.median(strides) <= 12
     steps = [s["stats"]["step_percent"] for s in walk["steps"]]
     assert 7 <= np.median(steps) <= 13
-    # The walk is given no camera, so no pair has an essential split, and
-    # the local density term is off, every step at the base target.
+    # The walk is given no camera and runs no pilot vote, so no pair has an
+    # essential split, and the local density term is off, every step at the
+    # base target.
     assert all(p["stats"]["essential_split"] is None for p in report["pairs"])
     assert walk["density_term"] == {"status": "off", "reason": "no_camera"}
     assert {json.dumps(s["density"]) for s in walk["steps"]} == {
@@ -145,7 +146,7 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
             }
         )
     }
-    assert walk["swaps"] == []
+    assert walk["swaps"] == [] and walk["pilot_vote"] is None
     read = _read(report)
     assert len(set(read)) == len(read) == walk["frames_read"] < 150
     assert counter.value == len(read)
@@ -164,12 +165,12 @@ def test_a_missing_sift_file_is_a_file_not_found_error(tmp_path: Path):
 
 def test_options_reach_the_walk(steady: _Capture):
     capture = steady
-    report = pick_images([capture.sequence], target_step_percent=20.0)
+    report = pick_images([capture.sequence], target_step_percent=20.0, pilot_vote=False)
     strides = np.diff(report["sequences"][0]["chosen"])
     assert 16 <= np.median(strides) <= 24
     # A floor above the matches of neighbouring frames keeps every frame.
     first = CaptureSequence(["frame_%04d.jpg"], capture.sequence.frames[:10])
-    report = pick_images([first], min_step_matches=5000)
+    report = pick_images([first], min_step_matches=5000, pilot_vote=False)
     assert report["sequences"][0]["chosen"] == list(range(10))
     for name, value in [
         ("target_step_percent", 0.0),
@@ -219,20 +220,16 @@ def test_a_sequence_s_camera_reaches_the_local_density_term(steady: _Capture):
         split = step["density"]["essential_split"]
         assert split["status"] == "measured" and split["parallax_p50_deg"] > 0.5
         assert step["density"]["gain"] == 1.0 and step["density"]["measure"] == 1.0
-    without = pick_images([steady.sequence])["sequences"][0]
+    without = pick_images([steady.sequence], pilot_vote=False)["sequences"][0]
     assert walk["chosen"] == without["chosen"]
-    # No pilot vote runs unless asked for, and one asked for runs only for a
-    # sequence with no camera.
+    # The pilot vote is on by default, and runs only for a sequence with no
+    # camera, on the frames the walk without it chooses.
     assert walk["pilot_vote"] is None and without["pilot_vote"] is None
-    assert (
-        pick_images([with_camera], pilot_vote=True)["sequences"][0]["pilot_vote"]
-        is None
-    )
     short = CaptureSequence(["f_%d.jpg"], frames[:8])
-    piloted = pick_images([short], pilot_vote=True)["sequences"][0]
+    piloted = pick_images([short])["sequences"][0]
     assert (
         piloted["pilot_vote"]["frames"]
-        == (pick_images([short])["sequences"][0]["chosen"])
+        == (pick_images([short], pilot_vote=False)["sequences"][0]["chosen"])
     )
     # A gain of 1 measures nothing; a camera of another aspect is named.
     off = pick_images([with_camera], max_density_gain=1.0)["sequences"][0]
@@ -379,6 +376,7 @@ def test_photographs_extracted_by_the_walk_are_every_one_kept(
         "feature_options": config["feature_options"],
         "feature_prefix_dir": config["feature_prefix_dir"],
         "concurrent_images": 4,
+        "pilot_vote": False,
     }
     report = pick_images([sequence], **extract)
     walk = report["sequences"][0]

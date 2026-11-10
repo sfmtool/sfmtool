@@ -12,10 +12,10 @@
 //! blurred against its neighbouring frames swapped for a sharper one. Given a
 //! sequence's camera, the local density term divides the target by a gain
 //! where the essential splits of the last steps chosen show a near
-//! foreground in front of a distant view ([`DensityTerm`]); with
-//! [`PickImagesOptions::pilot_vote`], a sequence with no camera takes the
-//! camera of a focal vote on the first frames the walk chooses without the
-//! term ([`PilotVote`]). A
+//! foreground in front of a distant view ([`DensityTerm`]); unless
+//! [`PickImagesOptions::pilot_vote`] is off, a sequence with no camera takes
+//! the camera of a focal vote on the first frames the walk chooses without
+//! the term ([`PilotVote`]). A
 //! [`FrameSource`] makes each frame's `.sift` files exist: an
 //! [`ExtractingSource`] extracts them on a pool of workers ahead of the walk,
 //! from the frames it predicts it will read, and a [`ReadOnlySource`] reads
