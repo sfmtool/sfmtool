@@ -6854,7 +6854,12 @@ where a test hands no host over.
   twice under two labels and a blank label each refuse the whole list, leaving
   the bench as it was with no version; and the viewed point's track takes the
   read-only bars, named in the version label, while the others start at the
-  defaults.
+  defaults. On a `sift_files` node converted after its points went on the
+  bench, a batch rebuilds the frameless items in its one version, each
+  answering `changed: true`, labelled with the puts and the rebuilds counted
+  apart and joined by `, and `, and one undo takes the puts and the rebuilds
+  back together; while the conversion holds the node, a batch that would
+  change anything is refused in the busy sentence and pushes nothing.
 - **The selected observations are the bench's, and do not outlive their
   track**: `select_bench_observations` replaces the set sorted and without
   repeats, `get_bench_track` reads it back, it writes one `Selection` row and
