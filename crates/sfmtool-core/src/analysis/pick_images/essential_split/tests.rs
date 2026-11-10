@@ -317,6 +317,20 @@ fn options_out_of_range_are_refused() {
                 ..base.clone()
             },
         ),
+        (
+            "essential_split.samples",
+            EssentialSplitOptions {
+                samples: MAX_RAY_SAMPLES + 1,
+                ..base.clone()
+            },
+        ),
+        (
+            "essential_split.samples",
+            EssentialSplitOptions {
+                samples: usize::MAX,
+                ..base.clone()
+            },
+        ),
     ];
     for (name, options) in cases {
         let err = measure_essential_split(&[], &[], &options).unwrap_err();
@@ -329,6 +343,11 @@ fn options_out_of_range_are_refused() {
     let edge = EssentialSplitOptions {
         min_inliers: 8,
         samples: 1,
+        ..base.clone()
+    };
+    assert!(measure_essential_split(&[], &[], &edge).is_ok());
+    let edge = EssentialSplitOptions {
+        samples: MAX_RAY_SAMPLES,
         ..base.clone()
     };
     assert!(measure_essential_split(&[], &[], &edge).is_ok());

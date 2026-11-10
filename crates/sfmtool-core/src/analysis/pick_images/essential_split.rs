@@ -16,6 +16,7 @@ use serde::Serialize;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::relative_pose::{
     decompose_essential_rays, estimate_essential_rays, EpipolarSide, RayEssentialOptions,
+    MAX_RAY_SAMPLES,
 };
 use crate::geometry::rotation::rotation_angle;
 use crate::numeric::{quantile_in_place, quantile_of_sorted};
@@ -43,7 +44,8 @@ pub struct EssentialSplitOptions {
     /// The fewest inliers a split is measured from, and so the fewest
     /// matches. At least 8.
     pub min_inliers: usize,
-    /// The minimal samples the consensus draws. At least 1.
+    /// The minimal samples the consensus draws, from 1 to
+    /// [`MAX_RAY_SAMPLES`] (65,536).
     pub samples: usize,
     /// The seed of the sampler.
     pub seed: u64,
@@ -102,10 +104,10 @@ impl EssentialSplitOptions {
                 format!("must be at least {MIN_SAMPLE}, got {}", self.min_inliers),
             ));
         }
-        if self.samples == 0 {
+        if !(1..=MAX_RAY_SAMPLES).contains(&self.samples) {
             return Err(refuse(
                 "essential_split.samples",
-                "must be at least 1".to_string(),
+                format!("must be from 1 to {MAX_RAY_SAMPLES}, got {}", self.samples),
             ));
         }
         Ok(())

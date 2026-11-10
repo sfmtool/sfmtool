@@ -77,7 +77,7 @@ pub struct EssentialSplitOptions {
     pub camera: CameraIntrinsics, // at the frames' image size
     pub tolerance_px: f64,        // 3.0, the consensus bound at the focal
     pub min_inliers: usize,       // 12, at least 8
-    pub samples: usize,           // 512, at least 1
+    pub samples: usize,           // 512, from 1 to MAX_RAY_SAMPLES (65,536)
     pub seed: u64,                // 0
 }
 impl EssentialSplitOptions {
@@ -322,7 +322,7 @@ promised, as for `estimate_essential_rays`.
 | `essential_split` | `None` | the split's options and camera; `None` measures no split |
 | `essential_split.tolerance_px` | `3.0` | the consensus bound, pixels at the camera's focal; positive and finite |
 | `essential_split.min_inliers` | `12` | the fewest inliers, and so matches, a split is measured from; at least 8 |
-| `essential_split.samples` | `512` | the minimal samples the consensus draws; at least 1 |
+| `essential_split.samples` | `512` | the minimal samples the consensus draws; from 1 to 65,536, the estimator's `MAX_RAY_SAMPLES` |
 | `essential_split.seed` | `0` | the sampler's seed |
 
 The defaults are `FramePairOptions::default()` and

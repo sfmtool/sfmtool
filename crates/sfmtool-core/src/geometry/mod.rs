@@ -52,6 +52,7 @@ pub use reconstruction_growth::{grow_reconstruction, GrowOptions, Reconstruction
 pub use relative_pose::{
     decompose_essential_rays, estimate_essential_rays, fit_ray_rotation, EpipolarSide,
     RayEssential, RayEssentialOptions, RayRelativePose, RayRotation, RayRotationOptions,
+    MAX_RAY_SAMPLES,
 };
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_images::{

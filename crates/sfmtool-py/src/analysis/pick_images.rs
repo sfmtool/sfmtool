@@ -241,7 +241,8 @@ impl PyFrameFeatures {
 ///     tolerance_px: The split's consensus bound, in pixels at the camera's
 ///         focal.
 ///     min_inliers: The fewest inliers a split is measured from, at least 8.
-///     samples: The minimal samples the split's consensus draws.
+///     samples: The minimal samples the split's consensus draws, 1 to
+///         65,536.
 ///     seed: The seed of the split's sampler.
 ///
 /// Returns:

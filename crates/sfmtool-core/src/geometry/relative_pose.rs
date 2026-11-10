@@ -45,6 +45,12 @@ const ROT_SAMPLE: usize = 3;
 /// Local-optimization rounds on the consensus set.
 const LO_ROUNDS: usize = 3;
 
+/// The most minimal samples either estimator draws: 65,536, 128 times the
+/// default. The samples are held in one list of indices, eight per sample for
+/// the essential matrix, so the bound keeps a caller's count from asking for
+/// more memory than there is. For a larger count the estimators return `None`.
+pub const MAX_RAY_SAMPLES: usize = 1 << 16;
+
 /// How an epipolar consensus scores a correspondence.
 ///
 /// The one-sided forms are the column scan's, where the two directions are
@@ -71,7 +77,8 @@ pub struct RayEssentialOptions {
     pub max_angle_rad: f64,
     /// Reject a consensus below this many correspondences.
     pub min_inliers: usize,
-    /// Minimal samples drawn (each is `EPI_SAMPLE` = 8 distinct indices).
+    /// Minimal samples drawn (each is `EPI_SAMPLE` = 8 distinct indices), at
+    /// most [`MAX_RAY_SAMPLES`].
     pub samples: usize,
     /// SplitMix64 sampler seed.
     pub seed: u64,
@@ -135,7 +142,8 @@ fn residuals_for(
 ///
 /// Scores seeded minimal samples of the linear 8-point constraint by the
 /// angular residual, keeps the largest consensus, then locally optimizes on
-/// it. Returns `None` when no consensus reaches `min_inliers`.
+/// it. Returns `None` when no consensus reaches `min_inliers`, and for
+/// `samples` above [`MAX_RAY_SAMPLES`].
 ///
 /// `r1[i]` and `r2[i]` are one correspondence, and both must be unit length;
 /// they are not normalized or checked. Slices of different lengths are read
@@ -153,6 +161,7 @@ pub fn estimate_essential_rays(
     let n = r1.len().min(r2.len());
     let (r1, r2) = (&r1[..n], &r2[..n]);
     if n < EPI_SAMPLE.max(options.min_inliers)
+        || options.samples > MAX_RAY_SAMPLES
         || options.max_angle_rad <= 0.0
         || !options.max_angle_rad.is_finite()
     {
@@ -325,7 +334,8 @@ pub struct RayRotationOptions {
     pub max_angle_rad: f64,
     /// Reject a consensus below this many correspondences.
     pub min_inliers: usize,
-    /// Minimal samples drawn (each is `ROT_SAMPLE` = 3 distinct indices).
+    /// Minimal samples drawn (each is `ROT_SAMPLE` = 3 distinct indices), at
+    /// most [`MAX_RAY_SAMPLES`].
     pub samples: usize,
     /// SplitMix64 sampler seed.
     pub seed: u64,
@@ -361,7 +371,7 @@ pub struct RayRotation {
 ///
 /// Scores seeded three-ray minimal samples by the angular residual, keeps the
 /// largest consensus, then refits on it. Returns `None` when no consensus
-/// reaches `min_inliers`.
+/// reaches `min_inliers`, and for `samples` above [`MAX_RAY_SAMPLES`].
 ///
 /// `r1[i]` and `r2[i]` are one correspondence, and both must be unit length;
 /// they are not normalized or checked. Slices of different lengths are read
@@ -374,6 +384,7 @@ pub fn fit_ray_rotation(
     let n = r1.len().min(r2.len());
     let (r1, r2) = (&r1[..n], &r2[..n]);
     if n < ROT_SAMPLE.max(options.min_inliers)
+        || options.samples > MAX_RAY_SAMPLES
         || options.max_angle_rad <= 0.0
         || !options.max_angle_rad.is_finite()
     {

@@ -131,6 +131,9 @@ def test_essential_split_options_are_checked():
         match_frame_pair(a, b, camera=camera, tolerance_px=0.0)
     with pytest.raises(ValueError, match="min_inliers"):
         match_frame_pair(a, b, camera=camera, min_inliers=7)
+    for samples in [0, 65_537, 2**40, 2**60]:
+        with pytest.raises(ValueError, match="samples must be from 1 to 65536"):
+            match_frame_pair(a, b, camera=camera, samples=samples)
     with pytest.raises(ValueError, match="480 x 270 but the frames are 960 x 540"):
         match_frame_pair(a, b, camera=_camera(WIDTH // 2, HEIGHT // 2))
 
