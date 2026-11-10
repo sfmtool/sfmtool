@@ -446,8 +446,10 @@ maximum, 3 by default, at a measure of 7.5.
 
 The measure is read from steps already taken, and the median of three
 follows most of the last three: a near foreground shortens the steps once two
-of the last three steps read it, or the first step alone at the start of a
-sequence, and the shortening ends once two of them no longer do. A long step reads a lower measure
+of the last three steps read it, and the shortening ends once two of them no
+longer do. At the start of a sequence there are fewer: the first step's
+measure alone sets the second step's gain, and the mean of the first two, the
+median of two, sets the third's, so one of them can shorten it. A long step reads a lower measure
 than a short one over the same scene, since its near matches are the first to
 be lost, so where the gain is 1 a near foreground can read below 2.5 until a
 shorter step measures it.
