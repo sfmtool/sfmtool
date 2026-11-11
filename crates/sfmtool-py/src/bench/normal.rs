@@ -23,10 +23,10 @@ use sfmtool_core::bench::{
     grid_plane_normal as core_grid_plane_normal, grown_plane_normal as core_grown_plane_normal,
     FiniteDifferenceOptions, GridPlaneAcceptance, GridPlaneCells, GridPlaneDetail,
     GridPlaneFitModel, GridPlaneIteration, GridPlaneNormalOptions, GridPlaneOutcome,
-    GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt, GrownPlaneNormalOptions,
-    GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal, GrownPlaneSequence,
-    GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate, NormalReport,
-    PieceLayout,
+    GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt, GrownPlaneGridRound,
+    GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
+    GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
+    NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -506,7 +506,29 @@ fn attempt_dict<'py>(py: Python<'py>, attempt: &GrownPlaneAttempt) -> PyResult<B
     d.set_item("grid_zncc", attempt.grid_zncc)?;
     d.set_item("sigma_deg", attempt.sigma_deg)?;
     d.set_item("refusal", attempt.refusal.map(refusal_name))?;
+    d.set_item(
+        "stage_turn_deg",
+        PyArray1::from_vec(py, attempt.stage_turn_deg.clone()),
+    )?;
+    d.set_item("grid_rounds", grid_rounds_list(py, &attempt.grid_rounds)?)?;
     Ok(d)
+}
+
+/// The list form of a growth's or a pair's whole-grid rounds, one dict per
+/// round with `cap_deg`, `turn_deg` and `zncc`.
+fn grid_rounds_list<'py>(
+    py: Python<'py>,
+    rounds: &[GrownPlaneGridRound],
+) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for round in rounds {
+        let d = PyDict::new(py);
+        d.set_item("cap_deg", round.cap_deg)?;
+        d.set_item("turn_deg", round.turn_deg)?;
+        d.set_item("zncc", round.zncc)?;
+        list.append(d)?;
+    }
+    Ok(list)
 }
 
 /// The dict form of what the grown-plane step made of one observation,
@@ -563,6 +585,7 @@ fn pair_dict<'py>(py: Python<'py>, pair: &GrownPlanePair) -> PyResult<Bound<'py,
     d.set_item("distance", pair.distance)?;
     d.set_item("kept", pair.refusal.is_none())?;
     d.set_item("refusal", pair.refusal.map(refusal_name))?;
+    d.set_item("grid_rounds", grid_rounds_list(py, &pair.grid_rounds)?)?;
     Ok(d)
 }
 
@@ -1037,6 +1060,23 @@ fn grid_plane_normal(
 /// reading the step ends with renders its bitmap and reads at. A
 /// reconstruction that stores patch bitmaps is worked at their resolution
 /// whatever ``resolution`` says.
+///
+/// With ``turned_support`` (default ``True``) the working grid and the
+/// reference's template are laid again, at the start of every fitted window
+/// stage and of every whole-grid round, on the starting square turned to the
+/// plane the growth has reached, and every whole grid read at a plane (a
+/// growth's own score and information, the held scores, the pairs and the
+/// shift-only fits) is read on the grid laid there. A window stage, and the
+/// first whole-grid round, may turn the plane at most
+/// ``stage_turn_cap_deg`` (default 12.0, above 0 and under 90, or infinite
+/// for no cap) from where it began; the whole-grid stage repeats as rounds
+/// whose cap halves whenever a round turns back against the one before,
+/// stopping once the cap would fall under ``min_stage_turn_cap_deg``
+/// (default 0.5, at most ``stage_turn_cap_deg``), after a round that turned
+/// less than half of it, or after ``max_grid_rounds`` (default 16) rounds.
+/// ``turned_support=False`` is the step with one grid laid on the starting
+/// square, no cap and one whole-grid stage, and does not read the other
+/// three.
 /// Every default is the Rust step's, and a setting outside what the step
 /// takes is refused before the photographs are decoded.
 ///
@@ -1091,12 +1131,20 @@ fn grid_plane_normal(
 /// them, or ``None`` for a try that left the view out),
 /// ``combined_sigma_deg`` (``NaN`` then) and ``attempts``, each
 /// with ``stage_zncc`` (a float64 array, one score per stage,
-/// ending at the window stage a growth stopped early at), ``shift``,
+/// ending at the window stage a growth stopped early at, the whole-grid
+/// stage's the last round's), ``shift``,
 /// ``normal`` (the growth's own plane), ``grid_zncc`` and ``sigma_deg`` (its
-/// own weakest ``σ``), both ``NaN`` for a growth that stopped early,
+/// own weakest ``σ``), both ``NaN`` for a growth that stopped early;
+/// ``grid_zncc`` is read on the grid laid at the growth's plane with
+/// ``turned_support``, and can differ slightly from the last ``stage_zncc``,
 /// ``refusal`` (``None`` when it was taken, else ``"under_floor"`` or
-/// ``"stopped_early"``) and ``tilt_start`` (``"starting"`` or
-/// ``"combined"``, the plane its windows started from). ``picks`` has one dict per pick of
+/// ``"stopped_early"``), ``tilt_start`` (``"starting"`` or
+/// ``"combined"``, the plane its windows started from), ``stage_turn_deg``
+/// (a float64 array, the degrees each fitted window stage turned the plane,
+/// as far as the growth ran) and ``grid_rounds`` (a list with one dict per
+/// whole-grid round, with ``cap_deg``, the cap it was fitted under, infinite
+/// with no cap, ``turn_deg`` and ``zncc``; empty for a growth that stopped
+/// early, one round without ``turned_support``). ``picks`` has one dict per pick of
 /// the selection: ``observation``, ``image``,
 /// ``angle_deg``, ``offset_direction`` (``(2,)``, in the starting patch frame),
 /// ``scale_px``, ``predicted_weak`` (the smallest eigenvalue of the
@@ -1106,8 +1154,9 @@ fn grid_plane_normal(
 /// matched).
 /// ``pairs`` has one dict per pair: ``observations``, ``images``,
 /// ``angle_deg`` (between the two views), ``normal``, ``relative_shift``,
-/// ``zncc``, ``sigma_deg``, ``distance``, ``kept`` and ``refusal`` (a
-/// ``reason`` word or ``"view_left_out"``).
+/// ``zncc``, ``sigma_deg``, ``distance``, ``kept``, ``refusal`` (a
+/// ``reason`` word or ``"view_left_out"``) and ``grid_rounds``, as an
+/// attempt's.
 ///
 /// With ``record_phases=True`` (default ``False``; the result is the same
 /// either way) the step runs with a detailed progress record, and the report
@@ -1147,6 +1196,10 @@ fn grid_plane_normal(
     max_iterations = None,
     initial_damping = None,
     min_improvement = None,
+    turned_support = None,
+    stage_turn_cap_deg = None,
+    min_stage_turn_cap_deg = None,
+    max_grid_rounds = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
     sigma_px = None,
@@ -1180,6 +1233,10 @@ fn grown_plane_normal(
     max_iterations: Option<u32>,
     initial_damping: Option<f64>,
     min_improvement: Option<f64>,
+    turned_support: Option<bool>,
+    stage_turn_cap_deg: Option<f64>,
+    min_stage_turn_cap_deg: Option<f64>,
+    max_grid_rounds: Option<u32>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
     sigma_px: Option<f64>,
@@ -1208,6 +1265,10 @@ fn grown_plane_normal(
         max_iterations,
         initial_damping,
         min_improvement,
+        turned_support,
+        stage_turn_cap_deg,
+        min_stage_turn_cap_deg,
+        max_grid_rounds,
         max_seed_offset_px,
         max_cache_bytes,
         sigma_px,
@@ -1266,6 +1327,10 @@ pub(super) struct GrownPlaneKeywords {
     pub(super) max_iterations: Option<u32>,
     pub(super) initial_damping: Option<f64>,
     pub(super) min_improvement: Option<f64>,
+    pub(super) turned_support: Option<bool>,
+    pub(super) stage_turn_cap_deg: Option<f64>,
+    pub(super) min_stage_turn_cap_deg: Option<f64>,
+    pub(super) max_grid_rounds: Option<u32>,
     pub(super) max_seed_offset_px: Option<f64>,
     pub(super) max_cache_bytes: Option<usize>,
     pub(super) sigma_px: Option<f64>,
@@ -1312,6 +1377,14 @@ impl GrownPlaneKeywords {
             max_iterations: self.max_iterations.unwrap_or(defaults.max_iterations),
             initial_damping: self.initial_damping.unwrap_or(defaults.initial_damping),
             min_improvement: self.min_improvement.unwrap_or(defaults.min_improvement),
+            turned_support: self.turned_support.unwrap_or(defaults.turned_support),
+            stage_turn_cap_deg: self
+                .stage_turn_cap_deg
+                .unwrap_or(defaults.stage_turn_cap_deg),
+            min_stage_turn_cap_deg: self
+                .min_stage_turn_cap_deg
+                .unwrap_or(defaults.min_stage_turn_cap_deg),
+            max_grid_rounds: self.max_grid_rounds.unwrap_or(defaults.max_grid_rounds),
             fit: {
                 let fit = fit_options(
                     self.max_seed_offset_px,

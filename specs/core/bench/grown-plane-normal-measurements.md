@@ -13,7 +13,8 @@ ladder; the weak-turn rule; the optimiser's Sobel gradient, its damping tries
 and its relative stop; the early stop, the second growth on the second rung and
 the shift-only fit; the information read through the Sobel gradient with the σ
 target of 2.75°; reading each view through its own slid patch; writing no
-keypoint; the arithmetic of the fits; and the optimiser's tilt cap that grows.
+keypoint; the arithmetic of the fits; the optimiser's tilt cap that grows;
+and the working grid laid again at each stage's plane.
 
 ## How the step is scored
 
@@ -588,3 +589,120 @@ error falls, and it makes 4.5% to 27% fewer
 iterations and 2.6% to 17% fewer renders and takes 1.2% to 12% less time. A cap
 of 0.4 makes more renders and iterations than 0.8 on every dataset and raises
 the Seoul bull's median and mean.
+
+## A working grid turned with the plane (2026-11-10)
+
+**Question.** The step laid its working grid once, on the starting square, and
+read every later plane by sliding each sample along its fixed reference ray.
+After a large turn the part of the plane a whole-grid score reads is the
+starting square sheared onto the plane, about `1/cos θ` of a patch side along
+the turn, not the square the patch has once it is turned there, and a second
+run, which lays its grid on the turned square, reads other pixels. Does laying
+the grid again at every fitted stage, with a cap on each stage's turn and
+whole-grid rounds whose cap halves on a reversal, let repeated passes settle,
+and at what cost?
+
+**The problem.** On `seoul_bull_sculpture_ground_truth_v02` point 255, whose
+patch side is 0.87 m and whose three views are within 4.1° of each other at
+15.5 m, straddling a canopy edge in front of tree trunks, the step on the one
+grid turned 69.6° with σ 36.6°, just under the weak-turn rule's 70°. At that
+turn the grid's 24 rows still cover the same 22 px of the reference
+photograph vertically but span about 2.4 m along the turned plane, where the
+0.87 m square turned there has a footprint of 21 × 8 px. Six passes turned
+69.6°, 15.6°, 3.9°, 4.4°, 3.5° and 8.9°. Points still turning more than 5° on
+the fourth pass numbered 56 on seoul_bull v02, 49 on kerry_park v02 and 10 on
+dino_dog_toy v01.
+
+**The prototype.** The design was chosen on a prototype written in numpy on the
+bindings. It reproduces the step's projections to 10⁻⁶ px and its ZNCC to
+4·10⁻⁷, but it fits with Nelder–Mead rather than Levenberg–Marquardt, scores
+plain ZNCC over the views' mean rather than the robust cell score per view, and
+fits the views jointly rather than growing them one at a time and combining
+their planes. On point 255 it ran 17 starts, the stored normal and 20° and 40°
+off it at 8 azimuths each, then 5 repeated passes from the stored normal. The
+spread is the largest angle between any two of the 17 answers.
+
+| Variant | Spread, all 17 starts | Spread, stored and 20° off (9) | Turns, passes 2–5 |
+|---------|----------------------:|-------------------------------:|-------------------|
+| Staged, grid kept on the starting square, tilt free | 117.5° | 106.6° | 52.2°, 90.0°, 90.0°, 66.2° |
+| Staged, laid again per stage, tilt free | 134.8° | 124.8° | 9.9°, 50.1°, 53.3°, 110.3° |
+| Staged, kept, small windows' tilt held | 49.6° | 34.9° | 4.4°, 3.2°, 4.3°, 7.6° |
+| Staged, laid again per stage, small windows' tilt held | 83.3° | 81.7° | 1.9°, 6.3°, 3.8°, 1.3° |
+| Staged, kept, 12° cap | 46.3° | 33.5° | 4.4°, 3.2°, 4.2°, 7.5° |
+| Staged, laid again per stage, 12° cap (fixed, at most 12 rounds) | 13.8° | 12.5° | 1.1°, 3.6°, 2.9°, 3.9° |
+| A cost on the turn instead of a cap (12° costs 0.01 / 0.04 of score) | 66.5° / 77.2° | 41.4° / 41.6° | 36.3°, 2.6°, 0.1°, 0.1° / 10.2°, 9.5°, 8.1°, 9.5° |
+
+With the fixed 12° cap every start used all 12 whole-grid rounds: 12° a round to
+arrive, then 2° to 12° a round with no net drift, because the template laid
+again moves the optimum of a flat score. The cost on the turn walked about 3°
+(0.01) or 0.9° (0.04) a round in one direction and stopped wherever the round
+limit fell. The small windows carry almost no information about the tilt: on
+point 255 the 11×11 window's ZNCC varies only from 0.719 to 0.735 over every
+tilt up to 36°, so a small window whose tilt is free wanders, to 71° to 84° in
+the prototype and 35° in the step itself. The cap bounds that wandering without
+holding the tilt, which the "tilt held" rows show is worse once the grid is laid
+again. Clipping the support to the turned square's own pixels in the
+reference, scored by plain ZNCC, peaked at the 80° edge of the search, in
+directions that depended on the view, so the turned square keeps `W` samples,
+interpolated where its footprint is under `W` px.
+
+The prototype with the cap that halves on a reversal, against the step on one
+grid, on the same 17 starts and 5 passes; the category is the point's under the
+step on one grid (ok: stable; A1, A2, C: the categories of the ground-truth
+sweep's unstable points). Its two kerry_park 228 starts at 91° from the
+reference's line of sight score −1 in the prototype and cannot move; the step's
+`tilt_patch` never makes such a start.
+
+| Point | Category | Spread, step on one grid | Spread, prototype | Prototype's turns, passes 2–5 | Prototype's answer from the stored normal |
+|---|---|---:|---:|---|---:|
+| seoul_bull v02 74 | ok | 6.1° | 0.2° | ≤ 0.1° | 0.9° |
+| kerry_park v02 81 | ok | 3.0° | 2.3° (0.2° from the stored and 20° starts) | 0.0° | 3.3° |
+| kerry_park v02 228 | ok | 1.5° | 38.1° (the other 15 within 0.1°) | 0.0° | 4.0° |
+| dino v01 919 | ok | 11.0° | 0.1° | ≤ 0.1° | 2.9° |
+| dino v01 942 | ok | 10.5° | 0.1° | ≤ 0.1° | 3.1° |
+| seoul_bull v02 255 | A2 | 114.9° | 1.2° | 0.2°, 1.6°, 1.4°, 0.4° | 72.0° |
+| seoul_bull v02 205 | C | 53.9° | 2.2° | 2.4°, 2.0°, 1.5°, 1.6° | 34.6° |
+| kerry_park v02 39 | A2 | 114.7° | 1.4° | 0.6°, 0.7°, 0.4°, 0.1° | 66.8° |
+| kerry_park v02 302 | A1 | 88.4° | 0.3° | 0.1°, 0.0°, 0.0°, 0.1° | 47.5° |
+| dino v01 25 | A2 | 96.2° | 106.3° (42.5° from the stored and 20° starts) | 24.8°, 10.3°, 0.5°, 39.8° | 22.5° |
+
+dino 25 stays unstable, with a best score of 0.916. The maintainer judged a
+shift of about 4° on a point stable before acceptable.
+
+**The step.** Built as the specification describes, with the defaults
+`stage_turn_cap_deg` 12, `min_stage_turn_cap_deg` 0.5 and `max_grid_rounds`
+16. On point 255, five passes from the stored normal turned 62.4°, 4.4°, 0.3°,
+0.1° and 0.1°; with `turned_support` off they turned 69.6°, 15.6°, 3.9°, 4.4°
+and 3.5°, the step before the change. The binding test of that point holds the
+second and third passes under 5°.
+
+**The step with the turned support off is the step before it.** Every finite
+point seen in two or more images of the three ground truths (274 on
+seoul_bull v02, 387 on kerry_park v02, 1243 on dino_dog_toy v01), put on the
+bench from its stored normal and run once with `turned_support = false` in a
+release build of the change, gave the same turned track and the same report,
+the new fields aside, bit for bit, as a release build of the step before the
+change.
+
+**Cost.** The step's own time per point, on one thread
+(`RAYON_NUM_THREADS=1`) in release builds on this machine, on the same 60
+random points of each ground truth (seeded, every finite point seen in two or
+more images), each started from its stored normal on the bench with photographs
+decoded once beforehand. Each form ran alone, three passes over the points, and
+the time is the best pass's.
+
+| Ground truth | Before the change | Turned support off | Turned support on (default) |
+|---|---:|---:|---:|
+| seoul_bull v02 | 17.1 ms | 18.3 ms | 26.5 ms (+55%) |
+| kerry_park v02 | 24.0 ms | 24.1 ms | 30.2 ms (+26%) |
+| dino_dog_toy v01 | 52.6 ms | 53.1 ms | 60.6 ms (+15%) |
+
+Laying the grid per stage alone had been estimated at 6% to 9% of the step;
+the rest is the whole-grid rounds after the first, each a whole-grid fit, and
+the template render each fitted stage and final reading adds. Why the share is
+largest on the Seoul bull was not measured. The turned support off costs what
+the step before it did, within the run-to-run spread.
+
+**Decision.** The turned support is the default. The cap, the floor and the
+round limit are first values; the quality of the new default across many
+points is evaluated separately.

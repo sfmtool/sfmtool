@@ -21,8 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::scene::{fixture_of, Scene, PLANE_Z, WORLD};
 use super::*;
 use crate::bench::{
-    GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlaneRefusal, GrownPlaneSequence,
-    GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView,
+    GrownPlaneAttempt, GrownPlaneGridRound, GrownPlaneNormalOptions, GrownPlaneOutcome,
+    GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome,
+    GrownPlaneView,
 };
 use crate::camera::CameraModel;
 
@@ -912,6 +913,15 @@ fn the_grown_plane_normal_refuses_a_bearing_bad_options_and_stops_when_cancelled
     assert!(cancel.load(Ordering::Relaxed));
 }
 
+/// The depth of the first phase named `name` among `phases`.
+fn depth_of_phase(phases: &[(&'static str, u8, Option<String>)], name: &str) -> u8 {
+    phases
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, d, _)| *d)
+        .expect("recorded")
+}
+
 /// The scene of [`a_view_whose_own_plane_disagrees_is_left_out`]: one view at
 /// 38 degrees sees the texture on a plane turned 25 degrees from the others'.
 fn disagreeing_scene() -> Scene {
@@ -1019,7 +1029,31 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
         let windows = sequence.window_half_widths.len() - 1;
         let shift_only = sequence.shift_only();
         assert_eq!(names(&detailed_phases, "window stage"), growths * windows);
-        assert_eq!(names(&detailed_phases, "whole-grid stage"), growths);
+        // One whole-grid stage phase per round of every growth.
+        let rounds: usize = sequence
+            .trace
+            .iter()
+            .flat_map(|t| &t.attempts)
+            .map(|a| a.grid_rounds.len())
+            .sum();
+        assert!(rounds >= growths, "{sequence:#?}");
+        assert_eq!(names(&detailed_phases, "whole-grid stage"), rounds);
+        // Each window stage's note gives its turn, each round's its cap, each
+        // growth's its template renders and each pair fit's its rounds.
+        let noted = |name: &str, word: &str| {
+            detailed_phases
+                .iter()
+                .filter(|(n, _, _)| *n == name)
+                .all(|(_, _, note)| note.as_deref().is_some_and(|t| t.contains(word)))
+        };
+        assert!(noted("window stage", "turned"), "{detailed_phases:#?}");
+        assert!(noted("whole-grid stage", "cap"), "{detailed_phases:#?}");
+        assert!(noted("growth", "template renders"), "{detailed_phases:#?}");
+        assert!(noted("pair fit", "rounds"), "{detailed_phases:#?}");
+        assert_eq!(
+            depth_of_phase(&detailed_phases, "whole-grid stage"),
+            depth_of_phase(&detailed_phases, "growth") + 1
+        );
         assert_eq!(names(&detailed_phases, "judge"), growths);
         assert_eq!(names(&detailed_phases, "joint fit"), 0);
         assert_eq!(names(&detailed_phases, "precision"), 0);
@@ -1626,4 +1660,280 @@ fn the_agreement_averages_the_scored_views_only() {
     ]);
     assert!(none.agreement().is_nan());
     assert!(sequence(Vec::new()).agreement().is_nan());
+}
+
+/// Six views of the textured plane out to 40 degrees, placed so that every
+/// one is under 80 degrees from a patch normal turned 60 degrees about the
+/// x axis, which tips it toward `+y`: the wide ones on that side, and one
+/// narrow view on the other.
+fn sixty_degree_centres() -> Vec<[f64; 3]> {
+    vec![
+        centre(0.0, 0.0),
+        centre(12.0, 250.0),
+        centre(20.0, 60.0),
+        centre(28.0, 120.0),
+        centre(34.0, 90.0),
+        centre(40.0, 100.0),
+    ]
+}
+
+/// The template renders a growth's `growth` phase note gives.
+fn template_renders(note: &str) -> usize {
+    let words: Vec<&str> = note.split_whitespace().collect();
+    let at = words
+        .iter()
+        .position(|w| *w == "template")
+        .expect("the growth note gives its template renders");
+    words[at - 1].parse().expect("a count")
+}
+
+/// The step on `scene` from `track`, with a detailed progress whose `growth`
+/// phase notes are kept, in the order the growths ran.
+fn run_noting_growths(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+    options: &GrownPlaneNormalOptions,
+) -> (EditableTrack, NormalReport, Vec<String>) {
+    use crate::progress::Event;
+    use std::sync::Mutex;
+
+    let notes: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Leave {
+            phase: "growth",
+            note: Some(note),
+            ..
+        } = event
+        {
+            notes.lock().unwrap().push(note.to_string());
+        }
+    };
+    let (turned, report) = grown_plane_normal(
+        track,
+        edited,
+        &scene.views(),
+        options,
+        &Progress::to(&sink).detailed(true),
+    )
+    .expect("the step runs");
+    (turned, report, notes.into_inner().unwrap())
+}
+
+/// A plane started 60 degrees off is reached within a degree with the
+/// turned support. Every window stage and every round keeps within its cap,
+/// the rounds' caps start at the stage cap and halve, every growth's and
+/// pair's rounds stop by one of the rules, and a growth from the starting
+/// plane lays a new grid and template exactly once for every stage that
+/// turned the plane. A second run from the turned normal turns it under half
+/// a degree.
+#[test]
+fn a_plane_started_sixty_degrees_off_is_reached_on_turned_grids() {
+    let scene = Scene::looking_at(&sixty_degree_centres(), WORLD, camera(), textured_plane);
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 60.0);
+    let options = every_view();
+    let (turned, report, notes) = run_noting_growths(&scene, &edited, &track, &options);
+    let sequence = sequence_of(&report);
+    let after = degrees(patch_frame_of(&turned).normal(), truth());
+    assert!(after < 1.0, "{after:.3} deg off: {report}");
+    assert!(report.tilt.degrees > 55.0, "{report}");
+
+    let cap = options.stage_turn_cap_deg;
+    let attempts: Vec<&GrownPlaneAttempt> =
+        sequence.trace.iter().flat_map(|t| &t.attempts).collect();
+    assert_eq!(notes.len(), attempts.len());
+    let mut relaid = 0;
+    for (attempt, note) in attempts.iter().zip(&notes) {
+        assert!(
+            attempt.stage_turn_deg.iter().all(|&t| t <= cap + 1e-9),
+            "{attempt:#?}"
+        );
+        if attempt.refusal == Some(GrownPlaneRefusal::StoppedEarly) {
+            continue;
+        }
+        check_rounds(&attempt.grid_rounds, &options);
+        assert_eq!(
+            attempt.stage_zncc.last(),
+            attempt.grid_rounds.last().map(|r| &r.zncc)
+        );
+        if attempt.tilt_start == GrownPlaneTiltStart::Starting {
+            let turned_stages = attempt
+                .stage_turn_deg
+                .iter()
+                .chain(attempt.grid_rounds.iter().map(|r| &r.turn_deg))
+                .filter(|&&t| t > 0.0)
+                .count();
+            assert_eq!(
+                template_renders(note),
+                turned_stages,
+                "{note}: {attempt:#?}"
+            );
+            relaid += turned_stages;
+        }
+    }
+    assert!(relaid > 0, "{sequence:#?}");
+    for pair in &sequence.pairs {
+        check_rounds(&pair.grid_rounds, &options);
+    }
+
+    let (again, second) = run(&scene, &edited, &turned, &options);
+    assert!(second.tilt.degrees < 0.5, "{second}");
+    assert!(
+        degrees(patch_frame_of(&again).normal(), truth()) < 1.0,
+        "{second}"
+    );
+}
+
+/// The rounds of one growth or pair: each within its cap, the first under
+/// the stage cap, each cap the one before or half of it, every round but the
+/// last turning at least half the floor under a cap of at least the floor,
+/// and the last stopping by a rule: at the round limit, a turn under half
+/// the floor, or a cap that a reversal halves under the floor.
+fn check_rounds(rounds: &[GrownPlaneGridRound], options: &GrownPlaneNormalOptions) {
+    let floor = options.min_stage_turn_cap_deg;
+    assert!(!rounds.is_empty() && rounds.len() <= options.max_grid_rounds as usize);
+    assert_eq!(rounds[0].cap_deg, options.stage_turn_cap_deg, "{rounds:#?}");
+    for (k, round) in rounds.iter().enumerate() {
+        assert!(round.turn_deg <= round.cap_deg + 1e-9, "{rounds:#?}");
+        if k > 0 {
+            let before = rounds[k - 1].cap_deg;
+            assert!(
+                round.cap_deg == before || round.cap_deg == before / 2.0,
+                "{rounds:#?}"
+            );
+        }
+        if k + 1 < rounds.len() {
+            assert!(round.turn_deg >= 0.5 * floor, "{rounds:#?}");
+            assert!(round.cap_deg >= floor, "{rounds:#?}");
+        }
+    }
+    let last = rounds.last().expect("one round at least");
+    assert!(
+        rounds.len() == options.max_grid_rounds as usize
+            || last.turn_deg < 0.5 * floor
+            || last.cap_deg / 2.0 < floor,
+        "{rounds:#?}"
+    );
+}
+
+/// With `turned_support` off the step lays one grid: every growth that
+/// reached the whole grid ran one round with no cap, its `grid_zncc` is the
+/// last entry of `stage_zncc`, every pair ran one round, no growth made a
+/// template render, and the wide scene's plane is reached as the standing
+/// tests require. The cap and the rounds are not read: other values of them
+/// change nothing.
+#[test]
+fn without_turned_support_the_step_lays_one_grid_and_runs_one_round() {
+    let off = GrownPlaneNormalOptions {
+        turned_support: false,
+        ..every_view()
+    };
+    for (name, scene, by) in [
+        (
+            "wide",
+            Scene::looking_at(&wide_centres(), WORLD, camera(), textured_plane),
+            25.0,
+        ),
+        ("disagreeing", disagreeing_scene(), 10.0),
+    ] {
+        let edited = edited_of(&scene);
+        let track = tilted_track(&edited, Vector3::new(1.0, 0.5, 0.0), by);
+        let (turned, report, notes) = run_noting_growths(&scene, &edited, &track, &off);
+        let sequence = sequence_of(&report);
+        assert!(!sequence.trace.is_empty(), "{name}");
+        for attempt in sequence.trace.iter().flat_map(|t| &t.attempts) {
+            let stopped = attempt.refusal == Some(GrownPlaneRefusal::StoppedEarly);
+            // One turn per fitted window: every stage but the first window
+            // and, for a growth that reached it, the whole grid.
+            assert_eq!(
+                attempt.stage_turn_deg.len(),
+                attempt.stage_zncc.len() - if stopped { 1 } else { 2 },
+                "{name}: {attempt:#?}"
+            );
+            if stopped {
+                assert!(attempt.grid_rounds.is_empty());
+                continue;
+            }
+            assert_eq!(attempt.grid_rounds.len(), 1, "{name}: {attempt:#?}");
+            assert_eq!(attempt.grid_rounds[0].cap_deg, f64::INFINITY);
+            assert_eq!(Some(&attempt.grid_zncc), attempt.stage_zncc.last());
+            assert_eq!(attempt.grid_rounds[0].zncc, attempt.grid_zncc);
+        }
+        assert!(!sequence.pairs.is_empty(), "{name}");
+        for pair in &sequence.pairs {
+            assert_eq!(pair.grid_rounds.len(), 1, "{name}");
+            assert_eq!(pair.grid_rounds[0].cap_deg, f64::INFINITY);
+            assert_eq!(pair.grid_rounds[0].zncc, pair.zncc);
+        }
+        for note in &notes {
+            assert_eq!(template_renders(note), 0, "{name}: {note}");
+        }
+        if name == "wide" {
+            let after = degrees(patch_frame_of(&turned).normal(), truth());
+            assert!(after < 1.0, "{after:.3} deg off: {report}");
+        }
+        // The turned support's own settings are not read with it off.
+        let other = GrownPlaneNormalOptions {
+            stage_turn_cap_deg: 3.0,
+            min_stage_turn_cap_deg: 2.0,
+            max_grid_rounds: 2,
+            ..off.clone()
+        };
+        let (again, same) = run(&scene, &edited, &track, &other);
+        assert_eq!(format!("{turned:?}"), format!("{again:?}"), "{name}");
+        assert_eq!(format!("{report:?}"), format!("{same:?}"), "{name}");
+    }
+}
+
+/// `check` refuses each of the turned support's settings out of its range,
+/// naming it, with the support on or off, and takes an infinite cap and a
+/// floor equal to the cap.
+#[test]
+fn check_refuses_the_turned_supports_settings_out_of_range() {
+    for turned_support in [true, false] {
+        let base = GrownPlaneNormalOptions {
+            turned_support,
+            ..Default::default()
+        };
+        for stage_turn_cap_deg in [f64::NAN, 0.0, -1.0, 90.0, 120.0, f64::NEG_INFINITY] {
+            let bad = GrownPlaneNormalOptions {
+                stage_turn_cap_deg,
+                ..base.clone()
+            };
+            assert_eq!(
+                bad.check(),
+                Err(NormalError::BadGrownPlaneOption("stage_turn_cap_deg")),
+                "{stage_turn_cap_deg}"
+            );
+        }
+        for min_stage_turn_cap_deg in [f64::NAN, f64::INFINITY, 0.0, -0.5, 12.5] {
+            let bad = GrownPlaneNormalOptions {
+                min_stage_turn_cap_deg,
+                ..base.clone()
+            };
+            assert_eq!(
+                bad.check(),
+                Err(NormalError::BadGrownPlaneOption("min_stage_turn_cap_deg")),
+                "{min_stage_turn_cap_deg}"
+            );
+        }
+        let bad = GrownPlaneNormalOptions {
+            max_grid_rounds: 0,
+            ..base.clone()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGrownPlaneOption("max_grid_rounds"))
+        );
+        for (cap, floor) in [(f64::INFINITY, 0.5), (12.0, 12.0), (89.9, 0.01)] {
+            let edges = GrownPlaneNormalOptions {
+                stage_turn_cap_deg: cap,
+                min_stage_turn_cap_deg: floor,
+                max_grid_rounds: 1,
+                ..base.clone()
+            };
+            assert_eq!(edges.check(), Ok(()), "{cap} {floor}");
+        }
+    }
 }

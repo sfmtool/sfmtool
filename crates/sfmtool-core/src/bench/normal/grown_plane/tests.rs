@@ -8,13 +8,14 @@
 
 use std::cell::RefCell;
 
-use nalgebra::{DMatrix, Matrix2};
+use nalgebra::{DMatrix, Matrix2, Vector3};
 
 use super::combine::{covariance, distance, weighted_mean};
 use super::render::{robust_score, zncc, Block, GradientRead, Samples};
 use super::solve::{
-    forward_difference, maximise, schur_tilt, tilt_information, Iteration, Linearised, Objective,
-    DAMPING_TRIES, MAX_GROWN_TILT_STEP, MAX_SHIFT_STEP_PX, MAX_TILT_STEP, MIN_RELATIVE_GAIN,
+    disc_of, forward_difference, maximise, schur_tilt, tilt_information, Iteration, Linearised,
+    Objective, Rounds, DAMPING_TRIES, MAX_GROWN_TILT_STEP, MAX_SHIFT_STEP_PX, MAX_TILT_STEP,
+    MIN_RELATIVE_GAIN,
 };
 use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
 
@@ -251,6 +252,7 @@ fn iteration() -> Iteration {
         max_iterations: o.max_iterations,
         damping: o.initial_damping,
         min_improvement: o.min_improvement,
+        disc: None,
     }
 }
 
@@ -489,4 +491,111 @@ fn the_weighted_mean_matches_a_hand_computed_case() {
     let unit = Matrix2::identity() * (4.0 * tau);
     let d = distance([1.0, 0.0], &unit, [0.0, 0.0], &unit, tau);
     assert!((d - 1.0).abs() < 1e-4, "{d}");
+}
+
+/// A tilt and shift target outside the disc: the fit ends on the disc's edge
+/// toward the target, with the shift reaching its own target, and no point it
+/// scores lies outside the disc. Inside the disc it reaches the optimum as
+/// with no disc.
+#[test]
+fn the_disc_keeps_every_trial_tilt_within_the_cap() {
+    let radius = 12f64.to_radians().tan();
+    let target = vec![0.5, -0.3, 1.5, -1.0];
+    let objective = Logged {
+        inner: Quadratic::tilt_and_shift(target.clone()),
+        frozen_at: RefCell::new(Vec::new()),
+        read_at: RefCell::new(Vec::new()),
+    };
+    let it = Iteration {
+        disc: disc_of(12.0),
+        ..iteration()
+    };
+    assert_eq!(it.disc, Some(radius));
+    let (p, _, _) = maximise(&objective, &[0.0; 4], &it);
+    let length = p[0].hypot(p[1]);
+    assert!((length - radius).abs() < 1e-3, "{p:?}");
+    // On the edge toward the target's tilt.
+    let along = (p[0] * target[0] + p[1] * target[1]) / (length * target[0].hypot(target[1]));
+    assert!(along > 0.999, "{p:?}");
+    assert!((p[2] - target[2]).abs() < 1e-3 && (p[3] - target[3]).abs() < 1e-3);
+    for q in objective.frozen_at.borrow().iter() {
+        assert!(q[0].hypot(q[1]) <= radius + 1e-12, "{q:?} outside the disc");
+    }
+
+    let inside = vec![0.1, -0.05, 1.5, -1.0];
+    let free = maximise(
+        &Quadratic::tilt_and_shift(inside.clone()),
+        &[0.0; 4],
+        &iteration(),
+    );
+    let capped = maximise(&Quadratic::tilt_and_shift(inside.clone()), &[0.0; 4], &it);
+    assert_eq!(free, capped);
+    for (a, b) in capped.0.iter().zip(&inside) {
+        assert!((a - b).abs() < 1e-6, "{capped:?}");
+    }
+    // No disc for an infinite cap, and a shift alone ignores the disc.
+    assert_eq!(disc_of(f64::INFINITY), None);
+    let shift = Quadratic {
+        target: vec![5.0, -3.0],
+        tilt_entries: 0,
+    };
+    assert_eq!(
+        maximise(&shift, &[0.0; 2], &it),
+        maximise(&shift, &[0.0; 2], &iteration())
+    );
+}
+
+/// The whole-grid rounds' schedule on given turn vectors. Turns that keep one
+/// direction keep the cap and stop at the round limit; turns that alternate
+/// halve the cap from the second round on and stop once it would fall under
+/// the floor; a round that turns under half the floor stops the rounds; one
+/// round with an infinite cap and a limit of one is the step without the
+/// turned support.
+#[test]
+fn the_rounds_halve_their_cap_on_a_reversal_and_stop_by_each_rule() {
+    let along = Vector3::new(1.0, 0.0, 0.0);
+    // One direction: 16 rounds at 12°.
+    let mut rounds = Rounds::new(12.0, 0.5, 16);
+    let mut caps = Vec::new();
+    loop {
+        caps.push(rounds.cap_deg());
+        if !rounds.after(3.0, along) {
+            break;
+        }
+    }
+    assert_eq!(caps, vec![12.0; 16]);
+
+    // Alternating: 12, 12 (the first round has nothing to reverse), 6, 3,
+    // 1.5, 0.75, then 0.375 would be under 0.5, so the sixth round is the last.
+    let mut rounds = Rounds::new(12.0, 0.5, 16);
+    let mut caps = Vec::new();
+    let mut sign = 1.0;
+    loop {
+        caps.push(rounds.cap_deg());
+        let more = rounds.after(1.0, along * sign);
+        sign = -sign;
+        if !more {
+            break;
+        }
+    }
+    assert_eq!(caps, vec![12.0, 12.0, 6.0, 3.0, 1.5, 0.75]);
+
+    // A turn at right angles to the one before is no reversal.
+    let mut rounds = Rounds::new(12.0, 0.5, 16);
+    assert!(rounds.after(2.0, along));
+    assert!(rounds.after(2.0, Vector3::new(0.0, 1.0, 0.0)));
+    assert_eq!(rounds.cap_deg(), 12.0);
+
+    // A round that turns under a quarter of a degree, half the floor, stops
+    // them; one at a quarter does not.
+    let mut rounds = Rounds::new(12.0, 0.5, 16);
+    assert!(rounds.after(0.25, along));
+    assert!(!rounds.after(0.2499, along));
+    let mut rounds = Rounds::new(12.0, 0.5, 16);
+    assert!(!rounds.after(0.0, Vector3::zeros()));
+
+    // The step without the turned support: one round, no cap.
+    let mut rounds = Rounds::new(f64::INFINITY, 0.0, 1);
+    assert_eq!(rounds.cap_deg(), f64::INFINITY);
+    assert!(!rounds.after(30.0, along));
 }

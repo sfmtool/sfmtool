@@ -20,15 +20,24 @@
 //! held, and its plane joins the combination. When the step turns the patch,
 //! every view not picked has its shift alone fitted at the final plane, over
 //! a mid-size window and then for two iterations over the whole grid.
+//!
+//! With the turned support a pair's fit runs as whole-grid rounds, each on
+//! the grid laid at the plane the pair has reached, and its information and
+//! score are read on the grid laid at its final plane; the shift-only fits
+//! run on the grid laid at the final plane.
 
 use nalgebra::{Matrix2, Vector2};
 
 use super::combine::{sigmas_deg, Combined, Estimate, PairEstimate};
-use super::solve::{maximise, tilt_information, Iteration, PairFit, Reading, ViewFit};
+use super::render::ViewRender;
+use super::solve::{
+    carried_information, maximise, schur_tilt, score_and_normal_matrix, tilt_information,
+    Iteration, PairFit, Reading,
+};
 use super::{
-    verdict_words, Fate, GrownPlaneAttempt, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
-    GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, NormalError, Outcome, Sequence,
-    SHIFT_ONLY_GRID_ITERATIONS, SHIFT_ONLY_WINDOW,
+    reached, verdict_words, Fate, GrownPlaneAttempt, GrownPlaneGridRound, GrownPlanePair,
+    GrownPlanePick, GrownPlaneRefusal, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome,
+    Laid, NormalError, Outcome, Sequence, SHIFT_ONLY_GRID_ITERATIONS, SHIFT_ONLY_WINDOW,
 };
 use crate::progress::Progress;
 use crate::progress_note;
@@ -46,7 +55,7 @@ const STARTING_PLANE_RETRY_RUNGS: u32 = 2;
 /// floor, else its last growth.
 type Matched = Result<Estimate, GrownPlaneAttempt>;
 
-impl Sequence<'_, '_, '_> {
+impl Sequence<'_, '_> {
     /// The selection, the combination of the selected views' planes and the
     /// pairs. Every view not picked is left [`Fate::NotTried`], for
     /// [`Self::fit_shift_only`].
@@ -249,47 +258,122 @@ impl Sequence<'_, '_, '_> {
             progress.check_cancel()?;
             let mut fit_phase = phase.detail_phase("pair fit");
             let (ea, eb) = (&estimates[a], &estimates[b]);
-            let renders_before =
-                self.renders[ea.index].renders() + self.renders[eb.index].renders();
-            let fit = PairFit {
-                first: &self.renders[ea.index],
-                second: &self.renders[eb.index],
-                live: self.live,
-                shifts: [self.moved_shift(ea, tilt), self.moved_shift(eb, tilt)],
-                min_coverage: options.min_coverage,
+            let (ca, cb) = (&self.candidates[ea.index], &self.candidates[eb.index]);
+            let renders_before = ca.image.renders() + cb.image.renders();
+            // Each view's shift against the reference, held at its own shift
+            // moved to the combined plane, for every round.
+            let shifts = [self.moved_shift(ea, tilt), self.moved_shift(eb, tilt)];
+            let turned = self.turned();
+            let (mut laid, t0) = self.laid_for(tilt);
+            let mut p = vec![t0[0], t0[1], 0.0, 0.0];
+            let mut normal = if turned {
+                laid.grid.frame.normal
+            } else {
+                laid.grid.plane_normal(t0)
             };
-            let (p, zncc, taken) = maximise(&fit, &[tilt[0], tilt[1], 0.0, 0.0], &self.iteration);
-            let own = [p[0], p[1]];
-            let information = tilt_information(&fit, &p);
+            let mut rounds = self.rounds();
+            let mut grid_rounds = Vec::new();
+            let mut zncc;
+            let mut taken = 0;
+            loop {
+                if turned {
+                    laid = self.lay(normal);
+                    (p[0], p[1]) = (0.0, 0.0);
+                }
+                let cap_deg = rounds.cap_deg();
+                let (first, second) = (
+                    ViewRender::new(&laid.grid, &ca.image),
+                    ViewRender::new(&laid.grid, &cb.image),
+                );
+                let fit = PairFit {
+                    first: &first,
+                    second: &second,
+                    live: &laid.live,
+                    shifts,
+                    min_coverage: options.min_coverage,
+                };
+                let (q, z, steps) = maximise(&fit, &p, &self.capped_iteration(cap_deg));
+                let (next, turn) = reached(&laid.grid, normal, [p[0], p[1]], [q[0], q[1]]);
+                let more = rounds.after(turn, next - normal);
+                grid_rounds.push(GrownPlaneGridRound {
+                    cap_deg,
+                    turn_deg: turn,
+                    zncc: z,
+                });
+                (normal, p, zncc, taken) = (next, q, z, taken + steps);
+                if !more {
+                    break;
+                }
+                progress.check_cancel()?;
+            }
+            // The pair's information about the tilt: without the turned
+            // support, on the one grid at the pair's tilt; with it, with the
+            // pair's score, on the grid laid at its final plane at no tilt,
+            // carried into the starting frame's tilt.
+            let (own, information) = if turned {
+                laid = self.lay(normal);
+                let (first, second) = (
+                    ViewRender::new(&laid.grid, &ca.image),
+                    ViewRender::new(&laid.grid, &cb.image),
+                );
+                let fit = PairFit {
+                    first: &first,
+                    second: &second,
+                    live: &laid.live,
+                    shifts,
+                    min_coverage: options.min_coverage,
+                };
+                let (z, n) = score_and_normal_matrix(&fit, &[0.0, 0.0, p[2], p[3]]);
+                zncc = z;
+                let information = n.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
+                (
+                    self.start_tilt(normal),
+                    carried_information(&information, &laid.grid.start_chart_jacobian()),
+                )
+            } else {
+                let (first, second) = (
+                    ViewRender::new(&laid.grid, &ca.image),
+                    ViewRender::new(&laid.grid, &cb.image),
+                );
+                let fit = PairFit {
+                    first: &first,
+                    second: &second,
+                    live: &laid.live,
+                    shifts,
+                    min_coverage: options.min_coverage,
+                };
+                ([p[0], p[1]], tilt_information(&fit, &p))
+            };
             let sigma = sigmas_deg(&information, options.zncc_tolerance)[0];
             let refused = (zncc.is_nan() || zncc < options.min_held_zncc)
                 .then_some(GrownPlaneRefusal::UnderFloor);
-            let (ca, cb) = (&self.candidates[ea.index], &self.candidates[eb.index]);
-            progress_note!(
-                fit_phase,
-                "images {} and {}, {deg:.1}\u{b0} apart: ZNCC {zncc:.3}, \u{3c3} {sigma:.2}\u{b0}, {}, {taken} iterations, {} renders",
-                ca.image_index,
-                cb.image_index,
-                verdict_words(refused),
-                self.renders[ea.index].renders() + self.renders[eb.index].renders() - renders_before
-            );
-            drop(fit_phase);
             pair_estimates.push(PairEstimate {
                 members: [a, b],
                 tilt: own,
                 information,
                 refused,
             });
+            progress_note!(
+                fit_phase,
+                "images {} and {}, {deg:.1}\u{b0} apart: ZNCC {zncc:.3}, \u{3c3} {sigma:.2}\u{b0}, {}, {} rounds, {taken} iterations, {} renders",
+                ca.image_index,
+                cb.image_index,
+                verdict_words(refused),
+                grid_rounds.len(),
+                ca.image.renders() + cb.image.renders() - renders_before
+            );
+            drop(fit_phase);
             pairs.push(GrownPlanePair {
                 observations: [ca.row, cb.row],
                 images: [ca.image_index, cb.image_index],
                 angle_deg: deg,
-                normal: self.grid.plane_normal(own).into(),
+                normal: normal.into(),
                 relative_shift: [p[2], p[3]],
                 zncc,
                 sigma_deg: sigma,
                 distance: None,
                 refusal: refused,
+                grid_rounds,
             });
         }
         progress_note!(phase, "{} pairs", pairs.len());
@@ -524,7 +608,7 @@ impl Sequence<'_, '_, '_> {
             state.kept_tilt = combined.tilt;
             sigma_after = combined.sigma_weak_deg(options.zncc_tolerance);
             if let (Some(t), Some(last)) = (combined.tilt, trace.last_mut()) {
-                last.combined_normal = Some(self.grid.plane_normal(t).into());
+                last.combined_normal = Some(self.start.grid.plane_normal(t).into());
                 last.combined_sigma_deg = sigma_after;
             }
         }
@@ -543,42 +627,45 @@ impl Sequence<'_, '_, '_> {
         Ok(sigma_after <= options.target_sigma_deg)
     }
 
-    /// Fit candidate `i`'s shift alone at the plane `tilt` from `shift`: over
-    /// the window of [`SHIFT_ONLY_WINDOW`] first, then for
-    /// [`SHIFT_ONLY_GRID_ITERATIONS`] iterations over the whole grid on the
-    /// robust cell score. The shift reached and its whole-grid score.
-    fn fit_shift(&self, i: usize, tilt: [f64; 2], shift: [f64; 2]) -> ([f64; 2], f64) {
+    /// Fit candidate `i`'s shift alone on `laid`'s grid at the plane `tilt`
+    /// of that grid from `shift`: over the window of [`SHIFT_ONLY_WINDOW`]
+    /// first, then for [`SHIFT_ONLY_GRID_ITERATIONS`] iterations over the
+    /// whole grid on the robust cell score. The shift reached and its
+    /// whole-grid score.
+    fn fit_shift(&self, i: usize, laid: &Laid, tilt: [f64; 2], shift: [f64; 2]) -> ([f64; 2], f64) {
         let half = self.radii[SHIFT_ONLY_WINDOW.min(self.radii.len() - 1)];
-        let window = ViewFit {
-            render: &self.renders[i],
-            reference: self.reference,
-            live: self.live,
-            reading: Reading::Window(self.grid.window(half)),
-            held: Some(tilt),
-            min_coverage: self.options.min_coverage,
-        };
+        let render = ViewRender::new(&laid.grid, &self.candidates[i].image);
+        let window = self.fit_on(
+            laid,
+            &render,
+            Reading::Window(laid.grid.window(half)),
+            Some(tilt),
+        );
         let (q, _, _) = maximise(&window, &shift, &self.iteration);
         let brief = Iteration {
             max_iterations: SHIFT_ONLY_GRID_ITERATIONS,
             ..self.iteration
         };
-        let (q, z, _) = maximise(&self.grid_fit(i, Some(tilt)), &q, &brief);
+        let whole = self.fit_on(laid, &render, Reading::Grid, Some(tilt));
+        let (q, z, _) = maximise(&whole, &q, &brief);
         ([q[0], q[1]], z)
     }
 
-    /// Candidate `i`'s shift alone at the final plane `tilt`, in a
-    /// `shift-only fit` phase: from its keypoint-implied shift, the first
-    /// window's ZNCC read and the shift fitted with the tilt held
-    /// ([`Self::fit_shift`]). A fit under the floor is kept as it is; the
-    /// note says which side of the floor it is on.
+    /// Candidate `i`'s shift alone at the final plane `tilt` of the starting
+    /// frame, in a `shift-only fit` phase: from its keypoint-implied shift,
+    /// the first window's ZNCC read and the shift fitted with the tilt held
+    /// ([`Self::fit_shift`]), on the grid laid at that plane at no tilt with
+    /// the turned support. A fit under the floor is kept as it is; the note
+    /// says which side of the floor it is on.
     fn shift_only(&self, i: usize, tilt: [f64; 2], progress: &Progress<'_>) -> Fate {
         let options = self.options;
         let candidate = &self.candidates[i];
         let mut phase = progress.detail_phase("shift-only fit");
-        let renders_before = self.renders[i].renders();
-        let rows = self.grid.window(self.radii[0]);
-        let z1 = self.spot_zncc(i, tilt, &rows, candidate.kp_shift);
-        let (shift, grid_zncc) = self.fit_shift(i, tilt, candidate.kp_shift);
+        let renders_before = candidate.image.renders();
+        let (laid, own) = self.laid_for(tilt);
+        let rows = laid.grid.window(self.radii[0]);
+        let z1 = self.spot_zncc(i, &laid, own, &rows, candidate.kp_shift);
+        let (shift, grid_zncc) = self.fit_shift(i, &laid, own, candidate.kp_shift);
         progress_note!(
             phase,
             "image {}: first window ZNCC {z1:.3}, grid ZNCC {grid_zncc:.3}, {}, {} renders",
@@ -588,7 +675,7 @@ impl Sequence<'_, '_, '_> {
             } else {
                 "under the floor"
             },
-            self.renders[i].renders() - renders_before
+            candidate.image.renders() - renders_before
         );
         Fate::ShiftOnly { shift, grid_zncc }
     }
@@ -628,7 +715,7 @@ impl Selection {
     /// model, the view nearest `aim`, ties by the earlier one.
     fn best_predicted_near(
         &self,
-        sequence: &Sequence<'_, '_, '_>,
+        sequence: &Sequence<'_, '_>,
         m: Option<(f64, f64)>,
         aim: f64,
         candidates: impl Iterator<Item = usize>,
@@ -659,8 +746,8 @@ struct Prediction {
 }
 
 impl Prediction {
-    fn new(sequence: &Sequence<'_, '_, '_>) -> Self {
-        let density = sequence.grid.density();
+    fn new(sequence: &Sequence<'_, '_>) -> Self {
+        let density = sequence.start.grid.density();
         let gain = sequence
             .candidates
             .iter()

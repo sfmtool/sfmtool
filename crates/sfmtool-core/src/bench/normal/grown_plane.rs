@@ -17,7 +17,12 @@
 //! than the growth recovers is left out. Fitting the keypoints is a separate
 //! step the caller runs. The growth widens the window outward, fitting tilt
 //! and shift by Levenberg–Marquardt (`solve`) at each size, and ends with a
-//! fit of the whole grid on the robust cell score. A growth stops early,
+//! fit of the whole grid on the robust cell score. With the turned support
+//! (the default), every fitted stage lays the working grid and the template
+//! again on the patch square turned to the plane the growth has reached
+//! ([`Grid::laid_at`](render::Grid::laid_at)), may turn the plane only a cap
+//! from there, and the whole-grid fit repeats as rounds whose cap halves when
+//! a round reverses the one before. A growth stops early,
 //! refused, at a window stage whose score shows it will not reach the floor.
 //! Each growth gives the view's own plane and its information about the tilt.
 //! A view with no keypoint, or whose anchor does not project into it, has no
@@ -40,7 +45,9 @@
 //!
 //! `specs/core/bench/grown-plane-normal.md` specifies the step.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use nalgebra::{Matrix2, Vector3};
 
@@ -68,7 +75,8 @@ mod solve;
 use combine::{sigmas_deg, Estimate};
 use render::{anchored, Grid, Samples, ViewImage, ViewRender};
 use solve::{
-    live_cells, maximise, normal_matrix, schur_tilt, shift_response, Iteration, Reading, ViewFit,
+    angle_deg, carried_information, disc_of, live_cells, maximise, normal_matrix, schur_tilt,
+    score_and_normal_matrix, shift_response, Iteration, Reading, Rounds, ViewFit,
 };
 
 /// A growth stops, refused ([`GrownPlaneRefusal::StoppedEarly`]), at a window
@@ -169,6 +177,24 @@ pub struct GrownPlaneNormalOptions {
     /// A stage stops once an iteration raises its score by less than this.
     /// 1e-6.
     pub min_improvement: f64,
+    /// Lay the working grid and the template again, at the start of every
+    /// fitted window stage and every whole-grid round, on the starting square
+    /// turned to the plane the growth has reached, cap each stage's turn,
+    /// repeat the whole-grid stage as rounds, and read every whole grid at a
+    /// plane on the grid laid there. `false` is the step with one grid laid on
+    /// the starting square, no cap and one whole-grid stage, and then the
+    /// three settings below are not read. `true`.
+    pub turned_support: bool,
+    /// The most a window stage, and the first whole-grid round, may turn the
+    /// plane from where the stage began, degrees: above 0 and under 90, or
+    /// infinite for no cap. 12.
+    pub stage_turn_cap_deg: f64,
+    /// The whole-grid rounds stop once their cap would fall under this, and
+    /// after a round that turned less than half of it, degrees: finite, above
+    /// 0 and at most [`Self::stage_turn_cap_deg`]. 0.5.
+    pub min_stage_turn_cap_deg: f64,
+    /// The most whole-grid rounds a growth or a pair runs; at least 1. 16.
+    pub max_grid_rounds: u32,
     /// The reading the step ends with, and the reference-view rule's grazing
     /// gate and sampler (`localize`).
     pub fit: FitOptions,
@@ -197,6 +223,10 @@ impl Default for GrownPlaneNormalOptions {
             max_iterations: 20,
             initial_damping: 1e-3,
             min_improvement: 1e-6,
+            turned_support: true,
+            stage_turn_cap_deg: 12.0,
+            min_stage_turn_cap_deg: 0.5,
+            max_grid_rounds: 16,
             fit: FitOptions::default(),
         }
     }
@@ -209,9 +239,12 @@ impl GrownPlaneNormalOptions {
     /// and a finite turn-to-`σ` ratio of at least zero, at least one selected
     /// view, a first rung of finite angles of at least zero with its aim
     /// within its bounds, a finite rung ratio above 1, a coverage in `0 ..= 1`,
-    /// a finite damping of at least zero and a fit whose sub-pixel kernel
-    /// runs at a patch resolution of at least 2. The error names the first
-    /// setting that fails.
+    /// a finite damping of at least zero, a stage turn cap above 0 and under
+    /// 90 or infinite, a finite floor on it above 0 and at most the cap, at
+    /// least one whole-grid round, and a fit whose sub-pixel kernel runs at a
+    /// patch resolution of at least 2. The three settings of the turned
+    /// support are checked with it off too. The error names the first setting
+    /// that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
         let positive = |v: f64| v.is_finite() && v > 0.0;
@@ -254,6 +287,16 @@ impl GrownPlaneNormalOptions {
         if !(self.initial_damping.is_finite() && self.initial_damping >= 0.0) {
             return bad("initial_damping");
         }
+        let cap = self.stage_turn_cap_deg;
+        if !(cap > 0.0 && (cap < 90.0 || cap == f64::INFINITY)) {
+            return bad("stage_turn_cap_deg");
+        }
+        if !positive(self.min_stage_turn_cap_deg) || self.min_stage_turn_cap_deg > cap {
+            return bad("min_stage_turn_cap_deg");
+        }
+        if self.max_grid_rounds == 0 {
+            return bad("max_grid_rounds");
+        }
         if self.fit.refine.resolution < 2 {
             return bad("resolution");
         }
@@ -265,6 +308,7 @@ impl GrownPlaneNormalOptions {
             max_iterations: self.max_iterations,
             damping: self.initial_damping,
             min_improvement: self.min_improvement,
+            disc: None,
         }
     }
 }
@@ -326,7 +370,7 @@ pub struct GrownPlaneAttempt {
     pub tilt_start: GrownPlaneTiltStart,
     /// Each stage's score: the first window's ZNCC at the keypoint-implied
     /// shift, each later window's ZNCC after its fit, and the whole grid's
-    /// robust score after the last fit.
+    /// robust score after the last fit, the last round's.
     /// A growth that stopped early ([`GrownPlaneRefusal::StoppedEarly`])
     /// ends at the window stage it stopped at, with no whole-grid score.
     pub stage_zncc: Vec<f64>,
@@ -335,6 +379,9 @@ pub struct GrownPlaneAttempt {
     /// The outward normal of the plane the growth ended at, world frame.
     pub normal: [f64; 3],
     /// The robust grid score there; `NaN` for a growth that stopped early.
+    /// With [`GrownPlaneNormalOptions::turned_support`] it is read on the
+    /// grid laid at that plane, and so can differ slightly from the last
+    /// entry of `stage_zncc`; with it off the two are equal.
     pub grid_zncc: f64,
     /// `σ` along its own plane's weakest direction, degrees, from its own
     /// information at its own plane and shift; `NaN` for a growth that
@@ -345,6 +392,24 @@ pub struct GrownPlaneAttempt {
     /// taken one is kept is the combination's verdict, in
     /// [`GrownPlaneSequence::views`].
     pub refusal: Option<GrownPlaneRefusal>,
+    /// The angle each fitted window stage turned the plane, degrees: one per
+    /// window stage after the first, in order, as far as the growth ran.
+    pub stage_turn_deg: Vec<f64>,
+    /// Each whole-grid round, in order: empty for a growth that stopped
+    /// early, one round with [`GrownPlaneNormalOptions::turned_support`] off.
+    pub grid_rounds: Vec<GrownPlaneGridRound>,
+}
+
+/// One whole-grid round of a growth or a pair.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GrownPlaneGridRound {
+    /// The cap it was fitted under, degrees; infinite with no cap.
+    pub cap_deg: f64,
+    /// The angle from the plane it began at to the plane it ended at,
+    /// degrees.
+    pub turn_deg: f64,
+    /// Its robust score there, read on its own grid.
+    pub zncc: f64,
 }
 
 /// What became of one try of a view.
@@ -396,7 +461,9 @@ pub struct GrownPlanePair {
     /// The second view's shift against the first's, beyond the two views'
     /// held shifts, image px.
     pub relative_shift: [f64; 2],
-    /// The robust score between the two views' renders at the pair's plane.
+    /// The robust score between the two views' renders at the pair's plane,
+    /// on the grid laid there with
+    /// [`GrownPlaneNormalOptions::turned_support`].
     pub zncc: f64,
     /// `σ` along the pair's plane's weakest direction, degrees.
     pub sigma_deg: f64,
@@ -405,6 +472,9 @@ pub struct GrownPlanePair {
     pub distance: Option<f64>,
     /// Why it was not kept; `None` when its plane is in the combined plane.
     pub refusal: Option<GrownPlaneRefusal>,
+    /// Each whole-grid round of its fit, in order; one with
+    /// [`GrownPlaneNormalOptions::turned_support`] off.
+    pub grid_rounds: Vec<GrownPlaneGridRound>,
 }
 
 /// One view the selection picked, and why.
@@ -685,6 +755,21 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// Each growth gives the view's own plane and its information about the
 /// tilt, the Schur complement of its normal matrix.
 ///
+/// With [`GrownPlaneNormalOptions::turned_support`], every fitted window
+/// stage and every whole-grid round starts on the working grid laid again on
+/// the patch square turned to the plane the growth has reached, with the
+/// reference's template rendered there, and fits the tilt in that grid's own
+/// frame within [`GrownPlaneNormalOptions::stage_turn_cap_deg`] of where it
+/// began; the whole-grid stage repeats as rounds whose cap halves when a
+/// round turns back against the one before, until the cap would fall under
+/// [`GrownPlaneNormalOptions::min_stage_turn_cap_deg`], a round turns less
+/// than half of that, or [`GrownPlaneNormalOptions::max_grid_rounds`] have
+/// run. Every whole grid read at a plane (a growth's own score and
+/// information, the held scores, the pairs and the shift-only fits) is read
+/// on the grid laid at that plane, and each estimate is carried into the
+/// starting frame's tilt before it is combined. Without it the grid is laid
+/// once on the starting square.
+///
 /// The step trusts the keypoints it is given and searches for no other
 /// shift: a view whose keypoint is off by more than the growing windows
 /// recover is refused and left out. A caller whose keypoints may be off fits
@@ -748,7 +833,8 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// `selection` for each pick, `mean` for each combination of planes, `pairs`
 /// with a `pair fit` per pair, `shift-only fit` for each view not picked,
 /// and `turn` under the step; `growth` under each try; and
-/// `window stage`, `whole-grid stage` and `judge` under each growth, each
+/// `window stage` per later window, `whole-grid stage` per round and `judge`
+/// under each growth, each
 /// noted with what it reached. The
 /// result is the same with detail on or off.
 ///
@@ -866,9 +952,8 @@ pub fn grown_plane_normal(
     } as usize;
     let grid = Grid::new(&patch_frame, ref_view, ref_keypoint, side);
     let ref_image = ViewImage::new(ref_view, &grid.anchored_patch_frame, side, Vector3::zeros());
-    let reference_samples =
-        ViewRender::new(&grid, &ref_image).render([0.0; 2], [0.0; 2], &grid.all());
-    let live = live_cells(&grid.cells, &reference_samples);
+    let start = Rc::new(Laid::new(grid, &ref_image));
+    let grid = &start.grid;
     let radii = window_radii(side, options);
 
     // The candidates: every other row with a keypoint-implied shift, nearest
@@ -932,10 +1017,6 @@ pub fn grown_plane_normal(
         })
         .collect();
     candidates.sort_by(|a, b| a.angle_deg.total_cmp(&b.angle_deg));
-    let renders: Vec<ViewRender<'_, '_>> = candidates
-        .iter()
-        .map(|c| ViewRender::new(&grid, &c.image))
-        .collect();
     progress_note!(
         setup,
         "grid {side}, {} other views, {} with no keypoint, {} windows",
@@ -948,12 +1029,11 @@ pub fn grown_plane_normal(
     let state = Sequence {
         options,
         iteration: options.iteration(),
-        grid: &grid,
-        reference: &reference_samples,
-        live: &live,
+        start: Rc::clone(&start),
+        reference: &ref_image,
         radii: &radii,
         candidates: &candidates,
-        renders: &renders,
+        last_laid: RefCell::new(None),
     };
     let mut outcome = state.run(progress)?;
 
@@ -1154,23 +1234,64 @@ struct Candidate<'a> {
     scale_px: f64,
 }
 
+/// A working grid laid at one plane, with the reference's template on it.
+struct Laid {
+    grid: Grid,
+    /// The reference rendered on the grid at no tilt and no shift: the
+    /// samples every view read on this grid is scored against.
+    template: Samples,
+    /// Which of the grid's cells the template is textured in.
+    live: [bool; 9],
+}
+
+impl Laid {
+    /// `grid` with the template rendered on it from `reference`, one render.
+    fn new(grid: Grid, reference: &ViewImage<'_>) -> Laid {
+        let template = ViewRender::new(&grid, reference).render([0.0; 2], [0.0; 2], &grid.all());
+        let live = live_cells(&grid.cells, &template);
+        Laid {
+            grid,
+            template,
+            live,
+        }
+    }
+}
+
 /// What every growth of one step shares.
-struct Sequence<'s, 'g, 'a> {
+struct Sequence<'s, 'a> {
     options: &'s GrownPlaneNormalOptions,
     iteration: Iteration,
-    grid: &'g Grid,
-    reference: &'s Samples,
-    live: &'s [bool; 9],
+    /// The grid laid on the starting square, with its template.
+    start: Rc<Laid>,
+    /// The reference's photograph, which every template is rendered from;
+    /// its render count is the step's template renders.
+    reference: &'s ViewImage<'a>,
     radii: &'s [usize],
     candidates: &'s [Candidate<'a>],
-    renders: &'s [ViewRender<'g, 'a>],
+    /// The last grid laid at a plane other than the starting one, keyed by
+    /// the bits of the normal it was laid at.
+    last_laid: RefCell<Option<([u64; 3], Rc<Laid>)>>,
 }
 
 /// One growth of one view.
 #[derive(Clone)]
 struct Grown {
+    /// Its plane, as a tilt of the starting frame.
     tilt: [f64; 2],
+    /// Its plane's outward normal, world frame.
+    normal: Vector3<f64>,
     attempt: GrownPlaneAttempt,
+}
+
+/// The plane a fit on `grid` reached, moving the tilt from `from` to `to`,
+/// and the angle it turned, degrees: `normal`, the plane at `from`, is kept
+/// bit for bit when the fit did not move the tilt.
+fn reached(grid: &Grid, normal: Vector3<f64>, from: [f64; 2], to: [f64; 2]) -> (Vector3<f64>, f64) {
+    if to == from {
+        return (normal, 0.0);
+    }
+    let next = grid.plane_normal(to);
+    (next, angle_deg(normal, next))
 }
 
 /// A judged growth: the growth, its verdict in its attempt, and the estimate
@@ -1218,59 +1339,183 @@ struct Outcome {
     pairs: Vec<GrownPlanePair>,
 }
 
-impl Sequence<'_, '_, '_> {
-    /// The fit of candidate `i` over the whole grid on the robust cell score,
-    /// with the tilt held at `held` where given.
-    fn grid_fit(&self, i: usize, held: Option<[f64; 2]>) -> ViewFit<'_, '_, '_> {
+impl<'a> Sequence<'_, 'a> {
+    /// Whether the working grid is laid again at the plane each stage starts
+    /// at ([`GrownPlaneNormalOptions::turned_support`]).
+    fn turned(&self) -> bool {
+        self.options.turned_support
+    }
+
+    /// The grid laid at the plane of unit normal `normal`, with its
+    /// template: the starting grid where `normal` is the starting normal,
+    /// the last grid laid where it was laid at the same normal, bit for bit,
+    /// and otherwise a grid laid now, with one template render.
+    fn lay(&self, normal: Vector3<f64>) -> Rc<Laid> {
+        if normal == self.start.grid.start.normal {
+            return Rc::clone(&self.start);
+        }
+        let key = [normal.x.to_bits(), normal.y.to_bits(), normal.z.to_bits()];
+        if let Some((k, laid)) = self.last_laid.borrow().as_ref() {
+            if *k == key {
+                return Rc::clone(laid);
+            }
+        }
+        let laid = Rc::new(Laid::new(self.start.grid.laid_at(normal), self.reference));
+        *self.last_laid.borrow_mut() = Some((key, Rc::clone(&laid)));
+        laid
+    }
+
+    /// The grid a whole grid is read on at the plane `tilt` of the starting
+    /// frame, and that plane's tilt in the grid's frame: with the turned
+    /// support, the grid laid there, at no tilt, the starting grid at the
+    /// starting plane; without it, the starting grid at `tilt`.
+    fn laid_for(&self, tilt: [f64; 2]) -> (Rc<Laid>, [f64; 2]) {
+        if !self.turned() || tilt == [0.0; 2] {
+            return (Rc::clone(&self.start), tilt);
+        }
+        (self.lay(self.start.grid.plane_normal(tilt)), [0.0; 2])
+    }
+
+    /// The starting frame's tilt of the plane of normal `normal`. Every
+    /// plane a fit keeps is under 90° from the starting normal
+    /// ([`Grid::faces_start`]), so the chart states it; `(0, 0)` stands in
+    /// where it would not.
+    fn start_tilt(&self, normal: Vector3<f64>) -> [f64; 2] {
+        self.start.grid.start.tilt_of(normal).unwrap_or([0.0; 2])
+    }
+
+    /// The whole-grid rounds' schedule: [`Rounds`] from
+    /// [`GrownPlaneNormalOptions::stage_turn_cap_deg`] with the turned
+    /// support, one round with no cap without it.
+    fn rounds(&self) -> Rounds {
+        let options = self.options;
+        if self.turned() {
+            Rounds::new(
+                options.stage_turn_cap_deg,
+                options.min_stage_turn_cap_deg,
+                options.max_grid_rounds,
+            )
+        } else {
+            Rounds::new(f64::INFINITY, 0.0, 1)
+        }
+    }
+
+    /// How a stage fitted under the cap `cap_deg` iterates: with the turned
+    /// support, within the disc of that cap about the stage's own `(0, 0)`.
+    fn capped_iteration(&self, cap_deg: f64) -> Iteration {
+        Iteration {
+            disc: if self.turned() {
+                disc_of(cap_deg)
+            } else {
+                None
+            },
+            ..self.iteration
+        }
+    }
+
+    /// The fit of the view `render` on `laid`'s grid, read as `reading` says
+    /// against `laid`'s template, with the tilt held at `held` where given.
+    fn fit_on<'r, 'g>(
+        &self,
+        laid: &'r Laid,
+        render: &'r ViewRender<'g, 'a>,
+        reading: Reading,
+        held: Option<[f64; 2]>,
+    ) -> ViewFit<'r, 'g, 'a> {
         ViewFit {
-            render: &self.renders[i],
-            reference: self.reference,
-            live: self.live,
-            reading: Reading::Grid,
+            render,
+            reference: &laid.template,
+            live: &laid.live,
+            reading,
             held,
             min_coverage: self.options.min_coverage,
         }
     }
 
-    /// How many renders every view has made so far.
+    /// How many renders every view has made so far, on every grid.
     fn renders_done(&self) -> u64 {
-        self.renders.iter().map(ViewRender::renders).sum()
+        self.candidates.iter().map(|c| c.image.renders()).sum()
     }
 
     /// The estimate candidate `i`'s growth gives: its own plane and shift,
-    /// and its information about the tilt and normal matrix read there.
-    fn estimate_of(&self, i: usize, grown: &Grown) -> Estimate {
-        let p = [
-            grown.tilt[0],
-            grown.tilt[1],
-            grown.attempt.shift[0],
-            grown.attempt.shift[1],
-        ];
-        let normal = normal_matrix(&self.grid_fit(i, None), &p);
-        let information = normal.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
-        Estimate {
+    /// and its information about the tilt and normal matrix read there,
+    /// with the score read from the same render where the turned support
+    /// lays the grid at its plane for them.
+    ///
+    /// Without the turned support the normal matrix is read on the starting
+    /// grid at the growth's tilt, in the starting frame. With it, the grid is
+    /// laid at the growth's plane, the normal matrix and the score are read
+    /// there at no tilt, the normal matrix stays in that grid's frame, and
+    /// the information is carried into the starting frame's tilt by the
+    /// chart's Jacobian.
+    fn estimate_of(&self, i: usize, grown: &Grown) -> (Estimate, Option<f64>) {
+        let image = &self.candidates[i].image;
+        let shift = grown.attempt.shift;
+        if !self.turned() {
+            let render = ViewRender::new(&self.start.grid, image);
+            let p = [grown.tilt[0], grown.tilt[1], shift[0], shift[1]];
+            let fit = self.fit_on(&self.start, &render, Reading::Grid, None);
+            let normal = normal_matrix(&fit, &p);
+            let information = normal.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
+            let estimate = Estimate {
+                index: i,
+                tilt: grown.tilt,
+                shift,
+                information,
+                normal,
+                frame: None,
+            };
+            return (estimate, None);
+        }
+        let laid = self.lay(grown.normal);
+        let render = ViewRender::new(&laid.grid, image);
+        let fit = self.fit_on(&laid, &render, Reading::Grid, None);
+        let (score, normal) = score_and_normal_matrix(&fit, &[0.0, 0.0, shift[0], shift[1]]);
+        let own = normal.as_ref().map_or_else(Matrix2::zeros, schur_tilt);
+        let estimate = Estimate {
             index: i,
             tilt: grown.tilt,
-            shift: grown.attempt.shift,
-            information,
+            shift,
+            information: carried_information(&own, &laid.grid.start_chart_jacobian()),
             normal,
-        }
+            frame: Some(laid.grid.frame),
+        };
+        (estimate, Some(score))
     }
 
-    /// `estimate`'s shift moved to the plane `tilt` by its own normal matrix:
-    /// the shift the fit would reach there to first order, with no render.
+    /// `estimate`'s shift moved to the plane `tilt` of the starting frame by
+    /// its own normal matrix: the shift the fit would reach there to first
+    /// order, with no render. The tilt change is read in the frame the
+    /// normal matrix is in: `tilt` less the estimate's own in the starting
+    /// frame, or, for an estimate read on a laid grid, the chart of that grid
+    /// at the target plane less at the estimate's own. A target at or past
+    /// 90° from that grid's normal leaves the shift unmoved.
     fn moved_shift(&self, estimate: &Estimate, tilt: [f64; 2]) -> [f64; 2] {
         let Some(n) = &estimate.normal else {
             return estimate.shift;
         };
-        let dt = [tilt[0] - estimate.tilt[0], tilt[1] - estimate.tilt[1]];
+        let dt = match &estimate.frame {
+            None => [tilt[0] - estimate.tilt[0], tilt[1] - estimate.tilt[1]],
+            Some(frame) => {
+                let target = self.start.grid.plane_normal(tilt);
+                match frame.tilt_step(frame.normal, target) {
+                    Some(step) => step,
+                    None => return estimate.shift,
+                }
+            }
+        };
         let ds = shift_response(n, dt);
         [estimate.shift[0] + ds[0], estimate.shift[1] + ds[1]]
     }
 
-    /// Candidate `i`'s robust grid score at `tilt` and `shift`: one render.
+    /// Candidate `i`'s robust grid score at the plane `tilt` of the starting
+    /// frame and `shift`, on the grid laid there with the turned support: one
+    /// render, and one template render where that grid is laid anew.
     fn score_at(&self, i: usize, tilt: [f64; 2], shift: [f64; 2]) -> f64 {
-        self.grid_fit(i, None).score_at(tilt, shift)
+        let (laid, own) = self.laid_for(tilt);
+        let render = ViewRender::new(&laid.grid, &self.candidates[i].image);
+        self.fit_on(&laid, &render, Reading::Grid, None)
+            .score_at(own, shift)
     }
 
     /// Each joined view's shift at the final plane `tilt`, moved there with
@@ -1319,34 +1564,43 @@ impl Sequence<'_, '_, '_> {
         from: (GrownPlaneTiltStart, [f64; 2]),
         phase: &Progress<'_>,
     ) -> Result<Judged, NormalError> {
+        let image = &self.candidates[i].image;
         let shift = self.candidates[i].kp_shift;
-        let rows = self.grid.window(self.radii[0]);
         let mut growth = phase.detail_phase("growth");
-        let z = self.spot_zncc(i, from.1, &rows, shift);
-        let renders_before = self.renders[i].renders();
-        let grown = self.grow(i, from, (z, shift), &growth)?;
+        let templates_before = self.reference.renders();
+        // Stage 1 reads the grid the growth starts on: the starting grid at
+        // the plane's tilt, or with the turned support the grid laid at the
+        // plane, at no tilt.
+        let (laid, t0) = self.laid_for(from.1);
+        let rows = laid.grid.window(self.radii[0]);
+        let z = self.spot_zncc(i, &laid, t0, &rows, shift);
+        let renders_before = image.renders();
+        let grown = self.grow(i, from.0, (laid, t0), (z, shift), &growth)?;
         let j = self.judge(i, grown, &growth);
         let attempt = &j.grown.attempt;
         progress_note!(
             growth,
-            "{}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders",
+            "{}: first window ZNCC {:.3}, grid ZNCC {:.3}, {}, {} renders, {} template renders",
             tilt_start_word(attempt.tilt_start),
             attempt.stage_zncc[0],
             attempt.grid_zncc,
             verdict_words(attempt.refusal),
-            self.renders[i].renders() - renders_before
+            image.renders() - renders_before,
+            self.reference.renders() - templates_before
         );
         Ok(j)
     }
 
     /// Judge a growth of candidate `i` on its own, in a `judge` phase: taken
     /// when its own robust grid score reaches the floor, its information read
-    /// at its own plane. A growth that stopped early is refused already, and
-    /// its information is not read.
+    /// at its own plane. With the turned support that score is read on the
+    /// grid laid at the growth's plane, with the information. A growth that
+    /// stopped early is refused already, and its information is not read.
     fn judge(&self, i: usize, mut grown: Grown, progress: &Progress<'_>) -> Judged {
         let options = self.options;
+        let image = &self.candidates[i].image;
         let mut phase = progress.detail_phase("judge");
-        let renders_before = self.renders[i].renders();
+        let renders_before = image.renders();
         if grown.attempt.refusal == Some(GrownPlaneRefusal::StoppedEarly) {
             // No refused growth is combined, so its information is not read.
             progress_note!(phase, "{}", verdict_words(grown.attempt.refusal));
@@ -1357,12 +1611,16 @@ impl Sequence<'_, '_, '_> {
                 shift: grown.attempt.shift,
                 information: Matrix2::zeros(),
                 normal: None,
+                frame: None,
             };
             return Judged { grown, estimate };
         }
-        let estimate = self.estimate_of(i, &grown);
+        let (estimate, score) = self.estimate_of(i, &grown);
         let sigma = sigmas_deg(&estimate.information, options.zncc_tolerance)[0];
         let attempt = &mut grown.attempt;
+        if let Some(score) = score {
+            attempt.grid_zncc = score;
+        }
         attempt.sigma_deg = sigma;
         attempt.refusal = (attempt.grid_zncc.is_nan() || attempt.grid_zncc < options.min_held_zncc)
             .then_some(GrownPlaneRefusal::UnderFloor);
@@ -1371,104 +1629,176 @@ impl Sequence<'_, '_, '_> {
             "grid ZNCC {:.3}, \u{3c3} {sigma:.2}\u{b0}: {}, {} renders",
             attempt.grid_zncc,
             verdict_words(attempt.refusal),
-            self.renders[i].renders() - renders_before
+            image.renders() - renders_before
         );
         drop(phase);
         Judged { grown, estimate }
     }
 
-    /// Grow candidate `i` from the plane `from`, from the first window's
-    /// ZNCC and shift in `first`: the growing windows, and the whole
-    /// grid's robust fit. A window stage from [`EARLY_REFUSAL_FROM_STAGE`] on
-    /// that scores under the floor less [`EARLY_REFUSAL_MARGIN`] ends the
-    /// growth there, refused ([`GrownPlaneRefusal::StoppedEarly`]).
+    /// Grow candidate `i` from `start`, the grid stage 1 was read on and the
+    /// starting plane's tilt there, from the first window's ZNCC and shift in
+    /// `first`: the growing windows, and the whole grid's robust fit, as
+    /// rounds ([`Self::rounds`]). A window stage from
+    /// [`EARLY_REFUSAL_FROM_STAGE`] on that scores under the floor less
+    /// [`EARLY_REFUSAL_MARGIN`] ends the growth there, refused
+    /// ([`GrownPlaneRefusal::StoppedEarly`]).
+    ///
+    /// Without the turned support every stage fits the tilt on the starting
+    /// grid, from where the stage before ended, and the whole-grid stage is
+    /// one round. With it, every fitted stage lays the grid at the plane the
+    /// growth has reached and fits from that grid's `(0, 0)` within its cap,
+    /// [`GrownPlaneNormalOptions::stage_turn_cap_deg`] for a window stage and
+    /// the round's for a whole-grid round. The shift carries over from stage
+    /// to stage either way.
     fn grow(
         &self,
         i: usize,
-        from: (GrownPlaneTiltStart, [f64; 2]),
+        tilt_start: GrownPlaneTiltStart,
+        start: (Rc<Laid>, [f64; 2]),
         first: (f64, [f64; 2]),
         progress: &Progress<'_>,
     ) -> Result<Grown, NormalError> {
-        let render = &self.renders[i];
+        let image = &self.candidates[i].image;
+        let turned = self.turned();
+        let (mut laid, t0) = start;
         let (z1, shift) = first;
-        let (tilt_start, t0) = from;
         let mut p = vec![t0[0], t0[1], shift[0], shift[1]];
+        let mut normal = if turned {
+            laid.grid.frame.normal
+        } else {
+            laid.grid.plane_normal(t0)
+        };
         let mut stage_zncc = vec![z1];
+        let mut stage_turn_deg = Vec::new();
+        let window_iteration = self.capped_iteration(self.options.stage_turn_cap_deg);
         for &half in &self.radii[1..] {
             progress.check_cancel()?;
             let mut stage = progress.detail_phase("window stage");
-            let renders_before = render.renders();
-            let fit = ViewFit {
-                render,
-                reference: self.reference,
-                live: self.live,
-                reading: Reading::Window(self.grid.window(half)),
-                held: None,
-                min_coverage: self.options.min_coverage,
-            };
-            let (q, s, taken) = maximise(&fit, &p, &self.iteration);
-            p = q;
+            let renders_before = image.renders();
+            if turned {
+                laid = self.lay(normal);
+                (p[0], p[1]) = (0.0, 0.0);
+            }
+            let render = ViewRender::new(&laid.grid, image);
+            let fit = self.fit_on(
+                &laid,
+                &render,
+                Reading::Window(laid.grid.window(half)),
+                None,
+            );
+            let (q, s, taken) = maximise(&fit, &p, &window_iteration);
+            let (next, turn) = reached(&laid.grid, normal, [p[0], p[1]], [q[0], q[1]]);
+            (normal, p) = (next, q);
             stage_zncc.push(s);
+            stage_turn_deg.push(turn);
             progress_note!(
                 stage,
-                "half-width {half}: ZNCC {s:.3}, {taken} iterations, {} renders",
-                render.renders() - renders_before
+                "half-width {half}: ZNCC {s:.3}, turned {turn:.2}\u{b0}, {taken} iterations, {} renders",
+                image.renders() - renders_before
             );
             let early_floor = self.options.min_held_zncc - EARLY_REFUSAL_MARGIN;
             if stage_zncc.len() > EARLY_REFUSAL_FROM_STAGE && (s.is_nan() || s < early_floor) {
-                let tilt = [p[0], p[1]];
+                let tilt = if turned {
+                    self.start_tilt(normal)
+                } else {
+                    [p[0], p[1]]
+                };
                 return Ok(Grown {
                     tilt,
+                    normal,
                     attempt: GrownPlaneAttempt {
                         tilt_start,
                         stage_zncc,
                         shift: [p[2], p[3]],
-                        normal: self.grid.plane_normal(tilt).into(),
+                        normal: normal.into(),
                         grid_zncc: f64::NAN,
                         sigma_deg: f64::NAN,
                         refusal: Some(GrownPlaneRefusal::StoppedEarly),
+                        stage_turn_deg,
+                        grid_rounds: Vec::new(),
                     },
                 });
             }
         }
         progress.check_cancel()?;
-        let mut stage = progress.detail_phase("whole-grid stage");
-        let renders_before = render.renders();
-        let (q, score, taken) = maximise(&self.grid_fit(i, None), &p, &self.iteration);
-        p = q;
+        let mut rounds = self.rounds();
+        let mut grid_rounds = Vec::new();
+        let mut score;
+        loop {
+            let mut stage = progress.detail_phase("whole-grid stage");
+            let renders_before = image.renders();
+            if turned {
+                laid = self.lay(normal);
+                (p[0], p[1]) = (0.0, 0.0);
+            }
+            let cap_deg = rounds.cap_deg();
+            let render = ViewRender::new(&laid.grid, image);
+            let fit = self.fit_on(&laid, &render, Reading::Grid, None);
+            let (q, s, taken) = maximise(&fit, &p, &self.capped_iteration(cap_deg));
+            let (next, turn) = reached(&laid.grid, normal, [p[0], p[1]], [q[0], q[1]]);
+            let more = rounds.after(turn, next - normal);
+            (normal, p, score) = (next, q, s);
+            grid_rounds.push(GrownPlaneGridRound {
+                cap_deg,
+                turn_deg: turn,
+                zncc: s,
+            });
+            progress_note!(
+                stage,
+                "round {}, cap {cap_deg:.2}\u{b0}: turned {turn:.2}\u{b0}, robust ZNCC {s:.3}, {taken} iterations, {} renders",
+                grid_rounds.len(),
+                image.renders() - renders_before
+            );
+            drop(stage);
+            if !more {
+                break;
+            }
+            progress.check_cancel()?;
+        }
         stage_zncc.push(score);
-        progress_note!(
-            stage,
-            "robust ZNCC {score:.3}, {taken} iterations, {} renders",
-            render.renders() - renders_before
-        );
-        drop(stage);
-        let tilt = [p[0], p[1]];
+        let tilt = if turned {
+            self.start_tilt(normal)
+        } else {
+            [p[0], p[1]]
+        };
         Ok(Grown {
             tilt,
+            normal,
             attempt: GrownPlaneAttempt {
                 tilt_start,
                 stage_zncc,
                 shift: [p[2], p[3]],
-                normal: self.grid.plane_normal(tilt).into(),
+                normal: normal.into(),
                 grid_zncc: score,
                 sigma_deg: f64::NAN,
                 refusal: None,
+                stage_turn_deg,
+                grid_rounds,
             },
         })
     }
 
-    /// The first window's ZNCC at the plane `tilt` and image shift `shift`.
-    fn spot_zncc(&self, i: usize, tilt: [f64; 2], rows: &[usize], shift: [f64; 2]) -> f64 {
-        let render = &self.renders[i];
-        let pixels = self.grid.project(render.view, tilt, rows);
-        let mut samples = Samples::new(self.grid.side * self.grid.side, render.view.channels);
-        render.view.sample(&pixels, rows, shift, &mut samples);
-        render::zncc(self.reference, &samples, rows, self.options.min_coverage)
+    /// The first window's ZNCC on `laid`'s grid at the plane `tilt` of that
+    /// grid and image shift `shift`, against `laid`'s template.
+    fn spot_zncc(
+        &self,
+        i: usize,
+        laid: &Laid,
+        tilt: [f64; 2],
+        rows: &[usize],
+        shift: [f64; 2],
+    ) -> f64 {
+        let image = &self.candidates[i].image;
+        let pixels = laid.grid.project(image, tilt, rows);
+        let mut samples = Samples::new(laid.grid.side * laid.grid.side, image.channels);
+        image.sample(&pixels, rows, shift, &mut samples);
+        render::zncc(&laid.template, &samples, rows, self.options.min_coverage)
     }
 }
 
 #[cfg(test)]
 mod jacobian_tests;
+#[cfg(test)]
+mod laid_tests;
 #[cfg(test)]
 mod tests;

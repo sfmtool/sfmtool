@@ -6,7 +6,9 @@
 ``finite_difference_normal``, ``grid_plane_normal`` and
 ``grown_plane_normal`` are proved in Rust on synthetic planes; what is checked
 here is that each binding hands back a new track and a report that carries the
-step's numbers in the documented words, and that the settings reach the step.
+step's numbers in the documented words, and that the settings reach the step. One
+test runs the grown plane normal on a ground-truth point whose repeated
+passes did not settle before the working grid was laid at each stage's plane.
 """
 
 import numpy as np
@@ -21,7 +23,9 @@ from sfmtool.bench import (
     grid_plane_normal,
     grown_plane_normal,
 )
+from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from tests.conftest import SEOUL_BULL_DIR
 
 PLANE_WORDS = {
     "in_plane",
@@ -276,6 +280,9 @@ GROWN_REFUSALS = {
     "no_keypoint",
 }
 
+# The keys of each whole-grid round of a growth or a pair.
+GRID_ROUND_KEYS = {"cap_deg", "turn_deg", "zncc"}
+
 # Every keyword of ``grown_plane_normal`` but the fit's, at the Rust default.
 GROWN_DEFAULTS = {
     "spot_window": 7,
@@ -297,6 +304,10 @@ GROWN_DEFAULTS = {
     "max_iterations": 20,
     "initial_damping": 1e-3,
     "min_improvement": 1e-6,
+    "turned_support": True,
+    "stage_turn_cap_deg": 12.0,
+    "min_stage_turn_cap_deg": 0.5,
+    "max_grid_rounds": 16,
 }
 
 
@@ -376,6 +387,20 @@ class TestGrownPlaneNormal:
                 assert np.linalg.norm(attempt["normal"]) == pytest.approx(1.0)
                 assert attempt["refusal"] in {None, "under_floor", "stopped_early"}
                 assert attempt["tilt_start"] in {"starting", "combined"}
+                stopped = attempt["refusal"] == "stopped_early"
+                assert attempt["stage_turn_deg"].dtype == np.float64
+                # One turn per fitted window stage, as far as the growth ran.
+                assert len(attempt["stage_turn_deg"]) == len(attempt["stage_zncc"]) - (
+                    1 if stopped else 2
+                )
+                assert (stopped) == (not attempt["grid_rounds"])
+                for r in attempt["grid_rounds"]:
+                    assert set(r) == GRID_ROUND_KEYS
+                    assert r["turn_deg"] <= r["cap_deg"] + 1e-6
+                if not stopped:
+                    assert (
+                        attempt["grid_rounds"][-1]["zncc"] == attempt["stage_zncc"][-1]
+                    )
             if entry["combined_normal"] is not None:
                 assert np.linalg.norm(entry["combined_normal"]) == pytest.approx(1.0)
 
@@ -407,7 +432,11 @@ class TestGrownPlaneNormal:
                 "distance",
                 "kept",
                 "refusal",
+                "grid_rounds",
             }
+            assert pair["grid_rounds"]
+            for r in pair["grid_rounds"]:
+                assert set(r) == GRID_ROUND_KEYS
             assert len(pair["observations"]) == 2
             assert pair["relative_shift"].shape == (2,)
             assert np.linalg.norm(pair["normal"]) == pytest.approx(1.0)
@@ -460,6 +489,43 @@ class TestGrownPlaneNormal:
         seq = report["estimate"]
         assert seq["working_resolution"] == 30
         assert seq["window_half_widths"] == [3, 15]
+
+    def test_the_turned_support_settings_reach_the_step(self, fitted, edited, images):
+        def attempts(report):
+            return [
+                a
+                for entry in report["estimate"]["trace"]
+                for a in entry["attempts"]
+                if a["refusal"] != "stopped_early"
+            ]
+
+        # Off: one grid, one whole-grid round with no cap, and the growth's
+        # own score is its last stage's.
+        _, off = grown_plane_normal(fitted, edited, images, turned_support=False)
+        assert attempts(off)
+        for a in attempts(off):
+            assert len(a["grid_rounds"]) == 1
+            assert a["grid_rounds"][0]["cap_deg"] == float("inf")
+            assert a["grid_zncc"] == a["stage_zncc"][-1]
+        for pair in off["estimate"]["pairs"]:
+            assert len(pair["grid_rounds"]) == 1
+        # A cap of 2 degrees and at most two rounds hold every stage and
+        # every growth's rounds.
+        _, capped = grown_plane_normal(
+            fitted,
+            edited,
+            images,
+            stage_turn_cap_deg=2.0,
+            min_stage_turn_cap_deg=0.25,
+            max_grid_rounds=2,
+        )
+        assert attempts(capped)
+        # The stored patch axes are orthogonal to about 1e-8, so a turn on the
+        # disc's edge reads 2 degrees to about 1e-7.
+        for a in attempts(capped):
+            assert all(t <= 2.0 + 1e-6 for t in a["stage_turn_deg"])
+            assert 1 <= len(a["grid_rounds"]) <= 2
+            assert a["grid_rounds"][0]["cap_deg"] == 2.0
 
     def test_the_selection_picks_near_to_far(self, grown):
         _, report = grown
@@ -532,6 +598,9 @@ class TestGrownPlaneNormal:
             ("first_rung_deg", 25.0),
             ("first_rung_min_deg", float("nan")),
             ("rung_ratio", 1.0),
+            ("stage_turn_cap_deg", 90.0),
+            ("min_stage_turn_cap_deg", 0.0),
+            ("max_grid_rounds", 0),
             ("resolution", 1),
         ]:
             with pytest.raises(ValueError, match=name):
@@ -597,7 +666,11 @@ class TestGrownPlaneNormal:
         assert names.count("grown plane view") == len(seq["trace"])
         growths = sum(len(entry["attempts"]) for entry in seq["trace"])
         assert names.count("judge") == growths
-        assert names.count("whole-grid stage") == growths
+        # One whole-grid stage per round of every growth.
+        rounds = sum(
+            len(a["grid_rounds"]) for entry in seq["trace"] for a in entry["attempts"]
+        )
+        assert names.count("whole-grid stage") == rounds >= growths
         assert names.count("window stage") == growths * (
             len(seq["window_half_widths"]) - 1
         )
@@ -662,3 +735,23 @@ class TestFiniteDifferenceNormal:
             finite_difference_normal(fitted, edited, images, pieces=1)
         with pytest.raises(ValueError, match="overlap"):
             finite_difference_normal(fitted, edited, images, overlap=0.95)
+
+
+def test_repeated_grown_plane_passes_settle_on_a_ground_truth_point():
+    """seoul_bull v02 point 255 straddles a canopy edge, seen by three views
+    within 4.1 degrees of each other. On one grid laid on the starting square
+    the step turned it 69.6, 15.6, 3.9, 4.4 and 3.5 degrees on five passes;
+    with the grid laid at each stage's plane the second and third passes turn
+    it 4.4 and 0.3 degrees, under the bar of 5."""
+    path = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
+    recon = SfmrReconstruction.load(str(path))
+    edited = EditedReconstruction(recon)
+    images = [read_image_rgb(SEOUL_BULL_DIR / name) for name in recon.image_names]
+    _, track = create_track(Bench(), edited, 255)
+    turns = []
+    for _ in range(3):
+        track, report = grown_plane_normal(track, edited, images)
+        assert report["estimate"]["outcome"] == "turned"
+        turns.append(report["tilt"]["degrees"])
+    assert turns[0] > 30.0, turns
+    assert turns[1] < 5.0 and turns[2] < 5.0, turns

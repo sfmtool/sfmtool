@@ -93,6 +93,30 @@ answer folded into the spec.
   single-view growth settled; whether its keypoint is off in that view is not
   known. The step has no search to cover it, and a fit of the keypoints before
   the step is what would.
+- **A score that does not reward a smaller support.** With the turned support,
+  at a grazing plane the turned square's `W` rows are interpolated from fewer
+  reference pixels: at 70°, its 24 rows cover about 8 px of the reference.
+  Interpolated rows are correlated, so the ZNCC over them overstates the
+  evidence, and a score that counts pixels rather than samples might be the
+  right one. In the prototype, clipping the support to the turned square's own
+  pixels and scoring plain ZNCC peaked at the 80° edge of the search, in
+  directions that depended on the view, so plain ZNCC on a support that shrinks
+  with the tilt is not it.
+- **Whether `W` should follow the turned footprint**, rather than staying the
+  starting square's.
+- **Whether each view's pyramid level should be chosen again** on the grid laid
+  at each stage, since a view's map from the grid changes as the square turns
+  (see also "Blur matching the other way").
+- **σ in the starting chart.** σ is read as if a tilt unit of the starting
+  chart were a radian, which overstates the angular σ at a large turn by up to
+  `1/cos² θ`. Reading σ in a frame at the combined plane would correct it, but
+  the weak-turn rule and the σ target were set on the chart's σ, so it would
+  need them set again.
+- **The turned support's defaults.** The cap of 12°, the floor of 0.5° and the
+  16 rounds are first values, from the prototype.
+- **The pairs' held shifts.** Each pair holds its two views' shifts at the
+  combined plane for every round; moving them to each round's plane by their
+  normal matrices is an alternative not measured.
 - **What the step reports.** σ along the weakest and strongest directions and
   the low-confidence verdict are settled; which of the two σ the verdict reads
   is not. The rest of `GrownPlaneSequence` is what the step knows and records,

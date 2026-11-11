@@ -32,8 +32,11 @@ In outline, for the views it picks:
 - **Within a view** it registers a small window at the patch's anchor first,
   where the view's own keypoint places the patch, and grows the window
   outward, fitting the plane's tilt and the view's image shift at each size,
-  because a small window tolerates a large error in the plane. Each view's
-  growth ends at that view's own plane, with its information about the plane.
+  because a small window tolerates a large error in the plane. Each stage
+  reads the patch square turned to the plane the growth has reached, and may
+  turn the plane only a few degrees; the last stage repeats over the whole
+  patch until its turns settle. Each view's growth ends at that view's own
+  plane, with its information about the plane.
 - **It trusts the keypoints.** It does not search a view for another place, so
   a caller whose keypoints may be off fits them first with a separate step.
 - **It grows only a few views**, picked one at a time near to far by what their
@@ -126,6 +129,13 @@ pub struct GrownPlaneNormalOptions {
     pub max_iterations: u32,
     pub initial_damping: f64,
     pub min_improvement: f64,
+    /// Lay the working grid again on the square turned to the plane at
+    /// every fitted stage; false is the step with one grid (§ The working
+    /// grid turned with the plane).
+    pub turned_support: bool,
+    pub stage_turn_cap_deg: f64,
+    pub min_stage_turn_cap_deg: f64,
+    pub max_grid_rounds: u32,
     /// The reading the step ends with, and the reference-view rule's grazing
     /// gate and sampler (`localize`).
     pub fit: FitOptions,
@@ -134,7 +144,8 @@ pub struct GrownPlaneNormalOptions {
 impl GrownPlaneNormalOptions {
     /// Refuses a setting the step cannot run with, naming the first that
     /// fails: NormalError::BadGrownPlaneOption("zncc_tolerance"), or
-    /// ("resolution") for a fit.refine.resolution under 2.
+    /// ("resolution") for a fit.refine.resolution under 2. The turned
+    /// support's three settings are checked with it off too.
     pub fn check(&self) -> Result<(), NormalError>;
 }
 
@@ -199,12 +210,14 @@ pub struct GrownPlaneTry {
 /// One growth of one view against the reference, and how it was judged.
 pub struct GrownPlaneAttempt {
     pub tilt_start: GrownPlaneTiltStart, // the plane its windows started from
-    pub stage_zncc: Vec<f64>,   // stage 1 at the keypoint-implied shift, each later window, the whole grid's robust score
+    pub stage_zncc: Vec<f64>,   // stage 1 at the keypoint-implied shift, each later window, the last round's robust score
     pub shift: [f64; 2],
     pub normal: [f64; 3],       // the view's own plane
-    pub grid_zncc: f64,         // NaN when it stopped early
+    pub grid_zncc: f64,         // on the grid laid at that plane; NaN when it stopped early
     pub sigma_deg: f64,         // its own weakest σ; NaN when it stopped early
     pub refusal: Option<GrownPlaneRefusal>, // UnderFloor or StoppedEarly
+    pub stage_turn_deg: Vec<f64>, // each fitted window stage's turn, as far as the growth ran
+    pub grid_rounds: Vec<GrownPlaneGridRound>, // empty when it stopped early; one with turned_support off
 }
 
 /// One pair of kept views matched against each other.
@@ -214,10 +227,18 @@ pub struct GrownPlanePair {
     pub angle_deg: f64,               // between the two views, from the patch centre
     pub normal: [f64; 3],             // the pair's own plane
     pub relative_shift: [f64; 2],     // the second view's shift against the first's
-    pub zncc: f64,                    // the robust score between the two renders
+    pub zncc: f64,                    // the robust score between the two renders, on the grid laid at its plane
     pub sigma_deg: f64,
     pub distance: Option<f64>,        // from the combined plane; None when refused under the floor
     pub refusal: Option<GrownPlaneRefusal>,
+    pub grid_rounds: Vec<GrownPlaneGridRound>, // one with turned_support off
+}
+
+/// One whole-grid round of a growth or a pair.
+pub struct GrownPlaneGridRound {
+    pub cap_deg: f64,   // the cap it was fitted under; infinite with no cap
+    pub turn_deg: f64,  // from the plane it began at to the plane it ended at
+    pub zncc: f64,      // its robust score there, on its own grid
 }
 
 /// One view the selection picked.
@@ -269,6 +290,8 @@ and ", N shift only" when there are such views, ", low confidence" when the
 precision is low, and, under `WeakTurn`, "; normal left unchanged: large turn
 on weak evidence, 19.8° at 1.5σ". When no view joined it ends ", normal left
 unchanged", as in "0 of 3 views joined, 3 left out, normal left unchanged".
+The sentence says nothing of the stages' turns or the whole-grid rounds, which
+the attempts and pairs carry.
 
 ### Why it is shaped this way
 
@@ -331,8 +354,13 @@ where the reconstruction stores no patch bitmaps, and one under 2 is refused.
 It returns `(EditableTrack, report)`; the
 report's `estimate` has `kind` `"grown_plane"` and carries the sequence's
 fields, `agreement`, `turn_sigma_ratio`, the counts, and one dict per view, per
-try, per pick and per pair; [editable-track.md](editable-track.md) § "Estimating
-the normal" lists its fields. With `record_phases=True` the report also carries
+try, per pick and per pair, each attempt with its `stage_turn_deg` and
+`grid_rounds` and each pair with its `grid_rounds`;
+[editable-track.md](editable-track.md) § "Estimating the normal" lists its
+fields. `turned_support`, `stage_turn_cap_deg`, `min_stage_turn_cap_deg` and
+`max_grid_rounds` are keywords of `grown_plane_normal` and
+`sfmtool.bench.refine_normals` alike, through the keyword set the two share
+(`GrownPlaneKeywords`). With `record_phases=True` the report also carries
 the phases the step recorded. The evaluation scripts `grid_plane_eval.py` and
 `grid_plane_detail.py` in
 [scripts/track_at_pixel/normal_sources](../../../scripts/track_at_pixel/normal_sources)
@@ -363,16 +391,22 @@ rule: the reference view's footprint of the patch at the starting frame, about
 one sample per photograph pixel, clamped to `R ..= 2R` for the patch resolution
 `R`, the edge of the reconstruction's stored patch bitmaps or, where it
 stores none, `fit.refine.resolution`, and at least 3; `W` is at least `spot_window`
-either way.
+either way. This is the starting grid; each fitted stage reads a grid laid
+again on the square turned to the plane the growth has reached
+(§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
 
-**The plane** has two unknowns, a tilt `(a, b)` of the starting frame's normal
-`n` along the frame's own axes `u` and `v`:
+**The plane** has two unknowns, a tilt `(a, b)` of a frame's normal `n` along
+the frame's own axes `u` and `v`:
 
 ```text
 normal = unit(n + a·u + b·v)
 ```
 
-through the anchor, the centre of the starting frame slid onto the reference
+The frame is that of the grid the plane is read on: the starting frame on the
+starting grid, and on a grid laid at a plane, that plane's normal and the
+turned square's axes. Every estimate is reported and combined as a tilt of the
+starting frame (§ [Combining estimates read in different frames](#combining-estimates-read-in-different-frames)).
+The plane passes through the anchor, the centre of the starting frame slid onto the reference
 keypoint. Every other view reads the same tilted patch slid onto its own
 keypoint: its centre `q_i` is where the keypoint's ray meets the plane through
 the patch centre that faces that view's camera, and each grid sample's place on
@@ -422,6 +456,150 @@ the same way at no tilt and no shift; its rays meet every plane where the
 reference sees it, so its tile is the same at every tilt and is the template
 every view is scored against.
 
+### The working grid turned with the plane
+
+**The sheared support.** A grid's samples are rays from the reference camera
+through a square. A plane through the anchor turned by `θ` from that square
+cuts the rays over a region whose extent along the turn grows as about
+`1/cos θ`, while the region the turned patch covers stays one patch side
+across. Read on the starting grid, a plane far from the start is scored over
+the starting square sheared onto it, not over the square the patch will have
+there: the evidence for a large turn comes from surface the turned patch does
+not cover, and a second run, which lays its grid on the turned square, compares
+other pixels and lands elsewhere. On `seoul_bull_sculpture_ground_truth_v02`
+point 255, whose patch side is 0.87 m, the step on the starting grid alone
+turned 69.6°, where the grid's 24 rows still cover the same 22 px of the
+reference photograph but span about 2.4 m along the plane, and six passes
+turned 69.6°, 15.6°, 3.9°, 4.4°, 3.5° and 8.9°
+([measurements](grown-plane-normal-measurements.md#a-working-grid-turned-with-the-plane-2026-11-10)).
+
+**The grid laid at a plane.** With `turned_support` (the default), a growth's
+fitted stages, every window stage after the first and every whole-grid round,
+each start on a grid laid at the plane the growth has reached:
+
+- **The turned square** is the starting patch frame turned by the least
+  rotation that takes the starting normal `n₀` to that plane's normal `n`,
+  built as `tilt_patch` builds its rotation (about `n₀ × perp` by the arc's
+  angle, `perp` the unit direction the arc leaves `n₀` in, the frame's own `u`
+  at a half turn), without `tilt_patch`'s stop at `MAX_TILT_DEG` from a camera,
+  since the square is a working grid and not the patch. It is centred on the
+  same anchor, with the same side `W` and the same sample spacing in world
+  units, `2·half_extent/W`, and its axes are `u = R·u₀`, `v = R·v₀`. The
+  rotation is taken from the starting frame each time, so the grid laid at a
+  plane depends on that plane alone, not on the path the growth took to it.
+- **The rays** are the reference camera's rays through the turned square's
+  samples, at the same grid positions `(col + ½ − W/2, row + ½ − W/2)`; the
+  cells are the same index sets.
+- **The template** is the reference rendered on those rays at no tilt and no
+  shift, from the reference's pyramid level chosen once at the starting
+  plane, and its live cells are read again from it.
+- **The tilt** is stated in that grid's own frame: the stage fits
+  `unit(n + a·u + b·v)` from `(a, b) = (0, 0)`, so a tilt of `(a, b)` is a turn
+  of `atan |(a, b)|` from the stage's starting plane.
+- **The shift** carries over from the stage before. Every plane passes through
+  the anchor, whose projection does not depend on the grid, so the same shift
+  means the same thing on every grid.
+
+Within a stage the rays and the template are fixed, and a plane other than the
+stage's starting plane is read by sliding the samples along the stage's rays,
+as on the starting grid: within a stage the support is the stage's starting
+square sheared onto the plane, which the cap below keeps close to the square
+turned there (a factor of at most `1/cos 12° ≈ 1.02` along the turn).
+
+**Stage 1**, the unfitted 7×7 read at the keypoint-implied shift, is read on
+the grid laid at the plane the growth starts from, at no tilt. For a growth
+from the starting plane that is the starting grid, bit for bit. For a growth
+from the combined plane it is the grid the first fitted window is laid on, so
+stage 1 and that window compare the same template.
+
+**The chart's edge.** A trial plane at 90° or more from the starting normal
+(`n · n₀ ≤ 0`) cannot be stated as a tilt of the starting frame, and is a plane
+edge-on to or facing away from the starting square. The view and pair fits
+score such a trial point `−1`, so no step keeps it. No tilt of the starting
+grid reaches it.
+
+**A cap on each stage's turn.** Within a stage the plane may turn at most a cap
+from the plane the stage began at: in the stage's own frame,
+`|(a, b)| ≤ tan(cap)`. The optimiser keeps every trial point inside that disc:
+a trial point whose tilt would leave it has its tilt moved radially back onto
+the disc's edge, `(a, b) · tan(cap)/|(a, b)|`, before it is rendered, and its
+shift is left as the step put it. The window stages use `stage_turn_cap_deg`,
+12° by default. The optimiser's tilt cap (§ [The optimiser](#the-optimiser))
+applies first; the disc is applied to the point the capped step reaches. The
+tilt cap doubles after a kept step it shortened, as on the starting grid; a step
+shortened by the disc alone does not double it.
+
+**Whole-grid rounds with a shrinking cap.** The whole-grid stage repeats as
+rounds. Round `r` lays the grid at the plane the growth has reached, fits the
+tilt and the shift on the robust cell score under the cap `c_r` from `(0, 0)`
+and the shift reached, and ends at the plane of unit normal `p_r`. Its turn is
+the angle from its starting plane to `p_r`, and its turn vector is the
+difference of the two normals, `d_r = p_r − p_{r−1}`, `p_0` being the normal
+the rounds start from, the last window stage's end.
+
+- The first round's cap is `stage_turn_cap_deg`.
+- After round `r`, from the second round on, when `d_r · d_{r−1} < 0` (the
+  round turned back against the one before) the cap halves,
+  `c_{r+1} = c_r / 2`; otherwise `c_{r+1} = c_r`.
+- The rounds stop after a round when the next cap would be under
+  `min_stage_turn_cap_deg` (0.5°), when the round turned less than half of
+  `min_stage_turn_cap_deg` (a round that could not rise turns 0°), or when
+  `max_grid_rounds` (16) rounds have run.
+
+The growth's plane, shift and last `stage_zncc` entry are the last round's. A
+cap that halves on a reversal makes the rounds a trust region: a round may go
+12° in one direction while each round keeps finding the score higher that way,
+and once the rounds go back and forth the step shrinks until it is too small to
+matter. With a fixed cap, in the prototype, every start used all its rounds,
+turning 2° to 12° a round with no net drift, because laying the template again
+moves the optimum of a flat score
+([measurements](grown-plane-normal-measurements.md#a-working-grid-turned-with-the-plane-2026-11-10)).
+The early stop judges the window stages' scores as before, each read on its own
+stage's grid.
+
+**Every whole-grid reading on the grid laid at its plane.** Each reading of a
+whole grid at a plane is taken on the grid laid at that plane, at no tilt. One
+template render per plane serves every view read there; the step keeps the last
+grid it laid, so the views' held checks at one mean and the shift-only fits at
+the final plane share one.
+
+- **A growth's own score and information.** After the last round the step lays
+  the grid at the growth's final plane and reads there, from one render, the
+  normal matrix over `[a, b, sx, sy]` and the robust cell score. That score is
+  the growth's `grid_zncc`, which `min_held_zncc` judges (`UnderFloor`); it
+  differs from the last round's score, the last entry of `stage_zncc`, by the
+  last round's turn read on the turned square rather than sheared.
+- **The held checks** of the robust combination score each kept view on the
+  grid laid at the combined plane, at its shift moved there.
+- **The pairs** start on the grid laid at the combined plane and run the same
+  rounds as a growth's whole-grid stage (§ [Wide pairs](#wide-pairs)).
+- **The shift-only fits** run on the grid laid at the final plane, with the tilt
+  held at `(0, 0)` in its frame.
+
+**What stays the same.** The working side `W` and each view's pyramid level,
+the reference's included, chosen once at the starting plane; every view's
+offset onto its slid patch, which no plane changes; the keypoint-implied
+shifts; the first window; the window schedule; the early stop; the robust cell
+score; the selection's ladder, model and stopping; the pair choice; the robust
+combination's algebra; the weak-turn rule; the final turn and readback through
+`turn_and_read`; and writing no keypoint.
+
+**Without the turned support.** `turned_support = false` lays the grid once, on
+the starting square, reads every plane as a tilt of the starting frame on it,
+sets no cap and runs one whole-grid round, reported with an infinite cap; it
+reads none of the other three settings and is the step as it stood before the
+turned support, bit for bit, on the three ground truths
+([measurements](grown-plane-normal-measurements.md#a-working-grid-turned-with-the-plane-2026-11-10)).
+It is a switch rather than a combination of the other three (`max_grid_rounds`
+1 and an infinite cap) because the change is the laying of the grid, which no
+value of the other three turns off. The cap and the rounds are not offered on
+the starting grid alone: the cap is a disc in a grid's own frame about
+`(0, 0)`, which a grid kept on the starting square does not start each stage
+at, and in the prototype a 12° cap on the kept grid spread 46.3° over the
+starts on point 255, against 13.8° with the grid laid again. The switch keeps
+the earlier step reachable on the same build, for comparison and for a caller
+that depends on its results.
+
 ### Near to far within a view
 
 Under a plane that is wrong, a sample at distance `r` from the window's centre
@@ -465,15 +643,21 @@ any no wider than the first window's half-width dropped: 3, then 6, 10, 16 and
 24 on a 48-sample grid, 3, 4, 6, 11 and 16 on a 32-sample grid, and 3, 5, 8 and
 12 on a 24-sample grid; the half-width `W/2` covers the whole grid. Each stage
 fits the tilt and the view's shift together for the best mean-channel ZNCC over
-the window (§ [The optimiser](#the-optimiser)).
+the window (§ [The optimiser](#the-optimiser)), on the grid laid at the plane
+the stage before reached and within `stage_turn_cap_deg` of it
+(§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
+`stage_turn_deg` reports how far each window stage turned the plane.
 
-**The whole-grid stage.** After the last window, a final stage fits the tilt
-and the shift for the best robust cell score over the whole grid
-(§ [The robust cell score](#the-robust-cell-score)). The view's own plane and
-its whole-grid score are those this stage ends at. A growth whose whole-grid
-score is under `min_held_zncc` is refused (`UnderFloor`), and no search for
-another shift follows it. A growth that reaches the floor is the view's
-estimate; whether it is kept is the combination's verdict
+**The whole-grid stage.** After the last window, the whole-grid stage fits the
+tilt and the shift for the best robust cell score over the whole grid
+(§ [The robust cell score](#the-robust-cell-score)), as rounds, each on the grid
+laid at the plane the round before reached, under a cap that halves when a
+round reverses the one before; `grid_rounds` reports each round's cap, turn and
+score. The view's own plane is the plane the last round ends at, and its
+whole-grid score, `grid_zncc`, is read on the grid laid at that plane. A growth
+whose whole-grid score is under `min_held_zncc` is refused (`UnderFloor`), and
+no search for another shift follows it. A growth that reaches the floor is the
+view's estimate; whether it is kept is the combination's verdict
 (§ [Combining the views' planes](#combining-the-views-planes)).
 
 **Stopping early.** A growth stops at a window stage, from the second window
@@ -618,6 +802,14 @@ worse on Kerry Park and the dino, and 21 better against 29 worse on the Seoul
 bull
 ([measurements](grown-plane-normal-measurements.md#a-tilt-cap-that-grows-2026-11-03)).
 
+With the turned support a fit whose tilt is free also has a disc about `(0, 0)`
+of radius `tan(cap)` for its stage's cap: the point a capped step reaches has
+its tilt moved radially onto the disc's edge when it lies outside, before it is
+rendered, its shift as the step put it, so no trial point turns the plane
+further than the cap from where the stage began
+(§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
+A fit of the shift alone has no tilt and no disc.
+
 The parameters are a view's tilt and shift `[a, b, sx, sy]` within a view, its
 shift alone with the tilt held in the shift-only fit, and in the pair fit the
 tilt and the second view's shift against the first's `[a, b, rx, ry]`
@@ -628,9 +820,11 @@ No fit has more than four parameters.
 
 ### Combining the views' planes
 
-Every growth ends at the view's own plane, the tilt `tₑ` its whole-grid stage
-reached, with its shift and its information `Iₑ` about the tilt, read at that
-plane and shift (§ [The plane's precision](#the-planes-precision)). The step
+Every growth ends at the view's own plane, the plane its whole-grid stage
+reached, stated as a tilt `tₑ` of the starting frame, with its shift and its
+information `Iₑ` about that tilt, read at that plane and shift
+(§ [The plane's precision](#the-planes-precision),
+§ [Combining estimates read in different frames](#combining-estimates-read-in-different-frames)). The step
 combines planes by their information and never fits views together. The
 combined plane of a set of estimates is their information-weighted mean,
 
@@ -682,20 +876,73 @@ from its own mean. The distance is read against a mean the estimate is part of,
 which shortens it.
 
 **Moving a shift to another plane.** A view's shift was fitted at its own plane
-`tₑ`, and the plane it ends at is `t`. With `N` the normal matrix of its
-whole-grid residual at its own plane and shift over `[a, b, sx, sy]`, the shift
-the Gauss–Newton model fits at `t` is
+`nₑ`, and the plane it ends at is `m`. With `N` the normal matrix of its
+whole-grid residual at its own plane and shift over `[a, b, sx, sy]`, read on a
+grid whose frame has normal `fₑ` and axes `uₑ, vₑ`, the shift the Gauss–Newton
+model fits at `m` is
 
 ```text
-s = sₑ − N_ss⁻¹ N_st (t − tₑ)
+cₑ(x) = ((x·uₑ)/(x·fₑ), (x·vₑ)/(x·fₑ))      the chart of that grid's frame
+δ     = cₑ(m) − cₑ(nₑ)
+s     = sₑ − N_ss⁻¹ N_st δ
 ```
 
-which costs no render. The held score at a mean, the score the report gives at
+which costs no render. With the turned support that grid is laid at the
+estimate's own plane, so `fₑ = nₑ` and `cₑ(nₑ) = 0`; without it the frame is the
+starting frame and `δ = t − tₑ`, the difference of the two planes' tilts. The
+chart is used rather than the Jacobian of the next section applied to the
+difference of starting-frame tilts because it costs as little and is right at
+any distance. A target at 90° or more from `fₑ` leaves the shift unmoved. The
+shift itself needs no conversion between grids
+(§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
+The held score at a mean, the score the report gives at
 the final plane, and a joined view's reported shift are all read at the shift
 moved this way; nothing is fitted again. The score at the final plane is not
 rendered again either: the combination's last held check scored every kept view
 at the final plane and that shift and left none out, so a joined view's
 `grid_zncc` is its `held_zncc`.
+
+### Combining estimates read in different frames
+
+With the turned support each estimate's tilt and information come out in the
+frame of the grid laid at its own plane. The combination, the Mahalanobis
+distances and σ, the selection's model, which reads each estimate's
+information along its offset direction in the starting frame's `(u, v)`, and the
+trace's combined normals all work in the starting frame's tilt, so each
+estimate, a growth's or a pair's, is carried into it before it is combined:
+
+```text
+c₀(m) = ((m·u₀)/(m·n₀), (m·v₀)/(m·n₀))      the starting chart, m · n₀ > 0
+tₑ    = c₀(nₑ)                               the estimate's plane
+J     = ∂c₀(nₑ + α·uₑ + β·vₑ)/∂(α, β) at (0, 0)
+      = [ (uₑ·u₀)/k − (nₑ·u₀)(uₑ·n₀)/k²    (vₑ·u₀)/k − (nₑ·u₀)(vₑ·n₀)/k² ]
+        [ (uₑ·v₀)/k − (nₑ·v₀)(uₑ·n₀)/k²    (vₑ·v₀)/k − (nₑ·v₀)(vₑ·n₀)/k² ]
+        with k = nₑ·n₀
+Iₑ⁰   = J⁻ᵀ · Iₑ · J⁻¹                       its information about (a, b)
+```
+
+`Iₑ⁰` is the information a tilt change of the starting chart carries to first
+order, since a change `δ` there is `J⁻¹ δ` in the estimate's frame. The carry
+is chosen over combining in a frame at the combined plane because the
+combination, the distance test, σ, the selection's model and the weak-turn rule
+then run on quantities in the coordinates they were set in, so
+`max_agreement_distance`, `target_sigma_deg`, `low_confidence_sigma_deg` and
+`min_turn_sigma_ratio` keep their meaning; because without the turned support
+every frame is the starting frame and the carry is skipped; and because an
+estimate's information is a property of the estimate at its plane, where the
+carry is exact to first order, which is all the quadratic model of each
+estimate claims. No estimate lies at 90° or more from `n₀`, since no fitted
+trial point does (§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
+
+The starting chart is not uniform in angle: at a turn `θ` from `n₀` a unit of
+the tilt along the turn is `cos² θ` radians and across it `cos θ`, so a σ read
+in it as if a tilt unit were a radian is larger than the angular σ there, by
+8.5 times along the turn at 70°. Without the turned support the information is
+read in this chart at the estimate's plane too, so the carry gives σ in the
+same chart with the same distortion, not a better one; reading σ in a frame at
+the combined plane is an open question
+([grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md)),
+since it moves the weak-turn rule's calibration.
 
 ### Wide pairs
 
@@ -728,6 +975,17 @@ amount changes neither render against the other, which is why the common part
 is held at the reference comparisons' value. The pair's information about the
 tilt is the Schur complement of its normal matrix with the relative shift
 eliminated, as for a view.
+
+With the turned support the fit runs the same rounds as a growth's whole-grid
+stage: each round lays the grid at the plane the pair has reached and fits the
+pair's tilt from `(0, 0)` in that grid's frame, under the round's cap, and the
+relative shift from where the round before left it. The two views' held shifts
+are each view's own shift moved to the combined plane, for every round. The
+pair's information and its score between the two renders are read on the grid
+laid at its final plane, whose template gives the live cells, and the
+information is carried into the starting frame's tilt; that score is the pair's
+`zncc`, which the floor judges. Without it the fit is one round on the starting
+grid.
 
 **Acceptance.** A pair whose score between its two renders is under
 `min_held_zncc` is refused (`UnderFloor`) and never combined. The others are
@@ -837,8 +1095,10 @@ held over the window of the second fitted stage, half-width `1/5` of the grid's
 side under the default fractions (10 on a 48 grid; the widest window on a grid
 with fewer), to the optimiser's usual stop; and then two Levenberg–Marquardt
 iterations over the whole grid on the robust cell score, whose score is the one
-reported. A fit under the floor is kept as it is, and no search for another
-shift follows it. The view is reported `ShiftOnly`, with its shift and its
+reported. With the turned support every part of it runs on the grid laid at
+the final plane, the tilt held at `(0, 0)` there; the combination's last held
+check laid the same grid, so its template is reused. A fit under the floor is
+kept as it is, and no search for another shift follows it. The view is reported `ShiftOnly`, with its shift and its
 score, which the progress note judges against `min_held_zncc`; its keypoint is
 not written. It is not in the plane. The window and the two iterations keep the
 score of a full whole-grid fit at about 40% less time on the shift-only views
@@ -878,7 +1138,10 @@ choice of τ scales every σ and every agreement distance by the same factor.
 
 **Which information.** Every growth's information is read when it is judged, at
 its own plane and shift, and a pair's at the plane and relative shift its fit
-ended at. The combined plane's information is the sum of the kept estimates'
+ended at; with the turned support each is read on the grid laid at that plane
+and carried into the starting frame's tilt
+(§ [Combining estimates read in different frames](#combining-estimates-read-in-different-frames)).
+The combined plane's information is the sum of the kept estimates'
 information as each was read, and the precision the report gives is that sum,
 σ (a), and the same with each pair's halved, σ (b). Nothing is read again at the
 final plane.
@@ -1035,10 +1298,34 @@ off
   of the robust combination, a few whole-grid renders per iteration of each
   pair fit, and one stage-1 window, one window fit and two whole-grid
   iterations per shift-only view. A growth that stops early skips its later
-  windows, its whole-grid stage and the reading of its information. On the
+  windows, its whole-grid stage and the reading of its information. The turned
+  support adds one template render, a render of the whole grid from the
+  reference, per fitted stage or round that starts at a plane not laid just
+  before, one per growth's and pair's final reading and one per held check's
+  plane, and the whole-grid rounds after the first; its cost on the ground
+  truths is in the
+  [measurements](grown-plane-normal-measurements.md#a-working-grid-turned-with-the-plane-2026-11-10).
+  On the
   tests' synthetic scenes a whole step takes well under a tenth of a second in
   an optimised build; on the ground truths a point costs about 6 to 8 ms of one
-  thread per observation ([refine-normals.md](refine-normals.md) § "Run time").
+  thread per observation without the turned support
+  ([refine-normals.md](refine-normals.md) § "Run time").
+- **Laid grids.** `Grid::laid_at` in
+  [grown_plane/render.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/render.rs)
+  builds a grid at a plane from the starting grid; the grid keeps the starting
+  frame beside its own, and `Frame::tilt_of` (a frame's chart) and
+  `Grid::start_chart_jacobian` (`J`) carry tilts and information into the
+  starting frame. The step lays grids through one function, `Sequence::lay`,
+  which returns the starting grid for the starting normal and keeps the last
+  grid it laid, keyed by the bits of the normal, so a stage that did not turn,
+  the held checks at one mean and the shift-only fits at the final plane reuse a
+  grid and its template. A view's render is made per laid grid, with its
+  projection cache per grid; the render count is kept on the view, so a note's
+  count sums over every grid the view was read on, and the reference's count is
+  the template renders. The round schedule is a pure function of the rounds'
+  turns (`Rounds` in
+  [grown_plane/solve.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/solve.rs)),
+  and the disc is a field of the fit's iteration settings.
 - **Phases.** The step opens the overview phase `grown plane normal` over
   everything after its settings are checked, and under it a `grown plane view`
   per try, noted with the image and whether it was matched or left out. A
@@ -1049,16 +1336,18 @@ off
   per robust combination (noted with the views and pairs kept, those held under
   the floor, the means read, `σ` and the renders), `pairs` with a `pair fit` per
   pair (noted with the two images, their angle, the pair's ZNCC, `σ`, verdict,
-  steps taken and renders), a `shift-only fit` per view not picked (noted with
+  rounds, steps taken and renders), a `shift-only fit` per view not picked (noted with
   its first-window and grid ZNCC, whether that reaches the floor, and its
   renders), and `turn` (`turn_and_read`, whose phases nest in it, noted with the
   turn); under each try, a `growth` per growth, noted with the plane it started
-  from, its first-window and grid ZNCC, whether it was taken, and its renders;
-  and under each growth a `window stage` per later window and a
-  `whole-grid stage` (each noted with its ZNCC, steps taken and renders), and
+  from, its first-window and grid ZNCC, whether it was taken, its renders and
+  the template renders it made;
+  and under each growth a `window stage` per later window (noted with its ZNCC,
+  its turn, steps taken and renders), a `whole-grid stage` per round (noted with
+  the round, its cap, its turn, its ZNCC, steps taken and renders), and
   `judge` (the growth's own information, noted with its grid ZNCC, `σ` and
   verdict, or with the verdict alone for a growth that stopped early). A view
-  counts its renders in a `Cell` beside its projection cache; the notes are
+  counts its renders in a `Cell` of its own; the notes are
   built only when a phase records, and nothing a phase does reaches the result,
   so the step's track and report are the same with detail on and off.
 - **Single-threaded.** The step renders one view at a time on the calling
@@ -1120,6 +1409,10 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 | `max_iterations` | `20` | Levenberg–Marquardt iterations per stage, at most |
 | `initial_damping` | `1e-3` | The damping each fit starts from; finite, at least 0 |
 | `min_improvement` | `1e-6` | A stage stops once a kept step raises its score by less |
+| `turned_support` | `true` | Lay the working grid again on the square turned to the plane at the start of every fitted stage and every whole-grid round, and read every whole grid at a plane on the grid laid there; `false` is the step with one grid, no cap and one whole-grid round, and the next three settings are not read |
+| `stage_turn_cap_deg` | `12.0` | The most a window stage, and the first whole-grid round, may turn the plane from where it began, degrees; above 0 and under 90, or infinite for no cap |
+| `min_stage_turn_cap_deg` | `0.5` | The whole-grid rounds stop once their cap would fall under this, and after a round that turned less than half of it, degrees; finite, above 0, at most `stage_turn_cap_deg` |
+| `max_grid_rounds` | `16` | The most whole-grid rounds a growth or a pair runs; at least 1 |
 | `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler; where the reconstruction stores no patch bitmaps, `refine.resolution` is the patch resolution `R` (`FitOptions::at_resolution` sets every kernel's), at least 2 |
 
 Five numbers are constants of the step rather than settings: the early stop's
@@ -1145,7 +1438,8 @@ better on every measure. `max_pairs` and `max_selected_views` are first values.
 information came to be read through the Sobel gradient. The ladder's settings
 were swept on the ground truths, which moved `first_rung_deg` from 12° to 15°.
 `weak_turn_deg` and `min_turn_sigma_ratio` were chosen on the points judged by
-eye. The measurements file gives each
+eye. The turned support's cap of 12°, floor of 0.5° and 16 rounds are first
+values, from a Python prototype on a few points. The measurements file gives each
 ([grown-plane-normal-measurements.md](grown-plane-normal-measurements.md)).
 
 ## Testing
@@ -1229,12 +1523,50 @@ the scenes with up to six views that need every view picked set a target σ of
   that is NaN, infinite or negative, a first rung whose bounds are not finite,
   are negative or are out of order, a `first_rung_deg` outside its bounds and a
   `rung_ratio` of 1 or less or not finite, and takes an infinite
-  `weak_turn_deg`, a `weak_turn_deg` of 0 and a ratio of 0.
+  `weak_turn_deg`, a `weak_turn_deg` of 0 and a ratio of 0. With the turned
+  support on and off, `check` refuses a `stage_turn_cap_deg` that is NaN, 0 or
+  less, or 90 or more and finite, a `min_stage_turn_cap_deg` that is not
+  finite, is 0 or less or exceeds the cap, and a `max_grid_rounds` of 0, and
+  takes an infinite cap and a floor equal to the cap.
+- **A plane started 60° off,** seen from six views out to 40°, is reached
+  within a degree; every window stage and every round keeps within its cap,
+  each round's cap is the one before or half of it, every growth's and pair's
+  rounds stop by one of the three rules, and a growth from the starting plane
+  makes exactly one template render for every stage that turned the plane, so
+  the grid is laid again at each stage's plane. A second run from the turned
+  normal turns under half a degree.
+- **Without the turned support,** on the wide scene and the disagreeing one,
+  every growth that reached the whole grid has one round with an infinite cap
+  and its `grid_zncc` equal to the last entry of `stage_zncc`, every pair one
+  round, no growth makes a template render, the wide scene's plane is reached,
+  and other values of the cap, the floor and the round limit change nothing.
 - **Detail phases change nothing:** with no sink, an overview sink and a
   detailed one, the track and report are the same, compared by their `Debug`
   text; the overview records the step and one phase per try and nothing finer,
   and the detailed run records the phases of
-  § [Implementation notes](#implementation-notes) at their depths.
+  § [Implementation notes](#implementation-notes) at their depths, one
+  `whole-grid stage` per round, with each window stage's turn, each round's cap,
+  each growth's template renders and each pair fit's rounds in their notes.
+- **The laid grid,**
+  [grown_plane/laid_tests.rs](../../../crates/sfmtool-core/src/bench/normal/grown_plane/laid_tests.rs),
+  on a pinhole facing a textured plane: the grid laid at the starting normal is
+  the starting grid to 10⁻¹²; on a grid laid 40° off every sample lies on the
+  turned plane, neighbouring samples are one spacing apart along the turned
+  axes, the centre sample is half a sample from the anchor along each axis, and
+  the anchor projects to the same pixel as on the starting grid; the template
+  on a laid grid is the reference sampled at the turned square's samples, and a
+  view at no tilt reads those samples; a laid grid's pixel derivatives follow a
+  central difference of its projection; `J` follows a central difference of the
+  starting chart to 10⁻⁶ at 5°, 40° and 70° and is the identity on the starting
+  grid, information carried by `J` and back is itself, the chart's step on the
+  starting frame is the difference of the tilts, so a shift moved by it is the
+  shift moved by that difference; and only a laid grid's tilt reaches a plane
+  past 90° from the start.
+- **Repeated passes on a ground truth,** in the binding's tests
+  ([test_bench_normal_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_normal_rust_bindings.py)):
+  on `seoul_bull_sculpture_ground_truth_v02` point 255, three passes from the
+  stored normal, the first turning it more than 30°, the second and third
+  under 5° (4.4° and 0.3° measured).
 - **The analytic Jacobian,** on renders of a textured plane through a pinhole, a
   radial lens and a fisheye, from a reference facing it and views 25° and 35°
   off: with the bilinear read's own derivative, every column of a view fit over
@@ -1255,7 +1587,13 @@ the scenes with up to six views that need every view picked set a target σ of
   tilt cap doubling from 0.1 to 0.2, 0.4 and 0.8 and then holding on a
   quadratic whose tilt target lies 2.5 away, which the fit reaches in at most
   six steps, and the weighted mean, its covariance and the agreement distance
-  against a hand-computed case.
+  against a hand-computed case. The disc: on a quadratic whose tilt target
+  lies outside a 12° disc the fit ends on the disc's edge toward it with the
+  shift at its target and scores no point outside the disc, and inside it the
+  fit is the fit with no disc. The rounds' schedule on given turns: turns in
+  one direction keep a 12° cap for all 16 rounds, alternating turns give caps
+  of 12°, 12°, 6°, 3°, 1.5° and 0.75° and stop, a turn at right angles is no
+  reversal, and a turn under a quarter of a degree stops the rounds.
 
 No test covers a patch centre off along the reference ray, σ against the spread
 of the fitted normal under added noise, or a pair refused under its floor;
@@ -1279,19 +1617,14 @@ proposes them.
   window. Starting from a textured spot elsewhere, with the anchor pinned at the
   keypoint and the tilt searched at stage 1, is proposed in
   [grown-plane-normal-off-anchor-spot-amendment.md](../../drafts/grown-plane-normal-off-anchor-spot-amendment.md).
-- **A working grid turned with the plane.** The working grid and the template
-  are laid once, on the starting square, and every plane is read on that
-  grid's rays, so after a large turn a stage's support is the starting square
-  sheared onto the plane rather than the square the patch will have there.
-  Laying the grid again on the turned square at every fitted stage, with a cap
-  on each stage's turn and whole-grid rounds whose cap shrinks, is proposed in
-  [grown-plane-normal-turned-support-amendment.md](../../drafts/grown-plane-normal-turned-support-amendment.md).
 
 ## Open questions
 
 The questions still open about the step's settings and rules (the calibration
 of σ, the agreement numbers, the weak-turn thresholds, the ladder, the pairs,
 the selection's model, the window schedule, the cheaper growths' constants, the
-optimiser, points where every view is weak or narrow, blur matching and the
-report's fields) are collected, with the evidence on each, in
+optimiser, points where every view is weak or narrow, blur matching, the
+report's fields, and the turned support's score, side, pyramid levels, chart
+for σ, defaults and the pairs' held shifts) are collected, with the evidence on
+each, in
 [grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md).
