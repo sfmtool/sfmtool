@@ -289,11 +289,11 @@ every translation direction there, the fitted matrix is `[t]×·R` for some
 zero, at the level of the match noise.
 
 **Cost.** Most of it is the essential fit's 512 samples, each scored
-against every match, so it grows with the matches: in a release build on a
-32-core machine, about 3.4 ms for a pair of 750 to 820 matches at 360 × 640,
-whose matching takes 1.2 ms, and 5 to 6 ms for 1,400 to 2,300 matches at
-2040 × 1536, whose matching takes 4 ms. The rays take 0.2 to 0.3 ms and the
-decomposition under 0.1 ms. It is spent only when a camera is given.
+against every match, which `estimate_essential_rays` scores on the rayon
+pool, so it grows with the matches: in a release build on a 32-core machine,
+1.2 to 2.6 ms for a pair of 1,300 matches at 1920 × 1080, whose matching takes
+4 ms. The rays take 0.2 to 0.3 ms and the decomposition under 0.1 ms. It is
+spent only when a camera is given.
 
 ## Determinism and precision
 
@@ -307,7 +307,8 @@ the largest, `128 · 255²`, is below `2²⁴`.
 The statistics are bit-identical for every thread count: the forest's trees
 are each built from `KdForestParams::seed`, and each query is independent of
 the others and of the order they run in. The essential split is too: its
-samples are drawn from `EssentialSplitOptions::seed`, its rays are computed
+samples are drawn from `EssentialSplitOptions::seed` and the first of the
+largest consensus is kept whatever thread scored it, its rays are computed
 per match, and its parallax quantiles are taken over the inliers in match
 order. It is computed in `f64`, the precision of the camera's ray map, and is
 the same from run to run on one machine; agreement between platforms is not

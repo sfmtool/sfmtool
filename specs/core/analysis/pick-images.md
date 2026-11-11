@@ -494,11 +494,13 @@ be lost, so where the gain is 1 a near foreground can read below 2.5 until a
 shorter step measures it.
 
 Only accepted steps are measured: the candidates the walk tries are matched
-without a split, and each accepted step is matched once more, with the split
+without a split, and the walk keeps the matched positions of each until its
+step is accepted. The accepted step's split is measured from them
 ([frames.rs](../../../crates/sfmtool-core/src/analysis/pick_images/frames.rs)
-`measure_split`), so the term costs one match and one essential fit per
-chosen frame, a few milliseconds, against the extraction of the frames the
-shorter steps add. That second match is kept out of the report's `pairs`.
+`measure_split`), the same positions in the same order that a second match
+of the pair with the split set would find, so the term costs one essential
+fit per chosen frame, a few milliseconds, against the extraction of the
+frames the shorter steps add. The pairs of the report carry no split.
 
 **The camera.** The split measures with the sequence's camera scaled to the
 frames' size: every focal and the principal point times the frames' long
@@ -555,9 +557,11 @@ of 1 no pilot runs, since the term it would serve is off.
    with the vote's camera as the sequence's. Every frame the pilot read stays
    read and every pair it matched keeps its statistics, so where the walk
    takes the pilot's steps again, as it does until a gain above 1 shortens
-   one, it waits for no frame and decides from no match a second time; it
-   matches each accepted step once more for its essential split, as every
-   walk with the term does. The report's frames and pairs hold the pilot's
+   one, it waits for no frame, decides from no match a second time and
+   reads no frame's features. It measures each accepted step's essential
+   split from the matched positions the pilot kept: the pilot's walk keeps
+   those of every pair it matches, where any other walk keeps only those of
+   the step it is taking. The report's frames and pairs hold the pilot's
    with the walk's, each once.
 
 The camera is not used, the term is off with the reason `NoCamera`, and the
@@ -748,10 +752,18 @@ in its folder after the check, is `Version1Sift`, with the same advice.
 - **One forest per frame, held only while it has a pair to match.** A frame's
   features are read from its `.sift` file and its forest built
   (`FrameFeatures::from_sift`) when a pair needs it. The walk holds the last
-  chosen frame's features and the last candidate's, which become the chosen
-  frame's when it is accepted. A frame's readings, a few numbers per sensor,
+  chosen frame's features, read when a pair from it is first matched, and
+  those of each candidate of the step it is taking, and the accepted
+  candidate's become the chosen frame's, so a frame's features are read once
+  for the pairs of one step. A frame's readings, a few numbers per sensor,
   are kept for every frame read. A pair's statistics are kept, so a pair is
   never matched twice.
+- **Matched positions are kept while a step may still be accepted.** With
+  the local density term on, the walk keeps each pair's matched positions,
+  two `f32` pairs per match, and drops those of the pairs from a frame once
+  it has chosen a later one; the pilot's walk keeps all of its own, at most
+  the pairs of its 30 steps, for the walk after it. A walk without the term
+  keeps none, and every walk drops those it kept when it ends.
 - **Each frame is waited for once.** Every frame passes through one reading
   step that waits on the source for the frames not yet read and reads all
   their `.sift` metadata, which is what makes the report's frame list the
@@ -759,7 +771,9 @@ in its folder after the check, is `Version1Sift`, with the same advice.
   the frames not yet read.
 - **No duplicate derivations.** The axis ratio and coherence are
   `ImageReadings`' own, the statistics of a pair `match_frame_pair`'s, the
-  split of a step `measure_essential_split`'s through `match_frame_pair`,
+  split of a step `measure_essential_split`'s on the positions
+  `match_frame_pair` matched, the same code path a match with the split set
+  takes,
   and the medians of the recent rates and of the measures
   `sfmtool_core::numeric`'s.
 - **The term's state.** The walk holds the measures of the last three
@@ -920,7 +934,8 @@ measures before it, at a target that is the base over the gain and in its
 own band, each step in the band after the first is reached by its first
 try, every step after the first is walked with a gain above 1, and the walk
 takes over twice the frames it takes without a camera, with no split in the
-pairs it matched to decide. With a maximum gain of 1 it chooses and waits for
+pairs it matched to decide, and each step's split equal to the one a second
+match of its pair with the split set measures. With a maximum gain of 1 it chooses and waits for
 what the walk with no camera does, and both report why the term is off; a wall seen while
 moving sideways, whose measures never count, chooses with the term on what
 it chooses with it off; a camera at twice the frames' size gives the report
@@ -936,7 +951,9 @@ walks the same capture with no camera and the default options, which run
 the pilot vote: the vote is on
 the first 30 frames the walk with no camera chooses, its pinhole focal is
 within 2% of the scene camera's, and the walk then chooses what the walk
-given that camera chooses, with steps walked with a gain above 1; a camera
+given that camera chooses, with steps walked with a gain above 1 and each
+step's split equal to the one a second match of its pair measures, those
+taken again from the pilot's pairs among them; a camera
 given runs no pilot and chooses what it chooses with the pilot off, and a
 maximum gain of 1 runs none and chooses and waits for what the walk with no
 camera does. A camera moving sideways with no turn gives a pool spread above

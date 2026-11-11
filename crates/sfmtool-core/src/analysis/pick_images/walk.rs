@@ -62,11 +62,15 @@ struct Walker<'w, 'a> {
     progress: &'w Progress<'w>,
     sequence: usize,
     last: usize,
-    /// The last chosen frame and its features.
-    current: (usize, FrameFeatures),
-    /// The last candidate measured and its features, reused when it is
-    /// accepted.
-    candidate: Option<(usize, FrameFeatures)>,
+    /// Whether this is the pilot's walk, which keeps the matched positions
+    /// of every pair it matches for the walk after it.
+    pilot: bool,
+    /// The last chosen frame and its features, read when a pair from it is
+    /// first matched.
+    current: (usize, Option<FrameFeatures>),
+    /// The candidates of the step matched from the last chosen frame, with
+    /// their features, so that the one accepted keeps them.
+    candidates: Vec<(usize, FrameFeatures)>,
     /// The rates of the last accepted steps that kept the match floor; empty
     /// at the start and after a step to the next frame that did not.
     rates: VecDeque<f64>,
@@ -86,6 +90,12 @@ struct Walker<'w, 'a> {
 /// Walk one sequence of `len` frames from its first frame to its last, with
 /// the local density term measuring with `camera` when it is given, or, with
 /// `stop_at`, until it has chosen that many frames.
+///
+/// With the term on, the matched positions of the pairs the walk may accept
+/// are kept in `frames`, so each accepted step's split is measured from the
+/// walk's own match of it. A walk with `stop_at`, the pilot's, keeps those of
+/// every pair it matches, for the walk after it, which takes its steps again
+/// from the pairs' statistics; any other walk drops them all when it ends.
 pub(super) fn walk_sequence(
     frames: &mut Frames,
     sequence: usize,
@@ -97,13 +107,8 @@ pub(super) fn walk_sequence(
 ) -> Result<Walked, PickImagesError> {
     let first = FrameId { sequence, frame: 0 };
     frames.ensure(&[first], progress)?;
-    let features = frames.features(first)?;
-    let split = density::split_options(
-        camera,
-        features.width(),
-        features.height(),
-        options.max_density_gain,
-    );
+    let (width, height) = frames.image_size(first);
+    let split = density::split_options(camera, width, height, options.max_density_gain);
     let density_term = match &split {
         Ok(split) => {
             let (fx, fy) = split.camera.focal_lengths();
@@ -123,14 +128,17 @@ pub(super) fn walk_sequence(
     if len == 1 {
         return Ok(walked);
     }
+    let pilot = stop_at.is_some();
+    frames.keep_positions(pilot || split.is_ok());
     let mut walker = Walker {
         frames,
         options,
         progress,
         sequence,
         last: len - 1,
-        current: (0, features),
-        candidate: None,
+        pilot,
+        current: (0, None),
+        candidates: Vec::new(),
         rates: VecDeque::new(),
         split: split.ok(),
         measures: VecDeque::new(),
@@ -142,6 +150,9 @@ pub(super) fn walk_sequence(
     let stop_at = stop_at.unwrap_or(usize::MAX);
     while walker.current.0 < walker.last && walker.walked.chosen.len() < stop_at {
         walker.step()?;
+    }
+    if !pilot {
+        walker.frames.keep_positions(false);
     }
     Ok(walker.walked)
 }
@@ -176,11 +187,16 @@ impl Walker<'_, '_> {
         if let Some(stats) = self.frames.pair(a, b) {
             return Ok(stats.clone());
         }
+        let current = match self.current.1.take() {
+            Some(current) => current,
+            None => self.frames.features(a)?,
+        };
         let features = self.frames.features(b)?;
         let stats = self
             .frames
-            .match_pair(a, &self.current.1, b, &features, self.progress)?;
-        self.candidate = Some((frame, features));
+            .match_pair(a, &current, b, &features, self.progress)?;
+        self.current.1 = Some(current);
+        self.candidates.push((frame, features));
         Ok(stats)
     }
 
@@ -521,11 +537,11 @@ impl Walker<'_, '_> {
         let f = self.current.0;
         let rate = stats.step_percent / (c - f) as f64;
         self.rates = self.rates_after(f, c, &stats);
-        let features = match self.candidate.take() {
-            Some((n, features)) if n == c => features,
-            _ => self.frames.features(self.id(c))?,
-        };
-        let density = self.density_after(c, &features)?;
+        let features = self
+            .candidates
+            .drain(..)
+            .find_map(|(n, features)| (n == c).then_some(features));
+        let density = self.density_after(c)?;
         self.walked.steps.push(WalkStep {
             from: f,
             to: c,
@@ -536,19 +552,18 @@ impl Walker<'_, '_> {
         });
         self.walked.chosen.push(c);
         self.current = (c, features);
+        if !self.pilot {
+            self.frames.drop_positions_before(self.id(c));
+        }
         Ok(())
     }
 
     /// The local density term's reading of the step from the last chosen
-    /// frame to `c`, whose features are `features`, with the target it was
-    /// walked with. With the term on, the step's split is measured and the
+    /// frame to `c`, with the target it was walked with. With the term on,
+    /// the step's split is measured from the pair's matched positions and the
     /// next step's target set from the measures of the last
     /// [`density::WINDOW`] steps.
-    fn density_after(
-        &mut self,
-        c: usize,
-        features: &FrameFeatures,
-    ) -> Result<StepDensity, PickImagesError> {
+    fn density_after(&mut self, c: usize) -> Result<StepDensity, PickImagesError> {
         let walked_with = StepDensity {
             target_percent: self.target,
             gain: self.gain,
@@ -559,14 +574,9 @@ impl Walker<'_, '_> {
         let Some(split) = &self.split else {
             return Ok(walked_with);
         };
-        let essential_split = self.frames.measure_split(
-            self.id(self.current.0),
-            &self.current.1,
-            self.id(c),
-            features,
-            split,
-            self.progress,
-        )?;
+        let essential_split =
+            self.frames
+                .measure_split(self.id(self.current.0), self.id(c), split, self.progress)?;
         let measure = density::step_measure(&essential_split);
         self.measures.push_back(measure);
         if self.measures.len() > density::WINDOW {
