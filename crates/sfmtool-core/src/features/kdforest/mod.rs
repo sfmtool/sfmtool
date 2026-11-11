@@ -72,7 +72,7 @@ pub use sfmtool_kdf_format::{
     KdfWorkspaceContents, KdfWorkspaceMetadata, KdfWriteOptions, Verification,
 };
 
-use build::{build_tree, BuildProgress, Node, Tree};
+use build::{build_tree, BuildProgress, Node, Tree, PARALLEL_MIN_POINTS};
 use rayon::prelude::*;
 
 use crate::progress::{Cancelled, Progress};
@@ -160,8 +160,10 @@ impl<S: ForestScalar> KdForest<S> {
     /// Build a forest from a flat row-major array of `n_points * dim` values.
     ///
     /// The `T` trees are constructed in parallel, each from its own seeded RNG
-    /// (`seed + tree_index`), so the result is deterministic for a given seed
-    /// regardless of thread count.
+    /// (`seed + tree_index`), and within a tree the two subtrees of every node
+    /// of at least 1,024 points are built in parallel too, each from the RNG
+    /// state a depth-first build would reach it with. So the result is
+    /// deterministic for a given seed regardless of thread count.
     ///
     /// For floating-point scalars, coordinates must be finite — `NaN`/infinity
     /// would corrupt the distance ordering (see [`OrdF32`]).
@@ -234,6 +236,7 @@ impl<S: ForestScalar> KdForest<S> {
                     &params,
                     params.seed.wrapping_add(t as u64),
                     &counter,
+                    PARALLEL_MIN_POINTS,
                 )
             })
             .collect::<Result<_, _>>()?;

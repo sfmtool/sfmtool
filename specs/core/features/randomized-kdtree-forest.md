@@ -153,7 +153,10 @@ Why it has this shape:
   per-tree reporting would be `T` steps that all land at the end, while points
   placed moves evenly from the first leaf to the last. The counter is one
   relaxed `fetch_add` per leaf and it reports only when the count crosses one
-  of two hundred boundaries. A build that is cancelled hands back nothing,
+  of two hundred boundaries. Leaves are placed on many threads at once, so
+  those reports are made under a lock that keeps the count last reported and
+  drops a smaller one: the fractions a caller sees never fall. A build that is
+  cancelled hands back nothing,
   because a forest missing the trees that had not finished is not a forest.
 - **`search_batch_with_distances_ordered`** *processes* the batch in the given
   permutation of `0..n_queries` but returns it in query order. Each query is
@@ -291,7 +294,13 @@ build(point_indices, depth):
   many points may share the median value; the partition distributes duplicates
   across both sides to keep the split balanced (depth ≈ log₂ N).
 - **Determinism.** Each tree gets its own seeded RNG (derived from a single
-  user-visible `seed` + tree index) so builds are reproducible.
+  user-visible `seed` + tree index) so builds are reproducible. A node's
+  draws (the variance sample, then the choice among the top `D`) are taken in
+  depth-first order: the node, then its left subtree, then its right subtree.
+- **Shape from `N` alone.** The split value is the element of rank `⌊n/2⌋`
+  and the partition sends exactly `⌊n/2⌋` points left, so every node's size,
+  and with it the whole tree's shape and how many draws each node makes, is
+  known from `N` before any point is read.
 - **`leaf_size`** caps points per leaf. Small buckets (e.g. 8–16) cut tree height
   and let the leaf scan run as one tight SIMD loop.
 
@@ -403,8 +412,27 @@ own tests calls it.
 Following the optical-flow and SIFT implementations:
 
 - **Build.** The `T` trees are independent → built with rayon (`into_par_iter`
-  over tree index), each with its own seeded RNG. Recursion within a tree is
-  sequential, so build parallelism is capped at `T`.
+  over tree index), each with its own seeded RNG. Within a tree, a node of at
+  least 1,024 points (`PARALLEL_MIN_POINTS` in
+  [`build.rs`](../../../crates/sfmtool-core/src/features/kdforest/build.rs))
+  builds its two subtrees with `rayon::join`; smaller subtrees are built by
+  the task that reached them. Two things keep the tree the same as a
+  node-by-node depth-first build, whatever the thread count:
+  - **Draws up front.** Since the shape depends on `N` alone (see "Shape from
+    `N` alone" above), each tree first walks that shape once and takes every
+    node's draws from its RNG in depth-first order, recording them per
+    internal node. A subtree built in parallel reads its draws from that
+    record, so it sees the same values it would have drawn in a depth-first
+    build. For a frame of 8,192 descriptors this is about 13,000 draws per
+    tree. The record lives only while its tree is built; its sample
+    positions, 100 `u32`s per node of more than 100 points, come to about
+    six bytes per point.
+  - **Arena by depth-first index.** The node arena is allocated at its final
+    size, `2 · internal + 1`, and a node's left subtree takes the slots
+    straight after it and its right subtree the slots after those, sized from
+    the number of internal nodes the draw record puts in the left subtree. So
+    each task writes its own stretch of the arena, and node indices are the
+    depth-first ones.
 - **Tree storage.** Each tree is an arena of nodes linked by `u32` indices,
   not boxes, plus its own permutation of point ids that each leaf indexes as a
   contiguous range. A tree is then a few flat allocations, a leaf's ids are
@@ -473,8 +501,15 @@ loop, so it changes speed only, never results.
   against OpenCV's FLANN forest on real SIFT.
 - **Determinism.** Same `seed` ⇒ identical query results across runs and thread
   counts (each tree is seeded independently as `seed + tree_index` and built by
-  an order-preserving parallel map). Covered by `determinism_same_seed` and the
-  Python `test_determinism`.
+  an order-preserving parallel map, and its draws are taken up front in
+  depth-first order). Covered by `determinism_same_seed` and the Python
+  `test_determinism`. `build/tests.rs` keeps the node-by-node depth-first build
+  that draws during its recursion as a reference, and checks the tree is that
+  one node for node and id for id — built serially, with the production
+  threshold, and with every node split across tasks, in pools of one and four
+  threads — on real SIFT descriptors from three seoul_bull images, on sizes
+  around the leaf and parallel thresholds, on identical points, repeated rows,
+  constant dimensions, one-dimensional and `f32` points.
 - **Matcher parity** — verified in production via the track-cluster matcher:
   the cluster-radius scheme that consumes `KdForest`'s k-NN at the accurate
   preset is the matcher behind `sfm match --cluster`. See
