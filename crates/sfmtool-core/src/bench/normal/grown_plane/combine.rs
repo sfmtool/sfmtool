@@ -11,9 +11,15 @@
 //! `t = (Σ I)⁻¹ Σ I·t`, with covariance `2τ·(Σ I)⁻¹`: the estimate a sum of
 //! independent quadratic score losses `½·(t − tₑ)ᵀ Iₑ (t − tₑ)` is maximised
 //! by.
+//!
+//! An estimate read on a grid laid at its own plane (the turned support) has
+//! its tilt and information carried into the starting frame's chart before
+//! it reaches the combination, so every estimate combined here is in the
+//! starting frame's tilt.
 
 use nalgebra::{DMatrix, Matrix2, Vector2};
 
+use super::render::Frame;
 use super::{GrownPlaneRefusal, Sequence};
 use crate::progress::Progress;
 use crate::progress_note;
@@ -28,15 +34,20 @@ const MEAN_REGULARISATION: f64 = 1e-6;
 pub(super) struct Estimate {
     /// Its index among the candidates.
     pub(super) index: usize,
-    /// Its own plane and shift.
+    /// Its own plane, as a tilt of the starting frame, and its shift.
     pub(super) tilt: [f64; 2],
     pub(super) shift: [f64; 2],
-    /// Its information about the tilt with the shift eliminated.
+    /// Its information about the starting frame's tilt with the shift
+    /// eliminated.
     pub(super) information: Matrix2<f64>,
     /// The normal matrix over `[a, b, sx, sy]` that information came from,
-    /// which moves its shift to another plane; `None` where nothing could be
-    /// read.
+    /// in the tilt of `frame`, which moves its shift to another plane; `None`
+    /// where nothing could be read.
     pub(super) normal: Option<DMatrix<f64>>,
+    /// The frame of the grid the normal matrix was read on, laid at the
+    /// estimate's own plane; `None` for the starting frame, the grid of a
+    /// step without the turned support.
+    pub(super) frame: Option<Frame>,
 }
 
 /// One pair of views' own plane, matched against each other.
@@ -152,7 +163,7 @@ pub(super) fn distance(
     d2.max(0.0).sqrt()
 }
 
-impl Sequence<'_, '_, '_> {
+impl Sequence<'_, '_> {
     /// Combine `views` and `pairs` into one plane, opening a `mean` phase.
     ///
     /// Every view estimate and every pair not refused already is in the

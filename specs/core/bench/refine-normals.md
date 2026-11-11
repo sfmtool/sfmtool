@@ -320,10 +320,17 @@ count.
 
 A refinement is not idempotent: a second run starts each step from the normal
 the first wrote. It starts from the same keypoints, since no run moves one.
+The grown-plane step's turned support, which lays its working grid at each
+stage's plane, makes a second pass turn less: on seoul_bull v02 point 255,
+passes that turned 15.6° and 3.9° on one grid turn 4.4° and 0.3°
+([grown-plane-normal-measurements.md](grown-plane-normal-measurements.md#a-working-grid-turned-with-the-plane-2026-11-10)).
 
 ### Run time
 
-Measured in a release build with the default options, on an Intel Core
+Measured in a release build with the default options of the time, before
+the grown-plane step laid its working grid again at each stage's plane (the
+step as `turned_support = false` runs it; the turned support's cost is in
+[grown-plane-normal-measurements.md](grown-plane-normal-measurements.md#a-working-grid-turned-with-the-plane-2026-11-10)), on an Intel Core
 i9-14900HX (32 logical processors), on copies of the two checked-in ground
 truths with embedded patches, by a test that loaded each file, decoded its
 photographs through `PhotographCache` and called `refine_normals` on the

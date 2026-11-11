@@ -163,6 +163,10 @@ def test_a_run_it_cannot_do_is_refused(ground_truth, images):
         refine_normals(ground_truth, images, spot_window=0)
     with pytest.raises(ValueError, match="resolution"):
         refine_normals(ground_truth, images, resolution=1)
+    with pytest.raises(ValueError, match="max_grid_rounds"):
+        refine_normals(ground_truth, images, max_grid_rounds=0)
+    with pytest.raises(ValueError, match="stage_turn_cap_deg"):
+        refine_normals(ground_truth, images, stage_turn_cap_deg=0.0)
     with pytest.raises(ValueError, match="images must be parallel"):
         refine_normals(ground_truth, images[:-1])
 

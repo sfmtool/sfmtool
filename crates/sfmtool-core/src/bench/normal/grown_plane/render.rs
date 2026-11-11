@@ -20,10 +20,19 @@
 //! once per view and holds at every tilt. The reference itself is rendered the
 //! same way at no tilt, no offset and no shift; its rays meet every plane at
 //! the reference pixels, so its tile is the same at every tilt.
+//!
+//! A grid can be laid again at another plane ([`Grid::laid_at`]): on the
+//! starting square turned to that plane by the least rotation, about the same
+//! anchor, with the same side and spacing. Its rays are the reference's rays
+//! through the turned square's samples, and its tilt is stated in its own
+//! frame, the plane's normal and the turned square's axes. [`Frame::tilt_of`]
+//! maps a normal to a frame's tilt (its chart), and
+//! [`Grid::start_chart_jacobian`] carries a laid grid's tilt into the
+//! starting frame's.
 
 use std::cell::{Cell, RefCell, RefMut};
 
-use nalgebra::{DMatrix, Vector3};
+use nalgebra::{DMatrix, Matrix2, Vector3};
 
 use crate::camera::image::ImageU8;
 use crate::camera::remap::sample_bilinear_u8;
@@ -47,13 +56,47 @@ pub(super) const FLAT_SPREAD: f64 = 0.5;
 /// A normalised vector shorter than this is treated as flat.
 const TINY_NORM: f64 = 1e-9;
 
+/// A plane's normal and two in-plane axes, against which a tilt `(a, b)` is
+/// stated: the plane `unit(normal + a·u + b·v)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Frame {
+    pub(super) normal: Vector3<f64>,
+    pub(super) u: Vector3<f64>,
+    pub(super) v: Vector3<f64>,
+}
+
+impl Frame {
+    /// The plane's unit normal at `tilt`.
+    pub(super) fn plane_normal(&self, tilt: [f64; 2]) -> Vector3<f64> {
+        (self.normal + self.u * tilt[0] + self.v * tilt[1]).normalize()
+    }
+
+    /// The frame's chart: the tilt of the plane of normal `m`,
+    /// `((m·u)/(m·n), (m·v)/(m·n))`; `None` for a plane at or past 90° from
+    /// the frame's normal (`m·n ≤ 0`), which no tilt of the frame reaches.
+    pub(super) fn tilt_of(&self, m: Vector3<f64>) -> Option<[f64; 2]> {
+        let k = m.dot(&self.normal);
+        (k > 0.0 && k.is_finite()).then(|| [m.dot(&self.u) / k, m.dot(&self.v) / k])
+    }
+
+    /// The change of the frame's tilt from the plane of normal `from` to the
+    /// plane of normal `to`, `c(to) − c(from)` in its chart; `None` where
+    /// either is at or past 90° from the frame's normal.
+    pub(super) fn tilt_step(&self, from: Vector3<f64>, to: Vector3<f64>) -> Option<[f64; 2]> {
+        let (a, b) = (self.tilt_of(from)?, self.tilt_of(to)?);
+        Some([b[0] - a[0], b[1] - a[1]])
+    }
+}
+
 /// The reference's working grid: one ray per sample, the anchor every plane
-/// passes through, and the starting patch frame the tilt is stated against.
+/// passes through, the frame the tilt is stated against and the starting
+/// frame.
 pub(super) struct Grid {
     /// Samples per side, `W`.
     pub(super) side: usize,
-    /// The starting patch frame re-anchored on the reference keypoint: the plane at
-    /// no tilt, whose square the grid's samples cover.
+    /// The square the grid's samples cover: the starting patch frame
+    /// re-anchored on the reference keypoint, the plane at no tilt, and for a
+    /// laid grid that square turned to the plane it is laid at.
     pub(super) anchored_patch_frame: OrientedPatch,
     /// The reference camera's centre.
     origin: Vector3<f64>,
@@ -61,13 +104,61 @@ pub(super) struct Grid {
     rays: Vec<Vector3<f64>>,
     /// Where the reference keypoint's ray meets the starting patch frame.
     pub(super) anchor: Vector3<f64>,
+    /// The grid's own frame: the normal of the plane it is laid at and the
+    /// square's axes; the starting frame on the starting grid.
+    pub(super) frame: Frame,
     /// The starting patch frame's outward normal and in-plane axes.
-    normal: Vector3<f64>,
-    u: Vector3<f64>,
-    v: Vector3<f64>,
+    pub(super) start: Frame,
+    /// Whether the grid was laid again ([`Self::laid_at`]) rather than being
+    /// the starting grid. Only a laid grid's tilt can reach a plane at or past
+    /// 90° from the starting normal.
+    laid: bool,
     /// The samples of each of the nine cells, `[row * 3 + col]` from the
     /// top-left, over the split `[0, W/3, W − W/3, W]`.
     pub(super) cells: [Vec<usize>; 9],
+}
+
+/// The rays from `origin` through the `side × side` samples of `square`, at
+/// grid positions `(col + ½ − W/2, row + ½ − W/2)`, row-major.
+fn rays_through(square: &OrientedPatch, origin: Vector3<f64>, side: usize) -> Vec<Vector3<f64>> {
+    let wpp = 2.0 * square.half_extent[0] / side as f64;
+    let half = side as f64 / 2.0;
+    let mut rays = Vec::with_capacity(side * side);
+    for row in 0..side {
+        for col in 0..side {
+            let (gx, gy) = (col as f64 + 0.5 - half, row as f64 + 0.5 - half);
+            rays.push(shifted_center(square, gx, gy, wpp, wpp).coords - origin);
+        }
+    }
+    rays
+}
+
+/// The least rotation taking the unit normal `from` to the unit normal `to`,
+/// built as `tilt_patch` builds it: about `from × perp` by the arc's angle,
+/// `perp` the unit direction the arc leaves `from` in, and `half_turn_axis`
+/// at a half turn, where every axis in the plane is equally least. `None`,
+/// no rotation, for a turn under 10⁻¹⁵ rad.
+fn least_rotation(
+    from: Vector3<f64>,
+    to: Vector3<f64>,
+    half_turn_axis: Vector3<f64>,
+) -> Option<nalgebra::Rotation3<f64>> {
+    let cos = from.dot(&to);
+    let off = to - from * cos;
+    let sin = off.norm();
+    let phi = sin.atan2(cos);
+    if phi.is_nan() || phi <= 1e-15 {
+        return None;
+    }
+    let perp = if sin > 1e-12 {
+        off / sin
+    } else {
+        half_turn_axis
+    };
+    Some(nalgebra::Rotation3::from_axis_angle(
+        &nalgebra::Unit::new_normalize(from.cross(&perp)),
+        phi,
+    ))
 }
 
 impl Grid {
@@ -82,15 +173,7 @@ impl Grid {
     ) -> Grid {
         let anchored_patch_frame = anchored(patch_frame, reference, keypoint);
         let origin = reference.cam_from_world.inverse_translation_origin().coords;
-        let wpp = 2.0 * anchored_patch_frame.half_extent[0] / side as f64;
-        let half = side as f64 / 2.0;
-        let mut rays = Vec::with_capacity(side * side);
-        for row in 0..side {
-            for col in 0..side {
-                let (gx, gy) = (col as f64 + 0.5 - half, row as f64 + 0.5 - half);
-                rays.push(shifted_center(&anchored_patch_frame, gx, gy, wpp, wpp).coords - origin);
-            }
-        }
+        let rays = rays_through(&anchored_patch_frame, origin, side);
         let bounds = CellLayout::new(side as u32, 0.0).bounds;
         let cells = std::array::from_fn(|k| {
             let (row, col) = (k / 3, k % 3);
@@ -102,23 +185,98 @@ impl Grid {
             }
             samples
         });
+        let start = Frame {
+            normal: patch_frame.normal(),
+            u: patch_frame.u_axis,
+            v: patch_frame.v_axis,
+        };
         Grid {
             side,
             origin,
             rays,
             anchor: anchored_patch_frame.center.coords,
             anchored_patch_frame,
-            normal: patch_frame.normal(),
-            u: patch_frame.u_axis,
-            v: patch_frame.v_axis,
+            frame: start,
+            start,
+            laid: false,
             cells,
         }
     }
 
-    /// The plane's unit normal at `tilt`: the starting normal tilted by `a`
-    /// along `u` and `b` along `v`.
+    /// The grid laid at the plane of normal `normal`: on the starting square
+    /// turned to it by the least rotation from the starting normal (the
+    /// starting frame's `u` the direction the arc leaves in at a half turn,
+    /// as `tilt_patch` takes it), with no stop short of it, centred on the
+    /// same anchor, with the same side and sample spacing, seen from the same
+    /// reference camera. Its frame is `normal`, a unit vector, and the turned
+    /// square's axes, and its cells are the same index sets. The rotation is
+    /// taken from the starting frame each time, so the grid laid at a plane
+    /// depends on that plane alone.
+    pub(super) fn laid_at(&self, normal: Vector3<f64>) -> Grid {
+        let (u, v) = match least_rotation(self.start.normal, normal, self.start.u) {
+            Some(rotation) => (rotation * self.start.u, rotation * self.start.v),
+            None => (self.start.u, self.start.v),
+        };
+        let mut square = self.anchored_patch_frame.clone();
+        square.center = self.anchor.into();
+        square.u_axis = u;
+        square.v_axis = v;
+        Grid {
+            side: self.side,
+            origin: self.origin,
+            rays: rays_through(&square, self.origin, self.side),
+            anchor: self.anchor,
+            anchored_patch_frame: square,
+            frame: Frame { normal, u, v },
+            start: self.start,
+            laid: true,
+            cells: self.cells.clone(),
+        }
+    }
+
+    /// Sample `k`'s point on the grid's square, world frame: the reference
+    /// camera's centre plus the sample's ray.
+    #[cfg(test)]
+    pub(super) fn sample_point(&self, k: usize) -> Vector3<f64> {
+        self.origin + self.rays[k]
+    }
+
+    /// Whether the plane at `tilt` in this grid's frame is under 90° from the
+    /// starting normal, so that the starting frame's tilt can state it. Every
+    /// tilt of the starting grid is.
+    pub(super) fn faces_start(&self, tilt: [f64; 2]) -> bool {
+        !self.laid || self.start.tilt_of(self.plane_normal(tilt)).is_some()
+    }
+
+    /// How the starting frame's tilt of this grid's plane moves with this
+    /// grid's own tilt at `(0, 0)`: `J = ∂c₀(n + α·u + β·v)/∂(α, β)` for the
+    /// starting chart `c₀(m) = ((m·u₀)/(m·n₀), (m·v₀)/(m·n₀))` and this grid's
+    /// frame `(n, u, v)`, with `k = n·n₀`:
+    ///
+    /// ```text
+    /// J = [ (u·u₀)/k − (n·u₀)(u·n₀)/k²    (v·u₀)/k − (n·u₀)(v·n₀)/k² ]
+    ///     [ (u·v₀)/k − (n·v₀)(u·n₀)/k²    (v·v₀)/k − (n·v₀)(v·n₀)/k² ]
+    /// ```
+    ///
+    /// The identity on the starting grid.
+    pub(super) fn start_chart_jacobian(&self) -> Matrix2<f64> {
+        let Frame { normal: n, u, v } = self.frame;
+        let Frame {
+            normal: n0,
+            u: u0,
+            v: v0,
+        } = self.start;
+        let k = n.dot(&n0);
+        let entry = |axis: Vector3<f64>, along: Vector3<f64>| {
+            axis.dot(&along) / k - n.dot(&along) * axis.dot(&n0) / (k * k)
+        };
+        Matrix2::new(entry(u, u0), entry(v, u0), entry(u, v0), entry(v, v0))
+    }
+
+    /// The plane's unit normal at `tilt`: the grid's normal tilted by `a`
+    /// along its `u` and `b` along its `v`.
     pub(super) fn plane_normal(&self, tilt: [f64; 2]) -> Vector3<f64> {
-        (self.normal + self.u * tilt[0] + self.v * tilt[1]).normalize()
+        self.frame.plane_normal(tilt)
     }
 
     /// The samples of the window `2 · half + 1` samples a side centred on the
@@ -194,14 +352,12 @@ impl Grid {
         rows: &[usize],
     ) -> Vec<[[f64; 2]; 2]> {
         let mut out = vec![[[0.0; 2]; 2]; self.rays.len()];
-        let m = self.normal + self.u * tilt[0] + self.v * tilt[1];
+        let Frame { normal, u, v } = self.frame;
+        let m = normal + u * tilt[0] + v * tilt[1];
         let length = m.norm();
         let n = m / length;
         // ∂n/∂a and ∂n/∂b: each tilt axis less its part along n, over |m|.
-        let dn = [
-            (self.u - n * n.dot(&self.u)) / length,
-            (self.v - n * n.dot(&self.v)) / length,
-        ];
+        let dn = [(u - n * n.dot(&u)) / length, (v - n * n.dot(&v)) / length];
         let offset = self.anchor - self.origin;
         let reach = offset.dot(&n);
         let rotation = view.cam_from_world.to_rotation_matrix();
@@ -248,10 +404,10 @@ impl Grid {
                 .project_homogeneous(view.cam_from_world, self.anchor + view.offset + d, 1.0)
         };
         let (Some(up), Some(un), Some(vp), Some(vn)) = (
-            at(self.u * h),
-            at(-self.u * h),
-            at(self.v * h),
-            at(-self.v * h),
+            at(self.frame.u * h),
+            at(-self.frame.u * h),
+            at(self.frame.v * h),
+            at(-self.frame.v * h),
         ) else {
             return f64::NAN;
         };
@@ -297,6 +453,9 @@ pub(super) struct ViewImage<'a> {
     /// The move from the grid's anchor to the centre of the patch this view
     /// sees, `q_i − anchor`: zero for the reference.
     pub(super) offset: Vector3<f64>,
+    /// How many renders of this view have run, on every grid it is read on,
+    /// for the detail phases' notes.
+    renders: Cell<u64>,
 }
 
 impl<'a> ViewImage<'a> {
@@ -324,7 +483,13 @@ impl<'a> ViewImage<'a> {
             scale: (1u64 << level) as f64,
             channels: (image.channels() as usize).clamp(1, 3),
             offset,
+            renders: Cell::new(0),
         }
+    }
+
+    /// How many renders of this view have run so far, on every grid.
+    pub(super) fn renders(&self) -> u64 {
+        self.renders.get()
     }
 
     /// `view` read at pyramid level `level`, with no offset.
@@ -338,6 +503,7 @@ impl<'a> ViewImage<'a> {
             scale: (1u64 << level) as f64,
             channels: (image.channels() as usize).clamp(1, 3),
             offset: Vector3::zeros(),
+            renders: Cell::new(0),
         }
     }
 
@@ -538,14 +704,13 @@ impl Gradients {
     }
 }
 
-/// One view rendered on the grid, with the projection of its last tilt kept,
-/// so that renders at one tilt and several shifts project once.
+/// One view rendered on one grid, with the projection of its last tilt kept,
+/// so that renders at one tilt and several shifts project once. Each render
+/// is counted on the view ([`ViewImage::renders`]).
 pub(super) struct ViewRender<'g, 'a> {
     pub(super) grid: &'g Grid,
     pub(super) view: &'g ViewImage<'a>,
     cache: RefCell<Option<Projected>>,
-    /// How many times [`Self::render`] has run, for the detail phases' notes.
-    renders: Cell<u64>,
 }
 
 /// The projection of one tilt over one set of rows.
@@ -561,13 +726,7 @@ impl<'g, 'a> ViewRender<'g, 'a> {
             grid,
             view,
             cache: RefCell::new(None),
-            renders: Cell::new(0),
         }
-    }
-
-    /// How many renders this view has made so far.
-    pub(super) fn renders(&self) -> u64 {
-        self.renders.get()
     }
 
     /// The view's samples over `rows` through the plane at `tilt`, shifted by
@@ -609,7 +768,7 @@ impl<'g, 'a> ViewRender<'g, 'a> {
     }
 
     fn render_into(&self, tilt: [f64; 2], shift: [f64; 2], rows: &[usize], out: &mut Samples) {
-        self.renders.set(self.renders.get() + 1);
+        self.view.renders.set(self.view.renders.get() + 1);
         let projected = self.projected(tilt, rows);
         let projected = projected.as_ref().expect("filled by projected");
         self.view.sample(&projected.pixels, rows, shift, out);

@@ -73,6 +73,73 @@ pub(super) struct Iteration {
     pub(super) max_iterations: u32,
     pub(super) damping: f64,
     pub(super) min_improvement: f64,
+    /// The radius, in tilt units, of the disc about `(0, 0)` every trial
+    /// point's tilt is kept in: a trial tilt outside it is moved radially
+    /// back onto its edge before it is rendered. `None` for no disc. A fit
+    /// with the tilt held has no tilt entries and ignores it.
+    pub(super) disc: Option<f64>,
+}
+
+/// The disc radius, in tilt units, that keeps a stage within `cap_deg` of
+/// the plane it began at, `tan(cap)`; `None` for a cap that is not finite.
+pub(super) fn disc_of(cap_deg: f64) -> Option<f64> {
+    cap_deg.is_finite().then(|| cap_deg.to_radians().tan())
+}
+
+/// The angle between two unit normals, degrees, read as `atan2(|a × b|, a·b)`
+/// so that a turn of a few nanoradians is not rounded to zero.
+pub(super) fn angle_deg(a: nalgebra::Vector3<f64>, b: nalgebra::Vector3<f64>) -> f64 {
+    a.cross(&b).norm().atan2(a.dot(&b)).to_degrees()
+}
+
+/// The cap of each whole-grid round of a growth or a pair, and when the
+/// rounds stop: a pure function of the rounds' turns, so that it is tested
+/// without a photograph.
+///
+/// The first round's cap is the one given. After each round from the second
+/// on, the cap halves when the round's turn vector, the difference of the
+/// normals it ended and began at, points against the previous round's
+/// (`d_r · d_{r−1} < 0`). The rounds stop after a round when the next cap
+/// would be under `min_cap_deg`, when the round turned less than half of
+/// `min_cap_deg`, or when `max_rounds` rounds have run.
+#[derive(Debug, Clone)]
+pub(super) struct Rounds {
+    cap_deg: f64,
+    min_cap_deg: f64,
+    max_rounds: u32,
+    run: u32,
+    last: Option<nalgebra::Vector3<f64>>,
+}
+
+impl Rounds {
+    pub(super) fn new(cap_deg: f64, min_cap_deg: f64, max_rounds: u32) -> Self {
+        Rounds {
+            cap_deg,
+            min_cap_deg,
+            max_rounds,
+            run: 0,
+            last: None,
+        }
+    }
+
+    /// The cap the next round is fitted under, degrees.
+    pub(super) fn cap_deg(&self) -> f64 {
+        self.cap_deg
+    }
+
+    /// Record a round that turned `turn_deg` degrees along the turn vector
+    /// `turn`; whether another round runs.
+    pub(super) fn after(&mut self, turn_deg: f64, turn: nalgebra::Vector3<f64>) -> bool {
+        self.run += 1;
+        if self.last.is_some_and(|last| turn.dot(&last) < 0.0) {
+            self.cap_deg /= 2.0;
+        }
+        self.last = Some(turn);
+        !(self.cap_deg < self.min_cap_deg
+            || turn_deg.is_nan()
+            || turn_deg < 0.5 * self.min_cap_deg
+            || self.run >= self.max_rounds)
+    }
 }
 
 /// A residual frozen at a point, and its value there.
@@ -168,7 +235,10 @@ fn value_derivative(
 /// than [`MIN_RELATIVE_GAIN`] of the first kept step's gain. A step is
 /// scaled back to the tilt cap, which starts at [`MAX_TILT_STEP`] and, in a
 /// fit whose tilt is free, doubles after each kept step it shortened, up to
-/// [`MAX_GROWN_TILT_STEP`].
+/// [`MAX_GROWN_TILT_STEP`]. With a disc (`it.disc`), the point the capped
+/// step reaches then has its tilt moved radially onto the disc's edge when
+/// it lies outside, its shift left as the step put it; a step shortened by
+/// the disc alone does not double the tilt cap.
 pub(super) fn maximise<O: Objective>(
     objective: &O,
     p0: &[f64],
@@ -200,11 +270,14 @@ pub(super) fn maximise<O: Objective>(
                 continue;
             };
             let tilt_capped = delta.iter().take(tilt_entries).any(|d| d.abs() > tilt_cap);
-            let q: Vec<f64> = p
+            let mut q: Vec<f64> = p
                 .iter()
                 .zip(capped(delta, tilt_entries, tilt_cap).iter())
                 .map(|(x, d)| x + d)
                 .collect();
+            if let (2, Some(radius)) = (tilt_entries, it.disc) {
+                onto_disc(&mut q, radius);
+            }
             let (s, f) = objective.freeze(&q);
             if s > score + 1e-12 {
                 damping = (damping / 10.0).max(1e-9);
@@ -243,6 +316,17 @@ fn damped_step(a: &DMatrix<f64>, g: &DVector<f64>, damping: f64) -> Option<DVect
     }
     let step = m.cholesky()?.solve(&(-g));
     step.iter().all(|v| v.is_finite()).then_some(step)
+}
+
+/// The tilt `(p[0], p[1])` moved radially onto the edge of the disc of
+/// `radius` about `(0, 0)` where it lies outside it.
+fn onto_disc(p: &mut [f64], radius: f64) {
+    let length = p[0].hypot(p[1]);
+    if length > radius {
+        let factor = radius / length;
+        p[0] *= factor;
+        p[1] *= factor;
+    }
 }
 
 /// `delta` scaled back so that no tilt entry, one of the first
@@ -343,8 +427,12 @@ impl ViewFit<'_, '_, '_> {
         }
     }
 
-    /// The score at `tilt` and `shift`.
+    /// The score at `tilt` and `shift`; `−1`, with no render, for a plane at
+    /// or past 90° from the starting normal ([`Grid::faces_start`](super::render::Grid::faces_start)).
     pub(super) fn score_at(&self, tilt: [f64; 2], shift: [f64; 2]) -> f64 {
+        if !self.render.grid.faces_start(tilt) {
+            return -1.0;
+        }
         let samples = self.render.render(tilt, shift, &self.rows());
         self.score_of(&samples).0
     }
@@ -407,8 +495,13 @@ impl Objective for ViewFit<'_, '_, '_> {
         }
     }
 
+    /// A trial plane at or past 90° from the starting normal scores `−1`
+    /// with nothing to linearise, so no step keeps it.
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<ViewFrozen>>) {
         let (tilt, shift) = self.split(p);
+        if !self.render.grid.faces_start(tilt) {
+            return (-1.0, None);
+        }
         let samples = self.render.render(tilt, shift, &self.rows());
         let (score, weights) = self.score_of(&samples);
         let blocks: Vec<Block> = match &self.reading {
@@ -546,7 +639,12 @@ impl Objective for PairFit<'_, '_, '_> {
         2
     }
 
+    /// A trial plane at or past 90° from the starting normal scores `−1`
+    /// with nothing to linearise, so no step keeps it.
     fn freeze(&self, p: &[f64]) -> (f64, Option<Linearised<PairFrozen>>) {
+        if !self.first.grid.faces_start([p[0], p[1]]) {
+            return (-1.0, None);
+        }
         let (first, second) = self.renders(p);
         let (a, b) = (&first, &second);
         let (score, weights) = self.score_of(a, b);
@@ -636,13 +734,39 @@ impl Objective for PairFit<'_, '_, '_> {
 /// parameter, with the Sobel gradient the fit's steps use as each sample's
 /// gradient ([`GradientRead::Sobel`]); `None` where nothing can be read.
 pub(super) fn normal_matrix<O: Objective>(objective: &O, p: &[f64]) -> Option<DMatrix<f64>> {
-    let (_, frozen) = objective.freeze(p);
-    let (fz, r0) = frozen?;
+    score_and_normal_matrix(objective, p).1
+}
+
+/// `objective`'s score at `p` and the normal matrix of its residual frozen
+/// there ([`normal_matrix`]), both from one render.
+pub(super) fn score_and_normal_matrix<O: Objective>(
+    objective: &O,
+    p: &[f64],
+) -> (f64, Option<DMatrix<f64>>) {
+    let (score, frozen) = objective.freeze(p);
+    let Some((fz, r0)) = frozen else {
+        return (score, None);
+    };
     if r0.is_empty() {
-        return None;
+        return (score, None);
     }
     let j = objective.jacobian(&fz, p, &r0, GradientRead::Sobel);
-    Some(j.tr_mul(&j))
+    (score, Some(j.tr_mul(&j)))
+}
+
+/// The information `information`, about the tilt of a grid's own frame,
+/// carried into the starting frame's tilt by the chart's Jacobian `j`
+/// ([`Grid::start_chart_jacobian`](super::render::Grid::start_chart_jacobian)): `J⁻ᵀ · I · J⁻¹`, the information a tilt
+/// change `δ` of the starting chart carries to first order, since `δ` is
+/// `J⁻¹ δ` in the grid's frame. Zero where `j` cannot be inverted.
+pub(super) fn carried_information(information: &Matrix2<f64>, j: &Matrix2<f64>) -> Matrix2<f64> {
+    match j.try_inverse() {
+        Some(inverse) if inverse.iter().all(|v| v.is_finite()) => {
+            let carried = inverse.transpose() * information * inverse;
+            (carried + carried.transpose()) * 0.5
+        }
+        _ => Matrix2::zeros(),
+    }
 }
 
 /// How the shifts of a fit whose normal matrix is `n`, over `[a, b, s…]`,

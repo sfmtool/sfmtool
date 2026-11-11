@@ -100,10 +100,10 @@ pub use normal::{
     GridPlaneFitModel, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
     GridPlaneOutcome, GridPlanePatchFrame, GridPlanePlane, GridPlaneRay, GridPlaneRender,
     GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit, GrownPlaneAttempt,
-    GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick,
-    GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTry,
-    GrownPlaneTryOutcome, GrownPlaneView, NormalError, NormalEstimate, NormalReport, PieceLayout,
-    BENCH_MIN_CELL_ZNCC,
+    GrownPlaneGridRound, GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair,
+    GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,
+    GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView, NormalError,
+    NormalEstimate, NormalReport, PieceLayout, BENCH_MIN_CELL_ZNCC,
 };
 pub use refine_normals::{
     refine_normals, NormalLeftUnchanged, RefineNormalsError, RefineNormalsOptions,

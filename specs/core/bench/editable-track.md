@@ -3955,16 +3955,19 @@ one dict per observation whose `kind` names the `GrownPlaneView`:
 `"left_out"`), `combined_normal`, `combined_sigma_deg` and `attempts`, each
 with `stage_zncc` (a float64 array), `shift`, `normal`,
 `grid_zncc`, `sigma_deg` (both `NaN` for a growth that stopped early at a
-window stage), `refusal` (`None`, `"under_floor"` or `"stopped_early"`) and
+window stage), `refusal` (`None`, `"under_floor"` or `"stopped_early"`),
 `tilt_start` (`"starting"` or `"combined"`, the plane the growth started
-from). `picks` holds one dict per pick of the selection, with
+from), `stage_turn_deg` (a float64 array, each fitted window stage's turn,
+degrees) and `grid_rounds` (one dict per whole-grid round, with `cap_deg`,
+infinite with no cap, `turn_deg` and `zncc`). `picks` holds one dict per pick of the selection, with
 `observation`, `image`, `angle_deg`, `offset_direction`, `scale_px`,
 `predicted_weak` (`NaN` for a pick of the first rung, made by angle alone),
 `matched`, `rung` (the selection's rung, from 0) and
 `sigma_after_deg` (`NaN` when not matched); `pairs` one per pair of
 views matched against each other, with `observations`, `images`,
 `angle_deg`, `normal`, `relative_shift`, `zncc`, `sigma_deg`, `distance`,
-`kept` and `refusal` (`None`, a `reason` word or `"view_left_out"`). Keypoints and vectors are float64 arrays, and a field the
+`kept`, `refusal` (`None`, a `reason` word or `"view_left_out"`) and
+`grid_rounds`. Keypoints and vectors are float64 arrays, and a field the
 Rust report leaves `None` is `None`. `grown_plane_normal(...,
 record_phases=True)` runs the step with a detailed `Progress` and adds
 `phases` to the report, one dict per phase the step closed, in the order
