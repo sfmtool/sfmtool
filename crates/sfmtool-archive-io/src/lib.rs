@@ -218,7 +218,8 @@ fn decode_zst(
 /// as a stream.
 ///
 /// It is the sum of the sizes the frame headers record, taken only when there
-/// is at least one stored byte, every frame records a size, the total is at
+/// is at least one stored byte, every frame records a size and needs a window
+/// the stream decoder accepts ([`MAX_STREAM_WINDOW_SIZE`]), the total is at
 /// most [`MAX_ZSTD_EXPANSION`] times the stored size, and it equals
 /// `expected_bytes`, the size the caller's metadata gives, where the caller
 /// passes one.
@@ -230,9 +231,75 @@ fn one_call_size(compressed: &[u8], expected_bytes: Option<usize>) -> Option<usi
     // `None` when a frame records no size or the input is not a clean
     // sequence of frames.
     let recorded = zstd::bulk::Decompressor::upper_bound(compressed)?;
+    if !windows_fit_the_stream_decoder(compressed) {
+        return None;
+    }
     let plausible = recorded <= compressed.len().saturating_mul(MAX_ZSTD_EXPANSION);
     let as_expected = expected_bytes.is_none_or(|expected| expected == recorded);
     (plausible && as_expected).then_some(recorded)
+}
+
+/// The largest window the stream decoder accepts: zstd's
+/// `ZSTD_MAXWINDOWSIZE_DEFAULT`, `2^ZSTD_WINDOWLOG_LIMIT_DEFAULT + 1` with a
+/// window log limit of 27. Neither constant is exposed without zstd's
+/// experimental API. A frame needing a larger window is an error on the stream
+/// path ("Frame requires too much memory for decoding"), so it is left to that
+/// path even though the one-call decoder would expand it.
+const MAX_STREAM_WINDOW_SIZE: u64 = (1 << 27) + 1;
+
+/// Whether every frame of `compressed` needs a window the stream decoder
+/// accepts. `false` for anything that is not a clean sequence of zstd and
+/// skippable frames, which then goes to the stream path to be reported.
+///
+/// The window size is read from each frame header as the zstd format
+/// specification gives it: a single-segment frame's window is its content
+/// size, and any other frame's comes from its window descriptor byte, the one
+/// after the frame header descriptor (exponent in the high 5 bits, mantissa in
+/// the low 3).
+fn windows_fit_the_stream_decoder(mut compressed: &[u8]) -> bool {
+    const FRAME_MAGIC: u32 = 0xFD2F_B528;
+    const SKIPPABLE_MAGIC_MASK: u32 = 0xFFFF_FFF0;
+    const SKIPPABLE_MAGIC: u32 = 0x184D_2A50;
+    while !compressed.is_empty() {
+        let Some(magic) = compressed
+            .first_chunk::<4>()
+            .map(|m| u32::from_le_bytes(*m))
+        else {
+            return false;
+        };
+        if magic & SKIPPABLE_MAGIC_MASK != SKIPPABLE_MAGIC {
+            if magic != FRAME_MAGIC {
+                return false;
+            }
+            let Some(&descriptor) = compressed.get(4) else {
+                return false;
+            };
+            let window = if descriptor & 0x20 != 0 {
+                match zstd::zstd_safe::get_frame_content_size(compressed) {
+                    Ok(Some(size)) => size,
+                    _ => return false,
+                }
+            } else {
+                let Some(&window_descriptor) = compressed.get(5) else {
+                    return false;
+                };
+                let window_log = 10 + u32::from(window_descriptor >> 3);
+                let base = 1u64 << window_log;
+                base + (base / 8) * u64::from(window_descriptor & 7)
+            };
+            if window > MAX_STREAM_WINDOW_SIZE {
+                return false;
+            }
+        }
+        let Ok(frame_len) = zstd::zstd_safe::find_frame_compressed_size(compressed) else {
+            return false;
+        };
+        let Some(rest) = compressed.get(frame_len..) else {
+            return false;
+        };
+        compressed = rest;
+    }
+    true
 }
 
 /// The one-call path of [`decode_zst`], or `None` when it does not apply or

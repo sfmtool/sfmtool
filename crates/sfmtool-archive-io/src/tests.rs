@@ -885,3 +885,65 @@ fn section_digests_preserve_big_endian_content_identity() {
         assert_eq!(streamed.finish(), xxh3_128(&old_fold), "{count} sections");
     }
 }
+
+/// A zstd frame made by hand of `blocks` RLE blocks of `block_size` bytes of
+/// `7`, with frame header descriptor `descriptor`, then `window` (the window
+/// descriptor byte, absent from a single-segment frame) and the content size
+/// field `content_size` as written.
+fn rle_frame(
+    descriptor: u8,
+    window: &[u8],
+    content_size: &[u8],
+    blocks: u32,
+    block_size: u32,
+) -> Vec<u8> {
+    let mut frame = 0xFD2F_B528_u32.to_le_bytes().to_vec();
+    frame.push(descriptor);
+    frame.extend_from_slice(window);
+    frame.extend_from_slice(content_size);
+    for i in 0..blocks {
+        let last = u32::from(i + 1 == blocks);
+        let header = last | (1 << 1) | (block_size << 3);
+        frame.extend_from_slice(&header.to_le_bytes()[..3]);
+        frame.push(7);
+    }
+    frame
+}
+
+#[test]
+fn a_frame_needing_a_larger_window_than_the_stream_accepts_gives_the_stream_paths_error() {
+    // Single segment, so the window is the content size: 1032 blocks of
+    // 128 KiB, past the stream decoder's 2^27 + 1.
+    let size = 1032u64 * 128 * 1024;
+    let single = rle_frame(0xE0, &[], &size.to_le_bytes(), 1032, 128 * 1024);
+    // Not single segment, with a window log of 28 and two blocks of
+    // 128 KiB: more than the stream decoder's output buffer, which a frame
+    // must be for the stream decoder to check its window rather than decode
+    // it whole in one step.
+    let windowed_size = 2u32 * 128 * 1024;
+    let windowed = rle_frame(
+        0x80,
+        &[18 << 3],
+        &windowed_size.to_le_bytes(),
+        2,
+        128 * 1024,
+    );
+    for (frame, len) in [(single, size as usize), (windowed, windowed_size as usize)] {
+        assert_eq!(
+            zstd::bulk::Decompressor::upper_bound(&frame),
+            Some(len),
+            "a valid frame header"
+        );
+        assert_eq!(one_call_size(&frame, None), None, "{len} bytes");
+        let expected = decode_zst_stream("e.zst", &frame).unwrap_err().to_string();
+        assert!(expected.contains("too much memory"), "{expected}");
+
+        let mut archive = archive_of("e.zst", &frame);
+        let err = read_zst_entry(&mut archive, "e.zst").unwrap_err();
+        assert_eq!(err.to_string(), expected);
+        let err = read_binary_array::<_, u8>(&mut archive, "e.zst", len).unwrap_err();
+        assert_eq!(err.to_string(), expected);
+        let err = DecodedEntries::read_all(&mut archive).unwrap_err();
+        assert_eq!(err.to_string(), expected);
+    }
+}

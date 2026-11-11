@@ -147,8 +147,10 @@ path find their workspace by one rule.
 **An entry is decompressed into a buffer of its known size.** Each zstd frame
 `zstd_compress` writes records its decompressed size in its header, and a
 format's metadata says how many bytes each binary entry holds. When an entry
-has at least one stored byte, every frame of it records a size, the total is at
-most 32,768 times the stored size (no zstd data expands further: a 4-byte RLE
+has at least one stored byte, every frame of it records a size and needs a
+window the stream decoder accepts (at most 2^27 + 1 bytes, zstd's default
+limit; a single-segment frame's window is its content size, any other frame's
+comes from its window descriptor), the total is at most 32,768 times the stored size (no zstd data expands further: a 4-byte RLE
 block is at most 128 KiB), and it equals the size the caller expects
 (`read_binary_array` and `read_uint128_array` pass the element count times the
 element size; `read_zst_entry` and `DecodedEntries` pass none), the frames are
@@ -379,7 +381,9 @@ stream path's error from every reader. A frame header rewritten to claim 100
 bytes more or fewer than it holds, and an entry missing its last bytes, give
 exactly the stream path's error whatever size the caller expects. A header
 claiming 4 GiB for a few stored bytes, or a caller expecting a size the header
-does not record, gets no one-call size. An element count whose byte size does
+does not record, gets no one-call size. So does a valid frame needing a window
+larger than the stream decoder accepts, single-segment or not, whose stream
+error every reader gives. An element count whose byte size does
 not fit in a `usize` is a `ShapeMismatch`, not an overflow. A recorded stored
 size larger than the central directory's offset reserves no more than that
 offset.
