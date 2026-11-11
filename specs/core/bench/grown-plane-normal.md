@@ -1279,6 +1279,13 @@ proposes them.
   window. Starting from a textured spot elsewhere, with the anchor pinned at the
   keypoint and the tilt searched at stage 1, is proposed in
   [grown-plane-normal-off-anchor-spot-amendment.md](../../drafts/grown-plane-normal-off-anchor-spot-amendment.md).
+- **A working grid turned with the plane.** The working grid and the template
+  are laid once, on the starting square, and every plane is read on that
+  grid's rays, so after a large turn a stage's support is the starting square
+  sheared onto the plane rather than the square the patch will have there.
+  Laying the grid again on the turned square at every fitted stage, with a cap
+  on each stage's turn and whole-grid rounds whose cap shrinks, is proposed in
+  [grown-plane-normal-turned-support-amendment.md](../../drafts/grown-plane-normal-turned-support-amendment.md).
 
 ## Open questions
 
