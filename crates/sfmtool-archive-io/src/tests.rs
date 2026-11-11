@@ -548,6 +548,178 @@ fn corrupt_zst_payload_is_an_invalid_format_error() {
     );
 }
 
+// ── One-call decoding ───────────────────────────────────────────────────
+
+/// An archive of one stored entry whose bytes are `stored`, as they are.
+fn archive_of(name: &str, stored: &[u8]) -> ZipArchive<Cursor<Vec<u8>>> {
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    zip.start_file(
+        name,
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+    )
+    .unwrap();
+    std::io::Write::write_all(&mut zip, stored).unwrap();
+    let buf = zip.finish().unwrap().into_inner();
+    ZipArchive::new(Cursor::new(buf)).unwrap()
+}
+
+/// `len` bytes that zstd compresses, but not to nothing: runs of one symbol
+/// broken by pseudo-random symbols from a four-symbol alphabet.
+fn varied_bytes(len: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    (0..len)
+        .map(|i| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            if i % 64 < 40 {
+                b'a'
+            } else {
+                b'a' + (state % 4) as u8
+            }
+        })
+        .collect()
+}
+
+/// `frame`, one zstd frame, with the content size its header records
+/// rewritten to `size`, in a field of the width the header already has.
+fn with_recorded_size(frame: &[u8], size: u64) -> Vec<u8> {
+    let descriptor = frame[4];
+    let single_segment = descriptor & 0x20 != 0;
+    let dictionary_bytes = [0, 1, 2, 4][usize::from(descriptor & 3)];
+    let at = 5 + usize::from(!single_segment) + dictionary_bytes;
+    let mut out = frame.to_vec();
+    match descriptor >> 6 {
+        0 => {
+            assert!(single_segment, "the frame records no size");
+            out[at] = u8::try_from(size).unwrap();
+        }
+        1 => out[at..at + 2].copy_from_slice(&u16::try_from(size - 256).unwrap().to_le_bytes()),
+        2 => out[at..at + 4].copy_from_slice(&u32::try_from(size).unwrap().to_le_bytes()),
+        _ => out[at..at + 8].copy_from_slice(&size.to_le_bytes()),
+    }
+    assert_eq!(
+        zstd::bulk::Decompressor::upper_bound(&out),
+        Some(usize::try_from(size).unwrap()),
+        "the rewritten header must record {size}"
+    );
+    out
+}
+
+#[test]
+fn one_call_and_stream_decoding_return_the_same_bytes() {
+    // Empty, one short block, one block, and several blocks of 128 KiB.
+    for len in [0, 7, 1000, 300_000] {
+        let payload = varied_bytes(len);
+        let stored = zstd_compress(&payload, LEVEL).unwrap();
+        // The one-call path applies to what `zstd_compress` writes, with or
+        // without a size from the caller, and gives the stream's bytes.
+        assert_eq!(
+            decode_zst_one_call(&stored, Some(len)).as_deref(),
+            Some(payload.as_slice()),
+            "{len} bytes"
+        );
+        assert_eq!(
+            decode_zst_one_call(&stored, None).as_deref(),
+            Some(payload.as_slice()),
+            "{len} bytes"
+        );
+        assert_eq!(decode_zst_stream("e.zst", &stored).unwrap(), payload);
+
+        let mut archive = archive_of("e.zst", &stored);
+        assert_eq!(read_zst_entry(&mut archive, "e.zst").unwrap(), payload);
+        assert_eq!(
+            read_binary_array::<_, u8>(&mut archive, "e.zst", len).unwrap(),
+            payload
+        );
+    }
+}
+
+#[test]
+fn a_frame_that_records_no_size_is_decoded_as_a_stream() {
+    let payload = varied_bytes(5000);
+    // The streaming encoder is not told the length, so the frame header
+    // records none.
+    let stored = zstd::stream::encode_all(payload.as_slice(), LEVEL).unwrap();
+    assert_eq!(one_call_size(&stored, Some(payload.len())), None);
+
+    let mut archive = archive_of("e.zst", &stored);
+    assert_eq!(
+        read_binary_array::<_, u8>(&mut archive, "e.zst", payload.len()).unwrap(),
+        payload
+    );
+}
+
+#[test]
+fn a_recorded_size_that_lies_gives_the_stream_paths_error() {
+    let payload = varied_bytes(1000);
+    let stored = zstd_compress(&payload, LEVEL).unwrap();
+    for claimed in [900, 1100] {
+        let lying = with_recorded_size(&stored, claimed);
+        let expected = decode_zst_stream("e.zst", &lying).unwrap_err().to_string();
+        assert!(expected.contains("e.zst"), "{expected}");
+
+        let mut archive = archive_of("e.zst", &lying);
+        // Told the size the header claims, and the true size.
+        for len in [claimed as usize, payload.len()] {
+            let err = read_binary_array::<_, u8>(&mut archive, "e.zst", len).unwrap_err();
+            assert!(matches!(err, ArchiveIoError::InvalidFormat(_)), "{err}");
+            assert_eq!(err.to_string(), expected, "claimed {claimed}, told {len}");
+        }
+        let err = read_zst_entry(&mut archive, "e.zst").unwrap_err();
+        assert_eq!(err.to_string(), expected);
+    }
+}
+
+#[test]
+fn the_one_call_size_is_bounded_by_the_stored_size_and_the_callers() {
+    let payload = vec![0u8; 100_000];
+    let stored = zstd_compress(&payload, LEVEL).unwrap();
+    assert_eq!(one_call_size(&stored, None), Some(payload.len()));
+    assert_eq!(
+        one_call_size(&stored, Some(payload.len())),
+        Some(payload.len())
+    );
+    // A caller whose metadata gives another size gets the stream path, and
+    // with it the length check's error.
+    assert_eq!(one_call_size(&stored, Some(payload.len() + 1)), None);
+
+    // A few bytes of zstd data cannot expand to 4 GiB, so no buffer that
+    // size is reserved, whatever the caller expects.
+    let lying = with_recorded_size(&stored, u64::from(u32::MAX));
+    assert!(lying.len() * MAX_ZSTD_EXPANSION < u32::MAX as usize);
+    assert_eq!(one_call_size(&lying, None), None);
+    assert_eq!(one_call_size(&lying, Some(u32::MAX as usize)), None);
+
+    let mut archive = archive_of("e.zst", &lying);
+    let err = read_binary_array::<_, u8>(&mut archive, "e.zst", u32::MAX as usize).unwrap_err();
+    assert!(matches!(err, ArchiveIoError::InvalidFormat(_)), "{err}");
+}
+
+#[test]
+fn a_truncated_entry_gives_the_stream_paths_error() {
+    let payload = varied_bytes(300_000);
+    let stored = zstd_compress(&payload, LEVEL).unwrap();
+    let truncated = &stored[..stored.len() - 3];
+    let expected = decode_zst_stream("e.zst", truncated)
+        .unwrap_err()
+        .to_string();
+
+    let mut archive = archive_of("e.zst", truncated);
+    let err = read_binary_array::<_, u8>(&mut archive, "e.zst", payload.len()).unwrap_err();
+    assert!(matches!(err, ArchiveIoError::InvalidFormat(_)), "{err}");
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
+fn an_element_count_too_large_to_hold_is_a_shape_mismatch() {
+    let mut archive = archive_of("e.zst", &zstd_compress(&[0; 16], LEVEL).unwrap());
+    let err = read_binary_array::<_, u64>(&mut archive, "e.zst", usize::MAX / 4).unwrap_err();
+    assert!(matches!(err, ArchiveIoError::ShapeMismatch(_)), "{err}");
+    let err = read_uint128_array(&mut archive, "e.zst", usize::MAX / 8).unwrap_err();
+    assert!(matches!(err, ArchiveIoError::ShapeMismatch(_)), "{err}");
+}
+
 // ── Atomic writes ───────────────────────────────────────────────────────
 
 /// A directory of this test's own under the system temp dir, emptied first so a
