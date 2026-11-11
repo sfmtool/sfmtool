@@ -712,6 +712,27 @@ fn a_truncated_entry_gives_the_stream_paths_error() {
 }
 
 #[test]
+fn an_empty_entry_gives_the_stream_paths_error() {
+    // No stored bytes record no size of zero: they are no frame at all.
+    assert_eq!(one_call_size(&[], None), None);
+    let expected = decode_zst_stream("e.zst", &[]).unwrap_err().to_string();
+    let mut archive = archive_of("e.zst", &[]);
+    let err = read_binary_array::<_, u8>(&mut archive, "e.zst", 0).unwrap_err();
+    assert_eq!(err.to_string(), expected);
+    let err = read_zst_entry(&mut archive, "e.zst").unwrap_err();
+    assert_eq!(err.to_string(), expected);
+    let err = DecodedEntries::read_all(&mut archive).unwrap_err();
+    assert_eq!(err.to_string(), expected);
+}
+
+#[test]
+fn the_stored_bytes_reservation_is_capped_at_the_central_directory() {
+    assert!(stored_buffer(1 << 20, 1000).capacity() < 2000);
+    assert!(stored_buffer(u64::MAX, 1000).capacity() < 2000);
+    assert!(stored_buffer(500, 1000).capacity() >= 500);
+}
+
+#[test]
 fn an_element_count_too_large_to_hold_is_a_shape_mismatch() {
     let mut archive = archive_of("e.zst", &zstd_compress(&[0; 16], LEVEL).unwrap());
     let err = read_binary_array::<_, u64>(&mut archive, "e.zst", usize::MAX / 4).unwrap_err();
