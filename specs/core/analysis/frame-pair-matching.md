@@ -52,10 +52,10 @@ impl FrameFeatures {
         height: u32,
         forest: KdForestParams,
     ) -> Result<Self, FramePairError>;
-    /// The features `read_sift_features` read, with the image size from the
-    /// same file's `read_sift_metadata`.
+    /// The positions and descriptors `read_sift_positions_descriptors` read,
+    /// with the image size from the same file's `read_sift_metadata`.
     pub fn from_sift(
-        features: SiftFeatures,
+        features: SiftPositionsDescriptors,
         metadata: &SiftMetadata,
         forest: KdForestParams,
     ) -> Result<Self, FramePairError>;
@@ -201,11 +201,11 @@ over frames, and none for the step to the next frame.
 ```rust
 use sfmtool_core::analysis::pick_images::{match_frame_pair, FrameFeatures, FramePairOptions};
 use sfmtool_core::features::kdforest::KdForestParams;
-use sfmtool_sift_format::{read_sift_features, read_sift_metadata};
+use sfmtool_sift_format::{read_sift_metadata, read_sift_positions_descriptors};
 
 let frame = |path: &std::path::Path| -> Result<FrameFeatures, Box<dyn std::error::Error>> {
     let (_, metadata, _) = read_sift_metadata(path)?;
-    let features = read_sift_features(path)?;
+    let features = read_sift_positions_descriptors(path)?;
     Ok(FrameFeatures::from_sift(features, &metadata, KdForestParams::balanced())?)
 };
 let a = frame("frames/features/walk_0100.jpg.sift".as_ref())?;

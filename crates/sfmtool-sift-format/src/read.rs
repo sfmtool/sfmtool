@@ -109,6 +109,41 @@ pub fn read_sift_features(path: &Path) -> Result<SiftFeatures, SiftError> {
     })
 }
 
+/// One image's features as descriptor matching reads them: the centers, one
+/// per feature, and the descriptors, [`DESCRIPTOR_DIM`] bytes per feature,
+/// row-major, in feature order.
+pub type SiftPositionsDescriptors = (Vec<[f32; 2]>, Vec<u8>);
+
+/// Read every feature's position and descriptor from a `.sift` file, and
+/// nothing else.
+///
+/// The columns [`read_sift_features`] reads, less the affine shapes and the
+/// content hashes: what a consumer that matches descriptors and measures where
+/// the matches are needs, without decompressing a column it would discard.
+/// The two columns come back with the same values and the same errors as from
+/// [`read_sift_features`]; an error that only the affine shapes entry would
+/// raise is not raised, since that entry is not read.
+///
+/// No `.sift` reader checks the content hashes against the bytes, this one
+/// included; that is [`crate::verify_sift`]'s job.
+pub fn read_sift_positions_descriptors(path: &Path) -> Result<SiftPositionsDescriptors, SiftError> {
+    let file = open_file(path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    check_metadata(&metadata)?;
+    let total = metadata.feature_count as usize;
+
+    let positions_xy: Vec<[f32; 2]> =
+        read_binary_array(&mut archive, &positions_entry_name(total), total)?;
+    let descriptors: Vec<u8> = read_binary_array(
+        &mut archive,
+        &descriptors_entry_name(total),
+        total * DESCRIPTOR_DIM,
+    )?;
+    Ok((positions_xy, descriptors))
+}
+
 /// Read only feature positions from a `.sift` file.
 ///
 /// Returns `(N, 2)` positions as `Vec<[f32; 2]>`. Reads only the positions

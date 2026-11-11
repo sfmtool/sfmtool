@@ -3,7 +3,7 @@
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
-use sfmtool_sift_format::{SiftContentHash, SiftFeatures, SiftMetadata, SIFT_FORMAT_VERSION};
+use sfmtool_sift_format::{SiftMetadata, SiftPositionsDescriptors, SIFT_FORMAT_VERSION};
 
 use super::*;
 
@@ -310,13 +310,8 @@ fn sift_metadata(feature_count: u32) -> SiftMetadata {
     }
 }
 
-fn sift_features(n: usize) -> SiftFeatures {
-    SiftFeatures {
-        content_hash: SiftContentHash::default(),
-        positions_xy: vec![[10.0, 20.0]; n],
-        affine_shapes: vec![[[1.0, 0.0], [0.0, 1.0]]; n],
-        descriptors: vec![7; n * DESCRIPTOR_DIM],
-    }
+fn sift_features(n: usize) -> SiftPositionsDescriptors {
+    (vec![[10.0, 20.0]; n], vec![7; n * DESCRIPTOR_DIM])
 }
 
 #[test]

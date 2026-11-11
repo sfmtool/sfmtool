@@ -13,7 +13,7 @@
 //! values per pair. The forest's squared descriptor distances are `f32`, and
 //! exact: the largest, `128 · 255²`, is below `2²⁴`.
 
-use sfmtool_sift_format::{SiftFeatures, SiftMetadata, DESCRIPTOR_DIM};
+use sfmtool_sift_format::{SiftMetadata, SiftPositionsDescriptors, DESCRIPTOR_DIM};
 
 use super::essential_split::{
     measure_essential_split, EssentialSplitOptions, EssentialSplitOutcome,
@@ -109,8 +109,9 @@ impl FrameFeatures {
         })
     }
 
-    /// The features of a `.sift` file read by `read_sift_features`, with the
-    /// image size from its `read_sift_metadata`.
+    /// The positions and descriptors of a `.sift` file read by
+    /// `read_sift_positions_descriptors`, with the image size from its
+    /// `read_sift_metadata`.
     ///
     /// # Errors
     ///
@@ -118,11 +119,12 @@ impl FrameFeatures {
     /// `features` holds a different number of features than `metadata`
     /// records, which means the two were read from different files.
     pub fn from_sift(
-        features: SiftFeatures,
+        features: SiftPositionsDescriptors,
         metadata: &SiftMetadata,
         forest: KdForestParams,
     ) -> Result<Self, FramePairError> {
-        let n = features.positions_xy.len();
+        let (positions_xy, descriptors) = features;
+        let n = positions_xy.len();
         if n != metadata.feature_count as usize {
             return Err(FramePairError::FeatureArrays {
                 reason: format!(
@@ -132,8 +134,8 @@ impl FrameFeatures {
             });
         }
         Self::new(
-            features.positions_xy,
-            features.descriptors,
+            positions_xy,
+            descriptors,
             metadata.image_width,
             metadata.image_height,
             forest,

@@ -30,7 +30,9 @@ use sfmtool_core::analysis::pick_images::{
 use sfmtool_core::features::kdforest::KdForestParams;
 use sfmtool_core::features::sift::{BuildSiftFilesError, BuildSiftFilesOptions};
 use sfmtool_core::progress::{Event, Progress};
-use sfmtool_sift_format::{read_sift_features, read_sift_metadata, SiftMetadata, DESCRIPTOR_DIM};
+use sfmtool_sift_format::{
+    read_sift_metadata, read_sift_positions_descriptors, SiftMetadata, DESCRIPTOR_DIM,
+};
 
 use crate::csr_args::float_array_f32;
 use crate::fileio::sift::PySiftFile;
@@ -184,7 +186,7 @@ impl PyFrameFeatures {
                     Some(metadata) => metadata,
                     None => read_sift_metadata(&path)?.1,
                 };
-                read_sift_features(&path).map(|features| (features, metadata))
+                read_sift_positions_descriptors(&path).map(|features| (features, metadata))
             })
             .map_err(read_err)?;
         let inner = py

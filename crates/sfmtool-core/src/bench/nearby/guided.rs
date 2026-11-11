@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use nalgebra::Vector3;
-use sfmtool_sift_format::{read_sift_features, SiftError, DESCRIPTOR_DIM};
+use sfmtool_sift_format::{read_sift_positions_descriptors, SiftError, DESCRIPTOR_DIM};
 
 use crate::bench::track_at_pixel::ViewCamera;
 use crate::features::kdforest::ImageKeypoints;
@@ -46,7 +46,8 @@ impl ImageDescriptors {
 
     /// Every descriptor of a `.sift` file.
     pub fn read(sift_path: &Path) -> Result<Self, SiftError> {
-        Ok(Self::new(read_sift_features(sift_path)?.descriptors))
+        let (_, descriptors) = read_sift_positions_descriptors(sift_path)?;
+        Ok(Self::new(descriptors))
     }
 
     /// How many descriptors there are.

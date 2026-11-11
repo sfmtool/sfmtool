@@ -21,7 +21,8 @@ mod write;
 
 pub use read::{
     read_sift, read_sift_features, read_sift_keypoints, read_sift_metadata, read_sift_partial,
-    read_sift_positions, read_sift_thumbnail, SiftKeypoints, SiftThumbnail,
+    read_sift_positions, read_sift_positions_descriptors, read_sift_thumbnail, SiftKeypoints,
+    SiftPositionsDescriptors, SiftThumbnail,
 };
 pub use types::*;
 pub use verify::verify_sift;

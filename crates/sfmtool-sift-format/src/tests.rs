@@ -187,6 +187,117 @@ fn test_partial_read() {
 }
 
 #[test]
+fn test_read_positions_descriptors_reads_what_read_sift_features_reads() {
+    let data = make_test_data();
+    let dir = std::env::temp_dir().join("sift_test_positions_descriptors");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    write_sift(&path, &data, 3).unwrap();
+
+    let (positions_xy, descriptors) = read_sift_positions_descriptors(&path).unwrap();
+    let features = read_sift_features(&path).unwrap();
+    assert_eq!(positions_xy, features.positions_xy);
+    assert_eq!(descriptors, features.descriptors);
+    // And both are what was written.
+    assert_eq!(
+        positions_xy.as_flattened(),
+        data.positions_xy.as_slice().unwrap()
+    );
+    assert_eq!(descriptors, data.descriptors.as_slice().unwrap());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Copy the `.sift` archive at `from` to `to`, storing `stored` as the raw
+/// bytes of the entry `name` in place of its own.
+fn replace_entry(from: &std::path::Path, to: &std::path::Path, name: &str, stored: &[u8]) {
+    use std::io::{Read, Write};
+    let mut source = zip::ZipArchive::new(std::fs::File::open(from).unwrap()).unwrap();
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(to).unwrap());
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for i in 0..source.len() {
+        let mut entry = source.by_index(i).unwrap();
+        let entry_name = entry.name().unwrap().into_owned();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        zip.start_file(entry_name.as_str(), options).unwrap();
+        zip.write_all(if entry_name == name { stored } else { &bytes })
+            .unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+/// The stored (compressed) bytes of the entry `name` of the archive at `path`.
+fn stored_entry(path: &std::path::Path, name: &str) -> Vec<u8> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let mut bytes = Vec::new();
+    archive
+        .by_name(name)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    bytes
+}
+
+#[test]
+fn test_corrupt_feature_entries_are_errors() {
+    let data = make_test_data();
+    let n = data.metadata.feature_count as usize;
+    let dir = std::env::temp_dir().join("sift_test_corrupt_entries");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("test.sift");
+    write_sift(&path, &data, 3).unwrap();
+
+    // A truncated descriptors entry is an error naming the entry, the same
+    // error from both readers that read it.
+    let descriptors = crate::types::descriptors_entry_name(n);
+    let stored = stored_entry(&path, &descriptors);
+    let truncated = dir.join("truncated.sift");
+    replace_entry(&path, &truncated, &descriptors, &stored[..stored.len() - 3]);
+    let err = read_sift_positions_descriptors(&truncated).unwrap_err();
+    assert!(matches!(err, SiftError::InvalidFormat(_)), "{err}");
+    assert!(err.to_string().contains(&descriptors), "{err}");
+    assert_eq!(
+        err.to_string(),
+        read_sift_features(&truncated).err().unwrap().to_string()
+    );
+
+    // A descriptors entry holding one feature too few is the length check's
+    // error.
+    let short = dir.join("short.sift");
+    let one_fewer = sfmtool_archive_io::zstd_compress(
+        &data.descriptors.as_slice().unwrap()[DESCRIPTOR_DIM..],
+        3,
+    )
+    .unwrap();
+    replace_entry(&path, &short, &descriptors, &one_fewer);
+    let err = read_sift_positions_descriptors(&short).unwrap_err();
+    assert!(matches!(err, SiftError::ShapeMismatch(_)), "{err}");
+    assert_eq!(
+        err.to_string(),
+        read_sift_features(&short).err().unwrap().to_string()
+    );
+
+    // A corrupt affine shapes entry fails the reader that reads it, and not
+    // the one that skips it.
+    let affine = crate::types::affine_shapes_entry_name(n);
+    let bad_affine = dir.join("bad_affine.sift");
+    replace_entry(&path, &bad_affine, &affine, b"not a zstd frame");
+    let err = read_sift_features(&bad_affine).err().unwrap();
+    assert!(err.to_string().contains(&affine), "{err}");
+    let (positions_xy, descriptors) = read_sift_positions_descriptors(&bad_affine).unwrap();
+    assert_eq!(
+        positions_xy.as_flattened(),
+        data.positions_xy.as_slice().unwrap()
+    );
+    assert_eq!(descriptors, data.descriptors.as_slice().unwrap());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_partial_read_oversize() {
     let data = make_test_data();
     let dir = std::env::temp_dir().join("sift_test_partial_over");
@@ -308,6 +419,7 @@ fn test_read_rejects_unsupported_versions() {
             read_sift_positions(&path, 2).err(),
             read_sift_keypoints(&path, 2).err(),
             read_sift_features(&path).err(),
+            read_sift_positions_descriptors(&path).err(),
             read_sift_thumbnail(&path).err(),
             read_sift_metadata(&path).err(),
         ] {

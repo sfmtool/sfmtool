@@ -87,7 +87,7 @@ pub(super) fn assert_splits_are_those_of_a_second_match(
     let features = |frame: usize| {
         let path = &run.sequences[0].frames[frame].images[0].sift_path;
         let (_, metadata, _) = sfmtool_sift_format::read_sift_metadata(path).expect("metadata");
-        let sift = sfmtool_sift_format::read_sift_features(path).expect("features");
+        let sift = sfmtool_sift_format::read_sift_positions_descriptors(path).expect("features");
         FrameFeatures::from_sift(sift, &metadata, options.forest).expect("a forest")
     };
     let steps = &run.walk(0).steps;
