@@ -5,9 +5,9 @@ ground truths; the proposal is prototyped in Python, not in the step, and is
 not decided. The settings' defaults are first values.
 
 Amends: [core/bench/grown-plane-normal.md](../core/bench/grown-plane-normal.md)
-§ "The working grid", § "Near to far within a view", § "Combining the views'
-planes", § "Wide pairs", § "The selection" (the views not picked),
-§ "The plane's precision" and § "Parameters".
+§ "One plane shared by all views" (the working grid), § "Near to far within a
+view", § "Combining the views' planes", § "Wide pairs", § "The selection" (the
+views not picked), § "The plane's precision" and § "Parameters".
 
 ## Purpose
 
@@ -136,8 +136,8 @@ normals, `d_r = p_r − p_{r−1}` in the world frame, `p_0` being the normal of
 plane the rounds start from (the last window stage's end).
 
 - The first round's cap is `stage_turn_cap_deg`.
-- After round `r`, when `d_r · d_{r−1} < 0` (the round turned back against the
-  one before), the cap halves: `c_{r+1} = c_r / 2`. Otherwise
+- After round `r`, from the second round on, when `d_r · d_{r−1} < 0` (the
+  round turned back against the one before), the cap halves: `c_{r+1} = c_r / 2`. Otherwise
   `c_{r+1} = c_r`.
 - The rounds stop after a round when the next cap would be under
   `min_stage_turn_cap_deg` (0.5°), when the round turned less than half of
@@ -225,7 +225,8 @@ The starting chart is not uniform in angle: at a turn `θ` from `n₀`, a unit o
 in it as if a tilt unit were a radian is larger than the angular σ there, by
 8.5× along the turn at 70°. That is so today, since today's information is
 read in this chart at the estimate's plane; carrying the turned frame's
-information into it reproduces today's σ, not a better one. Whether σ should be
+information into it gives σ in the same chart, with the same distortion, not
+a better one. Whether σ should be
 read in a frame at the combined plane is an open question below, since it moves
 the weak-turn rule's calibration.
 
@@ -238,16 +239,18 @@ estimate does.
 A view's shift is moved to another plane by its own normal matrix,
 `s = sₑ − N_ss⁻¹ N_st δ` (`shift_response` in
 [grown_plane/solve.rs](../../crates/sfmtool-core/src/bench/normal/grown_plane/solve.rs)).
-`N` is read in the estimate's own frame, so `δ` is the target plane's tilt in
-that frame less the estimate's own:
+`N` is read in the frame of the grid the estimate was read on, with normal
+`fₑ` and axes `uₑ, vₑ`, so `δ` is the target plane's tilt in that frame less
+the estimate's own:
 
 ```text
-cₑ(m) = ((m·uₑ)/(m·nₑ), (m·vₑ)/(m·nₑ))
+cₑ(m) = ((m·uₑ)/(m·fₑ), (m·vₑ)/(m·fₑ))
 δ     = cₑ(m_target) − cₑ(nₑ)
 ```
 
-With turned support `cₑ(nₑ) = 0`; with it off, `cₑ` is the starting chart and
-`δ = t − tₑ`, today's rule. The exact chart map is used rather than `J⁻¹`
+With turned support that grid is laid at the estimate's plane, so `fₑ = nₑ` and
+`cₑ(nₑ) = 0`; with it off the frame is the starting frame, `cₑ` is the
+starting chart and `δ = t − tₑ`, today's rule. The exact chart map is used rather than `J⁻¹`
 applied to the starting-chart difference, since it costs as little and is
 right at any distance. A target at 90° or more from `nₑ` leaves the shift
 unmoved. The shift itself needs no conversion between grids (§ "Turned support
@@ -284,9 +287,9 @@ In [grown_plane/solve.rs](../../crates/sfmtool-core/src/bench/normal/grown_plane
 - `Iteration` gains the disc's radius in tilt units, `Option<f64>`, `None`
   for no disc. `maximise` moves each trial point's tilt onto the disc before
   freezing it. A fit with the tilt held has no tilt entries and ignores it.
-- `ViewFit` and `PairFit` take the grid's template and live cells from the laid
-  grid they are given (today they take `reference` and `live` from the one grid),
-  and score a trial plane at or past 90° from `n₀` as `−1`.
+- `ViewFit` takes the template and the live cells, and `PairFit` the live
+  cells, from the laid grid they are given (today `reference` and `live` come
+  from the one grid), and both score a trial plane at or past 90° from `n₀` as `−1`.
 - A function that returns both the robust score and the normal matrix from one
   render, for a growth's and a pair's final reading.
 - The round schedule (caps, reversal, stop) is a small pure function of the
@@ -488,8 +491,8 @@ What the implementation's tests should show:
   sign halve the cap each round and stop once it would fall under 0.5°; turns
   that keep one direction keep the cap and stop at `max_grid_rounds`; a round
   that turns under 0.25° stops the rounds.
-- **The old step.** With `turned_support` off, every attempt has one round
-  with an infinite cap, `grid_zncc` equals the last entry of `stage_zncc`, and
+- **The old step.** With `turned_support` off, every attempt that reached the
+  whole-grid stage has one round with an infinite cap, `grid_zncc` equals the last entry of `stage_zncc`, and
   every test of the standing spec passes. Once, on the ground truths' sweep,
   the implementation checks that the step with `turned_support` off gives the
   same tracks and the same reports, the new fields aside, as the step before
