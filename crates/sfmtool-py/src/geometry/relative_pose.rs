@@ -19,7 +19,7 @@ use pyo3::types::PyDict;
 use nalgebra::{Matrix3, Vector3};
 use sfmtool_core::geometry::relative_pose::{
     estimate_essential_rays as core_essential, fit_ray_rotation as core_rotation, EpipolarSide,
-    RayEssentialOptions, RayRotationOptions,
+    RayEssentialOptions, RayRotationOptions, MAX_RAY_SAMPLES,
 };
 
 /// Read an (N, 3) float64 array of rays, normalizing each to unit length.
@@ -67,6 +67,18 @@ fn parse_side(name: &str) -> PyResult<EpipolarSide> {
     }
 }
 
+/// Refuse a sample count above `MAX_RAY_SAMPLES`, for which the estimators
+/// draw nothing and return `None`, so that a count too large reads as an error
+/// rather than as no consensus.
+fn check_samples(samples: usize) -> PyResult<()> {
+    if samples > MAX_RAY_SAMPLES {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "samples must be at most {MAX_RAY_SAMPLES}, got {samples}"
+        )));
+    }
+    Ok(())
+}
+
 fn check_same_length(a: usize, b: usize) -> PyResult<()> {
     if a != b {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -86,7 +98,8 @@ fn check_same_length(a: usize, b: usize) -> PyResult<()> {
 ///         Derive it from a pixel tolerance through the camera map's local
 ///         ``dr/dtheta`` (``tol_px / f`` for an equidistant map).
 ///     min_inliers: Reject a consensus below this (default 12).
-///     samples: Minimal samples drawn, 8 indexes each (default 512).
+///     samples: Minimal samples drawn, 8 indexes each (default 512, at most
+///         65,536).
 ///     seed: SplitMix64 sampler seed; same inputs + seed => bit-identical
 ///         output (default 0).
 ///     side: ``"both"`` (default, the larger of the two one-sided angles),
@@ -122,6 +135,7 @@ pub fn estimate_essential_rays(
     let r1 = read_rays(&rays1, "rays1")?;
     let r2 = read_rays(&rays2, "rays2")?;
     check_same_length(r1.len(), r2.len())?;
+    check_samples(samples)?;
     let options = RayEssentialOptions {
         max_angle_rad,
         min_inliers,
@@ -152,7 +166,8 @@ pub fn estimate_essential_rays(
 ///     max_angle_rad: Consensus bound on the angle between a rotated ray and
 ///         its partner.
 ///     min_inliers: Reject a consensus below this (default 20).
-///     samples: Minimal samples drawn, 3 indexes each (default 512).
+///     samples: Minimal samples drawn, 3 indexes each (default 512, at most
+///         65,536).
 ///     seed: SplitMix64 sampler seed (default 0).
 ///
 /// Returns:
@@ -173,6 +188,7 @@ pub fn fit_ray_rotation(
     let r1 = read_rays(&rays1, "rays1")?;
     let r2 = read_rays(&rays2, "rays2")?;
     check_same_length(r1.len(), r2.len())?;
+    check_samples(samples)?;
     let options = RayRotationOptions {
         max_angle_rad,
         min_inliers,

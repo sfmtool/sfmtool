@@ -344,3 +344,70 @@ fn from_sift_refuses_features_and_metadata_of_different_counts() {
     assert!(matches!(err, FramePairError::FeatureArrays { .. }), "{err}");
     assert!(err.to_string().contains("records 4"), "{err}");
 }
+
+fn camera(width: u32, height: u32) -> crate::camera::CameraIntrinsics {
+    crate::camera::CameraIntrinsics {
+        model: crate::camera::CameraModel::SimplePinhole {
+            focal_length: 700.0,
+            principal_point_x: f64::from(width) / 2.0,
+            principal_point_y: f64::from(height) / 2.0,
+        },
+        width,
+        height,
+        rolling_shutter: None,
+    }
+}
+
+#[test]
+fn a_camera_adds_the_essential_split_of_the_matches() {
+    // The second frame is the first turned 5° about the vertical axis.
+    let camera = camera(WIDTH, HEIGHT);
+    let turn = crate::geometry::rotation::axis_angle_to_rotation_matrix(
+        &nalgebra::Vector3::y(),
+        5f64.to_radians(),
+    );
+    let mut rng = StdRng::seed_from_u64(12);
+    let positions = random_pixels(&mut rng, 400, 1.0);
+    let (a, b) = mapped_pair(&mut rng, positions, |p| {
+        let ray = turn * nalgebra::Vector3::from(camera.pixel_to_ray(p[0], p[1]));
+        camera
+            .ray_to_pixel([ray.x, ray.y, ray.z])
+            .map(|(u, v)| [u, v])
+    });
+    let without = match_frame_pair(&a, &b, &FramePairOptions::default()).unwrap();
+    assert_eq!(without.essential_split, None);
+    let options = FramePairOptions {
+        essential_split: Some(EssentialSplitOptions::new(camera.clone())),
+        ..FramePairOptions::default()
+    };
+    let with = match_frame_pair(&a, &b, &options).unwrap();
+    assert_eq!(
+        (with.matches, with.step_percent),
+        (without.matches, without.step_percent)
+    );
+    let Some(EssentialSplitOutcome::Measured(split)) = with.essential_split else {
+        panic!("not measured: {:?}", with.essential_split);
+    };
+    assert_eq!(split.matches, with.matches);
+    assert!((split.rotation_deg - 5.0).abs() < 0.01, "{split:?}");
+    assert!(split.parallax_p90_deg < 0.01, "{split:?}");
+
+    // A camera of another size than the frames is refused.
+    let options = FramePairOptions {
+        essential_split: Some(EssentialSplitOptions::new(
+            crate::camera::CameraIntrinsics {
+                width: WIDTH / 2,
+                height: HEIGHT / 2,
+                ..camera
+            },
+        )),
+        ..FramePairOptions::default()
+    };
+    assert_eq!(
+        match_frame_pair(&a, &b, &options).unwrap_err(),
+        FramePairError::CameraSize {
+            camera: (WIDTH / 2, HEIGHT / 2),
+            frames: (WIDTH, HEIGHT)
+        }
+    );
+}

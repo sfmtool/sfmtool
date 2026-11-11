@@ -13,11 +13,15 @@
 use std::collections::HashMap;
 
 use sfmtool_sift_format::{
-    read_sift_features, read_sift_metadata, SiftError, SiftMetadata, SIFT_READINGS_VERSION,
+    read_sift_features, read_sift_metadata, SiftError, SiftMetadata, DESCRIPTOR_DIM,
+    SIFT_READINGS_VERSION,
 };
 
 use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
-use super::frame_pair::{match_frame_pair, FrameFeatures, FramePairStats};
+use super::essential_split::{EssentialSplitOptions, EssentialSplitOutcome};
+use super::frame_pair::{
+    match_frame_pair, FrameFeatures, FramePairError, FramePairOptions, FramePairStats,
+};
 use super::report::MeasuredPair;
 use super::source::FrameSource;
 use crate::features::sift::ImageReadings;
@@ -155,6 +159,46 @@ impl<'a> Frames<'a> {
         &self.read
     }
 
+    /// How many frames of sequence `sequence` have been read.
+    pub(super) fn read_count(&self, sequence: usize) -> usize {
+        self.index[sequence].iter().flatten().count()
+    }
+
+    /// The width and height of a frame read's reference image.
+    pub(super) fn image_size(&self, id: FrameId) -> (u32, u32) {
+        let i = self.index[id.sequence][id.frame].expect("the frame was read");
+        let metadata = &self.read[i].metadata;
+        (metadata.image_width, metadata.image_height)
+    }
+
+    /// The positions and descriptors of the first `count` features of a
+    /// frame's reference image, or all of them when it has fewer.
+    pub(super) fn first_features(
+        &self,
+        id: FrameId,
+        count: usize,
+    ) -> Result<(Vec<[f32; 2]>, Vec<u8>), PickImagesError> {
+        let path = &self.sequences[id.sequence].frames[id.frame].images[0].sift_path;
+        let mut features =
+            read_sift_features(path).map_err(|source| PickImagesError::ReadSift {
+                path: path.clone(),
+                source,
+            })?;
+        let n = count.min(features.positions_xy.len());
+        if features.descriptors.len() < n * DESCRIPTOR_DIM {
+            return Err(PickImagesError::ReadSift {
+                path: path.clone(),
+                source: SiftError::InvalidFormat(format!(
+                    "{} descriptor bytes for {n} features",
+                    features.descriptors.len()
+                )),
+            });
+        }
+        features.positions_xy.truncate(n);
+        features.descriptors.truncate(n * DESCRIPTOR_DIM);
+        Ok((features.positions_xy, features.descriptors))
+    }
+
     /// The features of a frame read: its reference sensor's, with the forest
     /// built.
     pub(super) fn features(&self, id: FrameId) -> Result<FrameFeatures, PickImagesError> {
@@ -192,19 +236,8 @@ impl<'a> Frames<'a> {
             return Ok(stats.clone());
         }
         progress.check_cancel()?;
-        let stats = match_frame_pair(fa, fb, &self.options.pair).map_err(|error| {
-            let image = |id: FrameId| {
-                self.sequences[id.sequence].frames[id.frame].images[0]
-                    .image_path
-                    .clone()
-            };
-            PickImagesError::Pair {
-                a,
-                b,
-                images: Box::new([image(a), image(b)]),
-                error,
-            }
-        })?;
+        let stats = match_frame_pair(fa, fb, &self.options.pair)
+            .map_err(|error| self.pair_error(a, b, error))?;
         self.pair_index.insert((a, b), self.pairs.len());
         self.pairs.push(MeasuredPair {
             a,
@@ -213,6 +246,47 @@ impl<'a> Frames<'a> {
         });
         progress.value("pairs_matched", self.pairs.len() as f64);
         Ok(stats)
+    }
+
+    /// The essential split of `a` with `b`, whose features are `fa` and
+    /// `fb`, measured with `split`: the pair is matched again with the split
+    /// set, and its statistics are not kept, so the pairs of the report stay
+    /// the ones the walk matched to decide. Checks for cancellation first.
+    pub(super) fn measure_split(
+        &self,
+        a: FrameId,
+        fa: &FrameFeatures,
+        b: FrameId,
+        fb: &FrameFeatures,
+        split: &EssentialSplitOptions,
+        progress: &Progress,
+    ) -> Result<EssentialSplitOutcome, PickImagesError> {
+        progress.check_cancel()?;
+        let options = FramePairOptions {
+            essential_split: Some(split.clone()),
+            ..self.options.pair.clone()
+        };
+        let stats =
+            match_frame_pair(fa, fb, &options).map_err(|error| self.pair_error(a, b, error))?;
+        Ok(stats
+            .essential_split
+            .expect("a pair matched with a split's options measures one"))
+    }
+
+    /// The error of a pair that could not be matched, naming the reference
+    /// sensor's image of each frame.
+    fn pair_error(&self, a: FrameId, b: FrameId, error: FramePairError) -> PickImagesError {
+        let image = |id: FrameId| {
+            self.sequences[id.sequence].frames[id.frame].images[0]
+                .image_path
+                .clone()
+        };
+        PickImagesError::Pair {
+            a,
+            b,
+            images: Box::new([image(a), image(b)]),
+            error,
+        }
     }
 
     /// Stop the source's work and return every frame it wrote `.sift` files

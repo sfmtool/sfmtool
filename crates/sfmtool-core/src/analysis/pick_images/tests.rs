@@ -7,6 +7,8 @@
 //! to prefetch or wait for.
 
 mod capture;
+mod density;
+mod pilot;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -24,9 +26,14 @@ use crate::progress::Progress;
 /// real frame's features.
 const FLOOR: usize = 60;
 
+/// The options of the walk tests: the defaults with the match floor at
+/// [`FLOOR`] and the pilot vote off, so that a sequence with no camera is
+/// walked without the local density term and no test of the walk pays for a
+/// pilot it does not assert on. The pilot's tests use the default, on.
 fn options() -> PickImagesOptions {
     PickImagesOptions {
         min_step_matches: FLOOR,
+        pilot_vote: false,
         ..PickImagesOptions::default()
     }
 }
@@ -953,6 +960,27 @@ fn every_option_out_of_range_is_refused() {
             },
         ),
         (
+            "max_density_gain",
+            PickImagesOptions {
+                max_density_gain: 0.99,
+                ..options()
+            },
+        ),
+        (
+            "max_density_gain",
+            PickImagesOptions {
+                max_density_gain: f64::NAN,
+                ..options()
+            },
+        ),
+        (
+            "max_density_gain",
+            PickImagesOptions {
+                max_density_gain: f64::INFINITY,
+                ..options()
+            },
+        ),
+        (
             "step_band",
             PickImagesOptions {
                 step_band: 0.0,
@@ -1012,6 +1040,7 @@ fn every_option_out_of_range_is_refused() {
     // The bounds themselves are accepted.
     let edges = PickImagesOptions {
         min_step_matches: 1,
+        max_density_gain: 1.0,
         ..options()
     };
     assert!(run_with(&[&synth], &edges, Fault::None, None)

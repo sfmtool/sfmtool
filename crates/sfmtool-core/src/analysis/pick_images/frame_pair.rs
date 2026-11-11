@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! One frame's features with its forest, and the statistics of a pair of
-//! frames: the number of mutual matches and the step. See
+//! frames: the number of mutual matches, the step and, given a camera, the
+//! essential split. See
 //! `specs/core/analysis/frame-pair-matching.md`.
 //!
 //! Precision: positions stay `f32`, as a `.sift` file stores them, and
@@ -14,6 +15,9 @@
 
 use sfmtool_sift_format::{SiftFeatures, SiftMetadata, DESCRIPTOR_DIM};
 
+use super::essential_split::{
+    measure_essential_split, EssentialSplitOptions, EssentialSplitOutcome,
+};
 use crate::features::kdforest::{KdForestParams, KdForestU8};
 use crate::numeric::median;
 use crate::progress::Progress;
@@ -167,6 +171,9 @@ pub struct FramePairOptions {
     /// The per-query budget of distance computations, or `None` for the
     /// queried forest's own `max_leaf_checks`.
     pub max_leaf_checks: Option<usize>,
+    /// With a camera, also measure each pair's essential split
+    /// ([`measure_essential_split`]); `None` measures nothing more.
+    pub essential_split: Option<EssentialSplitOptions>,
 }
 
 impl Default for FramePairOptions {
@@ -174,6 +181,7 @@ impl Default for FramePairOptions {
         Self {
             ratio: 0.8,
             max_leaf_checks: None,
+            essential_split: None,
         }
     }
 }
@@ -208,6 +216,9 @@ impl FramePairOptions {
                 reason: format!("must be in (0, 1], got {}", self.ratio),
             });
         }
+        if let Some(split) = &self.essential_split {
+            split.validate()?;
+        }
         Ok(())
     }
 }
@@ -215,9 +226,9 @@ impl FramePairOptions {
 /// Why [`FrameFeatures::new`] or [`match_frame_pair`] refused its input.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FramePairError {
-    /// An option out of range: a ratio outside `(0, 1]`, or a forest
-    /// parameter of 0, which the forest's build asserts against. `name` is
-    /// the field.
+    /// An option out of range: a ratio outside `(0, 1]`, a forest parameter
+    /// of 0, which the forest's build asserts against, or an essential split
+    /// option out of range, its camera among them. `name` is the field.
     Options { name: &'static str, reason: String },
     /// The descriptors are not `128 × positions_xy.len()` bytes, a position is
     /// not finite, there are more features than a forest indexes, or a
@@ -228,6 +239,12 @@ pub enum FramePairError {
     /// The two frames' images differ in size, so one step has no single long
     /// side to be measured against.
     SizeMismatch { a: (u32, u32), b: (u32, u32) },
+    /// The essential split's camera is not of the frames' image size, so its
+    /// pixels are not the frames' pixels.
+    CameraSize {
+        camera: (u32, u32),
+        frames: (u32, u32),
+    },
 }
 
 impl std::fmt::Display for FramePairError {
@@ -245,6 +262,11 @@ impl std::fmt::Display for FramePairError {
                  has no single long side to be measured against",
                 a.0, a.1, b.0, b.1
             ),
+            Self::CameraSize { camera, frames } => write!(
+                f,
+                "the essential split's camera is {} x {} but the frames are {} x {}",
+                camera.0, camera.1, frames.0, frames.1
+            ),
         }
     }
 }
@@ -259,18 +281,25 @@ pub struct FramePairStats {
     /// The median length of the mutual matches' displacements, in percent of
     /// the image's long side. NaN when there are no matches.
     pub step_percent: f64,
+    /// The essential split of the matches, or why none was measured; `None`
+    /// when the options gave no camera, so none was attempted.
+    pub essential_split: Option<EssentialSplitOutcome>,
 }
 
 /// Match two frames and measure the motion between them.
 ///
 /// The matches are the mutual best matches of two `k = 2` queries, each
 /// frame's descriptors against the other's forest, that pass the ratio test
-/// both ways. The step is the median length of their displacements.
+/// both ways. The step is the median length of their displacements. With
+/// [`FramePairOptions::essential_split`] set, the matches' essential split is
+/// measured too ([`measure_essential_split`]).
 ///
 /// # Errors
 ///
-/// [`FramePairError::Options`] for an option out of range and
-/// [`FramePairError::SizeMismatch`] when the frames' images differ in size.
+/// [`FramePairError::Options`] for an option out of range,
+/// [`FramePairError::SizeMismatch`] when the frames' images differ in size and
+/// [`FramePairError::CameraSize`] when the essential split's camera is of
+/// another size than the frames.
 pub fn match_frame_pair(
     a: &FrameFeatures,
     b: &FrameFeatures,
@@ -283,6 +312,15 @@ pub fn match_frame_pair(
             b: (b.width, b.height),
         });
     }
+    if let Some(split) = &options.essential_split {
+        let camera = (split.camera.width, split.camera.height);
+        if camera != (a.width, a.height) {
+            return Err(FramePairError::CameraSize {
+                camera,
+                frames: (a.width, a.height),
+            });
+        }
+    }
     let pairs = mutual_matches(a, b, options);
     let long_side = f64::from(a.width.max(a.height));
     let lengths: Vec<f64> = pairs
@@ -292,9 +330,20 @@ pub fn match_frame_pair(
             (q[0] - p[0]).hypot(q[1] - p[1])
         })
         .collect();
+    let essential_split = match &options.essential_split {
+        None => None,
+        Some(split) => {
+            let (points_a, points_b): (Vec<[f64; 2]>, Vec<[f64; 2]>) = pairs
+                .iter()
+                .map(|&(i, j)| (widen(a.positions_xy[i]), widen(b.positions_xy[j])))
+                .unzip();
+            Some(measure_essential_split(&points_a, &points_b, split)?)
+        }
+    };
     Ok(FramePairStats {
         matches: pairs.len(),
         step_percent: 100.0 * median(&lengths) / long_side,
+        essential_split,
     })
 }
 

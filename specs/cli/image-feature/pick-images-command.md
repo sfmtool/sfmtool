@@ -8,7 +8,10 @@ so that the image moves by about a tenth of its width from one to the next,
 but no further apart than keeps 600 mutual matches between consecutive
 chosen frames, sharper ones in place of frames blurred against their
 neighbours, more frames where the capture is hard to follow and fewer where
-it is easy. A capture whose neighbouring frames already match with fewer than
+it is easy, and more frames where a near foreground passes in front of a
+distant view, measured with the camera of a `.camrig` that covers the frames
+or, with none, the camera a focal vote finds on the first frames chosen. A
+capture whose neighbouring frames already match with fewer than
 that, such as frames already subsampled from a video, keeps every frame. It prints what it found,
 and when given a name it writes the frames it chose
 as a named image list ([workspace/named-image-lists.md](../../workspace/named-image-lists.md)),
@@ -46,17 +49,26 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--force` | off | Replace a list of that name if the workspace already defines one. Only with `--write-list`. |
 | `-r/--range` | | A range of file numbers, or the name of a named image list with an optional slice, that narrows the input ([the shared `-r/--range` option](../README.md#the-shared--r--range-option)). |
 | `--named-image-list NAME` | | Read the input frames from this named image list, in place of `PATHS`. |
-| `--target-step PERCENT` | `10` | The step to aim for between two chosen frames: the median feature displacement, in percent of the image's long side. |
+| `--target-step PERCENT` | `10` | The base target: the step to aim for between two chosen frames, the median feature displacement in percent of the image's long side, before the local density term divides it by its gain. |
+| `--max-density-gain GAIN` | `3` | The most the local density term divides the base target by, where the steps chosen show a near foreground in front of a distant view ([core/analysis/pick-images.md § The local density term](../../core/analysis/pick-images.md#the-local-density-term)). The term measures with the camera of the `.camrig` that covers a sequence's frames, or, with none, the pilot vote's ([Cameras](#cameras)). `1` turns it off and runs no pilot vote. Finite and at least 1. |
 | `--step-band FRACTION` | `0.3` | How far a step may be from the target and still be accepted: within `target × (1 ± FRACTION)`, 7% to 13% at the defaults. |
 | `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
 | `--min-step-matches N` | `600` | The match floor: a step past the next frame keeps at least `N` mutual matches, whatever its step. The step to the next frame is always taken, so a capture whose neighbouring frames match with fewer keeps every frame ([core/analysis/pick-images.md § The match floor](../../core/analysis/pick-images.md#the-match-floor)). At least 1. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 
-The four numeric options reach `sfmtool.analysis.pick_images` unchanged, as
-`target_step_percent`, `step_band`, `neighbour_blur_ratio` and
-`min_step_matches`, which checks their ranges before
+The five numeric options reach `sfmtool.analysis.pick_images` unchanged, as
+`target_step_percent`, `max_density_gain`, `step_band`,
+`neighbour_blur_ratio` and `min_step_matches`, which checks their ranges before
 it reads anything; a value out of range is an error with the binding's message
 ([core/analysis/pick-images.md § Parameters](../../core/analysis/pick-images.md#parameters)).
+
+**One option for the local density term.** A maximum gain of 1 leaves every
+target at the base target and measures no essential split, so it is the way
+to turn the term off, and no separate switch says the same thing twice. It
+also runs no pilot vote, whose camera only the term reads. There is no
+option to skip the pilot alone: a run with no `.camrig` and the term on needs
+a camera, and the pilot is where it comes from; a capture whose camera is
+known gets it from a `.camrig`, which the pilot never overrides.
 
 **Why `--write-list` and not a positional name or `--name`.** On the commands
 that take it, `--named-image-list NAME` names a list to **read**, and this
@@ -129,13 +141,14 @@ In order, it:
    ([The version 1 refusals](#the-version-1-refusals)).
 3. With `--write-list` and no `--force`, refuses a name the lists file already
    defines.
-4. Finds the rigs, from the `.camrig` files covering the input files,
-   groups the files into sequences and prints them.
-5. With the `sfmtool` feature tool, calls `sfmtool.analysis.pick_images`
-   with one `CaptureSequence` per sequence and the workspace's feature
-   options, which extracts the `.sift` files itself; with another tool,
-   extracts every input frame first and calls it to read them
-   ([Extraction](#extraction)).
+4. Finds the rigs and cameras, from the `.camrig` files covering the input
+   files, groups the files into sequences, each with the camera of its
+   reference sensor, and prints them.
+5. Calls `sfmtool.analysis.pick_images` with one `CaptureSequence` per
+   sequence and its pilot vote at the default, on: with the `sfmtool`
+   feature tool, with the workspace's feature options, so that it extracts
+   the `.sift` files itself; with another tool, after extracting every input
+   frame, to read them ([Extraction](#extraction)).
 6. Prints the report, writes the list when a name was given, and writes the
    JSON file when asked.
 
@@ -218,8 +231,48 @@ folder is walked as a rig of that sensor alone.
 Each frame becomes one `CaptureFrame` with its number, each image a
 `CaptureImage` with the path its `.sift` file has under the workspace's
 `feature_prefix_dir`, and each sequence one `CaptureSequence` whose patterns
-are the ones its list entries use. The sequences are walked one after
-another.
+are the ones its list entries use, with its camera
+([Cameras](#cameras)). The sequences are walked one after another.
+
+### Cameras
+
+The walk's local density term measures each chosen step with the camera the
+reference sensor's images were taken with
+([core/analysis/pick-images.md § The local density term](../../core/analysis/pick-images.md#the-local-density-term)).
+The command takes it from the `.camrig` files it finds the rigs with, as
+`sfm solve` takes its cameras from them (`find_rigs` and `collect_sequences`
+in [`_pick_images.py`](../../../src/sfmtool/_pick_images.py)):
+
+- a rig sequence takes the camera of its reference sensor from its
+  multi-sensor `.camrig`;
+- a sequence of single images takes the camera of the single-sensor
+  `.camrig` that covers every one of its frames;
+- a sequence that no `.camrig` covers, or one that a single-sensor `.camrig`
+  covers only in part, is given no camera, and the walk finds it one by its
+  pilot vote.
+
+The camera is passed as the `.camrig` stores it, a
+`sfmtool.geometry.CameraIntrinsics` built from its dict, and the walk scales
+it to the frames' size and says when it cannot use it. `camera_config.json`
+and EXIF inference give the term no camera.
+
+**The pilot vote.** For a sequence given no camera, the walk first chooses
+the sequence's first 30 frames without the term, clusters the first 1,500
+features of each and runs the focal vote of
+[`sfm estimate-intrinsics`](../reconstruction/estimate-intrinsics-command.md)
+on the clusters, as `sfm match --cluster --max-features 1500` and
+`sfm estimate-intrinsics --model auto` would, in memory, with the frames in
+file-number order where `sfm match` sorts them by name. It then walks the
+sequence again from its first frame, measuring with the vote's camera: a
+pinhole, or an equidistant fisheye for a fisheye verdict, confirmed or not,
+at the vote's focal with the principal point at the image centre
+([core/analysis/pick-images.md § The pilot vote](../../core/analysis/pick-images.md#the-pilot-vote)).
+The vote's camera is not used, and the term is off, when the pilot walk chose
+fewer than 3 frames, the vote reached no consensus, or its pool spread is
+above 0.35. The pilot writes nothing: no `.matches` file, no `.camrig`, and
+nothing in the workspace but the `.sift` files of the frames it reads, which
+the walk after it reuses. A rig sequence always has a camera, from its
+`.camrig`, so the pilot runs only for sequences of single images.
 
 ### Extraction
 
@@ -362,12 +415,16 @@ Given 1 path(s), 6120 image file(s) in 1 sequence:
 
 Walk: target step 10% (band 7-13%), match floor 600
   Chosen: 512 of 6120 frames; read: 2730 frames (2718 extracted, 12 reused)
+  Local density term: on, with the pilot vote's pinhole camera, focal 1222.3 px, pool spread 0.124; 61 of 511 steps walked with a gain above 1
+  Pilot vote: 30 frames chosen, 92 read, 45000 features in 8312 clusters; took 2.4 s
   Motion along the capture (median step, rate per frame, frames per step):
     frames         1-612     9.9%    0.64%     15
     frames      613-1224    10.1%    0.71%     14
     ...
   Steps stopped at the match floor: 31 of 511, 6 of them at the next frame
   Frames blurred against their neighbours swapped (29): 377->376, 1066->1068, ... and 21 more
+  Local density by step (target, gain, median measure of the last three steps; the step's parallax P50, P90/P50 and measure):
+    ...
 
 Extracted and never read: 40 frames
 
@@ -385,9 +442,9 @@ each heading names its sequence by its first pattern
 A list of more than eight swaps shows the first eight and the count of the
 rest.
 
-- **Walk.** The target, the band and the match floor; the frames chosen out
+- **Walk.** The base target, its band and the match floor; the frames chosen out
   of the sequence's frames and the frames the walk read, split into those it
-  extracted and those it reused; a table of the sequence in ten equal runs
+  extracted and those it reused; the local density term's line; a table of the sequence in ten equal runs
   of positions, each with the median step, rate and stride of the steps that
   start in it, leaving out a run where no step starts, and printing
   `unmeasured` for the step and rate of a run whose steps all go between
@@ -395,7 +452,46 @@ rest.
   (`StepKind::AtFloor`), and how many of those are steps to the next frame
   that itself keeps fewer matches than the floor, which is where the walk
   takes every frame, or `none`; and the swaps of frames blurred against their
-  neighbours, each as candidate and chosen frame, or `none`.
+  neighbours, each as candidate and chosen frame, or `none`; and, with the
+  local density term on, a table of every step.
+- **The local density term.** On, it names the camera's source and its focal
+  at the frames' size, and counts the steps walked with a gain above 1:
+
+  ```text
+    Local density term: on, with the camera of /captures/qa/k8/k8.camrig (focal 945.8 px at the frames' size); 53 of 61 steps walked with a gain above 1
+  ```
+
+  With the pilot vote's camera it names the vote's model, focal and pool
+  spread; the vote measures at the frames' size, so its focal is the one
+  the term uses:
+
+  ```text
+    Local density term: on, with the pilot vote's pinhole camera, focal 1222.3 px, pool spread 0.124; 61 of 211 steps walked with a gain above 1
+  ```
+
+  Off, it says why: `--max-density-gain is 1`; the pilot vote's camera was
+  not used (`the pilot walk chose 2 frames, and a vote needs at least 3`,
+  `the pilot vote reached no consensus (1 pooled vote)`, `the pilot vote's
+  pool spread 0.588 is above 0.35 (pinhole, focal 215.4 px)`); the camera's
+  aspect is not the frames'; or the walk refuses the camera, with the reason
+  (`the camera of … cannot be measured with: …`). For a sequence that a
+  single-sensor `.camrig` covers only in part, the pilot vote's text, used or
+  not, is followed by the `.camrig`'s and how many of the frames it covers
+  (`; /captures/a.camrig covers only 120 of its 3478 frames`). A fisheye verdict is named
+  `equidistant fisheye`, or `unconfirmed equidistant fisheye` when it carries
+  no certified rotation votes.
+- **The pilot vote.** When a pilot vote ran, the line after the term's gives
+  the frames it chose and read, the features it clustered and the clusters
+  they formed, and its wall time:
+
+  ```text
+    Pilot vote: 30 frames chosen, 92 read, 45000 features in 8312 clusters; took 2.4 s
+  ```
+
+  The table of steps, printed only with the term on, gives per step its
+  frames, the target it was walked with, the gain and median measure that
+  target came from, and the step's own parallax P50 in degrees, P90/P50 and
+  measure, or `not measured` with the split's reason.
 - **Extracted and never read.** The last line of the report: how many frames
   had a `.sift` file written in the run that the walk never read, the
   report's `frames_extracted_unread`. With the `sfmtool` tool these are
@@ -421,12 +517,22 @@ positions, not numbers), with these keys added:
 | Key | Holds |
 |-----|-------|
 | `workspace` | the workspace folder |
-| `options` | the four numeric options, under the binding's names |
-| `capture` | per sequence: `patterns`, `sensors` (for a rig, each sensor's image pattern as the `.camrig` stores it; `null` otherwise), `numbers` (the frame's number at each position) and `images` (each frame's workspace-relative image paths) |
+| `options` | the five numeric options, under the binding's names |
+| `capture` | per sequence: `patterns`, `sensors` (for a rig, each sensor's image pattern as the `.camrig` stores it; `null` otherwise), `numbers` (the frame's number at each position), `images` (each frame's workspace-relative image paths), `camera` (the camera dict the walk was given, as the `.camrig` stores it, or `null`, as for a sequence whose camera came from the pilot vote) and `camera_source` (the text the term's line names it by, or says why there is none, the pilot vote's model, focal and pool spread among them) |
 | `chosen_numbers` | per sequence, the chosen frames' numbers |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
 
 The file is written after the report and the list.
+Each pair's and each step's `stats` hold an `essential_split` key, which is
+`null`: the walk measures no split of the pairs it decides from. Each step's
+`density` holds the target it was walked with, its gain and median measure,
+its essential split, `null` with the term off, and its measure, and each
+sequence's `density_term` whether the term was on, with the camera's focal,
+or why not, and its `pilot_vote`, `null` when none ran, with the frames
+voted on, the frames read, the features and clusters, the vote's
+`camera_model`, `confirmed`, `focal_px`, `pool_spread`, `n_pool`,
+`n_epipolar` and `n_rotation`, its `outcome` and its `seconds`
+([core/analysis/pick-images.md § The report](../../core/analysis/pick-images.md#the-report)).
 With a tool other than `sfmtool`, `frames_extracted` and
 `frames_extracted_unread` are the command's, from the extraction made first.
 
@@ -450,11 +556,22 @@ list holds; a version 1
 workspace; no workspace; files with no number or a shared number; a
 `rig_config.json` at the workspace root, refused before any image is read even
 beside a `.camrig` of the same rig; kerry_park's rig, grouped into its 24
-frames by `kerry_park.camrig`; a `.camrig` rig in a subfolder whose sensor 0
+frames by `kerry_park.camrig`, with sensor 0's fisheye camera as its camera; a `.camrig` rig in a subfolder whose sensor 0
 sorts last, written one entry per sensor, whose list
 `resolve_camrig_for_solve` takes as a rig of both sensors at the chosen
 frames; a single-sensor `.camrig` defining no rig, whether it covers every
-input file or only some; a `.camrig` rig covering some of the input
+input file or only some; two single-sensor `.camrig` files, each sequence
+walked with the local density term on and its own camera; a `.camrig` camera
+at twice the frames' size, scaled to them, with no pilot vote, a run with
+`--max-density-gain 1`, which turns the term off, and a maximum gain below 1
+or not a number, refused naming the option; a run with no `.camrig` on the
+pan, whose pilot vote reaches no consensus, and whose term is off saying so;
+seattle_backyard's photographs with no `.camrig`, whose pilot vote's pinhole
+camera the walk measures with, reported in the term's line, the pilot's line
+and the JSON, with nothing new in the workspace but `.sift` files and the
+report, and with `--max-density-gain 1` no pilot; the seoul_bull photographs,
+whose pilot vote's pool spread is above 0.35; two photographs, too few for a
+vote; a `.camrig` rig covering some of the input
 files, walked as its rig sequence beside an ordinary sequence of the others,
 whose list `resolve_camrig_for_solve` takes as the rig at its chosen frames
 beside the other chosen images; two `.camrig` rigs, each its own sequence; a
@@ -467,11 +584,15 @@ checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the frame field chosen
 for numbers that run past their padded width and the error for numbers
 padded in ways no one frame field writes, a
-`.camrig` rig's frames, patterns and sensor order, every error, the list
+`.camrig` rig's frames, patterns, sensor order and reference sensor's
+camera, the camera of a single-sensor `.camrig` covering all or some of a
+sequence's frames, every error, the list
 entries, a lone chosen frame, a range split in parts, the slice suggestion,
 and the report's walk section: its heading, the frames chosen and read, the swaps, the steps stopped at the match floor and those
-at the next frame among them, and a run of the motion table whose steps
-match nothing.
+at the next frame among them, a run of the motion table whose steps
+match nothing, the local density term's line, on and for each reason it is
+off, and its table of steps, a step not measured among them, and the pilot
+vote's text for a fisheye verdict, confirmed and not.
 
 ## Non-goals
 
@@ -484,8 +605,9 @@ match nothing.
   [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
 - Judging whether a capture's frames describe one camera motion through a
   static scene, or whether its camera moved enough to be solved. The command
-  fits no geometry, so a camera that only turned, a scene that moved on its
-  own or a camera that moved little is walked like any other video
+  fits no geometry to decide that, so a camera that only turned, a scene that
+  moved on its own or a camera that moved little is walked like any other
+  video; the local density term's split only sets the next target
   ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
 

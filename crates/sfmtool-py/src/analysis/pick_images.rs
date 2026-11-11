@@ -23,8 +23,9 @@ use pyo3::types::{PyDict, PyTuple};
 
 use sfmtool_core::analysis::pick_images::{
     match_frame_pair as core_match_frame_pair, pick_images as core_pick_images, CaptureFrame,
-    CaptureImage, CaptureSequence, ExtractingSource, FrameFeatures, FramePairOptions, FrameSource,
-    FrameSourceError, PickImagesError, PickImagesOptions, ReadOnlySource,
+    CaptureImage, CaptureSequence, EssentialSplitOptions, ExtractingSource, FrameFeatures,
+    FramePairOptions, FrameSource, FrameSourceError, PickImagesError, PickImagesOptions,
+    ReadOnlySource,
 };
 use sfmtool_core::features::kdforest::KdForestParams;
 use sfmtool_core::features::sift::{BuildSiftFilesError, BuildSiftFilesOptions};
@@ -34,6 +35,7 @@ use sfmtool_sift_format::{read_sift_features, read_sift_metadata, SiftMetadata, 
 use crate::csr_args::float_array_f32;
 use crate::fileio::sift::PySiftFile;
 use crate::format_errors::{fault_to_py, read_err, Direction, FormatError};
+use crate::geometry::PyCameraIntrinsics;
 use crate::helpers::{serde_to_py, value_err};
 use crate::sift::extract::{feature_options_error, feature_options_from_dict};
 use crate::spatial::kdforest::{extract_u8_2d, resolve_forest_params};
@@ -221,37 +223,91 @@ impl PyFrameFeatures {
 /// Match two frames' features and measure the motion between them.
 ///
 /// The matches are the mutual best matches of a k = 2 query each way that
-/// pass Lowe's ratio test both ways. Options left as ``None`` take the
-/// defaults of the Rust ``FramePairOptions``: ``ratio`` 0.8 and the queried
-/// forest's own ``max_leaf_checks``.
+/// pass Lowe's ratio test both ways. Given a ``camera``, the matches'
+/// essential split is measured too: the rotation between the frames and the
+/// parallax of the matches with it taken out. Options left as ``None`` take
+/// the defaults of the Rust ``FramePairOptions`` and
+/// ``EssentialSplitOptions``: ``ratio`` 0.8, the queried forest's own
+/// ``max_leaf_checks``, no essential split, and for a split
+/// ``tolerance_px`` 3, ``min_inliers`` 12, ``samples`` 512 and ``seed`` 0.
 ///
 /// Args:
 ///     a: The first frame's ``FrameFeatures``.
 ///     b: The second frame's, of the same image size.
 ///     ratio: Lowe's ratio on descriptor distances, in (0, 1].
 ///     max_leaf_checks: The per-query budget of distance computations.
+///     camera: The ``sfmtool.geometry.CameraIntrinsics`` both frames were
+///         taken with, at their image size, or None to measure no split.
+///     tolerance_px: The split's consensus bound, in pixels at the camera's
+///         focal.
+///     min_inliers: The fewest inliers a split is measured from, at least 8.
+///     samples: The minimal samples the split's consensus draws, 1 to
+///         65,536.
+///     seed: The seed of the split's sampler.
 ///
 /// Returns:
-///     A dict: ``matches`` (int, the number of mutual matches) and
+///     A dict: ``matches`` (int, the number of mutual matches),
 ///     ``step_percent`` (float, their median displacement in percent of the
-///     long side, NaN with no matches).
+///     long side, NaN with no matches) and ``essential_split``: None without
+///     a camera, else a dict whose ``status`` is ``"measured"``, with
+///     ``matches`` (the matches considered), ``inliers``,
+///     ``rotation_deg``, ``parallax_p50_deg`` and ``parallax_p90_deg``, or
+///     ``"not_measured"``, with ``matches`` and a ``reason``:
+///     ``"too_few_matches"``, ``"no_consensus"`` or ``"no_pose_in_front"``.
 ///
 /// Raises:
-///     ValueError: an option out of range, or frames of different sizes.
+///     ValueError: an option out of range, frames of different sizes, a
+///         camera of another size than the frames, or a split option given
+///         without a camera.
 #[allow(rustdoc::invalid_rust_codeblocks)]
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (a, b, *, ratio=None, max_leaf_checks=None))]
+#[pyo3(signature = (
+    a, b, *, ratio=None, max_leaf_checks=None, camera=None, tolerance_px=None,
+    min_inliers=None, samples=None, seed=None
+))]
 pub fn match_frame_pair<'py>(
     py: Python<'py>,
     a: PyRef<'py, PyFrameFeatures>,
     b: PyRef<'py, PyFrameFeatures>,
     ratio: Option<f32>,
     max_leaf_checks: Option<usize>,
+    camera: Option<PyRef<'py, PyCameraIntrinsics>>,
+    tolerance_px: Option<f64>,
+    min_inliers: Option<usize>,
+    samples: Option<usize>,
+    seed: Option<u64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let defaults = FramePairOptions::default();
+    let essential_split = match camera {
+        Some(camera) => {
+            let split = EssentialSplitOptions::new(camera.inner.clone());
+            Some(EssentialSplitOptions {
+                tolerance_px: tolerance_px.unwrap_or(split.tolerance_px),
+                min_inliers: min_inliers.unwrap_or(split.min_inliers),
+                samples: samples.unwrap_or(split.samples),
+                seed: seed.unwrap_or(split.seed),
+                ..split
+            })
+        }
+        None => {
+            if tolerance_px.is_some()
+                || min_inliers.is_some()
+                || samples.is_some()
+                || seed.is_some()
+            {
+                return Err(PyValueError::new_err(
+                    "tolerance_px, min_inliers, samples and seed set the essential split, \
+                     which needs a camera",
+                ));
+            }
+            None
+        }
+    };
     let options = FramePairOptions {
         ratio: ratio.unwrap_or(defaults.ratio),
         max_leaf_checks: max_leaf_checks.or(defaults.max_leaf_checks),
+        essential_split,
     };
     let (a, b) = (&a.inner, &b.inner);
     let stats = py
@@ -260,6 +316,10 @@ pub fn match_frame_pair<'py>(
     let out = PyDict::new(py);
     out.set_item("matches", stats.matches)?;
     out.set_item("step_percent", stats.step_percent)?;
+    match &stats.essential_split {
+        Some(split) => out.set_item("essential_split", serde_to_py(py, split)?)?,
+        None => out.set_item("essential_split", py.None())?,
+    }
     Ok(out)
 }
 
@@ -358,11 +418,18 @@ impl PyCaptureFrame {
 }
 
 /// One sequence of a capture, in file-number order, with the pattern each
-/// sensor's list entry uses.
+/// sensor's list entry uses and the camera of its reference sensor.
 ///
 /// Args:
 ///     patterns: One pattern per sensor, in the order of each frame's images.
 ///     frames: The ``CaptureFrame`` objects, in file-number order.
+///     camera: The ``sfmtool.geometry.CameraIntrinsics`` the reference
+///         sensor's images were taken with, which ``pick_images``'s local
+///         density term measures with, or None to walk with the pilot
+///         vote's, or without the term when ``pick_images``'s ``pilot_vote``
+///         is False.
+///         It may be of another size than the frames, of the same aspect;
+///         the walk scales it to theirs.
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyclass(name = "CaptureSequence", module = "sfmtool.analysis", frozen)]
 pub struct PyCaptureSequence {
@@ -373,14 +440,17 @@ pub struct PyCaptureSequence {
 #[pymethods]
 impl PyCaptureSequence {
     #[new]
+    #[pyo3(signature = (patterns, frames, *, camera=None))]
     fn new(
         py: Python<'_>,
         patterns: Vec<String>,
         frames: Vec<Bound<'_, PyCaptureFrame>>,
+        camera: Option<PyRef<'_, PyCameraIntrinsics>>,
     ) -> PyResult<Self> {
         let inner = CaptureSequence {
             patterns,
             frames: frames.iter().map(|f| f.get().inner.clone()).collect(),
+            camera: camera.map(|c| c.inner.clone()),
         };
         Ok(Self {
             inner,
@@ -392,6 +462,15 @@ impl PyCaptureSequence {
     #[getter]
     fn patterns(&self) -> Vec<String> {
         self.inner.patterns.clone()
+    }
+
+    /// The camera of the reference sensor, or None.
+    #[getter]
+    fn camera(&self) -> Option<PyCameraIntrinsics> {
+        self.inner
+            .camera
+            .clone()
+            .map(|inner| PyCameraIntrinsics { inner })
     }
 
     /// The frames, a tuple of ``CaptureFrame``, so that
@@ -421,8 +500,11 @@ impl PyCaptureSequence {
 /// ``target_step_percent`` of the image's long side apart, with no step
 /// beyond the next frame keeping fewer than ``min_step_matches`` mutual
 /// matches, and a frame blurred against its neighbouring frames swapped for
-/// a sharper one. Options left as ``None`` take the defaults of the Rust
-/// ``PickImagesOptions``.
+/// a sharper one. For a sequence with a ``camera``, the local density term
+/// measures each chosen step's essential split, and where the last three
+/// show a near foreground in front of a distant view it divides the target
+/// by up to ``max_density_gain``. Options left as ``None`` take the defaults
+/// of the Rust ``PickImagesOptions``.
 ///
 /// With ``feature_options`` and ``feature_prefix_dir``, the workspace's
 /// settings for the ``sfmtool`` feature tool, each frame's ``.sift`` files
@@ -442,8 +524,13 @@ impl PyCaptureSequence {
 ///     concurrent_images: How many frames the workers extract at once, with
 ///         ``feature_options``; ``None`` takes ``SFMTOOL_SIFT_EXTRACT_WORKERS``
 ///         or the core count capped by memory, as ``build_sift_files`` does.
-///     target_step_percent: The step to aim for, in percent of the long
-///         side (10).
+///     target_step_percent: The base target: the step to aim for, in
+///         percent of the long side, before the local density term divides
+///         it by its gain (10).
+///     max_density_gain: The most the local density term divides the base
+///         target by, finite and at least 1 (3). 1 turns the term off, and
+///         a sequence with no camera is walked without it unless the pilot
+///         vote finds it one.
 ///     step_band: How far a step may be from the target, as a fraction
 ///         (0.3).
 ///     neighbour_blur_ratio: A frame about to be accepted is blurred against
@@ -451,6 +538,11 @@ impl PyCaptureSequence {
 ///         frame's within 2 positions (0.85).
 ///     min_step_matches: The match floor, the fewest mutual matches a step
 ///         beyond the next frame keeps (600), at least 1.
+///     pilot_vote: Whether a sequence with no ``camera`` takes one from a
+///         pilot vote, a focal vote on the first 30 frames the walk chooses
+///         without the local density term, before the walk starts again from
+///         its first frame (True). False walks such a sequence without the
+///         local density term. No pilot runs at a ``max_density_gain`` of 1.
 ///     ratio: Lowe's ratio on descriptor distances, as for
 ///         ``match_frame_pair``.
 ///     preset, num_trees, leaf_size, max_leaf_checks: Each frame's forest,
@@ -459,8 +551,11 @@ impl PyCaptureSequence {
 ///
 /// Returns:
 ///     The report as a dict of plain values, which ``json.dump`` writes as
-///     it is: ``sequences`` (per sequence: ``chosen``, ``steps``, ``swaps`` and
-///     ``frames_read``), ``frames``
+///     it is: ``sequences`` (per sequence: ``chosen``, ``steps``, each with
+///     its ``density``, the target it was walked with and the local density
+///     term's reading of it, ``swaps``, ``frames_read`` and
+///     ``density_term``, whether the term was on and why not, and
+///     ``pilot_vote``, what the pilot vote found, or ``None``), ``frames``
 ///     (every frame read, with its readings), ``pairs`` (every pair matched,
 ///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
 ///     whether its ``.sift`` files were written in this call) and
@@ -490,9 +585,11 @@ impl PyCaptureSequence {
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[pyo3(signature = (sequences, *, feature_options=None, feature_prefix_dir=None,
-                    concurrent_images=None, target_step_percent=None, step_band=None,
-                    neighbour_blur_ratio=None, min_step_matches=None, ratio=None, preset=None,
-                    num_trees=None, leaf_size=None, max_leaf_checks=None, progress=None))]
+                    concurrent_images=None, target_step_percent=None,
+                    max_density_gain=None, step_band=None,
+                    neighbour_blur_ratio=None, min_step_matches=None, pilot_vote=None, ratio=None,
+                    preset=None, num_trees=None, leaf_size=None, max_leaf_checks=None,
+                    progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn pick_images<'py>(
     py: Python<'py>,
@@ -501,9 +598,11 @@ pub fn pick_images<'py>(
     feature_prefix_dir: Option<PathBuf>,
     concurrent_images: Option<usize>,
     target_step_percent: Option<f64>,
+    max_density_gain: Option<f64>,
     step_band: Option<f64>,
     neighbour_blur_ratio: Option<f64>,
     min_step_matches: Option<usize>,
+    pilot_vote: Option<bool>,
     ratio: Option<f32>,
     preset: Option<&str>,
     num_trees: Option<usize>,
@@ -515,6 +614,7 @@ pub fn pick_images<'py>(
     let pair = FramePairOptions::default();
     let options = PickImagesOptions {
         target_step_percent: target_step_percent.unwrap_or(defaults.target_step_percent),
+        max_density_gain: max_density_gain.unwrap_or(defaults.max_density_gain),
         step_band: step_band.unwrap_or(defaults.step_band),
         neighbour_blur_ratio: neighbour_blur_ratio.unwrap_or(defaults.neighbour_blur_ratio),
         min_step_matches: min_step_matches.unwrap_or(defaults.min_step_matches),
@@ -522,8 +622,10 @@ pub fn pick_images<'py>(
         pair: FramePairOptions {
             ratio: ratio.unwrap_or(pair.ratio),
             max_leaf_checks: pair.max_leaf_checks,
+            essential_split: None,
         },
         prefetch: defaults.prefetch,
+        pilot_vote: pilot_vote.unwrap_or(defaults.pilot_vote),
     };
     let mut source: Box<dyn FrameSource + Send> = match (feature_options, feature_prefix_dir) {
         (Some(feature_options), Some(feature_prefix_dir)) => Box::new(

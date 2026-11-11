@@ -9,11 +9,14 @@ estimator for a camera that moved to a new position and one for a
 camera that only turned. The first returns an epipolar matrix that
 encodes the rotation and the direction of the translation; the second
 returns the rotation. Both also return which matches agree with the
-answer and the angle by which each match misses it. They work on
-viewing rays rather than pixels, so they handle fisheye images wider
-than 180°. They are offered to Rust callers and, through
-`sfmtool.geometry`, to Python; no pipeline or command in this
-repository calls them.
+answer and the angle by which each match misses it. A third function
+decomposes the epipolar matrix into the rotation and the translation
+direction. They work on viewing rays rather than pixels, so they handle
+fisheye images wider than 180°. The two estimators are offered to Rust
+callers and, through `sfmtool.geometry`, to Python; frame pair
+matching's essential split
+([frame-pair-matching.md](../analysis/frame-pair-matching.md#the-essential-split))
+calls the essential estimator and the decomposition.
 
 Because the intrinsics are known, each observed pixel converts to the
 unit ray the camera saw it along, and the only unknown left is the
@@ -32,6 +35,9 @@ per model:
 - `fit_ray_rotation` — rotation-only motion (the camera pivoted, or the
   scene is far enough that the baseline is negligible): a robust
   rotation taking image-1 rays onto image-2 rays.
+
+`decompose_essential_rays` turns the first estimator's matrix into a
+relative pose, choosing among its four by cheirality.
 
 These are the focal-vote camera-model columns' estimators
 ([focal-vote.md](focal-vote.md), Camera-Model Columns) evaluated for
@@ -64,14 +70,14 @@ them, and when the slices differ in length they use the first
 residuals they return have that length. The Python bindings take `(N, 3)`
 `float64` arrays, normalize each row to unit length, and raise `ValueError`
 for a row that is zero or non-finite, for a 2-D array whose rows do not have
-3 entries, and for two arrays of different lengths. An array that is not
-2-D or not `float64` raises `TypeError`.
+3 entries, for two arrays of different lengths, and for `samples` above
+65,536. An array that is not 2-D or not `float64` raises `TypeError`.
 
 | Option | Both | Rust default | Python | Meaning |
 |---|---|---|---|---|
 | `max_angle_rad` | ✓ | 0.01 | required keyword | Consensus bound, radians. Derive from a keypoint localization tolerance through the camera map's local `dr/dθ` (equidistant: `tol_px / f`) |
 | `min_inliers` | ✓ | 12 essential, 20 rotation | same defaults | Reject a consensus below this many correspondences |
-| `samples` | ✓ | 512 | 512 | Seeded minimal samples drawn (8-ray epipolar / 3-ray rotation) |
+| `samples` | ✓ | 512 | 512 | Seeded minimal samples drawn (8-ray epipolar / 3-ray rotation), at most `MAX_RAY_SAMPLES` = 65,536. The samples are held as one list of indices, so the bound keeps a count from asking for more memory than there is; above it the Rust estimators return none and the bindings raise `ValueError` |
 | `seed` | ✓ | 0 | 0 | SplitMix64 seed; identical input and seed give a bit-identical answer |
 | `side` | essential only | `EpipolarSide::Both` | `"both"`, `"one"` or `"two"`; default `"both"` | Which epipolar residual the consensus scores (below) |
 
@@ -105,6 +111,49 @@ the SVD it already needs.
 `fit_ray_rotation → RayRotation` (or none): the rotation `R x₁ ≈ x₂`,
 consensus mask, per-correspondence angular residuals, consensus RMS.
 
+## Decomposition
+
+```rust
+pub struct RayRelativePose {
+    pub rotation: Matrix3<f64>,    // R of X₂ = R·X₁ + t
+    pub translation: Vector3<f64>, // unit t, sign by cheirality
+    pub in_front: Vec<bool>,       // considered and in front of both cameras
+}
+
+pub fn decompose_essential_rays(
+    e: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    considered: &[bool],
+) -> Option<RayRelativePose>;
+```
+
+`decompose_essential_rays` takes an epipolar matrix with `x₂ᵀ·E·x₁ = 0`,
+as `estimate_essential_rays` returns it, and the correspondences to judge
+it by, usually its consensus mask as `considered`. The SVD
+`E = U·diag(σ₁, σ₂, σ₃)·Vᵀ`, with `U` and `V` turned to determinant `+1` and
+the smallest singular value's vectors last, gives the rotations `U·W·Vᵀ`
+and `U·Wᵀ·Vᵀ` (`W` the quarter turn about `z`) and the translation `±u₃`;
+taking `diag(1, 1, 0)` for the singular values is the projection onto the
+essential manifold. Of the four poses, the one that puts the most
+considered correspondences in front of both cameras is kept, a tie going
+to the first of `(R₁, +t)`, `(R₁, −t)`, `(R₂, +t)`, `(R₂, −t)`.
+
+A correspondence is in front when the closest approach of its two rays,
+camera 1 at the origin and camera 2 at `−Rᵀ·t` with its ray turned to
+`Rᵀ·x₂`, lies at a positive depth along both rays: the same test the
+baseline direction's sign uses
+([baseline-direction.md](baseline-direction.md#the-sign-is-cheirality)),
+shared with it. Depth along the ray, not `z`, is what keeps rays past 90°
+in the population. Exactly parallel rays have no closest approach and are
+not in front. The slices and the mask are read to the shortest of the
+three. The result is `None` for a matrix that is not finite, an SVD that
+fails, or no considered correspondence in front at any pose.
+
+The epipolar constraint of a pure rotation holds for every translation
+direction, so its matrix is `[t]×·R` for some `t`, and the decomposition
+still finds `R`; the translation is then arbitrary.
+
 ## Estimation
 
 Both estimators: seeded minimal samples (linear 8-point on rays /
@@ -125,7 +174,16 @@ operating systems.
 
 ## Tests
 
-- Rust: planted essential and rotation recovery on synthetic scenes
+- Rust: the decomposition on correspondences seen from `(R, +t)` and
+  from `(R, −t)`, which satisfy the same matrix, keeping the sign most of
+  them are in front at, with the majority on either sign; the
+  `considered` mask deciding the answer; no pose for nothing considered
+  or a matrix that is not finite; and, through the essential split's tests
+  in
+  [essential_split/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/essential_split/tests.rs),
+  planted rotations of pinhole and fisheye pairs, past the hemisphere,
+  and a pure rotation. A sample count above the bound gives none rather
+  than a panic, and the bound itself is accepted. Planted essential and rotation recovery on synthetic scenes
   including beyond-hemisphere rays; consensus correctness under outlier
   contamination; rejection of degenerate inputs and starved consensus;
   the two-sided residual's relationship to the one-sided forms; seeded
@@ -135,6 +193,7 @@ operating systems.
 - Python bindings: planted essential and rotation recovery past the
   hemisphere, abstention without a consensus, seeded determinism, `side`
   selection and rejection of an unknown `side`, shape, length and
-  zero-ray errors, and normalization of rays that arrive unnormalized.
+  zero-ray errors, a sample count above the bound refused, and
+  normalization of rays that arrive unnormalized.
   The Python tests do not compare against the Rust results directly; the
   bindings call the same Rust functions.

@@ -317,3 +317,97 @@ fn unequal_lengths_use_the_shorter_prefix() {
         assert_eq!(got.inliers, r_trimmed.inliers);
     }
 }
+
+// ── Decomposition ───────────────────────────────────────────────────────────
+
+/// Correspondences of points in front of both cameras, `plus` of them seen
+/// from `(R, +t)` and `minus` from `(R, −t)`. Every one satisfies the same
+/// epipolar matrix `[t]×·R`, so only cheirality tells the two signs apart.
+fn mixed_sign_scene(plus: usize, minus: usize) -> TwoViewScene {
+    let rot = planted_rotation(0.2);
+    let t = Vector3::new(0.6, 0.1, -0.2);
+    let r1 = planted_rays(plus + minus, 1.2);
+    let r2 = r1
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let depth = 3.0 + 2.0 * ((0.7 * i as f64).sin() + 1.0);
+            let sign = if i < plus { 1.0 } else { -1.0 };
+            (rot * (d * depth) + t * sign).normalize()
+        })
+        .collect();
+    (r1, r2, rot, t)
+}
+
+fn skew(v: &Vector3<f64>) -> Matrix3<f64> {
+    Matrix3::new(0.0, -v.z, v.y, v.z, 0.0, -v.x, -v.y, v.x, 0.0)
+}
+
+#[test]
+fn decomposition_keeps_the_pose_most_correspondences_are_in_front_of() {
+    for (plus, minus, sign) in [(30usize, 10usize, 1.0), (10, 30, -1.0)] {
+        let (r1, r2, rot, t) = mixed_sign_scene(plus, minus);
+        let e = skew(&t) * rot;
+        let pose = decompose_essential_rays(&(e / e.norm()), &r1, &r2, &vec![true; r1.len()])
+            .expect("a pose");
+        assert!(
+            (pose.rotation - rot).norm() < 1e-9,
+            "rotation {:?}",
+            pose.rotation
+        );
+        assert!(
+            (pose.translation - sign * t.normalize()).norm() < 1e-9,
+            "translation {:?} against {sign} t",
+            pose.translation
+        );
+        assert_eq!(
+            pose.in_front.iter().filter(|&&b| b).count(),
+            plus.max(minus)
+        );
+        // Each correspondence in front is one seen from the majority's sign.
+        let majority = |i: usize| (i < plus) == (sign > 0.0);
+        assert!((0..r1.len()).all(|i| pose.in_front[i] == majority(i)));
+    }
+}
+
+#[test]
+fn decomposition_reads_only_the_considered_correspondences() {
+    let (r1, r2, rot, t) = mixed_sign_scene(30, 10);
+    let e = skew(&t) * rot;
+    // Considering only the ten seen from −t turns the answer to −t.
+    let considered: Vec<bool> = (0..40).map(|i| i >= 30).collect();
+    let pose = decompose_essential_rays(&e, &r1, &r2, &considered).expect("a pose");
+    assert!((pose.translation + t.normalize()).norm() < 1e-9);
+    assert_eq!(pose.in_front, considered);
+    // Nothing considered, or a matrix that is not finite, gives no pose.
+    assert!(decompose_essential_rays(&e, &r1, &r2, &[false; 40]).is_none());
+    let nan = Matrix3::from_element(f64::NAN);
+    assert!(decompose_essential_rays(&nan, &r1, &r2, &[true; 40]).is_none());
+}
+
+// ── Sample bound ────────────────────────────────────────────────────────────
+
+#[test]
+fn more_samples_than_the_bound_give_no_estimate_rather_than_a_panic() {
+    let (r1, r2, _, _) = two_view_scene(40, 1.2, 0.2, Vector3::new(0.5, 0.0, 0.1));
+    for samples in [MAX_RAY_SAMPLES + 1, usize::MAX] {
+        let options = RayEssentialOptions {
+            samples,
+            ..RayEssentialOptions::default()
+        };
+        assert!(estimate_essential_rays(&r1, &r2, &options).is_none());
+        let options = RayRotationOptions {
+            samples,
+            ..RayRotationOptions::default()
+        };
+        assert!(fit_ray_rotation(&r1, &r2, &options).is_none());
+    }
+    // The bound itself is accepted, shown on the cheaper rotation fit of 20
+    // rays of a pure rotation.
+    let (r1, r2, _, _) = two_view_scene(20, 1.2, 0.2, Vector3::zeros());
+    let options = RayRotationOptions {
+        samples: MAX_RAY_SAMPLES,
+        ..RayRotationOptions::default()
+    };
+    assert!(fit_ray_rotation(&r1, &r2, &options).is_some());
+}

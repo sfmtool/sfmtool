@@ -13,7 +13,10 @@
 use serde::Serialize;
 
 use super::capture::FrameId;
+use super::density::DensityTerm;
+use super::essential_split::EssentialSplitOutcome;
 use super::frame_pair::FramePairStats;
+use super::pilot::PilotVote;
 
 /// What [`super::pick_images`] found.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -79,6 +82,11 @@ pub struct SequenceReport {
     pub swaps: Vec<Swap>,
     /// How many frames of this sequence the walk read.
     pub frames_read: usize,
+    /// Whether the walk had the local density term, and why not.
+    pub density_term: DensityTerm,
+    /// The pilot vote that gave the sequence its camera, or failed to;
+    /// `None` when none ran.
+    pub pilot_vote: Option<PilotVote>,
 }
 
 /// One accepted step.
@@ -90,6 +98,30 @@ pub struct WalkStep {
     /// The step per frame, `stats.step_percent / (to − from)`.
     pub rate: f64,
     pub kind: StepKind,
+    /// The target the step was walked with and the local density term's
+    /// reading of the step.
+    pub density: StepDensity,
+}
+
+/// One accepted step's target and the local density term's reading of it.
+/// With the term off, the target is the base target, the gain, the median
+/// measure and the measure are 1, and no split is measured.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StepDensity {
+    /// The target the step was walked with, in percent of the long side: the
+    /// base target over `gain`.
+    pub target_percent: f64,
+    /// The gain the base target was divided by, from `median_measure`.
+    pub gain: f64,
+    /// The median of the measures of the last three steps before this one,
+    /// or of as many as there were; 1 before the first.
+    pub median_measure: f64,
+    /// The step's essential split, measured once it was accepted; `None`
+    /// with the term off.
+    pub essential_split: Option<EssentialSplitOutcome>,
+    /// The step's measure, which the next steps' median measures take in:
+    /// its parallax P90 over P50 when its split counts, and 1 otherwise.
+    pub measure: f64,
 }
 
 /// Why a step was accepted where it was.

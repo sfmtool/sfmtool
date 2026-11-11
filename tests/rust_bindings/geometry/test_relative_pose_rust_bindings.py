@@ -139,3 +139,12 @@ def test_rays_need_not_arrive_normalized():
     npt.assert_allclose(
         np.abs(np.asarray(a["e_matrix"])), np.abs(np.asarray(b["e_matrix"])), atol=1e-9
     )
+
+
+@pytest.mark.parametrize("samples", [65_537, 2**40, 2**60])
+def test_a_sample_count_above_the_bound_is_refused(samples):
+    r1, r2 = two_view(n=40)
+    with pytest.raises(ValueError, match="samples must be at most 65536"):
+        estimate_essential_rays(r1, r2, max_angle_rad=0.01, samples=samples)
+    with pytest.raises(ValueError, match="samples must be at most 65536"):
+        fit_ray_rotation(r1, r2, max_angle_rad=0.01, samples=samples)

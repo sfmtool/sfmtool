@@ -45,8 +45,22 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
     default=10.0,
     metavar="PERCENT",
     show_default=True,
-    help="The step to aim for between two chosen frames: the median displacement "
-    "of their matched features, in percent of the image's long side.",
+    help="The base target: the step to aim for between two chosen frames, the "
+    "median displacement of their matched features in percent of the image's long "
+    "side, before the local density term divides it by its gain.",
+)
+@click.option(
+    "--max-density-gain",
+    "max_density_gain",
+    type=float,
+    default=3.0,
+    metavar="GAIN",
+    show_default=True,
+    help="The most the local density term divides the base target by, where the "
+    "steps chosen show a near foreground in front of a distant view. The term "
+    "measures with the camera of the .camrig that covers a sequence's frames, or, "
+    "with none, of a pilot focal vote on the sequence's first 30 chosen frames; 1 "
+    "turns it off and runs no pilot.",
 )
 @click.option(
     "--step-band",
@@ -95,6 +109,7 @@ def pick_images(
     range_expr,
     named_image_list,
     target_step,
+    max_density_gain,
     step_band,
     neighbour_blur_ratio,
     min_step_matches,
@@ -105,7 +120,13 @@ def pick_images(
     Walks each sequence from its first frame, choosing frames about
     --target-step percent of the image's long side apart, with no step past
     the next frame keeping fewer than --min-step-matches mutual matches, and
-    a frame blurred against its neighbours swapped for a sharper one. Each
+    a frame blurred against its neighbours swapped for a sharper one. Where
+    the steps chosen show a near foreground in front of a distant view, the
+    local density term shortens the target by up to --max-density-gain
+    times, measuring with the camera of the .camrig that covers the frames,
+    or, with no .camrig, with the camera a focal vote finds on the first 30
+    frames chosen without the term, as `sfm estimate-intrinsics` finds it on
+    a cluster match of them; the vote writes nothing. Each
     frame read, or predicted to be read, gets a .sift
     file, extracted with the workspace's settings; with a feature tool other
     than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
@@ -175,6 +196,7 @@ def pick_images(
         force=force,
         options={
             "target_step_percent": target_step,
+            "max_density_gain": max_density_gain,
             "step_band": step_band,
             "neighbour_blur_ratio": neighbour_blur_ratio,
             "min_step_matches": min_step_matches,
@@ -195,7 +217,7 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         find_rigs,
         list_entries,
     )
-    from .._pick_images_report import report_lines, slice_suggestion
+    from .._pick_images_report import pilot_source, report_lines, slice_suggestion
     from .._sfmtool import ProgressCounter
     from .._sfmtool.analysis import pick_images as walk
     from .._sfmtool.workspace import NamedImageLists
@@ -233,8 +255,10 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             )
 
     try:
-        camrig_rigs, notes = find_rigs(filenames, workspace_dir)
-        sequences = collect_sequences(filenames, workspace_dir, camrig_rigs)
+        camrig_rigs, camrig_cameras, notes = find_rigs(filenames, workspace_dir)
+        sequences = collect_sequences(
+            filenames, workspace_dir, camrig_rigs, camrig_cameras
+        )
     except PickImagesInputError as e:
         raise click.ClickException(str(e))
     for note in notes:
@@ -292,6 +316,9 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         report["frames_extracted_unread"] = sum(map(len, written_first)) - sum(
             report["frames_extracted"]
         )
+    for sequence, walked in zip(sequences, report["sequences"]):
+        if walked["pilot_vote"] is not None:
+            sequence.camera_source = pilot_source(walked["pilot_vote"], sequence)
     extracted = [{} for _ in sequences]
     for frame, written in zip(report["frames"], report["frames_extracted"]):
         extracted[frame["id"]["sequence"]][frame["id"]["frame"]] = written
@@ -357,6 +384,8 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
                 "sensors": s.sensors,
                 "numbers": s.numbers,
                 "images": [[p.as_posix() for p in images] for images in s.images],
+                "camera": s.camera,
+                "camera_source": s.camera_source,
             }
             for s in sequences
         ]

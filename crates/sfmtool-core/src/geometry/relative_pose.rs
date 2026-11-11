@@ -32,6 +32,7 @@
 
 use nalgebra::{Matrix3, Vector3};
 
+use super::baseline_direction::in_front_of_both;
 use super::focal_vote::column_scan::{
     draw_samples, epipolar_residuals, epipolar_rows, kabsch, null_from_rows, rotation_residuals,
     singular_values_desc,
@@ -43,6 +44,12 @@ const EPI_SAMPLE: usize = 8;
 const ROT_SAMPLE: usize = 3;
 /// Local-optimization rounds on the consensus set.
 const LO_ROUNDS: usize = 3;
+
+/// The most minimal samples either estimator draws: 65,536, 128 times the
+/// default. The samples are held in one list of indices, eight per sample for
+/// the essential matrix, so the bound keeps a caller's count from asking for
+/// more memory than there is. For a larger count the estimators return `None`.
+pub const MAX_RAY_SAMPLES: usize = 1 << 16;
 
 /// How an epipolar consensus scores a correspondence.
 ///
@@ -70,7 +77,8 @@ pub struct RayEssentialOptions {
     pub max_angle_rad: f64,
     /// Reject a consensus below this many correspondences.
     pub min_inliers: usize,
-    /// Minimal samples drawn (each is `EPI_SAMPLE` = 8 distinct indices).
+    /// Minimal samples drawn (each is `EPI_SAMPLE` = 8 distinct indices), at
+    /// most [`MAX_RAY_SAMPLES`].
     pub samples: usize,
     /// SplitMix64 sampler seed.
     pub seed: u64,
@@ -134,7 +142,8 @@ fn residuals_for(
 ///
 /// Scores seeded minimal samples of the linear 8-point constraint by the
 /// angular residual, keeps the largest consensus, then locally optimizes on
-/// it. Returns `None` when no consensus reaches `min_inliers`.
+/// it. Returns `None` when no consensus reaches `min_inliers`, and for
+/// `samples` above [`MAX_RAY_SAMPLES`].
 ///
 /// `r1[i]` and `r2[i]` are one correspondence, and both must be unit length;
 /// they are not normalized or checked. Slices of different lengths are read
@@ -152,6 +161,7 @@ pub fn estimate_essential_rays(
     let n = r1.len().min(r2.len());
     let (r1, r2) = (&r1[..n], &r2[..n]);
     if n < EPI_SAMPLE.max(options.min_inliers)
+        || options.samples > MAX_RAY_SAMPLES
         || options.max_angle_rad <= 0.0
         || !options.max_angle_rad.is_finite()
     {
@@ -228,6 +238,94 @@ pub fn estimate_essential_rays(
     })
 }
 
+/// The relative pose a ray-space essential matrix decomposes into, chosen by
+/// cheirality.
+#[derive(Clone, Debug)]
+pub struct RayRelativePose {
+    /// The rotation `R` of the motion `X₂ = R·X₁ + t`, where `X₁` and `X₂` are
+    /// one point in the first and second camera's frames: `R·x₁` is the
+    /// direction of `x₁` in the second camera's frame.
+    pub rotation: Matrix3<f64>,
+    /// The unit translation `t` of the same motion, its sign fixed by
+    /// cheirality. Two views fix no scale.
+    pub translation: Vector3<f64>,
+    /// Per correspondence, whether it was considered and its point lies in
+    /// front of both cameras at this pose, depth measured along each ray.
+    pub in_front: Vec<bool>,
+}
+
+/// The relative pose an epipolar matrix `e` (with `x₂ᵀ·E·x₁ = 0`, as
+/// [`estimate_essential_rays`] returns it) decomposes into.
+///
+/// The SVD of `e` gives two rotations and a translation direction up to sign,
+/// so four poses; the one that puts the most of the `considered`
+/// correspondences in front of both cameras is kept, a tie going to the
+/// first in the fixed order `(R₁, +t)`, `(R₁, −t)`, `(R₂, +t)`, `(R₂, −t)`.
+/// Depth is measured along each ray, so rays past 90° off the axis take part
+/// like any other. Taking `diag(1, 1, 0)` for the singular values projects `e`
+/// onto the essential manifold.
+///
+/// `r1[i]` and `r2[i]` are one correspondence, unit rays; the slices and
+/// `considered` are read to the shortest of the three. Returns `None` when the
+/// SVD fails or no considered correspondence is in front at any of the four
+/// poses.
+pub fn decompose_essential_rays(
+    e: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    considered: &[bool],
+) -> Option<RayRelativePose> {
+    let n = r1.len().min(r2.len()).min(considered.len());
+    if !e.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let svd = e.svd(true, true);
+    let (mut u, mut v_t) = (svd.u?, svd.v_t?);
+    // The singular values come in no promised order: put the smallest's
+    // vectors last, so that its left vector is the translation.
+    let sv = svd.singular_values;
+    let k = (0..3).fold(0, |k, j| if sv[j] < sv[k] { j } else { k });
+    if k != 2 {
+        u.swap_columns(k, 2);
+        v_t.swap_rows(k, 2);
+    }
+    if u.determinant() < 0.0 {
+        u = -u;
+    }
+    if v_t.determinant() < 0.0 {
+        v_t = -v_t;
+    }
+    let w = Matrix3::new(0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+    let t = u.column(2).into_owned();
+    let candidates = [
+        (u * w * v_t, t),
+        (u * w * v_t, -t),
+        (u * w.transpose() * v_t, t),
+        (u * w.transpose() * v_t, -t),
+    ];
+    let mut best: Option<(usize, RayRelativePose)> = None;
+    for (rotation, translation) in candidates {
+        // In camera 1's frame: camera 2's centre is −Rᵀt, its rays Rᵀ·x₂.
+        let r_t = rotation.transpose();
+        let centre = -(r_t * translation);
+        let in_front: Vec<bool> = (0..n)
+            .map(|i| considered[i] && in_front_of_both(&r1[i], &(r_t * r2[i]), &centre))
+            .collect();
+        let count = in_front.iter().filter(|&&b| b).count();
+        if count > best.as_ref().map_or(0, |(c, _)| *c) {
+            best = Some((
+                count,
+                RayRelativePose {
+                    rotation,
+                    translation,
+                    in_front,
+                },
+            ));
+        }
+    }
+    best.map(|(_, pose)| pose)
+}
+
 /// Settings of [`fit_ray_rotation`].
 #[derive(Clone, Copy, Debug)]
 pub struct RayRotationOptions {
@@ -236,7 +334,8 @@ pub struct RayRotationOptions {
     pub max_angle_rad: f64,
     /// Reject a consensus below this many correspondences.
     pub min_inliers: usize,
-    /// Minimal samples drawn (each is `ROT_SAMPLE` = 3 distinct indices).
+    /// Minimal samples drawn (each is `ROT_SAMPLE` = 3 distinct indices), at
+    /// most [`MAX_RAY_SAMPLES`].
     pub samples: usize,
     /// SplitMix64 sampler seed.
     pub seed: u64,
@@ -272,7 +371,7 @@ pub struct RayRotation {
 ///
 /// Scores seeded three-ray minimal samples by the angular residual, keeps the
 /// largest consensus, then refits on it. Returns `None` when no consensus
-/// reaches `min_inliers`.
+/// reaches `min_inliers`, and for `samples` above [`MAX_RAY_SAMPLES`].
 ///
 /// `r1[i]` and `r2[i]` are one correspondence, and both must be unit length;
 /// they are not normalized or checked. Slices of different lengths are read
@@ -285,6 +384,7 @@ pub fn fit_ray_rotation(
     let n = r1.len().min(r2.len());
     let (r1, r2) = (&r1[..n], &r2[..n]);
     if n < ROT_SAMPLE.max(options.min_inliers)
+        || options.samples > MAX_RAY_SAMPLES
         || options.max_angle_rad <= 0.0
         || !options.max_angle_rad.is_finite()
     {

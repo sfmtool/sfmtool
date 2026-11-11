@@ -11,6 +11,7 @@ use super::capture::{
     validate_sequences, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
 use super::frames::Frames;
+use super::pilot::pilot_vote;
 use super::report::{FrameReading, PickImagesReport, SensorReading, SequenceReport};
 use super::source::FrameSource;
 use super::walk::{walk_sequence, Walked};
@@ -23,6 +24,15 @@ use crate::progress::Progress;
 /// `target_step_percent` of the image's long side apart, with no step beyond
 /// the next frame keeping fewer than `min_step_matches` mutual matches, and
 /// a frame blurred against its neighbouring frames swapped for a sharper one.
+/// For a sequence with a [`CaptureSequence::camera`], the local density term
+/// measures each accepted step's essential split and divides the next step's
+/// target by up to `max_density_gain` where the last three show a near
+/// foreground in front of a distant view; the report says per sequence
+/// whether the term was on, and why not. With `options.pilot_vote` on, its
+/// default, and a `max_density_gain` above 1, a sequence with no camera first
+/// runs the pilot vote ([`super::PilotVote`]): the walk without the term until
+/// it has chosen 30 frames, a cluster match and focal vote on them, and the walk
+/// again from the first frame with the vote's camera when the vote is used.
 ///
 /// Every frame is read through `source`: [`pick_images`] waits on it for each
 /// frame just before reading the frame and, unless `options.prefetch` is
@@ -79,7 +89,22 @@ fn walk_all(
     sequences
         .iter()
         .enumerate()
-        .map(|(s, sequence)| walk_sequence(frames, s, sequence.frames.len(), options, &phase))
+        .map(|(s, sequence)| {
+            let len = sequence.frames.len();
+            let (pilot, found) = if sequence.camera.is_none()
+                && options.pilot_vote
+                && options.max_density_gain > 1.0
+            {
+                let (vote, camera) = pilot_vote(frames, s, len, options, &phase)?;
+                (Some(vote), camera)
+            } else {
+                (None, None)
+            };
+            let camera = sequence.camera.as_ref().or(found.as_ref());
+            let mut walked = walk_sequence(frames, s, len, camera, options, &phase, None)?;
+            walked.pilot_vote = pilot;
+            Ok(walked)
+        })
         .collect()
 }
 
@@ -132,6 +157,8 @@ fn assemble(walked: Vec<Walked>, frames: Frames, written: &[FrameId]) -> PickIma
             steps: walk.steps,
             swaps: walk.swaps,
             frames_read: readings.iter().filter(|f| f.id.sequence == s).count(),
+            density_term: walk.density_term,
+            pilot_vote: walk.pilot_vote,
         })
         .collect();
     let written: BTreeSet<FrameId> = written.iter().copied().collect();

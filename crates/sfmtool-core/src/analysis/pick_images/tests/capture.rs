@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! A synthetic capture for the walk's tests: a scene of points with random
-//! descriptors, seen by a pinhole camera along a path with known motion per
-//! frame, and a [`FrameSource`] that writes each frame's version 2 `.sift`
+//! descriptors, seen by a pinhole camera along a path with known motion and
+//! turn per frame, and a [`FrameSource`] that writes each frame's version 2 `.sift`
 //! files on a pool of workers, as the extracting source does, only for the
 //! frames it is asked to prefetch or wait for, and records what it was asked.
 
@@ -31,7 +31,7 @@ use crate::progress::Progress;
 
 pub(super) const WIDTH: u32 = 640;
 pub(super) const HEIGHT: u32 = 480;
-const FOCAL: f64 = 500.0;
+pub(super) const FOCAL: f64 = 500.0;
 /// The size of a rig's second sensor, which differs from the reference's.
 const SECOND_WIDTH: u32 = 320;
 const SECOND_HEIGHT: u32 = 240;
@@ -59,6 +59,9 @@ pub(super) enum Content {
 #[derive(Clone, Debug)]
 pub(super) struct Shot {
     pub(super) x: f64,
+    /// The camera's turn about the vertical axis, in radians from looking
+    /// along +z towards +x.
+    pub(super) yaw: f64,
     pub(super) content: Content,
     /// The readings of each sensor: sharpness and `[Exx, Eyy, Exy]`.
     pub(super) readings: Vec<(f32, [f32; 3])>,
@@ -122,11 +125,45 @@ impl Synth {
             .enumerate()
             .map(|(t, x)| Shot {
                 x,
+                yaw: 0.0,
                 content: Content::Scene,
                 readings: vec![sharp(t, 0), sharp(t, 1)],
             })
             .collect();
         self
+    }
+
+    /// A camera that turns by 1% of the long side per frame, `frames` times,
+    /// while it moves a little along x, in front of two rings of points about
+    /// the origin: most of them 300 away, which move almost only with the
+    /// turn, and a quarter of them 5 away, a near foreground whose parallax
+    /// is many times the distant points'.
+    pub(super) fn panning(seed: u64, frames: usize) -> Self {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let turn = 0.01 * f64::from(WIDTH) / FOCAL;
+        let span = (-0.8, turn * frames as f64 + 0.8);
+        let n = ((span.1 - span.0) * 520.0) as usize;
+        let points = (0..n)
+            .map(|_| {
+                let (radius, height) = if rng.random_range(0.0..1.0) < 0.25 {
+                    (5.0, 1.8)
+                } else {
+                    (300.0, 110.0)
+                };
+                let angle: f64 = rng.random_range(span.0..span.1);
+                [
+                    radius * angle.sin(),
+                    rng.random_range(-height..height),
+                    radius * angle.cos(),
+                ]
+            })
+            .collect();
+        let mut synth =
+            Self::with_points(&mut rng, points).along((0..frames).map(|t| 0.013 * t as f64));
+        for (t, shot) in synth.shots.iter_mut().enumerate() {
+            shot.yaw = turn * t as f64;
+        }
+        synth
     }
 
     /// A camera that moves `speed` along x every frame for `frames` frames.
@@ -160,6 +197,7 @@ impl Synth {
                 .map(|k| format!("cam{k}_%04d.jpg"))
                 .collect(),
             frames,
+            camera: None,
         }
     }
 
@@ -199,7 +237,16 @@ impl Synth {
             if !shown {
                 continue;
             }
-            let (x, y, z) = (point[0] - shot.x, point[1], point[2]);
+            let (x, y, z) = if shot.yaw == 0.0 {
+                (point[0] - shot.x, point[1], point[2])
+            } else {
+                let (dx, dz) = (point[0] - shot.x, point[2]);
+                let (sin, cos) = shot.yaw.sin_cos();
+                (cos * dx - sin * dz, point[1], sin * dx + cos * dz)
+            };
+            if z < 0.5 {
+                continue;
+            }
             let noise = |rng: &mut StdRng| 0.2 * rng.sample::<f64, _>(StandardNormal);
             let u = FOCAL * x / z + f64::from(WIDTH) / 2.0 + noise(&mut rng);
             let v = FOCAL * y / z + f64::from(HEIGHT) / 2.0 + noise(&mut rng);

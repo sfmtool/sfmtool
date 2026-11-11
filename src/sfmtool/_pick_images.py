@@ -12,7 +12,10 @@ into sequences by folder and by the name apart from the file number
 `number_from_filename` reads, which is the number `-r` selects a file by, so
 the pattern each sequence's list entry uses is built from the same rule. A
 rig's images are grouped into frames by the multi-sensor `.camrig` that
-covers them, found as `sfm solve` finds it.
+covers them, found as `sfm solve` finds it, and each sequence takes the
+camera of its reference sensor from the `.camrig` that covers its frames,
+for the walk's local density term; the walk finds the camera of a sequence
+with none by its pilot vote.
 For the other feature tools it extracts every frame's `.sift` files through
 `image_files_to_sift_files` with the workspace's settings. See
 specs/cli/image-feature/pick-images-command.md.
@@ -46,6 +49,11 @@ class PickSequence:
     # images: its image pattern as the `.camrig` stores it; `None` for a
     # sequence of single images.
     sensors: list[str] | None = None
+    # The camera dict of the reference sensor, from the `.camrig` that covers
+    # the sequence's frames, or `None`.
+    camera: dict | None = None
+    # Where `camera` comes from, or why there is none.
+    camera_source: str = "no .camrig covers its frames"
 
     @property
     def name(self) -> str:
@@ -125,14 +133,16 @@ class _Group:
 
 
 def find_rigs(image_paths: list[Path], workspace_dir: Path):
-    """The rigs that group `image_paths` into rig frames, found as `sfm solve`
-    finds them: `(camrig_rigs, notes)`.
+    """The rigs that group `image_paths` into rig frames, and the cameras of
+    the other images, found as `sfm solve` finds them:
+    `(camrig_rigs, camrig_cameras, notes)`.
 
     Each multi-sensor `.camrig` covering any of the images is returned in
     `camrig_rigs`, in path order, as a `CamrigRig` whose assignments hold the
-    images it covers; single-sensor ones, each a camera only, define no rig.
-    The images no multi-sensor `.camrig` covers are single images. `notes`
-    are the lines to print about the rigs.
+    images it covers; single-sensor ones, each a camera only, define no rig,
+    and are returned in `camrig_cameras` as a `CamrigCamera` with the images
+    it covers. The images no multi-sensor `.camrig` covers are single images.
+    `notes` are the lines to print about the rigs.
 
     Raises `PickImagesInputError` when the workspace root holds a
     `rig_config.json` (`_refuse_rig_config`), when an image is matched by
@@ -140,6 +150,7 @@ def find_rigs(image_paths: list[Path], workspace_dir: Path):
     cannot be used.
     """
     from .camrig.resolver import (
+        CamrigCamera,
         CamrigRig,
         CamrigSolveError,
         _build_rig_assignments,
@@ -155,9 +166,14 @@ def find_rigs(image_paths: list[Path], workspace_dir: Path):
 
     notes = []
     rigs = []
+    cameras = []
     for camrig_file, data, covered in hits:
         sensor_count = data["metadata"]["sensor_count"]
         if sensor_count == 1:  # a camera, not a rig
+            camera = data["cameras"][data["camera_indexes"][0]]
+            cameras.append(
+                CamrigCamera(camrig_file=camrig_file, camera=camera, images=covered)
+            )
             continue
         notes.append(f"  Camera rig: {camrig_file} ({sensor_count} sensors)")
         try:
@@ -171,13 +187,14 @@ def find_rigs(image_paths: list[Path], workspace_dir: Path):
                 assignments={p: a for p, a in assignments.items() if p in covered},
             )
         )
-    return rigs, notes
+    return rigs, cameras, notes
 
 
 def collect_sequences(
     image_paths: list[Path],
     workspace_dir: Path,
     camrig_rigs=(),
+    camrig_cameras=(),
 ) -> list[PickSequence]:
     """Group `image_paths`, all under `workspace_dir`, into sequences.
 
@@ -185,8 +202,11 @@ def collect_sequences(
     the number `number_from_filename` reads, ordered by that number. Each of
     `camrig_rigs` (the `CamrigRig`s from `find_rigs`) makes the images its
     assignments hold one rig sequence instead, framed by the `.camrig`'s frame
-    indexes, and the other images form sequences as above. The sequences are
-    ordered by their first pattern.
+    indexes, with the camera of its reference sensor, and the other images
+    form sequences as above, each with the camera of the one of
+    `camrig_cameras` (the `CamrigCamera`s from `find_rigs`) that covers all
+    its images, if one does. The sequences are ordered by their first
+    pattern.
 
     Raises `PickImagesInputError` naming the files with no number, the files
     of one sequence that share a number, the rig frames that lack a sensor
@@ -244,6 +264,7 @@ def collect_sequences(
         sequence, group_problems = _sequence(group)
         problems.extend(group_problems)
         if sequence is not None:
+            _camera_of(sequence, root, camrig_cameras)
             sequences.append(sequence)
     if problems:
         raise PickImagesInputError("\n".join(problems))
@@ -288,6 +309,25 @@ def _sequence(group: _Group) -> tuple[PickSequence | None, list[str]]:
         ),
         problems,
     )
+
+
+def _camera_of(sequence: PickSequence, root: Path, camrig_cameras) -> None:
+    """Give `sequence`, of single images under `root`, the camera of the
+    single-sensor `.camrig` of `camrig_cameras` that covers all its images,
+    or say how much of it they cover."""
+    images = {(root / i[0]).resolve() for i in sequence.images}
+    for camrig_camera in camrig_cameras:
+        covered = len(images & camrig_camera.images)
+        if covered == len(images):
+            sequence.camera = camrig_camera.camera
+            sequence.camera_source = f"the camera of {camrig_camera.camrig_file}"
+            return
+        if covered:
+            sequence.camera_source = (
+                f"{camrig_camera.camrig_file} covers only {covered} of its "
+                f"{len(images)} frames"
+            )
+            return
 
 
 def _camrig_sequence(
@@ -350,15 +390,21 @@ def _camrig_sequence(
         )
     if problems:
         return None, problems
-    return (
-        PickSequence(
-            patterns=patterns,
-            numbers=numbers,
-            images=[[Path(frames[n][s]) for s in sensors] for n in numbers],
-            sensors=[stored[s] for s in sensors],
-        ),
-        problems,
+    sequence = PickSequence(
+        patterns=patterns,
+        numbers=numbers,
+        images=[[Path(frames[n][s]) for s in sensors] for n in numbers],
+        sensors=[stored[s] for s in sensors],
     )
+    # A rig given none of its images is a sequence of no frames, with no
+    # reference sensor to take a camera from.
+    if sensors:
+        data = camrig_rig.data
+        sequence.camera = data["cameras"][data["camera_indexes"][sensors[0]]]
+        sequence.camera_source = (
+            f"the camera of {camrig_rig.camrig_file}, sensor {stored[sensors[0]]}"
+        )
+    return sequence, problems
 
 
 def sift_path(image_path: Path, feature_prefix_dir: str) -> Path:
@@ -370,8 +416,10 @@ def sift_path(image_path: Path, feature_prefix_dir: str) -> Path:
 def capture_sequences(
     sequences: list[PickSequence], workspace_dir: Path, feature_prefix_dir: str
 ):
-    """The `CaptureSequence` of each sequence, with absolute image paths."""
+    """The `CaptureSequence` of each sequence, with absolute image paths and
+    its camera."""
     from .analysis import CaptureFrame, CaptureImage, CaptureSequence
+    from .geometry import CameraIntrinsics
 
     root = Path(os.path.abspath(workspace_dir))
     capture = []
@@ -387,7 +435,14 @@ def capture_sequences(
                     ],
                 )
             )
-        capture.append(CaptureSequence(sequence.patterns, frames))
+        camera = sequence.camera
+        capture.append(
+            CaptureSequence(
+                sequence.patterns,
+                frames,
+                camera=None if camera is None else CameraIntrinsics.from_dict(camera),
+            )
+        )
     return capture
 
 

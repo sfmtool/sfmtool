@@ -5,15 +5,21 @@
 //! or measure the next frame first when there is none, measure the step,
 //! accept it or re-aim, keep every step beyond the next frame at or above the
 //! match floor, and swap a frame blurred against its neighbours for a sharper
-//! neighbour. See `specs/core/analysis/pick-images.md` § "The walk" and
-//! § "Run-ahead".
+//! neighbour; with the local density term, measure each accepted step's
+//! essential split and set the next step's target from the last three.
+//! See `specs/core/analysis/pick-images.md` § "The walk", § "The local
+//! density term" and § "Run-ahead".
 
 use std::collections::VecDeque;
 
 use super::capture::{FrameId, PickImagesError, PickImagesOptions};
+use super::density::{self, DensityTerm};
+use super::essential_split::EssentialSplitOptions;
 use super::frame_pair::{FrameFeatures, FramePairStats};
 use super::frames::Frames;
-use super::report::{StepKind, Swap, WalkStep};
+use super::pilot::PilotVote;
+use super::report::{StepDensity, StepKind, Swap, WalkStep};
+use crate::camera::CameraIntrinsics;
 use crate::numeric::median;
 use crate::progress::Progress;
 
@@ -33,6 +39,8 @@ pub(super) struct Walked {
     pub(super) chosen: Vec<usize>,
     pub(super) steps: Vec<WalkStep>,
     pub(super) swaps: Vec<Swap>,
+    pub(super) density_term: DensityTerm,
+    pub(super) pilot_vote: Option<PilotVote>,
 }
 
 /// The bounds one step works within.
@@ -62,28 +70,59 @@ struct Walker<'w, 'a> {
     /// The rates of the last accepted steps that kept the match floor; empty
     /// at the start and after a step to the next frame that did not.
     rates: VecDeque<f64>,
+    /// The local density term's split options, `None` with the term off.
+    split: Option<EssentialSplitOptions>,
+    /// The measures of the last accepted steps, at most
+    /// [`density::WINDOW`].
+    measures: VecDeque<f64>,
+    /// The next step's target, and the gain and median measure it came
+    /// from.
+    target: f64,
+    gain: f64,
+    median_measure: f64,
     walked: Walked,
 }
 
-/// Walk one sequence of `len` frames from its first frame to its last.
+/// Walk one sequence of `len` frames from its first frame to its last, with
+/// the local density term measuring with `camera` when it is given, or, with
+/// `stop_at`, until it has chosen that many frames.
 pub(super) fn walk_sequence(
     frames: &mut Frames,
     sequence: usize,
     len: usize,
+    camera: Option<&CameraIntrinsics>,
     options: &PickImagesOptions,
     progress: &Progress,
+    stop_at: Option<usize>,
 ) -> Result<Walked, PickImagesError> {
     let first = FrameId { sequence, frame: 0 };
     frames.ensure(&[first], progress)?;
+    let features = frames.features(first)?;
+    let split = density::split_options(
+        camera,
+        features.width(),
+        features.height(),
+        options.max_density_gain,
+    );
+    let density_term = match &split {
+        Ok(split) => {
+            let (fx, fy) = split.camera.focal_lengths();
+            DensityTerm::On {
+                focal_px: 0.5 * (fx + fy),
+            }
+        }
+        Err(off) => DensityTerm::Off(off.clone()),
+    };
     let walked = Walked {
         chosen: vec![0],
         steps: Vec::new(),
         swaps: Vec::new(),
+        density_term,
+        pilot_vote: None,
     };
     if len == 1 {
         return Ok(walked);
     }
-    let features = frames.features(first)?;
     let mut walker = Walker {
         frames,
         options,
@@ -93,9 +132,15 @@ pub(super) fn walk_sequence(
         current: (0, features),
         candidate: None,
         rates: VecDeque::new(),
+        split: split.ok(),
+        measures: VecDeque::new(),
+        target: options.target_step_percent,
+        gain: 1.0,
+        median_measure: 1.0,
         walked,
     };
-    while walker.current.0 < walker.last {
+    let stop_at = stop_at.unwrap_or(usize::MAX);
+    while walker.current.0 < walker.last && walker.walked.chosen.len() < stop_at {
         walker.step()?;
     }
     Ok(walker.walked)
@@ -179,12 +224,11 @@ impl Walker<'_, '_> {
             return f + 1;
         }
         let rates: Vec<f64> = rates.iter().copied().collect();
-        let target = self.options.target_step_percent;
-        Self::aim(f, target / median(&rates), f + 1, self.last)
+        Self::aim(f, self.target / median(&rates), f + 1, self.last)
     }
 
     fn bounds(&self) -> StepBounds {
-        let target = self.options.target_step_percent;
+        let target = self.target;
         StepBounds {
             from: self.current.0,
             low: target * (1.0 - self.options.step_band),
@@ -466,7 +510,8 @@ impl Walker<'_, '_> {
     /// Make `c`, reached with `stats`, the last chosen frame. A step that
     /// keeps the floor adds its rate to the recent rates; a step to the next
     /// frame that does not clears them, so the next step measures its next
-    /// frame first.
+    /// frame first. With the local density term, the step's essential split
+    /// is measured and the next step's target set from the last measures.
     fn accept(
         &mut self,
         c: usize,
@@ -476,19 +521,66 @@ impl Walker<'_, '_> {
         let f = self.current.0;
         let rate = stats.step_percent / (c - f) as f64;
         self.rates = self.rates_after(f, c, &stats);
+        let features = match self.candidate.take() {
+            Some((n, features)) if n == c => features,
+            _ => self.frames.features(self.id(c))?,
+        };
+        let density = self.density_after(c, &features)?;
         self.walked.steps.push(WalkStep {
             from: f,
             to: c,
             stats,
             rate,
             kind,
+            density,
         });
         self.walked.chosen.push(c);
-        let features = match self.candidate.take() {
-            Some((n, features)) if n == c => features,
-            _ => self.frames.features(self.id(c))?,
-        };
         self.current = (c, features);
         Ok(())
+    }
+
+    /// The local density term's reading of the step from the last chosen
+    /// frame to `c`, whose features are `features`, with the target it was
+    /// walked with. With the term on, the step's split is measured and the
+    /// next step's target set from the measures of the last
+    /// [`density::WINDOW`] steps.
+    fn density_after(
+        &mut self,
+        c: usize,
+        features: &FrameFeatures,
+    ) -> Result<StepDensity, PickImagesError> {
+        let walked_with = StepDensity {
+            target_percent: self.target,
+            gain: self.gain,
+            median_measure: self.median_measure,
+            essential_split: None,
+            measure: 1.0,
+        };
+        let Some(split) = &self.split else {
+            return Ok(walked_with);
+        };
+        let essential_split = self.frames.measure_split(
+            self.id(self.current.0),
+            &self.current.1,
+            self.id(c),
+            features,
+            split,
+            self.progress,
+        )?;
+        let measure = density::step_measure(&essential_split);
+        self.measures.push_back(measure);
+        if self.measures.len() > density::WINDOW {
+            self.measures.pop_front();
+        }
+        let measures: Vec<f64> = self.measures.iter().copied().collect();
+        let (median_measure, gain) = density::gain(&measures, self.options.max_density_gain);
+        self.median_measure = median_measure;
+        self.gain = gain;
+        self.target = self.options.target_step_percent / gain;
+        Ok(StepDensity {
+            essential_split: Some(essential_split),
+            measure,
+            ..walked_with
+        })
     }
 }

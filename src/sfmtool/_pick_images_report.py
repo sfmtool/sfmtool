@@ -57,6 +57,125 @@ def _motion_rows(walk: dict, numbers: list[int]) -> list[str]:
     return rows
 
 
+def _vote_model(vote: dict) -> str:
+    """The camera model of a pilot vote's verdict, in words."""
+    if vote["camera_model"] == "EquidistantFisheye":
+        return (
+            "unconfirmed equidistant fisheye"
+            if vote["confirmed"] is False
+            else "equidistant fisheye"
+        )
+    return "pinhole"
+
+
+def pilot_source(vote: dict, sequence: PickSequence) -> str:
+    """What `sequence`'s camera source is after its pilot vote: the vote's
+    camera, with its model, focal and pool spread, or why the vote gave it
+    none, followed by the note of a `.camrig` that covers only some of its
+    frames."""
+    text = _vote_source(vote)
+    if sequence.camera_source != PickSequence.camera_source:
+        text = f"{text}; {sequence.camera_source}"
+    return text
+
+
+def _vote_source(vote: dict) -> str:
+    """The camera a pilot vote gave, or why it gave none."""
+    outcome = vote["outcome"]
+    status = outcome["status"]
+    if status == "used":
+        return (
+            f"the pilot vote's {_vote_model(vote)} camera, focal "
+            f"{vote['focal_px']:.1f} px, pool spread {vote['pool_spread']:.3f}"
+        )
+    if status == "wide_spread":
+        return (
+            f"the pilot vote's pool spread {vote['pool_spread']:.3f} is above "
+            f"{outcome['max_pool_spread']:g} ({_vote_model(vote)}, focal "
+            f"{vote['focal_px']:.1f} px)"
+        )
+    if status == "no_consensus":
+        pooled = vote["n_pool"]
+        return (
+            f"the pilot vote reached no consensus ({pooled} pooled "
+            f"vote{'' if pooled == 1 else 's'})"
+        )
+    return (
+        f"the pilot walk chose {len(vote['frames'])} frames, and a vote needs "
+        f"at least {outcome['min_frames']}"
+    )
+
+
+def _pilot_line(vote: dict) -> str:
+    """The line giving what the pilot vote read and how long it took."""
+    return (
+        f"  Pilot vote: {len(vote['frames'])} frames chosen, "
+        f"{vote['frames_read']} read, {vote['features']} features in "
+        f"{vote['clusters']} clusters; took {vote['seconds']:.1f} s"
+    )
+
+
+def _density_term_line(walk: dict, sequence: PickSequence) -> str:
+    """The line saying whether the local density term was on, with the
+    camera it measured with and how many steps it shortened, or why it was
+    off."""
+    term = walk["density_term"]
+    if term["status"] == "on":
+        steps = walk["steps"]
+        gained = sum(s["density"]["gain"] > 1 for s in steps)
+        # The pilot vote's camera is at the frames' size, and its source
+        # names its focal.
+        focal = (
+            ""
+            if walk["pilot_vote"] is not None
+            else f" (focal {term['focal_px']:.1f} px at the frames' size)"
+        )
+        return (
+            f"  Local density term: on, with {sequence.camera_source}{focal}; "
+            f"{gained} of {len(steps)} steps walked with a gain above 1"
+        )
+    reason = term["reason"]
+    if reason == "max_gain_one":
+        why = "--max-density-gain is 1"
+    elif reason == "no_camera":
+        why = sequence.camera_source
+    elif reason == "camera_shape":
+        (cw, ch), (fw, fh) = term["camera"], term["frames"]
+        why = (
+            f"{sequence.camera_source} is {cw} x {ch}, of another aspect than the "
+            f"frames' {fw} x {fh}"
+        )
+    else:
+        why = f"{sequence.camera_source} cannot be measured with: {term['problem']}"
+    return f"  Local density term: off, {why}"
+
+
+def _density_rows(walk: dict, numbers: list[int]) -> list[str]:
+    """The table of each step's target, the gain and median measure it came
+    from, and the step's parallax P50 and P90/P50 and measure."""
+    rows = [
+        "  Local density by step (target, gain, median measure of the last three "
+        "steps; the step's parallax P50, P90/P50 and measure):",
+        f"    {'frames':>15}  {'target':>7}  {'gain':>5}  {'median':>6}  "
+        f"{'P50 deg':>8}  {'P90/P50':>7}  {'measure':>7}",
+    ]
+    for step in walk["steps"]:
+        density = step["density"]
+        frames = f"{numbers[step['from']]}-{numbers[step['to']]}"
+        split = density["essential_split"]
+        if split["status"] == "measured":
+            p50, p90 = split["parallax_p50_deg"], split["parallax_p90_deg"]
+            ratio = f"{p90 / p50:7.2f}" if p50 else f"{'-':>7}"
+            parallax = f"{p50:8.3f}  {ratio}  {density['measure']:7.2f}"
+        else:
+            parallax = f"not measured ({split['reason']})"
+        rows.append(
+            f"    {frames:>15}  {density['target_percent']:6.2f}%  "
+            f"{density['gain']:5.2f}  {density['median_measure']:6.2f}  {parallax}"
+        )
+    return rows
+
+
 def walk_lines(
     report: dict,
     index: int,
@@ -86,6 +205,9 @@ def walk_lines(
         f"  Chosen: {len(walk['chosen'])} of {len(numbers)} frames; read: {read} "
         f"frames ({written} extracted, {read - written} reused)"
     )
+    lines.append(_density_term_line(walk, sequence))
+    if walk["pilot_vote"] is not None:
+        lines.append(_pilot_line(walk["pilot_vote"]))
     lines.append(
         "  Motion along the capture (median step, rate per frame, frames per step):"
     )
@@ -108,6 +230,8 @@ def walk_lines(
         if swaps
         else f"  {heading}: none"
     )
+    if walk["density_term"]["status"] == "on" and steps:
+        lines.extend(_density_rows(walk, numbers))
     return lines
 
 
