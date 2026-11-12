@@ -526,7 +526,11 @@ The code that reads, writes and verifies `.sift` files is:
   [`sfmtool-sift-format`](../../crates/sfmtool-sift-format/src/lib.rs), with
   readers for part of a file: `read_sift_partial` (the first `k` features),
   `read_sift_positions`, `read_sift_keypoints`, `read_sift_features` (the three
-  feature columns only) and `read_sift_thumbnail`. Every reader rejects an
+  feature columns only), `read_sift_positions_descriptors` (the positions and
+  descriptors, for descriptor matching) and `read_sift_thumbnail`. Each
+  reader decompresses only the entries it needs, so a damaged entry it does
+  not read raises no error from it. No reader checks the content hashes
+  against the bytes; `verify_sift` does. Every reader rejects an
   unsupported `metadata.version`; `write_sift` refuses to write one; and
   `verify_sift`, which returns `(is_valid, error_messages)`, reports it as an
   error. Every reader also rejects a version 2 file without the two readings

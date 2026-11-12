@@ -144,6 +144,28 @@ finds the directory its parent would. Commands use it, through
 workspace of an input path that records none, so a recorded file and an input
 path find their workspace by one rule.
 
+**An entry is decompressed into a buffer of its known size.** Each zstd frame
+`zstd_compress` writes records its decompressed size in its header, and a
+format's metadata says how many bytes each binary entry holds. When an entry
+has at least one stored byte, every frame of it records a size and needs a
+window the stream decoder accepts (at most 2^27 + 1 bytes, zstd's default
+limit; a single-segment frame's window is its content size, any other frame's
+comes from its window descriptor), the total is at most 32,768 times the
+stored size (no zstd data expands further: a 4-byte RLE block is at most
+128 KiB), and it equals the size the caller expects
+(`read_binary_array` and `read_uint128_array` pass the element count times the
+element size; `read_zst_entry` and `DecodedEntries` pass none), the frames are
+decompressed in one call into a buffer reserved at that size, and the result is
+kept only if it is exactly that long. Otherwise, and whenever that call fails,
+the entry is decoded as a stream into a growing buffer, as it would be without
+the size. That second path is where every error comes from, so a size that lies
+changes no value and no error message: it costs at most one reservation,
+bounded by the stored size and by what the caller's metadata says, and a
+reservation that cannot be made is skipped rather than aborting. The stored
+bytes, by `read_zst_entry` and `DecodedEntries` alike, are read into a buffer
+reserved at the entry's recorded size, capped at the offset of the ZIP's
+central directory, which the entry lies before.
+
 **Hash strings are parsed strictly.** `parse_hash` accepts exactly 32
 characters from `0-9a-f` and nothing else: no uppercase, no sign, no other
 length. Every writer (`format_hash` in Rust, `hexdigest()` in Python) produces
@@ -351,6 +373,20 @@ the same entry, every typed accessor must equal its free-function counterpart,
 and the length-mismatch and missing-entry errors must render the same string.
 The archive-order rule gets a file with two unreadable entries, read repeatedly,
 which must name the earlier one every time.
+
+The one-call decompression is tested against the stream path it stands in for:
+over empty, short, one-block and several-block payloads the two return the same
+bytes, and the one-call path is the one taken. A frame that records no size
+goes to the stream, and so does an entry with no stored bytes, which is the
+stream path's error from every reader. A frame header rewritten to claim 100
+bytes more or fewer than it holds, and an entry missing its last bytes, give
+exactly the stream path's error whatever size the caller expects. A header
+claiming 4 GiB for a few stored bytes, or a caller expecting a size the header
+does not record, gets no one-call size. So does a valid frame needing a window
+larger than the stream decoder accepts, single-segment or not, whose stream
+error every reader gives. An element count whose byte size does not fit in a
+`usize` is a `ShapeMismatch`, not an overflow. A recorded stored size larger
+than the central directory's offset reserves no more than that offset.
 
 Two properties get dedicated tests because everything above rests on them:
 `write_binary_entry_hashed` must produce the same digest as hashing the two

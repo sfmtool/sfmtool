@@ -157,14 +157,167 @@ pub fn read_zst_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
 ) -> Result<Vec<u8>, ArchiveIoError> {
-    let mut entry = archive.by_name(name)?;
-    let mut compressed = Vec::new();
-    entry.read_to_end(&mut compressed)?;
-    decode_zst(name, &compressed)
+    read_zst_entry_of_size(archive, name, None)
 }
 
-/// Expand one entry's stored zstd frame, naming the entry in the error.
-fn decode_zst(name: &str, compressed: &[u8]) -> Result<Vec<u8>, ArchiveIoError> {
+/// [`read_zst_entry`], told how many bytes the caller's metadata says the
+/// entry expands to, so the decompressor can fill one buffer of that size.
+fn read_zst_entry_of_size<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+    expected_bytes: Option<usize>,
+) -> Result<Vec<u8>, ArchiveIoError> {
+    // Entries are stored, so the stored size is what is read.
+    let directory_start = archive.central_directory_start();
+    let mut entry = archive.by_name(name)?;
+    let mut compressed = stored_buffer(entry.compressed_size(), directory_start);
+    entry.read_to_end(&mut compressed)?;
+    decode_zst(name, &compressed, expected_bytes)
+}
+
+/// An empty buffer for an entry's stored bytes, reserved at its recorded
+/// `stored_size` capped at `directory_start`, the offset of the ZIP's central
+/// directory, which every entry lies before. A reservation that cannot be made
+/// is skipped, leaving `read_to_end` to grow the buffer.
+fn stored_buffer(stored_size: u64, directory_start: u64) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let stored = usize::try_from(stored_size.min(directory_start)).unwrap_or(0);
+    let _ = buffer.try_reserve_exact(stored);
+    buffer
+}
+
+/// The most bytes one byte of zstd data can expand to.
+///
+/// A zstd block expands to at most 128 KiB, and the smallest block that does
+/// is an RLE block: a 3-byte header and the 1 byte it repeats. So no input of
+/// `n` bytes, however many frames it holds, expands to more than
+/// `n * 128 KiB / 4` bytes, and a frame header that claims more is lying.
+const MAX_ZSTD_EXPANSION: usize = 128 * 1024 / 4;
+
+/// Expand one entry's stored zstd frames, naming the entry in the error.
+///
+/// When [`one_call_size`] gives a size, the frames are decompressed in one
+/// call into a buffer of that size, and the result is kept only if it is
+/// exactly that long. Otherwise, and whenever that one call fails, the entry
+/// is decoded as a stream into a growing buffer ([`decode_zst_stream`]), which
+/// returns the same bytes and is the path every error is reported from. A
+/// size that lies therefore costs at most one reservation, bounded as
+/// [`one_call_size`] says, and changes no result and no error.
+fn decode_zst(
+    name: &str,
+    compressed: &[u8],
+    expected_bytes: Option<usize>,
+) -> Result<Vec<u8>, ArchiveIoError> {
+    if let Some(bytes) = decode_zst_one_call(compressed, expected_bytes) {
+        return Ok(bytes);
+    }
+    decode_zst_stream(name, compressed)
+}
+
+/// The size [`decode_zst`] decompresses into in one call, or `None` to decode
+/// as a stream.
+///
+/// It is the sum of the sizes the frame headers record, taken only when there
+/// is at least one stored byte, every frame records a size and needs a window
+/// the stream decoder accepts ([`MAX_STREAM_WINDOW_SIZE`]), the total is at
+/// most [`MAX_ZSTD_EXPANSION`] times the stored size, and it equals
+/// `expected_bytes`, the size the caller's metadata gives, where the caller
+/// passes one.
+fn one_call_size(compressed: &[u8], expected_bytes: Option<usize>) -> Option<usize> {
+    // No bytes are no frame, which the stream path reports as an error.
+    if compressed.is_empty() {
+        return None;
+    }
+    // `None` when a frame records no size or the input is not a clean
+    // sequence of frames.
+    let recorded = zstd::bulk::Decompressor::upper_bound(compressed)?;
+    if !windows_fit_the_stream_decoder(compressed) {
+        return None;
+    }
+    let plausible = recorded <= compressed.len().saturating_mul(MAX_ZSTD_EXPANSION);
+    let as_expected = expected_bytes.is_none_or(|expected| expected == recorded);
+    (plausible && as_expected).then_some(recorded)
+}
+
+/// The largest window the stream decoder accepts: zstd's
+/// `ZSTD_MAXWINDOWSIZE_DEFAULT`, `2^ZSTD_WINDOWLOG_LIMIT_DEFAULT + 1` with a
+/// window log limit of 27. Neither constant is exposed without zstd's
+/// experimental API. A frame needing a larger window is an error on the stream
+/// path ("Frame requires too much memory for decoding"), so it is left to that
+/// path even though the one-call decoder would expand it.
+const MAX_STREAM_WINDOW_SIZE: u64 = (1 << 27) + 1;
+
+/// Whether every frame of `compressed` needs a window the stream decoder
+/// accepts. `false` for anything that is not a clean sequence of zstd and
+/// skippable frames, which then goes to the stream path to be reported.
+///
+/// The window size is read from each frame header as the zstd format
+/// specification gives it: a single-segment frame's window is its content
+/// size, and any other frame's comes from its window descriptor byte, the one
+/// after the frame header descriptor (exponent in the high 5 bits, mantissa in
+/// the low 3).
+fn windows_fit_the_stream_decoder(mut compressed: &[u8]) -> bool {
+    const FRAME_MAGIC: u32 = 0xFD2F_B528;
+    const SKIPPABLE_MAGIC_MASK: u32 = 0xFFFF_FFF0;
+    const SKIPPABLE_MAGIC: u32 = 0x184D_2A50;
+    while !compressed.is_empty() {
+        let Some(magic) = compressed
+            .first_chunk::<4>()
+            .map(|m| u32::from_le_bytes(*m))
+        else {
+            return false;
+        };
+        if magic & SKIPPABLE_MAGIC_MASK != SKIPPABLE_MAGIC {
+            if magic != FRAME_MAGIC {
+                return false;
+            }
+            let Some(&descriptor) = compressed.get(4) else {
+                return false;
+            };
+            let window = if descriptor & 0x20 != 0 {
+                match zstd::zstd_safe::get_frame_content_size(compressed) {
+                    Ok(Some(size)) => size,
+                    _ => return false,
+                }
+            } else {
+                let Some(&window_descriptor) = compressed.get(5) else {
+                    return false;
+                };
+                let window_log = 10 + u32::from(window_descriptor >> 3);
+                let base = 1u64 << window_log;
+                base + (base / 8) * u64::from(window_descriptor & 7)
+            };
+            if window > MAX_STREAM_WINDOW_SIZE {
+                return false;
+            }
+        }
+        let Ok(frame_len) = zstd::zstd_safe::find_frame_compressed_size(compressed) else {
+            return false;
+        };
+        let Some(rest) = compressed.get(frame_len..) else {
+            return false;
+        };
+        compressed = rest;
+    }
+    true
+}
+
+/// The one-call path of [`decode_zst`], or `None` when it does not apply or
+/// does not succeed.
+fn decode_zst_one_call(compressed: &[u8], expected_bytes: Option<usize>) -> Option<Vec<u8>> {
+    let size = one_call_size(compressed, expected_bytes)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(size).ok()?;
+    let mut decompressor = zstd::bulk::Decompressor::new().ok()?;
+    let written = decompressor
+        .decompress_to_buffer(compressed, &mut out)
+        .ok()?;
+    (written == size && out.len() == size).then_some(out)
+}
+
+/// The stream path of [`decode_zst`]: decode into a buffer that grows as
+/// the frames expand.
+fn decode_zst_stream(name: &str, compressed: &[u8]) -> Result<Vec<u8>, ArchiveIoError> {
     let mut decompressed = Vec::new();
     zstd::stream::copy_decode(compressed, &mut decompressed).map_err(|e| {
         ArchiveIoError::InvalidFormat(format!("zstd decompression failed for {name}: {e}"))
@@ -189,7 +342,9 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
     name: &str,
     expected_len: usize,
 ) -> Result<Vec<T>, ArchiveIoError> {
-    bytes_to_array(name, &read_zst_entry(archive, name)?, expected_len)
+    let expected_bytes = expected_len.checked_mul(std::mem::size_of::<T>());
+    let bytes = read_zst_entry_of_size(archive, name, expected_bytes)?;
+    bytes_to_array(name, &bytes, expected_len)
 }
 
 /// Validate a decompressed entry's length and reinterpret it as `T` values.
@@ -202,7 +357,12 @@ fn bytes_to_array<T: bytemuck::Pod>(
     bytes: &[u8],
     expected_len: usize,
 ) -> Result<Vec<T>, ArchiveIoError> {
-    let expected_bytes = expected_len * std::mem::size_of::<T>();
+    let Some(expected_bytes) = expected_len.checked_mul(std::mem::size_of::<T>()) else {
+        return Err(ArchiveIoError::ShapeMismatch(format!(
+            "{name}: expected {expected_len} elements, more bytes than fit in memory, got {} bytes",
+            bytes.len()
+        )));
+    };
     if bytes.len() != expected_bytes {
         return Err(ArchiveIoError::ShapeMismatch(format!(
             "{name}: expected {expected_bytes} bytes ({expected_len} elements), got {} bytes",
@@ -247,7 +407,8 @@ pub fn read_uint128_array<R: Read + Seek>(
     name: &str,
     count: usize,
 ) -> Result<Vec<[u8; 16]>, ArchiveIoError> {
-    bytes_to_uint128(name, &read_zst_entry(archive, name)?, count)
+    let bytes = read_zst_entry_of_size(archive, name, count.checked_mul(16))?;
+    bytes_to_uint128(name, &bytes, count)
 }
 
 /// [`bytes_to_array`] for the raw 16-byte digest columns.
@@ -256,7 +417,12 @@ fn bytes_to_uint128(
     bytes: &[u8],
     count: usize,
 ) -> Result<Vec<[u8; 16]>, ArchiveIoError> {
-    let expected = count * 16;
+    let Some(expected) = count.checked_mul(16) else {
+        return Err(ArchiveIoError::ShapeMismatch(format!(
+            "{name}: expected {count} hashes, more bytes than fit in memory, got {} bytes",
+            bytes.len()
+        )));
+    };
     if bytes.len() != expected {
         return Err(ArchiveIoError::ShapeMismatch(format!(
             "{name}: expected {expected} bytes ({count} hashes), got {} bytes",
@@ -307,6 +473,7 @@ impl DecodedEntries {
     /// One sequential pass collects each entry's stored bytes; the zstd frames
     /// are then expanded in parallel, which is the point of the type.
     pub fn read_all<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<Self, ArchiveIoError> {
+        let directory_start = archive.central_directory_start();
         let mut stored: Vec<(String, Vec<u8>)> = Vec::with_capacity(archive.len());
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index)?;
@@ -315,14 +482,14 @@ impl DecodedEntries {
             }
             let name = entry.name()?.into_owned();
             // STORE method throughout, so the stored size is what we read.
-            let mut compressed = Vec::with_capacity(entry.compressed_size() as usize);
+            let mut compressed = stored_buffer(entry.compressed_size(), directory_start);
             entry.read_to_end(&mut compressed)?;
             stored.push((name, compressed));
         }
 
         let decoded: Vec<Result<Vec<u8>, ArchiveIoError>> = stored
             .par_iter()
-            .map(|(name, compressed)| decode_zst(name, compressed))
+            .map(|(name, compressed)| decode_zst(name, compressed, None))
             .collect();
 
         // Reassembled in archive order, so an archive with several unreadable

@@ -750,12 +750,14 @@ in its folder after the check, is `Version1Sift`, with the same advice.
 ## Implementation notes
 
 - **One forest per frame, held only while it has a pair to match.** A frame's
-  features are read from its `.sift` file and its forest built
-  (`FrameFeatures::from_sift`) when a pair needs it. The walk holds the last
-  chosen frame's features, read when a pair from it is first matched, and
-  those of each candidate of the step it is taking, and the accepted
-  candidate's become the chosen frame's, so a frame's features are read once
-  for the pairs of one step. A frame's readings, a few numbers per sensor,
+  positions and descriptors are read from its `.sift` file
+  (`read_sift_positions_descriptors`, which leaves the affine shapes and the
+  thumbnail compressed) and its forest built (`FrameFeatures::from_sift`) when
+  a pair needs it. The walk holds the last chosen frame's features, read when a
+  pair from it is first matched, and those of each candidate of the step it is
+  taking, and the accepted candidate's become the chosen frame's, so a frame's
+  features are read once for the pairs of one step. A frame's readings, a few
+  numbers per sensor,
   are kept for every frame read. A pair's statistics are kept, so a pair is
   never matched twice.
 - **Matched positions are kept while a step may still be accepted.** With

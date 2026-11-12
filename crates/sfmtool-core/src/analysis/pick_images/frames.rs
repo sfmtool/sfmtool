@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 
 use sfmtool_sift_format::{
-    read_sift_features, read_sift_metadata, SiftError, SiftMetadata, DESCRIPTOR_DIM,
+    read_sift_metadata, read_sift_positions_descriptors, SiftError, SiftMetadata, DESCRIPTOR_DIM,
     SIFT_READINGS_VERSION,
 };
 
@@ -188,24 +188,24 @@ impl<'a> Frames<'a> {
         count: usize,
     ) -> Result<(Vec<[f32; 2]>, Vec<u8>), PickImagesError> {
         let path = &self.sequences[id.sequence].frames[id.frame].images[0].sift_path;
-        let mut features =
-            read_sift_features(path).map_err(|source| PickImagesError::ReadSift {
+        let (mut positions_xy, mut descriptors) =
+            read_sift_positions_descriptors(path).map_err(|source| PickImagesError::ReadSift {
                 path: path.clone(),
                 source,
             })?;
-        let n = count.min(features.positions_xy.len());
-        if features.descriptors.len() < n * DESCRIPTOR_DIM {
+        let n = count.min(positions_xy.len());
+        if descriptors.len() < n * DESCRIPTOR_DIM {
             return Err(PickImagesError::ReadSift {
                 path: path.clone(),
                 source: SiftError::InvalidFormat(format!(
                     "{} descriptor bytes for {n} features",
-                    features.descriptors.len()
+                    descriptors.len()
                 )),
             });
         }
-        features.positions_xy.truncate(n);
-        features.descriptors.truncate(n * DESCRIPTOR_DIM);
-        Ok((features.positions_xy, features.descriptors))
+        positions_xy.truncate(n);
+        descriptors.truncate(n * DESCRIPTOR_DIM);
+        Ok((positions_xy, descriptors))
     }
 
     /// The features of a frame read: its reference sensor's, with the forest
@@ -213,10 +213,11 @@ impl<'a> Frames<'a> {
     pub(super) fn features(&self, id: FrameId) -> Result<FrameFeatures, PickImagesError> {
         let i = self.index[id.sequence][id.frame].expect("the frame was read");
         let path = &self.sequences[id.sequence].frames[id.frame].images[0].sift_path;
-        let features = read_sift_features(path).map_err(|source| PickImagesError::ReadSift {
-            path: path.clone(),
-            source,
-        })?;
+        let features =
+            read_sift_positions_descriptors(path).map_err(|source| PickImagesError::ReadSift {
+                path: path.clone(),
+                source,
+            })?;
         FrameFeatures::from_sift(features, &self.read[i].metadata, self.options.forest).map_err(
             |e| PickImagesError::ReadSift {
                 path: path.clone(),
