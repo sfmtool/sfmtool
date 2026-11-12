@@ -198,7 +198,8 @@ def test_refine_normals_renders_bitmaps_only_where_stored(seoul_bull_normals_ref
 
     # Bitmaps at R = 12 rather than the default 24: the refinement runs at the
     # value's patch resolution, so this pass costs about a third as much, and
-    # it still rewrites most points but not all of them (90 of 99).
+    # it still rewrites most points. The fixture's point at infinity is one it
+    # does not rewrite.
     with_bitmaps = AddPatchBitmapsTransform(resolution=12).apply(recon)
     out = RefineNormalsTransform().apply(with_bitmaps)
     before = np.asarray(with_bitmaps.patch_bitmaps)

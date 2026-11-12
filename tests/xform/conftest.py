@@ -117,12 +117,34 @@ def positions_are_translated(
 @pytest.fixture(scope="session")
 def seoul_bull_normals_refined(seoul_bull_workspace_once: Path):
     """Every eighth point of the seoul_bull workspace (``SEOUL_BULL_POINT_STEP``)
-    converted to ``embedded_patches`` (mean-viewing normals, no bitmaps) and
-    ``RefineNormalsTransform()``'s output on it, built once for the tests that
-    only read them. Read them; do not modify them or their source workspace."""
+    and point 1, converted to ``embedded_patches`` (mean-viewing normals, no
+    bitmaps), and ``RefineNormalsTransform()``'s output on it, built once for
+    the tests that only read them. Read them; do not modify them or their
+    source workspace.
+
+    Point 1, row 1 of the subset, is made a point at infinity in the direction
+    from the mean camera centre to where it was. The refinement skips points at
+    infinity, so it leaves at least that row unchanged on every platform. Which
+    finite points it leaves unchanged depends on the triangulation, which
+    differs between platforms, and on some it turns every finite point."""
     from sfmtool.xform import RefineNormalsTransform
 
-    recon = every_nth_point(
-        SfmrReconstruction.load(seoul_bull_workspace_once), SEOUL_BULL_POINT_STEP
-    ).to_embedded_patches(normal="mean_viewing", extent_value=5.0)
+    subset = every_nth_point(
+        SfmrReconstruction.load(seoul_bull_workspace_once),
+        SEOUL_BULL_POINT_STEP,
+        keep=[1],
+    )
+    centers = np.array(
+        [
+            -RotQuaternion.from_wxyz_array(q).to_rotation_matrix().T @ t
+            for q, t in zip(subset.quaternions_wxyz, subset.translations)
+        ]
+    )
+    positions = np.array(subset.positions_xyzw, dtype=np.float64)
+    direction = positions[1, :3] - centers.mean(axis=0)
+    positions[1] = np.append(direction / np.linalg.norm(direction), 0.0)
+    recon = subset.clone_with_changes(positions=positions).to_embedded_patches(
+        normal="mean_viewing", extent_value=5.0
+    )
+    assert np.asarray(recon.point_is_at_infinity).nonzero()[0].tolist() == [1]
     return recon, RefineNormalsTransform().apply(recon)
