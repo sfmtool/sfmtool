@@ -11,6 +11,7 @@ frame across one dino_dog_toy photograph, a step of 1.25% of the long side.
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -1044,3 +1045,35 @@ def test_new_workspace_options_without_it_are_usage_errors(
     assert result.exit_code == 2, result.output
     assert f"{named}: only with --new-workspace." in result.output
     assert not (pan_workspace / "frames" / "features").exists()
+
+
+def test_new_workspace_through_a_linked_directory(tmp_path: Path, pan_videos):
+    # DIR reached through a directory link: the list keeps paths under DIR,
+    # and the prune keeps the chosen frames.
+    (tmp_path / "real").mkdir()
+    link = tmp_path / "link"
+    try:
+        if os.name == "nt":
+            import _winapi
+
+            _winapi.CreateJunction(str(tmp_path / "real"), str(link))
+        else:
+            link.symlink_to(tmp_path / "real", target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"cannot link a directory here: {error}")
+    workspace = link / "garden"
+    result = _new_workspace(
+        workspace,
+        pan_videos[:1],
+        *FAST,
+        *["-r", "5-36", "--write-list", "picked", "--prune-images"],
+        *["--json", str(workspace / "r.json")],
+    )
+    assert result.exit_code == 0, result.output
+    (chosen,) = json.loads((workspace / "r.json").read_text())["chosen_numbers"]
+    kept = [f"top/frame_{n:06d}.jpg" for n in chosen]
+    assert _resolve(workspace, "picked") == kept
+    frames = tmp_path / "real" / "garden" / "top"
+    assert sorted(p.name for p in frames.glob("frame_*.jpg")) == [
+        f"frame_{n:06d}.jpg" for n in chosen
+    ]

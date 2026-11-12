@@ -618,7 +618,7 @@ def _pick_from_videos(
         count = len(videos)
         result = _run(
             filenames=filenames,
-            workspace_dir=workspace_dir.resolve(),
+            workspace_dir=Path(os.path.abspath(workspace_dir)),
             given=f"Given {count} video{'' if count == 1 else 's'}",
             write_list=write_list,
             force=force,

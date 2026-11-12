@@ -720,7 +720,9 @@ order, a list that resolves to the frames the JSON report chose, a `.sift`
 file for each chosen frame and every frame kept without `--prune-images`;
 `--prune-images` with `-r 5-36`, after which exactly the chosen frames, their
 `.sift` files, the workspace, lists and record files and the JSON report are
-left, with the count line; a pick refused by the binding (`--max-density-gain
+left, with the count line; the same through a directory link to `DIR`'s
+parent, after which the list holds paths under `DIR` and only the chosen
+frames are left; a pick refused by the binding (`--max-density-gain
 0.5`), which prunes nothing and says the workspace is left as it is; a
 non-empty `DIR`, an image and a missing video refused in one error with
 nothing created; a `DIR` inside a workspace refused and not created; the
