@@ -71,8 +71,8 @@ way:
 - **A range expression** is file numbers and spans `START-END`, separated by
   commas, and a span may take a step as `START-END:STEP`, which applies to that
   span alone: `7`, `1-100`, `1-10,20,30-40`, `1-100:10` (1, 11, …, 91) and
-  `1-10,20-30:5`. A span runs from its start up to its end; there is no
-  open-ended span. Every command's `-r` help gives this syntax with the
+  `1-10,20-30:5`. A span whose end is below its start needs a negative step
+  (`10-1:-1`), a step of zero is an error, and there is no open-ended span. Every command's `-r` help gives this syntax with the
   examples `'7'`, `'1-100'`, `'1-10,20,30-40'` and `'1-100:10'`, in one
   sentence that [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py)
   adds after the command's own text, which therefore carries no examples of
