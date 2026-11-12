@@ -68,12 +68,26 @@ the workspace's named image lists
 optionally followed by a slice. Each of the ten commands handles it the same
 way:
 
+- **A range expression** is file numbers and spans `START-END`, separated by
+  commas, and a span may take a step as `START-END:STEP`, which applies to that
+  span alone: `7`, `1-100`, `1-10,20,30-40`, `1-100:10` (1, 11, …, 91) and
+  `1-10,20-30:5`. A span runs from its start up to its end; there is no
+  open-ended span. Every command's `-r` help gives this syntax with the
+  examples `'7'`, `'1-100'`, `'1-10,20,30-40'` and `'1-100:10'`, in one
+  sentence that [`_range_options.py`](../../src/sfmtool/_commands/_range_options.py)
+  adds after the command's own text, which therefore carries no examples of
+  its own. The sentence avoids words joined by a hyphen, such as `START-END`,
+  because Click wraps help text at such a hyphen.
 - **A value with a letter or a `[` in it is a list name; any other value is a
   range.** A range expression contains only digits, `-`, `:` and `,` (and
   whitespace), so the two cannot be confused. A value with a letter that is
-  not a valid name (`walk 1`, say) is an error saying what a name may contain.
-  A range given alone reaches the command as before, so each command's
-  handling of a range is its own.
+  not a valid name (`walk 1`, say) is an error saying what a name may contain,
+  followed by the note on reading a value as a list described below. Any
+  other value must parse as a range expression before the command does
+  anything else; one that does not is a usage error giving the parser's
+  message and the range syntax with its examples. A range given alone reaches
+  the command as the string it was given, so each command's handling of a
+  range is its own.
 - **A slice after the name takes part of the list by position**, with Python's
   list slice syntax and rules: `-r 'walk1[:30]'` is the list's first 30
   images, `-r 'walk1[-30:]'` its last 30 and `-r 'walk1[::3]'` every third
@@ -102,11 +116,27 @@ way:
   members whose frame number is in 100-900. Two names, or two ranges, are an
   error.
 - **An unknown name** is an error that names the lists file and lists the
-  names it defines, or says the workspace has no lists file, and says: "A
-  --range value with a letter in it is read as a named image list; a range
-  contains only digits, '-', ':' and ','." A list name given where no
-  workspace is found is an error saying that no workspace was found and so no
-  named image lists are defined, with the same sentence.
+  names it defines, or says the workspace has no lists file. A list name given
+  where no workspace is found is an error saying that no workspace was found
+  and so no named image lists are defined.
+- **The note on reading a value as a list.** When a `-r` value gave the list,
+  each of those errors and the error for a list given with image paths end
+  with a note saying that the value was read as a named image list, not a
+  range, because it has a letter in it, and that a range holds only digits,
+  `-`, `:` and `,`, with the examples above. So does the error for a `-r`
+  value with no `[` that is not a valid name. A value with a slice was meant
+  as a list, and a list given with `--named-image-list` was asked for by name,
+  so their errors carry no note.
+- **A span with a mistyped step.** A value that is a span followed by `x`,
+  `by`, `step`, `every` or `/` and a number, in any case and with or without
+  spaces between the parts (`1-10389x10`, `1-100 step 10`, `1-100/10`), is
+  still an error, read as a list name or, for `/`, as a range that does not
+  parse. Its error adds the suggestion of the same numbers as a stepped span:
+  "A span with a step is written START-END:STEP; did you mean '1-10389:10'?"
+  for a list name, and "Did you mean '1-100:10'?" for a range. No other shape
+  of value gets a suggestion, and the command never runs on the suggested
+  value. A workspace that defines a list called `1-10389x10` still gets that
+  list.
 
 **The image-directory commands.** For `sift`, `match`, `motion`, `pick-images`
 and `solve`, a list replaces the image path arguments: the command takes either

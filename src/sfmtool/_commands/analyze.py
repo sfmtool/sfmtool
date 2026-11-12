@@ -92,7 +92,7 @@ def _require_finite(ctx, param, value):
     "midpoint bound reach it. Only with --depth-reliability.",
 )
 @range_option(
-    "Range expression of file numbers to include (e.g. '1-10'). Only with --metrics.",
+    "Range expression of file numbers to include. Only with --metrics.",
     on="reconstruction",
 )
 @click.option(

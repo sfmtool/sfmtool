@@ -98,7 +98,7 @@ def sift(
     if selection.list_name is not None and paths:
         raise click.UsageError(
             "A named image list replaces the image paths; give paths or a list, "
-            "not both."
+            "not both." + selection.list_note()
         )
 
     if draw_output_dir:

@@ -29,10 +29,19 @@ from sfmtool.workspace import NAMED_IMAGE_LISTS_FILE_NAME
 
 from .conftest import SEOUL_BULL_DIR
 
-RANGE_OR_NAME_SENTENCE = (
-    "A --range value with a letter in it is read as a named image list; "
-    "a range contains only digits, '-', ':' and ','."
+RANGE_EXAMPLES = (
+    "'7', '1-100', '1-10,20,30-40' or '1-100:10' (every 10th number from 1 to 100)"
 )
+
+
+def _read_as_a_list(value: str) -> str:
+    """The note an error about a list given by `-r value` ends with."""
+    return (
+        f"'{value}' was read as a named image list, not a range, because it has "
+        "a letter in it; a range holds only digits, '-', ':' and ',', as in "
+        f"{RANGE_EXAMPLES}."
+    )
+
 
 _LISTS = {
     "bull_odd": [{"pattern": "images/seoul_bull_sculpture_%02d.jpg", "range": "1-5:2"}],
@@ -164,6 +173,12 @@ def test_a_value_with_a_letter_that_is_not_a_name_says_what_a_name_may_contain(
     assert result.exit_code != 0
     assert "'walk 1' is not a valid named image list name" in result.output
     assert "one or more of the ASCII letters, the digits" in result.output
+    assert _read_as_a_list("walk 1") in " ".join(result.output.split())
+    # A value with a slice was meant as a list, so its error has no note.
+    result = _invoke(["sift", "--extract", "-r", "bull_all[5]"])
+    assert result.exit_code != 0
+    assert "--range 'bull_all[5]' is not a valid slice" in result.output
+    assert "not a range" not in result.output
     result = _invoke(["sift", "--extract", "--named-image-list", "123"])
     assert result.exit_code != 0
     assert "--named-image-list '123' is not a valid" in result.output
@@ -187,6 +202,77 @@ def test_one_name_and_one_range_narrow_the_list(list_workspace, recorded_sift, a
     result = _invoke(["sift", "--extract", *args])
     assert result.exit_code == 0, result.output
     assert _names(recorded_sift[0]) == ["seoul_bull_sculpture_01.jpg"]
+
+
+# ── A mistyped range ─────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["pick-images"],
+        ["sift", "--extract"],
+        ["solve", "-i"],
+        ["match", "--exhaustive"],
+    ],
+)
+def test_a_span_with_its_step_after_a_letter_suggests_the_colon_form(
+    list_workspace, command
+):
+    (list_workspace / NAMED_IMAGE_LISTS_FILE_NAME).unlink()
+    images = str(list_workspace / "images")
+    for args in (["-r", "1-10389x10"], ["-r", "1-10389x10", images]):
+        result = _invoke([*command, *args])
+        assert result.exit_code != 0, args
+        output = " ".join(result.output.split())
+        assert _read_as_a_list("1-10389x10") in output, args
+        assert (
+            "A span with a step is written START-END:STEP; did you mean '1-10389:10'?"
+        ) in output, args
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["1-10389 step 10", "1-10389 by 10", "1-10389every10", "1-10389X10"],
+)
+def test_other_spellings_of_a_step_get_the_same_suggestion(list_workspace, value):
+    result = _invoke(["sift", "--extract", "-r", value])
+    assert result.exit_code != 0
+    assert "did you mean '1-10389:10'?" in " ".join(result.output.split())
+
+
+def test_a_range_that_does_not_parse_shows_the_syntax(list_workspace):
+    images = str(list_workspace / "images")
+    result = _invoke(["sift", "--extract", "-r", "1-10389/10", images])
+    assert result.exit_code == 2
+    output = " ".join(result.output.split())
+    assert "--range '1-10389/10': Expected ':' or ',' in '1-10389/10'." in output
+    assert f"a span may take a step after a ':', as in {RANGE_EXAMPLES}." in output
+    assert "Did you mean '1-10389:10'?" in output
+    result = _invoke(["sift", "--extract", "-r", "5-", images])
+    assert result.exit_code == 2
+    output = " ".join(result.output.split())
+    assert f"as in {RANGE_EXAMPLES}." in output
+    assert "Did you mean" not in output
+
+
+def test_a_list_named_like_a_mistyped_range_is_still_a_list(
+    list_workspace, recorded_sift
+):
+    _write_lists(
+        list_workspace,
+        {
+            "1-5x2": [
+                {"pattern": "images/seoul_bull_sculpture_%02d.jpg", "range": "4-5"}
+            ]
+        },
+    )
+    result = _invoke(["sift", "--extract", "-r", "1-5x2"])
+    assert result.exit_code == 0, result.output
+    assert _names(recorded_sift[0]) == [
+        "seoul_bull_sculpture_04.jpg",
+        "seoul_bull_sculpture_05.jpg",
+    ]
 
 
 def test_two_names_or_two_ranges_are_errors(list_workspace):
@@ -241,7 +327,14 @@ def test_an_unknown_name_names_the_file_and_the_lists_it_defines(list_workspace)
     assert NAMED_IMAGE_LISTS_FILE_NAME in output
     assert "no named image list is called 'walk'" in output
     assert "'bull_odd', 'bull_all', 'everything', 'hero', 'only_notes'" in output
-    assert RANGE_OR_NAME_SENTENCE in output
+    assert _read_as_a_list("walk") in output
+    assert "did you mean" not in output
+    # --named-image-list asks for a list, so its error says nothing of ranges.
+    result = _invoke(["sift", "--extract", "--named-image-list", "walk"])
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "no named image list is called 'walk'" in output
+    assert "not a range" not in output
 
 
 def test_a_workspace_without_a_lists_file_has_no_lists(list_workspace):
@@ -251,7 +344,7 @@ def test_a_workspace_without_a_lists_file_has_no_lists(list_workspace):
     output = " ".join(result.output.split())
     assert "has no named image lists" in output
     assert NAMED_IMAGE_LISTS_FILE_NAME in output
-    assert RANGE_OR_NAME_SENTENCE in output
+    assert _read_as_a_list("hero") in output
 
 
 def test_a_list_name_with_no_workspace_is_an_error(tmp_path, monkeypatch):
@@ -267,6 +360,7 @@ def test_a_list_name_with_no_workspace_is_an_error(tmp_path, monkeypatch):
         output = " ".join(result.output.split())
         assert "No workspace was found" in output, args
         assert "no named image lists are defined" in output, args
+        assert _read_as_a_list("hero") in output, args
 
 
 @pytest.mark.parametrize(
@@ -282,6 +376,7 @@ def test_a_list_together_with_paths_is_an_error(list_workspace, command):
     result = _invoke([*command, "-r", "hero", str(list_workspace / "images")])
     assert result.exit_code != 0
     assert "A named image list replaces the image paths" in result.output
+    assert _read_as_a_list("hero") in " ".join(result.output.split())
 
 
 # ── Image files only ─────────────────────────────────────────────────────
@@ -800,7 +895,7 @@ def test_to_colmap_bin_errors_name_the_list(seoul_bull_ground_truth_sfmr, tmp_pa
     assert "named image list 'absent' matches no image" in result.output
     result = _invoke(["to-colmap-bin", str(sfmr), out, "-r", "nope"])
     assert result.exit_code != 0
-    assert RANGE_OR_NAME_SENTENCE in " ".join(result.output.split())
+    assert _read_as_a_list("nope") in " ".join(result.output.split())
 
 
 def test_to_colmap_bin_range_is_unchanged(seoul_bull_ground_truth_sfmr, tmp_path):
@@ -921,7 +1016,9 @@ def test_reconstruction_commands_find_the_list_in_the_reconstructions_workspace(
         "sift",
         "match",
         "motion",
+        "pick-images",
         "solve",
+        "estimate-intrinsics",
         "analyze",
         "panorama",
         "to-colmap-bin",
@@ -933,6 +1030,10 @@ def test_help_explains_both_forms(command):
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
     assert "-r, --range RANGE|NAME" in output
+    assert (
+        "A range is file numbers and spans separated by commas, and a span may "
+        f"take a step after a ':', as in {RANGE_EXAMPLES}."
+    ) in output
     assert "--named-image-list NAME" in output
     assert "A value with a letter in it is instead the name of a named image list" in (
         output

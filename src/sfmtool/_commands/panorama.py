@@ -38,8 +38,7 @@ from ._sfmr_path import check_sfmr_path
     "(default: the reconstruction's workspace directory).",
 )
 @range_option(
-    "Composite only images whose file number matches this range "
-    "expression (e.g. '10-50' or '0-9,20-29').",
+    "Composite only images whose file number matches this range expression.",
     on="reconstruction",
 )
 @click.option(
