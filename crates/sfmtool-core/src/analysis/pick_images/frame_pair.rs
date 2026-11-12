@@ -305,6 +305,17 @@ pub fn match_frame_pair(
     b: &FrameFeatures,
     options: &FramePairOptions,
 ) -> Result<FramePairStats, FramePairError> {
+    match_frame_pair_positions(a, b, options).map(|(stats, _)| stats)
+}
+
+/// [`match_frame_pair`], returning the matched positions with the statistics,
+/// so that a caller can measure the pair's essential split later without
+/// matching it again ([`MatchedPositions::essential_split`]).
+pub(super) fn match_frame_pair_positions(
+    a: &FrameFeatures,
+    b: &FrameFeatures,
+    options: &FramePairOptions,
+) -> Result<(FramePairStats, MatchedPositions), FramePairError> {
     options.validate()?;
     if (a.width, a.height) != (b.width, b.height) {
         return Err(FramePairError::SizeMismatch {
@@ -313,38 +324,78 @@ pub fn match_frame_pair(
         });
     }
     if let Some(split) = &options.essential_split {
-        let camera = (split.camera.width, split.camera.height);
-        if camera != (a.width, a.height) {
-            return Err(FramePairError::CameraSize {
-                camera,
-                frames: (a.width, a.height),
-            });
-        }
+        check_camera_size(split, (a.width, a.height))?;
     }
     let pairs = mutual_matches(a, b, options);
+    let positions = MatchedPositions {
+        size: (a.width, a.height),
+        a: pairs.iter().map(|&(i, _)| a.positions_xy[i]).collect(),
+        b: pairs.iter().map(|&(_, j)| b.positions_xy[j]).collect(),
+    };
     let long_side = f64::from(a.width.max(a.height));
-    let lengths: Vec<f64> = pairs
+    let lengths: Vec<f64> = positions
+        .a
         .iter()
-        .map(|&(i, j)| {
-            let (p, q) = (widen(a.positions_xy[i]), widen(b.positions_xy[j]));
+        .zip(&positions.b)
+        .map(|(&p, &q)| {
+            let (p, q) = (widen(p), widen(q));
             (q[0] - p[0]).hypot(q[1] - p[1])
         })
         .collect();
     let essential_split = match &options.essential_split {
         None => None,
-        Some(split) => {
-            let (points_a, points_b): (Vec<[f64; 2]>, Vec<[f64; 2]>) = pairs
-                .iter()
-                .map(|&(i, j)| (widen(a.positions_xy[i]), widen(b.positions_xy[j])))
-                .unzip();
-            Some(measure_essential_split(&points_a, &points_b, split)?)
-        }
+        Some(split) => Some(positions.essential_split(split)?),
     };
-    Ok(FramePairStats {
+    let stats = FramePairStats {
         matches: pairs.len(),
         step_percent: 100.0 * median(&lengths) / long_side,
         essential_split,
-    })
+    };
+    Ok((stats, positions))
+}
+
+/// The matched positions of a pair, as [`match_frame_pair_positions`] found
+/// them: `a[i]` in the first frame matches `b[i]` in the second, in the order
+/// of the first frame's features.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct MatchedPositions {
+    /// The frames' image size.
+    size: (u32, u32),
+    a: Vec<[f32; 2]>,
+    b: Vec<[f32; 2]>,
+}
+
+impl MatchedPositions {
+    /// The essential split of the matches, measured with `split`: what
+    /// [`match_frame_pair`] measures with [`FramePairOptions::essential_split`]
+    /// set to `split`.
+    ///
+    /// # Errors
+    ///
+    /// [`FramePairError::CameraSize`] when the camera is of another size than
+    /// the frames, and [`FramePairError::Options`] for a split option out of
+    /// range.
+    pub(super) fn essential_split(
+        &self,
+        split: &EssentialSplitOptions,
+    ) -> Result<EssentialSplitOutcome, FramePairError> {
+        check_camera_size(split, self.size)?;
+        let points_a: Vec<[f64; 2]> = self.a.iter().map(|&p| widen(p)).collect();
+        let points_b: Vec<[f64; 2]> = self.b.iter().map(|&p| widen(p)).collect();
+        measure_essential_split(&points_a, &points_b, split)
+    }
+}
+
+/// Refuse a split whose camera is not of the frames' size `frames`.
+fn check_camera_size(
+    split: &EssentialSplitOptions,
+    frames: (u32, u32),
+) -> Result<(), FramePairError> {
+    let camera = (split.camera.width, split.camera.height);
+    if camera != frames {
+        return Err(FramePairError::CameraSize { camera, frames });
+    }
+    Ok(())
 }
 
 fn widen(p: [f32; 2]) -> [f64; 2] {

@@ -64,6 +64,46 @@ pub(super) fn choices(run: &Run) -> serde_json::Value {
     value
 }
 
+/// Every step's split, of a run with `options`, is the one a second match
+/// of its pair, with the split's options for `camera` set, measures: the walk
+/// measures it from its own match of the pair, which finds the same positions
+/// in the same order.
+pub(super) fn assert_splits_are_those_of_a_second_match(
+    run: &Run,
+    options: &PickImagesOptions,
+    camera: &CameraIntrinsics,
+) {
+    let split = crate::analysis::pick_images::density::split_options(
+        Some(camera),
+        WIDTH,
+        HEIGHT,
+        options.max_density_gain,
+    )
+    .expect("the term is on");
+    let pair_options = FramePairOptions {
+        essential_split: Some(split),
+        ..options.pair.clone()
+    };
+    let features = |frame: usize| {
+        let path = &run.sequences[0].frames[frame].images[0].sift_path;
+        let (_, metadata, _) = sfmtool_sift_format::read_sift_metadata(path).expect("metadata");
+        let sift = sfmtool_sift_format::read_sift_features(path).expect("features");
+        FrameFeatures::from_sift(sift, &metadata, options.forest).expect("a forest")
+    };
+    let steps = &run.walk(0).steps;
+    assert!(!steps.is_empty());
+    for step in steps {
+        let stats = match_frame_pair(&features(step.from), &features(step.to), &pair_options)
+            .expect("a match");
+        assert!(stats.essential_split.is_some());
+        assert_eq!(
+            step.density.essential_split, stats.essential_split,
+            "{} -> {}",
+            step.from, step.to
+        );
+    }
+}
+
 /// Every step was walked with the base target and measured nothing.
 fn assert_base_target_only(walk: &SequenceReport) {
     let base = options().target_step_percent;
@@ -100,6 +140,7 @@ fn a_near_foreground_shortens_the_steps_by_the_gain_of_the_last_three() {
     let (synth, off) = panning();
     let on = run_camera(synth, Some(camera(1.0)), &options());
     assert_read_is_asked(&on);
+    assert_splits_are_those_of_a_second_match(&on, &options(), &camera(1.0));
     let walk = on.walk(0);
     assert_eq!(walk.density_term, DensityTerm::On { focal_px: FOCAL });
     let base = options().target_step_percent;

@@ -7,7 +7,9 @@
 //! used.
 
 use super::capture::FOCAL;
-use super::density::{camera, choices, panning, run_camera};
+use super::density::{
+    assert_splits_are_those_of_a_second_match, camera, choices, panning, run_camera,
+};
 use super::*;
 use crate::analysis::pick_images::pilot::{verdict_camera, MAX_POOL_SPREAD, PILOT_FRAMES};
 use crate::geometry::focal_vote::CameraModel as VoteModel;
@@ -54,17 +56,17 @@ fn a_sequence_with_no_camera_is_walked_with_the_pilot_vote_s_camera() {
     // The walk starts again from the first frame with the vote's camera, and
     // chooses what the walk given that camera chooses.
     assert_eq!(walk.density_term, DensityTerm::On { focal_px: focal });
-    let given = run_camera(
-        synth,
-        Some(verdict_camera(
-            Some(VoteModel::Pinhole),
-            focal,
-            capture::WIDTH,
-            capture::HEIGHT,
-        )),
-        &options(),
+    let camera = verdict_camera(
+        Some(VoteModel::Pinhole),
+        focal,
+        capture::WIDTH,
+        capture::HEIGHT,
     );
+    let given = run_camera(synth, Some(camera.clone()), &options());
     assert_eq!(walked(walk), walked(given.walk(0)));
+    // The steps the walk takes again from the pilot's pairs are measured
+    // from the positions the pilot kept.
+    assert_splits_are_those_of_a_second_match(&run, &pilot_options(), &camera);
     assert!(walk.steps.iter().any(|s| s.density.gain > 1.0));
 }
 

@@ -161,6 +161,17 @@ three-ray Kabsch), consensus by the angular bound, then local
 optimization on the consensus set (refit + re-gate, up to 3 rounds,
 keeping the last consensus that clears `min_inliers`).
 
+The samples are drawn serially, then scored against every correspondence
+on the rayon pool when there are 32 or more of them, and on the calling
+thread when there are fewer: fitting and scoring one essential sample takes
+2 to 5 µs for 20 to 1,500 correspondences, and on the pool 16 samples took
+about as long as on one thread. The sample kept is the first, in drawing
+order, of those with the largest consensus, so the result does not depend
+on the thread count, and is the one a serial loop keeping only a strictly
+larger consensus ends on. A sample whose model has no inlier is never kept.
+The focal vote's column scan keeps serial loops of its own: its callers
+already scan many pairs at once on the pool.
+
 ## Determinism
 
 All sampling derives from the input seed, and identical inputs and seed
@@ -187,7 +198,10 @@ operating systems.
   including beyond-hemisphere rays; consensus correctness under outlier
   contamination; rejection of degenerate inputs and starved consensus;
   the two-sided residual's relationship to the one-sided forms; seeded
-  determinism; slices of different lengths read to the shorter one, in
+  determinism; the sample kept being the one a serial loop keeps, on the
+  pool and on the calling thread, with many samples tied at the largest
+  consensus, both for a table of counts and for the essential fit's own
+  samples of a scene with outliers; slices of different lengths read to the shorter one, in
   either order; column-scan outputs unchanged by the machinery sharing
   (covered by the scan's existing tests).
 - Python bindings: planted essential and rotation recovery past the

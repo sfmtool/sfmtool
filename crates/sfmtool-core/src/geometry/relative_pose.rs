@@ -31,6 +31,7 @@
 //! bit-identical answer.
 
 use nalgebra::{Matrix3, Vector3};
+use rayon::prelude::*;
 
 use super::baseline_direction::in_front_of_both;
 use super::focal_vote::column_scan::{
@@ -44,6 +45,12 @@ const EPI_SAMPLE: usize = 8;
 const ROT_SAMPLE: usize = 3;
 /// Local-optimization rounds on the consensus set.
 const LO_ROUNDS: usize = 3;
+/// The fewest minimal samples scored on the rayon pool; fewer are scored on
+/// the calling thread. Fitting and scoring one essential sample takes 2 to
+/// 5 µs for 20 to 1,500 correspondences, and on the pool 16 samples took
+/// about as long as on one thread, so from 32 the pool is faster at every
+/// input size measured.
+const PARALLEL_MIN_SAMPLES: usize = 32;
 
 /// The most minimal samples either estimator draws: 65,536, 128 times the
 /// default. The samples are held in one list of indices, eight per sample for
@@ -138,6 +145,50 @@ fn residuals_for(
     }
 }
 
+/// The model of the first minimal sample in `samples` with the most inliers,
+/// and that count, or `None` when no sample's model has an inlier: the sample
+/// a serial loop keeping only a strictly larger count would end on.
+///
+/// `model` fits a sample, and `count` counts the inliers of a model with the
+/// scratch space `scratch` makes. From [`PARALLEL_MIN_SAMPLES`] samples on,
+/// they are scored on the rayon pool, each worker with scratch space of its
+/// own; the winner is the same either way, and its model is fitted again
+/// rather than carried through the reduction.
+fn best_sample<const K: usize, M, S>(
+    samples: &[[usize; K]],
+    model: impl Fn(&[usize; K]) -> Option<M> + Sync,
+    scratch: impl Fn() -> S + Sync + Send,
+    count: impl Fn(&M, &mut S) -> usize + Sync,
+) -> Option<(usize, M)> {
+    // Of two (count, sample index) scores, the larger count, then the earlier
+    // sample.
+    let better = |a: (usize, usize), b: (usize, usize)| {
+        if b.0 > a.0 || (b.0 == a.0 && b.1 < a.1) {
+            b
+        } else {
+            a
+        }
+    };
+    let score = |s: &mut S, k: usize| {
+        let m = model(&samples[k])?;
+        Some((count(&m, s), k))
+    };
+    let best = if samples.len() >= PARALLEL_MIN_SAMPLES {
+        (0..samples.len())
+            .into_par_iter()
+            .map_init(&scratch, score)
+            .flatten()
+            .reduce_with(better)
+    } else {
+        let mut s = scratch();
+        (0..samples.len())
+            .filter_map(|k| score(&mut s, k))
+            .reduce(better)
+    };
+    let (best_count, k) = best.filter(|&(c, _)| c > 0)?;
+    Some((best_count, model(&samples[k])?))
+}
+
 /// Robust ray-space epipolar matrix from unit-ray correspondences.
 ///
 /// Scores seeded minimal samples of the linear 8-point constraint by the
@@ -172,29 +223,23 @@ pub fn estimate_essential_rays(
     let mut state = options.seed;
     let samples = draw_samples(&mut state, n, EPI_SAMPLE, options.samples.max(1));
 
-    let mut resid = vec![0.0f64; n];
-    let mut scratch = vec![0.0f64; n];
-    let mut best_count = 0usize;
-    let mut best_e: Option<Matrix3<f64>> = None;
-    let mut inliers = vec![false; n];
-    for s in samples.as_chunks::<EPI_SAMPLE>().0 {
-        let Some(e) = null_from_rows(&rows, s.iter().copied()) else {
-            continue;
-        };
-        residuals_for(&e, r1, r2, options.side, &mut scratch, &mut resid);
-        let count = (0..n).filter(|&i| resid[i] < sin_tol).count();
-        if count > best_count {
-            best_count = count;
-            best_e = Some(e);
-            for i in 0..n {
-                inliers[i] = resid[i] < sin_tol;
-            }
-        }
-    }
+    let best = best_sample(
+        samples.as_chunks::<EPI_SAMPLE>().0,
+        |s| null_from_rows(&rows, s.iter().copied()),
+        || (vec![0.0f64; n], vec![0.0f64; n]),
+        |e, (resid, scratch)| {
+            residuals_for(e, r1, r2, options.side, scratch, resid);
+            resid.iter().filter(|&&r| r < sin_tol).count()
+        },
+    );
+    let (best_count, mut e) = best?;
     if best_count < options.min_inliers {
         return None;
     }
-    let mut e = best_e?;
+    let mut resid = vec![0.0f64; n];
+    let mut scratch = vec![0.0f64; n];
+    residuals_for(&e, r1, r2, options.side, &mut scratch, &mut resid);
+    let mut inliers: Vec<bool> = resid.iter().map(|&r| r < sin_tol).collect();
     for _ in 0..LO_ROUNDS {
         let Some(refit) = null_from_rows(&rows, (0..n).filter(|&i| inliers[i])) else {
             break;
@@ -395,28 +440,22 @@ pub fn fit_ray_rotation(
     let mut state = options.seed;
     let samples = draw_samples(&mut state, n, ROT_SAMPLE, options.samples.max(1));
 
-    let mut resid = vec![0.0f64; n];
-    let mut best_count = 0usize;
-    let mut best: Option<Matrix3<f64>> = None;
-    let mut inliers = vec![false; n];
-    for s in samples.as_chunks::<ROT_SAMPLE>().0 {
-        let Some(rot) = kabsch(r1, r2, s) else {
-            continue;
-        };
-        rotation_residuals(&rot, r1, r2, &all, &mut resid);
-        let count = (0..n).filter(|&i| resid[i] < tol).count();
-        if count > best_count {
-            best_count = count;
-            best = Some(rot);
-            for i in 0..n {
-                inliers[i] = resid[i] < tol;
-            }
-        }
-    }
+    let best = best_sample(
+        samples.as_chunks::<ROT_SAMPLE>().0,
+        |s| kabsch(r1, r2, s),
+        || vec![0.0f64; n],
+        |rot, resid| {
+            rotation_residuals(rot, r1, r2, &all, resid);
+            resid.iter().filter(|&&r| r < tol).count()
+        },
+    );
+    let (best_count, mut rot) = best?;
     if best_count < options.min_inliers {
         return None;
     }
-    let mut rot = best?;
+    let mut resid = vec![0.0f64; n];
+    rotation_residuals(&rot, r1, r2, &all, &mut resid);
+    let mut inliers: Vec<bool> = resid.iter().map(|&r| r < tol).collect();
     for _ in 0..LO_ROUNDS {
         let idx: Vec<usize> = (0..n).filter(|&i| inliers[i]).collect();
         let Some(refit) = kabsch(r1, r2, &idx) else {

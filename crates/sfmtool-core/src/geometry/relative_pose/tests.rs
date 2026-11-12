@@ -411,3 +411,112 @@ fn more_samples_than_the_bound_give_no_estimate_rather_than_a_panic() {
     };
     assert!(fit_ray_rotation(&r1, &r2, &options).is_some());
 }
+
+// ── Parallel sample scoring ─────────────────────────────────────────────────
+
+/// The serial loop the samples were once scored with: keep a sample only when
+/// its count is strictly larger than the best so far, starting from 0.
+fn serial_best<const K: usize, M>(
+    samples: &[[usize; K]],
+    model: impl Fn(&[usize; K]) -> Option<M>,
+    count: impl Fn(&M) -> usize,
+) -> Option<(usize, usize, M)> {
+    let mut best: Option<(usize, usize, M)> = None;
+    for (k, s) in samples.iter().enumerate() {
+        let Some(m) = model(s) else { continue };
+        let c = count(&m);
+        if c > best.as_ref().map_or(0, |b| b.0) {
+            best = Some((c, k, m));
+        }
+    }
+    best
+}
+
+#[test]
+fn best_sample_keeps_the_first_sample_of_the_largest_count() {
+    // Counts with many ties at the top, zeros, and samples with no model,
+    // over enough samples to be scored on the pool.
+    let len = 4096;
+    let counts: Vec<usize> = (0..len).map(|k| (k * 7919) % 13).collect();
+    let samples: Vec<[usize; 1]> = (0..len).map(|k| [k]).collect();
+    let model = |s: &[usize; 1]| (s[0] % 5 != 3).then_some(s[0]);
+    assert!(len >= PARALLEL_MIN_SAMPLES);
+    let got = best_sample(&samples, model, || (), |&k, _| counts[k]);
+    let want = serial_best(&samples, model, |&k| counts[k]).unwrap();
+    // The top count is shared by many samples, so the rule decides.
+    assert!(
+        samples
+            .iter()
+            .filter(|s| model(s).is_some() && counts[s[0]] == want.0)
+            .count()
+            > 10
+    );
+    assert_eq!(got, Some((want.0, want.2)));
+    // The same on the calling thread, for fewer samples.
+    let few = &samples[..PARALLEL_MIN_SAMPLES - 1];
+    let want_few = serial_best(few, model, |&k| counts[k]).unwrap();
+    assert!(
+        few.iter()
+            .filter(|s| model(s).is_some() && counts[s[0]] == want_few.0)
+            .count()
+            > 1
+    );
+    assert_eq!(
+        best_sample(few, model, || (), |&k, _| counts[k]),
+        Some((want_few.0, want_few.2))
+    );
+    // No sample with an inlier gives none, as the serial loop does.
+    assert_eq!(best_sample(&samples, model, || (), |_, _| 0), None);
+}
+
+/// A two-view scene with every third correspondence's second ray replaced by
+/// an unrelated one, so the clean minimal samples all reach the same count.
+fn contaminated_scene() -> (Vec<Vector3<f64>>, Vec<Vector3<f64>>) {
+    let (r1, mut r2, _, _) = two_view_scene(300, 2.0, 0.35, Vector3::new(0.9, -0.25, 0.4));
+    let far = planted_rays(300, 3.0);
+    for i in (0..300).step_by(3) {
+        r2[i] = far[(i * 37 + 11) % 300];
+    }
+    (r1, r2)
+}
+
+#[test]
+fn the_essential_fit_takes_the_sample_the_serial_loop_takes() {
+    let (r1, r2) = contaminated_scene();
+    let options = RayEssentialOptions {
+        max_angle_rad: 1e-6,
+        min_inliers: 20,
+        seed: 5,
+        ..Default::default()
+    };
+    let n = r1.len();
+    let sin_tol = options.max_angle_rad.sin();
+    let rows = epipolar_rows(&r1, &r2);
+    let mut state = options.seed;
+    let drawn = draw_samples(&mut state, n, EPI_SAMPLE, options.samples);
+    let samples = drawn.as_chunks::<EPI_SAMPLE>().0;
+    let model = |s: &[usize; EPI_SAMPLE]| null_from_rows(&rows, s.iter().copied());
+    let count = |e: &Matrix3<f64>| {
+        let (mut resid, mut scratch) = (vec![0.0; n], vec![0.0; n]);
+        residuals_for(e, &r1, &r2, options.side, &mut scratch, &mut resid);
+        resid.iter().filter(|&&r| r < sin_tol).count()
+    };
+    let (want_count, want_k, want_e) = serial_best(samples, model, count).unwrap();
+    // Several clean samples tie at the top count, and the first of them wins.
+    let tied: Vec<usize> = (0..samples.len())
+        .filter(|&k| model(&samples[k]).is_some_and(|e| count(&e) == want_count))
+        .collect();
+    assert!(tied.len() > 1, "{tied:?}");
+    assert_eq!(tied[0], want_k);
+    assert!(samples.len() >= PARALLEL_MIN_SAMPLES);
+    let got = best_sample(
+        samples,
+        model,
+        || (vec![0.0; n], vec![0.0; n]),
+        |e, (resid, scratch)| {
+            residuals_for(e, &r1, &r2, options.side, scratch, resid);
+            resid.iter().filter(|&&r| r < sin_tol).count()
+        },
+    );
+    assert_eq!(got, Some((want_count, want_e)));
+}

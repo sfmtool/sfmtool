@@ -8,7 +8,10 @@
 //! and dropped when the pairs that need them are matched, so at most a few
 //! forests are held at once. The frames [`super::pick_images`] predicts it
 //! will read are passed to the source's prefetch, which only starts work:
-//! nothing here reads a frame it did not wait for.
+//! nothing here reads a frame it did not wait for. While the walk asks for
+//! them, the matched positions of the pairs it may still accept are kept
+//! too, so that an accepted step's essential split is measured from the
+//! walk's own match of the pair.
 
 use std::collections::HashMap;
 
@@ -20,7 +23,7 @@ use sfmtool_sift_format::{
 use super::capture::{CaptureFrame, CaptureSequence, FrameId, PickImagesError, PickImagesOptions};
 use super::essential_split::{EssentialSplitOptions, EssentialSplitOutcome};
 use super::frame_pair::{
-    match_frame_pair, FrameFeatures, FramePairError, FramePairOptions, FramePairStats,
+    match_frame_pair_positions, FrameFeatures, FramePairError, FramePairStats, MatchedPositions,
 };
 use super::report::MeasuredPair;
 use super::source::FrameSource;
@@ -45,6 +48,10 @@ pub(super) struct Frames<'a> {
     read: Vec<ReadFrame>,
     pair_index: HashMap<(FrameId, FrameId), usize>,
     pairs: Vec<MeasuredPair>,
+    /// Whether the matched positions of each pair matched are kept.
+    keep_positions: bool,
+    /// The matched positions kept, by pair.
+    positions: HashMap<(FrameId, FrameId), MatchedPositions>,
 }
 
 impl<'a> Frames<'a> {
@@ -64,6 +71,8 @@ impl<'a> Frames<'a> {
             read: Vec::new(),
             pair_index: HashMap::new(),
             pairs: Vec::new(),
+            keep_positions: false,
+            positions: HashMap::new(),
         }
     }
 
@@ -236,8 +245,11 @@ impl<'a> Frames<'a> {
             return Ok(stats.clone());
         }
         progress.check_cancel()?;
-        let stats = match_frame_pair(fa, fb, &self.options.pair)
+        let (stats, positions) = match_frame_pair_positions(fa, fb, &self.options.pair)
             .map_err(|error| self.pair_error(a, b, error))?;
+        if self.keep_positions {
+            self.positions.insert((a, b), positions);
+        }
         self.pair_index.insert((a, b), self.pairs.len());
         self.pairs.push(MeasuredPair {
             a,
@@ -248,29 +260,40 @@ impl<'a> Frames<'a> {
         Ok(stats)
     }
 
-    /// The essential split of `a` with `b`, whose features are `fa` and
-    /// `fb`, measured with `split`: the pair is matched again with the split
-    /// set, and its statistics are not kept, so the pairs of the report stay
-    /// the ones the walk matched to decide. Checks for cancellation first.
+    /// Keep the matched positions of the pairs matched from now on, or, with
+    /// `keep` false, keep none and drop those kept.
+    pub(super) fn keep_positions(&mut self, keep: bool) {
+        self.keep_positions = keep;
+        if !keep {
+            self.positions.clear();
+        }
+    }
+
+    /// Drop the matched positions kept of every pair whose first frame is
+    /// before `from` in its sequence: the pairs a walk at `from` no longer
+    /// measures.
+    pub(super) fn drop_positions_before(&mut self, from: FrameId) {
+        self.positions
+            .retain(|(a, _), _| a.sequence != from.sequence || a.frame >= from.frame);
+    }
+
+    /// The essential split of `a` with `b`, measured with `split` from the
+    /// matched positions kept of that pair, the ones its statistics were
+    /// measured from. The pair has been matched while positions were kept,
+    /// and its positions not dropped since. Checks for cancellation first.
     pub(super) fn measure_split(
         &self,
         a: FrameId,
-        fa: &FrameFeatures,
         b: FrameId,
-        fb: &FrameFeatures,
         split: &EssentialSplitOptions,
         progress: &Progress,
     ) -> Result<EssentialSplitOutcome, PickImagesError> {
         progress.check_cancel()?;
-        let options = FramePairOptions {
-            essential_split: Some(split.clone()),
-            ..self.options.pair.clone()
-        };
-        let stats =
-            match_frame_pair(fa, fb, &options).map_err(|error| self.pair_error(a, b, error))?;
-        Ok(stats
-            .essential_split
-            .expect("a pair matched with a split's options measures one"))
+        self.positions
+            .get(&(a, b))
+            .expect("the walk keeps the positions of every pair it may accept")
+            .essential_split(split)
+            .map_err(|error| self.pair_error(a, b, error))
     }
 
     /// The error of a pair that could not be matched, naming the reference
