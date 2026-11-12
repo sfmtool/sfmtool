@@ -112,6 +112,12 @@ check = "ruff check src tests"
 
 [feature.test.dependencies]
 cargo-llvm-cov = ">=0.9.0,<0.10"
+# `sfm extract-frames` runs ffmpeg and ffprobe from PATH and refuses an ffmpeg
+# older than 5.1; its tests make their videos with ffmpeg, so they run in CI
+# rather than skip. pycolmap already pulls ffmpeg in through libopenimageio;
+# declaring it here keeps it, at 5.1 or newer, if that changes. Users install
+# ffmpeg themselves.
+ffmpeg = ">=5.1"
 
 [feature.test.pypi-dependencies]
 maturin = ">=1.15.0, <2"

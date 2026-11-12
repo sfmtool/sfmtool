@@ -191,6 +191,7 @@ naming each such image, the `.sift` path tried and the image path tried.
 | `sfm camrig` (`create`, `cp`, `spherical-tiles`) | [camrig-command.md](workspace/camrig-command.md) |
 | `sfm pano2rig` | [pano2rig-command.md](workspace/pano2rig-command.md) |
 | `sfm insv2rig` | [insv2rig-command.md](workspace/insv2rig-command.md) |
+| `sfm extract-frames` | [extract-frames-command.md](workspace/extract-frames-command.md) |
 
 ## Image Feature
 

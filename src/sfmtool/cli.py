@@ -49,6 +49,13 @@ COMMANDS = (
         "insv2rig",
         "Extract dual-fisheye frames from an Insta360 .insv video file.",
     ),
+    (
+        "extract-frames",
+        "Workspace",
+        "extract_frames",
+        "extract_frames",
+        "Extract the frames of videos into one numbered JPEG sequence per video.",
+    ),
     ("camrig", "Workspace", "camrig", "camrig", "Build .camrig camera rig files."),
     # Image Feature
     (

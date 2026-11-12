@@ -170,7 +170,7 @@ slowest probes overlap.
 | `pycolmap` | `pycolmap` | pycolmap's version, the COLMAP version it wraps, and its CUDA support (below). | `pycolmap.__version__`, `pycolmap.COLMAP_version`, `pycolmap.has_cuda`, `pycolmap.get_num_cuda_devices` |
 | `numpy` | `numpy` | numpy's version. | `numpy.__version__` |
 | `OpenCV` | `opencv` | OpenCV's version, or `not installed`; it is an optional backend. | `cv2.__version__` |
-| `ffmpeg` | `ffmpeg` | ffmpeg's version and path, or `not found on PATH`. `sfm insv2rig` runs `ffmpeg` from PATH to read video. | `shutil.which("ffmpeg")`, and the third word of the first line of `ffmpeg -version`, run with a five-second timeout |
+| `ffmpeg` | `ffmpeg` | ffmpeg's version and path, or `not found on PATH`. `sfm insv2rig` and `sfm extract-frames` run `ffmpeg` from PATH to read video. | `shutil.which("ffmpeg")`, through `locate_program` in [`_video_frames.py`](../../../src/sfmtool/_video_frames.py), the lookup `sfm extract-frames` uses, and the third word of the first line of `ffmpeg -version`, run with a five-second timeout and repeated, up to three runs, when it exits with status 0 having printed nothing (`run_for_output`) |
 
 A Python module that cannot be imported is reported as `not installed` when
 it does not exist, and otherwise as the import's error,
