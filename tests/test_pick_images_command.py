@@ -27,6 +27,7 @@ from sfmtool.reconstruction import RangeExpr
 from sfmtool.workspace import NAMED_IMAGE_LISTS_FILE_NAME, NamedImageLists
 
 from .conftest import SEOUL_BULL_DIR, TEST_DATA_DIR
+from .test_extract_frames_command import _ffmpeg
 
 PAN_FRAMES = 100
 PAN_WIDTH, PAN_HEIGHT, PAN_STEP = 320, 240, 4
@@ -852,3 +853,194 @@ def test_an_out_of_range_match_floor_is_refused(pan_workspace: Path):
     assert result.exit_code == 1, result.output
     assert "min_step_matches" in result.output, result.output
     assert "Traceback" not in result.output
+
+
+# `--new-workspace`: two videos of the pans, 40 frames each, written with
+# ffmpeg's built-in mpeg4 encoder and extracted at --fps full.
+VIDEO_FRAMES = 40
+
+
+@pytest.fixture(scope="module")
+def pan_videos(pan_source, tmp_path_factory) -> list[Path]:
+    root = tmp_path_factory.mktemp("pan_videos")
+    videos = []
+    for name in ("top", "bottom"):
+        video = root / f"{name}.mp4"
+        _ffmpeg(
+            *[
+                "-framerate",
+                "30",
+                "-i",
+                str(pan_source[name][0].parent / "pan_%03d.jpg"),
+            ],
+            *["-frames:v", str(VIDEO_FRAMES), "-c:v", "mpeg4", "-q:v", "2"],
+            str(video),
+        )
+        videos.append(video)
+    return videos
+
+
+def _new_workspace(workspace: Path, videos: list[Path], *args: str):
+    return CliRunner().invoke(
+        main,
+        [
+            "pick-images",
+            "--new-workspace",
+            str(workspace),
+            *map(str, videos),
+            "--fps",
+            "full",
+            *args,
+        ],
+    )
+
+
+def test_new_workspace_extracts_the_videos_and_picks_from_their_frames(
+    tmp_path: Path, pan_videos
+):
+    workspace = tmp_path / "garden"
+    result = _new_workspace(
+        workspace,
+        pan_videos,
+        *FAST,
+        *["--max-features", "1024", "--write-list", "picked"],
+        *["--json", str(workspace / "r.json")],
+    )
+    assert result.exit_code == 0, result.output
+    config = json.loads((workspace / ".sfm-workspace.json").read_text())
+    assert config["feature_options"]["max_num_features"] == 1024
+    assert "Given 2 videos, 80 image file(s) in 2 sequences:" in result.output
+    data = json.loads((workspace / "r.json").read_text())
+    chosen = data["chosen_numbers"]
+    assert all(1 < len(numbers) < VIDEO_FRAMES for numbers in chosen)
+    # The sequences are in pick-images' order, by pattern.
+    assert [c["patterns"] for c in data["capture"]] == [
+        ["bottom/frame_%06d.jpg"],
+        ["top/frame_%06d.jpg"],
+    ]
+    picked = [
+        f"{stem}/frame_{n:06d}.jpg"
+        for stem, numbers in zip(("bottom", "top"), chosen)
+        for n in numbers
+    ]
+    assert _resolve(workspace, "picked") == picked
+    prefix = config["feature_prefix_dir"]
+    for path in picked:
+        frame = workspace / path
+        assert (frame.parent / prefix / (frame.name + ".sift")).is_file()
+    # Without --prune-images every extracted frame stays.
+    for stem in ("top", "bottom"):
+        frames = list((workspace / stem).glob("frame_*.jpg"))
+        assert len(frames) == VIDEO_FRAMES
+
+
+def test_prune_images_keeps_exactly_the_chosen_frames(tmp_path: Path, pan_videos):
+    workspace = tmp_path / "garden"
+    video = pan_videos[0]
+    result = _new_workspace(
+        workspace,
+        [video],
+        *FAST,
+        *["-r", "5-36", "--write-list", "picked", "--prune-images"],
+        *["--json", str(workspace / "r.json")],
+    )
+    assert result.exit_code == 0, result.output
+    prefix = json.loads((workspace / ".sfm-workspace.json").read_text())[
+        "feature_prefix_dir"
+    ]
+    (chosen,) = json.loads((workspace / "r.json").read_text())["chosen_numbers"]
+    assert chosen[0] == 5 and chosen[-1] <= 36
+    kept = [f"top/frame_{n:06d}.jpg" for n in chosen]
+    assert _files(workspace) == {
+        ".sfm-workspace.json",
+        NAMED_IMAGE_LISTS_FILE_NAME,
+        "r.json",
+        "top/video-frames.json",
+        *kept,
+        *(f"top/{prefix}/frame_{n:06d}.jpg.sift" for n in chosen),
+    }
+    report = json.loads((workspace / "r.json").read_text())
+    written = sum(report["frames_extracted"]) + report["frames_extracted_unread"]
+    deleted_sift = written - len(chosen)
+    assert (
+        f"Pruned {VIDEO_FRAMES - len(chosen)} frames not chosen, and "
+        f"{deleted_sift} .sift files of them." in result.output
+    )
+    assert video.is_file()
+    assert _resolve(workspace, "picked") == kept
+
+
+def test_a_failed_pick_prunes_nothing(tmp_path: Path, pan_videos):
+    workspace = tmp_path / "garden"
+    result = _new_workspace(
+        workspace, pan_videos[:1], "--max-density-gain", "0.5", "--prune-images"
+    )
+    assert result.exit_code == 1, result.output
+    assert "max_density_gain" in result.output
+    assert f"The new workspace {workspace} is left as it is" in result.output
+    assert len(list((workspace / "top").glob("frame_*.jpg"))) == VIDEO_FRAMES
+
+
+def test_new_workspace_refusals_list_every_problem_and_create_nothing(
+    tmp_path: Path, pan_videos
+):
+    workspace = tmp_path / "garden"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("")
+    image = tmp_path / "still.jpg"
+    image.write_bytes(b"")
+    result = _new_workspace(workspace, [pan_videos[0], image, tmp_path / "missing.mp4"])
+    assert result.exit_code == 1, result.output
+    assert "3 problems found, so nothing was created" in result.output
+    assert "the new workspace's directory is not empty" in result.output
+    assert "still.jpg: an image, not a video" in result.output
+    assert "missing.mp4: no such file" in result.output
+    assert _files(workspace) == {"notes.txt"}
+
+
+def test_new_workspace_inside_a_workspace_is_refused(tmp_path: Path, pan_videos):
+    _init_workspace(tmp_path / "outer")
+    workspace = tmp_path / "outer" / "garden"
+    result = _new_workspace(workspace, pan_videos[:1])
+    assert result.exit_code == 1, result.output
+    assert f"is inside the workspace {tmp_path / 'outer'}" in result.output
+    assert not workspace.exists()
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (["--named-image-list", "walk"], "A new workspace has no named image lists"),
+        (["-r", "walk"], "A new workspace has no named image lists"),
+        (["--dsp"], "--dsp/--no-dsp option is only supported for COLMAP"),
+        (["--fps", "0"], "--fps"),
+    ],
+)
+def test_new_workspace_usage_errors_create_nothing(
+    tmp_path: Path, pan_videos, args, message
+):
+    workspace = tmp_path / "garden"
+    result = _new_workspace(workspace, pan_videos[:1], *args)
+    assert result.exit_code == 2, result.output
+    assert message in result.output
+    assert not workspace.exists()
+
+
+@pytest.mark.parametrize(
+    "option, named",
+    [
+        (["--fps", "5"], "--fps"),
+        (["--max-frame-size", "full"], "--max-frame-size"),
+        (["--prune-images"], "--prune-images"),
+        (["--max-features", "1024"], "--max-features"),
+        (["--no-gpu"], "--gpu/--no-gpu"),
+        (["--feature-tool", "sfmtool"], "--feature-tool"),
+    ],
+)
+def test_new_workspace_options_without_it_are_usage_errors(
+    pan_workspace: Path, option, named
+):
+    result = CliRunner().invoke(main, ["pick-images", "frames", *option])
+    assert result.exit_code == 2, result.output
+    assert f"{named}: only with --new-workspace." in result.output
+    assert not (pan_workspace / "frames" / "features").exists()

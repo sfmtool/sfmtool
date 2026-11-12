@@ -11,29 +11,13 @@ from .._cli_utils import timed_command
 from .._video_frames import (
     DEFAULT_FPS,
     DEFAULT_MAX_FRAME_SIZE,
+    FullOr,
     VideoFramesError,
     extract_planned,
     parse_fps,
     parse_max_frame_size,
     plan_extraction,
 )
-
-
-class _FullOr(click.ParamType):
-    """An option value that is `full` or what `parse` accepts; `parse` raises
-    `ValueError` for anything else."""
-
-    def __init__(self, name: str, parse):
-        self.name = name
-        self._parse = parse
-
-    def convert(self, value, param, ctx):
-        if not isinstance(value, str):
-            return value
-        try:
-            return self._parse(value)
-        except ValueError as error:
-            self.fail(str(error), param, ctx)
 
 
 @click.command("extract-frames")
@@ -56,14 +40,14 @@ class _FullOr(click.ParamType):
 )
 @click.option(
     "--fps",
-    type=_FullOr("N|full", parse_fps),
+    type=FullOr("N|full", parse_fps),
     default=str(DEFAULT_FPS),
     show_default=True,
     help="Frames per second of video time to keep, or `full` for every frame.",
 )
 @click.option(
     "--max-frame-size",
-    type=_FullOr("PX|full", parse_max_frame_size),
+    type=FullOr("PX|full", parse_max_frame_size),
     default=str(DEFAULT_MAX_FRAME_SIZE),
     show_default=True,
     help="The largest long side of a written frame, in pixels (at least 64). "

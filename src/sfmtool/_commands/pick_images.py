@@ -5,21 +5,78 @@
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
 from .._cli_utils import timed_command
 from .._filenames import expand_paths
+from .._video_frames import (
+    DEFAULT_FPS,
+    DEFAULT_MAX_FRAME_SIZE,
+    FullOr,
+    parse_fps,
+    parse_max_frame_size,
+)
+from .._workspace_init_options import (
+    WORKSPACE_INIT_PARAMETERS,
+    workspace_init_options,
+)
 from ._range_options import parse_image_selection, range_option, resolve_list_images
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
+
+# The options that only `--new-workspace` takes, by parameter name.
+_NEW_WORKSPACE_ONLY = {
+    **WORKSPACE_INIT_PARAMETERS,
+    "fps": "--fps",
+    "max_frame_size": "--max-frame-size",
+    "prune_images": "--prune-images",
+}
 
 
 @click.command("pick-images")
 @timed_command
 @click.help_option("--help", "-h")
-@click.argument("paths", nargs=-1, type=click.Path(exists=True))
+@click.argument("paths", nargs=-1, type=click.Path(path_type=Path))
+@click.option(
+    "--new-workspace",
+    "new_workspace",
+    metavar="DIR",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Create a workspace at DIR, which must be missing or empty and not "
+    "inside a workspace, extract the videos given as PATHS into it, one frame "
+    "directory DIR/<name>/ per video as `sfm extract-frames` writes them, and "
+    "choose from their frames.",
+)
+@click.option(
+    "--fps",
+    type=FullOr("N|full", parse_fps),
+    default=str(DEFAULT_FPS),
+    show_default=True,
+    help="Frames per second of video time to extract, or `full` for every "
+    "frame. Only with --new-workspace.",
+)
+@click.option(
+    "--max-frame-size",
+    type=FullOr("PX|full", parse_max_frame_size),
+    default=str(DEFAULT_MAX_FRAME_SIZE),
+    show_default=True,
+    help="The largest long side of an extracted frame, in pixels (at least "
+    "64), or `full` for the video's size. Only with --new-workspace.",
+)
+@click.option(
+    "--prune-images",
+    "prune_images",
+    is_flag=True,
+    default=False,
+    help="After the list and the JSON file are written, delete the extracted "
+    "frames not chosen, those -r left out included, and their .sift files. "
+    "Only with --new-workspace.",
+)
+@workspace_init_options(" The workspace's setting; only with --new-workspace.")
 @click.option(
     "--write-list",
     "write_list",
@@ -104,6 +161,17 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 )
 def pick_images(
     paths,
+    new_workspace,
+    fps,
+    max_frame_size,
+    prune_images,
+    feature_tool,
+    domain_size_pooling,
+    max_num_features,
+    use_gpu,
+    estimate_affine_shape,
+    image_to_gray_formula,
+    quantize_bits,
     write_list,
     force,
     range_expr,
@@ -131,8 +199,37 @@ def pick_images(
     file, extracted with the workspace's settings; with a feature tool other
     than sfmtool, every input frame is extracted first. With --write-list NAME the chosen frames are written as
     the named image list NAME, for `sfm solve -r NAME`.
+
+    With --new-workspace DIR, PATHS are videos: the command creates a
+    workspace at DIR with the workspace options, as `sfm ws init DIR` does,
+    extracts each video into DIR/<name>/ as `sfm extract-frames -o DIR` does,
+    and chooses from the frames; every input is checked before anything is
+    created. --prune-images then deletes the frames not chosen.
+
+    Example usage:
+
+        sfm pick-images frames/ --write-list walk1
+
+        sfm pick-images --new-workspace garden walk.mp4 --write-list picked
     """
     from .._sfmtool.workspace import is_named_image_list_name
+
+    ctx = click.get_current_context()
+    if new_workspace is None:
+        given_only_with = [
+            option
+            for name, option in _NEW_WORKSPACE_ONLY.items()
+            if ctx.get_parameter_source(name) != click.core.ParameterSource.DEFAULT
+        ]
+        if given_only_with:
+            raise click.UsageError(
+                f"{', '.join(given_only_with)}: only with --new-workspace."
+            )
+        for path in paths:
+            if not path.exists():
+                raise click.BadParameter(
+                    f"Path '{path}' does not exist.", param_hint="'[PATHS]...'"
+                )
 
     if write_list is not None and not is_named_image_list_name(write_list):
         raise click.UsageError(
@@ -144,6 +241,36 @@ def pick_images(
         raise click.UsageError("--force replaces a written list; give --write-list.")
 
     selection = parse_image_selection(range_expr, named_image_list)
+    options = {
+        "target_step_percent": target_step,
+        "max_density_gain": max_density_gain,
+        "step_band": step_band,
+        "neighbour_blur_ratio": neighbour_blur_ratio,
+        "min_step_matches": min_step_matches,
+    }
+    if new_workspace is not None:
+        _pick_from_videos(
+            videos=list(paths),
+            workspace_dir=new_workspace,
+            selection=selection,
+            fps=fps,
+            max_frame_size=max_frame_size,
+            prune_images=prune_images,
+            workspace_options={
+                "feature_tool": feature_tool,
+                "domain_size_pooling": domain_size_pooling,
+                "max_num_features": max_num_features,
+                "use_gpu": use_gpu,
+                "estimate_affine_shape": estimate_affine_shape,
+                "image_to_gray_formula": image_to_gray_formula,
+                "quantize_bits": quantize_bits,
+            },
+            write_list=write_list,
+            force=force,
+            options=options,
+            json_path=Path(json_path) if json_path is not None else None,
+        )
+        return
     if selection.list_name is not None and paths:
         raise click.UsageError(
             "A named image list replaces the image paths; give paths or a list, "
@@ -194,15 +321,18 @@ def pick_images(
         given=given,
         write_list=write_list,
         force=force,
-        options={
-            "target_step_percent": target_step,
-            "max_density_gain": max_density_gain,
-            "step_band": step_band,
-            "neighbour_blur_ratio": neighbour_blur_ratio,
-            "min_step_matches": min_step_matches,
-        },
+        options=options,
         json_path=Path(json_path) if json_path is not None else None,
     )
+
+
+@dataclass(frozen=True)
+class _RunResult:
+    """What `_run` chose, for `--prune-images`: each chosen frame's images,
+    under the workspace directory, and the workspace's features folder."""
+
+    chosen_images: list[Path]
+    feature_prefix_dir: str
 
 
 def _run(*, filenames, workspace_dir, given, write_list, force, options, json_path):
@@ -336,6 +466,12 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         [s.numbers[p] for p in r["chosen"]]
         for s, r in zip(sequences, report["sequences"])
     ]
+    chosen_images = [
+        workspace_dir / image
+        for s, r in zip(sequences, report["sequences"])
+        for p in r["chosen"]
+        for image in s.images[p]
+    ]
     written_list = None
     if write_list is not None:
         entries = [
@@ -393,3 +529,139 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         data["named_image_list"] = written_list
         json_path.write_text(json.dumps(data, indent=1) + "\n")
         click.echo(f"Wrote the report to {json_path}")
+    return _RunResult(
+        chosen_images=chosen_images, feature_prefix_dir=config["feature_prefix_dir"]
+    )
+
+
+def _pick_from_videos(
+    *,
+    videos: list[Path],
+    workspace_dir: Path,
+    selection,
+    fps: float | None,
+    max_frame_size: int | None,
+    prune_images: bool,
+    workspace_options: dict,
+    write_list: str | None,
+    force: bool,
+    options: dict,
+    json_path: Path | None,
+) -> None:
+    """`--new-workspace`: check every input, then create the workspace,
+    extract the videos into it, run the walk on their frames and, with
+    `prune_images`, delete the frames not chosen."""
+    from .._sfmtool.reconstruction import RangeExpr
+    from .._video_frames import VideoFramesError, extract_planned, plan_extraction
+    from .._workspace_init_options import (
+        check_workspace_init_options,
+        create_workspace,
+    )
+    from ..workspace import find_workspace_for_path
+
+    if selection.list_name is not None:
+        raise click.UsageError(
+            "A new workspace has no named image lists; --named-image-list and a "
+            "list name in -r are not taken with --new-workspace."
+        )
+    if not videos:
+        raise click.UsageError("--new-workspace needs one or more videos.")
+    numbers = None
+    if selection.range_expr is not None:
+        try:
+            numbers = RangeExpr(selection.range_expr)
+        except ValueError as e:
+            raise click.UsageError(f"--range '{selection.range_expr}': {e}")
+    check_workspace_init_options(**workspace_options)
+
+    problems = []
+    if workspace_dir.is_dir() and any(workspace_dir.iterdir()):
+        problems.append(f"{workspace_dir}: the new workspace's directory is not empty")
+    existing = find_workspace_for_path(workspace_dir.resolve())
+    if existing is not None:
+        problems.append(
+            f"{workspace_dir}: the new workspace's directory is inside the "
+            f"workspace {existing}"
+        )
+    try:
+        plan = plan_extraction(
+            videos,
+            workspace_dir,
+            fps=fps,
+            max_frame_size=max_frame_size,
+            command="sfm pick-images --new-workspace",
+            problems=tuple(problems),
+        )
+    except VideoFramesError as error:
+        raise click.ClickException(str(error))
+
+    # From here a failure leaves the directory as it is, and says so.
+    try:
+        workspace_dir.mkdir(parents=True, exist_ok=True)
+        create_workspace(workspace_dir, **workspace_options)
+        click.echo(f"ffmpeg: {plan.programs.ffmpeg} ({plan.programs.version})")
+        try:
+            extracted = extract_planned(plan)
+        except VideoFramesError as error:
+            raise click.ClickException(str(error))
+        click.echo("")
+        filenames = expand_paths(
+            [video.frame_dir for video in extracted],
+            extensions=IMAGE_EXTENSIONS,
+            numbers=numbers,
+        )
+        if not filenames:
+            raise click.ClickException(
+                f"The range '{selection.range_expr}' keeps none of the extracted "
+                "frames."
+            )
+        count = len(videos)
+        result = _run(
+            filenames=filenames,
+            workspace_dir=workspace_dir.resolve(),
+            given=f"Given {count} video{'' if count == 1 else 's'}",
+            write_list=write_list,
+            force=force,
+            options=options,
+            json_path=json_path,
+        )
+    except click.ClickException as error:
+        error.message += "\n" + _left_as_it_is(workspace_dir)
+        raise
+    except BaseException:
+        click.echo(_left_as_it_is(workspace_dir), err=True)
+        raise
+
+    if prune_images:
+        _prune(extracted, result)
+
+
+def _left_as_it_is(workspace_dir: Path) -> str:
+    return (
+        f"The new workspace {workspace_dir} is left as it is; delete or empty it "
+        "to run the command again."
+    )
+
+
+def _prune(extracted, result: _RunResult) -> None:
+    """Delete the extracted frames that were not chosen and their `.sift`
+    files, and print how many were deleted."""
+    from .._pick_images import sift_path
+
+    chosen = {os.path.normcase(os.path.abspath(p)) for p in result.chosen_images}
+    frames = sift_files = 0
+    for video in extracted:
+        for number in range(1, video.frame_count + 1):
+            frame = video.frame_dir / (video.frame_pattern % number)
+            if os.path.normcase(os.path.abspath(frame)) in chosen:
+                continue
+            frame.unlink()
+            frames += 1
+            sift = sift_path(frame, result.feature_prefix_dir)
+            if sift.is_file():
+                sift.unlink()
+                sift_files += 1
+    click.echo(
+        f"Pruned {frames} frames not chosen, and {sift_files} .sift "
+        f"file{'' if sift_files == 1 else 's'} of them."
+    )

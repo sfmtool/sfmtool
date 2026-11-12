@@ -32,6 +32,15 @@ If `WORKSPACE_DIR` is omitted, the current directory is used.
 | `--quantize-bits B` | int, 1 to 16 | none | Round the formula's value to `B` bits (sfmtool only) |
 | `--force / -f` | flag | | Allow creating workspace even if nested or already exists |
 
+Every option but `--force` is also an option of
+[`sfm pick-images --new-workspace`](../image-feature/pick-images-command.md#from-videos---new-workspace),
+which creates its workspace with it. The options, their checks below and the
+creation of the workspace with the lines it prints are in
+[`_workspace_init_options.py`](../../../src/sfmtool/_workspace_init_options.py),
+which both commands call; the command
+([`_commands/ws.py`](../../../src/sfmtool/_commands/ws.py)) adds `--force`
+and its two checks.
+
 ## Validation Rules
 
 - COLMAP-specific options (`--dsp`, `--gpu`, `--affine-shape`) cannot be used with any

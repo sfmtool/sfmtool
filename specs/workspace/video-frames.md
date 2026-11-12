@@ -69,5 +69,8 @@ Every key is present in a version 1 file.
 
 `sfm extract-frames` writes the file
 ([cli/workspace/extract-frames-command.md](../cli/workspace/extract-frames-command.md)),
-in [`src/sfmtool/_video_frames.py`](../../src/sfmtool/_video_frames.py). No
-sfmtool command reads it.
+and so does `sfm pick-images --new-workspace` with the same code
+([cli/image-feature/pick-images-command.md](../cli/image-feature/pick-images-command.md#from-videos---new-workspace)),
+in [`src/sfmtool/_video_frames.py`](../../src/sfmtool/_video_frames.py). Its
+`--prune-images` deletes frames and leaves the record as it is. No sfmtool
+command reads it.

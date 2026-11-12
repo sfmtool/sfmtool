@@ -388,6 +388,23 @@ def _directory_problem(directory: Path) -> str | None:
     return None
 
 
+class FullOr(click.ParamType):
+    """An option value that is `full` or what `parse` accepts, for `--fps`
+    and `--max-frame-size`; `parse` raises `ValueError` for anything else."""
+
+    def __init__(self, name: str, parse):
+        self.name = name
+        self._parse = parse
+
+    def convert(self, value, param, ctx):
+        if not isinstance(value, str):
+            return value
+        try:
+            return self._parse(value)
+        except ValueError as error:
+            self.fail(str(error), param, ctx)
+
+
 def plan_extraction(
     videos: list[Path],
     out_dir: Path,
@@ -395,6 +412,7 @@ def plan_extraction(
     fps: float | None,
     max_frame_size: int | None,
     command: str,
+    problems: tuple[str, ...] = (),
 ) -> ExtractionPlan:
     """Check every input of an extraction and plan it, creating nothing.
 
@@ -403,12 +421,13 @@ def plan_extraction(
     directory, a file ffprobe reads as a video, not HDR, a stem with no `*`
     and no other video's stem in another letter case, and a frame directory
     `out_dir/<stem>/` that is missing or empty. Raises one `VideoFramesError`
-    listing every problem found. `command` names the caller for the messages.
+    listing every problem found, after `problems`, those the caller found.
+    `command` names the caller for the messages.
     """
     programs = find_ffmpeg(command)
     if out_dir.exists() and not out_dir.is_dir():
         raise VideoFramesError(f"{out_dir} exists and is not a directory")
-    problems: list[str] = []
+    problems = list(problems)
     probes: list[VideoProbe | None] = []
     for video in videos:
         probes.append(None)

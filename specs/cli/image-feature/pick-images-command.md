@@ -42,6 +42,9 @@ The command needs a workspace, found by the upward search from the images'
 common parent ([workspace.md § Workspace Discovery](../../workspace/workspace.md#workspace-discovery)),
 and without one it stops with an error asking for `sfm ws init`. There is no
 `--tool` option: the feature tool and its settings are always the workspace's.
+With `--new-workspace DIR` the `PATHS` are videos instead, and the command
+creates the workspace and the frames first
+([From videos: `--new-workspace`](#from-videos---new-workspace)).
 
 | Option | Default | Meaning |
 |--------|---------|---------|
@@ -55,6 +58,10 @@ and without one it stops with an error asking for `sfm ws init`. There is no
 | `--neighbour-blur-ratio RATIO` | `0.85` | A frame about to be chosen is blurred against its neighbours, and swapped for a sharper neighbour, when its sharpness is below `RATIO` times the sharpest of the frames up to 2 positions away ([core/analysis/pick-images.md § Blur](../../core/analysis/pick-images.md#blur)). |
 | `--min-step-matches N` | `600` | The match floor: a step past the next frame keeps at least `N` mutual matches, whatever its step. The step to the next frame is always taken, so a capture whose neighbouring frames match with fewer keeps every frame ([core/analysis/pick-images.md § The match floor](../../core/analysis/pick-images.md#the-match-floor)). At least 1. |
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
+| `--new-workspace DIR` | | Create a workspace at `DIR`, extract the videos given as `PATHS` into it and choose from their frames ([From videos: `--new-workspace`](#from-videos---new-workspace)). |
+| `--fps N\|full`, `--max-frame-size PX\|full` | `10`, `1920` | The frame rate and size the videos are extracted at, as for `sfm extract-frames`. Only with `--new-workspace`. |
+| `--prune-images` | off | Delete the extracted frames not chosen, and their `.sift` files ([Pruning](#pruning)). Only with `--new-workspace`. |
+| The workspace options of `sfm ws init` | | `--feature-tool`, `--max-features`, `--dsp/--no-dsp`, `--gpu/--no-gpu`, `--affine-shape/--no-affine-shape`, `--image-to-gray` and `--quantize-bits`, the new workspace's settings. Only with `--new-workspace`. |
 
 The five numeric options reach `sfmtool.analysis.pick_images` unchanged, as
 `target_step_percent`, `max_density_gain`, `step_band`,
@@ -350,6 +357,132 @@ files are all present would otherwise reach the walk's reader, whose
 `Version1Sift` advice to remove the file is the wrong fix for a version 1
 workspace.
 
+## From videos: `--new-workspace`
+
+```bash
+sfm pick-images --new-workspace DIR VIDEO... [--fps N|full] [--max-frame-size PX|full]
+    [--prune-images] [workspace options] [pick-images options]
+```
+
+`sfm pick-images --new-workspace DIR VIDEO...` goes from videos to a solvable
+set of frames in one call. With it, the positional arguments are video files,
+not image folders, and the command:
+
+1. Checks the options, then the inputs, creating nothing until every check
+   passes ([Checks](#checks)).
+2. Creates the workspace at `DIR` with the workspace options, as `sfm ws init
+   DIR` does, and prints the same lines.
+3. Extracts each video into `DIR/<stem>/`, `<stem>` being its file name
+   without the extension, with `extract_planned`, the function `sfm
+   extract-frames -o DIR` uses, at the same defaults (`--fps 10`,
+   `--max-frame-size 1920`), from the plan `plan_extraction` made in the
+   checks ([extract-frames-command.md](../workspace/extract-frames-command.md)).
+   Each frame directory holds `frame_000001.jpg`, … and the
+   `video-frames.json` record ([workspace/video-frames.md](../../workspace/video-frames.md)).
+4. Runs pick-images on the frame directories exactly as `sfm pick-images
+   DIR/<stem1> DIR/<stem2> …` does, the workspace being `DIR`: `-r` with a
+   range, `--write-list`, `--force` (which replaces a list, as always),
+   `--json` and the five numeric options apply unchanged, and the sequences
+   are in pick-images' order, by pattern, not the order the videos were
+   given. The line that lists the sequences counts the videos given.
+5. With `--prune-images`, deletes the frames not chosen ([Pruning](#pruning)).
+
+```bash
+sfm pick-images --new-workspace garden walk1.mp4 walk2.mov --write-list picked
+cd garden && sfm solve -i -r picked
+
+# A COLMAP workspace, every frame of a short video, only the chosen frames kept
+sfm pick-images --new-workspace orbit orbit.mov --fps full \
+    --feature-tool colmap --max-features 4096 --prune-images --write-list picked
+```
+
+The flow is `_pick_from_videos` in
+[`_commands/pick_images.py`](../../../src/sfmtool/_commands/pick_images.py),
+which calls the same `_run` as a run on image folders.
+
+**Workspace options.** These `sfm ws init` options are taken under the same
+names, with the same defaults and the same checks: `--feature-tool`,
+`--max-features`, `--dsp/--no-dsp`, `--gpu/--no-gpu`,
+`--affine-shape/--no-affine-shape`, `--image-to-gray` and `--quantize-bits`
+([ws-init-command.md](../workspace/ws-init-command.md)). None of them is a
+pick-images option, so they need no prefix, and each means exactly what it
+means to `sfm ws init`. Both commands declare them, check them and create the
+workspace through
+[`_workspace_init_options.py`](../../../src/sfmtool/_workspace_init_options.py)
+(`workspace_init_options`, `check_workspace_init_options`,
+`create_workspace`), so the two cannot drift apart. `sfm ws init --force` is
+not taken: it would clash with pick-images' `--force`, and its two uses
+(re-initialising a workspace, nesting one) do not apply to a new empty
+directory. `--fps` and `--max-frame-size` are spelled, parsed and checked as
+`sfm extract-frames` spells them.
+
+### Checks
+
+Usage errors, exit status 2, come first, with nothing created:
+
+- Without `--new-workspace`, each of the workspace options, `--fps`,
+  `--max-frame-size` and `--prune-images`, when given, is a usage error naming
+  the options given and `--new-workspace`. Each is detected by whether it was
+  given on the command line, so `--feature-tool sfmtool`, the default, is
+  refused too.
+- With it, `--named-image-list`, and a list name in `-r`, are usage errors,
+  since a new workspace has no lists; so are no videos, a range that does not
+  parse, an invalid `--fps` or `--max-frame-size`, and the workspace options'
+  own errors (`--dsp` with the `sfmtool` tool, `--quantize-bits 17`, …).
+
+Then `plan_extraction` finds ffmpeg and ffprobe, probes every video and
+applies every check of
+[extract-frames-command.md § Checks](../workspace/extract-frames-command.md#checks),
+with these two added to its list, so that one error, exit status 1, lists
+every problem found under "N problems found, so nothing was created":
+
+- **A non-empty `DIR`.** `DIR` must be missing or an empty directory. A `DIR`
+  that is a file is refused by the extraction's own check.
+- **A nested `DIR`.** A `DIR` inside an existing workspace, found by the
+  upward search from it, is refused, naming that workspace. `sfm ws init`'s
+  nesting rule applies with no `--force` to override it here.
+
+The ffmpeg message names the command as `sfm pick-images --new-workspace`.
+
+### Failure part-way
+
+A failure or Ctrl+C after the workspace is created leaves `DIR` as it is, and
+the message ends "The new workspace DIR is left as it is; delete or empty it
+to run the command again." Nothing is deleted on a failure. The frames already
+extracted can still be used by hand (`sfm pick-images DIR/<stem>` in the
+workspace). A failure in pick-images itself, such as a numeric option the
+binding refuses, comes after the extraction, so the frames are on disk.
+
+### Pruning
+
+`--prune-images` deletes, after pick-images has finished and written the list
+and the JSON file when asked for, and only then:
+
+- every frame this run extracted that pick-images did not choose, frames that
+  `-r` left out of the input included, since none of them is used, and
+- the `.sift` file of each of those frames, at the path pick-images gives it
+  (`sift_path` in [`_pick_images.py`](../../../src/sfmtool/_pick_images.py)
+  with the workspace's `feature_prefix_dir`, the path `sfm sift --extract`
+  writes), when one exists. pick-images writes these for frames it read or
+  predicted it would read.
+
+It never touches the chosen frames or their `.sift` files, the videos,
+`.sfm-workspace.json`, `.sfm-named-image-lists.json`, the JSON report, the
+`video-frames.json` records (which keep every extracted frame's time, so a
+kept frame's number still finds its time) or any file the run did not write.
+The kept frames keep their numbers, with gaps, which the written list's ranges
+and `sfm solve DIR/<stem>` both read. The command's last line before its time
+says how many frames and `.sift` files were deleted:
+
+```text
+Pruned 86 frames not chosen, and 49 .sift files of them.
+```
+
+A failed or cancelled pick deletes nothing. Pruning frees the disk after the
+run; the peak is still every extracted frame. `--prune-images` needs no
+`--write-list`: the frames left in each directory are the chosen ones, which
+`sfm solve DIR/<stem>` reads.
+
 ## Writing the list
 
 Each sequence becomes one entry of the list: a pattern made from the sequence's
@@ -579,6 +712,21 @@ match
 floor too large for the binding, refused naming the option, and one below 1,
 a usage error; an invalid output name; and `--force` without `--write-list`
 and paths given with a list, which are usage errors.
+For `--new-workspace`, two 40-frame videos are written once per module from
+the two pans with ffmpeg's built-in `mpeg4` encoder and extracted at
+`--fps full`. The tests cover the whole flow on both videos, with
+`--max-features` reaching the workspace file, the sequences in pick-images'
+order, a list that resolves to the frames the JSON report chose, a `.sift`
+file for each chosen frame and every frame kept without `--prune-images`;
+`--prune-images` with `-r 5-36`, after which exactly the chosen frames, their
+`.sift` files, the workspace, lists and record files and the JSON report are
+left, with the count line; a pick refused by the binding (`--max-density-gain
+0.5`), which prunes nothing and says the workspace is left as it is; a
+non-empty `DIR`, an image and a missing video refused in one error with
+nothing created; a `DIR` inside a workspace refused and not created; the
+usage errors with `--new-workspace` (`--named-image-list`, a list name in
+`-r`, `--dsp` with the `sfmtool` tool, an invalid `--fps`), with nothing
+created; and each `--new-workspace` option given without it.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the frame field chosen
@@ -610,12 +758,9 @@ vote's text for a fisheye verdict, confirmed and not.
   video; the local density term's split only sets the next target
   ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
-- Reading video. The command reads frames already on disk, which
-  [`sfm extract-frames`](../workspace/extract-frames-command.md) writes from
-  videos. `--new-workspace DIR VIDEO...`, which would create a workspace,
-  extract the videos into it and pick from their frames, and its
-  `--prune-images`, are proposed in
-  [drafts/extract-frames.md](../../drafts/extract-frames.md).
+- What [`sfm extract-frames`](../workspace/extract-frames-command.md) leaves
+  out ([extract-frames-command.md § Non-goals](../workspace/extract-frames-command.md#non-goals)),
+  HDR video among them: `--new-workspace` extracts with the same code.
 
 The choices of this command that are still open are in
 [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).

@@ -55,7 +55,13 @@ finds ffmpeg, probes every video and applies every check of
 `extract_planned(plan)` then extracts its videos in order and returns, for
 each, an `ExtractedVideo` with the frame directory, the frame pattern, the
 frame count and the record. `parse_fps` and `parse_max_frame_size` parse the
-two option values, and `command` names the calling command in the messages.
+two option values, `FullOr` is the click type that reads them, and `command`
+names the calling command in the messages. `problems` takes the problems a
+caller found in its own inputs, listed first in the same error.
+[`sfm pick-images --new-workspace`](../image-feature/pick-images-command.md#from-videos---new-workspace)
+is the other caller: it checks its new workspace's directory, plans the
+extraction with those problems, creates the workspace and extracts with
+`extract_planned`, at the same defaults.
 
 ```python
 plan = plan_extraction([Path("walk1.mp4")], Path("frames"), fps=10.0,
@@ -309,8 +315,6 @@ CI rather than skip.
 - Hardware-accelerated decoding, and extracting several videos at once:
   ffmpeg already decodes with several threads.
 - Resuming an interrupted extraction.
-- Going from videos to picked frames in one call. `sfm pick-images
-  --new-workspace DIR VIDEO...`, which would create a workspace, extract the
-  videos into it with `plan_extraction` and `extract_planned`, and pick frames
-  from them, is proposed in
-  [drafts/extract-frames.md](../../drafts/extract-frames.md).
+- Choosing frames. `sfm pick-images` chooses among the frames on disk, and
+  `sfm pick-images --new-workspace DIR VIDEO...` extracts the videos with
+  this command's code and chooses among their frames in one call.
