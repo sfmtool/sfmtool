@@ -610,6 +610,12 @@ vote's text for a fisheye verdict, confirmed and not.
   video; the local density term's split only sets the next target
   ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
+- Reading video. The command reads frames already on disk, which
+  [`sfm extract-frames`](../workspace/extract-frames-command.md) writes from
+  videos. `--new-workspace DIR VIDEO...`, which would create a workspace,
+  extract the videos into it and pick from their frames, and its
+  `--prune-images`, are proposed in
+  [drafts/extract-frames.md](../../drafts/extract-frames.md).
 
 The choices of this command that are still open are in
 [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).
