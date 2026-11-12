@@ -1124,10 +1124,10 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
 /// reference that faces the plane: each view is 20 degrees from it, and the
 /// two pairs, the views opposite each other, are 40 degrees apart. Under a
 /// target `σ` the four views do not reach, the selection matches all four,
-/// the pairs are matched widest first and both
-/// are kept; with them the weakest `σ` is under that of the reference matches
-/// alone (with `max_pairs` 0), and still is with each pair's information
-/// halved, and the plane stays on the truth.
+/// the pairs are matched widest first and both are kept; with them the
+/// weakest `σ` is under that of the reference matches alone (with
+/// `max_pairs` 0), and still is with each pair's information halved, and the
+/// plane stays on the truth.
 #[test]
 fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
     let centres = vec![

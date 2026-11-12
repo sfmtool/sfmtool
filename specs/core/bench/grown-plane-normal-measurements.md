@@ -766,9 +766,10 @@ separation, the probability that a random `A2` point's σ (a) exceeds a random
 13 weak turns were made. At the same share of `ok` points flagged the bar
 catches one or two more `A2` points in a hundred and flags about half a point
 more of the `A1` ones: the fix moves the trade-off along nearly the same curve,
-as the approximate correction `σ·cos²(turn)` did. Eleven `ok` points that the
-bar at 8° flagged before, σ (a) before → after, degrees, with the turn from the
-mean viewing direction, which the change did not move:
+as did a trial, before this change, of the approximate correction
+`σ·cos²(turn)`. Eleven `ok` points that the bar at 8° flagged before, σ (a)
+before → after, degrees, with the turn from the mean viewing direction, which
+the change did not move:
 
 | Point | Turn | σ (a) |
 |---|---:|---|

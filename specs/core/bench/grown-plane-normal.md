@@ -926,10 +926,10 @@ order, since a change `δ` there is `J⁻¹ δ` in the estimate's frame. The car
 is chosen over combining in a frame at the combined plane because the
 combination, the distance test and the selection's model then run on
 quantities in the coordinates they were set in; because without the turned
-support every frame is the starting frame and the carry is skipped; and because an
-estimate's information is a property of the estimate at its plane, where the
-carry is exact to first order, which is all the quadratic model of each
-estimate claims. No estimate lies at 90° or more from `n₀`, since no fitted
+support every frame is the starting frame and the carry is skipped; and
+because an estimate's information is a property of the estimate at its plane,
+where the carry is exact to first order, which is all the quadratic model of
+each estimate claims. No estimate lies at 90° or more from `n₀`, since no fitted
 trial point does (§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
 
 The starting chart is not uniform in angle: at a turn `θ` from `n₀` a unit of
