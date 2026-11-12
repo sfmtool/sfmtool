@@ -335,6 +335,12 @@ def test_an_unknown_name_names_the_file_and_the_lists_it_defines(list_workspace)
     output = " ".join(result.output.split())
     assert "no named image list is called 'walk'" in output
     assert "not a range" not in output
+    # A value with a slice was meant as a list, so its error has no note either.
+    result = _invoke(["sift", "--extract", "-r", "walk[:3]"])
+    assert result.exit_code != 0
+    output = " ".join(result.output.split())
+    assert "no named image list is called 'walk'" in output
+    assert "not a range" not in output
 
 
 def test_a_workspace_without_a_lists_file_has_no_lists(list_workspace):

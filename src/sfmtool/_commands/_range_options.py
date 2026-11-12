@@ -141,8 +141,9 @@ class ImageSelection:
     At most one range and at most one list name. With both, the range narrows
     the list rather than being applied on its own. `list_slice` is the slice
     given after the list's name, which takes part of the narrowed list by
-    position. `list_range_value` is the `-r` value that gave the list, slice
-    included, or None when `--named-image-list` gave it.
+    position. `list_range_value` is the `-r` value that gave the list, or None
+    when `--named-image-list` gave it or the value has a slice, which was
+    meant as a list.
     """
 
     range_expr: str | None = None
@@ -167,8 +168,8 @@ class ImageSelection:
         return text
 
     def list_note(self) -> str:
-        """For an error about the list: when a `-r` value gave it, a space and
-        `_range_or_name_note` of that value; otherwise ''."""
+        """For an error about the list: when a `-r` value with no slice gave
+        it, a space and `_range_or_name_note` of that value; otherwise ''."""
         if self.list_range_value is None:
             return ""
         return " " + _range_or_name_note(self.list_range_value)
@@ -284,7 +285,11 @@ def parse_image_selection(
         range_expr=ranges[0] if ranges else None,
         list_name=list_name,
         list_slice=list_slice,
-        list_range_value=list_value if named_image_list is None else None,
+        list_range_value=(
+            list_value
+            if named_image_list is None and list_value and "[" not in list_value
+            else None
+        ),
     )
 
 
