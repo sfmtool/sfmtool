@@ -406,3 +406,146 @@ fn a_camera_adds_the_essential_split_of_the_matches() {
         }
     );
 }
+
+/// The mutual matches of querying every feature of `b` back in `a`'s forest,
+/// as `mutual_matches` would without leaving out the features of `b` that no
+/// feature of `a` keeps.
+fn mutual_matches_querying_all_of_b(
+    a: &FrameFeatures,
+    b: &FrameFeatures,
+    options: &FramePairOptions,
+) -> Vec<(usize, usize)> {
+    if a.is_empty() || b.is_empty() {
+        return Vec::new();
+    }
+    let a_to_b = best_passing(a.forest.points(), a.len(), b, options);
+    let b_to_a = best_passing(b.forest.points(), b.len(), a, options);
+    a_to_b
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &j)| {
+            let j = j?;
+            (b_to_a[j] == Some(i)).then_some((i, j))
+        })
+        .collect()
+}
+
+/// The number of features of `b` that no feature of `a` keeps, which
+/// `mutual_matches` does not query back.
+fn features_of_b_left_out(
+    a: &FrameFeatures,
+    b: &FrameFeatures,
+    options: &FramePairOptions,
+) -> usize {
+    let mut kept = vec![false; b.len()];
+    for &j in best_passing(a.forest.points(), a.len(), b, options)
+        .iter()
+        .flatten()
+    {
+        kept[j] = true;
+    }
+    kept.iter().filter(|&&k| !k).count()
+}
+
+/// Options with the ratio and checks given, so that a pair is matched under
+/// both a tight and a loose budget.
+fn options_with(ratio: f32, max_leaf_checks: Option<usize>) -> FramePairOptions {
+    FramePairOptions {
+        ratio,
+        max_leaf_checks,
+        ..FramePairOptions::default()
+    }
+}
+
+/// Assert that `mutual_matches` gives the matches of querying all of `b`, in
+/// both directions and for several ratios and budgets, and that it leaves out
+/// at least one feature of `b` for at least one of them, so the comparison
+/// is of a shortened reverse search.
+fn assert_same_as_querying_all_of_b(x: &FrameFeatures, y: &FrameFeatures) {
+    let mut left_out = 0;
+    for ratio in [0.6, 0.8, 1.0] {
+        for checks in [Some(1), Some(16), None] {
+            let options = options_with(ratio, checks);
+            for (a, b) in [(x, y), (y, x)] {
+                let matches = mutual_matches(a, b, &options);
+                let reference = mutual_matches_querying_all_of_b(a, b, &options);
+                assert_eq!(matches, reference, "ratio {ratio}, checks {checks:?}");
+                left_out += features_of_b_left_out(a, b, &options);
+            }
+        }
+    }
+    assert!(left_out > 0, "no feature of b was left out");
+}
+
+#[test]
+fn querying_back_only_the_kept_features_gives_the_same_matches_with_ties() {
+    // Each frame holds exact duplicates, near copies and unrelated
+    // descriptors, so queries tie at the nearest neighbour, fail the ratio
+    // test, and land several on one feature of the other frame.
+    let mut rng = StdRng::seed_from_u64(9);
+    let shared = random_descriptors(&mut rng, 300);
+    let near: Vec<u8> = shared[..100 * DESCRIPTOR_DIM]
+        .iter()
+        .enumerate()
+        .map(|(k, &v)| if k % DESCRIPTOR_DIM < 4 { v ^ 1 } else { v })
+        .collect();
+    let a_descriptors = [
+        shared.clone(),
+        shared[..50 * DESCRIPTOR_DIM].to_vec(),
+        near,
+        random_descriptors(&mut rng, 200),
+    ]
+    .concat();
+    let b_descriptors = [
+        shared[150 * DESCRIPTOR_DIM..].to_vec(),
+        shared.clone(),
+        random_descriptors(&mut rng, 400),
+    ]
+    .concat();
+    let a = frame(
+        random_pixels(&mut rng, a_descriptors.len() / DESCRIPTOR_DIM, 1.0),
+        a_descriptors,
+    );
+    let b = frame(
+        random_pixels(&mut rng, b_descriptors.len() / DESCRIPTOR_DIM, 1.0),
+        b_descriptors,
+    );
+    assert!(!mutual_matches(&a, &b, &FramePairOptions::default()).is_empty());
+    assert_same_as_querying_all_of_b(&a, &b);
+}
+
+/// The positions and descriptors of the default SIFT features of one
+/// seoul_bull image, with its size.
+fn seoul_bull_features(number: usize) -> FrameFeatures {
+    use crate::features::sift::{extract_sift, gray_from_rgb, SiftParams};
+    let path = format!(
+        "{}/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_{number:02}.jpg",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let rgb = image::open(path).expect("the test image loads").to_rgb8();
+    let (width, height) = (rgb.width(), rgb.height());
+    let params = SiftParams::default();
+    let gray = gray_from_rgb(width, height, rgb.as_raw(), &params.image_to_gray);
+    let features = extract_sift(&gray, &params);
+    let positions = features.keypoints.iter().map(|k| [k.x, k.y]).collect();
+    let descriptors = features.descriptors.rows().concat();
+    FrameFeatures::new(
+        positions,
+        descriptors,
+        width,
+        height,
+        KdForestParams::balanced(),
+    )
+    .expect("valid features")
+}
+
+#[test]
+fn querying_back_only_the_kept_features_gives_the_same_matches_on_real_images() {
+    let near = seoul_bull_features(1);
+    let next = seoul_bull_features(2);
+    let far = seoul_bull_features(9);
+    assert!(near.len() > 500, "{} features", near.len());
+    assert!(!mutual_matches(&near, &next, &FramePairOptions::default()).is_empty());
+    assert_same_as_querying_all_of_b(&near, &next);
+    assert_same_as_querying_all_of_b(&near, &far);
+}

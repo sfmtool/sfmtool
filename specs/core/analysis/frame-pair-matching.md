@@ -229,17 +229,24 @@ move it. It is NaN when there are no matches.
 ### The ratio test and mutual matches
 
 Each feature of frame `a` is queried in `b`'s forest for its two nearest
-descriptors, and each feature of `b` in `a`'s. A query's nearest neighbour is
-kept when it is closer than `ratio` times the second nearest (Lowe's ratio
-test), which drops a feature whose descriptor is about as close to two
-features of the other frame, as on a repeated texture. The forest reports
-squared distances, so the test compares them against `ratio²`. A query that
-found only one neighbour has nothing to be compared with and keeps it.
+descriptors, and each feature of `b` that can be in a match in `a`'s, as
+below. A query's nearest neighbour is kept when it is closer than `ratio`
+times the second nearest (Lowe's ratio test), which drops a feature whose
+descriptor is about as close to two features of the other frame, as on a
+repeated texture. The forest reports squared distances, so the test compares
+them against `ratio²`. A query that found only one neighbour has nothing to
+be compared with and keeps it.
 
 A match is kept when it is mutual: feature `i` of `a` keeps `j` of `b` and
 feature `j` keeps `i`. Each feature is then in at most one match, so a
 feature of `b` that several features of `a` resemble counts once. The
 **matches** of the statistics are these mutual matches.
+
+A feature of `b` that no feature of `a` keeps is in no mutual match, whatever
+its own query finds, so it is not queried. A query's result depends only on
+its descriptor, the forest and the checks, not on which other queries run, so
+the matches are those of querying every feature of `b`. A pair that shares
+fewer features keeps fewer of them, and so makes fewer reverse queries.
 
 ### The essential split
 
@@ -378,6 +385,10 @@ build frames from random descriptors at synthetic positions:
 - no matches give a NaN step;
 - the ratio test drops a feature with two equally close neighbours, and a
   match that is not mutual is dropped;
+- querying back only the features of `b` that `a` keeps gives the matches of
+  querying back all of them, both ways, for three ratios and three budgets
+  of checks, on frames with duplicated and nearly equal descriptors and on
+  SIFT features extracted from seoul_bull images;
 - every error variant is returned for its input, and the bounds of each
   option are accepted;
 - a camera adds a measured split, with the rotation of a frame turned 5°,

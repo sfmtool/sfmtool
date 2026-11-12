@@ -406,6 +406,12 @@ fn widen(p: [f32; 2]) -> [f64; 2] {
 
 /// The mutual best matches `(index in a, index in b)` that pass the ratio
 /// test both ways, in the order of `a`'s features.
+///
+/// Only the features of `b` that some feature of `a` keeps are queried back
+/// in `a`'s forest: a feature of `b` that no feature of `a` keeps is in no
+/// mutual match, whatever its own query finds. A query's result depends only
+/// on its descriptor, the forest and the checks, not on which other queries
+/// run, so the matches are those of querying every feature of `b`.
 fn mutual_matches(
     a: &FrameFeatures,
     b: &FrameFeatures,
@@ -414,8 +420,25 @@ fn mutual_matches(
     if a.is_empty() || b.is_empty() {
         return Vec::new();
     }
-    let a_to_b = best_passing(a, b, options);
-    let b_to_a = best_passing(b, a, options);
+    let a_to_b = best_passing(a.forest.points(), a.len(), b, options);
+    let mut kept = vec![false; b.len()];
+    for &j in a_to_b.iter().flatten() {
+        kept[j] = true;
+    }
+    let kept: Vec<usize> = (0..b.len()).filter(|&j| kept[j]).collect();
+    let b_points = b.forest.points();
+    let queries: Vec<u8> = kept
+        .iter()
+        .flat_map(|&j| &b_points[j * DESCRIPTOR_DIM..(j + 1) * DESCRIPTOR_DIM])
+        .copied()
+        .collect();
+    let mut b_to_a = vec![None; b.len()];
+    for (&j, i) in kept
+        .iter()
+        .zip(best_passing(&queries, kept.len(), a, options))
+    {
+        b_to_a[j] = i;
+    }
     a_to_b
         .iter()
         .enumerate()
@@ -426,21 +449,22 @@ fn mutual_matches(
         .collect()
 }
 
-/// For each feature of `from`, its nearest neighbour in `to`'s forest when
-/// that neighbour passes the ratio test, comparing squared distances against
-/// `ratio²`. A feature whose query found only one neighbour has nothing to be
-/// compared with and keeps it.
+/// For each of the `n` descriptors in `queries`, its nearest neighbour in
+/// `to`'s forest when that neighbour passes the ratio test, comparing squared
+/// distances against `ratio²`. A query that found only one neighbour has
+/// nothing to be compared with and keeps it.
 fn best_passing(
-    from: &FrameFeatures,
+    queries: &[u8],
+    n: usize,
     to: &FrameFeatures,
     options: &FramePairOptions,
 ) -> Vec<Option<usize>> {
     let checks = options
         .max_leaf_checks
         .unwrap_or(to.forest.params().max_leaf_checks);
-    let (indices, distances_sq) =
-        to.forest
-            .search_batch_with_distances(from.forest.points(), from.len(), 2, checks, None);
+    let (indices, distances_sq) = to
+        .forest
+        .search_batch_with_distances(queries, n, 2, checks, None);
     let ratio_sq = options.ratio * options.ratio;
     indices
         .as_chunks::<2>()
