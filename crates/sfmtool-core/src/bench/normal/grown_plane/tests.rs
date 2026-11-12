@@ -10,14 +10,14 @@ use std::cell::RefCell;
 
 use nalgebra::{DMatrix, Matrix2, Vector3};
 
-use super::combine::{covariance, distance, weighted_mean};
+use super::combine::{covariance, distance, sigmas_deg, weighted_mean};
 use super::render::{robust_score, zncc, Block, GradientRead, Samples};
 use super::solve::{
     disc_of, forward_difference, maximise, schur_tilt, tilt_information, Iteration, Linearised,
     Objective, Rounds, DAMPING_TRIES, MAX_GROWN_TILT_STEP, MAX_SHIFT_STEP_PX, MAX_TILT_STEP,
     MIN_RELATIVE_GAIN,
 };
-use super::{sigmas_deg, window_radii, GrownPlaneNormalOptions};
+use super::{window_radii, GrownPlaneNormalOptions};
 
 /// Samples of `channels` channels, every one valid, from `values` laid out
 /// sample by sample.

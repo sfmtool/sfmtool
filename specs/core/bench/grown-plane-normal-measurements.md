@@ -14,7 +14,8 @@ and its relative stop; the early stop, the second growth on the second rung and
 the shift-only fit; the information read through the Sobel gradient with the σ
 target of 2.75°; reading each view through its own slid patch; writing no
 keypoint; the arithmetic of the fits; the optimiser's tilt cap that grows;
-and the working grid laid again at each stage's plane.
+the working grid laid again at each stage's plane; and σ read in the plane's
+own angular frame.
 
 ## How the step is scored
 
@@ -706,3 +707,93 @@ the step before it did, within the run-to-run spread.
 **Decision.** The turned support is the default. The cap, the floor and the
 round limit are first values; the quality of the new default across many
 points is evaluated separately.
+
+## σ in the plane's own frame (2026-11-11)
+
+**Question.** σ was read from the information about the starting chart's tilt
+as if a unit of tilt were a radian. At a plane turned `θ` from the start a unit
+along the turn is `cos² θ` radians and across it `cos θ`, so σ was overstated
+along a large turn, 4 times at 60° and 8.5 times at 70°. σ is the cheapest
+candidate for telling a determined normal, one the step reaches from any start,
+from an undetermined one, and the overstatement is largest on exactly the
+points that turn far from the mean viewing direction solving starts from. What
+does reading σ in the angular frame of the plane it is at change, and does it
+separate the two kinds better?
+
+**The change.** Every σ in degrees is read from the information expressed in
+that plane's angular frame, `Jᵀ · I⁰ · J` with `J` the chart Jacobian at the
+plane (§ [The plane's precision](grown-plane-normal.md#the-planes-precision)).
+Nothing else changed: the plane each estimate and the combination reach, the
+agreement distance and the selection's prediction are as they were, so a point
+moves only where the selection's stop at `target_sigma_deg`, the weak-turn rule
+or the low-confidence verdict reads a different σ.
+
+**The ground truths.** `refine_normals` at the defaults on every finite point
+of the five ground truths, from the stored normals, before and after the change
+in release builds; σ (a) from the same step run on the bench for each point
+from its stored normal. "Moved" is the angle between the normal written before
+and after.
+
+| Ground truth | Points | Moved > 1° | Moved > 5° | Outcomes changed | Low confidence | Median σ (a) | 90th percentile σ (a) |
+|---|---:|---:|---:|---|---:|---:|---:|
+| dino_dog_toy v01 | 1243 | 1 | 0 | none | 45 → 45 | 1.66° → 1.66° | 2.42° → 2.41° |
+| kerry_park v01 | 382 | 2 | 1 | 1 weak turn → turned | 186 → 184 | 3.26° → 3.03° | 27.6° → 19.6° |
+| kerry_park v02 | 387 | 1 | 0 | none | 197 → 194 | 3.56° → 3.31° | 36.9° → 20.8° |
+| seoul_bull v01 | 266 | 0 | 0 | none | 172 → 164 | 9.14° → 7.21° | 63.5° → 34.5° |
+| seoul_bull v02 | 274 | 3 | 3 | 2 weak turns → turned | 164 → 166 | 8.67° → 6.88° | 69.3° → 51.8° |
+
+No point joined no view where it had joined one, or the other way. The low
+confidence counts are of turned points, so a weak turn now made can add one.
+
+**Separation from the mean viewing direction.** Every point of the sweep that
+labelled the ground truths' points (`ok`: stable; `A1`: unstable but
+determined; `A2`: undetermined), run once from the mean viewing direction of
+its views at the defaults: 1391 `ok`, 172 `A1` and 516 `A2` points. The
+separation, the probability that a random `A2` point's σ (a) exceeds a random
+`ok` or `A1` point's, went from 0.961 to 0.962. The shares flagged by a bar on
+σ (a):
+
+| Bar | `ok` flagged | `A1` flagged | `A2` caught |
+|---|---:|---:|---:|
+| σ > 5°, before | 5.7% | 45.9% | 89.0% |
+| σ > 5°, after | 2.8% | 33.1% | 84.5% |
+| σ > 8°, before | 2.2% | 30.2% | 81.4% |
+| σ > 8°, after | 0.9% | 19.8% | 71.3% |
+| σ > 3.25°, after (5.7% of `ok`) | 5.8% | 46.5% | 90.9% |
+| σ > 5.28°, after (2.2% of `ok`) | 2.2% | 30.8% | 82.4% |
+
+σ (a) after the change is a median 0.80 of σ before (10th percentile 0.37), and
+13 weak turns were made. At the same share of `ok` points flagged the bar
+catches one or two more `A2` points in a hundred and flags about half a point
+more of the `A1` ones: the fix moves the trade-off along nearly the same curve,
+as the approximate correction `σ·cos²(turn)` did. Eleven `ok` points that the
+bar at 8° flagged before, σ (a) before → after, degrees, with the turn from the
+mean viewing direction, which the change did not move:
+
+| Point | Turn | σ (a) |
+|---|---:|---|
+| dino v01 678 | 50.1° | 14.9 → 7.1 |
+| dino v01 1001 | 25.2° | 70.9 → 62.1 |
+| kerry_park v01 274 | 31.3° | 12.8 → 9.9 |
+| kerry_park v02 319 | 10.4° | 11.5 → 11.1 |
+| kerry_park v02 271 | 31.8° | 12.8 → 9.8 |
+| seoul_bull v02 160 | 13.7° | 21.5 → 20.5 |
+| seoul_bull v02 96 | 37.3° | 24.3 → 17.3 |
+| seoul_bull v02 18 | 23.6° | 9.5 → 8.5 |
+| seoul_bull v02 241 | 34.3° | 14.5 → 10.7 |
+| seoul_bull v02 159 | 15.2° | 11.1 → 10.3 |
+| seoul_bull v02 14 | 38.0° | 17.0 → 11.1 |
+
+Only dino 678 falls under 8°; the others stay over it, most turned too little
+for the chart to matter.
+
+**Cost.** The change reads one 2×2 Jacobian and one 2×2 product per σ, a
+handful per point against thousands of renders. `refine_normals`'s wall time
+on the 32 threads did not rise: 7.1, 1.6, 1.5, 0.7 and 0.8 s before, part of
+it beside a compile, and 5.3, 1.4, 1.2, 0.7 and 0.8 s after.
+
+**Decision.** σ is read in the plane's own frame: it is the angular quantity
+it is reported as, and it no longer depends on the normal the step starts
+from. The thresholds that read it were set on the chart's σ; setting them
+again is an open question
+([grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md)).

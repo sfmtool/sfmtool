@@ -28,7 +28,7 @@
 
 use nalgebra::{Matrix2, Vector2};
 
-use super::combine::{sigmas_deg, Combined, Estimate, PairEstimate};
+use super::combine::{sigmas_deg_at, Combined, Estimate, PairEstimate};
 use super::render::ViewRender;
 use super::solve::{
     carried_information, maximise, schur_tilt, score_and_normal_matrix, tilt_information,
@@ -344,7 +344,12 @@ impl Sequence<'_, '_> {
                 };
                 ([p[0], p[1]], tilt_information(&fit, &p))
             };
-            let sigma = sigmas_deg(&information, options.zncc_tolerance)[0];
+            let sigma = sigmas_deg_at(
+                &information,
+                &self.start.grid.start,
+                own,
+                options.zncc_tolerance,
+            )[0];
             let refused = (zncc.is_nan() || zncc < options.min_held_zncc)
                 .then_some(GrownPlaneRefusal::UnderFloor);
             pair_estimates.push(PairEstimate {
@@ -606,7 +611,7 @@ impl Sequence<'_, '_> {
                 .filter(|a| a.is_finite())
                 .reduce(f64::max);
             state.kept_tilt = combined.tilt;
-            sigma_after = combined.sigma_weak_deg(options.zncc_tolerance);
+            sigma_after = combined.sigma_weak_deg(&self.start.grid.start, options.zncc_tolerance);
             if let (Some(t), Some(last)) = (combined.tilt, trace.last_mut()) {
                 last.combined_normal = Some(self.start.grid.plane_normal(t).into());
                 last.combined_sigma_deg = sigma_after;

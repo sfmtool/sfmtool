@@ -1122,8 +1122,9 @@ fn the_grown_plane_normals_detail_phases_change_nothing() {
 
 /// The information-weighted plane of the views on opposite sides of a
 /// reference that faces the plane: each view is 20 degrees from it, and the
-/// two pairs, the views opposite each other, are 40 degrees apart. The
-/// selection matches all four, the pairs are matched widest first and both
+/// two pairs, the views opposite each other, are 40 degrees apart. Under a
+/// target `σ` the four views do not reach, the selection matches all four,
+/// the pairs are matched widest first and both
 /// are kept; with them the weakest `σ` is under that of the reference matches
 /// alone (with `max_pairs` 0), and still is with each pair's information
 /// halved, and the plane stays on the truth.
@@ -1143,10 +1144,10 @@ fn wide_pairs_sharpen_the_plane_over_reference_matches_alone() {
 
     let without = GrownPlaneNormalOptions {
         max_pairs: 0,
-        ..Default::default()
+        ..every_view()
     };
     let (alone, alone_report) = run(&scene, &edited, &track, &without);
-    let (paired, paired_report) = run(&scene, &edited, &track, &GrownPlaneNormalOptions::default());
+    let (paired, paired_report) = run(&scene, &edited, &track, &every_view());
     let (alone_seq, paired_seq) = (sequence_of(&alone_report), sequence_of(&paired_report));
     assert_eq!(alone_seq.joined(), 4, "{alone_seq:#?}");
     assert_eq!(paired_seq.joined(), 4, "{paired_seq:#?}");
@@ -1783,6 +1784,83 @@ fn a_plane_started_sixty_degrees_off_is_reached_on_turned_grids() {
         degrees(patch_frame_of(&again).normal(), truth()) < 1.0,
         "{second}"
     );
+}
+
+/// `σ` is read in the angular frame of the plane it is at, so it does not
+/// depend on the normal the step started from: on the sixty-degree scene,
+/// runs from 60 and from 35 degrees off about the same axis take the same
+/// reference, match the same views and pairs and end at about the same
+/// plane, and give the same `σ` for the plane, both ways, and for each view's
+/// and each pair's own plane, within 10%. Read in the starting chart as if a
+/// unit of tilt were a radian, `σ` along a turn of 60 degrees is 4 times the
+/// angular one and along 35 degrees 1.5 times, so the two runs' would differ
+/// by up to 2.7 times.
+#[test]
+fn sigma_does_not_depend_on_the_starting_normal() {
+    let scene = Scene::looking_at(&sixty_degree_centres(), WORLD, camera(), textured_plane);
+    let edited = edited_of(&scene);
+    let track = tilted_track(&edited, Vector3::x(), 60.0);
+    let options = every_view();
+    let (_, far) = run(&scene, &edited, &track, &options);
+    let (_, near) = run(
+        &scene,
+        &edited,
+        &tilted_track(&edited, Vector3::x(), 35.0),
+        &options,
+    );
+    let (far_sequence, near_sequence) = (sequence_of(&far), sequence_of(&near));
+    assert_eq!(far_sequence.reference, near_sequence.reference);
+    let close = |what: &str, a: f64, b: f64| {
+        assert!(
+            a.is_finite() && b.is_finite() && (a / b - 1.0).abs() < 0.1,
+            "{what}: {a:.3} from 60 degrees off, {b:.3} from 35"
+        );
+    };
+    let (a, b) = (
+        far_sequence.precision.expect("views joined"),
+        near_sequence.precision.expect("views joined"),
+    );
+    close("weak", a.sigma_weak_deg, b.sigma_weak_deg);
+    close("strong", a.sigma_strong_deg, b.sigma_strong_deg);
+    close(
+        "discounted weak",
+        a.discounted_sigma_weak_deg,
+        b.discounted_sigma_weak_deg,
+    );
+    close(
+        "discounted strong",
+        a.discounted_sigma_strong_deg,
+        b.discounted_sigma_strong_deg,
+    );
+    // Each view's last growth, by image, and each pair, by its images.
+    let last_sigma = |sequence: &GrownPlaneSequence, image: u32| {
+        sequence
+            .trace
+            .iter()
+            .find(|t| t.image == image)
+            .and_then(|t| t.attempts.last())
+            .map(|a| a.sigma_deg)
+    };
+    assert_eq!(far_sequence.trace.len(), near_sequence.trace.len());
+    for t in &near_sequence.trace {
+        let (Some(a), Some(b)) = (
+            last_sigma(far_sequence, t.image),
+            last_sigma(near_sequence, t.image),
+        ) else {
+            panic!("image {} tried in both runs", t.image);
+        };
+        close(&format!("image {}", t.image), a, b);
+    }
+    assert!(!near_sequence.pairs.is_empty());
+    assert_eq!(far_sequence.pairs.len(), near_sequence.pairs.len());
+    for p in &near_sequence.pairs {
+        let q = far_sequence
+            .pairs
+            .iter()
+            .find(|q| q.images == p.images)
+            .expect("the same pairs");
+        close(&format!("pair {:?}", p.images), q.sigma_deg, p.sigma_deg);
+    }
 }
 
 /// The rounds of one growth or pair: each within its cap, the first under

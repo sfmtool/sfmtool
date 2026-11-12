@@ -15,7 +15,11 @@
 //! An estimate read on a grid laid at its own plane (the turned support) has
 //! its tilt and information carried into the starting frame's chart before
 //! it reaches the combination, so every estimate combined here is in the
-//! starting frame's tilt.
+//! starting frame's tilt. `σ` is read from that information at the plane it
+//! is about, in that plane's own angular frame ([`sigmas_deg_at`]), not in the
+//! starting chart, whose unit of tilt is a radian only at the starting plane.
+//! The agreement distance needs no such reading: it is unchanged by a linear
+//! change of the tilt's coordinates.
 
 use nalgebra::{DMatrix, Matrix2, Vector2};
 
@@ -86,10 +90,12 @@ pub(super) struct Combined {
 }
 
 impl Combined {
-    /// The combined plane's weakest `σ`, degrees; `NaN` with no plane.
-    pub(super) fn sigma_weak_deg(&self, tau: f64) -> f64 {
+    /// The combined plane's weakest `σ`, degrees, read at that plane in its
+    /// own angular frame ([`sigmas_deg_at`]) for the starting frame `start`;
+    /// `NaN` with no plane.
+    pub(super) fn sigma_weak_deg(&self, start: &Frame, tau: f64) -> f64 {
         match self.tilt {
-            Some(_) => sigmas_deg(&self.information, tau)[0],
+            Some(tilt) => sigmas_deg_at(&self.information, start, tilt, tau)[0],
             None => f64::NAN,
         }
     }
@@ -123,8 +129,8 @@ pub(super) fn weighted_mean(estimates: &[([f64; 2], Matrix2<f64>)]) -> Option<[f
 }
 
 /// `σ` along the weakest and strongest directions of `information`, degrees:
-/// `√(2τ/λ)` for each eigenvalue `λ`, floored at `1e-12`, a small tilt
-/// `(a, b)` being that many radians.
+/// `√(2τ/λ)` for each eigenvalue `λ`, floored at `1e-12`, for information
+/// about two angles in radians.
 pub(super) fn sigmas_deg(information: &Matrix2<f64>, tau: f64) -> [f64; 2] {
     let eigen = information.symmetric_eigen().eigenvalues;
     let (lo, hi) = if eigen[0] <= eigen[1] {
@@ -134,6 +140,33 @@ pub(super) fn sigmas_deg(information: &Matrix2<f64>, tau: f64) -> [f64; 2] {
     };
     let sigma = |lambda: f64| (2.0 * tau / lambda.max(1e-12)).sqrt().to_degrees();
     [sigma(lo), sigma(hi)]
+}
+
+/// `σ` along the weakest and strongest directions, degrees, of
+/// `information` about the tilt of the starting frame `start`, read at the
+/// plane `tilt` of that frame: the information expressed in that plane's own
+/// angular frame, `Jᵀ · I · J` for the Jacobian `J`
+/// ([`Frame::chart_jacobian`]) from the plane's normal's turns about two
+/// orthonormal axes in its own tangent plane, those of `start` turned to it
+/// ([`Frame::turned_to`]), to the starting chart, and then [`sigmas_deg`].
+///
+/// A unit of the starting chart's tilt is a radian only at the starting
+/// plane: at a plane turned `θ` from it, a unit along the turn is `cos² θ`
+/// radians and across it `cos θ`, so the chart's information read as if it
+/// were about radians overstates `σ` along a large turn. At `(0, 0)` `J` is
+/// the identity and this is [`sigmas_deg`]. The two eigenvalues do not depend
+/// on which orthonormal axes are taken, since another choice turns `J` by a
+/// rotation.
+pub(super) fn sigmas_deg_at(
+    information: &Matrix2<f64>,
+    start: &Frame,
+    tilt: [f64; 2],
+    tau: f64,
+) -> [f64; 2] {
+    let j = start
+        .turned_to(start.plane_normal(tilt))
+        .chart_jacobian(start);
+    sigmas_deg(&(j.transpose() * information * j), tau)
 }
 
 /// The covariance of the tilt that `information` gives: `2τ·(I + 10⁻⁶)⁻¹`,
@@ -324,10 +357,9 @@ impl Sequence<'_, '_> {
             "{kept_views} of {} views and {kept_pairs} of {} pairs kept, {held_out} held under the floor, {rounds} means: \u{3c3} {:.2}\u{b0} weakest, {} renders",
             views.len(),
             pairs.len(),
-            if tilt.is_some() {
-                sigmas_deg(&information, tau)[0]
-            } else {
-                f64::NAN
+            match tilt {
+                Some(tilt) => sigmas_deg_at(&information, &self.start.grid.start, tilt, tau)[0],
+                None => f64::NAN,
             },
             self.renders_done() - renders_before.unwrap_or(0)
         );

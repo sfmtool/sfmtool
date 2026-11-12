@@ -4,12 +4,14 @@
 //! The working grid laid again at a plane, and the charts that carry a laid
 //! grid's tilt and information into the starting frame's: the laid grid's
 //! samples on the turned square, the template rendered there, a laid grid's
-//! pixel derivatives against differences of its projection, and the chart
-//! Jacobian against a central difference of the chart.
+//! pixel derivatives against differences of its projection, the chart
+//! Jacobian against a central difference of the chart, and `σ` read in a
+//! plane's own angular frame from information in the starting chart.
 
 use nalgebra::{Matrix2, Rotation3, Unit, Vector3};
 
-use super::render::{Grid, ViewImage, ViewRender};
+use super::combine::{sigmas_deg, sigmas_deg_at};
+use super::render::{Frame, Grid, ViewImage, ViewRender};
 use super::solve::carried_information;
 use super::Laid;
 use crate::bench::tests::scene::{texture, Scene, PLANE_Z, WORLD};
@@ -335,6 +337,67 @@ fn the_charts_carry_tilts_and_information_into_the_starting_frame() {
     // A plane at or past 90 degrees has no tilt.
     assert!(grid.start.tilt_of(-grid.start.normal).is_none());
     assert!(grid.start.tilt_of(grid.start.u).is_none());
+}
+
+/// `σ` is read in the angular frame of the plane it is at. Information about
+/// turns of a plane's normal, in radians about two orthonormal axes of its
+/// own, carried into the starting chart and read there by `sigmas_deg_at`
+/// gives back the `σ` of the information as it was, at 0°, 40° and 70°
+/// from the starting normal, and whichever orthonormal axes it was stated
+/// on. Read in the chart as if a unit of tilt were a radian, the same
+/// isotropic information gives a weakest `σ` `1/cos² θ` and a strongest
+/// `1/cos θ` times the true one: 8.5 times at 70°.
+#[test]
+fn sigma_is_read_in_the_planes_own_angular_frame() {
+    let scene = scene();
+    let views = scene.views();
+    let grid = starting_grid(&views, 16);
+    let start = grid.start;
+    let tau = 0.01;
+    // σ of 1° in every direction, and of 2° and 0.5° along two axes.
+    let lambda = |deg: f64| 2.0 * tau / deg.to_radians().powi(2);
+    let isotropic = Matrix2::identity() * lambda(1.0);
+    let skewed = Matrix2::new(lambda(2.0), 0.0, 0.0, lambda(0.5));
+    for (axis, deg) in [
+        (Vector3::new(1.0, 0.3, 0.0), 0.0),
+        (Vector3::new(1.0, 0.3, 0.0), 40.0),
+        (Vector3::new(-0.4, 1.0, 0.0), 70.0),
+    ] {
+        let normal = turned(&grid, axis, deg);
+        let tilt = start.tilt_of(normal).expect("under 90 degrees");
+        let own = start.turned_to(normal);
+        // The same plane's frame with its axes turned 30° about its normal.
+        let spun = Rotation3::from_axis_angle(&Unit::new_normalize(normal), 0.5);
+        let other = Frame {
+            normal,
+            u: spun * own.u,
+            v: spun * own.v,
+        };
+        for frame in [own, other] {
+            let j = frame.chart_jacobian(&start);
+            for information in [isotropic, skewed] {
+                let want = sigmas_deg(&information, tau);
+                let chart = carried_information(&information, &j);
+                let got = sigmas_deg_at(&chart, &start, tilt, tau);
+                for k in 0..2 {
+                    assert!(
+                        (got[k] / want[k] - 1.0).abs() < 1e-9,
+                        "{deg}: {got:?} vs {want:?}"
+                    );
+                }
+            }
+            let read_as_radians = sigmas_deg(&carried_information(&isotropic, &j), tau);
+            let c = deg.to_radians().cos();
+            assert!(
+                (read_as_radians[0] - 1.0 / (c * c)).abs() < 1e-6,
+                "{deg}: {read_as_radians:?}"
+            );
+            assert!(
+                (read_as_radians[1] - 1.0 / c).abs() < 1e-6,
+                "{deg}: {read_as_radians:?}"
+            );
+        }
+    }
 }
 
 /// A laid grid's tilt that turns its plane to 90° or more from the starting

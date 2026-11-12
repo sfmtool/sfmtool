@@ -28,7 +28,8 @@
 //! frame, the plane's normal and the turned square's axes. [`Frame::tilt_of`]
 //! maps a normal to a frame's tilt (its chart), and
 //! [`Grid::start_chart_jacobian`] carries a laid grid's tilt into the
-//! starting frame's.
+//! starting frame's; [`Frame::chart_jacobian`] does the same for any frame,
+//! such as the frame [`Frame::turned_to`] a plane, in which `σ` is read.
 
 use std::cell::{Cell, RefCell, RefMut};
 
@@ -85,6 +86,46 @@ impl Frame {
     pub(super) fn tilt_step(&self, from: Vector3<f64>, to: Vector3<f64>) -> Option<[f64; 2]> {
         let (a, b) = (self.tilt_of(from)?, self.tilt_of(to)?);
         Some([b[0] - a[0], b[1] - a[1]])
+    }
+
+    /// This frame turned to the plane of unit normal `normal` by the least
+    /// rotation from this frame's normal, its `u` the direction the arc leaves
+    /// in at a half turn, as `tilt_patch` takes it: `normal` and the turned
+    /// axes. This frame's axes where `normal` is its normal.
+    pub(super) fn turned_to(&self, normal: Vector3<f64>) -> Frame {
+        let (u, v) = match least_rotation(self.normal, normal, self.u) {
+            Some(rotation) => (rotation * self.u, rotation * self.v),
+            None => (self.u, self.v),
+        };
+        Frame { normal, u, v }
+    }
+
+    /// How the tilt of `chart`'s frame moves with this frame's own tilt at
+    /// `(0, 0)`: `J = ∂c(n + α·u + β·v)/∂(α, β)` for `chart`'s chart
+    /// `c(m) = ((m·u₀)/(m·n₀), (m·v₀)/(m·n₀))` and this frame `(n, u, v)`,
+    /// with `k = n·n₀`:
+    ///
+    /// ```text
+    /// J = [ (u·u₀)/k − (n·u₀)(u·n₀)/k²    (v·u₀)/k − (n·u₀)(v·n₀)/k² ]
+    ///     [ (u·v₀)/k − (n·v₀)(u·n₀)/k²    (v·v₀)/k − (n·v₀)(v·n₀)/k² ]
+    /// ```
+    ///
+    /// The identity where the two frames are the same. For a frame with a
+    /// unit normal and orthonormal axes, a small tilt `(α, β)` of its own
+    /// turns its normal by `α` radians toward `u` and `β` toward `v`, so `J`
+    /// also maps those angles to `chart`'s tilt.
+    pub(super) fn chart_jacobian(&self, chart: &Frame) -> Matrix2<f64> {
+        let Frame { normal: n, u, v } = *self;
+        let Frame {
+            normal: n0,
+            u: u0,
+            v: v0,
+        } = *chart;
+        let k = n.dot(&n0);
+        let entry = |axis: Vector3<f64>, along: Vector3<f64>| {
+            axis.dot(&along) / k - n.dot(&along) * axis.dot(&n0) / (k * k)
+        };
+        Matrix2::new(entry(u, u0), entry(v, u0), entry(u, v0), entry(v, v0))
     }
 }
 
@@ -213,21 +254,18 @@ impl Grid {
     /// taken from the starting frame each time, so the grid laid at a plane
     /// depends on that plane alone.
     pub(super) fn laid_at(&self, normal: Vector3<f64>) -> Grid {
-        let (u, v) = match least_rotation(self.start.normal, normal, self.start.u) {
-            Some(rotation) => (rotation * self.start.u, rotation * self.start.v),
-            None => (self.start.u, self.start.v),
-        };
+        let frame = self.start.turned_to(normal);
         let mut square = self.anchored_patch_frame.clone();
         square.center = self.anchor.into();
-        square.u_axis = u;
-        square.v_axis = v;
+        square.u_axis = frame.u;
+        square.v_axis = frame.v;
         Grid {
             side: self.side,
             origin: self.origin,
             rays: rays_through(&square, self.origin, self.side),
             anchor: self.anchor,
             anchored_patch_frame: square,
-            frame: Frame { normal, u, v },
+            frame,
             start: self.start,
             laid: true,
             cells: self.cells.clone(),
@@ -249,28 +287,10 @@ impl Grid {
     }
 
     /// How the starting frame's tilt of this grid's plane moves with this
-    /// grid's own tilt at `(0, 0)`: `J = ∂c₀(n + α·u + β·v)/∂(α, β)` for the
-    /// starting chart `c₀(m) = ((m·u₀)/(m·n₀), (m·v₀)/(m·n₀))` and this grid's
-    /// frame `(n, u, v)`, with `k = n·n₀`:
-    ///
-    /// ```text
-    /// J = [ (u·u₀)/k − (n·u₀)(u·n₀)/k²    (v·u₀)/k − (n·u₀)(v·n₀)/k² ]
-    ///     [ (u·v₀)/k − (n·v₀)(u·n₀)/k²    (v·v₀)/k − (n·v₀)(v·n₀)/k² ]
-    /// ```
-    ///
-    /// The identity on the starting grid.
+    /// grid's own tilt at `(0, 0)`: [`Frame::chart_jacobian`] of this grid's
+    /// frame into the starting frame. The identity on the starting grid.
     pub(super) fn start_chart_jacobian(&self) -> Matrix2<f64> {
-        let Frame { normal: n, u, v } = self.frame;
-        let Frame {
-            normal: n0,
-            u: u0,
-            v: v0,
-        } = self.start;
-        let k = n.dot(&n0);
-        let entry = |axis: Vector3<f64>, along: Vector3<f64>| {
-            axis.dot(&along) / k - n.dot(&along) * axis.dot(&n0) / (k * k)
-        };
-        Matrix2::new(entry(u, u0), entry(v, u0), entry(u, v0), entry(v, v0))
+        self.frame.chart_jacobian(&self.start)
     }
 
     /// The plane's unit normal at `tilt`: the grid's normal tilted by `a`
