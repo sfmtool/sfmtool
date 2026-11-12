@@ -15,7 +15,6 @@ import importlib
 import json
 import os
 import platform
-import shutil
 import subprocess
 import sys
 import threading
@@ -158,22 +157,17 @@ def pycolmap_facts() -> dict:
 
 
 def ffmpeg_facts() -> dict:
-    """Where `ffmpeg` is on PATH, which `sfm insv2rig` runs to read video, and
-    the first line of `ffmpeg -version`: `{"path": None}` when it is not
-    found, and an `"error"` when it is found but does not run."""
-    path = shutil.which("ffmpeg")
-    if path is not None:
-        path = os.path.normpath(path)
+    """Where `ffmpeg` is on PATH, which `sfm insv2rig` and
+    `sfm extract-frames` run to read video, found as `sfm extract-frames`
+    finds it, and the first line of `ffmpeg -version`: `{"path": None}` when
+    it is not found, and an `"error"` when it is found but does not run."""
+    from ._video_frames import ffmpeg_version_name, locate_program, run_for_output
+
+    path = locate_program("ffmpeg")
     if path is None:
         return {"path": None, "version": None}
     try:
-        result = subprocess.run(
-            [path, "-version"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=FFMPEG_TIMEOUT_S,
-        )
+        result = run_for_output([path, "-version"], timeout=FFMPEG_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as error:
         return {"path": path, "version": None, "error": _error_text(error)}
     first = result.stdout.splitlines()[0] if result.stdout else ""
@@ -183,12 +177,7 @@ def ffmpeg_facts() -> dict:
             "version": None,
             "error": f"`ffmpeg -version` exited with status {result.returncode}",
         }
-    # "ffmpeg version 7.1-full_build Copyright (c) 2000-2024 ..." -> "7.1-full_build"
-    words = first.split()
-    version = (
-        words[2] if len(words) > 2 and words[:2] == ["ffmpeg", "version"] else first
-    )
-    return {"path": path, "version": version}
+    return {"path": path, "version": ffmpeg_version_name(first)}
 
 
 def _gpu_text(gpu: dict) -> str:
