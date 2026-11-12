@@ -551,19 +551,21 @@ fn a_reporting_build_climbs_to_the_end_and_builds_the_same_forest() {
         "a finished build ends at its end"
     );
 
-    // The counter is shared across trees, so the count itself never falls; what
-    // can arrive out of order is the *report*, because a `T > 1` build makes
-    // them from rayon's workers. One tree is one thread, and there the order
-    // the sink sees is the order the leaves were placed in.
+    // Leaves are placed on rayon's workers, across trees and within one, so
+    // two reports can be made in one order and reach the sink in the other;
+    // the counter drops a report of a smaller count, so the sink never sees
+    // the fractions fall, with four trees or with one built across threads.
     let one_tree = KdForestParams {
         num_trees: 1,
         ..KdForestParams::balanced()
     };
     let (ordered, _) = fractions_of_a_build(&points, n, dim, one_tree);
-    assert!(
-        ordered.windows(2).all(|w| w[1] >= w[0]),
-        "the fractions ran backwards: {ordered:?}"
-    );
+    for fractions in [&fractions, &ordered] {
+        assert!(
+            fractions.windows(2).all(|w| w[1] >= w[0]),
+            "the fractions ran backwards: {fractions:?}"
+        );
+    }
     assert_eq!(ordered.last().copied(), Some(1.0));
 
     // Same parameters and the same seed, so the two forests are the same
