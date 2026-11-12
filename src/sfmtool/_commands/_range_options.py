@@ -11,9 +11,10 @@ whose value is either a range expression of file numbers or the name of a
 named image list of the workspace, optionally followed by a slice such as
 `[:30]`, and `--named-image-list NAME`, the long form for a list. One name and
 one range together narrow the list, and a slice then takes part of the
-narrowed list by position. The options, the rule that tells a name from a
-range, the errors and the resolution of a list all live here so that the ten
-commands cannot drift apart.
+narrowed list by position. The options, the range syntax their help gives,
+the rule that tells a name from a range, the check that a range parses, the
+errors and the resolution of a list all live here so that the ten commands
+cannot drift apart.
 
 A range on its own reaches each command as the string it always took
 (`ImageSelection.range_expr`), so a command's handling of a range is its own
@@ -32,6 +33,7 @@ different sinks (`print` and `click.echo`) and the point of this module is to
 leave their output untouched.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,10 +47,56 @@ if TYPE_CHECKING:
     from .._sfmtool.workspace import NamedImageLists, NamedImageListSlice
     from ..colmap.db_setup import MatchesImageFilter
 
-RANGE_OR_NAME_SENTENCE = (
-    "A --range value with a letter in it is read as a named image list; "
-    "a range contains only digits, '-', ':' and ','."
+_RANGE_EXAMPLES = (
+    "'7', '1-100', '1-10,20,30-40' or '1-100:10' (every 10th number from 1 to 100)"
 )
+
+RANGE_OR_NAME_SENTENCE = (
+    "A --range value with a letter or '[' in it is read as a named image "
+    "list; a range holds only digits, '-', ':' and ',', as in " + _RANGE_EXAMPLES + "."
+)
+
+# No word joined by a '-' to another word, such as START-END, since Click
+# wraps help text at such a hyphen and would split the syntax across lines.
+_RANGE_HELP = (
+    " A range is file numbers and spans separated by commas, and a span may "
+    "take a step after a ':', as in " + _RANGE_EXAMPLES + "."
+)
+
+# A span with its step written with a word or a '/' in place of ':', such as
+# '1-100x10' or '1-100 step 10'. Only this exact shape gets a suggestion.
+_MISTYPED_STEP = re.compile(
+    r"\s*(\d+)\s*-\s*(\d+)\s*(?:x|by|step|every|/)\s*(\d+)\s*", re.IGNORECASE
+)
+
+
+def _step_suggestion(value: str) -> str | None:
+    """`value` with its step written START-END:STEP, when `value` is a span
+    with a mistyped step; otherwise None."""
+    m = _MISTYPED_STEP.fullmatch(value)
+    if m is None:
+        return None
+    start, end, step = m.groups()
+    return f"{start}-{end}:{step}"
+
+
+def _range_or_name_note(value: str) -> str:
+    """Why `value`, which has a letter in it, was read as a list name, the
+    range syntax, and a suggestion when `value` is a span with a mistyped
+    step."""
+    note = (
+        f"'{value}' was read as a named image list, not a range, because it "
+        "has a letter in it; a range holds only digits, '-', ':' and ',', as "
+        f"in {_RANGE_EXAMPLES}."
+    )
+    suggestion = _step_suggestion(value)
+    if suggestion is not None:
+        note += (
+            " A span with a step is written START-END:STEP; did you mean "
+            f"'{suggestion}'?"
+        )
+    return note
+
 
 _NAME_HELP = (
     " A value with a letter in it is instead the name of a named image list "
@@ -93,12 +141,15 @@ class ImageSelection:
     At most one range and at most one list name. With both, the range narrows
     the list rather than being applied on its own. `list_slice` is the slice
     given after the list's name, which takes part of the narrowed list by
-    position.
+    position. `list_range_value` is the `-r` value that gave the list, or None
+    when `--named-image-list` gave it or the value has a slice, which was
+    meant as a list.
     """
 
     range_expr: str | None = None
     list_name: str | None = None
     list_slice: "NamedImageListSlice | None" = None
+    list_range_value: str | None = None
 
     @property
     def given(self) -> bool:
@@ -116,17 +167,24 @@ class ImageSelection:
             text += f" sliced by {self.list_slice}"
         return text
 
+    def list_note(self) -> str:
+        """For an error about the list: when a `-r` value with no slice gave
+        it, a space and `_range_or_name_note` of that value; otherwise ''."""
+        if self.list_range_value is None:
+            return ""
+        return " " + _range_or_name_note(self.list_range_value)
+
 
 def range_option(
     range_help: str, *, on: str, list_help_extra: str = ""
 ) -> Callable[[Callable], Callable]:
     """Attach `-r/--range` and `--named-image-list` to a command.
 
-    `range_help` is what the command's range does; the sentence about list
-    names is added to it. `on` is `"paths"` for a command that picks images
-    from image directories, `"reconstruction"` for one that picks them from
-    a reconstruction and `"matches"` for one that picks them from a
-    `.matches` file. `list_help_extra` is added to the help of
+    `range_help` is what the command's range does; the range syntax and the
+    sentence about list names are added to it. `on` is `"paths"` for a
+    command that picks images from image directories, `"reconstruction"` for
+    one that picks them from a reconstruction and `"matches"` for one that
+    picks them from a `.matches` file. `list_help_extra` is added to the help of
     `--named-image-list`, for what a list does in the command beyond that. The
     command receives `range_expr`, a tuple of the `-r` values, and
     `named_image_list`, and turns them into an `ImageSelection` with
@@ -148,7 +206,7 @@ def range_option(
             "range_expr",
             metavar="RANGE|NAME",
             multiple=True,
-            help=range_help + _NAME_HELP,
+            help=range_help + _RANGE_HELP + _NAME_HELP,
         )(f)
         return f
 
@@ -167,8 +225,27 @@ def _split_list_value(value: str, option: str) -> tuple[str, str, object]:
     try:
         name, list_slice = split_named_image_list_value(value)
     except ValueError as e:
-        raise click.UsageError(f"{option} {e}.")
+        message = f"{option} {e}."
+        # A value with no '[' that is not a valid name has a letter in it, and
+        # may be a mistyped range; one with a slice was meant as a list.
+        if option == "--range" and "[" not in value:
+            message += " " + _range_or_name_note(value)
+        raise click.UsageError(message)
     return value, name, list_slice
+
+
+def _check_range(value: str) -> None:
+    """The usage error for a `-r` value that is not a valid range expression."""
+    from .._sfmtool.reconstruction import RangeExpr
+
+    try:
+        RangeExpr(value)
+    except ValueError as e:
+        message = f"--range '{value}': {e}." + _RANGE_HELP
+        suggestion = _step_suggestion(value)
+        if suggestion is not None:
+            message += f" Did you mean '{suggestion}'?"
+        raise click.UsageError(message)
 
 
 def parse_image_selection(
@@ -177,8 +254,8 @@ def parse_image_selection(
     """Sort the `-r` values and `--named-image-list` into a range and a name.
 
     A `-r` value with a letter or a `[` in it is a list name, optionally
-    followed by a slice, and any other value is a range. At most one of each
-    may be given in all.
+    followed by a slice, and any other value is a range, which must parse as
+    a range expression. At most one of each may be given in all.
     """
     names: list[tuple[str, str, object]] = []
     ranges: list[str] = []
@@ -188,6 +265,7 @@ def parse_image_selection(
         if _is_list_value(value):
             names.append(_split_list_value(value, "--range"))
         else:
+            _check_range(value)
             ranges.append(value)
     if len(names) > 1:
         quoted = ", ".join(f"'{value}'" for value, _, _ in names)
@@ -202,22 +280,27 @@ def parse_image_selection(
             f"Give at most one range; got {quoted}. Write the frames as one "
             "range expression, such as '1-10,20-30'."
         )
-    _, list_name, list_slice = names[0] if names else (None, None, None)
+    list_value, list_name, list_slice = names[0] if names else (None, None, None)
     return ImageSelection(
         range_expr=ranges[0] if ranges else None,
         list_name=list_name,
         list_slice=list_slice,
+        list_range_value=(
+            list_value
+            if named_image_list is None and list_value and "[" not in list_value
+            else None
+        ),
     )
 
 
-def _no_workspace_error(where: str, name: str) -> click.ClickException:
+def _no_workspace_error(where: str, selection: ImageSelection) -> click.ClickException:
     return click.ClickException(
         f"No workspace was found {where}, so no named image lists are defined "
-        f"and none is called '{name}'. " + RANGE_OR_NAME_SENTENCE
+        f"and none is called '{selection.list_name}'." + selection.list_note()
     )
 
 
-def _read_lists(workspace_dir: Path, name: str):
+def _read_lists(workspace_dir: Path, selection: ImageSelection):
     """The workspace's lists, or the error for a workspace without a lists file."""
     from .._sfmtool.workspace import NAMED_IMAGE_LISTS_FILE_NAME, NamedImageLists
 
@@ -228,17 +311,19 @@ def _read_lists(workspace_dir: Path, name: str):
     if lists is None:
         raise click.ClickException(
             f"The workspace {workspace_dir} has no named image lists, since it "
-            f"has no {NAMED_IMAGE_LISTS_FILE_NAME}, so none is called '{name}'. "
-            + RANGE_OR_NAME_SENTENCE
+            f"has no {NAMED_IMAGE_LISTS_FILE_NAME}, so none is called "
+            f"'{selection.list_name}'." + selection.list_note()
         )
     return lists
 
 
-def _resolution_error(lists, name: str, e: Exception) -> click.ClickException:
-    """`e` from a resolver, with the name-or-range sentence for an unknown name."""
+def _resolution_error(
+    lists, selection: ImageSelection, e: Exception
+) -> click.ClickException:
+    """`e` from a resolver, with `ImageSelection.list_note` for an unknown name."""
     message = str(e)
-    if name not in lists:
-        message += ". " + RANGE_OR_NAME_SENTENCE
+    if selection.list_name not in lists:
+        message += "." + selection.list_note()
     return click.ClickException(message)
 
 
@@ -259,10 +344,7 @@ def _narrow(selection: ImageSelection):
         return None
     from .._sfmtool.reconstruction import RangeExpr
 
-    try:
-        return RangeExpr(selection.range_expr)
-    except ValueError as e:
-        raise click.UsageError(f"--range '{selection.range_expr}': {e}")
+    return RangeExpr(selection.range_expr)
 
 
 @dataclass(frozen=True)
@@ -285,12 +367,12 @@ def _list_image_members(
     """
     name = selection.list_name
     assert name is not None
-    lists = _read_lists(workspace_dir, name)
+    lists = _read_lists(workspace_dir, selection)
     narrow = _narrow(selection)
     try:
         members = lists.resolve(name, narrow=narrow)
     except (ValueError, OSError, InterruptedError) as e:
-        raise _resolution_error(lists, name, e)
+        raise _resolution_error(lists, selection, e)
 
     images = [m.path for m in members if has_extension(Path(m.path), extensions)]
     if not images:
@@ -316,12 +398,11 @@ def resolve_list_images(
     """
     from ..workspace import find_workspace_for_path
 
-    name = selection.list_name
-    assert name is not None
+    assert selection.list_name is not None
     cwd = Path.cwd()
     workspace_dir = find_workspace_for_path(cwd)
     if workspace_dir is None:
-        raise _no_workspace_error(f"from the current directory {cwd}", name)
+        raise _no_workspace_error(f"from the current directory {cwd}", selection)
     lists, images = _list_image_members(selection, workspace_dir, extensions)
     root = Path(lists.workspace_dir).absolute()
     return ListImages(paths=[root / p for p in images], workspace_dir=root)
@@ -407,14 +488,14 @@ def reconstruction_list_indices(
     assert name is not None
     workspace_dir = recon.workspace_dir
     if not workspace_dir:
-        raise _no_workspace_error(f"for {sfmr_path}", name)
-    lists = _read_lists(Path(workspace_dir), name)
+        raise _no_workspace_error(f"for {sfmr_path}", selection)
+    lists = _read_lists(Path(workspace_dir), selection)
     narrow = _narrow(selection)
     image_names = list(recon.image_names)
     try:
         members = lists.resolve_in_names(name, image_names, narrow=narrow)
     except ValueError as e:
-        raise _resolution_error(lists, name, e)
+        raise _resolution_error(lists, selection, e)
     members = _slice(lists, selection, narrow, members)
     wanted = {m.path for m in members}
     return [i for i, image_name in enumerate(image_names) if image_name in wanted]
@@ -434,9 +515,8 @@ def range_options(f: Callable) -> Callable:
         "no remaining observations. Default is to keep all 3D points.",
     )(f)
     f = range_option(
-        "Export only images whose file number matches this range expression "
-        "(e.g. '10-50' or '0-9,20-29'). Observations on excluded images are "
-        "dropped.",
+        "Export only images whose file number matches this range expression. "
+        "Observations on excluded images are dropped.",
         on="reconstruction",
     )(f)
     return f

@@ -100,7 +100,7 @@ def motion(
     if selection.list_name is not None and paths:
         raise click.UsageError(
             "A named image list replaces the image paths; give paths, a .sfmr "
-            "file or a list, not more than one."
+            "file or a list, not more than one." + selection.list_note()
         )
     if not paths and selection.list_name is None:
         raise click.UsageError(

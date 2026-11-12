@@ -183,6 +183,7 @@ def solve(
             "A named image list replaces the image paths; give image paths or "
             "a list, not both. A list given with a single .matches file keeps "
             "the file's images that are among the list's images."
+            + selection.list_note()
         )
     if not paths and selection.list_name is None:
         raise click.UsageError("Must provide image paths or a .matches file.")

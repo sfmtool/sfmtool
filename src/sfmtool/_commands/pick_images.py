@@ -147,7 +147,7 @@ def pick_images(
     if selection.list_name is not None and paths:
         raise click.UsageError(
             "A named image list replaces the image paths; give paths or a list, "
-            "not both."
+            "not both." + selection.list_note()
         )
 
     if selection.list_name is not None:
@@ -163,10 +163,7 @@ def pick_images(
             paths = (".",)
         numbers = None
         if selection.range_expr is not None:
-            try:
-                numbers = RangeExpr(selection.range_expr)
-            except ValueError as e:
-                raise click.UsageError(f"--range '{selection.range_expr}': {e}")
+            numbers = RangeExpr(selection.range_expr)
         filenames = expand_paths(
             [Path(p) for p in paths], extensions=IMAGE_EXTENSIONS, numbers=numbers
         )
