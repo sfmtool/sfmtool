@@ -364,6 +364,29 @@ fn test_invalid_params_return_errors() {
 }
 
 #[test]
+fn test_stride_beyond_the_image_places_one_patch_per_axis() {
+    // Any stride larger than the image leaves one patch per axis, so a stride
+    // of u32::MAX, whose next patch position overflows, gives the same flow
+    // as a stride of the image width.
+    let img_a = smooth_texture(40, 24, 0.0);
+    let img_b = smooth_texture(40, 24, 0.6);
+    let flow = |patch_stride: u32| {
+        let params = DisFlowParams {
+            patch_stride,
+            finest_scale: Some(0),
+            coarsest_scale: Some(0),
+            ..DisFlowParams::default_quality()
+        };
+        compute_optical_flow(&img_a, &img_b, &params, None).unwrap()
+    };
+    let max = flow(u32::MAX);
+    let one = flow(40);
+    assert_eq!(max.u_slice(), one.u_slice());
+    assert_eq!(max.v_slice(), one.v_slice());
+    assert!(max.u_slice().iter().any(|&u| u != 0.0));
+}
+
+#[test]
 fn test_resolve_scales() {
     let base = DisFlowParams::default_quality;
     // Automatic: floor(log2(2 * 640 / 40)) = 5, finest 5 - 2.
