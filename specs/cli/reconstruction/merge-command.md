@@ -11,7 +11,12 @@ reconstructions should be pre-aligned to a common coordinate frame (e.g., via `s
 sfm merge <RECONSTRUCTION1.sfmr> <RECONSTRUCTION2.sfmr> [MORE...] --output <OUTPUT.sfmr> [OPTIONS...]
 ```
 
-At least two reconstructions are required.
+At least two reconstructions are required. They must record the same feature
+folder (`feature_prefix_dir` in their workspace metadata), since observations
+are matched and combined by feature index and the merged reconstruction
+records the first input's folder; inputs made from different feature folders,
+such as one solved before `sfm ws upgrade` and one after, stop the merge with
+an error naming each input's folder.
 
 ## Options
 
@@ -47,7 +52,8 @@ At least two reconstructions are required.
    gives the rule).
 6. **Refine poses** — Run PnP+RANSAC on a pool of threads, one per CPU, to refine
    camera poses in the merged reconstruction, each image through its own intrinsics: its merged camera with
-   its adjustment applied. Points at infinity are left out of PnP, which takes
+   its adjustment applied. The keypoints come from the `.sift` files in the
+   feature folder the inputs record, not the workspace's current one. Points at infinity are left out of PnP, which takes
    Euclidean positions only. pycolmap has no model for an `SFMTOOL_PINHOLE`
    camera, the only one whose images carry a radial correction or rates, so
    such an image's refinement fails and it keeps its pose, as any image whose
