@@ -410,8 +410,8 @@ The upper bound bounds the cost: a patch that covers 1024 photograph pixels
 across in its finest view gets 128 samples per side, each spanning 8 pixels, and
 a crop of 3 times the patch is 384 samples a side rather than 3072.
 
-**Views finer than the grid are prefiltered.** Under the upper bound a view
-can have pixels finer than the grid; it is read through the photograph's
+**Views finer than the grid are prefiltered.** Where the grid is held at its
+upper bound a view can have pixels finer than the grid; it is read through the photograph's
 pyramid down to the grid, so every such view is filtered alike and its texture
 finer than the grid cannot alias into false structure that the flow matches. A
 view coarser than the grid is upsampled, which only blurs; blur that both crops
@@ -765,8 +765,8 @@ point's views faces a plane the views see nearly edge on or from behind. A
 round whose answer is that far does not pass it on: the step stops after that
 round, and its outcome is `Unstable`, since the evidence settled on a plane
 that cannot be the surface the photographs show. A fallback plane that far is
-not passed on either. Where a round has no plane to pass on, because its answer
-and its fallback are both missing or too far, the step stops, as rendering on
+not passed on either. Where a round has no plane to pass on, because it has no
+answer and its fallback is missing or too far, the step stops, as rendering on
 the same plane again would repeat the same round. The bar does not catch every
 drift: on seoul_bull point 207, a bush with the bull in front and trees behind,
 the step ends 112° from the reference while within 80° of the mean viewing
@@ -783,7 +783,8 @@ The step's outcome, chosen radius, normal and σ are those of the last round it
 ran. A last round with no answer leaves the given normal unchanged, even where
 an earlier round had one; which round's answer to keep, and whether to stop
 early when a round's answer moves less than its σ, are open questions. In the
-prototype, with the two rules above, 3 rounds from the mean viewing direction
+prototype, with the crop floor in the finest view's pixels and the bar on the
+mean viewing direction, 3 rounds from the mean viewing direction
 brought the ground-truth dino points from 28.8° to 1.2° median and the
 kerry_park points from 48.9° to 3.7°, the kerry_park points still improving at
 round 3; the seoul_bull points stopped improving after round 1, at about 10° to
@@ -989,11 +990,12 @@ on a common plane is settled: a common plane, iterated from the given normal
   rounds stop at about 10° to 18° from the reference after round 1, with pairs
   2° to 5° apart, against 6.9° on the curated seoul_bull points for the first
   prototype. Point by point, the remaining errors are concentrated on layered
-  and narrow-baseline points, not on the `ok` points: five `ok`
-  points end 1.2° to 7.1° from the reference, one 16°, and three `Unstable`;
-  the median is set by the judged and hand points (63 at 33°, 70 at 22°, 173 at
-  25°, 207 at 112°, 255 at 46°, 238 at 9°) and the two-view points (160 at 68°
-  before the one-round rule, 192 and 260 `Undetermined`). What the step should
+  and narrow-baseline points, not on the `ok` points: of the ten `ok` points,
+  1, 2, 109, 143 and 157 end 1.2° to 7.1° from the reference, 10 ends 16°,
+  18, 120 and 167 are `Unstable`, and 160, a single pair, ends 68° (before the
+  one-round rule); the median is set by the judged and hand points (63 at 33°,
+  70 at 22°, 173 at 25°, 207 at 112°, 255 at 46°, 238 at 9°, 192 and 260
+  `Undetermined`) and by 160. What the step should
   do on a point with another layer in its crops is the open part.
 - **kerry_park is still improving at round 3.** Whether to run more rounds, or
   take a stronger step per round.

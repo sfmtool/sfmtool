@@ -297,7 +297,9 @@ direction, with both changes.
 | σ ≤ 10°, χ² ≤ 2 | median angle | 15.8° | 3.5° | 1.3° | 9.8° | 2.2° | 6.5° |
 | | turned | 72% | 80% | 92% | 90% | 96% | |
 
-By round, the median angle from the reference:
+By round, the median angle from the reference at the start and after each
+round, with the same next-plane rule as before: the answer by the rule at σ ≤
+10° and mean χ² ≤ 2, or, with no answer, the fallback at 1 half-extent:
 
 | Set | Start | Round 1 | Round 2 | Round 3 |
 |---|---:|---:|---:|---:|
@@ -318,12 +320,12 @@ By round, the median angle from the reference:
 kerry_park turns more of its curated points (80% against 53% to 73%) and fewer
 of its `A2` points (8 of 18, against 11 to 13).
 
-**The curated seoul_bull points, one by one.** The `ok` points 1, 2, 109, 143
-and 157 end 1.2° to 7.1° from the reference, `ok` point 10 ends 16° from it,
-and `ok` points 18, 120 and 167 are `Unstable`. The median is set by the judged
-and hand points, 63 at 33°, 70 at 22°, 173 at 25°, 207 at 112°, 255 at 46° and
-238 at 9°, and by the two-view points: 160, a single pair, at 68°, and 192 and
-260 `Undetermined`. The remaining seoul_bull errors are concentrated on layered
+**The curated seoul_bull points, one by one.** Of the ten `ok` points, 1, 2,
+109, 143 and 157 end 1.2° to 7.1° from the reference, 10 ends 16° from it, 18,
+120 and 167 are `Unstable`, and 160, a two-view point read as a single pair,
+ends 68° from it. The median is set by the judged and hand points, 63 at 33°,
+70 at 22°, 173 at 25°, 207 at 112°, 255 at 46° and 238 at 9°, 192 and 260
+`Undetermined`, and by 160. The remaining seoul_bull errors are concentrated on layered
 and narrow-baseline points, not on the `ok` points.
 
 **Drift.** The bar does not catch every drift: point 207, a bush with the bull
