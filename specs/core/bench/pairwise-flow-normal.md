@@ -901,7 +901,8 @@ on synthetic surfaces photographed by pinholes around the point, with noise of
   level 2 on a square a quarter as wide, fits and enters the combination, and
   the patch is turned onto the plane.
 - **Refusals and cancellation**: a track at infinity is refused as
-  `NormalError::AtInfinity`, `rounds` of 0 as a bad option, and a cancel flag
+  `NormalError::AtInfinity`, `rounds` of 0 as a bad option, an observation
+  naming an image with no view as `EvaluateError::NoView`, and a cancel flag
   set as the first pair is counted stops the step with `NormalError::Cancelled`
   after that one pair.
 
