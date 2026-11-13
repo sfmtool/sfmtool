@@ -3,12 +3,12 @@
 
 """SfM reconstruction filename generation utilities."""
 
-import os
 import re
 import textwrap
 from datetime import datetime
 from pathlib import Path
 
+from ._filenames import group_by_directory
 from ._path_summary import summarize_path_list, summarize_paths_by_sequence
 from ._sfmtool.reconstruction import RangeExpr
 
@@ -103,18 +103,10 @@ def _group_by_directory(
     directory holding every image; the images in that deepest directory itself
     have the key `()`.
     """
-    # `abspath` also folds `..`, so `a/../b` and `b` are one directory.
-    parents = [Path(os.path.abspath(p)).parent for p in image_paths]
-    try:
-        common = Path(os.path.commonpath(parents))
-    except ValueError:
-        # Images on different drives share no directory.
-        common = None
-    groups: dict[tuple[str, ...], list[str]] = {}
-    for path, parent in zip(image_paths, parents):
-        rel = parent.relative_to(common if common is not None else parent.anchor)
-        groups.setdefault(rel.parts, []).append(Path(path).name)
-    return groups
+    return {
+        key: [path.name for path in paths]
+        for key, paths in group_by_directory(image_paths).items()
+    }
 
 
 def _single_sequence(filenames: list[str]) -> tuple[str, list[int]] | None:

@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ntpath
+import os
 import posixpath
 import re
 from pathlib import Path
 from typing import Iterable
 
-__all__ = ["number_from_filename", "expand_paths", "normalize_workspace_path"]
+__all__ = [
+    "number_from_filename",
+    "expand_paths",
+    "group_by_directory",
+    "normalize_workspace_path",
+]
 
 
 _NUMBER_FROM_FILENAME_RE = re.compile(r"\((\d+)\)$|(\d+)$")
@@ -112,6 +118,31 @@ def expand_paths(
             filenames.append(path)
 
     return filenames
+
+
+def group_by_directory(
+    paths: Iterable[str | Path],
+) -> dict[tuple[str, ...], list[Path]]:
+    """Group file paths by the directory that holds them, in input order.
+
+    Each key is the parts of the directory's path relative to the deepest
+    directory holding every file; the files in that deepest directory itself
+    have the key `()`. Files on different drives share no directory, so each
+    key is then the directory's path below its drive.
+    """
+    paths = [Path(p) for p in paths]
+    # `abspath` also folds `..`, so `a/../b` and `b` are one directory.
+    parents = [Path(os.path.abspath(p)).parent for p in paths]
+    try:
+        common = Path(os.path.commonpath(parents)) if parents else None
+    except ValueError:
+        # Files on different drives share no directory.
+        common = None
+    groups: dict[tuple[str, ...], list[Path]] = {}
+    for path, parent in zip(paths, parents):
+        rel = parent.relative_to(common if common is not None else parent.anchor)
+        groups.setdefault(rel.parts, []).append(path)
+    return groups
 
 
 def normalize_workspace_path(relative_path: str | Path) -> str:
