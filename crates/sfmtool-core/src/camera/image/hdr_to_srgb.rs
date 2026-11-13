@@ -65,8 +65,9 @@ pub struct HdrToSrgbOptions {
     /// The transfer function the input's R'G'B' is encoded with.
     pub transfer: HdrTransfer,
     /// The exposure change in stops: display light is multiplied by
-    /// `2^exposure_stops` before the highlight roll-off. 0 is the recipe's
-    /// own anchor, HDR reference white (203 cd/m²) as the sRGB scale's 1.0.
+    /// `2^exposure_stops` before the highlight roll-off. 0 leaves the light
+    /// the HLG OOTF or the PQ EOTF gives, so that HDR reference white
+    /// (203 cd/m²) comes out at sRGB code 229.
     /// At most [`HDR_EXPOSURE_STOPS_LIMIT`] either way.
     pub exposure_stops: f32,
 }

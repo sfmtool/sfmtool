@@ -10,9 +10,11 @@ the same function of its own value, with no analysis of the frame, the scene
 or the video (no per-frame peak detection, no local tone mapping, no dynamic
 metadata). Frames from different times and different videos of a capture so
 get the same exposure, which a feature matcher and a photometric step rely
-on. The recipe follows ITU-R BT.2100 for the signal, ITU-R BT.2408 for the
-anchor (HDR reference white, 203 cd/m², is the SDR scale's white) and the
-BT.2390 EETF for the highlight roll-off.
+on. The recipe follows ITU-R BT.2100 for the signal, the BT.2390 EETF for
+the highlight roll-off, from 1000 cd/m² to BT.2408's HDR reference white,
+203 cd/m², and makes 203 cd/m² the SDR scale's white. The roll-off starts
+below reference white, so reference white itself comes out at about
+159 cd/m², sRGB code 229.
 
 ## Interface
 
@@ -127,8 +129,10 @@ Each pixel's three codes `D_Y, D_Cb, D_Cr` go through these steps, in `f32`.
    One factor for the three channels keeps the hue and the ratios of the
    channels; the largest channel of 1000 cd/m² or more reaches 203 cd/m². The
    EETF's black-level term vanishes with both blacks at 0.
-7. **Anchor.** `y = RGB/203`: HDR reference white, 203 cd/m², is the sRGB
-   scale's 1.0, the light the roll-off ends at.
+7. **Anchor.** `y = RGB/203`: 203 cd/m², the light the roll-off ends at,
+   is the sRGB scale's 1.0. HDR reference white, 203.15 cd/m² from HLG 75%
+   or 203 cd/m² in PQ, is above the knee and leaves the roll-off at
+   159.1 cd/m², so it is not the sRGB 1.0 but about 0.78 of it.
 8. **sRGB encoding and quantisation.** `code = ⌊255 · sRGB(y) + 1/2⌋`,
    `sRGB(y) = 12.92 y` for `y ≤ 0.0031308` and `1.055 y^(1/2.4) − 0.055`
    above, which with `y ≤ 1` gives codes 0 to 255.

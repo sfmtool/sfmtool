@@ -138,8 +138,9 @@ chain:
 Output options: `-fps_mode passthrough`, so the image muxer writes each frame
 the filters pass exactly once (constant-rate output would duplicate and drop
 frames of a variable-rate video), and `-q:v 2` to ffmpeg's `mjpeg` encoder,
-its highest quality setting in practical use (about libjpeg quality 95, the
-quality `write_image_rgb` writes with), in the full-range 4:2:0 format ffmpeg
+its highest quality setting in practical use (a lower quality than the 95
+`write_image_rgb` writes with; see [HDR video](#hdr-video)), in the
+full-range 4:2:0 format ffmpeg
 negotiates for JPEG. Video is 4:2:0 already, so 4:4:4 would store no more
 colour detail. A 10-bit SDR video is converted to 8 bits by ffmpeg's default
 conversion.
@@ -172,7 +173,7 @@ adapts to each frame), so ffmpeg only decodes it and sfmtool converts it:
   the recipe of [core/camera/hdr-to-srgb.md](../../core/camera/hdr-to-srgb.md)
   in Rust, in parallel over the frame's rows, and writes the frame as
   `write_image_rgb` writes a JPEG: quality 95, 4:2:0, the subsampling of the
-  SDR frames and the quality `-q:v 2` is chosen to match. Measured on one
+  SDR frames, but not their quality. Measured on one
   converted 1920 x 1080 frame, quality 95 writes 957 KB with an RMS error of
   0.79 levels against the pixels encoded, and ffmpeg's `-q:v 2` 690 KB with
   2.06, so the HDR frames are the larger and the closer to their pixels. Four
@@ -183,9 +184,10 @@ adapts to each frame), so ffmpeg only decodes it and sfmtool converts it:
   BT.2100 narrow-range Y'CbCr to R'G'B'; the HLG inverse OETF and the OOTF of
   a 1000 cd/m² display, or the PQ EOTF, to display light; `2^STOPS` of
   `--hdr-exposure`; BT.2020 to BT.709 primaries with negative components set
-  to 0; the BT.2390 EETF on `max(R, G, B)`, from 1000 to 203 cd/m²; 203
-  cd/m², HDR reference white, as sRGB's 1.0; the sRGB encoding rounded to 8
-  bits. HLG 75%, reference white, becomes sRGB 229. `--hdr-exposure` is the
+  to 0; the BT.2390 EETF on `max(R, G, B)`, from 1000 to 203 cd/m², with
+  its knee at 87.84 cd/m²; 203 cd/m² as sRGB's 1.0; the sRGB encoding
+  rounded to 8 bits. HLG 75%, HDR reference white, is compressed by the
+  roll-off and becomes sRGB 229. `--hdr-exposure` is the
   one adjustment, the same for every frame of every video of a run.
 - **Dolby Vision.** A Dolby Vision video (an iPhone's profile 8.4 has an HLG
   base layer) is converted from its base layer by the base layer's own
