@@ -66,7 +66,8 @@ fn refine_flow_at_level_inner(
     // GPU path: run gradient computation, inverse search, and densification on GPU.
     // Skip GPU for small levels where dispatch overhead exceeds compute savings.
     #[cfg(feature = "gpu")]
-    let use_gpu = gpu.is_some() && (w * h) >= params.gpu_min_pixels;
+    let use_gpu =
+        (w * h) >= params.gpu_min_pixels && gpu.is_some_and(|g| g.level_fits(w, h, params));
     #[cfg(not(feature = "gpu"))]
     let use_gpu = false;
 
@@ -83,7 +84,9 @@ fn refine_flow_at_level_inner(
                     gamma: params.variational_gamma,
                     alpha: params.variational_alpha,
                     jacobi_iterations: params.variational_jacobi_iterations,
-                    outer_iterations: params.variational_outer_iterations_base * (scale_index + 1),
+                    outer_iterations: params
+                        .variational_outer_iterations_base
+                        .saturating_mul(scale_index + 1),
                 };
                 let t_combined = Instant::now();
                 gpu_ctx.run_dis_and_variational(ref_image, tgt_image, flow, params, &var_params);
@@ -102,24 +105,32 @@ fn refine_flow_at_level_inner(
     // CPU path: gradient computation, inverse search, and densification
     let t_dis = Instant::now();
     let ps = params.patch_size;
-    let stride = params.patch_stride();
+    let stride = params.patch_stride;
 
     // Precompute image gradients for the reference image
     let (grad_x, grad_y) = compute_gradients(ref_image);
 
-    // Build grid positions, then run inverse search in parallel
+    // Build grid positions, then run inverse search in parallel. A stride near
+    // `u32::MAX` would overflow the next position, which ends the axis.
+    let fits = |start: u32, size: u32| u64::from(start) + u64::from(ps) <= u64::from(size);
     let mut grid: Vec<(u32, u32, (f32, f32))> = Vec::new();
     let mut gy = 0u32;
-    while gy + ps <= h {
+    while fits(gy, h) {
         let mut gx = 0u32;
-        while gx + ps <= w {
+        while fits(gx, w) {
             let cx = gx + ps / 2;
             let cy = gy + ps / 2;
             let initial_flow = flow.get(cx.min(w - 1), cy.min(h - 1));
             grid.push((gx, gy, initial_flow));
-            gx += stride;
+            let Some(next) = gx.checked_add(stride) else {
+                break;
+            };
+            gx = next;
         }
-        gy += stride;
+        let Some(next) = gy.checked_add(stride) else {
+            break;
+        };
+        gy = next;
     }
 
     let ps_sq = (ps * ps) as f32;
@@ -169,7 +180,9 @@ fn refine_flow_at_level_inner(
             gamma: params.variational_gamma,
             alpha: params.variational_alpha,
             jacobi_iterations: params.variational_jacobi_iterations,
-            outer_iterations: params.variational_outer_iterations_base * (scale_index + 1),
+            outer_iterations: params
+                .variational_outer_iterations_base
+                .saturating_mul(scale_index + 1),
         };
         let t_var = Instant::now();
         variational_refine(ref_image, tgt_image, flow, &var_params);

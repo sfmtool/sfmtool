@@ -12,7 +12,7 @@
 //! let img_a = GrayImage::new_constant(64, 64, 0.5);
 //! let img_b = GrayImage::new_constant(64, 64, 0.5);
 //! let params = DisFlowParams::default_quality();
-//! let flow = compute_optical_flow(&img_a, &img_b, &params, None);
+//! let flow = compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
 //! assert_eq!(flow.width(), img_a.width());
 //! ```
 //!
@@ -28,10 +28,11 @@
 //! let img_c = GrayImage::new_constant(64, 64, 0.5);
 //! let params = DisFlowParams::fast();
 //!
-//! let flow_ab = compute_optical_flow(&img_a, &img_b, &params, None);
-//! let flow_bc = compute_optical_flow(&img_b, &img_c, &params, None);
+//! let flow_ab = compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+//! let flow_bc = compute_optical_flow(&img_b, &img_c, &params, None).unwrap();
 //! let chained = compose_flow(&flow_ab, &flow_bc);
-//! let refined = compute_optical_flow_with_init(&img_a, &img_c, &params, &chained, None);
+//! let refined =
+//!     compute_optical_flow_with_init(&img_a, &img_c, &params, &chained, None).unwrap();
 //! assert_eq!(refined.width(), img_a.width());
 //! ```
 
@@ -57,7 +58,7 @@ pub mod gpu {
 // through the PyO3 bindings.
 pub use flow_field::{FlowField, FlowFieldRef};
 pub use image::{matcher_gray_from_rgb, matcher_image_to_gray, GrayImage, MATCHER_GRAY_FORMULA};
-pub use params::{DisFlowParams, FlowTiming};
+pub use params::{DisFlowParams, FlowTiming, OpticalFlowError};
 
 use pyramid::ImagePyramid;
 
@@ -109,7 +110,9 @@ pub mod bench {
 /// Compute dense optical flow from image A to image B.
 ///
 /// Input images are single-channel grayscale f32 normalized to [0, 1].
-/// Returns a FlowField the same size as the input images.
+/// Returns a FlowField the same size as the input images, or an
+/// [`OpticalFlowError`] when the images differ in size or a field of
+/// `params` is out of its range for them.
 ///
 /// Pass a [`gpu::GpuFlowContext`] to run the pyramid levels with at least
 /// `gpu_min_pixels` pixels on the GPU, or `None` for the CPU path. Those levels
@@ -120,40 +123,27 @@ pub fn compute_optical_flow(
     img_b: &GrayImage,
     params: &DisFlowParams,
     gpu: Option<&gpu::GpuFlowContext>,
-) -> FlowField {
-    compute_optical_flow_timed(img_a, img_b, params, gpu).0
+) -> Result<FlowField, OpticalFlowError> {
+    compute_optical_flow_timed(img_a, img_b, params, gpu).map(|(flow, _)| flow)
 }
 
 /// Compute dense optical flow with per-stage timing breakdown.
 ///
 /// Returns `(flow, timing)` where `timing` contains precise measurements
-/// of each pipeline stage.
+/// of each pipeline stage, or the errors of [`compute_optical_flow`].
 pub fn compute_optical_flow_timed(
     img_a: &GrayImage,
     img_b: &GrayImage,
     params: &DisFlowParams,
     gpu: Option<&gpu::GpuFlowContext>,
-) -> (FlowField, FlowTiming) {
+) -> Result<(FlowField, FlowTiming), OpticalFlowError> {
     use std::time::Instant;
 
-    assert_eq!(img_a.width(), img_b.width());
-    assert_eq!(img_a.height(), img_b.height());
+    check_same_size(img_a, img_b)?;
+    let (finest, coarsest) = params.resolve_scales(img_a.width(), img_a.height())?;
 
     let t_total_start = Instant::now();
     let mut timing = FlowTiming::default();
-
-    let width = img_a.width();
-
-    // Determine pyramid levels
-    let coarsest = params
-        .coarsest_scale
-        .unwrap_or_else(|| params.compute_coarsest_scale(width));
-    let finest = params
-        .finest_scale
-        .unwrap_or_else(|| coarsest.saturating_sub(2));
-
-    // Ensure we have at least one level to process
-    let coarsest = coarsest.max(finest);
 
     // Build pyramids (need coarsest + 1 levels, indexed 0..=coarsest)
     let num_levels = coarsest + 1;
@@ -176,7 +166,11 @@ pub fn compute_optical_flow_timed(
     // Determine whether to use the multi-level GPU path (keeps flow on GPU between
     // levels, eliminating per-level CPU↔GPU flow transfers and CPU upsample cost).
     #[cfg(feature = "gpu")]
-    let gpu_start_scale: Option<u32> = if gpu.is_some() && params.variational_refinement {
+    let gpu_start_scale: Option<u32> = if params.variational_refinement
+        && gpu.is_some_and(|g| {
+            let (w, h) = level_dims[finest as usize];
+            g.level_fits(w, h, params) && g.image_fits(img_a.width(), img_a.height())
+        }) {
         // Find the first GPU-eligible scale in coarse-to-fine processing order.
         (finest..=coarsest).rev().find(|&s| {
             let (w, h) = level_dims[s as usize];
@@ -344,7 +338,18 @@ pub fn compute_optical_flow_timed(
 
     timing.total = t_total_start.elapsed().as_secs_f64();
 
-    (flow, timing)
+    Ok((flow, timing))
+}
+
+/// Check that the two images are the same size.
+fn check_same_size(img_a: &GrayImage, img_b: &GrayImage) -> Result<(), OpticalFlowError> {
+    let a = (img_a.width(), img_a.height());
+    let b = (img_b.width(), img_b.height());
+    if a == b {
+        Ok(())
+    } else {
+        Err(OpticalFlowError::ImageSizeMismatch { a, b })
+    }
 }
 
 /// Compose two flow fields: result(x) = flow_ab(x) + flow_bc(x + flow_ab(x)).
@@ -398,30 +403,26 @@ pub fn compose_flow_ref(flow_ab: &FlowFieldRef<'_>, flow_bc: &FlowFieldRef<'_>) 
 /// as a starting point — the solver only needs to compute the residual correction.
 ///
 /// Input images are single-channel grayscale f32 normalized to [0, 1].
-/// The initial flow must have the same dimensions as the input images.
+/// The initial flow must have the same dimensions as the input images; the
+/// errors are those of [`compute_optical_flow`], and
+/// [`OpticalFlowError::InitialFlowSizeMismatch`].
 pub fn compute_optical_flow_with_init(
     img_a: &GrayImage,
     img_b: &GrayImage,
     params: &DisFlowParams,
     initial_flow: &FlowField,
     gpu: Option<&gpu::GpuFlowContext>,
-) -> FlowField {
-    assert_eq!(img_a.width(), img_b.width());
-    assert_eq!(img_a.height(), img_b.height());
-    assert_eq!(initial_flow.width(), img_a.width());
-    assert_eq!(initial_flow.height(), img_a.height());
-
-    let width = img_a.width();
-
-    // Determine pyramid levels
-    let coarsest = params
-        .coarsest_scale
-        .unwrap_or_else(|| params.compute_coarsest_scale(width));
-    let finest = params
-        .finest_scale
-        .unwrap_or_else(|| coarsest.saturating_sub(2));
-
-    let coarsest = coarsest.max(finest);
+) -> Result<FlowField, OpticalFlowError> {
+    check_same_size(img_a, img_b)?;
+    let image = (img_a.width(), img_a.height());
+    let flow_size = (initial_flow.width(), initial_flow.height());
+    if flow_size != image {
+        return Err(OpticalFlowError::InitialFlowSizeMismatch {
+            image,
+            flow: flow_size,
+        });
+    }
+    let (finest, coarsest) = params.resolve_scales(img_a.width(), img_a.height())?;
 
     // Build pyramids
     let num_levels = coarsest + 1;
@@ -455,29 +456,44 @@ pub fn compute_optical_flow_with_init(
         flow = flow.upsample_2x();
     }
 
-    resize_flow_to(flow, img_a.width(), img_a.height())
+    Ok(resize_flow_to(flow, img_a.width(), img_a.height()))
 }
 
-/// Resize a flow field to target dimensions, cropping or zero-padding as needed.
-/// Takes ownership to avoid cloning when dimensions already match.
+/// Resize a flow field to target dimensions, cropping, or padding by repeating
+/// the last column and row. Takes ownership to avoid cloning when dimensions
+/// already match.
+///
+/// Padding is needed where a level is an odd number of pixels wide or high:
+/// upsampling the next coarser level, `floor(n / 2)` pixels, by 2 gives one
+/// pixel fewer than the level. Repeating the edge gives those pixels the flow
+/// of their neighbours rather than none, as the GPU's upsample shader does by
+/// clamping its reads.
 fn resize_flow_to(flow: FlowField, target_w: u32, target_h: u32) -> FlowField {
     if flow.width() == target_w && flow.height() == target_h {
         return flow;
     }
 
     let mut result = FlowField::new(target_w, target_h);
-    let copy_w = flow.width().min(target_w) as usize;
-    let copy_h = flow.height().min(target_h) as usize;
+    if flow.width() == 0 || flow.height() == 0 {
+        return result;
+    }
     let src_w = flow.width() as usize;
+    let src_h = flow.height() as usize;
     let dst_w = target_w as usize;
+    let copy_w = src_w.min(dst_w);
 
-    for row in 0..copy_h {
-        let src_start = row * src_w;
+    for row in 0..target_h as usize {
+        let src_start = row.min(src_h - 1) * src_w;
         let dst_start = row * dst_w;
-        result.data_u[dst_start..dst_start + copy_w]
-            .copy_from_slice(&flow.data_u[src_start..src_start + copy_w]);
-        result.data_v[dst_start..dst_start + copy_w]
-            .copy_from_slice(&flow.data_v[src_start..src_start + copy_w]);
+        for (src, dst) in [
+            (&flow.data_u, &mut result.data_u),
+            (&flow.data_v, &mut result.data_v),
+        ] {
+            let src_row = &src[src_start..src_start + src_w];
+            let dst_row = &mut dst[dst_start..dst_start + dst_w];
+            dst_row[..copy_w].copy_from_slice(&src_row[..copy_w]);
+            dst_row[copy_w..].fill(src_row[src_w - 1]);
+        }
     }
 
     result

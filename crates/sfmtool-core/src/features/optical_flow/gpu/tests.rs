@@ -57,7 +57,7 @@ fn test_gpu_variational_identical_images() {
         ..super::super::DisFlowParams::default_quality()
     };
 
-    let flow = super::super::compute_optical_flow(&img, &img, &params, Some(&gpu));
+    let flow = super::super::compute_optical_flow(&img, &img, &params, Some(&gpu)).unwrap();
 
     // For identical images, flow should remain near zero
     let mut max_flow = 0.0f32;
@@ -92,8 +92,9 @@ fn test_gpu_vs_cpu_variational() {
         ..super::super::DisFlowParams::default_quality()
     };
 
-    let cpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, None).unwrap();
+    let gpu_flow =
+        super::super::compute_optical_flow(&ref_img, &tgt_img, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -139,8 +140,9 @@ fn test_gpu_vs_cpu_full_pipeline_shifted() {
         ..super::super::DisFlowParams::default_quality()
     };
 
-    let cpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, None).unwrap();
+    let gpu_flow =
+        super::super::compute_optical_flow(&ref_img, &tgt_img, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -158,8 +160,8 @@ fn test_gpu_vs_cpu_full_pipeline_identical() {
     let img = GrayImage::checkerboard(64, 64);
     let params = super::super::DisFlowParams::default_quality();
 
-    let cpu_flow = super::super::compute_optical_flow(&img, &img, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img, &img, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img, &img, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img, &img, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -181,8 +183,8 @@ fn test_gpu_vs_cpu_seoul_bull_consecutive() {
     let img_b = load_test_image("seoul_bull_sculpture_09.jpg");
     let params = super::super::DisFlowParams::default_quality();
 
-    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -202,8 +204,8 @@ fn test_gpu_vs_cpu_seoul_bull_wider_baseline() {
     let img_b = load_test_image("seoul_bull_sculpture_08.jpg");
     let params = super::super::DisFlowParams::default_quality();
 
-    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -223,8 +225,8 @@ fn test_gpu_vs_cpu_seattle_backyard_consecutive() {
     let img_b = load_test_image("seattle_backyard_11.jpg");
     let params = super::super::DisFlowParams::default_quality();
 
-    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -263,8 +265,9 @@ fn test_gpu_vs_cpu_seattle_backyard_panning_diagnostic() {
             ..super::super::DisFlowParams::default_quality()
         };
 
-        let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-        let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+        let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+        let gpu_flow =
+            super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
         let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
         eprintln!(
@@ -283,16 +286,18 @@ fn test_gpu_vs_cpu_seattle_backyard_panning_diagnostic() {
             ..super::super::DisFlowParams::default_quality()
         };
 
-        let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-        let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+        let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+        let gpu_flow =
+            super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
         let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
         eprintln!("  Scales {coarsest}→{stop_scale}: RMSE={rmse:.6}, max_diff={max_diff:.4}");
     }
 
     // Full pipeline — find where the worst pixels are
-    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &base_params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &base_params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &base_params, None).unwrap();
+    let gpu_flow =
+        super::super::compute_optical_flow(&img_a, &img_b, &base_params, Some(&gpu)).unwrap();
 
     // Find top-5 worst pixels
     let total = cpu_flow.width() as usize * cpu_flow.height() as usize;
@@ -382,8 +387,10 @@ fn test_gpu_vs_cpu_seattle_backyard_panning_diagnostic() {
         variational_refinement: false,
         ..super::super::DisFlowParams::default_quality()
     };
-    let cpu_novar = super::super::compute_optical_flow(&img_a, &img_b, &no_var_params, None);
-    let gpu_novar = super::super::compute_optical_flow(&img_a, &img_b, &no_var_params, Some(&gpu));
+    let cpu_novar =
+        super::super::compute_optical_flow(&img_a, &img_b, &no_var_params, None).unwrap();
+    let gpu_novar =
+        super::super::compute_optical_flow(&img_a, &img_b, &no_var_params, Some(&gpu)).unwrap();
     let (rmse_nv, max_nv) = flow_rmse(&cpu_novar, &gpu_novar);
     eprintln!("  Without variational: RMSE={rmse_nv:.6}, max_diff={max_nv:.4}");
 
@@ -395,9 +402,10 @@ fn test_gpu_vs_cpu_seattle_backyard_panning_diagnostic() {
         gpu_min_pixels: 0,
         ..super::super::DisFlowParams::default_quality()
     };
-    let cpu_var_flow = super::super::compute_optical_flow(&img_a, &img_b, &var_3_params, None);
+    let cpu_var_flow =
+        super::super::compute_optical_flow(&img_a, &img_b, &var_3_params, None).unwrap();
     let gpu_var_flow =
-        super::super::compute_optical_flow(&img_a, &img_b, &var_3_params, Some(&gpu));
+        super::super::compute_optical_flow(&img_a, &img_b, &var_3_params, Some(&gpu)).unwrap();
     let (rmse_v, max_v) = flow_rmse(&cpu_var_flow, &gpu_var_flow);
     eprintln!("  DIS+Variational (3 outer): RMSE={rmse_v:.6}, max_diff={max_v:.4}");
 }
@@ -423,8 +431,8 @@ fn test_gpu_vs_cpu_seattle_backyard_panning() {
     let img_b = load_test_image("seattle_backyard_22.jpg");
     let params = super::super::DisFlowParams::default_quality();
 
-    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -448,8 +456,8 @@ fn test_gpu_dis_identical_images() {
         ..super::super::DisFlowParams::default_quality()
     };
 
-    let cpu_flow = super::super::compute_optical_flow(&img, &img, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img, &img, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img, &img, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img, &img, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -474,8 +482,9 @@ fn test_gpu_dis_shifted_image() {
         ..super::super::DisFlowParams::default_quality()
     };
 
-    let cpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&ref_img, &tgt_img, &params, None).unwrap();
+    let gpu_flow =
+        super::super::compute_optical_flow(&ref_img, &tgt_img, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -498,8 +507,8 @@ fn test_gpu_dis_real_images() {
         ..super::super::DisFlowParams::default_quality()
     };
 
-    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None);
-    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu));
+    let cpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu_flow = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
 
     let (rmse, max_diff) = flow_rmse(&cpu_flow, &gpu_flow);
     assert!(
@@ -600,8 +609,8 @@ fn bench_gpu_vs_cpu() {
 
         for (preset_name, params) in presets {
             // Warmup
-            let _ = super::super::compute_optical_flow(&img_a, &img_b, params, Some(&gpu));
-            let _ = super::super::compute_optical_flow(&img_a, &img_b, params, None);
+            let _ = super::super::compute_optical_flow(&img_a, &img_b, params, Some(&gpu)).unwrap();
+            let _ = super::super::compute_optical_flow(&img_a, &img_b, params, None).unwrap();
 
             let n = 5;
             let mut gpu_times = Vec::new();
@@ -609,12 +618,13 @@ fn bench_gpu_vs_cpu() {
 
             for _ in 0..n {
                 let t = Instant::now();
-                let _ = super::super::compute_optical_flow(&img_a, &img_b, params, Some(&gpu));
+                let _ =
+                    super::super::compute_optical_flow(&img_a, &img_b, params, Some(&gpu)).unwrap();
                 gpu_times.push(t.elapsed().as_secs_f64());
             }
             for _ in 0..n {
                 let t = Instant::now();
-                let _ = super::super::compute_optical_flow(&img_a, &img_b, params, None);
+                let _ = super::super::compute_optical_flow(&img_a, &img_b, params, None).unwrap();
                 cpu_times.push(t.elapsed().as_secs_f64());
             }
 
@@ -631,4 +641,83 @@ fn bench_gpu_vs_cpu() {
             );
         }
     }
+}
+
+#[test]
+fn test_level_fits_limits_routes_dense_patches_on_large_levels_to_cpu() {
+    // Needs no adapter: it checks the arithmetic against wgpu's default
+    // limits, 65,535 workgroups of 64 inverse-search threads per dispatch.
+    let limits = wgpu::Limits::default();
+    let dense = super::super::DisFlowParams {
+        patch_stride: 1,
+        ..super::super::DisFlowParams::default_quality()
+    };
+    // (2055 - 8 + 1)^2 = 4,194,304 patches = 65,536 workgroups: one too many.
+    assert!(level_fits_limits(2054, 2054, &dense, &limits));
+    assert!(!level_fits_limits(2055, 2055, &dense, &limits));
+    // The default stride of 4 leaves the same level well inside the limit.
+    let default = super::super::DisFlowParams::default_quality();
+    assert!(level_fits_limits(2055, 2055, &default, &limits));
+    // One f32 per pixel must fit a storage buffer binding.
+    let max_pixels = limits.max_storage_buffer_binding_size / 4;
+    assert!(image_fits_limits(max_pixels as u32, 1, &limits));
+    assert!(!image_fits_limits(max_pixels as u32 + 1, 1, &limits));
+}
+
+#[test]
+fn test_gpu_patch_stride_caps_at_the_longer_side() {
+    let params = |patch_stride| super::super::DisFlowParams {
+        patch_stride,
+        ..super::super::DisFlowParams::default_quality()
+    };
+    assert_eq!(gpu_patch_stride(40, 24, &params(3)), 3);
+    assert_eq!(gpu_patch_stride(40, 24, &params(u32::MAX)), 40);
+    // The cap leaves one patch per axis, as the stride it replaces did.
+    assert_eq!(patch_grid(40, 24, &params(u32::MAX)), (1, 1));
+    assert_eq!(patch_grid(10, 1000, &params(500)), (1, 2));
+}
+
+#[test]
+fn test_gpu_dis_stride_beyond_the_image_matches_cpu() {
+    // A stride near u32::MAX places one patch at the top-left, and both
+    // paths give every pixel outside it zero flow. Uncapped, densify.wgsl's
+    // `col + 1 - ps + stride - 1` wraps and names that patch for those
+    // pixels; this test fails if the shader then lacks its coverage check
+    // and the stride is not capped (`gpu_patch_stride`).
+    let Some(gpu) = gpu_or_skip() else {
+        return;
+    };
+    let texture = |dx: f32| {
+        let mut img = GrayImage::new_constant(40, 24, 0.0);
+        for row in 0..24 {
+            for col in 0..40 {
+                let x = col as f32 - dx;
+                let v = 0.5 + 0.2 * (0.4 * x).sin() + 0.2 * (0.33 * row as f32 + 0.1 * x).cos();
+                img.set_pixel(col, row, v);
+            }
+        }
+        img
+    };
+    let (img_a, img_b) = (texture(0.0), texture(0.6));
+    let params = super::super::DisFlowParams {
+        patch_stride: u32::MAX - 4,
+        finest_scale: Some(0),
+        coarsest_scale: Some(0),
+        variational_refinement: false,
+        gpu_min_pixels: 0,
+        ..super::super::DisFlowParams::default_quality()
+    };
+    let cpu = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
+    assert_ne!(cpu.get(0, 0), (0.0, 0.0), "the patch found no flow");
+    for row in 0..24 {
+        for col in 0..40 {
+            if col >= 8 || row >= 8 {
+                assert_eq!(gpu.get(col, row), (0.0, 0.0), "({col}, {row})");
+                assert_eq!(cpu.get(col, row), (0.0, 0.0), "({col}, {row})");
+            }
+        }
+    }
+    let (rmse, max_diff) = flow_rmse(&cpu, &gpu);
+    assert!(rmse < 0.01, "rmse {rmse:.4} (max_diff={max_diff:.4})");
 }

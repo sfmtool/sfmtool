@@ -86,6 +86,25 @@ above it, they run on GPU. The threshold is checked in two places:
   threshold runs DIS on the GPU and copies its flow back to the CPU. The same
   per-level check applies in `compute_optical_flow_with_init`.
 
+A level that would exceed the device's limits runs on the CPU whatever its size:
+the inverse search's one-dimensional dispatch, one thread per patch in workgroups
+of 64, must stay within `max_compute_workgroups_per_dimension` (65,535 under
+wgpu's default limits, so about 4.2 million patches), and a buffer of one `f32`
+per pixel within the storage-buffer binding and buffer sizes.
+`GpuFlowContext::level_fits` checks a level, and the batch path above also needs
+`GpuFlowContext::image_fits` for the full-resolution image, since it holds the
+whole pyramid and the full-resolution flow on the GPU. The presets do not come
+near the dispatch limit at the image sizes above; a `patch_stride` of 1 at full
+resolution reaches it at about 2,050×2,050 pixels, and such a level then runs on
+the CPU.
+
+The GPU path reads every `DisFlowParams` field the CPU path reads: patch size,
+stride, iteration count and patch normalization in the inverse search and
+densification uniforms, and the variational weights and iteration counts in the
+refinement's. The two paths differ on a level smaller than one patch: the CPU
+densification writes zero flow there and refines that, while the GPU leaves the
+incoming flow unchanged and skips the level.
+
 Per-level routing for fisheye 3840×3840 high_quality (7 pyramid levels):
 
 | Level | Resolution | Pixels | Path | DIS | VAR |
