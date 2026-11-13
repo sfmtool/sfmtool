@@ -5,15 +5,15 @@ repository, behind [pairwise-flow-normal.md](pairwise-flow-normal.md). No code i
 the repository produced these numbers, and the prototype's scripts are not
 checked in.
 
-The measurements bear on five choices the draft makes: the flow settings, the
-crop's size, the rule that chooses the support, the σ and outcome rules, and
-what the step costs. Each section states the question, the setup and the
-result.
+The measurements bear on six choices the draft makes: the flow settings, the
+crop's size, the rule that chooses the support, the σ and outcome rules, the
+common plane and its rounds, and what the step costs. Each section states the
+question, the setup and the result.
 
 ## Reference sets
 
 Two sets of points with a reference normal each, five sets in all when split by
-dataset.
+dataset, and a third set with none.
 
 **(a) Curated, from the checked-in ground truths:** 59 points.
 
@@ -27,6 +27,9 @@ dataset.
 - 7 points the maintainer judged good by eye, with their stored normals.
 - 2 points with normals the maintainer set by hand.
 
+By dataset that is 18 seoul_bull points (10 `ok`, 6 judged good, 2 with hand
+normals), 15 kerry_park points and 26 dino points.
+
 **(b) Fresh solves:** seoul_bull and dino_dog_toy solved by the dataset scripts
 (`scripts/init_dataset_seoul_bull.sh`, `scripts/init_dataset_dino_dog_toy.sh`),
 converted to patches whose normals face the mean viewing direction (what `sfm
@@ -36,6 +39,10 @@ similarity fitted on the camera centres maps the solve onto the ground truth; a
 match is kept when it lies within the ground-truth point's patch half-extent and
 the two points share at least 2 images. That left 68 seoul_bull and 26 dino
 matches, each compared with the ground-truth point's normal.
+
+**(c) `A2` points, with no reference:** 36 points of the ground truths whose
+grown-plane answer depends on its start: 16 seoul_bull, 18 kerry_park and 2
+dino. Only their outcomes are read.
 
 **Caveat.** Every reference normal except the two hand normals was itself
 produced by the grown-plane step, run on the ground truths' cleaner tracks. The
@@ -51,10 +58,11 @@ photographs, in pixels, which bounds what a support of one patch can see:
 
 ## The prototype's crops
 
-The prototype's runs on real photographs used two crop designs, and neither is
-the one the draft proposes. (The runs on synthetic scenes, § "Synthetic
-scenes", rendered their crops by casting rays onto the true surface and test
-the σ and outcome rules, not the crops.)
+The first prototype's runs on real photographs used two crop designs, neither
+of them the one the draft proposes; the later runs of the revised design are
+described in § "Real points with the revised design". (The runs on synthetic
+scenes, § "Synthetic scenes", rendered their crops by casting rays onto the
+true surface and test the σ and outcome rules, not the crops.)
 
 - **The runs against the grown plane** (§ "Fresh solves against the grown
   plane", made with the prototype's `pairflow.py` and scripts like it): each
@@ -66,12 +74,15 @@ the σ and outcome rules, not the crops.)
   were downsampled onto the grid without a pyramid and so aliased; views
   farther than the median were upsampled.
 
-The draft proposes a different design: a grid set by the patch
-(`samples_per_patch` samples per patch side), each view prefiltered through its
-photograph's pyramid down to that grid, each pair read at the pyramid level of
-its coarser view, and radii in patch half-extents. That design was not
-measured. The radius list, the χ² threshold and `max_sigma_deg` need measuring
-again with it, alongside the σ texture term the draft adds.
+The draft proposes a different design: every view rendered on one common plane,
+iterated over rounds from the given normal, a grid of one sample per pixel of
+the finest view within 24 to 128 samples per patch side, views finer than the
+grid prefiltered through their photographs' pyramids, each pair read at the
+pyramid level of its coarser view, radii in patch half-extents, and σ the larger
+of a texture σ and a residual σ. § "Real points with the revised design"
+measures the common plane, the rounds, the grid and the σ; the crop extent, the
+per-pair levels and the radius list of those runs are not recorded there, so
+those settings remain unmeasured.
 
 ## Flow settings
 
@@ -155,6 +166,101 @@ set. Fixed sizes in units of the patch do well on dino, whose patches are large,
 and badly on seoul_bull and kerry_park. The radius of smallest σ picks large
 discs, since one pair's σ keeps falling as the radius grows, across a fold
 as well. The χ² threshold and the radius list were tuned on these references.
+
+## Real points with the revised design
+
+**Question.** On real points, how do the revised grid, the common plane and its
+rounds, and the revised σ compare with the first prototype, and what outcomes
+do they give where there is no reference?
+
+**Setup.** A second Python prototype on reference sets (a), (b) and (c). Every
+run used the texture-weighted σ with the 99.9% noise threshold and the two-pair
+agreement rule; the rows below name what else each used. Each figure is the
+median angle from the reference per set, in the order gt seoul / gt kerry / gt
+dino / fresh seoul / fresh dino, and the mean of the five medians. For
+comparison, the first prototype's largest radius with mean χ² ≤ 2, on its
+pixel-based crops (§ "Choosing the support"), read 6.9 / 5.6 / 2.0 / 8.7 / 3.7,
+mean 5.4°. The crop extent, the per-pair pyramid levels and the radius list of
+these runs are not recorded here.
+
+**A grid of 24 samples per patch side, a fronto plane per view, the texture σ
+alone.** The best setting tried had a mean of the set medians of 7.7° to 9°,
+the set medians 11° to 20° / 9° to 14° / 1.1° to 4° / 8° to 10° / 3°. With σ ≤
+10° and χ² ≤ 2, only 40% to 44% of the curated kerry_park and seoul_bull points
+turned. A larger flow floor, 0.1 or 0.2 px, did not help. On the dino ground
+truth's patches, about 43 px across, the fixed grid lost detail: at a fixed
+radius of 1 half-extent the error was 2.9°, against 1.7° with the first
+prototype's pixel-based crops and 1.3° at native resolution.
+
+**The texture σ alone is too small.** On good points the combined normal was
+close to the reference (on seoul_bull point 157, 1.6° to 8° at every radius),
+but the mean χ² was 44 to 2,500, and 600 to 50,000 on the points whose grid had
+90 or more samples per patch side. σ the larger of the texture σ and the
+residual σ (the draft's step 6) is the draft's answer to this, and the runs
+below use it.
+
+**The native grid and σ the larger of the two, a fronto plane per view** (σ ≤
+10°, χ² ≤ 1):
+
+| | gt seoul | gt kerry | gt dino | fresh seoul | fresh dino | Mean |
+|---|---:|---:|---:|---:|---:|---:|
+| Median angle | 12.6° | 5.9° | 1.4° | 8.3° | 1.8° | 6.0° |
+| Turned | 50% | 40% | 69% | 82% | 92% | |
+
+**The common plane, 3 rounds from the mean viewing direction**, the native grid
+and σ the larger of the two:
+
+| Rule | | gt seoul | gt kerry | gt dino | fresh seoul | fresh dino | Mean |
+|---|---|---:|---:|---:|---:|---:|---:|
+| σ ≤ 10°, χ² ≤ 1 | median angle | 15.3° | 3.3° | 0.9° | 9.0° | 1.8° | 6.0° |
+| | turned | 67% | 53% | 85% | 82% | 96% | |
+| σ ≤ 10°, χ² ≤ 2 | median angle | 15.2° | 3.0° | 1.2° | 10.7° | 2.6° | 6.5° |
+| | turned | 72% | 73% | 92% | 85% | 96% | |
+
+At the same rule the common plane turns as many points as the fronto planes or
+more, and is closer on kerry_park and the dino ground truth; it is further on
+seoul_bull.
+
+**By round**, the median angle from the reference at the start and after each
+round:
+
+| Set | Start | Round 1 | Round 2 | Round 3 |
+|---|---:|---:|---:|---:|
+| gt kerry | 48.9° | 16.3° | 9.1° | 4.3° |
+| gt dino | 28.8° | 2.3° | 1.2° | 1.1° |
+| fresh dino | 37.0° | 2.4° | 2.2° | 2.7° |
+| gt seoul | 42.3° | 17.2° | 18.5° | 17.7° |
+| fresh seoul | 32.7° | 10.2° | 10.8° | 12.3° |
+
+kerry_park is still improving at round 3. seoul_bull, whose pairs are 2° to 5°
+apart, stops improving after round 1; the first prototype got 6.9° on the
+curated seoul_bull points, and what in the revised design costs accuracy there
+is not yet isolated.
+
+**Six points traced**, kerry_park 93, 158 and 343 and dino 1172, 44 and 204.
+With a fronto plane per view, 4 were `Unstable` and 2 `Turned`, at 3.3° and
+0.6° from the reference. On the common plane all 6 turned, from 13.6° to 59.9°
+at the mean viewing direction to 1.1° to 4.3° after 3 rounds; kerry_park 158
+went 59.9° → 1.1° → 1.3° → 1.6°, and dino 44 went 23.6° → 19.3° → 13.7° → 3.6°.
+On kerry_park 93, whose pairs are 89° to 113° apart, the flow between fronto
+crops was chaotic and its leftover over 1 px almost everywhere; on dino 1172,
+whose pairs are 30° to 50° apart, the fronto crops were rotated and sheared by
+several pixels and the flow was reliable only near the centre.
+
+**`A2` points** (set (c)), the common plane, σ ≤ 10°, χ² ≤ 2:
+
+| Set | Turned | Single pair | Undetermined | Unstable |
+|---|---:|---:|---:|---:|
+| seoul_bull | 6 | 1 | 3 | 6 |
+| kerry_park | 13 | 0 | 0 | 5 |
+| dino | 1 | 0 | 0 | 1 |
+
+The outcomes do not yet tell these points from good ones: 13 of the 18
+kerry_park `A2` points turned. They may be determined, with wide baselines; the
+`A2` label comes from the grown plane's instability, not from the truth.
+
+**Cost.** About 4 to 8 minutes for the 189 points with 12 processes per
+configuration, more with the native grid and 3 rounds.
 
 ## Synthetic scenes
 
