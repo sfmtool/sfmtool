@@ -261,8 +261,13 @@ tag:
 
 ## Code that writes images
 
-Every image file sfmtool's Python code writes goes through `write_image_rgb` or
-`write_image_rgba`:
+Every image file sfmtool's Python code writes goes through `write_image_rgb`,
+`write_image_rgba`, or `write_image_from_hdr`, which writes through
+`ImageU8::write` as `write_image_rgb` does after converting a frame of HDR
+video to sRGB ([hdr-to-srgb.md](hdr-to-srgb.md)):
+
+- `extract-frames` and `pick-images --new-workspace`, an HDR video's frames,
+  through `write_image_from_hdr` (ffmpeg writes an SDR video's frames).
 
 - `undistort`, with alpha when the source has it, and `to-nerfstudio`'s
   downscaled pyramid, likewise, at its `--jpeg-quality`.

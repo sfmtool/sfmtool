@@ -11,6 +11,7 @@
 //! [`area_resize`] is sfmtool's area-average resampler.
 
 pub mod area_resize;
+pub mod hdr_to_srgb;
 
 /// The JPEG quality a caller of [`ImageU8::write`] passes when it has no
 /// reason to choose another. It is 95, the default of OpenCV's
