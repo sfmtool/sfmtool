@@ -175,7 +175,8 @@ def _numbered_sequences(image_paths: list[Path]) -> list[tuple[str, dict[int, Pa
     if not sequences:
         raise click.ClickException(
             "No numbered sequence detected in the provided images. "
-            "Sequential overlap mode requires a numbered sequence."
+            "Sequential overlap mode requires a numbered sequence of at least "
+            "three images in one directory."
         )
     if outside:
         listed = ", ".join(outside[:_MAX_LISTED_IMAGES])
@@ -183,7 +184,8 @@ def _numbered_sequences(image_paths: list[Path]) -> list[tuple[str, dict[int, Pa
             listed += f" and {len(outside) - _MAX_LISTED_IMAGES} more"
         raise click.ClickException(
             f"Sequential overlap mode solves numbered sequences of at least three "
-            f"images, and {len(outside)} of the provided images are in none: "
+            f"images, and {len(outside)} of the provided images "
+            f"{'is' if len(outside) == 1 else 'are'} in none: "
             f"{listed}. Leave them out, for example with -r or --named-image-list."
         )
     return sequences
