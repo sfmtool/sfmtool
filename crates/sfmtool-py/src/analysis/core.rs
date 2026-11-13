@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for spatial analysis, SE3 transforms, viewing angles,
-//! alignment, point correspondence, and track filtering.
+//! Python bindings for viewing angles, alignment, point correspondence, and
+//! point and track merging.
 
 use std::collections::HashMap;
 
@@ -12,64 +12,6 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 
 use crate::geometry::se3_transform::PySe3Transform;
 use crate::PySfmrReconstruction;
-
-// ── SE3 transform acceleration ────────────────────────────────────────────
-
-/// Apply SE3 similarity transform to batched camera poses.
-///
-/// Takes transform parameters and camera pose arrays, returns transformed poses.
-#[pyfunction]
-#[pyo3(name = "apply_se3_to_camera_poses")]
-pub fn apply_se3_to_camera_poses_py(
-    py: Python<'_>,
-    rotation_wxyz: PyReadonlyArray1<f64>,
-    translation: PyReadonlyArray1<f64>,
-    scale: f64,
-    quaternions_wxyz: PyReadonlyArray2<f64>,
-    translations_xyz: PyReadonlyArray2<f64>,
-) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
-    let rot_data = to_contiguous!(rotation_wxyz);
-    let trans_data = to_contiguous!(translation);
-    let q_data = to_contiguous!(quaternions_wxyz);
-    let t_data = to_contiguous!(translations_xyz);
-
-    let n = quaternions_wxyz.shape()[0];
-    let rot_wxyz: [f64; 4] = rot_data
-        .as_ref()
-        .try_into()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("rotation must have 4 elements"))?;
-    let trans_xyz: [f64; 3] = trans_data
-        .as_ref()
-        .try_into()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("translation must have 3 elements"))?;
-
-    let mut out_quats = vec![0.0f64; n * 4];
-    let mut out_trans = vec![0.0f64; n * 3];
-
-    sfmtool_core::geometry::transform::apply_se3_to_camera_poses(
-        rot_wxyz,
-        trans_xyz,
-        scale,
-        &q_data,
-        &t_data,
-        &mut out_quats,
-        &mut out_trans,
-    );
-
-    // Convert to numpy arrays
-    let out_q = numpy::PyArray2::from_vec2(
-        py,
-        &out_quats.chunks(4).map(|c| c.to_vec()).collect::<Vec<_>>(),
-    )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let out_t = numpy::PyArray2::from_vec2(
-        py,
-        &out_trans.chunks(3).map(|c| c.to_vec()).collect::<Vec<_>>(),
-    )
-    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-    Ok((out_q.into_any().unbind(), out_t.into_any().unbind()))
-}
 
 // ── Viewing angle analysis ────────────────────────────────────────────────
 
@@ -340,45 +282,6 @@ pub fn find_point_correspondences_by_coordinate_py(
     ))
 }
 
-// ── Track Filtering ─────────────────────────────────────────────────────
-
-/// Filter tracks by point mask and remap point IDs.
-///
-/// Returns (track_image_indexes, track_feature_indexes, track_point_indexes) as 1D uint32 arrays.
-#[pyfunction]
-#[pyo3(name = "filter_tracks_by_point_mask")]
-pub fn filter_tracks_by_point_mask_py(
-    py: Python<'_>,
-    points_to_keep_mask: PyReadonlyArray1<bool>,
-    track_image_indexes: PyReadonlyArray1<u32>,
-    track_feature_indexes: PyReadonlyArray1<u32>,
-    track_point_indexes: PyReadonlyArray1<u32>,
-) -> PyResult<(Py<PyAny>, Py<PyAny>, Py<PyAny>)> {
-    let mask_data = to_contiguous!(points_to_keep_mask);
-    let img_data = to_contiguous!(track_image_indexes);
-    let feat_data = to_contiguous!(track_feature_indexes);
-    let point_data = to_contiguous!(track_point_indexes);
-
-    let result = sfmtool_core::reconstruction::filter::filter_tracks_by_point_mask(
-        &mask_data,
-        &img_data,
-        &feat_data,
-        &point_data,
-    );
-
-    Ok((
-        numpy::PyArray1::from_vec(py, result.track_image_indexes)
-            .into_any()
-            .unbind(),
-        numpy::PyArray1::from_vec(py, result.track_feature_indexes)
-            .into_any()
-            .unbind(),
-        numpy::PyArray1::from_vec(py, result.track_point_indexes)
-            .into_any()
-            .unbind(),
-    ))
-}
-
 // ── Point and track merging ─────────────────────────────────────────────
 
 /// Merge 3D points and tracks from multiple aligned reconstructions.
@@ -496,7 +399,6 @@ pub fn merge_points_and_tracks_py(
 // ── Registration ──────────────────────────────────────────────────────────
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(apply_se3_to_camera_poses_py, m)?)?;
     m.add_function(wrap_pyfunction!(compute_narrow_track_mask, m)?)?;
     m.add_function(wrap_pyfunction!(estimate_alignment_py, m)?)?;
     m.add_function(wrap_pyfunction!(ransac_alignment_py, m)?)?;
@@ -506,6 +408,5 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(merge_points_and_tracks_py, m)?)?;
-    m.add_function(wrap_pyfunction!(filter_tracks_by_point_mask_py, m)?)?;
     Ok(())
 }

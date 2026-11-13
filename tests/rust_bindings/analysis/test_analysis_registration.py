@@ -6,14 +6,12 @@
 import sfmtool._sfmtool.analysis as analysis
 
 _EXPECTED_FUNCTIONS = (
-    "apply_se3_to_camera_poses",
     "compute_narrow_track_mask",
     "estimate_alignment",
     "ransac_alignment",
     "find_point_correspondences",
     "find_point_correspondences_by_coordinate",
     "merge_points_and_tracks",
-    "filter_tracks_by_point_mask",
     "triangulate_batch",
     "bearing_score_batch",
     "fit_point_and_bearing_batch",

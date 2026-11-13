@@ -372,8 +372,6 @@ Paths in the *Source* column are relative to
 | [analysis/core.rs](../crates/sfmtool-py/src/analysis/core.rs) | `estimate_alignment`, `ransac_alignment` | [reconstruction-alignment.md](core/analysis/reconstruction-alignment.md) |
 | | `find_point_correspondences`, `find_point_correspondences_by_coordinate`, `merge_points_and_tracks` | [point-correspondence.md](core/reconstruction/point-correspondence.md) |
 | | `compute_narrow_track_mask` | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
-| | `filter_tracks_by_point_mask` | [xform-command.md](cli/reconstruction/xform/xform-command.md) |
-| | `apply_se3_to_camera_poses` | none |
 | [analysis/triangulation.rs](../crates/sfmtool-py/src/analysis/triangulation.rs), [point_or_bearing.rs](../crates/sfmtool-py/src/analysis/point_or_bearing.rs) | `triangulate_batch`, `fit_point_and_bearing_batch`, `bearing_score_batch`, `observed_rays` and the triangulation default constants | [batch-triangulation-api.md](core/reconstruction/batch-triangulation-api.md) |
 | [analysis/epipolar.rs](../crates/sfmtool-py/src/analysis/epipolar.rs) | `epipolar_curves` | [epipolar-curves.md](core/camera/epipolar-curves.md) |
 | [analysis/image_pair_graph.rs](../crates/sfmtool-py/src/analysis/image_pair_graph.rs) | `build_covisibility_pairs`, `build_frustum_intersection_pairs` | [image-pair-graph.md](core/analysis/image-pair-graph.md) |

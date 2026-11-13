@@ -263,7 +263,7 @@ fn apply_to_camera_pose_round_trip() {
     assert_relative_eq!(back_trans.z, cam_trans.z, epsilon = 1e-10);
 }
 
-// ── apply_to_camera_poses_flat tests (matching transform.rs tests) ──
+// ── apply_to_camera_poses_flat ──────────────────────────────────────
 
 #[test]
 fn flat_identity_preserves_poses() {
