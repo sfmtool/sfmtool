@@ -2327,7 +2327,7 @@ fn settle_reason(measurement: &mut super::track::TrackMeasurement, missing: Opti
 /// # use sfmtool_core::progress::Progress;
 /// # fn run(track: &EditableTrack, edited: &EditedReconstruction, views: &[ProjectedImage<'_>])
 /// # -> Result<(), Box<dyn std::error::Error>> {
-/// let rendered = render_bitmap_in_place(track, edited, views, &FitOptions::default());
+/// let rendered = render_bitmap_in_place(track, edited, views, &FitOptions::default())?;
 /// let scored = score_bitmap(&rendered, edited, views, &EvaluateOptions::default(), &Progress::none())?;
 /// # let _ = scored;
 /// # Ok(())

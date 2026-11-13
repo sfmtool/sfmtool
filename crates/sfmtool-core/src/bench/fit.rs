@@ -489,13 +489,25 @@ pub fn fit(
 /// The track's [`RepaintMark`](super::track::RepaintMark) comes across: the
 /// bitmap is nothing a verdict depends on, so an evaluation whose answer is
 /// rendered here still hands on what its repaint did.
+///
+/// # Errors
+///
+/// [`EvaluateError::NoView`] when an observation names an image `images`
+/// holds no view for.
 pub fn render_bitmap_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
     options: &FitOptions,
-) -> EditableTrack {
-    render_bitmap_in_place_from(track, edited, images, options, track.held_reference())
+) -> Result<EditableTrack, EvaluateError> {
+    check_observation_views(track, images)?;
+    Ok(render_bitmap_in_place_from(
+        track,
+        edited,
+        images,
+        options,
+        track.held_reference(),
+    ))
 }
 
 /// [`render_bitmap_in_place`], rendering the tile of row `from` where it is an

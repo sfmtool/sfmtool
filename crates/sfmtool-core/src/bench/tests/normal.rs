@@ -180,3 +180,25 @@ fn the_normal_steps_refuse_what_the_track_alone_rules_out() {
         );
     }
 }
+
+/// A track with an observation naming an image the views do not hold is
+/// refused before any piece is fitted.
+#[test]
+fn the_finite_difference_normal_refuses_an_observation_with_no_view() {
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut stray = track_of(&bench, &label);
+    stray.observations[1].image = 99;
+    assert_eq!(
+        finite_difference_normal(
+            &stray,
+            &edited,
+            &scene.views(),
+            &FiniteDifferenceOptions::default(),
+            &Progress::none()
+        )
+        .err(),
+        Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
+    );
+}

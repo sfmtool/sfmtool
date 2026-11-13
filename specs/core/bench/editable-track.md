@@ -628,13 +628,15 @@ pub fn fit(
 // and move nothing. A cluster, a track with no patch frame, one with fewer than
 // two `in` sightings that carry a keypoint, and one whose `in` rows the rule
 // finds none eligible among come back unchanged. The rows' bitmap scores still read the old bitmap, so a
-// caller scores them against the new one with `score_bitmap` afterwards.
+// caller scores them against the new one with `score_bitmap` afterwards. An
+// observation naming an image `images` holds no view for is refused
+// (`EvaluateError::NoView`).
 pub fn render_bitmap_in_place(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
     options: &FitOptions,
-) -> EditableTrack;
+) -> Result<EditableTrack, EvaluateError>;
 
 // Score every row of a track-stage track against the bitmap it holds, writing
 // the bitmap scores `evaluate` writes and changing nothing else. A track with no
@@ -2999,7 +3001,10 @@ centre does not move, the turn is the
 least rotation, and it stops where `tilt_patch`'s cap stops it, which the
 `NormalReport`'s `tilt` says. All three take the track stage only, refuse a track at
 infinity (whose patch faces along its own bearing) and need two `in`
-observations; `normal_preconditions` is that half of their validation.
+observations; `normal_preconditions` is that half of their validation. Each
+also refuses an observation naming an image `images` holds no view for, as
+`NormalError::Evaluate(EvaluateError::NoView { image })`, before it reads any
+view.
 
 **`finite_difference_normal` reads the normal from where smaller pieces fit.**
 Along each of the patch's two in-plane axes it places `pieces` square pieces
@@ -4171,8 +4176,8 @@ bench versions are listed in [`bench.md`](bench.md) § "Testing".
 
 **The refusals.**
 - Each refusal names what did not hold: fewer views than images, a track-stage
-  fit of one sighting, an observation naming an image with no view, a track with
-  no frame.
+  fit of one sighting, an observation naming an image with no view (refused by
+  the evaluation and by `render_bitmap_in_place`), a track with no frame.
 - The three precondition functions give their step's own answer when asked
   alone, which is what makes them safe to ask in front of a decode.
 - An observation seeded past `max_seed_offset_px` comes back with `SeedTooFar`,
@@ -4368,6 +4373,8 @@ Over the plane seen by three views:
 - Both layouts keep the centre and leave the track read and its bitmap rendered.
 - `normal_preconditions` and the piece and overlap bounds refuse what the track
   and the settings alone rule out.
+- An observation naming an image with no view is refused as `NoView` before
+  any piece is fitted.
 
 The piece layout, the line through the centres and the one-line fallback are
 unit-tested in `normal.rs` itself.
@@ -4412,8 +4419,8 @@ unit-tested in `normal.rs` itself.
   `Undetermined`, and the frame is exactly the one the step was given.
 - Every view of the textured plane reports all nine cells fitted, each cell a
   ray in each of the three views.
-- A bearing is refused as `AtInfinity`, and a set cancel flag stops the step
-  as `Cancelled`.
+- A bearing is refused as `AtInfinity`, an observation naming an image with
+  no view as `NoView`, and a set cancel flag stops the step as `Cancelled`.
 - The textured plane from 10 degrees off reports the baseline as the widest
   angle between the three cameras seen from the point, a predicted precision
   under 2 degrees, and one trace entry per render, each with both axes, nine
