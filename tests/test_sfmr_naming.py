@@ -148,3 +148,14 @@ def test_a_long_first_directory_is_cut_to_fit(tmp_path: Path):
     # 78 bytes are left for the directory: "a" and 38 "é" take 77, and a
     # 39th "é" would end on half a character.
     assert descriptor == "a" + "é" * 38 + "+1-more-total-2-images"
+
+
+def test_a_path_through_dotdot_is_the_same_directory(tmp_path: Path):
+    """`shopA/../shopB` and `shopB` are one directory, so one sequence."""
+    images = [
+        tmp_path / "shopA" / ".." / "shopB" / "frame_0001.jpg",
+        tmp_path / "shopB" / "frame_0002.jpg",
+        tmp_path / "shopB" / "frame_0003.jpg",
+    ]
+    out = get_next_sfm_filename(tmp_path / "sfmr", images)
+    assert out.name.endswith("-00-solve-frame_1-3.sfmr")

@@ -102,9 +102,10 @@ descriptor that would be longer gives up detail in steps until it fits:
 - Several directories: each sequence's range becomes its first and last frame
   (`shopA-frame_1-144+shopB-frame_1-144-total-24-images`); then each directory
   is named alone (`shopA+shopB-total-24-images`); then the name lists as many
-  directories as fit and the count of the rest
-  (`video00+video01+…+video08+21-more-total-90-images`), and a first directory
-  that does not fit even alone is cut short at a character boundary.
+  directories as fit and the count of the rest (30 directories give
+  `video00+video01+video02+video03+video04+video05+video06+video07+video08+21-more-total-90-images`),
+  and a first directory that does not fit even alone is cut short at a
+  character boundary.
 
 ## Options
 

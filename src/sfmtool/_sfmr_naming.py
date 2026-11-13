@@ -103,7 +103,8 @@ def _group_by_directory(
     directory holding every image; the images in that deepest directory itself
     have the key `()`.
     """
-    parents = [Path(p).absolute().parent for p in image_paths]
+    # `abspath` also folds `..`, so `a/../b` and `b` are one directory.
+    parents = [Path(os.path.abspath(p)).parent for p in image_paths]
     try:
         common = Path(os.path.commonpath(parents))
     except ValueError:
