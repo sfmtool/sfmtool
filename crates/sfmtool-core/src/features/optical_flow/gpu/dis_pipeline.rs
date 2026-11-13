@@ -356,7 +356,7 @@ impl GpuDisPipeline {
         let w = ref_image.width();
         let h = ref_image.height();
         let ps = params.patch_size;
-        let stride = params.patch_stride;
+        let stride = super::gpu_patch_stride(w, h, params);
 
         let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
         let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };
@@ -463,7 +463,7 @@ impl GpuDisPipeline {
         densify_params_bg: &wgpu::BindGroup,
     ) {
         let ps = params.patch_size;
-        let stride = params.patch_stride;
+        let stride = super::gpu_patch_stride(w, h, params);
 
         let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
         let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };
@@ -526,7 +526,7 @@ impl GpuDisPipeline {
         let w = ref_image.width();
         let h = ref_image.height();
         let ps = params.patch_size;
-        let stride = params.patch_stride;
+        let stride = super::gpu_patch_stride(w, h, params);
 
         let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
         let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };

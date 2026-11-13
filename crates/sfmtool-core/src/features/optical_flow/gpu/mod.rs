@@ -131,7 +131,7 @@ impl GpuFlowContext {
         let n = (w as usize) * (h as usize);
 
         let ps = dis_params.patch_size;
-        let stride = dis_params.patch_stride;
+        let stride = gpu_patch_stride(w, h, dis_params);
         let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
         let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };
         if num_patches_x == 0 || num_patches_y == 0 {
@@ -374,7 +374,7 @@ impl GpuFlowContext {
         let queue = &self.ctx.queue;
 
         let ps = params.patch_size;
-        let stride = params.patch_stride;
+        let stride = gpu_patch_stride(w, h, params);
         let (num_patches_x, num_patches_y) = patch_grid(w, h, params);
 
         // DIS uniform buffers
@@ -825,11 +825,26 @@ impl GpuFlowContext {
     }
 }
 
+/// The patch stride the GPU uses on a `w` x `h` level: `patch_stride`, capped
+/// at the level's longer side.
+///
+/// A stride at least as long as an axis places one patch on it, at 0, so the
+/// cap changes no patch position or count. It keeps the shaders' `u32`
+/// arithmetic from wrapping: `densify.wgsl` adds `stride - 1` to a pixel
+/// coordinate to find the first patch that can cover it, which wraps for a
+/// stride near `u32::MAX` and names patch 0 for pixels no patch covers. The
+/// shader's per-patch coverage check then discards that patch, so the cap is
+/// what makes the range right rather than the only thing keeping the result
+/// equal to the CPU's zero flow there.
+pub(super) fn gpu_patch_stride(w: u32, h: u32, params: &super::DisFlowParams) -> u32 {
+    params.patch_stride.min(w.max(h)).max(1)
+}
+
 /// Number of DIS patches along x and y for a `w` x `h` level; zero along an
 /// axis shorter than one patch.
 fn patch_grid(w: u32, h: u32, params: &super::DisFlowParams) -> (u32, u32) {
     let ps = params.patch_size;
-    let stride = params.patch_stride;
+    let stride = gpu_patch_stride(w, h, params);
     let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
     let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };
     (num_patches_x, num_patches_y)

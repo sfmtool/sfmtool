@@ -663,3 +663,61 @@ fn test_level_fits_limits_routes_dense_patches_on_large_levels_to_cpu() {
     assert!(image_fits_limits(max_pixels as u32, 1, &limits));
     assert!(!image_fits_limits(max_pixels as u32 + 1, 1, &limits));
 }
+
+#[test]
+fn test_gpu_patch_stride_caps_at_the_longer_side() {
+    let params = |patch_stride| super::super::DisFlowParams {
+        patch_stride,
+        ..super::super::DisFlowParams::default_quality()
+    };
+    assert_eq!(gpu_patch_stride(40, 24, &params(3)), 3);
+    assert_eq!(gpu_patch_stride(40, 24, &params(u32::MAX)), 40);
+    // The cap leaves one patch per axis, as the stride it replaces did.
+    assert_eq!(patch_grid(40, 24, &params(u32::MAX)), (1, 1));
+    assert_eq!(patch_grid(10, 1000, &params(500)), (1, 2));
+}
+
+#[test]
+fn test_gpu_dis_stride_beyond_the_image_matches_cpu() {
+    // A stride near u32::MAX places one patch at the top-left, and both
+    // paths give every pixel outside it zero flow. Uncapped, densify.wgsl's
+    // `col + 1 - ps + stride - 1` wraps and names that patch for those
+    // pixels; this test fails if the shader then lacks its coverage check
+    // and the stride is not capped (`gpu_patch_stride`).
+    let Some(gpu) = gpu_or_skip() else {
+        return;
+    };
+    let texture = |dx: f32| {
+        let mut img = GrayImage::new_constant(40, 24, 0.0);
+        for row in 0..24 {
+            for col in 0..40 {
+                let x = col as f32 - dx;
+                let v = 0.5 + 0.2 * (0.4 * x).sin() + 0.2 * (0.33 * row as f32 + 0.1 * x).cos();
+                img.set_pixel(col, row, v);
+            }
+        }
+        img
+    };
+    let (img_a, img_b) = (texture(0.0), texture(0.6));
+    let params = super::super::DisFlowParams {
+        patch_stride: u32::MAX - 4,
+        finest_scale: Some(0),
+        coarsest_scale: Some(0),
+        variational_refinement: false,
+        gpu_min_pixels: 0,
+        ..super::super::DisFlowParams::default_quality()
+    };
+    let cpu = super::super::compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    let gpu = super::super::compute_optical_flow(&img_a, &img_b, &params, Some(&gpu)).unwrap();
+    assert_ne!(cpu.get(0, 0), (0.0, 0.0), "the patch found no flow");
+    for row in 0..24 {
+        for col in 0..40 {
+            if col >= 8 || row >= 8 {
+                assert_eq!(gpu.get(col, row), (0.0, 0.0), "({col}, {row})");
+                assert_eq!(cpu.get(col, row), (0.0, 0.0), "({col}, {row})");
+            }
+        }
+    }
+    let (rmse, max_diff) = flow_rmse(&cpu, &gpu);
+    assert!(rmse < 0.01, "rmse {rmse:.4} (max_diff={max_diff:.4})");
+}
