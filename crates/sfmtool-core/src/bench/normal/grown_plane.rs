@@ -72,7 +72,7 @@ mod render;
 mod selected;
 mod solve;
 
-use combine::{sigmas_deg, Estimate};
+use combine::{sigmas_deg_at, Estimate};
 use render::{anchored, Grid, Samples, ViewImage, ViewRender};
 use solve::{
     angle_deg, carried_information, disc_of, live_cells, maximise, normal_matrix, schur_tilt,
@@ -384,8 +384,8 @@ pub struct GrownPlaneAttempt {
     /// entry of `stage_zncc`; with it off the two are equal.
     pub grid_zncc: f64,
     /// `σ` along its own plane's weakest direction, degrees, from its own
-    /// information at its own plane and shift; `NaN` for a growth that
-    /// stopped early.
+    /// information at its own plane and shift, in that plane's own angular
+    /// frame; `NaN` for a growth that stopped early.
     pub sigma_deg: f64,
     /// Why it was refused, [`GrownPlaneRefusal::UnderFloor`] or
     /// [`GrownPlaneRefusal::StoppedEarly`]; `None` when it was taken. Whether a
@@ -441,7 +441,8 @@ pub struct GrownPlaneTry {
     /// plane of the views picked so far, this one among them. `None` for a
     /// try that left the view out.
     pub combined_normal: Option<[f64; 3]>,
-    /// `σ` along that plane's weakest direction after the try, degrees;
+    /// `σ` along that plane's weakest direction after the try, degrees, in
+    /// that plane's own angular frame;
     /// `NaN` where `combined_normal` is `None`.
     pub combined_sigma_deg: f64,
 }
@@ -465,7 +466,8 @@ pub struct GrownPlanePair {
     /// on the grid laid there with
     /// [`GrownPlaneNormalOptions::turned_support`].
     pub zncc: f64,
-    /// `σ` along the pair's plane's weakest direction, degrees.
+    /// `σ` along the pair's plane's weakest direction, degrees, in that
+    /// plane's own angular frame.
     pub sigma_deg: f64,
     /// The Mahalanobis distance of its plane from the combined plane; `None`
     /// for a pair refused under the floor, which was never combined.
@@ -550,7 +552,9 @@ pub enum GrownPlaneView {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GrownPlanePrecision {
     /// `σ` along the plane's weakest and strongest directions, degrees, from
-    /// every kept estimate's information summed, each read at its own plane.
+    /// every kept estimate's information summed, each read at its own plane,
+    /// expressed in the final plane's own angular frame: turns of its normal,
+    /// in radians, about two orthonormal axes in the plane.
     pub sigma_weak_deg: f64,
     pub sigma_strong_deg: f64,
     /// The same with each kept pair's information halved, so that a view
@@ -1065,8 +1069,10 @@ pub fn grown_plane_normal(
         );
     };
 
-    let [weak, strong] = sigmas_deg(&outcome.information, options.zncc_tolerance);
-    let [d_weak, d_strong] = sigmas_deg(&outcome.discounted, options.zncc_tolerance);
+    // σ at the final plane, in its own angular frame.
+    let tau = options.zncc_tolerance;
+    let [weak, strong] = sigmas_deg_at(&outcome.information, &grid.start, tilt, tau);
+    let [d_weak, d_strong] = sigmas_deg_at(&outcome.discounted, &grid.start, tilt, tau);
     sequence.precision = Some(GrownPlanePrecision {
         sigma_weak_deg: weak,
         sigma_strong_deg: strong,
@@ -1616,7 +1622,13 @@ impl<'a> Sequence<'_, 'a> {
             return Judged { grown, estimate };
         }
         let (estimate, score) = self.estimate_of(i, &grown);
-        let sigma = sigmas_deg(&estimate.information, options.zncc_tolerance)[0];
+        // σ at the growth's own plane, in that plane's own angular frame.
+        let sigma = sigmas_deg_at(
+            &estimate.information,
+            &self.start.grid.start,
+            estimate.tilt,
+            options.zncc_tolerance,
+        )[0];
         let attempt = &mut grown.attempt;
         if let Some(score) = score {
             attempt.grid_zncc = score;

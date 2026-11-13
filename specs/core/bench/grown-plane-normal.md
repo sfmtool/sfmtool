@@ -924,25 +924,27 @@ Iₑ⁰   = J⁻ᵀ · Iₑ · J⁻¹                       its information abou
 `Iₑ⁰` is the information a tilt change of the starting chart carries to first
 order, since a change `δ` there is `J⁻¹ δ` in the estimate's frame. The carry
 is chosen over combining in a frame at the combined plane because the
-combination, the distance test, σ, the selection's model and the weak-turn rule
-then run on quantities in the coordinates they were set in, so
-`max_agreement_distance`, `target_sigma_deg`, `low_confidence_sigma_deg` and
-`min_turn_sigma_ratio` keep their meaning; because without the turned support
-every frame is the starting frame and the carry is skipped; and because an
-estimate's information is a property of the estimate at its plane, where the
-carry is exact to first order, which is all the quadratic model of each
-estimate claims. No estimate lies at 90° or more from `n₀`, since no fitted
+combination, the distance test and the selection's model then run on
+quantities in the coordinates they were set in; because without the turned
+support every frame is the starting frame and the carry is skipped; and
+because an estimate's information is a property of the estimate at its plane,
+where the carry is exact to first order, which is all the quadratic model of
+each estimate claims. No estimate lies at 90° or more from `n₀`, since no fitted
 trial point does (§ [The working grid turned with the plane](#the-working-grid-turned-with-the-plane)).
 
 The starting chart is not uniform in angle: at a turn `θ` from `n₀` a unit of
 the tilt along the turn is `cos² θ` radians and across it `cos θ`, so a σ read
-in it as if a tilt unit were a radian is larger than the angular σ there, by
-8.5 times along the turn at 70°. Without the turned support the information is
-read in this chart at the estimate's plane too, so the carry gives σ in the
-same chart with the same distortion, not a better one; reading σ in a frame at
-the combined plane is an open question
-([grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md)),
-since it moves the weak-turn rule's calibration.
+in it as if a tilt unit were a radian would be larger than the angular σ there,
+by 8.5 times along the turn at 70°. σ is therefore read from the chart's
+information in the angular frame of the plane it is about
+(§ [The plane's precision](#the-planes-precision)), with or without the turned
+support. The Mahalanobis distance needs no such reading: a change of the
+tilt's coordinates by any invertible linear map `A` takes `d` to `A d` and the
+covariance `C` to `A C Aᵀ`, which leaves `dᵀ C⁻¹ d` as it was, so to first
+order the distance is the same in the chart as in any plane's angular frame.
+The selection's prediction and the eigenvalue its picks maximise stay in the
+chart's units: they rank the candidates against each other and are not read
+as angles.
 
 ### Wide pairs
 
@@ -1131,10 +1133,24 @@ noise can produce. A tilt change inside that ellipse cannot be told from noise,
 which makes the covariance of the tilt `2τ · I⁻¹`, regularised as
 `2τ · (I + 10⁻⁶)⁻¹` so that a direction with no information gets a large
 variance rather than none. σ is the plane's uncertainty along its weakest
-direction, `√(2τ/λ_min)` with `λ_min` the smaller eigenvalue of `I`, in degrees,
-since a small tilt `(a, b)` is that many radians; the strongest direction's σ
-comes from the larger eigenvalue in the same way. Since σ grows as `√τ`, the
-choice of τ scales every σ and every agreement distance by the same factor.
+direction, `√(2τ/λ_min)` in degrees, with `λ_min` the smaller eigenvalue of
+the information expressed in the angular frame of the plane `m` it is read at:
+the turns of `m` in radians about two orthonormal axes `p, q` of its own
+tangent plane, the starting frame's axes turned to `m` by the least rotation,
+as a grid is laid there. With `I⁰` the information about the starting chart's
+tilt,
+
+```text
+J = ∂c₀(m + α·p + β·q)/∂(α, β) at (0, 0)       the chart Jacobian above, at m
+I_m = Jᵀ · I⁰ · J
+```
+
+since a small turn `(α, β)` is the chart step `J (α, β)`. The strongest
+direction's σ comes from the larger eigenvalue in the same way. The two
+eigenvalues do not depend on which orthonormal axes are taken, since another
+choice turns `J` by a rotation, and at the starting plane `J` is the identity,
+so there σ is the chart's. Since σ grows as `√τ`, the choice of τ scales every
+σ and every agreement distance by the same factor.
 
 **Which information.** Every growth's information is read when it is judged, at
 its own plane and shift, and a pair's at the plane and relative shift its fit
@@ -1145,6 +1161,16 @@ The combined plane's information is the sum of the kept estimates'
 information as each was read, and the precision the report gives is that sum,
 σ (a), and the same with each pair's halved, σ (b). Nothing is read again at the
 final plane.
+
+**Which plane σ is at.** An attempt's `sigma_deg` and a pair's are read at the
+estimate's own plane. A pick's `sigma_after_deg`, a try's `combined_sigma_deg`,
+the selection's stop at `target_sigma_deg` and the `mean` phase's note are read
+at the combined plane they describe, and the precision the report gives, with
+the low-confidence verdict and the weak-turn rule that judge it, at the final
+plane. `target_sigma_deg`, `low_confidence_sigma_deg` and
+`min_turn_sigma_ratio` were set when σ was read in the starting chart, where a
+point the step turns far had a larger σ
+([measurements](grown-plane-normal-measurements.md#σ-in-the-planes-own-frame-2026-11-11)).
 
 **Calibration.** Read through the Sobel gradient, σ is somewhat large in the
 middle of the errors and still small in their tail: at the 2.75° target, 63% of
@@ -1535,6 +1561,11 @@ the scenes with up to six views that need every view picked set a target σ of
   makes exactly one template render for every stage that turned the plane, so
   the grid is laid again at each stage's plane. A second run from the turned
   normal turns under half a degree.
+- **σ does not depend on the start:** on the same scene, runs from 60° and
+  from 35° off about the same axis take the same reference and the same views
+  and pairs, and give the same σ for the final plane, both ways, and for each
+  view's and each pair's own plane, within 10%, where σ read in the starting
+  chart differed by 2.5 times.
 - **Without the turned support,** on the wide scene and the disagreeing one,
   every growth that reached the whole grid has one round with an infinite cap
   and its `grid_zncc` equal to the last entry of `stage_zncc`, every pair one
@@ -1558,10 +1589,13 @@ the scenes with up to six views that need every view picked set a target σ of
   view at no tilt reads those samples; a laid grid's pixel derivatives follow a
   central difference of its projection; `J` follows a central difference of the
   starting chart to 10⁻⁶ at 5°, 40° and 70° and is the identity on the starting
-  grid, information carried by `J` and back is itself, the chart's step on the
-  starting frame is the difference of the tilts, so a shift moved by it is the
-  shift moved by that difference; and only a laid grid's tilt reaches a plane
-  past 90° from the start.
+  grid, information carried by `J` and back is itself; information about a
+  plane's turns, carried into the starting chart and read by σ at that plane,
+  gives back its own σ at 0°, 40° and 70° on two choices of the plane's axes,
+  where read as radians of the chart the weakest σ is `1/cos² θ` times it;
+  the chart's step on the starting frame is the difference of the tilts, so a
+  shift moved by it is the shift moved by that difference; and only a laid
+  grid's tilt reaches a plane past 90° from the start.
 - **Repeated passes on a ground truth,** in the binding's tests
   ([test_bench_normal_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_normal_rust_bindings.py)):
   on `seoul_bull_sculpture_ground_truth_v02` point 255, three passes from the
@@ -1624,7 +1658,7 @@ The questions still open about the step's settings and rules (the calibration
 of σ, the agreement numbers, the weak-turn thresholds, the ladder, the pairs,
 the selection's model, the window schedule, the cheaper growths' constants, the
 optimiser, points where every view is weak or narrow, blur matching, the
-report's fields, and the turned support's score, side, pyramid levels, chart
-for σ, defaults and the pairs' held shifts) are collected, with the evidence on
+report's fields, and the turned support's score, side, pyramid levels,
+defaults and the pairs' held shifts) are collected, with the evidence on
 each, in
 [grown-plane-normal-open-questions.md](../../drafts/grown-plane-normal-open-questions.md).

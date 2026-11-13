@@ -35,7 +35,10 @@ answer folded into the spec.
 - **The weak-turn rule's thresholds.** 70° and 3 were chosen on the same 62
   points that score them, and every combination near them also beat turning
   every time; whether they hold on points not yet judged, and whether σ (a) is
-  the right σ once its calibration is settled.
+  the right σ once its calibration is settled. They, the σ target and the
+  low-confidence bar were set when σ was read in the starting chart, which
+  overstated σ along a large turn by up to `1/cos² θ`; σ is now read in the
+  plane's own angular frame, and whether to set them again on that σ is open.
 - **Points where every view is weak.** On dino 1, six views within 5° of the
   reference, each view's own plane is so poorly determined (σ 15° to 171°) that
   their weighted mean is 4.6° to 5.4° off, where fitting the six together
@@ -107,11 +110,6 @@ answer folded into the spec.
 - **Whether each view's pyramid level should be chosen again** on the grid laid
   at each stage, since a view's map from the grid changes as the square turns
   (see also "Blur matching the other way").
-- **σ in the starting chart.** σ is read as if a tilt unit of the starting
-  chart were a radian, which overstates the angular σ at a large turn by up to
-  `1/cos² θ`. Reading σ in a frame at the combined plane would correct it, but
-  the weak-turn rule and the σ target were set on the chart's σ, so it would
-  need them set again.
 - **The turned support's defaults.** The cap of 12°, the floor of 0.5° and the
   16 rounds are first values, from the prototype.
 - **The pairs' held shifts.** Each pair holds its two views' shifts at the
