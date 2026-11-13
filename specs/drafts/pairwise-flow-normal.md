@@ -93,11 +93,12 @@ pub struct PairwiseFlowNormalOptions {
     /// residuals' robust scale.
     pub tukey_c: f64,
     /// How far apart two flow errors are before they are independent, in
-    /// photograph px. 8.
+    /// photograph px; also the side of the square the crops' structure
+    /// tensors are summed over. 8.
     pub correlation_length_px: f64,
-    /// The side of the window the crops' structure tensors are summed over,
-    /// in samples: about the DIS patch. 12.
-    pub structure_window: u32,
+    /// The share of pure-noise windows whose larger tensor eigenvalue may
+    /// pass the significance threshold. 0.001.
+    pub noise_false_alarm: f64,
     /// The largest σ a normal may have and still be a determined answer: a
     /// pair's fit, a radius's combined normal, or a single pair's. 10.
     pub max_sigma_deg: f64,
@@ -141,11 +142,11 @@ pub struct PairwiseFlowRadii {
 /// Turned: the patch was turned to the normal at the chosen radius.
 /// SinglePair: one pair, read at single_pair_radius with no agreement test,
 /// its σ at most max_sigma_deg, and turned.
-/// Undetermined: too little evidence. No radius has a determined pair (one
-/// with σ at most max_sigma_deg), or a single pair's σ is over it; the track
-/// as given.
-/// Unstable: some radius has enough evidence, but at every such radius the
-/// pairs disagree (mean χ² over max_mean_chi2); the track as given.
+/// Undetermined: too little evidence. No radius has two determined pairs
+/// (each with σ at most max_sigma_deg), so no agreement can be tested, or a
+/// point with one pair has its σ over the bar; the track as given.
+/// Unstable: some radius has two or more determined pairs, but at every such
+/// radius they disagree (mean χ² over max_mean_chi2); the track as given.
 pub enum PairwiseFlowOutcome { Turned, SinglePair, Undetermined, Unstable }
 
 pub enum PairwiseFlowCrop {
@@ -178,7 +179,7 @@ pub struct PairwiseFlowRadius {
     pub radius: f64,
     pub normal: Option<[f64; 3]>,          // the combined normal; None: no determined pair
     pub sigma_deg: f64,
-    pub mean_chi2: f64,                    // over the determined pairs
+    pub mean_chi2: f64,                    // over the determined pairs; NaN with fewer than two
     pub pairs_fitted: usize,
     pub pairs_determined: usize,
     pub pairs_combined: usize,
@@ -200,7 +201,7 @@ for a flow refusal the options check could not foresee.
 The report's sentence (`Display`) would read, for example, "21 of 21 pairs
 agree at 11 samples (χ² 1.4), σ 1.8°". A point the step does not turn ends
 with the words `grid_plane_normal` uses for the same two outcomes: "15 pairs,
-none with σ under 10° at any radius, normal left unchanged: undetermined", or
+no radius with two under σ 10°, normal left unchanged: undetermined", or
 "15 pairs, no radius where they agree (least χ² 3.7 at 6 samples), normal left
 unchanged: unstable".
 
@@ -398,12 +399,15 @@ photographs:
    and a fit whose `sigma_deg` is over `max_sigma_deg` is not **determined**:
    it is reported but does not enter the combination or χ².
 4. **Correlated samples.** `H` sums over samples, but DIS flow errors are
-   correlated over about one DIS patch, taken as `correlation_length_px` (8)
-   photograph pixels; where the coarser of the two views is upsampled `k`
-   times, that is `8k` samples. `H` is therefore divided by `(8k)²`, the number
-   of samples in one such square, so each square counts as one measurement.
-   Counted per photograph pixel instead of per correlated square, σ would be too
-   small by about 8; counted per sample, by about `8k`.
+   correlated over a distance of the order of the DIS patch (12 samples); the
+   prototype took `correlation_length_px`, 8 photograph pixels. Where the
+   coarser of the two views is upsampled `k` times (`k` its
+   `samples_per_pixel`, and 1 where neither view is coarser than the grid),
+   that is a square of side `L = 8k` samples. Each sample's `W_s` (below) is the
+   information of the `L × L` square about it, so summing it over every sample
+   counts each square's information `L²` times; `H` is therefore divided by
+   `L²`, and each correlated square counts once. Counted per photograph pixel
+   instead, σ would be too small by about 8; counted per sample, by about `8k`.
 
 **The flow information of a sample.** The geometric derivative `J_s` alone
 says nothing about texture: on a textureless crop the smoothed DIS flow is
@@ -417,13 +421,32 @@ precisely only along the image gradients in it, with covariance
 `∇I ∇Iᵀ` over the window, and `σ_I²` is the variance of the photometric
 residual. So:
 
-- `T_i(s)` is the structure tensor of crop `i`'s grey values over a
-  `structure_window`-sided square (12, about the DIS patch) centred on `s`, and
-  `T_j(s)` is crop `j`'s at `s` plus the measured flow.
-- Each tensor has the expected contribution of noise removed: the gradient of
-  noise of variance `σ_I²/2` per crop adds a known amount to the diagonal,
-  which is subtracted, and eigenvalues below zero are set to zero. A crop whose
-  gradients are no larger than its noise gives a zero tensor.
+- `T_i(s)` is the structure tensor of crop `i`'s grey values over the
+  `L × L` square centred on `s`, the correlated square of step 4, so the window
+  the information is read over and the area it is counted once per are the
+  same; `T_j(s)` is crop `j`'s at `s` plus the measured flow. There is no
+  separate window option.
+- Each tensor keeps only what is significant against noise. Removing the
+  expected noise contribution from the diagonal is not enough: it removes the
+  noise only on average, and a sum of `n = L²` noise gradients fluctuates
+  about its mean. For gradients `g` of independent Gaussian noise with
+  per-component variance `v` (proportional to the crop's noise variance
+  `σ_I²/2`, with a factor set by the gradient operator), each diagonal entry
+  of the tensor has mean `n·v` and standard deviation `v·√(2n)`; for `L = 8`
+  that is `64v ± 11v`. Neighbouring gradients share pixels and an upsampled
+  crop is smooth over `k` samples, so the true spread is larger than that
+  formula. The step therefore takes the threshold from a simulation: for each
+  `L` and `k` it renders pure white noise the way a crop is rendered, computes
+  the tensor's larger eigenvalue over many windows, and takes its
+  `1 − noise_false_alarm` quantile (99.9%), in units of `v`. That threshold
+  `τ·v` is subtracted from both eigenvalues of each tensor, and eigenvalues
+  below zero are set to zero. A window on a flat crop then has zero
+  information except in about one window in a thousand, and there only the
+  small excess over the threshold.
+- The noise variance is read from `σ_I²`, which includes the flow's
+  registration error as well as the image noise. That makes `v`, and with it
+  the threshold, larger than the image noise alone would, which removes more
+  information than necessary, never less: the error is on the safe side.
 - The two are combined as the **parallel sum** `T_i (T_i + T_j)⁺ T_j`, the
   inverse of the sum of the two covariances. The flow is the difference of two
   positions, one read in each crop, so its error is the sum of the two
@@ -440,10 +463,13 @@ residual. So:
   flow against crop `i`), floored at the 8-bit quantization variance so a
   perfect match does not claim infinite precision.
 
-Because `W_s` is absolute, not scaled by the flow residual's own variance, a
-flat crop gives a near-zero `H` and a large or infinite σ, and weak texture
-gives a σ that grows as the texture weakens. The Tukey weights still remove
-outlying flow.
+Because `W_s` is absolute, not scaled by the flow residual's own variance, and
+counts only structure significant against noise, a flat crop gives an `H` that
+is zero or nearly so: of the 380 samples in a disc of radius 11, about one in
+a thousand has a window over the threshold, each with information only just
+above zero, so σ is far above `max_sigma_deg` or infinite and no pair is
+determined. Weak texture gives a σ that grows as the texture weakens. The Tukey
+weights still remove outlying flow.
 
 **The prototype's σ had no texture term.** It was the geometric Hessian's
 inverse times the flow residual variance, with the correlation correction. The
@@ -463,14 +489,25 @@ most `max_sigma_deg`):
    5°) of the medoid, `σ` being that pair's own. Its σ is the inverse square
    root of the summed weights, in degrees.
 3. **χ²**: the mean over the determined pairs of (angle from the combined
-   normal / that pair's σ)².
+   normal / that pair's σ)², taken only where at least two pairs are
+   determined; with fewer it is `NaN`.
 
-A radius has **enough evidence** when at least one pair is determined there;
-its combined normal's σ is then at most `max_sigma_deg`, since only determined
-pairs enter it. The chosen radius is the largest radius with enough
-evidence whose mean χ² is at most `max_mean_chi2` (2): the largest support on
-which the pairs agree within their own precision. The step turns the patch to
-the combined normal at that radius.
+A radius has **enough evidence** when at least two pairs are determined there,
+so that their agreement can be tested; its combined normal's σ is then at most
+`max_sigma_deg`, since only determined pairs enter it. The chosen radius is the
+largest radius with enough evidence whose mean χ² is at most `max_mean_chi2`
+(2): the largest support on which the pairs agree within their own precision.
+The step turns the patch to the combined normal at that radius.
+
+A radius with only one determined pair, on a point with several pairs, is not
+used at all. Its χ² over one pair would be 0, so counting it would let the
+largest such radius win with no test of agreement, which is the rejected
+"radius of smallest σ" rule (one pair's σ keeps falling as the disc grows)
+without even the single-pair bar. It is not read as `SinglePair` either:
+when a point has several pairs and only one of them fixes the tilt, the other
+pairs' failure is itself evidence that the views see the surface poorly, and
+the one fit has nothing to check it against. `SinglePair` stays the allowance
+for a point that has only one pair to offer.
 
 The reason the agreement between pairs, and not any one pair's readings, picks
 the support: a support that is too large, one that runs over a fold of the
@@ -483,8 +520,8 @@ The rules the prototype tried and rejected are in the measurements
 
 ### Undetermined and unstable
 
-When no radius has enough evidence, the outcome is `Undetermined`: no pair's
-fit fixes the tilt to within `max_sigma_deg` at any support, which is a lack of
+When no radius has enough evidence, the outcome is `Undetermined`: at no
+support do two pairs fix the tilt to within `max_sigma_deg`, which is a lack of
 evidence. When some radius has enough evidence
 but the pairs disagree (mean χ² over `max_mean_chi2`) at every such radius, the
 outcome is `Unstable`: the evidence is there and does not settle on one plane.
@@ -532,7 +569,7 @@ with, which pairs disagreed and at which radius.
 | `max_grid_tilt_deg`, `grid_tilt_step_deg`, `grid_azimuth_step_deg` | 85°, 10°, 30° | prototype |
 | `tukey_c` | 4.685 | the usual 95%-efficiency constant; not measured here |
 | `correlation_length_px` | 8 px | a guess; open question |
-| `structure_window` | 12 samples | the DIS patch; not measured, the prototype had no texture term |
+| `noise_false_alarm` | 0.001 | proposed; the significance level of the tensors' noise threshold, not measured |
 | `max_sigma_deg` | 10° | proposed; not measured, open question |
 | `agreement_sigmas`, `agreement_margin_deg` | 3, 5° | prototype |
 | `max_mean_chi2` | 2 | measured, § "Choosing the support", with the prototype's σ, which had no texture term; tuned on references the grown plane made |
@@ -551,18 +588,37 @@ Proposed tests for the step when it is built:
 - **A fold.** Two textured planes meeting at a crease near the point: the chosen
   radius stops short of the crease, and the normal is the near plane's.
 - **Undetermined.** A textureless plane, its photographs a constant grey with
-  noise added: after the noise is removed every structure tensor is zero, so
-  every pair's `H` is zero and it has no fit at any radius; no radius has
-  enough evidence, the outcome is `Undetermined`, and the track's normal is
+  white noise added: after the significance threshold, about one window in a
+  thousand keeps any information, and only a little, so every pair's `H` is
+  zero or nearly so and its σ is far over `max_sigma_deg`; no radius has two
+  determined pairs, the outcome is `Undetermined`, and the track's normal is
   exactly the one given. The same with two views, one pair, is `Undetermined`
   and not `SinglePair`.
 - **Weak texture.** A plane whose texture contrast is lowered step by step: the
   pairs' σ grows as the contrast falls, and below some contrast the outcome
-  changes from `Turned` to `Undetermined`; at every contrast where it is
-  `Turned`, the normal is within 3σ of the true one.
-- **Unstable.** A synthetic track whose views each see the textured plane at a
-  different tilt, so every pair fits precisely and the pairs disagree at every
-  radius: `Unstable`, and the track's normal is exactly the one given.
+  changes from `Turned` to `Undetermined`. It is never `Unstable`, since the
+  scene is one plane: an `Unstable` reading would mean the pairs' σ
+  understates their error. At every contrast where it is `Turned`, the normal
+  is within 3 times the largest σ among the pairs combined at the chosen
+  radius. The combined σ is not the bound, because the pairs reuse views and
+  so understate it (§ [Open questions](#open-questions)).
+- **One determined pair among several.** The support rule given pair fits at
+  every radius in which one pair is determined and the others are not: no
+  radius has enough evidence, and the outcome is `Undetermined`, not `Turned`
+  at the largest radius.
+- **Unstable.** A crease through the point itself: two textured planes meeting
+  at a 90° dihedral along a line through `X`, with the cameras in front of the
+  edge and spread to both sides, so each sees both faces. Every disc, at every
+  radius, straddles the crease, and no plane fits it; each pair's fit is a
+  compromise between the two faces that depends on how that pair's viewpoints
+  foreshorten each face, so the pairs' normals differ by far more than their σ
+  once their σ is small, and the outcome is `Unstable`, with the track's
+  normal exactly the one given. This depends on the χ² calibration: at the
+  smallest radii each pair's σ is large, and if the pairs agree within it
+  there, the rule turns the patch at that radius to a compromise normal with a
+  large σ. The test uses radii from 8 samples up, where on this scene the
+  pairs are determined, and so also checks that `max_mean_chi2` does not
+  accept a crease.
 - **Refusals.** A track at infinity is refused as `NormalError::AtInfinity`; an
   empty `radii` or a radius past `crop_half_width` is refused by `check` naming
   the option; cancellation through `Progress` returns `NormalError::Cancelled`.
@@ -606,9 +662,11 @@ Each a separate change after the core step:
   term, so its χ² ≤ 2 rule and agreement window were calibrated with a σ that
   is too small on weak texture. Once σ includes the structure tensor, the χ²
   threshold, the agreement window and the support results need measuring
-  again. Also open: the structure window's size, the noise model the tensors
-  are corrected with, and `max_sigma_deg`, which is proposed at 10° without a
-  measurement.
+  again. Also open: the noise model the tensors are thresholded with (white
+  Gaussian noise of the photometric residual's variance), the significance
+  level `noise_false_alarm`, and `max_sigma_deg`, which is proposed at 10°
+  without a measurement. The structure window has no setting of its own: it is
+  the correlated square, so it is settled with the correlation length.
 - **Many views.** A dino point can have 20 or more views, which is 190 pairs.
   Whether to cap the pairs, and how to choose them: widest angles first, a
   spread of baselines, each view in a fixed number of pairs, or the pairs whose
