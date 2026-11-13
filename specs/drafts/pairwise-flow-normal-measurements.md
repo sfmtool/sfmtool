@@ -48,6 +48,28 @@ photographs, in pixels, which bounds what a support of one patch can see:
 |---|---:|---:|---:|---:|---:|
 | Median half-size, px | 12.7 | 14.5 | 21.6 | 3.4 | 9.5 |
 
+## The prototype's crops
+
+The prototype's runs used two crop designs, and neither is the one the draft
+proposes.
+
+- **The runs against the grown plane** (§ "Fresh solves against the grown
+  plane", made with the prototype's `pairflow.py` and scripts like it): each
+  view's crop was 3 times the patch in world space, sampled at one sample per
+  photograph pixel, with a floor of 32 samples.
+- **The support-rule runs** (§ "Choosing the support"): each crop was 48
+  photograph pixels in half-width at the point's median scale, on one grid per
+  point, sampled bilinearly with no prefilter. Views nearer than the median
+  were downsampled onto the grid without a pyramid and so aliased; views
+  farther than the median were upsampled.
+
+The draft proposes a different design: a grid set by the patch
+(`samples_per_patch` samples per patch side), each view prefiltered through its
+photograph's pyramid down to that grid, each pair read at the pyramid level of
+its coarser view, and radii in patch half-extents. That design was not
+measured. The radius list, the χ² threshold and `max_sigma_deg` need measuring
+again with it, alongside the σ texture term the draft adds.
+
 ## Flow settings
 
 **Question.** Does `DisFlowParams::high_quality()` measure the flow between two
@@ -79,7 +101,9 @@ to the ground truth than the mean viewing direction and the grown-plane step?
 
 **Setup.** Reference set (b). This run predates the support rule and the
 fixed-size crops: it used OpenCV's DIS (patch 12, stride 1, finest scale 0, 16
-iterations, 5 variational iterations), crops of 3 times the patch, and a fixed
+iterations, 5 variational iterations), crops of 3 times the patch in world
+space at one sample per photograph pixel with a 32-sample floor
+(§ "The prototype's crops"), and a fixed
 disc of 0.75, 1, 1.5 or 2 times the patch. The grown plane ran from the mean
 viewing direction.
 
@@ -102,7 +126,9 @@ every size is closer than the grown plane. On dino the flow fit is closer from
 
 **Setup.** Both reference sets, split into five. sfmtool's own DIS
 (`sfmtool.flow.compute_optical_flow`, `high_quality` with `finest_scale=0`,
-`patch_stride=1`), crops of 48 px half-width, the radii 4, 6, 8, 11, 16, 22, 32
+`patch_stride=1`), crops of 48 px half-width at the point's median scale on
+one grid per point, sampled bilinearly with no prefilter (§ "The prototype's
+crops"), the radii 4, 6, 8, 11, 16, 22, 32
 and 45 px, and the fits and combination of the draft, but with a σ that has no
 texture term: the geometric Hessian's inverse times the flow residual variance,
 with the correlation correction (the draft adds the texture term; § "Fitting

@@ -4,6 +4,10 @@
 built. The design was prototyped in Python outside the repository and measured
 against reference normals; the measurements are in
 [pairwise-flow-normal-measurements.md](pairwise-flow-normal-measurements.md).
+The prototype's crops were sized and sampled differently from the crops this
+draft proposes (a grid set by the patch, a prefilter, a pyramid level per pair,
+radii in patch half-extents), so the measured numbers bear on the design but
+not on its defaults (§ [Fronto crops](#fronto-crops)).
 
 Complements: [core/bench/grown-plane-normal.md](../core/bench/grown-plane-normal.md),
 the bench's grown-plane normal step, which it stands beside and does not replace.
@@ -37,8 +41,8 @@ properties that this step is meant to avoid:
 
 This draft proposes a deliberately expensive estimator for one point,
 `pairwise_flow_normal`. It renders a fronto-parallel crop of the photograph
-around the point for every observation, computes dense optical flow between the
-crops of every pair of observations at full resolution, and fits the plane
+around the point for every observation, on a grid set by the patch, computes
+dense optical flow between the crops of every pair of observations, and fits the plane
 through the point to each pair's flow over discs of several radii. It then
 chooses the support itself: the largest radius at which the pairs agree with
 each other within their own precision. It needs no start normal and no
@@ -54,7 +58,7 @@ assume the given normal is the mean viewing direction: in the viewer it may
 have been set by hand or by another step, and a point the step does not turn
 keeps it.
 
-It spends far more compute than the grown-plane step: one full-resolution flow
+It spends far more compute than the grown-plane step: one dense flow
 per pair of observations, and many small fits. The uses proposed for it are:
 
 - a refinement step on the bench, for a point a person is working on;
@@ -72,13 +76,20 @@ Track View and the wire could call it the way they call the others.
 
 ```rust
 /// How pairwise_flow_normal renders its crops, computes its flows, fits its
-/// planes and chooses its support. Defaults are the prototype's (§ Parameters).
+/// planes and chooses its support. Defaults and their sources in § Parameters.
 pub struct PairwiseFlowNormalOptions {
-    /// Half the crop's side, in samples; one sample is about one photograph
-    /// pixel at the point. 48.
-    pub crop_half_width: u32,
-    /// The disc radii the planes are fitted over, in samples, ascending.
-    /// [4, 6, 8, 11, 16, 22, 32, 45].
+    /// The grid: samples along one side of the patch. 24.
+    pub samples_per_patch: u32,
+    /// The crop's half-width in the world, in patch half-extents. 3.
+    pub crop_half_extents: f64,
+    /// The least crop half-width a pair is read over, in photograph px of the
+    /// pair's coarser view. 48.
+    pub min_crop_half_width_px: f64,
+    /// The most samples along one side of a rendered crop; past it the grid
+    /// is coarsened. 256.
+    pub max_crop_samples: u32,
+    /// The disc radii the planes are fitted over, in patch half-extents,
+    /// ascending. [0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12].
     pub radii: Vec<f64>,
     /// The flow between two crops. high_quality with finest_scale Some(0)
     /// and patch_stride 1.
@@ -111,7 +122,7 @@ pub struct PairwiseFlowNormalOptions {
     /// this. 2.
     pub max_mean_chi2: f64,
     /// The radius a point with one pair is read at, where there is no
-    /// agreement to test. 8.
+    /// agreement to test, in patch half-extents. 1.
     pub single_pair_radius: f64,
     /// The reading the step ends with, as for the other normal steps.
     pub fit: FitOptions,
@@ -120,20 +131,23 @@ pub struct PairwiseFlowNormalOptions {
 impl PairwiseFlowNormalOptions {
     /// Refuses a setting the step cannot run with, naming the first that
     /// fails: NormalError::BadPairwiseFlowOption("radii") for an empty,
-    /// unsorted or non-positive list or a radius past crop_half_width, and so
-    /// on. The flow settings are checked against the crop's size here, so a
-    /// patch_size larger than the crop is refused before any render.
+    /// unsorted or non-positive list, ("samples_per_patch") under 2,
+    /// ("crop_half_extents") under 1, and so on. The flow settings are checked
+    /// against the smallest crop a pair can be read on here, so a patch_size
+    /// larger than that is refused before any render.
     pub fn check(&self) -> Result<(), NormalError>;
 }
 
 /// What the step did, carried by NormalEstimate::PairwiseFlow(Box<_>).
 pub struct PairwiseFlowRadii {
-    pub sample_spacing: f64,               // world units per crop sample
+    pub sample_spacing: f64,               // world units per grid sample
+    pub samples_per_patch: f64,            // the grid used: the option's, or fewer under the cap
+    pub crop_half_width: u32,              // the rendered crops' half-width, grid samples
     pub crops: Vec<PairwiseFlowCrop>,      // one per observation of the track
     pub pairs: Vec<PairwiseFlowPair>,      // every pair of rendered crops
     pub radii: Vec<PairwiseFlowRadius>,    // one per options.radii entry
     pub outcome: PairwiseFlowOutcome,
-    pub chosen_radius: Option<f64>,        // None: Undetermined or Unstable
+    pub chosen_radius: Option<f64>,        // patch half-extents; None: Undetermined or Unstable
     pub normal: Option<[f64; 3]>,          // the combined normal at the chosen radius
     pub sigma_deg: Option<f64>,            // its sigma, largest axis
     pub turn_deg: Option<f64>,             // from the given normal to it
@@ -151,10 +165,10 @@ pub struct PairwiseFlowRadii {
 pub enum PairwiseFlowOutcome { Turned, SinglePair, Undetermined, Unstable }
 
 pub enum PairwiseFlowCrop {
-    /// samples_per_pixel: how many crop samples one of the view's own pixels
+    /// samples_per_pixel: how many grid samples one of the view's own pixels
     /// spans at the point; over 1 the view was upsampled, under 1 it was read
-    /// from a coarser pyramid level. coverage: the share of the crop's samples
-    /// that fell on the photograph.
+    /// through the photograph's pyramid. coverage: the share of the crop's
+    /// samples that fell on the photograph.
     Rendered { image: u32, samples_per_pixel: f64, coverage: f64 },
     /// Not in, a second row in one image, or a camera centre at the point.
     NotAttempted,
@@ -164,20 +178,22 @@ pub struct PairwiseFlowPair {
     pub observations: [usize; 2],
     pub images: [u32; 2],
     pub angle_deg: f64,                    // between the two views, from the point
-    pub fits: Vec<Option<PairwiseFlowFit>>, // one per radius; None: too few samples on both crops, or a singular Hessian
+    pub level: u32,                        // the crops' pyramid level the pair is read at
+    pub half_width: u32,                   // the central square read, samples at that level
+    pub fits: Vec<Option<PairwiseFlowFit>>, // one per radius; None: past the square read, too few samples on both crops, or a singular Hessian
 }
 
 pub struct PairwiseFlowFit {
     pub normal: [f64; 3],
     pub sigma_deg: f64,                    // largest axis; from the texture-weighted Hessian
-    pub offset: [f64; 2],                  // the pair's free shift, samples
-    pub rms_residual: f64,                 // samples, Tukey-weighted
+    pub offset: [f64; 2],                  // the pair's free shift, grid samples
+    pub rms_residual: f64,                 // grid samples, Tukey-weighted
     pub determined: bool,                  // sigma_deg at most max_sigma_deg
     pub combined: bool,                    // within the agreement window at this radius
 }
 
 pub struct PairwiseFlowRadius {
-    pub radius: f64,
+    pub radius: f64,                       // patch half-extents
     pub normal: Option<[f64; 3]>,          // the combined normal; None: no determined pair
     pub sigma_deg: f64,
     pub mean_chi2: f64,                    // over the determined pairs; NaN with fewer than two
@@ -200,11 +216,11 @@ as `BadGrownPlaneOption` is for the grown-plane step, and `Flow(OpticalFlowError
 for a flow refusal the options check could not foresee.
 
 The report's sentence (`Display`) would read, for example, "21 of 21 pairs
-agree at 11 samples (χ² 1.4), σ 1.8°". A point the step does not turn ends
-with the words `grid_plane_normal` uses for the same two outcomes: "15 pairs,
-no radius with two pairs under σ 10°, normal left unchanged: undetermined", or
-"15 pairs, no radius where they agree (least χ² 3.7 at 6 samples), normal left
-unchanged: unstable".
+agree at 1.5 half-extents (χ² 1.4), σ 1.8°". A point the step does not turn
+ends with the words `grid_plane_normal` uses for the same two outcomes: "15
+pairs, no radius with two pairs under σ 10°, normal left unchanged:
+undetermined", or "15 pairs, no radius where they agree (least χ² 3.7 at 0.75
+half-extents), normal left unchanged: unstable".
 
 ### Why it is shaped this way
 
@@ -243,7 +259,7 @@ width does not.
 name as backlog from before that ruling.
 
 **It takes a `Progress`** (STANDARDS § "Long-running functions take a
-Progress"): a point with 20 views has 190 pairs, each a full-resolution flow.
+Progress"): a point with 20 views has 190 pairs, each a dense flow.
 It would report a phase for the crops, one for the flows with a count per pair,
 and one for the fits, and check for cancellation between pairs and between
 radii.
@@ -282,7 +298,7 @@ let (turned, report) = pairwise_flow_normal(
     &PairwiseFlowNormalOptions::default(),
     &Progress::none(),
 )?;
-println!("{report}"); // "21 of 21 pairs agree at 11 samples (χ² 1.4), σ 1.8°, turned 12.3°, …"
+println!("{report}"); // "21 of 21 pairs agree at 1.5 half-extents (χ² 1.4), σ 1.8°, turned 12.3°, …"
 ```
 
 ## Theory
@@ -297,55 +313,112 @@ every crop has the same orientation about the line of sight and two crops
 differ, before the plane's effect, by little more than a shift. Where `u` is
 within a few degrees of the line of sight, `v` is projected instead.
 
-The crop is rendered as an `OrientedPatch` with that frame and a half-extent of
-`crop_half_width` samples, through `WarpMap::from_patch`
+The crop is rendered as an `OrientedPatch` with that frame, centred on `X`,
+through `WarpMap::from_patch`
 ([camera/warp_map.rs](../../crates/sfmtool-core/src/camera/warp_map.rs)), which
 maps each sample through the camera model. Lens distortion, including a
 fisheye's edges, and the view's angle to the surface are therefore removed: a
 crop is what a distortion-free camera looking straight at `X` from `C_j`'s side
-would see.
+would see. Each view is rendered once, on one grid shared by all the point's
+views, so the flow is in one unit across pairs; there are no per-pair renders.
 
-**The sample spacing** is one photograph pixel at the point: for each
-observation, the patch's half-extent divided by that half-extent's length in the
-photograph in pixels (the half-side of the square of equal area, read from the
-patch's Jacobian, `patch_grid_jacobian`), and the median of that over the
-observations (`sfmtool_core::numeric::median`). All crops of one point share
-the spacing, so the flow is in one unit across pairs, and radii are in samples,
-which are close to photograph pixels.
+**The grid is set by the patch**, not by the photographs' pixels: the sample
+spacing is the patch's side over `samples_per_patch` (24, the patch resolution
+the bench renders at; the default is not measured). A view whose own pixels are
+finer than the grid is read through the photograph's pyramid down to the grid,
+so it is prefiltered, and every such view is filtered alike: the normal then
+describes the patch's surface at the patch's own scale rather than texture
+finer than the patch, and the cost is bounded by the patch, not by the
+photograph. A 24 × 24 grid on a patch that covers 1024 photograph pixels
+across gives a crop of 72 samples a side at 3 times the patch, each sample
+spanning about 43 photograph pixels across; at one sample per photograph pixel
+the same crop would be 3072 samples a side. A view coarser than the grid is
+upsampled, which only blurs, and blur is harmless to the flow; its σ counts the
+correlation of the flow's errors in that view's own pixels (§ [Fitting each
+pair at each radius](#fitting-each-pair-at-each-radius)).
 
-**The crop's size is a fixed number of photograph pixels**, not a multiple of
-the patch. What a disc of flow can say about the tilt is bounded by how many
-real image pixels it covers, and the patches a solve stores vary widely in that:
-a fresh solve of seoul_bull has a median patch half-size of 3.4 px, and the
-curated ground truths 12.7 to 21.6 px. A crop of a multiple of the patch would
-be a few pixels across on the first and needlessly large on the others.
-
-**Aliasing.** A view whose own pixels are finer than the grid (it is closer to
-the point, or has a longer focal length) must be sampled through a pyramid or
-an area filter: point sampling aliases fine texture into false structure that
-the flow then matches with confidence. A view coarser than the grid is
-upsampled, which only blurs, and blur is harmless to the flow. The sampler rule
-([sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs),
-`SamplerChoice::PerView`) already does both: it reads a finer view from the mip
-level the warp's compression picks, or with the anisotropic sampler where the
-compression is much stronger along one axis, and a coarser one bilinearly from
-level 0, through the `ImageU8Pyramid` each `ProjectedImage` carries. The crops are then
-converted to the flow's grey (`matcher_gray_from_rgb` in
+The renderers already sample this way. With `SamplerChoice::PerView`
+([sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs)) a view is read
+with `Sampler::BilinearMip` at the level `bilinear_mip_level` gives,
+`round(log2 max(σ_major, 1))` for `σ_major` the larger singular value of the
+grid's Jacobian into the photograph in photograph px per sample, or with the
+anisotropic sampler where the compression is much stronger along one axis
+(`rule_sampler`). The levels are those of the `ImageU8Pyramid` each
+`ProjectedImage` carries, built by 2× box-filter downsampling
+([camera/image.rs](../../crates/sfmtool-core/src/camera/image.rs)). A view
+with about one pixel per sample (`σ_major` under √2) reads level 0, a view with
+finer pixels reads a coarser level, about one of its pixels per sample there,
+and a view coarser than the grid reads level 0 bilinearly, which upsamples it.
+Because the
+level is rounded, two views on either side of a level boundary are filtered
+up to √2 apart in scale; that is "alike" to within one rounding. The crops are
+then converted to the flow's grey (`matcher_gray_from_rgb` in
 [optical_flow/image.rs](../../crates/sfmtool-core/src/features/optical_flow/image.rs)).
+
+**The extent.** A pair `(i, j)` is read over a central square of half-width
+`max(crop_half_extents · h, min_crop_half_width_px · p)` in the world, where
+`h` is the patch's half-extent and `p` the size, at `X`, of one photograph
+pixel of the pair's coarser view: 3 times the patch by default, but never fewer
+than 48 of the coarser view's pixels. The floor is there for tiny patches: a
+fresh solve of seoul_bull has a median patch half-size of 3.4 px, so 3 times
+the patch would be about 10 px, while the prototype's best fixed support on
+those points was 16 px, about 4.7 times the patch, and the support chooser
+needs room above that to find where the surface stops being one plane. Each
+view is rendered once at the largest extent any of its pairs needs, which is
+the one set by the point's coarsest view, and a pair reads the central square
+it needs from the two renders.
+
+**The cap.** With a fine grid on a tiny patch and a coarse view setting the
+extent, the rendered crop could be very large: a 3.4 px half-size patch on a
+24-sample grid is 3.5 samples per photograph pixel, and 48 px of the same view
+is then a half-width of 170 samples. Where a rendered crop would have more than
+`max_crop_samples` (256) along a side, the grid is coarsened for the whole
+point until it fits, and the report carries the `samples_per_patch` used. The
+extent is kept and the resolution given up, because a grid finer than the
+photographs' pixels adds no information to the flow.
+
+**The pyramid level of a pair.** The scale only matters within a pair when one
+of its views is coarser than the grid. Then that view has been upsampled by
+`k`, its `samples_per_pixel` (over 1), and its crop is blurred over `k`
+samples while the other crop is sharp; DIS would match a sharp crop against a
+blurred one. So each rendered crop gets a **fronto pyramid**, 2×
+downsamplings with one Gaussian kernel for every view: the flow's own
+`ImagePyramid` in
+[optical_flow/pyramid.rs](../../crates/sfmtool-core/src/features/optical_flow/pyramid.rs),
+whose levels are a blur by the 6-tap σ = 1 kernel `GAUSS6_1D` and a 2×
+downsample (the module is private to the flow today, reachable outside it only
+through the hidden `bench` re-export, so the step needs it made visible within
+the crate). A pair is read at level `ℓ = floor(log2 k)` of both crops' fronto
+pyramids, `k` being the coarser view's; at that level the coarser view is
+upsampled by `k / 2^ℓ`, between 1 and 2, and the two crops carry about the same
+blur. A pair whose views are both at or finer than the grid is read at level 0.
+The flow at level `ℓ` is in level samples, `2^ℓ` grid samples each. The level
+is chosen per pair from the renders already made, so no view is rendered again
+for a pair, and reading a pair of unequal views at the coarser one's level also
+cuts the flow's cost by `4^ℓ`.
+
+**Radii in patch half-extents.** The radii are multiples of `h`, so every pair
+is compared at the same radius in the world. That is what the χ² rule needs:
+it detects the radius at which the surface stops being one plane, which is a
+distance on the surface, not a count of any one view's pixels. A radius that
+covers few pixels of a pair's coarser view gives that pair a large σ and so
+little weight, with no special case; a radius past the square a pair reads
+gives that pair no fit there.
 
 ### Flow
 
 For every unordered pair `(i, j)` of rendered crops the step computes the DIS
 flow from crop `i` to crop `j` with `compute_optical_flow`
 ([optical_flow/mod.rs](../../crates/sfmtool-core/src/features/optical_flow/mod.rs)),
-at full resolution: `finest_scale` `Some(0)`, `patch_stride` 1, and otherwise
+on the central square the pair reads at its pyramid level, at that level's
+full resolution: `finest_scale` `Some(0)`, `patch_stride` 1, and otherwise
 `DisFlowParams::high_quality()` (patch 12, 16 gradient-descent iterations,
 variational refinement on).
 
-`high_quality` itself is not enough. It fixes `finest_scale` at 1, and on a crop
-of 96 samples the automatic coarsest scale is
-`floor(log2(2 · 96 / (5 · 12)))`, which is 1, so the whole flow is solved at
-half resolution and upsampled bilinearly
+`high_quality` itself is not enough. It fixes `finest_scale` at 1, so it never
+solves at full resolution; on the prototype's crops of 96 samples the automatic
+coarsest scale is `floor(log2(2 · 96 / (5 · 12)))`, which is 1, so the whole
+flow is solved at half resolution and upsampled bilinearly
 ([optical-flow.md](../core/features/optical-flow.md#presets)). On synthetic
 pairs, a real crop warped by the flow of a known plane, the prototype measured a
 median flow error of 0.093 px with `high_quality` and 0.040 px at full
@@ -360,10 +433,10 @@ crop `i` to crop `j` is exact ray-plane geometry:
 1. the sample's position on crop `i`'s fronto plane gives a ray from `C_i`;
 2. the ray meets the candidate plane, through `X` with normal `n`, at `Y`;
 3. the ray from `C_j` to `Y` meets crop `j`'s fronto plane at a point whose
-   in-plane coordinates, in samples, minus the sample's own coordinates, are
+   in-plane coordinates, in grid samples, minus the sample's own coordinates, are
    the predicted flow.
 
-Each pair also has a free 2D offset, in samples, added to the predicted flow:
+Each pair also has a free 2D offset, in grid samples, added to the predicted flow:
 the point's projection and the true position of the surface in each photograph
 differ by the keypoint and triangulation inconsistency, and the offset takes
 that up so it does not bias the tilt. The pair's unknowns are the normal's two
@@ -376,8 +449,8 @@ plane recovered the normal to 0.00°, so the geometry is right.
 ### Fitting each pair at each radius
 
 At each radius `r` in `radii`, the step fits the normal to pair `(i, j)`'s
-measured flow at the samples within `r` of the crop's centre that lie on both
-photographs:
+measured flow at the samples within `r · h` of the crop's centre that lie on
+both photographs, at the pair's pyramid level:
 
 1. **A coarse grid.** Every normal on a grid of tilts from 0° to
    `max_grid_tilt_deg` in `grid_tilt_step_deg` steps, at azimuths
@@ -401,10 +474,12 @@ photographs:
    it is reported but does not enter the combination or χ².
 4. **Correlated samples.** `H` sums over samples, but DIS flow errors are
    correlated over a distance of the order of the DIS patch (12 samples); the
-   prototype took `correlation_length_px`, 8 photograph pixels. Where the
-   coarser of the two views is upsampled `k` times (`k` its
-   `samples_per_pixel`, and 1 where neither view is coarser than the grid),
-   that is a square of side `L = 8k` samples. Each sample's `W_s` (below) is the
+   prototype took `correlation_length_px`, 8 photograph pixels, and the step
+   counts them in the coarser view's own pixels. Where that view is upsampled
+   `k` times at the level the pair is read at (`k / 2^ℓ`, between 1 and 2, `k`
+   its `samples_per_pixel`), and 1 where neither view is coarser than the grid,
+   that is a square of side `L = 8k` samples at that level, `k` now meaning
+   that factor. Each sample's `W_s` (below) is the
    information of the `L × L` square about it, so summing it over every sample
    counts each square's information `L²` times; `H` is therefore divided by
    `L²`, and each correlated square counts once. Counted per photograph pixel
@@ -437,9 +512,10 @@ residual. So:
   that is `64v ± 11v`. Neighbouring gradients share pixels and an upsampled
   crop is smooth over `k` samples, so the true spread is larger than that
   formula. The step therefore takes the threshold from a simulation: for each
-  window side `L` and each way a crop is rendered (the crop's own
-  `samples_per_pixel`, which can differ from the pair's `k`), it renders pure
-  white noise the way that crop is rendered, computes
+  window side `L` and each way a crop is rendered and read (the crop's own
+  `samples_per_pixel`, which can differ from the pair's `k`, and the pyramid
+  level the pair reads it at), it renders pure white noise the way that crop
+  is rendered, takes it to that level, and computes
   the tensor's larger eigenvalue over many windows, and takes its
   `1 − noise_false_alarm` quantile (99.9%), in units of `v`. That threshold
   `τ·v` is subtracted from both eigenvalues of each tensor, and eigenvalues
@@ -472,7 +548,7 @@ residual. So:
 
 Because `W_s` is absolute, not scaled by the flow residual's own variance, and
 counts only structure significant against noise, a flat crop gives an `H` that
-is zero or nearly so: of the 380 samples in a disc of radius 11, about one in
+is zero or nearly so: of the 380 samples in a disc of radius 11 samples, about one in
 a thousand has a window over the threshold, each with information only just
 above zero, so σ is far above `max_sigma_deg` or infinite and no pair is
 determined. Weak texture gives a σ that grows as the texture weakens. The Tukey
@@ -481,8 +557,11 @@ weights still remove outlying flow.
 **The prototype's σ had no texture term.** It was the geometric Hessian's
 inverse times the flow residual variance, with the correlation correction. The
 χ² threshold of 2, the agreement window and the support results in the
-measurements were obtained with that σ, so the threshold must be checked again
-once σ includes the texture term (§ [Open questions](#open-questions)).
+measurements were obtained with that σ, and with the prototype's crops, which
+were set in photograph pixels and sampled without a prefilter. The radius
+list, the χ² threshold and `max_sigma_deg` must be measured again with the
+crops this draft proposes and the texture term together
+(§ [Open questions](#open-questions)).
 
 ### Choosing the support
 
@@ -535,7 +614,8 @@ outcome is `Unstable`: the evidence is there and does not settle on one plane.
 Both leave the given normal unchanged, and the report's outcome says which.
 
 A point with one pair has no agreement to test; the prototype read it at a
-fixed 8 samples, which this draft keeps as `SinglePair`. It is turned only when
+fixed 8 photograph pixels, and this draft reads it at a fixed
+`single_pair_radius` (1 half-extent, not measured) as `SinglePair`. It is turned only when
 the pair's σ at that radius is at most `max_sigma_deg`; otherwise the outcome
 is `Undetermined`.
 
@@ -549,29 +629,36 @@ with, which pairs disagreed and at which radius.
 
 ## Implementation notes
 
-- **Order of work.** Crops are rendered once per observation; flows are
-  computed once per pair, in parallel over pairs with rayon; the fits are per
+- **Order of work.** Crops are rendered once per observation, and each crop's
+  fronto pyramid is built once, to the deepest level any of its pairs reads;
+  flows are computed once per pair, at its level, in parallel over pairs with
+  rayon; the fits are per
   pair and radius, independent of one another, and also parallel. The combined
   normal and χ² are taken in pair order, so the result does not depend on the
   thread count.
 - **Precision.** The crops and the flow are `f32`, as `GrayImage` and
   `FlowField` are: flow errors are 0.04 px or more, far above `f32`'s rounding
-  at crop coordinates under 100. The fits accumulate a few thousand samples into
+  at crop coordinates under `max_crop_samples` (256). The fits accumulate a few thousand samples into
   4×4 normal equations and run in `f64`, which costs nothing at that size and
   keeps the Hessian's inverse well conditioned near edge-on tilts.
 - **Cost.** The Python prototype took about 59 s for 153 points with 12
   processes, about 4.6 CPU-seconds per point, most of it in the fits; the flows
   were one full-resolution flow on a 96×96 crop per pair. A Rust version is
-  expected to be far cheaper, chiefly in the fits, but the step stays expensive
-  by design: the number of pairs grows with the square of the number of views.
-  How to bound it is an open question.
+  expected to be far cheaper, chiefly in the fits. The crops this draft
+  proposes bound each flow: a crop is at most `max_crop_samples` a side, and a
+  pair read at level `ℓ` has `4^ℓ` fewer samples. The step stays expensive by
+  design all the same: the number of pairs grows with the square of the number
+  of views. How to bound it is an open question.
 
 ## Parameters
 
 | Option | Default | Source |
 |--------|---------|--------|
-| `crop_half_width` | 48 samples | prototype |
-| `radii` | 4, 6, 8, 11, 16, 22, 32, 45 samples | prototype |
+| `samples_per_patch` | 24 | the bench's patch resolution; not measured |
+| `crop_half_extents` | 3 | the extent of the prototype's runs against the grown plane; not measured with this grid |
+| `min_crop_half_width_px` | 48 px | the prototype's support-rule crops, which were 48 px at the point's median scale; not measured as a floor |
+| `max_crop_samples` | 256 | proposed; not measured |
+| `radii` | 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12 half-extents | proposed: about the prototype's spacing of radii, about 1.4 apart; not measured |
 | `flow` | `high_quality`, `finest_scale` 0, `patch_stride` 1 | measured, § "Flow settings" |
 | `max_grid_tilt_deg`, `grid_tilt_step_deg`, `grid_azimuth_step_deg` | 85°, 10°, 30° | prototype |
 | `tukey_c` | 4.685 | the usual 95%-efficiency constant; not measured here |
@@ -579,8 +666,8 @@ with, which pairs disagreed and at which radius.
 | `noise_false_alarm` | 0.001 | proposed; the significance level of the tensors' noise threshold, not measured |
 | `max_sigma_deg` | 10° | proposed; not measured, open question |
 | `agreement_sigmas`, `agreement_margin_deg` | 3, 5° | prototype |
-| `max_mean_chi2` | 2 | measured, § "Choosing the support", with the prototype's σ, which had no texture term; tuned on references the grown plane made |
-| `single_pair_radius` | 8 samples | the best fixed radius measured; open question |
+| `max_mean_chi2` | 2 | measured, § "Choosing the support", with the prototype's σ, which had no texture term, and its crops; tuned on references the grown plane made |
+| `single_pair_radius` | 1 half-extent | proposed; the prototype's best fixed radius was 8 photograph px, which has no fixed value in half-extents; open question |
 
 ## Testing
 
@@ -623,15 +710,27 @@ Proposed tests for the step when it is built:
   normal exactly the one given. This depends on the χ² calibration: at the
   smallest radii each pair's σ is large, and if the pairs agree within it
   there, the rule turns the patch at that radius to a compromise normal with a
-  large σ. The test uses radii from 8 samples up, where on this scene the
+  large σ. The test uses radii from 1 half-extent up, where on this scene the
   pairs are determined, and so also checks that `max_mean_chi2` does not
   accept a crease.
+- **A large patch keeps a small crop.** A textured plane whose patch covers
+  about 1000 photograph pixels across in every view: every crop is
+  `3 · samples_per_patch` (72) samples a side, the views are read through
+  their photographs' pyramids at the level `bilinear_mip_level` gives (about
+  5, one level per doubling of 43 px per sample), and the step returns `Turned`
+  near the true normal, as on the same scene at a small patch.
+- **Two views 4× apart in scale.** A textured plane seen by a near camera and
+  by one four times as far with the same focal length, the patch set so the
+  grid is the near view's pixel: the far crop's `samples_per_pixel` is about
+  4, the pair is read at level 2 of both crops' fronto pyramids, and the
+  normal is recovered; a third, near camera pairs with the first at level 0.
 - **Refusals.** A track at infinity is refused as `NormalError::AtInfinity`; an
-  empty `radii` or a radius past `crop_half_width` is refused by `check` naming
-  the option; cancellation through `Progress` returns `NormalError::Cancelled`.
+  empty or unsorted `radii`, or a `samples_per_patch` under 2, is refused by
+  `check` naming the option; cancellation through `Progress` returns
+  `NormalError::Cancelled`.
 
-The synthetic scenes are small (a few cameras, crops of 96 samples), so the
-tests take well under a second each.
+The synthetic scenes are small (a few cameras, crops of at most a few hundred
+samples a side), so the tests take well under a second each.
 
 ## Non-goals
 
@@ -660,8 +759,15 @@ Each a separate change after the core step:
 
 ## Open questions
 
+- **The crops' defaults.** The prototype measured neither a grid set by the
+  patch, nor a prefilter, nor a pyramid level per pair, nor radii in
+  half-extents. `samples_per_patch`, `crop_half_extents`,
+  `min_crop_half_width_px`, `max_crop_samples`, the radius list and
+  `single_pair_radius` are proposed values, and the radius list, the χ²
+  threshold and `max_sigma_deg` need measuring with these crops, together with
+  the σ texture term.
 - **Points with one pair.** There is no agreement to test; the prototype read
-  them at 8 samples. This draft turns one only when its σ there is at most
+  them at 8 photograph pixels. This draft turns one only when its σ there is at most
   `max_sigma_deg`, and calls it `Undetermined` otherwise, so weak texture is
   not turned. Open: whether a precise single pair should be turned at all, read
   at a fixed radius, or have its radius chosen by another rule.
@@ -678,7 +784,9 @@ Each a separate change after the core step:
   Whether to cap the pairs, and how to choose them: widest angles first, a
   spread of baselines, each view in a fixed number of pairs, or the pairs whose
   geometry predicts the most information about the tilt, as the grown-plane
-  step's selection does.
+  step's selection does. A cap should prefer pairs whose two views have
+  similar scale: a very unequal pair is read at the coarser view's level and
+  carries little information, which its σ shows.
 - **The thresholds' references.** `max_mean_chi2`, the agreement window and the
   radius list were tuned against reference normals that the grown-plane step
   made, apart from two hand normals. They need checking against normals that
@@ -699,4 +807,5 @@ Each a separate change after the core step:
   at the cost of reintroducing a dependence on a start.
 - **GPU flow.** `compute_optical_flow` takes a `GpuFlowContext`
   ([gpu-optical-flow.md](../core/features/gpu-optical-flow.md)); whether batches
-  of 96×96 crops gain from it, below its `gpu_min_pixels` default of 50,000.
+  of small crops gain from it: a crop under 224 samples a side is below the
+  presets' `gpu_min_pixels` of 50,000.
