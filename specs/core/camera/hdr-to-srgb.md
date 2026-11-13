@@ -59,7 +59,10 @@ The binding takes the planes as a `(3, H, W)` `uint16` array and a
 `ImageU8::write`, as `write_image_rgb` writes an image (a JPEG at quality 95,
 4:2:0), all with the GIL released. It converts and writes in one call because
 its only caller writes every converted frame to a file, so the sRGB array is
-never handed to Python. It also exports the three constants above.
+never handed to Python. It returns the wall time of each part,
+`{"conversion_seconds": …, "encoding_seconds": …}`, the encoding's including
+the file's write, which `sfm pick-images --new-workspace` sums into its time
+breakdown. It also exports the three constants above.
 
 Errors: `SampleCount` when `planes` does not hold `3 * width * height`
 codes, and `Exposure` for an `exposure_stops` that is not finite or is beyond

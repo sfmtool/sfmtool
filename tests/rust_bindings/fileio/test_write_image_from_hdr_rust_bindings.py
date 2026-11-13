@@ -30,7 +30,10 @@ def _planes(left: int, right: int, height: int = 8, width: int = 16) -> np.ndarr
 def test_planes_are_converted_and_written(tmp_path):
     # HLG 75% and 50%: sRGB 229 and 137; PQ 203 cd/m² (code 573): 229.
     path = tmp_path / "frame.png"
-    write_image_from_hdr(path, _planes(721, 502), transfer="HLG")
+    times = write_image_from_hdr(path, _planes(721, 502), transfer="HLG")
+    # The call's two wall times.
+    assert set(times) == {"conversion_seconds", "encoding_seconds"}
+    assert all(isinstance(t, float) and t >= 0 for t in times.values())
     pixels = read_image_rgb(path)
     assert pixels.shape == (8, 16, 3)
     assert (pixels[:, :8] == 229).all() and (pixels[:, 8:] == 137).all()

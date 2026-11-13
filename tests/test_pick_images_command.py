@@ -102,6 +102,50 @@ def _resolve(workspace: Path, name: str) -> list[str]:
     return [m.path for m in lists.resolve(name)]
 
 
+# The walk's figures of the report's `times`, which add up to its
+# `total_seconds`.
+WALK_TIMES = [
+    "checking_input_seconds",
+    "waiting_for_frames_seconds",
+    "reading_sift_metadata_seconds",
+    "reading_sift_features_seconds",
+    "building_forests_seconds",
+    "matching_seconds",
+    "essential_split_seconds",
+    "pilot_vote_seconds",
+    "stopping_source_seconds",
+    "other_seconds",
+]
+
+
+def _time_seconds(output: str, label: str) -> float:
+    """The seconds of the time breakdown's line that starts with `label`."""
+    (line,) = [line for line in output.splitlines() if line.strip().startswith(label)]
+    assert line.endswith(" s"), line
+    return float(line[:-2].rsplit(maxsplit=1)[1])
+
+
+def _assert_times(data: dict, output: str) -> None:
+    """The JSON report's times add up and the printed breakdown shows them:
+    the walk's figures add up to its wall time, the binding call took at
+    least that, and the printed lines give the JSON's figures."""
+    times = data["times"]
+    assert all(times[key] >= 0 for key in WALK_TIMES)
+    total = times["total_seconds"]
+    assert sum(times[key] for key in WALK_TIMES) == pytest.approx(total, abs=1e-6)
+    assert times["matching_seconds"] > 0 and times["reading_sift_metadata_seconds"] > 0
+    command_times = data["command_times"]
+    assert command_times["picking_seconds"] >= total
+    assert command_times["collecting_frames_seconds"] > 0
+    assert "Time on the command's thread:" in output
+    assert _time_seconds(output, "Picking") == round(
+        command_times["picking_seconds"], 2
+    )
+    assert _time_seconds(output, "Matching frame pairs") == round(
+        times["matching_seconds"], 2
+    )
+
+
 def test_report_only_writes_nothing_but_sift_files(pan_workspace: Path):
     before = _files(pan_workspace)
     result = _invoke(["pick-images", "frames", *FAST])
@@ -183,6 +227,18 @@ def test_json_report_and_reuse_of_sift_files(pan_workspace: Path):
     sift_files = list((pan_workspace / "frames").rglob("*.jpg.sift"))
     assert len(sift_files) == len(a["frames"]) + unread
     assert f"Extracted and never read: {unread} frame" in first.output
+    # The time breakdown, with the extraction workers' time on its own.
+    _assert_times(a, first.output)
+    source = a["times"]["source"]
+    assert source["workers"] >= 1 and source["seconds"] > 0
+    assert source["frames"] >= len(a["frames"]) + unread
+    assert a["command_times"]["preparing_seconds"] is None
+    assert a["command_times"]["videos"] == []
+    assert a["command_times"]["extracting_first_seconds"] is None
+    assert _time_seconds(
+        first.output, f"SIFT extraction, {source['workers']} workers on "
+    ) == round(source["seconds"], 2)
+    assert "Extracting the videos' frames" not in first.output
 
     # A second run reads the same frames and extracts none of them.
     second = _invoke(["pick-images", "frames", *FAST, "--json", "b.json"])
@@ -316,6 +372,15 @@ def test_another_feature_tool_extracts_every_frame_first(
     assert data["frames_extracted"] == [True] * read
     assert data["frames_extracted_unread"] == 70 - read
     assert f"Extracted and never read: {70 - read} frames" in result.output
+    # The extraction first is the command's; the walk's source extracts
+    # nothing and runs no workers.
+    _assert_times(data, result.output)
+    assert data["times"]["source"] == {"workers": 0, "frames": 0, "seconds": 0.0}
+    assert data["command_times"]["extracting_first_seconds"] > 0
+    assert _time_seconds(
+        result.output, "Extracting every frame's .sift file first"
+    ) == round(data["command_times"]["extracting_first_seconds"], 2)
+    assert "Time on other threads" not in result.output
 
     # A second run reads the same files and extracts none.
     again = _invoke(["pick-images", "frames", *OPENCV_FAST, "--json", "b.json"])
@@ -405,8 +470,10 @@ def test_a_sequence_with_no_camrig_takes_the_pilot_vote_s_camera(
     assert f"Local density term: on, with {source_text}; " in result.output
     assert (
         f"  Pilot vote: 26 frames chosen, 26 read, {vote['features']} features "
-        f"in {vote['clusters']} clusters; took " in result.output
+        f"in {vote['clusters']} clusters; clustering and vote took "
+        f"{vote['seconds']:.1f} s" in result.output
     )
+    assert data["times"]["pilot_vote_seconds"] == vote["seconds"] > 0
     # The vote wrote nothing into the workspace: only .sift files and the
     # report are new.
     added = _files(workspace) - before
@@ -933,6 +1000,21 @@ def test_new_workspace_extracts_the_videos_and_picks_from_their_frames(
     for stem in ("top", "bottom"):
         frames = list((workspace / stem).glob("frame_*.jpg"))
         assert len(frames) == VIDEO_FRAMES
+    # The time breakdown has each video's extraction, ffmpeg's alone for an
+    # SDR video.
+    _assert_times(data, result.output)
+    command_times = data["command_times"]
+    assert command_times["preparing_seconds"] > 0
+    videos = command_times["videos"]
+    assert [v["video"] for v in videos] == [v.name for v in pan_videos]
+    for video in videos:
+        assert video["hdr"] is None and video["seconds"] > 0
+        assert _time_seconds(
+            result.output, f"{video['video']}: ffmpeg decoding and writing JPEGs"
+        ) == round(video["seconds"], 2)
+    assert _time_seconds(result.output, "Extracting the videos' frames") == round(
+        sum(v["seconds"] for v in videos), 2
+    )
 
 
 def test_prune_images_keeps_exactly_the_chosen_frames(tmp_path: Path, pan_videos):

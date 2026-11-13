@@ -5,6 +5,7 @@
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -345,9 +346,29 @@ class _RunResult:
     feature_prefix_dir: str
 
 
-def _run(*, filenames, workspace_dir, given, write_list, force, options, json_path):
-    """Collect the sequences, run the walk, print the report and write the
-    list and the JSON file."""
+def _run(
+    *,
+    filenames,
+    workspace_dir,
+    given,
+    write_list,
+    force,
+    options,
+    json_path,
+    command_times=None,
+):
+    """Collect the sequences, run the walk, print the report, write the list
+    and the JSON file, and print the time breakdown.
+
+    `command_times` holds `--new-workspace`'s `preparing_seconds` and
+    `videos`, the times of the work before this call; without it there was
+    none."""
+    start = time.monotonic()
+    command_times = {
+        "preparing_seconds": None,
+        "videos": [],
+        **(command_times or {}),
+    }
     from .._pick_images import (
         PickImagesInputError,
         capture_sequences,
@@ -357,7 +378,12 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         find_rigs,
         list_entries,
     )
-    from .._pick_images_report import pilot_source, report_lines, slice_suggestion
+    from .._pick_images_report import (
+        pilot_source,
+        report_lines,
+        slice_suggestion,
+        time_lines,
+    )
     from .._sfmtool import ProgressCounter
     from .._sfmtool.analysis import pick_images as walk
     from .._sfmtool.workspace import NamedImageLists
@@ -418,6 +444,8 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
     click.echo("")
 
     capture = capture_sequences(sequences, workspace_dir, config["feature_prefix_dir"])
+    command_times["collecting_frames_seconds"] = time.monotonic() - start
+    command_times["extracting_first_seconds"] = None
     # The walk extracts the sfmtool tool's files itself, ahead of the frames
     # it reads; for another tool every frame is extracted first, and the walk
     # reads the files.
@@ -432,13 +460,16 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
             f"Extracting the .sift files of every frame with the "
             f"{config['feature_tool']} tool before the walk:"
         )
+        extracting = time.monotonic()
         try:
             written_first = extract_every_frame(capture, config, settings_source)
         except (SiftExtractionError, ValueError, OSError) as e:
             raise click.ClickException(str(e))
+        command_times["extracting_first_seconds"] = time.monotonic() - extracting
         click.echo("")
         source = {}
     counter = ProgressCounter()
+    picking = time.monotonic()
     try:
         with echo_frames_read(counter, click.echo):
             report = walk(capture, progress=counter, **source, **options)
@@ -446,6 +477,8 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         # An option too large for the binding is an OverflowError whose note
         # names the option.
         raise click.ClickException("\n".join([str(e), *getattr(e, "__notes__", [])]))
+    writing = time.monotonic()
+    command_times["picking_seconds"] = writing - picking
 
     if written_first is not None:
         # The walk extracted nothing; what this run wrote, it wrote first.
@@ -537,8 +570,12 @@ def _run(*, filenames, workspace_dir, given, write_list, force, options, json_pa
         ]
         data["chosen_numbers"] = chosen
         data["named_image_list"] = written_list
+        data["command_times"] = command_times
         json_path.write_text(json.dumps(data, indent=1) + "\n")
         click.echo(f"Wrote the report to {json_path}")
+    click.echo("")
+    for line in time_lines(report, command_times, time.monotonic() - writing):
+        click.echo(line)
     return _RunResult(
         chosen_images=chosen_images, feature_prefix_dir=config["feature_prefix_dir"]
     )
@@ -570,6 +607,7 @@ def _pick_from_videos(
     )
     from ..workspace import find_workspace_for_path
 
+    start = time.monotonic()
     if selection.list_name is not None:
         raise click.UsageError(
             "A new workspace has no named image lists; --named-image-list and a "
@@ -611,11 +649,19 @@ def _pick_from_videos(
     try:
         workspace_dir.mkdir(parents=True, exist_ok=True)
         create_workspace(workspace_dir, **workspace_options)
+        preparing_seconds = time.monotonic() - start
         click.echo(f"ffmpeg: {plan.programs.ffmpeg} ({plan.programs.version})")
         try:
             extracted = extract_planned(plan)
         except VideoFramesError as error:
             raise click.ClickException(str(error))
+        command_times = {
+            "preparing_seconds": preparing_seconds,
+            "videos": [
+                {"video": video.probe.path.name, **result.times}
+                for video, result in zip(plan.videos, extracted)
+            ],
+        }
         click.echo("")
         filenames = expand_paths(
             [video.frame_dir for video in extracted],
@@ -636,6 +682,7 @@ def _pick_from_videos(
             force=force,
             options=options,
             json_path=json_path,
+            command_times=command_times,
         )
     except click.ClickException as error:
         error.message += "\n" + _left_as_it_is(workspace_dir)

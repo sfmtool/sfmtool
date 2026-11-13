@@ -11,9 +11,12 @@
 //! nothing here reads a frame it did not wait for. While the walk asks for
 //! them, the matched positions of the pairs it may still accept are kept
 //! too, so that an accepted step's essential split is measured from the
-//! walk's own match of the pair.
+//! walk's own match of the pair. Each of these steps adds its wall time to
+//! the [`Clock`] the report's times come from.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use sfmtool_sift_format::{
     read_sift_metadata, read_sift_positions_descriptors, SiftError, SiftMetadata, DESCRIPTOR_DIM,
@@ -26,7 +29,7 @@ use super::frame_pair::{
     match_frame_pair_positions, FrameFeatures, FramePairError, FramePairStats, MatchedPositions,
 };
 use super::report::MeasuredPair;
-use super::source::FrameSource;
+use super::source::{FrameSource, SourceWork};
 use crate::features::sift::ImageReadings;
 use crate::progress::Progress;
 
@@ -37,6 +40,35 @@ pub(super) struct ReadFrame {
     pub(super) readings: Vec<ImageReadings>,
     /// The reference sensor's metadata, for building its features.
     metadata: SiftMetadata,
+}
+
+/// The wall time the walk's thread spent in each kind of work, summed over
+/// the calls. Each call is timed once, by the step that makes it, and no
+/// timed step calls another, so the times never count one moment twice.
+#[derive(Default)]
+pub(super) struct Clock {
+    /// Blocked in the source's `wait`.
+    pub(super) waiting_for_frames: Cell<Duration>,
+    /// Reading each frame's `.sift` metadata and readings.
+    pub(super) reading_sift_metadata: Cell<Duration>,
+    /// Reading features from `.sift` files, for a pair or for the pilot vote.
+    pub(super) reading_sift_features: Cell<Duration>,
+    /// Building each frame's KD-forest.
+    pub(super) building_forests: Cell<Duration>,
+    /// Matching pairs of frames.
+    pub(super) matching: Cell<Duration>,
+    /// Measuring the essential splits of accepted steps.
+    pub(super) essential_split: Cell<Duration>,
+    /// Clustering the pilot frames' features and running the focal vote.
+    pub(super) pilot_vote: Cell<Duration>,
+}
+
+/// Run `f`, adding its wall time to `total`.
+pub(super) fn timed<T>(total: &Cell<Duration>, f: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let value = f();
+    total.set(total.get() + start.elapsed());
+    value
 }
 
 pub(super) struct Frames<'a> {
@@ -52,6 +84,8 @@ pub(super) struct Frames<'a> {
     keep_positions: bool,
     /// The matched positions kept, by pair.
     positions: HashMap<(FrameId, FrameId), MatchedPositions>,
+    /// The wall time spent in each kind of work.
+    pub(super) clock: Clock,
 }
 
 impl<'a> Frames<'a> {
@@ -73,6 +107,7 @@ impl<'a> Frames<'a> {
             pairs: Vec::new(),
             keep_positions: false,
             positions: HashMap::new(),
+            clock: Clock::default(),
         }
     }
 
@@ -135,7 +170,10 @@ impl<'a> Frames<'a> {
         }
         progress.check_cancel()?;
         let requests = self.requests(&new);
-        self.source.wait(&requests, progress)?;
+        timed(&self.clock.waiting_for_frames, || {
+            self.source.wait(&requests, progress)
+        })?;
+        let start = Instant::now();
         for id in new {
             let frame = &self.sequences[id.sequence].frames[id.frame];
             let mut readings = Vec::with_capacity(frame.images.len());
@@ -153,6 +191,8 @@ impl<'a> Frames<'a> {
                 metadata,
             });
         }
+        let reading = &self.clock.reading_sift_metadata;
+        reading.set(reading.get() + start.elapsed());
         progress.count(self.read.len() as u64, None, "frames");
         Ok(())
     }
@@ -188,11 +228,13 @@ impl<'a> Frames<'a> {
         count: usize,
     ) -> Result<(Vec<[f32; 2]>, Vec<u8>), PickImagesError> {
         let path = &self.sequences[id.sequence].frames[id.frame].images[0].sift_path;
-        let (mut positions_xy, mut descriptors) =
-            read_sift_positions_descriptors(path).map_err(|source| PickImagesError::ReadSift {
-                path: path.clone(),
-                source,
-            })?;
+        let (mut positions_xy, mut descriptors) = timed(&self.clock.reading_sift_features, || {
+            read_sift_positions_descriptors(path)
+        })
+        .map_err(|source| PickImagesError::ReadSift {
+            path: path.clone(),
+            source,
+        })?;
         let n = count.min(positions_xy.len());
         if descriptors.len() < n * DESCRIPTOR_DIM {
             return Err(PickImagesError::ReadSift {
@@ -213,17 +255,20 @@ impl<'a> Frames<'a> {
     pub(super) fn features(&self, id: FrameId) -> Result<FrameFeatures, PickImagesError> {
         let i = self.index[id.sequence][id.frame].expect("the frame was read");
         let path = &self.sequences[id.sequence].frames[id.frame].images[0].sift_path;
-        let features =
-            read_sift_positions_descriptors(path).map_err(|source| PickImagesError::ReadSift {
-                path: path.clone(),
-                source,
-            })?;
-        FrameFeatures::from_sift(features, &self.read[i].metadata, self.options.forest).map_err(
-            |e| PickImagesError::ReadSift {
-                path: path.clone(),
-                source: SiftError::InvalidFormat(e.to_string()),
-            },
-        )
+        let features = timed(&self.clock.reading_sift_features, || {
+            read_sift_positions_descriptors(path)
+        })
+        .map_err(|source| PickImagesError::ReadSift {
+            path: path.clone(),
+            source,
+        })?;
+        timed(&self.clock.building_forests, || {
+            FrameFeatures::from_sift(features, &self.read[i].metadata, self.options.forest)
+        })
+        .map_err(|e| PickImagesError::ReadSift {
+            path: path.clone(),
+            source: SiftError::InvalidFormat(e.to_string()),
+        })
     }
 
     /// The statistics of `a` against `b` when that pair has been matched.
@@ -246,8 +291,10 @@ impl<'a> Frames<'a> {
             return Ok(stats.clone());
         }
         progress.check_cancel()?;
-        let (stats, positions) = match_frame_pair_positions(fa, fb, &self.options.pair)
-            .map_err(|error| self.pair_error(a, b, error))?;
+        let (stats, positions) = timed(&self.clock.matching, || {
+            match_frame_pair_positions(fa, fb, &self.options.pair)
+        })
+        .map_err(|error| self.pair_error(a, b, error))?;
         if self.keep_positions {
             self.positions.insert((a, b), positions);
         }
@@ -290,11 +337,14 @@ impl<'a> Frames<'a> {
         progress: &Progress,
     ) -> Result<EssentialSplitOutcome, PickImagesError> {
         progress.check_cancel()?;
-        self.positions
+        let positions = self
+            .positions
             .get(&(a, b))
-            .expect("the walk keeps the positions of every pair it may accept")
-            .essential_split(split)
-            .map_err(|error| self.pair_error(a, b, error))
+            .expect("the walk keeps the positions of every pair it may accept");
+        timed(&self.clock.essential_split, || {
+            positions.essential_split(split)
+        })
+        .map_err(|error| self.pair_error(a, b, error))
     }
 
     /// The error of a pair that could not be matched, naming the reference
@@ -313,9 +363,9 @@ impl<'a> Frames<'a> {
         }
     }
 
-    /// Stop the source's work and return every frame it wrote `.sift` files
-    /// for, sorted.
-    pub(super) fn finish_source(&mut self) -> Vec<FrameId> {
+    /// Stop the source's work and return what it did: every frame it wrote
+    /// `.sift` files for, sorted, and its workers' time.
+    pub(super) fn finish_source(&mut self) -> SourceWork {
         self.source.finish()
     }
 

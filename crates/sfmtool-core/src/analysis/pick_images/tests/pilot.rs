@@ -6,6 +6,8 @@
 //! pilot at a maximum gain of 1, and each reason the vote's camera is not
 //! used.
 
+use std::time::Duration;
+
 use super::capture::FOCAL;
 use super::density::{
     assert_splits_are_those_of_a_second_match, camera, choices, panning, run_camera,
@@ -68,6 +70,61 @@ fn a_sequence_with_no_camera_is_walked_with_the_pilot_vote_s_camera() {
     // from the positions the pilot kept.
     assert_splits_are_those_of_a_second_match(&run, &pilot_options(), &camera);
     assert!(walk.steps.iter().any(|s| s.density.gain > 1.0));
+    // The run did every kind of work its times count, and they add up.
+    assert_times_add_up(&run);
+    let times = &run.report().times;
+    for (name, seconds) in walk_thread_times(times) {
+        assert!(
+            name == "other" || name == "stopping_source" || seconds > 0.0,
+            "{name}: {seconds}"
+        );
+    }
+    assert!(vote.seconds > 0.0 && times.source.seconds > 0.0);
+}
+
+/// A source that takes `DELAY` per frame on one worker makes the pilot walk
+/// wait at least `DELAY` for each frame it reads. The walk's thread's times
+/// are disjoint stretches that add up to the call's wall time, so a vote
+/// timer that also counted the pilot walk's waits, reads or matching would
+/// count them twice, and the parts would add up to more than the call by at
+/// least the waits. The frames match nothing, so the pilot walk reads every
+/// frame. With no prefetch the worker starts a frame only when the walk
+/// waits for it, so each wait lasts at least `DELAY`.
+#[test]
+fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
+    const DELAY: Duration = Duration::from_millis(5);
+    let mut synth = Synth::steady(43, 8, ONE_PERCENT);
+    for shot in &mut synth.shots {
+        shot.content = Content::Junk;
+    }
+    let dir = tempfile::tempdir().expect("a temporary folder");
+    let sequence = synth.sequence(&dir.path().join("seq0"));
+    let mut source = SynthSource::slowed(&[&synth], 1, Fault::None, DELAY);
+    let report = pick_images(
+        std::slice::from_ref(&sequence),
+        &mut source,
+        &PickImagesOptions {
+            prefetch: false,
+            ..pilot_options()
+        },
+        &Progress::none(),
+    )
+    .expect("the walk runs");
+    let vote = report.sequences[0]
+        .pilot_vote
+        .as_ref()
+        .expect("a pilot ran");
+    assert!(vote.features > 0, "a vote ran");
+    // The pilot walk waited at least this long, so a vote timer that spanned
+    // it would make the parts exceed the call by far more than the rounding
+    // `assert_parts_add_up` allows.
+    let pilot_extraction = vote.frames_read as f64 * DELAY.as_secs_f64();
+    assert!(
+        report.times.waiting_for_frames_seconds >= pilot_extraction,
+        "{:?}",
+        report.times
+    );
+    assert_parts_add_up(&report);
 }
 
 #[test]
@@ -145,4 +202,5 @@ fn a_pilot_of_too_few_frames_runs_no_vote() {
     assert_eq!(vote.outcome, PilotOutcome::TooFewFrames { min_frames: 3 });
     assert_eq!(vote.frames, vec![0, 1]);
     assert_eq!((vote.features, vote.n_pool, vote.focal_px), (0, 0, None));
+    assert_eq!(vote.seconds, 0.0);
 }

@@ -19,7 +19,12 @@ from sfmtool._pick_images import (
     frame_field,
     list_entries,
 )
-from sfmtool._pick_images_report import pilot_source, slice_suggestion, walk_lines
+from sfmtool._pick_images_report import (
+    pilot_source,
+    slice_suggestion,
+    time_lines,
+    walk_lines,
+)
 from sfmtool.camrig.resolver import CamrigCamera, CamrigRig
 from sfmtool.reconstruction import RangeExpr
 
@@ -447,4 +452,106 @@ def test_a_fisheye_pilot_vote_names_its_model():
         "the pilot vote's pool spread 0.490 is above 0.35 (unconfirmed "
         f"equidistant fisheye, focal 1034.8 px); {ROOT / 'a.camrig'} covers "
         "only 1 of its 2 frames"
+    )
+
+
+def _walk_times(**seconds) -> dict:
+    """A report's `times`: every walk figure 0.5 s unless given, the total
+    their sum, and an extracting source of 4 workers."""
+    names = [
+        "checking_input",
+        "waiting_for_frames",
+        "reading_sift_metadata",
+        "reading_sift_features",
+        "building_forests",
+        "matching",
+        "essential_split",
+        "pilot_vote",
+        "stopping_source",
+        "other",
+    ]
+    times = {f"{n}_seconds": seconds.get(n, 0.5) for n in names}
+    times["total_seconds"] = sum(times.values())
+    times["source"] = {"workers": 4, "frames": 70, "seconds": 41.25}
+    return times
+
+
+def test_the_time_breakdown_divides_the_command_s_thread():
+    times = _walk_times(waiting_for_frames=12.0, matching=3.25)
+    hdr = {
+        "writers": 4,
+        "waiting_for_writers_seconds": 6.5,
+        "decoding_seconds": 2.0,
+        "conversion_seconds": 20.0,
+        "encoding_seconds": 9.75,
+    }
+    command_times = {
+        "preparing_seconds": 0.25,
+        "videos": [
+            {"video": "walk.mp4", "seconds": 7.0, "hdr": None},
+            {"video": "pan.MOV", "seconds": 8.5, "hdr": hdr},
+        ],
+        "collecting_frames_seconds": 0.125,
+        "extracting_first_seconds": None,
+        "picking_seconds": times["total_seconds"] + 0.75,
+    }
+    report = {"times": times, "sequences": [{"pilot_vote": {}}, {"pilot_vote": None}]}
+    lines = time_lines(report, command_times, 0.0625)
+    # Each line's label, indent and seconds, the seconds in one column.
+    column = {len(line) for line in lines if line.endswith(" s")}
+    assert len(column) == 1
+    rows = [
+        (len(line) - len(line.lstrip()), *line[:-2].strip().rsplit(maxsplit=1))
+        for line in lines
+        if line.endswith(" s")
+    ]
+    rows = [(indent, label, float(seconds)) for indent, label, seconds in rows]
+    assert lines[0] == "Time on the command's thread:"
+    assert rows == [
+        (2, "Checking the videos, creating the workspace", 0.25),
+        (2, "Extracting the videos' frames", 15.5),
+        (4, "walk.mp4: ffmpeg decoding and writing JPEGs", 7.0),
+        (4, "pan.MOV (HDR)", 8.5),
+        (6, "ffmpeg decoding, read from its pipe", 2.0),
+        (6, "Waiting for the conversion to sRGB", 6.5),
+        (2, "Collecting the frames", 0.12),
+        (2, "Picking", 20.0),
+        (4, "Checking the input", 0.5),
+        (4, "Waiting for frames' .sift files", 12.0),
+        (4, "Reading .sift metadata", 0.5),
+        (4, "Reading .sift features", 0.5),
+        (4, "Building KD-forests", 0.5),
+        (4, "Matching frame pairs", 3.25),
+        (4, "Measuring essential splits", 0.5),
+        (4, "Pilot votes: clustering and focal vote", 0.5),
+        (4, "Stopping the extraction workers", 0.5),
+        (4, "The walk's decisions and the rest", 0.5),
+        (4, "Handing the report to Python", 0.75),
+        (2, "Printing the report, writing the list, JSON", 0.06),
+        (2, "SIFT extraction, 4 workers on 70 frames", 41.25),
+        (4, "Converting to sRGB", 20.0),
+        (4, "Encoding and writing JPEGs", 9.75),
+    ]
+    other = lines.index(
+        "Time on other threads, at the same time (summed over the threads):"
+    )
+    assert lines[other + 2] == "  pan.MOV: 4 writer threads"
+    assert lines[other - 1].endswith("0.06 s")
+
+    # With no videos, another tool's extraction first, a source of no
+    # workers and no pilot vote, there are no video lines, no pilot line and
+    # nothing on other threads.
+    times["source"] = {"workers": 0, "frames": 0, "seconds": 0.0}
+    command_times.update(
+        preparing_seconds=None, videos=[], extracting_first_seconds=3.5
+    )
+    report["sequences"] = [{"pilot_vote": None}]
+    lines = time_lines(report, command_times, 0.0625)
+    assert not any(
+        "video" in line or "other threads" in line or "Pilot" in line for line in lines
+    )
+    assert any(
+        line.startswith("  Extracting every frame's .sift file first")
+        and line.endswith("3.50 s")
+        for line in lines
     )

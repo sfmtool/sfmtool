@@ -805,12 +805,26 @@ _SHOWINFO_FRAME = re.compile(
 
 @dataclass(frozen=True)
 class ExtractedVideo:
-    """One extracted video: where its frames are, and its record."""
+    """One extracted video: where its frames are, its record, and where its
+    extraction's time went (`times`).
+
+    `times["seconds"]` is the extraction's wall time, from the call of
+    `extract_video_frames` to its return. For an SDR video ffmpeg decodes,
+    scales and writes the JPEG frames in its one process, and that is all
+    there is; `times["hdr"]` is `None`. For an HDR video `times["hdr"]` splits
+    it: `waiting_for_writers_seconds`, the part of `seconds` the calling thread
+    spent blocked on the writer threads, and `decoding_seconds`, the rest,
+    ffmpeg's decoding read from its pipe and the command's handling of each
+    frame; and, on the `writers` threads, which run at the same time as the
+    calling thread and as each other, `conversion_seconds` and
+    `encoding_seconds`, each the sum over the frames of
+    `write_image_from_hdr`'s own figure."""
 
     frame_dir: Path
     frame_pattern: str
     frame_count: int
     record: dict
+    times: dict
 
 
 def _video_line(probe: VideoProbe) -> str:
@@ -906,10 +920,11 @@ def extract_video_frames(
     args = ffmpeg_arguments(
         plan.programs, probe, video.frame_dir, fps, plan.max_frame_size
     )
+    hdr_times = None
     if hdr_conversion is None:
         returncode, tail = run_ffmpeg(args, on_line)
     else:
-        returncode, tail = _run_ffmpeg_hdr(
+        returncode, tail, hdr_times = _run_ffmpeg_hdr(
             args, on_line, video.frame_dir, probe.hdr_transfer, exposure
         )
     if returncode != 0:
@@ -952,21 +967,24 @@ def extract_video_frames(
     (video.frame_dir / RECORD_NAME).write_text(
         "{\n" + ",\n".join(entries) + "\n}\n", encoding="utf-8"
     )
-    echo(
-        f"  {count} frames written, {width}x{height}, in "
-        f"{_duration_text(time.monotonic() - start)}"
-    )
+    seconds = time.monotonic() - start
+    echo(f"  {count} frames written, {width}x{height}, in {_duration_text(seconds)}")
+    if hdr_times is not None:
+        hdr_times["decoding_seconds"] = max(
+            0.0, seconds - hdr_times["waiting_for_writers_seconds"]
+        )
     return ExtractedVideo(
         frame_dir=video.frame_dir,
         frame_pattern=FRAME_PATTERN,
         frame_count=count,
         record=record,
+        times={"seconds": seconds, "hdr": hdr_times},
     )
 
 
 def _run_ffmpeg_hdr(
     args: list[str], on_line, frame_dir: Path, transfer: str, exposure: float
-) -> tuple[int, list[str]]:
+) -> tuple[int, list[str], dict]:
     """Run ffmpeg on an HDR video (`run_ffmpeg` with `on_frame`), converting
     and writing each frame it decodes as `frame_dir / FRAME_PATTERN`,
     numbered from 1, with `write_image_from_hdr`.
@@ -974,7 +992,8 @@ def _run_ffmpeg_hdr(
     The frames are converted and written on `_HDR_WRITERS` threads, at most
     `_HDR_PENDING_FRAMES` waiting, so decoding goes on while frames are
     written; every frame is written, or the first write error raised, before
-    this returns."""
+    this returns. Returns `run_ffmpeg`'s exit status and lines, and the times
+    of `ExtractedVideo.times["hdr"]` but `decoding_seconds`."""
     import numpy as np
 
     from .fileio import write_image_from_hdr
@@ -982,6 +1001,21 @@ def _run_ffmpeg_hdr(
     pending: deque = deque()
     numbered = 0
     sizes: list[tuple[int, int]] = []
+    times = {
+        "writers": _HDR_WRITERS,
+        "waiting_for_writers_seconds": 0.0,
+        "conversion_seconds": 0.0,
+        "encoding_seconds": 0.0,
+    }
+
+    def written() -> None:
+        """Wait for the oldest pending frame, adding the wait and the
+        frame's own times to `times`."""
+        start = time.monotonic()
+        frame = pending.popleft().result()
+        times["waiting_for_writers_seconds"] += time.monotonic() - start
+        times["conversion_seconds"] += frame["conversion_seconds"]
+        times["encoding_seconds"] += frame["encoding_seconds"]
 
     def sized_on_line(line: str) -> int | None:
         size = on_line(line)
@@ -996,7 +1030,7 @@ def _run_ffmpeg_hdr(
         width, height = sizes[numbered - 1]
         planes = np.frombuffer(data, dtype="<u2").reshape(3, height, width)
         while len(pending) >= _HDR_PENDING_FRAMES:
-            pending.popleft().result()
+            written()
         pending.append(
             writers.submit(
                 write_image_from_hdr,
@@ -1011,12 +1045,12 @@ def _run_ffmpeg_hdr(
         try:
             result = run_ffmpeg(args, sized_on_line, on_frame)
             while pending:
-                pending.popleft().result()
+                written()
         except BaseException:
             for future in pending:
                 future.cancel()
             raise
-    return result
+    return (*result, times)
 
 
 def extract_planned(plan: ExtractionPlan, echo=click.echo) -> list[ExtractedVideo]:

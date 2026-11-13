@@ -405,8 +405,19 @@ def test_photographs_extracted_by_the_walk_are_every_one_kept(
         assert walked["metadata"] == expected["metadata"]
         assert np.array_equal(walked["descriptors"], expected["descriptors"])
 
+    # The four workers took up every frame read, and the walk's thread
+    # waited for them.
+    times = report["times"]
+    assert times["source"]["workers"] == 4
+    assert times["source"]["frames"] >= 17
+    assert times["waiting_for_frames_seconds"] > 0
+
     again = pick_images([sequence], **extract)
     assert again["frames_extracted"] == [False] * 17
-    assert {k: v for k, v in again.items() if k != "frames_extracted"} == {
-        k: v for k, v in report.items() if k != "frames_extracted"
+    # The times differ from run to run; the rest is the same.
+    differ = {"frames_extracted", "times"}
+    assert {k: v for k, v in again.items() if k not in differ} == {
+        k: v for k, v in report.items() if k not in differ
     }
+    # The second run's workers found every file up to date.
+    assert again["times"]["source"]["seconds"] < times["source"]["seconds"]

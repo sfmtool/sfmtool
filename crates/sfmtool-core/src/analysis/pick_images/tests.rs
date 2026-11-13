@@ -156,6 +156,59 @@ fn assert_read_is_asked(run: &Run) {
     assert_eq!(report.frames_extracted_unread, unread);
 }
 
+/// The walk's thread's times of `times`, in the order of
+/// [`PickImagesTimes`], each with its name.
+fn walk_thread_times(times: &PickImagesTimes) -> [(&'static str, f64); 10] {
+    [
+        ("checking_input", times.checking_input_seconds),
+        ("waiting_for_frames", times.waiting_for_frames_seconds),
+        ("reading_sift_metadata", times.reading_sift_metadata_seconds),
+        ("reading_sift_features", times.reading_sift_features_seconds),
+        ("building_forests", times.building_forests_seconds),
+        ("matching", times.matching_seconds),
+        ("essential_split", times.essential_split_seconds),
+        ("pilot_vote", times.pilot_vote_seconds),
+        ("stopping_source", times.stopping_source_seconds),
+        ("other", times.other_seconds),
+    ]
+}
+
+/// [`assert_parts_add_up`], and the source's workers, [`THREADS`] of them,
+/// worked on at least every frame read.
+fn assert_times_add_up(run: &Run) {
+    let report = run.report();
+    assert_parts_add_up(report);
+    assert_eq!(report.times.source.workers, THREADS);
+    assert!(report.times.source.frames >= report.frames.len());
+}
+
+/// Every time of `report` is finite and not negative; the walk's thread's
+/// add up to the call's wall time, which they would pass if two of them
+/// counted one moment; and the pilot votes' figure is the sum of the votes'.
+fn assert_parts_add_up(report: &PickImagesReport) {
+    let times = &report.times;
+    let parts = walk_thread_times(times);
+    for (name, seconds) in parts.iter().copied().chain([
+        ("total", times.total_seconds),
+        ("source", times.source.seconds),
+    ]) {
+        assert!(seconds.is_finite() && seconds >= 0.0, "{name}: {seconds}");
+    }
+    let sum: f64 = parts.iter().map(|(_, s)| s).sum();
+    assert!(
+        (sum - times.total_seconds).abs() < 1e-6,
+        "the parts add up to {sum} s of a {} s call: {parts:?}",
+        times.total_seconds
+    );
+    let votes: f64 = report
+        .sequences
+        .iter()
+        .filter_map(|s| s.pilot_vote.as_ref())
+        .map(|v| v.seconds)
+        .sum();
+    assert!((times.pilot_vote_seconds - votes).abs() < 1e-6);
+}
+
 /// The band at [`options`]' target.
 fn band() -> (f64, f64) {
     let o = options();
@@ -711,13 +764,20 @@ fn a_rig_takes_its_motion_from_the_reference_sensor_and_blur_from_either() {
     assert_read_is_asked(&local);
 }
 
-/// The report without the one count that depends on timing, as its JSON
-/// value, in which a NaN (a step with no matches) equals itself.
+/// The report without the figures that depend on timing, the count of
+/// frames extracted and never read and the times, as its JSON value, in
+/// which a NaN (a step with no matches) equals itself.
 fn decisions(run: &Run) -> serde_json::Value {
-    let report = PickImagesReport {
+    let mut report = PickImagesReport {
         frames_extracted_unread: 0,
+        times: PickImagesTimes::default(),
         ..run.report().clone()
     };
+    for sequence in &mut report.sequences {
+        if let Some(vote) = &mut sequence.pilot_vote {
+            vote.seconds = 0.0;
+        }
+    }
     serde_json::to_value(report).expect("the report serializes")
 }
 

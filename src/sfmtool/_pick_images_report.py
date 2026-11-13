@@ -107,11 +107,13 @@ def _vote_source(vote: dict) -> str:
 
 
 def _pilot_line(vote: dict) -> str:
-    """The line giving what the pilot vote read and how long it took."""
+    """The line giving what the pilot vote read and how long its clustering
+    and vote took."""
     return (
         f"  Pilot vote: {len(vote['frames'])} frames chosen, "
         f"{vote['frames_read']} read, {vote['features']} features in "
-        f"{vote['clusters']} clusters; took {vote['seconds']:.1f} s"
+        f"{vote['clusters']} clusters; clustering and vote took "
+        f"{vote['seconds']:.1f} s"
     )
 
 
@@ -286,3 +288,124 @@ def report_lines(
         f"Extracted and never read: {unread} frame{'' if unread == 1 else 's'}"
     )
     return lines
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def time_lines(report: dict, command_times: dict, writing_seconds: float) -> list[str]:
+    """The time breakdown printed at the end of a run.
+
+    `report` is the report `pick_images` returned, whose `times` are the
+    walk's, with a line for the pilot votes when one ran; `command_times` the
+    command's own, as the JSON report's `command_times` holds them; and
+    `writing_seconds` the time from the walk's end to the JSON file written.
+    The lines under "Time on the command's thread" are wall times on that
+    thread that do not overlap, each indented under the line it divides; the
+    lines under "Time on other threads" are summed over threads that ran at
+    the same time as it, and are not part of it. The seconds are in one
+    column. See specs/cli/image-feature/pick-images-command.md § "Time
+    breakdown"."""
+    times = report["times"]
+    # Each row is (indent, label, seconds), or (indent, text, None) for a
+    # heading.
+    rows: list[tuple[int, str, float | None]] = [
+        (0, "Time on the command's thread:", None)
+    ]
+    if command_times["preparing_seconds"] is not None:
+        rows.append(
+            (
+                2,
+                "Checking the videos, creating the workspace",
+                command_times["preparing_seconds"],
+            )
+        )
+    videos = command_times["videos"]
+    if videos:
+        total = sum(v["seconds"] for v in videos)
+        rows.append((2, "Extracting the videos' frames", total))
+        for video in videos:
+            hdr = video["hdr"]
+            if hdr is None:
+                label = f"{video['video']}: ffmpeg decoding and writing JPEGs"
+                rows.append((4, label, video["seconds"]))
+                continue
+            rows.append((4, f"{video['video']} (HDR)", video["seconds"]))
+            rows.append(
+                (6, "ffmpeg decoding, read from its pipe", hdr["decoding_seconds"])
+            )
+            rows.append(
+                (
+                    6,
+                    "Waiting for the conversion to sRGB",
+                    hdr["waiting_for_writers_seconds"],
+                )
+            )
+    rows.append(
+        (2, "Collecting the frames", command_times["collecting_frames_seconds"])
+    )
+    if command_times["extracting_first_seconds"] is not None:
+        rows.append(
+            (
+                2,
+                "Extracting every frame's .sift file first",
+                command_times["extracting_first_seconds"],
+            )
+        )
+    picking = command_times["picking_seconds"]
+    rows.append((2, "Picking", picking))
+    piloted = any(s["pilot_vote"] is not None for s in report["sequences"])
+    for label, key in (
+        ("Checking the input", "checking_input_seconds"),
+        ("Waiting for frames' .sift files", "waiting_for_frames_seconds"),
+        ("Reading .sift metadata", "reading_sift_metadata_seconds"),
+        ("Reading .sift features", "reading_sift_features_seconds"),
+        ("Building KD-forests", "building_forests_seconds"),
+        ("Matching frame pairs", "matching_seconds"),
+        ("Measuring essential splits", "essential_split_seconds"),
+        (
+            "Pilot votes: clustering and focal vote",
+            "pilot_vote_seconds" if piloted else None,
+        ),
+        ("Stopping the extraction workers", "stopping_source_seconds"),
+        ("The walk's decisions and the rest", "other_seconds"),
+    ):
+        if key is not None:
+            rows.append((4, label, times[key]))
+    # The binding call's wall time beyond the walk's own: turning the report
+    # into Python values.
+    rows.append(
+        (4, "Handing the report to Python", max(0.0, picking - times["total_seconds"]))
+    )
+    rows.append((2, "Printing the report, writing the list, JSON", writing_seconds))
+
+    others: list[tuple[int, str, float | None]] = []
+    source = times["source"]
+    if source["workers"]:
+        label = (
+            f"SIFT extraction, {_plural(source['workers'], 'worker')} on "
+            f"{_plural(source['frames'], 'frame')}"
+        )
+        others.append((2, label, source["seconds"]))
+    for video in videos:
+        hdr = video["hdr"]
+        if hdr is None:
+            continue
+        others.append(
+            (2, f"{video['video']}: {_plural(hdr['writers'], 'writer thread')}", None)
+        )
+        others.append((4, "Converting to sRGB", hdr["conversion_seconds"]))
+        others.append((4, "Encoding and writing JPEGs", hdr["encoding_seconds"]))
+    if others:
+        heading = "Time on other threads, at the same time (summed over the threads):"
+        rows.append((0, heading, None))
+        rows.extend(others)
+
+    width = max(indent + len(label) for indent, label, s in rows if s is not None)
+    return [
+        " " * indent + label
+        if seconds is None
+        else f"{' ' * indent}{label:<{width - indent}}{seconds:10.2f} s"
+        for indent, label, seconds in rows
+    ]

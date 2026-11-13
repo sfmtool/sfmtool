@@ -75,7 +75,7 @@ fn the_extracting_source_writes_what_build_sift_files_writes() {
     source
         .wait(&requests(&frames, &[0, 1, 2]), &Progress::none())
         .unwrap();
-    assert_eq!(source.finish(), vec![id(0), id(1), id(2)]);
+    assert_eq!(source.finish().written, vec![id(0), id(1), id(2)]);
 
     let (_other, copies) = images(3);
     let built = build_sift_files(&copies, &options, &Progress::none()).unwrap();
@@ -87,7 +87,7 @@ fn the_extracting_source_writes_what_build_sift_files_writes() {
     again
         .wait(&requests(&frames, &[2, 0]), &Progress::none())
         .unwrap();
-    assert!(again.finish().is_empty());
+    assert!(again.finish().written.is_empty());
     drop(dir);
 }
 
@@ -110,7 +110,7 @@ fn a_prefetched_frame_is_written_without_a_wait() {
     source
         .wait(&requests(&frames, &[1]), &Progress::none())
         .unwrap();
-    assert_eq!(source.finish(), vec![id(1)]);
+    assert_eq!(source.finish().written, vec![id(1)]);
     assert!(sift.exists());
     assert!(!frames[0].images[0].sift_path.exists());
 }
@@ -150,7 +150,7 @@ fn an_image_that_cannot_be_read_is_an_error_naming_the_frame() {
         other => panic!("{other:?}"),
     }
     assert!(error.to_string().contains("missing_0003.jpg"), "{error}");
-    assert_eq!(source.finish(), vec![id(0)]);
+    assert_eq!(source.finish().written, vec![id(0)]);
 }
 
 #[test]
@@ -227,7 +227,7 @@ fn the_read_only_source_names_a_missing_file() {
         }
     );
     assert!(error.to_string().contains("b.jpg.sift"));
-    assert!(source.finish().is_empty());
+    assert!(source.finish().written.is_empty());
     assert!(!missing.exists());
 }
 
@@ -292,7 +292,7 @@ fn a_wait_goes_ahead_of_prefetched_frames_and_a_prefetch_replaces_the_last() {
     pool.wait(&requests(&frames, &[10, 3]), &Progress::none())
         .unwrap();
     assert_eq!(*ran.lock().unwrap(), vec![id(0), id(9), id(3), id(10)]);
-    assert_eq!(pool.finish(), vec![id(0), id(3), id(9), id(10)]);
+    assert_eq!(pool.finish().written, vec![id(0), id(3), id(9), id(10)]);
 }
 
 #[test]
@@ -319,7 +319,7 @@ fn a_cancelled_wait_stops_the_workers_promptly() {
     );
     // Three frames started and were stopped; none was written.
     assert_eq!(ran.lock().unwrap().len(), 3);
-    assert!(pool.finish().is_empty());
+    assert!(pool.finish().written.is_empty());
 }
 
 #[test]
@@ -339,7 +339,7 @@ fn a_panic_in_a_job_is_an_error_not_a_hang() {
         }
         other => panic!("{other:?}"),
     }
-    assert!(pool.finish().is_empty());
+    assert!(pool.finish().written.is_empty());
 }
 
 #[test]
@@ -409,7 +409,7 @@ fn a_frame_stopped_after_writing_is_counted_as_written() {
     assert!(pool
         .wait(&requests(&frames, &[1]), &Progress::none())
         .is_err());
-    assert_eq!(pool.finish(), vec![id(0), id(1)]);
+    assert_eq!(pool.finish().written, vec![id(0), id(1)]);
 }
 
 #[test]

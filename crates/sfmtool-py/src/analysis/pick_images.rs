@@ -560,10 +560,14 @@ impl PyCaptureSequence {
 ///     ``pilot_vote``, what the pilot vote found, or ``None``), ``frames``
 ///     (every frame read, with its readings), ``pairs`` (every pair matched,
 ///     with its statistics), ``frames_extracted`` (per entry of ``frames``,
-///     whether its ``.sift`` files were written in this call) and
+///     whether its ``.sift`` files were written in this call),
 ///     ``frames_extracted_unread`` (how many frames had ``.sift`` files
-///     written ahead of the walk that it never read). A number that is not
-///     finite is ``None``.
+///     written ahead of the walk that it never read) and ``times`` (where
+///     the call's wall time went: ``total_seconds``, the walk's thread's
+///     figures from ``checking_input_seconds`` to ``other_seconds``, which
+///     add up to it, and ``source``, the extraction workers' ``workers``,
+///     ``frames`` and summed ``seconds``). A number that is not finite is
+///     ``None``.
 ///
 /// Raises:
 ///     The exception a signal handler raised while the walk ran

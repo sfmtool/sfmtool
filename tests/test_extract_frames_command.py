@@ -419,6 +419,28 @@ def test_hdr_exposure_applies_to_every_hdr_frame_and_no_sdr_frame(videos, tmp_pa
     assert "exposure -1 stops" in result.output
 
 
+def test_extraction_times_split_an_hdr_video_s_work(videos, tmp_path):
+    """An SDR video's extraction is ffmpeg's alone; an HDR video's is split
+    into the calling thread's decoding and waiting, which make up its wall
+    time, and the writer threads' conversion and encoding."""
+    plan = _video_frames.plan_extraction(
+        [videos["hlg"], videos["small"]],
+        tmp_path / "out",
+        fps=None,
+        max_frame_size=64,
+        command="test",
+    )
+    hlg, small = _video_frames.extract_planned(plan, lambda text: None)
+    assert small.times["hdr"] is None and small.times["seconds"] > 0
+    hdr = hlg.times["hdr"]
+    assert hdr["writers"] == 4
+    assert hdr["conversion_seconds"] > 0 and hdr["encoding_seconds"] > 0
+    assert hdr["decoding_seconds"] > 0 and hdr["waiting_for_writers_seconds"] >= 0
+    assert hdr["decoding_seconds"] + hdr["waiting_for_writers_seconds"] == (
+        pytest.approx(hlg.times["seconds"])
+    )
+
+
 def test_hdr_exposure_with_no_hdr_video_is_refused(videos, tmp_path):
     out = tmp_path / "out"
     args = [str(videos["small"]), "-o", str(out), "--hdr-exposure", "0.5"]
