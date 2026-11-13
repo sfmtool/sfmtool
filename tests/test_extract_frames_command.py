@@ -5,7 +5,9 @@
 
 The videos are made here with ffmpeg's `testsrc2` source and its built-in
 `mpeg4` encoder, a second or two at 320 x 240 or smaller, so no codec library
-and no checked-in video is needed. ffmpeg comes from the test environment.
+and no checked-in video is needed. The HDR videos are 10-bit frames of two
+flat levels written from numpy with the built-in lossless `ffv1` encoder and
+tagged HLG or PQ. ffmpeg comes from the test environment.
 """
 
 import json
@@ -27,7 +29,7 @@ from sfmtool._video_frames import (
     run_ffmpeg,
 )
 from sfmtool.cli import main
-from sfmtool.fileio import image_dimensions
+from sfmtool.fileio import image_dimensions, read_image_rgb
 
 
 def _invoke(args: list[str]):
@@ -58,7 +60,9 @@ def videos(tmp_path_factory) -> dict[str, Path]:
             ("rotated", "rotated.mp4"),
             ("vfr", "vfr.mp4"),
             ("hlg", "hlg.mkv"),
-            ("pq", "pq.mov"),
+            ("pq", "pq.mkv"),
+            ("hlg_full_range", "hlg_full_range.mkv"),
+            ("pq_bt709", "pq_bt709.mov"),
             ("song", "song.m4a"),
         )
     }
@@ -88,18 +92,23 @@ def videos(tmp_path_factory) -> dict[str, Path]:
         *["-fps_mode", "vfr", "-c:v", "mpeg4", "-q:v", "5"],
         str(paths["vfr"]),
     )
-    # HDR transfer tags on the plain frames: HLG and PQ.
+    # HDR video: 1 s at 30 fps of 128 x 96 10-bit frames, the left half at
+    # one level and the right half at another (HDR_LEVELS).
+    for name, transfer in (("hlg", "arib-std-b67"), ("pq", "smpte2084")):
+        _hdr_video(paths[name], transfer, HDR_LEVELS[name])
+    # HDR transfer tags the conversion does not take, on the plain frames.
     _ffmpeg(
         "-i",
         str(paths["plain"]),
-        *["-c", "copy", "-color_trc", "arib-std-b67"],
-        str(paths["hlg"]),
+        *["-c", "copy", "-color_trc", "arib-std-b67", "-color_range", "pc"],
+        str(paths["hlg_full_range"]),
     )
     _ffmpeg(
         "-i",
         str(paths["plain"]),
-        *["-c", "copy", "-color_trc", "smpte2084", "-movflags", "+write_colr"],
-        str(paths["pq"]),
+        *["-c", "copy", "-color_trc", "smpte2084", "-colorspace", "bt709"],
+        *["-movflags", "+write_colr"],
+        str(paths["pq_bt709"]),
     )
     # Audio with cover art: its only video stream is an attached picture.
     cover = root / "cover.jpg"
@@ -112,6 +121,48 @@ def videos(tmp_path_factory) -> dict[str, Path]:
     )
     cover.unlink()
     return paths
+
+
+# The 10-bit narrow-range Y' codes of the HDR test videos' two halves:
+# HLG 75% (reference white) and 50%; PQ 203 and 100 cd/m².
+HDR_LEVELS = {"hlg": (721, 502), "pq": (573, 509)}
+
+
+def _hdr_video(path: Path, transfer: str, levels: tuple[int, int]) -> None:
+    """Write a 1 s, 30 fps, 128 x 96 video of 10-bit BT.2020 narrow-range
+    frames, the left half at Y' code `levels[0]`, the right at `levels[1]`,
+    zero chroma, losslessly, tagged with `transfer`."""
+    import numpy as np
+
+    width, height = 128, 96
+    luma = np.empty((height, width), np.uint16)
+    luma[:, : width // 2], luma[:, width // 2 :] = levels
+    chroma = np.full((height // 2, width // 2), 512, np.uint16)
+    frame = luma.tobytes() + chroma.tobytes() * 2
+    subprocess.run(
+        [
+            *["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"],
+            *["-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-s", f"{width}x{height}"],
+            *["-r", "30", "-i", "-", "-c:v", "ffv1", "-vf"],
+            f"setparams=color_trc={transfer}:color_primaries=bt2020"
+            ":colorspace=bt2020nc:range=tv",
+            str(path),
+        ],
+        input=frame * 30,
+        check=True,
+    )
+
+
+def _halves(frame: Path) -> tuple[list[int], list[int]]:
+    """The RGB of a frame's left and right halves, each at a pixel a quarter
+    of the width in from its side, on the middle row."""
+    pixels = read_image_rgb(frame)
+    height, width, _ = pixels.shape
+    row = height // 2
+    return (
+        pixels[row, width // 4].tolist(),
+        pixels[row, width - 1 - width // 4].tolist(),
+    )
 
 
 def _record(frame_dir: Path) -> dict:
@@ -149,13 +200,14 @@ def test_default_rate_numbering_and_record(videos, tmp_path):
     times = record["frame_times_s"]
     assert [_interval(t, 10) for t in times] == list(range(20))
     assert record == {
-        "version": 1,
+        "version": 2,
         "video": str(videos["plain"].resolve()),
         "video_stream": 0,
         "codec": "mpeg4",
         "video_size": [320, 240],
         "rotation_degrees": 0,
         "color_transfer": None,
+        "hdr_conversion": None,
         "fps": 10,
         "max_frame_size": 1920,
         "frame_size": [320, 240],
@@ -284,8 +336,10 @@ def test_every_refused_input_is_named_and_nothing_is_created(videos, tmp_path):
         inputs / "missing.mp4": "no such file",
         inputs / "star*name.mp4": "its name has a '*'",
         videos["song"]: "it has no video stream other than cover art",
-        videos["hlg"]: "HDR video (HLG, transfer arib-std-b67)",
-        videos["pq"]: "HDR video (PQ, transfer smpte2084)",
+        videos["hlg_full_range"]: "HDR video (HLG) with color_range pc; the HDR "
+        "conversion takes BT.2020 non-constant-luminance Y'CbCr (bt2020nc), "
+        "BT.2020 primaries and narrow (tv) range",
+        videos["pq_bt709"]: "HDR video (PQ) with color_space bt709;",
         busy: f"its frame directory {out / 'busy'} is not empty",
         taken: f"its frame directory {out / 'taken'} exists and is not a directory",
     }
@@ -304,6 +358,78 @@ def test_every_refused_input_is_named_and_nothing_is_created(videos, tmp_path):
     # One more for the pair, and one for star*name.mp4, which is also missing.
     assert f"{len(refused) + 2} problems found, so nothing was created" in result.output
     assert _tree(out) == before
+
+
+# The sRGB codes of each half of the HDR test videos, worked out by hand from
+# the recipe (specs/core/camera/hdr-to-srgb.md): HLG 75% 229.02 and 50%
+# 136.89, one stop down 186.91 and 99.04; PQ 203 cd/m² 229.15 and 100 cd/m²
+# 185.67. A conversion that read the signal as SDR would give 191 and 128 for
+# HLG, 148 and 130 for PQ.
+HDR_CODES = {("hlg", 0): (229, 137), ("hlg", -1): (187, 99), ("pq", 0): (229, 186)}
+
+
+@pytest.mark.parametrize("name", ["hlg", "pq"])
+def test_hdr_video_is_converted_to_srgb(videos, tmp_path, name):
+    out = tmp_path / "out"
+    result = _invoke([str(videos[name]), "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    frame_dir = out / name
+    _check_numbering(frame_dir, 10)
+    record = _record(frame_dir)
+    transfer = {"hlg": "HLG", "pq": "PQ"}[name]
+    assert record["color_transfer"] == {"hlg": "arib-std-b67", "pq": "smpte2084"}[name]
+    assert record["hdr_conversion"] == {
+        "transfer": transfer,
+        "recipe": "sfmtool-hdr-to-srgb",
+        "recipe_version": 1,
+        "exposure_stops": 0,
+    }
+    assert record["frame_size"] == [128, 96]
+    assert [_interval(t, 10) for t in record["frame_times_s"]] == list(range(10))
+    left, right = HDR_CODES[name, 0]
+    for frame in _frame_names(frame_dir):
+        (l_rgb, r_rgb) = _halves(frame_dir / frame)
+        assert l_rgb == pytest.approx([left] * 3, abs=1), frame
+        assert r_rgb == pytest.approx([right] * 3, abs=1), frame
+    assert f"ffv1 128x96, HDR {transfer}, 30.00 fps" in result.output
+    assert (
+        f"converted from {transfer} to sRGB by sfmtool-hdr-to-srgb 1, exposure +0 "
+        "stops" in result.output
+    )
+
+
+def test_hdr_exposure_applies_to_every_hdr_frame_and_no_sdr_frame(videos, tmp_path):
+    """One run with an HDR and an SDR video, scaled down: the exposure darkens
+    every HDR frame, is recorded for it, and leaves the SDR video's record
+    without a conversion."""
+    out = tmp_path / "out"
+    args = [str(videos["hlg"]), str(videos["small"]), "-o", str(out)]
+    result = _invoke([*args, "--hdr-exposure", "-1", "--max-frame-size", "64"])
+    assert result.exit_code == 0, result.output
+    record = _record(out / "hlg")
+    assert record["hdr_conversion"]["exposure_stops"] == -1
+    assert record["frame_size"] == [64, 48]
+    left, right = HDR_CODES["hlg", -1]
+    for frame in _frame_names(out / "hlg"):
+        assert list(image_dimensions(out / "hlg" / frame)) == [64, 48]
+        (l_rgb, r_rgb) = _halves(out / "hlg" / frame)
+        assert l_rgb == pytest.approx([left] * 3, abs=1), frame
+        assert r_rgb == pytest.approx([right] * 3, abs=1), frame
+    assert _record(out / "small")["hdr_conversion"] is None
+    assert "exposure -1 stops" in result.output
+
+
+def test_hdr_exposure_with_no_hdr_video_is_refused(videos, tmp_path):
+    out = tmp_path / "out"
+    args = [str(videos["small"]), "-o", str(out), "--hdr-exposure", "0.5"]
+    result = _invoke(args)
+    assert result.exit_code == 1, result.output
+    assert (
+        "1 problem found, so nothing was created:\n  --hdr-exposure sets the "
+        "exposure of HDR video frames, and none of the videos read is HDR"
+        in result.output
+    )
+    assert not out.exists()
 
 
 def test_the_same_video_twice_is_refused(videos, tmp_path):
@@ -382,6 +508,10 @@ def test_ffmpeg_version_number(output, version):
         ("--fps", "nan"),
         ("--max-frame-size", "63"),
         ("--max-frame-size", "1.5e3"),
+        ("--hdr-exposure", "nan"),
+        ("--hdr-exposure", "16.5"),
+        ("--hdr-exposure", "-inf"),
+        ("--hdr-exposure", "bright"),
     ],
 )
 def test_bad_option_values_are_usage_errors(videos, tmp_path, option, value):

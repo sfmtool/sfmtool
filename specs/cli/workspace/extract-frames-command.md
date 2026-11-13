@@ -8,16 +8,18 @@ video becomes a directory of JPEG frames, sampled at a chosen rate (10 per
 second by default), scaled down to a chosen size (1920 pixels on the long side
 by default), turned upright, and named so that the commands which group
 numbered files into sequences, such as `sfm pick-images`, read each directory
-as one. Beside the frames it writes a record of each frame's time in the
-video. Without it, a user has to know ffmpeg's options for rotation, variable
-frame rate and file naming, and a wrong choice (frames duplicated by ffmpeg's
-constant-rate output, or numbers padded to a width that runs out) only shows
-up later as a poor solve.
+as one. HDR video (HLG, as phones record it, or PQ) is converted to sRGB by
+one fixed recipe, the same for every pixel of every frame. Beside the frames
+it writes a record of each frame's time in the video. Without it, a user has
+to know ffmpeg's options for rotation, variable frame rate and file naming,
+and a wrong choice (frames duplicated by ffmpeg's constant-rate output, or
+numbers padded to a width that runs out) only shows up later as a poor solve.
 
 ## Command
 
 ```bash
 sfm extract-frames VIDEO... -o DIR [--fps N|full] [--max-frame-size PX|full]
+    [--hdr-exposure STOPS]
 ```
 
 | Option | Default | Meaning |
@@ -25,9 +27,10 @@ sfm extract-frames VIDEO... -o DIR [--fps N|full] [--max-frame-size PX|full]
 | `-o/--output DIR` | required | The directory the frame directories go in. Created when missing. It need not be in a workspace. |
 | `--fps N\|full` | `10` | Frames per second of video time to keep, a positive number; `full` keeps every decoded frame. |
 | `--max-frame-size PX\|full` | `1920` | The largest long side of a written frame, in pixels, an integer of at least 64. A larger frame is scaled down keeping its aspect; a smaller one is written at its own size, never scaled up. `full` writes every frame at the video's size. |
+| `--hdr-exposure STOPS` | `0` | The exposure change of every HDR video's frames: their display light is multiplied by `2^STOPS` before the highlight roll-off ([HDR video](#hdr-video)). One value for the whole run, recorded with each HDR video's frames. A number from -16 to 16. |
 
-An invalid `--fps` or `--max-frame-size` is a usage error. Each `VIDEO` gets
-the directory `DIR/<stem>/`, `<stem>` being the video's file name without its
+An invalid `--fps`, `--max-frame-size` or `--hdr-exposure` is a usage
+error. Each `VIDEO` gets the directory `DIR/<stem>/`, `<stem>` being the video's file name without its
 extension, holding `frame_000001.jpg`, `frame_000002.jpg`, … in presentation
 order, and the record `video-frames.json`
 ([workspace/video-frames.md](../../workspace/video-frames.md)).
@@ -40,6 +43,9 @@ sfm extract-frames walk1.mp4 walk2.MOV -o captures/garden
 # Every frame, at the video's own size
 sfm extract-frames orbit.mov -o frames --fps full --max-frame-size full
 
+# An HDR (HLG) phone video, half a stop darker than the recipe's anchor
+sfm extract-frames walk_hdr.mp4 -o frames --hdr-exposure -0.5
+
 # Then, in a workspace, as for any frames
 sfm pick-images captures/garden --write-list picked
 ```
@@ -49,14 +55,15 @@ with its row in `cli.COMMANDS` under *Workspace*, beside `sfm insv2rig` and
 `sfm pano2rig`, the other commands that turn a capture into a workspace's
 images. The work is in [`_video_frames.py`](../../../src/sfmtool/_video_frames.py),
 in two steps so that a caller can check every input before it creates
-anything: `plan_extraction(videos, out_dir, *, fps, max_frame_size, command)`
-finds ffmpeg, probes every video and applies every check of
-[Checks](#checks), creating nothing, and returns an `ExtractionPlan`;
+anything: `plan_extraction(videos, out_dir, *, fps, max_frame_size, command,
+problems=(), hdr_exposure=None)` finds ffmpeg, probes every video and
+applies every check of [Checks](#checks), creating nothing, and returns an `ExtractionPlan`;
 `extract_planned(plan)` then extracts its videos in order and returns, for
 each, an `ExtractedVideo` with the frame directory, the frame pattern, the
 frame count and the record. `parse_fps` and `parse_max_frame_size` parse the
-two option values, `FullOr` is the click type that reads them, and `command`
-names the calling command in the messages. `problems` takes the problems a
+two option values, `FullOr` is the click type that reads them, `HdrExposure`
+is the one that reads `--hdr-exposure`, and `command` names the calling
+command in the messages. `problems` takes the problems a
 caller found in its own inputs, listed first in the same error.
 [`sfm pick-images --new-workspace`](../image-feature/pick-images-command.md#from-videos---new-workspace)
 is the other caller: it checks its new workspace's directory, plans the
@@ -131,11 +138,64 @@ chain:
 Output options: `-fps_mode passthrough`, so the image muxer writes each frame
 the filters pass exactly once (constant-rate output would duplicate and drop
 frames of a variable-rate video), and `-q:v 2` to ffmpeg's `mjpeg` encoder,
-its highest quality setting in practical use (about libjpeg quality 95, the
-quality `write_image_rgb` writes with), in the full-range 4:2:0 format ffmpeg
+its highest quality setting in practical use (a lower quality than the 95
+`write_image_rgb` writes with; see [HDR video](#hdr-video)), in the
+full-range 4:2:0 format ffmpeg
 negotiates for JPEG. Video is 4:2:0 already, so 4:4:4 would store no more
-colour detail. A 10-bit video is converted to 8 bits by ffmpeg's default
+colour detail. A 10-bit SDR video is converted to 8 bits by ffmpeg's default
 conversion.
+
+## HDR video
+
+A video whose transfer characteristic (ffprobe's `color_transfer`) is
+`arib-std-b67` (HLG, which phones record) or `smpte2084` (PQ, as in HDR10) is
+HDR: its 10-bit values are a signal coded for an HDR display over the BT.2020
+gamut, and written to 8-bit JPEG as if it were SDR it would come out flat and
+desaturated (HLG) or dark and flat (PQ). ffmpeg alone cannot convert it the
+same way on every build (the conversion filters that do it properly,
+`zscale` and `libplacebo`, are optional libraries, and its `tonemap` filter
+adapts to each frame), so ffmpeg only decodes it and sfmtool converts it:
+
+- **ffmpeg decodes.** The filter chain is the one above, with
+  `flags=area+accurate_rnd+full_chroma_int` on every `scale` filter, one more
+  `scale` with those flags when the frame keeps its size, and
+  `format=yuv444p16le` before `showinfo`: the frames stay Y'CbCr, with the
+  chroma upsampled to every pixel and each sample shifted to 16 bits, exactly
+  (a 10-bit code times 64). They are written raw to ffmpeg's stdout
+  (`-f rawvideo -pix_fmt yuv444p16le pipe:1`), so nothing but the JPEG
+  frames is written to disk. The frames are not converted to RGB by ffmpeg:
+  its scaler's Y'CbCr to `rgb48le` conversion maps narrow-range white
+  (10-bit 940) to 65283 rather than 65535, 0.4% low, measured on ffmpeg 9.0.2,
+  and its arithmetic is the build's.
+- **sfmtool converts.** Python reads `showinfo`'s line for each frame from
+  stderr, on a thread, then that frame's `6 · width · height` bytes from
+  stdout, and hands them to the binding `write_image_from_hdr`, which applies
+  the recipe of [core/camera/hdr-to-srgb.md](../../core/camera/hdr-to-srgb.md)
+  in Rust, in parallel over the frame's rows, and writes the frame as
+  `write_image_rgb` writes a JPEG: quality 95, 4:2:0, the subsampling of the
+  SDR frames, but not their quality. Measured on one
+  converted 1920 x 1080 frame, quality 95 writes 957 KB with an RMS error of
+  0.79 levels against the pixels encoded, and ffmpeg's `-q:v 2` 690 KB with
+  2.06, so the HDR frames are the larger and the closer to their pixels. Four
+  frames are converted and written at once on a thread pool, with at most
+  eight waiting, so ffmpeg goes on decoding meanwhile.
+- **The recipe** is one fixed function of each pixel's own value, with no
+  per-frame peak, no local or adaptive tone mapping and no dynamic metadata:
+  BT.2100 narrow-range Y'CbCr to R'G'B'; the HLG inverse OETF and the OOTF of
+  a 1000 cd/m² display, or the PQ EOTF, to display light; `2^STOPS` of
+  `--hdr-exposure`; BT.2020 to BT.709 primaries with negative components set
+  to 0; the BT.2390 EETF on `max(R, G, B)`, from 1000 to 203 cd/m², with
+  its knee at 87.84 cd/m²; 203 cd/m² as sRGB's 1.0; the sRGB encoding
+  rounded to 8 bits. HLG 75%, HDR reference white, is compressed by the
+  roll-off and becomes sRGB 229. `--hdr-exposure` is the
+  one adjustment, the same for every frame of every video of a run.
+- **Dolby Vision.** A Dolby Vision video (an iPhone's profile 8.4 has an HLG
+  base layer) is converted from its base layer by the base layer's own
+  transfer; the per-frame RPU metadata is ignored.
+
+The video's line names the transfer (`hevc 1920x1080, HDR HLG, …`), and a
+line under it the conversion. An SDR video in a run with HDR videos is
+extracted as above, `--hdr-exposure` not applying to it.
 
 ## Frame times
 
@@ -146,7 +206,9 @@ its video's frames are all written. A frame's time is its `pts` from
 to the microsecond; this is exact, where `showinfo`'s printed `pts_time` has
 six significant digits, 10 ms after 1000 s. `fps` and `max_frame_size` are the
 options as given (`"full"` or a number), and `frame_size` is the size
-`showinfo` logs for the first frame.
+`showinfo` logs for the first frame. `hdr_conversion` is `null` for SDR
+video, and for HDR video names the transfer, the recipe and its version, and
+the exposure.
 
 ## Output
 
@@ -156,15 +218,16 @@ walk1.mp4: hevc 3840x2160, rotated 90, 29.97 fps (variable), 612.4 s
   -> captures/garden/walk1/ at 10 fps
   2210 of about 6124 frames (10 s)
   6122 frames written, 1080x1920, in 1m 48.2s
-walk2.MOV: h264 1920x1080, 30.00 fps, 95.1 s
+walk2.MOV: hevc 1920x1080, HDR HLG, 30.00 fps (variable), 95.1 s
   -> captures/garden/walk2/ at 10 fps
+  converted from HLG to sRGB by sfmtool-hdr-to-srgb 1, exposure +0 stops
   951 frames written, 1920x1080, in 9.8s
 Wrote 7073 frames from 2 videos to captures/garden
 Completed in 1m 58.43s
 ```
 
-Each video's line gives its codec, its stored size, its rotation when it has
-one, its average frame rate, marked `(variable)` when ffprobe's
+Each video's line gives its codec, its stored size, `HDR` and its transfer
+for an HDR video, its rotation when it has one, its average frame rate, marked `(variable)` when ffprobe's
 `avg_frame_rate` and `r_frame_rate` differ, and its duration. The progress
 line is printed every 10 seconds while a video is extracted, counting the
 `showinfo` lines; "about" is the duration times the rate (the average frame
@@ -200,13 +263,17 @@ created":
   `ffprobe -v error -show_streams -show_format -of json -o -`; one that ffprobe
   cannot open is refused with the last line ffprobe printed, and one with no
   video stream other than an attached picture is refused as having none.
-- **HDR.** A video whose transfer characteristic (ffprobe's `color_transfer`)
-  is `arib-std-b67` (HLG, which iPhones record) or `smpte2084` (PQ, as in
-  HDR10) is refused: "HDR video (HLG, transfer arib-std-b67), which this
-  command does not convert; convert the video to SDR first". Converting it to
-  8-bit JPEG without tone mapping would leave HLG frames flat and desaturated
-  and PQ frames dark and flat, and the choice of tone mapping changes what
-  SIFT sees.
+- **HDR tags.** An HDR video ([HDR video](#hdr-video)) is converted only
+  as BT.2020 non-constant-luminance Y'CbCr (`color_space` `bt2020nc`) with
+  BT.2020 primaries in narrow range (`color_range` `tv`), each tag also
+  taken when the video does not state it. Any other is refused, naming it:
+  "HDR video (HLG) with color_range pc; the HDR conversion takes BT.2020
+  non-constant-luminance Y'CbCr (bt2020nc), BT.2020 primaries and narrow (tv)
+  range". Phones and HDR10 video use these tags.
+- **`--hdr-exposure` with no HDR video.** Given when none of the videos
+  read is HDR, it is a problem of the run: "--hdr-exposure sets the exposure
+  of HDR video frames, and none of the videos read is HDR". A run with HDR
+  and SDR videos takes it, for the HDR ones.
 - **Colliding names.** Two videos whose stems are equal ignoring letter case
   (`walk.mp4` and `walk.MOV`, or one file given twice) are refused, naming
   both, since they would share a directory; letter case is ignored because
@@ -237,10 +304,23 @@ and checks its result, as `sfm insv2rig` does
 would spawn the same process and parse the same text, and no Rust caller
 needs it, so this is the pipeline case
 [STANDARDS.md § Logic lives in Rust](../../STANDARDS.md#logic-lives-in-rust-not-in-python-wrappers)
-puts out of scope. The long call is the child process, so `run_ffmpeg`
+puts out of scope. The HDR conversion, the one computation on pixels, is in
+Rust behind `write_image_from_hdr`; Python only hands it the bytes ffmpeg
+wrote. The long call is the child process, so `run_ffmpeg`
 prints no progress of its own: it hands each stderr line to its caller, which
 prints the progress line, and on any exception from that loop, Ctrl+C
-included, it stops ffmpeg as above and re-raises.
+included, it stops ffmpeg as above and re-raises. For HDR video it reads
+stderr on a thread into a queue and handles each line, and reads each frame
+from stdout, on the calling thread, so the callbacks' exceptions, Ctrl+C
+among them, reach it the same way; it waits on the queue in half-second
+steps so Ctrl+C is seen.
+
+**A pipe, not a temporary file.** A frame of 1920 x 1080 at 16 bits in three
+planes is 12 MB, 2.4 GB for a minute at 10 fps, and an 8K frame at `full`
+size is 200 MB. On a pipe each frame exists only while it is converted, ffmpeg
+waits while the converters are behind, and an interruption leaves nothing to
+clean up. `showinfo` logs a frame on stderr before ffmpeg writes it to stdout,
+so its line gives the size of the bytes that follow.
 
 **Output lost at exit.** Some ffmpeg builds, conda-forge's win-64 ffmpeg
 9.0.2 among them, now and then lose what they printed to stdout through the C
@@ -279,8 +359,8 @@ conda-forge in the `test` and `test-ci` environments, so these tests run in
 CI rather than skip.
 
 - At the default 10 fps from a 30 fps video, 20 frames numbered from 1 with
-  no gaps, one in each tenth of a second, the whole record, the frame size
-  and the output lines; at `--fps full`, 15 and 2.5, the counts and at most
+  no gaps, one in each tenth of a second, the whole record (`hdr_conversion`
+  `null`), the frame size and the output lines; at `--fps full`, 15 and 2.5, the counts and at most
   one frame per interval; at 30, every frame, with the message saying so.
 - `--max-frame-size 160` on 320x240 gives 160x120; on a 100x80 video gives
   100x80; `full` keeps 320x240. A video with rotation metadata
@@ -291,14 +371,26 @@ CI rather than skip.
   times.
 - Two videos in one run, beside an earlier video's directory and an empty
   directory named for one of them.
+- HDR video: 128 x 96 10-bit frames, the left half at one level and the
+  right at another, written from numpy with ffmpeg's built-in lossless `ffv1`
+  encoder and tagged HLG (75% and 50%) or PQ (203 and 100 cd/m²) with
+  `setparams`. At the defaults each frame's halves have the sRGB codes worked
+  out by hand from the recipe (229 and 137 for HLG, 229 and 186 for PQ, within
+  1 for the JPEG), which reading the signal as SDR would not give (191 and
+  128, 148 and 130); the record names the conversion. With an SDR video in
+  the same run, `--hdr-exposure -1` and `--max-frame-size 64`, the HLG frames
+  are 64 x 48 with codes 187 and 99, the exposure is recorded and the SDR
+  video's record has no conversion. `--hdr-exposure` with only SDR video is
+  refused with nothing created.
 - Every refusal of [Checks](#checks) in one run, each named, with the output
   directory unchanged: `.insv`, an image, a non-video file, a directory, a
   missing file, a stem with `*`, audio whose only video stream is cover art,
-  HLG and PQ video, a non-empty frame directory, a file in its place, and
-  colliding stems; one file given twice; no ffmpeg on PATH; an ffmpeg 4.4
+  HLG video in full range and PQ video with a BT.709 matrix, a non-empty frame
+  directory, a file in its place, and colliding stems; one file given twice; no ffmpeg on PATH; an ffmpeg 4.4
   (a script on PATH that prints its version line); the version parsing on
   release, `n`-prefixed and development-build outputs; and invalid option
-  values as usage errors.
+  values as usage errors, `--hdr-exposure` of `nan`, `16.5`, `-inf` and a
+  word among them.
 - Ctrl+C: an exception from the line callback terminates a running ffmpeg and
   is re-raised; raised from the progress line of an extraction, it leaves no
   record.
@@ -308,8 +400,10 @@ CI rather than skip.
 ## Non-goals
 
 - Insta360 `.insv` and other multi-lens files; `sfm insv2rig` handles those.
-- Converting HDR video. The command refuses it, and the video is converted
-  to SDR before extraction.
+- Tone mapping that adapts to the frame or the scene, and choosing an
+  exposure per video: [HDR video](#hdr-video) has one recipe and one
+  `--hdr-exposure` for a run. Dolby Vision's RPU metadata is ignored.
+- HDR video in any colour space but BT.2020 narrow range.
 - Camera intrinsics from video metadata. Phone videos rarely carry a focal
   length, and pick-images finds a camera by its pilot vote.
 - Hardware-accelerated decoding, and extracting several videos at once:

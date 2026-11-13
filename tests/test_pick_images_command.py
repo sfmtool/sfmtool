@@ -999,6 +999,18 @@ def test_new_workspace_refusals_list_every_problem_and_create_nothing(
     assert _files(workspace) == {"notes.txt"}
 
 
+def test_new_workspace_passes_hdr_exposure_to_the_extraction(
+    tmp_path: Path, pan_videos
+):
+    """`--hdr-exposure` reaches the extraction's checks, which refuse it for
+    SDR video before anything is created."""
+    workspace = tmp_path / "garden"
+    result = _new_workspace(workspace, pan_videos[:1], "--hdr-exposure", "1")
+    assert result.exit_code == 1, result.output
+    assert "--hdr-exposure sets the exposure of HDR video frames" in result.output
+    assert not workspace.exists()
+
+
 def test_new_workspace_inside_a_workspace_is_refused(tmp_path: Path, pan_videos):
     _init_workspace(tmp_path / "outer")
     workspace = tmp_path / "outer" / "garden"
@@ -1015,6 +1027,7 @@ def test_new_workspace_inside_a_workspace_is_refused(tmp_path: Path, pan_videos)
         (["-r", "walk"], "A new workspace has no named image lists"),
         (["--dsp"], "--dsp/--no-dsp option is only supported for COLMAP"),
         (["--fps", "0"], "--fps"),
+        (["--hdr-exposure", "nan"], "--hdr-exposure"),
     ],
 )
 def test_new_workspace_usage_errors_create_nothing(
@@ -1032,6 +1045,7 @@ def test_new_workspace_usage_errors_create_nothing(
     [
         (["--fps", "5"], "--fps"),
         (["--max-frame-size", "full"], "--max-frame-size"),
+        (["--hdr-exposure", "1"], "--hdr-exposure"),
         (["--prune-images"], "--prune-images"),
         (["--max-features", "1024"], "--max-features"),
         (["--no-gpu"], "--gpu/--no-gpu"),

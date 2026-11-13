@@ -3,13 +3,18 @@
 
 //! Python bindings for reading and writing image files: the header-only reads
 //! `image_dimensions` and `image_has_alpha`, the full decodes
-//! `read_image_rgb` and `read_image_rgba`, and the encoders `write_image_rgb`
-//! and `write_image_rgba`.
+//! `read_image_rgb` and `read_image_rgba`, the encoders `write_image_rgb`
+//! and `write_image_rgba`, and `write_image_from_hdr`, which converts a frame
+//! of HDR video to sRGB and encodes it.
 
 use std::path::PathBuf;
 
 use numpy::{IntoPyArray, PyArray3, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::prelude::*;
+use sfmtool_core::camera::image::hdr_to_srgb::{
+    hdr_ycbcr_to_srgb, HdrToSrgbOptions, HdrTransfer, HDR_EXPOSURE_STOPS_LIMIT, HDR_TO_SRGB_RECIPE,
+    HDR_TO_SRGB_RECIPE_VERSION,
+};
 use sfmtool_core::camera::image::{ImageU8, DEFAULT_JPEG_QUALITY};
 
 /// Read an image file's `(width, height)` from its header alone.
@@ -159,6 +164,86 @@ pub fn write_image_rgba(py: Python<'_>, path: PathBuf, pixels: &Bound<'_, PyAny>
     written.map_err(|e| write_error(&path, e))
 }
 
+/// Convert a frame of HDR video to 8-bit sRGB and encode it to the image file
+/// at `path`, in the format the path's extension names.
+///
+/// `planes` is a `(3, H, W)` `uint16` array: the planes Y', Cb and Cr in
+/// BT.2100 narrow range at 16 bits (a 10-bit code shifted left by 6), with
+/// BT.2020 non-constant-luminance weights, as FFmpeg's `yuv444p16le` lays
+/// them out. `transfer` is `"HLG"` or `"PQ"`. Every pixel goes through the one
+/// fixed recipe `HDR_TO_SRGB_RECIPE`, version `HDR_TO_SRGB_RECIPE_VERSION`
+/// (`sfmtool_core::camera::image::hdr_to_srgb`), with display light scaled
+/// by `2 ** exposure_stops` before the highlight roll-off; `exposure_stops`
+/// is at most `HDR_EXPOSURE_STOPS_LIMIT` either way. The sRGB image is then
+/// written as `write_image_rgb` writes one, a JPEG at `jpeg_quality`. The GIL
+/// is released while the frame is converted, in parallel over its rows, and
+/// encoded.
+///
+/// Raises `TypeError` when `planes` is not a `uint16` array; `ValueError`
+/// when it is not `(3, H, W)` with `H` and `W` at least 1, when `transfer`
+/// is neither name, when `exposure_stops` is out of range or not finite, and
+/// for `write_image_rgb`'s other `ValueError`s; and `write_image_rgb`'s
+/// `FileNotFoundError` and `OSError`.
+#[pyfunction]
+#[pyo3(signature = (path, planes, *, transfer, exposure_stops = 0.0, jpeg_quality = DEFAULT_JPEG_QUALITY as i64))]
+pub fn write_image_from_hdr(
+    py: Python<'_>,
+    path: PathBuf,
+    planes: &Bound<'_, PyAny>,
+    transfer: &str,
+    exposure_stops: f32,
+    jpeg_quality: i64,
+) -> PyResult<()> {
+    let value_error = |message: String| pyo3::exceptions::PyValueError::new_err(message);
+    if !(1..=100).contains(&jpeg_quality) {
+        return Err(value_error(format!(
+            "jpeg_quality must be 1 to 100, got {jpeg_quality}"
+        )));
+    }
+    let transfer = match transfer {
+        "HLG" => HdrTransfer::Hlg,
+        "PQ" => HdrTransfer::Pq,
+        other => {
+            return Err(value_error(format!(
+                "transfer must be \"HLG\" or \"PQ\", not {other:?}"
+            )))
+        }
+    };
+    let array = planes
+        .extract::<PyReadonlyArrayDyn<'_, u16>>()
+        .map_err(|_| {
+            pyo3::exceptions::PyTypeError::new_err(
+                "write_image_from_hdr takes a uint16 numpy array, (3, H, W) Y'CbCr planes",
+            )
+        })?;
+    let (height, width) = match array.shape() {
+        [3, h, w] if *h > 0 && *w > 0 => (*h, *w),
+        shape => {
+            return Err(value_error(format!(
+                "write_image_from_hdr takes a non-empty (3, H, W) array, got shape {shape:?}"
+            )))
+        }
+    };
+    let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
+        return Err(value_error(format!(
+            "write_image_from_hdr: a {width} x {height} image is too large to encode"
+        )));
+    };
+    let samples = to_contiguous!(array);
+    let options = HdrToSrgbOptions {
+        transfer,
+        exposure_stops,
+    };
+    let samples: &[u16] = &samples;
+    py.detach(|| {
+        let image = hdr_ycbcr_to_srgb(samples, width, height, &options)
+            .map_err(|e| value_error(format!("write_image_from_hdr: {e}")))?;
+        image
+            .write(&path, jpeg_quality as u8)
+            .map_err(|e| write_error(&path, e))
+    })
+}
+
 /// The `ImageU8` holding `pixels`, which must be a `uint8` array of shape
 /// `(H, W, channels)` with `H` and `W` at least 1. It is copied in row order,
 /// so an array in any memory layout is accepted.
@@ -221,5 +306,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_image_rgba, m)?)?;
     m.add_function(wrap_pyfunction!(write_image_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(write_image_rgba, m)?)?;
+    m.add_function(wrap_pyfunction!(write_image_from_hdr, m)?)?;
+    m.add("HDR_TO_SRGB_RECIPE", HDR_TO_SRGB_RECIPE)?;
+    m.add("HDR_TO_SRGB_RECIPE_VERSION", HDR_TO_SRGB_RECIPE_VERSION)?;
+    m.add("HDR_EXPOSURE_STOPS_LIMIT", HDR_EXPOSURE_STOPS_LIMIT)?;
     Ok(())
 }

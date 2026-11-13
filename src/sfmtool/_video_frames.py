@@ -9,20 +9,27 @@ specs/workspace/video-frames.md the `video-frames.json` record written beside
 each video's frames. The work is in two steps so a caller can check every
 input before it creates anything: `plan_extraction` finds ffmpeg, probes each
 video and applies every check, creating nothing, and `extract_planned`
-extracts the planned videos one ffmpeg process at a time.
+extracts the planned videos one ffmpeg process at a time. ffmpeg writes an SDR
+video's JPEG frames itself; an HDR video's frames it decodes to 16-bit Y'CbCr
+on a pipe, and the binding `write_image_from_hdr` converts each to sRGB and
+writes it (specs/core/camera/hdr-to-srgb.md).
 
-The module imports only the standard library and click, so `sfm version`
-takes its ffmpeg discovery (`locate_program`) from here.
+The module imports only the standard library and click at the top, so `sfm
+version` takes its ffmpeg discovery (`locate_program`) from here; numpy and
+the extension are imported when an HDR video is extracted.
 """
 
 import json
 import math
 import os
 import re
+import queue
 import shutil
 import subprocess
+import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -34,7 +41,7 @@ FRAME_PATTERN = "frame_%06d.jpg"
 
 # The record written beside each video's frames, and its version.
 RECORD_NAME = "video-frames.json"
-RECORD_VERSION = 1
+RECORD_VERSION = 2
 
 DEFAULT_FPS = 10
 DEFAULT_MAX_FRAME_SIZE = 1920
@@ -64,6 +71,26 @@ _STDERR_TAIL_LINES = 20
 
 # The transfer characteristics, as ffprobe names them, of HDR video.
 _HDR_TRANSFERS = {"arib-std-b67": "HLG", "smpte2084": "PQ"}
+
+# The tags an HDR video may carry to be converted, as ffprobe names them, with
+# `None` and "unknown" for a tag the video does not state: BT.2020
+# non-constant-luminance Y'CbCr, BT.2020 primaries, narrow ("tv") range.
+_HDR_ACCEPTED_TAGS = {
+    "color_space": ("bt2020nc", None, "unknown"),
+    "color_primaries": ("bt2020", None, "unknown"),
+    "color_range": ("tv", None, "unknown"),
+}
+
+# The scaler flags of every scale filter on an HDR video's frames, so the
+# resampling and the chroma upsampling to 4:4:4 are the ones named here rather
+# than a build's default.
+_HDR_SWS_FLAGS = "area+accurate_rnd+full_chroma_int"
+
+# How many HDR frames are converted and written at once, each on its own
+# thread (the conversion of one frame is itself parallel over its rows), and
+# how many decoded frames may wait for a thread.
+_HDR_WRITERS = 4
+_HDR_PENDING_FRAMES = 8
 
 # Image extensions the commands collect; ffmpeg would open such a file as a
 # one-frame video.
@@ -270,6 +297,14 @@ class VideoProbe:
     average_frame_rate: Fraction | None
     duration_s: float | None
     color_transfer: str | None
+    color_space: str | None = None
+    color_primaries: str | None = None
+    color_range: str | None = None
+
+    @property
+    def hdr_transfer(self) -> str | None:
+        """ "HLG" or "PQ" for an HDR video, `None` for SDR."""
+        return _HDR_TRANSFERS.get(self.color_transfer)
 
     @property
     def is_variable_rate(self) -> bool:
@@ -352,6 +387,9 @@ def probe_video(path: Path, ffprobe: str) -> VideoProbe:
         average_frame_rate=_fraction(stream.get("avg_frame_rate")),
         duration_s=duration,
         color_transfer=stream.get("color_transfer"),
+        color_space=stream.get("color_space"),
+        color_primaries=stream.get("color_primaries"),
+        color_range=stream.get("color_range"),
     )
 
 
@@ -374,6 +412,9 @@ class ExtractionPlan:
     # The largest long side of a written frame, or `None` for the video's size.
     max_frame_size: int | None
     videos: tuple[PlannedVideo, ...]
+    # The exposure change in stops for every HDR video's frames, as given, or
+    # `None` when not given, which converts at 0.
+    hdr_exposure: float | None = None
 
 
 def _directory_problem(directory: Path) -> str | None:
@@ -405,6 +446,32 @@ class FullOr(click.ParamType):
             self.fail(str(error), param, ctx)
 
 
+class HdrExposure(click.ParamType):
+    """The `--hdr-exposure` value: a finite number of stops within the
+    conversion's `HDR_EXPOSURE_STOPS_LIMIT` either way, checked when the
+    option is read so that a bad value stops the command before anything is
+    created."""
+
+    name = "STOPS"
+
+    def convert(self, value, param, ctx):
+        if isinstance(value, float):
+            return value
+        from .fileio import HDR_EXPOSURE_STOPS_LIMIT as limit
+
+        try:
+            stops = float(value)
+        except ValueError:
+            stops = math.nan
+        if not math.isfinite(stops) or abs(stops) > limit:
+            self.fail(
+                f"{value!r} is not a number of stops from {-limit:g} to {limit:g}",
+                param,
+                ctx,
+            )
+        return stops
+
+
 def plan_extraction(
     videos: list[Path],
     out_dir: Path,
@@ -413,16 +480,20 @@ def plan_extraction(
     max_frame_size: int | None,
     command: str,
     problems: tuple[str, ...] = (),
+    hdr_exposure: float | None = None,
 ) -> ExtractionPlan:
     """Check every input of an extraction and plan it, creating nothing.
 
     Finds ffmpeg and ffprobe (`find_ffmpeg`; without them nothing else is
     checked), then checks each video: not an `.insv`, not an image or a
-    directory, a file ffprobe reads as a video, not HDR, a stem with no `*`
-    and no other video's stem in another letter case, and a frame directory
-    `out_dir/<stem>/` that is missing or empty. Raises one `VideoFramesError`
-    listing every problem found, after `problems`, those the caller found.
-    `command` names the caller for the messages.
+    directory, a file ffprobe reads as a video, for HDR video the tags the
+    conversion takes (`_HDR_ACCEPTED_TAGS`), a stem with no `*` and no other
+    video's stem in another letter case, and a frame directory
+    `out_dir/<stem>/` that is missing or empty. `hdr_exposure`, the
+    `--hdr-exposure` given or `None`, is a problem when no video read is HDR.
+    Raises one `VideoFramesError` listing every problem found, after
+    `problems`, those the caller found. `command` names the caller for the
+    messages.
     """
     programs = find_ffmpeg(command)
     if out_dir.exists() and not out_dir.is_dir():
@@ -458,15 +529,29 @@ def plan_extraction(
         except VideoFramesError as error:
             problems.append(str(error))
             continue
-        transfer = probe.color_transfer
-        if transfer in _HDR_TRANSFERS:
-            problems.append(
-                f"{video}: HDR video ({_HDR_TRANSFERS[transfer]}, transfer "
-                f"{transfer}), which this command does not convert; convert "
-                "the video to SDR first"
-            )
-            continue
+        if probe.hdr_transfer is not None:
+            wrong = [
+                f"{tag} {getattr(probe, tag)}"
+                for tag, accepted in _HDR_ACCEPTED_TAGS.items()
+                if getattr(probe, tag) not in accepted
+            ]
+            if wrong:
+                problems.append(
+                    f"{video}: HDR video ({probe.hdr_transfer}) with "
+                    f"{', '.join(wrong)}; the HDR conversion takes BT.2020 "
+                    "non-constant-luminance Y'CbCr (bt2020nc), BT.2020 "
+                    "primaries and narrow (tv) range"
+                )
+                continue
         probes[-1] = probe
+
+    if hdr_exposure is not None and not any(
+        probe is not None and probe.hdr_transfer is not None for probe in probes
+    ):
+        problems.append(
+            "--hdr-exposure sets the exposure of HDR video frames, and none "
+            "of the videos read is HDR"
+        )
 
     by_stem: dict[str, list[Path]] = {}
     for video in videos:
@@ -507,6 +592,7 @@ def plan_extraction(
         fps=fps,
         max_frame_size=max_frame_size,
         videos=tuple(planned),
+        hdr_exposure=hdr_exposure,
     )
 
 
@@ -544,7 +630,9 @@ def video_filters(
     probe: VideoProbe, fps: float | None, max_frame_size: int | None
 ) -> str:
     """The `-vf` filter chain for one video. ffmpeg's autorotate inserts the
-    turn that makes the frames upright before it."""
+    turn that makes the frames upright before it. An HDR video's chain gives
+    every scale filter `_HDR_SWS_FLAGS` and ends in 16-bit 4:4:4 Y'CbCr."""
+    hdr = probe.hdr_transfer is not None
     filters = []
     if not _keeps_every_frame(fps, probe):
         n = repr(float(fps))
@@ -554,12 +642,19 @@ def video_filters(
         )
     sar = probe.sample_aspect_ratio
     if sar is not None and sar != 1:
-        filters.append("scale=iw*sar:ih,setsar=1")
-    if max_frame_size is not None and probe.long_side > max_frame_size:
+        flags = f":flags={_HDR_SWS_FLAGS}" if hdr else ""
+        filters.append(f"scale=iw*sar:ih{flags},setsar=1")
+    resized = max_frame_size is not None and probe.long_side > max_frame_size
+    if resized:
         s = max_frame_size
+        flags = _HDR_SWS_FLAGS if hdr else "area"
         filters.append(
-            f"scale='if(gte(iw,ih),{s},-2)':'if(gte(iw,ih),-2,{s})':flags=area,setsar=1"
+            f"scale='if(gte(iw,ih),{s},-2)':'if(gte(iw,ih),-2,{s})':flags={flags},setsar=1"
         )
+    if hdr:
+        if not resized:
+            filters.append(f"scale=flags={_HDR_SWS_FLAGS}")
+        filters.append("format=yuv444p16le")
     filters.append("showinfo")
     return ",".join(filters)
 
@@ -571,7 +666,12 @@ def ffmpeg_arguments(
     fps: float | None,
     max_frame_size: int | None,
 ) -> list[str]:
-    """The ffmpeg command line that extracts one video's frames."""
+    """The ffmpeg command line that extracts one video's frames: JPEG files
+    for SDR video, raw 16-bit Y'CbCr frames on stdout for HDR video."""
+    if probe.hdr_transfer is not None:
+        output = ["-f", "rawvideo", "-pix_fmt", "yuv444p16le", "pipe:1"]
+    else:
+        output = ["-q:v", "2", str(frame_dir / FRAME_PATTERN)]
     return [
         programs.ffmpeg,
         "-hide_banner",
@@ -588,34 +688,94 @@ def ffmpeg_arguments(
         video_filters(probe, fps, max_frame_size),
         "-fps_mode",
         "passthrough",
-        "-q:v",
-        "2",
-        str(frame_dir / FRAME_PATTERN),
+        *output,
     ]
 
 
-def run_ffmpeg(args: list[str], on_line) -> tuple[int, list[str]]:
+def _stderr_lines(stream, lines: queue.Queue) -> None:
+    """Put each line of ffmpeg's stderr (bytes) on `lines` as text, then
+    `None` at its end."""
+    try:
+        for raw in stream:
+            lines.put(raw.decode("utf-8", errors="replace").rstrip("\r\n"))
+    finally:
+        lines.put(None)
+
+
+def _read_exactly(stream, count: int) -> bytes | None:
+    """`count` bytes from `stream`, or `None` when it ends first."""
+    data = bytearray()
+    while len(data) < count:
+        chunk = stream.read(count - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return bytes(data)
+
+
+def run_ffmpeg(args: list[str], on_line, on_frame=None) -> tuple[int, list[str]]:
     """Run ffmpeg, calling `on_line` with each line of its stderr, and return
     its exit status and its last `_STDERR_TAIL_LINES` stderr lines.
+
+    With `on_frame`, ffmpeg writes raw frames to its stdout: `on_line`
+    returns the byte count of the frame a line announces (`showinfo` logs
+    each frame before it is written) or `None`, and that many bytes are read
+    from stdout and passed to `on_frame`. stderr is then read on a thread and
+    the lines handled on the calling thread, so an exception from either
+    callback reaches the caller. When stdout ends before a frame's bytes, the
+    frame is not passed on and the rest of stderr is still read.
 
     On any exception while it runs, Ctrl+C included, ffmpeg is terminated
     (and killed if it has not exited after `_TERMINATE_WAIT_S`), waited for,
     and the exception re-raised."""
-    process = subprocess.Popen(
-        args,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
     tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
+    if on_frame is None:
+        process = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    else:
+        process = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     try:
-        for line in process.stderr:
-            line = line.rstrip("\r\n")
-            tail.append(line)
-            on_line(line)
+        if on_frame is None:
+            for line in process.stderr:
+                line = line.rstrip("\r\n")
+                tail.append(line)
+                on_line(line)
+        else:
+            lines: queue.Queue = queue.Queue()
+            reader = threading.Thread(
+                target=_stderr_lines, args=(process.stderr, lines), daemon=True
+            )
+            reader.start()
+            stdout_open = True
+            while True:
+                try:
+                    # A timeout, so that Ctrl+C is seen while waiting.
+                    line = lines.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                tail.append(line)
+                size = on_line(line)
+                if size is not None and stdout_open:
+                    data = _read_exactly(process.stdout, size)
+                    if data is None:
+                        stdout_open = False
+                    else:
+                        on_frame(data)
+            reader.join()
         returncode = process.wait()
     except BaseException:
         process.terminate()
@@ -627,6 +787,8 @@ def run_ffmpeg(args: list[str], on_line) -> tuple[int, list[str]]:
         raise
     finally:
         process.stderr.close()
+        if process.stdout is not None:
+            process.stdout.close()
     return returncode, list(tail)
 
 
@@ -653,6 +815,8 @@ class ExtractedVideo:
 
 def _video_line(probe: VideoProbe) -> str:
     parts = [f"{probe.codec} {probe.width}x{probe.height}"]
+    if probe.hdr_transfer is not None:
+        parts.append(f"HDR {probe.hdr_transfer}")
     if probe.rotation_degrees:
         parts.append(f"rotated {_number_text(probe.rotation_degrees)}")
     if probe.average_frame_rate is not None:
@@ -685,6 +849,22 @@ def extract_video_frames(
         )
     rate_text = "every frame" if keeps_all else f"{_number_text(fps)} fps"
     echo(f"  -> {video.frame_dir}{os.sep} at {rate_text}")
+    hdr_conversion = None
+    if probe.hdr_transfer is not None:
+        from .fileio import HDR_TO_SRGB_RECIPE, HDR_TO_SRGB_RECIPE_VERSION
+
+        exposure = plan.hdr_exposure or 0.0
+        hdr_conversion = {
+            "transfer": probe.hdr_transfer,
+            "recipe": HDR_TO_SRGB_RECIPE,
+            "recipe_version": HDR_TO_SRGB_RECIPE_VERSION,
+            "exposure_stops": _option_value(exposure),
+        }
+        echo(
+            f"  converted from {probe.hdr_transfer} to sRGB by "
+            f"{HDR_TO_SRGB_RECIPE} {HDR_TO_SRGB_RECIPE_VERSION}, exposure "
+            f"{exposure:+g} stops"
+        )
 
     expected = None
     rate = probe.average_frame_rate if keeps_all else fps
@@ -697,7 +877,7 @@ def extract_video_frames(
     start = time.monotonic()
     last_report = start
 
-    def on_line(line: str) -> None:
+    def on_line(line: str) -> int | None:
         nonlocal last_report
         match = _SHOWINFO_FRAME.search(line)
         if match:
@@ -715,16 +895,23 @@ def extract_video_frames(
                 last_report = now
                 about = f" of about {expected}" if expected is not None else ""
                 echo(f"  {len(times)}{about} frames ({now - start:.0f} s)")
-            return
+            # A 16-bit sample per plane and pixel, three planes.
+            return 6 * int(match.group(4)) * int(match.group(5))
         match = _SHOWINFO_TIME_BASE.search(line)
         if match:
             time_base.append(Fraction(int(match.group(1)), int(match.group(2))))
+        return None
 
     video.frame_dir.mkdir(parents=True, exist_ok=True)
     args = ffmpeg_arguments(
         plan.programs, probe, video.frame_dir, fps, plan.max_frame_size
     )
-    returncode, tail = run_ffmpeg(args, on_line)
+    if hdr_conversion is None:
+        returncode, tail = run_ffmpeg(args, on_line)
+    else:
+        returncode, tail = _run_ffmpeg_hdr(
+            args, on_line, video.frame_dir, probe.hdr_transfer, exposure
+        )
     if returncode != 0:
         quoted = "\n".join(f"    {line}" for line in tail)
         raise VideoFramesError(
@@ -750,6 +937,7 @@ def extract_video_frames(
         "video_size": [probe.width, probe.height],
         "rotation_degrees": _option_value(probe.rotation_degrees),
         "color_transfer": probe.color_transfer,
+        "hdr_conversion": hdr_conversion,
         "fps": _option_value(fps),
         "max_frame_size": _option_value(plan.max_frame_size),
         "frame_size": [width, height],
@@ -774,6 +962,61 @@ def extract_video_frames(
         frame_count=count,
         record=record,
     )
+
+
+def _run_ffmpeg_hdr(
+    args: list[str], on_line, frame_dir: Path, transfer: str, exposure: float
+) -> tuple[int, list[str]]:
+    """Run ffmpeg on an HDR video (`run_ffmpeg` with `on_frame`), converting
+    and writing each frame it decodes as `frame_dir / FRAME_PATTERN`,
+    numbered from 1, with `write_image_from_hdr`.
+
+    The frames are converted and written on `_HDR_WRITERS` threads, at most
+    `_HDR_PENDING_FRAMES` waiting, so decoding goes on while frames are
+    written; every frame is written, or the first write error raised, before
+    this returns."""
+    import numpy as np
+
+    from .fileio import write_image_from_hdr
+
+    pending: deque = deque()
+    numbered = 0
+    sizes: list[tuple[int, int]] = []
+
+    def sized_on_line(line: str) -> int | None:
+        size = on_line(line)
+        if size is not None:
+            match = _SHOWINFO_FRAME.search(line)
+            sizes.append((int(match.group(4)), int(match.group(5))))
+        return size
+
+    def on_frame(data: bytes) -> None:
+        nonlocal numbered
+        numbered += 1
+        width, height = sizes[numbered - 1]
+        planes = np.frombuffer(data, dtype="<u2").reshape(3, height, width)
+        while len(pending) >= _HDR_PENDING_FRAMES:
+            pending.popleft().result()
+        pending.append(
+            writers.submit(
+                write_image_from_hdr,
+                frame_dir / (FRAME_PATTERN % numbered),
+                planes,
+                transfer=transfer,
+                exposure_stops=exposure,
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=_HDR_WRITERS) as writers:
+        try:
+            result = run_ffmpeg(args, sized_on_line, on_frame)
+            while pending:
+                pending.popleft().result()
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
+    return result
 
 
 def extract_planned(plan: ExtractionPlan, echo=click.echo) -> list[ExtractedVideo]:
