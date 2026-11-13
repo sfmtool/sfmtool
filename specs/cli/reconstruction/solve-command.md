@@ -138,7 +138,19 @@ images, consecutive windows sharing `OVERLAP` images, and writes each window's
 reconstruction to its own `.sfmr` file. The last window holds the images that remain and
 can be shorter than `WINDOW`. It does not align or merge the windows; run `sfm align` and
 `sfm merge` on the outputs for that. Useful for long sequences that fail with a single
-solve. The input must contain exactly one numbered image sequence.
+solve.
+
+A numbered sequence is the images of one directory whose file names follow one numbered
+pattern, such as `frame_%06d.jpg`, with at least three images. Frames with the same
+number in two directories, such as the frames `sfm extract-frames` writes for two videos,
+belong to two sequences. Each sequence is cut into its own windows, so a window holds
+images of one sequence only. The windows are solved one after another, the sequences in
+sorted order of their directory path relative to the deepest directory holding all the
+images, then of their pattern. Since no window spans two sequences, the outputs of two
+sequences share no images. The command fails, writing nothing, when the images hold no
+numbered sequence, or when some of them are in none, listing them in sorted order of
+directory and then file name, the first five and a count of the rest; `-r` or
+`--named-image-list` leaves such images out.
 
 `--seq-overlap` cannot be combined with `--output` (each window writes its own
 automatically-named output) or with a `.matches` input file (the windows drive
