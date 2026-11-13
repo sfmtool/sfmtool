@@ -259,3 +259,5 @@ def test_the_patch_read_along_a_ray(pyramids, query):
     )
     with pytest.raises(ValueError, match="not one of"):
         bench.read_patch_along_ray(edited, pyramids, image, pixel, 8.0, [10.0], [99])
+    with pytest.raises(ValueError, match="image 99 is not one of"):
+        bench.read_patch_along_ray(edited, pyramids, 99, pixel, 8.0, [10.0])

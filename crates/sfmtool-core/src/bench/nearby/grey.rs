@@ -33,19 +33,72 @@ pub struct GreyImage {
     data: Vec<f32>,
 }
 
+/// Why a grey image could not be made or read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GreyImageError {
+    /// The values do not fill the image: `data` does not hold
+    /// `width * height` of them.
+    DataSize {
+        /// The image's width, in px.
+        width: u32,
+        /// The image's height, in px.
+        height: u32,
+        /// How many values `data` holds.
+        got: usize,
+    },
+    /// The image asked for is not an index into both the cache and the views.
+    NoSuchImage {
+        /// The image asked for.
+        image: usize,
+        /// How many images the cache is for.
+        cache_len: usize,
+        /// How many views there are.
+        view_count: usize,
+    },
+}
+
+impl std::fmt::Display for GreyImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DataSize { width, height, got } => write!(
+                f,
+                "a {width}x{height} grey image needs {} values, but {got} were given",
+                *width as usize * *height as usize
+            ),
+            Self::NoSuchImage {
+                image,
+                cache_len,
+                view_count,
+            } => write!(
+                f,
+                "image {image} is not one of the grey cache's {cache_len} images and the                  {view_count} views"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GreyImageError {}
+
 impl GreyImage {
     /// An image from its row-major values.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `data` does not hold `width * height` values.
-    pub fn new(width: u32, height: u32, data: Vec<f32>) -> Self {
-        assert_eq!(data.len(), width as usize * height as usize);
-        Self {
+    /// [`GreyImageError::DataSize`] when `data` does not hold
+    /// `width * height` values.
+    pub fn new(width: u32, height: u32, data: Vec<f32>) -> Result<Self, GreyImageError> {
+        if data.len() != width as usize * height as usize {
+            return Err(GreyImageError::DataSize {
+                width,
+                height,
+                got: data.len(),
+            });
+        }
+        Ok(Self {
             width,
             height,
             data,
-        }
+        })
     }
 
     /// The width, in px.
@@ -97,10 +150,28 @@ impl GreyImages {
     /// Image `image` in grey and blurred, built from `views[image]`'s
     /// full-resolution photograph the first time it is asked for.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `image` is not an index into both the cache and `views`.
-    pub fn get(&self, views: &[ProjectedImage<'_>], image: usize) -> &GreyImage {
+    /// [`GreyImageError::NoSuchImage`] when `image` is not an index into both
+    /// the cache and `views`.
+    pub fn get(
+        &self,
+        views: &[ProjectedImage<'_>],
+        image: usize,
+    ) -> Result<&GreyImage, GreyImageError> {
+        if image >= self.images.len() || image >= views.len() {
+            return Err(GreyImageError::NoSuchImage {
+                image,
+                cache_len: self.images.len(),
+                view_count: views.len(),
+            });
+        }
+        Ok(self.checked(views, image))
+    }
+
+    /// [`Self::get`] for an `image` the caller has already checked is an
+    /// index into both the cache and `views`.
+    pub(super) fn checked(&self, views: &[ProjectedImage<'_>], image: usize) -> &GreyImage {
         self.images[image].get_or_init(|| blurred_grey(views[image].pyramid.level(0)))
     }
 }
@@ -133,11 +204,12 @@ pub fn blurred_grey(image: &ImageU8) -> GreyImage {
     } else {
         data.chunks_exact(c).map(|p| f32::from(p[0])).collect()
     };
-    GreyImage::new(
-        w as u32,
-        h as u32,
-        gaussian_blur(&grey, w, h, GREY_BLUR_SIGMA),
-    )
+    // The blur keeps the `w x h` size, so the values fill the image.
+    GreyImage {
+        width: w as u32,
+        height: h as u32,
+        data: gaussian_blur(&grey, w, h, GREY_BLUR_SIGMA),
+    }
 }
 
 /// OpenCV's Gaussian kernel for a 32-bit float image of blur `sigma`: `ksize =

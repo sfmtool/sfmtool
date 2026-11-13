@@ -630,24 +630,20 @@ fn read_sift(
     let read: Result<Vec<_>, String> = files
         .par_iter()
         .map(|path| {
-            sfmtool_sift_format::read_sift_features(path)
-                .map_err(|e| format!("{}: {e}", path.display()))
+            let shown = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+            let f = sfmtool_sift_format::read_sift_features(path).map_err(|e| shown(&e))?;
+            let descriptors = ImageDescriptors::new(f.descriptors).map_err(|e| shown(&e))?;
+            Ok((
+                ImageKeypoints {
+                    positions: f.positions_xy,
+                    affine_shapes: f.affine_shapes,
+                },
+                descriptors,
+            ))
         })
         .collect();
     match read {
-        Ok(read) => Some(
-            read.into_iter()
-                .map(|f| {
-                    (
-                        ImageKeypoints {
-                            positions: f.positions_xy,
-                            affine_shapes: f.affine_shapes,
-                        },
-                        ImageDescriptors::new(f.descriptors),
-                    )
-                })
-                .unzip(),
-        ),
+        Ok(read) => Some(read.into_iter().unzip()),
         Err(e) => {
             sfmtool_core::progress_warn!(
                 progress,

@@ -102,7 +102,8 @@ pub struct NearbyCandidate {
 impl NearbyCandidate {
     pub fn n_views(&self) -> usize;
     pub fn image(&self) -> u32;                                  // the queried image
-    pub fn ray_distance(&self, views: &[ProjectedImage<'_>]) -> f64;
+    pub fn ray_distance(&self, views: &[ProjectedImage<'_>])
+        -> Result<f64, DistanceRangeError>;                     // NoSuchImage off `views`
     pub fn range(&self, views: &[ProjectedImage<'_>], tolerance_px: f64)
         -> Result<[f64; 2], DistanceRangeError>;
 }
@@ -157,6 +158,8 @@ make the matches depend on how the index was built rather than on the
 photographs. The `.sift` files hold each image's descriptors row for row with
 the keypoints every source already reads, so `ImageDescriptors` is read from
 them once per capture and kept, 128 bytes a keypoint, as `ImageKeypoints` is.
+`ImageDescriptors::new` refuses bytes that are not a whole number of 128-byte
+rows (`DescriptorRowsError`).
 The rays through the keypoints are kept too: in the camera's frame they depend
 on the lens and not the pose, so `KeypointRays` builds each image's the first
 time it is read and a query turns them into the world frame with the pose it
@@ -397,7 +400,8 @@ decides the sources on the bench's synthetic capture, a grid of points on a
 textured plane seen by three cameras, with the middle point deleted and the
 query made at its pixel: the eight grid neighbours are found nearest first,
 without the deleted point, with the queried sighting first and a range that
-holds their distance; a point one photograph puts 3 px away is left out until
+holds their distance, and a queried image that is not a view refused by
+`ray_distance` and `range` alike; a point one photograph puts 3 px away is left out until
 the bar allows it; a point with too few observations is left out; and a query
 that names no place is refused. On the same plane seen by four cameras, a
 cluster with one member 8 px off keeps the other three, and all four once the
@@ -409,7 +413,8 @@ plane points with their own descriptors, finds the match along the ray in two
 images and the loose one in a third after them; a keypoint on the queried ray
 further out whose descriptor is nearly as close makes that image's match
 ambiguous, and it is refused until the ratio allows it; and descriptors that
-are not row for row with the keypoints are refused. The constellation, over a
+are not row for row with the keypoints are refused, as are bytes that are not
+whole descriptor rows. The constellation, over a
 `.kdf` written for thirty plane points seen by every camera, carries the pixel
 to where the point projects in each other image and meets at the point, adds
 one candidate per keypoint queried from with `Keypoints`, and finds nothing

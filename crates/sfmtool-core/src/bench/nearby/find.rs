@@ -751,7 +751,7 @@ pub fn find_nearby_tracks(
             for c in found {
                 let range = c.range(views, options.range.tolerance_px)?;
                 tracks.push(unplaced(
-                    c.ray_distance(views),
+                    c.ray_distance(views)?,
                     range,
                     classify(range),
                     c.point,

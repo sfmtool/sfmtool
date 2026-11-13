@@ -106,11 +106,32 @@ impl NearbyCandidate {
     /// The point's distance along [`Self::query_pixel`]'s unit ray from the
     /// queried camera's centre, the distance [`distance_range`] takes.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the queried image is not one of `views`.
-    pub fn ray_distance(&self, views: &[ProjectedImage<'_>]) -> f64 {
-        let cq = ViewCamera::new(&views[self.image() as usize]);
+    /// [`DistanceRangeError::NoSuchImage`] when the queried image is not one
+    /// of `views`.
+    pub fn ray_distance(&self, views: &[ProjectedImage<'_>]) -> Result<f64, DistanceRangeError> {
+        let view = self.query_view(views)?;
+        Ok(self.distance_along_ray(view))
+    }
+
+    /// The queried image's view, or [`DistanceRangeError::NoSuchImage`].
+    fn query_view<'a, 'v>(
+        &self,
+        views: &'a [ProjectedImage<'v>],
+    ) -> Result<&'a ProjectedImage<'v>, DistanceRangeError> {
+        let image = self.image();
+        views
+            .get(image as usize)
+            .ok_or(DistanceRangeError::NoSuchImage {
+                image,
+                image_count: views.len(),
+            })
+    }
+
+    /// [`Self::ray_distance`] in the queried image's own view.
+    fn distance_along_ray(&self, view: &ProjectedImage<'_>) -> f64 {
+        let cq = ViewCamera::new(view);
         let ray = cq.ray(self.query_pixel);
         (self.position - cq.center).dot(&(ray / ray.norm()))
     }
@@ -121,19 +142,13 @@ impl NearbyCandidate {
         views: &[ProjectedImage<'_>],
         tolerance_px: f64,
     ) -> Result<[f64; 2], DistanceRangeError> {
-        let image = self.image();
-        if image as usize >= views.len() {
-            return Err(DistanceRangeError::NoSuchImage {
-                image,
-                image_count: views.len(),
-            });
-        }
+        let view = self.query_view(views)?;
         distance_range(
             views,
-            image,
+            self.image(),
             self.query_pixel,
             &self.sightings,
-            self.ray_distance(views),
+            self.distance_along_ray(view),
             tolerance_px,
         )
     }
