@@ -191,14 +191,18 @@ fn a_near_foreground_shortens_the_steps_by_the_gain_of_the_last_three() {
     }
     // The near foreground reads as one: past the first steps the gain is at
     // its maximum, and the walk takes far more frames than without the term.
+    // Near the end of the capture a step of three frames has a parallax P90
+    // just under the 0.2° its measure needs, so the last step may be walked
+    // with two such measures of the last three, and a gain of 1.
     assert_eq!(walk.steps[0].density.gain, 1.0);
     assert!(
         walk.steps[0].density.measure > 7.5,
         "{:?}",
         walk.steps[0].density
     );
+    let middle = &walk.steps[1..walk.steps.len() - 1];
     assert!(
-        gained + 1 >= walk.steps.len(),
+        middle.iter().all(|s| s.density.gain > 1.0),
         "{gained} of {}",
         walk.steps.len()
     );

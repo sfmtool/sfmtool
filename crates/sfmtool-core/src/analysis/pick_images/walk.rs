@@ -3,7 +3,8 @@
 
 //! The walk along one sequence: predict the next frame from the recent rate,
 //! or measure the next frame first when there is none, measure the step,
-//! accept it or re-aim, keep every step beyond the next frame at or above the
+//! accept it or re-aim, aiming no further than twice the longest span
+//! measured, keep every step beyond the next frame at or above the
 //! match floor, and swap a frame blurred against its neighbours for a sharper
 //! neighbour; with the local density term, measure each accepted step's
 //! essential split and set the next step's target from the last three.
@@ -29,6 +30,22 @@ const MAX_REAIMS: usize = 4;
 
 /// How many accepted steps' rates predict the next step.
 const RECENT_RATES: usize = 3;
+
+/// How many times the longest span a step has measured, of the recent steps
+/// and of its own candidates that held below the band, its aim may lie from
+/// the last chosen frame. The band's ends are about 2 apart, `1.3 / 0.7`, so
+/// a candidate at twice a span measured below the band reads close to the
+/// band rather than far past it, where frames that share only the distant
+/// scene can read in the band.
+const REACH_FACTOR: usize = 2;
+
+/// An accepted step that kept the match floor: its rate and its span in
+/// positions.
+#[derive(Clone, Copy)]
+struct Recent {
+    rate: f64,
+    span: usize,
+}
 
 /// How many positions on either side of a candidate lie the frames it is
 /// compared with for blur against its neighbours.
@@ -71,9 +88,10 @@ struct Walker<'w, 'a> {
     /// The candidates of the step matched from the last chosen frame, with
     /// their features, so that the one accepted keeps them.
     candidates: Vec<(usize, FrameFeatures)>,
-    /// The rates of the last accepted steps that kept the match floor; empty
-    /// at the start and after a step to the next frame that did not.
-    rates: VecDeque<f64>,
+    /// The rates and spans of the last accepted steps that kept the match
+    /// floor; empty at the start and after a step to the next frame that did
+    /// not.
+    recent: VecDeque<Recent>,
     /// The local density term's split options, `None` with the term off.
     split: Option<EssentialSplitOptions>,
     /// The measures of the last accepted steps, at most
@@ -139,7 +157,7 @@ pub(super) fn walk_sequence(
         pilot,
         current: (0, None),
         candidates: Vec::new(),
-        rates: VecDeque::new(),
+        recent: VecDeque::new(),
         split: split.ok(),
         measures: VecDeque::new(),
         target: options.target_step_percent,
@@ -215,32 +233,56 @@ impl Walker<'_, '_> {
         }
     }
 
-    /// The recent rates once a step from `f` to `c`, measured as `stats`,
-    /// is accepted: a step that keeps the floor adds its rate, and a step to
-    /// the next frame that does not clears them, so the next step measures
-    /// its next frame first.
-    fn rates_after(&self, f: usize, c: usize, stats: &FramePairStats) -> VecDeque<f64> {
-        let mut rates = self.rates.clone();
+    /// The recent steps once a step from `f` to `c`, measured as `stats`,
+    /// is accepted: a step that keeps the floor adds its rate and span, and a
+    /// step to the next frame that does not clears them, so the next step
+    /// measures its next frame first.
+    fn recent_after(&self, f: usize, c: usize, stats: &FramePairStats) -> VecDeque<Recent> {
+        let mut recent = self.recent.clone();
         if stats.matches >= self.options.min_step_matches {
-            rates.push_back(stats.step_percent / (c - f) as f64);
-            if rates.len() > RECENT_RATES {
-                rates.pop_front();
+            recent.push_back(Recent {
+                rate: stats.step_percent / (c - f) as f64,
+                span: c - f,
+            });
+            if recent.len() > RECENT_RATES {
+                recent.pop_front();
             }
         } else {
-            rates.clear();
+            recent.clear();
         }
-        rates
+        recent
     }
 
-    /// The first candidate of a step from `f` with the recent rates `rates`:
-    /// `target / rate` frames on, at the median of the rates, or the next
-    /// frame when there are none. Past the last frame when `f` is the last.
-    fn first_candidate(&self, f: usize, rates: &VecDeque<f64>) -> usize {
-        if rates.is_empty() || f >= self.last {
+    /// The farthest frame a step from `f` may aim at, its reach:
+    /// [`REACH_FACTOR`] times the longest span of the recent steps `recent`
+    /// and of `measured`, the step's own farthest candidate that held below
+    /// the band, from `f`, and at most the last frame.
+    fn reach(&self, f: usize, recent: &VecDeque<Recent>, measured: Option<usize>) -> usize {
+        let span = recent
+            .iter()
+            .map(|r| r.span)
+            .chain(measured.map(|x| x - f))
+            .max()
+            .unwrap_or(0)
+            .max(1);
+        (f + REACH_FACTOR * span).min(self.last)
+    }
+
+    /// The first candidate of a step from `f` with the recent steps `recent`:
+    /// `target / rate` frames on, at the median of their rates, within their
+    /// reach, or the next frame when there are none. Past the last frame when
+    /// `f` is the last.
+    fn first_candidate(&self, f: usize, recent: &VecDeque<Recent>) -> usize {
+        if recent.is_empty() || f >= self.last {
             return f + 1;
         }
-        let rates: Vec<f64> = rates.iter().copied().collect();
-        Self::aim(f, self.target / median(&rates), f + 1, self.last)
+        let rates: Vec<f64> = recent.iter().map(|r| r.rate).collect();
+        Self::aim(
+            f,
+            self.target / median(&rates),
+            f + 1,
+            self.reach(f, recent, None),
+        )
     }
 
     fn bounds(&self) -> StepBounds {
@@ -269,10 +311,10 @@ impl Walker<'_, '_> {
     fn step(&mut self) -> Result<(), PickImagesError> {
         let b = self.bounds();
         let f = b.from;
-        // With no recent rate, the step to the next frame is measured first
-        // and the walk re-aims from its rate.
-        let from_next = self.rates.is_empty();
-        let mut c = self.first_candidate(f, &self.rates);
+        // With no recent step, the step to the next frame is measured first
+        // and the walk aims from its rate, which is the step's prediction.
+        let mut predicting = self.recent.is_empty();
+        let mut c = self.first_candidate(f, &self.recent);
         // The largest candidate below the band that held, the smallest above
         // it, and the smallest short of the floor.
         let mut below: Option<(usize, FramePairStats)> = None;
@@ -354,18 +396,25 @@ impl Walker<'_, '_> {
                 self.predict(f, &next);
                 continue;
             }
-            // Aiming from the next frame's rate is the step's prediction,
-            // not a re-aim.
-            if reaims == MAX_REAIMS + usize::from(from_next) {
-                return match below {
-                    Some((x, s)) => {
-                        self.settle(Self::within_floor(b, short), x, s, StepKind::BelowBand)
-                    }
-                    None => self.settle_next(b, short),
-                };
+            // The aim stays within the step's reach. An aim the reach stops
+            // is a probe outward, which doubles the reach when it measures
+            // below the band, and not a re-aim; nor is the step's prediction
+            // from the next frame's rate.
+            let distance = (c - f) as f64 * b.target / m;
+            let reach = self.reach(f, &self.recent, below.as_ref().map(|(x, _)| *x));
+            let probe = Self::aim(f, distance, low, high) > reach;
+            if !std::mem::take(&mut predicting) && !probe {
+                if reaims == MAX_REAIMS {
+                    return match below {
+                        Some((x, s)) => {
+                            self.settle(Self::within_floor(b, short), x, s, StepKind::BelowBand)
+                        }
+                        None => self.settle_next(b, short),
+                    };
+                }
+                reaims += 1;
             }
-            reaims += 1;
-            c = Self::aim(f, (c - f) as f64 * b.target / m, low, high);
+            c = Self::aim(f, distance, low, high.min(reach));
         }
     }
 
@@ -409,9 +458,9 @@ impl Walker<'_, '_> {
         // recent rates left, the walk reads the frames after `c` one after
         // another for as long as they keep fewer matches than the floor, so
         // as many of them as the source works on at once are predicted.
-        let rates = self.rates_after(b.from, c, &stats);
-        let next = self.first_candidate(c, &rates);
-        let ahead = if rates.is_empty() {
+        let recent = self.recent_after(b.from, c, &stats);
+        let next = self.first_candidate(c, &recent);
+        let ahead = if recent.is_empty() {
             self.frames.prefetch_window().max(1)
         } else {
             1
@@ -536,7 +585,7 @@ impl Walker<'_, '_> {
     ) -> Result<(), PickImagesError> {
         let f = self.current.0;
         let rate = stats.step_percent / (c - f) as f64;
-        self.rates = self.rates_after(f, c, &stats);
+        self.recent = self.recent_after(f, c, &stats);
         let features = self
             .candidates
             .drain(..)

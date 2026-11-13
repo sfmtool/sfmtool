@@ -454,11 +454,15 @@ floor is the walk's one count of matches.
 ### The walk
 
 The walk chooses the sequence's first frame and repeats from the last chosen
-frame `f` until it chooses the sequence's last frame. The **recent rates**
-are the rates of the last three accepted steps that kept the match floor.
+frame `f` until it chooses the sequence's last frame. The **recent steps**
+are the last three accepted steps that kept the match floor, and the
+**recent rates** their rates. A step's **reach** is the farthest frame it
+may aim at: `f` plus twice the longest span it has measured, of the recent
+steps and of its own candidates that held below the band, and at most the
+sequence's last frame ([The reach](#the-reach)).
 
 1. **Predict.** With recent rates, the candidate is `c = f + target / rate`,
-   rounded, at least `f + 1` and at most the sequence's last frame, with the
+   rounded, at least `f + 1` and at most the step's reach, with the
    rate their median and the target the step's own. The rates are steps per
    position whatever target their steps had, so a change of target moves the
    prediction with it. With none, at the start of the sequence and after a
@@ -481,8 +485,11 @@ are the rates of the last three accepted steps that kept the match floor.
      re-aim.
 4. **Re-aim** to `c' = f + (c − f) · target / m`, kept strictly between the
    largest candidate measured below the band and the smallest measured
-   above the band or short of the floor. After a candidate short of the
-   floor, the next is instead the middle of the frames left between them,
+   above the band or short of the floor, and at most the step's reach. A
+   re-aim the reach stops is a **probe**: it does not count as a re-aim,
+   and when it measures below the band it doubles the reach, so the walk
+   reaches any distance in as many probes as the doublings it takes. After
+   a candidate short of the floor, the next is instead the middle of the frames left between them,
    rounded up, so that the walk finds the farthest frame that keeps the floor
    in a few tries rather than one frame at a time; those tries do not count
    as re-aims. When no frame is left between them, they lie one frame apart,
@@ -507,6 +514,33 @@ are the rates of the last three accepted steps that kept the match floor.
    rate measured before the matches fell. With the local density term, the
    step's essential split is measured and the next step's target set
    ([The local density term](#the-local-density-term)).
+
+### The reach
+
+The step is the median displacement of a pair's mutual matches, and over a
+long span it need not grow with the span. Frames far apart share mostly the
+distant part of the scene, whose displacement is small, so a pair hundreds
+of frames apart can read a step in the band while the frames between them
+read steps above it. On a video that starts almost still, the first
+prediction, from the next frame's rate of a few hundredths of a percent, lands
+hundreds of frames on; a candidate there can read in the band and be
+accepted, and the steps after it, predicted from that step's small rate,
+overshoot in the same way. A step that long leaves too few frames for the
+local density term to read a near foreground, and which far frame happens
+to read in the band depends on where the walk starts.
+
+So a step aims no further than twice the longest span it has measured. At
+the start of a sequence, and after a step to the next frame that kept fewer
+matches than the floor, the only span measured is the next frame's, and the
+walk probes outward by doubling, 1, 2, 4, 8 and on, until a candidate
+reaches the band or the floor stops it; after that the recent steps' spans
+bound the prediction. The factor of 2 matches the band's width, whose ends
+are about 2 apart (`1.3 / 0.7`): where the step grows with the span, a
+candidate at twice a span measured below the band reads at most about twice
+that step, close to the band rather than far past it. A probe costs one
+pair match, and the walk probes only where the step it wants is more than
+twice the longest it has measured: a few times at the start of a sequence,
+and where the motion slows to under about half its recent speed.
 
 **Every step holds.** A step to the next frame always holds, and the search
 of step 4 only settles beyond the next frame on a frame whose step keeps the
@@ -887,8 +921,9 @@ exact.
 | `step_band` | `0.3` | the band, `target × (1 ± step_band)` |
 | `neighbour_blur_ratio` | `0.85` | below this times the sharpest neighbour's sharpness is blurred against the neighbours |
 | `min_step_matches` | `600` | the match floor, the mutual matches a step beyond the next frame keeps; at least 1 |
-| re-aims | 4 | before the walk settles below the band; the tries towards the floor and the aim from the next frame's rate are not counted |
+| re-aims | 4 | before the walk settles below the band; the tries towards the floor, the probes and the aim from the next frame's rate are not counted |
 | recent rates | 3 | the accepted steps the prediction takes the median of |
+| reach | 2 times the longest span measured | the farthest a step aims, from the recent steps' spans and the step's own candidates below the band |
 | neighbours | 2 positions on either side | the frames a candidate is judged against for blur against its neighbours |
 | measured steps | 3 | the last accepted steps whose median measure sets the gain |
 | measure at a gain of 1 | 2.5 | the median measure the gain is `M / 2.5` of |
@@ -901,8 +936,8 @@ exact.
 | pilot frames for a vote | at least 3 | fewer run no vote |
 | pool spread | at most 0.35 | for the pilot vote's camera to be used |
 
-The re-aims, the recent rates, the neighbours and the local density term's
-and pilot vote's values below them are constants of the module; the prediction below the
+The re-aims, the recent rates, the reach, the neighbours and the local
+density term's and pilot vote's values below them are constants of the module; the prediction below the
 floor is the source's `concurrency`. The split itself takes
 `EssentialSplitOptions::new`'s defaults: a 3-pixel bound, 512 samples and
 seed 0.
@@ -979,8 +1014,15 @@ every wait and prefetch. The walk's tests turn the pilot vote off, so a
 sequence with no camera is walked without the local density term; the
 pilot's tests leave it at its default. They cover a steady video chosen at
 about the target step, whose first step measures the next frame; a change of speed
-that the stride follows; a frame blurred against its neighbours swapped for
-the sharpest neighbour whose step fits; a frame sharper than every other
+that the stride follows; a capture that starts still in front of a wall and
+far points, whose next frame's rate predicts a step past the last frame and
+whose frames far apart read in the band on the far points alone, where every
+frame the first step measures lies within twice the farthest measured below
+the band before it, the first step lands in the band on the wall near the
+start, the walk takes at least 15 frames rather than a few long steps, and
+a walk started later in the still stretch lands near the start of the
+motion too; a frame blurred against its
+neighbours swapped for the sharpest neighbour whose step fits; a frame sharper than every other
 frame of the capture but its neighbours, swapped all the same; a uniformly
 blurred stretch none of whose frames is swapped against its neighbours,
 crossed at the band's spacing; neighbours out of the band or short of the
@@ -1014,7 +1056,9 @@ ring of distant points and a ring of near ones: with its camera every step is
 measured, each walked with the gain of the median of the last three
 measures before it, at a target that is the base over the gain and in its
 own band, each step in the band after the first is reached by its first
-try, every step after the first is walked with a gain above 1, and the walk
+try, every step after the first but the last is walked with a gain above 1
+(at the end of the capture a three-frame step's parallax P90 sits just
+under the 0.2° its measure needs), and the walk
 takes over twice the frames it takes without a camera, with no split in the
 pairs it matched to decide, and each step's split equal to the one a second
 match of its pair with the split set measures. With a maximum gain of 1 it chooses and waits for

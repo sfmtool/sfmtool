@@ -300,6 +300,58 @@ fn the_stride_adapts_to_the_speed() {
     assert_read_is_asked(&run);
 }
 
+/// A camera that holds still for `still` frames and then moves by about 1%
+/// of the long side a frame for `moving` frames, along a wall in front of
+/// far points ([`Synth::wall_before_far_points`]). The step to the next frame
+/// at the start is the keypoints' noise, and predicts a step past the last
+/// frame; frames far apart share only the far points, whose step from frame
+/// 0 is in the band at frames some 150 to 190 into the motion.
+fn still_then_moving(still: usize, moving: usize) -> Synth {
+    let xs = (0..still + moving).map(|t| t.saturating_sub(still) as f64 * ONE_PERCENT);
+    let length = moving as f64 * ONE_PERCENT;
+    Synth::wall_before_far_points(41, -12.0, length + 12.0, 40.0, 0.65).along(xs)
+}
+
+#[test]
+fn a_step_aims_no_further_than_twice_the_longest_span_measured() {
+    // From a still start, the walk probes outward from the next frame,
+    // doubling, rather than aim where the next frame's rate predicts, past
+    // the last frame, whose re-aims land where only the far points are
+    // shared and the step reads in the band. It settles on the frame in the
+    // band on the wall, about 10 frames into the motion.
+    let (still, moving) = (20, 200);
+    let synth = still_then_moving(still, moving);
+    let from_0 = run(&[&synth]);
+    let walk = from_0.walk(0);
+    let first = &walk.steps[0];
+    assert_eq!(first.kind, StepKind::InBand, "{first:?}");
+    assert!((still + 7..=still + 14).contains(&first.to), "{first:?}");
+    // Every frame measured from frame 0 lies within twice the farthest frame
+    // measured below the band before it, the next frame at first.
+    let mut longest = 1;
+    for p in from_0.report().pairs.iter().filter(|p| p.a.frame == 0) {
+        let frame = p.b.frame;
+        assert!(frame <= 2 * longest, "{frame} beyond {}", 2 * longest);
+        if p.stats.step_percent < band().0 {
+            longest = longest.max(frame);
+        }
+    }
+    // The steps after it aim from rates measured on the wall, and the walk
+    // does not collapse into a few long steps.
+    assert!(walk.chosen.len() >= 15, "{:?}", walk.chosen);
+    assert_read_is_asked(&from_0);
+
+    // Started later in the still stretch, the walk's first step ends near
+    // the start of the motion too.
+    let start = 7;
+    let mut later = synth.clone();
+    later.shots.drain(..start);
+    let from_later = run(&[&later]);
+    let steps = &from_later.walk(0).steps;
+    let to = steps[0].to + start;
+    assert!((still + 7..=still + 14).contains(&to), "{:?}", steps[0]);
+}
+
 /// The report's reading of `frame`, which was read.
 fn reading(run: &Run, frame: usize) -> FrameReading {
     run.report()

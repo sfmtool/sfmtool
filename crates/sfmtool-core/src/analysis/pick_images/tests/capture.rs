@@ -105,6 +105,36 @@ impl Synth {
         Self::with_points(&mut rng, points)
     }
 
+    /// [`Synth::wall`] in front of far points: `far_density` per unit of x
+    /// at depths 140 to 160, spread along x over the wall's range widened by
+    /// 100 on either side and as high as the view at their depth. The far
+    /// points move across the image about a fifteenth as far as the wall for
+    /// the same motion along x, and frames 18 or more apart along x share
+    /// none of the wall's points and most of the far ones, so the step
+    /// between them is the far points' alone: well short of the wall's.
+    pub(super) fn wall_before_far_points(
+        seed: u64,
+        x_min: f64,
+        x_max: f64,
+        density: f64,
+        far_density: f64,
+    ) -> Self {
+        let mut synth = Self::wall(seed, x_min, x_max, density);
+        let mut rng = StdRng::seed_from_u64(seed.wrapping_add(1));
+        let n = ((x_max - x_min + 200.0) * far_density) as usize;
+        for _ in 0..n {
+            synth.points.push([
+                rng.random_range(x_min - 100.0..x_max + 100.0),
+                rng.random_range(-70.0..70.0),
+                rng.random_range(140.0..160.0),
+            ]);
+            synth
+                .descriptors
+                .push(std::array::from_fn(|_| rng.random::<u8>()));
+        }
+        synth
+    }
+
     fn with_points(rng: &mut StdRng, points: Vec<[f64; 3]>) -> Self {
         let descriptors = points
             .iter()
