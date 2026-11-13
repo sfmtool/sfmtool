@@ -104,7 +104,8 @@ pub struct PairwiseFlowNormalOptions {
     /// residuals' robust scale.
     pub tukey_c: f64,
     /// How far apart two flow errors are before they are independent, in
-    /// photograph px; also the side of the square the crops' structure
+    /// pixels of the pair's coarser view as its crop reads them (one sample
+    /// per pixel for a view read through its pyramid); also the side of the square the crops' structure
     /// tensors are summed over. 8.
     pub correlation_length_px: f64,
     /// The share of pure-noise windows whose larger tensor eigenvalue may
@@ -333,8 +334,10 @@ photograph. A 24 × 24 grid on a patch that covers 1024 photograph pixels
 across gives a crop of 72 samples a side at 3 times the patch, each sample
 spanning about 43 photograph pixels across; at one sample per photograph pixel
 the same crop would be 3072 samples a side. A view coarser than the grid is
-upsampled, which only blurs, and blur is harmless to the flow; its σ counts the
-correlation of the flow's errors in that view's own pixels (§ [Fitting each
+upsampled, which only blurs; blur that both crops of a pair share is harmless to
+the flow, and a pair whose crops differ in blur is read at a coarser level
+(below). Its σ counts the correlation of the flow's errors in that view's own
+pixels (§ [Fitting each
 pair at each radius](#fitting-each-pair-at-each-radius)).
 
 The renderers already sample this way. With `SamplerChoice::PerView`
@@ -475,15 +478,16 @@ both photographs, at the pair's pyramid level:
 4. **Correlated samples.** `H` sums over samples, but DIS flow errors are
    correlated over a distance of the order of the DIS patch (12 samples); the
    prototype took `correlation_length_px`, 8 photograph pixels, and the step
-   counts them in the coarser view's own pixels. Where that view is upsampled
-   `k` times at the level the pair is read at (`k / 2^ℓ`, between 1 and 2, `k`
-   its `samples_per_pixel`), and 1 where neither view is coarser than the grid,
-   that is a square of side `L = 8k` samples at that level, `k` now meaning
-   that factor. Each sample's `W_s` (below) is the
+   counts them in the coarser view's pixels as its crop reads them. With `m`
+   the factor by which that view is upsampled at the level the pair is read at
+   (`m = k / 2^ℓ`, between 1 and 2, `k` its `samples_per_pixel`), or `m = 1`
+   where neither view is coarser than the grid (each is then read through its
+   pyramid at about one pixel per sample), that is a square of side `L = 8m`
+   samples at that level. Each sample's `W_s` (below) is the
    information of the `L × L` square about it, so summing it over every sample
    counts each square's information `L²` times; `H` is therefore divided by
    `L²`, and each correlated square counts once. Counted per photograph pixel
-   instead, σ would be too small by about 8; counted per sample, by about `8k`.
+   instead, σ would be too small by about 8; counted per sample, by about `8m`.
 
 **The flow information of a sample.** The geometric derivative `J_s` alone
 says nothing about texture: on a textureless crop the smoothed DIS flow is
