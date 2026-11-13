@@ -83,16 +83,16 @@ fn a_sequence_with_no_camera_is_walked_with_the_pilot_vote_s_camera() {
 }
 
 /// A source that takes `DELAY` per frame on one worker makes the pilot walk
-/// last at least `DELAY` per frame it read; the walk's thread spends the
-/// delay waiting for frames, and the vote's own time, the clustering and the
-/// vote alone, is less than that wait. The frames match nothing, so the pilot walk reads
-/// every frame and the vote, on few features, is quick next to the delay.
-/// With no prefetch the worker starts a frame only when the walk waits for
-/// it, so each wait lasts at least `DELAY` however long the walk's own reads
-/// take.
+/// wait at least `DELAY` for each frame it reads. The walk's thread's times
+/// are disjoint stretches that add up to the call's wall time, so a vote
+/// timer that also counted the pilot walk's waits, reads or matching would
+/// count them twice, and the parts would add up to more than the call by at
+/// least the waits. The frames match nothing, so the pilot walk reads every
+/// frame. With no prefetch the worker starts a frame only when the walk
+/// waits for it, so each wait lasts at least `DELAY`.
 #[test]
 fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
-    const DELAY: Duration = Duration::from_millis(25);
+    const DELAY: Duration = Duration::from_millis(5);
     let mut synth = Synth::steady(43, 8, ONE_PERCENT);
     for shot in &mut synth.shots {
         shot.content = Content::Junk;
@@ -115,26 +115,16 @@ fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
         .as_ref()
         .expect("a pilot ran");
     assert!(vote.features > 0, "a vote ran");
-    // The one worker wrote each frame the pilot read after a delay of its
-    // own, started by the walk's wait for it, so the pilot walk waited at
-    // least this long.
+    // The pilot walk waited at least this long, so a vote timer that spanned
+    // it would make the parts exceed the call by far more than the rounding
+    // `assert_parts_add_up` allows.
     let pilot_extraction = vote.frames_read as f64 * DELAY.as_secs_f64();
     assert!(
         report.times.waiting_for_frames_seconds >= pilot_extraction,
         "{:?}",
         report.times
     );
-    // The pilot read every frame, so every wait of the run was the pilot
-    // walk's: a vote time that counted the pilot walk would be at least the
-    // wait. The vote alone takes about 10 ms against the wait's 200 ms or
-    // more, a margin that holds while other tests load every core.
-    assert!(
-        vote.seconds < report.times.waiting_for_frames_seconds,
-        "the vote took {} s: {:?}",
-        vote.seconds,
-        report.times
-    );
-    assert!((report.times.pilot_vote_seconds - vote.seconds).abs() < 1e-9);
+    assert_parts_add_up(&report);
 }
 
 #[test]

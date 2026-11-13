@@ -173,12 +173,19 @@ fn walk_thread_times(times: &PickImagesTimes) -> [(&'static str, f64); 10] {
     ]
 }
 
-/// Every time of `run`'s report is finite and not negative; the walk's
-/// thread's add up to the call's wall time, which they would pass if two of
-/// them counted one moment; the pilot votes' figure is the sum of the votes';
-/// and the source's workers worked on at least every frame read.
+/// [`assert_parts_add_up`], and the source's workers, [`THREADS`] of them,
+/// worked on at least every frame read.
 fn assert_times_add_up(run: &Run) {
     let report = run.report();
+    assert_parts_add_up(report);
+    assert_eq!(report.times.source.workers, THREADS);
+    assert!(report.times.source.frames >= report.frames.len());
+}
+
+/// Every time of `report` is finite and not negative; the walk's thread's
+/// add up to the call's wall time, which they would pass if two of them
+/// counted one moment; and the pilot votes' figure is the sum of the votes'.
+fn assert_parts_add_up(report: &PickImagesReport) {
     let times = &report.times;
     let parts = walk_thread_times(times);
     for (name, seconds) in parts.iter().copied().chain([
@@ -200,8 +207,6 @@ fn assert_times_add_up(run: &Run) {
         .map(|v| v.seconds)
         .sum();
     assert!((times.pilot_vote_seconds - votes).abs() < 1e-6);
-    assert_eq!(times.source.workers, THREADS);
-    assert!(times.source.frames >= report.frames.len());
 }
 
 /// The band at [`options`]' target.
