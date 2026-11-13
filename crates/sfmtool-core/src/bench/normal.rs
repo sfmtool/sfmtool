@@ -27,8 +27,11 @@ use super::fit::{fit, FitError, FitOptions};
 use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackEditError};
 use super::track::{EditableTrack, Stage, StageKind};
 
+use crate::features::optical_flow::OpticalFlowError;
+
 mod grid_plane;
 mod grown_plane;
+mod pairwise_flow;
 
 pub use grid_plane::{
     grid_plane_normal, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
@@ -41,6 +44,7 @@ pub use grown_plane::{
     GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal,
     GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView,
 };
+pub use pairwise_flow::PairwiseFlowNormalOptions;
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
 /// fitted centres are the fewest that fix a line.
@@ -155,6 +159,13 @@ pub enum NormalError {
     /// A [`GrownPlaneNormalOptions`] setting, named, is outside what the step
     /// takes ([`GrownPlaneNormalOptions::check`]).
     BadGrownPlaneOption(&'static str),
+    /// A [`PairwiseFlowNormalOptions`] setting, named, is outside what the
+    /// pairwise-flow normal takes ([`PairwiseFlowNormalOptions::check`]).
+    BadPairwiseFlowOption(&'static str),
+    /// The optical flow refused its settings: those of
+    /// [`PairwiseFlowNormalOptions::flow`], which no pair of crops could be
+    /// read with.
+    Flow(OpticalFlowError),
     /// The turn to the estimated normal was refused.
     Tilt(TrackEditError),
     /// The reading the step ends with failed.
@@ -205,6 +216,13 @@ impl std::fmt::Display for NormalError {
                     "the grown plane normal's {name} is outside what it takes"
                 )
             }
+            NormalError::BadPairwiseFlowOption(name) => {
+                write!(
+                    f,
+                    "the pairwise flow normal's {name} is outside what it takes"
+                )
+            }
+            NormalError::Flow(e) => write!(f, "the optical flow refused its settings: {e}"),
             NormalError::Tilt(e) => write!(f, "{e}"),
             NormalError::Evaluate(e) => write!(f, "{e}"),
             NormalError::Cancelled => write!(f, "the step was cancelled"),

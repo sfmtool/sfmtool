@@ -60,7 +60,10 @@ pub use flow_field::{FlowField, FlowFieldRef};
 pub use image::{matcher_gray_from_rgb, matcher_image_to_gray, GrayImage, MATCHER_GRAY_FORMULA};
 pub use params::{DisFlowParams, FlowTiming, OpticalFlowError};
 
-use pyramid::ImagePyramid;
+// Crate-visible for the bench's pairwise-flow normal, which reads each crop
+// it renders at the level of this pyramid that a pair of crops is compared
+// at, so every crop is blurred with the kernel the flow itself uses.
+pub(crate) use pyramid::ImagePyramid;
 
 /// Internals exposed for benchmarking only. Not part of the public API.
 #[doc(hidden)]

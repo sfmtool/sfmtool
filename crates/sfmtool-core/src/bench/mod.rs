@@ -103,7 +103,7 @@ pub use normal::{
     GrownPlaneGridRound, GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair,
     GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,
     GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView, NormalError,
-    NormalEstimate, NormalReport, PieceLayout, BENCH_MIN_CELL_ZNCC,
+    NormalEstimate, NormalReport, PairwiseFlowNormalOptions, PieceLayout, BENCH_MIN_CELL_ZNCC,
 };
 pub use refine_normals::{
     refine_normals, NormalLeftUnchanged, RefineNormalsError, RefineNormalsOptions,

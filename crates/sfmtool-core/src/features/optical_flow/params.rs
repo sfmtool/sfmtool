@@ -11,6 +11,7 @@
 /// Notation follows Kroeger et al., "Fast Optical Flow using Dense Inverse Search," ECCV 2016.
 /// The flow functions check every field against the image and return an
 /// [`OpticalFlowError`] for a value outside the range its doc gives.
+#[derive(Debug, Clone)]
 pub struct DisFlowParams {
     /// Patch size (square edge length in pixels), at least 1 and no larger
     /// than the image's width or height. Default: 8.
@@ -206,6 +207,16 @@ impl DisFlowParams {
             .finest_scale
             .unwrap_or_else(|| coarsest.saturating_sub(2));
         Ok((finest, coarsest.max(finest)))
+    }
+
+    /// The checks of [`Self::resolve_scales`] that no image passes: those it
+    /// makes against the largest image a `u32` side can hold, so every refusal
+    /// but [`OpticalFlowError::PatchLargerThanImage`] and a scale the image at
+    /// hand is too small for. A caller that checks its settings before it has
+    /// an image, such as a bench step's options, refuses with the errors the
+    /// flow would.
+    pub(crate) fn check_fields(&self) -> Result<(), OpticalFlowError> {
+        self.resolve_scales(u32::MAX, u32::MAX).map(|_| ())
     }
 }
 

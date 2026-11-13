@@ -1,7 +1,8 @@
 # Pairwise Flow Normal
 
-**Status:** Draft. A proposal for a new bench normal step; nothing here is
-built. The design was prototyped in Python outside the repository and measured
+**Status:** Draft. A proposal for a new bench normal step; its building blocks
+are built (§ [Implementation notes](#implementation-notes)) and the step is not.
+The design was prototyped in Python outside the repository and measured
 against reference normals on real points and on synthetic scenes; the
 measurements are in
 [pairwise-flow-normal-measurements.md](pairwise-flow-normal-measurements.md).
@@ -162,7 +163,8 @@ impl PairwiseFlowNormalOptions {
     /// unsorted or non-positive list, ("rounds") of 0, ("min_samples_per_patch")
     /// under 2 or over max_samples_per_patch, ("crop_half_extents") under 1,
     /// and so on. The flow's own settings are checked here as
-    /// compute_optical_flow checks them; a pair whose square at its level is
+    /// compute_optical_flow checks them, except against an image's size, and
+    /// refused as NormalError::Flow; a pair whose square at its level is
     /// narrower than the flow's patch_size is not refused but has no flow and
     /// no fits.
     pub fn check(&self) -> Result<(), NormalError>;
@@ -265,9 +267,10 @@ pub fn pairwise_flow_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError>;
 ```
 
-`NormalError` would gain two variants: `BadPairwiseFlowOption(&'static str)`,
+`NormalError` gains two variants: `BadPairwiseFlowOption(&'static str)`,
 as `BadGrownPlaneOption` is for the grown-plane step, and `Flow(OpticalFlowError)`
-for a flow refusal the options check could not foresee.
+for a flow refusal: the options check's, for flow settings no image could be
+read with, and the flow's own, for one the check could not foresee.
 
 The report's sentence (`Display`) would read, for example, "3 rounds; 21 of 21
 pairs agree at 1.5 half-extents (χ² 1.4), σ 1.8°". A point the step does not
@@ -848,6 +851,35 @@ which pairs disagreed at which radius.
   thousand samples into 4×4 normal equations and run in `f64`, which costs
   nothing at that size and keeps the Hessian's inverse well conditioned near
   edge-on tilts.
+- **The building blocks.** The pieces the step composes are built, crate-internal,
+  under [bench/normal/pairwise_flow/](../../crates/sfmtool-core/src/bench/normal/pairwise_flow.rs),
+  with `PairwiseFlowNormalOptions` and its check; the step, its rounds, support
+  rule and report are not. Where those pieces settle what this draft leaves
+  open:
+  - The finest view, and each crop's `samples_per_pixel`, read a view's pixel
+    along its coarser axis on the plane: the smaller singular value of the
+    plane-to-photograph Jacobian at the point.
+  - The correlated square's side `L = correlation_length_px · m` is rounded to
+    whole samples at the pair's level, and that whole side is both the
+    structure tensor's window and the `L²` the information is shared over.
+  - The noise threshold is simulated per window side, crop `samples_per_pixel`
+    (read in quarter steps) and level: white noise drawn at the photograph's
+    pixels and sampled bilinearly onto the grid where the crop is upsampled,
+    at the grid's samples where it is not, taken down the flow's pyramid and
+    scaled to unit variance, so the threshold is in units of the noise
+    variance at that level. A level deeper than 3 is simulated at level 3
+    with `samples_per_pixel` scaled down by the levels left out, which bounds
+    the simulated field at 1024 samples a side. The draws come from a fixed
+    generator, so the threshold is the same on every machine, and each
+    setting is simulated once per process.
+  - The coarse grid of tilts is scored on at most 4,096 of the disc's samples,
+    at an even stride; Gauss-Newton then reads every sample.
+  - The residual σ counts a sample as carrying weight where its Tukey weight
+    and its information are both non-zero, and `s²` is the Tukey-weighted mean
+    squared residual per component over those samples.
+  - A disc whose texture runs one way at every sample, such as parallel
+    stripes, leaves the offset across it free; its Hessian is singular and the
+    pair has no fit there.
 - **Cost.** The first Python prototype took about 59 s for 153 points with 12
   processes, about 4.6 CPU-seconds per point, most of it in the fits; the flows
   were one full-resolution flow on a 96×96 crop per pair. The prototype of the
