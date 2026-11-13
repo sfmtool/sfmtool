@@ -199,7 +199,8 @@ is a refusal.
 one with no patch, one at infinity (`NormalError::AtInfinity`) and one with
 fewer than two `in` observations, and `check_views` too few views, as for every
 normal step; an observation naming an image with no view in `images` is
-refused as `EvaluateError::NoView` before any view is read. `check` names the first setting the step does not take as
+refused as `EvaluateError::NoView` before any view is read. `check` names the
+first setting the step does not take as
 `NormalError::BadPairwiseFlowOption(name)`: at least one round; view and normal
 angles above 0° and at most 90°; finite radii above zero, `radii` non-empty
 and strictly ascending, `fallback_radius` and `single_pair_radius` each one of

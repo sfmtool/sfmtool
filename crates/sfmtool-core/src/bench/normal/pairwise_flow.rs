@@ -357,9 +357,10 @@ impl PairwiseFlowNormalOptions {
 /// observations, too few views, and settings
 /// [`PairwiseFlowNormalOptions::check`] refuses; an observation naming an
 /// image `images` holds no view for is refused as
-/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView); a flow refusal the check
-/// could not foresee is [`NormalError::Flow`]. Cancelled through `progress`
-/// between pairs and between radii, as [`NormalError::Cancelled`].
+/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView); a flow
+/// refusal the check could not foresee is [`NormalError::Flow`]. Cancelled
+/// through `progress` between pairs and between radii, as
+/// [`NormalError::Cancelled`].
 ///
 /// # Example
 ///
