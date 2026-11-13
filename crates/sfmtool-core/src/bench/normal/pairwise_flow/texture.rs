@@ -290,8 +290,8 @@ pub(super) fn simulate_noise_threshold(
         let data: Vec<f32> = if k_quarters > 4 {
             // Photograph pixels under the grid, with a pixel of margin.
             let photo_side = (side as f64 / k).ceil() as usize + 3;
-            let photo: Vec<f64> = (0..photo_side * photo_side)
-                .map(|_| normal.next())
+            let photo: Vec<f32> = (0..photo_side * photo_side)
+                .map(|_| normal.next() as f32)
                 .collect();
             let mut data = Vec::with_capacity(side * side);
             for r in 0..side {
@@ -299,11 +299,11 @@ pub(super) fn simulate_noise_threshold(
                     let x = (c as f64 + 0.5) / k + 0.5;
                     let y = (r as f64 + 0.5) / k + 0.5;
                     let (x0, y0) = (x.floor() as usize, y.floor() as usize);
-                    let (fx, fy) = (x - x0 as f64, y - y0 as f64);
+                    let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
                     let at = |cc: usize, rr: usize| photo[rr * photo_side + cc];
                     let top = at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx;
                     let bottom = at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx;
-                    data.push((top * (1.0 - fy) + bottom * fy) as f32);
+                    data.push(top * (1.0 - fy) + bottom * fy);
                 }
             }
             data
@@ -314,16 +314,7 @@ pub(super) fn simulate_noise_threshold(
         let pyramid = ImagePyramid::build(&image, level + 1);
         let read = pyramid.level(level as usize);
         let (w, h) = (read.width() as usize, read.height() as usize);
-        // The field's own variance, summed in f64: one sum of 16,384 terms
-        // per field, which costs nothing beside the render.
-        let n = (w * h) as f64;
-        let mean = read.data().iter().map(|&v| f64::from(v)).sum::<f64>() / n;
-        let variance = read
-            .data()
-            .iter()
-            .map(|&v| (f64::from(v) - mean).powi(2))
-            .sum::<f64>()
-            / n;
+        let variance = f64::from(field_variance(read.data(), w));
         let tensors = structure_tensors(read, &vec![true; w * h], window);
         // Only windows wholly inside the field, and one sample in from its
         // edge, where every gradient in them is a central difference.
@@ -337,6 +328,24 @@ pub(super) fn simulate_noise_threshold(
         }
     }
     quantile_in_place(&mut eigenvalues, 1.0 - false_alarm)
+}
+
+/// The variance of a field of `width` columns about its mean, each row summed
+/// and then the row sums, in `f32`.
+///
+/// The field is the level the noise is read at, 128 × 128 samples of noise of
+/// about unit variance. Summed by rows, the rounding is bounded by about
+/// `(rows + columns) · 2⁻²⁴` of the sum of the terms' magnitudes,
+/// `1.5 · 10⁻⁵` at that size, far below the threshold's own sampling error:
+/// its 0.999 quantile rests on some 50 windows above it.
+fn field_variance(data: &[f32], width: usize) -> f32 {
+    let n = data.len() as f32;
+    let rows = || data.chunks_exact(width.max(1));
+    let mean = rows().map(|row| row.iter().sum::<f32>()).sum::<f32>() / n;
+    let squares: f32 = rows()
+        .map(|row| row.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>())
+        .sum();
+    squares / n
 }
 
 /// SplitMix64's output function: a fixed scramble of one 64-bit state, so the
