@@ -5,9 +5,10 @@ repository, behind [pairwise-flow-normal.md](pairwise-flow-normal.md). No code i
 the repository produced these numbers, and the prototype's scripts are not
 checked in.
 
-The measurements bear on four choices the draft makes: the flow settings, the
-crop's size, the rule that chooses the support, and what the step costs. Each
-section states the question, the setup and the result.
+The measurements bear on five choices the draft makes: the flow settings, the
+crop's size, the rule that chooses the support, the σ and outcome rules, and
+what the step costs. Each section states the question, the setup and the
+result.
 
 ## Reference sets
 
@@ -50,8 +51,10 @@ photographs, in pixels, which bounds what a support of one patch can see:
 
 ## The prototype's crops
 
-The prototype's runs used two crop designs, and neither is the one the draft
-proposes.
+The prototype's runs on real photographs used two crop designs, and neither is
+the one the draft proposes. (The runs on synthetic scenes, § "Synthetic
+scenes", rendered their crops by casting rays onto the true surface and test
+the σ and outcome rules, not the crops.)
 
 - **The runs against the grown plane** (§ "Fresh solves against the grown
   plane", made with the prototype's `pairflow.py` and scripts like it): each
@@ -152,6 +155,66 @@ set. Fixed sizes in units of the patch do well on dino, whose patches are large,
 and badly on seoul_bull and kerry_park. The radius of smallest σ picks large
 discs, since one pair's σ keeps falling as the radius grows, across a fold
 as well. The χ² threshold and the radius list were tuned on these references.
+
+## Synthetic scenes
+
+**Question.** Do the revised σ and outcome rules give `Undetermined` on flat
+and weak texture, an honest σ on strong texture, and what do they give on a
+crease through the point? How large should the flow floor be?
+
+**Setup.** A Python prototype of the draft's revised σ and outcome rules: σ
+weighted by the structure tensor with the 99.9% noise threshold, the floor on
+the flow's precision where stated, two determined pairs needed at a radius, and
+a mean χ² of at most 2. It is a prototype of those rules, not of the draft's
+crop sizing: each crop was rendered by casting each sample's ray onto the true
+surface, at one sample per photograph pixel.
+
+- **Scenes.** A textured plane, or a 90° crease with the point on its edge.
+- **Cameras.** 4 on a ring 8° or 2° off the axis, so pairs are up to 16° or 4°
+  apart.
+- **Images.** Noise of 2 grey levels; texture a smooth random field whose
+  standard deviation, the contrast, is 0 to 30 grey levels.
+- **Repeats.** 4 seeds for each setting.
+
+**Flat and weak texture.** At contrast 0, 0.5, 1, 2 and 4 every run was
+`Undetermined`, in all 4 seeds on both rings, and none was `Unstable`, with the
+flow floor and without it. At contrast 8 the runs were `Turned`, except on the
+2° ring with a floor of 0.05, where 3 were `Turned` and 1 `Undetermined`.
+
+**Accuracy when turned.** On the 8° ring at contrast 8 to 30 the normal was
+0.1° to 0.8° from the true one; on the 2° ring, 0.1° to 1.9°. The chosen radius
+was 3 half-extents, the largest tried, and 2 in a few runs on the 2° ring.
+
+**σ and the flow floor.** Without a floor, σ was too small where the texture
+was strong: at contrast 16 to 30 the error was 2 to 4 times σ, for example an
+error of 0.1° with σ 0.04°, and one clean plane of the 24 came out `Unstable`
+because χ² was inflated. With each correlated square's covariance modelled as
+`W⁻¹ + f²·I`:
+
+| Floor `f` | Error over σ, strong texture | Clean planes `Unstable` |
+|---|---|---:|
+| none | 2 to 4 | 1 of 24 |
+| 0.02 px | 1 to 2 | 0 |
+| 0.05 px | under 1, slightly cautious | 0 |
+
+The draft's default, 0.03, lies between the two floors measured.
+
+**A crease through the point**, at contrast 30:
+
+| Floor | Ring | Outcome | Distance from the faces' bisector | Mean χ² |
+|---|---|---|---|---|
+| none | 8° | `Unstable` | — | 2.0 to 7.2 at 0.5 half-extents, rising to thousands at 3 |
+| none | 2° | `Turned` at 1 half-extent | 0.3° to 1.8° | |
+| 0.03 | 8° | `Turned` at 0.75 to 1 half-extent | 2.6° to 3.2° | about 2 or less there, then 12 to 15 at 1.5 and 160 to 176 at 3 |
+| 0.03 | 2° | `Turned` at 3 half-extents | 0.7° to 0.8° | 0.7 or less at every radius |
+
+On the 2° ring the narrow pairs all see the same compromise between the faces,
+so they agree at every radius. On a crease through the point the rule shrinks
+the support to where the pairs still agree and turns the patch to about the
+bisector of the faces; it gives `Unstable` only where no radius agrees.
+
+**The noise estimate.** Immerkær's Laplacian estimate of the image noise
+recovered the true standard deviation of 2.0 as 2.02.
 
 ## Rejected alternatives
 
