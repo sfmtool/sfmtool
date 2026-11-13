@@ -1,11 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The three steps that estimate which way a track's patch faces and tilt it
+//! The four steps that estimate which way a track's patch faces and tilt it
 //! there: [`finite_difference_normal`], from where smaller pieces of the patch fit,
 //! [`grid_plane_normal`], from the plane through the patch's nine cells,
-//! each registered in every view, and [`grown_plane_normal`], from one plane
-//! fitted directly to the photographs, view by view.
+//! each registered in every view, [`grown_plane_normal`], from one plane
+//! fitted directly to the photographs, view by view, and
+//! [`pairwise_flow_normal`], from the dense optical flow between pairs of the
+//! views rendered on a common plane.
 //!
 //! `specs/core/bench/editable-track.md` § "Estimating the normal" is the
 //! design. A [`fit`] moves the patch's centre and leaves its
@@ -44,7 +46,11 @@ pub use grown_plane::{
     GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal,
     GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView,
 };
-pub use pairwise_flow::PairwiseFlowNormalOptions;
+pub use pairwise_flow::{
+    pairwise_flow_normal, PairwiseFlowCrop, PairwiseFlowFit, PairwiseFlowNormalOptions,
+    PairwiseFlowOutcome, PairwiseFlowPair, PairwiseFlowRadius, PairwiseFlowRound,
+    PairwiseFlowRounds,
+};
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
 /// fitted centres are the fewest that fix a line.
@@ -291,6 +297,8 @@ pub enum NormalEstimate {
     GridPlaneCells(Box<GridPlaneCells>),
     /// [`grown_plane_normal`]'s sequence of views.
     GrownPlane(Box<GrownPlaneSequence>),
+    /// [`pairwise_flow_normal`]'s rounds.
+    PairwiseFlow(Box<PairwiseFlowRounds>),
 }
 
 /// What one normal step did.
@@ -341,6 +349,7 @@ impl std::fmt::Display for NormalReport {
             }
             NormalEstimate::GridPlaneCells(cells) => write!(f, "{cells}")?,
             NormalEstimate::GrownPlane(sequence) => write!(f, "{sequence}")?,
+            NormalEstimate::PairwiseFlow(rounds) => write!(f, "{rounds}")?,
         }
         write!(f, ", turned {:.1}\u{b0}", self.tilt.degrees)?;
         if let Some(stop) = self.tilt.stopped {

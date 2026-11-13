@@ -9,12 +9,12 @@
 //! crops this small it solves the whole flow at half resolution and
 //! upsamples it, which the prototype measured at 0.093 px median flow error
 //! against 0.040 px at full resolution
-//! (`specs/drafts/pairwise-flow-normal-measurements.md` § "Flow settings").
+//! (`specs/core/bench/pairwise-flow-normal-measurements.md` § "Flow settings").
 //!
 //! The flow runs on the CPU. A crop under 224 samples a side is below the
 //! presets' `gpu_min_pixels` of 50,000, where the GPU path would run on the
 //! CPU anyway; whether the larger crops gain from a `GpuFlowContext` is the
-//! draft's open question "GPU flow", left for when the step is built.
+//! question "GPU flow" of `specs/drafts/pairwise-flow-normal-amendment.md`.
 
 use crate::features::optical_flow::{
     compute_optical_flow, DisFlowParams, FlowField, GrayImage, OpticalFlowError,

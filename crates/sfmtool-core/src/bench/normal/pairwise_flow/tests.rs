@@ -52,6 +52,41 @@ fn the_check_names_the_first_setting_that_fails() {
         bad("max_crop_samples")
     );
     assert_eq!(
+        refused(&|o| o.max_crop_samples = 4097),
+        bad("max_crop_samples")
+    );
+    assert_eq!(refused(&|o| o.max_pairs = 1), bad("max_pairs"));
+    // The fallback and single-pair radii must be radii the pairs are fitted at.
+    assert_eq!(
+        refused(&|o| o.fallback_radius = 1.25),
+        bad("fallback_radius")
+    );
+    assert_eq!(
+        refused(&|o| o.single_pair_radius = 0.6),
+        bad("single_pair_radius")
+    );
+    // A grid of tilts so fine it would hold billions of normals, from a
+    // tilt of 0° too, and one whose azimuths do.
+    assert_eq!(
+        refused(&|o| o.grid_tilt_step_deg = 1e-300),
+        bad("grid_tilt_step_deg")
+    );
+    assert_eq!(
+        refused(&|o| {
+            o.max_grid_tilt_deg = 0.0;
+            o.grid_tilt_step_deg = 1e-300;
+        }),
+        bad("grid_tilt_step_deg")
+    );
+    assert_eq!(
+        refused(&|o| o.grid_azimuth_step_deg = 0.5),
+        bad("grid_azimuth_step_deg")
+    );
+    assert_eq!(
+        refused(&|o| o.correlation_length_px = 17.0),
+        bad("correlation_length_px")
+    );
+    assert_eq!(
         refused(&|o| o.max_view_angle_deg = 95.0),
         bad("max_view_angle_deg")
     );
@@ -204,8 +239,8 @@ fn cameras() -> Vec<Vector3<f64>> {
 /// true one, read at 1, 2 and 3 half-extents: every pair's fit lands within
 /// a degree of the truth (0.01° to 0.6°), its error within twice its
 /// texture σ, which the flow floor keeps honest (0.03 to 1.3 times it), and
-/// its σ under the step's 10° bar. This is the draft's measurement on synthetic scenes
-/// at contrast 30 with noise of 2 grey levels.
+/// its σ under the step's 10° bar. This is the prototype's measurement on
+/// synthetic scenes at contrast 30 with noise of 2 grey levels.
 #[test]
 fn pair_fits_on_a_textured_plane_land_near_the_true_normal() {
     let options = PairwiseFlowNormalOptions::default();

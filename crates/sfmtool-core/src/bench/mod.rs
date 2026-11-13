@@ -96,14 +96,16 @@ pub use nearby::{
 };
 pub use normal::{
     finite_difference_normal, grid_plane_normal, grown_plane_normal, normal_preconditions,
-    FiniteDifferenceOptions, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
-    GridPlaneFitModel, GridPlaneIteration, GridPlaneLayout, GridPlaneNormalOptions,
-    GridPlaneOutcome, GridPlanePatchFrame, GridPlanePlane, GridPlaneRay, GridPlaneRender,
-    GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit, GrownPlaneAttempt,
-    GrownPlaneGridRound, GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair,
-    GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,
+    pairwise_flow_normal, FiniteDifferenceOptions, GridPlaneAcceptance, GridPlaneCell,
+    GridPlaneCells, GridPlaneDetail, GridPlaneFitModel, GridPlaneIteration, GridPlaneLayout,
+    GridPlaneNormalOptions, GridPlaneOutcome, GridPlanePatchFrame, GridPlanePlane, GridPlaneRay,
+    GridPlaneRender, GridPlaneTile, GridPlaneView, GridPlaneViewCell, GridPlaneViewFit,
+    GrownPlaneAttempt, GrownPlaneGridRound, GrownPlaneNormalOptions, GrownPlaneOutcome,
+    GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal, GrownPlaneSequence,
     GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView, NormalError,
-    NormalEstimate, NormalReport, PairwiseFlowNormalOptions, PieceLayout, BENCH_MIN_CELL_ZNCC,
+    NormalEstimate, NormalReport, PairwiseFlowCrop, PairwiseFlowFit, PairwiseFlowNormalOptions,
+    PairwiseFlowOutcome, PairwiseFlowPair, PairwiseFlowRadius, PairwiseFlowRound,
+    PairwiseFlowRounds, PieceLayout, BENCH_MIN_CELL_ZNCC,
 };
 pub use refine_normals::{
     refine_normals, NormalLeftUnchanged, RefineNormalsError, RefineNormalsOptions,

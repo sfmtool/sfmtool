@@ -319,17 +319,27 @@ fn render_crop(
     // Off the photograph the render holds nothing; filling it with the mean
     // keeps the flow's pyramid from blurring an edge into the crop.
     if on < n {
+        // Each row summed and then the row sums, in `f32`: over a crop of at
+        // most `MAX_CROP_SAMPLES` a side the rounding is bounded by about
+        // `(rows + columns) · 2⁻²⁴` of the sum, `5 · 10⁻⁴`, and the fill only
+        // has to be near the crop's grey.
         let mean = if on == 0 {
             0.5
         } else {
-            let sum: f64 = image
+            let row = side as usize;
+            let sum: f32 = image
                 .data()
-                .iter()
-                .zip(&valid)
-                .filter(|(_, &v)| v)
-                .map(|(&g, _)| f64::from(g))
+                .chunks_exact(row)
+                .zip(valid.chunks_exact(row))
+                .map(|(grey, ok)| {
+                    grey.iter()
+                        .zip(ok)
+                        .filter(|(_, &v)| v)
+                        .map(|(&g, _)| g)
+                        .sum::<f32>()
+                })
                 .sum();
-            (sum / on as f64) as f32
+            sum / on as f32
         };
         for (g, &v) in image.data_mut().iter_mut().zip(&valid) {
             if !v {

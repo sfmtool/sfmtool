@@ -16,6 +16,7 @@ mod grid_plane_normal;
 mod grown_plane_normal;
 mod normal;
 mod observation_readings;
+mod pairwise_flow_normal;
 mod reference_view;
 mod refine_normals;
 mod refit_points;

@@ -84,6 +84,9 @@ pub(crate) struct PairFit {
     /// The Tukey-weighted root mean square of the residuals' lengths over the
     /// samples that carry information, grid samples.
     pub(crate) rms_residual: f64,
+    /// `σ_I²`, the photometric residual's variance over the disc, in the
+    /// flow's grey units squared.
+    pub(crate) residual_variance: f64,
 }
 
 /// One sample's predicted flow and its derivative with respect to the
@@ -428,6 +431,7 @@ impl<'a> Gauss<'a> {
             sigma_residual_deg,
             offset: [self.offset[0] * scale, self.offset[1] * scale],
             rms_residual: (squared / weight).sqrt() * scale,
+            residual_variance: self.disc.residual_variance,
         })
     }
 }
