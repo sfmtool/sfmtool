@@ -376,7 +376,7 @@ impl PairwiseFlowNormalOptions {
 ///     &PairwiseFlowNormalOptions::default(),
 ///     &Progress::none(),
 /// )?;
-/// println!("{report}"); // "3 rounds; 10 of 10 pairs agree at 1.5 half-extents (χ² 1.4), σ 1.8°, …"
+/// println!("{report}"); // "3 rounds; 10 of 10 pairs agree at 1.5 half-extents (χ² 1.4), σ 1.83°, …"
 /// # let _ = turned;
 /// # Ok(())
 /// # }

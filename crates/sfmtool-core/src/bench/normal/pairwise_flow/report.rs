@@ -252,7 +252,7 @@ impl std::fmt::Display for PairwiseFlowRounds {
                     )?;
                 }
                 if let Some(sigma) = self.sigma_deg {
-                    write!(f, ", \u{3c3} {sigma:.1}\u{b0}")?;
+                    write!(f, ", \u{3c3} {sigma:.2}\u{b0}")?;
                 }
                 Ok(())
             }
@@ -261,7 +261,7 @@ impl std::fmt::Display for PairwiseFlowRounds {
                     write!(f, "; one pair at {r} half-extents")?;
                 }
                 if let Some(sigma) = self.sigma_deg {
-                    write!(f, ", \u{3c3} {sigma:.1}\u{b0}")?;
+                    write!(f, ", \u{3c3} {sigma:.2}\u{b0}")?;
                 }
                 write!(f, ", single pair")
             }
