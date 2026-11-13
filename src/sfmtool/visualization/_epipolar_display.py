@@ -13,7 +13,7 @@ import pycolmap
 
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._sfmtool.fileio import read_image_rgb, write_image_rgb
-from ..sift.file import get_sift_path_for_image
+from ..sift.file import get_sift_path_from_recon
 from ..fileio import SiftFile
 from .._sfmtool.analysis import epipolar_curves
 from .._sfmtool.geometry import RotQuaternion
@@ -207,18 +207,10 @@ def _find_image_index(image_names, query: str) -> int | None:
     return exact if exact is not None else basename_match
 
 
-def _require_sift_path(
-    image_path: Path,
-    image_name: str,
-    feature_tool: str | None,
-    feature_options: dict | None,
-) -> Path:
-    """The image's `.sift` path, raising `FileNotFoundError` if it is missing."""
-    sift_path = get_sift_path_for_image(
-        image_path,
-        feature_tool=feature_tool,
-        feature_options=feature_options,
-    )
+def _require_sift_path(recon, image_idx: int, image_name: str) -> Path:
+    """The image's `.sift` path in the feature folder the reconstruction
+    records, raising `FileNotFoundError` if it is missing."""
+    sift_path = get_sift_path_from_recon(recon, recon.image_names[image_idx])
     if not sift_path.exists():
         raise FileNotFoundError(
             f"SIFT file not found for {image_name}. Expected at: {sift_path}."
@@ -639,8 +631,6 @@ def draw_epipolar_visualization(
     undistort: bool = False,
     draw_lines: bool = True,
     side_by_side: bool = False,
-    feature_tool: str | None = None,
-    feature_options: dict | None = None,
     sweep_max_features: int | None = None,
     sweep_window_size: int = 30,
     save_which: str = "both",
@@ -663,8 +653,6 @@ def draw_epipolar_visualization(
         rectify: Whether to rectify images
         undistort: Whether to remove lens distortion
         side_by_side: Whether to combine images side-by-side or save separately
-        feature_tool: Feature extraction tool name
-        feature_options: Optional dict of options for feature tool
         sweep_max_features: If set, runs sort-and-sweep matching with this many features
         sweep_window_size: Window size for sort-and-sweep matching
         save_which: Which image(s) to save - "both", "first", or "second"
@@ -701,12 +689,8 @@ def draw_epipolar_visualization(
 
     image1_path = workspace_dir / image_names[image1_idx]
     image2_path = workspace_dir / image_names[image2_idx]
-    sift1_path = _require_sift_path(
-        image1_path, image1_name, feature_tool, feature_options
-    )
-    sift2_path = _require_sift_path(
-        image2_path, image2_name, feature_tool, feature_options
-    )
+    sift1_path = _require_sift_path(recon, image1_idx, image1_name)
+    sift2_path = _require_sift_path(recon, image2_idx, image2_name)
 
     sweep = None
     if sweep_max_features is not None:

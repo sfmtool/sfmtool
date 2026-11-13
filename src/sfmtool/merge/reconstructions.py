@@ -107,8 +107,9 @@ def merge_reconstructions(
     step_start = time.perf_counter()
     workspace_meta = reconstructions[0].source_metadata.get("workspace", {})
     workspace_contents = workspace_meta.get("contents", {})
-    feature_tool = workspace_contents.get("feature_tool", "colmap")
-    feature_options = workspace_contents.get("feature_options", {})
+    # The feature folder the reconstruction records, not the workspace's
+    # current one, which `sfm ws upgrade` moves.
+    feature_prefix_dir = workspace_contents["feature_prefix_dir"]
 
     merged_images = refine_camera_poses(
         merged_images=merged_images,
@@ -117,8 +118,7 @@ def merge_reconstructions(
         merged_points=merged_points,
         merged_tracks=merged_tracks,
         workspace_dir=workspace_dir,
-        feature_tool=feature_tool,
-        feature_options=feature_options,
+        feature_prefix_dir=feature_prefix_dir,
     )
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")
 

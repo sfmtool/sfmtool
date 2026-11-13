@@ -18,11 +18,14 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
+import sfmtool.fileio
 from sfmtool import load_workspace_config
 from sfmtool.cli import main
 from sfmtool.colmap.io import save_colmap_binary
 from sfmtool.fileio import SiftFile, read_colmap_binary, read_matches
+from sfmtool.merge.reconstructions import merge_reconstructions
 from sfmtool.reconstruction import SfmrReconstruction
+from sfmtool.visualization._epipolar_display import _require_sift_path
 
 from .conftest import SEOUL_BULL_DIR
 
@@ -76,7 +79,7 @@ def _positions(sift_path: Path) -> np.ndarray:
 
 
 def test_solve_reads_the_feature_folder_the_matches_file_was_matched_on(
-    workspace_copy,
+    workspace_copy, monkeypatch
 ):
     workspace, matches_path, old_folder, new_folder = workspace_copy
     output = workspace / "solved.sfmr"
@@ -137,6 +140,22 @@ def test_solve_reads_the_feature_folder_the_matches_file_was_matched_on(
     for name, kps in zip(exported["image_names"], exported["keypoints_per_image"]):
         old = _positions(workspace / old_folder / f"{name}.sift")
         np.testing.assert_array_equal(np.asarray(kps, dtype=np.float32)[:, :2], old)
+
+    # `sfm epipolar` and the pose refinement of `sfm merge` read the same folder.
+    name = recon.image_names[0]
+    assert _require_sift_path(recon, 0, name) == workspace / old_folder / (
+        f"{name}.sift"
+    )
+    opened = []
+
+    def recording_sift_file(path, *args, **kwargs):
+        opened.append(Path(path))
+        return SiftFile(path, *args, **kwargs)
+
+    monkeypatch.setattr(sfmtool.fileio, "SiftFile", recording_sift_file)
+    merge_reconstructions([recon, recon])
+    assert opened
+    assert {p.parent for p in opened} == {workspace / old_folder}
 
 
 def test_solve_refuses_before_solving_when_the_feature_folder_is_gone(
