@@ -4,13 +4,12 @@
 //! Python bindings for spatial analysis, SE3 transforms, viewing angles,
 //! alignment, point correspondence, and track filtering.
 
-use std::collections::HashMap;
-
 use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
 use crate::geometry::se3_transform::PySe3Transform;
+use crate::helpers::value_err;
 use crate::PySfmrReconstruction;
 
 // ── SE3 transform acceleration ────────────────────────────────────────────
@@ -104,7 +103,8 @@ pub fn compute_narrow_track_mask(
         &point_ids_data,
         &img_idx_data,
         min_angle_rad,
-    );
+    )
+    .map_err(value_err)?;
 
     // Convert Vec<bool> to numpy bool array
     let arr = numpy::PyArray1::from_vec(py, keep);
@@ -155,7 +155,7 @@ pub fn estimate_alignment_py(
             estimate_scale,
         },
     )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    .map_err(value_err)?;
 
     Ok(PySe3Transform { inner: transform })
 }
@@ -187,7 +187,8 @@ pub fn ransac_alignment_py(
         threshold,
         min_sample_size,
         seed,
-    );
+    )
+    .map_err(value_err)?;
 
     let arr = numpy::PyArray1::from_vec(py, mask);
     Ok(arr.into_any().unbind())
@@ -230,7 +231,8 @@ pub fn find_point_correspondences_py(
         &tgt_pts,
         &shared_src,
         &shared_tgt,
-    );
+    )
+    .map_err(value_err)?;
 
     let source_ids = numpy::PyArray1::from_vec(py, result.source_ids);
     let target_ids = numpy::PyArray1::from_vec(py, result.target_ids);
@@ -432,30 +434,32 @@ pub fn merge_points_and_tracks_py(
         })
         .collect::<PyResult<Vec<_>>>()?;
 
-    // Build reverse image mapping: per-recon HashMap<old_img_idx, merged_img_idx>.
-    let num_recons = inner_refs.len();
-    let mut reverse_mapping: Vec<HashMap<u32, u32>> = vec![HashMap::new(); num_recons];
-
-    for (merged_idx, item) in image_mapping.iter().enumerate() {
-        let (_name, occurrences) = item;
-        let occ_list = occurrences.cast::<PyList>()?;
-        for occ in occ_list.iter() {
-            let tuple = occ.cast::<PyTuple>()?;
-            let recon_idx: usize = tuple.get_item(0)?.extract()?;
-            let old_img_idx: u32 = tuple.get_item(1)?.extract()?;
-            reverse_mapping[recon_idx]
-                .entry(old_img_idx)
-                .or_insert(merged_idx as u32);
-        }
-    }
+    // Parse the image mapping, in the dict's order, which is the merged image
+    // order: dict[str, list[tuple[int, int]]].
+    let mapping: Vec<Vec<(usize, u32)>> = image_mapping
+        .values()
+        .iter()
+        .map(|occurrences| {
+            occurrences
+                .cast::<PyList>()?
+                .iter()
+                .map(|occ| {
+                    let tuple = occ.cast::<PyTuple>()?;
+                    let recon_idx: usize = tuple.get_item(0)?.extract()?;
+                    let old_img_idx: u32 = tuple.get_item(1)?.extract()?;
+                    Ok((recon_idx, old_img_idx))
+                })
+                .collect::<PyResult<Vec<_>>>()
+        })
+        .collect::<PyResult<Vec<_>>>()?;
 
     // Call the Rust core function.
     let result = sfmtool_core::reconstruction::point_correspondence::merge_points_and_tracks(
         &inner_refs,
         &groups,
-        &reverse_mapping,
+        &mapping,
     )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    .map_err(value_err)?;
 
     // Build output dict with numpy arrays.
     let dict = PyDict::new(py);

@@ -1186,7 +1186,7 @@ with correspondence count, inliers, and post-fit RMS residual:
 keypoint position says so after the noun:
 `Aligned v02 → v01: 215/223 points by keypoint position, RMS 0.234`. On
 failure (no shared images, too few correspondences, keypoint positions that
-cannot be read, degenerate geometry, SVD failure) the
+cannot be read, degenerate geometry) the
 transform is left untouched and the reason recorded as a **failed** entry:
 `Align run_b → run_a failed: <reason>`. The status line is the most recent
 non-query entry (see [action-log.md](action-log.md)), painted in the viewport

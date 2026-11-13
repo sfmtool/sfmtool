@@ -83,6 +83,8 @@ All 17 files (4,380 lines) were read in full and checked against the core functi
 - Effort: medium.
 - Risk: low — core signatures change; the bindings keep theirs.
 
+> _Status (2026-11-13): **Done** — `compute_narrow_track_mask`, `estimate_alignment`, `ransac_alignment`, `find_point_correspondences`, `build_covisibility_pairs`, `build_frustum_intersection_pairs` and `merge_points_and_tracks` return `NarrowTrackMaskError`, `AlignmentError`, `PointCorrespondenceError`, `ImagePairGraphError` and `MergePointsAndTracksError`, each with a lowercase `Display`, mapped to `ValueError` with `value_err`; `merge_points_and_tracks` takes the image mapping and builds the reverse mapping itself, checking every reconstruction, image and point index; branch `hyg-fix-1113-02-analysis-input-validation`. `apply_se3_to_camera_poses` and `filter_tracks_by_point_mask` are removed instead, on branch `hyg-fix-1113-01-delete-dead-analysis-bindings` (PR #1232)._
+
 **Delete `apply_se3_to_camera_poses` and `filter_tracks_by_point_mask`**
 - Location: `core.rs:72-126`, `core.rs:399-434`; core `geometry/transform.rs:27-47`, `reconstruction/filter.rs:28`.
 - Problem: outside their crate the only caller of either binding is `tests/rust_bindings/analysis/test_analysis_registration.py`, which checks only that the name is registered, and the core functions are called only by their own `tests.rs`. `Se3Transform.apply_to_camera_poses` (`geometry/se3_transform.rs:253`) is the validated binding for the same operation, and `EditedReconstruction::filter_points_by_mask` (`edit.rs:627`) does the remap inline. Two of the panics above are in these two.

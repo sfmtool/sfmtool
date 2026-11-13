@@ -42,6 +42,11 @@ the image quaternions.
 3. Drop pairs failing the viewing-angle test.
 4. Return `(img_i, img_j, shared_point_count)` sorted by count descending.
 
+It returns an `ImagePairGraphError` when the quaternions do not hold four
+values per image (`ArrayLength`), the two track columns differ in length
+(`TrackColumnLength`), or an observation names an image past the end
+(`ImageIndexOutOfRange`); the binding raises each as `ValueError`.
+
 ## Frustum-intersection pairs (`build_frustum_intersection_pairs`)
 
 Input: poses, per-image pinhole intrinsics (`fx, fy, cx, cy, width,
@@ -75,6 +80,11 @@ Returns `(img_i, img_j, intersection_volume)` for pairs with positive
 estimated overlap, sorted by volume descending. The pair loop is
 rayon-parallel over the first image index, with a deterministic per-row RNG
 (`seed + i`), so results are reproducible for a fixed `seed`.
+
+It returns `ImagePairGraphError::ArrayLength`, raised as `ValueError` by the
+binding, when an input does not hold its share for each image: four quaternion
+values, three translation values, one value of each intrinsic, width, height
+and histogram bound, and `num_bins` histogram counts.
 
 ## CLI surface
 

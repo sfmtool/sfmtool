@@ -89,13 +89,13 @@ count, the RMS residual over the inliers, which mode produced them, and, for
 the point mode, `point_matching`: `PointMatching::FeatureIndex` or
 `PointMatching::KeypointPosition` (`None` for the camera mode). Every
 failure the modes name — no shared images, too few correspondences, a
-degenerate configuration, an SVD that would not converge — comes back as an
-`Err` string a caller can show verbatim, leaving the source where it was.
+degenerate configuration — comes back as an `Err` string a caller can show
+verbatim, leaving the source where it was.
 
 ## Least-squares fit (`least_squares.rs`)
 
 `estimate_alignment(source_points, target_points, n_points, params) ->
-Result<Se3Transform, String>` computes the least-squares similarity aligning
+Result<Se3Transform, AlignmentError>` computes the least-squares similarity aligning
 `n` uniformly-weighted source points to target points. Points are flat
 `&[f64]` slices of length `3 * n` (row-major `x0, y0, z0, x1, …`). `params`
 is an `AlignmentParams { rounds, keep_fraction, estimate_scale }`; its
@@ -132,10 +132,12 @@ genuinely unconstrained cases, keyed off the numerical rank of `H`
 
 ### Errors
 
-Returns `Err` on `n_points < 1`, slice length ≠ `n_points * 3`, or SVD
-failure. Note the Rust core accepts `n = 1` (yielding `R = I`, `s = 1`, pure
-translation); the Python wrapper `align/core.py::estimate_alignment` demands
-`n ≥ 2`.
+`AlignmentError` is shared with `ransac_alignment` below.
+`estimate_alignment` returns `AlignmentError::NoPoints` when `n_points` is 0
+and `AlignmentError::PointsLength` when either slice does not hold
+`n_points * 3` values; the binding raises each as `ValueError`. Note the Rust
+core accepts `n = 1` (yielding `R = I`, `s = 1`, pure translation); the Python
+wrapper `align/core.py::estimate_alignment` demands `n ≥ 2`.
 
 ### Trimming and rigid fits
 
@@ -150,8 +152,12 @@ not run, so the result is identical to the single-shot fit above.
 ## RANSAC (`ransac.rs`)
 
 `ransac_alignment(source_points, target_points, n_points, max_iterations,
-threshold, min_sample_size, seed) -> Vec<bool>` returns a per-correspondence
-inlier mask. Standard hypothesize-and-verify:
+threshold, min_sample_size, seed) -> Result<Vec<bool>, AlignmentError>`
+returns a per-correspondence inlier mask. It returns
+`AlignmentError::PointsLength` when either slice does not hold
+`n_points * 3` values and `AlignmentError::SampleSize` when
+`min_sample_size` is 0 or more than `n_points`; the binding raises each as
+`ValueError`. Standard hypothesize-and-verify:
 
 1. Sample `min_sample_size` indices without replacement (seeded `StdRng` —
    deterministic for a given `seed`).
