@@ -45,8 +45,8 @@ each other within their own precision. It needs no start normal and no
 reference view for its estimate, and it says when it has no normal, for one of
 two reasons kept apart by the glossary's **turned** / **undetermined** /
 **unstable** entry ([GLOSSARY.md](../GLOSSARY.md)): *undetermined* when the
-photographs carry too little evidence about the tilt at any radius (no pair's
-fit is precise enough), and *unstable* when pairs are precise but disagree at
+photographs carry too little evidence about the tilt at any radius (no radius
+has two pairs whose fits are precise enough), and *unstable* when pairs are precise but disagree at
 every radius. On either outcome the step leaves the given normal unchanged, as
 `grid_plane_normal` does on its `GridPlaneOutcome::Undetermined` and
 `GridPlaneOutcome::Unstable`, and the report says which. The step must not
@@ -144,7 +144,8 @@ pub struct PairwiseFlowRadii {
 /// its σ at most max_sigma_deg, and turned.
 /// Undetermined: too little evidence. No radius has two determined pairs
 /// (each with σ at most max_sigma_deg), so no agreement can be tested, or a
-/// point with one pair has its σ over the bar; the track as given.
+/// point with one pair has no fit at single_pair_radius or its σ there is
+/// over the bar; the track as given.
 /// Unstable: some radius has two or more determined pairs, but at every such
 /// radius they disagree (mean χ² over max_mean_chi2); the track as given.
 pub enum PairwiseFlowOutcome { Turned, SinglePair, Undetermined, Unstable }
@@ -201,7 +202,7 @@ for a flow refusal the options check could not foresee.
 The report's sentence (`Display`) would read, for example, "21 of 21 pairs
 agree at 11 samples (χ² 1.4), σ 1.8°". A point the step does not turn ends
 with the words `grid_plane_normal` uses for the same two outcomes: "15 pairs,
-no radius with two under σ 10°, normal left unchanged: undetermined", or
+no radius with two pairs under σ 10°, normal left unchanged: undetermined", or
 "15 pairs, no radius where they agree (least χ² 3.7 at 6 samples), normal left
 unchanged: unstable".
 
@@ -436,13 +437,19 @@ residual. So:
   that is `64v ± 11v`. Neighbouring gradients share pixels and an upsampled
   crop is smooth over `k` samples, so the true spread is larger than that
   formula. The step therefore takes the threshold from a simulation: for each
-  `L` and `k` it renders pure white noise the way a crop is rendered, computes
+  window side `L` and each way a crop is rendered (the crop's own
+  `samples_per_pixel`, which can differ from the pair's `k`), it renders pure
+  white noise the way that crop is rendered, computes
   the tensor's larger eigenvalue over many windows, and takes its
   `1 − noise_false_alarm` quantile (99.9%), in units of `v`. That threshold
   `τ·v` is subtracted from both eigenvalues of each tensor, and eigenvalues
   below zero are set to zero. A window on a flat crop then has zero
   information except in about one window in a thousand, and there only the
-  small excess over the threshold.
+  small excess over the threshold. Since the noise adds about `n·v` to each
+  eigenvalue on average and `τ·v` is larger than that, a textured window also
+  loses the margin `(τ − n)·v`: its information is understated, so its σ errs
+  large. The loss is small beside strong texture and matters only for texture
+  near the noise level.
 - The noise variance is read from `σ_I²`, which includes the flow's
   registration error as well as the image noise. That makes `v`, and with it
   the threshold, larger than the image noise alone would, which removes more
