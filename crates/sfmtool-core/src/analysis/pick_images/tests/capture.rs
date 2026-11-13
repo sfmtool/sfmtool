@@ -24,7 +24,7 @@ use sfmtool_sift_format::{
 
 use super::super::source::{Job, Threads, WorkerPool};
 use super::super::{
-    CaptureFrame, CaptureImage, CaptureSequence, FrameId, FrameSource, FrameSourceError,
+    CaptureFrame, CaptureImage, CaptureSequence, FrameId, FrameSource, FrameSourceError, SourceWork,
 };
 use crate::features::sift::BuildSiftFilesError;
 use crate::progress::Progress;
@@ -361,8 +361,15 @@ pub(super) struct SynthSource<'s> {
 
 impl<'s> SynthSource<'s> {
     pub(super) fn new(synths: &[&Synth], threads: usize, fault: Fault) -> Self {
+        Self::slowed(synths, threads, fault, Duration::ZERO)
+    }
+
+    /// A source whose workers sleep for `delay` before each frame, as a
+    /// slower extraction would take.
+    pub(super) fn slowed(synths: &[&Synth], threads: usize, fault: Fault, delay: Duration) -> Self {
         let synths: Arc<Vec<Synth>> = Arc::new(synths.iter().map(|&s| s.clone()).collect());
         let job: Arc<Job> = Arc::new(move |id, images, _progress, wrote| {
+            std::thread::sleep(delay);
             write_frame(&synths, id, images, fault, threads, wrote)
         });
         Self {
@@ -464,7 +471,7 @@ impl FrameSource for SynthSource<'_> {
         self.pool.wait(frames, progress)
     }
 
-    fn finish(&mut self) -> Vec<FrameId> {
+    fn finish(&mut self) -> SourceWork {
         self.pool.finish()
     }
 }

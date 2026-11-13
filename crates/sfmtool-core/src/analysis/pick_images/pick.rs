@@ -6,14 +6,17 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use super::capture::{
     validate_sequences, CaptureSequence, FrameId, PickImagesError, PickImagesOptions,
 };
-use super::frames::Frames;
+use super::frames::{Clock, Frames};
 use super::pilot::pilot_vote;
-use super::report::{FrameReading, PickImagesReport, SensorReading, SequenceReport};
-use super::source::FrameSource;
+use super::report::{
+    FrameReading, PickImagesReport, PickImagesTimes, SensorReading, SequenceReport,
+};
+use super::source::{FrameSource, SourceWork};
 use super::walk::{walk_sequence, Walked};
 use crate::features::sift::version_1_sift_files;
 use crate::progress::Progress;
@@ -43,7 +46,8 @@ use crate::progress::Progress;
 /// ahead of it, except for
 /// [`PickImagesReport::frames_extracted_unread`]. When the run ends, with a
 /// report or an error, the source's work is stopped with
-/// [`FrameSource::finish`].
+/// [`FrameSource::finish`]. [`PickImagesReport::times`] says where the
+/// call's wall time went.
 ///
 /// Before anything is extracted, every folder the capture's `.sift` files go
 /// in is checked for version 1 files with [`version_1_sift_files`].
@@ -66,16 +70,64 @@ pub fn pick_images(
     options: &PickImagesOptions,
     progress: &Progress,
 ) -> Result<PickImagesReport, PickImagesError> {
+    let start = Instant::now();
     options.validate()?;
     validate_sequences(sequences)?;
     check_folders(sequences)?;
     progress.check_cancel()?;
+    let checked = start.elapsed();
 
     let mut frames = Frames::new(sequences, source, options);
     let walked = walk_all(&mut frames, sequences, options, progress);
     // Stopped on every path, so no worker goes on extracting after the run.
-    let written = frames.finish_source();
-    Ok(assemble(walked?, frames, &written))
+    let stopping = Instant::now();
+    let work = frames.finish_source();
+    let stopped = stopping.elapsed();
+    let clock = std::mem::take(&mut frames.clock);
+    let mut report = assemble(walked?, frames, &work.written);
+    report.times = times(&clock, checked, stopped, &work, start.elapsed());
+    Ok(report)
+}
+
+/// The call's times: `total`, of which the checks took `checked` and
+/// stopping the source `stopped`, the rest of the walk's thread from `clock`,
+/// what is left over as `other_seconds`, and the source's workers' time.
+fn times(
+    clock: &Clock,
+    checked: Duration,
+    stopped: Duration,
+    work: &SourceWork,
+    total: Duration,
+) -> PickImagesTimes {
+    let parts = [
+        checked,
+        clock.waiting_for_frames.get(),
+        clock.reading_sift_metadata.get(),
+        clock.reading_sift_features.get(),
+        clock.building_forests.get(),
+        clock.matching.get(),
+        clock.essential_split.get(),
+        clock.pilot_vote.get(),
+        stopped,
+    ];
+    // The parts are disjoint stretches of the call, so they never add up to
+    // more than it; the saturation only guards the subtraction.
+    let other = total.saturating_sub(parts.iter().sum());
+    let s = |d: Duration| d.as_secs_f64();
+    PickImagesTimes {
+        total_seconds: s(total),
+        checking_input_seconds: s(parts[0]),
+        waiting_for_frames_seconds: s(parts[1]),
+        reading_sift_metadata_seconds: s(parts[2]),
+        reading_sift_features_seconds: s(parts[3]),
+        building_forests_seconds: s(parts[4]),
+        matching_seconds: s(parts[5]),
+        essential_split_seconds: s(parts[6]),
+        pilot_vote_seconds: s(parts[7]),
+        stopping_source_seconds: s(parts[8]),
+        other_seconds: s(other),
+        source: work.times,
+    }
 }
 
 /// The walk of each sequence, one after another.
@@ -170,5 +222,6 @@ fn assemble(walked: Vec<Walked>, frames: Frames, written: &[FrameId]) -> PickIma
         pairs: frames.into_pairs(),
         frames_extracted,
         frames_extracted_unread: written.len() - extracted_read,
+        times: PickImagesTimes::default(),
     }
 }

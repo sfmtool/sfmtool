@@ -80,8 +80,18 @@ pub trait FrameSource {
     /// Block until every image of these frames has its `.sift` file.
     fn wait(&mut self, frames: &[(FrameId, &CaptureFrame)], progress: &Progress)
         -> Result<(), FrameSourceError>;
-    /// Stop the work no wait asked for; the frames it wrote files for, sorted.
-    fn finish(&mut self) -> Vec<FrameId>;
+    /// Stop the work no wait asked for; the frames it wrote files for, sorted,
+    /// and its workers' time.
+    fn finish(&mut self) -> SourceWork;
+}
+
+pub struct SourceWork { pub written: Vec<FrameId>, pub times: SourceTimes }
+
+/// A source's workers' time, on threads other than the walk's.
+pub struct SourceTimes {
+    pub workers: usize,   // 0 for a source with no workers
+    pub frames: usize,    // frames a worker took up, however their work ended
+    pub seconds: f64,     // each such frame's wall time, summed
 }
 
 /// Extracts missing `.sift` files with the `sfmtool` tool, as `build_sift_files` does.
@@ -239,7 +249,8 @@ and its `StepKind`: `InBand`, `AboveBand`, `Bracketed`, `AtLimit`,
 `AtFloor` or `BelowBand`, and its `StepDensity`), the swaps of frames blurred
 against their neighbours, each as candidate and chosen frame, the count of
 frames the walk read, its `DensityTerm`, and its `PilotVote`, `None` when
-no pilot vote ran.
+no pilot vote ran. The report's `times` say where the call's wall time went
+([Times](#times)).
 
 ```rust
 /// One accepted step's target and the local density term's reading of it.
@@ -280,7 +291,7 @@ pub struct PilotVote {
     pub n_epipolar: usize,
     pub n_rotation: usize,
     pub outcome: PilotOutcome,
-    pub seconds: f64,              // wall time of the pilot's walk, matching and vote
+    pub seconds: f64,              // wall time of the clustering and the vote; 0 with no vote
 }
 
 pub enum PilotOutcome {
@@ -311,6 +322,70 @@ gives none. The walk decides nothing from those splits, and
 none there and `essential_split` is `null` in every pair. The local density
 term's split of a step is its `StepDensity::essential_split`, in the same
 form, measured with the sequence's camera.
+
+### Times
+
+`PickImagesReport::times` says where the call's wall time went, so that a
+caller can tell a run's waiting for extraction from its matching and from
+the pilot vote. The work overlaps: the source's workers extract while the
+walk matches, and a match is itself parallel. So every figure is defined by
+the thread it is measured on, and only figures of one thread are added up.
+
+```rust
+pub struct PickImagesTimes {
+    pub total_seconds: f64,                 // the call, from its start to its return
+    // The walk's thread, the thread that called pick_images:
+    pub checking_input_seconds: f64,        // the options, the sequences, the version 1 folder check
+    pub waiting_for_frames_seconds: f64,    // blocked in FrameSource::wait
+    pub reading_sift_metadata_seconds: f64, // each frame's metadata and readings
+    pub reading_sift_features_seconds: f64, // positions and descriptors, for pairs and the pilot vote
+    pub building_forests_seconds: f64,      // each frame's KD-forest
+    pub matching_seconds: f64,              // the mutual matches of each pair and their statistics
+    pub essential_split_seconds: f64,       // each accepted step's split, with the term on
+    pub pilot_vote_seconds: f64,            // every PilotVote::seconds, summed
+    pub stopping_source_seconds: f64,       // FrameSource::finish
+    pub other_seconds: f64,                 // the rest of total_seconds
+    // The source's workers, on threads of their own:
+    pub source: SourceTimes,
+}
+```
+
+**The walk's thread.** Each figure from `checking_input_seconds` to
+`stopping_source_seconds` is the wall time of one kind of call on the walk's
+thread, summed over the calls: a timer starts and stops around each call, not
+around each feature or match. No timed call contains another, so no moment is
+counted twice, and `other_seconds` is what is left of `total_seconds`: the
+walk's own decisions, the predictions passed to the source, the checks for
+cancellation and assembling the report. The ten figures add up to
+`total_seconds`. The walk's share of extraction is
+`waiting_for_frames_seconds`, the time it was blocked waiting for frames it
+was about to read; extraction the workers finished ahead of the walk costs
+it nothing. Each figure is wall time, so while the workers keep every core
+busy the walk's own calls take longer than they take alone: a match runs on
+the rayon pool the extraction runs on, and a read of a `.sift` file waits on
+the disk the workers write to. A run whose files already exist shows what
+each call costs alone.
+
+**The pilot vote.** `PilotVote::seconds`, and so `pilot_vote_seconds`, is
+the clustering of the pilot frames' features and the focal vote on the
+clusters, from the moment their features are read to the vote's end. The
+pilot walk's waits, reads and matches, and the reading of the features
+clustered, are in the other figures, so a slow source makes the pilot's
+waits longer and leaves its vote's time as it is.
+
+**The workers.** `source` is the extracting source's workers' time, which is
+not part of the walk's: `workers` is how many ran, `frames` how many frames
+a worker took up, whether it then wrote files, found them up to date, failed
+or was stopped, and `seconds` each such frame's wall time, from the moment a
+worker took it up to the moment its work ended, summed over the frames. The
+workers run at the same time as each other and as the walk, so `seconds` is
+not CPU time and may be several times `total_seconds`. The read-only source
+has no workers, and its `source` is all zero.
+
+The times are the one part of the report besides `frames_extracted_unread`
+that differs from run to run. The timers read the clock before and after
+each timed call, about 0.1 µs a call and a few calls per frame read, which
+is nothing next to the calls they time.
 
 ## The algorithm
 
@@ -585,9 +660,9 @@ the match floor.
 
 The pilot costs the extraction and matching of its walk, which the walk
 after it reuses where it takes the same steps, one cluster match of at most
-30 × 1,500 features and one focal vote; `PilotVote::seconds` is its wall
-time, and the one figure of the report besides `frames_extracted_unread`
-that differs from run to run.
+30 × 1,500 features and one focal vote. `PilotVote::seconds` is the wall
+time of the cluster match and the vote alone; the pilot walk's time is in
+the report's other times ([Times](#times)).
 
 ### Blur
 
@@ -791,8 +866,9 @@ statistics repeat exactly ([frame-pair-matching.md § Determinism and precision]
 every decision reads them and the readings in a fixed order, and no hash map is
 iterated for an output. The essential split is seeded, so a step's measure,
 and the targets after it, repeat too, and so is the pilot vote, whose
-`seconds` alone differs from run to run. It is the same for any source, lookahead and worker
-count too, but for `frames_extracted_unread`, by the
+`seconds` alone differs from run to run, as the report's `times` do. It is
+the same for any source, lookahead and worker count too, but for
+`frames_extracted_unread` and the times, by the
 [determinism rule](#run-ahead). The readings are kept as `f32`, as `ImageReadings`
 holds them, which is enough for readings compared within a capture to about
 three digits; the sharpness ratios are compared in `f64`, and widening is
@@ -961,7 +1037,14 @@ maximum gain of 1 runs none and chooses and waits for what the walk with no
 camera does. A camera moving sideways with no turn gives a pool spread above
 0.35, frames that match nothing a vote with no consensus, and two frames no
 vote, and each such sequence is walked as with no camera, its reason in the
-report.
+report. The run with the pilot's camera also checks the times: every figure
+finite and not negative, each kind of work on the walk's thread above 0, the
+walk's figures adding up to `total_seconds`, which they would pass if two
+timers counted one moment, `pilot_vote_seconds` the vote's own, and the
+workers' figures; and a source that sleeps 25 ms before each frame, on one
+worker, leaves the vote's time below half of the pilot's extraction while
+the walk's wait for frames takes it up. A pilot of two frames, with no vote,
+reports 0 for its vote's time.
 [pilot/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pilot/tests.rs)
 checks the outcome at the spread's bound and past it, the camera of each
 verdict, and the outcome's JSON form.

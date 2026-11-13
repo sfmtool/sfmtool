@@ -15,6 +15,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use super::capture::{CaptureFrame, CaptureImage, FrameId};
 use crate::features::sift::{
     build_sift_file, default_concurrent_images, sift_file_up_to_date, BuildSiftFilesError,
@@ -62,9 +64,36 @@ pub trait FrameSource {
     ) -> Result<(), FrameSourceError>;
 
     /// Drop the work no [`wait`](Self::wait) asked for, let the work in
-    /// flight stop or finish, and return every frame whose `.sift` files the
-    /// source wrote since it was made or last finished, sorted.
-    fn finish(&mut self) -> Vec<FrameId>;
+    /// flight stop or finish, and return what the source did since it was
+    /// made or last finished: every frame whose `.sift` files it wrote,
+    /// sorted, and the time its workers spent.
+    fn finish(&mut self) -> SourceWork;
+}
+
+/// What a [`FrameSource`] did between its start, or its last
+/// [`finish`](FrameSource::finish), and a `finish`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SourceWork {
+    /// Every frame the source wrote any `.sift` file for, sorted.
+    pub written: Vec<FrameId>,
+    /// How long its workers spent.
+    pub times: SourceTimes,
+}
+
+/// How long a [`FrameSource`]'s workers spent, on threads other than the
+/// walk's. Workers run at the same time as each other and as the walk, so
+/// `seconds` is not part of the walk's wall time and may exceed it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct SourceTimes {
+    /// How many workers ran; 0 for a source that does no work of its own.
+    pub workers: usize,
+    /// How many frames the workers took up, each once a worker started on
+    /// it, whether it then wrote files, found them up to date, failed or was
+    /// stopped.
+    pub frames: usize,
+    /// The wall time of each of those frames' work, from the moment a
+    /// worker took it up to the moment it ended, summed over the frames.
+    pub seconds: f64,
 }
 
 /// Why a [`FrameSource`] could not make a frame's `.sift` files exist.
@@ -232,7 +261,7 @@ impl FrameSource for ExtractingSource {
         self.pool.wait(frames, progress)
     }
 
-    fn finish(&mut self) -> Vec<FrameId> {
+    fn finish(&mut self) -> SourceWork {
         self.pool.finish()
     }
 }
@@ -270,8 +299,8 @@ impl FrameSource for ReadOnlySource {
         Ok(())
     }
 
-    fn finish(&mut self) -> Vec<FrameId> {
-        Vec::new()
+    fn finish(&mut self) -> SourceWork {
+        SourceWork::default()
     }
 }
 
@@ -327,6 +356,8 @@ struct State {
     written: Vec<FrameId>,
     /// How many tasks have ended.
     ended: u64,
+    /// The wall time of the tasks that have ended, summed.
+    task_time: Duration,
 }
 
 struct Task {
@@ -539,13 +570,19 @@ impl WorkerPool {
         self.shared.stop.store(false, Ordering::Relaxed);
     }
 
-    pub(super) fn finish(&mut self) -> Vec<FrameId> {
+    pub(super) fn finish(&mut self) -> SourceWork {
+        let workers = self.handles.len();
         self.stop_workers();
         let mut state = lock(&self.shared);
         let mut written = std::mem::take(&mut state.written);
+        let times = SourceTimes {
+            workers,
+            frames: state.ended as usize,
+            seconds: state.task_time.as_secs_f64(),
+        };
         *state = State::default();
         written.sort();
-        written
+        SourceWork { written, times }
     }
 }
 
@@ -573,6 +610,7 @@ fn work(shared: &Shared, job: &Job) {
             }
         };
         let mut wrote = false;
+        let start = Instant::now();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             job(task.id, &task.images, &progress, &mut wrote)
         }))
@@ -587,6 +625,7 @@ fn work(shared: &Shared, job: &Job) {
                 message,
             })
         });
+        let took = start.elapsed();
         let mut state = lock(shared);
         // A frame with any file written counts, however its job ended: a rig
         // frame stopped between its images keeps the files written before.
@@ -607,6 +646,7 @@ fn work(shared: &Shared, job: &Job) {
             }
         }
         state.ended += 1;
+        state.task_time += took;
         drop(state);
         shared.done.notify_all();
     }

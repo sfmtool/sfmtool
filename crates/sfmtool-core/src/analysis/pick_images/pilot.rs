@@ -71,8 +71,11 @@ pub struct PilotVote {
     pub n_rotation: usize,
     /// Whether the walk measured with the vote's camera, and why not.
     pub outcome: PilotOutcome,
-    /// The pilot's wall time in seconds, its walk, matching and vote: the one
-    /// figure of the pilot that differs from run to run.
+    /// The wall time in seconds of the vote itself: clustering the frames'
+    /// features and the focal vote on the clusters, 0 when no vote ran. The
+    /// pilot walk's waits, reads and matches, and the reading of the
+    /// features clustered, are in [`super::PickImagesTimes`]' other
+    /// figures. The one figure of the pilot that differs from run to run.
     pub seconds: f64,
 }
 
@@ -147,7 +150,6 @@ pub(super) fn pilot_vote(
     options: &PickImagesOptions,
     progress: &Progress,
 ) -> Result<(PilotVote, Option<CameraIntrinsics>), PickImagesError> {
-    let start = Instant::now();
     let read_before = frames.read_count(sequence);
     let walked = walk_sequence(
         frames,
@@ -183,7 +185,9 @@ pub(super) fn pilot_vote(
             .map(|&frame| FrameId { sequence, frame })
             .collect();
         let (width, height) = frames.image_size(ids[0]);
-        let (estimate, features, clusters) = vote_on(frames, &ids, width, height, progress)?;
+        let (estimate, features, clusters, seconds) =
+            vote_on(frames, &ids, width, height, progress)?;
+        vote.seconds = seconds;
         let result = &estimate.vote;
         vote.features = features;
         vote.clusters = clusters;
@@ -204,22 +208,22 @@ pub(super) fn pilot_vote(
             ));
         }
     }
-    vote.seconds = start.elapsed().as_secs_f64();
     Ok((vote, camera))
 }
 
 /// Cluster the first [`PILOT_MAX_FEATURES`] features of each frame of `ids`,
 /// as `sfm match --cluster --max-features` does, and run the focal vote
 /// `sfm estimate-intrinsics` runs on the clusters, the model chosen by the
-/// evidence. Returns the estimate, the number of features clustered and the
-/// number of clusters.
+/// evidence. Returns the estimate, the number of features clustered, the
+/// number of clusters and the wall time of the clustering and the vote in
+/// seconds, which it also adds to the frames' clock.
 fn vote_on(
     frames: &Frames,
     ids: &[FrameId],
     width: u32,
     height: u32,
     progress: &Progress,
-) -> Result<(IntrinsicsEstimate, usize, usize), PickImagesError> {
+) -> Result<(IntrinsicsEstimate, usize, usize, f64), PickImagesError> {
     let mut positions: Vec<Vec<[f32; 2]>> = Vec::with_capacity(ids.len());
     let mut corpus: Vec<u8> = Vec::new();
     let mut image_starts: Vec<u32> = vec![0];
@@ -231,6 +235,8 @@ fn vote_on(
         positions.push(frame_positions);
     }
     progress.check_cancel()?;
+    // The vote's own time starts once its features are read.
+    let start = Instant::now();
     let features = corpus.len() / DESCRIPTOR_DIM;
     let params = BackgroundFloorParams::default();
     // A corpus too small for the matcher's background rank forms no
@@ -266,7 +272,15 @@ fn vote_on(
             ..IntrinsicsOptions::default()
         },
     );
-    Ok((estimate, features, cluster_starts.len() - 1))
+    let took = start.elapsed();
+    let clock = &frames.clock.pilot_vote;
+    clock.set(clock.get() + took);
+    Ok((
+        estimate,
+        features,
+        cluster_starts.len() - 1,
+        took.as_secs_f64(),
+    ))
 }
 
 #[cfg(test)]

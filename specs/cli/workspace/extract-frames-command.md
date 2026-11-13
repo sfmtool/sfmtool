@@ -178,7 +178,12 @@ adapts to each frame), so ffmpeg only decodes it and sfmtool converts it:
   0.79 levels against the pixels encoded, and ffmpeg's `-q:v 2` 690 KB with
   2.06, so the HDR frames are the larger and the closer to their pixels. Four
   frames are converted and written at once on a thread pool, with at most
-  eight waiting, so ffmpeg goes on decoding meanwhile.
+  eight waiting, so ffmpeg goes on decoding meanwhile. The extraction keeps
+  the time the calling thread waited for that pool and the pool's conversion
+  and encoding times, which `write_image_from_hdr` returns per frame, for the
+  time breakdown of
+  [`sfm pick-images --new-workspace`](../image-feature/pick-images-command.md#time-breakdown);
+  this command does not print them.
 - **The recipe** is one fixed function of each pixel's own value, with no
   per-frame peak, no local or adaptive tone mapping and no dynamic metadata:
   BT.2100 narrow-range Y'CbCr to R'G'B'; the HLG inverse OETF and the OOTF of
@@ -381,7 +386,10 @@ CI rather than skip.
   the same run, `--hdr-exposure -1` and `--max-frame-size 64`, the HLG frames
   are 64 x 48 with codes 187 and 99, the exposure is recorded and the SDR
   video's record has no conversion. `--hdr-exposure` with only SDR video is
-  refused with nothing created.
+  refused with nothing created. Extracted through `extract_planned`, the SDR
+  video's times are its wall time alone, and the HLG video's split into
+  decoding and waiting for the writers, which add up to its wall time, and
+  the four writer threads' conversion and encoding, each above 0.
 - Every refusal of [Checks](#checks) in one run, each named, with the output
   directory unchanged: `.insv`, an image, a non-video file, a directory, a
   missing file, a stem with `*`, audio whose only video stream is cover art,

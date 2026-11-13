@@ -17,6 +17,7 @@ use super::density::DensityTerm;
 use super::essential_split::EssentialSplitOutcome;
 use super::frame_pair::FramePairStats;
 use super::pilot::PilotVote;
+use super::source::SourceTimes;
 
 /// What [`super::pick_images`] found.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -34,9 +35,56 @@ pub struct PickImagesReport {
     /// How many frames the source wrote any `.sift` file for during the run
     /// that the walk never read: frames it predicted it would read and then
     /// did not, a rig frame stopped between its images among them. Unlike
-    /// everything else in the report, it depends on how far ahead the walk
-    /// predicts and on how fast the source works.
+    /// everything else in the report but `times`, it depends on how far
+    /// ahead the walk predicts and on how fast the source works.
     pub frames_extracted_unread: usize,
+    /// Where the call's wall time went, which differs from run to run.
+    pub times: PickImagesTimes,
+}
+
+/// Where the wall time of a [`super::pick_images`] call went.
+///
+/// Every figure but `source` is wall time on the thread that called
+/// `pick_images`, the walk's thread, summed over the calls of one kind of
+/// work. No two of them count the same moment, and `other_seconds` is what
+/// is left of `total_seconds`, so the figures from `checking_input_seconds`
+/// to `other_seconds` add up to `total_seconds`. The source's workers run at
+/// the same time as the walk, so their time, in `source`, is not part of it:
+/// the walk's share of extraction is the time it waited for frames.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PickImagesTimes {
+    /// The call's wall time, from its start to its return.
+    pub total_seconds: f64,
+    /// Checking the options, the sequences and the folders the `.sift` files
+    /// go in for version 1 files.
+    pub checking_input_seconds: f64,
+    /// Blocked in [`super::FrameSource::wait`], for the extracting source the
+    /// wait for workers to extract the frames the walk is about to read.
+    pub waiting_for_frames_seconds: f64,
+    /// Reading each frame's `.sift` metadata and readings once it was waited
+    /// for.
+    pub reading_sift_metadata_seconds: f64,
+    /// Reading frames' positions and descriptors from their `.sift` files,
+    /// for the pairs matched and for the pilot vote.
+    pub reading_sift_features_seconds: f64,
+    /// Building each frame's KD-forest.
+    pub building_forests_seconds: f64,
+    /// Matching pairs of frames, the mutual matches and their statistics.
+    pub matching_seconds: f64,
+    /// Measuring the essential split of each accepted step, with the local
+    /// density term on.
+    pub essential_split_seconds: f64,
+    /// The pilot votes' clustering and focal votes, the sum of every
+    /// [`PilotVote::seconds`].
+    pub pilot_vote_seconds: f64,
+    /// [`super::FrameSource::finish`]: stopping the source's workers, which
+    /// lets the frames in flight stop or finish.
+    pub stopping_source_seconds: f64,
+    /// Everything else: the walk's own decisions, the predictions passed to
+    /// the source and assembling the report.
+    pub other_seconds: f64,
+    /// The source's workers' time, on threads of their own.
+    pub source: SourceTimes,
 }
 
 /// One frame read, with the readings of each of its sensors.

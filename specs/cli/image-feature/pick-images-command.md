@@ -554,7 +554,7 @@ Given 1 path(s), 6120 image file(s) in 1 sequence:
 Walk: target step 10% (band 7-13%), match floor 600
   Chosen: 512 of 6120 frames; read: 2730 frames (2718 extracted, 12 reused)
   Local density term: on, with the pilot vote's pinhole camera, focal 1222.3 px, pool spread 0.124; 61 of 511 steps walked with a gain above 1
-  Pilot vote: 30 frames chosen, 92 read, 45000 features in 8312 clusters; took 2.4 s
+  Pilot vote: 30 frames chosen, 92 read, 45000 features in 8312 clusters; clustering and vote took 0.9 s
   Motion along the capture (median step, rate per frame, frames per step):
     frames         1-612     9.9%    0.64%     15
     frames      613-1224    10.1%    0.71%     14
@@ -568,6 +568,9 @@ Extracted and never read: 40 frames
 
 Wrote the named image list walk1 (512 images) to /captures/garden/.sfm-named-image-lists.json
   For a quick test solve, try -r 'walk1[:30]', -r 'walk1[241:271]' or -r 'walk1[-30:]'
+
+Time on the command's thread:
+  ...
 Completed in 6m 12.40s
 ```
 
@@ -620,10 +623,12 @@ rest.
   no certified rotation votes.
 - **The pilot vote.** When a pilot vote ran, the line after the term's gives
   the frames it chose and read, the features it clustered and the clusters
-  they formed, and its wall time:
+  they formed, and the wall time of the clustering and the vote, which leaves
+  out reading and extracting the frames
+  ([core/analysis/pick-images.md § Times](../../core/analysis/pick-images.md#times)):
 
   ```text
-    Pilot vote: 30 frames chosen, 92 read, 45000 features in 8312 clusters; took 2.4 s
+    Pilot vote: 30 frames chosen, 92 read, 45000 features in 8312 clusters; clustering and vote took 0.9 s
   ```
 
   The table of steps, printed only with the term on, gives per step its
@@ -645,6 +650,91 @@ rest.
   images, since its entries go one per sensor. When no name was given, a line
   gives the count of frames chosen and says to pass `--write-list NAME`.
 
+### Time breakdown
+
+The last lines before `Completed in` say where the run's time went. Work
+overlaps in time: the extraction workers extract frames while the walk
+matches, an HDR video's frames are converted on threads of their own while
+ffmpeg decodes, and a match is itself parallel. So the breakdown is in two
+parts, each defined by the thread it is measured on. Two fresh SDR videos
+with `--new-workspace`:
+
+```text
+Time on the command's thread:
+  Checking the videos, creating the workspace         0.55 s
+  Extracting the videos' frames                       5.05 s
+    shopA.mp4: ffmpeg decoding and writing JPEGs      3.07 s
+    shopB.mp4: ffmpeg decoding and writing JPEGs      1.98 s
+  Collecting the frames                               0.19 s
+  Picking                                            51.52 s
+    Checking the input                                0.00 s
+    Waiting for frames' .sift files                  34.35 s
+    Reading .sift metadata                            8.41 s
+    Reading .sift features                            0.98 s
+    Building KD-forests                               2.36 s
+    Matching frame pairs                              2.33 s
+    Measuring essential splits                        2.47 s
+    Pilot votes: clustering and focal vote            0.51 s
+    Stopping the extraction workers                   0.00 s
+    The walk's decisions and the rest                 0.09 s
+    Handing the report to Python                      0.00 s
+  Printing the report, writing the list, JSON         0.02 s
+Time on other threads, at the same time (summed over the threads):
+  SIFT extraction, 32 workers on 490 frames         232.87 s
+Completed in 57.34s
+```
+
+**Time on the command's thread** is wall time on the thread the command
+runs on. Each line is the time of one stretch of the run, and the lines
+indented under a line divide it, so the lines at one indent under a heading
+add up to it and no moment is counted twice. The lines at the first indent
+are the stretches of the run, in order, which add up to the run's time but
+for loading the command and parsing its options:
+
+- **Checking the videos, creating the workspace**, with `--new-workspace`:
+  the checks of the inputs, ffprobe's reading of each video and writing the
+  workspace file.
+- **Extracting the videos' frames**, with `--new-workspace`, divided per
+  video. For an SDR video ffmpeg decodes, scales and writes the JPEG frames
+  in its one process, and the command waits for it, so the line is that one
+  time (`ffmpeg decoding and writing JPEGs`). For an HDR video the frames
+  come through a pipe and are converted on threads of the command's own
+  ([extract-frames-command.md § HDR video](../workspace/extract-frames-command.md#hdr-video)),
+  and the video's time is divided into `ffmpeg decoding, read from its pipe`,
+  the command's thread reading ffmpeg's output and handing each frame on,
+  and `Waiting for the conversion to sRGB`, the time it was blocked because
+  the threads converting and writing frames were behind.
+- **Collecting the frames**: reading the workspace, finding the `.camrig`
+  files and grouping the files into sequences.
+- **Extracting every frame's .sift file first**, with a feature tool other
+  than `sfmtool` ([Extraction](#extraction)).
+- **Picking**: the call of `pick_images`, divided by the report's `times`
+  ([core/analysis/pick-images.md § Times](../../core/analysis/pick-images.md#times)):
+  checking the input, waiting for frames' `.sift` files, which is the walk's
+  share of the extraction, reading `.sift` metadata and features, building
+  KD-forests, matching frame pairs, measuring essential splits, the pilot
+  votes' clustering and focal vote, printed only when a pilot vote ran,
+  stopping the extraction workers, and the walk's decisions and the rest; and
+  `Handing the report to Python`, the rest of the call: turning the report
+  into Python values. While the extraction workers keep every core busy, the
+  walk's own calls take longer than they take alone, so a fresh run's
+  matching, reading and forest lines are larger than a second run's on the
+  same files, which shows what each costs alone.
+- **Printing the report, writing the list, JSON**: from the call's end to the
+  JSON file written.
+
+**Time on other threads** is summed over threads that ran at the same time
+as the command's thread, so it is not part of the times above and may be
+larger than the run: `SIFT extraction`, the extraction workers' time, with
+the number of workers and of frames they took up, whether they then
+extracted a frame or found its `.sift` file up to date, each frame's wall
+time from the moment a worker took it up, summed; and per HDR video, its writer
+threads' `Converting to sRGB` and `Encoding and writing JPEGs`, each the sum
+over its frames. The heading is printed only when there is such a line: a
+feature tool other than `sfmtool` runs no extraction workers.
+
+The deletion of `--prune-images` comes after the breakdown and is not in it.
+
 ### JSON
 
 `--json PATH` writes the dict `pick_images` returns, as it is (`sequences`,
@@ -659,6 +749,7 @@ positions, not numbers), with these keys added:
 | `capture` | per sequence: `patterns`, `sensors` (for a rig, each sensor's image pattern as the `.camrig` stores it; `null` otherwise), `numbers` (the frame's number at each position), `images` (each frame's workspace-relative image paths), `camera` (the camera dict the walk was given, as the `.camrig` stores it, or `null`, as for a sequence whose camera came from the pilot vote) and `camera_source` (the text the term's line names it by, or says why there is none, the pilot vote's model, focal and pool spread among them) |
 | `chosen_numbers` | per sequence, the chosen frames' numbers |
 | `named_image_list` | the written list's `name`, `path`, `images` and `entries`, or `null` |
+| `command_times` | the command's own times, in seconds, on its thread: `preparing_seconds` and `videos` (per video its file name as `video`, its extraction's `seconds` and `hdr`, `null` for an SDR video and for an HDR video its `decoding_seconds` and `waiting_for_writers_seconds`, which add up to `seconds`, and its `writers` threads' summed `conversion_seconds` and `encoding_seconds`), `null` and `[]` without `--new-workspace`; `collecting_frames_seconds`; `extracting_first_seconds`, `null` with the `sfmtool` tool; and `picking_seconds`, the call of `pick_images` |
 
 The file is written after the report and the list.
 Each pair's and each step's `stats` hold an `essential_split` key, which is
@@ -669,8 +760,13 @@ sequence's `density_term` whether the term was on, with the camera's focal,
 or why not, and its `pilot_vote`, `null` when none ran, with the frames
 voted on, the frames read, the features and clusters, the vote's
 `camera_model`, `confirmed`, `focal_px`, `pool_spread`, `n_pool`,
-`n_epipolar` and `n_rotation`, its `outcome` and its `seconds`
+`n_epipolar` and `n_rotation`, its `outcome` and its `seconds`, the wall
+time of its clustering and vote
 ([core/analysis/pick-images.md § The report](../../core/analysis/pick-images.md#the-report)).
+The report's `times` hold the walk's figures and the extraction workers'
+([core/analysis/pick-images.md § Times](../../core/analysis/pick-images.md#times)).
+The JSON file is written before the breakdown's last line is measured, so
+it has no figure for writing itself.
 With a tool other than `sfmtool`, `frames_extracted` and
 `frames_extracted_unread` are the command's, from the extraction made first.
 
@@ -716,7 +812,14 @@ beside the other chosen images; two `.camrig` rigs, each its own sequence; a
 match
 floor too large for the binding, refused naming the option, and one below 1,
 a usage error; an invalid output name; and `--force` without `--write-list`
-and paths given with a list, which are usage errors.
+and paths given with a list, which are usage errors. The JSON report and
+reuse test, the `opencv` workspace and the `--new-workspace` flow each check
+the time breakdown: the walk's figures in the JSON add up to its
+`total_seconds`, the call took at least that, and the printed lines give the
+JSON's figures, with the extraction workers' line for the `sfmtool` tool,
+the extraction first and no workers for `opencv`, and each video's line
+for the videos; the pilot vote's line gives its clustering and vote time,
+which the JSON's `pilot_vote_seconds` equals.
 For `--new-workspace`, two 40-frame videos are written once per module from
 the two pans with ffmpeg's built-in `mpeg4` encoder and extracted at
 `--fps full`. The tests cover the whole flow on both videos, with
@@ -750,7 +853,10 @@ and the report's walk section: its heading, the frames chosen and read, the swap
 at the next frame among them, a run of the motion table whose steps
 match nothing, the local density term's line, on and for each reason it is
 off, and its table of steps, a step not measured among them, and the pilot
-vote's text for a fisheye verdict, confirmed and not.
+vote's text for a fisheye verdict, confirmed and not, and the time
+breakdown's lines: their labels, indents and seconds in one column, an SDR
+and an HDR video, the binding call's rest, the lines on other threads, and
+with another tool and no pilot vote no video, pilot or other-threads line.
 
 ## Non-goals
 

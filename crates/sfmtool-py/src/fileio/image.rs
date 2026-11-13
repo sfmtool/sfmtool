@@ -8,9 +8,11 @@
 //! of HDR video to sRGB and encodes it.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use numpy::{IntoPyArray, PyArray3, PyReadonlyArrayDyn, PyUntypedArrayMethods};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use sfmtool_core::camera::image::hdr_to_srgb::{
     hdr_ycbcr_to_srgb, HdrToSrgbOptions, HdrTransfer, HDR_EXPOSURE_STOPS_LIMIT, HDR_TO_SRGB_RECIPE,
     HDR_TO_SRGB_RECIPE_VERSION,
@@ -179,6 +181,10 @@ pub fn write_image_rgba(py: Python<'_>, path: PathBuf, pixels: &Bound<'_, PyAny>
 /// is released while the frame is converted, in parallel over its rows, and
 /// encoded.
 ///
+/// Returns a dict of the call's two wall times in seconds:
+/// `conversion_seconds`, converting the frame to sRGB, and
+/// `encoding_seconds`, encoding it and writing the file.
+///
 /// Raises `TypeError` when `planes` is not a `uint16` array; `ValueError`
 /// when it is not `(3, H, W)` with `H` and `W` at least 1, when `transfer`
 /// is neither name, when `exposure_stops` is out of range or not finite, and
@@ -193,7 +199,7 @@ pub fn write_image_from_hdr(
     transfer: &str,
     exposure_stops: f32,
     jpeg_quality: i64,
-) -> PyResult<()> {
+) -> PyResult<Py<PyDict>> {
     let value_error = |message: String| pyo3::exceptions::PyValueError::new_err(message);
     if !(1..=100).contains(&jpeg_quality) {
         return Err(value_error(format!(
@@ -235,13 +241,20 @@ pub fn write_image_from_hdr(
         exposure_stops,
     };
     let samples: &[u16] = &samples;
-    py.detach(|| {
+    let (conversion, encoding) = py.detach(|| {
+        let start = Instant::now();
         let image = hdr_ycbcr_to_srgb(samples, width, height, &options)
             .map_err(|e| value_error(format!("write_image_from_hdr: {e}")))?;
+        let converted = Instant::now();
         image
             .write(&path, jpeg_quality as u8)
-            .map_err(|e| write_error(&path, e))
-    })
+            .map_err(|e| write_error(&path, e))?;
+        Ok::<_, PyErr>((converted - start, converted.elapsed()))
+    })?;
+    let times = PyDict::new(py);
+    times.set_item("conversion_seconds", conversion.as_secs_f64())?;
+    times.set_item("encoding_seconds", encoding.as_secs_f64())?;
+    Ok(times.unbind())
 }
 
 /// The `ImageU8` holding `pixels`, which must be a `uint8` array of shape
