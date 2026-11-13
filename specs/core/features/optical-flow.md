@@ -37,7 +37,7 @@ pub fn compute_optical_flow(
     img_b: &GrayImage,
     params: &DisFlowParams,
     gpu: Option<&gpu::GpuFlowContext>,
-) -> FlowField;
+) -> Result<FlowField, OpticalFlowError>;
 
 pub fn compute_optical_flow_with_init(
     img_a: &GrayImage,
@@ -45,14 +45,17 @@ pub fn compute_optical_flow_with_init(
     params: &DisFlowParams,
     initial_flow: &FlowField,
     gpu: Option<&gpu::GpuFlowContext>,
-) -> FlowField;
+) -> Result<FlowField, OpticalFlowError>;
 
 pub fn compose_flow(flow_ab: &FlowField, flow_bc: &FlowField) -> FlowField;
 ```
 
 The image pair must have equal dimensions, and `initial_flow` must have those same
-dimensions. `None` selects the CPU path. A reusable GPU context can be passed when
-the crate's default `gpu` feature is enabled.
+dimensions. Every field of `DisFlowParams` has a range, given under
+[Parameters](#parameters), and the functions check the fields against the image
+before any work. A mismatch or an out-of-range field returns an
+`OpticalFlowError` that names it. `None` selects the CPU path. A reusable GPU
+context can be passed when the crate's default `gpu` feature is enabled.
 
 ```rust
 use sfmtool_core::features::optical_flow::{
@@ -65,11 +68,11 @@ let img_b = GrayImage::new_constant(64, 64, 0.5);
 let img_c = GrayImage::new_constant(64, 64, 0.5);
 let params = DisFlowParams::default_quality();
 
-let flow_ab = compute_optical_flow(&img_a, &img_b, &params, None);
-let flow_bc = compute_optical_flow(&img_b, &img_c, &params, None);
+let flow_ab = compute_optical_flow(&img_a, &img_b, &params, None)?;
+let flow_bc = compute_optical_flow(&img_b, &img_c, &params, None)?;
 let initial_ac = compose_flow(&flow_ab, &flow_bc);
 let flow_ac =
-    compute_optical_flow_with_init(&img_a, &img_c, &params, &initial_ac, None);
+    compute_optical_flow_with_init(&img_a, &img_c, &params, &initial_ac, None)?;
 assert_eq!((flow_ac.width(), flow_ac.height()), (64, 64));
 ```
 
@@ -119,26 +122,46 @@ illumination changes.
 1. Build Gaussian image pyramids for both images (scale factor 2)
 2. At the coarsest level, initialize flow to zero
 3. At each pyramid level (coarsest to finest):
-   a. Upsample flow from coarser level (x2 spatially, x2 magnitude)
+   a. Upsample flow from coarser level (x2 spatially, x2 magnitude). A level
+      an odd number of pixels wide or high is one pixel wider or higher than
+      the upsampled flow, and that column or row repeats its neighbour
    b. For each patch on a regular grid: inverse search via gradient descent
    c. Reject outlier patches: reset if displacement update exceeds patch size
    d. Densify sparse patch updates via photometric-error-weighted averaging (Eq. 3)
    e. Optionally apply variational refinement
-4. Output the flow field at the finest level
+4. Upsample the finest level's flow by 2 per level to full resolution, repeating
+   the last column and row where the image's width or height is not a multiple
+   of `2^finest_scale`
 
 ### Parameters
 
-| Symbol | Name | Description | Default |
-|--------|------|-------------|---------|
-| theta_ps | Patch size | Square patch edge length (pixels) | 8 |
-| theta_ov | Patch overlap | Fraction of overlap between adjacent patches | 0.4 |
-| theta_it | Iterations | Gradient descent iterations per patch | 12 |
-| theta_sd | Scale factor | Downscaling factor between pyramid levels | 2 |
-| theta_ss | Coarsest scale | Coarsest pyramid level (auto-computed) | image-dependent |
-| theta_sf | Finest scale | Finest pyramid level (0 = full resolution) | theta_ss - 2 |
+| Symbol | Name | Description | Default | Range |
+|--------|------|-------------|---------|-------|
+| theta_ps | Patch size (`patch_size`) | Square patch edge length (pixels) | 8 | 1 to the image's width and height |
+| | Patch stride (`patch_stride`) | Pixels between the top-left corners of neighbouring patches | 4 | at least 1 |
+| theta_it | Iterations (`grad_descent_iterations`) | Gradient descent iterations per patch | 12 | at least 1 |
+| theta_sd | Scale factor | Downscaling factor between pyramid levels | 2 | fixed |
+| theta_ss | Coarsest scale (`coarsest_scale`) | Coarsest pyramid level | image-dependent | a level at least 1 pixel on each side |
+| theta_sf | Finest scale (`finest_scale`) | Finest pyramid level (0 = full resolution) | theta_ss - 2 | as theta_ss, and at most theta_ss when both are given |
+
+The paper sets the patch spacing by an overlap, theta_ov, the fraction of a patch
+its neighbour shares, and derives the stride from it. `DisFlowParams` holds the
+stride itself, as OpenCV's DIS does, so a caller asking for a stride gets exactly
+that stride: theta_ov = 1 - `patch_stride` / `patch_size`. Patches start at
+multiples of the stride and stop at the last one that fits the level, so when
+`(width - patch_size)` is not a multiple of the stride, the last
+`(width - patch_size) mod patch_stride` columns are covered by no patch (rows
+likewise) and densification gives them zero flow; variational refinement, when
+on, then pulls them toward their neighbours. A stride of 1 covers every pixel.
 
 **Automatic coarsest scale:** `theta_ss = floor(log2(2 * width / (f * theta_ps)))`
-where f = 5 (motions up to 1/5 of image width).
+where f = 5 (motions up to 1/5 of image width), lowered to the deepest level that
+is at least one pixel on each side. An explicit `finest_scale` coarser than the
+automatic theta_ss raises it to `finest_scale`.
+
+Below the finest scale nothing is solved: the flow at `finest_scale` is upsampled
+bilinearly to full resolution, so it carries no detail finer than
+`2^finest_scale` pixels.
 
 ### Variational Refinement
 
@@ -158,21 +181,32 @@ GPU compute shaders. It converges slower per iteration, so we use 7 inner iterat
 
 | Symbol | Name | Default |
 |--------|------|---------|
-| delta | Intensity weight | 5 |
-| gamma | Gradient weight | 10 |
-| alpha | Smoothness weight | 10 |
-| theta_vo | Outer iterations per scale | 1 x (s + 1), s = scale index |
-| theta_vi | Inner Jacobi iterations | 7 |
+| delta | Intensity weight (`variational_delta`) | 5 |
+| gamma | Gradient weight (`variational_gamma`) | 10 |
+| alpha | Smoothness weight (`variational_alpha`) | 10 |
+| theta_vo | Outer iterations per scale | `variational_outer_iterations_base` x (s + 1), s = scale index; base 1 |
+| theta_vi | Inner Jacobi iterations (`variational_jacobi_iterations`) | 7 |
+
+The weights are finite and at least 0, and both iteration counts at least 1.
+`variational_refinement` turns the stage on or off.
 
 ### Presets
 
 Three quality/speed presets correspond to the DIS paper's operating points:
 
-| Preset | Patch | Overlap | Iterations | Finest Scale | Variational |
-|--------|-------|---------|------------|--------------|-------------|
-| `fast` | 8 | 0.3 | 16 | 3 (fixed) | disabled |
-| `default_quality` | 8 | 0.4 | 12 | theta_ss - 2 | enabled |
-| `high_quality` | 12 | 0.75 | 16 | 1 (fixed) | enabled |
+| Preset | Patch | Stride | Iterations | Finest Scale | Variational |
+|--------|-------|--------|------------|--------------|-------------|
+| `fast` | 8 | 5 | 16 | 3 (fixed) | disabled |
+| `default_quality` | 8 | 4 | 12 | theta_ss - 2 | enabled |
+| `high_quality` | 12 | 3 | 16 | 1 (fixed) | enabled |
+
+The strides are those the paper's overlaps give, floor(patch size x (1 - theta_ov))
+for theta_ov 0.3, 0.4 and 0.75. No preset solves at full resolution:
+`high_quality` stops at half resolution, and `default_quality` two levels finer
+than its coarsest scale, so at full resolution only on images narrow enough that
+theta_ss is 2 or less. A caller that needs full-resolution flow, for example
+between small crops where theta_ss is 0 or 1, sets `finest_scale` to 0, and for
+dense patches `patch_stride` to 1.
 
 ## Architecture
 
@@ -233,7 +267,15 @@ and COLMAP convention. Sampling at (0.5, 0.5) returns the exact top-left pixel v
 
 **`DisFlowParams`** holds all algorithm parameters, with constructor methods for each
 preset (`fast`, `default_quality`, `high_quality`). Includes `gpu_min_pixels` (default
-50,000) to control the per-level CPU/GPU routing threshold.
+50,000) to control the per-level CPU/GPU routing threshold. Its fields are public, so
+a caller starts from a preset and changes the fields it needs
+(`DisFlowParams { finest_scale: Some(0), ..DisFlowParams::high_quality() }`).
+
+**`OpticalFlowError`** is what the flow functions return for input they refuse: images
+of different sizes, an initial flow of another size, or a `DisFlowParams` field out of
+its range (a zero patch size, stride or iteration count, a patch larger than the image,
+a negative or non-finite weight, a scale with no pixels, a finest scale above an
+explicit coarsest scale). It names the field, which is also the Python keyword.
 
 **`ImagePyramid`** builds a Gaussian pyramid via fused 6-tap blur + 2x downsample at
 each level (sigma = 1.0, separable, even tap count for between-pixel centering).
@@ -268,11 +310,11 @@ densification from sparse patch results.
 
 The Python submodule `sfmtool.flow` exposes:
 
-- `compute_optical_flow(img_a, img_b, preset, use_gpu)` — returns `(flow_u, flow_v)`
-  as two `(H, W)` float32 arrays
-- `compute_optical_flow_timed(img_a, img_b, preset, use_gpu)` — also returns a
-  per-stage timing dictionary
-- `compute_optical_flow_with_init(img_a, img_b, initial_flow_u, initial_flow_v, preset, use_gpu)` — same with initial flow
+- `compute_optical_flow(img_a, img_b, preset, use_gpu, *, ...)` — returns
+  `(flow_u, flow_v)` as two `(H, W)` float32 arrays
+- `compute_optical_flow_timed(img_a, img_b, preset, use_gpu, *, ...)` — also
+  returns a per-stage timing dictionary
+- `compute_optical_flow_with_init(img_a, img_b, initial_flow_u, initial_flow_v, preset, use_gpu, *, ...)` — same with initial flow
 - `compose_flow(flow_ab_u, flow_ab_v, flow_bc_u, flow_bc_v)` — returns composed `(flow_u, flow_v)`
 - `advect_points(points, flow_u, flow_v)` — advects `(N, 2)` float32 points through a flow field
 - `gpu_available()` — returns whether GPU acceleration is available
@@ -284,6 +326,28 @@ Images accept two-dimensional `uint8` numpy arrays. Flow fields use separate u/v
 (not interleaved), matching the internal split layout. The Python `preset` strings are
 `"fast"`, `"default"`, and `"high_quality"`; `"default"` selects the Rust
 `DisFlowParams::default_quality()` preset.
+
+The `...` in the three flow functions stands for their keyword-only overrides of
+the preset, one for each `DisFlowParams` field and named as it: `patch_size`, `patch_stride`,
+`grad_descent_iterations`, `finest_scale`, `coarsest_scale`,
+`variational_refinement`, `variational_jacobi_iterations`,
+`variational_outer_iterations_base`, `variational_alpha`, `variational_gamma`,
+`variational_delta`, `normalize_patches` and `gpu_min_pixels`. Each defaults to
+`None`, which keeps the preset's value; no keyword sets a scale back to
+automatic, so a caller wanting an automatic scale picks a preset that has one.
+They are keywords rather than a parameters object because a call then names only
+what it changes, beside the preset it starts from:
+
+```python
+from sfmtool.flow import compute_optical_flow
+
+flow_u, flow_v = compute_optical_flow(
+    crop_a, crop_b, preset="high_quality", finest_scale=0, patch_stride=1
+)
+```
+
+A value out of the range in [Parameters](#parameters) raises `ValueError` with the
+core's message, and a negative integer raises `OverflowError` before reaching it.
 
 ## Initial Flow Support
 
@@ -350,7 +414,8 @@ datasets (dino_dog_toy 2040x1536, seattle_backyard 360x640):
 | `optical_flow/bilinear` | 1M bilinear samples |
 
 The [CPU tests](../../../crates/sfmtool-core/src/features/optical_flow/tests.rs) cover
-identity and translated synthetic images, composition, and initial-flow refinement;
+identity and translated synthetic images, composition, initial-flow refinement, the
+parameter checks, odd image sizes and full-resolution dense patches;
 the [GPU tests](../../../crates/sfmtool-core/src/features/optical_flow/gpu/tests.rs)
 check CPU/GPU agreement. Accuracy changes are evaluated with the synthetic-ground-truth
 benchmark linked in **Internal Modules**; there is no OpenCV DIS cross-validation suite.

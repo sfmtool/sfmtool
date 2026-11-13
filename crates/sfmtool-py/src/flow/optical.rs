@@ -70,6 +70,13 @@ pub fn gpu_available() -> bool {
 ///     img_b: (H, W) uint8 numpy array, the same shape as img_a
 ///     preset: "default" (default), "fast", or "high_quality"
 ///     use_gpu: None (default, auto-detect), True (require GPU), or False (force CPU)
+///     patch_size, patch_stride, grad_descent_iterations, finest_scale,
+///     coarsest_scale, variational_refinement, variational_jacobi_iterations,
+///     variational_outer_iterations_base, variational_alpha, variational_gamma,
+///     variational_delta, normalize_patches, gpu_min_pixels: keyword-only
+///         overrides of the preset's DIS parameters; None keeps the preset's
+///         value. "Python Bindings" in specs/core/features/optical-flow.md
+///         gives each one's meaning and range.
 ///
 /// Returns:
 ///     Tuple of two (H, W) numpy arrays of float32: (flow_u, flow_v)
@@ -78,17 +85,32 @@ pub fn gpu_available() -> bool {
 ///
 /// Raises:
 ///     TypeError: If an image is not a 2-D uint8 array.
-///     ValueError: If the two images differ in shape, or the preset is unknown.
+///     ValueError: If the two images differ in shape, the preset is unknown,
+///         or a parameter is out of its range for the images.
+///     OverflowError: If an integer parameter is negative.
 ///     RuntimeError: If use_gpu is True and no GPU is available.
 #[pyfunction]
-#[pyo3(signature = (img_a, img_b, preset=None, use_gpu=None))]
-#[allow(clippy::type_complexity)]
+#[pyo3(signature = (img_a, img_b, preset=None, use_gpu=None, *, patch_size=None, patch_stride=None, grad_descent_iterations=None, finest_scale=None, coarsest_scale=None, variational_refinement=None, variational_jacobi_iterations=None, variational_outer_iterations_base=None, variational_alpha=None, variational_gamma=None, variational_delta=None, normalize_patches=None, gpu_min_pixels=None))]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_optical_flow(
     py: Python<'_>,
     img_a: PyReadonlyArray2<'_, u8>,
     img_b: PyReadonlyArray2<'_, u8>,
     preset: Option<&str>,
     use_gpu: Option<bool>,
+    patch_size: Option<u32>,
+    patch_stride: Option<u32>,
+    grad_descent_iterations: Option<u32>,
+    finest_scale: Option<u32>,
+    coarsest_scale: Option<u32>,
+    variational_refinement: Option<bool>,
+    variational_jacobi_iterations: Option<u32>,
+    variational_outer_iterations_base: Option<u32>,
+    variational_alpha: Option<f32>,
+    variational_gamma: Option<f32>,
+    variational_delta: Option<f32>,
+    normalize_patches: Option<bool>,
+    gpu_min_pixels: Option<u32>,
 ) -> PyResult<(Py<numpy::PyArray2<f32>>, Py<numpy::PyArray2<f32>>)> {
     let shape_a = img_a.shape();
     let shape_b = img_b.shape();
@@ -101,7 +123,24 @@ pub fn compute_optical_flow(
     let h = shape_a[0] as u32;
     let w = shape_a[1] as u32;
 
-    let params = parse_flow_preset(preset)?;
+    let params = flow_params(
+        preset,
+        FlowParamOverrides {
+            patch_size,
+            patch_stride,
+            grad_descent_iterations,
+            finest_scale,
+            coarsest_scale,
+            variational_refinement,
+            variational_jacobi_iterations,
+            variational_outer_iterations_base,
+            variational_alpha,
+            variational_gamma,
+            variational_delta,
+            normalize_patches,
+            gpu_min_pixels,
+        },
+    )?;
     let gpu = resolve_gpu(use_gpu)?;
 
     let data_a: Vec<u8> = to_contiguous!(img_a).into_owned();
@@ -110,7 +149,9 @@ pub fn compute_optical_flow(
     let gray_a = optical_flow::GrayImage::from_u8(w, h, &data_a);
     let gray_b = optical_flow::GrayImage::from_u8(w, h, &data_b);
 
-    let flow = py.detach(|| optical_flow::compute_optical_flow(&gray_a, &gray_b, &params, gpu));
+    let flow = py
+        .detach(|| optical_flow::compute_optical_flow(&gray_a, &gray_b, &params, gpu))
+        .map_err(flow_error)?;
 
     let shape = (h as usize, w as usize);
     let arr_u = ndarray::Array2::from_shape_vec(shape, flow.u_slice().to_vec())
@@ -133,18 +174,27 @@ pub fn compute_optical_flow(
 ///     initial_flow_v: (H, W) float32 initial vertical flow estimate
 ///     preset: "default" (default), "fast", or "high_quality"
 ///     use_gpu: None (default, auto-detect), True (require GPU), or False (force CPU)
+///     patch_size, patch_stride, grad_descent_iterations, finest_scale,
+///     coarsest_scale, variational_refinement, variational_jacobi_iterations,
+///     variational_outer_iterations_base, variational_alpha, variational_gamma,
+///     variational_delta, normalize_patches, gpu_min_pixels: keyword-only
+///         overrides of the preset's DIS parameters; None keeps the preset's
+///         value. "Python Bindings" in specs/core/features/optical-flow.md
+///         gives each one's meaning and range.
 ///
 /// Returns:
 ///     Tuple of two (H, W) numpy arrays of float32: (flow_u, flow_v)
 ///
 /// Raises:
 ///     TypeError: If an image is not a 2-D uint8 array.
-///     ValueError: If the images or the initial flow arrays differ in shape, or
-///         the preset is unknown.
+///     ValueError: If the images or the initial flow arrays differ in shape,
+///         the preset is unknown, or a parameter is out of its range for the
+///         images.
+///     OverflowError: If an integer parameter is negative.
 ///     RuntimeError: If use_gpu is True and no GPU is available.
 #[pyfunction]
-#[pyo3(signature = (img_a, img_b, initial_flow_u, initial_flow_v, preset=None, use_gpu=None))]
-#[allow(clippy::type_complexity)]
+#[pyo3(signature = (img_a, img_b, initial_flow_u, initial_flow_v, preset=None, use_gpu=None, *, patch_size=None, patch_stride=None, grad_descent_iterations=None, finest_scale=None, coarsest_scale=None, variational_refinement=None, variational_jacobi_iterations=None, variational_outer_iterations_base=None, variational_alpha=None, variational_gamma=None, variational_delta=None, normalize_patches=None, gpu_min_pixels=None))]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn compute_optical_flow_with_init(
     py: Python<'_>,
     img_a: PyReadonlyArray2<'_, u8>,
@@ -153,6 +203,19 @@ pub fn compute_optical_flow_with_init(
     initial_flow_v: PyReadonlyArray2<'_, f32>,
     preset: Option<&str>,
     use_gpu: Option<bool>,
+    patch_size: Option<u32>,
+    patch_stride: Option<u32>,
+    grad_descent_iterations: Option<u32>,
+    finest_scale: Option<u32>,
+    coarsest_scale: Option<u32>,
+    variational_refinement: Option<bool>,
+    variational_jacobi_iterations: Option<u32>,
+    variational_outer_iterations_base: Option<u32>,
+    variational_alpha: Option<f32>,
+    variational_gamma: Option<f32>,
+    variational_delta: Option<f32>,
+    normalize_patches: Option<bool>,
+    gpu_min_pixels: Option<u32>,
 ) -> PyResult<(Py<numpy::PyArray2<f32>>, Py<numpy::PyArray2<f32>>)> {
     let shape_a = img_a.shape();
     let shape_b = img_b.shape();
@@ -170,7 +233,24 @@ pub fn compute_optical_flow_with_init(
     let h = shape_a[0] as u32;
     let w = shape_a[1] as u32;
 
-    let params = parse_flow_preset(preset)?;
+    let params = flow_params(
+        preset,
+        FlowParamOverrides {
+            patch_size,
+            patch_stride,
+            grad_descent_iterations,
+            finest_scale,
+            coarsest_scale,
+            variational_refinement,
+            variational_jacobi_iterations,
+            variational_outer_iterations_base,
+            variational_alpha,
+            variational_gamma,
+            variational_delta,
+            normalize_patches,
+            gpu_min_pixels,
+        },
+    )?;
     let gpu = resolve_gpu(use_gpu)?;
 
     let data_a: Vec<u8> = to_contiguous!(img_a).into_owned();
@@ -182,9 +262,11 @@ pub fn compute_optical_flow_with_init(
     let gray_b = optical_flow::GrayImage::from_u8(w, h, &data_b);
     let init_flow = optical_flow::FlowField::from_split(w, h, init_u, init_v);
 
-    let flow = py.detach(|| {
-        optical_flow::compute_optical_flow_with_init(&gray_a, &gray_b, &params, &init_flow, gpu)
-    });
+    let flow = py
+        .detach(|| {
+            optical_flow::compute_optical_flow_with_init(&gray_a, &gray_b, &params, &init_flow, gpu)
+        })
+        .map_err(flow_error)?;
 
     let shape = (h as usize, w as usize);
     let arr_u = ndarray::Array2::from_shape_vec(shape, flow.u_slice().to_vec())
@@ -312,6 +394,8 @@ pub fn advect_points(
 
 /// Compute dense optical flow with per-stage timing breakdown.
 ///
+/// Takes the arguments of ``compute_optical_flow`` and raises its errors.
+///
 /// Returns a dict with timing info for each pipeline stage:
 ///   - pyramid_build: time to build Gaussian pyramids (seconds)
 ///   - dis_total: total DIS inverse search + densification time (seconds)
@@ -322,13 +406,27 @@ pub fn advect_points(
 ///   - per_level: list of (scale, width, height, dis_time, var_time) tuples
 ///   - flow_u, flow_v: the computed flow arrays
 #[pyfunction]
-#[pyo3(signature = (img_a, img_b, preset=None, use_gpu=None))]
+#[pyo3(signature = (img_a, img_b, preset=None, use_gpu=None, *, patch_size=None, patch_stride=None, grad_descent_iterations=None, finest_scale=None, coarsest_scale=None, variational_refinement=None, variational_jacobi_iterations=None, variational_outer_iterations_base=None, variational_alpha=None, variational_gamma=None, variational_delta=None, normalize_patches=None, gpu_min_pixels=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn compute_optical_flow_timed(
     py: Python<'_>,
     img_a: PyReadonlyArray2<'_, u8>,
     img_b: PyReadonlyArray2<'_, u8>,
     preset: Option<&str>,
     use_gpu: Option<bool>,
+    patch_size: Option<u32>,
+    patch_stride: Option<u32>,
+    grad_descent_iterations: Option<u32>,
+    finest_scale: Option<u32>,
+    coarsest_scale: Option<u32>,
+    variational_refinement: Option<bool>,
+    variational_jacobi_iterations: Option<u32>,
+    variational_outer_iterations_base: Option<u32>,
+    variational_alpha: Option<f32>,
+    variational_gamma: Option<f32>,
+    variational_delta: Option<f32>,
+    normalize_patches: Option<bool>,
+    gpu_min_pixels: Option<u32>,
 ) -> PyResult<Py<PyAny>> {
     let shape_a = img_a.shape();
     let shape_b = img_b.shape();
@@ -341,7 +439,24 @@ pub fn compute_optical_flow_timed(
     let h = shape_a[0] as u32;
     let w = shape_a[1] as u32;
 
-    let params = parse_flow_preset(preset)?;
+    let params = flow_params(
+        preset,
+        FlowParamOverrides {
+            patch_size,
+            patch_stride,
+            grad_descent_iterations,
+            finest_scale,
+            coarsest_scale,
+            variational_refinement,
+            variational_jacobi_iterations,
+            variational_outer_iterations_base,
+            variational_alpha,
+            variational_gamma,
+            variational_delta,
+            normalize_patches,
+            gpu_min_pixels,
+        },
+    )?;
     let gpu = resolve_gpu(use_gpu)?;
 
     let data_a: Vec<u8> = to_contiguous!(img_a).into_owned();
@@ -350,8 +465,9 @@ pub fn compute_optical_flow_timed(
     let gray_a = optical_flow::GrayImage::from_u8(w, h, &data_a);
     let gray_b = optical_flow::GrayImage::from_u8(w, h, &data_b);
 
-    let (flow, timing) =
-        py.detach(|| optical_flow::compute_optical_flow_timed(&gray_a, &gray_b, &params, gpu));
+    let (flow, timing) = py
+        .detach(|| optical_flow::compute_optical_flow_timed(&gray_a, &gray_b, &params, gpu))
+        .map_err(flow_error)?;
 
     let shape = (h as usize, w as usize);
     let arr_u = ndarray::Array2::from_shape_vec(shape, flow.u_slice().to_vec())
@@ -376,17 +492,78 @@ pub fn compute_optical_flow_timed(
     Ok(dict.into())
 }
 
-/// Parse a flow preset string into DisFlowParams.
-fn parse_flow_preset(preset: Option<&str>) -> PyResult<optical_flow::DisFlowParams> {
-    match preset.unwrap_or("default") {
-        "fast" => Ok(optical_flow::DisFlowParams::fast()),
-        "default" => Ok(optical_flow::DisFlowParams::default_quality()),
-        "high_quality" => Ok(optical_flow::DisFlowParams::high_quality()),
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Unknown preset '{}'. Use 'fast', 'default', or 'high_quality'.",
-            other
-        ))),
-    }
+/// The flow functions' keyword-only overrides of a preset's `DisFlowParams`
+/// fields, each named as the field it sets; `None` keeps the preset's value.
+/// The core checks the values that result.
+struct FlowParamOverrides {
+    patch_size: Option<u32>,
+    patch_stride: Option<u32>,
+    grad_descent_iterations: Option<u32>,
+    finest_scale: Option<u32>,
+    coarsest_scale: Option<u32>,
+    variational_refinement: Option<bool>,
+    variational_jacobi_iterations: Option<u32>,
+    variational_outer_iterations_base: Option<u32>,
+    variational_alpha: Option<f32>,
+    variational_gamma: Option<f32>,
+    variational_delta: Option<f32>,
+    normalize_patches: Option<bool>,
+    gpu_min_pixels: Option<u32>,
+}
+
+/// The preset's `DisFlowParams` with `overrides` applied.
+fn flow_params(
+    preset: Option<&str>,
+    overrides: FlowParamOverrides,
+) -> PyResult<optical_flow::DisFlowParams> {
+    let mut params = match preset.unwrap_or("default") {
+        "fast" => optical_flow::DisFlowParams::fast(),
+        "default" => optical_flow::DisFlowParams::default_quality(),
+        "high_quality" => optical_flow::DisFlowParams::high_quality(),
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Unknown preset '{}'. Use 'fast', 'default', or 'high_quality'.",
+                other
+            )))
+        }
+    };
+    let FlowParamOverrides {
+        patch_size,
+        patch_stride,
+        grad_descent_iterations,
+        finest_scale,
+        coarsest_scale,
+        variational_refinement,
+        variational_jacobi_iterations,
+        variational_outer_iterations_base,
+        variational_alpha,
+        variational_gamma,
+        variational_delta,
+        normalize_patches,
+        gpu_min_pixels,
+    } = overrides;
+    params.patch_size = patch_size.unwrap_or(params.patch_size);
+    params.patch_stride = patch_stride.unwrap_or(params.patch_stride);
+    params.grad_descent_iterations =
+        grad_descent_iterations.unwrap_or(params.grad_descent_iterations);
+    params.finest_scale = finest_scale.or(params.finest_scale);
+    params.coarsest_scale = coarsest_scale.or(params.coarsest_scale);
+    params.variational_refinement = variational_refinement.unwrap_or(params.variational_refinement);
+    params.variational_jacobi_iterations =
+        variational_jacobi_iterations.unwrap_or(params.variational_jacobi_iterations);
+    params.variational_outer_iterations_base =
+        variational_outer_iterations_base.unwrap_or(params.variational_outer_iterations_base);
+    params.variational_alpha = variational_alpha.unwrap_or(params.variational_alpha);
+    params.variational_gamma = variational_gamma.unwrap_or(params.variational_gamma);
+    params.variational_delta = variational_delta.unwrap_or(params.variational_delta);
+    params.normalize_patches = normalize_patches.unwrap_or(params.normalize_patches);
+    params.gpu_min_pixels = gpu_min_pixels.unwrap_or(params.gpu_min_pixels);
+    Ok(params)
+}
+
+/// Raise an `OpticalFlowError` as a Python `ValueError`.
+fn flow_error(e: optical_flow::OpticalFlowError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -76,7 +76,7 @@ fn test_gray_image_from_u8() {
 fn test_identical_images_near_zero_flow() {
     let img = GrayImage::checkerboard(64, 64);
     let params = DisFlowParams::fast();
-    let flow = compute_optical_flow(&img, &img, &params, None);
+    let flow = compute_optical_flow(&img, &img, &params, None).unwrap();
 
     // Flow should be near zero for identical images
     let mut max_flow = 0.0f32;
@@ -103,7 +103,7 @@ fn test_horizontal_shift() {
         variational_refinement: false,
         ..DisFlowParams::default_quality()
     };
-    let flow = compute_optical_flow(&img_a, &img_b, &params, None);
+    let flow = compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
 
     // Check flow in the center region (away from borders)
     let mut sum_dx = 0.0;
@@ -129,19 +129,275 @@ fn test_horizontal_shift() {
     assert!(avg_dy.abs() < 2.0, "Expected avg dy ~0.0, got {}", avg_dy);
 }
 
+/// A smooth texture with structure on both axes, sampled at `(x - dx, y)`, so
+/// the flow from the `dx = 0` image to this one is `(dx, 0)` everywhere.
+fn smooth_texture(width: u32, height: u32, dx: f32) -> GrayImage {
+    let mut img = GrayImage::new_constant(width, height, 0.0);
+    for row in 0..height {
+        for col in 0..width {
+            let x = col as f32 - dx;
+            let y = row as f32;
+            let v = 0.5 + 0.2 * (0.4 * x).sin() + 0.2 * (0.33 * y + 0.1 * x).cos();
+            img.set_pixel(col, row, v);
+        }
+    }
+    img
+}
+
+#[test]
+fn test_odd_size_edge_gets_flow_with_finest_scale_above_zero() {
+    // At finest scale 1 the flow is solved at floor(65 / 2) x floor(49 / 2)
+    // and upsampled to 64 x 48, one pixel short of the image on each axis.
+    // The last column and row repeat their neighbours' flow rather than
+    // being left at zero.
+    let (w, h) = (65, 49);
+    let img_a = smooth_texture(w, h, 0.0);
+    let img_b = smooth_texture(w, h, 1.0);
+    let params = DisFlowParams {
+        finest_scale: Some(1),
+        coarsest_scale: Some(1),
+        ..DisFlowParams::default_quality()
+    };
+    let flow = compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+    assert_eq!((flow.width(), flow.height()), (w, h));
+    for row in 0..h {
+        assert_eq!(flow.get(w - 1, row), flow.get(w - 2, row), "row {row}");
+    }
+    for col in 0..w {
+        assert_eq!(flow.get(col, h - 1), flow.get(col, h - 2), "col {col}");
+    }
+    let (dx, _) = flow.get(w - 1, h / 2);
+    assert!((dx - 1.0).abs() < 0.5, "last column dx {dx}");
+}
+
+#[test]
+fn test_resize_flow_to_repeats_edges_and_crops() {
+    let mut flow = FlowField::new(2, 2);
+    flow.set(0, 0, 1.0, -1.0);
+    flow.set(1, 0, 2.0, -2.0);
+    flow.set(0, 1, 3.0, -3.0);
+    flow.set(1, 1, 4.0, -4.0);
+    let grown = resize_flow_to(flow.clone(), 3, 3);
+    assert_eq!(grown.get(2, 0), (2.0, -2.0));
+    assert_eq!(grown.get(0, 2), (3.0, -3.0));
+    assert_eq!(grown.get(2, 2), (4.0, -4.0));
+    assert_eq!(grown.get(1, 1), (4.0, -4.0));
+    let cropped = resize_flow_to(flow, 1, 2);
+    assert_eq!(cropped.u_slice(), &[1.0, 3.0]);
+    assert_eq!(cropped.v_slice(), &[-1.0, -3.0]);
+}
+
+#[test]
+fn test_full_resolution_dense_patches_beat_half_resolution() {
+    // The setting the high_quality preset cannot reach: patches on every
+    // pixel at full resolution. On a sub-pixel shift of a small image it is
+    // closer to the true flow than the same patches solved at half
+    // resolution and upsampled.
+    let (w, h) = (64, 64);
+    let img_a = smooth_texture(w, h, 0.0);
+    let img_b = smooth_texture(w, h, 0.6);
+    let error = |finest: u32| {
+        let params = DisFlowParams {
+            patch_size: 12,
+            patch_stride: 1,
+            finest_scale: Some(finest),
+            coarsest_scale: Some(1),
+            ..DisFlowParams::high_quality()
+        };
+        let flow = compute_optical_flow(&img_a, &img_b, &params, None).unwrap();
+        let errors: Vec<f64> = (8..h - 8)
+            .flat_map(|row| (8..w - 8).map(move |col| (col, row)))
+            .map(|(col, row)| {
+                let (dx, dy) = flow.get(col, row);
+                f64::from((dx - 0.6).hypot(dy))
+            })
+            .collect();
+        crate::numeric::median(&errors)
+    };
+    let full = error(0);
+    let half = error(1);
+    assert!(full < 0.05, "full-resolution median error {full}");
+    assert!(full < 0.7 * half, "full {full} vs half {half}");
+}
+
+#[test]
+fn test_invalid_params_return_errors() {
+    let img = GrayImage::checkerboard(40, 24);
+    let run = |params: DisFlowParams| {
+        compute_optical_flow(&img, &img, &params, None)
+            .err()
+            .unwrap()
+    };
+    let base = DisFlowParams::default_quality;
+    assert_eq!(
+        run(DisFlowParams {
+            patch_size: 0,
+            ..base()
+        }),
+        OpticalFlowError::PatchSizeZero
+    );
+    assert_eq!(
+        run(DisFlowParams {
+            patch_stride: 0,
+            ..base()
+        }),
+        OpticalFlowError::PatchStrideZero
+    );
+    assert_eq!(
+        run(DisFlowParams {
+            patch_size: 25,
+            ..base()
+        }),
+        OpticalFlowError::PatchLargerThanImage {
+            patch_size: 25,
+            width: 40,
+            height: 24
+        }
+    );
+    // A patch the size of the image's shorter side is accepted.
+    let params = DisFlowParams {
+        patch_size: 24,
+        ..base()
+    };
+    assert!(compute_optical_flow(&img, &img, &params, None).is_ok());
+    for (field, params) in [
+        (
+            "grad_descent_iterations",
+            DisFlowParams {
+                grad_descent_iterations: 0,
+                ..base()
+            },
+        ),
+        (
+            "variational_jacobi_iterations",
+            DisFlowParams {
+                variational_jacobi_iterations: 0,
+                ..base()
+            },
+        ),
+        (
+            "variational_outer_iterations_base",
+            DisFlowParams {
+                variational_outer_iterations_base: 0,
+                ..base()
+            },
+        ),
+    ] {
+        assert_eq!(run(params), OpticalFlowError::ZeroIterations { field });
+    }
+    for value in [-1.0, f32::INFINITY] {
+        assert_eq!(
+            run(DisFlowParams {
+                variational_gamma: value,
+                ..base()
+            }),
+            OpticalFlowError::InvalidWeight {
+                field: "variational_gamma",
+                value
+            }
+        );
+    }
+    assert!(matches!(
+        run(DisFlowParams {
+            variational_alpha: f32::NAN,
+            ..base()
+        }),
+        OpticalFlowError::InvalidWeight {
+            field: "variational_alpha",
+            ..
+        }
+    ));
+    // 24 rows halve to 1 row at level 4 and to none at level 5.
+    assert_eq!(
+        run(DisFlowParams {
+            finest_scale: Some(5),
+            ..base()
+        }),
+        OpticalFlowError::ScaleTooCoarse {
+            field: "finest_scale",
+            scale: 5,
+            max_scale: 4
+        }
+    );
+    assert_eq!(
+        run(DisFlowParams {
+            coarsest_scale: Some(u32::MAX),
+            ..base()
+        }),
+        OpticalFlowError::ScaleTooCoarse {
+            field: "coarsest_scale",
+            scale: u32::MAX,
+            max_scale: 4
+        }
+    );
+    assert_eq!(
+        run(DisFlowParams {
+            finest_scale: Some(2),
+            coarsest_scale: Some(1),
+            ..base()
+        }),
+        OpticalFlowError::FinestAboveCoarsest {
+            finest: 2,
+            coarsest: 1
+        }
+    );
+    let other = GrayImage::checkerboard(40, 23);
+    assert_eq!(
+        compute_optical_flow(&img, &other, &base(), None)
+            .err()
+            .unwrap(),
+        OpticalFlowError::ImageSizeMismatch {
+            a: (40, 24),
+            b: (40, 23)
+        }
+    );
+    let init = FlowField::new(39, 24);
+    assert_eq!(
+        compute_optical_flow_with_init(&img, &img, &base(), &init, None)
+            .err()
+            .unwrap(),
+        OpticalFlowError::InitialFlowSizeMismatch {
+            image: (40, 24),
+            flow: (39, 24)
+        }
+    );
+}
+
+#[test]
+fn test_resolve_scales() {
+    let base = DisFlowParams::default_quality;
+    // Automatic: floor(log2(2 * 640 / 40)) = 5, finest 5 - 2.
+    assert_eq!(base().resolve_scales(640, 480), Ok((3, 5)));
+    // A short image lowers the automatic coarsest scale to its deepest
+    // level: 9 rows reach level 3, one row high.
+    assert_eq!(base().resolve_scales(640, 9), Ok((1, 3)));
+    // An explicit finest scale raises an automatic coarsest scale to it.
+    let params = DisFlowParams {
+        finest_scale: Some(4),
+        ..base()
+    };
+    assert_eq!(params.resolve_scales(100, 100), Ok((4, 4)));
+}
+
 #[test]
 fn test_presets() {
     // Just verify presets don't panic and produce valid params
+    // The strides are those the paper's overlaps (0.3, 0.4, 0.75) give,
+    // floor(patch_size * (1 - overlap)).
     let fast = DisFlowParams::fast();
     assert_eq!(fast.patch_size, 8);
+    assert_eq!(fast.patch_stride, 5);
     assert!(!fast.variational_refinement);
 
     let default = DisFlowParams::default_quality();
     assert_eq!(default.patch_size, 8);
+    assert_eq!(default.patch_stride, 4);
     assert!(default.variational_refinement);
 
     let hq = DisFlowParams::high_quality();
     assert_eq!(hq.patch_size, 12);
+    assert_eq!(hq.patch_stride, 3);
+    assert_eq!(hq.finest_scale, Some(1));
     assert!(hq.variational_refinement);
 }
 
@@ -234,7 +490,7 @@ fn test_compute_optical_flow_with_init_identical() {
         }
     }
 
-    let flow = compute_optical_flow_with_init(&img, &img, &params, &init, None);
+    let flow = compute_optical_flow_with_init(&img, &img, &params, &init, None).unwrap();
 
     // Should be near zero (solver corrects the bad init)
     let mut max_flow = 0.0f32;
@@ -271,7 +527,7 @@ fn test_compute_optical_flow_with_init_shift() {
         }
     }
 
-    let flow = compute_optical_flow_with_init(&img_a, &img_b, &params, &init, None);
+    let flow = compute_optical_flow_with_init(&img_a, &img_b, &params, &init, None).unwrap();
 
     // Check center region
     let mut sum_dx = 0.0;

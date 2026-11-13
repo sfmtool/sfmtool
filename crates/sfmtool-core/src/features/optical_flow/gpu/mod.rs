@@ -99,6 +99,19 @@ impl GpuFlowContext {
         })
     }
 
+    /// Whether DIS on a `w` x `h` pyramid level fits this device's limits; a
+    /// level that does not runs on the CPU. See [`level_fits_limits`].
+    pub(super) fn level_fits(&self, w: u32, h: u32, params: &super::DisFlowParams) -> bool {
+        level_fits_limits(w, h, params, &self.ctx.device.limits())
+    }
+
+    /// Whether a buffer of one `f32` per pixel of a `w` x `h` image fits this
+    /// device's limits. The multi-level path holds the whole pyramid and the
+    /// full-resolution flow on the GPU, so it needs this for the input image.
+    pub(super) fn image_fits(&self, w: u32, h: u32) -> bool {
+        image_fits_limits(w, h, &self.ctx.device.limits())
+    }
+
     /// Run DIS and variational refinement for one pyramid level as a single GPU
     /// submission, updating `flow` in place.
     ///
@@ -118,7 +131,7 @@ impl GpuFlowContext {
         let n = (w as usize) * (h as usize);
 
         let ps = dis_params.patch_size;
-        let stride = dis_params.patch_stride();
+        let stride = dis_params.patch_stride;
         let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
         let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };
         if num_patches_x == 0 || num_patches_y == 0 {
@@ -361,7 +374,7 @@ impl GpuFlowContext {
         let queue = &self.ctx.queue;
 
         let ps = params.patch_size;
-        let stride = params.patch_stride();
+        let stride = params.patch_stride;
         let (num_patches_x, num_patches_y) = patch_grid(w, h, params);
 
         // DIS uniform buffers
@@ -670,7 +683,9 @@ impl GpuFlowContext {
                 gamma: params.variational_gamma,
                 alpha: params.variational_alpha,
                 jacobi_iterations: params.variational_jacobi_iterations,
-                outer_iterations: params.variational_outer_iterations_base * (scale + 1),
+                outer_iterations: params
+                    .variational_outer_iterations_base
+                    .saturating_mul(scale + 1),
             };
 
             if i == 0 {
@@ -814,10 +829,29 @@ impl GpuFlowContext {
 /// axis shorter than one patch.
 fn patch_grid(w: u32, h: u32, params: &super::DisFlowParams) -> (u32, u32) {
     let ps = params.patch_size;
-    let stride = params.patch_stride();
+    let stride = params.patch_stride;
     let num_patches_x = if w >= ps { (w - ps) / stride + 1 } else { 0 };
     let num_patches_y = if h >= ps { (h - ps) / stride + 1 } else { 0 };
     (num_patches_x, num_patches_y)
+}
+
+/// Whether DIS on a `w` x `h` level fits `limits`: the inverse search runs one
+/// thread per patch in a one-dimensional dispatch of `IS_WG_SIZE`-thread
+/// workgroups, and the level's image, gradient and flow buffers each hold one
+/// `f32` per pixel. A small `patch_stride` on a large level is what exceeds
+/// the dispatch limit.
+fn level_fits_limits(w: u32, h: u32, params: &super::DisFlowParams, limits: &wgpu::Limits) -> bool {
+    let (num_patches_x, num_patches_y) = patch_grid(w, h, params);
+    let total_patches = u64::from(num_patches_x) * u64::from(num_patches_y);
+    let workgroups = total_patches.div_ceil(u64::from(dis_pipeline::IS_WG_SIZE));
+    workgroups <= u64::from(limits.max_compute_workgroups_per_dimension)
+        && image_fits_limits(w, h, limits)
+}
+
+/// Whether a buffer of one `f32` per pixel of a `w` x `h` image fits `limits`.
+fn image_fits_limits(w: u32, h: u32, limits: &wgpu::Limits) -> bool {
+    let bytes = u64::from(w) * u64::from(h) * 4;
+    bytes <= limits.max_storage_buffer_binding_size && bytes <= limits.max_buffer_size
 }
 
 /// Per-level uniform-parameter bind groups, created before encoding so that all
