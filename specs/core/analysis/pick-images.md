@@ -1046,8 +1046,8 @@ finite and not negative, each kind of work on the walk's thread above 0, the
 walk's figures adding up to `total_seconds`, which they would pass if two
 timers counted one moment, `pilot_vote_seconds` the vote's own, and the
 workers' figures; and a source that sleeps 25 ms before each frame, on one
-worker and with no prefetch, leaves the vote's time below half of the pilot's extraction while
-the walk's wait for frames takes it up. A pilot of two frames, with no vote,
+worker and with no prefetch, makes the walk's wait for frames at least the
+pilot's extraction and leaves the vote's time below that wait. A pilot of two frames, with no vote,
 reports 0 for its vote's time.
 [pilot/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pilot/tests.rs)
 checks the outcome at the spread's bound and past it, the camera of each

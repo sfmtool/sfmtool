@@ -83,9 +83,9 @@ fn a_sequence_with_no_camera_is_walked_with_the_pilot_vote_s_camera() {
 }
 
 /// A source that takes `DELAY` per frame on one worker makes the pilot walk
-/// last at least `DELAY` per frame it read; the vote's own time is the
-/// clustering and the vote alone, and the walk's thread spends the delay
-/// waiting for frames. The frames match nothing, so the pilot walk reads
+/// last at least `DELAY` per frame it read; the walk's thread spends the
+/// delay waiting for frames, and the vote's own time, the clustering and the
+/// vote alone, is less than that wait. The frames match nothing, so the pilot walk reads
 /// every frame and the vote, on few features, is quick next to the delay.
 /// With no prefetch the worker starts a frame only when the walk waits for
 /// it, so each wait lasts at least `DELAY` however long the walk's own reads
@@ -120,16 +120,21 @@ fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
     // least this long.
     let pilot_extraction = vote.frames_read as f64 * DELAY.as_secs_f64();
     assert!(
-        vote.seconds < 0.5 * pilot_extraction,
-        "the vote took {} s, the pilot's frames at least {pilot_extraction} s",
-        vote.seconds
-    );
-    assert!((report.times.pilot_vote_seconds - vote.seconds).abs() < 1e-9);
-    assert!(
         report.times.waiting_for_frames_seconds >= pilot_extraction,
         "{:?}",
         report.times
     );
+    // The pilot read every frame, so every wait of the run was the pilot
+    // walk's: a vote time that counted the pilot walk would be at least the
+    // wait. The vote alone takes about 10 ms against the wait's 200 ms or
+    // more, a margin that holds while other tests load every core.
+    assert!(
+        vote.seconds < report.times.waiting_for_frames_seconds,
+        "the vote took {} s: {:?}",
+        vote.seconds,
+        report.times
+    );
+    assert!((report.times.pilot_vote_seconds - vote.seconds).abs() < 1e-9);
 }
 
 #[test]
