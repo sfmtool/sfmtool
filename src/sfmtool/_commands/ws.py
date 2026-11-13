@@ -119,8 +119,8 @@ def upgrade(path):
     workspace gains its tool's conversion. A new feature_prefix_dir is named
     from the new options, so .sift files are extracted again into a new folder;
     the old folder, its .sift files and the named image lists file stay on
-    disk, and .sfmr files that name the old folder still find their .sift
-    files.
+    disk, and .matches and .sfmr files that name the old folder still find
+    their .sift files there. New matches need 'sfm match' again.
 
     Example usage:
 
@@ -144,4 +144,9 @@ def upgrade(path):
     click.echo(
         "The old folder and its .sift files are left on disk; .sift files are "
         "extracted again into the new folder."
+    )
+    click.echo(
+        "Existing .matches and .sfmr files refer to the old folder and keep "
+        "using it, so keep it while you use them. To match on the new "
+        "features, run 'sfm match' again, which extracts them first."
     )

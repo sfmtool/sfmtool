@@ -11,7 +11,7 @@ import numpy as np
 
 from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
-from ..sift.file import get_sift_path_for_image
+from ..sift.file import get_sift_path_from_recon
 from ..fileio import SiftFile
 from ..visualization import render_heatmap_overlay
 from ..visualization._heatmap_renderer import compute_triangulation_angles
@@ -229,7 +229,7 @@ def heatmap(
                 raise FileNotFoundError(f"Image not found: {image_path}")
 
             # Get feature positions from SIFT file
-            sift_path = get_sift_path_for_image(image_path)
+            sift_path = get_sift_path_from_recon(recon, image_name)
             if not sift_path.exists():
                 raise FileNotFoundError(f"SIFT file not found: {sift_path}")
 

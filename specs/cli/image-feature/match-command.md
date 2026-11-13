@@ -258,7 +258,11 @@ directory named after the input's stem with a trailing `-clusters` removed
 `tvg-matches/kerry_park.matches`).
 
 The derivation expands the clusters into per-image-pair matches, writes them
-with the workspace's features and cameras into a throwaway COLMAP database,
+with the features the clusters file was matched on (the `.sift` files in the
+feature folder it records, checked against its content hashes as `sfm solve`
+checks them, see
+[solve-command.md § From a `.matches` file](../reconstruction/solve-command.md#from-a-matches-file))
+and the workspace's cameras into a throwaway COLMAP database,
 runs `pycolmap.verify_matches` over exactly the derived pair list, and reads
 the surviving matches back with their geometries. Verification culls pairs
 below COLMAP's `min_num_matches`, so the output's pairs are a subset of the

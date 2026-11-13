@@ -5,9 +5,12 @@ workspace's `.sfm-workspace.json` as version 2, keeping every feature option,
 including hand-edited ones, and names a new features folder from the converted
 options, so the workspace's `.sift` files are extracted again, as version 2
 files, into that folder. Nothing else on disk changes: the old folder and its
-`.sift` files, the named image lists file and every `.sfmr` stay as they are,
-and a `.sfmr` that names the old folder still finds its `.sift` files through
-its own record. The two versions of the file, and why extraction refuses
+`.sift` files, the named image lists file and every `.matches` and `.sfmr`
+file stay as they are, and a `.matches` or `.sfmr` file that names the old
+folder still finds its `.sift` files there through its own record. Their
+feature indexes refer to the old folder's files, so a solve from an existing
+`.matches` file reads the old folder, and refuses when those files are gone or
+have changed; matching on the new features takes `sfm match` again. The two versions of the file, and why extraction refuses
 version 1 settings, are in
 [workspace.md § Versions](../../workspace/workspace.md#versions).
 
@@ -38,7 +41,9 @@ On a version 1 file:
 Every other option and field is kept, `version` becomes `2`, and
 `feature_prefix_dir` becomes `features/{feature_type}-{hash}`, the hash taken
 over the converted options as `sfm ws init` takes it. The command prints the
-file, the conversion and the old and new folders.
+file, the conversion and the old and new folders, and says that existing
+`.matches` and `.sfmr` files keep using the old folder and that matching on the
+new features takes `sfm match` again.
 
 On a version 2 file it prints "nothing to do: already version 2" and changes
 nothing.
@@ -67,6 +72,7 @@ Upgraded workspace file: /home/user/my_project/.sfm-workspace.json
   old features folder: features/sift-sfmtool-3dcd2b2f8c892d12c3ffe28cedce19c9
   new features folder: features/sift-sfmtool-9017ec0d2c5dfc401da610578062b53d
 The old folder and its .sift files are left on disk; .sift files are extracted again into the new folder.
+Existing .matches and .sfmr files refer to the old folder and keep using it, so keep it while you use them. To match on the new features, run 'sfm match' again, which extracts them first.
 
 $ sfm ws upgrade my_project
 /home/user/my_project/.sfm-workspace.json: nothing to do: already version 2

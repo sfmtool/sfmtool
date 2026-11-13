@@ -19,6 +19,7 @@ from ..camrig.resolver import CamrigSolveResult, resolve_camrig_for_solve
 from ..rig.frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
 from ..sift.extract import image_files_to_sift_files
 from ..rig.config import _refuse_rig_config
+from .._workspace import load_workspace_config
 from .db_builders import _setup_db_single_sensor, _setup_db_with_camrigs
 
 
@@ -230,6 +231,84 @@ def resolve_image_and_sift_paths(
     return image_paths, sift_paths
 
 
+class MatchedFeaturesError(RuntimeError):
+    """A `.matches` file's `.sift` files are missing or have changed.
+
+    A `.matches` file's feature indexes are rows of the `.sift` files in the
+    feature folder it records, as they were when it was matched, so it cannot
+    be used without them.
+    """
+
+
+def resolve_matched_sift_paths(
+    matches_file: Path,
+    matches_data: dict,
+    image_indexes: list[int],
+) -> tuple[list[Path], list[Path]]:
+    """The image and `.sift` paths of the `.matches` file's images at
+    `image_indexes`, in the feature folder the file records.
+
+    The `.sift` files are those the file was matched on: the folder is the
+    `feature_prefix_dir` of the file's own workspace contents, never the
+    workspace's current one, which `sfm ws upgrade` moves. Each file's content
+    hash is checked against the one the `.matches` file recorded for it.
+    Raises `MatchedFeaturesError`, naming the `.matches` file, the folder and
+    what to do, when any of them is missing or has changed, so a caller stops
+    before it builds anything from features its indexes do not refer to.
+    Raises `FileNotFoundError` for a missing image.
+    """
+    from .._sfmtool.fileio import read_sift_metadata
+
+    workspace_dir = Path(matches_data["workspace_dir"])
+    all_names = matches_data["image_names"]
+    recorded_hashes = matches_data["sift_content_hashes"]
+    contents = matches_data["metadata"]["workspace"].get("contents", {})
+    feature_prefix_dir = contents.get("feature_prefix_dir") or ""
+
+    image_paths: list[Path] = []
+    sift_paths: list[Path] = []
+    missing: list[Path] = []
+    changed: list[Path] = []
+    for index in image_indexes:
+        name = all_names[index]
+        image_path = workspace_dir / name
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image not found: {image_path}")
+        rel = Path(name)
+        sift_path = workspace_dir / rel.parent / feature_prefix_dir / f"{rel.name}.sift"
+        image_paths.append(image_path)
+        sift_paths.append(sift_path)
+        if not sift_path.exists():
+            missing.append(sift_path)
+            continue
+        found = read_sift_metadata(str(sift_path))["content_hash"]["content_xxh128"]
+        if bytes.fromhex(found) != bytes(recorded_hashes[index]):
+            changed.append(sift_path)
+
+    if missing or changed:
+        count = len(image_indexes)
+        if missing:
+            verb = "is" if len(missing) == 1 else "are"
+            problem = (
+                f"{len(missing)} of the {count} .sift files it needs {verb} "
+                f"missing, such as {missing[0]}"
+            )
+        else:
+            verb = "has" if len(changed) == 1 else "have"
+            problem = (
+                f"{len(changed)} of the {count} .sift files it needs {verb} "
+                f"changed since it was matched, such as {changed[0]}"
+            )
+        raise MatchedFeaturesError(
+            f"Cannot use {matches_file}: it was matched on the .sift files in "
+            f"the feature folder {feature_prefix_dir}, and {problem}. Its "
+            "feature indexes refer to those files only. Run 'sfm match' on its "
+            "images again to match them on the workspace's current features, "
+            "and use the new .matches file."
+        )
+    return image_paths, sift_paths
+
+
 def _setup_for_sfm_from_matches(
     matches_file: str | Path,
     colmap_dir: str | Path,
@@ -295,6 +374,7 @@ def _setup_for_sfm_from_matches(
             old: new for new, old in enumerate(kept_old_indices)
         }
     else:
+        kept_old_indices = list(range(len(all_image_names)))
         image_names = list(all_image_names)
         old_to_new = None
 
@@ -325,11 +405,18 @@ def _setup_for_sfm_from_matches(
             f"Matches: {kept_matches} (filtered from {total_matches})"
         )
 
-    # Resolve image paths and .sift paths
-    feature_prefix_dir = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
-    image_paths, sift_paths = resolve_image_and_sift_paths(
-        workspace_dir, image_names, feature_prefix_dir
+    # The .sift files the file was matched on, checked before anything is
+    # built from them.
+    image_paths, sift_paths = resolve_matched_sift_paths(
+        matches_file, matches_data, kept_old_indices
     )
+    feature_prefix_dir = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
+    current_prefix_dir = load_workspace_config(workspace_dir).get("feature_prefix_dir")
+    if current_prefix_dir and current_prefix_dir != feature_prefix_dir:
+        print(
+            f"Features: {feature_prefix_dir}, which the .matches file was "
+            f"matched on (the workspace now extracts into {current_prefix_dir})"
+        )
 
     # Set up COLMAP directory and database
     colmap_dir.mkdir(exist_ok=True, parents=True)

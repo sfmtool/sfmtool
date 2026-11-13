@@ -100,6 +100,22 @@ filters the file's images instead
 When a single `.matches` file is provided, pre-computed matches are loaded directly into the
 COLMAP database, skipping feature extraction and matching.
 
+The file's feature indexes are rows of the `.sift` files it was matched on, in
+the feature folder its own `workspace.contents.feature_prefix_dir` names, so
+the solve reads those files and not the workspace's current folder, which
+`sfm ws upgrade` moves. The database, the reconstruction's keypoints, its
+recorded feature definition (`workspace.contents`), its `.sift` content
+hashes, its thumbnails and its image readings all come from that folder, and
+the command prints the folder when it is not the workspace's current one.
+Before it builds anything, the command checks each of those `.sift` files
+against the content hash the `.matches` file recorded for it; when one is
+missing or its hash differs, it stops with an error naming the `.matches`
+file, the folder and a `.sift` file at fault, and saying to run `sfm match`
+again to match on the workspace's current features. The check is
+`resolve_matched_sift_paths` in
+[`colmap/db_setup.py`](../../../src/sfmtool/colmap/db_setup.py), which
+`sfm to-colmap-db` and `sfm match --derive-pairs` share.
+
 `-r` and `--named-image-list` choose which of the file's images to solve. The
 images left out are not written to the database, and neither is any pair that
 involves one of them; the kept images stay in the file's order.
