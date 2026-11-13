@@ -19,6 +19,7 @@
 //! camera models are.
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 
 use crate::camera::sampler::{render_tile, SamplerChoice};
 use crate::camera::warp_map::{patch_grid_jacobian, singular_values_2x2};
@@ -266,13 +267,16 @@ pub(crate) struct Crop {
 /// Render the crop of every view `sights` says is seen, on `grid`, through
 /// its camera model; `None` for the others. `sights` is the second half of
 /// [`CropGrid::new`]'s answer for the same `views`.
+///
+/// The views are rendered in parallel; each crop depends on its own view
+/// alone, and they are returned in the views' order.
 pub(crate) fn render_crops(
     grid: &CropGrid,
     views: &[ProjectedImage<'_>],
     sights: &[ViewSight],
 ) -> Vec<Option<Crop>> {
     views
-        .iter()
+        .par_iter()
         .zip(sights)
         .map(|(view, sight)| match *sight {
             ViewSight::Seen {
