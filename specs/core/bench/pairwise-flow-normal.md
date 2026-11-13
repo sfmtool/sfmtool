@@ -853,7 +853,8 @@ which round went wrong and which pairs disagreed at which radius.
 
 The pieces are tested in their own modules under
 [bench/normal/pairwise_flow/](../../../crates/sfmtool-core/src/bench/normal/pairwise_flow/):
-the options' check names every setting it refuses; the grid follows the
+the options' check names the first setting that fails, the bounds on the crop
+size, the coarse grid and the correlation length among them; the grid follows the
 finest view and the crop cap coarsens it keeping the extent; views too oblique
 or at the point are left out; crops of the photographed plane line up and the
 pyramid's mask shrinks with its kernel; a pair is read at its coarser view's
