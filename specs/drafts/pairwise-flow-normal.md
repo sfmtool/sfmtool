@@ -781,7 +781,8 @@ from moving the plane further along that pair's error, and the next round
 renders on that error. In the prototype a two-view point of seoul_bull, 160,
 drifted 14° → 40° → 55° → 68° from the reference over the rounds. Its one
 round renders on the given normal, as round 1 always does, and ends
-`SinglePair` or `Undetermined`.
+`SinglePair`, `Undetermined`, or `Unstable` for a normal more than
+`max_normal_from_mean_view_deg` from the mean viewing direction.
 
 A point with more observations follows the ordinary rule in every round, even
 when a round's too-oblique views leave it only one rendered pair. That round
@@ -955,8 +956,8 @@ Proposed tests for the step when it is built:
   samples a side there, and the normal is recovered; a third, near camera pairs
   with the first at level 0, on the whole 384-sample square.
 - **One pair runs one round.** A two-view scene: the report holds one round,
-  rendered on the given normal, and the outcome is `SinglePair` or
-  `Undetermined`.
+  rendered on the given normal, and the outcome is `SinglePair`,
+  `Undetermined` or `Unstable`, never `Turned`.
 - **A view left out is not a single pair.** A textured plane seen by three
   cameras, given a normal from which one camera is more than
   `max_view_angle_deg` away and the other two are not: round 1 renders two
