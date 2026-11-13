@@ -12,6 +12,7 @@ from .._video_frames import (
     DEFAULT_FPS,
     DEFAULT_MAX_FRAME_SIZE,
     FullOr,
+    HdrExposure,
     VideoFramesError,
     extract_planned,
     parse_fps,
@@ -54,7 +55,16 @@ from .._video_frames import (
     "A larger frame is scaled down, a smaller one is never scaled up; `full` "
     "writes every frame at the video's size.",
 )
-def extract_frames(videos, output_dir, fps, max_frame_size):
+@click.option(
+    "--hdr-exposure",
+    "hdr_exposure",
+    type=HdrExposure(),
+    default=None,
+    help="The exposure change, in stops, of every HDR video's frames: their "
+    "light is multiplied by 2^STOPS before the highlight roll-off. The same "
+    "for every frame and recorded. [default: 0; only with an HDR video]",
+)
+def extract_frames(videos, output_dir, fps, max_frame_size, hdr_exposure):
     """Extract the frames of videos into one numbered JPEG sequence per video.
 
     Each VIDEO becomes the directory OUTPUT/<name>/, <name> being the video's
@@ -63,11 +73,14 @@ def extract_frames(videos, output_dir, fps, max_frame_size):
     record of each frame's time in the video. ffmpeg 5.1 or newer and ffprobe
     must be on PATH. Frames are upright (the video's rotation metadata is
     applied), and a variable frame rate is sampled without duplicating frames.
+    HDR video (HLG or PQ) is converted to sRGB by one fixed recipe, the same
+    for every pixel of every frame.
 
     Every input is checked before anything is created: an Insta360 .insv
     file (use `sfm insv2rig`), an image, a file that is not a video, an HDR
-    video, two videos whose names differ only in letter case or extension, and
-    a frame directory that exists and is not empty are refused.
+    video tagged other than BT.2020 narrow range, two videos whose names
+    differ only in letter case or extension, and a frame directory that
+    exists and is not empty are refused.
 
     Example usage:
 
@@ -82,6 +95,7 @@ def extract_frames(videos, output_dir, fps, max_frame_size):
             fps=fps,
             max_frame_size=max_frame_size,
             command="sfm extract-frames",
+            hdr_exposure=hdr_exposure,
         )
         click.echo(f"ffmpeg: {plan.programs.ffmpeg} ({plan.programs.version})")
         extracted = extract_planned(plan)

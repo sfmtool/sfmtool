@@ -60,6 +60,7 @@ creates the workspace and the frames first
 | `--json PATH` | | Also write the whole report to a JSON file ([JSON](#json)). |
 | `--new-workspace DIR` | | Create a workspace at `DIR`, extract the videos given as `PATHS` into it and choose from their frames ([From videos: `--new-workspace`](#from-videos---new-workspace)). |
 | `--fps N\|full`, `--max-frame-size PX\|full` | `10`, `1920` | The frame rate and size the videos are extracted at, as for `sfm extract-frames`. Only with `--new-workspace`. |
+| `--hdr-exposure STOPS` | `0` | The exposure of HDR video's frames, as for `sfm extract-frames`. Only with `--new-workspace`, and refused when no video given is HDR. |
 | `--prune-images` | off | Delete the extracted frames not chosen, and their `.sift` files ([Pruning](#pruning)). Only with `--new-workspace`. |
 | The workspace options of `sfm ws init` | | `--feature-tool`, `--max-features`, `--dsp/--no-dsp`, `--gpu/--no-gpu`, `--affine-shape/--no-affine-shape`, `--image-to-gray` and `--quantize-bits`, the new workspace's settings. Only with `--new-workspace`. |
 
@@ -361,7 +362,7 @@ workspace.
 
 ```bash
 sfm pick-images --new-workspace DIR VIDEO... [--fps N|full] [--max-frame-size PX|full]
-    [--prune-images] [workspace options] [pick-images options]
+    [--hdr-exposure STOPS] [--prune-images] [workspace options] [pick-images options]
 ```
 
 `sfm pick-images --new-workspace DIR VIDEO...` goes from videos to a solvable
@@ -377,6 +378,8 @@ not image folders, and the command:
    extract-frames -o DIR` uses, at the same defaults (`--fps 10`,
    `--max-frame-size 1920`), from the plan `plan_extraction` made in the
    checks ([extract-frames-command.md](../workspace/extract-frames-command.md)).
+   An HDR video is converted to sRGB by the same fixed recipe, at
+   `--hdr-exposure`.
    Each frame directory holds `frame_000001.jpg`, … and the
    `video-frames.json` record ([workspace/video-frames.md](../../workspace/video-frames.md)).
 4. Runs pick-images on the frame directories exactly as `sfm pick-images
@@ -413,21 +416,23 @@ workspace through
 `create_workspace`), so the two cannot drift apart. `sfm ws init --force` is
 not taken: it would clash with pick-images' `--force`, and its two uses
 (re-initialising a workspace, nesting one) do not apply to a new empty
-directory. `--fps` and `--max-frame-size` are spelled, parsed and checked as
-`sfm extract-frames` spells them.
+directory. `--fps`, `--max-frame-size` and `--hdr-exposure` are spelled,
+parsed and checked as `sfm extract-frames` spells them.
 
 ### Checks
 
 Usage errors, exit status 2, come first, with nothing created:
 
 - Without `--new-workspace`, each of the workspace options, `--fps`,
-  `--max-frame-size` and `--prune-images`, when given, is a usage error naming
+  `--max-frame-size`, `--hdr-exposure` and `--prune-images`, when given, is a
+  usage error naming
   the options given and `--new-workspace`. Each is detected by whether it was
   given on the command line, so `--feature-tool sfmtool`, the default, is
   refused too.
 - With it, `--named-image-list`, and a list name in `-r`, are usage errors,
   since a new workspace has no lists; so are no videos, a range that does not
-  parse, an invalid `--fps` or `--max-frame-size`, and the workspace options'
+  parse, an invalid `--fps`, `--max-frame-size` or `--hdr-exposure`, and the
+  workspace options'
   own errors (`--dsp` with the `sfmtool` tool, `--quantize-bits 17`, …).
 
 Then `plan_extraction` finds ffmpeg and ffprobe, probes every video and
@@ -725,10 +730,13 @@ parent, after which the list holds paths under `DIR` and only the chosen
 frames are left; a pick refused by the binding (`--max-density-gain
 0.5`), which prunes nothing and says the workspace is left as it is; a
 non-empty `DIR`, an image and a missing video refused in one error with
-nothing created; a `DIR` inside a workspace refused and not created; the
+nothing created; `--hdr-exposure` with the SDR videos refused by the
+extraction's checks, which shows it reaches them, with nothing created; a
+`DIR` inside a workspace refused and not created; the
 usage errors with `--new-workspace` (`--named-image-list`, a list name in
-`-r`, `--dsp` with the `sfmtool` tool, an invalid `--fps`), with nothing
-created; and each `--new-workspace` option given without it.
+`-r`, `--dsp` with the `sfmtool` tool, an invalid `--fps`, a `--hdr-exposure`
+of `nan`), with nothing created; and each `--new-workspace` option given
+without it.
 [test_pick_images_sequences.py](../../../tests/test_pick_images_sequences.py)
 checks the grouping on names alone: folders, names, letter case, `%`,
 parenthesized numbers, padded and unpadded numbers, the frame field chosen
@@ -761,8 +769,8 @@ vote's text for a fisheye verdict, confirmed and not.
   ([core/analysis/pick-images.md § Non-goals](../../core/analysis/pick-images.md#non-goals)).
 - Recording why a frame was chosen in the list or in a `.sfmr`.
 - What [`sfm extract-frames`](../workspace/extract-frames-command.md) leaves
-  out ([extract-frames-command.md § Non-goals](../workspace/extract-frames-command.md#non-goals)),
-  HDR video among them: `--new-workspace` extracts with the same code.
+  out ([extract-frames-command.md § Non-goals](../workspace/extract-frames-command.md#non-goals)):
+  `--new-workspace` extracts with the same code.
 
 The choices of this command that are still open are in
 [pick-images-open-questions.md](../../drafts/pick-images-open-questions.md).

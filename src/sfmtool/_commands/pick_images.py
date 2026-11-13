@@ -16,6 +16,7 @@ from .._video_frames import (
     DEFAULT_FPS,
     DEFAULT_MAX_FRAME_SIZE,
     FullOr,
+    HdrExposure,
     parse_fps,
     parse_max_frame_size,
 )
@@ -32,6 +33,7 @@ _NEW_WORKSPACE_ONLY = {
     **WORKSPACE_INIT_PARAMETERS,
     "fps": "--fps",
     "max_frame_size": "--max-frame-size",
+    "hdr_exposure": "--hdr-exposure",
     "prune_images": "--prune-images",
 }
 
@@ -66,6 +68,15 @@ _NEW_WORKSPACE_ONLY = {
     show_default=True,
     help="The largest long side of an extracted frame, in pixels (at least "
     "64), or `full` for the video's size. Only with --new-workspace.",
+)
+@click.option(
+    "--hdr-exposure",
+    "hdr_exposure",
+    type=HdrExposure(),
+    default=None,
+    help="The exposure change, in stops, of every HDR video's frames, as "
+    "`sfm extract-frames --hdr-exposure` sets it. [default: 0] Only with "
+    "--new-workspace and an HDR video.",
 )
 @click.option(
     "--prune-images",
@@ -164,6 +175,7 @@ def pick_images(
     new_workspace,
     fps,
     max_frame_size,
+    hdr_exposure,
     prune_images,
     feature_tool,
     domain_size_pooling,
@@ -255,6 +267,7 @@ def pick_images(
             selection=selection,
             fps=fps,
             max_frame_size=max_frame_size,
+            hdr_exposure=hdr_exposure,
             prune_images=prune_images,
             workspace_options={
                 "feature_tool": feature_tool,
@@ -538,6 +551,7 @@ def _pick_from_videos(
     selection,
     fps: float | None,
     max_frame_size: int | None,
+    hdr_exposure: float | None,
     prune_images: bool,
     workspace_options: dict,
     write_list: str | None,
@@ -586,6 +600,7 @@ def _pick_from_videos(
             workspace_dir,
             fps=fps,
             max_frame_size=max_frame_size,
+            hdr_exposure=hdr_exposure,
             command="sfm pick-images --new-workspace",
             problems=tuple(problems),
         )
