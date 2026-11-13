@@ -40,6 +40,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
+use crate::numeric::{median_in_place, quantile_in_place};
 use crate::spatial::PointCloud3;
 
 /// The splat size [`compute_auto_point_size`] reports for a cloud with fewer
@@ -218,18 +219,18 @@ pub fn compute_camera_nn_scale(images: &[crate::SfmrImage]) -> Option<f32> {
     // reconstruction) reports an infinite distance and drops out here.
     let cloud = PointCloud3::<f32>::new(&distinct, entry_of.len());
     let entry_nn = cloud.nearest_neighbor_distances();
-    let mut nn_distances: Vec<f32> = per_image
+    let mut nn_distances: Vec<f64> = per_image
         .iter()
         .map(|&entry| entry_nn[entry])
         .filter(|d| d.is_finite() && *d > 0.0)
+        .map(f64::from)
         .collect();
 
     if nn_distances.is_empty() {
         return None;
     }
 
-    nn_distances.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    Some(nn_distances[nn_distances.len() * 9 / 10])
+    Some(quantile_in_place(&mut nn_distances, 0.9) as f32)
 }
 
 /// Compute the bounding sphere (center, radius) for a set of 3D points.
@@ -248,26 +249,20 @@ pub fn compute_scene_bounds(points: &[crate::Point3D]) -> (Point3<f64>, f64) {
         return (Point3::origin(), 1.0);
     }
 
-    // Collect coordinates
-    let mut xs: Vec<f64> = finite.iter().map(|p| p.position.x).collect();
-    let mut ys: Vec<f64> = finite.iter().map(|p| p.position.y).collect();
-    let mut zs: Vec<f64> = finite.iter().map(|p| p.position.z).collect();
+    let axis_median = |axis: usize| {
+        let mut coords: Vec<f64> = finite.iter().map(|p| p.position[axis]).collect();
+        median_in_place(&mut coords)
+    };
+    let center = Point3::new(axis_median(0), axis_median(1), axis_median(2));
 
-    xs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    ys.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-    zs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-
-    let n = xs.len();
-    let center = Point3::new(xs[n / 2], ys[n / 2], zs[n / 2]);
-
-    // Compute distances from center and take 80th percentile
     let mut dists: Vec<f64> = finite
         .iter()
         .map(|p| (p.position - center).norm())
         .collect();
-    dists.sort_unstable_by(|a: &f64, b: &f64| a.partial_cmp(b).unwrap());
 
-    (center, dists[n * 4 / 5].max(0.1))
+    // `f64::max` returns the other operand for a NaN, so a radius that a NaN
+    // reached falls back to the floor.
+    (center, quantile_in_place(&mut dists, 0.8).max(0.1))
 }
 
 #[cfg(test)]

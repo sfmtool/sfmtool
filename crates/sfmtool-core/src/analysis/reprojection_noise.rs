@@ -16,6 +16,7 @@
 
 use ndarray::Array2;
 
+use crate::numeric::median_in_place;
 use crate::reconstruction::data::observation_reprojection_residual;
 use crate::reconstruction::triangulation::observed_ray;
 use crate::reconstruction::{ReconstructionError, SfmrReconstruction};
@@ -246,18 +247,7 @@ fn robust_spread(components: &mut [f64]) -> Option<f64> {
     for c in components.iter_mut() {
         *c = c.abs();
     }
-    let mid = components.len() / 2;
-    let (_, &mut upper, _) = components.select_nth_unstable_by(mid, f64::total_cmp);
-    let median = if components.len() % 2 == 1 {
-        upper
-    } else {
-        let lower = components[..mid]
-            .iter()
-            .copied()
-            .fold(f64::NEG_INFINITY, f64::max);
-        0.5 * (lower + upper)
-    };
-    Some(MAD_TO_SIGMA * median)
+    Some(MAD_TO_SIGMA * median_in_place(components))
 }
 
 /// The gated RMS over `residuals`, with `camera_count` cameras: each camera's

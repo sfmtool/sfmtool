@@ -229,11 +229,20 @@ function, such as `residual_quantiles_px` in `move_camera.rs`. The fix for a
 failure is to call `numeric`; an entry is added, with the reason, only for such
 a helper or for a genuinely different operation.
 
-The test reads function names only, so look for what it cannot see:
+`the_workspace_selects_no_order_statistic_by_hand` reads the same files, line
+by line, outside comments and `numeric.rs` itself. It fails on a
+`select_nth_unstable` call, an index at half a length (`v[n / 2]`,
+`v[n / 2 - 1]`) and an index at an integer fraction of one (`v[n * 9 / 10]`,
+`v[(n * 95) / 100]`), unless the line is listed by path and a fragment of its
+text in `ORDER_STATISTIC_ALLOWLIST`. The entries there are top-k cuts, which
+are not order statistics of a population, and lines inside the different
+operations listed on `MEDIAN_ALLOWLIST`.
 
-- An inline median: a sort or `select_nth_unstable` followed by indexing the
-  middle (`v[n / 2]`), in a function not named for a median.
-- A hand-written percentile: an index computed from a fraction
+The tests read names and those shapes only, so look for what they cannot see:
+
+- An inline median written another way, such as a sort followed by indexing a
+  middle position held in a variable.
+- A hand-written percentile: an index computed from a float fraction
   (`sorted[(0.9 * n as f64) as usize]`) or an interpolation between two order
   statistics.
 - A call to a crate's own copy, or a closure or local helper that computes

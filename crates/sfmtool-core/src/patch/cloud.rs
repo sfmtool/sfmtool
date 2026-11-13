@@ -1330,8 +1330,11 @@ fn build_patch_cloud(
                 .into_iter()
                 .filter(|x| x.is_finite())
                 .collect();
-            d.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let median = if d.is_empty() { 1.0 } else { d[d.len() / 2] };
+            let median = if d.is_empty() {
+                1.0
+            } else {
+                median_in_place(&mut d)
+            };
             median * factor
         } else {
             0.0

@@ -495,8 +495,8 @@ fn image_error_stats(state: &AppState, image: ImageRef) -> Value {
         .compute_observation_reprojection_errors(image.index())
     {
         Ok(errors) => {
-            let mut errors: Vec<f32> = errors.into_iter().map(|(_, error)| error).collect();
-            render::error_stats(&mut errors)
+            let errors: Vec<f32> = errors.into_iter().map(|(_, error)| error).collect();
+            render::error_stats(&errors)
         }
         Err(e) => {
             log::debug!(

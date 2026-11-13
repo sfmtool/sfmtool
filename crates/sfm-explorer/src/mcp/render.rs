@@ -16,6 +16,7 @@
 
 use nalgebra::{Point3, Vector3};
 use serde_json::{json, Value};
+use sfmtool_core::numeric::{median_in_place, quantile_in_place};
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::SfmrReconstruction;
 
@@ -574,29 +575,29 @@ pub(super) fn observations_per_image(recon: &SfmrReconstruction) -> Vec<usize> {
     counts
 }
 
-/// Mean, median and 95th percentile of a set of per-observation reprojection
-/// errors, or `null` for an empty set.
+/// Mean, median and 95th percentile of the finite values in a set of
+/// per-observation reprojection errors, or `null` when none is finite.
 ///
-/// Sorts `errors` in place. Percentiles are nearest-rank, which is what a table
-/// of a few hundred observations wants: no interpolation between two
-/// neighbouring measurements that were never averaged in the first place.
-pub(super) fn error_stats(errors: &mut [f32]) -> Value {
-    let finite = |e: &f32| e.is_finite();
-    if !errors.iter().any(finite) {
+/// The median and percentile are `sfmtool_core::numeric`'s: an even count
+/// averages the two middle errors and the percentile interpolates linearly,
+/// as `numpy.median` and `numpy.percentile` do.
+pub(super) fn error_stats(errors: &[f32]) -> Value {
+    // A behind-the-camera observation reprojects to NaN
+    // (`crate::metrics`), which would poison the mean. Those rows drop out of
+    // the statistics and stay in the track, where the agent can see them for
+    // what they are.
+    let mut finite: Vec<f64> = errors
+        .iter()
+        .filter(|e| e.is_finite())
+        .map(|&e| f64::from(e))
+        .collect();
+    if finite.is_empty() {
         return Value::Null;
     }
-    // A behind-the-camera observation reprojects to NaN
-    // (`crate::metrics`), which would sort unpredictably and
-    // poison the mean. Those rows drop out of the statistics and stay in the
-    // track, where the agent can see them for what they are.
-    errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));
-    let n = errors.iter().filter(|e| finite(e)).count();
-    let sum: f64 = errors.iter().filter(|e| finite(e)).map(|e| *e as f64).sum();
-    json!({
-        "mean": sum / n as f64,
-        "median": errors[n / 2] as f64,
-        "p95": errors[((n * 95) / 100).min(n - 1)] as f64,
-    })
+    let mean = finite.iter().sum::<f64>() / finite.len() as f64;
+    let median = median_in_place(&mut finite);
+    let p95 = quantile_in_place(&mut finite, 0.95);
+    json!({ "mean": mean, "median": median, "p95": p95 })
 }
 
 /// A reconstruction's label, or `None` if the id has left the scene.

@@ -360,3 +360,43 @@ fn test_auto_point_size_fallback_on_degenerate_input() {
         FALLBACK_POINT_SIZE
     );
 }
+
+/// The centre is the per-axis median, which averages the two middle values of
+/// an even count, and the radius is the linearly interpolated 80th percentile
+/// of the distances from it.
+#[test]
+fn test_scene_bounds_take_the_shared_median_and_quantile() {
+    let points: Vec<Point3D> = [0.0, 1.0, 2.0, 10.0]
+        .iter()
+        .map(|&x| make_point(x, 0.0, 0.0))
+        .collect();
+    let (center, radius) = compute_scene_bounds(&points);
+    assert_eq!(center, Point3::new(1.5, 0.0, 0.0));
+    // Distances 0.5, 0.5, 1.5, 8.5; position 0.8 · 3 = 2.4 between 1.5 and 8.5.
+    assert!((radius - 4.3).abs() < 1e-12, "radius={radius}");
+}
+
+/// A NaN position no longer panics the sort: it orders above every finite
+/// value, so a minority of them leaves the bounds finite.
+#[test]
+fn test_scene_bounds_survive_a_nan_position() {
+    let mut points: Vec<Point3D> = (0..5).map(|i| make_point(i as f64, 0.0, 0.0)).collect();
+    points.push(make_point(f64::NAN, 0.0, 0.0));
+    let (center, radius) = compute_scene_bounds(&points);
+    assert_eq!(center, Point3::new(2.5, 0.0, 0.0));
+    assert!(radius.is_finite(), "radius={radius}");
+}
+
+/// The camera scale is the linearly interpolated 90th percentile of the
+/// nearest-neighbour distances.
+#[test]
+fn test_camera_nn_scale_interpolates_the_90th_percentile() {
+    // Gaps 1, 1, 2, 4 along X: the distances are 1, 1, 1, 2, 4, and position
+    // 0.9 · 4 = 3.6 lies between 2 and 4.
+    let images: Vec<SfmrImage> = [0.0, 1.0, 2.0, 4.0, 8.0]
+        .iter()
+        .map(|&x| make_image_at(x, 0.0, 0.0))
+        .collect();
+    let scale = compute_camera_nn_scale(&images).unwrap();
+    assert!((scale - 3.2).abs() < 1e-6, "scale={scale}");
+}

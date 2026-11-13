@@ -6680,6 +6680,19 @@ fn in_front_gate(s: &Scene, points: &[Vector3<f64>]) -> Vec<bool> {
         .collect()
 }
 
+/// The floor is the shared median of the positive in-front measures of finite
+/// points: an even count averages the two middle measures, and directions,
+/// measures at or behind zero and non-finite ones are left out.
+#[test]
+fn the_in_front_floor_is_a_fraction_of_the_median_measure() {
+    let depths = [4.0, 1.0, -5.0, 3.0, f64::NAN, 2.0, 100.0];
+    let is_dir = [false, false, false, false, false, false, true];
+    let obs_pt: Vec<u32> = (0..7).collect();
+    let floor = in_front_floor(&depths, &is_dir, &obs_pt);
+    assert_eq!(floor, IN_FRONT_FLOOR_FRACTION * 2.5);
+    assert_eq!(in_front_floor(&[-1.0], &[false], &[0]), 0.0);
+}
+
 /// The floor still does its job: a point on a camera's centre, a billionth of
 /// the scene's median depth in front of it, is trimmed, and so is one behind
 /// it; a point a thousandth of the median depth in front, which is a position

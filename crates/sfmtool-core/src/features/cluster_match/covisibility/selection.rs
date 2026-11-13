@@ -9,6 +9,7 @@
 //! `specs/core/features/covisibility-selection.md`.
 
 use super::ClusterCovisibility;
+use crate::numeric::median_in_place;
 
 impl ClusterCovisibility {
     /// The thinning sweep order: decreasing isolation — largest
@@ -83,23 +84,19 @@ impl ClusterCovisibility {
         if n == 0 {
             return Vec::new();
         }
-        // Median (numpy-style: mean of the middle two for even n) of the
-        // per-image peak covisibility.
-        let mut peaks: Vec<u32> = (0..n)
+        // Median of the per-image peak covisibility.
+        let mut peaks: Vec<f64> = (0..n)
             .map(|i| {
-                self.counts[i * n..(i + 1) * n]
-                    .iter()
-                    .copied()
-                    .max()
-                    .expect("rows are non-empty")
+                f64::from(
+                    self.counts[i * n..(i + 1) * n]
+                        .iter()
+                        .copied()
+                        .max()
+                        .expect("rows are non-empty"),
+                )
             })
             .collect();
-        peaks.sort_unstable();
-        let med_peak = if n % 2 == 1 {
-            peaks[n / 2] as f64
-        } else {
-            (peaks[n / 2 - 1] as f64 + peaks[n / 2] as f64) / 2.0
-        };
+        let med_peak = median_in_place(&mut peaks);
 
         let order = self.sweep_order();
         let (mut lo, mut hi) = (1.0f64, med_peak);
