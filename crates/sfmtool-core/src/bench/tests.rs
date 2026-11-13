@@ -4080,11 +4080,15 @@ fn an_observation_naming_an_image_with_no_view_is_refused() {
         evaluate_over(&scene, &edited, &track).expect_err("there is no image 9"),
         EvaluateError::NoView { image: 9 }
     );
-    // An added observation joins as a candidate, so make it `in` for the
-    // render, which renders from the `in` rows.
-    let mut stray = track.clone();
-    let last = stray.observations.len() - 1;
-    stray.observations[last].verdict = Verdict::In;
+    // The render reads only the `in` rows that carry a keypoint, so point one
+    // of those at the missing image; an added observation carries none.
+    let mut stray = track_of(&bench, &label);
+    stray.observations[1].image = 9;
+    assert_eq!(stray.observations[1].verdict, Verdict::In);
+    assert!(stray.observations[1]
+        .track
+        .as_ref()
+        .is_some_and(|m| m.keypoint.is_some()));
     assert_eq!(
         render_bitmap_in_place(&stray, &edited, &scene.views(), &test_fit_options()).err(),
         Some(EvaluateError::NoView { image: 9 })
