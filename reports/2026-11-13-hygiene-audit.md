@@ -391,6 +391,36 @@ Each finding here comes from a kept hit of a mechanical check, confirmed by read
 - Effort: medium per area; high overall.
 - Risk: low.
 
+> _Status (2026-11-13): **Partially done** — the bench normal steps and nearby reads refuse an out-of-range image or wrong-sized data with an error instead of panicking, PR #1234. Fixed there:_
+>
+> - _`grid_plane_normal` and `grown_plane_normal` refuse with `NoView` instead of panicking._
+> - _`finite_difference_normal` refuses with `NoView` instead of a misleading `TooFewPieces`._
+> - _`render_bitmap_in_place` now returns a `Result`._
+> - _`read_patch_along_ray`, `NearbyCandidate::ray_distance` and `GreyImages::get` refuse instead of panicking, and their `# Panics` sections are gone._
+> - _`GreyImage::new` and `ImageDescriptors::new` no longer assert._
+>
+> _A survey made for that PR lists the public functions that still document a `# Panics` on caller input (about 85, almost all in `sfmtool-core`), for working through as separate changes. Line numbers are as of that PR's base:_
+>
+> - _**An index into views, cloud, points or images out of range:**_
+>   - _`patch/` kernels: `keypoint_localize` (709, 824, `reference.rs:177`), `keypoint_subpixel` (739, 896), `member_coherence:551`, `observation_reading:190`, `stored_bitmap` (123, 196, 298), `view_selection:1228`, `spawn:168` (its binding validates) and `pair_sharpness:272`._
+>   - _Geometry and reconstruction: `geometry/reprojection:35`, `adjacency_surfel_normals:184`, `point_or_bearing:112`, `feature_match/gather:29`, `reconstruction/thumbnail:297`, `image_set` (183, 268) and `point_set:476`._
+>   - _`sfmtool-sfmr-format` `observation_readings:280`._
+>   - _Accessors: `ImageU8::get`, `per_tile_source_stack` (474–538) and `tile_rig` (567, 614)._
+> - _**Parallel slices of different lengths, or data that does not match its stated size:**_
+>   - _`analysis/`: `observation_adjacency` and `observation_coverage`, with `baseline_direction`, `point_correspondence/by_coordinate`, `spatial:154` and `camera/sampler:409`._
+>   - _Constructors: `ImageU8::new` (`camera/image.rs:36`), `warp_map:169`, `optical_flow/image:34`, `sift/gray` (422, 715) and `thumbnail` (42, 93)._
+>   - _Patch kernels: `blur_matched/*`, `self_similarity` (and `overlap`), `member_coherence` (the matrix and 259, 272, 319), `reference_view` (`agreement`, `track`), `stored_bitmap` (425, 595, 712), `track_views`, `cluster_refine:1342`, `readings:58` and `edit:625`._
+>   - _Others: `tile_rig` (471, 735) and `photograph_cache:190` (`levels` 0)._
+> - _**Invalid camera values:** `intrinsics` (1009, 1311) and `rolling_shutter:49`._
+> - _**A precondition on how the API is called, not on the input itself** (needs a decision on whether each is caller input):_
+>   - _`warp_map` (493, 646): a method called before `compute_svd` or `compute_jacobians`._
+>   - _`keypoint_localize:527`: the core outside the tile._
+>   - _`keypoint_localize:709`: a search buffer that cannot be allocated._
+>   - _`row_map:338`: a row with no source._
+>   - _`adjusted_fixture:18`._
+>
+> _Not counted: the `sfm-explorer` items that are not public API (`bg_image_mesh`, `display.rs` `range` and `refit_points.rs:730`)._
+
 **Have the image-pair-graph bindings take the reconstruction, and stop repeating bindings in Python**
 - Location (check 13): `src/sfmtool/_image_pair_graph.py:45,56`; `src/sfmtool/align/core.py:205`; `src/sfmtool/sift/file.py:40,61`; `src/sfmtool/_patch_compaction.py:50`; `src/sfmtool/camrig/create.py:56`, `camrig/cp.py:77`.
 - Problem: of 324 top-level Python functions and classes that use a binding name, these repeat what Rust does:
