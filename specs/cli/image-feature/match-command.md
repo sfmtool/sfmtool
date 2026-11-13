@@ -67,15 +67,45 @@ two-digit counter for that date in the output directory, and `descriptor`
 describes the input images. The descriptor comes from
 [`_generate_image_descriptor`](../../../src/sfmtool/_sfmr_naming.py), the same
 function a generated `.sfmr` name uses, so both artifacts of one run describe
-their inputs identically: `<prefix>_<range>` when the images form a single
-numbered sequence (`frame_1-50`), and `<first stem>-total-<n>-images`
-otherwise. The descriptor is at most 100 UTF-8 bytes, so the whole name stays
-inside the 255-byte or 255-character limit file systems put on one path
-component: a sequence whose range would be longer, such as an irregular list
-of picked frames, becomes `<prefix>_<first>-<last>-total-<n>-images`
-(`DinoLedge_1-1177-total-96-images`), and a prefix or first stem that still
-does not fit is cut short at a character boundary. The cluster matcher appends
-`-clusters` to the stem.
+their inputs identically. The cluster matcher appends `-clusters` to the stem.
+
+Each directory that holds images is its own sequence, named by its path
+relative to the deepest directory that holds all the images, with the parts of
+that path joined by `_` (`day1/shopA` becomes `day1_shopA`). This keeps the
+frames of different videos apart: `sfm extract-frames` and `sfm pick-images
+--new-workspace` write each video's frames into its own directory with the
+same names (`frame_000001.jpg`, …), so the file names alone would merge them.
+
+When all the images are in one directory, the descriptor comes from their file
+names: `<prefix>_<range>` when they form a single numbered sequence
+(`frame_1-50`, or `frame_1-177x4` for every fourth frame, with the range's `:`
+step written as `x`), and `<first stem>-total-<n>-images` otherwise.
+
+When the images are in several directories, the descriptor lists the
+directories in sorted order, joined by `+`, and always ends with
+`-total-<n>-images`, where `n` is the number of images. Each directory is
+written as `<dir>-<prefix>_<range>` when its images are one numbered sequence,
+and as `<dir>` alone otherwise; images directly in the common directory are
+written without a `<dir>`, as their sequence or their first stem. Two videos'
+frames give `shopA-frame_1-177x4+shopB-frame_50-81-total-77-images`. `+` is
+the separator because the directory, prefix and range already use `-`, `_` and
+`,`, and `+` is allowed in a file name on Windows, macOS and Linux.
+
+The descriptor is at most 100 UTF-8 bytes, so the whole name stays inside the
+255-byte or 255-character limit file systems put on one path component. A
+descriptor that would be longer gives up detail in steps until it fits:
+
+- One directory: a sequence whose range would be longer, such as an irregular
+  list of picked frames, becomes `<prefix>_<first>-<last>-total-<n>-images`
+  (`DinoLedge_1-1177-total-96-images`), and a prefix or first stem that still
+  does not fit is cut short at a character boundary.
+- Several directories: each sequence's range becomes its first and last frame
+  (`shopA-frame_1-144+shopB-frame_1-144-total-24-images`); then each directory
+  is named alone (`shopA+shopB-total-24-images`); then the name lists as many
+  directories as fit and the count of the rest (30 directories give
+  `video00+video01+video02+video03+video04+video05+video06+video07+video08+21-more-total-90-images`),
+  and a first directory that does not fit even alone is cut short at a
+  character boundary.
 
 ## Options
 
