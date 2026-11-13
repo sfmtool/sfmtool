@@ -3,6 +3,7 @@
 
 """SfM reconstruction filename generation utilities."""
 
+import os
 import re
 import textwrap
 from datetime import datetime
@@ -59,6 +60,13 @@ _MAX_DESCRIPTOR_BYTES = 100
 def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
     """Generate a descriptor string characterizing the source images.
 
+    Each directory holding images is its own sequence, named by its path
+    relative to the deepest directory that holds all of them. Images in one
+    directory are described by their file names: `{prefix}_{range}` for one
+    numbered sequence, `{first stem}-total-{n}-images` otherwise. Images in
+    several directories are described by `_describe_directories`, which always
+    ends the descriptor with `-total-{n}-images`.
+
     The result is at most `_MAX_DESCRIPTOR_BYTES` UTF-8 bytes long. A range
     that would be longer becomes `{prefix}_{first}-{last}-total-{n}-images`,
     and a prefix or stem that still does not fit is cut short.
@@ -66,15 +74,15 @@ def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
     if not image_paths:
         return ""
 
-    filenames = [Path(p).name for p in image_paths]
-    summaries = summarize_paths_by_sequence(filenames)
+    groups = _group_by_directory(image_paths)
+    if len(groups) > 1:
+        return _describe_directories(groups, len(image_paths))
 
-    if len(summaries) == 1 and summaries[0].index_set:
-        summary = summaries[0]
-        prefix = summary.path.split("%")[0].rstrip("_-")
-        indexes = sorted(summary.index_set)
-        range_str = str(RangeExpr.from_list(indexes))
-        range_str = range_str.replace(":", "x")
+    filenames = next(iter(groups.values()))
+    single = _single_sequence(filenames)
+    if single is not None:
+        prefix, indexes = single
+        range_str = _range_string(indexes)
         descriptor = f"{prefix}_{range_str}"
         if len(descriptor.encode("utf-8")) <= _MAX_DESCRIPTOR_BYTES:
             return descriptor
@@ -84,6 +92,105 @@ def _generate_image_descriptor(image_paths: list[str | Path]) -> str:
     first_name = Path(filenames[0]).stem
     suffix = f"-total-{len(image_paths)}-images"
     return _truncate_utf8(first_name, _MAX_DESCRIPTOR_BYTES - len(suffix)) + suffix
+
+
+def _group_by_directory(
+    image_paths: list[str | Path],
+) -> dict[tuple[str, ...], list[str]]:
+    """Group the images' file names by directory, in input order.
+
+    Each key is the parts of the directory's path relative to the deepest
+    directory holding every image; the images in that deepest directory itself
+    have the key `()`.
+    """
+    parents = [Path(p).absolute().parent for p in image_paths]
+    try:
+        common = Path(os.path.commonpath(parents))
+    except ValueError:
+        # Images on different drives share no directory.
+        common = None
+    groups: dict[tuple[str, ...], list[str]] = {}
+    for path, parent in zip(image_paths, parents):
+        rel = parent.relative_to(common if common is not None else parent.anchor)
+        groups.setdefault(rel.parts, []).append(Path(path).name)
+    return groups
+
+
+def _single_sequence(filenames: list[str]) -> tuple[str, list[int]] | None:
+    """The prefix and sorted frame numbers when `filenames` are one numbered sequence."""
+    summaries = summarize_paths_by_sequence(filenames)
+    if len(summaries) != 1 or not summaries[0].index_set:
+        return None
+    prefix = summaries[0].path.split("%")[0].rstrip("_-")
+    return prefix, sorted(summaries[0].index_set)
+
+
+def _range_string(indexes: list[int]) -> str:
+    """The range expression for `indexes`, with its `:` step written as `x`."""
+    return str(RangeExpr.from_list(indexes)).replace(":", "x")
+
+
+def _describe_directories(
+    groups: dict[tuple[str, ...], list[str]], image_count: int
+) -> str:
+    """Describe images held in several directories.
+
+    Each directory is written as its relative path with the parts joined by
+    `_`, so it can be part of a file name. The directories are listed in
+    sorted order, joined by `+`, followed by `-total-{image_count}-images`.
+    The first of these that fits in
+    `_MAX_DESCRIPTOR_BYTES` is used:
+
+    1. each directory with its sequence and range, `{dir}-{prefix}_{range}`;
+    2. each directory with its sequence's first and last frame,
+       `{dir}-{prefix}_{first}-{last}`;
+    3. each directory alone, `{dir}`;
+    4. as many directories as fit, then `+{k}-more`, with the first
+       directory cut short when even it does not fit.
+
+    A directory whose images are not one numbered sequence is named alone
+    at every step. Images directly in the common directory list their
+    sequence without a directory, or `{first stem}` when they are not one.
+    """
+    suffix = f"-total-{image_count}-images"
+    budget = _MAX_DESCRIPTOR_BYTES - len(suffix)
+
+    names = sorted(groups)
+    sequences = {name: _single_sequence(groups[name]) for name in names}
+
+    def label(name: tuple[str, ...], detail: str) -> str:
+        return f"{'_'.join(name)}-{detail}" if name else detail
+
+    def bare(name: tuple[str, ...]) -> str:
+        return "_".join(name) if name else Path(groups[name][0]).stem
+
+    def full(name: tuple[str, ...]) -> str:
+        seq = sequences[name]
+        if seq is None:
+            return bare(name)
+        return label(name, f"{seq[0]}_{_range_string(seq[1])}")
+
+    def ends(name: tuple[str, ...]) -> str:
+        seq = sequences[name]
+        if seq is None:
+            return bare(name)
+        prefix, indexes = seq
+        return label(name, f"{prefix}_{indexes[0]}-{indexes[-1]}")
+
+    for describe in (full, ends, bare):
+        joined = "+".join(describe(name) for name in names)
+        if len(joined.encode("utf-8")) <= budget:
+            return joined + suffix
+
+    # Name as many directories as fit, followed by how many more there are.
+    for shown in range(len(names) - 1, 0, -1):
+        joined = "+".join(bare(name) for name in names[:shown])
+        more = f"+{len(names) - shown}-more"
+        if len((joined + more).encode("utf-8")) <= budget:
+            return joined + more + suffix
+    more = f"+{len(names) - 1}-more"
+    first = _truncate_utf8(bare(names[0]), budget - len(more))
+    return first + more + suffix
 
 
 def _truncate_utf8(text: str, max_bytes: int) -> str:

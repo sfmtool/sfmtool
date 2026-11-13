@@ -226,6 +226,22 @@ def test_generated_matches_name_for_multiple_sequences(tmp_path: Path):
     assert out.stem.endswith("-exhaustive-cam_a_0001-total-4-images")
 
 
+def test_generated_matches_name_for_frames_of_two_videos(tmp_path: Path):
+    """Two directories holding the same frame names name both and count every image."""
+    from sfmtool.feature_match._run import _generate_output_path
+
+    images = [
+        tmp_path / shop / f"frame_{n:06d}.jpg"
+        for shop in ("shopA", "shopB")
+        for n in range(1, 6)
+    ]
+    out = _generate_output_path(tmp_path / "matches", images, "exhaustive")
+    assert out.suffix == ".matches"
+    assert out.stem.endswith(
+        "-exhaustive-shopA-frame_1-5+shopB-frame_1-5-total-10-images"
+    )
+
+
 def test_match_flow(isolated_seoul_bull_17_images: list[Path]):
     """Test flow-based matching on a small set of images."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
