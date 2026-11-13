@@ -362,9 +362,13 @@ cancellation and assembling the report. The ten figures add up to
 was about to read; extraction the workers finished ahead of the walk costs
 it nothing. Each figure is wall time, so while the workers keep every core
 busy the walk's own calls take longer than they take alone: a match runs on
-the rayon pool the extraction runs on, and a read of a `.sift` file waits on
-the disk the workers write to. A run whose files already exist shows what
-each call costs alone.
+the rayon pool the extraction runs on. The first open of a `.sift` file a
+worker has just written can also cost far more than later ones, idle or not:
+on Windows with real-time antivirus scanning, about 20 ms against 0.2 ms, the
+scan of the new file on its first open. A frame's first open is its metadata
+read, after the source reports the file written, so that cost is in
+`reading_sift_metadata_seconds`, not in the wait. A run whose files already
+exist shows what each call costs alone.
 
 **The pilot vote.** `PilotVote::seconds`, and so `pilot_vote_seconds`, is
 the clustering of the pilot frames' features and the focal vote on the
@@ -1042,7 +1046,7 @@ finite and not negative, each kind of work on the walk's thread above 0, the
 walk's figures adding up to `total_seconds`, which they would pass if two
 timers counted one moment, `pilot_vote_seconds` the vote's own, and the
 workers' figures; and a source that sleeps 25 ms before each frame, on one
-worker, leaves the vote's time below half of the pilot's extraction while
+worker and with no prefetch, leaves the vote's time below half of the pilot's extraction while
 the walk's wait for frames takes it up. A pilot of two frames, with no vote,
 reports 0 for its vote's time.
 [pilot/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/pilot/tests.rs)

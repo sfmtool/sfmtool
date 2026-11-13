@@ -87,6 +87,9 @@ fn a_sequence_with_no_camera_is_walked_with_the_pilot_vote_s_camera() {
 /// clustering and the vote alone, and the walk's thread spends the delay
 /// waiting for frames. The frames match nothing, so the pilot walk reads
 /// every frame and the vote, on few features, is quick next to the delay.
+/// With no prefetch the worker starts a frame only when the walk waits for
+/// it, so each wait lasts at least `DELAY` however long the walk's own reads
+/// take.
 #[test]
 fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
     const DELAY: Duration = Duration::from_millis(25);
@@ -100,7 +103,10 @@ fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
     let report = pick_images(
         std::slice::from_ref(&sequence),
         &mut source,
-        &pilot_options(),
+        &PickImagesOptions {
+            prefetch: false,
+            ..pilot_options()
+        },
         &Progress::none(),
     )
     .expect("the walk runs");
@@ -110,7 +116,8 @@ fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
         .expect("a pilot ran");
     assert!(vote.features > 0, "a vote ran");
     // The one worker wrote each frame the pilot read after a delay of its
-    // own, so the pilot walk took at least this long.
+    // own, started by the walk's wait for it, so the pilot walk waited at
+    // least this long.
     let pilot_extraction = vote.frames_read as f64 * DELAY.as_secs_f64();
     assert!(
         vote.seconds < 0.5 * pilot_extraction,
@@ -119,7 +126,7 @@ fn the_pilot_vote_s_time_leaves_out_the_extraction_of_its_frames() {
     );
     assert!((report.times.pilot_vote_seconds - vote.seconds).abs() < 1e-9);
     assert!(
-        report.times.waiting_for_frames_seconds >= 0.5 * pilot_extraction,
+        report.times.waiting_for_frames_seconds >= pilot_extraction,
         "{:?}",
         report.times
     );

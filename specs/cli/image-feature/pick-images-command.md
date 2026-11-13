@@ -719,7 +719,10 @@ for loading the command and parsing its options:
   into Python values. While the extraction workers keep every core busy, the
   walk's own calls take longer than they take alone, so a fresh run's
   matching, reading and forest lines are larger than a second run's on the
-  same files, which shows what each costs alone.
+  same files, which shows what each costs alone. On Windows with real-time
+  antivirus scanning, the first open of each newly written `.sift` file, its
+  metadata read, takes about 20 ms against 0.2 ms after, which is most of
+  the fresh run's `Reading .sift metadata` line above.
 - **Printing the report, writing the list, JSON**: from the call's end to the
   JSON file written.
 
