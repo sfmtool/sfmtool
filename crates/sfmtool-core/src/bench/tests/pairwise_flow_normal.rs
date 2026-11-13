@@ -351,7 +351,6 @@ fn weak_texture_is_turned_within_its_sigma_or_undetermined_and_never_unstable() 
         );
         let rounds = rounds_of(&report);
         let detail = describe(rounds);
-        println!("contrast {contrast}\n{detail}");
         assert_ne!(rounds.outcome, PairwiseFlowOutcome::Unstable, "{detail}");
         for round in &rounds.rounds {
             assert_ne!(round.outcome, PairwiseFlowOutcome::Unstable, "{detail}");

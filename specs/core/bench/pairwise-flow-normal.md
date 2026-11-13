@@ -904,7 +904,8 @@ on synthetic surfaces photographed by pinholes around the point, with noise of
   after that one pair.
 
 Each scene is a few cameras of 160 × 160 px and crops of about 100 samples a
-side, so each test takes about a second at most.
+side, so each run of the step takes well under a second; the weak-texture
+test, five runs, takes about 3 s, and each of the others under 1 s.
 
 ## Non-goals
 
