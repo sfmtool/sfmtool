@@ -77,12 +77,12 @@ true surface and test the σ and outcome rules, not the crops.)
 The draft proposes a different design: every view rendered on one common plane,
 iterated over rounds from the given normal, a grid of one sample per pixel of
 the finest view within 24 to 128 samples per patch side, views finer than the
-grid prefiltered through their photographs' pyramids, each pair read at the
-pyramid level of its coarser view, radii in patch half-extents, and σ the larger
-of a texture σ and a residual σ. § "Real points with the revised design"
-measures the common plane, the rounds, the grid and the σ; the crop extent, the
-per-pair levels and the radius list of those runs are not recorded there, so
-those settings remain unmeasured.
+grid prefiltered through their photographs' pyramids, a crop floor in pixels
+of the finest view, each pair read at the pyramid level of its coarser view,
+radii in patch half-extents, and σ the larger of a texture σ and a residual σ.
+§ "Real points with the revised design" measures the common plane, the rounds,
+the grid, the σ and the crop floor, and records the other settings those runs
+used; those were not measured against other values.
 
 ## Flow settings
 
@@ -180,8 +180,21 @@ median angle from the reference per set, in the order gt seoul / gt kerry / gt
 dino / fresh seoul / fresh dino, and the mean of the five medians. For
 comparison, the first prototype's largest radius with mean χ² ≤ 2, on its
 pixel-based crops (§ "Choosing the support"), read 6.9 / 5.6 / 2.0 / 8.7 / 3.7,
-mean 5.4°. The crop extent, the per-pair pyramid levels and the radius list of
-these runs are not recorded here.
+mean 5.4°.
+
+The prototype's other settings, the same in every run of this section unless a
+row says otherwise:
+
+- crop half-width 3 half-extents or 48 px, whichever is larger; the 48 px of
+  the pair's coarser view, except in the last runs, which count the finest
+  view's (§ "The crop floor and the bar on the mean viewing direction");
+- at most 512 samples a side per render;
+- radii 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8 and 12 half-extents;
+- each pair read at level `floor(log2 k)` of its coarser view;
+- at most 10 pairs per point, chosen at random;
+- `flow_floor_px` 0.03;
+- the correlated square 8 px of the coarser view at the pair's level;
+- the noise threshold at the 0.999 quantile.
 
 **A grid of 24 samples per patch side, a fronto plane per view, the texture σ
 alone.** The best setting tried had a mean of the set medians of 7.7° to 9°,
@@ -208,7 +221,8 @@ below use it.
 | Turned | 50% | 40% | 69% | 82% | 92% | |
 
 **The common plane, 3 rounds from the mean viewing direction**, the native grid
-and σ the larger of the two:
+and σ the larger of the two, before the two changes of § "The crop floor and
+the bar on the mean viewing direction":
 
 | Rule | | gt seoul | gt kerry | gt dino | fresh seoul | fresh dino | Mean |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -222,7 +236,8 @@ more, and is closer on kerry_park and the dino ground truth; it is further on
 seoul_bull.
 
 **By round**, the median angle from the reference at the start and after each
-round:
+round. Each next round's plane was the answer by the rule at σ ≤ 10° and mean
+χ² ≤ 2, or, with no answer, the fallback at 1 half-extent:
 
 | Set | Start | Round 1 | Round 2 | Round 3 |
 |---|---:|---:|---:|---:|
@@ -258,6 +273,65 @@ several pixels and the flow was reliable only near the centre.
 The outcomes do not yet tell these points from good ones: 13 of the 18
 kerry_park `A2` points turned. They may be determined, with wide baselines; the
 `A2` label comes from the grown plane's instability, not from the truth.
+
+### The crop floor and the bar on the mean viewing direction
+
+**Question.** Two failures showed in the runs above. With the crop floor in
+pixels of the pair's coarser view, a point with one far view got pair squares,
+and so allowed radii, that were large in the world: on seoul_bull points 70,
+173 and 255 the rule picked 4 to 12 half-extents, about 76 to 152 pixels of the
+finest view, where the first prototype, with crops set in pixels, never went
+past 45 px. And some rounds drifted to planes the views cannot see. What do a
+floor in pixels of the finest view, and a bar that makes a normal more than 80°
+from the mean viewing direction of the views no answer, change?
+
+**Setup.** As above, the common plane with 3 rounds from the mean viewing
+direction, with both changes.
+
+**Result.**
+
+| Rule | | gt seoul | gt kerry | gt dino | fresh seoul | fresh dino | Mean |
+|---|---|---:|---:|---:|---:|---:|---:|
+| σ ≤ 10°, χ² ≤ 1 | median angle | 14.7° | 3.2° | 0.9° | 8.6° | 1.8° | 5.9° |
+| | turned | 67% | 80% | 88% | 84% | 96% | |
+| σ ≤ 10°, χ² ≤ 2 | median angle | 15.8° | 3.5° | 1.3° | 9.8° | 2.2° | 6.5° |
+| | turned | 72% | 80% | 92% | 90% | 96% | |
+
+By round, the median angle from the reference:
+
+| Set | Start | Round 1 | Round 2 | Round 3 |
+|---|---:|---:|---:|---:|
+| gt seoul | 42.3° | 17.4° | 17.2° | 18.3° |
+| gt kerry | 48.9° | 14.2° | 5.9° | 3.7° |
+| gt dino | 28.8° | 2.8° | 1.4° | 1.2° |
+| fresh seoul | 32.7° | 10.4° | 11.5° | 11.0° |
+| fresh dino | 37.0° | 2.7° | 2.1° | 2.4° |
+
+`A2` points, χ² ≤ 1:
+
+| Set | Turned | Single pair | Undetermined | Unstable |
+|---|---:|---:|---:|---:|
+| seoul_bull | 7 | 0 | 2 | 7 |
+| kerry_park | 8 | 0 | 0 | 10 |
+| dino | 1 | 0 | 0 | 1 |
+
+kerry_park turns more of its curated points (80% against 53% to 73%) and fewer
+of its `A2` points (8 of 18, against 11 to 13).
+
+**The curated seoul_bull points, one by one.** The `ok` points 1, 2, 109, 143
+and 157 end 1.2° to 7.1° from the reference, `ok` point 10 ends 16° from it,
+and `ok` points 18, 120 and 167 are `Unstable`. The median is set by the judged
+and hand points, 63 at 33°, 70 at 22°, 173 at 25°, 207 at 112°, 255 at 46° and
+238 at 9°, and by the two-view points: 160, a single pair, at 68°, and 192 and
+260 `Undetermined`. The remaining seoul_bull errors are concentrated on layered
+and narrow-baseline points, not on the `ok` points.
+
+**Drift.** The bar does not catch every drift: point 207, a bush with the bull
+in front and trees behind, ends 112° from the reference while within 80° of the
+mean viewing direction. Point 160, with two views and so one pair, drifted 14°
+→ 40° → 55° → 68° from the reference over the rounds; with no second pair
+nothing tests a round's answer, which is why the draft runs one round for a
+point with one pair.
 
 **Cost.** About 4 to 8 minutes for the 189 points with 12 processes per
 configuration, more with the native grid and 3 rounds.

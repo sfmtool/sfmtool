@@ -85,11 +85,15 @@ Track View and the wire could call it the way they call the others.
 /// planes and chooses its support. Defaults and their sources in § Parameters.
 pub struct PairwiseFlowNormalOptions {
     /// How many rounds the step runs, each rendering on the plane the last
-    /// found, the first on the given normal. 3.
+    /// found, the first on the given normal; a point with one pair runs one.
+    /// 3.
     pub rounds: u32,
     /// A view more than this from the round's plane normal, at the point, is
     /// left out of that round. 80.
     pub max_view_angle_deg: f64,
+    /// A normal more than this from the mean viewing direction of the point's
+    /// views is no answer: the views cannot see such a plane. 80.
+    pub max_normal_from_mean_view_deg: f64,
     /// The radius whose combined normal, over the pairs with a finite σ, is
     /// the next round's plane when a round has no answer, in patch
     /// half-extents. 1.
@@ -101,8 +105,8 @@ pub struct PairwiseFlowNormalOptions {
     pub max_samples_per_patch: u32,
     /// The crop's half-width in the world, in patch half-extents. 3.
     pub crop_half_extents: f64,
-    /// The least crop half-width a pair is read over, in photograph px of the
-    /// pair's coarser view. 48.
+    /// The least crop half-width, in photograph px of the point's finest
+    /// view. 48.
     pub min_crop_half_width_px: f64,
     /// The most samples along one side of a rendered crop; past it the grid
     /// is coarsened. 512.
@@ -157,9 +161,10 @@ impl PairwiseFlowNormalOptions {
     /// fails: NormalError::BadPairwiseFlowOption("radii") for an empty,
     /// unsorted or non-positive list, ("rounds") of 0, ("min_samples_per_patch")
     /// under 2 or over max_samples_per_patch, ("crop_half_extents") under 1,
-    /// and so on. The flow settings are checked against the smallest crop a
-    /// pair can be read on here, so a patch_size larger than that is refused
-    /// before any render.
+    /// and so on. The flow's own settings are checked here as
+    /// compute_optical_flow checks them; a pair whose square at its level is
+    /// narrower than the flow's patch_size is not refused but has no flow and
+    /// no fits.
     pub fn check(&self) -> Result<(), NormalError>;
 }
 
@@ -186,19 +191,23 @@ pub struct PairwiseFlowRound {
     pub chosen_radius: Option<f64>,        // patch half-extents
     pub normal: Option<[f64; 3]>,          // the answer; None: no answer by the rule
     pub sigma_deg: Option<f64>,
-    pub next_plane: Option<[f64; 3]>,      // the next round's plane: the answer, else the fallback
+    pub from_mean_view_deg: Option<f64>,   // the answer's angle from the views' mean viewing direction
+    pub next_plane: Option<[f64; 3]>,      // the next round's plane: the answer, else the fallback; None: the step stopped here
 }
 
 /// Turned: the patch was turned to the last round's normal at its chosen
 /// radius.
-/// SinglePair: one pair, read at single_pair_radius with no agreement test,
-/// its σ at most max_sigma_deg, and turned.
+/// SinglePair: one pair, read in one round at single_pair_radius with no
+/// agreement test, its σ at most max_sigma_deg and its normal within
+/// max_normal_from_mean_view_deg of the mean viewing direction, and turned.
 /// Undetermined: too little evidence. No radius has two determined pairs
 /// (each with σ at most max_sigma_deg), so no agreement can be tested, or a
 /// point with one pair has no fit at single_pair_radius or its σ there is
 /// over the bar; the track as given.
 /// Unstable: some radius has two or more determined pairs, but at every such
-/// radius they disagree (mean χ² over max_mean_chi2); the track as given.
+/// radius they disagree (mean χ² over max_mean_chi2), or the answer is more
+/// than max_normal_from_mean_view_deg from the mean viewing direction; the
+/// track as given.
 pub enum PairwiseFlowOutcome { Turned, SinglePair, Undetermined, Unstable }
 
 pub enum PairwiseFlowCrop {
@@ -431,44 +440,54 @@ crops are then converted to the flow's grey (`matcher_gray_from_rgb` in
 
 ### The extent
 
-A pair `(i, j)` is read over a central square of half-width
-`max(crop_half_extents · h, min_crop_half_width_px · p)` in the world, where
-`h` is the patch's half-extent and `p` the size, at `X`, of one photograph
-pixel of the pair's coarser view on the plane: 3 times the patch by default,
-but never fewer than 48 of the coarser view's pixels. The floor is there for
-tiny patches: a fresh solve of seoul_bull has a median patch half-size of
-3.4 px, so 3 times the patch would be about 10 px, while the prototype's best
-fixed support on those points was 16 px, about 4.7 times the patch, and the
-support chooser needs room above that to find where the surface stops being one
-plane. Each view is rendered once per round at the largest extent any of its
-pairs needs, which is the one set by the point's coarsest view, and a pair reads
-the central square it needs from the two renders.
+Every crop of a round is rendered over a square of half-width
+`max(crop_half_extents · h, min_crop_half_width_px · p_f)` in the world, where
+`h` is the patch's half-extent and `p_f` the size, at `X`, of one photograph
+pixel of the point's finest view on the plane: 3 times the patch by default,
+but never fewer than 48 of the finest view's pixels, and every pair reads that
+whole square at its own level. The floor is there for tiny patches: a fresh
+solve of seoul_bull has a median patch half-size of 3.4 px, so 3 times the
+patch would be about 10 px, while the first prototype's best fixed support on
+those points was 16 px, about 4.7 times the patch, and the support chooser
+needs room above that to find where the surface stops being one plane. The
+finest view's pixels still cover a tiny patch, so the floor counts them.
 
-**The cap and the cost.** `max_crop_samples` (512) bounds only the one render
-per view. A view is rendered at a half-width of `max(3h, 48 · k_c)` grid
-samples, `h` here in grid samples and `k_c` the `samples_per_pixel` of the
-point's coarsest view, and the grid is coarsened for the whole round, with the
-report carrying the `samples_per_patch` used, only when that render would have
-more than `max_crop_samples` along a side. `3h` is at most 192 samples, under
-the upper bound on the grid, so with the defaults that happens only when the
-floor exceeds the cap, `2 · 48 · k_c > 512`: a coarsest view whose pixel spans
-more than about 5.3 grid samples. The coarsening may take the grid under
+**Why the finest view and not the pair's coarser view.** An earlier form set
+the floor per pair, at 48 pixels of the pair's coarser view. A point with one
+far view then got pair squares, and so allowed radii, that were large in the
+world: on seoul_bull points 70, 173 and 255 the rule picked 4 to 12
+half-extents, about 76 to 152 pixels of the finest view, where the first
+prototype, with its crops set in pixels, never went past 45 px
+(measurements, § "Real points with the revised design"). With the floor in the
+finest view's pixels, the radii a pair can reach are the same for every pair,
+and a pair with a far view simply reads fewer of that view's own pixels: at its
+level its square is `2^ℓ` times narrower in samples, and its σ larger.
+
+**The cap and the cost.** `max_crop_samples` (512) bounds the one render per
+view. A crop's half-width in grid samples is `max(3h, 48 · k_f)`, `h` here in
+grid samples and `k_f` the `samples_per_pixel` of the finest view: 1 where the
+grid is at the finest view's pixel, over 1 where the grid is held at its lower
+bound on a tiny patch, under 1 where it is held at its upper bound on a large
+one. The grid is coarsened for the whole round, with the report carrying the
+`samples_per_patch` used, only when the render would have more than
+`max_crop_samples` along a side. `3h` is at most 192 samples, under the upper
+bound on the grid, so with the defaults that happens only when the floor
+exceeds the cap, `2 · 48 · k_f > 512`: a finest view whose pixel spans more
+than about 5.3 grid samples, that is a patch under about 4.5 pixels across in
+its finest view. The coarsening may take the grid under
 `min_samples_per_patch`; the extent is kept and the resolution given up,
 because the floor is what leaves the support chooser room. A 3.4 px half-size
-patch is 6.8 px across, so its grid is the lower bound, 24 samples, 3.5 samples
-per pixel of a view at that scale; 48 px of that view is a half-width of 170
-samples, a render of 340 a side, under the cap, and the grid is coarsened only
-if the point has a view more than about 1.5 times coarser still.
+patch is 6.8 px across in a view at that scale, so if that is its finest view
+its grid is the lower bound, 24 samples, 3.5 samples per pixel; 48 px of that
+view is a half-width of 170 samples, a render of 340 a side, under the cap.
 
-What bounds each pair's flow is its level and the extent, not the cap. A pair
-reads only its central square, at its own level. Where the coarser view is
-coarser than the grid (`k` over 1), the floor's half-width is 48 of that view's
-pixels, which at level `ℓ` is `48 · k / 2^ℓ = 48m` samples with `m` between 1
-and 2, at most 96; `3h` at that level is `3h / 2^ℓ`. Where neither view is
-coarser than the grid, the pair is at level 0 and its square is
-`2 · max(3h, 48k)` samples a side. So every pair's square is at most
-`2 · max(3h, 96)` samples a side: under 192 where `3h` is small, and up to 384
-on a patch at the upper bound of the grid.
+What bounds each pair's flow is the render and its level. A pair read at level
+`ℓ` reads the render's square at `2^ℓ` times fewer samples a side, so its
+square is at most `2 · max(3h, 48 · k_f) / 2^ℓ` samples a side: at level 0 at
+most 384 where the grid is at the finest view's pixel and up to the render's
+512 where it is held at its lower bound. A pair whose square at its level is
+narrower than the flow's `patch_size` has no flow and no fits; it is reported,
+not refused.
 
 ### The pyramid level of a pair
 
@@ -738,18 +757,38 @@ round's crops line up more closely than the last and its flow measures a
 smaller parallax. When a round has no answer by the rule, the next round's
 plane is the **fallback**: the combined normal at `fallback_radius` (1
 half-extent) over the pairs with a finite σ there, determined or not, which is
-the prototype's choice; where no pair has a finite σ there, the plane stays.
-Every round is reported.
+the prototype's choice. Every round is reported.
 
-The step's outcome, chosen radius, normal and σ are the last round's. A last
-round with no answer leaves the given normal unchanged, even where an earlier
-round had one; which round's answer to keep, and whether to stop early when a
-round's answer moves less than its σ, are open questions. In the prototype,
-3 rounds from the mean viewing direction brought the ground-truth dino points
-from 28.8° to 1.1° median and the kerry_park points from 48.9° to 4.3°, the
-kerry_park points still improving at round 3; the seoul_bull points stopped
-improving after round 1, at 10° to 18° (measurements, § "Real points with the
-revised design"). 3 is the most rounds measured.
+**A plane the views cannot see is no answer.** A normal more than
+`max_normal_from_mean_view_deg` (80°) from the mean viewing direction of the
+point's views faces a plane the views see nearly edge on or from behind. A
+round whose answer is that far does not pass it on: the step stops after that
+round, and its outcome is `Unstable`, since the evidence settled on a plane
+that cannot be the surface the photographs show. A fallback plane that far is
+not passed on either. Where a round has no plane to pass on, because its answer
+and its fallback are both missing or too far, the step stops, as rendering on
+the same plane again would repeat the same round. The bar does not catch every
+drift: on seoul_bull point 207, a bush with the bull in front and trees behind,
+the step ends 112° from the reference while within 80° of the mean viewing
+direction.
+
+**A point with one pair runs one round.** With one pair there is no agreement
+to test, so nothing stops a round from moving the plane further along that
+pair's error, and the next round renders on that error. In the prototype a
+two-view point of seoul_bull, 160, drifted 14° → 40° → 55° → 68° from the
+reference over the rounds. Its one round renders on the given normal, as
+round 1 always does.
+
+The step's outcome, chosen radius, normal and σ are those of the last round it
+ran. A last round with no answer leaves the given normal unchanged, even where
+an earlier round had one; which round's answer to keep, and whether to stop
+early when a round's answer moves less than its σ, are open questions. In the
+prototype, with the two rules above, 3 rounds from the mean viewing direction
+brought the ground-truth dino points from 28.8° to 1.2° median and the
+kerry_park points from 48.9° to 3.7°, the kerry_park points still improving at
+round 3; the seoul_bull points stopped improving after round 1, at about 10° to
+18° (measurements, § "Real points with the revised design"). 3 is the most
+rounds measured.
 
 ### Undetermined and unstable
 
@@ -757,14 +796,18 @@ When no radius has enough evidence, the outcome is `Undetermined`: at no
 support do two pairs fix the tilt to within `max_sigma_deg`, which is a lack of
 evidence. When some radius has enough evidence but the pairs disagree (mean χ²
 over `max_mean_chi2`) at every such radius, the outcome is `Unstable`: the
-evidence is there and does not settle on one plane. Both leave the given normal
+evidence is there and does not settle on one plane. An answer more than
+`max_normal_from_mean_view_deg` from the mean viewing direction is also
+`Unstable` (§ [Rounds](#rounds)). Both outcomes leave the given normal
 unchanged, and the report's outcome says which.
 
-A point with one pair has no agreement to test; the prototype read it at a
-fixed 8 photograph pixels, and this draft reads it at a fixed
+A point with one pair has no agreement to test; the first prototype read it at
+a fixed 8 photograph pixels, and this draft reads it in one round at a fixed
 `single_pair_radius` (1 half-extent, not measured) as `SinglePair`. It is turned
-only when the pair's σ at that radius is at most `max_sigma_deg`; otherwise the
-outcome is `Undetermined`.
+only when the pair's σ at that radius is at most `max_sigma_deg` and its normal
+is within `max_normal_from_mean_view_deg` of the mean viewing direction;
+otherwise the outcome is `Undetermined`, or `Unstable` for a normal too far
+from the mean viewing direction.
 
 ### Output
 
@@ -796,9 +839,9 @@ which pairs disagreed at which radius.
   revised design took about 4 to 8 minutes for 189 points with 12 processes per
   configuration, more with the native grid and 3 rounds. A Rust version is
   expected to be far cheaper, chiefly in the fits. The crops bound each flow: a
-  render is at most `max_crop_samples` a side, and each pair's flow is on its
-  own central square at its own level, at most 384 samples a side
-  (§ [The extent](#the-extent)). The step stays expensive by design all the
+  render is at most `max_crop_samples` a side, and each pair reads it at its
+  own level, `2^ℓ` times fewer samples a side (§ [The extent](#the-extent)).
+  The prototype read at most 10 pairs per point, chosen at random. The step stays expensive by design all the
   same: the number of pairs grows with the square of the number of views, and
   every round repeats the flows. How to bound it is an open question.
 
@@ -808,18 +851,19 @@ which pairs disagreed at which radius.
 |--------|---------|--------|
 | `rounds` | 3 | measured on real points up to 3 rounds (measurements, § "Real points with the revised design"); not beyond |
 | `max_view_angle_deg` | 80° | the prototype's; not measured against other values |
+| `max_normal_from_mean_view_deg` | 80° | the prototype's, in the runs after the two changes of § "Real points with the revised design"; not measured against other values |
 | `fallback_radius` | 1 half-extent | the prototype's choice; not measured against other values |
 | `min_samples_per_patch`, `max_samples_per_patch` | 24, 128 | the prototype's native grid with these bounds; the bounds themselves not measured against other values |
-| `crop_half_extents` | 3 | the extent of the first prototype's runs against the grown plane; not measured with this grid |
-| `min_crop_half_width_px` | 48 px | the first prototype's support-rule crops, which were 48 px at the point's median scale; not measured as a floor |
-| `max_crop_samples` | 512 | proposed; bounds the render per view only, so the grid is coarsened only past about 5.3 grid samples per pixel of the coarsest view; not measured |
-| `radii` | 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12 half-extents | proposed: about the first prototype's spacing of radii, about 1.4 apart; not measured |
+| `crop_half_extents` | 3 | used in the real-point runs of the revised design; not measured against other values |
+| `min_crop_half_width_px` | 48 px of the finest view | used in the real-point runs after the two changes (before them, 48 px of the pair's coarser view); not measured against other values |
+| `max_crop_samples` | 512 | used in the real-point runs; bounds the render per view only, so the grid is coarsened only for a patch under about 4.5 px across in its finest view; not measured against other values |
+| `radii` | 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12 half-extents | used in the real-point runs; not measured against other lists |
 | `flow` | `high_quality`, `finest_scale` 0, `patch_stride` 1 | measured, § "Flow settings" |
 | `max_grid_tilt_deg`, `grid_tilt_step_deg`, `grid_azimuth_step_deg` | 85°, 10°, 30° | prototype |
 | `tukey_c` | 4.685 | the usual 95%-efficiency constant; not measured here |
-| `correlation_length_px` | 8 px | a guess; open question |
-| `noise_false_alarm` | 0.001 | proposed; the significance level of the tensors' noise threshold, not measured |
-| `flow_floor_px` | 0.03 px | measured only on synthetic scenes at one sample per pixel (measurements, § "Synthetic scenes"): 0.02 left the error 1–2 times σ, 0.05 under 1 times σ |
+| `correlation_length_px` | 8 px | used in the real-point runs; a guess, open question |
+| `noise_false_alarm` | 0.001 | used in the real-point and synthetic runs; not measured against other values |
+| `flow_floor_px` | 0.03 px | measured only on synthetic scenes at one sample per pixel (measurements, § "Synthetic scenes"): 0.02 left the error 1–2 times σ, 0.05 under 1 times σ; used in the real-point runs |
 | `max_sigma_deg` | 10° | measured on real points with the revised design: the best of the settings tried |
 | `agreement_sigmas`, `agreement_margin_deg` | 3, 5° | prototype |
 | `max_mean_chi2` | 2 | measured on real points with the revised design: 1 and 2 were the best of the settings tried, 2 turning more points (measurements, § "Real points with the revised design") |
@@ -889,14 +933,19 @@ Proposed tests for the step when it is built:
   exactly this on the scene (measurements, § "Synthetic scenes"); the radius
   at which it stops depends on the χ² calibration and the flow floor.
 - **Two views 4× apart in scale.** A textured plane seen by a near camera and
-  by one four times as far with the same focal length, the patch set so the
-  grid, at the near view's pixel, is within its bounds: the far crop's
-  `samples_per_pixel` is about 4, every view is rendered at a half-width of
-  `max(3h, 48 · 4)` samples, under `max_crop_samples` when `3h` is at most 192,
-  so the grid is not coarsened; the pair is read at level 2 of both crops'
-  pyramids, on a square 96 samples a side there where the floor sets it, and
-  the normal is recovered; a third, near camera pairs with the first at
-  level 0.
+  by one four times as far with the same focal length, the patch 128 pixels
+  across in the near view, so the grid is 128 samples per side at the near
+  view's pixel and every crop has a half-width of `3h` = 192 samples, 384 a
+  side, under `max_crop_samples`: the far crop's `samples_per_pixel` is about
+  4, the pair is read at level 2 of both crops' pyramids, on a square 96
+  samples a side there, and the normal is recovered; a third, near camera pairs
+  with the first at level 0, on the whole 384-sample square.
+- **One pair runs one round.** A two-view scene: the report holds one round,
+  rendered on the given normal, and the outcome is `SinglePair` or
+  `Undetermined`.
+- **An answer the views cannot see.** The round logic given a round whose
+  answer is 85° from the mean viewing direction: the outcome is `Unstable`,
+  no later round runs, and the track's normal is exactly the one given.
 - **Refusals.** A track at infinity is refused as `NormalError::AtInfinity`; an
   empty or unsorted `radii`, `rounds` of 0, or a `min_samples_per_patch` under
   2 or over `max_samples_per_patch` is refused by `check` naming the option;
@@ -937,10 +986,15 @@ on a common plane is settled: a common plane, iterated from the given normal
 (§ [Crops on a common plane](#crops-on-a-common-plane)).
 
 - **seoul_bull stops improving after round 1.** On the seoul_bull points the
-  rounds stop at 10° to 18° from the reference after round 1, with pairs 2° to
-  5° apart. The first prototype, with crops set in photograph pixels and
-  per-view fronto planes, got 6.9° on the curated seoul_bull points, so
-  something in the revised design costs accuracy there; it is not yet isolated.
+  rounds stop at about 10° to 18° from the reference after round 1, with pairs
+  2° to 5° apart, against 6.9° on the curated seoul_bull points for the first
+  prototype. Point by point, the remaining errors are concentrated on layered
+  and narrow-baseline points, not on the `ok` points: five `ok`
+  points end 1.2° to 7.1° from the reference, one 16°, and three `Unstable`;
+  the median is set by the judged and hand points (63 at 33°, 70 at 22°, 173 at
+  25°, 207 at 112°, 255 at 46°, 238 at 9°) and the two-view points (160 at 68°
+  before the one-round rule, 192 and 260 `Undetermined`). What the step should
+  do on a point with another layer in its crops is the open part.
 - **kerry_park is still improving at round 3.** Whether to run more rounds, or
   take a stronger step per round.
 - **Which round's answer.** The step reports the last round's; whether to keep
@@ -951,7 +1005,9 @@ on a common plane is settled: a common plane, iterated from the given normal
   measured.
 - **Separating undetermined points.** The outcomes do not yet tell the `A2`
   points (those whose grown-plane answer depends on its start) from good ones:
-  13 of 18 kerry_park `A2` points turned. They may be determined, with wide
+  8 of 18 kerry_park `A2` points turned, down from 11 to 13 before the floor
+  counted the finest view and the bar on the mean viewing direction. They may
+  be determined, with wide
   baselines; the `A2` label comes from the grown plane's instability, not from
   the truth.
 - **The thresholds.** `max_sigma_deg` of 10° with `max_mean_chi2` of 1 or 2
@@ -963,15 +1019,19 @@ on a common plane is settled: a common plane, iterated from the given normal
   (90° and more): on a common plane they line up, but their crops see the
   surface from very different sides.
 - **The crops' defaults.** `crop_half_extents`, `min_crop_half_width_px`,
-  `max_crop_samples`, the radius list and `single_pair_radius` are proposed
-  values; the real-point runs of the revised design do not record which crop
-  extent, per-pair levels and radius list they used, so these remain
-  unmeasured.
+  `max_crop_samples` and the radius list are the values the real-point runs
+  used, and `single_pair_radius` is proposed; none was measured against other
+  values.
 - **Points with one pair.** There is no agreement to test; the first prototype
-  read them at 8 photograph pixels. This draft turns one only when its σ there
-  is at most `max_sigma_deg`, and calls it `Undetermined` otherwise, so weak
-  texture is not turned. Open: whether a precise single pair should be turned at
-  all, read at a fixed radius, or have its radius chosen by another rule.
+  read them at 8 photograph pixels. This draft reads one in one round and turns
+  it only when its σ there is at most `max_sigma_deg`, and calls it
+  `Undetermined` otherwise, so weak texture is not turned. The one-round rule
+  rests on one point, seoul_bull 160, which drifted over the rounds. Open:
+  whether a precise single pair should be turned at all, read at a fixed
+  radius, or have its radius chosen by another rule.
+- **Drift that stays in view.** The bar on the mean viewing direction stops an
+  answer the views cannot see, but not every drift: seoul_bull point 207 ends
+  112° from the reference within 80° of the mean viewing direction.
 - **The noise threshold.** The noise model the tensors are thresholded with
   (white Gaussian noise of the photometric residual's variance) and the
   significance level `noise_false_alarm`. The structure window has no setting
@@ -983,7 +1043,8 @@ on a common plane is settled: a common plane, iterated from the given normal
   geometry predicts the most information about the tilt, as the grown-plane
   step's selection does. A cap should prefer pairs whose two views have
   similar scale: a very unequal pair is read at the coarser view's level and
-  carries little information, which its σ shows.
+  carries little information, which its σ shows. The prototype read at most 10
+  pairs per point, chosen at random.
 - **The correlation length.** 8 photograph px is a guess at how far flow errors
   stay correlated. It sets the scale of the texture σ and, through `L²`, of the
   residual σ; it could be measured from the residuals of the synthetic pairs.
@@ -1004,5 +1065,6 @@ on a common plane is settled: a common plane, iterated from the given normal
 - **GPU flow.** `compute_optical_flow` takes a `GpuFlowContext`
   ([gpu-optical-flow.md](../core/features/gpu-optical-flow.md)); whether
   batches of small crops gain from it. A pair's square under 224 samples a side
-  is below the presets' `gpu_min_pixels` of 50,000; only pairs on a patch near
-  the upper bound of the grid, read at level 0, reach 384 a side.
+  is below the presets' `gpu_min_pixels` of 50,000; only pairs read at level 0
+  on a large patch, up to 384 a side, or on a tiny one whose grid is held at
+  its lower bound, up to 512, reach it.
