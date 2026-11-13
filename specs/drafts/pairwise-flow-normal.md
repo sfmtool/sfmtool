@@ -141,9 +141,9 @@ pub struct PairwiseFlowRadii {
 /// Turned: the patch was turned to the normal at the chosen radius.
 /// SinglePair: one pair, read at single_pair_radius with no agreement test,
 /// its σ at most max_sigma_deg, and turned.
-/// Undetermined: too little evidence. No radius has a combined normal with
-/// σ at most max_sigma_deg (no pair fitted precisely enough there), or a
-/// single pair's σ is over it; the track as given.
+/// Undetermined: too little evidence. No radius has a determined pair (one
+/// with σ at most max_sigma_deg), or a single pair's σ is over it; the track
+/// as given.
 /// Unstable: some radius has enough evidence, but at every such radius the
 /// pairs disagree (mean χ² over max_mean_chi2); the track as given.
 pub enum PairwiseFlowOutcome { Turned, SinglePair, Undetermined, Unstable }
@@ -432,10 +432,13 @@ residual. So:
   The plain sum `T_i + T_j` is rejected because it would credit a pair with
   texture only one of its crops has, as where one crop is blurred, occluded or
   off the surface.
-- `W_s = T_s / σ_I²`, with `σ_I²` the pair's photometric residual variance
-  over the disc (crop `j` warped by the measured flow against crop `i`),
-  floored at the 8-bit quantization variance so a perfect match does not
-  claim infinite precision.
+- `W_s = T_s / (σ_I²/2)`, `T_s` being that parallel sum: each crop's
+  position is read with covariance `(σ_I²/2) · T⁻¹`, its own noise variance
+  times its tensor's inverse, so where the two tensors are equal `W_s` is
+  `T / σ_I²`, the Lucas-Kanade information of the flow. `σ_I²` is the pair's
+  photometric residual variance over the disc (crop `j` warped by the measured
+  flow against crop `i`), floored at the 8-bit quantization variance so a
+  perfect match does not claim infinite precision.
 
 Because `W_s` is absolute, not scaled by the flow residual's own variance, a
 flat crop gives a near-zero `H` and a large or infinite σ, and weak texture
@@ -462,8 +465,9 @@ most `max_sigma_deg`):
 3. **χ²**: the mean over the determined pairs of (angle from the combined
    normal / that pair's σ)².
 
-A radius has **enough evidence** when it has a combined normal whose σ is at
-most `max_sigma_deg`. The chosen radius is the largest radius with enough
+A radius has **enough evidence** when at least one pair is determined there;
+its combined normal's σ is then at most `max_sigma_deg`, since only determined
+pairs enter it. The chosen radius is the largest radius with enough
 evidence whose mean χ² is at most `max_mean_chi2` (2): the largest support on
 which the pairs agree within their own precision. The step turns the patch to
 the combined normal at that radius.
@@ -480,8 +484,8 @@ The rules the prototype tried and rejected are in the measurements
 ### Undetermined and unstable
 
 When no radius has enough evidence, the outcome is `Undetermined`: no pair's
-fit, or no combination of them, fixes the tilt to within `max_sigma_deg` at
-any support, which is a lack of evidence. When some radius has enough evidence
+fit fixes the tilt to within `max_sigma_deg` at any support, which is a lack of
+evidence. When some radius has enough evidence
 but the pairs disagree (mean χ² over `max_mean_chi2`) at every such radius, the
 outcome is `Unstable`: the evidence is there and does not settle on one plane.
 Both leave the given normal unchanged, and the report's outcome says which.
@@ -587,7 +591,9 @@ Each a separate change after the core step:
 3. An option of `refine_normals` choosing this step as the per-point step,
    with the per-point outcomes it reports extended by `Undetermined` and
    `Unstable`.
-4. The glossary entry for the step's name.
+4. The glossary entry for the step's name, and the **turned** /
+   **undetermined** / **unstable** entry widened from `grid_plane_normal`'s
+   outcomes to this step's as well.
 
 ## Open questions
 
