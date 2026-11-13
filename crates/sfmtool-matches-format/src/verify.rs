@@ -23,6 +23,7 @@
 //! damaged file reports everything that is wrong with it at once. The call
 //! order above is therefore also the reported order.
 
+use std::borrow::Cow;
 use std::io::Seek;
 use std::path::Path;
 
@@ -35,6 +36,10 @@ use crate::cells::{
 };
 use crate::entries;
 use crate::types::*;
+use crate::validate::{
+    check_backbone_counts, cluster_errors, cluster_patch_errors, config_index_errors,
+    image_dims_errors, inlier_errors, pair_errors, ClusterSlices,
+};
 use sfmtool_archive_io::{format_hash, raw_to_f32, raw_to_u32, read_zst_entry};
 
 /// Check the backbone rule and metadata flag / summary-count / zip-entry
@@ -229,8 +234,9 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     section_digests.push(images_hash);
 
     // === The correspondence backbone, and what it carries ===
+    let mut pairs = None;
     if !metadata.has_clusters {
-        let pairs_hash = verify_image_pairs_section(
+        let (pairs_hash, pairs_raw) = verify_image_pairs_section(
             &mut archive,
             &metadata,
             &feature_counts_raw,
@@ -238,6 +244,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
             &mut errors,
         )?;
         section_digests.push(pairs_hash);
+        pairs = pairs_raw;
     } else {
         let (clusters_hash, backbone) = verify_clusters_section(
             &mut archive,
@@ -262,8 +269,13 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
 
     // === Two-view geometries (optional) ===
     if metadata.has_two_view_geometries {
-        let tvg_hash =
-            verify_two_view_geometries_section(&mut archive, &metadata, &stored, &mut errors)?;
+        let tvg_hash = verify_two_view_geometries_section(
+            &mut archive,
+            &metadata,
+            pairs.as_ref(),
+            &stored,
+            &mut errors,
+        )?;
         section_digests.push(tvg_hash);
     }
 
@@ -343,16 +355,8 @@ fn verify_images_section<R: std::io::Read + Seek>(
                 dims_raw.len(),
                 image_count * 8
             ));
-        } else if let Some((k, _)) = raw_to_u32(&dims_raw)
-            .iter()
-            .enumerate()
-            .find(|(_, &v)| v == 0)
-        {
-            errors.push(format!(
-                "image_dims[{}] has a zero {} (every dimension must be >= 1)",
-                k / 2,
-                if k % 2 == 0 { "width" } else { "height" }
-            ));
+        } else {
+            image_dims_errors(&raw_to_u32(&dims_raw), errors);
         }
     }
 
@@ -387,13 +391,17 @@ struct PairsRaw {
 }
 
 /// Hash `image_pairs/` and check the pair table it stores.
+///
+/// Returns the section digest and, when every array is the length its count
+/// calls for, the raw pair table, which the two-view geometries' inlier check
+/// reads.
 fn verify_image_pairs_section<R: std::io::Read + Seek>(
     archive: &mut ZipArchive<R>,
     metadata: &MatchesMetadata,
     feature_counts_raw: &[u8],
     stored: &MatchesContentHash,
     errors: &mut Vec<String>,
-) -> Result<u128, MatchesError> {
+) -> Result<(u128, Option<PairsRaw>), MatchesError> {
     let image_count = metadata.image_count as usize;
     let pair_count = metadata.image_pair_count.unwrap_or(0) as usize;
     let match_count = metadata.match_count.unwrap_or(0) as usize;
@@ -441,10 +449,9 @@ fn verify_image_pairs_section<R: std::io::Read + Seek>(
     // Structural validation on raw data. The length checks run first and gate
     // the rest, because everything below indexes by pair, by match or by
     // image: an array that is not the length its declared count calls for
-    // cannot be walked. `check_match_counts` extends that gate — its values
-    // are the CSR run lengths `check_match_feature_bounds` advances through,
-    // and a sum that overruns `match_count` walks off the end of
-    // `match_feature_indexes`.
+    // cannot be walked. `pair_errors` extends that gate itself: the match
+    // counts are the CSR run lengths its feature-bounds walk advances
+    // through, so it walks only when they sum to `match_count`.
     let lengths_ok = check_pair_array_lengths(
         &raw,
         feature_counts_raw,
@@ -453,21 +460,19 @@ fn verify_image_pairs_section<R: std::io::Read + Seek>(
         image_count,
         errors,
     );
-    if lengths_ok {
-        check_pair_ordering(&raw.image_index_pairs, pair_count, image_count, errors);
+    if !lengths_ok {
+        return Ok((pairs_hash, None));
     }
-    if lengths_ok && check_match_counts(&raw.match_counts, match_count, errors) {
-        check_match_feature_bounds(
-            &raw,
-            feature_counts_raw,
-            pair_count,
-            match_count,
-            image_count,
-            errors,
-        );
-    }
+    pair_errors(
+        &raw_to_u32(&raw.image_index_pairs),
+        &raw_to_u32(&raw.match_counts),
+        &raw_to_u32(&raw.match_feature_indexes),
+        &raw_to_u32(feature_counts_raw),
+        image_count,
+        errors,
+    );
 
-    Ok(pairs_hash)
+    Ok((pairs_hash, Some(raw)))
 }
 
 /// Check every array the pair-table checks index against the count it is sized
@@ -530,123 +535,6 @@ fn check_pair_array_lengths(
     pairs_ok
 }
 
-/// Validate pair sorting (idx_i < idx_j, lexicographic order).
-fn check_pair_ordering(
-    pairs_raw: &[u8],
-    pair_count: usize,
-    image_count: usize,
-    errors: &mut Vec<String>,
-) {
-    if pair_count > 0 {
-        let pair_idxs = raw_to_u32(pairs_raw);
-        for k in 0..pair_count {
-            let idx_i = pair_idxs[k * 2];
-            let idx_j = pair_idxs[k * 2 + 1];
-            if idx_i >= idx_j {
-                errors.push(format!(
-                    "image_index_pairs[{k}] = ({idx_i}, {idx_j}): idx_i must be < idx_j"
-                ));
-                break;
-            }
-            if idx_i as usize >= image_count || idx_j as usize >= image_count {
-                errors.push(format!(
-                    "image_index_pairs[{k}] = ({idx_i}, {idx_j}): index out of bounds (image_count = {image_count})"
-                ));
-                break;
-            }
-            if k > 0 {
-                let prev_i = pair_idxs[(k - 1) * 2];
-                let prev_j = pair_idxs[(k - 1) * 2 + 1];
-                if (idx_i, idx_j) <= (prev_i, prev_j) {
-                    errors.push(format!(
-                        "image_index_pairs not sorted at index {k}: ({prev_i}, {prev_j}) >= ({idx_i}, {idx_j})"
-                    ));
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// Validate the per-pair match counts against the file's match total.
-///
-/// Returns whether they sum to `match_count`, which is what makes them usable
-/// as the CSR run lengths [`check_match_feature_bounds`] advances through. A
-/// zero count is reported but does not clear the gate: it shortens a run
-/// rather than overrunning the array.
-fn check_match_counts(
-    match_counts_raw: &[u8],
-    match_count: usize,
-    errors: &mut Vec<String>,
-) -> bool {
-    let mut sum_ok = true;
-    if !match_counts_raw.is_empty() {
-        let counts = raw_to_u32(match_counts_raw);
-        let sum: u64 = counts.iter().map(|&c| c as u64).sum();
-        if sum != match_count as u64 {
-            errors.push(format!(
-                "Sum of match_counts ({sum}) != match_count ({match_count})"
-            ));
-            sum_ok = false;
-        }
-        if counts.iter().any(|&c| c < 1) {
-            errors.push("match_counts contains values < 1".into());
-        }
-    }
-    sum_ok
-}
-
-/// Validate that every matched feature index is within its image's feature
-/// count, walking the CSR-style match runs pair by pair.
-///
-/// The walk indexes all four arrays without further bounds checks, so callers
-/// must first have cleared both gates: [`check_pair_array_lengths`] for the
-/// array lengths and [`check_match_counts`] for the run lengths.
-fn check_match_feature_bounds(
-    raw: &PairsRaw,
-    feature_counts_raw: &[u8],
-    pair_count: usize,
-    match_count: usize,
-    image_count: usize,
-    errors: &mut Vec<String>,
-) {
-    if pair_count > 0 && match_count > 0 {
-        let pair_idxs = raw_to_u32(&raw.image_index_pairs);
-        let counts = raw_to_u32(&raw.match_counts);
-        let match_fi = raw_to_u32(&raw.match_feature_indexes);
-        let feature_counts = raw_to_u32(feature_counts_raw);
-
-        let mut offset: usize = 0;
-        'outer: for k in 0..pair_count {
-            let idx_i = pair_idxs[k * 2] as usize;
-            let idx_j = pair_idxs[k * 2 + 1] as usize;
-            if idx_i >= image_count || idx_j >= image_count {
-                break;
-            }
-            let fc_i = feature_counts[idx_i];
-            let fc_j = feature_counts[idx_j];
-            let c = counts[k] as usize;
-            for m in offset..offset + c {
-                let fi = match_fi[m * 2];
-                let fj = match_fi[m * 2 + 1];
-                if fi >= fc_i {
-                    errors.push(format!(
-                        "match_feature_indexes[{m}][0] = {fi} >= feature_counts[{idx_i}] = {fc_i}"
-                    ));
-                    break 'outer;
-                }
-                if fj >= fc_j {
-                    errors.push(format!(
-                        "match_feature_indexes[{m}][1] = {fj} >= feature_counts[{idx_j}] = {fc_j}"
-                    ));
-                    break 'outer;
-                }
-            }
-            offset += c;
-        }
-    }
-}
-
 /// The cluster backbone as `verify` holds it: the raw entry bytes, the counts
 /// they are sized by, and whether they proved self-consistent.
 ///
@@ -665,6 +553,38 @@ struct ClusterBackbone {
     /// `None` before format version 6, which introduced the entry.
     member_affine_shapes: Option<Vec<u8>>,
     consistent: bool,
+}
+
+/// The cluster backbone's raw entries read as the values they hold, borrowed
+/// where the bytes are aligned, for the content checks.
+struct RawClusterSlices<'a> {
+    cluster_starts: Cow<'a, [u32]>,
+    member_images: Cow<'a, [u32]>,
+    member_features: Cow<'a, [u32]>,
+    member_positions: Option<Cow<'a, [f32]>>,
+    member_affine_shapes: Option<Cow<'a, [f32]>>,
+}
+
+impl<'a> RawClusterSlices<'a> {
+    fn new(backbone: &'a ClusterBackbone) -> Self {
+        RawClusterSlices {
+            cluster_starts: raw_to_u32(&backbone.cluster_starts),
+            member_images: raw_to_u32(&backbone.member_images),
+            member_features: raw_to_u32(&backbone.member_features),
+            member_positions: backbone.member_positions.as_deref().map(raw_to_f32),
+            member_affine_shapes: backbone.member_affine_shapes.as_deref().map(raw_to_f32),
+        }
+    }
+
+    fn view(&self) -> ClusterSlices<'_> {
+        ClusterSlices {
+            cluster_starts: &self.cluster_starts,
+            member_images: &self.member_images,
+            member_features: &self.member_features,
+            member_positions: self.member_positions.as_deref(),
+            member_affine_shapes: self.member_affine_shapes.as_deref(),
+        }
+    }
 }
 
 /// Hash `clusters/` and check the CSR backbone it stores.
@@ -825,76 +745,13 @@ fn check_clusters_structure(
         }
     }
 
-    let starts = raw_to_u32(starts_raw);
-    let member_images = raw_to_u32(member_images_raw);
-    let member_features = raw_to_u32(member_features_raw);
-
     if clusters_ok {
-        if starts[0] != 0 {
-            errors.push(format!("cluster_starts[0] = {} != 0", starts[0]));
-            clusters_ok = false;
-        }
-        for c in 0..cluster_count {
-            if starts[c + 1] < starts[c] {
-                errors.push(format!(
-                    "cluster_starts not non-decreasing at cluster {c}: {} > {}",
-                    starts[c],
-                    starts[c + 1]
-                ));
-                clusters_ok = false;
-                break;
-            }
-            if starts[c + 1] - starts[c] < 2 {
-                errors.push(format!(
-                    "cluster {c} has {} members; every cluster must have >= 2",
-                    starts[c + 1] - starts[c]
-                ));
-                clusters_ok = false;
-                break;
-            }
-        }
-        if clusters_ok && starts[cluster_count] as usize != member_count {
-            errors.push(format!(
-                "cluster_starts final value {} != member count {member_count}",
-                starts[cluster_count]
-            ));
-            clusters_ok = false;
-        }
-    }
-
-    if clusters_ok {
-        let feature_counts = raw_to_u32(feature_counts_raw);
-        for k in 0..member_count {
-            let img = member_images[k];
-            if img as usize >= image_count || img as usize >= feature_counts.len() {
-                errors.push(format!(
-                    "member_images[{k}] = {img} >= image_count {image_count}"
-                ));
-                break;
-            }
-            let feat = member_features[k];
-            let fc = feature_counts[img as usize];
-            if feat >= fc {
-                errors.push(format!(
-                    "member_features[{k}] = {feat} >= feature_counts[{img}] = {fc}"
-                ));
-                break;
-            }
-        }
-    }
-
-    // Member geometry holds a real position and shape on every row.
-    if clusters_ok {
-        for (name, raw, per_member) in [
-            ("member_positions", &backbone.member_positions, 2),
-            ("member_affine_shapes", &backbone.member_affine_shapes, 4),
-        ] {
-            if let Some(raw) = raw {
-                if let Some(i) = raw_to_f32(raw).iter().position(|v| v.is_nan()) {
-                    errors.push(format!("{name}[{}] contains NaN", i / per_member));
-                }
-            }
-        }
+        clusters_ok = cluster_errors(
+            &RawClusterSlices::new(backbone).view(),
+            &raw_to_u32(feature_counts_raw),
+            image_count,
+            errors,
+        );
     }
 
     backbone.consistent = clusters_ok;
@@ -1061,7 +918,12 @@ fn verify_cluster_patches_section<R: std::io::Read + Seek>(
         _ => false,
     };
     if statuses_ok && backbone.consistent {
-        check_cluster_references(&raw, backbone, errors);
+        cluster_patch_errors(
+            &RawClusterSlices::new(backbone).view(),
+            &raw_to_u32(&raw.reference_members),
+            &raw.member_status,
+            errors,
+        );
     }
     if let (true, Some(legend)) = (cells_ok, &cell_legend) {
         check_member_cells(
@@ -1180,88 +1042,13 @@ fn check_cluster_patch_lengths(
     cp_ok
 }
 
-/// Check each cluster's reference member: that it lies in the cluster, that it
-/// is marked as the reference, that its affine shape is invertible, and that
-/// no image is covered twice within the cluster.
-fn check_cluster_references(
-    raw: &ClusterPatchRaw,
-    backbone: &ClusterBackbone,
-    errors: &mut Vec<String>,
-) {
-    let starts = raw_to_u32(&backbone.cluster_starts);
-    let member_images = raw_to_u32(&backbone.member_images);
-    let status_raw = &raw.member_status;
-    let refs = raw_to_u32(&raw.reference_members);
-
-    'clusters: for c in 0..backbone.cluster_count {
-        let start = starts[c];
-        let end = starts[c + 1];
-
-        let reference = refs[c];
-        if reference != CLUSTER_REFERENCE_UNREFINABLE {
-            if reference < start || reference >= end {
-                errors.push(format!(
-                    "reference_members[{c}] = {reference} outside cluster member \
-                     range [{start}, {end})"
-                ));
-                break;
-            }
-            if status_raw[reference as usize] != ClusterMemberStatus::Reference as u8 {
-                errors.push(format!(
-                    "reference_members[{c}] = {reference} has status {}, expected {} \
-                     (reference)",
-                    status_raw[reference as usize],
-                    ClusterMemberStatus::Reference as u8
-                ));
-                break;
-            }
-            // A cluster's reference member carries `S_ref`, its
-            // own detector affine shape, in the backbone's shape
-            // array. The value is not checkable without the
-            // `.sift` data, but it must be invertible — the
-            // relative warp `W = S·S_ref⁻¹` is recovered through
-            // it. Only version 6+ files reach here with the array
-            // present; older cluster files carry other semantics
-            // and are refused by the reader.
-            if let Some(raw) = &backbone.member_affine_shapes {
-                let shapes = raw_to_f32(raw);
-                let base = reference as usize * 4;
-                let det = f64::from(shapes[base]) * f64::from(shapes[base + 3])
-                    - f64::from(shapes[base + 1]) * f64::from(shapes[base + 2]);
-                if !det.is_finite() || det == 0.0 {
-                    errors.push(format!(
-                        "member_affine_shapes[{reference}] (cluster {c}'s reference \
-                         member) is singular (det {det})"
-                    ));
-                    break;
-                }
-            }
-        }
-
-        // At most one Reference/Kept member per (cluster, image).
-        let mut covered: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-        for m in start as usize..end as usize {
-            let status = status_raw[m];
-            if status == ClusterMemberStatus::Reference as u8
-                || status == ClusterMemberStatus::Kept as u8
-            {
-                let img = member_images[m];
-                if let Some(prev) = covered.insert(img, m) {
-                    errors.push(format!(
-                        "cluster {c}: members {prev} and {m} are both reference/kept \
-                         for image {img}"
-                    ));
-                    break 'clusters;
-                }
-            }
-        }
-    }
-}
-
-/// Hash `two_view_geometries/` and check its per-pair counts.
+/// Hash `two_view_geometries/` and check its per-pair counts, its config
+/// indexes and, when `pairs` holds the pair table at its declared lengths, that
+/// every inlier is one of its pair's candidate matches.
 fn verify_two_view_geometries_section<R: std::io::Read + Seek>(
     archive: &mut ZipArchive<R>,
     metadata: &MatchesMetadata,
+    pairs: Option<&PairsRaw>,
     stored: &MatchesContentHash,
     errors: &mut Vec<String>,
 ) -> Result<u128, MatchesError> {
@@ -1319,10 +1106,11 @@ fn verify_two_view_geometries_section<R: std::io::Read + Seek>(
     tvg_hasher.update(&inlier_counts_raw);
 
     // two_view_geometries/inlier_feature_indexes
-    tvg_hasher.update(&read_zst_entry(
+    let inlier_fi_raw = read_zst_entry(
         archive,
         &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
-    )?);
+    )?;
+    tvg_hasher.update(&inlier_fi_raw);
 
     // two_view_geometries/metadata.json
     tvg_hasher.update(&tvg_meta_raw);
@@ -1350,26 +1138,49 @@ fn verify_two_view_geometries_section<R: std::io::Read + Seek>(
 
     // Every config index names an entry of config_types.
     let config_types: Vec<serde_json::Value> = serde_json::from_slice(&config_types_raw)?;
-    if let Some((k, &idx)) = config_indexes_raw
-        .iter()
-        .enumerate()
-        .find(|&(_, &idx)| idx as usize >= config_types.len())
-    {
-        errors.push(format!(
-            "config_indexes[{k}] = {idx} >= config_types length {}",
-            config_types.len()
-        ));
-    }
+    config_index_errors(&config_indexes_raw, config_types.len(), errors);
 
-    // Validate inlier_counts sum
-    if !inlier_counts_raw.is_empty() {
-        let inlier_counts = raw_to_u32(&inlier_counts_raw);
-        let inlier_sum: u64 = inlier_counts.iter().map(|&c| c as u64).sum();
-        if inlier_sum != inlier_count as u64 {
+    // The inlier arrays are walked by pair and by inlier, so they are checked
+    // against their declared counts first, as the pair table's are.
+    let mut lengths_ok = true;
+    for (name, raw_len, expected, count, unit) in [
+        (
+            "inlier_counts",
+            inlier_counts_raw.len(),
+            pair_count * 4,
+            pair_count,
+            "uint32 values",
+        ),
+        (
+            "inlier_feature_indexes",
+            inlier_fi_raw.len(),
+            inlier_count * 8,
+            inlier_count,
+            "uint32 pairs",
+        ),
+    ] {
+        if raw_len != expected {
             errors.push(format!(
-                "Sum of inlier_counts ({inlier_sum}) != inlier_count ({inlier_count})"
+                "{name} byte length {raw_len} != expected {expected} ({count} {unit})"
             ));
+            lengths_ok = false;
         }
+    }
+    if lengths_ok {
+        let candidates = pairs.map(|pairs| {
+            (
+                raw_to_u32(&pairs.match_counts),
+                raw_to_u32(&pairs.match_feature_indexes),
+            )
+        });
+        inlier_errors(
+            &raw_to_u32(&inlier_counts_raw),
+            &raw_to_u32(&inlier_fi_raw),
+            candidates
+                .as_ref()
+                .map(|(counts, indexes)| (&counts[..], &indexes[..])),
+            errors,
+        );
     }
 
     Ok(tvg_hash)

@@ -1,12 +1,14 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::validate::check_backbone_counts;
 use crate::*;
 use ndarray::{Array1, Array2, Array3};
 use std::collections::BTreeMap;
 
 mod cells;
 mod clusters_write;
+mod validation;
 mod workspace;
 
 /// Create minimal valid MatchesData without TVGs for testing.
@@ -1701,7 +1703,7 @@ fn test_verify_rejects_match_counts_overrunning_match_count() {
                 set_u32(bytes, 0, 4) // counts become [4, 2], sum 6 > 5
             })
         },
-        &["Sum of match_counts (6) != match_count (5)"],
+        &["sum of match_counts (6) != match_count (5)"],
     );
 }
 
@@ -1724,7 +1726,7 @@ fn test_verify_gates_pair_checks_on_array_consistency() {
                 |bytes| set_u32(bytes, 0, 100), // feature_counts[0] = 100
             );
         },
-        &["Sum of match_counts (6) != match_count (5)"],
+        &["sum of match_counts (6) != match_count (5)"],
     );
 
     // With the counts consistent again, the same out-of-range index is

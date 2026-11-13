@@ -12,6 +12,7 @@ use crate::cells::{
 };
 use crate::entries;
 use crate::types::*;
+use crate::validate::{check_backbone_counts, content_errors};
 use sfmtool_archive_io::{read_json_entry, DecodedEntries};
 
 /// Read only the top-level metadata from a `.matches` file (fast, no binary data).
@@ -120,6 +121,16 @@ pub fn read_matches_image_names(
 /// Pairwise-backbone files keep their full version compatibility; version ≤ 3
 /// ones never store `images/image_dims`, so they load with
 /// [`MatchesData::image_dims`] as `None`.
+///
+/// The data read is held to the rules [`crate::write_matches`] holds its input
+/// to: every `image_dims` value at least 1, pairs sorted and within the image
+/// count, match and inlier counts that sum to their totals, every feature
+/// index within its image's feature count, every inlier one of its pair's
+/// candidate matches, every config index naming a config type, a well-formed
+/// `cluster_starts`, members within the image and feature counts, member
+/// geometry free of `NaN`, and each cluster's reference and kept members as
+/// the format defines them. A file that breaks one is refused with the first
+/// finding as [`MatchesError::InvalidFormat`].
 pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
         operation: "Failed to open file",
@@ -286,7 +297,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         metadata.version = MATCHES_FORMAT_VERSION;
     }
 
-    Ok(MatchesData {
+    let data = MatchesData {
         metadata,
         content_hash,
         image_names,
@@ -298,7 +309,14 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         clusters,
         cluster_patches,
         two_view_geometries,
-    })
+    };
+    // The content rules the writer holds a file to. Only damage or a hand
+    // edit makes a file that breaks one, and refusing it here keeps its
+    // out-of-range values from the code that indexes by them.
+    if let Some(error) = content_errors(&data).into_iter().next() {
+        return Err(MatchesError::InvalidFormat(error));
+    }
+    Ok(data)
 }
 
 fn read_pairs_section(
@@ -496,7 +514,7 @@ fn read_cluster_patches_section(
     )?;
     let member_consistency_residual = Array1::from_vec(member_consistency_vec);
 
-    let member_cells = read_member_cells(decoded, &cp_meta, stored_version, &member_status)?;
+    let member_cells = read_member_cells(decoded, &cp_meta, stored_version, member_count)?;
 
     Ok(ClusterPatchData {
         reference_members,
@@ -520,9 +538,8 @@ fn read_member_cells(
     decoded: &DecodedEntries,
     cp_meta: &serde_json::Value,
     stored_version: u32,
-    member_status: &Array1<u8>,
+    member_count: usize,
 ) -> Result<Option<MemberCellData>, MatchesError> {
-    let member_count = member_status.len();
     let legend = read_member_cell_status_legend(cp_meta, stored_version)
         .map_err(MatchesError::InvalidFormat)?;
     if let Some(error) = cell_entry_errors(decoded.names(), member_count, legend.is_some())
@@ -565,9 +582,6 @@ fn read_member_cells(
             .map_err(|e| reshape("member_cell_status", e))?,
         iterations: Array1::from_vec(iterations),
     };
-    if let Some(error) = cells.validation_error(member_status.as_slice().unwrap()) {
-        return Err(MatchesError::InvalidFormat(error));
-    }
     Ok(Some(cells))
 }
 
@@ -599,16 +613,6 @@ fn read_tvg_section(
         pair_count,
     )?;
     let config_indexes = Array1::from_vec(config_indexes_vec);
-
-    // Validate config_indexes bounds
-    for (k, &idx) in config_indexes.iter().enumerate() {
-        if idx as usize >= config_types.len() {
-            return Err(MatchesError::InvalidFormat(format!(
-                "config_indexes[{k}] = {idx} >= config_types length {}",
-                config_types.len()
-            )));
-        }
-    }
 
     // inlier_counts
     let inlier_counts_vec: Vec<u32> = decoded.binary_array(
