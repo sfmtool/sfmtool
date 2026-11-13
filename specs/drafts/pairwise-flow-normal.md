@@ -391,12 +391,13 @@ cap, and the grid is coarsened only if the point has a view more than about
 1.5 times coarser still.
 
 What bounds each pair's flow is its level and the floor, not the cap. A pair
-reads only its central square, at its own level. Where the floor sets the
-square, its half-width is 48 of the coarser view's pixels, which at level `ℓ`
-is `48 · k / 2^ℓ = 48m` samples with `m` between 1 and 2, so the square is 96
-to under 192 samples a side; where `3h` sets it, the pair is at level 0 and the
-square is 72 samples a side. Every pair's flow is on a square under 192 samples
-a side, however large the render.
+reads only its central square, at its own level. Where the coarser view is
+coarser than the grid (`k` over 1), the floor sets the square: its half-width
+is 48 of that view's pixels, which at level `ℓ` is `48 · k / 2^ℓ = 48m`
+samples with `m` between 1 and 2, so the square is 96 to under 192 samples a
+side. Where neither view is coarser than the grid, the pair is at level 0 and
+the square is `2 · max(36, 48k)` samples a side, 72 to 96. Every pair's flow
+is on a square under 192 samples a side, however large the render.
 
 **The pyramid level of a pair.** The scale only matters within a pair when one
 of its views is coarser than the grid. Then that view has been upsampled by
