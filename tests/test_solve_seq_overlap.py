@@ -100,17 +100,27 @@ def test_one_directory_is_one_sequence(workspace, recorded_solves):
 def test_images_in_no_sequence_are_named_and_nothing_is_solved(
     workspace, recorded_solves
 ):
-    _frames(workspace / "videos" / "walk1", range(1, 8))
+    videos = workspace / "videos"
+    images = _frames(videos / "walk1", range(1, 8))
     # Two frames are too few to be a sequence, and a name without a number
     # is in none.
-    _frames(workspace / "videos" / "walk2", range(1, 3))
-    (workspace / "videos" / "walk1" / "cover.jpg").write_bytes(b"")
-    result = _solve("4,1", str(workspace / "videos"))
+    images += _frames(videos / "walk2", range(1, 3))
+    for name in ("walk1/cover.jpg", "walk2/notes_a.jpg", "walk2/notes_b.jpg"):
+        (videos / name).write_bytes(b"")
+        images.append(videos / name)
+    images += _frames(videos / "walk3", range(1, 3))
+    # The images are handed over in reverse order, so the message lists them
+    # in sorted order only if the command sorts them, and names the same five
+    # of the seven whatever the order of the input.
+    result = _solve("4,1", *(str(p) for p in reversed(images)))
     assert result.exit_code != 0
     assert recorded_solves == []
     message = " ".join(result.output.split())
-    assert "3 of the provided images are in none:" in message
-    assert "walk1/cover.jpg, walk2/frame_000001.jpg, walk2/frame_000002.jpg." in message
+    assert "7 of the provided images are in none:" in message
+    assert (
+        "walk1/cover.jpg, walk2/frame_000001.jpg, walk2/frame_000002.jpg, "
+        "walk2/notes_a.jpg, walk2/notes_b.jpg and 2 more." in message
+    )
 
 
 def test_no_numbered_sequence_is_refused(workspace, recorded_solves):

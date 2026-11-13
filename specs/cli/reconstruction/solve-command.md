@@ -148,7 +148,8 @@ images of one sequence only. The windows are solved one after another, the seque
 sorted order of their directory path relative to the deepest directory holding all the
 images, then of their pattern. Since no window spans two sequences, the outputs of two
 sequences share no images. The command fails, writing nothing, when the images hold no
-numbered sequence, or when some of them are in none, listing them; `-r` or
+numbered sequence, or when some of them are in none, listing them in sorted order of
+directory and then file name, the first five and a count of the rest; `-r` or
 `--named-image-list` leaves such images out.
 
 `--seq-overlap` cannot be combined with `--output` (each window writes its own

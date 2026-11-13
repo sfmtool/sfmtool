@@ -149,15 +149,21 @@ def _numbered_sequences(image_paths: list[Path]) -> list[tuple[str, dict[int, Pa
     `walk1/frame_%06d.jpg`), and a map from frame number to image path.
 
     Raises `click.ClickException` when no image is in a numbered sequence, or
-    when some images are in none, naming them, so that no image is left out
-    without a word.
+    when some images are in none, naming them in sorted order of directory
+    and then file name, so that no image is left out without a word.
     """
     sequences: list[tuple[str, dict[int, Path]]] = []
     outside: list[str] = []
     for dir_parts, paths in sorted(group_by_directory(image_paths).items()):
         name_to_path = {path.name: path for path in paths}
         used: set[str] = set()
-        for summary in summarize_paths_by_sequence(list(name_to_path)):
+        # Sorting here, rather than relying on the input order, which for a
+        # directory is the platform's listing order, fixes the order of the
+        # sequences and of the images named in the refusal below.
+        summaries = sorted(
+            summarize_paths_by_sequence(sorted(name_to_path)), key=lambda s: s.path
+        )
+        for summary in summaries:
             if not summary.index_set:
                 continue
             prefix, padding, suffix = _split_pattern(summary.path)
@@ -169,7 +175,9 @@ def _numbered_sequences(image_paths: list[Path]) -> list[tuple[str, dict[int, Pa
             label = "/".join((*dir_parts, summary.path))
             sequences.append((label, number_to_path))
         outside.extend(
-            "/".join((*dir_parts, name)) for name in name_to_path if name not in used
+            "/".join((*dir_parts, name))
+            for name in sorted(name_to_path)
+            if name not in used
         )
 
     if not sequences:
