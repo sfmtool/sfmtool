@@ -262,16 +262,19 @@ crops was chaotic and its leftover over 1 px almost everywhere; on dino 1172,
 whose pairs are 30° to 50° apart, the fronto crops were rotated and sheared by
 several pixels and the flow was reliable only near the centre.
 
-**`A2` points** (set (c)), the common plane, σ ≤ 10°, χ² ≤ 2:
+**`A2` points** (set (c)), the common plane, σ ≤ 10°:
 
-| Set | Turned | Single pair | Undetermined | Unstable |
-|---|---:|---:|---:|---:|
-| seoul_bull | 6 | 1 | 3 | 6 |
-| kerry_park | 13 | 0 | 0 | 5 |
-| dino | 1 | 0 | 0 | 1 |
+| Set | Rule | Turned | Single pair | Undetermined | Unstable |
+|---|---|---:|---:|---:|---:|
+| seoul_bull | χ² ≤ 1 | 5 | 1 | 3 | 7 |
+| kerry_park | χ² ≤ 1 | 11 | 0 | 0 | 7 |
+| dino | χ² ≤ 1 | 1 | 0 | 0 | 1 |
+| seoul_bull | χ² ≤ 2 | 6 | 1 | 3 | 6 |
+| kerry_park | χ² ≤ 2 | 13 | 0 | 0 | 5 |
+| dino | χ² ≤ 2 | 1 | 0 | 0 | 1 |
 
-The outcomes do not yet tell these points from good ones: 13 of the 18
-kerry_park `A2` points turned. They may be determined, with wide baselines; the
+The outcomes do not yet tell these points from good ones: 11 of the 18
+kerry_park `A2` points turned at χ² ≤ 1, and 13 at χ² ≤ 2. They may be determined, with wide baselines; the
 `A2` label comes from the grown plane's instability, not from the truth.
 
 ### The crop floor and the bar on the mean viewing direction
@@ -318,7 +321,7 @@ round, with the same next-plane rule as before: the answer by the rule at σ ≤
 | dino | 1 | 0 | 0 | 1 |
 
 kerry_park turns more of its curated points (80% against 53% to 73%) and fewer
-of its `A2` points (8 of 18, against 11 to 13).
+of its `A2` points: at χ² ≤ 1, 8 of 18 against 11 before the two changes.
 
 **The curated seoul_bull points, one by one.** Of the ten `ok` points, 1, 2,
 109, 143 and 157 end 1.2° to 7.1° from the reference, 10 ends 16° from it, 18,

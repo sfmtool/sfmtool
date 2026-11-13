@@ -85,8 +85,8 @@ Track View and the wire could call it the way they call the others.
 /// planes and chooses its support. Defaults and their sources in § Parameters.
 pub struct PairwiseFlowNormalOptions {
     /// How many rounds the step runs, each rendering on the plane the last
-    /// found, the first on the given normal; a point with one pair runs one.
-    /// 3.
+    /// found, the first on the given normal. A point with exactly two
+    /// observations, one pair, runs one round. 3.
     pub rounds: u32,
     /// A view more than this from the round's plane normal, at the point, is
     /// left out of that round. 80.
@@ -149,8 +149,8 @@ pub struct PairwiseFlowNormalOptions {
     /// The pairs agree at a radius when their mean chi-squared is at most
     /// this. 2.
     pub max_mean_chi2: f64,
-    /// The radius a point with one pair is read at, where there is no
-    /// agreement to test, in patch half-extents. 1.
+    /// The radius a point with exactly two observations is read at, where
+    /// there is no agreement to test, in patch half-extents. 1.
     pub single_pair_radius: f64,
     /// The reading the step ends with, as for the other normal steps.
     pub fit: FitOptions,
@@ -197,13 +197,15 @@ pub struct PairwiseFlowRound {
 
 /// Turned: the patch was turned to the last round's normal at its chosen
 /// radius.
-/// SinglePair: one pair, read in one round at single_pair_radius with no
-/// agreement test, its σ at most max_sigma_deg and its normal within
+/// SinglePair: a point with exactly two observations, one pair, read in one
+/// round at single_pair_radius with no agreement test, its σ at most max_sigma_deg and its normal within
 /// max_normal_from_mean_view_deg of the mean viewing direction, and turned.
 /// Undetermined: too little evidence. No radius has two determined pairs
 /// (each with σ at most max_sigma_deg), so no agreement can be tested, or a
-/// point with one pair has no fit at single_pair_radius or its σ there is
-/// over the bar; the track as given.
+/// point with exactly two observations has no fit at single_pair_radius or
+/// its σ there is over the bar; the track as given. A point with more
+/// observations follows this rule in every round, even a round whose
+/// too-oblique views leave it one rendered pair.
 /// Unstable: some radius has two or more determined pairs, but at every such
 /// radius they disagree (mean χ² over max_mean_chi2), or the answer is more
 /// than max_normal_from_mean_view_deg from the mean viewing direction; the
@@ -738,7 +740,7 @@ without even the single-pair bar. It is not read as `SinglePair` either:
 when a point has several pairs and only one of them fixes the tilt, the other
 pairs' failure is itself evidence that the views see the surface poorly, and
 the one fit has nothing to check it against. `SinglePair` stays the allowance
-for a point that has only one pair to offer.
+for a point with exactly two observations, which has only one pair to offer.
 
 The reason the agreement between pairs, and not any one pair's readings, picks
 the support: a support that is too large, one that runs over a fold of the
@@ -772,12 +774,22 @@ drift: on seoul_bull point 207, a bush with the bull in front and trees behind,
 the step ends 112° from the reference while within 80° of the mean viewing
 direction.
 
-**A point with one pair runs one round.** With one pair there is no agreement
-to test, so nothing stops a round from moving the plane further along that
-pair's error, and the next round renders on that error. In the prototype a
-two-view point of seoul_bull, 160, drifted 14° → 40° → 55° → 68° from the
-reference over the rounds. Its one round renders on the given normal, as
-round 1 always does.
+**A point with one pair runs one round.** A point with one pair is a point
+with exactly two observations, whichever views a round leaves out as too
+oblique. With one pair there is no agreement to test, so nothing stops a round
+from moving the plane further along that pair's error, and the next round
+renders on that error. In the prototype a two-view point of seoul_bull, 160,
+drifted 14° → 40° → 55° → 68° from the reference over the rounds. Its one
+round renders on the given normal, as round 1 always does, and ends
+`SinglePair` or `Undetermined`.
+
+A point with more observations follows the ordinary rule in every round, even
+when a round's too-oblique views leave it only one rendered pair. That round
+cannot have two determined pairs, so it has no answer of its own, and the
+fallback decides whether there is a next plane; the next plane may bring the
+views it left out back within `max_view_angle_deg`. A round with fewer than two
+rendered crops has no pair, so it has neither an answer nor a fallback, and the
+step stops there.
 
 The step's outcome, chosen radius, normal and σ are those of the last round it
 ran. A last round with no answer leaves the given normal unchanged, even where
@@ -802,8 +814,9 @@ evidence is there and does not settle on one plane. An answer more than
 `Unstable` (§ [Rounds](#rounds)). Both outcomes leave the given normal
 unchanged, and the report's outcome says which.
 
-A point with one pair has no agreement to test; the first prototype read it at
-a fixed 8 photograph pixels, and this draft reads it in one round at a fixed
+A point with exactly two observations has one pair and no agreement to test;
+the first prototype read it at a fixed 8 photograph pixels, and this draft
+reads it in one round at a fixed
 `single_pair_radius` (1 half-extent, not measured) as `SinglePair`. It is turned
 only when the pair's σ at that radius is at most `max_sigma_deg` and its normal
 is within `max_normal_from_mean_view_deg` of the mean viewing direction;
@@ -944,6 +957,13 @@ Proposed tests for the step when it is built:
 - **One pair runs one round.** A two-view scene: the report holds one round,
   rendered on the given normal, and the outcome is `SinglePair` or
   `Undetermined`.
+- **A view left out is not a single pair.** A textured plane seen by three
+  cameras, given a normal from which one camera is more than
+  `max_view_angle_deg` away and the other two are not: round 1 renders two
+  crops, has one pair and so no answer, and passes on its fallback plane; from
+  that plane all three cameras are within `max_view_angle_deg`, so round 2
+  renders all three, and the step runs every round and does not report
+  `SinglePair`.
 - **An answer the views cannot see.** The round logic given a round whose
   answer is 85° from the mean viewing direction: the outcome is `Unstable`,
   no later round runs, and the track's normal is exactly the one given.
@@ -1007,11 +1027,10 @@ on a common plane is settled: a common plane, iterated from the given normal
   measured.
 - **Separating undetermined points.** The outcomes do not yet tell the `A2`
   points (those whose grown-plane answer depends on its start) from good ones:
-  8 of 18 kerry_park `A2` points turned, down from 11 to 13 before the floor
-  counted the finest view and the bar on the mean viewing direction. They may
-  be determined, with wide
-  baselines; the `A2` label comes from the grown plane's instability, not from
-  the truth.
+  at χ² ≤ 1, 8 of 18 kerry_park `A2` points turned, down from 11 before the
+  floor counted the finest view and the bar on the mean viewing direction. They
+  may be determined, with wide baselines; the `A2` label comes from the grown
+  plane's instability, not from the truth.
 - **The thresholds.** `max_sigma_deg` of 10° with `max_mean_chi2` of 1 or 2
   are the best settings tried so far on real points; neither was swept finely.
   `max_mean_chi2`, the agreement window and the radius list were also tuned
