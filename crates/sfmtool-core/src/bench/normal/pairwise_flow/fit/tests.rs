@@ -103,7 +103,7 @@ fn a_disc_with_no_information_has_no_fit() {
 }
 
 /// Texture along one image axis at every sample, such as a crop of parallel
-/// stripes, leaves the offset across them free: the Hessian is singular,
+/// stripes, leaves the offset along them free: the Hessian is singular,
 /// and the pair has no fit rather than a confident one.
 #[test]
 fn stripes_in_every_window_give_no_fit() {
@@ -153,4 +153,21 @@ fn the_residual_sigma_matches_the_spread_of_noisy_fits() {
         rms_error < 2.0 * std::f64::consts::SQRT_2 * mean_sigma && rms_error > 0.25 * mean_sigma,
         "rms error {rms_error}°, mean σ {mean_sigma}°"
     );
+}
+
+/// The residual σ counts each correlated square once: the same noisy flow
+/// read as squares of `L² = 16` samples has a residual σ 4 times that of
+/// squares of one sample, while the texture σ, whose information already
+/// shares each square among its samples, is unchanged.
+#[test]
+fn the_residual_sigma_grows_with_the_correlated_square() {
+    let options = PairwiseFlowNormalOptions::default();
+    let fit = |l2| {
+        let d = disc(10.0, [0.0; 2], 0.1, [1.0, 0.0, 1.0], l2, 7);
+        fit_pair(&model(), &d, &options).unwrap()
+    };
+    let (one, sixteen) = (fit(1.0), fit(16.0));
+    let ratio = sixteen.sigma_residual_deg / one.sigma_residual_deg;
+    assert!((ratio - 4.0).abs() < 1e-6, "{ratio}");
+    assert_eq!(sixteen.sigma_texture_deg, one.sigma_texture_deg);
 }

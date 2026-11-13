@@ -878,8 +878,8 @@ which pairs disagreed at which radius.
     and its information are both non-zero, and `s²` is the Tukey-weighted mean
     squared residual per component over those samples.
   - A disc whose texture runs one way at every sample, such as parallel
-    stripes, leaves the offset across it free; its Hessian is singular and the
-    pair has no fit there.
+    stripes, leaves the offset along the stripes free; its Hessian is
+    singular and the pair has no fit there.
 - **Cost.** The first Python prototype took about 59 s for 153 points with 12
   processes, about 4.6 CPU-seconds per point, most of it in the fits; the flows
   were one full-resolution flow on a 96×96 crop per pair. The prototype of the

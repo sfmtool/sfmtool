@@ -526,7 +526,8 @@ impl PairSamples {
             / n)
             .max(QUANTIZATION_VARIANCE);
         let noise = residual_variance / 2.0;
-        let l2 = (self.window * self.window) as f64;
+        // In f64, so a long correlation length cannot overflow the product.
+        let l2 = (self.window as f64).powi(2);
         let information = inside
             .iter()
             .map(|&k| {
