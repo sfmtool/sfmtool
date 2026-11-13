@@ -71,7 +71,8 @@ impl std::fmt::Display for GreyImageError {
                 view_count,
             } => write!(
                 f,
-                "image {image} is not one of the grey cache's {cache_len} images and the                  {view_count} views"
+                "image {image} is not one of the grey cache's {cache_len} images and the \
+                 {view_count} views"
             ),
         }
     }

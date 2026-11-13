@@ -264,6 +264,13 @@ fn a_patch_read_refuses_an_image_with_no_view_and_a_mismatched_grey_cache() {
     };
     assert_eq!(GreyImages::new(2).get(&views, 2), no_grey(2));
     assert_eq!(GreyImages::new(2).get(&views, 9), no_grey(9));
+    assert_eq!(
+        no_grey(9).unwrap_err().to_string(),
+        format!(
+            "image 9 is not one of the grey cache's 2 images and the {} views",
+            views.len()
+        )
+    );
 }
 
 // ---- The far-field sweep -----------------------------------------------------
