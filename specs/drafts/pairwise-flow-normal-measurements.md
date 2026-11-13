@@ -103,8 +103,10 @@ every size is closer than the grown plane. On dino the flow fit is closer from
 **Setup.** Both reference sets, split into five. sfmtool's own DIS
 (`sfmtool.flow.compute_optical_flow`, `high_quality` with `finest_scale=0`,
 `patch_stride=1`), crops of 48 px half-width, the radii 4, 6, 8, 11, 16, 22, 32
-and 45 px, and the fits and combination of the draft. Each rule picks one
-radius per point.
+and 45 px, and the fits and combination of the draft, but with a σ that has no
+texture term: the geometric Hessian's inverse times the flow residual variance,
+with the correlation correction (the draft adds the texture term; § "Fitting
+each pair at each radius" there). Each rule picks one radius per point.
 
 **Result.** Median angle from the reference: the mean over the five sets, then
 each set.
