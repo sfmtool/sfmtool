@@ -303,8 +303,9 @@ the flow then matches with confidence. A view coarser than the grid is
 upsampled, which only blurs, and blur is harmless to the flow. The sampler rule
 ([sampler.rs](../../crates/sfmtool-core/src/camera/sampler.rs),
 `SamplerChoice::PerView`) already does both: it reads a finer view from the mip
-level the warp's compression picks, and a coarser one bilinearly from level 0,
-through the `ImageU8Pyramid` each `ProjectedImage` carries. The crops are then
+level the warp's compression picks, or with the anisotropic sampler where the
+compression is much stronger along one axis, and a coarser one bilinearly from
+level 0, through the `ImageU8Pyramid` each `ProjectedImage` carries. The crops are then
 converted to the flow's grey (`matcher_gray_from_rgb` in
 [optical_flow/image.rs](../../crates/sfmtool-core/src/features/optical_flow/image.rs)).
 
@@ -358,7 +359,9 @@ photographs:
    `max_grid_tilt_deg` in `grid_tilt_step_deg` steps, at azimuths
    `grid_azimuth_step_deg` apart, about the pair's mean viewing direction, with
    the offset at each solved in closed form; the grid's best is the start. The
-   grid is why the result does not depend on the given normal.
+   grid is why the result does not depend on the given normal. Centring it on
+   the pair's mean viewing direction is this draft's choice, not a measured
+   one: any centre that does not depend on the given normal would do.
 2. **Gauss-Newton with Tukey weights** from that start, over the two tilt
    angles and the offset, the weights from the residuals' robust scale and
    `tukey_c`.
