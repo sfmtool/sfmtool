@@ -239,12 +239,18 @@ pub fn compute_camera_nn_scale(images: &[crate::SfmrImage]) -> Option<f32> {
 /// distance from center as a robust radius. Handles outliers gracefully
 /// since percentile-based statistics ignore extreme values.
 ///
-/// Returns `(origin, 1.0)` if fewer than 2 points.
+/// Points at infinity and points with a non-finite coordinate are left out.
+/// Returns `(origin, 1.0)` if fewer than 2 points remain.
 pub fn compute_scene_bounds(points: &[crate::Point3D]) -> (Point3<f64>, f64) {
     // Exclude points at infinity: their `position` is a unit direction, not a
     // location, and would pull the center toward the origin and distort the
     // radius (and hence the adaptive clip planes that depend on these bounds).
-    let finite: Vec<&crate::Point3D> = points.iter().filter(|p| !p.is_at_infinity()).collect();
+    // A NaN or infinite coordinate, which a file read without verification
+    // can hold, is not a location either.
+    let finite: Vec<&crate::Point3D> = points
+        .iter()
+        .filter(|p| !p.is_at_infinity() && p.position.iter().all(|c| c.is_finite()))
+        .collect();
     if finite.len() < 2 {
         return (Point3::origin(), 1.0);
     }
@@ -260,8 +266,6 @@ pub fn compute_scene_bounds(points: &[crate::Point3D]) -> (Point3<f64>, f64) {
         .map(|p| (p.position - center).norm())
         .collect();
 
-    // `f64::max` returns the other operand for a NaN, so a radius that a NaN
-    // reached falls back to the floor.
     (center, quantile_in_place(&mut dists, 0.8).max(0.1))
 }
 

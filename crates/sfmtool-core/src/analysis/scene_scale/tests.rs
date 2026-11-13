@@ -376,15 +376,19 @@ fn test_scene_bounds_take_the_shared_median_and_quantile() {
     assert!((radius - 4.3).abs() < 1e-12, "radius={radius}");
 }
 
-/// A NaN position no longer panics the sort: it orders above every finite
-/// value, so a minority of them leaves the bounds finite.
+/// A point with a NaN or infinite coordinate is left out, however many there
+/// are, so the bounds are those of the finite positions.
 #[test]
-fn test_scene_bounds_survive_a_nan_position() {
+fn test_scene_bounds_leave_out_non_finite_positions() {
     let mut points: Vec<Point3D> = (0..5).map(|i| make_point(i as f64, 0.0, 0.0)).collect();
-    points.push(make_point(f64::NAN, 0.0, 0.0));
+    for _ in 0..6 {
+        points.push(make_point(f64::NAN, 0.0, 0.0));
+    }
+    points.push(make_point(0.0, f64::INFINITY, 0.0));
     let (center, radius) = compute_scene_bounds(&points);
-    assert_eq!(center, Point3::new(2.5, 0.0, 0.0));
-    assert!(radius.is_finite(), "radius={radius}");
+    assert_eq!(center, Point3::new(2.0, 0.0, 0.0));
+    // Distances 0, 1, 1, 2, 2; position 0.8 · 4 = 3.2 between 2 and 2.
+    assert_eq!(radius, 2.0);
 }
 
 /// The camera scale is the linearly interpolated 90th percentile of the
