@@ -38,7 +38,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::super::evaluate::check_views;
+use super::super::evaluate::{check_observation_views, check_views};
 use super::super::fit::FitOptions;
 use super::super::track::{EditableTrack, Verdict};
 use super::{
@@ -355,7 +355,9 @@ impl PairwiseFlowNormalOptions {
 /// Refused, as every normal step refuses them, for a track at the cluster
 /// stage, one with no patch, one at infinity, one with fewer than two `in`
 /// observations, too few views, and settings
-/// [`PairwiseFlowNormalOptions::check`] refuses; a flow refusal the check
+/// [`PairwiseFlowNormalOptions::check`] refuses; an observation naming an
+/// image `images` holds no view for is refused as
+/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView); a flow refusal the check
 /// could not foresee is [`NormalError::Flow`]. Cancelled through `progress`
 /// between pairs and between radii, as [`NormalError::Cancelled`].
 ///
@@ -390,6 +392,7 @@ pub fn pairwise_flow_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     check_views(edited, images)?;
     normal_preconditions(track)?;
+    check_observation_views(track, images)?;
     options.check()?;
     let patch = patch_frame_of(track);
     let given = patch.normal();

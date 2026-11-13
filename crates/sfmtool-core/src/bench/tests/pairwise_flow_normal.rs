@@ -659,8 +659,8 @@ fn a_view_four_times_as_far_is_read_at_level_two() {
 }
 
 /// A track at infinity is refused as every normal step refuses it; a setting
-/// the check refuses is named; a set cancel flag stops the step between
-/// pairs.
+/// the check refuses is named; an observation naming an image with no view
+/// is refused; a set cancel flag stops the step between pairs.
 #[test]
 fn the_step_refuses_a_bearing_and_bad_options_and_stops_when_cancelled() {
     let scene = Scene::looking_at(&four_views(), WORLD, camera(), plane(truth(), 30.0, 2.0));
@@ -686,6 +686,13 @@ fn the_step_refuses_a_bearing_and_bad_options_and_stops_when_cancelled() {
     assert_eq!(
         pairwise_flow_normal(&track, &edited, &scene.views(), &bad, &Progress::none()).err(),
         Some(NormalError::BadPairwiseFlowOption("rounds"))
+    );
+    // An observation naming an image with no view is refused, not indexed.
+    let mut stray = track.clone();
+    stray.observations[1].image = 99;
+    assert_eq!(
+        pairwise_flow_normal(&stray, &edited, &scene.views(), &options, &Progress::none()).err(),
+        Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
     );
 
     // The flag is set when the first pair is counted done, so the step is
