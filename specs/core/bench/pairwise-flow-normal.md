@@ -146,7 +146,8 @@ pub enum PairwiseFlowOutcome { Turned, SinglePair, Undetermined, Unstable }
 pub enum PairwiseFlowCrop {
     Rendered { image: u32, angle_deg: f64, samples_per_pixel: f64, coverage: f64 },
     TooOblique { image: u32, angle_deg: f64 },
-    NotAttempted, // not in, a second row in one image, a camera centre at the point
+    NotAttempted, // not in, a second row in one image, a camera centre at the point,
+                  // or a point its camera model does not project
 }
 
 pub struct PairwiseFlowPair {
