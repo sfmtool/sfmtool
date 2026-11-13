@@ -2991,13 +2991,13 @@ proposed in
 ### Estimating the normal
 
 A fit moves the patch along the sightings' rays and keeps the way it faces.
-Three steps do the opposite: each estimates which way the surface under the patch
+Four steps do the opposite: each estimates which way the surface under the patch
 faces, turns the patch to that normal with `tilt_patch` (§ "Placing, sizing and
 turning by hand"), and ends as a fit does, by reading the track back, rendering
 its stored bitmap over the turned square and scoring every row against it. The
 centre does not move, the turn is the
 least rotation, and it stops where `tilt_patch`'s cap stops it, which the
-`NormalReport`'s `tilt` says. All three take the track stage only, refuse a track at
+`NormalReport`'s `tilt` says. All four take the track stage only, refuse a track at
 infinity (whose patch faces along its own bearing) and need two `in`
 observations; `normal_preconditions` is that half of their validation.
 
@@ -3228,6 +3228,20 @@ keypoints and reports the plane it found; and it reports the precision in
 its centre with `tilt_patch` and writes no keypoint: the image shifts it
 solves for are the tilt fit's own unknowns, reported per view, and every
 keypoint stays where it was given.
+
+**`pairwise_flow_normal` fits the plane to the optical flow between pairs of
+views.** [pairwise-flow-normal.md](pairwise-flow-normal.md) specifies it, with
+its options, its report and its theory. In a few rounds it renders every `in`
+view on one plane through the point, reads the flow between pairs of the
+renders, fits the plane to each pair's flow over discs of several radii, and
+turns the patch to the combined normal at the largest disc on which the pairs
+agree within their σ; with too little evidence or pairs that disagree at
+every disc it reads the track back at the normal it was given, as
+`grid_plane_normal` does, and reports `NormalEstimate::PairwiseFlow` as
+undetermined or unstable. It reads no reference view and no keypoint. It is
+deliberately expensive, and only Rust calls it: Track View, the wire,
+`refine_normals` and Python do not run it
+([pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md)).
 
 The finite difference depends only on where each piece is placed along its
 rays, and so on depth, but a piece small enough to hold little texture fits
