@@ -733,3 +733,51 @@ fn the_detail_record_follows_the_trace() {
     assert_eq!(first.center, <[f64; 3]>::from(start.center.coords));
     assert_eq!(first.normal, <[f64; 3]>::from(start.normal()));
 }
+
+#[test]
+fn the_grid_plane_check_bounds_the_working_grid_and_the_fit_resolution() {
+    assert_eq!(GridPlaneNormalOptions::default().check(), Ok(()));
+    let widest = GridPlaneNormalOptions {
+        working_resolution: Some(2048),
+        fit: FitOptions::default().at_resolution(1024),
+        ..Default::default()
+    };
+    assert_eq!(widest.check(), Ok(()));
+    // A side or a resolution whose sizes would overflow is refused rather
+    // than allocated.
+    for side in [2049, 1 << 31, u32::MAX] {
+        let bad = GridPlaneNormalOptions {
+            working_resolution: Some(side),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGridPlaneOption("working_resolution")),
+            "{side}"
+        );
+    }
+    for resolution in [0, 1, 1025, 1 << 31, u32::MAX] {
+        let bad = GridPlaneNormalOptions {
+            fit: FitOptions::default().at_resolution(resolution),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGridPlaneOption("resolution")),
+            "{resolution}"
+        );
+    }
+    // The step asks the same question before it reads a view.
+    let scene = Scene::new();
+    let edited = three_view_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let bad = GridPlaneNormalOptions {
+        working_resolution: Some(1 << 31),
+        ..Default::default()
+    };
+    assert_eq!(
+        grid_plane_normal(&track, &edited, &scene.views(), &bad, &Progress::none()).err(),
+        Some(NormalError::BadGridPlaneOption("working_resolution"))
+    );
+}

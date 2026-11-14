@@ -492,23 +492,66 @@ pub fn compute_optical_flow_timed(
     Ok(dict.into())
 }
 
-/// The flow functions' keyword-only overrides of a preset's `DisFlowParams`
-/// fields, each named as the field it sets; `None` keeps the preset's value.
-/// The core checks the values that result.
-struct FlowParamOverrides {
-    patch_size: Option<u32>,
-    patch_stride: Option<u32>,
-    grad_descent_iterations: Option<u32>,
-    finest_scale: Option<u32>,
-    coarsest_scale: Option<u32>,
-    variational_refinement: Option<bool>,
-    variational_jacobi_iterations: Option<u32>,
-    variational_outer_iterations_base: Option<u32>,
-    variational_alpha: Option<f32>,
-    variational_gamma: Option<f32>,
-    variational_delta: Option<f32>,
-    normalize_patches: Option<bool>,
-    gpu_min_pixels: Option<u32>,
+/// The keyword-only overrides of a `DisFlowParams`' fields that the flow
+/// functions take, each named as the field it sets, and that
+/// `sfmtool.bench.pairwise_flow_normal` takes with a `flow_` prefix; `None`
+/// keeps the value it is applied to. The core checks the values that result.
+pub(crate) struct FlowParamOverrides {
+    pub(crate) patch_size: Option<u32>,
+    pub(crate) patch_stride: Option<u32>,
+    pub(crate) grad_descent_iterations: Option<u32>,
+    pub(crate) finest_scale: Option<u32>,
+    pub(crate) coarsest_scale: Option<u32>,
+    pub(crate) variational_refinement: Option<bool>,
+    pub(crate) variational_jacobi_iterations: Option<u32>,
+    pub(crate) variational_outer_iterations_base: Option<u32>,
+    pub(crate) variational_alpha: Option<f32>,
+    pub(crate) variational_gamma: Option<f32>,
+    pub(crate) variational_delta: Option<f32>,
+    pub(crate) normalize_patches: Option<bool>,
+    pub(crate) gpu_min_pixels: Option<u32>,
+}
+
+impl FlowParamOverrides {
+    /// `params` with each override that is given in place of its field.
+    pub(crate) fn apply(
+        self,
+        mut params: optical_flow::DisFlowParams,
+    ) -> optical_flow::DisFlowParams {
+        let FlowParamOverrides {
+            patch_size,
+            patch_stride,
+            grad_descent_iterations,
+            finest_scale,
+            coarsest_scale,
+            variational_refinement,
+            variational_jacobi_iterations,
+            variational_outer_iterations_base,
+            variational_alpha,
+            variational_gamma,
+            variational_delta,
+            normalize_patches,
+            gpu_min_pixels,
+        } = self;
+        params.patch_size = patch_size.unwrap_or(params.patch_size);
+        params.patch_stride = patch_stride.unwrap_or(params.patch_stride);
+        params.grad_descent_iterations =
+            grad_descent_iterations.unwrap_or(params.grad_descent_iterations);
+        params.finest_scale = finest_scale.or(params.finest_scale);
+        params.coarsest_scale = coarsest_scale.or(params.coarsest_scale);
+        params.variational_refinement =
+            variational_refinement.unwrap_or(params.variational_refinement);
+        params.variational_jacobi_iterations =
+            variational_jacobi_iterations.unwrap_or(params.variational_jacobi_iterations);
+        params.variational_outer_iterations_base =
+            variational_outer_iterations_base.unwrap_or(params.variational_outer_iterations_base);
+        params.variational_alpha = variational_alpha.unwrap_or(params.variational_alpha);
+        params.variational_gamma = variational_gamma.unwrap_or(params.variational_gamma);
+        params.variational_delta = variational_delta.unwrap_or(params.variational_delta);
+        params.normalize_patches = normalize_patches.unwrap_or(params.normalize_patches);
+        params.gpu_min_pixels = gpu_min_pixels.unwrap_or(params.gpu_min_pixels);
+        params
+    }
 }
 
 /// The preset's `DisFlowParams` with `overrides` applied.
@@ -516,7 +559,7 @@ fn flow_params(
     preset: Option<&str>,
     overrides: FlowParamOverrides,
 ) -> PyResult<optical_flow::DisFlowParams> {
-    let mut params = match preset.unwrap_or("default") {
+    let params = match preset.unwrap_or("default") {
         "fast" => optical_flow::DisFlowParams::fast(),
         "default" => optical_flow::DisFlowParams::default_quality(),
         "high_quality" => optical_flow::DisFlowParams::high_quality(),
@@ -527,38 +570,7 @@ fn flow_params(
             )))
         }
     };
-    let FlowParamOverrides {
-        patch_size,
-        patch_stride,
-        grad_descent_iterations,
-        finest_scale,
-        coarsest_scale,
-        variational_refinement,
-        variational_jacobi_iterations,
-        variational_outer_iterations_base,
-        variational_alpha,
-        variational_gamma,
-        variational_delta,
-        normalize_patches,
-        gpu_min_pixels,
-    } = overrides;
-    params.patch_size = patch_size.unwrap_or(params.patch_size);
-    params.patch_stride = patch_stride.unwrap_or(params.patch_stride);
-    params.grad_descent_iterations =
-        grad_descent_iterations.unwrap_or(params.grad_descent_iterations);
-    params.finest_scale = finest_scale.or(params.finest_scale);
-    params.coarsest_scale = coarsest_scale.or(params.coarsest_scale);
-    params.variational_refinement = variational_refinement.unwrap_or(params.variational_refinement);
-    params.variational_jacobi_iterations =
-        variational_jacobi_iterations.unwrap_or(params.variational_jacobi_iterations);
-    params.variational_outer_iterations_base =
-        variational_outer_iterations_base.unwrap_or(params.variational_outer_iterations_base);
-    params.variational_alpha = variational_alpha.unwrap_or(params.variational_alpha);
-    params.variational_gamma = variational_gamma.unwrap_or(params.variational_gamma);
-    params.variational_delta = variational_delta.unwrap_or(params.variational_delta);
-    params.normalize_patches = normalize_patches.unwrap_or(params.normalize_patches);
-    params.gpu_min_pixels = gpu_min_pixels.unwrap_or(params.gpu_min_pixels);
-    Ok(params)
+    Ok(overrides.apply(params))
 }
 
 /// Raise an `OpticalFlowError` as a Python `ValueError`.

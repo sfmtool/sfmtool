@@ -54,7 +54,7 @@ use crate::reconstruction::edited::EditedReconstruction;
 use super::super::evaluate::{
     check_observation_views, check_views, seed_of, stored_patch_resolution, track_reference,
 };
-use super::super::fit::FitOptions;
+use super::super::fit::{FitOptions, MAX_FIT_RESOLUTION};
 use super::super::steps::tilt_patch;
 use super::super::track::EditableTrack;
 use super::{
@@ -73,6 +73,14 @@ pub use detail::{
 /// The smallest working grid the step renders: three samples a side are the
 /// fewest that cut into nine cells.
 pub(super) const MIN_WORKING_RESOLUTION: u32 = 3;
+
+/// The largest working grid side a caller may ask the grid-plane and
+/// grown-plane steps for, samples: twice the largest fit resolution
+/// (`MAX_FIT_RESOLUTION`, 1024), the side the rule for a `None`
+/// working resolution reaches at that resolution, since it clamps the side to
+/// `R ..= 2R`. Every view's tile on the grid is held at once, so the memory a
+/// step takes grows with the square of the side; a side of 2^31 overflows.
+pub(super) const MAX_WORKING_RESOLUTION: u32 = 2 * MAX_FIT_RESOLUTION;
 
 /// A sample variance under this is flat for the acceptance score.
 const FLAT_VARIANCE: f64 = 1e-9;
@@ -107,8 +115,8 @@ pub struct GridPlaneNormalOptions {
     /// [`DEFAULT_MIN_CELL_CURVATURE`](crate::patch::cluster_refine::DEFAULT_MIN_CELL_CURVATURE),
     /// 0.02.
     pub min_cell_curvature: f32,
-    /// Side of the working grid the views are rendered on, in samples, at
-    /// least 3. `None` renders at about one sample per photograph pixel of
+    /// Side of the working grid the views are rendered on, in samples, from 3
+    /// (a smaller side is raised to 3) to 2048. `None` renders at about one sample per photograph pixel of
     /// the reference view: the patch's longer side as the reference view
     /// sees it at the starting patch frame, rounded up and clamped to `R ..= 2R`
     /// (see `working_side`), with `R` the reconstruction's own patch
@@ -144,6 +152,29 @@ pub struct GridPlaneNormalOptions {
     /// view, each view's affine fit, each cell's rays and triangulation, and
     /// the plane. Off by default; the step's result does not depend on it.
     pub record_detail: bool,
+}
+
+impl GridPlaneNormalOptions {
+    /// Whether the settings are ones the step takes, naming the first that
+    /// fails as [`NormalError::BadGridPlaneOption`]: a `working_resolution`
+    /// of at most 2048, and a fit whose sub-pixel kernel runs at a patch
+    /// resolution from 2 to 1024. The other settings are taken as they come.
+    ///
+    /// Published so a caller can refuse settings before it decodes the
+    /// photographs; [`grid_plane_normal`] asks the same question.
+    pub fn check(&self) -> Result<(), NormalError> {
+        let bad = |name| Err(NormalError::BadGridPlaneOption(name));
+        if self
+            .working_resolution
+            .is_some_and(|side| side > MAX_WORKING_RESOLUTION)
+        {
+            return bad("working_resolution");
+        }
+        if !self.fit.resolution_is_taken() {
+            return bad("resolution");
+        }
+        Ok(())
+    }
 }
 
 impl Default for GridPlaneNormalOptions {
@@ -398,8 +429,9 @@ impl std::fmt::Display for GridPlaneCells {
 ///
 /// A track at infinity is refused, as by every normal step, and so is one
 /// with an observation naming an image `images` holds no view for, as
-/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView), before any
-/// view is read.
+/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView), and
+/// settings [`GridPlaneNormalOptions::check`] refuses, before any view is
+/// read.
 ///
 /// # Example
 ///
@@ -433,6 +465,7 @@ pub fn grid_plane_normal(
     check_views(edited, images)?;
     normal_preconditions(track)?;
     check_observation_views(track, images)?;
+    options.check()?;
     let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);

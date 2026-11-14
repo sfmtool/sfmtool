@@ -138,7 +138,28 @@ impl FitOptions {
         options.evaluate.localize.resolution = resolution;
         options
     }
+
+    /// Whether the sub-pixel kernel's patch resolution, the `R` of the
+    /// bitmap render, is one the bench's normal steps take: from 2 to
+    /// `MAX_FIT_RESOLUTION` (1024). Below 2 the kernel has no sample to
+    /// interpolate between.
+    pub(crate) fn resolution_is_taken(&self) -> bool {
+        (2..=MAX_FIT_RESOLUTION).contains(&self.refine.resolution)
+    }
 }
+
+/// The largest patch resolution `R` the bench's normal steps take for their
+/// fit, [`FitOptions::resolution_is_taken`].
+///
+/// The kernels render an `R × R` tile per view, with a warp map and the
+/// photograph's colour channels as `f32` values for every sample, and the
+/// grown-plane step's working grid is up to `2R` samples a side, so the memory
+/// a step holds grows with `R²` per view. At 1024 one view's tile is about
+/// 20 MB and its working grid four times that; far larger values ask for more
+/// memory than a track of tens of views can be given, and from about 2^31 the
+/// sizes overflow. Stored patch bitmaps are tens of samples a side, and the
+/// default `R` is 24.
+pub(crate) const MAX_FIT_RESOLUTION: u32 = 1024;
 
 /// Why a fit was refused. Every variant names what did not hold, because the
 /// caller is a button that has to say so in one sentence.

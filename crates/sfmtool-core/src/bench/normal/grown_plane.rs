@@ -64,7 +64,7 @@ use super::super::evaluate::{
 use super::super::fit::FitOptions;
 use super::super::steps::tilt_degrees;
 use super::super::track::EditableTrack;
-use super::grid_plane::{working_side, MIN_WORKING_RESOLUTION};
+use super::grid_plane::{working_side, MAX_WORKING_RESOLUTION, MIN_WORKING_RESOLUTION};
 use super::{
     normal_preconditions, patch_frame_of, turn_and_read, NormalError, NormalEstimate, NormalReport,
 };
@@ -112,10 +112,12 @@ pub struct GrownPlaneNormalOptions {
     /// follows the reference view's footprint of the patch at the starting
     /// patch frame, about one sample per photograph pixel, clamped to `R ..= 2R`,
     /// the rule [`grid_plane_normal`](super::grid_plane_normal) uses. At least
-    /// [`Self::spot_window`] either way.
+    /// [`Self::spot_window`] either way. At most 2048, as
+    /// [`GridPlaneNormalOptions::working_resolution`](super::GridPlaneNormalOptions::working_resolution).
     pub working_resolution: Option<u32>,
     /// Side of the first window, grid px, centred on the grid's centre
-    /// sample. 7.
+    /// sample, from 1 to 2048, since the working grid is at least this wide.
+    /// 7.
     pub spot_window: u32,
     /// Half-widths of the later windows about the same sample, as fractions
     /// of the working grid's side, each rounded to grid px; one no wider than
@@ -235,8 +237,8 @@ impl Default for GrownPlaneNormalOptions {
 }
 
 impl GrownPlaneNormalOptions {
-    /// Whether the settings are ones the step takes: a first window of at
-    /// least one sample, finite fractions above zero, a positive tolerance
+    /// Whether the settings are ones the step takes: a working resolution
+    /// of at most 2048, a first window of 1 to 2048 samples, finite fractions above zero, a positive tolerance
     /// and target `σ`, a weak-turn bound of at least zero (infinite allowed)
     /// and a finite turn-to-`σ` ratio of at least zero, at least one selected
     /// view, a first rung of finite angles of at least zero with its aim
@@ -244,13 +246,20 @@ impl GrownPlaneNormalOptions {
     /// a finite damping of at least zero, a stage turn cap above 0 and under
     /// 90 or infinite, a finite floor on it above 0 and at most the cap, at
     /// least one whole-grid round, and a fit whose sub-pixel kernel runs at a
-    /// patch resolution of at least 2. The three settings of the turned
+    /// patch resolution from 2 to 1024. The three settings of the turned
     /// support are checked with it off too. The error names the first setting
     /// that fails.
     pub fn check(&self) -> Result<(), NormalError> {
         let bad = |name| Err(NormalError::BadGrownPlaneOption(name));
         let positive = |v: f64| v.is_finite() && v > 0.0;
-        if self.spot_window == 0 {
+        if self
+            .working_resolution
+            .is_some_and(|side| side > MAX_WORKING_RESOLUTION)
+        {
+            return bad("working_resolution");
+        }
+        // The working grid is at least the first window wide.
+        if self.spot_window == 0 || self.spot_window > MAX_WORKING_RESOLUTION {
             return bad("spot_window");
         }
         if !self.window_fractions.iter().all(|&f| positive(f)) {
@@ -299,7 +308,7 @@ impl GrownPlaneNormalOptions {
         if self.max_grid_rounds == 0 {
             return bad("max_grid_rounds");
         }
-        if self.fit.refine.resolution < 2 {
+        if !self.fit.resolution_is_taken() {
             return bad("resolution");
         }
         Ok(())

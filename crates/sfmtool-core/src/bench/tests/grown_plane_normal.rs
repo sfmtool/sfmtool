@@ -896,8 +896,9 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
             "{rung_ratio}"
         );
     }
-    // The fit's patch resolution: at least 2.
-    for resolution in [0, 1] {
+    // The fit's patch resolution: from 2 to 1024, so one whose sizes would
+    // overflow is refused rather than allocated.
+    for resolution in [0, 1, 1025, 1 << 31, u32::MAX] {
         let bad = GrownPlaneNormalOptions {
             fit: FitOptions::default().at_resolution(resolution),
             ..Default::default()
@@ -913,6 +914,40 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
         ..Default::default()
     };
     assert_eq!(two.check(), Ok(()));
+    let largest = GrownPlaneNormalOptions {
+        fit: FitOptions::default().at_resolution(1024),
+        ..Default::default()
+    };
+    assert_eq!(largest.check(), Ok(()));
+    // The working grid and the first window, which the grid is at least as
+    // wide as: at most 2048 samples a side, so a side whose sizes would
+    // overflow is refused rather than allocated.
+    for side in [2049, 1 << 31, u32::MAX] {
+        let bad = GrownPlaneNormalOptions {
+            working_resolution: Some(side),
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGrownPlaneOption("working_resolution")),
+            "{side}"
+        );
+        let bad = GrownPlaneNormalOptions {
+            spot_window: side,
+            ..Default::default()
+        };
+        assert_eq!(
+            bad.check(),
+            Err(NormalError::BadGrownPlaneOption("spot_window")),
+            "{side}"
+        );
+    }
+    let widest = GrownPlaneNormalOptions {
+        working_resolution: Some(2048),
+        spot_window: 2048,
+        ..Default::default()
+    };
+    assert_eq!(widest.check(), Ok(()));
 
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);

@@ -144,7 +144,8 @@ pub struct GrownPlaneNormalOptions {
 impl GrownPlaneNormalOptions {
     /// Refuses a setting the step cannot run with, naming the first that
     /// fails: NormalError::BadGrownPlaneOption("zncc_tolerance"), or
-    /// ("resolution") for a fit.refine.resolution under 2. The turned
+    /// ("resolution") for a fit.refine.resolution under 2 or over 1024, or
+    /// ("working_resolution") / ("spot_window") for one over 2048. The turned
     /// support's three settings are checked with it off too.
     pub fn check(&self) -> Result<(), NormalError>;
 }
@@ -1417,8 +1418,8 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `working_resolution` | `None` | Side of the working grid, samples; `None` follows the reference's footprint, clamped to `R ..= 2R`, as `grid_plane_normal` does; at least `spot_window` |
-| `spot_window` | `7` | Side of the first window, grid px, centred on the grid's centre sample; at least 1 |
+| `working_resolution` | `None` | Side of the working grid, samples; `None` follows the reference's footprint, clamped to `R ..= 2R`, as `grid_plane_normal` does; at least `spot_window`; at most 2048, as `grid_plane_normal`'s |
+| `spot_window` | `7` | Side of the first window, grid px, centred on the grid's centre sample; from 1 to 2048, since the working grid is at least as wide |
 | `window_fractions` | `[1/8, 1/5, 1/3, 1/2]` | Half-widths of the later windows as fractions of the grid's side, rounded, any no wider than the first window's dropped: 6, 10, 16, 24 on a 48 grid; 4, 6, 11, 16 on a 32 grid; 5, 8, 12 on a 24 grid; each finite and above 0 |
 | `zncc_tolerance` | `0.01` | ZNCC difference noise can produce, τ; finite and above 0 |
 | `max_agreement_distance` | `3.0` | Largest Mahalanobis distance of an estimate's plane from the combined plane |
@@ -1441,7 +1442,7 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 | `stage_turn_cap_deg` | `12.0` | The most a window stage, and the first whole-grid round, may turn the plane from where it began, degrees; above 0 and under 90, or infinite for no cap |
 | `min_stage_turn_cap_deg` | `0.5` | The whole-grid rounds stop once their cap would fall under this, and after a round that turned less than half of it, degrees; finite, above 0, at most `stage_turn_cap_deg` |
 | `max_grid_rounds` | `16` | The most whole-grid rounds a growth or a pair runs; at least 1 |
-| `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler; where the reconstruction stores no patch bitmaps, `refine.resolution` is the patch resolution `R` (`FitOptions::at_resolution` sets every kernel's), at least 2 |
+| `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler; where the reconstruction stores no patch bitmaps, `refine.resolution` is the patch resolution `R` (`FitOptions::at_resolution` sets every kernel's), from 2 to 1024, a bound on the memory each view's renders take (`MAX_FIT_RESOLUTION` in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs)) |
 
 Five numbers are constants of the step rather than settings: the early stop's
 margin of 0.25 under `min_held_zncc` (`EARLY_REFUSAL_MARGIN`) and its first

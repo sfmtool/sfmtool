@@ -224,7 +224,8 @@ impl DisFlowParams {
 /// variants refused its input.
 ///
 /// A `field` names the [`DisFlowParams`] field at fault, which is also the
-/// keyword argument the Python bindings take for it.
+/// keyword argument the Python flow bindings take for it, and
+/// `sfmtool.bench.pairwise_flow_normal` takes with a `flow_` prefix.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpticalFlowError {
     /// The two images differ in size; each is `(width, height)`.

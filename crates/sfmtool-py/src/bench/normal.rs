@@ -26,7 +26,7 @@ use sfmtool_core::bench::{
     GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt, GrownPlaneGridRound,
     GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
     GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
-    NormalReport, PairwiseFlowOutcome, PairwiseFlowRounds, PieceLayout,
+    NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -486,7 +486,7 @@ fn try_outcome_name(outcome: GrownPlaneTryOutcome) -> &'static str {
 }
 
 /// A fixed-length vector as a float64 array, `None` staying `None`.
-fn maybe_vector<'py, const N: usize>(
+pub(super) fn maybe_vector<'py, const N: usize>(
     py: Python<'py>,
     value: Option<[f64; N]>,
 ) -> Option<Bound<'py, PyArray1<f64>>> {
@@ -676,28 +676,6 @@ fn sequence_dict<'py>(
     Ok(d)
 }
 
-/// The dict form of how the pairwise-flow normal ended: its outcome, how many
-/// rounds it ran, and the radius, normal, σ and turn of the answer it turned
-/// the patch to. The rounds themselves are not carried: no binding runs the
-/// step yet.
-fn rounds_dict<'py>(py: Python<'py>, rounds: &PairwiseFlowRounds) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("kind", "pairwise_flow")?;
-    let outcome = match rounds.outcome {
-        PairwiseFlowOutcome::Turned => "turned",
-        PairwiseFlowOutcome::SinglePair => "single_pair",
-        PairwiseFlowOutcome::Undetermined => "undetermined",
-        PairwiseFlowOutcome::Unstable => "unstable",
-    };
-    d.set_item("outcome", outcome)?;
-    d.set_item("rounds", rounds.rounds.len())?;
-    d.set_item("chosen_radius", rounds.chosen_radius)?;
-    d.set_item("normal", maybe_vector(py, rounds.normal))?;
-    d.set_item("sigma_deg", rounds.sigma_deg)?;
-    d.set_item("turn_deg", rounds.turn_deg)?;
-    Ok(d)
-}
-
 /// The dict form of where a normal came from, `kind` naming which estimate.
 fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bound<'py, PyDict>> {
     let d = match estimate {
@@ -731,13 +709,18 @@ fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bo
         }
         NormalEstimate::GridPlaneCells(cells) => cells_dict(py, cells)?,
         NormalEstimate::GrownPlane(sequence) => sequence_dict(py, sequence)?,
-        NormalEstimate::PairwiseFlow(rounds) => rounds_dict(py, rounds)?,
+        NormalEstimate::PairwiseFlow(rounds) => {
+            super::pairwise_flow_normal::rounds_dict(py, rounds)?
+        }
     };
     Ok(d)
 }
 
 /// The dict form of one normal step's report.
-fn normal_report_dict<'py>(py: Python<'py>, report: &NormalReport) -> PyResult<Bound<'py, PyDict>> {
+pub(super) fn normal_report_dict<'py>(
+    py: Python<'py>,
+    report: &NormalReport,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     let n = report.tilt.normal;
     d.set_item("normal", PyArray1::from_vec(py, vec![n.x, n.y, n.z]))?;
@@ -864,10 +847,12 @@ fn finite_difference_normal(
 /// ``max_normal_precision_deg`` (default ``None``) is a bar on the plane's
 /// predicted precision in degrees: a plane predicted less precise proposes
 /// no turn, and the step ends ``"undetermined"``. ``working_resolution`` is
-/// the side of the working grid in samples; the
+/// the side of the working grid in samples, at most 2048; the
 /// default ``None`` follows the reference view's footprint of the patch,
 /// about one sample per photograph pixel, clamped to ``R`` to ``2R`` for
-/// ``R`` the bitmap's resolution. Every default is the Rust step's.
+/// ``R`` the bitmap's resolution. Every default is the Rust step's, and a
+/// setting outside what the step takes is refused before the photographs are
+/// decoded.
 ///
 /// Only a loop that converges with at least one axis fixed turns the patch
 /// (``outcome`` ``"turned"``); every other ending leaves the normal as it was
@@ -1003,6 +988,8 @@ fn grid_plane_normal(
         record_detail,
         ..defaults
     };
+    // Refuse the settings before the photographs are decoded.
+    options.check().map_err(refused)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
     let views = views_of(&posed, &pyramids);
@@ -1028,7 +1015,7 @@ fn grid_plane_normal(
 ///
 /// The reference and the working grid are :func:`grid_plane_normal`'s. A view
 /// is grown against the reference from the starting plane: a
-/// ``spot_window``-sample window (default 7) at the grid's centre starts from
+/// ``spot_window``-sample window (default 7, 1 to 2048) at the grid's centre starts from
 /// the shift the view's keypoint implies; the window then grows through
 /// half-widths of ``window_fractions`` of the grid's side (default
 /// ``[1/8, 1/5, 1/3, 1/2]``, ``1/2`` covering the whole grid), with tilt and
@@ -1075,7 +1062,7 @@ fn grid_plane_normal(
 /// (default 3.0) times the weakest-direction ``σ`` (every kept estimate's
 /// information summed; a ``σ`` that is not finite counts as no evidence) is
 /// a large turn on weak evidence, and is not made. ``working_resolution`` is
-/// :func:`grid_plane_normal`'s. ``resolution`` (default 24, at least 2) is
+/// :func:`grid_plane_normal`'s. ``resolution`` (default 24, 2 to 1024) is
 /// the patch resolution ``R`` the step works at where the reconstruction
 /// stores no patch bitmaps: the ``R`` that a ``working_resolution`` of
 /// ``None`` clamps the working grid's side to ``R ..= 2R`` by, the

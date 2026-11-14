@@ -216,7 +216,7 @@ impl PairwiseFlowNormalOptions {
     /// a finite `flow_floor_px` of at least 0; `max_sigma_deg` and
     /// `max_mean_chi2` above 0 (infinite allowed); finite agreement settings
     /// of at least 0; and a read-back fit whose sub-pixel kernel runs at a
-    /// patch resolution of at least 2.
+    /// patch resolution from 2 to 1024.
     ///
     /// The flow's settings are checked as the flow checks them, except
     /// against an image's size, and refused as [`NormalError::Flow`]. A pair
@@ -246,7 +246,8 @@ impl PairwiseFlowNormalOptions {
         if !non_negative(self.min_crop_half_width_px) {
             return bad("min_crop_half_width_px");
         }
-        if self.max_crop_samples < 2 * self.min_samples_per_patch
+        // Widened, so a `min_samples_per_patch` of 2^31 or more does not wrap.
+        if u64::from(self.max_crop_samples) < 2 * u64::from(self.min_samples_per_patch)
             || self.max_crop_samples > MAX_CROP_SAMPLES
         {
             return bad("max_crop_samples");
@@ -310,7 +311,7 @@ impl PairwiseFlowNormalOptions {
         if self.max_mean_chi2.is_nan() || self.max_mean_chi2 <= 0.0 {
             return bad("max_mean_chi2");
         }
-        if self.fit.refine.resolution < 2 {
+        if !self.fit.resolution_is_taken() {
             return bad("resolution");
         }
         Ok(())
