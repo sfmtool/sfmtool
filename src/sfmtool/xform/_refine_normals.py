@@ -14,12 +14,9 @@ removes no point and moves no centre and no keypoint. See
 import math
 
 from .._progress import _poll_progress
+from .._sfmtool.bench import REFINE_NORMALS_METHODS
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
-
-# The binding's ``method`` values, checked here so that a bad one is a usage
-# error before the reconstruction is loaded; the binding refuses it too.
-_METHODS = ("grown_plane", "pairwise_flow")
 
 
 class RefineNormalsTransform:
@@ -38,8 +35,10 @@ class RefineNormalsTransform:
     required_feature_source = "embedded_patches"
 
     def __init__(self, method: str = "grown_plane"):
-        if method not in _METHODS:
-            raise ValueError(f"method must be one of {_METHODS}, got {method!r}")
+        if method not in REFINE_NORMALS_METHODS:
+            raise ValueError(
+                f"method must be one of {REFINE_NORMALS_METHODS}, got {method!r}"
+            )
         self.method = method
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:

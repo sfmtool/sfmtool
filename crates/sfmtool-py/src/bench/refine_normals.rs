@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use sfmtool_core::bench::{
     refine_normals as core_refine_normals, NormalError, NormalLeftUnchanged, NormalTurned,
@@ -26,6 +26,15 @@ use super::pairwise_flow_normal::PairwiseFlowKeywords;
 use super::{refused, views_of};
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::{ProgressCounter, PySfmrReconstruction};
+
+/// The `method` that runs the grown-plane normal, the default.
+const GROWN_PLANE: &str = "grown_plane";
+/// The `method` that runs the pairwise-flow normal.
+const PAIRWISE_FLOW: &str = "pairwise_flow";
+/// Every `method` [`refine_normals`] takes, the default first, exported as
+/// ``REFINE_NORMALS_METHODS`` so a caller can refuse another before it
+/// loads anything.
+const METHODS: [&str; 2] = [GROWN_PLANE, PAIRWISE_FLOW];
 
 /// Turn the patch of every finite point of `recon`, or of every finite point
 /// of ``point_indexes``, to its grown-plane normal, or to its pairwise-flow
@@ -53,7 +62,8 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 ///
 /// ``images`` is one decoded image per image of `recon`, or a prebuilt
 /// :class:`ImagePyramidSet`, as :func:`fit` takes them. ``method`` names the
-/// step: ``"grown_plane"`` (the default) or ``"pairwise_flow"``. The other
+/// step: ``"grown_plane"`` (the default) or ``"pairwise_flow"``, the names
+/// ``REFINE_NORMALS_METHODS`` lists. The other
 /// keywords are :func:`grown_plane_normal`'s and :func:`pairwise_flow_normal`'s,
 /// with their defaults; ``max_pairs``, ``resolution`` and :func:`fit`'s four
 /// are shared and set the chosen step's, and a keyword only the other step
@@ -322,22 +332,23 @@ fn refine_normals(
             "{name} is a keyword of the {step} normal, and method is {method:?}"
         ))
     };
-    let step = match method.unwrap_or("grown_plane") {
-        "grown_plane" => {
+    let step = match method.unwrap_or(GROWN_PLANE) {
+        GROWN_PLANE => {
             if let Some(name) = pairwise_flow.first_own_given() {
-                return Err(other(name, "pairwise flow", "grown_plane"));
+                return Err(other(name, "pairwise flow", GROWN_PLANE));
             }
             RefineNormalsStep::GrownPlane(grown_plane.options())
         }
-        "pairwise_flow" => {
+        PAIRWISE_FLOW => {
             if let Some(name) = grown_plane.first_own_given() {
-                return Err(other(name, "grown plane", "pairwise_flow"));
+                return Err(other(name, "grown plane", PAIRWISE_FLOW));
             }
             RefineNormalsStep::PairwiseFlow(pairwise_flow.options())
         }
         other => {
             return Err(PyValueError::new_err(format!(
-                "unknown method: {other:?} (expected grown_plane|pairwise_flow)"
+                "unknown method: {other:?} (expected {})",
+                METHODS.join("|")
             )))
         }
     };
@@ -519,5 +530,6 @@ fn normal_error_name(e: &NormalError) -> &'static str {
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(refine_normals, m)?)?;
+    m.add("REFINE_NORMALS_METHODS", PyTuple::new(m.py(), METHODS)?)?;
     Ok(())
 }

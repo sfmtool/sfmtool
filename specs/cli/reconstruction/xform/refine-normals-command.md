@@ -56,7 +56,11 @@ path. `parse_refine_normals_params` refuses each of these with a
   `--add-patch-bitmaps` adds bitmaps. So `--refine-normals bitmaps=false` and
   `--refine-normals angular_range_deg=25` are refused;
 - a `method` other than `grown_plane` or `pairwise_flow`, the hyphenated
-  `pairwise-flow` among them, naming the two values;
+  `pairwise-flow` among them, naming the two values. The parser and
+  `RefineNormalsTransform` take the names from the binding's
+  `REFINE_NORMALS_METHODS`
+  ([refine-normals.md](../../../core/bench/refine-normals.md) § "Python
+  binding"), so the list is kept once, in Rust;
 - a malformed token (`method` with no `=`) or a repeated `method`, with the
   messages every `key=value` option gives.
 

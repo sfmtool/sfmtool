@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from sfmtool import ProgressCounter
-from sfmtool.bench import refine_normals
+from sfmtool.bench import REFINE_NORMALS_METHODS, refine_normals
 from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import SfmrReconstruction
 from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
@@ -332,7 +332,13 @@ def test_method_pairwise_flow_runs_that_step_and_reports_its_outcomes():
 
 
 def test_a_method_and_its_keywords_are_checked(ground_truth, images):
-    with pytest.raises(ValueError, match="unknown method"):
+    # The methods the binding takes are the ones it lists, and the refusal of
+    # another names them.
+    assert REFINE_NORMALS_METHODS == ("grown_plane", "pairwise_flow")
+    with pytest.raises(
+        ValueError,
+        match=r'unknown method: "grid_plane" \(expected grown_plane\|pairwise_flow\)',
+    ):
         refine_normals(ground_truth, images, method="grid_plane")
     # A keyword of the other step is refused rather than ignored.
     with pytest.raises(ValueError, match="spot_window is a keyword of the grown"):

@@ -485,7 +485,12 @@ keyword arguments, the `flow_` ones included and `gpu_min_pixels` not taken
 which make up `RefineNormalsStep::PairwiseFlow`. `max_pairs`, `resolution`
 and `fit`'s four keywords are taken by both steps and set the chosen step's.
 A keyword only the other step takes is refused with `ValueError` naming it,
-rather than ignored, and so is an unknown `method`.
+rather than ignored, and so is an unknown `method`, with a message that lists
+the methods. `sfmtool.bench.REFINE_NORMALS_METHODS` is the tuple of the
+methods the binding takes, `("grown_plane", "pairwise_flow")`, the default
+first, built from the same constants its parse of `method` matches, so a
+caller such as `sfm xform` can refuse another name before it loads anything
+without keeping a list of its own.
 
 It returns the new `SfmrReconstruction` and a report dict, as `refit_points`'
 binding does ([`refit-points.md`](refit-points.md) § "Python binding"), with

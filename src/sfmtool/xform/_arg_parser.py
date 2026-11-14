@@ -26,6 +26,7 @@ from pathlib import Path
 import click
 import numpy as np
 
+from .._sfmtool.bench import REFINE_NORMALS_METHODS
 from .._sfmtool.reconstruction import RangeExpr
 from . import (
     AddPatchBitmapsTransform,
@@ -200,7 +201,7 @@ def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
     except ValueError:
         raise click.UsageError(
             f"Invalid value for {option} key 'method': '{kwargs['method']}' "
-            "is not grown_plane or pairwise_flow"
+            f"is not {' or '.join(REFINE_NORMALS_METHODS)}"
         )
 
 
