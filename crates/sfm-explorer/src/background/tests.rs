@@ -703,6 +703,7 @@ fn each_operation_declares_the_spec_s_queue_lock_and_quiet_value() {
         ("Fit track", Fast, true, false),
         ("Set track stage", Fast, true, false),
         ("Grown plane normal", Fast, true, false),
+        ("Pairwise flow normal", Fast, true, false),
         ("Finite difference normal", Fast, true, false),
         ("Grid plane normal", Fast, true, false),
         ("Search descriptors", Fast, true, false),
@@ -1061,6 +1062,7 @@ fn real_task(operation: Operation) -> RealTask {
         "Fit track"
         | "Set track stage"
         | "Grown plane normal"
+        | "Pairwise flow normal"
         | "Finite difference normal"
         | "Grid plane normal" => {
             let (mut state, id) = crate::bench::tests::state();
@@ -1068,6 +1070,9 @@ fn real_task(operation: Operation) -> RealTask {
             let job = match operation.name {
                 "Fit track" => state.bench_fit_job(id, &label, None),
                 "Grown plane normal" => state.bench_normal_job(id, &label, NormalStep::GrownPlane),
+                "Pairwise flow normal" => {
+                    state.bench_normal_job(id, &label, NormalStep::PairwiseFlow)
+                }
                 "Finite difference normal" => state.bench_normal_job(
                     id,
                     &label,

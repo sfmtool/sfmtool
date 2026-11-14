@@ -222,7 +222,7 @@ Quit does (§ "`quit`").
 | `select_bench_observations` | write | Replace the selected observations of the focused item: Track View's highlighted rows |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
 | `fit_bench_track` | write | Localize, re-triangulate and re-render the bitmap of a bench track, then read it back, on a worker thread |
-| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated from a row of fitted pieces along each axis, from the plane through a grid of fitted pieces, or from one plane grown and fitted to the photographs, keeping its centre, then read it back, on a worker thread |
+| `fit_bench_track_normal` | write | Turn a track-stage bench track's patch to a normal estimated from a row of fitted pieces along each axis, from the plane through a grid of fitted pieces, from one plane grown and fitted to the photographs, or from the optical flow between pairs of its views, keeping its centre, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each, unpinned and `out`, on a worker thread |
 | `search_bench_track_geometry` | write | Project a track's surfel into every camera, and add each photograph that matches it, unpinned and `out`, on a worker thread |
@@ -5383,24 +5383,31 @@ reprojection noise; a reconstruction holding no finite point measures none, and
 a fit or upgrade there without it fails, saying so.
 
 **`fit_bench_track_normal` turns the patch and keeps its centre.** It is Track
-View's *Finite Diff Normal*, *Grid Plane Normal* and *Grown Plane Normal*,
-chosen by the required `method`: `finite_difference`, `grid_plane` or
-`grown_plane`. The two piece methods take `pieces` (default 2) and
-`overlap_percent` (default 0), and `grown_plane` refuses either. `grown_plane`
+View's *Finite Diff Normal*, *Grid Plane Normal*, *Grown Plane Normal* and
+*Pairwise Flow Normal*, chosen by the required `method`: `finite_difference`,
+`grid_plane`, `grown_plane` or `pairwise_flow`. The two piece methods take
+`pieces` (default 2) and `overlap_percent` (default 0), and `grown_plane` and
+`pairwise_flow` refuse either. `grown_plane`
 runs `grown_plane_normal` at its default options; like the piece methods it
 moves no keypoint, so a `fit_bench_track` after it relocalizes the keypoints
 on the turned patch, and its `report` gives the plane's σ along its weakest and strongest directions
 and says *low confidence* when that precision is low, as Track View's Action
-Log row does ([track-view.md](track-view.md) § "The toolbar"). It is refused in
+Log row does ([track-view.md](track-view.md) § "The toolbar"). `pairwise_flow`
+runs `pairwise_flow_normal` at its default options; it reads no keypoint and
+moves none, and its `report` gives the rounds run and then either the radius
+the pairs agree at, or the one pair it read, with the normal's σ, or *normal
+left unchanged: undetermined* or *normal left unchanged: unstable*, as Track
+View's Action Log row does. It is refused in
 the call, before a photograph is
 read, at the cluster stage, with no patch yet, at infinity and with fewer than
 two `in` observations, in a sentence that starts *"Cannot take the
-finite-difference normal of …"*, *"Cannot take the grid-plane normal of …"* or
-*"Cannot take the grown-plane normal of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
+finite-difference normal of …"*, *"Cannot take the grid-plane normal of …"*,
+*"Cannot take the grown-plane normal of …"* or *"Cannot take the pairwise-flow
+normal of …"*. It runs on a worker and answers in the two levels `fit_bench_track`
 does: inside the reply window, an edit's reply (`serial`, `cursor`, `label`,
 `dirty`, `report`, `changed`), and after it a `running: true` handle whose
-`operation` is `Finite difference normal`, `Grid plane normal` or `Grown plane
-normal`.
+`operation` is `Finite difference normal`, `Grid plane normal`, `Grown plane
+normal` or `Pairwise flow normal`.
 Like the other bench steps that run on a worker, the reply carries no `item`.
 
 **A fit's sentence names the representation the rays earned.** Finite or at

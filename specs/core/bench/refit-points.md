@@ -555,8 +555,8 @@ From Python a track naming an image past the image set cannot reach the run:
   no observation is turned out, added or searched for. Deciding which sightings
   a track should have is the bench's work.
 - **Turning the patch.** The fit keeps the way the patch faces. The normal
-  steps, *Finite Diff Normal*, *Grid Plane Normal* and *Grown Plane Normal*,
-  are per-track bench steps, and the grown-plane one has a run over every
+  steps, *Finite Diff Normal*, *Grid Plane Normal*, *Grown Plane Normal* and
+  *Pairwise Flow Normal*, are per-track bench steps, and the grown-plane one has a run over every
   finite point of its own, [`refine-normals.md`](refine-normals.md), which
   shares this run's preconditions and writer.
 - **Refitting a list of points.** The run is over every point; one point is

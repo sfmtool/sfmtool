@@ -16,12 +16,13 @@ two run at the same time (§ "Two queues"), so a bundle adjustment of one
 reconstruction does not stop a person opening another file or fitting a track
 on another reconstruction's bench. A task started while its queue is busy
 **waits** behind the tasks already waiting there, and starts when they have
-landed. The twenty operations are `Open`, which reads files and
+landed. The twenty-one operations are `Open`, which reads files and
 makes them nodes (§ "Opening a file"); the six whole-value edits, `Bundle
 adjust`, `Convert to embedded patches`, `Retriangulate all points`, `Refit all
 points`, `Switch camera model` and `Prune covered observations`; `Add image to
-tracks`; the ten the bench runs, `Fit track`, `Set track stage`, `Finite
-difference normal`, `Grid plane normal`, `Grown plane normal`, `Search descriptors`, `Geometry
+tracks`; the eleven the bench runs, `Fit track`, `Set track stage`, `Finite
+difference normal`, `Grid plane normal`, `Grown plane normal`, `Pairwise flow
+normal`, `Search descriptors`, `Geometry
 search`, `Build index files`, `Create track at pixel` and `Find nearby tracks`
 ([bench.md](bench.md)); `Build SIFT files`, which builds the `.sift` files the
 index files are read from ([index-files.md](index-files.md) § "Building the
@@ -172,7 +173,7 @@ pub(crate) struct Operation {
 | Build SIFT files | slow | yes | no |
 | Build index files | slow | yes | no |
 | Open | fast | no (it makes a new node) | no |
-| Fit track, Set track stage, Finite difference normal, Grid plane normal, Grown plane normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
+| Fit track, Set track stage, Finite difference normal, Grid plane normal, Grown plane normal, Pairwise flow normal, Search descriptors, Geometry search, Create track at pixel, Find nearby tracks | fast | yes | no |
 | Find points | fast | no; it pushes no version (it fills the track table cache) | no |
 | Live evaluation | fast | no; it does not start on a locked node (§ "Quiet tasks") | yes |
 | Camera model proposal | fast | no; it pushes no version (Apply installs its answer), and an open proposal refuses every task on its node | yes |

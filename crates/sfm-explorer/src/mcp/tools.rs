@@ -2107,6 +2107,7 @@ impl Args<'_> {
         use crate::bench::{NormalStep, SplitSettings};
         let step = match self.optional_string("method")?.as_deref() {
             Some("grown_plane") => NormalStep::GrownPlane,
+            Some("pairwise_flow") => NormalStep::PairwiseFlow,
             Some(method @ ("finite_difference" | "grid_plane")) => {
                 let defaults = SplitSettings::default();
                 let split = SplitSettings {
@@ -2124,16 +2125,18 @@ impl Args<'_> {
             Some(other) => {
                 return Err(self.error(format!(
                     "does not know the method {other:?} — the methods are finite_difference, \
-                     grid_plane and grown_plane."
+                     grid_plane, grown_plane and pairwise_flow."
                 )))
             }
             None => {
                 return Err(self.error(
-                    "needs method — finite_difference, grid_plane or grown_plane.".to_string(),
+                    "needs method — finite_difference, grid_plane, grown_plane or \
+                     pairwise_flow."
+                        .to_string(),
                 ))
             }
         };
-        if matches!(step, NormalStep::GrownPlane)
+        if matches!(step, NormalStep::GrownPlane | NormalStep::PairwiseFlow)
             && (self.optional_usize("pieces")?.is_some()
                 || self.optional_f64("overlap_percent")?.is_some())
         {

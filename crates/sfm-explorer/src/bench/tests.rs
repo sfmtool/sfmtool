@@ -1743,6 +1743,54 @@ fn a_normal_step_runs_on_the_worker_and_is_named_for_what_it_did() {
     assert_eq!(versions(&state, id), before);
 }
 
+/// *Pairwise Flow Normal* runs on the worker under its own operation and comes
+/// home as one version named for the step, with an Action Log row that carries
+/// the step's report: how many rounds ran and the turn.
+///
+/// On the fixture's screen-space pattern the step may find no plane the pairs
+/// agree on; it still ends with the track read back. Whether its estimate is
+/// right is core's to test.
+#[test]
+fn the_pairwise_flow_normal_runs_on_the_worker_and_is_named_for_its_step() {
+    use super::NormalStep;
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+
+    state.action_log.clear();
+    let before = versions(&state, id);
+    state
+        .start_bench_normal(id, &label, NormalStep::PairwiseFlow)
+        .expect("a framed finite track with three sightings");
+    assert_eq!(
+        state.running_tasks().next().map(|task| task.operation.name),
+        Some("Pairwise flow normal"),
+        "it runs on the worker under its own name"
+    );
+    state.finish_background_tasks();
+    let logged = rows(&state);
+    assert_eq!(versions(&state, id), before + 1, "{logged:?}");
+    let named = format!("Pairwise-flow normal of {label}");
+    assert_eq!(
+        state
+            .node(id)
+            .expect("loaded")
+            .history
+            .versions()
+            .last()
+            .expect("a version")
+            .label,
+        named
+    );
+    assert!(
+        logged
+            .iter()
+            .any(|(_, text)| text.starts_with(&format!("{named}: "))
+                && text.contains(" round")
+                && text.contains("turned")),
+        "{logged:?}"
+    );
+}
+
 /// A fit's **version label** carries the classification, not just the item.
 ///
 /// Finite or at infinity is the fit's real outcome on a distant track, and a
