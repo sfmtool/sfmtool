@@ -294,16 +294,25 @@ version 2 writes a new folder beside any older output.
 
 #### A command that uses a workspace requires version 2
 
-**Every command that uses a workspace's settings or the `.sift` files in its
-feature folders requires a version 2 workspace, and refuses a version 1 one
-before it does any work**, whether or not the `.sift` files it needs are
-there. The refusal is one message: it names the workspace file, says it is
-version 1 and that sfmtool works only in a version 2 workspace, and says to run
+**A command that does work with a workspace's settings or with the features in
+its feature folders requires a version 2 workspace, and refuses a version 1
+one before it does any work**, whether or not the `.sift` files it needs are
+there. That work is extracting, matching, solving, transforming or refining a
+reconstruction, and drawing or measuring from its `.sift` features. Opening a
+file the user gives is not such work: it reads what the file records, at any
+version and in any workspace. `SfmrReconstruction.load` fills in an older
+`.sfmr`'s keypoints from the `.sift` files it records, and a reconstruction
+with no thumbnails takes them from those files, as the viewer and
+`sfm web-export` do, so a `.sfmr` made before `sfm ws upgrade` still opens
+afterwards from the old folder it names.
+
+The refusal is one message: it names the workspace file, says it is version 1
+and that sfmtool works only in a version 2 workspace, and says to run
 `sfm ws upgrade`, which moves the workspace to version 2 and a new features
 folder. Version 1 settings cannot write a `.sift` file
-([Versions never mix](#versions-never-mix)), so a command could use a
-version 1 workspace only as long as every file it needed was already there;
-requiring version 2 everywhere takes away that case and the code that kept it
+([Versions never mix](#versions-never-mix)), so a command could do such work
+in a version 1 workspace only as long as every file it needed was already
+there; requiring version 2 takes away that case and the code that kept it
 working, and gives one answer for every command.
 
 The check is made in two places, both in
@@ -318,28 +327,26 @@ The check is made in two places, both in
   `sfm pick-images`, `sfm from-colmap-bin`, and `sfm flow` and `sfm sift --draw`,
   which find `.sift` files through the settings.
 - **`require_version_2_workspace`** refuses a version 1 workspace for a command
-  that reads a `.sfmr`'s `.sift` files through the `.sfmr`'s own record rather
-  than the workspace's settings. `get_sift_path_from_recon` in
-  [`sift/file.py`](../../src/sfmtool/sift/file.py), where the Python code finds
-  those files, calls it, which refuses `sfm epipolar` and `sfm densify`
-  before they write anything, and any other reader of those files when it
-  reaches them. A command that would do work first, or whose `.sift` files are
-  read in Rust, calls it up front: `sfm merge`, `sfm to-colmap-db` from a
-  `.sfmr`, `sfm heatmap`, `sfm undistort` and `sfm embed-patches`;
-  `sfm xform` for a `sift_files` input, whatever its steps, since several
-  steps and the save read its `.sift` files; `sfm inspect --strips` for a
-  `sift_files` reconstruction; and `sfm compare` for a `sift_files` input
-  when it draws `--strips` or matches points by coordinate, which it does with
+  that does such work from a `.sfmr`'s `.sift` files, which it finds through
+  the `.sfmr`'s own record rather than the workspace's settings. Each calls it
+  before any work: `sfm epipolar`, `sfm densify`, `sfm merge`,
+  `sfm to-colmap-db` from a `.sfmr`, `sfm undistort` and `sfm embed-patches`;
+  `sfm heatmap`, `sfm inspect --strips` and `sfm xform` for a `sift_files`
+  input, `sfm xform` whatever its steps, since several steps and the save read
+  its `.sift` files; and `sfm compare` for a `sift_files` input when it draws
+  `--strips` or matches points by coordinate, which it does with
   `--by-coordinate` and by default when the inputs share no `.sift` file. It
   makes that choice before any work; matching by feature index, its default
   when the inputs share their `.sift` files, reads none of them.
 
-Commands that only read the files they are given work in a version 1
-workspace: `sfm inspect` of a `.sfmr`, `.matches` or `.sift` file,
-`sfm analyze`, `sfm explorer`, `sfm estimate-intrinsics` (which reads a
-`.matches` file's image sizes) and `sfm cluster-patches` (which reads a
-`.matches` file and the photographs). `sfm inspect` of an image reports its
-readings as unavailable, with the refusal, since they are taken through the
+The commands that open the files they are given and write them out or report
+on them work in a version 1 workspace: `sfm inspect` of a `.sfmr`, `.matches`
+or `.sift` file, `sfm analyze`, `sfm explorer`, `sfm web-export`,
+`sfm to-colmap-bin` (which writes a `sift_files` reconstruction's keypoints
+from the `.sift` files it records), `sfm align`, `sfm estimate-intrinsics`
+(which reads a `.matches` file's image sizes) and `sfm cluster-patches` (which
+reads a `.matches` file and the photographs). `sfm inspect` of an image reports
+its readings as unavailable, with the refusal, since they are taken through the
 workspace's conversion. `sfm ws upgrade` and `sfm ws init --force` are what
 move a version 1 workspace to version 2.
 

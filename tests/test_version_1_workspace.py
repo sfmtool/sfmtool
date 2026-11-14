@@ -165,6 +165,8 @@ def test_a_command_that_uses_the_workspace_refuses_version_1_before_any_work(
             "seoul_bull_sculpture_01.jpg.sift",
         ],
         ["estimate-intrinsics", "-i", "clusters.matches"],
+        ["web-export", "recon.sfmr", "-o", "web"],
+        ["to-colmap-bin", "recon.sfmr", "colmap"],
         ["cluster-patches", "-i", "clusters.matches", "-o", "patches.matches"],
     ],
     ids=lambda command: " ".join(command)[:40],

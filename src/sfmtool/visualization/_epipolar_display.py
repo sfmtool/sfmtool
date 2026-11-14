@@ -14,6 +14,7 @@ import pycolmap
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._sfmtool.fileio import read_image_rgb, write_image_rgb
 from ..sift.file import get_sift_path_from_recon
+from .._workspace import require_version_2_workspace
 from ..fileio import SiftFile
 from .._sfmtool.analysis import epipolar_curves
 from .._sfmtool.geometry import RotQuaternion
@@ -661,6 +662,8 @@ def draw_epipolar_visualization(
         sweep_window_size: Window size for sort-and-sweep matching
         save_which: Which image(s) to save - "both", "first", or "second"
     """
+    # The features are drawn from the .sift files of a version 2 workspace.
+    require_version_2_workspace(recon.workspace_dir)
     workspace_dir = Path(recon.workspace_dir)
     output_path = Path(output_path)
     image_names = recon.image_names
