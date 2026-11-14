@@ -29,7 +29,7 @@ from sfmtool.cli import main
 # module itself is reached through the import machinery.
 ei = importlib.import_module("sfmtool._commands.estimate_intrinsics")
 
-# No `-r`: the selection `_load_selection` gets when the command is run plainly.
+# No `-r`: the selection `_load_cameras` gets when the command is run plainly.
 _NO_SELECTION = ei.parse_image_selection((), None)
 
 
@@ -109,7 +109,7 @@ def _vote_result(
 
 
 def _observations(width=640, height=480, image_names=None) -> dict:
-    """The report payload `_load_selection` returns beside the selection, for a
+    """The report payload `_load_cameras` returns beside the selection, for a
     two-image, one-cluster capture with no `-r`."""
     names = image_names or ["images/a.jpg", "images/b.jpg"]
     return {
@@ -142,8 +142,8 @@ def stub_estimate(monkeypatch, tmp_path):
         # canned run needs no `.matches` at all: the stub estimator ignores it.
         monkeypatch.setattr(
             ei,
-            "_load_selection",
-            lambda path, image_selection: (None, data or _observations()),
+            "_load_cameras",
+            lambda path, image_selection: [(None, None, data or _observations())],
         )
 
         def stub(*a, **k):
@@ -660,6 +660,176 @@ def test_a_pattern_covering_left_out_images_is_refused(stub_estimate, tmp_path):
     assert out_path.exists()
 
 
+# ── Images of several cameras ────────────────────────────────────────────────
+
+
+def _pinhole_camera() -> dict:
+    return {
+        "model": "SIMPLE_PINHOLE",
+        "width": 640,
+        "height": 480,
+        "parameters": {
+            "focal_length": 500.0,
+            "principal_point_x": 320.0,
+            "principal_point_y": 240.0,
+        },
+    }
+
+
+@pytest.fixture
+def cameras_run(monkeypatch, tmp_path):
+    """Run the command plainly on a workspace of image files named `names`,
+    with no real `.matches` file: the stub kernel gives each selection the
+    focal `focal_for` maps its images to, and records the images of each
+    selection it was handed on the callable's `selections` list.
+
+    The workspace is `tmp_path / "ws"`, and its `.camrig` and
+    `camera_config.json` files are the test's to write.
+    """
+    from sfmtool.fileio import write_camrig
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    matches_path = tmp_path / "clusters.matches"
+    matches_path.write_bytes(b"not read")
+    selections: list[list[str]] = []
+
+    def run(names, *args, focal_for=lambda chosen: 300.0):
+        for name in names:
+            (workspace / name).parent.mkdir(parents=True, exist_ok=True)
+            (workspace / name).write_bytes(b"jpeg")
+        monkeypatch.setattr(
+            ei,
+            "_open_matches",
+            lambda path, selection: (None, list(names), None, None, workspace),
+        )
+
+        def select(mfile, restrict, data):
+            chosen = list(names) if restrict is None else list(restrict)
+            return tuple(chosen), {
+                **data,
+                "image_names": chosen,
+                "width": 640,
+                "height": 480,
+                "cluster_count": 1,
+                "observation_count": 2,
+            }
+
+        def stub(selection, **k):
+            selections.append(list(selection))
+            return _estimate(focal_px=focal_for(list(selection)))
+
+        monkeypatch.setattr(ei, "_select", select)
+        monkeypatch.setattr(_geometry, "estimate_intrinsics", stub)
+        return CliRunner().invoke(
+            main, ["estimate-intrinsics", "-i", str(matches_path), *args]
+        )
+
+    def rig(path: Path, patterns: list[str]) -> None:
+        """Write a `.camrig` whose sensors match `patterns`, sharing one camera."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_camrig(
+            path=str(path),
+            name=path.stem,
+            rig_type="generic",
+            cameras=[_pinhole_camera()],
+            sensor_image_patterns=patterns,
+            camera_indexes=[0] * len(patterns),
+            quaternions_wxyz=np.tile([1.0, 0.0, 0.0, 0.0], (len(patterns), 1)),
+            translations_xyz=np.zeros((len(patterns), 3)),
+        )
+
+    run.workspace = workspace
+    run.selections = selections
+    run.rig = rig
+    return run
+
+
+def test_the_workspace_s_cameras_are_estimated_apart(cameras_run):
+    """Each sensor of a rig, each one-sensor `.camrig`, each
+    `camera_config.json` and the images none of them covers are a camera
+    each, as `sfm solve` gives them: each is voted on its own images and
+    reported on its own, and no vote pools two of them."""
+    ws = cameras_run.workspace
+    names = [
+        "left/f_01.jpg",
+        "left/f_02.jpg",
+        "right/f_01.jpg",
+        "right/f_02.jpg",
+        "solo/s_01.jpg",
+        "solo/s_02.jpg",
+        "gopro/g_01.jpg",
+        "gopro/g_02.jpg",
+        "phone/p_01.jpg",
+        "phone/p_02.jpg",
+    ]
+    cameras_run.rig(ws / "rig.camrig", ["left/f_%02d.jpg", "right/f_%02d.jpg"])
+    cameras_run.rig(ws / "solo" / "solo.camrig", ["s_%02d.jpg"])
+    (ws / "gopro").mkdir()
+    (ws / "gopro" / "camera_config.json").write_text(
+        json.dumps({"version": 1, "camera_intrinsics": _pinhole_camera()})
+    )
+    focal = {"left": 410.0, "right": 420.0, "solo": 430.0, "gopro": 440.0}
+
+    def focal_for(chosen):
+        return focal.get(chosen[0].split("/")[0], 450.0)
+
+    out = cameras_run(names, "--json", focal_for=focal_for)
+    assert out.exit_code == 0, out.output
+    assert sorted(cameras_run.selections) == sorted(
+        [names[i : i + 2] for i in range(0, len(names), 2)]
+    )
+    payload = json.loads(out.stdout)
+    assert payload["image_count"] == payload["selected_image_count"] == 10
+    assert [
+        (c["camera"], c["estimate"]["selected_image_count"], c["estimate"]["focal_px"])
+        for c in payload["cameras"]
+    ] == [
+        ("rig.camrig sensor 0 (left/f_%02d.jpg)", 2, 410.0),
+        ("rig.camrig sensor 1 (right/f_%02d.jpg)", 2, 420.0),
+        ("solo/solo.camrig", 2, 430.0),
+        ("gopro/camera_config.json", 2, 440.0),
+        ("no .camrig or camera_config.json (EXIF)", 2, 450.0),
+    ]
+
+    out = cameras_run(names, focal_for=focal_for)
+    assert out.exit_code == 0, out.output
+    assert out.output.startswith("5 cameras among the selected images of ")
+    assert "Camera rig.camrig sensor 1 (right/f_%02d.jpg) (2 images)\n" in out.output
+    assert "  Focal length:  420.00 px\n" in out.output
+
+
+def test_write_camrig_refuses_images_of_several_cameras(cameras_run):
+    """One `.camrig` holds one camera, so a selection of two is refused before
+    any vote, naming both and how to select one."""
+    ws = cameras_run.workspace
+    cameras_run.rig(ws / "rig.camrig", ["left/f_%02d.jpg", "right/f_%02d.jpg"])
+    out_path = ws / "out.camrig"
+    names = ["left/f_01.jpg", "left/f_02.jpg", "right/f_01.jpg", "right/f_02.jpg"]
+    out = cameras_run(names, "--write-camrig", str(out_path))
+    assert out.exit_code != 0
+    assert "the selected images are of 2 cameras of the workspace" in out.output
+    assert "rig.camrig sensor 0 (left/f_%02d.jpg)  (2 image(s))" in out.output
+    assert "Select one camera's images with -r" in out.output
+    assert cameras_run.selections == []
+    assert not out_path.exists()
+
+
+def test_images_of_one_camera_keep_the_single_estimate(cameras_run):
+    """Images all of one camera -- here all under one `.camrig` -- are the
+    one vote and the one JSON object they always were."""
+    ws = cameras_run.workspace
+    cameras_run.rig(ws / "a.camrig", ["a/f_%02d.jpg"])
+    names = ["a/f_01.jpg", "a/f_02.jpg"]
+    out = cameras_run(names, "--json")
+    assert out.exit_code == 0, out.output
+    assert cameras_run.selections == [names]
+    payload = json.loads(out.stdout)
+    assert "cameras" not in payload
+    assert payload["focal_px"] == 300.0
+    assert payload["selected_image_count"] == 2
+
+
 # ── End to end ───────────────────────────────────────────────────────────────
 
 
@@ -698,7 +868,9 @@ def test_the_vote_reads_the_backbones_positions(cluster_matches_file):
     assert not hasattr(ei, "_positions_from_sift"), (
         "the legacy .sift lookup is gone; version <= 5 cluster files are refused"
     )
-    selection, data = ei._load_selection(cluster_matches_file, _NO_SELECTION)
+    ((_camera, selection, data),) = ei._load_cameras(
+        cluster_matches_file, _NO_SELECTION
+    )
     positions = np.asarray(selection.member_positions(), dtype=np.float64)
     assert len(positions) == data["observation_count"] > 0
     assert np.isfinite(positions).all()
@@ -715,7 +887,9 @@ def test_the_object_form_is_the_array_form(cluster_matches_file):
     a caller spelling that out gets bit-identical numbers."""
     from sfmtool.geometry import estimate_intrinsics as estimate
 
-    selection, data = ei._load_selection(cluster_matches_file, _NO_SELECTION)
+    ((_camera, selection, data),) = ei._load_cameras(
+        cluster_matches_file, _NO_SELECTION
+    )
     object_form = estimate(selection, seed=0, columns="auto")
     array_form = estimate(
         np.asarray(selection.cluster_starts, dtype=np.uint32),
@@ -734,7 +908,9 @@ def test_the_object_form_is_the_array_form(cluster_matches_file):
 def test_the_object_form_takes_no_observation_arrays(cluster_matches_file):
     from sfmtool.geometry import estimate_intrinsics as estimate
 
-    selection, data = ei._load_selection(cluster_matches_file, _NO_SELECTION)
+    ((_camera, selection, data),) = ei._load_cameras(
+        cluster_matches_file, _NO_SELECTION
+    )
     with pytest.raises(ValueError, match="takes no observation arrays"):
         estimate(
             selection,
@@ -927,7 +1103,7 @@ def test_r_restricts_the_vote_to_the_selected_images(cluster_matches_file: Path)
     whole_starts = np.asarray(matches.select_clusters().cluster_starts)
     assert 0 < direct_starts[-1] < whole_starts[-1]
 
-    selection, data = ei._load_selection(
+    ((_camera, selection, data),) = ei._load_cameras(
         cluster_matches_file, ei.parse_image_selection(("front",), None)
     )
     npt.assert_array_equal(np.asarray(selection.cluster_starts), direct_starts)
@@ -975,3 +1151,47 @@ def test_r_restricts_the_vote_to_the_selected_images(cluster_matches_file: Path)
     out = run("-r", "nosuch")
     assert out.exit_code != 0
     assert "no named image list is called 'nosuch'" in out.output
+
+
+def test_each_lens_of_a_rig_is_estimated_from_its_own_images(
+    isolated_kerry_park_camrig: Path,
+):
+    """kerry_park is two fisheye lenses under one multi-sensor `.camrig`: a
+    plain run votes each lens on its own images, the vote `select_clusters`
+    restricted to that lens gives, and finds a fisheye for each."""
+    from sfmtool.fileio import MatchesFile
+    from sfmtool.geometry import estimate_intrinsics as estimate
+
+    workspace_dir = isolated_kerry_park_camrig
+    matches_path = workspace_dir / "matches" / "clusters.matches"
+    runner = CliRunner()
+    for args in (
+        ["ws", "init", str(workspace_dir)],
+        ["sift", "--extract", str(workspace_dir)],
+        ["match", "--cluster", "--output", str(matches_path), str(workspace_dir)],
+    ):
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0, result.output
+
+    out = runner.invoke(
+        main, ["estimate-intrinsics", "-i", str(matches_path), "--json"]
+    )
+    assert out.exit_code == 0, out.output
+    payload = json.loads(out.stdout)
+    assert payload["image_count"] == payload["selected_image_count"] == 48
+    matches = MatchesFile(matches_path)
+    for camera, sensor, lens in zip(
+        payload["cameras"], (0, 1), ("fisheye_left", "fisheye_right"), strict=True
+    ):
+        assert camera["camera"] == (
+            f"kerry_park.camrig sensor {sensor} ({lens}/frame_%02d.jpg)"
+        )
+        lens_estimate = camera["estimate"]
+        assert lens_estimate["selected_image_count"] == 24
+        names = [n for n in matches.image_names if n.startswith(f"{lens}/")]
+        own = estimate(
+            matches.select_clusters(restrict_images=names), seed=0, columns="auto"
+        )
+        assert lens_estimate["focal_px"] == own["focal_px"]
+        assert lens_estimate["camera_model"] == "EquidistantFisheye"
+        assert lens_estimate["fisheye_confirmed"] is True

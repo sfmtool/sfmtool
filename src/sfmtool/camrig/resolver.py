@@ -384,6 +384,37 @@ def _uncovered_note(
     )
 
 
+def single_sensor_camera_groups(
+    image_paths, camera_config_resolver, camrig_cameras
+) -> dict[int | Path | None, list[int]]:
+    """Group images that each form a frame of their own by the camera `sfm
+    solve` gives them.
+
+    Returns the positions in `image_paths` of each camera's images, keyed in
+    the order of each camera's first image. Each file of `camrig_cameras`
+    (the single-sensor `CamrigCamera`s covering some of the images) is one
+    camera, keyed by its index, and an image takes the camera of the file
+    that covers it. Of the images no such file covers, those that resolve the
+    same `camera_config.json` through `camera_config_resolver` share one
+    camera, keyed by that file's path, and those that resolve none, or all of
+    them when `camera_config_resolver` is `None`, share the one camera EXIF
+    gives, keyed by `None`.
+    """
+    camrig_index_of = {
+        path: index
+        for index, camrig_camera in enumerate(camrig_cameras or [])
+        for path in camrig_camera.images
+    }
+    groups: dict[int | Path | None, list[int]] = {}
+    for position, image_path in enumerate(image_paths):
+        key = camrig_index_of.get(Path(image_path).resolve())
+        if key is None and camera_config_resolver is not None:
+            resolved = camera_config_resolver.resolve_for_image(Path(image_path))
+            key = resolved[0] if resolved is not None else None
+        groups.setdefault(key, []).append(position)
+    return groups
+
+
 def resolve_camrig_for_solve(
     image_paths,
     workspace_dir,
