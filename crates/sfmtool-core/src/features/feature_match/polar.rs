@@ -29,7 +29,9 @@ use crate::numeric::median_in_place;
 
 use super::gather::gather_rows;
 use super::geometric_filter::{GeometricFilterConfig, StereoPairGeometry};
+use super::sweep::{check_sweep_arrays, SweepArrayNames};
 use super::window::{affine_row, mutual_matches, WindowFilter, WindowMatcher};
+use super::{MatchImagePairError, PairMatches};
 
 /// Compute both epipoles from a flat row-major 3x3 fundamental matrix.
 ///
@@ -424,13 +426,14 @@ fn angular_order(theta: &[f64], radius: &[f64]) -> Vec<usize> {
     idx
 }
 
-/// The shared body of both public entry points.
+/// The shared body of both public entry points, for feature arrays whose
+/// lengths have been checked against `n1`, `n2` and `desc_len`.
 ///
 /// `geometric` carries the only difference between them: `Some((affines1,
 /// affines2, geom, config))` runs the geometric filter over each window,
 /// `None` compares the whole window.
 #[allow(clippy::too_many_arguments)]
-fn polar_mutual_best_match_inner(
+pub(super) fn polar_mutual_best_match_inner(
     positions1: &[f64],
     descriptors1: &[u8],
     n1: usize,
@@ -569,6 +572,12 @@ fn polar_mutual_best_match_inner(
 /// `Some(Vec<(orig_idx1, orig_idx2, distance)>)` for mutual matches, sorted
 /// by `orig_idx1`,
 /// or `None` if either epipole is at infinity.
+///
+/// # Errors
+///
+/// [`MatchImagePairError::FeatureArrayLength`], before anything is matched,
+/// when a position array does not hold 2 values per feature or a descriptor
+/// array does not hold `desc_len` bytes per feature.
 #[allow(clippy::too_many_arguments)]
 pub fn polar_mutual_best_match(
     positions1: &[f64],
@@ -582,8 +591,19 @@ pub fn polar_mutual_best_match(
     window_size: usize,
     threshold: Option<f64>,
     min_radius: f64,
-) -> Option<Vec<(usize, usize, f64)>> {
-    polar_mutual_best_match_inner(
+) -> Result<Option<PairMatches>, MatchImagePairError> {
+    check_sweep_arrays(
+        &POLAR_NAMES,
+        positions1,
+        descriptors1,
+        n1,
+        positions2,
+        descriptors2,
+        n2,
+        desc_len,
+        None,
+    )?;
+    Ok(polar_mutual_best_match_inner(
         positions1,
         descriptors1,
         n1,
@@ -596,7 +616,7 @@ pub fn polar_mutual_best_match(
         threshold,
         min_radius,
         None,
-    )
+    ))
 }
 
 /// Full bidirectional polar sweep matching with geometric filtering and mutual consistency.
@@ -627,6 +647,12 @@ pub fn polar_mutual_best_match(
 /// `Some(Vec<(orig_idx1, orig_idx2, distance)>)` for mutual matches, sorted
 /// by `orig_idx1`,
 /// or `None` if either epipole is at infinity.
+///
+/// # Errors
+///
+/// [`MatchImagePairError::FeatureArrayLength`], as from
+/// [`polar_mutual_best_match`], and also when an affine-shape array does not
+/// hold 4 values per feature.
 #[allow(clippy::too_many_arguments)]
 pub fn polar_mutual_best_match_geometric(
     positions1: &[f64],
@@ -644,8 +670,19 @@ pub fn polar_mutual_best_match_geometric(
     min_radius: f64,
     geom: &StereoPairGeometry,
     config: &GeometricFilterConfig,
-) -> Option<Vec<(usize, usize, f64)>> {
-    polar_mutual_best_match_inner(
+) -> Result<Option<PairMatches>, MatchImagePairError> {
+    check_sweep_arrays(
+        &POLAR_NAMES,
+        positions1,
+        descriptors1,
+        n1,
+        positions2,
+        descriptors2,
+        n2,
+        desc_len,
+        Some((affines1, affines2)),
+    )?;
+    Ok(polar_mutual_best_match_inner(
         positions1,
         descriptors1,
         n1,
@@ -658,8 +695,16 @@ pub fn polar_mutual_best_match_geometric(
         threshold,
         min_radius,
         Some((affines1, affines2, geom, config)),
-    )
+    ))
 }
+
+/// The names the polar entry points' errors give their feature arrays.
+const POLAR_NAMES: SweepArrayNames = SweepArrayNames {
+    keypoints1: "positions1",
+    descriptors1: "descriptors1",
+    keypoints2: "positions2",
+    descriptors2: "descriptors2",
+};
 
 #[cfg(test)]
 mod tests;

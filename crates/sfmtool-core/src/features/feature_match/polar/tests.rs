@@ -221,7 +221,8 @@ fn test_polar_mutual_best_match_geometric_basic() {
     let result = polar_mutual_best_match_geometric(
         &positions, &descs, n, &positions, &descs, n, &affines, &affines, desc_len, &f_matrix, 10,
         None, 1.0, &geom, &config,
-    );
+    )
+    .unwrap();
 
     let mutual = result.expect("Should return Some since epipoles are finite");
     // All features should match themselves
@@ -365,7 +366,8 @@ fn test_polar_mutual_best_match_nongeometric() {
 
     let result = polar_mutual_best_match(
         &positions, &descs, n, &positions, &descs, n, desc_len, &f_matrix, 10, None, 1.0,
-    );
+    )
+    .unwrap();
 
     let mutual = result.expect("Should return Some since epipoles are finite");
     assert_eq!(mutual.len(), n);
@@ -399,7 +401,8 @@ fn test_polar_mutual_best_match_with_threshold() {
     // No threshold: should find matches (nearest, even if far)
     let result_none = polar_mutual_best_match(
         &positions, &descs1, n, &positions, &descs2, n, desc_len, &f_matrix, 10, None, 1.0,
-    );
+    )
+    .unwrap();
     let mutual_none = result_none.expect("Should return Some");
     assert!(
         !mutual_none.is_empty(),
@@ -419,7 +422,8 @@ fn test_polar_mutual_best_match_with_threshold() {
         10,
         Some(10.0),
         1.0,
-    );
+    )
+    .unwrap();
     let mutual_tight = result_tight.expect("Should return Some");
     assert!(
         mutual_tight.is_empty(),
@@ -511,5 +515,87 @@ fn test_polar_match_one_way_geometric_rejects_bad_orientation() {
         matches.is_empty(),
         "All matches should be rejected due to perpendicular orientation, got {} matches",
         matches.len()
+    );
+}
+
+/// Both polar entry points refuse a feature array that does not hold its
+/// rows, naming the array, rather than reading past its end.
+#[test]
+fn test_polar_refuses_feature_arrays_of_the_wrong_length() {
+    let positions = [10.0, 0.0, 0.0, 10.0, -10.0, 0.0];
+    let descs = vec![0u8; 3 * 128];
+    let affines = [1.0, 0.0, 0.0, 1.0].repeat(3);
+    // F for pure forward translation, whose epipoles are both at the origin.
+    let f_matrix = [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let geom = StereoPairGeometry::new(
+        &Matrix3::identity(),
+        &Matrix3::identity(),
+        &Matrix3::identity(),
+        &Matrix3::identity(),
+        &nalgebra::Vector3::zeros(),
+        &nalgebra::Vector3::new(0.0, 0.0, 1.0),
+    );
+    let config = GeometricFilterConfig::default();
+    let err = |array: &'static str, rows: usize, width: usize, len: usize| {
+        MatchImagePairError::FeatureArrayLength {
+            array,
+            image: None,
+            rows,
+            width,
+            len,
+        }
+    };
+
+    assert_eq!(
+        polar_mutual_best_match(
+            &positions[..3],
+            &descs,
+            3,
+            &positions,
+            &descs,
+            3,
+            128,
+            &f_matrix,
+            10,
+            None,
+            1.0
+        ),
+        Err(err("positions1", 3, 2, 3))
+    );
+    assert_eq!(
+        polar_mutual_best_match(
+            &positions,
+            &descs,
+            3,
+            &positions,
+            &descs[..256],
+            3,
+            128,
+            &f_matrix,
+            10,
+            None,
+            1.0
+        ),
+        Err(err("descriptors2", 3, 128, 256))
+    );
+    assert_eq!(
+        polar_mutual_best_match_geometric(
+            &positions,
+            &descs,
+            3,
+            &positions,
+            &descs,
+            3,
+            &affines,
+            &affines[..8],
+            128,
+            &f_matrix,
+            10,
+            None,
+            1.0,
+            &geom,
+            &config,
+        ),
+        Err(err("affines2", 3, 4, 8))
     );
 }

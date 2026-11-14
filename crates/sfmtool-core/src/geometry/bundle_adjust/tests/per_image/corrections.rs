@@ -66,6 +66,7 @@ fn run_corrections(
         schedule,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// [`run_corrections`], reporting to `progress`.
@@ -79,7 +80,7 @@ fn run_corrections_to(
     prior: Option<&ImagePriorOptions>,
     schedule: &[BaSchedule],
     progress: &Progress<'_>,
-) -> BundleAdjustment {
+) -> Result<BundleAdjustment, BaInputError> {
     let n_img = s.quats.len();
     let adjustments: Vec<IntrinsicAdjustment> = if start_adj.is_empty() {
         vec![IntrinsicAdjustment::default(); n_img]
@@ -829,8 +830,7 @@ fn corrections_on_another_model_are_held() {
 }
 
 #[test]
-#[should_panic(expected = "rolling_shutter_scanlines")]
-fn releasing_rates_without_a_scanlines_setting_panics() {
+fn releasing_rates_without_a_scanlines_setting_is_refused() {
     let truth = spline_pinhole();
     let mut s = per_image_scene(
         &truth,
@@ -841,7 +841,7 @@ fn releasing_rates_without_a_scanlines_setting_panics() {
         21,
         |_| 50,
     );
-    run_corrections(
+    let out = run_corrections_to(
         &mut s,
         &truth,
         &[],
@@ -849,6 +849,11 @@ fn releasing_rates_without_a_scanlines_setting_panics() {
         None,
         None,
         &DEFAULT_SCHEDULE,
+        &Progress::none(),
+    );
+    assert_eq!(
+        out.unwrap_err(),
+        BaInputError::RollingShutterWithoutScanlines { camera: 0 }
     );
 }
 
@@ -886,6 +891,7 @@ fn each_round_reports_its_cost_once_per_iteration_and_listening_changes_nothing(
             &DEFAULT_SCHEDULE,
             progress,
         )
+        .unwrap()
     };
     let quiet_out = run(&mut quiet, &Progress::none());
 

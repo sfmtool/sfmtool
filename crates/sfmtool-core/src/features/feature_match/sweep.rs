@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use super::gather::gather_rows;
 use super::geometric_filter::{GeometricFilterConfig, StereoPairGeometry};
 use super::window::{affine_row, mutual_matches, WindowFilter, WindowMatcher};
+use super::{check_feature_array, MatchImagePairError};
 
 /// Result of a one-way sweep match: maps query index to (target index, distance).
 pub type SweepMatches = HashMap<usize, (usize, f64)>;
@@ -68,12 +69,11 @@ fn match_one_way_sweep_inner(
     sorted_kpts2: &[f64],
     sorted_descs2: &[u8],
     n2: usize,
+    desc_len: usize,
     window_size: usize,
     threshold: Option<f64>,
     geometric: Option<&GeometricInputs<'_>>,
 ) -> SweepMatches {
-    let desc_len = sorted_descs1.len().checked_div(n1).unwrap_or(128);
-
     let mut matches = SweepMatches::new();
 
     if n2 == 0 {
@@ -234,6 +234,7 @@ pub(super) fn mutual_best_match_sweep_inner(
         &sorted_kpts2,
         &sorted_descs2,
         n2,
+        desc_len,
         window_size,
         threshold,
         sorted_geometry
@@ -250,6 +251,7 @@ pub(super) fn mutual_best_match_sweep_inner(
         &sorted_kpts1,
         &sorted_descs1,
         n1,
+        desc_len,
         window_size,
         threshold,
         sorted_geometry
@@ -260,6 +262,59 @@ pub(super) fn mutual_best_match_sweep_inner(
 
     mutual_matches(&forward, &backward, |s| sort_idx1[s], |s| sort_idx2[s])
 }
+
+/// The feature-array names of one sweep entry point, which its errors report:
+/// keypoints and descriptors of image 1, then of image 2.
+pub(super) struct SweepArrayNames {
+    pub(super) keypoints1: &'static str,
+    pub(super) descriptors1: &'static str,
+    pub(super) keypoints2: &'static str,
+    pub(super) descriptors2: &'static str,
+}
+
+/// `Err` unless every per-feature array of a sweep holds its count of rows:
+/// keypoints `n × 2`, descriptors `n × desc_len` and, when given, affine
+/// shapes `n × 4` (named `affines1` and `affines2`).
+///
+/// Every public sweep checks its input through this before it reads a row, so
+/// a short or mis-shaped array is an error rather than a slice index past the
+/// end.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn check_sweep_arrays(
+    names: &SweepArrayNames,
+    keypoints1: &[f64],
+    descriptors1: &[u8],
+    n1: usize,
+    keypoints2: &[f64],
+    descriptors2: &[u8],
+    n2: usize,
+    desc_len: usize,
+    affines: Option<(&[f64], &[f64])>,
+) -> Result<(), MatchImagePairError> {
+    check_feature_array(names.keypoints1, None, keypoints1, n1, 2)?;
+    check_feature_array(names.descriptors1, None, descriptors1, n1, desc_len)?;
+    check_feature_array(names.keypoints2, None, keypoints2, n2, 2)?;
+    check_feature_array(names.descriptors2, None, descriptors2, n2, desc_len)?;
+    if let Some((affines1, affines2)) = affines {
+        check_feature_array("affines1", None, affines1, n1, 4)?;
+        check_feature_array("affines2", None, affines2, n2, 4)?;
+    }
+    Ok(())
+}
+
+const SORTED_NAMES: SweepArrayNames = SweepArrayNames {
+    keypoints1: "sorted_kpts1",
+    descriptors1: "sorted_descs1",
+    keypoints2: "sorted_kpts2",
+    descriptors2: "sorted_descs2",
+};
+
+const UNSORTED_NAMES: SweepArrayNames = SweepArrayNames {
+    keypoints1: "keypoints1",
+    descriptors1: "descriptors1",
+    keypoints2: "keypoints2",
+    descriptors2: "descriptors2",
+};
 
 /// One-way Y-sweep nearest-neighbor match on pre-sorted features.
 ///
@@ -278,6 +333,7 @@ pub(super) fn mutual_best_match_sweep_inner(
 /// * `sorted_descs2` – Descriptors for image 2, flat row-major Mx(desc_len),
 ///   in the same sorted order as `sorted_kpts2`.
 /// * `n2` – Number of features in image 2.
+/// * `desc_len` – Number of bytes per descriptor (typically 128).
 /// * `window_size` – Number of Y-neighbors to consider from image 2
 ///   for each feature in image 1.
 /// * `threshold` – Optional L2 distance ceiling. When `Some(t)`, a match
@@ -286,6 +342,12 @@ pub(super) fn mutual_best_match_sweep_inner(
 /// # Returns
 ///
 /// A map from sorted index in image 1 to `(sorted_index_in_image_2, distance)`.
+///
+/// # Errors
+///
+/// [`MatchImagePairError::FeatureArrayLength`], before anything is matched,
+/// when a keypoint array does not hold 2 values per feature or a descriptor
+/// array does not hold `desc_len` bytes per feature.
 #[allow(clippy::too_many_arguments)]
 pub fn match_one_way_sweep(
     sorted_kpts1: &[f64],
@@ -294,20 +356,33 @@ pub fn match_one_way_sweep(
     sorted_kpts2: &[f64],
     sorted_descs2: &[u8],
     n2: usize,
+    desc_len: usize,
     window_size: usize,
     threshold: Option<f64>,
-) -> SweepMatches {
-    match_one_way_sweep_inner(
+) -> Result<SweepMatches, MatchImagePairError> {
+    check_sweep_arrays(
+        &SORTED_NAMES,
         sorted_kpts1,
         sorted_descs1,
         n1,
         sorted_kpts2,
         sorted_descs2,
         n2,
+        desc_len,
+        None,
+    )?;
+    Ok(match_one_way_sweep_inner(
+        sorted_kpts1,
+        sorted_descs1,
+        n1,
+        sorted_kpts2,
+        sorted_descs2,
+        n2,
+        desc_len,
         window_size,
         threshold,
         None,
-    )
+    ))
 }
 
 /// One-way Y-sweep nearest-neighbor match with geometric filtering on pre-sorted features.
@@ -327,6 +402,7 @@ pub fn match_one_way_sweep(
 /// * `n2` – Number of features in image 2.
 /// * `sorted_affines1` – Affine shapes for image 1, flat row-major Nx4.
 /// * `sorted_affines2` – Affine shapes for image 2, flat row-major Mx4.
+/// * `desc_len` – Number of bytes per descriptor (typically 128).
 /// * `window_size` – Number of Y-neighbors to consider from image 2.
 /// * `threshold` – Optional L2 distance ceiling.
 /// * `geom` – Precomputed camera geometry.
@@ -335,6 +411,12 @@ pub fn match_one_way_sweep(
 /// # Returns
 ///
 /// A map from sorted index in image 1 to `(sorted_index_in_image_2, distance)`.
+///
+/// # Errors
+///
+/// [`MatchImagePairError::FeatureArrayLength`], as from
+/// [`match_one_way_sweep`], and also when an affine-shape array does not hold
+/// 4 values per feature.
 #[allow(clippy::too_many_arguments)]
 pub fn match_one_way_sweep_geometric(
     sorted_kpts1: &[f64],
@@ -345,18 +427,31 @@ pub fn match_one_way_sweep_geometric(
     n2: usize,
     sorted_affines1: &[f64],
     sorted_affines2: &[f64],
+    desc_len: usize,
     window_size: usize,
     threshold: Option<f64>,
     geom: &StereoPairGeometry,
     config: &GeometricFilterConfig,
-) -> SweepMatches {
-    match_one_way_sweep_inner(
+) -> Result<SweepMatches, MatchImagePairError> {
+    check_sweep_arrays(
+        &SORTED_NAMES,
         sorted_kpts1,
         sorted_descs1,
         n1,
         sorted_kpts2,
         sorted_descs2,
         n2,
+        desc_len,
+        Some((sorted_affines1, sorted_affines2)),
+    )?;
+    Ok(match_one_way_sweep_inner(
+        sorted_kpts1,
+        sorted_descs1,
+        n1,
+        sorted_kpts2,
+        sorted_descs2,
+        n2,
+        desc_len,
         window_size,
         threshold,
         Some(&GeometricInputs {
@@ -367,7 +462,7 @@ pub fn match_one_way_sweep_geometric(
             geom,
             config,
         }),
-    )
+    ))
 }
 
 /// Full bidirectional Y-sweep matching with mutual consistency check.
@@ -391,8 +486,14 @@ pub fn match_one_way_sweep_geometric(
 ///
 /// # Returns
 ///
-/// `Vec<(orig_idx1, orig_idx2, distance)>` for every pair that is each
-/// other's best match, sorted by `orig_idx1`.
+/// `(orig_idx1, orig_idx2, distance)` for every pair that is each other's
+/// best match, sorted by `orig_idx1`.
+///
+/// # Errors
+///
+/// [`MatchImagePairError::FeatureArrayLength`], before anything is matched,
+/// when a keypoint array does not hold 2 values per feature or a descriptor
+/// array does not hold `desc_len` bytes per feature.
 #[allow(clippy::too_many_arguments)]
 pub fn mutual_best_match_sweep(
     keypoints1: &[f64],
@@ -404,8 +505,19 @@ pub fn mutual_best_match_sweep(
     desc_len: usize,
     window_size: usize,
     threshold: Option<f64>,
-) -> Vec<(usize, usize, f64)> {
-    mutual_best_match_sweep_inner(
+) -> Result<Vec<(usize, usize, f64)>, MatchImagePairError> {
+    check_sweep_arrays(
+        &UNSORTED_NAMES,
+        keypoints1,
+        descriptors1,
+        n1,
+        keypoints2,
+        descriptors2,
+        n2,
+        desc_len,
+        None,
+    )?;
+    Ok(mutual_best_match_sweep_inner(
         keypoints1,
         descriptors1,
         n1,
@@ -416,7 +528,7 @@ pub fn mutual_best_match_sweep(
         window_size,
         threshold,
         None,
-    )
+    ))
 }
 
 /// Full bidirectional Y-sweep matching with geometric filtering and mutual consistency.
@@ -442,8 +554,14 @@ pub fn mutual_best_match_sweep(
 ///
 /// # Returns
 ///
-/// `Vec<(orig_idx1, orig_idx2, distance)>` for every pair that is each
-/// other's best match, sorted by `orig_idx1`.
+/// `(orig_idx1, orig_idx2, distance)` for every pair that is each other's
+/// best match, sorted by `orig_idx1`.
+///
+/// # Errors
+///
+/// [`MatchImagePairError::FeatureArrayLength`], as from
+/// [`mutual_best_match_sweep`], and also when an affine-shape array does not
+/// hold 4 values per feature.
 #[allow(clippy::too_many_arguments)]
 pub fn mutual_best_match_sweep_geometric(
     keypoints1: &[f64],
@@ -459,8 +577,19 @@ pub fn mutual_best_match_sweep_geometric(
     threshold: Option<f64>,
     geom: &StereoPairGeometry,
     config: &GeometricFilterConfig,
-) -> Vec<(usize, usize, f64)> {
-    mutual_best_match_sweep_inner(
+) -> Result<Vec<(usize, usize, f64)>, MatchImagePairError> {
+    check_sweep_arrays(
+        &UNSORTED_NAMES,
+        keypoints1,
+        descriptors1,
+        n1,
+        keypoints2,
+        descriptors2,
+        n2,
+        desc_len,
+        Some((affines1, affines2)),
+    )?;
+    Ok(mutual_best_match_sweep_inner(
         keypoints1,
         descriptors1,
         n1,
@@ -478,7 +607,7 @@ pub fn mutual_best_match_sweep_geometric(
             geom,
             config,
         }),
-    )
+    ))
 }
 
 /// Return indices that would sort an Nx2 row-major keypoint array by Y,

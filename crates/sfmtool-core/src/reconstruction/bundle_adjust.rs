@@ -1516,7 +1516,13 @@ impl Problem<'_> {
             options.min_track,
             options.min_obs,
             progress,
-        );
+        )
+        // Every array here is gathered from one reconstruction, whose image
+        // set holds only adjustments its cameras can take, and the checks in
+        // `bundle_adjust` above leave only releases each camera's model
+        // admits, with a scanlines setting for every camera releasing its
+        // rates. So the kernel has nothing to refuse.
+        .expect("the gathered kernel input is consistent");
         next.is_dir.clone_from(&result.point_at_infinity);
         next.cameras.clone_from(&result.cameras);
         next.adjustments.clone_from(&result.image_adjustments);
