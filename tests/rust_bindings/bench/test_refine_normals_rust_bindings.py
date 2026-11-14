@@ -163,6 +163,12 @@ def test_a_run_it_cannot_do_is_refused(ground_truth, images):
         refine_normals(ground_truth, images, spot_window=0)
     with pytest.raises(ValueError, match="resolution"):
         refine_normals(ground_truth, images, resolution=1)
+    # A working grid or first window too large to allocate is refused, not a
+    # panic.
+    with pytest.raises(ValueError, match="working_resolution"):
+        refine_normals(ground_truth, images, working_resolution=2**31)
+    with pytest.raises(ValueError, match="spot_window"):
+        refine_normals(ground_truth, images, spot_window=2**31)
     with pytest.raises(ValueError, match="max_grid_rounds"):
         refine_normals(ground_truth, images, max_grid_rounds=0)
     with pytest.raises(ValueError, match="stage_turn_cap_deg"):

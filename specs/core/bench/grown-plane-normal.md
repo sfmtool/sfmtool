@@ -144,7 +144,8 @@ pub struct GrownPlaneNormalOptions {
 impl GrownPlaneNormalOptions {
     /// Refuses a setting the step cannot run with, naming the first that
     /// fails: NormalError::BadGrownPlaneOption("zncc_tolerance"), or
-    /// ("resolution") for a fit.refine.resolution under 2 or over 1024. The turned
+    /// ("resolution") for a fit.refine.resolution under 2 or over 1024, or
+    /// ("working_resolution") / ("spot_window") for one over 2048. The turned
     /// support's three settings are checked with it off too.
     pub fn check(&self) -> Result<(), NormalError>;
 }
@@ -1417,8 +1418,8 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `working_resolution` | `None` | Side of the working grid, samples; `None` follows the reference's footprint, clamped to `R ..= 2R`, as `grid_plane_normal` does; at least `spot_window` |
-| `spot_window` | `7` | Side of the first window, grid px, centred on the grid's centre sample; at least 1 |
+| `working_resolution` | `None` | Side of the working grid, samples; `None` follows the reference's footprint, clamped to `R ..= 2R`, as `grid_plane_normal` does; at least `spot_window`; at most 2048, as `grid_plane_normal`'s |
+| `spot_window` | `7` | Side of the first window, grid px, centred on the grid's centre sample; from 1 to 2048, since the working grid is at least as wide |
 | `window_fractions` | `[1/8, 1/5, 1/3, 1/2]` | Half-widths of the later windows as fractions of the grid's side, rounded, any no wider than the first window's dropped: 6, 10, 16, 24 on a 48 grid; 4, 6, 11, 16 on a 32 grid; 5, 8, 12 on a 24 grid; each finite and above 0 |
 | `zncc_tolerance` | `0.01` | ZNCC difference noise can produce, τ; finite and above 0 |
 | `max_agreement_distance` | `3.0` | Largest Mahalanobis distance of an estimate's plane from the combined plane |

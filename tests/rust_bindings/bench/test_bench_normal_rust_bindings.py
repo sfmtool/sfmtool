@@ -265,6 +265,13 @@ class TestGridPlaneNormal:
         with pytest.raises(ValueError, match="acceptance"):
             grid_plane_normal(fitted, edited, images, acceptance="always")
 
+    def test_a_working_grid_past_2048_is_refused(self, fitted, edited, images):
+        # Refused rather than allocated, up to a side whose sizes would
+        # overflow.
+        for side in (2049, 2**31):
+            with pytest.raises(ValueError, match="working_resolution"):
+                grid_plane_normal(fitted, edited, images, working_resolution=side)
+
 
 GROWN_VIEW_KEYS = {
     "reference": {"kind"},
@@ -607,6 +614,12 @@ class TestGrownPlaneNormal:
             # than allocated.
             ("resolution", 1025),
             ("resolution", 2**31),
+            # Past 2048, the working grid and the first window, which the
+            # grid is at least as wide as.
+            ("working_resolution", 2049),
+            ("working_resolution", 2**31),
+            ("spot_window", 2049),
+            ("spot_window", 2**31),
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})

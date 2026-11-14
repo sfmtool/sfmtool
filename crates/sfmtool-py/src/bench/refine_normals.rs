@@ -278,6 +278,7 @@ fn normal_error_name(e: &NormalError) -> &'static str {
         NormalError::BadOverlap(_) => "bad_overlap",
         NormalError::TooFewPieces { .. } => "too_few_pieces",
         NormalError::TooFewGridPieces { .. } => "too_few_grid_pieces",
+        NormalError::BadGridPlaneOption(_) => "bad_grid_plane_option",
         NormalError::BadGrownPlaneOption(_) => "bad_grown_plane_option",
         NormalError::BadPairwiseFlowOption(_) => "bad_pairwise_flow_option",
         NormalError::Flow(_) => "flow",

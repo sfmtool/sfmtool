@@ -164,6 +164,9 @@ pub enum NormalError {
         /// How many the grid holds.
         of: usize,
     },
+    /// A [`GridPlaneNormalOptions`] setting, named, is outside what the step
+    /// takes ([`GridPlaneNormalOptions::check`]).
+    BadGridPlaneOption(&'static str),
     /// A [`GrownPlaneNormalOptions`] setting, named, is outside what the step
     /// takes ([`GrownPlaneNormalOptions::check`]).
     BadGrownPlaneOption(&'static str),
@@ -221,6 +224,9 @@ impl std::fmt::Display for NormalError {
                 f,
                 "{fitted} of the grid's {of} pieces fitted, and a plane needs more"
             ),
+            NormalError::BadGridPlaneOption(name) => {
+                write!(f, "the grid plane normal's {name} is outside what it takes")
+            }
             NormalError::BadGrownPlaneOption(name) => {
                 write!(
                     f,

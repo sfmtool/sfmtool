@@ -722,7 +722,7 @@ pub struct GridPlaneNormalOptions {
     pub cell_shift_bound_px: f32,       // search bound and render margin, grid px, 2.0
     pub min_cell_zncc: f32,             // BENCH_MIN_CELL_ZNCC, 0.6
     pub min_cell_curvature: f32,        // DEFAULT_MIN_CELL_CURVATURE, 0.02
-    pub working_resolution: Option<u32>, // None: the reference view's footprint, clamped to R..=2R
+    pub working_resolution: Option<u32>, // None: the reference view's footprint, clamped to R..=2R; at most 2048
     pub plane: CellPlaneParams,         // the cell plane kernel's, default
     pub update_tolerance_px: f32,       // largest cell-centre movement of a turn, 0.05
     pub max_iterations: u8,             // renders, 5
@@ -730,6 +730,13 @@ pub struct GridPlaneNormalOptions {
     pub max_normal_precision_deg: Option<f64>, // precision gate, None: off
     pub fit: FitOptions,                // the reading it ends with; tile sampler; reference rule
     pub record_detail: bool,            // keep a GridPlaneDetail of every render, false
+}
+
+impl GridPlaneNormalOptions {
+    // NormalError::BadGridPlaneOption("working_resolution") for a side over
+    // 2048, or ("resolution") for a fit.refine.resolution outside 2..=1024;
+    // grid_plane_normal asks it before reading a view.
+    pub fn check(&self) -> Result<(), NormalError>;
 }
 
 pub enum GridPlaneAcceptance { WindowedZncc, None }
@@ -3057,7 +3064,11 @@ clamped to `R ..= 2R`. The cap bounds the cost, which grows with the square
 of the side, for a patch seen close up across hundreds of pixels; the floor
 keeps the grid no coarser than the bitmap's. The side is chosen once, from
 the starting frame, so every render of the loop is on one grid; `Some(n)`
-sets it instead.
+sets it instead, raised to 3 and refused over 2048. 2048 is twice the largest
+fit resolution the step takes (1024), the side the `None` rule reaches at that
+resolution; every view's tile on the grid is held at once, so a far larger
+side would ask for more memory than the step can be given, and a side of 2^31
+overflows.
 
 Each pass renders every `in` view once at the track's current frame, as a
 *context tile*: the patch slid onto the view's keypoint
@@ -3908,7 +3919,9 @@ refuses bad settings before it reads a photograph; Track View's Grid Plane
 Normal is `layout="grid", pieces=2, overlap=0.0`. `grid_plane_normal` takes
 `working_resolution`, `cell_shift_bound_px`, `min_cell_zncc`,
 `min_cell_curvature`, `update_tolerance_px` and `max_iterations`, each
-defaulting to `GridPlaneNormalOptions::default()`'s when `None`, `acceptance`
+defaulting to `GridPlaneNormalOptions::default()`'s when `None` and refused,
+before a photograph is read, where `GridPlaneNormalOptions::check` refuses
+them, `acceptance`
 as the word `"windowed_zncc"` (the default) or `"none"`, and
 `max_normal_precision_deg` (default `None`); the plane fit's
 `CellPlaneParams` keep their defaults. Each returns `(EditableTrack,
@@ -4469,6 +4482,11 @@ unit-tested in `normal.rs` itself.
   the entry's proposed normal up to sign, with its weaker-axis precision the
   entry's. The last render's cells and views give the report's statuses, ray
   counts and weights, and the first render's frame is the start's.
+- The options' check: a
+  `working_resolution` of 2048 and a fit resolution of 1024 pass; a side of
+  2049, 2^31 or `u32::MAX` is refused as `working_resolution`, a resolution of
+  0, 1, 1025, 2^31 or `u32::MAX` as `resolution`, and the step refuses a side
+  of 2^31 before it reads a view.
 
 The loop's rules are unit-tested in `normal/grid_plane/tests.rs` on a state
 that is a number: a turn that lowers the score is not kept, the tolerance does

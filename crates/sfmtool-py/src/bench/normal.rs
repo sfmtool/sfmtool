@@ -847,10 +847,12 @@ fn finite_difference_normal(
 /// ``max_normal_precision_deg`` (default ``None``) is a bar on the plane's
 /// predicted precision in degrees: a plane predicted less precise proposes
 /// no turn, and the step ends ``"undetermined"``. ``working_resolution`` is
-/// the side of the working grid in samples; the
+/// the side of the working grid in samples, at most 2048; the
 /// default ``None`` follows the reference view's footprint of the patch,
 /// about one sample per photograph pixel, clamped to ``R`` to ``2R`` for
-/// ``R`` the bitmap's resolution. Every default is the Rust step's.
+/// ``R`` the bitmap's resolution. Every default is the Rust step's, and a
+/// setting outside what the step takes is refused before the photographs are
+/// decoded.
 ///
 /// Only a loop that converges with at least one axis fixed turns the patch
 /// (``outcome`` ``"turned"``); every other ending leaves the normal as it was
@@ -986,6 +988,8 @@ fn grid_plane_normal(
         record_detail,
         ..defaults
     };
+    // Refuse the settings before the photographs are decoded.
+    options.check().map_err(refused)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
     let views = views_of(&posed, &pyramids);
@@ -1011,7 +1015,7 @@ fn grid_plane_normal(
 ///
 /// The reference and the working grid are :func:`grid_plane_normal`'s. A view
 /// is grown against the reference from the starting plane: a
-/// ``spot_window``-sample window (default 7) at the grid's centre starts from
+/// ``spot_window``-sample window (default 7, 1 to 2048) at the grid's centre starts from
 /// the shift the view's keypoint implies; the window then grows through
 /// half-widths of ``window_fractions`` of the grid's side (default
 /// ``[1/8, 1/5, 1/3, 1/2]``, ``1/2`` covering the whole grid), with tilt and
