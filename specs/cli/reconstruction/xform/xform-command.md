@@ -1147,12 +1147,6 @@ which returns a new reconstruction:
 | `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, sorts each point's kept observations by their new image index (so a reordered list keeps the tracks sorted by point then image, each per-observation column and reference observation moving with its observation), and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. Works for both `sift_files` and `embedded_patches` reconstructions: the per-observation feature index or inline keypoint is filtered with the tracks. |
 | `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-zncc-self-similarity-radius`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
 
-A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
-performs the same mask-filter-and-remap on bare track columns (no
-reconstruction object). It is exposed to Python as
-`analysis.filter_tracks_by_point_mask` but the xform pipeline uses the
-reconstruction-level `filter_points_by_mask` instead.
-
 ## Usage Examples
 
 ```bash

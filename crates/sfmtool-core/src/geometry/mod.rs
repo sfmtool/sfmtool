@@ -29,7 +29,6 @@ pub mod rotation;
 pub mod rotation_init;
 pub mod se3_transform;
 pub(crate) mod simd;
-pub mod transform;
 pub mod translation_averaging;
 pub mod viewing_angle;
 

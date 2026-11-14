@@ -3,7 +3,7 @@
 
 use super::*;
 use approx::assert_relative_eq;
-use std::f64::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_4};
+use std::f64::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_4, PI};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -263,7 +263,7 @@ fn apply_to_camera_pose_round_trip() {
     assert_relative_eq!(back_trans.z, cam_trans.z, epsilon = 1e-10);
 }
 
-// ── apply_to_camera_poses_flat tests (matching transform.rs tests) ──
+// ── apply_to_camera_poses_flat ──────────────────────────────────────
 
 #[test]
 fn flat_identity_preserves_poses() {
@@ -333,6 +333,61 @@ fn flat_scale_triples_distances() {
     );
     assert_relative_eq!(center.x, 6.0, epsilon = 1e-10);
     assert_relative_eq!(center.y, 0.0, epsilon = 1e-10);
+    assert_relative_eq!(center.z, 0.0, epsilon = 1e-10);
+}
+
+#[test]
+fn flat_rotation_and_translation_move_center() {
+    // 90° around Z, then shift by (10, 0, 0)
+    let se3 = Se3Transform::new(
+        RotQuaternion::from_axis_angle(Vector3::z(), FRAC_PI_2).unwrap(),
+        Vector3::new(10.0, 0.0, 0.0),
+        1.0,
+    );
+
+    // Camera at (1,0,0): identity rotation, t = -R*C = (-1,0,0)
+    let cam_q = [1.0, 0.0, 0.0, 0.0];
+    let cam_t = [-1.0, 0.0, 0.0];
+
+    let mut out_q = [0.0; 4];
+    let mut out_t = [0.0; 3];
+
+    se3.apply_to_camera_poses_flat(&cam_q, &cam_t, &mut out_q, &mut out_t);
+
+    // Center = R*(1,0,0) + t = (0,1,0) + (10,0,0) = (10,1,0)
+    let center = camera_center(
+        &RotQuaternion::from_wxyz_array([out_q[0], out_q[1], out_q[2], out_q[3]]),
+        &Vector3::new(out_t[0], out_t[1], out_t[2]),
+    );
+    assert_relative_eq!(center.x, 10.0, epsilon = 1e-10);
+    assert_relative_eq!(center.y, 1.0, epsilon = 1e-10);
+    assert_relative_eq!(center.z, 0.0, epsilon = 1e-10);
+}
+
+#[test]
+fn flat_arbitrary_axis_rotation_moves_center() {
+    // 180° around (1,1,0)/sqrt(2) maps (1,0,0) to (0,1,0)
+    let se3 = Se3Transform::new(
+        RotQuaternion::from_axis_angle(Vector3::new(1.0, 1.0, 0.0), PI).unwrap(),
+        Vector3::zeros(),
+        1.0,
+    );
+
+    // Camera at (1,0,0): identity rotation, t = -R*C = (-1,0,0)
+    let cam_q = [1.0, 0.0, 0.0, 0.0];
+    let cam_t = [-1.0, 0.0, 0.0];
+
+    let mut out_q = [0.0; 4];
+    let mut out_t = [0.0; 3];
+
+    se3.apply_to_camera_poses_flat(&cam_q, &cam_t, &mut out_q, &mut out_t);
+
+    let center = camera_center(
+        &RotQuaternion::from_wxyz_array([out_q[0], out_q[1], out_q[2], out_q[3]]),
+        &Vector3::new(out_t[0], out_t[1], out_t[2]),
+    );
+    assert_relative_eq!(center.x, 0.0, epsilon = 1e-10);
+    assert_relative_eq!(center.y, 1.0, epsilon = 1e-10);
     assert_relative_eq!(center.z, 0.0, epsilon = 1e-10);
 }
 

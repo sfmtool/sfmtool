@@ -11,7 +11,6 @@ pub mod drop_image_adjustments;
 mod edit;
 pub mod edited;
 mod embed;
-pub mod filter;
 pub mod image_adjustment_statistics;
 pub mod image_readings;
 pub mod minimal;
