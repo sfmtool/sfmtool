@@ -262,7 +262,7 @@ All 16 files (4,369 lines) were read in full, with Python probes against the reb
 - Effort: medium.
 - Risk: low.
 
-> _Status (2026-11-13): **Done** — core `PatchCloud::from_tracks` checks its array lengths, offsets and image indexes (`PatchCloudError::InputLength`, `ObservationOffsets`, `ImageIndexOutOfRange`); core `spawn_candidate_tracks` returns a new `SpawnError` for mismatched lengths, an out-of-range or infinity parent and an out-of-range patch view; `render_patch_cloud_bitmaps` and `read_cloud_observations` return a new `CloudRenderError` for missing inline keypoints, missing or out-of-range point indexes and a view count that is not one per image. The bindings raise these as `ValueError` and drop the checks core now makes, branch `hyg-fix2-1113-04-patch-core-input-checks`._
+> _Status (2026-11-13): **Done** — core `PatchCloud::from_tracks` checks its array lengths, offsets and image indexes (`PatchCloudError::InputLength`, `ObservationOffsets`, `ImageIndexOutOfRange`); core `spawn_candidate_tracks` returns a new `SpawnError` for mismatched lengths, an out-of-range or infinity parent and an out-of-range patch view; `render_patch_cloud_bitmaps` and `read_cloud_observations` return a new `CloudRenderError` for missing inline keypoints, missing or out-of-range point indexes and a view count that is not one per image. The bindings raise these as `ValueError` and drop the checks core now makes; the spawn and render bindings run core's public `check_spawn_requests` and `check_cloud_render` before building the image pyramids, branch `hyg-fix2-1113-04-patch-core-input-checks`._
 
 **Raise the method's own error for a CameraViews in `render_bitmaps` and `read_observations`**
 - Location: `render_bitmaps.rs:101-105,199-203`.
