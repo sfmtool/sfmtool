@@ -163,10 +163,12 @@ def _camera_groups(names: list[str], workspace_dir: Path) -> list[tuple[str, lis
     """
     from .._pick_images import PickImagesInputError, find_rigs
     from ..camera.config import CameraConfigError, CameraConfigResolver
+    from ..camrig.resolver import single_sensor_camera_groups
 
     root = Path(workspace_dir).resolve()
+    paths = [(root / name).resolve() for name in names]
     try:
-        rigs, cameras, _notes = find_rigs([root / name for name in names], root)
+        rigs, cameras, _notes = find_rigs(paths, root)
     except PickImagesInputError as e:
         raise click.ClickException(str(e)) from None
 
@@ -180,25 +182,27 @@ def _camera_groups(names: list[str], workspace_dir: Path) -> list[tuple[str, lis
             label_of[path] = (
                 f"{rel(rig.camrig_file)} sensor {sensor} ({patterns[sensor]})"
             )
-    for camera in cameras:
-        for path in camera.images:
-            label_of[path] = rel(camera.camrig_file)
-    resolver = CameraConfigResolver(workspace_dir)
+    # The images no multi-sensor `.camrig` covers take the cameras a solve
+    # gives its single images.
+    single = [path for path in paths if path not in label_of]
+    try:
+        single_groups = single_sensor_camera_groups(
+            single, CameraConfigResolver(workspace_dir), cameras
+        )
+    except CameraConfigError as e:
+        raise click.ClickException(str(e)) from None
+    for key, positions in single_groups.items():
+        if isinstance(key, int):
+            label = rel(cameras[key].camrig_file)
+        elif key is None:
+            label = "no .camrig or camera_config.json (EXIF)"
+        else:
+            label = rel(key)
+        for position in positions:
+            label_of[single[position]] = label
     groups: dict[str, list[str]] = {}
-    for name in names:
-        path = (root / name).resolve()
-        label = label_of.get(path)
-        if label is None:
-            try:
-                config = resolver.resolve_for_image(path)
-            except CameraConfigError as e:
-                raise click.ClickException(str(e)) from None
-            label = (
-                "no .camrig or camera_config.json (EXIF)"
-                if config is None
-                else rel(config[0])
-            )
-        groups.setdefault(label, []).append(name)
+    for name, path in zip(names, paths):
+        groups.setdefault(label_of[path], []).append(name)
     return list(groups.items())
 
 

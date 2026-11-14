@@ -275,9 +275,9 @@ the rejection counters (`n_h_dominated`, `n_estimator_failed`,
 or parallax-poor. No consensus is still exit code 0 -- the report is the
 product; only I/O failures and rejected inputs are errors.
 
-`--json` emits the vote dict verbatim at the top level, for scripting, plus
-the image counts, `image_count` (the file's images) and
-`selected_image_count` (the images the vote ran on, all of them without
+For images of one camera, `--json` emits the vote dict verbatim at the top
+level, for scripting, plus the image counts, `image_count` (the file's
+images) and `selected_image_count` (the images the vote ran on, all of them without
 `-r`), and six keys the estimate supplies: `fisheye_confirmed`,
 `certified_rotation_mass`, `diagonal_fov_deg`, `escalation` (the weak-vote
 reasons that made the columns worth running, `[]` when they did not run, and
@@ -524,10 +524,10 @@ The report blocks then go to stderr, so stdout holds the JSON alone.
 - The cameras of the selected images come from `find_rigs` in
   [`_pick_images.py`](../../../src/sfmtool/_pick_images.py), which finds the
   `.camrig` files as `sfm solve` does and assigns each rig image its sensor,
-  and from `CameraConfigResolver` for the images no `.camrig` covers -- the
-  partition `_single_sensor_cameras` in
-  [`db_builders.py`](../../../src/sfmtool/colmap/db_builders.py) gives a solve's
-  single images.
+  and from `single_sensor_camera_groups` in
+  [`camrig/resolver.py`](../../../src/sfmtool/camrig/resolver.py) for the
+  images no multi-sensor `.camrig` covers, the function that groups a solve's
+  single images into cameras.
 - `-r` is resolved by `matches_image_filter` in
   [`_range_options.py`](../../../src/sfmtool/_commands/_range_options.py),
   the function `sfm solve` filters a `.matches` file's images with, and the

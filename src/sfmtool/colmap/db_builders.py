@@ -17,7 +17,12 @@ from ..camera.setup import (
     intrinsics_for_image,
 )
 from ..camera.cameras import colmap_camera_from_intrinsics
-from ..camrig.resolver import CamrigCamera, CamrigRig, CamrigSolveResult
+from ..camrig.resolver import (
+    CamrigCamera,
+    CamrigRig,
+    CamrigSolveResult,
+    single_sensor_camera_groups,
+)
 from ..fileio import SiftFile
 
 
@@ -35,28 +40,17 @@ def _single_sensor_cameras(
     of the images) is one camera, and an image takes the camera of the file
     that covers it. Of the images no such file covers, those that resolve the
     same `camera_config.json` share one camera built from that file, and
-    those that resolve none share one camera inferred from EXIF. A camera is
+    those that resolve none share one camera inferred from EXIF
+    (`single_sensor_camera_groups`). A camera is
     built from its first image, so its focal length and principal point are
     scaled to that image's resolution. With `camera_model`, the camera of
     each `camera_config.json` is refit to it (one report line per camera) and
     the EXIF camera takes that model; `.camrig` cameras arrive already refit
     by the resolver.
     """
-    camrig_index_of = {
-        path: index
-        for index, camrig_camera in enumerate(camrig_cameras or [])
-        for path in camrig_camera.images
-    }
-    # A group key is the index of a `.camrig` camera, the path of a
-    # `camera_config.json`, or `None` for the images whose camera EXIF gives.
-    groups: dict[int | Path | None, list[int]] = {}
-    for position, image_path in enumerate(image_paths):
-        key = camrig_index_of.get(Path(image_path).resolve())
-        if key is None and camera_config_resolver is not None:
-            resolved = camera_config_resolver.resolve_for_image(Path(image_path))
-            key = resolved[0] if resolved is not None else None
-        groups.setdefault(key, []).append(position)
-
+    groups = single_sensor_camera_groups(
+        image_paths, camera_config_resolver, camrig_cameras
+    )
     cameras: list[tuple[pycolmap.Camera, list[int]]] = []
     for key, positions in groups.items():
         first_image = Path(image_paths[positions[0]])
