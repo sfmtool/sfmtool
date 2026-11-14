@@ -237,7 +237,8 @@ have been. Every such camera the solve uses is refit: each camera of a multi-sen
 refit to `SIMPLE_RADIAL` keeps its focal and gains `radial_distortion_k1 = 0`, a term the
 solve's bundle adjustment then refines. One line per refit camera names it, the two models, and the fit's rms and max in pixels, followed
 by a line for each term the target model cannot represent. The line names the camera by
-the file it comes from, by its path in the workspace, after the line that says the file is used:
+the file it comes from, by its path in the workspace written with forward slashes, after the
+line that says the file is used:
 
 ```
 Camera intrinsics: using shopA/frame.camrig

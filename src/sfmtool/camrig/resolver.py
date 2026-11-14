@@ -222,7 +222,7 @@ def _refit_camera(camera: dict, camera_model: str, camera_name: str) -> dict:
 
 def _resolve_single_sensor(
     camrig_file: Path,
-    shown_path: Path,
+    shown_path: str,
     data: dict,
     covered: set[Path],
     camera_model,
@@ -242,7 +242,7 @@ def _resolve_single_sensor(
 
 def _resolve_multi_sensor(
     camrig_file: Path,
-    shown_path: Path,
+    shown_path: str,
     data: dict,
     solve_set: set[Path],
     camera_model,
@@ -467,7 +467,7 @@ def resolve_camrig_for_solve(
     result = CamrigSolveResult()
     for camrig_file, data, covered in hits:
         # The report lines name each file by its path in the workspace.
-        shown_path = camrig_file.relative_to(workspace_dir)
+        shown_path = camrig_file.relative_to(workspace_dir).as_posix()
         if data["metadata"]["sensor_count"] > 1:
             result.rigs.append(
                 _resolve_multi_sensor(

@@ -299,7 +299,9 @@ def intrinsics_for_image(
     if camera_model_override is not None:
         # The report line names the file by its path in the workspace, as
         # the `.camrig` lines do; a resolved file is always inside it.
-        shown_path = config_path.relative_to(camera_config_resolver.workspace_dir)
+        shown_path = config_path.relative_to(
+            camera_config_resolver.workspace_dir
+        ).as_posix()
         intrinsics = refit_intrinsics_to_model(
             intrinsics, camera_model_override, f"the camera of {shown_path}"
         )

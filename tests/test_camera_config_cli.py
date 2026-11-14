@@ -176,7 +176,7 @@ def test_to_colmap_db_refits_camrig_camera(seoul_bull_workspace: Path, tmp_path:
     assert camera.has_prior_focal_length
     assert camrig_file.read_bytes() == before
     assert (
-        f"The camera of {camrig_file.relative_to(workspace_dir)}: "
+        f"The camera of {camrig_file.relative_to(workspace_dir).as_posix()}: "
         "SIMPLE_PINHOLE -> SIMPLE_RADIAL" in result.output
     )
 
@@ -329,7 +329,7 @@ def test_solve_refused_refit_is_a_clean_error(isolated_seoul_bull_17_images):
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
     assert (
-        f"cannot switch the camera of {camrig_file.relative_to(workspace_dir)} from "
+        f"cannot switch the camera of {camrig_file.relative_to(workspace_dir).as_posix()} from "
         "EQUIDISTANT_FISHEYE to PINHOLE"
     ) in result.output
     assert "Traceback" not in result.output

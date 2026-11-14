@@ -186,7 +186,7 @@ def test_one_camera_per_camera_config_and_one_for_exif(
     # One report line per refit file.
     out = capsys.readouterr().out
     for folder in ("gopro", "drone"):
-        line = f"The camera of {Path(folder) / 'camera_config.json'}: "
+        line = f"The camera of {folder}/camera_config.json: "
         assert out.count(line + "SIMPLE_PINHOLE -> SIMPLE_RADIAL") == 1
 
 

@@ -486,7 +486,7 @@ def test_resolve_camrig_names_a_shared_rig_camera_by_its_sensors(
     )
     left = sorted((rig_dir / "left").glob("*.jpg"))
     right = sorted((rig_dir / "right").glob("*.jpg"))
-    shown = Path("rig") / "pair.camrig"
+    shown = "rig/pair.camrig"
 
     resolve_camrig_for_solve(left + right, tmp_path, "simple_radial")
     resolve_camrig_for_solve(right, tmp_path, "simple_radial")

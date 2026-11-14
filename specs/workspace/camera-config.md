@@ -233,9 +233,9 @@ with the `has_prior_focal_length` setting the file gives it, and the file is not
 | An image resolves a `camera_config.json`, no `--camera-model` flag | File is used (full, partial, or model-only — whatever it specifies) |
 | An image resolves a `camera_config.json` AND `--camera-model` is set | The file's camera is refit to the model, and one line reports the fit |
 
-The report line names the file by its path in the workspace and gives both models and
-the fit's rms and max in pixels, followed by a line for each term the new model cannot
-represent:
+The report line names the file by its path in the workspace, written with forward slashes,
+and gives both models and the fit's rms and max in pixels, followed by a line for each
+term the new model cannot represent:
 
 ```
 The camera of gopro/camera_config.json: SIMPLE_RADIAL -> OPENCV, fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px
