@@ -59,9 +59,9 @@ callers refill).
 The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
 (`bundle_adjust`, `BaCameras`, `BaSchedule`, `BundleAdjustment`,
-`BaInputError`, `CameraRelease`, `ImagePriorOptions`, `ImagePriorWidths`, `ImagePrior`,
-`PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`,
-`FreePointDecision`), bound as `sfmtool.geometry.bundle_adjust`.
+`BaInputError`, `CameraRelease`, `ImagePriorOptions`, `ImagePriorWidths`,
+`ImagePrior`, `PointConstraint`, `PointConstraints`, `DistanceReference`,
+`FreePointPolicy`, `FreePointDecision`), bound as `sfmtool.geometry.bundle_adjust`.
 
 ```rust
 pub struct BaSchedule {
