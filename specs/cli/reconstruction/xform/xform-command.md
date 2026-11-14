@@ -678,8 +678,8 @@ patch frames carried through unchanged — note that the patch `(u, v)` frames a
 #### `--refine-normals`
 
 Turns each finite point's patch to its grown-plane normal, one plane fitted to
-the photographs the point is seen in, as the viewer's *Refine All Normals*
-does, leaving the point count, positions, keypoints, poses and cameras
+the photographs the point is seen in, as the viewer's *Refine All Normals ▸
+Grown Plane* does, leaving the point count, positions, keypoints, poses and cameras
 unchanged. It reads the workspace source images, so those must still be
 present where the reconstruction was created. A turned point gets a new normal,
 patch frame, colour and observation readings, and a new bitmap where the
