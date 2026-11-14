@@ -6,7 +6,6 @@
 //! ``specs/core/analysis/cluster-census.md``).
 
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
-
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
