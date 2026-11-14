@@ -156,6 +156,8 @@ distorted.
 
 - **Single measurement**: The scale factor is used directly (no median needed).
 - **Zero reconstruction distance**: Error — the two points are coincident in the reconstruction.
+- **Point at infinity**: Error naming the measurement and the Point ID — a `w = 0` point is a
+  direction with no position, so no distance to it can be measured.
 - **Negative or zero real distance**: Error at parse time.
 
 ## Point ID Resolution

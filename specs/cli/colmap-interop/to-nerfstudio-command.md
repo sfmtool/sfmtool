@@ -207,6 +207,14 @@ Positions are written as stored — the `.sfmr` world frame is already the
 Nerfstudio world frame (`applied_transform` is identity), so cameras and
 points share a frame with no re-transformation.
 
+A PLY vertex is a finite position, so points at infinity (`w = 0`) are first
+placed at a finite depth, far enough that their parallax is at most one pixel
+in every camera that observes them, as `to-colmap-bin` places them
+(`materialize_infinity_for_export` in `src/sfmtool/colmap/io.py`). The command
+prints "`  Nerfstudio export: materializing N point(s) at infinity`" when it
+moves any, and the PLY keeps one vertex per point. With `--include-colmap`,
+`sparse/` holds the same finite points.
+
 Hand-rolled writer (`write_sparse_ply`) — the format has one element type
 and six fixed properties, so an external PLY library would add more
 indirection than code. The reference `ns-process-data` output is also

@@ -257,3 +257,31 @@ class TestEmbeddedPatches:
         transform = ScaleByMeasurementsTransform(yaml_path)
         with pytest.raises(ValueError, match="no feature indexes"):
             transform.apply(recon)
+
+
+def test_a_measured_point_at_infinity_is_refused(seoul_bull_sfmr_only, tmp_path):
+    """A ``w = 0`` point is a direction, so a distance to it is refused with
+    the measurement and the Point ID named, not measured from the direction's
+    three numbers."""
+    recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+    xyzw = recon.positions_xyzw.copy()
+    xyzw[0] = [0.0, 0.0, 1.0, 0.0]
+    path = seoul_bull_sfmr_only.parent / "with_infinity.sfmr"
+    recon.clone_with_changes(positions=xyzw).save(path)
+    recon = SfmrReconstruction.load(path)
+    assert recon.point_is_at_infinity[0]
+    prefix = recon.content_xxh128[:8].lower()
+    yaml_path = tmp_path / "measurements.yaml"
+    yaml_path.write_text(
+        "unit: m\n"
+        "measurements:\n"
+        "  - label: sky\n"
+        f"    point_a: pt3d_{prefix}_0\n"
+        f"    point_b: pt3d_{prefix}_1\n"
+        "    distance: 2.0\n"
+    )
+
+    with pytest.raises(
+        ValueError, match=rf"'sky': point pt3d_{prefix}_0 .* is at infinity"
+    ):
+        ScaleByMeasurementsTransform(yaml_path).apply(recon)

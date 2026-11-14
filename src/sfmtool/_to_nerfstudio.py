@@ -289,6 +289,12 @@ def export_to_nerfstudio(
     with open(output_dir / "transforms.json", "w", encoding="utf-8") as f:
         json.dump(transforms, f, indent=4)
 
+    # A PLY vertex is a finite position and `recon.positions` holds a unit
+    # direction for a point at infinity, so those points are placed at a
+    # finite depth first, as the COLMAP export places them.
+    from .colmap.io import materialize_infinity_for_export
+
+    recon = materialize_infinity_for_export(recon, "Nerfstudio export")
     transformed_positions = apply_transform_to_points(np.asarray(recon.positions))
     write_sparse_ply(
         output_dir / "sparse_pc.ply", transformed_positions, np.asarray(recon.colors)

@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from sfmtool.visualization._common import get_color_palette
 from sfmtool.feature_match._geometry import get_fundamental_matrix
 from sfmtool.visualization._epipolar_display import (
+    _curve_anchor_depths,
     _draw_epipolar_line,
     _draw_polyline,
 )
@@ -134,6 +135,34 @@ class TestDrawPolyline:
         img = np.zeros((200, 200, 3), dtype=np.uint8)
         _draw_polyline(img, np.array([[10.0, 10.0]]), (255, 255, 255), 1)
         assert img.sum() == 0
+
+
+class TestCurveAnchorDepths:
+    def test_point_at_infinity_keeps_the_baseline_seed(self, seoul_bull_sfmr_only):
+        """A finite track point seeds its depth; a point at infinity has no
+        depth, so its feature keeps the baseline length, as an unmatched
+        feature does."""
+        from sfmtool.reconstruction import SfmrReconstruction
+
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        xyzw = recon.positions_xyzw.copy()
+        # Camera 1 sits at the origin looking down -Z; point 1 is 5 in front
+        # of it, and point 0 is the direction straight ahead, which the old
+        # depth formula read as a point 1 in front.
+        xyzw[0] = [0.0, 0.0, -1.0, 0.0]
+        xyzw[1] = [0.0, 0.0, -5.0, 1.0]
+        recon = recon.clone_with_changes(positions=xyzw)
+
+        depths = _curve_anchor_depths(
+            recon,
+            np.array([0, 1, -1], dtype=np.int64),
+            np.eye(3),
+            np.zeros(3),
+            np.eye(3),
+            np.array([-2.0, 0.0, 0.0]),
+        )
+
+        np.testing.assert_allclose(depths, [2.0, 5.0, 2.0])
 
 
 class TestEpipolarCurves:

@@ -11,6 +11,7 @@ from sfmtool._commands.heatmap import (
     _insert_metric_before_number,
     _observations_by_image,
     _output_stem,
+    _max_ray_angles_deg,
 )
 from sfmtool.cli import main
 from sfmtool.reconstruction import SfmrReconstruction
@@ -21,7 +22,6 @@ from sfmtool.visualization import (
     render_heatmap_overlay,
     value_to_color,
 )
-from sfmtool.visualization._heatmap_renderer import compute_triangulation_angles
 
 
 # =============================================================================
@@ -201,98 +201,60 @@ class TestOutputStem:
 # =============================================================================
 
 
-class TestComputeTriangulationAngles:
-    def test_two_cameras_known_angle(self):
-        """Two cameras separated along X axis, point on Z axis."""
-        from sfmtool.geometry import RotQuaternion
+def _expected_max_ray_angles_deg(recon) -> dict[int, float]:
+    """Each finite point's widest angle between two of its viewing rays, in
+    degrees, computed here from the camera centres and stored positions."""
+    from sfmtool.geometry import RotQuaternion
 
-        # Identity rotation for both cameras
-        q = RotQuaternion.identity()
-        qwxyz = q.to_wxyz_array()
-        quaternions = np.array([qwxyz, qwxyz])
+    quats = recon.quaternions_wxyz
+    translations = recon.translations
+    centres = np.array(
+        [
+            RotQuaternion.from_wxyz_array(q).camera_center(t)
+            for q, t in zip(quats, translations)
+        ]
+    )
+    xyzw = recon.positions_xyzw
+    rays: dict[int, list[np.ndarray]] = {}
+    for img, pt in zip(recon.track_image_indexes, recon.track_point_indexes):
+        if xyzw[pt, 3] == 0.0:
+            continue
+        ray = xyzw[pt, :3] / xyzw[pt, 3] - centres[img]
+        rays.setdefault(int(pt), []).append(ray / np.linalg.norm(ray))
+    out = {}
+    for pt, rs in rays.items():
+        r = np.array(rs)
+        dots = np.clip(r @ r.T, -1.0, 1.0)
+        out[pt] = float(np.degrees(np.arccos(dots.min())))
+    return out
 
-        # Camera 0 at origin, Camera 1 at (2, 0, 0)
-        # For identity rotation, camera center = -R^T @ t = -t
-        translations = np.array([[0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]])
 
-        # Point at (1, 0, 1) — equidistant from both cameras
-        positions = np.array([[1.0, 0.0, 1.0]])
+class TestMaxRayAngles:
+    def test_finite_points_match_their_viewing_rays(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        angles = _max_ray_angles_deg(recon)
+        expected = _expected_max_ray_angles_deg(recon)
+        assert angles.shape == (recon.point_count,)
+        assert len(expected) > 0
+        idx = np.array(list(expected))
+        np.testing.assert_allclose(angles[idx], [expected[i] for i in idx], atol=1e-3)
+        assert (angles[idx] > 0.0).any()
 
-        track_image_indexes = np.array([0, 1], dtype=np.uint32)
-        track_point_indexes = np.array([0, 0], dtype=np.uint32)
+    def test_point_at_infinity_has_zero_angle(self, seoul_bull_sfmr_only):
+        """A direction is seen along the same ray from every camera, so its
+        angle is 0, not the spread of rays to a point one unit from the
+        origin."""
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        counts = np.asarray(recon.observation_counts)
+        point = int(np.argmax(counts))
+        assert counts[point] >= 2
+        xyzw = recon.positions_xyzw.copy()
+        xyzw[point] = [0.0, 0.0, 1.0, 0.0]
+        recon = recon.clone_with_changes(positions=xyzw)
+        assert recon.point_is_at_infinity[point]
 
-        angles = compute_triangulation_angles(
-            positions,
-            quaternions,
-            translations,
-            track_image_indexes,
-            track_point_indexes,
-        )
-
-        # Expected angle: arctan(1/1) * 2 = 90 degrees
-        assert angles.shape == (1,)
-        assert abs(angles[0] - 90.0) < 1.0
-
-    def test_single_observer_zero_angle(self):
-        """Point observed by only one camera should have zero angle."""
-        from sfmtool.geometry import RotQuaternion
-
-        q = RotQuaternion.identity()
-        qwxyz = q.to_wxyz_array()
-        quaternions = np.array([qwxyz])
-        translations = np.array([[0.0, 0.0, 0.0]])
-        positions = np.array([[1.0, 0.0, 5.0]])
-
-        track_image_indexes = np.array([0], dtype=np.uint32)
-        track_point_indexes = np.array([0], dtype=np.uint32)
-
-        angles = compute_triangulation_angles(
-            positions,
-            quaternions,
-            translations,
-            track_image_indexes,
-            track_point_indexes,
-        )
-
-        assert angles[0] == 0.0
-
-    def test_multiple_points(self):
-        """Multiple points with different observer counts."""
-        from sfmtool.geometry import RotQuaternion
-
-        q = RotQuaternion.identity()
-        qwxyz = q.to_wxyz_array()
-        quaternions = np.array([qwxyz, qwxyz, qwxyz])
-        translations = np.array(
-            [
-                [0.0, 0.0, 0.0],
-                [-2.0, 0.0, 0.0],
-                [-1.0, -2.0, 0.0],
-            ]
-        )
-        positions = np.array(
-            [
-                [1.0, 0.0, 5.0],  # Point 0: observed by 2 cameras
-                [0.0, 0.0, 3.0],  # Point 1: observed by 3 cameras
-            ]
-        )
-
-        track_image_indexes = np.array([0, 1, 0, 1, 2], dtype=np.uint32)
-        track_point_indexes = np.array([0, 0, 1, 1, 1], dtype=np.uint32)
-
-        angles = compute_triangulation_angles(
-            positions,
-            quaternions,
-            translations,
-            track_image_indexes,
-            track_point_indexes,
-        )
-
-        assert angles.shape == (2,)
-        assert angles[0] > 0
-        assert angles[1] > 0
-        # Point with 3 observers should have >= angle of 2-observer point
-        # (more baselines means at least as large a max angle)
+        angles = _max_ray_angles_deg(recon)
+        assert angles[point] == 0.0
 
 
 # =============================================================================

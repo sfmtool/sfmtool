@@ -589,7 +589,8 @@ worth more than a paragraph.
    say so rather than filing a hundred findings.
 9. **Points-at-infinity scan** — grep library code for finite-only point
    interfaces and unguarded homogeneous divisions: `positions_xyz\b`,
-   `\[:, *:3\]` on an xyzw array, `/ *w\b`, and public signatures taking
+   `\[:, *:3\]` on an xyzw array, `/ *w\b`, Python reads of the
+   `\.positions\b` getter (a direction for a `w = 0` row), and public signatures taking
    `[f64; 3]` / `Vec3` slices of reconstruction points. Report the hit count
    per pattern, then read each hit and keep only those with no `w = 0`
    handling (`is_at_infinity`, an explicit branch, a documented finite-only

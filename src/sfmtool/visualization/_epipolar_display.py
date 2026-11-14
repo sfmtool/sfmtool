@@ -65,8 +65,9 @@ def _curve_anchor_depths(
 ) -> np.ndarray:
     """Per-feature seed depth for epipolar-curve sampling, in `R_from` coords.
 
-    Uses the reconstructed track depth when a triangulated 3D point is
-    available (and is in front of the camera); otherwise the baseline length
+    Uses the reconstructed track depth when a finite triangulated 3D point is
+    available (and is in front of the camera); otherwise, as for a point at
+    infinity, which has no depth, the baseline length
     `‖C_other − C_from‖`. `track_point_indexes` is one entry per feature pair with
     `-1` marking unmatched features. See specs/core/camera/epipolar-curves.md
     ("Caller-side seeding strategy") for the rationale.
@@ -79,6 +80,9 @@ def _curve_anchor_depths(
 
     depths = np.full(len(track_point_indexes), baseline, dtype=np.float64)
     valid = track_point_indexes >= 0
+    # A point at infinity is a direction with no depth, so its feature keeps
+    # the baseline seed.
+    valid[valid] = ~np.asarray(recon.point_is_at_infinity)[track_point_indexes[valid]]
     if not valid.any():
         return depths
     pids = track_point_indexes[valid]

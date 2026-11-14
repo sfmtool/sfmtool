@@ -332,9 +332,19 @@ class ScaleByMeasurementsTransform:
         click.echo(f"\nScale by measurements (target unit: {target_unit}):")
         scale_factors = []
         positions = recon.positions
+        at_infinity = recon.point_is_at_infinity
         for i, pm in enumerate(parsed_measurements):
             idx_a = resolved[pm["point_id_a"]]
             idx_b = resolved[pm["point_id_b"]]
+            # A point at infinity is a direction with no position, so no
+            # distance to it can be measured.
+            for pt_id, idx in ((pm["point_id_a"], idx_a), (pm["point_id_b"], idx_b)):
+                if at_infinity[idx]:
+                    raise ValueError(
+                        f"Measurement '{pm['label']}': point {pt_id} (point {idx} "
+                        "of the input) is at infinity, so it has no position to "
+                        "measure a distance from"
+                    )
             pos_a = positions[idx_a]
             pos_b = positions[idx_b]
             recon_dist = float(np.linalg.norm(pos_a - pos_b))
