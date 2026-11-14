@@ -124,9 +124,7 @@ anything:
   made by `sfm undistort`, and the error says to run it again.
 
 When every `.sift` file is present and current, nothing is written and nothing
-is refused, so a version 1 workspace's existing features keep working, as
-[workspace.md § Commands in a version 1 workspace](../../workspace/workspace.md#commands-in-a-version-1-workspace)
-states for every command. The same
+is refused, so a version 1 workspace's existing features keep working. The same
 refusals apply where [`sfm solve`](../reconstruction/solve-command.md),
 [`sfm match`](match-command.md) and
 [`sfm to-colmap-db`](../colmap-interop/to-colmap-db-command.md) extract missing

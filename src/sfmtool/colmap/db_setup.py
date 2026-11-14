@@ -17,7 +17,7 @@ import pycolmap
 from ..camera.config import CameraConfigResolver
 from ..camrig.resolver import CamrigSolveResult, resolve_camrig_for_solve
 from ..rig.frames import _build_cross_frame_pairs, _build_same_frame_index_pairs
-from ..sift.extract import _version_1_settings_message, image_files_to_sift_files
+from ..sift.extract import image_files_to_sift_files
 from ..rig.config import _refuse_rig_config
 from .._workspace import load_workspace_config
 from .db_builders import _setup_db_single_sensor, _setup_db_with_camrigs
@@ -254,10 +254,8 @@ def resolve_matched_sift_paths(
     hash is checked against the one the `.matches` file recorded for it.
     Raises `MatchedFeaturesError`, naming the `.matches` file, the folder and
     what to do, when any of them is missing or has changed, so a caller stops
-    before it builds anything from features its indexes do not refer to. In a
-    version 1 workspace, where matching again would first have to extract
-    files, the message includes the version 1 settings refusal that names
-    `sfm ws upgrade`. Raises `FileNotFoundError` for a missing image.
+    before it builds anything from features its indexes do not refer to.
+    Raises `FileNotFoundError` for a missing image.
     """
     from .._sfmtool.fileio import read_sift_metadata
 
@@ -301,25 +299,12 @@ def resolve_matched_sift_paths(
                 f"{len(changed)} of the {count} .sift files it needs {verb} "
                 f"changed since it was matched, such as {changed[0]}"
             )
-        config = load_workspace_config(workspace_dir)
-        if "image_to_gray" in config["feature_options"]:
-            remedy = (
-                "Run 'sfm match' on its images again to match them on the "
-                "workspace's current features, and use the new .matches file."
-            )
-        else:
-            # Matching again extracts the missing files, which a version 1
-            # workspace refuses, so the remedy starts with that refusal.
-            source = f"The workspace file {workspace_dir / '.sfm-workspace.json'}"
-            remedy = (
-                "Matching its images again extracts .sift files. "
-                f"{_version_1_settings_message(source)} Then run 'sfm match' on "
-                "its images again, and use the new .matches file."
-            )
         raise MatchedFeaturesError(
             f"Cannot use {matches_file}: it was matched on the .sift files in "
             f"the feature folder {feature_prefix_dir}, and {problem}. Its "
-            f"feature indexes refer to those files only. {remedy}"
+            "feature indexes refer to those files only. Run 'sfm match' on its "
+            "images again to match them on the workspace's current features, "
+            "and use the new .matches file."
         )
     return image_paths, sift_paths
 

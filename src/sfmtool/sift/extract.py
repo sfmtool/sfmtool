@@ -53,32 +53,6 @@ def _image_readings_fields(image_path, rgb, feature_options: dict) -> dict:
     }
 
 
-def _version_1_settings_message(
-    settings_source: str | None, settings_from_sfmr: bool = False
-) -> str:
-    """The refusal of version 1 settings, the one message every command gives
-    for them.
-
-    ``settings_source`` names what the settings were read from, such as
-    ``"The workspace file <path>"``. For a workspace file the message says to
-    run ``sfm ws upgrade``; for a ``.sfmr``'s record (``settings_from_sfmr``)
-    it says the record is the ``.sfmr``'s own, which ``sfm ws upgrade`` does
-    not change.
-    """
-    upgrade = (
-        "The record is the .sfmr's own, so 'sfm ws upgrade' does not change it."
-        if settings_from_sfmr
-        else "Run 'sfm ws upgrade', which moves the workspace to version 2 and a "
-        "new folder."
-    )
-    where = settings_source or "The feature options"
-    return (
-        f"{where} holds version 1 settings (its feature options carry no "
-        "'image_to_gray'), and no .sift file is written from version 1 "
-        f"settings. {upgrade}"
-    )
-
-
 def _check_versions_never_mix(
     feature_tool: str,
     feature_options: dict,
@@ -111,8 +85,17 @@ def _check_versions_never_mix(
             "and cannot be extracted. Run 'sfm undistort' again to write them."
         )
     if "image_to_gray" not in feature_options:
+        upgrade = (
+            "The record is the .sfmr's own, so 'sfm ws upgrade' does not change it."
+            if settings_from_sfmr
+            else "Run 'sfm ws upgrade', which moves the workspace to version 2 and a "
+            "new folder."
+        )
+        where = settings_source or "The feature options"
         raise SiftExtractionError(
-            _version_1_settings_message(settings_source, settings_from_sfmr)
+            f"{where} holds version 1 settings (its feature options carry no "
+            "'image_to_gray'), and no .sift file is written from version 1 "
+            f"settings. {upgrade}"
         )
     if feature_tool in _FIXED_CONVERSION_TOOLS:
         row = tool_image_to_gray(feature_tool).to_dict()

@@ -288,48 +288,11 @@ those images. Its folder, `features/sift-sfmtool-undistort-{hash}`, is named ove
 its whole `feature_options` when it creates it, so undistorting again under
 version 2 writes a new folder beside any older output.
 
-#### Commands in a version 1 workspace
-
-Every command follows one rule in a version 1 workspace: **it reads the files
-that are already there, and when it needs a `.sift` file the workspace cannot
-give it, it refuses before it does any work, with the version 1 settings
-refusal.** The workspace cannot give a `.sift` file that is missing or older
-than its image, since that file would have to be extracted under version 1
-settings. Nor can it give `sfm pick-images` the version 2 files its walk reads,
-since a version 1 workspace's folder holds only version 1 files. The refusal is
-one message, made by `_version_1_settings_message` in
-[`sift/extract.py`](../../src/sfmtool/sift/extract.py): it names the workspace
-file, says it holds version 1 settings from which no `.sift` file is written,
-and says to run `sfm ws upgrade`.
-
-The rule follows from the two rules at the top of
-[Versions never mix](#versions-never-mix). Extraction is the one thing a
-version 1 workspace cannot do, since no `.sift` file is written from version 1
-settings, so that is what is refused. Everything else reads files that already
-exist, which stays allowed; refusing a whole version 1 workspace would take
-away matching and solving on features already extracted while preventing no
-wrong file. The check is made before any work: in `image_files_to_sift_files`
-before it extracts or writes anything, which `sfm sift`, `sfm match` and
-`sfm solve` call before they build a database, match or solve; in
-`sfm pick-images` before it reads a frame; and, for a `.matches` file, in
-`resolve_matched_sift_paths` before a database is built.
-
-| Command | In a version 1 workspace |
-|---------|--------------------------|
-| `sfm sift --extract` | with every `.sift` file present and current, writes nothing and succeeds; otherwise refuses before writing any file |
-| `sfm match` (`--exhaustive`, `--sequential`, `--flow`, `--cluster`) and `sfm solve` from images | match and solve on the existing `.sift` files when every one is present and current; otherwise refuse before they build a database, match or solve |
-| `sfm solve`, `sfm to-colmap-db` and `sfm match --derive-pairs` from a `.matches` file | read the `.sift` files the `.matches` file was matched on, in the folder it records. When one is missing or has changed they refuse before building a database; matching again would extract, so in a version 1 workspace the message includes the version 1 settings refusal before saying to run `sfm match` again |
-| `sfm pick-images` | refuses before it reads a frame, since its walk reads only version 2 `.sift` files |
-| `sfm to-colmap-db` from a `.sfmr` | uses the `.sfmr`'s record, not the workspace file, and converts a version 1 record in memory when it has files to extract (above) |
-| `sfm estimate-intrinsics`, `sfm epipolar`, `sfm densify`, `sfm xform`, `sfm merge`, `sfm inspect`, `sfm analyze`, `sfm explorer` | read `.matches`, `.sfmr` and `.sift` files as they are, and work |
-| `sfm ws init` | refuses an existing workspace file without `--force`; with it, writes version 2 and a new folder ([Migration](#migration)) |
-| `sfm ws upgrade` | moves the workspace to version 2 and a new folder ([Migration](#migration)) |
-
 #### Refusals
 
 | Refusal | Raised by | Its message |
 |---------|-----------|-------------|
-| Version 1 settings | `image_files_to_sift_files`, `build_sift_files`, and up front `sfm pick-images`; it is also part of the `.matches` refusal of `resolve_matched_sift_paths` in a version 1 workspace | names the workspace file or the record, says it holds version 1 settings, and, for a workspace file, says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new folder. For a `.sfmr`'s record it says the record is the `.sfmr`'s own, and never suggests `sfm ws upgrade` |
+| Version 1 settings | `image_files_to_sift_files`, `build_sift_files` | names the workspace file or the record, says it holds version 1 settings, and, for a workspace file, says to run `sfm ws upgrade`, which moves the workspace to version 2 and a new folder. For a `.sfmr`'s record it says the record is the `.sfmr`'s own, and never suggests `sfm ws upgrade` |
 | Version 1 files in the folder | `image_files_to_sift_files`, `build_sift_files` | names the folder and the version 1 `.sift` files in it (the first five, and a count of the rest), and says to remove those files from the folder and run again, which extracts version 2 files in their place. The folder is checked only for version 2 settings, since version 1 settings are refused first, and `sfm ws upgrade` prints "nothing to do: already version 2" for a version 2 workspace file and never changes a `.sfmr`'s record, so the message is the same for every caller. It is the `Display` of `Version1SiftFiles`, which `sfmtool_core::features::sift::version_1_sift_files` returns and `sfmtool.sift.version_1_sift_files` binds |
 | An `sfmtool-undistort` tool | `image_files_to_sift_files` | says the files of an undistorted workspace are made by `sfm undistort` and cannot be extracted, and to run `sfm undistort` again |
 | `colmap` or `opencv` conversion differs | `image_files_to_sift_files` | names the tool and the one conversion it makes |

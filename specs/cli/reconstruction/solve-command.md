@@ -117,11 +117,7 @@ Before it builds anything, the command checks each of those `.sift` files
 against the content hash the `.matches` file recorded for it; when one is
 missing or its hash differs, it stops with an error naming the `.matches`
 file, the folder and a `.sift` file at fault, and saying to run `sfm match`
-again to match on the workspace's current features. In a version 1 workspace,
-where matching again would first extract `.sift` files, the message also gives
-the version 1 settings refusal, which says to run `sfm ws upgrade` first
-([workspace.md § Commands in a version 1 workspace](../../workspace/workspace.md#commands-in-a-version-1-workspace)).
-The check is
+again to match on the workspace's current features. The check is
 `resolve_matched_sift_paths` in
 [`colmap/db_setup.py`](../../../src/sfmtool/colmap/db_setup.py), which
 `sfm to-colmap-db` and `sfm match --derive-pairs` share.
