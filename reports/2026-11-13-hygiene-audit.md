@@ -481,6 +481,8 @@ Each finding here comes from a kept hit of a mechanical check, confirmed by read
 - Effort: low.
 - Risk: low to medium — a coarser working grid lands on slightly different frames, so the rounding event must be re-confirmed.
 
+> _Status (2026-11-14): **Done** — the test runs the grown-plane normal on a 16-sample working grid (`working_resolution: Some(16)`) and keeps all three tilts, the 441-point grid, the 48 x 48 bitmaps and both assertions (every tilt turns all 441 points; dropping the rounding in `evaluate_track` leaves 12 bytes off); a new assertion renders each refined value through frames that store as the stored ones but are not them and requires some byte to differ (6 do over 1323 bitmaps). Alone in the test profile on 32 threads, 5.7 s to 1.7 s; with `RAYON_NUM_THREADS=4`, 19.2 s to 5.9 s. Branch `hyg-fix2-1113-08-stored-bitmap-test-grid`._
+
 **Share the copied blocks the duplicate scan found outside the units read**
 - Location (checks 3 and 4): as listed.
 - Problem and proposed fix, one per pair:

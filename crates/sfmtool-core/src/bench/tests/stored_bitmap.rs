@@ -84,8 +84,19 @@ fn bytes_off_a_render_of_the_stored_value(
     scene: &Scene,
     recon: &SfmrReconstruction,
 ) -> (usize, usize) {
+    bytes_off_a_render_through(scene, recon, OrientedPatch::clone)
+}
+
+/// As [`bytes_off_a_render_of_the_stored_value`], with each stored frame
+/// passed through `patch_frame` before the render.
+fn bytes_off_a_render_through(
+    scene: &Scene,
+    recon: &SfmrReconstruction,
+    patch_frame: impl FnMut(&OrientedPatch) -> OrientedPatch,
+) -> (usize, usize) {
     let views: Vec<Option<ProjectedImage<'_>>> = scene.views().into_iter().map(Some).collect();
-    let cloud = PatchCloud::from_stored_patch_frames(recon).expect("a framed value");
+    let mut cloud = PatchCloud::from_stored_patch_frames(recon).expect("a framed value");
+    cloud.patches = cloud.patches.iter().map(patch_frame).collect();
     let params = KeypointSubpixelParams {
         resolution: BITMAP_R as u32,
         ..FitOptions::default().refine
@@ -129,26 +140,69 @@ fn bytes_off_a_render_of_the_stored_value(
     (bytes, named)
 }
 
+/// A frame that is not `patch` but stores as it, as the unrounded frame a
+/// step builds in `f64` does: each stored half-vector component moved a
+/// quarter of the way to the next `f32` up. `None` where that frame does not
+/// store as `patch`.
+fn unrounded_frame_storing_as(patch: &OrientedPatch) -> Option<OrientedPatch> {
+    let [u, v] = patch.stored_halfvecs();
+    let up = |h: [f32; 3]| {
+        let h = Vector3::from(h.map(|x| f64::from(x) + 0.25 * f64::from(x.next_up() - x)));
+        (h.normalize(), h.norm())
+    };
+    let ((u_axis, hu), (v_axis, hv)) = (up(u), up(v));
+    let unrounded = OrientedPatch {
+        u_axis,
+        v_axis,
+        half_extent: [hu, hv],
+        ..patch.clone()
+    };
+    (unrounded.stored_halfvecs() == [u, v]).then_some(unrounded)
+}
+
 #[test]
 fn refine_normals_stores_the_render_of_the_frame_it_stores() {
     let scene = plane_scene();
+    // The patch is about 10 px across in the photographs, so a 16-sample
+    // working grid reads each view at about a sample per pixel; the stored
+    // bitmaps stay `BITMAP_R` on a side.
+    let options = RefineNormalsOptions {
+        normal: GrownPlaneNormalOptions {
+            working_resolution: Some(16),
+            ..GrownPlaneNormalOptions::default()
+        },
+        ..RefineNormalsOptions::default()
+    };
     // Three starting tilts, so that over all of them some sample of a render
     // through the unrounded turned frame lands one level off.
     let (mut bytes, mut named) = (0, 0);
+    let (mut unrounded, mut unrounded_bytes) = (0, 0);
     for by in [15.0, 25.0, 35.0] {
         let recon = tilted_grid_value(&scene, by);
-        let (out, report) = refine_normals(
-            &recon,
-            &scene.views(),
-            &RefineNormalsOptions::default(),
-            &Progress::none(),
-        )
-        .expect("the run refines");
+        let (out, report) = refine_normals(&recon, &scene.views(), &options, &Progress::none())
+            .expect("the run refines");
         assert!(report.turned() > grid().len() / 2, "{by}: {report:?}");
         let (b, n) = bytes_off_a_render_of_the_stored_value(&scene, &out);
         bytes += b;
         named += n;
+        // What the rounding at render time guards against: a render through
+        // frames that store as these but are not them, as a step's unrounded
+        // frames are, differs from the stored bitmaps somewhere.
+        let (b, _) = bytes_off_a_render_through(&scene, &out, |patch| {
+            unrounded_frame_storing_as(patch).map_or_else(
+                || patch.clone(),
+                |patch_frame| {
+                    unrounded += 1;
+                    patch_frame
+                },
+            )
+        });
+        unrounded_bytes += b;
     }
+    assert!(
+        unrounded_bytes > 0,
+        "no byte off over {unrounded} bitmaps rendered through unrounded frames"
+    );
     assert_eq!(bytes, 0, "{bytes} bytes off over {named} bitmaps");
 }
 
