@@ -16,7 +16,11 @@ from click.testing import CliRunner
 from sfmtool.cli import main
 from sfmtool.fileio import SiftFile, read_image_rgb, read_sift, write_sift
 from sfmtool.sift import ImageToGray, image_readings_from_rgb, version_1_sift_files
-from sfmtool.sift.extract import SiftExtractionError, image_files_to_sift_files
+from sfmtool.sift.extract import (
+    SiftExtractionError,
+    _version_1_settings_message,
+    image_files_to_sift_files,
+)
 from sfmtool.sift.extract_colmap import get_colmap_feature_options
 from sfmtool.sift.extract_opencv import get_default_opencv_feature_options
 from sfmtool.sift.extract_sfmtool import get_default_sfmtool_feature_options
@@ -294,28 +298,73 @@ def test_tool_outside_a_workspace_writes_version_2(images):
             assert reader.metadata["version"] == 2
 
 
-def test_solve_refuses_implicit_extraction_in_a_version_1_workspace(
-    images, tmp_path, monkeypatch
+def _version_1_prefix(root: Path) -> str:
+    return json.loads((root / ".sfm-workspace.json").read_text())["feature_prefix_dir"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["solve", "-i"],
+        ["solve", "-g"],
+        ["match", "--exhaustive"],
+        ["match", "--cluster"],
+    ],
+)
+def test_a_command_that_would_extract_refuses_a_version_1_workspace_before_any_work(
+    images, tmp_path, monkeypatch, command
 ):
+    """A missing `.sift` file in a version 1 workspace stops the command with
+    the one version 1 settings refusal before it writes anything: no `.sift`
+    file, no database, no `.matches` or `.sfmr` file."""
     workspace_file = _version_1_workspace(tmp_path)
+    # One image's file is there, the other's is missing.
+    image = images[0]
+    _write_version_1_sift(
+        image.parent / _version_1_prefix(tmp_path) / (image.name + ".sift"), image
+    )
     monkeypatch.chdir(tmp_path)
-    result = CliRunner().invoke(main, ["solve", "-i", str(tmp_path / "images")])
+    before = sorted(tmp_path.rglob("*"))
+    result = CliRunner().invoke(main, [*command, str(tmp_path / "images")])
     assert result.exit_code != 0
-    message = str(result.exception) + result.output
-    assert "holds version 1 settings" in message
-    assert str(workspace_file) in message
-    assert not list(tmp_path.rglob("*.sift"))
+    assert (
+        _version_1_settings_message(f"The workspace file {workspace_file}")
+        in result.output
+    )
+    assert sorted(tmp_path.rglob("*")) == before
 
 
-def test_match_refuses_implicit_extraction_in_a_version_1_workspace(
+def test_a_version_1_workspace_matches_on_its_files_and_a_matches_file_missing_one_names_ws_upgrade(
     images, tmp_path, monkeypatch
 ):
-    _version_1_workspace(tmp_path)
+    """Matching reads the version 1 files a version 1 workspace holds. When a
+    `.sift` file the `.matches` file was matched on is gone, a solve from it
+    refuses before building anything, and since matching again would extract,
+    the message gives the version 1 settings refusal before saying to match
+    again."""
+    workspace_file = _version_1_workspace(tmp_path)
+    folder = images[0].parent / _version_1_prefix(tmp_path)
+    for image in images:
+        _write_version_1_sift(folder / (image.name + ".sift"), image)
     monkeypatch.chdir(tmp_path)
+    matches_path = tmp_path / "old.matches"
     result = CliRunner().invoke(
-        main, ["match", "--exhaustive", str(tmp_path / "images")]
+        main,
+        ["match", "--exhaustive", "--output", str(matches_path), str(images[0].parent)],
     )
+    assert result.exit_code == 0, result.output
+    assert matches_path.exists()
+    assert "New SIFT feature extraction (SFMTOOL): 0 / 2 image(s)" in result.output
+
+    (folder / (images[1].name + ".sift")).unlink()
+    before = sorted(tmp_path.rglob("*"))
+    result = CliRunner().invoke(main, ["solve", "-i", str(matches_path)])
     assert result.exit_code != 0
-    message = str(result.exception) + result.output
-    assert "holds version 1 settings" in message
-    assert not list(tmp_path.rglob("*.sift"))
+    assert "1 of the 2 .sift files it needs is missing" in result.output
+    assert (
+        "Matching its images again extracts .sift files. "
+        + _version_1_settings_message(f"The workspace file {workspace_file}")
+        + " Then run 'sfm match' on its images again, and use the new .matches "
+        "file."
+    ) in result.output
+    assert sorted(tmp_path.rglob("*")) == before
