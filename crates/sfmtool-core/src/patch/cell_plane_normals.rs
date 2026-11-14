@@ -152,6 +152,9 @@ pub enum NormalDeterminacy {
 }
 
 impl NormalDeterminacy {
+    /// The names, in [`Self::code`] order.
+    pub const NAMES: [&'static str; 3] = ["none", "one_axis", "both_axes"];
+
     /// `0` none, `1` one axis, `2` both axes.
     pub fn code(&self) -> u8 {
         match self {
@@ -159,6 +162,11 @@ impl NormalDeterminacy {
             NormalDeterminacy::OneAxis { .. } => 1,
             NormalDeterminacy::BothAxes => 2,
         }
+    }
+
+    /// The name for this verdict: [`Self::NAMES`] at [`Self::code`].
+    pub fn name(&self) -> &'static str {
+        Self::NAMES[self.code() as usize]
     }
 }
 

@@ -51,7 +51,9 @@ pub enum NormalDeterminacy {
 }
 
 impl NormalDeterminacy {
+    pub const NAMES: [&'static str; 3]; // "none", "one_axis", "both_axes", in code order
     pub fn code(&self) -> u8;            // 0 none, 1 one axis, 2 both axes
+    pub fn name(&self) -> &'static str;  // NAMES[code()]
 }
 
 #[repr(u8)]
@@ -102,7 +104,7 @@ pub enum CellPlaneNormalsError {
 }
 ```
 
-**Why this shape.** The inputs are the cluster file's member-parallel arrays borrowed as they are, so a caller holding a `MatchesData` or the Python `MatchesFile` passes its columns without building per-cluster objects, and the cameras are the per-camera intrinsics, per-image camera index and per-image `cam_from_world` pose that the bundle adjustment and resection take. An image without a pose is `None`, so a partly posed seed passes the file's whole image list. The output keeps every cell's position, ray count and status, because a wrong normal is diagnosed by asking which cells were used and how each was seen. The binding returns the statuses as their `u8` discriminants in `cell_status`, with `CellPlaneStatus::NAMES` as `cell_status_names`, and the verdict as `NormalDeterminacy::code()` in `determinacy`, with `determinacy_names`.
+**Why this shape.** The inputs are the cluster file's member-parallel arrays borrowed as they are, so a caller holding a `MatchesData` or the Python `MatchesFile` passes its columns without building per-cluster objects, and the cameras are the per-camera intrinsics, per-image camera index and per-image `cam_from_world` pose that the bundle adjustment and resection take. An image without a pose is `None`, so a partly posed seed passes the file's whole image list. The output keeps every cell's position, ray count and status, because a wrong normal is diagnosed by asking which cells were used and how each was seen. The binding returns the statuses as their `u8` discriminants in `cell_status`, with `CellPlaneStatus::NAMES` as `cell_status_names`, and the verdict as `NormalDeterminacy::code()` in `determinacy`, with `NormalDeterminacy::NAMES` as `determinacy_names`.
 
 A cluster or cell the kernel cannot use is data, not an error: a cluster with too few usable cells gets `NormalDeterminacy::None`, and each cell's `CellPlaneStatus` says why it was or was not used, so one bad cluster does not stop the others. An error is input that does not describe a cluster file and its cameras consistently. `cell_plane_normals` checks for it before fitting any cluster and returns a `CellPlaneNormalsError` naming the first one it finds: a member-parallel slice whose length differs from `member_images` (`MemberArrayLength`), a `cluster_starts` that is not `C + 1` long (`ClusterStartsLength`), has an entry past the member count (`ClusterStartsPastMembers`) or decreases (`ClusterStartsDecrease`), a reference member that is neither `CLUSTER_REFERENCE_UNREFINABLE` nor in its own cluster's member range (`ReferenceOutsideCluster`), `resolution < 3` (`ResolutionTooSmall`), a `patch_size` that is not positive and finite (`InvalidPatchSize`), a `cam_from_world` not as long as `image_camera` (`PoseListLength`), and a member image or image camera index out of range (`ImageIndexOutOfRange`, `CameraIndexOutOfRange`). Its `Display` names the field at fault, and the index where the error is about one entry. The Python binding raises that error's message as a `ValueError`. Before calling the kernel it raises `ValueError` itself for what the Rust types already rule out: an array whose shape does not match the others, and a member or cell status code that is not a known one.
 
