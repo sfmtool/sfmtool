@@ -10,7 +10,7 @@ The cells it reads are measured by the piecewise refinement of [cluster-patch-re
 
 ## Rust API
 
-The kernel is [`cell_plane_normals`](../../../crates/sfmtool-core/src/patch/cell_plane_normals.rs) in `sfmtool_core::patch::cell_plane_normals`, bound as `sfmtool._sfmtool.analysis.cell_plane_normals` in [cell_plane_normals.rs](../../../crates/sfmtool-py/src/analysis/cell_plane_normals.rs).
+The kernel is [`cell_plane_normals`](../../../crates/sfmtool-core/src/patch/cell_plane_normals.rs) in `sfmtool_core::patch::cell_plane_normals`, bound as `sfmtool.analysis.cell_plane_normals` in [cell_plane_normals.rs](../../../crates/sfmtool-py/src/analysis/cell_plane_normals.rs).
 
 ```rust
 pub struct CellPlaneClusters<'a> {

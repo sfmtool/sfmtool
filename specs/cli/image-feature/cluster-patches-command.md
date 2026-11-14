@@ -116,7 +116,7 @@ consumer reads the cells.
    embed-patches pattern), with results collected in submission order. The
    arrays are RGB, as the kernel takes them; the viewer hands it the same.
    Present the seed geometry from step 2 in images-section order, and call
-   `_sfmtool.matching.refine_cluster_patches` (the
+   `sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member self-similarity gate,
    reference selection by largest SIFT scale, Gaussian-windowed-ZNCC shift →
    similarity → affine Nelder-Mead cascade seeded from the SIFT affine

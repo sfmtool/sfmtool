@@ -65,7 +65,7 @@ register the cells of a render it makes itself, as the bench's
 `grid_plane_normal` does with renders through a track's patch plane
 ([editable-track.md](../bench/editable-track.md#estimating-the-normal)). The
 stage is bound as
-`sfmtool._sfmtool.matching.refine_cluster_patches` in
+`sfmtool.matching.refine_cluster_patches` in
 [cluster.rs](../../../crates/sfmtool-py/src/matching/cluster.rs). The stored
 per-cell columns are `MemberCellData` and `ClusterCellStatus` in
 [cells.rs](../../../crates/sfmtool-matches-format/src/cells.rs).
@@ -1225,8 +1225,8 @@ stage at these defaults and exposes none of them.
 
 ## Python bindings
 
-`_sfmtool.matching.refine_cluster_patches`, in
-`crates/sfmtool-py/src/matching/cluster.rs`, registered beside
+`sfmtool.matching.refine_cluster_patches`, bound in
+`crates/sfmtool-py/src/matching/cluster.rs` and registered beside
 `background_floor_clusters` and `clusters_to_pair_matches`:
 
 ```python

@@ -542,6 +542,8 @@ Each finding here comes from a kept hit of a mechanical check, confirmed by read
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-14): **Done** — `insv2rig` builds the right eye's `RotQuaternion` where it writes the rig; a grep of `src/sfmtool/_commands/` confirmed it was the only module-level call beyond the two `re.compile` constants, which are now pattern strings passed to `re.match` / `re.fullmatch`; the new `test_command_modules_call_nothing_at_import` in `tests/test_lazy_loading.py` fails on any call a command module makes at import outside its decorators, and STANDARDS.md and `specs/cli/README.md` say so. The specs name the public modules: `sfmtool.matching.refine_cluster_patches` (cluster-patch-refinement.md, twice, and cluster-patches-command.md) and `sfmtool.analysis.cell_plane_normals` (cell-plane-normals.md; the binding is in `analysis`, not `patches`), branch `hyg-fix2-1113-09-insv2rig-lazy-rotation`._
+
 ## Carried findings
 
 Still-open findings of the 2026-10-08 report. A finding whose units were not read this run carries the date of its last deep read; its figures were re-measured at `929b62f0`.

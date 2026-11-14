@@ -474,9 +474,12 @@ commands" describes the mechanism.
 `sfm --help` import none of numpy, OpenCV and pycolmap, that running a command
 imports only its own module, that each `_LAZY_NAMES` entry resolves to its
 submodule and matches the `TYPE_CHECKING` imports, and that `COMMANDS` and the
-command modules match. Look for what it does not check: a command module that
-reads files, builds large tables or calls into the extension at module level,
-and a top-level import of a Python submodule in `sfmtool/__init__.py`, which
+command modules match, and it fails on a call that a `sfmtool._commands` module
+makes at import outside the decorators that define its commands, so a module
+keeps a regular expression as a pattern string and builds a value such as a
+rotation inside the function that uses it. Look for what it does not check: a
+command module that writes a large table as a literal at module level, and a
+top-level import of a Python submodule in `sfmtool/__init__.py`, which
 the tests notice only when that submodule imports one of the three libraries.
 Out of scope: imports inside a command's function body, which run only when
 the command does.
