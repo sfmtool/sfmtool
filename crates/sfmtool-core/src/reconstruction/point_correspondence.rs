@@ -44,6 +44,12 @@ pub struct PointCorrespondenceResult {
 ///
 /// # Returns
 /// `PointCorrespondenceResult` with parallel `source_ids` and `target_ids` vectors.
+///
+/// # Errors
+/// [`PointCorrespondenceError::TrackColumnLength`] when one side's three track
+/// columns differ in length, and
+/// [`PointCorrespondenceError::SharedImagesLength`] when the two shared-image
+/// arrays do.
 #[allow(clippy::too_many_arguments)]
 pub fn find_point_correspondences(
     source_track_image_indexes: &[u32],
@@ -54,7 +60,37 @@ pub fn find_point_correspondences(
     target_track_point_indexes: &[u32],
     shared_images_source: &[u32],
     shared_images_target: &[u32],
-) -> PointCorrespondenceResult {
+) -> Result<PointCorrespondenceResult, PointCorrespondenceError> {
+    for (side, image, feature, point) in [
+        (
+            "source",
+            source_track_image_indexes,
+            source_track_feature_indexes,
+            source_track_point_indexes,
+        ),
+        (
+            "target",
+            target_track_image_indexes,
+            target_track_feature_indexes,
+            target_track_point_indexes,
+        ),
+    ] {
+        if feature.len() != image.len() || point.len() != image.len() {
+            return Err(PointCorrespondenceError::TrackColumnLength {
+                side,
+                image_indexes: image.len(),
+                feature_indexes: feature.len(),
+                point_indexes: point.len(),
+            });
+        }
+    }
+    if shared_images_source.len() != shared_images_target.len() {
+        return Err(PointCorrespondenceError::SharedImagesLength {
+            source: shared_images_source.len(),
+            target: shared_images_target.len(),
+        });
+    }
+
     let source_map = build_feature_to_point_map(
         source_track_image_indexes,
         source_track_feature_indexes,
@@ -90,11 +126,49 @@ pub fn find_point_correspondences(
         target_ids.push(*tgt_id);
     }
 
-    PointCorrespondenceResult {
+    Ok(PointCorrespondenceResult {
         source_ids,
         target_ids,
+    })
+}
+
+/// Why [`find_point_correspondences`] refused its input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PointCorrespondenceError {
+    /// One side's track columns differ in length. `side` is `"source"` or
+    /// `"target"`.
+    TrackColumnLength {
+        side: &'static str,
+        image_indexes: usize,
+        feature_indexes: usize,
+        point_indexes: usize,
+    },
+    /// `shared_images_source` and `shared_images_target` differ in length.
+    SharedImagesLength { source: usize, target: usize },
+}
+
+impl std::fmt::Display for PointCorrespondenceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TrackColumnLength {
+                side,
+                image_indexes,
+                feature_indexes,
+                point_indexes,
+            } => write!(
+                f,
+                "the {side} track columns differ in length: {image_indexes} image indexes, \
+                 {feature_indexes} feature indexes and {point_indexes} point indexes"
+            ),
+            Self::SharedImagesLength { source, target } => write!(
+                f,
+                "shared_images_source has {source} entries but shared_images_target has {target}"
+            ),
+        }
     }
 }
+
+impl std::error::Error for PointCorrespondenceError {}
 
 /// Build a nested map: image_idx -> (feature_idx -> point_id).
 fn build_feature_to_point_map(
@@ -154,29 +228,81 @@ pub struct MergedPointsAndTracks {
 /// * `reconstructions` — Slice of reconstruction references.
 /// * `correspondence_groups` — Groups of (recon_idx, point_id) that represent
 ///   the same physical 3D point.
-/// * `reverse_image_mapping` — Per-reconstruction mapping from old image index
-///   to merged image index.
+/// * `image_mapping` — One entry per merged image, in merged image index
+///   order: the `(recon_idx, image_idx)` occurrences of that image in the
+///   input reconstructions. An image that occurs under two merged indexes in
+///   one reconstruction maps to the first.
 ///
 /// # Errors
-/// Returns an error if any input reconstruction is `embedded_patches`. Merge
-/// keys observations on `(image, feature_index)` identity, which an
-/// `embedded_patches` reconstruction has no feature index to provide; merging
-/// those is not supported.
+/// [`MergePointsAndTracksError::ReconstructionIndexOutOfRange`],
+/// [`MergePointsAndTracksError::ImageIndexOutOfRange`] and
+/// [`MergePointsAndTracksError::PointIndexOutOfRange`] when `image_mapping` or
+/// `correspondence_groups` names a reconstruction, image or point that does
+/// not exist, and [`MergePointsAndTracksError::EmbeddedPatches`] when an input
+/// reconstruction is `embedded_patches`. Merge keys observations on
+/// `(image, feature_index)` identity, which an `embedded_patches`
+/// reconstruction has no feature index to provide; merging those is not
+/// supported.
 pub fn merge_points_and_tracks(
     reconstructions: &[&SfmrReconstruction],
     correspondence_groups: &[Vec<(usize, u32)>],
-    reverse_image_mapping: &[HashMap<u32, u32>],
-) -> Result<MergedPointsAndTracks, String> {
+    image_mapping: &[Vec<(usize, u32)>],
+) -> Result<MergedPointsAndTracks, MergePointsAndTracksError> {
+    let num_reconstructions = reconstructions.len();
+    let reconstruction = |argument: &'static str, recon_idx: usize| {
+        reconstructions.get(recon_idx).copied().ok_or(
+            MergePointsAndTracksError::ReconstructionIndexOutOfRange {
+                argument,
+                recon_idx,
+                num_reconstructions,
+            },
+        )
+    };
+
+    // Per-reconstruction mapping from old image index to merged image index.
+    let mut reverse_image_mapping: Vec<HashMap<u32, u32>> =
+        vec![HashMap::new(); num_reconstructions];
+    for (merged_idx, occurrences) in image_mapping.iter().enumerate() {
+        for &(recon_idx, image_idx) in occurrences {
+            let num_images = reconstruction("image_mapping", recon_idx)?
+                .image_set
+                .images
+                .len();
+            if image_idx as usize >= num_images {
+                return Err(MergePointsAndTracksError::ImageIndexOutOfRange {
+                    recon_idx,
+                    image_idx,
+                    num_images,
+                });
+            }
+            reverse_image_mapping[recon_idx]
+                .entry(image_idx)
+                .or_insert(merged_idx as u32);
+        }
+    }
+    for &(recon_idx, point_id) in correspondence_groups.iter().flatten() {
+        let num_points = reconstruction("correspondence_groups", recon_idx)?
+            .point_set
+            .points
+            .len();
+        if point_id as usize >= num_points {
+            return Err(MergePointsAndTracksError::PointIndexOutOfRange {
+                recon_idx,
+                point_id,
+                num_points,
+            });
+        }
+    }
+
     // Merge identity is `(image, feature_index)`, a sift_files notion. Refuse
     // embedded_patches up front rather than silently substituting a placeholder
     // feature index (which would collapse distinct observations in an image).
-    for (i, recon) in reconstructions.iter().enumerate() {
+    for (recon_idx, recon) in reconstructions.iter().enumerate() {
         if recon.feature_indexes().is_none() {
-            return Err(format!(
-                "merge_points_and_tracks is not supported for embedded_patches \
-                 reconstructions (reconstruction {i} is {})",
-                recon.feature_source()
-            ));
+            return Err(MergePointsAndTracksError::EmbeddedPatches {
+                recon_idx,
+                feature_source: recon.feature_source().to_string(),
+            });
         }
     }
 
@@ -364,6 +490,83 @@ pub fn merge_points_and_tracks(
 
     Ok(result)
 }
+
+/// Why [`merge_points_and_tracks`] refused its input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergePointsAndTracksError {
+    /// An entry of `argument` (`"image_mapping"` or
+    /// `"correspondence_groups"`) names a reconstruction past the end of
+    /// `reconstructions`.
+    ReconstructionIndexOutOfRange {
+        argument: &'static str,
+        recon_idx: usize,
+        num_reconstructions: usize,
+    },
+    /// `image_mapping` names an image past the end of its reconstruction's
+    /// images.
+    ImageIndexOutOfRange {
+        recon_idx: usize,
+        image_idx: u32,
+        num_images: usize,
+    },
+    /// `correspondence_groups` names a point past the end of its
+    /// reconstruction's points.
+    PointIndexOutOfRange {
+        recon_idx: usize,
+        point_id: u32,
+        num_points: usize,
+    },
+    /// An input reconstruction has no feature indexes; `feature_source` is
+    /// its feature source.
+    EmbeddedPatches {
+        recon_idx: usize,
+        feature_source: String,
+    },
+}
+
+impl std::fmt::Display for MergePointsAndTracksError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReconstructionIndexOutOfRange {
+                argument,
+                recon_idx,
+                num_reconstructions,
+            } => write!(
+                f,
+                "{argument} names reconstruction {recon_idx}, out of range for \
+                 {num_reconstructions} reconstructions"
+            ),
+            Self::ImageIndexOutOfRange {
+                recon_idx,
+                image_idx,
+                num_images,
+            } => write!(
+                f,
+                "image_mapping names image {image_idx} of reconstruction {recon_idx}, \
+                 out of range for its {num_images} images"
+            ),
+            Self::PointIndexOutOfRange {
+                recon_idx,
+                point_id,
+                num_points,
+            } => write!(
+                f,
+                "correspondence_groups names point {point_id} of reconstruction {recon_idx}, \
+                 out of range for its {num_points} points"
+            ),
+            Self::EmbeddedPatches {
+                recon_idx,
+                feature_source,
+            } => write!(
+                f,
+                "merge_points_and_tracks is not supported for embedded_patches \
+                 reconstructions (reconstruction {recon_idx} is {feature_source})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MergePointsAndTracksError {}
 
 /// The positions of the points merged into one, kept apart by kind so that
 /// [`merge_points_and_tracks`] can apply its rule for mixing finite points

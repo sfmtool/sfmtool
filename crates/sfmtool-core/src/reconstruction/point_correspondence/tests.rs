@@ -28,7 +28,8 @@ fn test_basic_correspondences() {
         &tgt_pts,
         &shared_src,
         &shared_tgt,
-    );
+    )
+    .unwrap();
 
     assert_eq!(result.source_ids.len(), 3);
     assert_eq!(result.target_ids.len(), 3);
@@ -69,7 +70,8 @@ fn test_no_shared_features() {
         &tgt_pts,
         &shared_src,
         &shared_tgt,
-    );
+    )
+    .unwrap();
 
     assert!(result.source_ids.is_empty());
     assert!(result.target_ids.is_empty());
@@ -100,7 +102,8 @@ fn test_deduplication_first_occurrence_wins() {
         &tgt_pts,
         &shared_src,
         &shared_tgt,
-    );
+    )
+    .unwrap();
 
     // Source point 100 should appear only once
     assert_eq!(result.source_ids.len(), 1);
@@ -134,7 +137,8 @@ fn test_missing_shared_image() {
         &tgt_pts,
         &shared_src,
         &shared_tgt,
-    );
+    )
+    .unwrap();
 
     assert!(result.source_ids.is_empty());
 }
@@ -153,15 +157,97 @@ fn test_merge_rejects_embedded_patches() {
         image_file_hashes: vec![[0u8; 16]; n_img],
     };
 
-    let mapping = vec![HashMap::new()];
     // (MergedPointsAndTracks is not Debug, so match rather than expect_err.)
-    let Err(err) = merge_points_and_tracks(&[&recon], &[], &mapping) else {
+    let Err(err) = merge_points_and_tracks(&[&recon], &[], &[]) else {
         panic!("merge must reject embedded_patches");
     };
+    assert_eq!(
+        err,
+        MergePointsAndTracksError::EmbeddedPatches {
+            recon_idx: 0,
+            feature_source: "embedded_patches".to_string(),
+        }
+    );
     assert!(
-        err.contains("embedded_patches"),
+        err.to_string().contains("embedded_patches"),
         "unexpected error message: {err}"
     );
+}
+
+#[test]
+fn test_merge_rejects_image_mapping_reconstruction_out_of_range() {
+    let recon = SfmrReconstruction::demo(2);
+    let Err(err) = merge_points_and_tracks(&[&recon], &[], &[vec![(5, 0)]]) else {
+        panic!("merge must reject reconstruction 5 of 1");
+    };
+    assert_eq!(
+        err,
+        MergePointsAndTracksError::ReconstructionIndexOutOfRange {
+            argument: "image_mapping",
+            recon_idx: 5,
+            num_reconstructions: 1,
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "image_mapping names reconstruction 5, out of range for 1 reconstructions"
+    );
+}
+
+#[test]
+fn test_merge_rejects_image_index_out_of_range() {
+    let recon = SfmrReconstruction::demo(2);
+    let num_images = recon.image_set.images.len();
+    let past_end = num_images as u32;
+    let Err(err) = merge_points_and_tracks(&[&recon], &[], &[vec![(0, past_end)]]) else {
+        panic!("merge must reject an image past the end");
+    };
+    assert_eq!(
+        err,
+        MergePointsAndTracksError::ImageIndexOutOfRange {
+            recon_idx: 0,
+            image_idx: past_end,
+            num_images,
+        }
+    );
+}
+
+#[test]
+fn test_merge_rejects_correspondence_group_indexes_out_of_range() {
+    let recon = SfmrReconstruction::demo(2);
+    let num_points = recon.point_set.points.len();
+    let Err(err) = merge_points_and_tracks(&[&recon], &[vec![(1, 0)]], &[]) else {
+        panic!("merge must reject reconstruction 1 of 1");
+    };
+    assert_eq!(
+        err,
+        MergePointsAndTracksError::ReconstructionIndexOutOfRange {
+            argument: "correspondence_groups",
+            recon_idx: 1,
+            num_reconstructions: 1,
+        }
+    );
+    let past_end = num_points as u32;
+    let Err(err) = merge_points_and_tracks(&[&recon], &[vec![(0, past_end)]], &[]) else {
+        panic!("merge must reject a point past the end");
+    };
+    assert_eq!(
+        err,
+        MergePointsAndTracksError::PointIndexOutOfRange {
+            recon_idx: 0,
+            point_id: past_end,
+            num_points,
+        }
+    );
+}
+
+/// The identity image mapping for `num_reconstructions` copies of a
+/// reconstruction with `num_images` images: merged image `i` is image `i` of
+/// every copy.
+fn identity_mapping(num_reconstructions: usize, num_images: usize) -> Vec<Vec<(usize, u32)>> {
+    (0..num_images as u32)
+        .map(|i| (0..num_reconstructions).map(|r| (r, i)).collect())
+        .collect()
 }
 
 /// Two copies of a four-point demo reconstruction whose points share every
@@ -169,14 +255,12 @@ fn test_merge_rejects_embedded_patches() {
 fn two_demo_copies() -> (
     SfmrReconstruction,
     SfmrReconstruction,
-    Vec<HashMap<u32, u32>>,
+    Vec<Vec<(usize, u32)>>,
 ) {
     let a = SfmrReconstruction::demo(4);
     let b = a.clone();
-    let identity: HashMap<u32, u32> = (0..a.image_set.images.len() as u32)
-        .map(|i| (i, i))
-        .collect();
-    (a, b, vec![identity.clone(), identity])
+    let mapping = identity_mapping(2, a.image_set.images.len());
+    (a, b, mapping)
 }
 
 fn set_at_infinity(recon: &mut SfmrReconstruction, point_id: usize, direction: [f64; 3]) {
@@ -239,12 +323,12 @@ fn test_merge_keeps_points_at_infinity() {
 
 #[test]
 fn test_merge_group_averages_only_its_finite_points() {
-    let (a, mut b, mapping) = two_demo_copies();
+    let (a, mut b, _) = two_demo_copies();
     let mut c = a.clone();
     // Point 0 is finite in `a`, at infinity in `b`, and finite but moved in `c`.
     set_at_infinity(&mut b, 0, [0.0, 0.0, 1.0]);
     c.point_set.points[0].position.x += 2.0;
-    let mapping = vec![mapping[0].clone(), mapping[1].clone(), mapping[0].clone()];
+    let mapping = identity_mapping(3, a.image_set.images.len());
     let p = a.point_set.points[0].position;
 
     let groups = vec![vec![(0usize, 0u32), (1, 0), (2, 0)]];
@@ -257,4 +341,41 @@ fn test_merge_group_averages_only_its_finite_points() {
     for (got, want) in got[..3].iter().zip([p.x + 1.0, p.y, p.z]) {
         assert!((got - want).abs() < 1e-12);
     }
+}
+
+#[test]
+fn test_correspondence_column_lengths_are_errors() {
+    let err = find_point_correspondences(&[0, 0], &[0], &[0, 1], &[0], &[0], &[0], &[0], &[0])
+        .err()
+        .expect("unequal source columns are an error");
+    assert_eq!(
+        err,
+        PointCorrespondenceError::TrackColumnLength {
+            side: "source",
+            image_indexes: 2,
+            feature_indexes: 1,
+            point_indexes: 2,
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "the source track columns differ in length: 2 image indexes, \
+         1 feature indexes and 2 point indexes"
+    );
+    assert_eq!(
+        find_point_correspondences(&[0], &[0], &[0], &[0], &[0], &[], &[0], &[0]).err(),
+        Some(PointCorrespondenceError::TrackColumnLength {
+            side: "target",
+            image_indexes: 1,
+            feature_indexes: 1,
+            point_indexes: 0,
+        })
+    );
+    assert_eq!(
+        find_point_correspondences(&[0], &[0], &[0], &[0], &[0], &[0], &[0, 1], &[0]).err(),
+        Some(PointCorrespondenceError::SharedImagesLength {
+            source: 2,
+            target: 1,
+        })
+    );
 }

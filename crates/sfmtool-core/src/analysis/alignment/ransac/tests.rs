@@ -16,7 +16,7 @@ fn test_no_outliers() {
     let target: Vec<f64> = source.iter().map(|&x| x + 1.0).collect();
     let n = 10;
 
-    let mask = ransac_alignment(&source, &target, n, 100, 0.5, 3, 42);
+    let mask = ransac_alignment(&source, &target, n, 100, 0.5, 3, 42).unwrap();
     let inlier_count: usize = mask.iter().filter(|&&b| b).count();
     assert_eq!(inlier_count, n);
 }
@@ -60,7 +60,7 @@ fn test_known_outliers_rejected() {
         target[base + 2] = source[base + 2] + 100.0;
     }
 
-    let mask = ransac_alignment(&source, &target, 10, 1000, 0.5, 3, 42);
+    let mask = ransac_alignment(&source, &target, 10, 1000, 0.5, 3, 42).unwrap();
 
     // Outliers should be rejected
     assert!(!mask[8]);
@@ -82,7 +82,50 @@ fn test_deterministic_with_seed() {
     ];
     let target: Vec<f64> = source.iter().map(|&x| x + 0.5).collect();
 
-    let mask1 = ransac_alignment(&source, &target, 10, 100, 0.5, 3, 123);
-    let mask2 = ransac_alignment(&source, &target, 10, 100, 0.5, 3, 123);
+    let mask1 = ransac_alignment(&source, &target, 10, 100, 0.5, 3, 123).unwrap();
+    let mask2 = ransac_alignment(&source, &target, 10, 100, 0.5, 3, 123).unwrap();
     assert_eq!(mask1, mask2);
+}
+
+#[test]
+fn test_point_slice_lengths_are_errors() {
+    let six = [0.0; 6];
+    let nine = [0.0; 9];
+    // Points of 2 values each, as from a (3, 2) array.
+    assert_eq!(
+        ransac_alignment(&six, &six, 3, 10, 0.5, 3, 0),
+        Err(AlignmentError::PointsLength {
+            array: "source_points",
+            len: 6,
+            n_points: 3,
+        })
+    );
+    // A target with fewer points than the source.
+    let err = ransac_alignment(&nine, &six, 3, 10, 0.5, 3, 0).unwrap_err();
+    assert_eq!(
+        err,
+        AlignmentError::PointsLength {
+            array: "target_points",
+            len: 6,
+            n_points: 3,
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "target_points has 6 values but 3 points of 3 values each need 9"
+    );
+}
+
+#[test]
+fn test_sample_size_out_of_range_is_error() {
+    let six = [0.0; 6];
+    for min_sample_size in [0, 3] {
+        assert_eq!(
+            ransac_alignment(&six, &six, 2, 10, 0.5, min_sample_size, 0),
+            Err(AlignmentError::SampleSize {
+                min_sample_size,
+                n_points: 2,
+            })
+        );
+    }
 }

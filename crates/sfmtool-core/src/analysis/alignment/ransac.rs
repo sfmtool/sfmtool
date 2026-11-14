@@ -10,7 +10,9 @@ use rand::rngs::StdRng;
 use rand::seq::index::sample;
 use rand::SeedableRng;
 
-use super::least_squares::{estimate_alignment, AlignmentParams};
+use super::least_squares::{
+    check_points_length, estimate_alignment, AlignmentError, AlignmentParams,
+};
 
 /// RANSAC alignment: identify inlier point correspondences.
 ///
@@ -18,6 +20,11 @@ use super::least_squares::{estimate_alignment, AlignmentParams};
 /// row-major order (x0, y0, z0, x1, y1, z1, ...).
 ///
 /// Returns a `Vec<bool>` of length `n_points` where `true` indicates an inlier.
+///
+/// # Errors
+/// [`AlignmentError::PointsLength`] when either slice does not hold
+/// `n_points * 3` values, and [`AlignmentError::SampleSize`] when
+/// `min_sample_size` is 0 or more than `n_points`.
 pub fn ransac_alignment(
     source_points: &[f64],
     target_points: &[f64],
@@ -26,7 +33,15 @@ pub fn ransac_alignment(
     threshold: f64,
     min_sample_size: usize,
     seed: u64,
-) -> Vec<bool> {
+) -> Result<Vec<bool>, AlignmentError> {
+    check_points_length("source_points", source_points, n_points)?;
+    check_points_length("target_points", target_points, n_points)?;
+    if min_sample_size == 0 || min_sample_size > n_points {
+        return Err(AlignmentError::SampleSize {
+            min_sample_size,
+            n_points,
+        });
+    }
     let mut best_inliers = vec![true; n_points];
     let mut best_inlier_count: usize = 0;
     let mut rng = StdRng::seed_from_u64(seed);
@@ -95,7 +110,7 @@ pub fn ransac_alignment(
         }
     }
 
-    best_inliers
+    Ok(best_inliers)
 }
 
 #[cfg(test)]

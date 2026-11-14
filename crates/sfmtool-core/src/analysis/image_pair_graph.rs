@@ -86,14 +86,33 @@ pub fn compute_camera_directions(quaternions_wxyz: &[f64], num_images: usize) ->
 /// # Returns
 /// `Vec<(u32, u32, u32)>` of `(img_i, img_j, shared_count)`, sorted by
 /// `shared_count` descending.
+///
+/// # Errors
+/// [`ImagePairGraphError::ArrayLength`] when `quaternions_wxyz` does not hold
+/// `num_images * 4` values, [`ImagePairGraphError::TrackColumnLength`] when
+/// the two track columns differ in length, and
+/// [`ImagePairGraphError::ImageIndexOutOfRange`] when an image index is
+/// `num_images` or more.
 pub fn build_covisibility_pairs(
     quaternions_wxyz: &[f64],
     num_images: usize,
     track_point_indexes: &[u32],
     track_image_indexes: &[u32],
     angle_threshold_deg: f64,
-) -> Vec<(u32, u32, u32)> {
-    debug_assert_eq!(track_point_indexes.len(), track_image_indexes.len());
+) -> Result<Vec<(u32, u32, u32)>, ImagePairGraphError> {
+    check_array_length("quaternions_wxyz", quaternions_wxyz.len(), num_images, 4)?;
+    if track_point_indexes.len() != track_image_indexes.len() {
+        return Err(ImagePairGraphError::TrackColumnLength {
+            track_point_indexes: track_point_indexes.len(),
+            track_image_indexes: track_image_indexes.len(),
+        });
+    }
+    if let Some(&image) = track_image_indexes
+        .iter()
+        .find(|&&image| image as usize >= num_images)
+    {
+        return Err(ImagePairGraphError::ImageIndexOutOfRange { image, num_images });
+    }
 
     // Step 1: Build mapping from point_id -> list of image_ids
     let mut point_to_images: HashMap<u32, Vec<u32>> = HashMap::new();
@@ -140,7 +159,7 @@ pub fn build_covisibility_pairs(
     // Step 5: Sort by count descending
     pairs.sort_by_key(|p| Reverse(p.2));
 
-    pairs
+    Ok(pairs)
 }
 
 /// Estimate Z value at given percentile from histogram.
@@ -206,6 +225,10 @@ pub fn estimate_z_from_histogram(
 /// # Returns
 /// `Vec<(u32, u32, f64)>` of `(img_i, img_j, intersection_volume)` sorted by
 /// volume descending.
+///
+/// # Errors
+/// [`ImagePairGraphError::ArrayLength`] when a per-image array does not hold
+/// its length above.
 #[allow(clippy::too_many_arguments)]
 pub fn build_frustum_intersection_pairs(
     quaternions_wxyz: &[f64],
@@ -226,7 +249,28 @@ pub fn build_frustum_intersection_pairs(
     num_samples: usize,
     angle_threshold_deg: f64,
     seed: u64,
-) -> Vec<(u32, u32, f64)> {
+) -> Result<Vec<(u32, u32, f64)>, ImagePairGraphError> {
+    check_array_length("quaternions_wxyz", quaternions_wxyz.len(), num_images, 4)?;
+    check_array_length("translations", translations.len(), num_images, 3)?;
+    for (array, len) in [
+        ("fx", fx.len()),
+        ("fy", fy.len()),
+        ("cx", cx.len()),
+        ("cy", cy.len()),
+        ("widths", widths.len()),
+        ("heights", heights.len()),
+        ("histogram_min_z", histogram_min_z.len()),
+        ("histogram_max_z", histogram_max_z.len()),
+    ] {
+        check_array_length(array, len, num_images, 1)?;
+    }
+    check_array_length(
+        "histogram_counts",
+        histogram_counts.len(),
+        num_images,
+        num_bins,
+    )?;
+
     // Step 1: Compute camera directions for angle culling
     let directions = compute_camera_directions(quaternions_wxyz, num_images);
     let cos_threshold = angle_threshold_deg.to_radians().cos();
@@ -389,7 +433,78 @@ pub fn build_frustum_intersection_pairs(
     // Step 4: Sort by volume descending
     pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
-    pairs
+    Ok(pairs)
+}
+
+/// Why [`build_covisibility_pairs`] or [`build_frustum_intersection_pairs`]
+/// refused its input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImagePairGraphError {
+    /// A per-image array does not hold `num_images × width` values. `array`
+    /// is the parameter name.
+    ArrayLength {
+        array: &'static str,
+        len: usize,
+        num_images: usize,
+        width: usize,
+    },
+    /// The two track columns differ in length.
+    TrackColumnLength {
+        track_point_indexes: usize,
+        track_image_indexes: usize,
+    },
+    /// An observation names an image past the end of the cameras.
+    ImageIndexOutOfRange { image: u32, num_images: usize },
+}
+
+impl std::fmt::Display for ImagePairGraphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ArrayLength {
+                array,
+                len,
+                num_images,
+                width,
+            } => write!(
+                f,
+                "{array} has {len} values but {num_images} images of {width} values each need {}",
+                num_images.saturating_mul(*width)
+            ),
+            Self::TrackColumnLength {
+                track_point_indexes,
+                track_image_indexes,
+            } => write!(
+                f,
+                "track_point_indexes has {track_point_indexes} entries but \
+                 track_image_indexes has {track_image_indexes}"
+            ),
+            Self::ImageIndexOutOfRange { image, num_images } => write!(
+                f,
+                "track_image_indexes holds image {image}, out of range for {num_images} images"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImagePairGraphError {}
+
+/// `Err` unless an array of `len` values holds `num_images × width` of them.
+fn check_array_length(
+    array: &'static str,
+    len: usize,
+    num_images: usize,
+    width: usize,
+) -> Result<(), ImagePairGraphError> {
+    if num_images.checked_mul(width) == Some(len) {
+        Ok(())
+    } else {
+        Err(ImagePairGraphError::ArrayLength {
+            array,
+            len,
+            num_images,
+            width,
+        })
+    }
 }
 
 #[cfg(test)]

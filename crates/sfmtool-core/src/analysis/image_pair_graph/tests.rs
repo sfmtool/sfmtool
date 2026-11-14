@@ -88,7 +88,8 @@ fn test_covisibility_simple() {
         &track_point_indexes,
         &track_image_indexes,
         90.0,
-    );
+    )
+    .unwrap();
 
     assert_eq!(pairs.len(), 2);
 
@@ -120,7 +121,8 @@ fn test_covisibility_angle_culling() {
         &track_point_indexes,
         &track_image_indexes,
         90.0,
-    );
+    )
+    .unwrap();
 
     assert!(
         pairs.is_empty(),
@@ -186,7 +188,8 @@ fn test_build_frustum_intersection_pairs_identical_cameras() {
         1000,
         90.0,
         42,
-    );
+    )
+    .unwrap();
 
     assert_eq!(pairs.len(), 1, "Should find exactly one pair");
     assert_eq!(pairs[0].0, 0);
@@ -255,7 +258,8 @@ fn test_build_frustum_intersection_pairs_nan_skipped() {
         100,
         90.0,
         42,
-    );
+    )
+    .unwrap();
 
     assert!(
         pairs.is_empty(),
@@ -293,4 +297,94 @@ fn test_camera_directions_90_around_y() {
     assert_relative_eq!(dirs[0], 1.0, epsilon = 1e-10);
     assert_relative_eq!(dirs[1], 0.0, epsilon = 1e-10);
     assert_relative_eq!(dirs[2], 0.0, epsilon = 1e-10);
+}
+
+#[test]
+fn test_covisibility_input_errors() {
+    let quaternions = identity_quat();
+    // Image 5 with 1 image.
+    let err = build_covisibility_pairs(&quaternions, 1, &[0, 0], &[0, 5], 90.0).unwrap_err();
+    assert_eq!(
+        err,
+        ImagePairGraphError::ImageIndexOutOfRange {
+            image: 5,
+            num_images: 1,
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "track_image_indexes holds image 5, out of range for 1 images"
+    );
+    assert_eq!(
+        build_covisibility_pairs(&quaternions, 1, &[0], &[0, 0], 90.0),
+        Err(ImagePairGraphError::TrackColumnLength {
+            track_point_indexes: 1,
+            track_image_indexes: 2,
+        })
+    );
+    assert_eq!(
+        build_covisibility_pairs(&quaternions, 2, &[], &[], 90.0),
+        Err(ImagePairGraphError::ArrayLength {
+            array: "quaternions_wxyz",
+            len: 4,
+            num_images: 2,
+            width: 4,
+        })
+    );
+}
+
+#[test]
+fn test_frustum_intersection_input_errors() {
+    let quaternions = [identity_quat(), identity_quat()].concat();
+    let translations = [0.0; 6];
+    let two = [1.0; 2];
+    let sizes = [10_u32; 2];
+    let hist = [1_u32; 8];
+    let call = |fx: &[f64], hist: &[u32]| {
+        build_frustum_intersection_pairs(
+            &quaternions,
+            &translations,
+            2,
+            fx,
+            &two,
+            &two,
+            &two,
+            &sizes,
+            &sizes,
+            hist,
+            &two,
+            &[2.0; 2],
+            4,
+            5.0,
+            95.0,
+            10,
+            90.0,
+            0,
+        )
+    };
+    // One intrinsics row for two images.
+    let err = call(&[1.0], &hist).unwrap_err();
+    assert_eq!(
+        err,
+        ImagePairGraphError::ArrayLength {
+            array: "fx",
+            len: 1,
+            num_images: 2,
+            width: 1,
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "fx has 1 values but 2 images of 1 values each need 2"
+    );
+    assert_eq!(
+        call(&two, &hist[..4]),
+        Err(ImagePairGraphError::ArrayLength {
+            array: "histogram_counts",
+            len: 4,
+            num_images: 2,
+            width: 4,
+        })
+    );
+    assert!(call(&two, &hist).is_ok());
 }

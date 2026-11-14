@@ -51,20 +51,21 @@ impl Default for AlignmentParams {
 /// correspondences with the smallest residual `‖s·R·src + t − tgt‖` under the
 /// previous fit.
 ///
-/// Returns an [`Se3Transform`] or an error string on degenerate input
-/// (`n_points < 1`, slice length ≠ `n_points * 3`, or SVD failure).
+/// # Errors
+/// [`AlignmentError::NoPoints`] when `n_points` is 0, and
+/// [`AlignmentError::PointsLength`] when either slice does not hold
+/// `n_points * 3` values.
 pub fn estimate_alignment(
     source_points: &[f64],
     target_points: &[f64],
     n_points: usize,
     params: AlignmentParams,
-) -> Result<Se3Transform, String> {
+) -> Result<Se3Transform, AlignmentError> {
     if n_points < 1 {
-        return Err("Need at least 1 point".to_string());
+        return Err(AlignmentError::NoPoints);
     }
-    if source_points.len() != n_points * 3 || target_points.len() != n_points * 3 {
-        return Err("Point slice length does not match n_points * 3".to_string());
-    }
+    check_points_length("source_points", source_points, n_points)?;
+    check_points_length("target_points", target_points, n_points)?;
     let keep = (params.keep_fraction.clamp(0.0, 1.0) * n_points as f64).round() as usize;
     let keep = keep.max(1).min(n_points);
 
@@ -74,7 +75,7 @@ pub fn estimate_alignment(
         target_points,
         &indices,
         params.estimate_scale,
-    )?;
+    );
     for _ in 0..params.rounds.saturating_sub(1) {
         // Residual of every correspondence under the current transform.
         let mut resid: Vec<(f64, usize)> = (0..n_points)
@@ -94,7 +95,7 @@ pub fn estimate_alignment(
             target_points,
             &indices,
             params.estimate_scale,
-        )?;
+        );
     }
     Ok(transform)
 }
@@ -108,17 +109,15 @@ fn point_at(points: &[f64], i: usize) -> Vector3<f64> {
 /// SVD similarity/rigid fit over the observations in `indices` (a subset of the
 /// points). `estimate_scale = false` yields a rigid transform (scale 1).
 ///
-/// This is the single SVD implementation underlying [`estimate_alignment`].
+/// This is the single SVD implementation underlying [`estimate_alignment`],
+/// which passes it at least one index.
 fn fit_indexed(
     source_points: &[f64],
     target_points: &[f64],
     indices: &[usize],
     estimate_scale: bool,
-) -> Result<Se3Transform, String> {
+) -> Se3Transform {
     let n = indices.len();
-    if n < 1 {
-        return Err("Need at least 1 point".to_string());
-    }
     let w = 1.0 / n as f64;
 
     // Compute centroids
@@ -142,8 +141,8 @@ fn fit_indexed(
 
     // SVD
     let svd = h.svd(true, true);
-    let u = svd.u.ok_or("SVD failed to compute U")?;
-    let mut vt = svd.v_t.ok_or("SVD failed to compute V^T")?;
+    let u = svd.u.expect("the SVD was asked for U");
+    let mut vt = svd.v_t.expect("the SVD was asked for V^T");
 
     // For rank-deficient H, SVD may pick arbitrary orthonormal completions
     // for nullspace columns of U and V.  We only need to fix these when the
@@ -209,7 +208,71 @@ fn fit_indexed(
     let translation = tgt_c - scale * (rot * src_c);
 
     let rotation = RotQuaternion::from_rotation_matrix(rot);
-    Ok(Se3Transform::new(rotation, translation, scale))
+    Se3Transform::new(rotation, translation, scale)
+}
+
+/// Why [`estimate_alignment`] or [`ransac_alignment`](super::ransac_alignment)
+/// refused its input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AlignmentError {
+    /// `n_points` is 0; a fit needs at least one correspondence.
+    NoPoints,
+    /// A point slice does not hold `n_points * 3` values. `array` is the
+    /// parameter name.
+    PointsLength {
+        array: &'static str,
+        len: usize,
+        n_points: usize,
+    },
+    /// [`ransac_alignment`](super::ransac_alignment): `min_sample_size` is 0
+    /// or more than `n_points`.
+    SampleSize {
+        min_sample_size: usize,
+        n_points: usize,
+    },
+}
+
+impl std::fmt::Display for AlignmentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPoints => write!(f, "an alignment needs at least 1 point"),
+            Self::PointsLength {
+                array,
+                len,
+                n_points,
+            } => write!(
+                f,
+                "{array} has {len} values but {n_points} points of 3 values each need {}",
+                n_points.saturating_mul(3)
+            ),
+            Self::SampleSize {
+                min_sample_size,
+                n_points,
+            } => write!(
+                f,
+                "min_sample_size {min_sample_size} must be from 1 to the number of points, {n_points}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AlignmentError {}
+
+/// `Err` unless `points` holds `n_points * 3` values.
+pub(super) fn check_points_length(
+    array: &'static str,
+    points: &[f64],
+    n_points: usize,
+) -> Result<(), AlignmentError> {
+    if n_points.checked_mul(3) == Some(points.len()) {
+        Ok(())
+    } else {
+        Err(AlignmentError::PointsLength {
+            array,
+            len: points.len(),
+            n_points,
+        })
+    }
 }
 
 #[cfg(test)]

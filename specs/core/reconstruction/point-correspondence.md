@@ -40,7 +40,10 @@ image pairs, and:
    matched it (no voting; the map is not guaranteed one-to-one on the target
    side).
 
-Returns parallel `source_ids` / `target_ids` vectors. Because the key is the
+Returns parallel `source_ids` / `target_ids` vectors, or a
+`PointCorrespondenceError` (raised as `ValueError` by the binding):
+`TrackColumnLength` when one side's three track columns differ in length, and
+`SharedImagesLength` when the two shared-image arrays do. Because the key is the
 feature *index*, both reconstructions must reference the **same `.sift`
 files** — two solves of the same workspace qualify; reconstructions built
 with different feature backends do not. `embedded_patches` reconstructions
@@ -131,14 +134,20 @@ points-at-infinity filter as the feature-index wrapper applies.
 ## Merging points and tracks (`merge_points_and_tracks`)
 
 `merge_points_and_tracks(reconstructions, correspondence_groups,
-reverse_image_mapping)` produces the merged point set and track columns:
+image_mapping)` produces the merged point set and track columns.
+`image_mapping` has one entry per merged image, in merged image order, listing
+the `(recon_idx, image_idx)` occurrences of that image; the binding takes it as
+the `{image name: occurrences}` dict `merge/reconstructions.py` builds, in the
+dict's order. The core inverts it into a per-reconstruction map from image
+index to merged image index, keeping the first merged index an image is listed
+under.
 
 1. **Group points:** each correspondence group becomes one temp point with
    position/color/error **averaged** over its members (the averaged error is
    not the merged track's RMS, so `sfm merge` scores every point again once it
    has refined the poses), and the union of the
-   members' observations remapped into merged-image indices via
-   `reverse_image_mapping`. An empty group is skipped.
+   members' observations remapped into merged-image indices through that
+   map. An empty group is skipped.
 2. **Unique points:** every point not in any group is carried over as its
    own temp point.
 3. **Union-find over observations:** temp points that share an observation
@@ -166,10 +175,14 @@ merge. Steps 1 and 4 average positions by one rule:
 
 Colors and errors are averaged over every point, finite or not.
 
-Because the merge keys observations on `(image, feature_index)` identity,
-`embedded_patches` inputs are **rejected** with an error — they have no
-feature indexes, and substituting a placeholder would collapse distinct
-observations within an image.
+Errors are a `MergePointsAndTracksError`, raised as `ValueError` by the
+binding. `ReconstructionIndexOutOfRange`, `ImageIndexOutOfRange` and
+`PointIndexOutOfRange` name an entry of `image_mapping` or
+`correspondence_groups` that refers to a reconstruction, image or point that
+does not exist. Because the merge keys observations on `(image, feature_index)`
+identity, `embedded_patches` inputs are **rejected** with `EmbeddedPatches` —
+they have no feature indexes, and substituting a placeholder would collapse
+distinct observations within an image.
 
 `merge/reconstructions.py` stores the rows as homogeneous positions, and
 its pose refinement ([merge/pose_refinement.py](../../../src/sfmtool/merge/pose_refinement.py))

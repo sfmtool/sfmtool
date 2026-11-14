@@ -176,9 +176,8 @@ pub struct AlignFit {
 /// Fit the similarity taking `source` onto `target`.
 ///
 /// Returns the reason as an `Err` string on every failure the spec names — no
-/// shared images, too few correspondences, a degenerate configuration, an SVD
-/// that would not converge — so the caller can leave the source where it was
-/// and report it.
+/// shared images, too few correspondences, a degenerate configuration — so
+/// the caller can leave the source where it was and report it.
 pub fn align_reconstructions(
     source: &SfmrReconstruction,
     target: &SfmrReconstruction,
@@ -346,7 +345,8 @@ fn point_correspondences(
                     &target_points,
                     &shared_source,
                     &shared_target,
-                ),
+                )
+                .map_err(|e| e.to_string())?,
                 PointMatching::FeatureIndex,
             ),
             _ => {
@@ -483,7 +483,8 @@ fn fit_by_cameras(
     }
     // No RANSAC: a few hundred camera centres are too few for a consensus
     // sample to beat fitting them all and trimming the worst away.
-    let transform = estimate_alignment(&c.source, &c.target, n, params(estimate_scale))?;
+    let transform = estimate_alignment(&c.source, &c.target, n, params(estimate_scale))
+        .map_err(|e| e.to_string())?;
     let resid = residuals(&c, &transform);
     let keep = trimmed_indices(&resid, kept_count(n));
     Ok(AlignFit {
@@ -512,7 +513,8 @@ fn fit_by_points(
     // Threshold the way `sfm align` does: a preliminary all-correspondence fit,
     // then the 95th percentile of its residuals. A fixed absolute threshold
     // would be meaningless — reconstructions carry no metric scale.
-    let preliminary = estimate_alignment(&c.source, &c.target, n, AlignmentParams::default())?;
+    let preliminary = estimate_alignment(&c.source, &c.target, n, AlignmentParams::default())
+        .map_err(|e| e.to_string())?;
     let mut prelim_resid = residuals(&c, &preliminary);
     prelim_resid.sort_by(f64::total_cmp);
     let threshold = prelim_resid[((n as f64 * RANSAC_PERCENTILE) as usize).min(n - 1)];
@@ -531,7 +533,8 @@ fn fit_by_points(
         threshold,
         RANSAC_SAMPLE,
         RANSAC_SEED,
-    );
+    )
+    .map_err(|e| e.to_string())?;
     let inlier_indices: Vec<usize> = (0..n).filter(|&i| mask[i]).collect();
     if inlier_indices.len() < MIN_POINT_CORRESPONDENCES {
         return Err(format!(
@@ -547,7 +550,8 @@ fn fit_by_points(
         &inliers.target,
         inlier_indices.len(),
         params(estimate_scale),
-    )?;
+    )
+    .map_err(|e| e.to_string())?;
     let resid = residuals(&inliers, &transform);
     let keep = trimmed_indices(&resid, kept_count(inlier_indices.len()));
     Ok(AlignFit {

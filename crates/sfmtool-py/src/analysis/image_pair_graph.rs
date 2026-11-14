@@ -8,6 +8,8 @@ use pyo3::prelude::*;
 
 use sfmtool_core::analysis::image_pair_graph;
 
+use crate::helpers::value_err;
+
 /// Build covisibility pairs from track observations.
 /// Returns list of (i, j, count) tuples sorted by count descending.
 #[pyfunction]
@@ -25,13 +27,14 @@ pub fn build_covisibility_pairs_py(
     let point_ids_data = to_contiguous!(track_point_indexes);
     let img_idx_data = to_contiguous!(track_image_indexes);
 
-    Ok(image_pair_graph::build_covisibility_pairs(
+    image_pair_graph::build_covisibility_pairs(
         &q_data,
         num_images,
         &point_ids_data,
         &img_idx_data,
         angle_threshold_deg,
-    ))
+    )
+    .map_err(value_err)
 }
 
 /// Build frustum intersection pairs using Monte Carlo volume estimation.
@@ -79,7 +82,7 @@ pub fn build_frustum_intersection_pairs_py(
     let hist_min_data = to_contiguous!(histogram_min_z);
     let hist_max_data = to_contiguous!(histogram_max_z);
 
-    Ok(image_pair_graph::build_frustum_intersection_pairs(
+    image_pair_graph::build_frustum_intersection_pairs(
         &q_data,
         &t_data,
         num_images,
@@ -98,7 +101,8 @@ pub fn build_frustum_intersection_pairs_py(
         num_samples,
         angle_threshold_deg,
         seed,
-    ))
+    )
+    .map_err(value_err)
 }
 
 // ── Registration ──────────────────────────────────────────────────────────

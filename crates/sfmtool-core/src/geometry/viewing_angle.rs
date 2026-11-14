@@ -51,7 +51,15 @@ pub fn max_viewing_angle(rays: &[(usize, Vector3<f64>)]) -> f64 {
 /// * `min_angle_rad` - Minimum angle threshold in radians
 ///
 /// # Returns
-/// Boolean vec of length num_points. true = keep, false = remove.
+/// Boolean vec of length num_points. true = keep, false = remove. An
+/// observation whose point ID is `num_points` or more is skipped.
+///
+/// # Errors
+/// [`NarrowTrackMaskError::ArrayLength`] when `quaternions_wxyz`,
+/// `translations` or `positions` does not hold its length above,
+/// [`NarrowTrackMaskError::TrackColumnLength`] when the two track columns
+/// differ in length, and [`NarrowTrackMaskError::ImageIndexOutOfRange`] when
+/// an image index is `num_images` or more.
 #[allow(clippy::too_many_arguments)]
 pub fn compute_narrow_track_mask(
     quaternions_wxyz: &[f64],
@@ -62,7 +70,23 @@ pub fn compute_narrow_track_mask(
     track_point_indexes: &[u32],
     track_image_indexes: &[u32],
     min_angle_rad: f64,
-) -> Vec<bool> {
+) -> Result<Vec<bool>, NarrowTrackMaskError> {
+    check_array_length("quaternions_wxyz", quaternions_wxyz, num_images, 4)?;
+    check_array_length("translations", translations, num_images, 3)?;
+    check_array_length("positions", positions, num_points, 3)?;
+    if track_point_indexes.len() != track_image_indexes.len() {
+        return Err(NarrowTrackMaskError::TrackColumnLength {
+            track_point_indexes: track_point_indexes.len(),
+            track_image_indexes: track_image_indexes.len(),
+        });
+    }
+    if let Some(&image) = track_image_indexes
+        .iter()
+        .find(|&&image| image as usize >= num_images)
+    {
+        return Err(NarrowTrackMaskError::ImageIndexOutOfRange { image, num_images });
+    }
+
     // Step 1: Compute camera centers for all images
     let camera_centers: Vec<Point3<f64>> = (0..num_images)
         .map(|i| {
@@ -118,7 +142,77 @@ pub fn compute_narrow_track_mask(
         }
     }
 
-    keep
+    Ok(keep)
+}
+
+/// Why [`compute_narrow_track_mask`] refused its input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NarrowTrackMaskError {
+    /// A flat array does not hold `rows × width` values. `array` is the
+    /// parameter name.
+    ArrayLength {
+        array: &'static str,
+        len: usize,
+        rows: usize,
+        width: usize,
+    },
+    /// The two track columns differ in length.
+    TrackColumnLength {
+        track_point_indexes: usize,
+        track_image_indexes: usize,
+    },
+    /// An observation names an image past the end of the cameras.
+    ImageIndexOutOfRange { image: u32, num_images: usize },
+}
+
+impl std::fmt::Display for NarrowTrackMaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ArrayLength {
+                array,
+                len,
+                rows,
+                width,
+            } => write!(
+                f,
+                "{array} has {len} values but {rows} rows of {width} values each need {}",
+                rows.saturating_mul(*width)
+            ),
+            Self::TrackColumnLength {
+                track_point_indexes,
+                track_image_indexes,
+            } => write!(
+                f,
+                "track_point_indexes has {track_point_indexes} entries but \
+                 track_image_indexes has {track_image_indexes}"
+            ),
+            Self::ImageIndexOutOfRange { image, num_images } => write!(
+                f,
+                "track_image_indexes holds image {image}, out of range for {num_images} images"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NarrowTrackMaskError {}
+
+/// `Err` unless `values` holds `rows × width` elements.
+fn check_array_length(
+    array: &'static str,
+    values: &[f64],
+    rows: usize,
+    width: usize,
+) -> Result<(), NarrowTrackMaskError> {
+    if rows.checked_mul(width) == Some(values.len()) {
+        Ok(())
+    } else {
+        Err(NarrowTrackMaskError::ArrayLength {
+            array,
+            len: values.len(),
+            rows,
+            width,
+        })
+    }
 }
 
 #[cfg(test)]

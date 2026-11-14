@@ -27,7 +27,8 @@ fn test_cameras_at_same_position_filtered() {
         &track_point_indexes,
         &track_image_indexes,
         0.1, // any positive threshold
-    );
+    )
+    .unwrap();
 
     assert_eq!(keep.len(), 1);
     assert!(
@@ -67,7 +68,8 @@ fn test_cameras_90_degrees_apart_kept() {
         &track_point_indexes,
         &track_image_indexes,
         PI / 6.0,
-    );
+    )
+    .unwrap();
 
     assert!(
         keep[0],
@@ -84,7 +86,8 @@ fn test_cameras_90_degrees_apart_kept() {
         &track_point_indexes,
         &track_image_indexes,
         80.0_f64.to_radians(),
-    );
+    )
+    .unwrap();
 
     assert!(
         !keep2[0],
@@ -109,7 +112,8 @@ fn test_single_observation_removed() {
         &track_point_indexes,
         &track_image_indexes,
         0.01,
-    );
+    )
+    .unwrap();
 
     assert!(
         !keep[0],
@@ -142,7 +146,8 @@ fn test_angle_threshold_boundary() {
         &track_point_indexes,
         &track_image_indexes,
         threshold_below,
-    );
+    )
+    .unwrap();
     let keep_above = compute_narrow_track_mask(
         &quaternions,
         &translations,
@@ -152,7 +157,8 @@ fn test_angle_threshold_boundary() {
         &track_point_indexes,
         &track_image_indexes,
         threshold_above,
-    );
+    )
+    .unwrap();
 
     assert!(
         keep_below[0],
@@ -187,11 +193,90 @@ fn test_multiple_points_mixed() {
         &track_point_indexes,
         &track_image_indexes,
         10.0_f64.to_radians(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(keep.len(), 3);
     // Point 0: angle ~ atan2(10, 1) ~ 84° - should be kept
     assert!(keep[0]);
     // Point 1: angle ~ atan2(10, 100) ~ 5.7° - should be filtered
     assert!(!keep[1]);
+}
+
+#[test]
+fn test_input_lengths_are_errors() {
+    let quaternions = [identity_quat(), identity_quat()].concat();
+    let translations = [0.0; 6];
+    let positions = [0.0, 0.0, 5.0];
+    let call = |quaternions: &[f64],
+                translations: &[f64],
+                positions: &[f64],
+                point_ids: &[u32],
+                image_ids: &[u32]| {
+        compute_narrow_track_mask(
+            quaternions,
+            translations,
+            2,
+            positions,
+            1,
+            point_ids,
+            image_ids,
+            0.1,
+        )
+    };
+
+    // Translations for one image of two.
+    let err = call(&quaternions, &[0.0; 3], &positions, &[0, 0], &[0, 1]).unwrap_err();
+    assert_eq!(
+        err,
+        NarrowTrackMaskError::ArrayLength {
+            array: "translations",
+            len: 3,
+            rows: 2,
+            width: 3,
+        }
+    );
+    assert_eq!(
+        err.to_string(),
+        "translations has 3 values but 2 rows of 3 values each need 6"
+    );
+    // Positions of 2 values, as from a (1, 2) array.
+    assert_eq!(
+        call(&quaternions, &translations, &[0.0, 5.0], &[0, 0], &[0, 1]),
+        Err(NarrowTrackMaskError::ArrayLength {
+            array: "positions",
+            len: 2,
+            rows: 1,
+            width: 3,
+        })
+    );
+    assert_eq!(
+        call(
+            &quaternions[..4],
+            &translations,
+            &positions,
+            &[0, 0],
+            &[0, 1]
+        ),
+        Err(NarrowTrackMaskError::ArrayLength {
+            array: "quaternions_wxyz",
+            len: 4,
+            rows: 2,
+            width: 4,
+        })
+    );
+    assert_eq!(
+        call(&quaternions, &translations, &positions, &[0], &[0, 1]),
+        Err(NarrowTrackMaskError::TrackColumnLength {
+            track_point_indexes: 1,
+            track_image_indexes: 2,
+        })
+    );
+    assert_eq!(
+        call(&quaternions, &translations, &positions, &[0, 0], &[0, 2]),
+        Err(NarrowTrackMaskError::ImageIndexOutOfRange {
+            image: 2,
+            num_images: 2,
+        })
+    );
 }

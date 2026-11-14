@@ -7,7 +7,20 @@ use approx::assert_relative_eq;
 #[test]
 fn test_zero_points_is_error() {
     let result = estimate_alignment(&[], &[], 0, AlignmentParams::default());
-    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), AlignmentError::NoPoints);
+}
+
+#[test]
+fn test_point_slice_length_is_error() {
+    let err = estimate_alignment(&[0.0; 6], &[0.0; 5], 2, AlignmentParams::default()).unwrap_err();
+    assert_eq!(
+        err,
+        AlignmentError::PointsLength {
+            array: "target_points",
+            len: 5,
+            n_points: 2,
+        }
+    );
 }
 
 #[test]
