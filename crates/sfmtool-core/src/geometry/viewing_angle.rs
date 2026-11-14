@@ -37,14 +37,19 @@ pub fn max_viewing_angle(rays: &[(usize, Vector3<f64>)]) -> f64 {
 
 /// Compute which 3D points to keep based on minimum viewing angle threshold.
 ///
-/// For each point, computes the maximum angle between any pair of viewing rays
-/// from observing cameras. Points with max angle >= min_angle_rad are kept.
+/// For each finite point, computes the maximum angle between any pair of
+/// viewing rays from observing cameras. Points with max angle >= min_angle_rad
+/// are kept.
+///
+/// A point at infinity (`w = 0`) is always kept. Its observation rays are
+/// parallel by definition, so the viewing angle, which measures how well a
+/// finite position is triangulated, says nothing about it.
 ///
 /// # Arguments
 /// * `quaternions_wxyz` - Flat slice of camera quaternions [w0,x0,y0,z0, w1,...], length num_images*4
 /// * `translations` - Flat slice of camera translations [tx0,ty0,tz0, ...], length num_images*3
 /// * `num_images` - Number of camera images
-/// * `positions` - Flat slice of 3D point positions [x0,y0,z0, ...], length num_points*3
+/// * `positions_xyzw` - Flat slice of homogeneous point coordinates [x0,y0,z0,w0, ...], length num_points*4
 /// * `num_points` - Number of 3D points
 /// * `track_point_indexes` - Point ID for each track observation
 /// * `track_image_indexes` - Image index for each track observation
@@ -56,7 +61,7 @@ pub fn max_viewing_angle(rays: &[(usize, Vector3<f64>)]) -> f64 {
 ///
 /// # Errors
 /// [`NarrowTrackMaskError::ArrayLength`] when `quaternions_wxyz`,
-/// `translations` or `positions` does not hold its length above,
+/// `translations` or `positions_xyzw` does not hold its length above,
 /// [`NarrowTrackMaskError::TrackColumnLength`] when the two track columns
 /// differ in length, and [`NarrowTrackMaskError::ImageIndexOutOfRange`] when
 /// an image index is `num_images` or more.
@@ -65,7 +70,7 @@ pub fn compute_narrow_track_mask(
     quaternions_wxyz: &[f64],
     translations: &[f64],
     num_images: usize,
-    positions: &[f64],
+    positions_xyzw: &[f64],
     num_points: usize,
     track_point_indexes: &[u32],
     track_image_indexes: &[u32],
@@ -73,7 +78,7 @@ pub fn compute_narrow_track_mask(
 ) -> Result<Vec<bool>, NarrowTrackMaskError> {
     check_array_length("quaternions_wxyz", quaternions_wxyz, num_images, 4)?;
     check_array_length("translations", translations, num_images, 3)?;
-    check_array_length("positions", positions, num_points, 3)?;
+    check_array_length("positions_xyzw", positions_xyzw, num_points, 4)?;
     if track_point_indexes.len() != track_image_indexes.len() {
         return Err(NarrowTrackMaskError::TrackColumnLength {
             track_point_indexes: track_point_indexes.len(),
@@ -114,20 +119,22 @@ pub fn compute_narrow_track_mask(
         }
     }
 
-    // Step 3: For each point, keep it when its maximum viewing angle (the
-    // largest angle between any pair of observation rays) meets the threshold.
+    // Step 3: For each finite point, keep it when its maximum viewing angle
+    // (the largest angle between any pair of observation rays) meets the
+    // threshold. A point at infinity is kept whatever its rays.
     let mut keep = vec![false; num_points];
     for point_id in 0..num_points {
+        let [x, y, z, w] = [0, 1, 2, 3].map(|k| positions_xyzw[point_id * 4 + k]);
+        if w == 0.0 {
+            keep[point_id] = true;
+            continue;
+        }
         let obs = &point_observations[point_id];
         if obs.len() < 2 {
             continue;
         }
 
-        let point_pos = Point3::new(
-            positions[point_id * 3],
-            positions[point_id * 3 + 1],
-            positions[point_id * 3 + 2],
-        );
+        let point_pos = Point3::new(x / w, y / w, z / w);
         let rays = viewing_rays(
             point_pos,
             &camera_centers,

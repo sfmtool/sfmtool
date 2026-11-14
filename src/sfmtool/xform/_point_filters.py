@@ -11,24 +11,6 @@ from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.fileio import read_sift_partial
 
 
-def keep_infinity_points(
-    recon: SfmrReconstruction, finite_keep_mask: np.ndarray
-) -> np.ndarray:
-    """Combine a finite-point keep mask with a pass-through for infinity points.
-
-    Some xform point filters score a quantity that is undefined for a point at
-    infinity — a triangulation angle or neighbour distance, both meaningless for
-    a direction rather than a location. Those filters keep such points
-    unconditionally via this helper. Filters scoring a quantity that is
-    well-defined regardless of ``w`` — track length, feature size, or
-    reprojection error (a ``w = 0`` point still projects through rotation +
-    intrinsics) — score points at infinity normally instead. See
-    specs/formats/sfmr-file-format.md.
-    """
-    at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
-    return np.asarray(finite_keep_mask, dtype=bool) | at_infinity
-
-
 class RemoveShortTracksFilter:
     """Remove 3D points with track length <= size.
 
@@ -80,19 +62,15 @@ class RemoveNarrowTracksFilter:
 
         from .._sfmtool.analysis import compute_narrow_track_mask
 
-        # The narrow-track mask scores each point from its own observation
-        # rays; for a point at infinity the stored position is a direction, so
-        # its score is meaningless — pass it through untouched.
-        points_to_keep_mask = keep_infinity_points(
-            recon,
-            compute_narrow_track_mask(
-                recon.quaternions_wxyz,
-                recon.translations,
-                recon.positions,
-                recon.track_point_indexes,
-                recon.track_image_indexes,
-                self.min_angle_rad,
-            ),
+        # The mask keeps every point at infinity: its rays are parallel by
+        # definition, so it has no viewing angle to fall short.
+        points_to_keep_mask = compute_narrow_track_mask(
+            recon.quaternions_wxyz,
+            recon.translations,
+            recon.positions_xyzw,
+            recon.track_point_indexes,
+            recon.track_image_indexes,
+            self.min_angle_rad,
         )
 
         if not np.any(points_to_keep_mask):

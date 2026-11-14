@@ -14,7 +14,7 @@ fn test_cameras_at_same_position_filtered() {
     // Two cameras at the same position looking at a point - 0 angle, should be filtered
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-    let positions = [0.0, 0.0, 5.0]; // point in front
+    let positions = [0.0, 0.0, 5.0, 1.0]; // point in front
     let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
@@ -54,7 +54,7 @@ fn test_cameras_90_degrees_apart_kept() {
 
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0, 0.0, 0.0, -5.0, 0.0, 0.0];
-    let positions = [0.0, 0.0, 5.0];
+    let positions = [0.0, 0.0, 5.0, 1.0];
     let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
@@ -99,7 +99,7 @@ fn test_cameras_90_degrees_apart_kept() {
 fn test_single_observation_removed() {
     let quaternions = identity_quat().to_vec();
     let translations = [0.0, 0.0, 0.0];
-    let positions = [1.0, 2.0, 3.0];
+    let positions = [1.0, 2.0, 3.0, 1.0];
     let track_point_indexes = [0_u32];
     let track_image_indexes = [0_u32];
 
@@ -128,7 +128,7 @@ fn test_angle_threshold_boundary() {
     // Set up cameras with known geometry
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0, 0.0, 0.0, -10.0, 0.0, 0.0];
-    let positions = [0.0, 0.0, 10.0];
+    let positions = [0.0, 0.0, 10.0, 1.0];
     let track_point_indexes = [0_u32, 0];
     let track_image_indexes = [0_u32, 1];
 
@@ -179,7 +179,7 @@ fn test_multiple_points_mixed() {
     // Point 0 at (0,0,1) - very close, large angle from cam0+cam1
     // Point 1 at (0,0,100) - very far, small angle
     // Point 2 at (5,5,5) - moderate
-    let positions = [0.0, 0.0, 1.0, 0.0, 0.0, 100.0, 5.0, 5.0, 5.0];
+    let positions = [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 100.0, 1.0, 5.0, 5.0, 5.0, 1.0];
 
     let track_point_indexes = [0_u32, 0, 1, 1, 2, 2];
     let track_image_indexes = [0_u32, 1, 0, 1, 0, 2];
@@ -204,10 +204,66 @@ fn test_multiple_points_mixed() {
 }
 
 #[test]
+fn test_points_at_infinity_are_kept() {
+    // Two cameras at one centre see point 0 along parallel rays, so a finite
+    // point there has a zero viewing angle and is removed. The same rays on a
+    // point at infinity, and a point at infinity with one observation or none,
+    // are kept.
+    let quaternions = [identity_quat(), identity_quat()].concat();
+    let translations = [0.0; 6];
+    let positions = [
+        0.0, 0.0, 5.0, 1.0, // finite, zero viewing angle
+        0.0, 0.0, 1.0, 0.0, // at infinity, two observations
+        1.0, 0.0, 0.0, 0.0, // at infinity, one observation
+        0.0, 1.0, 0.0, 0.0, // at infinity, no observations
+    ];
+    let track_point_indexes = [0_u32, 0, 1, 1, 2];
+    let track_image_indexes = [0_u32, 1, 0, 1, 0];
+
+    let keep = compute_narrow_track_mask(
+        &quaternions,
+        &translations,
+        2,
+        &positions,
+        4,
+        &track_point_indexes,
+        &track_image_indexes,
+        0.1,
+    )
+    .unwrap();
+
+    assert_eq!(keep, vec![false, true, true, true]);
+}
+
+#[test]
+fn test_finite_points_are_divided_by_w() {
+    // Cameras at (0,0,0) and (5,0,0) see (0,0,5) at 45°, stored here as
+    // (0,0,10,2). Read without the division, (0,0,10) would be seen at about
+    // 26.6° and removed at a 30° threshold.
+    let quaternions = [identity_quat(), identity_quat()].concat();
+    let translations = [0.0, 0.0, 0.0, -5.0, 0.0, 0.0];
+    let positions = [0.0, 0.0, 10.0, 2.0];
+
+    let keep = compute_narrow_track_mask(
+        &quaternions,
+        &translations,
+        2,
+        &positions,
+        1,
+        &[0, 0],
+        &[0, 1],
+        30.0_f64.to_radians(),
+    )
+    .unwrap();
+
+    assert!(keep[0], "(0,0,10,2) is the point (0,0,5), seen at 45°");
+}
+
+#[test]
 fn test_input_lengths_are_errors() {
     let quaternions = [identity_quat(), identity_quat()].concat();
     let translations = [0.0; 6];
-    let positions = [0.0, 0.0, 5.0];
+    let positions = [0.0, 0.0, 5.0, 1.0];
     let call = |quaternions: &[f64],
                 translations: &[f64],
                 positions: &[f64],
@@ -240,14 +296,20 @@ fn test_input_lengths_are_errors() {
         err.to_string(),
         "translations has 3 values but 2 rows of 3 values each need 6"
     );
-    // Positions of 2 values, as from a (1, 2) array.
+    // Positions of 3 values, as from a (1, 3) array of finite xyz.
     assert_eq!(
-        call(&quaternions, &translations, &[0.0, 5.0], &[0, 0], &[0, 1]),
+        call(
+            &quaternions,
+            &translations,
+            &[0.0, 0.0, 5.0],
+            &[0, 0],
+            &[0, 1]
+        ),
         Err(NarrowTrackMaskError::ArrayLength {
-            array: "positions",
-            len: 2,
+            array: "positions_xyzw",
+            len: 3,
             rows: 1,
-            width: 3,
+            width: 4,
         })
     );
     assert_eq!(

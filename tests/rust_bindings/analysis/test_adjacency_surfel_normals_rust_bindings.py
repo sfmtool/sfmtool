@@ -40,16 +40,32 @@ _FULL_RING = _ring([22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5])
 _WEDGE = _ring([5, 25, 50, 70, 85])
 
 
-def _hub(neighbours, *, view=(0.0, 0.0, 1.0), selected=None, extras=None, **params):
+def _xyzw(xyz):
+    """Finite homogeneous rows, ``w = 1``, for ``(n, 3)`` positions."""
+    xyz = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    return np.hstack([xyz, np.ones((len(xyz), 1))])
+
+
+def _hub(
+    neighbours,
+    *,
+    view=(0.0, 0.0, 1.0),
+    selected=None,
+    extras=None,
+    positions_xyzw=None,
+    **params,
+):
     """Fit point 0, sitting at the origin with ``neighbours`` hung off it.
 
     The neighbours become points ``1..k``, each with an empty CSR row, so only
-    point 0 has anything to fit.
+    point 0 has anything to fit. ``positions_xyzw``, when given, replaces the
+    finite rows built from ``neighbours``.
     """
     neighbours = np.asarray(neighbours, dtype=np.float64).reshape(-1, 3)
     k = len(neighbours)
-    positions = np.vstack([np.zeros((1, 3)), neighbours])
-    n = len(positions)
+    if positions_xyzw is None:
+        positions_xyzw = _xyzw(np.vstack([np.zeros((1, 3)), neighbours]))
+    n = len(positions_xyzw)
 
     offsets = np.full(n + 1, k, dtype=np.uint32)
     offsets[0] = 0
@@ -59,7 +75,7 @@ def _hub(neighbours, *, view=(0.0, 0.0, 1.0), selected=None, extras=None, **para
         selected = np.zeros(n, dtype=bool)
         selected[0] = True
     return estimate_adjacency_surfel_normals(
-        positions,
+        positions_xyzw,
         offsets,
         np.arange(1, k + 1, dtype=np.uint32),
         view_dirs,
@@ -86,7 +102,8 @@ def _assert_unfitted(out, p):
 def test_exact_plane_recovers_its_normal():
     out = _hub(_FULL_RING)
 
-    assert set(out) == _KEYS
+    assert set(out) == _KEYS | {"selected_at_infinity"}
+    assert out["selected_at_infinity"] == 0
     assert out["normals"].shape == (9, 3)
     assert out["normals"].dtype == np.float64
     assert out["n_eff"].dtype == np.float64
@@ -214,9 +231,45 @@ def test_parameters_move_the_verdict():
     assert _hub(_FULL_RING, sigma_floor_deg=5.0)["sigma_deg"][0] == pytest.approx(5.0)
 
 
+def test_a_selected_point_at_infinity_is_counted_and_not_fitted():
+    # Point 3, a neighbour of the hub, is selected and stored at infinity. It
+    # has no position for a plane to pass through, so it stays NaN and is
+    # counted. The hub is still fitted, with point 3's direction (0, 0, 1)
+    # among its neighbour directions.
+    positions_xyzw = _xyzw(np.vstack([np.zeros((1, 3)), _FULL_RING]))
+    positions_xyzw[3] = [0.0, 0.0, 1.0, 0.0]
+    selected = np.zeros(9, dtype=bool)
+    selected[[0, 3]] = True
+    out = _hub(_FULL_RING, positions_xyzw=positions_xyzw, selected=selected)
+
+    assert out["selected_at_infinity"] == 1
+    _assert_unfitted(out, 3)
+    assert out["n_support"][0] == 8.0
+    # The direction along the normal lies off the plane and is redescended.
+    assert out["n_eff"][0] == pytest.approx(7.0)
+    assert _angle_deg(out["normals"][0], _UP) < 1e-9
+
+    # Unselected, the same point is not counted.
+    selected[3] = False
+    out = _hub(_FULL_RING, positions_xyzw=positions_xyzw, selected=selected)
+    assert out["selected_at_infinity"] == 0
+
+
+def test_finite_rows_are_divided_by_w():
+    # The ring stored at w = 2 with doubled coordinates is the same cloud.
+    positions_xyzw = 2.0 * _xyzw(np.vstack([np.zeros((1, 3)), _FULL_RING]))
+    positions_xyzw[0] = [0.0, 0.0, 1.0, 1.0]
+    positions_xyzw[1:, 2] = 2.0
+    out = _hub(_FULL_RING, positions_xyzw=positions_xyzw)
+
+    # Read without the division, the ring would sit 1 above the hub at z = 1.
+    assert _angle_deg(out["normals"][0], _UP) < 1e-9
+    assert out["resid_deg"][0] == pytest.approx(0.0, abs=1e-9)
+
+
 def test_empty_cloud():
     out = estimate_adjacency_surfel_normals(
-        np.zeros((0, 3)),
+        np.zeros((0, 4)),
         np.zeros(1, dtype=np.uint32),
         np.zeros(0, dtype=np.uint32),
         np.zeros((0, 3)),
@@ -224,11 +277,16 @@ def test_empty_cloud():
     )
     assert out["normals"].shape == (0, 3)
     assert out["determined"].size == 0
+    assert out["selected_at_infinity"] == 0
 
 
 @pytest.mark.parametrize(
     "mutate, message",
     [
+        (
+            lambda a: a.__setitem__("positions_xyzw", np.zeros((2, 3))),
+            r"positions_xyzw must have shape \(P, 4\)",
+        ),
         (lambda a: a.__setitem__("view_dirs", np.zeros((3, 3))), "view_dirs"),
         (lambda a: a.__setitem__("selected", np.zeros(3, dtype=bool)), "selected"),
         (lambda a: a.__setitem__("offsets", np.zeros(4, dtype=np.uint32)), "offsets"),
@@ -244,7 +302,7 @@ def test_empty_cloud():
 )
 def test_malformed_inputs_raise(mutate, message):
     args = {
-        "positions": np.zeros((2, 3)),
+        "positions_xyzw": _xyzw(np.zeros((2, 3))),
         "offsets": np.array([0, 1, 1], dtype=np.uint32),
         "neighbours": np.array([1], dtype=np.uint32),
         "view_dirs": np.tile(_UP, (2, 1)),
@@ -258,7 +316,7 @@ def test_malformed_inputs_raise(mutate, message):
 def test_offsets_must_match_the_neighbour_count():
     with pytest.raises(ValueError, match="neighbours has"):
         estimate_adjacency_surfel_normals(
-            np.zeros((2, 3)),
+            _xyzw(np.zeros((2, 3))),
             np.array([0, 3, 3], dtype=np.uint32),
             np.array([1], dtype=np.uint32),
             np.tile(_UP, (2, 1)),

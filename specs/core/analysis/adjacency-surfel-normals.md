@@ -37,7 +37,14 @@ an unfittable point comes back `NaN`, not something that looks estimated.
 Per selected point `p` with neighbour set `N(p)` from the adjacency CSR
 (plus any caller-supplied extra neighbour positions, see below):
 
-1. **Displacements.** `d_q = position[q] − position[p]` for each `q ∈ N(p)`;
+0. **Points at infinity.** Positions are homogeneous, `positions_xyzw`, and a
+   finite row is read as `(x/w, y/w, z/w)`. A selected point at infinity
+   (`w = 0`) has no position for a plane to pass through, so it is not
+   fitted: its row of the output is `NaN` and undetermined, and the output's
+   `selected_at_infinity` counts it.
+1. **Displacements.** `d_q = position[q] − position[p]` for each `q ∈ N(p)`,
+   and for a neighbour `q` at infinity its stored direction, which is where
+   that displacement points in the limit as a finite `q` moves out along it;
    rows with `‖d_q‖ ≤ 1e−12` are dropped. `n_support` is the count that
    remains. Points with `n_support < 2` get no normal.
 2. **IRLS** (`irls_iters` passes, default 3), all rows starting at weight 1:
@@ -103,13 +110,16 @@ toward every diagnostic. Extras for unselected points are ignored.
 ## Output
 
 Dense arrays over the whole cloud, `NaN` (or `false`) for unselected and
-unfitted points:
+unfitted points, and one count:
 
 - `normals` — `(n, 3)` f64, unit, sign-aligned to `view_dir`; `NaN` rows
-  where `n_support < 2` or the point was not selected.
+  where `n_support < 2`, the point is at infinity, or the point was not
+  selected.
 - `n_eff`, `anisotropy`, `sectors`, `sigma_deg`, `resid_deg`, `n_support`
   — f64 per point.
 - `determined` — bool per point.
+- `selected_at_infinity` — the number of selected points at infinity, none
+  of which was fitted.
 
 ## API
 
@@ -129,7 +139,7 @@ pub struct AdjacencySurfelParams {
 }
 
 pub fn estimate_adjacency_surfel_normals(
-    positions: &[[f64; 3]],          // per point
+    positions_xyzw: &[[f64; 4]],     // per point, homogeneous
     offsets: &[u32],                 // adjacency CSR, n_points + 1
     neighbours: &[u32],
     view_dirs: &[[f64; 3]],          // per point; sign + sector reference
@@ -145,10 +155,11 @@ eigenvectors by explicit eigenvalue comparison, never by an assumed
 ordering).
 
 The Python binding takes numpy arrays (accepting `SfmrReconstruction`
-accessor dtypes and the adjacency builder's outputs directly), `extras` as
-an optional `dict[point_index → (k, 3) float64 array]`, keyword parameters
-with the defaults above, and returns the output arrays as a dict keyed as
-in the output list.
+accessor dtypes, `positions_xyzw` among them, and the adjacency builder's
+outputs directly), `extras` as an optional
+`dict[point_index → (k, 3) float64 array]` of finite positions, keyword
+parameters with the defaults above, and returns the output arrays and the
+count as a dict keyed as in the output list.
 
 ## Testing
 
@@ -161,7 +172,9 @@ below `sin 2°`); the per-point stall exit keeping a usable normal when all
 residuals redescend to zero weight; `n_support < 2` yielding `NaN` and
 `determined = false`; a collinear neighbour line failing the anisotropy
 gate and a half-plane-only neighbourhood failing the sector gate while a
-well-spread one passes; extras entering the fit (an under-determined point
+well-spread one passes; a selected point at infinity left unfitted and
+counted, a neighbour at infinity filling sectors along its own direction,
+and a finite row divided by its `w`; extras entering the fit (an under-determined point
 becoming determined when extras fill its empty sectors) and extras for
 unselected points being ignored; and unselected points staying `NaN`
 end-to-end.

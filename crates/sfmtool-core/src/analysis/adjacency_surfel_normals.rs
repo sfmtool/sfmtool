@@ -89,7 +89,8 @@ impl Default for AdjacencySurfelParams {
 pub struct ExtraNeighbours {
     /// CSR row boundaries; length `n_points + 1`, or empty for "no extras".
     pub offsets: Vec<u32>,
-    /// Extra neighbour positions, in the same frame as `positions`.
+    /// Extra neighbour positions, finite, in the same frame as
+    /// `positions_xyzw`.
     pub positions: Vec<[f64; 3]>,
 }
 
@@ -111,9 +112,10 @@ impl ExtraNeighbours {
 
 /// Per-point normals and the diagnostics that say how well determined they are.
 ///
-/// Every field is dense over the cloud. Points that were not selected, and
-/// selected points with fewer than two usable neighbours, are `NaN` throughout
-/// (and `false` in [`Self::determined`]).
+/// Every per-point field is dense over the cloud. Points that were not
+/// selected, selected points at infinity, and selected points with fewer than
+/// two usable neighbours, are `NaN` throughout (and `false` in
+/// [`Self::determined`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AdjacencySurfelNormals {
     /// Unit normals, sign-aligned to the caller's `view_dirs`.
@@ -133,6 +135,9 @@ pub struct AdjacencySurfelNormals {
     pub n_support: Vec<f64>,
     /// The determinacy verdict: support, coverage and anisotropy all pass.
     pub determined: Vec<bool>,
+    /// Selected points at infinity (`w = 0`), which have no position for a
+    /// plane to pass through and so get no normal.
+    pub selected_at_infinity: usize,
 }
 
 impl AdjacencySurfelNormals {
@@ -147,6 +152,7 @@ impl AdjacencySurfelNormals {
             resid_deg: vec![f64::NAN; n_points],
             n_support: vec![f64::NAN; n_points],
             determined: vec![false; n_points],
+            selected_at_infinity: 0,
         }
     }
 }
@@ -166,7 +172,11 @@ struct PointFit {
 /// Estimate a surfel normal at every selected point.
 ///
 /// # Arguments
-/// * `positions` — per point.
+/// * `positions_xyzw` — per point, homogeneous. A selected point at infinity
+///   (`w = 0`) is not fitted: it comes back `NaN` and undetermined, and is
+///   counted in [`AdjacencySurfelNormals::selected_at_infinity`]. A neighbour
+///   at infinity contributes its own direction, which is where the direction
+///   toward a finite point tends as that point moves out along it.
 /// * `offsets`, `neighbours` — the adjacency CSR; `offsets` has `n_points + 1`
 ///   entries.
 /// * `view_dirs` — per point, the reference direction the normal's sign and the
@@ -185,7 +195,7 @@ struct PointFit {
 /// If the per-point slices disagree on length, if `offsets` is not
 /// `n_points + 1` long, or if a neighbour index is out of range.
 pub fn estimate_adjacency_surfel_normals(
-    positions: &[[f64; 3]],
+    positions_xyzw: &[[f64; 4]],
     offsets: &[u32],
     neighbours: &[u32],
     view_dirs: &[[f64; 3]],
@@ -193,7 +203,7 @@ pub fn estimate_adjacency_surfel_normals(
     extras: &ExtraNeighbours,
     params: &AdjacencySurfelParams,
 ) -> AdjacencySurfelNormals {
-    let n_points = positions.len();
+    let n_points = positions_xyzw.len();
     assert_eq!(
         view_dirs.len(),
         n_points,
@@ -222,14 +232,27 @@ pub fn estimate_adjacency_surfel_normals(
     );
 
     let mut out = AdjacencySurfelNormals::empty(n_points);
-    let ids: Vec<usize> = (0..n_points).filter(|&p| selected[p]).collect();
+    let (at_infinity, ids): (Vec<usize>, Vec<usize>) = (0..n_points)
+        .filter(|&p| selected[p])
+        .partition(|&p| positions_xyzw[p][3] == 0.0);
+    out.selected_at_infinity = at_infinity.len();
     if ids.is_empty() {
         return out;
     }
 
     let fits: Vec<Option<PointFit>> = ids
         .par_iter()
-        .map(|&p| fit_point(p, positions, offsets, neighbours, view_dirs, extras, params))
+        .map(|&p| {
+            fit_point(
+                p,
+                positions_xyzw,
+                offsets,
+                neighbours,
+                view_dirs,
+                extras,
+                params,
+            )
+        })
         .collect();
 
     for (&p, fit) in ids.iter().zip(fits) {
@@ -246,18 +269,20 @@ pub fn estimate_adjacency_surfel_normals(
     out
 }
 
-/// Fit one point. `None` when fewer than two neighbour directions survive, which
-/// is the kernel's way of saying "no normal", not "a normal of zero quality".
+/// Fit one finite point. `None` when fewer than two neighbour directions
+/// survive, which is the kernel's way of saying "no normal", not "a normal of
+/// zero quality".
 fn fit_point(
     p: usize,
-    positions: &[[f64; 3]],
+    positions_xyzw: &[[f64; 4]],
     offsets: &[u32],
     neighbours: &[u32],
     view_dirs: &[[f64; 3]],
     extras: &ExtraNeighbours,
     params: &AdjacencySurfelParams,
 ) -> Option<PointFit> {
-    let anchor = Vector3::from(positions[p]);
+    let [x, y, z, w] = positions_xyzw[p];
+    let anchor = Vector3::new(x, y, z) / w;
 
     // Unit directions to the neighbours. The residual, the scatter and the
     // sector angle are all scale-free, so the length is dropped here and the
@@ -266,10 +291,9 @@ fn fit_point(
     let row = offsets[p] as usize..offsets[p + 1] as usize;
     let dirs: Vec<Vector3<f64>> = neighbours[row]
         .iter()
-        .map(|&q| Vector3::from(positions[q as usize]))
-        .chain(extras.row(p).iter().map(|&e| Vector3::from(e)))
-        .filter_map(|q| {
-            let d = q - anchor;
+        .map(|&q| displacement(&anchor, positions_xyzw[q as usize]))
+        .chain(extras.row(p).iter().map(|&e| Vector3::from(e) - anchor))
+        .filter_map(|d| {
             let len = d.norm();
             if len > EPS_DISPLACEMENT {
                 Some(d / len)
@@ -379,6 +403,21 @@ fn fit_point(
         n_support,
         determined,
     })
+}
+
+/// The displacement from the finite `anchor` toward the homogeneous point `q`.
+///
+/// For a point at infinity it is `q`'s direction, the limit of the
+/// displacement toward a finite point moved out along that direction; only its
+/// direction is used.
+fn displacement(anchor: &Vector3<f64>, q: [f64; 4]) -> Vector3<f64> {
+    let [x, y, z, w] = q;
+    let xyz = Vector3::new(x, y, z);
+    if w == 0.0 {
+        xyz
+    } else {
+        xyz / w - anchor
+    }
 }
 
 /// `Σ w_q d̂_q d̂_qᵀ` — the weighted scatter of the unit directions.

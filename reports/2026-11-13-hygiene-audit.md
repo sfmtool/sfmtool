@@ -115,6 +115,8 @@ All 17 files (4,380 lines) were read in full and checked against the core functi
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-13): **Done** — both cores and bindings take `positions_xyzw` and divide a finite row by its `w`; `compute_narrow_track_mask` keeps every `w = 0` row in core, and `estimate_adjacency_surfel_normals` leaves a selected point at infinity `NaN` and undetermined, counts it in `selected_at_infinity`, and takes a neighbour at infinity's direction as its displacement; `keep_infinity_points` is deleted and `RemoveNarrowTracksFilter` passes `recon.positions_xyzw`, branch `hyg-fix2-1113-03-analysis-xyzw-positions`._
+
 **Bridge a `ProgressCounter` to `track_table` and `covered_by_finer`, and give 13 analysis cores a Progress**
 - Location: `track_table.rs:136`, `covered_by_finer.rs:317`, `pick_images.rs:664-690`.
 - Problem: both cores take `&Progress` and loop over every point or row, but the bindings pass `Progress::none()` and take no `ProgressCounter`, so their `Cancelled` arms map an error that cannot happen. `pick_images.rs:664-690` is the one binding here that bridges counter, cancellation and signals, with its sink written inline. 13 core functions behind this unit loop over every track or pair with no `Progress` at all, among them `fit_point_and_bearing_batch` (Levenberg-Marquardt per track), `build_frustum_intersection_pairs`, `cell_plane_normals`, `build_observation_adjacency` and `cluster_census`. [Long-running functions take a Progress](../specs/STANDARDS.md#long-running-functions-take-a-progress).
