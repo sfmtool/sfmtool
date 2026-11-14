@@ -250,12 +250,14 @@ def test_slice_suggestion():
     )
 
 
-def _density(target, gain, median, split, measure):
+def _density(target, gain, median, split, measure, pair, focal=1.0):
     return {
         "target_percent": target,
         "gain": gain,
         "median_measure": median,
         "essential_split": split,
+        "focal_factor": focal,
+        "measured_pair": pair,
         "measure": measure,
     }
 
@@ -277,8 +279,19 @@ def test_the_local_density_term_is_reported_by_step():
         "parallax_p90_deg": 1.5,
     }
     lost = {"status": "not_measured", "matches": 9, "reason": "too_few_matches"}
+    wide = {**near, "parallax_p50_deg": 0.9, "parallax_p90_deg": 2.7}
+    step = {"pair": "step", "p50_gate_deg": 0.5}
+    reference = {
+        "pair": "reference",
+        "to": 4,
+        "step_percent": 3.4,
+        "matched_for_measure": True,
+        "essential_split": near,
+        "focal_factor": 1.03,
+        "p50_gate_deg": 0.2,
+    }
     walk = {
-        "chosen": [0, 12, 16, 19],
+        "chosen": [0, 12, 16, 19, 29],
         "steps": [
             {
                 "from": 0,
@@ -286,7 +299,7 @@ def test_the_local_density_term_is_reported_by_step():
                 "stats": stats,
                 "rate": 0.8,
                 "kind": "in_band",
-                "density": _density(10.0, 1.0, 1.0, near, 12.0),
+                "density": _density(10.0, 1.0, 1.0, wide, 12.0, reference, 0.97),
             },
             {
                 "from": 12,
@@ -294,7 +307,7 @@ def test_the_local_density_term_is_reported_by_step():
                 "stats": stats,
                 "rate": 0.8,
                 "kind": "in_band",
-                "density": _density(10 / 3, 3.0, 12.0, near, 12.0),
+                "density": _density(10 / 3, 3.0, 12.0, near, 12.0, step),
             },
             {
                 "from": 16,
@@ -302,7 +315,22 @@ def test_the_local_density_term_is_reported_by_step():
                 "stats": stats,
                 "rate": 0.8,
                 "kind": "in_band",
-                "density": _density(10 / 3, 3.0, 12.0, lost, 1.0),
+                "density": _density(10 / 3, 3.0, 12.0, lost, 1.0, step),
+            },
+            {
+                "from": 19,
+                "to": 29,
+                "stats": stats,
+                "rate": 1.0,
+                "kind": "in_band",
+                "density": _density(
+                    10 / 3,
+                    3.0,
+                    12.0,
+                    wide,
+                    1.0,
+                    {"pair": "wide_parallax", "to": 22, "p50_gate_deg": 0.2},
+                ),
             },
         ],
         "swaps": [],
@@ -314,25 +342,33 @@ def test_the_local_density_term_is_reported_by_step():
     lines = walk_lines(report, 0, sequence, {}, "", 10.0, 0.3, 600)
     assert (
         "  Local density term: on, with the camera of k8.camrig (focal 945.8 px at "
-        "the frames' size); 2 of 3 steps walked with a gain above 1" in lines
+        "the frames' size); 3 of 4 steps walked with a gain above 1" in lines
     )
     rows = lines[lines.index(next(x for x in lines if "Local density by step" in x)) :]
+    # A reference pair: its frames, focal factor, split and gate.
     assert rows[2].split() == [
         "10-130",
         "10.00%",
         "1.00",
         "1.00",
+        "10-50",
+        "1.03",
         "0.125",
         "12.00",
+        "0.20",
         "12.00",
     ]
+    # The step itself, at the step's focal factor and gate.
     assert rows[3].split() == [
         "130-170",
         "3.33%",
         "3.00",
         "12.00",
+        "step",
+        "1.00",
         "0.125",
         "12.00",
+        "0.50",
         "12.00",
     ]
     assert rows[4].split() == [
@@ -340,9 +376,24 @@ def test_the_local_density_term_is_reported_by_step():
         "3.33%",
         "3.00",
         "12.00",
+        "step",
+        "1.00",
         "not",
         "measured",
         "(too_few_matches)",
+    ]
+    # No pair: the step's own split at the reference gate, and a measure of 1.
+    assert rows[5].split() == [
+        "200-300",
+        "3.33%",
+        "3.00",
+        "12.00",
+        "none",
+        "1.00",
+        "0.900",
+        "3.00",
+        "0.20",
+        "1.00",
     ]
     # Each reason the term is off.
     for term, why in [

@@ -53,7 +53,16 @@ pub(super) enum Content {
     Window { period: usize, lifetime: usize },
     /// Only every `every`-th point.
     Subset { every: usize },
+    /// Every point at least [`NEAR_RADIUS`] from the vertical axis through
+    /// the origin, and the nearer ones for which
+    /// `(frame + point) % period < lifetime`: frames `lifetime` or more apart
+    /// share none of the near points, and all of the far ones.
+    NearWindow { period: usize, lifetime: usize },
 }
+
+/// How far from the vertical axis through the origin a point of
+/// [`Content::NearWindow`] is near within.
+const NEAR_RADIUS: f64 = 50.0;
 
 /// One frame of the synthetic capture.
 #[derive(Clone, Debug)]
@@ -169,13 +178,19 @@ impl Synth {
     /// turn, and a quarter of them 5 away, a near foreground whose parallax
     /// is many times the distant points'.
     pub(super) fn panning(seed: u64, frames: usize) -> Self {
+        Self::panning_with_near(seed, frames, 0.25)
+    }
+
+    /// [`Synth::panning`] with a share `near` of the points in the near
+    /// ring.
+    pub(super) fn panning_with_near(seed: u64, frames: usize, near: f64) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let turn = 0.01 * f64::from(WIDTH) / FOCAL;
         let span = (-0.8, turn * frames as f64 + 0.8);
         let n = ((span.1 - span.0) * 520.0) as usize;
         let points = (0..n)
             .map(|_| {
-                let (radius, height) = if rng.random_range(0.0..1.0) < 0.25 {
+                let (radius, height) = if rng.random_range(0.0..1.0) < near {
                     (5.0, 1.8)
                 } else {
                     (300.0, 110.0)
@@ -262,6 +277,9 @@ impl Synth {
             let shown = match content {
                 Content::Window { period, lifetime } => (t + p) % period < lifetime,
                 Content::Subset { every } => p % every == 0,
+                Content::NearWindow { period, lifetime } => {
+                    point[0].hypot(point[2]) >= NEAR_RADIUS || (t + p) % period < lifetime
+                }
                 _ => true,
             };
             if !shown {

@@ -259,7 +259,23 @@ pub struct StepDensity {
     pub gain: f64,            // from median_measure; 1 with the term off
     pub median_measure: f64,  // of the last three steps before this one; 1 before the first
     pub essential_split: Option<EssentialSplitOutcome>, // the step's, None with the term off
-    pub measure: f64,         // the step's own measure, which later steps' medians take in
+    pub focal_factor: f64,    // the focal the step's split was kept at, over the camera's
+    pub measured_pair: Option<DensityPair>, // the pair the measure was read from; None with the term off
+    pub measure: f64,         // the step's measure, which later steps' medians take in
+}
+
+/// The pair a step's measure was read from, and the P50 gate it was held to.
+pub enum DensityPair {
+    Step { p50_gate_deg: f64 },               // the step itself, its split above
+    Reference {                               // a reference pair from the step's first frame
+        to: usize,
+        step_percent: f64,
+        matched_for_measure: bool,            // matched for the measure, not by the walk before
+        essential_split: EssentialSplitOutcome,
+        focal_factor: f64,
+        p50_gate_deg: f64,
+    },
+    WideParallax { to: usize, p50_gate_deg: f64 }, // none: the step's own P50 rules the pair to `to` out
 }
 
 /// Whether a sequence's walk had the local density term.
@@ -309,6 +325,11 @@ and `frames` and a `CameraRefused`'s `problem` beside its reason, and
 "min_frames": 3}`, `{"status": "no_consensus"}` or `{"status":
 "wide_spread", "max_pool_spread": 0.35}`. A sequence whose pilot vote is not
 used has no camera, and its term is off with the reason `no_camera`.
+`DensityPair` serializes with its kind under `pair`: `{"pair": "step",
+"p50_gate_deg": 0.5}`, `{"pair": "reference", "to": …, "step_percent": …,
+"matched_for_measure": …, "essential_split": {…}, "focal_factor": …,
+"p50_gate_deg": 0.2}` or `{"pair": "wide_parallax", "to": …,
+"p50_gate_deg": 0.2}`.
 
 Every type serializes with `serde`, a number that is not finite as `null`, so
 a caller writes the whole report as JSON as it is.
@@ -512,7 +533,8 @@ sequence's last frame ([The reach](#the-reach)).
    recent rates; a step to the next frame that keeps fewer clears them, so
    the next step measures its next frame first rather than aiming from a
    rate measured before the matches fell. With the local density term, the
-   step's essential split is measured and the next step's target set
+   step's measure is read, from the step or from a reference pair, and the
+   next step's target set
    ([The local density term](#the-local-density-term)).
 
 ### The reach
@@ -556,7 +578,8 @@ every step.
 **What is never read.** A frame the walk does not read lies between two
 chosen frames, inside a step that held. A frame within 2 positions of a
 chosen candidate is read, and is measured only if it is tried in the
-candidate's place. A frame the walk predicted and did not read may still
+candidate's place. A frame the local density term reads for a reference
+pair lies inside the step it measures. A frame the walk predicted and did not read may still
 have been extracted ([Run-ahead](#run-ahead)).
 
 ### The local density term
@@ -571,49 +594,118 @@ gives the near points few views each, at wide angles from one another, while
 a solve needs them in more frames to follow and place them. The local
 density term shortens the steps there.
 
-It reads each step's **essential split**
+It reads a pair's **essential split**
 ([frame-pair-matching.md § The essential split](frame-pair-matching.md#the-essential-split)):
 the parallax of each match once the rotation between the frames is taken out,
-at the sequence's camera. A step's **measure** is its parallax P90 over its
+at the sequence's camera. A pair's **measure** is its parallax P90 over its
 parallax P50 when the split was measured with at least 50 inliers, a P90 of
-at least 0.2° and a P50 above 0 and below 0.5°; otherwise it is 1. A measure
-well above 1 says that most matches have almost no parallax and a tenth of
-them or more have many times as much: a near foreground in front of a distant
-view. The three conditions keep the measure to that case:
+at least 0.2° and a P50 above 0 and below the pair's **P50 gate**; otherwise
+it is 1. A measure well above 1 says that most matches have almost no
+parallax and a tenth of them or more have many times as much: a near
+foreground in front of a distant view. The three conditions keep the measure
+to that case:
 
-- the P50 below 0.5° leaves alone a step whose median match already has a
-  wide parallax, a scene near enough throughout for the base target;
+- the P50 below the gate leaves alone a pair whose median match already has
+  a wide parallax, a scene near enough throughout for the base target;
 - the P90 of at least 0.2° leaves alone a camera turning on the spot, whose
   parallax is the match noise everywhere and whose ratio is a ratio of noise;
-- the 50 inliers leave alone a step whose split rests on too few matches.
+- the 50 inliers leave alone a pair whose split rests on too few matches.
 
-After each step it accepts, the walk measures that step's split and takes
-the **median measure** `M` of the last three steps, or of as many as there
-are at the start; before the first step `M` is 1. The next step's **gain** is
+After each step it accepts, the walk reads the step's measure and takes the
+**median measure** `M` of the last three steps, or of as many as there are
+at the start; before the first step `M` is 1. The next step's **gain** is
 `g = clip(M / 2.5, 1, max_density_gain)` and its target the base target over
 `g`. A median of three keeps one step's reading from moving the target, and
 2.5 is the measure at which the gain starts to rise, so a scene whose parallax
 spreads by up to that factor keeps the base target. The gain reaches the
-maximum, 3 by default, at a measure of 7.5.
+maximum, 3 by default, at a measure of 7.5. A near foreground shortens the
+steps once two of the last three steps read it, and the shortening ends once
+two of them no longer do. At the start of a sequence the first step's
+measure alone sets the second step's gain, and the mean of the first two,
+the median of two, sets the third's.
 
-The measure is read from steps already taken, and the median of three
-follows most of the last three: a near foreground shortens the steps once two
-of the last three steps read it, and the shortening ends once two of them no
-longer do. At the start of a sequence there are fewer: the first step's
-measure alone sets the second step's gain, and the mean of the first two, the
-median of two, sets the third's, so one of them can shorten it. A long step reads a lower measure
-than a short one over the same scene, since its near matches are the first to
-be lost, so where the gain is 1 a near foreground can read below 2.5 until a
-shorter step measures it.
+**The pair measured.** The measure depends on the length of the pair it
+reads. A pair a few percent of the long side apart keeps the near matches
+and reads the spread of their parallax. A longer pair loses the near matches
+first, so its P90 falls, and its P50 grows with the distance travelled until
+it passes the gate. Were each step measured itself, a walk at a gain of 1,
+taking long steps, would read measures near or below 2.5 and keep its gain
+at 1, while a walk at the maximum gain, taking short steps, would read high
+measures and keep its gain there: the gain would feed back through the step
+length, and which of the two a walk settled in would depend on where it
+started. So the term reads every step's measure at about one length, the
+**reference step** `R`, the base target over `max_density_gain` (3.33% at
+the defaults), the step the walk takes at the maximum gain.
+
+After accepting the step from `f` to `c`, of step `s` over `L = c − f`
+frames:
+
+1. A step of at most `1.3 R`, or one whose step is not a number, is measured
+   itself, with the **step gate** of 0.5°. A walk near the maximum gain takes
+   steps this short, so there it measures nothing more. The factor 1.3, and
+   the 0.7 below, are the ends of the default band around `R`.
+2. A longer step is measured by a **reference pair** from `f`, with the
+   **reference gate** of 0.2°. The frame the step's rate puts the reference
+   step at is `k = round(L · R / s)` positions on, kept within `[1, L]`.
+   - When the step's own split has at least 50 inliers and its P50 times
+     `k / L` is at least the reference gate, no pair is measured and the
+     measure is 1. The parallax of a scene near throughout grows about in
+     proportion to the distance travelled, so the pair `k / L` as long reads
+     about that P50, at or above the gate; this spares the read and the match.
+   - Otherwise the reference pair is a pair from `f` the walk has already
+     matched and kept the positions of, whose step is within `0.7 R` to
+     `1.3 R`, the one nearest `R` in ratio and the first on a tie. These are
+     the step's own candidates, and, early in a sequence walked after a pilot
+     walk, the pilot's pairs. Measuring one costs a split and no frame read.
+   - With none, it is the pair from `f` to the frame `k` positions on, which
+     the walk reads, when it has not, and matches. That frame lies inside the
+     step. It is `c` itself only for a step of one frame, or of two whose
+     rate rounds to both, and the step is then measured itself with the
+     reference gate.
+
+The two gates differ because a reference pair is a short pair. On a scene
+near throughout, whose steps already serve a solve at the base target, a pair
+of the reference step has a P50 of about 0.2° to 0.45°, and a P90 over P50
+that can pass 2.5; a distant view behind a near foreground keeps its P50 well
+under 0.2° at that length. With the step gate a reference pair would raise
+the gain over such a scene and add frames that bring a solve nothing, and
+with the reference gate it does not. The step itself keeps the step gate: a
+step of at most `1.3 R` is walked at a gain near the maximum, which a near
+foreground in front of a distant view put there.
+
+**The focal search.** A focal error leaves parallax on the rotation: the
+rotation fitted with the wrong focal misplaces each ray by about the
+rotation times the error, so the P50 of a turning pair rises by about
+`k · rotation · |error|`, with `k` near 1 for a focal that is too short and
+a small fraction of 1 for one that is too long. A focal a few percent short
+lifts a distant view's P50 over the gate on a pair that turns a few degrees,
+and hides the near foreground; a pilot vote's focal can be that far off. So
+each split the term measures, the step's and the reference pair's, is
+measured at the camera's focal times `1 + 0.03 i` for `i` from −4 to 4, every
+focal of the camera scaled alike (`IntrinsicAdjustment::focal`), and the one
+with the smallest P50 among those with at least 50 inliers is kept, the
+earliest on a tie, the camera's own first. The P50 rises steeply below the
+true focal and slowly above it, so its smallest value lies near the true
+focal, and the range of ±12% holds a pilot vote's focal error of several
+percent with room on either side. The search does not run, and the camera's own
+focal is kept, when the split at the camera's focal has a rotation below
+0.5°, where a focal error leaves little parallax, or a P50 less 0.12 times
+its rotation in degrees of at least 0.5°: 0.12° per degree is the most an
+error within the range adds, so no focal in it brings that pair under either
+gate. The focal the split was kept at is reported as a factor of the
+camera's. The search changes no camera outside the term's measure.
 
 Only accepted steps are measured: the candidates the walk tries are matched
 without a split, and the walk keeps the matched positions of each until its
 step is accepted. The accepted step's split is measured from them
 ([frames.rs](../../../crates/sfmtool-core/src/analysis/pick_images/frames.rs)
 `measure_split`), the same positions in the same order that a second match
-of the pair with the split set would find, so the term costs one essential
-fit per chosen frame, a few milliseconds, against the extraction of the
-frames the shorter steps add. The pairs of the report carry no split.
+of the pair with the split set would find, and so is a reference pair's. The
+term costs at most nine essential fits for the step and nine for a reference
+pair, a few milliseconds each, and at most one frame read and one pair match
+per chosen frame, against the extraction of the frames the shorter steps
+add. The pairs of the report carry no split; a pair matched for a reference
+pair is among them.
 
 **The camera.** The split measures with the sequence's camera scaled to the
 frames' size: every focal and the principal point times the frames' long
@@ -894,8 +986,14 @@ in its folder after the check, is `Version1Sift`, with the same advice.
 - **The term's state.** The walk holds the measures of the last three
   accepted steps and the next step's target, gain and median measure, and
   records in each step the three it was walked with. The rule itself, the
-  measure, the gain and the camera's scaling, is in
-  [density.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density.rs).
+  measure and its gates, the choice of the pair measured (`measure_plan`),
+  the focal search (`focal_searched_split`), the gain and the camera's
+  scaling, is in
+  [density.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density.rs);
+  the walk reads and matches a reference pair's frame and offers the rule the
+  pairs it has matched from the step's first frame
+  ([frames.rs](../../../crates/sfmtool-core/src/analysis/pick_images/frames.rs)
+  `kept_pairs_from`).
 
 ## Determinism and precision
 
@@ -927,9 +1025,14 @@ exact.
 | neighbours | 2 positions on either side | the frames a candidate is judged against for blur against its neighbours |
 | measured steps | 3 | the last accepted steps whose median measure sets the gain |
 | measure at a gain of 1 | 2.5 | the median measure the gain is `M / 2.5` of |
-| inliers | 50 | the fewest a step's split has for its measure to count |
-| parallax P90 | at least 0.2° | for a step's measure to count |
-| parallax P50 | below 0.5° | for a step's measure to count |
+| inliers | 50 | the fewest a pair's split has for its measure to count |
+| parallax P90 | at least 0.2° | for a pair's measure to count |
+| step gate | P50 below 0.5° | for the step's own measure to count |
+| reference gate | P50 below 0.2° | for a reference pair's measure to count |
+| reference step | `target_step_percent / max_density_gain` | the length the term reads a step's measure at |
+| reference band | 0.7 to 1.3 times the reference step | a step up to its upper end is measured itself; a matched pair within it is a reference pair |
+| focal search | 1 + 0.03 i, i from −4 to 4 | the focals each split is measured at, as factors of the camera's |
+| focal search rotation | at least 0.5° | for the search to run on a split |
 | prediction below the floor | `W` frames | how far the walk prefetches where it reads every frame, for a source of `W` workers |
 | pilot frames | 30 | the frames the pilot walk chooses before the vote |
 | pilot features | 1,500 | the first features of each pilot frame the vote's clusters are formed from |
@@ -1066,11 +1169,23 @@ what the walk with no camera does, and both report why the term is off; a wall s
 moving sideways, whose measures never count, chooses with the term on what
 it chooses with it off; a camera at twice the frames' size gives the report
 of one at their size; a camera of another aspect, and one with a focal of 0,
-turn the term off saying why; and a lone frame reports the term.
+turn the term off saying why; and a lone frame reports the term. A capture
+whose near points stay in view over its first 30 frames and after that leave
+it within 7 frames, so that only a short pair reads them, settles at a gain
+above 2 past frame 60 both when walked from its first frame and when walked
+from frame 40, where its first steps are long.
 [density/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density/tests.rs)
-checks the rule: each condition of the measure at its edge and past it, the
-median and its bounds, the scaling of a pinhole and an equidistant fisheye
-camera and each reason the term is off, and the term's JSON form.
+checks the rule: each condition of the measure at its edge and past it,
+under both gates; the pair measured, the step itself up to 1.3 times the
+reference step, a matched pair within the reference band, the nearest and
+the first on a tie, the frame the step's rate puts there, the step itself at
+the reference gate when no frame lies between, and no pair where the step's
+own P50 rules it out; the focal search's order, its choice of the smallest P50
+among splits with 50 inliers, and when it does not run, at the edges; the
+search finding the focal a synthetic turning pair was taken with from a
+camera 6%, 9% and 12% off; the median and its bounds, the scaling of a
+pinhole and an equidistant fisheye camera and each reason the term is off,
+and the term's JSON form.
 
 [tests/pilot.rs](../../../crates/sfmtool-core/src/analysis/pick_images/tests/pilot.rs)
 walks the same capture with no camera and the default options, which run
@@ -1135,8 +1250,11 @@ equal `build_sift_files`', and which a second run reads without extracting.
   so a camera that only turned, a scene that moved on its own and a camera
   that moved little but steadily are walked like any other video, and the
   solve that follows finds out. The local density term's split reads only
-  how a chosen step's parallax is spread, to set the next target.
+  how the parallax of a chosen step, or of a reference pair inside it, is
+  spread, to set the next target.
 - Calibrating the camera. The local density term measures with the camera it
   is given, or with the pilot vote's centred, distortion-free camera, and a
-  wrong focal or lens model reads a wrong parallax; the pilot's guards leave
-  the term off where its vote disagrees with itself, not where it is wrong.
+  wrong lens model, or a focal error beyond the focal search's ±12%, reads a
+  wrong parallax; the pilot's guards leave the term off where its vote
+  disagrees with itself, not where it is wrong. The focal search picks the
+  focal each split is measured at and reports it, and changes no camera.

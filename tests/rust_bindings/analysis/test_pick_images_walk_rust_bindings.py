@@ -142,6 +142,8 @@ def test_a_steady_video_is_walked_from_files_that_exist(steady: _Capture):
                 "gain": 1.0,
                 "median_measure": 1.0,
                 "essential_split": None,
+                "focal_factor": 1.0,
+                "measured_pair": None,
                 "measure": 1.0,
             }
         )

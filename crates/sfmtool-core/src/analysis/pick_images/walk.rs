@@ -6,20 +6,21 @@
 //! accept it or re-aim, aiming no further than twice the longest span
 //! measured, keep every step beyond the next frame at or above the
 //! match floor, and swap a frame blurred against its neighbours for a sharper
-//! neighbour; with the local density term, measure each accepted step's
-//! essential split and set the next step's target from the last three.
+//! neighbour; with the local density term, measure each accepted step,
+//! or a reference pair of a shorter step, and set the next step's target
+//! from the last three measures.
 //! See `specs/core/analysis/pick-images.md` § "The walk", § "The local
 //! density term" and § "Run-ahead".
 
 use std::collections::VecDeque;
 
 use super::capture::{FrameId, PickImagesError, PickImagesOptions};
-use super::density::{self, DensityTerm};
-use super::essential_split::EssentialSplitOptions;
+use super::density::{self, DensityTerm, MeasurePlan};
+use super::essential_split::{EssentialSplitOptions, EssentialSplitOutcome};
 use super::frame_pair::{FrameFeatures, FramePairStats};
 use super::frames::Frames;
 use super::pilot::PilotVote;
-use super::report::{StepDensity, StepKind, Swap, WalkStep};
+use super::report::{DensityPair, StepDensity, StepKind, Swap, WalkStep};
 use crate::camera::CameraIntrinsics;
 use crate::numeric::median;
 use crate::progress::Progress;
@@ -590,7 +591,7 @@ impl Walker<'_, '_> {
             .candidates
             .drain(..)
             .find_map(|(n, features)| (n == c).then_some(features));
-        let density = self.density_after(c)?;
+        let density = self.density_after(c, stats.step_percent)?;
         self.walked.steps.push(WalkStep {
             from: f,
             to: c,
@@ -608,25 +609,76 @@ impl Walker<'_, '_> {
     }
 
     /// The local density term's reading of the step from the last chosen
-    /// frame to `c`, with the target it was walked with. With the term on,
-    /// the step's split is measured from the pair's matched positions and the
-    /// next step's target set from the measures of the last
+    /// frame to `c`, of step `step_percent`, with the target it was walked
+    /// with. With the term on, the step's split is measured from the pair's
+    /// matched positions, with the focal search; the step's measure is read
+    /// from the step or from a reference pair ([`density::measure_plan`]);
+    /// and the next step's target is set from the measures of the last
     /// [`density::WINDOW`] steps.
-    fn density_after(&mut self, c: usize) -> Result<StepDensity, PickImagesError> {
+    fn density_after(
+        &mut self,
+        c: usize,
+        step_percent: f64,
+    ) -> Result<StepDensity, PickImagesError> {
         let walked_with = StepDensity {
             target_percent: self.target,
             gain: self.gain,
             median_measure: self.median_measure,
             essential_split: None,
+            focal_factor: 1.0,
+            measured_pair: None,
             measure: 1.0,
         };
-        let Some(split) = &self.split else {
+        let Some(split) = self.split.clone() else {
             return Ok(walked_with);
         };
-        let essential_split =
-            self.frames
-                .measure_split(self.id(self.current.0), self.id(c), split, self.progress)?;
-        let measure = density::step_measure(&essential_split);
+        let f = self.current.0;
+        let (essential_split, focal_factor) = self.searched_split(f, c, &split)?;
+        let reference_percent = self.options.target_step_percent / self.options.max_density_gain;
+        let plan = density::measure_plan(
+            f,
+            c,
+            step_percent,
+            reference_percent,
+            &essential_split,
+            &self.frames.kept_pairs_from(self.id(f)),
+        );
+        let (measure, measured_pair) = match plan {
+            MeasurePlan::Step { p50_gate_deg } => (
+                density::pair_measure(&essential_split, p50_gate_deg),
+                DensityPair::Step { p50_gate_deg },
+            ),
+            MeasurePlan::WideParallax { to } => (
+                1.0,
+                DensityPair::WideParallax {
+                    to,
+                    p50_gate_deg: density::MAX_REFERENCE_PARALLAX_P50_DEG,
+                },
+            ),
+            MeasurePlan::Reference { to, matched } => {
+                if !matched {
+                    self.match_for_measure(to)?;
+                }
+                let (split_n, factor_n) = self.searched_split(f, to, &split)?;
+                let p50_gate_deg = density::MAX_REFERENCE_PARALLAX_P50_DEG;
+                let step_percent = self
+                    .frames
+                    .pair(self.id(f), self.id(to))
+                    .expect("the reference pair is matched")
+                    .step_percent;
+                (
+                    density::pair_measure(&split_n, p50_gate_deg),
+                    DensityPair::Reference {
+                        to,
+                        step_percent,
+                        matched_for_measure: !matched,
+                        essential_split: split_n,
+                        focal_factor: factor_n,
+                        p50_gate_deg,
+                    },
+                )
+            }
+        };
         self.measures.push_back(measure);
         if self.measures.len() > density::WINDOW {
             self.measures.pop_front();
@@ -638,8 +690,43 @@ impl Walker<'_, '_> {
         self.target = self.options.target_step_percent / gain;
         Ok(StepDensity {
             essential_split: Some(essential_split),
+            focal_factor,
+            measured_pair: Some(measured_pair),
             measure,
             ..walked_with
         })
+    }
+
+    /// The split of the pair from `a` to `b`, which the walk has matched
+    /// keeping its positions, measured with `split` and the focal search
+    /// ([`density::focal_searched_split`]), and the focal factor it chose.
+    fn searched_split(
+        &self,
+        a: usize,
+        b: usize,
+        split: &EssentialSplitOptions,
+    ) -> Result<(EssentialSplitOutcome, f64), PickImagesError> {
+        let (a, b) = (self.id(a), self.id(b));
+        density::focal_searched_split(split, |options| {
+            self.frames.measure_split(a, b, options, self.progress)
+        })
+    }
+
+    /// Read `frame`, when it has not been read, and match it with the last
+    /// chosen frame keeping the matched positions: a reference pair the walk
+    /// has not matched.
+    fn match_for_measure(&mut self, frame: usize) -> Result<(), PickImagesError> {
+        self.read(&[frame])?;
+        let (a, b) = (self.id(self.current.0), self.id(frame));
+        let current = match self.current.1.take() {
+            Some(current) => current,
+            None => self.frames.features(a)?,
+        };
+        let features = self.frames.features(b)?;
+        let matched = self
+            .frames
+            .match_keeping_positions(a, &current, b, &features, self.progress);
+        self.current.1 = Some(current);
+        matched
     }
 }

@@ -10,9 +10,9 @@
 //! will read are passed to the source's prefetch, which only starts work:
 //! nothing here reads a frame it did not wait for. While the walk asks for
 //! them, the matched positions of the pairs it may still accept are kept
-//! too, so that an accepted step's essential split is measured from the
-//! walk's own match of the pair. Each of these steps adds its wall time to
-//! the [`Clock`] the report's times come from.
+//! too, so that an accepted step's essential split, and a reference pair's,
+//! is measured from the walk's own match of the pair. Each of these steps
+//! adds its wall time to the [`Clock`] the report's times come from.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -315,6 +315,48 @@ impl<'a> Frames<'a> {
         if !keep {
             self.positions.clear();
         }
+    }
+
+    /// The frames whose pair with `a` has been matched and its positions
+    /// kept, by position in `a`'s sequence, with the pair's step, in order.
+    pub(super) fn kept_pairs_from(&self, a: FrameId) -> Vec<(usize, f64)> {
+        let mut kept: Vec<(usize, f64)> = self
+            .positions
+            .keys()
+            .filter(|(x, _)| *x == a)
+            .filter_map(|&(_, b)| Some((b.frame, self.pair(a, b)?.step_percent)))
+            .collect();
+        kept.sort_by_key(|&(frame, _)| frame);
+        kept
+    }
+
+    /// Match `a` with `b`, whose features are `fa` and `fb`, and keep the
+    /// matched positions, unless they are kept already. A pair matched
+    /// before keeps its statistics, which a match finds again from the same
+    /// positions. Checks for cancellation first.
+    pub(super) fn match_keeping_positions(
+        &mut self,
+        a: FrameId,
+        fa: &FrameFeatures,
+        b: FrameId,
+        fb: &FrameFeatures,
+        progress: &Progress,
+    ) -> Result<(), PickImagesError> {
+        if self.positions.contains_key(&(a, b)) {
+            return Ok(());
+        }
+        progress.check_cancel()?;
+        let (stats, positions) = timed(&self.clock.matching, || {
+            match_frame_pair_positions(fa, fb, &self.options.pair)
+        })
+        .map_err(|error| self.pair_error(a, b, error))?;
+        self.positions.insert((a, b), positions);
+        if self.pair(a, b).is_none() {
+            self.pair_index.insert((a, b), self.pairs.len());
+            self.pairs.push(MeasuredPair { a, b, stats });
+            progress.value("pairs_matched", self.pairs.len() as f64);
+        }
+        Ok(())
     }
 
     /// Drop the matched positions kept of every pair whose first frame is

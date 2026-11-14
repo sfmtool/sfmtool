@@ -153,7 +153,8 @@ pub struct WalkStep {
 
 /// One accepted step's target and the local density term's reading of it.
 /// With the term off, the target is the base target, the gain, the median
-/// measure and the measure are 1, and no split is measured.
+/// measure, the focal factor and the measure are 1, and no split is
+/// measured.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StepDensity {
     /// The target the step was walked with, in percent of the long side: the
@@ -164,12 +165,49 @@ pub struct StepDensity {
     /// The median of the measures of the last three steps before this one,
     /// or of as many as there were; 1 before the first.
     pub median_measure: f64,
-    /// The step's essential split, measured once it was accepted; `None`
-    /// with the term off.
+    /// The step's essential split, measured once it was accepted at the
+    /// focal `focal_factor` gives; `None` with the term off.
     pub essential_split: Option<EssentialSplitOutcome>,
+    /// The focal the step's split was measured at, as a factor of the
+    /// camera's: the focal search's choice, or 1 where the search did not
+    /// run.
+    pub focal_factor: f64,
+    /// The pair the step's measure was read from; `None` with the term off.
+    pub measured_pair: Option<DensityPair>,
     /// The step's measure, which the next steps' median measures take in:
-    /// its parallax P90 over P50 when its split counts, and 1 otherwise.
+    /// the measured pair's parallax P90 over P50 when its split counts, and
+    /// 1 otherwise.
     pub measure: f64,
+}
+
+/// The pair an accepted step's measure was read from, and the parallax P50
+/// gate it was held to. Frames are positions in the sequence; every pair
+/// starts at the step's first frame.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "pair", rename_all = "snake_case")]
+pub enum DensityPair {
+    /// The step itself, its split [`StepDensity::essential_split`]: at the
+    /// step gate for a step up to 1.3 times the reference step, and at the
+    /// reference gate for a longer step of so few frames that it is its own
+    /// reference pair.
+    Step { p50_gate_deg: f64 },
+    /// A reference pair, from the step's first frame to `to`, of the step
+    /// `step_percent`.
+    Reference {
+        to: usize,
+        step_percent: f64,
+        /// Whether the pair was matched for the measure, reading `to` if it
+        /// had not been read, rather than one the walk had matched already.
+        matched_for_measure: bool,
+        /// The pair's split, at the focal `focal_factor` gives.
+        essential_split: EssentialSplitOutcome,
+        focal_factor: f64,
+        p50_gate_deg: f64,
+    },
+    /// No pair: the step's own parallax P50, scaled to the span of the
+    /// reference pair to `to`, is at least `p50_gate_deg`, the reference
+    /// gate, so the measure is 1 and that pair is not matched.
+    WideParallax { to: usize, p50_gate_deg: f64 },
 }
 
 /// Why a step was accepted where it was.

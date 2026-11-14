@@ -1,9 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use nalgebra::Vector3;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
 use super::*;
-use crate::analysis::pick_images::essential_split::{EssentialSplit, SplitNotMeasured};
+use crate::analysis::pick_images::essential_split::{
+    measure_essential_split, EssentialSplit, SplitNotMeasured,
+};
 use crate::camera::{CameraModel, RollingShutter, RollingShutterScanlines};
+use crate::geometry::rotation::axis_angle_to_rotation_matrix;
 
 fn split(inliers: usize, p50: f64, p90: f64) -> EssentialSplitOutcome {
     EssentialSplitOutcome::Measured(EssentialSplit {
@@ -16,19 +23,29 @@ fn split(inliers: usize, p50: f64, p90: f64) -> EssentialSplitOutcome {
 }
 
 #[test]
-fn a_step_counts_only_with_enough_inliers_a_wide_p90_and_a_narrow_p50() {
+fn a_pair_counts_only_with_enough_inliers_a_wide_p90_and_a_p50_under_its_gate() {
+    let (step, reference) = (MAX_STEP_PARALLAX_P50_DEG, MAX_REFERENCE_PARALLAX_P50_DEG);
+    assert_eq!((step, reference), (0.5, 0.2));
     // Counts: its ratio.
-    assert_eq!(step_measure(&split(50, 0.125, 1.5)), 12.0);
-    assert_eq!(step_measure(&split(400, 0.25, 0.375)), 1.5);
+    assert_eq!(pair_measure(&split(50, 0.125, 1.5), step), 12.0);
+    assert_eq!(pair_measure(&split(400, 0.25, 0.375), step), 1.5);
+    assert_eq!(pair_measure(&split(50, 0.125, 1.5), reference), 12.0);
     // Each condition at its edge, then just past it.
-    assert_eq!(step_measure(&split(49, 0.1, 1.2)), 1.0);
-    assert_eq!(step_measure(&split(80, 0.1, 0.2)), 2.0);
-    assert_eq!(step_measure(&split(80, 0.05, 0.199)), 1.0);
-    assert_eq!(step_measure(&split(80, 0.499, 0.998)), 2.0);
-    assert_eq!(step_measure(&split(80, 0.5, 5.0)), 1.0);
+    assert_eq!(pair_measure(&split(49, 0.1, 1.2), step), 1.0);
+    assert_eq!(pair_measure(&split(80, 0.1, 0.2), step), 2.0);
+    assert_eq!(pair_measure(&split(80, 0.05, 0.199), step), 1.0);
+    assert_eq!(pair_measure(&split(80, 0.499, 0.998), step), 2.0);
+    assert_eq!(pair_measure(&split(80, 0.5, 5.0), step), 1.0);
+    // The reference gate: a P50 the step's gate passes and the reference
+    // pair's does not.
+    assert_eq!(pair_measure(&split(80, 0.199, 0.398), reference), 2.0);
+    assert_eq!(pair_measure(&split(80, 0.2, 1.0), reference), 1.0);
+    assert_eq!(pair_measure(&split(80, 0.2, 1.0), step), 5.0);
+    assert_eq!(pair_measure(&split(49, 0.1, 1.2), reference), 1.0);
+    assert_eq!(pair_measure(&split(80, 0.05, 0.199), reference), 1.0);
     // A P50 of 0 has no ratio, and a P90 that is not a number fails its floor.
-    assert_eq!(step_measure(&split(80, 0.0, 1.0)), 1.0);
-    assert_eq!(step_measure(&split(80, 0.1, f64::NAN)), 1.0);
+    assert_eq!(pair_measure(&split(80, 0.0, 1.0), step), 1.0);
+    assert_eq!(pair_measure(&split(80, 0.1, f64::NAN), step), 1.0);
     // Not measured.
     for reason in [
         SplitNotMeasured::TooFewMatches,
@@ -39,7 +56,282 @@ fn a_step_counts_only_with_enough_inliers_a_wide_p90_and_a_narrow_p50() {
             matches: 300,
             reason,
         };
-        assert_eq!(step_measure(&outcome), 1.0);
+        assert_eq!(pair_measure(&outcome, step), 1.0);
+        assert_eq!(pair_measure(&outcome, reference), 1.0);
+    }
+}
+
+/// The reference step at the default base target and maximum gain.
+const R: f64 = 10.0 / 3.0;
+
+#[test]
+fn a_step_near_the_reference_step_is_measured_itself() {
+    let narrow = split(400, 0.1, 1.0);
+    let step = MeasurePlan::Step {
+        p50_gate_deg: MAX_STEP_PARALLAX_P50_DEG,
+    };
+    // Up to 1.3 times the reference step, whatever was matched.
+    let matched = [(105, 3.0), (110, 4.0)];
+    for s in [0.5, R, 1.3 * R] {
+        assert_eq!(measure_plan(100, 110, s, R, &narrow, &matched), step, "{s}");
+    }
+    // A step that is not a number is measured itself too.
+    assert_eq!(measure_plan(100, 110, f64::NAN, R, &narrow, &matched), step);
+    // Just past it, a reference pair is.
+    assert_ne!(
+        measure_plan(100, 110, 1.3 * R * 1.001, R, &narrow, &matched),
+        step
+    );
+}
+
+#[test]
+fn a_long_step_is_measured_by_a_matched_pair_near_the_reference_step_or_the_frame_its_rate_puts_there(
+) {
+    let narrow = split(400, 0.1, 1.0);
+    // A step of 10% over 30 frames: its rate puts the reference step 10
+    // frames on. Of the pairs matched, those within 0.7 to 1.3 times the
+    // reference step qualify, and the nearest in ratio is measured.
+    let matched = [(104, 1.5), (108, 2.5), (112, 4.0), (115, 5.0), (130, 10.0)];
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &narrow, &matched),
+        MeasurePlan::Reference {
+            to: 112,
+            matched: true
+        }
+    );
+    // The band's ends qualify, and the nearer in ratio is taken: 1.3 times
+    // the reference step is nearer than 0.7 times.
+    for (n, step) in [(105, 0.7 * R), (106, 1.3 * R)] {
+        assert_eq!(
+            measure_plan(100, 130, 10.0, R, &narrow, &[(n, step)]),
+            MeasurePlan::Reference {
+                to: n,
+                matched: true
+            }
+        );
+    }
+    let ends = [(105, 0.7 * R), (106, 1.3 * R)];
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &narrow, &ends),
+        MeasurePlan::Reference {
+            to: 106,
+            matched: true
+        }
+    );
+    // Of two as near, the first.
+    let tie = [(107, 3.0), (109, 3.0)];
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &narrow, &tie),
+        MeasurePlan::Reference {
+            to: 107,
+            matched: true
+        }
+    );
+    // With none within the band, the frame the step's rate puts there.
+    let outside = [(104, 0.69 * R), (115, 1.31 * R), (130, 10.0)];
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &narrow, &outside),
+        MeasurePlan::Reference {
+            to: 110,
+            matched: false
+        }
+    );
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &narrow, &[]),
+        MeasurePlan::Reference {
+            to: 110,
+            matched: false
+        }
+    );
+    // A step of two frames whose rate puts the reference step one frame on.
+    assert_eq!(
+        measure_plan(100, 102, 6.0, R, &narrow, &[]),
+        MeasurePlan::Reference {
+            to: 101,
+            matched: false
+        }
+    );
+    // A step of one frame, or of two whose rate rounds to both, has no frame
+    // nearer the reference step: it is measured itself, at the reference
+    // gate, unless a matched pair qualifies.
+    let own = MeasurePlan::Step {
+        p50_gate_deg: MAX_REFERENCE_PARALLAX_P50_DEG,
+    };
+    assert_eq!(measure_plan(100, 101, 6.0, R, &narrow, &[]), own);
+    assert_eq!(measure_plan(100, 102, 4.4, R, &narrow, &[]), own);
+    assert_eq!(
+        measure_plan(100, 101, 6.0, R, &narrow, &[(103, 3.5)]),
+        MeasurePlan::Reference {
+            to: 103,
+            matched: true
+        }
+    );
+}
+
+#[test]
+fn a_long_step_whose_own_parallax_rules_out_the_reference_gate_measures_no_pair() {
+    // Scaled to the reference pair's 10 frames of 30, a P50 of 0.6° is at the
+    // reference gate, whatever was matched.
+    let matched = [(110, R)];
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &split(50, 0.6, 3.0), &matched),
+        MeasurePlan::WideParallax { to: 110 }
+    );
+    // Just under it, or with too few inliers, the reference pair is measured.
+    let reference = MeasurePlan::Reference {
+        to: 110,
+        matched: true,
+    };
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &split(50, 0.599, 3.0), &matched),
+        reference
+    );
+    assert_eq!(
+        measure_plan(100, 130, 10.0, R, &split(49, 3.0, 9.0), &matched),
+        reference
+    );
+    let lost = EssentialSplitOutcome::NotMeasured {
+        matches: 30,
+        reason: SplitNotMeasured::NoConsensus,
+    };
+    assert_eq!(measure_plan(100, 130, 10.0, R, &lost, &matched), reference);
+}
+
+fn turned(inliers: usize, rotation_deg: f64, p50: f64) -> EssentialSplitOutcome {
+    EssentialSplitOutcome::Measured(EssentialSplit {
+        matches: inliers + 10,
+        inliers,
+        rotation_deg,
+        parallax_p50_deg: p50,
+        parallax_p90_deg: 1.0,
+    })
+}
+
+#[test]
+fn the_focal_search_runs_only_where_a_focal_could_bring_the_pair_under_a_gate() {
+    assert!(focal_search_runs(&turned(400, 0.5, 0.1)));
+    assert!(!focal_search_runs(&turned(400, 0.499, 0.1)));
+    // A focal error within the search's 12% adds at most 0.12° of P50 per
+    // degree of rotation.
+    assert!(focal_search_runs(&turned(400, 10.0, 1.699)));
+    assert!(!focal_search_runs(&turned(400, 10.0, 1.7)));
+    // Inliers do not decide it, a split that was not measured does.
+    assert!(focal_search_runs(&turned(10, 3.0, 0.1)));
+    let lost = EssentialSplitOutcome::NotMeasured {
+        matches: 30,
+        reason: SplitNotMeasured::NoConsensus,
+    };
+    assert!(!focal_search_runs(&lost));
+}
+
+/// The factor of `options`' focal over 500.
+fn factor_of(options: &EssentialSplitOptions) -> f64 {
+    options.camera.focal_lengths().0 / 500.0
+}
+
+#[test]
+fn the_focal_search_keeps_the_smallest_p50_of_a_split_with_enough_inliers() {
+    let split = EssentialSplitOptions::new(pinhole(640, 480, 500.0));
+    // The P50 at each factor: 0.05 per step from 1.06, and at 1.03 a P50 of
+    // 0 from too few inliers.
+    let run = |at: &dyn Fn(i32) -> EssentialSplitOutcome| {
+        let mut asked = Vec::new();
+        let kept = focal_searched_split(&split, |options| {
+            let i = ((factor_of(options) - 1.0) / FOCAL_SEARCH_STEP).round() as i32;
+            asked.push(i);
+            Ok::<_, ()>(at(i))
+        })
+        .expect("no error");
+        (kept, asked)
+    };
+    let p50 = |i: i32| 0.01 + 0.05 * f64::from((i - 2).abs());
+    let ((outcome, factor), asked) = run(&|i| {
+        if i == 1 {
+            turned(49, 3.0, 0.0)
+        } else {
+            turned(400, 3.0, p50(i))
+        }
+    });
+    assert_eq!(asked, vec![0, -4, -3, -2, -1, 1, 2, 3, 4]);
+    assert_eq!(factor, 1.06);
+    assert_eq!(outcome, turned(400, 3.0, 0.01));
+    // Of two as small, the first; the camera's own is first of all.
+    let ((_, factor), _) = run(&|i| turned(400, 3.0, if i >= 2 { 0.01 } else { 0.2 }));
+    assert_eq!(factor, 1.06);
+    let ((_, factor), _) = run(&|i| turned(400, 3.0, if i == 0 || i == 3 { 0.01 } else { 0.2 }));
+    assert_eq!(factor, 1.0);
+    // With too few inliers at the camera's focal, another focal is kept
+    // whatever its P50.
+    let ((_, factor), _) = run(&|i| {
+        if i == 0 {
+            turned(40, 3.0, 0.01)
+        } else {
+            turned(400, 3.0, 0.3 + 0.01 * f64::from(i))
+        }
+    });
+    assert_eq!(factor, 0.88);
+    // Where the search does not run, the camera's split alone is measured.
+    let ((outcome, factor), asked) = run(&|_| turned(400, 0.4, 0.01));
+    assert_eq!((asked, factor), (vec![0], 1.0));
+    assert_eq!(outcome, turned(400, 0.4, 0.01));
+}
+
+/// Matched positions of a camera of focal 500 that turns by `turn_deg`
+/// about the vertical and moves `travel` sideways, in front of far points,
+/// 200 to 400 away, and a share `near` of near points, 4 to 8 away.
+fn near_and_far(turn_deg: f64, travel: f64, near: f64) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
+    let camera = pinhole(640, 480, 500.0);
+    let mut rng = StdRng::seed_from_u64(7);
+    let rotation = axis_angle_to_rotation_matrix(&Vector3::y(), turn_deg.to_radians());
+    let translation = Vector3::new(travel, 0.0, 0.0);
+    let (mut a, mut b) = (Vec::new(), Vec::new());
+    while a.len() < 400 {
+        let pixel = [rng.random_range(0.0..640.0), rng.random_range(0.0..480.0)];
+        let ray = Vector3::from(camera.pixel_to_ray(pixel[0], pixel[1]));
+        let depth = if rng.random_range(0.0..1.0) < near {
+            rng.random_range(4.0..8.0)
+        } else {
+            rng.random_range(200.0..400.0)
+        };
+        let seen = rotation * (ray * depth) + translation;
+        let Some((u, v)) = camera.ray_to_pixel([seen.x, seen.y, seen.z]) else {
+            continue;
+        };
+        if (0.0..640.0).contains(&u) && (0.0..480.0).contains(&v) {
+            a.push(pixel);
+            b.push([u, v]);
+        }
+    }
+    (a, b)
+}
+
+#[test]
+fn the_focal_search_finds_the_focal_a_turning_pair_was_taken_with() {
+    // A turn of 6° with a fifth of the points near: off the true focal, the
+    // turn leaves parallax on the far points.
+    let (a, b) = near_and_far(6.0, 0.05, 0.2);
+    let search = |focal: f64| {
+        let split = EssentialSplitOptions::new(pinhole(640, 480, focal));
+        focal_searched_split(&split, |options| measure_essential_split(&a, &b, options))
+            .expect("measured")
+    };
+    let p50 = |outcome: &EssentialSplitOutcome| match outcome {
+        EssentialSplitOutcome::Measured(s) => s.parallax_p50_deg,
+        other => panic!("{other:?}"),
+    };
+    let (at_truth, factor) = search(500.0);
+    assert_eq!(factor, 1.0);
+    for (given, expected) in [
+        (500.0 / 1.06, 1.06),
+        (500.0 / 0.91, 0.91),
+        (500.0 / 1.12, 1.12),
+    ] {
+        let (outcome, factor) = search(given);
+        assert_eq!(factor, expected, "given {given}");
+        assert!(
+            (p50(&outcome) - p50(&at_truth)).abs() < 1e-6,
+            "given {given}: {outcome:?} against {at_truth:?}"
+        );
     }
 }
 
