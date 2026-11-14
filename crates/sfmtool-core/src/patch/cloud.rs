@@ -20,11 +20,37 @@ use crate::progress_note;
 use crate::reconstruction::SfmrReconstruction;
 use crate::spatial::PointCloud;
 
-/// Errors from [`PatchCloud::from_reconstruction`].
+/// Errors from [`PatchCloud::from_reconstruction`] and
+/// [`PatchCloud::from_tracks`].
 #[derive(Debug)]
 pub enum PatchCloudError {
     /// The caller asked the build to stop, and it did, with nothing built.
     Cancelled,
+    /// An array given to [`PatchCloud::from_tracks`] does not have the length
+    /// the others set: `what` names it, `expected` is the length it must have
+    /// and `got` the length it has.
+    InputLength {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
+    /// The observation offsets given to [`PatchCloud::from_tracks`] are not a
+    /// prefix sum over the observations: they do not start at `0`, fall from
+    /// one point to the next, or do not end at the observation count.
+    /// `point_index` is the first point whose range `start..end` is wrong.
+    ObservationOffsets {
+        point_index: usize,
+        start: usize,
+        end: usize,
+        observations: usize,
+    },
+    /// Observation `observation` given to [`PatchCloud::from_tracks`] names
+    /// image `image_index`, past the `images` the cameras and poses describe.
+    ImageIndexOutOfRange {
+        observation: usize,
+        image_index: u32,
+        images: usize,
+    },
     /// [`PatchExtent::FeatureSize`] could not derive a world size for point
     /// `point_index` because none of its observations yielded a usable keypoint
     /// scale. The counts break the `observations` down by cause so the message
@@ -62,6 +88,35 @@ impl std::fmt::Display for PatchCloudError {
             PatchCloudError::Cancelled => f.write_str(
                 "building the patch frames was asked to stop before it had an answer, so \
                  nothing was built",
+            ),
+            PatchCloudError::InputLength {
+                what,
+                expected,
+                got,
+            } => write!(
+                f,
+                "the {what} have {got} entries, but there must be {expected}"
+            ),
+            PatchCloudError::ObservationOffsets {
+                point_index,
+                start,
+                end,
+                observations,
+            } => write!(
+                f,
+                "the observation offsets give point {point_index} the observations \
+                 {start}..{end}, which is not a range of the {observations} observations \
+                 in order: the offsets must start at 0, never fall, and end at the \
+                 observation count"
+            ),
+            PatchCloudError::ImageIndexOutOfRange {
+                observation,
+                image_index,
+                images,
+            } => write!(
+                f,
+                "observation {observation} names image {image_index}, which is out of \
+                 range for {images} views"
             ),
             PatchCloudError::MissingFeatureScale {
                 point_index,
@@ -1102,6 +1157,13 @@ impl PatchCloud {
     ///
     /// The resulting patches' `point_indexes` are row indexes into `positions`.
     ///
+    /// Errors with [`PatchCloudError::InputLength`] when an array's length
+    /// disagrees with the counts above, [`PatchCloudError::ObservationOffsets`]
+    /// when `obs_offsets` is not a prefix sum from `0` to `M`, and
+    /// [`PatchCloudError::ImageIndexOutOfRange`] when an entry of `obs_images`
+    /// is not below `N`. A point with no observation is allowed: its patch takes
+    /// world `+y` as its in-plane up.
+    ///
     /// `progress` covers the passes this makes over the arrays: `patch spatial
     /// index` (built only for [`PatchNormal::Geometric`] and
     /// [`PatchExtent::RelativeToSpacing`]), `patch sizes` (only for
@@ -1127,6 +1189,17 @@ impl PatchCloud {
         exclude_points_at_infinity: bool,
         progress: &Progress<'_>,
     ) -> Result<Self, PatchCloudError> {
+        check_tracks_input(
+            positions.len(),
+            weights.len(),
+            stored_normals.map(<[_]>::len),
+            obs_offsets,
+            obs_images,
+            obs_scales.map(<[_]>::len),
+            cam_quats.len(),
+            cam_translations.len(),
+            cam_intrinsics.len(),
+        )?;
         // A NaN scale counts as an unreadable scale, mirroring the `.sift` path's
         // "missing scale" so the MissingFeatureScale taxonomy is unchanged.
         let obs_scales_opt: Vec<Option<f64>> = obs_scales
@@ -1316,6 +1389,79 @@ impl PatchCloud {
             &weights,
         ))
     }
+}
+
+/// Check that the arrays given to [`PatchCloud::from_tracks`] agree, so the
+/// shared build can index them without checking: the per-point arrays have one
+/// entry per position, the offsets are a prefix sum over the observations, the
+/// per-observation arrays have one entry per observation, the per-image arrays
+/// have one entry per image, and every observation names one of those images.
+#[allow(clippy::too_many_arguments)]
+fn check_tracks_input(
+    points: usize,
+    weights: usize,
+    stored_normals: Option<usize>,
+    obs_offsets: &[usize],
+    obs_images: &[u32],
+    obs_scales: Option<usize>,
+    cam_quats: usize,
+    cam_translations: usize,
+    cam_intrinsics: usize,
+) -> Result<(), PatchCloudError> {
+    let length = |what, expected, got| {
+        if got == expected {
+            Ok(())
+        } else {
+            Err(PatchCloudError::InputLength {
+                what,
+                expected,
+                got,
+            })
+        }
+    };
+    length("per-point weights", points, weights)?;
+    if let Some(got) = stored_normals {
+        length("per-point stored normals", points, got)?;
+    }
+    length("observation offsets", points + 1, obs_offsets.len())?;
+    let observations = obs_images.len();
+    for p in 0..points {
+        let (start, end) = (obs_offsets[p], obs_offsets[p + 1]);
+        let first_wrong = p == 0 && start != 0;
+        let last_wrong = p + 1 == points && end != observations;
+        if first_wrong || end < start || last_wrong {
+            return Err(PatchCloudError::ObservationOffsets {
+                point_index: p,
+                start,
+                end,
+                observations,
+            });
+        }
+    }
+    if points == 0 && observations != 0 {
+        return Err(PatchCloudError::InputLength {
+            what: "per-observation image indexes",
+            expected: 0,
+            got: observations,
+        });
+    }
+    if let Some(got) = obs_scales {
+        length("per-observation keypoint scales", observations, got)?;
+    }
+    length("per-image camera translations", cam_quats, cam_translations)?;
+    length("per-image cameras", cam_quats, cam_intrinsics)?;
+    if let Some((observation, &image_index)) = obs_images
+        .iter()
+        .enumerate()
+        .find(|&(_, &img)| img as usize >= cam_quats)
+    {
+        return Err(PatchCloudError::ImageIndexOutOfRange {
+            observation,
+            image_index,
+            images: cam_quats,
+        });
+    }
+    Ok(())
 }
 
 /// The reconstruction-independent inputs shared by

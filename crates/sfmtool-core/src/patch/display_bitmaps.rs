@@ -18,7 +18,7 @@ use crate::geometry::RigidTransform;
 use crate::patch::keypoint_subpixel::KeypointSubpixelParams;
 use crate::patch::normal_refine::ProjectedImage;
 use crate::patch::stored_bitmap::{
-    render_patch_cloud_bitmaps, PatchBitmapColumn, UnreferencedPoints,
+    render_patch_cloud_bitmaps, CloudRenderError, PatchBitmapColumn, UnreferencedPoints,
 };
 use crate::patch::PatchCloud;
 use crate::progress::{Cancelled, Progress};
@@ -163,7 +163,13 @@ pub fn render_patch_bitmap_column(
         UnreferencedPoints::Pick,
         None,
         &phase,
-    )?;
+    )
+    .map_err(|e| match e {
+        CloudRenderError::Cancelled => Cancelled,
+        // The cloud, the keypoints checked above and one view per image all
+        // come from `recon`, so they agree with it.
+        e => unreachable!("a display render of a reconstruction's own frames: {e}"),
+    })?;
     progress_note!(
         phase,
         "{} patches at {} px",

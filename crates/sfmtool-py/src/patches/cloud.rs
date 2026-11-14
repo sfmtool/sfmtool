@@ -175,11 +175,10 @@ impl PyPatchCloud {
                 tii.shape()[0]
             )));
         }
-        let n_images = views.cameras.len() as u32;
-
         // Group the observations into per-point offsets, validating that the point
         // ids are nondecreasing (the grouping the shared routine assumes), in range,
-        // that image indexes are in range, and that every point has ≥1 observation.
+        // and that every point has ≥1 observation. Core checks the rest: the image
+        // indexes against the views and the scales' length against the tracks.
         let mut obs_offsets = vec![0usize; p + 1];
         let mut counts = vec![0usize; p];
         let mut prev: Option<u32> = None;
@@ -198,12 +197,6 @@ impl PyPatchCloud {
                     "track_point_indexes[{j}] = {pid} is out of range for {p} points"
                 )));
             }
-            let img = tii[j];
-            if img >= n_images {
-                return Err(PyValueError::new_err(format!(
-                    "track_image_indexes[{j}] = {img} is out of range for {n_images} views"
-                )));
-            }
             counts[pid as usize] += 1;
         }
         for (pid, &c) in counts.iter().enumerate() {
@@ -218,16 +211,7 @@ impl PyPatchCloud {
 
         // FeatureSize needs the caller's per-observation scales.
         let scales_vec: Option<Vec<f64>> = match &keypoint_scales {
-            Some(arr) => {
-                let a = arr.as_array();
-                if a.shape()[0] != m {
-                    return Err(PyValueError::new_err(format!(
-                        "keypoint_scales must have length {m} (parallel to the tracks), got {}",
-                        a.shape()[0]
-                    )));
-                }
-                Some(a.to_vec())
-            }
+            Some(arr) => Some(arr.as_array().to_vec()),
             None => {
                 if matches!(extent_policy, PatchExtent::FeatureSize { .. }) {
                     return Err(PyValueError::new_err(

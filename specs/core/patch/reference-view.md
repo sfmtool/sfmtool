@@ -154,7 +154,11 @@ pub enum UnreferencedPoints { Pick, Skip } // what a point at -1 gets
 pub fn render_patch_cloud_bitmaps(cloud: &PatchCloud, recon: &SfmrReconstruction,
     views: &[Option<ProjectedImage<'_>>], params: &KeypointSubpixelParams,
     unreferenced: UnreferencedPoints, done: Option<&AtomicUsize>,
-    progress: &Progress<'_>) -> Result<PatchBitmapColumn, Cancelled>;
+    progress: &Progress<'_>) -> Result<PatchBitmapColumn, CloudRenderError>;
+// Cancelled, or, before rendering anything: no inline keypoints, a patch with
+// no point index or one out of range, or not one view per image
+pub enum CloudRenderError { Cancelled, NoInlineKeypoints, PointIndexes { .. },
+    PointOutOfRange { .. }, ViewCount { .. } }
 
 // patch::normal_refine
 pub struct ViewingAngle { pub angle_deg: f64, pub tilt_direction_deg: Option<f64> }

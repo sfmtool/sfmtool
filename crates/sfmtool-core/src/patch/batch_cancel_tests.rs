@@ -20,7 +20,9 @@ use crate::patch::member_coherence::{
     validate_patch_cloud_member_coherence, MemberCoherenceParams,
 };
 use crate::patch::normal_refine::ProjectedImage;
-use crate::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
+use crate::patch::stored_bitmap::{
+    render_patch_cloud_bitmaps, CloudRenderError, UnreferencedPoints,
+};
 use crate::patch::view_selection::{select_patch_cloud_views, ViewSelectParams};
 use crate::patch::PatchCloud;
 use crate::progress::{Event, Progress};
@@ -201,15 +203,17 @@ fn a_batch_cancelled_before_it_starts_does_no_work() {
     let stored = PatchCloud::from_stored_patch_frames(&recon).expect("the ground truth has frames");
     let none: Vec<Option<ProjectedImage<'_>>> = vec![None; recon.image_count()];
     check("the stored bitmaps", &|progress, done| {
-        render_patch_cloud_bitmaps(
-            &stored,
-            &recon,
-            &none,
-            &KeypointSubpixelParams::default(),
-            UnreferencedPoints::Pick,
-            Some(done),
-            progress,
+        matches!(
+            render_patch_cloud_bitmaps(
+                &stored,
+                &recon,
+                &none,
+                &KeypointSubpixelParams::default(),
+                UnreferencedPoints::Pick,
+                Some(done),
+                progress,
+            ),
+            Err(CloudRenderError::Cancelled)
         )
-        .is_err()
     });
 }

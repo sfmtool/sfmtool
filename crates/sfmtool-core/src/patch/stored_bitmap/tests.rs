@@ -504,3 +504,90 @@ fn with_no_eligible_view_there_is_no_bitmap() {
     )
     .is_none());
 }
+
+/// `demo(points)` with inline keypoints, as an `embedded_patches` value holds
+/// them.
+fn demo_with_keypoints(points: usize) -> crate::SfmrReconstruction {
+    let mut data = crate::SfmrReconstruction::demo(points).to_sfmr_data();
+    let m = data.metadata.observation_count as usize;
+    let n = data.metadata.image_count as usize;
+    data.metadata.feature_source = sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    data.feature_indexes = None;
+    data.feature_tool_hashes = None;
+    data.sift_content_hashes = None;
+    data.image_file_hashes = Some(vec![[7u8; 16]; n]);
+    data.keypoints_xy = Some(ndarray::Array2::zeros((m, 2)));
+    crate::SfmrReconstruction::from_sfmr_data(data).expect("the embedded demo loads")
+}
+
+/// Both whole-cloud renders refuse, before rendering anything, a
+/// reconstruction without inline keypoints, a cloud whose patches do not all
+/// name a point of it, and views that are not one per image.
+#[test]
+fn a_cloud_render_refuses_input_that_disagrees_with_the_reconstruction() {
+    use crate::patch::observation_reading::read_cloud_observations;
+
+    let recon = demo_with_keypoints(4);
+    let points = recon.point_count();
+    let images = recon.image_count();
+    let cloud = |point_indexes: Vec<u32>| PatchCloud {
+        patches: vec![patch(Vector3::z()); 2],
+        point_indexes,
+    };
+    let render = |cloud: &PatchCloud, recon: &crate::SfmrReconstruction, views: usize| {
+        let views: Vec<Option<ProjectedImage<'_>>> = vec![None; views];
+        let bitmaps = render_patch_cloud_bitmaps(
+            cloud,
+            recon,
+            &views,
+            &KeypointSubpixelParams::default(),
+            UnreferencedPoints::Pick,
+            None,
+            &Progress::none(),
+        )
+        .map(|_| ());
+        let readings = read_cloud_observations(
+            cloud,
+            recon,
+            &views,
+            24,
+            SamplerChoice::default(),
+            None,
+            &Progress::none(),
+        )
+        .map(|_| ());
+        assert_eq!(bitmaps, readings, "the two renders check alike");
+        bitmaps
+    };
+
+    assert_eq!(render(&cloud(vec![0, 1]), &recon, images), Ok(()));
+    assert_eq!(
+        render(
+            &cloud(vec![0, 1]),
+            &crate::SfmrReconstruction::demo(4),
+            images
+        ),
+        Err(CloudRenderError::NoInlineKeypoints)
+    );
+    assert_eq!(
+        render(&cloud(vec![0]), &recon, images),
+        Err(CloudRenderError::PointIndexes {
+            patches: 2,
+            point_indexes: 1
+        })
+    );
+    assert_eq!(
+        render(&cloud(vec![0, points as u32]), &recon, images),
+        Err(CloudRenderError::PointOutOfRange {
+            point_index: points as u32,
+            points
+        })
+    );
+    assert_eq!(
+        render(&cloud(vec![0, 1]), &recon, images - 1),
+        Err(CloudRenderError::ViewCount {
+            views: images - 1,
+            images
+        })
+    );
+}

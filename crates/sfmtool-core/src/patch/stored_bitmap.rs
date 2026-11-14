@@ -243,6 +243,106 @@ pub struct PatchBitmapColumn {
     pub reference_observations: Vec<i32>,
 }
 
+/// Why [`render_patch_cloud_bitmaps`] or
+/// [`read_cloud_observations`](crate::patch::observation_reading::read_cloud_observations)
+/// rendered nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloudRenderError {
+    /// The caller asked the render to stop, and it did.
+    Cancelled,
+    /// The reconstruction carries no inline keypoints (its observations are
+    /// `.sift` feature indexes), so there is no keypoint to render at.
+    NoInlineKeypoints,
+    /// The cloud has `patches` patches but `point_indexes` point indexes, so
+    /// not every patch says which point it is.
+    PointIndexes {
+        patches: usize,
+        point_indexes: usize,
+    },
+    /// A patch's point index `point_index` is past the reconstruction's
+    /// `points`.
+    PointOutOfRange { point_index: u32, points: usize },
+    /// `views` has `views` entries where the reconstruction has `images`
+    /// images.
+    ViewCount { views: usize, images: usize },
+}
+
+impl std::fmt::Display for CloudRenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CloudRenderError::Cancelled => {
+                f.write_str("the render was asked to stop before it finished")
+            }
+            CloudRenderError::NoInlineKeypoints => f.write_str(
+                "the reconstruction has no inline keypoints to render at: its observations \
+                 are .sift feature indexes (an embedded_patches reconstruction stores the \
+                 keypoints)",
+            ),
+            CloudRenderError::PointIndexes {
+                patches,
+                point_indexes,
+            } => write!(
+                f,
+                "the patch cloud has {patches} patches but {point_indexes} point indexes, \
+                 so not every patch names its point"
+            ),
+            CloudRenderError::PointOutOfRange {
+                point_index,
+                points,
+            } => write!(
+                f,
+                "a patch names point {point_index}, out of range for the reconstruction's \
+                 {points} points (was the cloud built from a different reconstruction?)"
+            ),
+            CloudRenderError::ViewCount { views, images } => write!(
+                f,
+                "{views} views were given for a reconstruction of {images} images; there \
+                 must be one per image"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CloudRenderError {}
+
+impl From<Cancelled> for CloudRenderError {
+    fn from(_: Cancelled) -> Self {
+        CloudRenderError::Cancelled
+    }
+}
+
+/// Check the inputs of a whole-cloud render against `recon`, and return its
+/// inline keypoints.
+pub(crate) fn check_cloud_render<'r>(
+    cloud: &PatchCloud,
+    recon: &'r crate::SfmrReconstruction,
+    views: usize,
+) -> Result<&'r ndarray::Array2<f32>, CloudRenderError> {
+    let keypoints = recon
+        .keypoints_xy()
+        .ok_or(CloudRenderError::NoInlineKeypoints)?;
+    if cloud.point_indexes.len() != cloud.patches.len() {
+        return Err(CloudRenderError::PointIndexes {
+            patches: cloud.patches.len(),
+            point_indexes: cloud.point_indexes.len(),
+        });
+    }
+    let points = recon.point_count();
+    if let Some(&point_index) = cloud.point_indexes.iter().find(|&&p| p as usize >= points) {
+        return Err(CloudRenderError::PointOutOfRange {
+            point_index,
+            points,
+        });
+    }
+    if views != recon.image_count() {
+        return Err(CloudRenderError::ViewCount {
+            views,
+            images: recon.image_count(),
+        });
+    }
+    Ok(keypoints)
+}
+
 /// What [`render_patch_cloud_bitmaps`] does for a point whose stored
 /// reference observation is `-1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,14 +392,11 @@ type RenderedRow = (Vec<u8>, i32);
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled before every patch was
-/// rendered.
-///
-/// # Panics
-///
-/// Panics if `recon` carries no inline keypoints, if a patch's point index is
-/// out of range for `recon`, or a track's image index is out of range for
-/// `views`.
+/// [`CloudRenderError::Cancelled`] when `progress` was cancelled before every
+/// patch was rendered. Before rendering anything, the other
+/// [`CloudRenderError`]s when `recon` carries no inline keypoints, a patch of
+/// `cloud` has no point index or one out of range for `recon`, or `views` does
+/// not hold one entry per image of `recon`.
 pub fn render_patch_cloud_bitmaps(
     cloud: &PatchCloud,
     recon: &crate::SfmrReconstruction,
@@ -308,10 +405,8 @@ pub fn render_patch_cloud_bitmaps(
     unreferenced: UnreferencedPoints,
     done: Option<&AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<PatchBitmapColumn, Cancelled> {
-    let keypoints_xy = recon
-        .keypoints_xy()
-        .expect("render_patch_cloud_bitmaps needs a reconstruction with inline keypoints");
+) -> Result<PatchBitmapColumn, CloudRenderError> {
+    let keypoints_xy = check_cloud_render(cloud, recon, views.len())?;
     let resolution = params.resolution.max(2) as usize;
     let point_count = recon.point_count();
     let offsets = &recon.point_set.observation_offsets;

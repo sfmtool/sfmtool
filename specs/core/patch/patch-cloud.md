@@ -744,6 +744,17 @@ The core entry point takes a trailing `progress: &Progress<'_>` as
 (see "What a build reports"). The binding passes `&Progress::none()`, so the
 Python signature above is the whole of it.
 
+The core entry point takes the observations already grouped, as prefix-sum
+`obs_offsets` (`P + 1`) over the flat `obs_images` (`M`), and checks its arrays
+before building anything: `PatchCloudError::InputLength` when a per-point,
+per-observation or per-image array has the wrong length,
+`PatchCloudError::ObservationOffsets` when the offsets do not run from `0` to
+`M` without falling, and `PatchCloudError::ImageIndexOutOfRange` when an
+observation names an image past the cameras. It allows a point with no
+observation. The binding groups `track_point_indexes` into those offsets,
+checking the grouping and the point ids as it goes, and raises each core error
+as a `ValueError` with its message.
+
 Semantics match `from_reconstruction` exactly, sourced from the arrays:
 
 - **Observations.** One `(point, image)` observation per row of the two track

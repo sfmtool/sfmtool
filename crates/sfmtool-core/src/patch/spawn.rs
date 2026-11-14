@@ -147,6 +147,113 @@ impl SpawnedTracks {
     }
 }
 
+/// Why [`spawn_candidate_tracks`] refused its requests, before spawning any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpawnError {
+    /// `offsets_uv` has `offsets` rows where `parents` has `parents` entries.
+    OffsetsLength { offsets: usize, parents: usize },
+    /// `patch_views` has `patch_views` entries where `parents` has `parents`.
+    PatchViewsLength { patch_views: usize, parents: usize },
+    /// `parents` names patch `parent`, past the cloud's `patches`.
+    ParentOutOfRange { parent: u32, patches: usize },
+    /// `parents` names patch `parent`, whose patch is a point at infinity.
+    ParentAtInfinity { parent: u32 },
+    /// `patch_views[candidate]` names image `view`, past the scene's `views`.
+    ViewOutOfRange {
+        candidate: usize,
+        view: u32,
+        views: usize,
+    },
+}
+
+impl std::fmt::Display for SpawnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SpawnError::OffsetsLength { offsets, parents } => write!(
+                f,
+                "offsets_uv has {offsets} rows but parents has {parents} entries"
+            ),
+            SpawnError::PatchViewsLength {
+                patch_views,
+                parents,
+            } => write!(
+                f,
+                "patch_views has {patch_views} entries but parents has {parents}"
+            ),
+            SpawnError::ParentOutOfRange { parent, patches } => write!(
+                f,
+                "parents contains {parent}, out of range for the cloud's {patches} patches"
+            ),
+            SpawnError::ParentAtInfinity { parent } => write!(
+                f,
+                "parents contains {parent}, whose patch is a point at infinity; \
+                 candidate spawning displaces a frame in world units and triangulates \
+                 a finite position, so only finite parents can be spawned from"
+            ),
+            SpawnError::ViewOutOfRange {
+                candidate,
+                view,
+                views,
+            } => write!(
+                f,
+                "patch_views[{candidate}] contains image index {view} out of range for \
+                 this scene's {views} views"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SpawnError {}
+
+/// Check a [`spawn_candidate_tracks`] batch before any of it runs.
+fn check_spawn_requests(
+    views: usize,
+    cloud: &PatchCloud,
+    parents: &[u32],
+    offsets_uv: &[[f64; 2]],
+    patch_views: &[Vec<u32>],
+) -> Result<(), SpawnError> {
+    let n = parents.len();
+    if offsets_uv.len() != n {
+        return Err(SpawnError::OffsetsLength {
+            offsets: offsets_uv.len(),
+            parents: n,
+        });
+    }
+    if patch_views.len() != n {
+        return Err(SpawnError::PatchViewsLength {
+            patch_views: patch_views.len(),
+            parents: n,
+        });
+    }
+    for &parent in parents {
+        // The offsets displace the frame in world units and the output is a
+        // triangulated 3D position; a point at infinity has neither, so an
+        // infinity parent is a caller mistake rather than a candidate that
+        // could fail a gate.
+        match cloud.patches.get(parent as usize) {
+            None => {
+                return Err(SpawnError::ParentOutOfRange {
+                    parent,
+                    patches: cloud.len(),
+                })
+            }
+            Some(patch) if patch.w == 0.0 => return Err(SpawnError::ParentAtInfinity { parent }),
+            Some(_) => {}
+        }
+    }
+    for (candidate, vs) in patch_views.iter().enumerate() {
+        if let Some(&view) = vs.iter().find(|&&v| v as usize >= views) {
+            return Err(SpawnError::ViewOutOfRange {
+                candidate,
+                view,
+                views,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Spawn one candidate track per `(parent, offset)` request.
 ///
 /// `views` is one [`ProjectedImage`] per image (indexed by image index);
@@ -162,14 +269,13 @@ impl SpawnedTracks {
 ///
 /// Candidates are built **finite** (`w = 1`): the offsets displace the frame in
 /// world units and the output is a triangulated 3D position, neither of which a
-/// point at infinity has. Callers filter their parents accordingly (the Python
-/// binding rejects an infinity parent outright).
+/// point at infinity has, so a parent at infinity is refused.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `offsets_uv` or `patch_views` is not parallel to `parents`, or a
-/// parent index is out of range for `cloud`. The binding validates these and
-/// raises `ValueError` instead.
+/// A [`SpawnError`], with nothing spawned, when `offsets_uv` or `patch_views`
+/// is not parallel to `parents`, a parent index is out of range for `cloud` or
+/// names a patch at infinity, or a patch view is out of range for `views`.
 pub fn spawn_candidate_tracks(
     views: &[ProjectedImage<'_>],
     cloud: &PatchCloud,
@@ -177,23 +283,14 @@ pub fn spawn_candidate_tracks(
     offsets_uv: &[[f64; 2]],
     patch_views: &[Vec<u32>],
     params: &SpawnParams,
-) -> SpawnedTracks {
+) -> Result<SpawnedTracks, SpawnError> {
+    check_spawn_requests(views.len(), cloud, parents, offsets_uv, patch_views)?;
     let n = parents.len();
-    assert_eq!(
-        offsets_uv.len(),
-        n,
-        "offsets_uv must be parallel to parents"
-    );
-    assert_eq!(
-        patch_views.len(),
-        n,
-        "patch_views must be parallel to parents"
-    );
 
     let mut out = SpawnedTracks::with_capacity(n);
     out.obs_offsets.push(0);
     if n == 0 {
-        return out;
+        return Ok(out);
     }
 
     // ── The candidate cloud: each parent's frame translated to its own X_c ──
@@ -397,7 +494,7 @@ pub fn spawn_candidate_tracks(
         out.positions.push([position.x, position.y, position.z]);
     }
 
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

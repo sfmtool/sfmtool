@@ -18,6 +18,7 @@ use sfmtool_core::progress::Progress;
 use super::args::parse_sampler;
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_reconstruction, resolve_pyramids};
+use crate::helpers::value_err;
 use crate::ProgressCounter;
 
 /// The bitmap column and the reference observation of each point.
@@ -101,12 +102,6 @@ impl PyPatchCloud {
         let (posed, recon_guard) =
             resolve_patch_reconstruction(recon, &self.inner, "render_bitmaps")?;
         let recon = recon_guard.inner();
-        if recon.keypoints_xy().is_none() {
-            return Err(PyValueError::new_err(
-                "render_bitmaps needs the per-observation keypoints an embedded_patches \
-                 reconstruction stores (run `sfm xform --to-embedded-patches` first)",
-            ));
-        }
         let params = KeypointSubpixelParams {
             resolution,
             sampler: parse_sampler(sampler)?,
@@ -140,7 +135,7 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .expect("nothing cancels a render given no cancel flag");
+            .map_err(value_err)?;
         Ok((
             column.bitmaps.into_pyarray(py),
             PyArray1::from_vec(py, column.reference_observations),
@@ -197,12 +192,6 @@ impl PyPatchCloud {
         let (posed, recon_guard) =
             resolve_patch_reconstruction(recon, &self.inner, "read_observations")?;
         let recon = recon_guard.inner();
-        if recon.keypoints_xy().is_none() {
-            return Err(PyValueError::new_err(
-                "read_observations needs the per-observation keypoints an embedded_patches \
-                 reconstruction stores",
-            ));
-        }
         let sampler = parse_sampler(sampler)?;
         let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
@@ -228,7 +217,7 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .expect("nothing cancels a reading given no cancel flag");
+            .map_err(value_err)?;
         crate::readings::readings_to_py(py, &readings)
     }
 }

@@ -13,6 +13,7 @@ use sfmtool_core::patch::spawn::{spawn_candidate_tracks as core_spawn, SpawnPara
 
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
+use crate::helpers::value_err;
 
 /// Localize a new candidate track at an in-plane offset from each parent patch.
 ///
@@ -99,50 +100,10 @@ pub fn spawn_candidate_tracks(
     if offsets_uv.shape()[1] != 2 {
         return Err(PyValueError::new_err("offsets_uv must have shape (n, 2)"));
     }
-    if offsets_uv.shape()[0] != n {
-        return Err(PyValueError::new_err(format!(
-            "offsets_uv has {} rows but parents has {n} entries",
-            offsets_uv.shape()[0]
-        )));
-    }
-    if patch_views.len() != n {
-        return Err(PyValueError::new_err(format!(
-            "patch_views has {} entries but parents has {n}",
-            patch_views.len()
-        )));
-    }
 
+    // Core checks the batch: the lengths, the parents and the patch views.
     let parent_data = to_contiguous!(parents);
-    let n_patches = cloud.inner.len();
-    if let Some(&bad) = parent_data.iter().find(|&&p| p as usize >= n_patches) {
-        return Err(PyValueError::new_err(format!(
-            "parents contains {bad}, out of range for the cloud's {n_patches} patches"
-        )));
-    }
-    // The offsets displace the frame in world units and the output is a
-    // triangulated 3D position; a point at infinity has neither, so an infinity
-    // parent is a caller mistake rather than a candidate that could fail a gate.
-    if let Some(&bad) = parent_data
-        .iter()
-        .find(|&&p| cloud.inner.patch(p as usize).w == 0.0)
-    {
-        return Err(PyValueError::new_err(format!(
-            "parents contains {bad}, whose patch is a point at infinity; \
-             candidate spawning displaces a frame in world units and triangulates \
-             a finite position, so only finite parents can be spawned from"
-        )));
-    }
-
     let (posed, _recon) = resolve_scene(views)?;
-    let n_images = posed.len() as u32;
-    for (i, vs) in patch_views.iter().enumerate() {
-        if let Some(&bad) = vs.iter().find(|&&v| v >= n_images) {
-            return Err(PyValueError::new_err(format!(
-                "patch_views[{i}] contains image index {bad} out of range for this \
-                 scene's {n_images} views"
-            )));
-        }
-    }
 
     let offsets: Vec<[f64; 2]> = to_contiguous!(offsets_uv)
         .chunks_exact(2)
@@ -167,16 +128,18 @@ pub fn spawn_candidate_tracks(
         })
         .collect();
 
-    let out = py.detach(|| {
-        core_spawn(
-            &projected,
-            &cloud.inner,
-            &parent_data,
-            &offsets,
-            &patch_views,
-            &params,
-        )
-    });
+    let out = py
+        .detach(|| {
+            core_spawn(
+                &projected,
+                &cloud.inner,
+                &parent_data,
+                &offsets,
+                &patch_views,
+                &params,
+            )
+        })
+        .map_err(value_err)?;
 
     // Flat + reshape so an empty batch still yields clean `(0, 3)` / `(0, 2)`.
     let n_obs = out.obs_view_indexes.len();
