@@ -164,7 +164,7 @@ fn unrounded_frame_storing_as(patch: &OrientedPatch) -> Option<OrientedPatch> {
 fn refine_normals_stores_the_render_of_the_frame_it_stores() {
     let scene = plane_scene();
     // The patch is about 10 px across in the photographs, so a 16-sample
-    // working grid reads each view at about a sample per pixel; the stored
+    // working grid reads each view at under two samples per pixel; the stored
     // bitmaps stay `BITMAP_R` on a side.
     let options = RefineNormalsOptions {
         normal: GrownPlaneNormalOptions {
