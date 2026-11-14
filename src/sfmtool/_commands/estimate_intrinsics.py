@@ -149,37 +149,98 @@ def _select(mfile, restrict: list[str] | None, data: dict) -> tuple:
     }
 
 
-def _load_selection(matches_path: Path, image_selection) -> tuple:
-    """The selection the vote runs on, and what the report says about it.
+def _camera_groups(names: list[str], workspace_dir: Path) -> list[tuple[str, list]]:
+    """The workspace's cameras among `names`, workspace-relative images:
+    `(label, names)` pairs, in the order of each camera's first image.
+
+    The cameras are the ones `sfm solve` gives the images: each sensor of a
+    multi-sensor `.camrig` is one camera, as is each single-sensor `.camrig`;
+    of the images no `.camrig` covers, those that resolve the same
+    `camera_config.json` share one camera, and those that resolve none share
+    the one camera EXIF gives. A label names the camera's source, relative to
+    the workspace. A `rig_config.json` at the workspace root, or `.camrig`
+    files `sfm solve` would refuse, raise `click.ClickException`.
+    """
+    from .._pick_images import PickImagesInputError, find_rigs
+    from ..camera.config import CameraConfigError, CameraConfigResolver
+
+    root = Path(workspace_dir).resolve()
+    try:
+        rigs, cameras, _notes = find_rigs([root / name for name in names], root)
+    except PickImagesInputError as e:
+        raise click.ClickException(str(e)) from None
+
+    def rel(path: Path) -> str:
+        return path.relative_to(root).as_posix()
+
+    label_of: dict[Path, str] = {}
+    for rig in rigs:
+        patterns = rig.data["sensor_image_patterns"]
+        for path, (sensor, _frame) in rig.assignments.items():
+            label_of[path] = (
+                f"{rel(rig.camrig_file)} sensor {sensor} ({patterns[sensor]})"
+            )
+    for camera in cameras:
+        for path in camera.images:
+            label_of[path] = rel(camera.camrig_file)
+    resolver = CameraConfigResolver(workspace_dir)
+    groups: dict[str, list[str]] = {}
+    for name in names:
+        path = (root / name).resolve()
+        label = label_of.get(path)
+        if label is None:
+            try:
+                config = resolver.resolve_for_image(path)
+            except CameraConfigError as e:
+                raise click.ClickException(str(e)) from None
+            label = (
+                "no .camrig or camera_config.json (EXIF)"
+                if config is None
+                else rel(config[0])
+            )
+        groups.setdefault(label, []).append(name)
+    return list(groups.items())
+
+
+def _load_cameras(matches_path: Path, image_selection) -> list[tuple]:
+    """The selections the vote runs on, one per camera, and what the report
+    says about each: `(label, selection, data)` triples, `label` `None` when
+    the selected images are of one camera.
 
     Without `-r` every cluster the file admits votes, on all its images, under
     the format's own member admission. With `-r` the images are those
     `matches_image_filter` keeps -- the same resolution `sfm solve` gives a
     range or a named image list on a `.matches` file -- and the selection is
     restricted to them, so only members on those images vote and a cluster
-    left spanning fewer than two of them drops. The selection handle goes
-    straight to the kernel, which reads the backbone's own CSR arrays and
-    member positions off it -- so nothing is re-derived here beyond the
-    counts and the image size the report and the `.camrig` need.
+    left spanning fewer than two of them drops. The vote estimates one
+    camera, so images the workspace gives different cameras
+    (`_camera_groups`) are never pooled: each camera's images get a
+    selection of their own, restricted to them in the same way. The
+    selection handle goes straight to the kernel, which reads the backbone's
+    own CSR arrays and member positions off it -- so nothing is re-derived
+    here beyond the counts and the image size the report and the `.camrig`
+    need.
     """
     mfile, file_image_names, kept, label, workspace_dir = _open_matches(
         matches_path, image_selection
     )
-    selection, data = _select(
-        mfile,
-        kept,
-        {
-            "matches_path": matches_path,
-            "file_image_names": file_image_names,
-            "selection_label": label,
-            "workspace_dir": None if kept is None else workspace_dir,
-        },
-    )
-    if kept is None and data["observation_count"] == 0:
+    base = {
+        "matches_path": matches_path,
+        "file_image_names": file_image_names,
+        "selection_label": label,
+        "workspace_dir": None if kept is None else workspace_dir,
+    }
+    chosen = file_image_names if kept is None else kept
+    groups = [] if workspace_dir is None else _camera_groups(chosen, workspace_dir)
+    if len(groups) > 1:
+        cameras = [(camera, *_select(mfile, names, base)) for camera, names in groups]
+    else:
+        cameras = [(None, *_select(mfile, kept, base))]
+    if kept is None and all(data["observation_count"] == 0 for *_, data in cameras):
         raise click.UsageError(
             f"{matches_path} holds no cluster observations to vote on"
         )
-    return selection, data
+    return cameras
 
 
 def _diagonal_fov_deg(
@@ -343,6 +404,47 @@ def _report_lines(estimate: dict, data: dict) -> list[str]:
                 f"{column['n_certified_rotation']}"
             )
     return lines
+
+
+def _several_cameras_message(cameras: list[tuple]) -> str:
+    """Why `--write-camrig` refuses images of several cameras, naming them."""
+    lines = [
+        f"  {camera}  ({len(data['image_names'])} image(s))  "
+        f"e.g. {data['image_names'][0]}"
+        for camera, _selection, data in cameras
+    ]
+    return (
+        f"the selected images are of {len(cameras)} cameras of the workspace, "
+        "and --write-camrig writes one:\n"
+        + "\n".join(lines)
+        + "\nSelect one camera's images with -r, such as a named image list "
+        "whose pattern is that camera's folder, and write its .camrig."
+    )
+
+
+def _echo_cameras(matches_path: Path, estimates: list[tuple], as_json: bool) -> None:
+    """Print the estimates of the cameras among the selected images, one per
+    camera: one report block each, or one JSON object listing them."""
+    import json as json_module
+
+    if as_json:
+        payload = {
+            "image_count": len(estimates[0][2]["file_image_names"]),
+            "selected_image_count": sum(
+                len(camera_data["image_names"]) for *_, camera_data in estimates
+            ),
+            "cameras": [
+                {"camera": camera, "estimate": _json_payload(result, data)}
+                for camera, result, data in estimates
+            ],
+        }
+        click.echo(json_module.dumps(payload, indent=2))
+        return
+    lines = [f"{len(estimates)} cameras among the selected images of {matches_path}:"]
+    for camera, result, data in estimates:
+        lines += ["", f"Camera {camera} ({len(data['image_names'])} images)"]
+        lines += [f"  {line}" if line else "" for line in _report_lines(result, data)]
+    click.echo("\n".join(lines))
 
 
 def _derive_pattern(image_names: list[str], *, name_prefix: bool = False) -> str:
@@ -1037,8 +1139,11 @@ def estimate_intrinsics(
     back weak. The report says which of the two happened, and why.
 
     -r selects the file's images to estimate from, as `sfm solve -r` selects
-    them from a .matches file: only members on those images vote, so one
-    .matches file over a whole capture can be estimated per camera.
+    them from a .matches file: only members on those images vote. The vote
+    estimates one camera, so images the workspace gives different cameras
+    (each sensor of a .camrig rig, each one-sensor .camrig, each
+    camera_config.json) are never pooled: each camera is estimated from its
+    own images and reported on its own.
 
     The report is the product: a capture with no consensus still exits 0.
     Passing --write-camrig also commits the estimate as a one-sensor .camrig,
@@ -1086,13 +1191,25 @@ def estimate_intrinsics(
         return
 
     try:
-        selection, data = _load_selection(Path(input_path), image_selection)
-        result = estimate(selection, **vote_options)
+        cameras = _load_cameras(Path(input_path), image_selection)
+        if len(cameras) > 1:
+            if camrig_path is not None:
+                raise click.UsageError(_several_cameras_message(cameras))
+            estimates = [
+                (camera, estimate(selection, **vote_options), data)
+                for camera, selection, data in cameras
+            ]
+        else:
+            ((_camera, selection, data),) = cameras
+            result = estimate(selection, **vote_options)
     except click.ClickException:
         raise
     except Exception as e:
         raise click.ClickException(str(e)) from None
 
+    if len(cameras) > 1:
+        _echo_cameras(Path(input_path), estimates, as_json)
+        return
     if as_json:
         click.echo(json_module.dumps(_json_payload(result, data), indent=2))
     else:

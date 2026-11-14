@@ -10,7 +10,11 @@ through whichever estimator their geometry can observe, the pooled log-median
 is the focal consensus, and the camera-model columns arbitrate pinhole
 against equidistant fisheye on the certified mass of model-informative scan
 votes. Because no structure is estimated, the answer cannot be biased by the
-depth/focal (bas-relief) compensation of structure-based estimation.
+depth/focal (bas-relief) compensation of structure-based estimation. The
+vote is of one camera, so selected images the workspace gives different
+cameras, such as the two lenses of a `.camrig` rig, are estimated and
+reported one camera at a time
+([Images of several cameras](#images-of-several-cameras)).
 
 The output is a report; with `--write-camrig` the command also commits the
 estimate to the workspace as a one-sensor `.camrig`
@@ -55,11 +59,79 @@ under `vote` supplies the report's diagnostics. Without `-r` the whole
 file's admission votes: every cluster, on every image, with the members the
 format's default selection admits.
 
-The vote assumes one shared camera with a centred principal point. When the
-selected images carry more than one distinct `(width, height)`, the command
-refuses up front with a message naming the differing dimensions; select one
-camera's images with `-r`, or split the images into per-camera match files,
-and estimate each.
+The vote assumes one shared camera with a centred principal point, so the
+command never pools images the workspace gives different cameras: it votes
+once per camera, each on that camera's own images
+([Images of several cameras](#images-of-several-cameras)). When the images of
+one vote carry more than one distinct `(width, height)`, the command refuses
+up front with a message naming the differing dimensions; select one camera's
+images with `-r`, or split the images into per-camera match files, and
+estimate each.
+
+### Images of several cameras
+
+The cameras are the ones `sfm solve` gives the selected images
+([solve-command.md § Camera Rig Files](solve-command.md#camera-rig-files-camrig),
+[§ Camera Intrinsics](solve-command.md#camera-intrinsics)), found in the
+workspace the `.matches` file resolves to:
+
+- each sensor of a multi-sensor `.camrig` is one camera, even where the
+  file's sensors share an entry of its camera pool, since each is its own
+  lens and `sfm solve` gives each sensor its own camera;
+- each single-sensor `.camrig` is one camera;
+- of the images no `.camrig` covers, those that resolve the same
+  `camera_config.json` are one camera, and those that resolve none are the
+  one camera `sfm solve` infers from EXIF.
+
+Images of one camera are voted on together, whatever folders or sequences
+they are in. When the selected images are of one camera, which includes
+every file whose workspace cannot be resolved, the command runs one
+vote and its output is the one described below. When they are of several,
+it runs one vote per camera, on `select_clusters(restrict_images=...)` of that
+camera's selected images, so each estimate is the one `-r` gives for the same
+images. Pairs between two cameras' images do not vote. A capture of a
+two-lens 360 camera, converted by `sfm insv2rig` into a multi-sensor
+`.camrig`, gets one estimate per lens:
+
+```text
+2 cameras among the selected images of matches/clusters.matches:
+
+Camera kerry_park.camrig sensor 0 (fisheye_left/frame_%02d.jpg) (24 images)
+  Images:        24 @ 480x480
+  ...
+
+Camera kerry_park.camrig sensor 1 (fisheye_right/frame_%02d.jpg) (24 images)
+  Images:        24 @ 480x480
+  ...
+```
+
+Each block is a camera's label and image count, then that camera's report.
+A label names the camera's source relative to the workspace: `<.camrig>
+sensor <index> (<pattern>)` for a rig's sensor, the `.camrig` file for a
+single-sensor one, the `camera_config.json` file, or `no .camrig or
+camera_config.json (EXIF)`. The cameras are in the order of their first
+image in the `.matches` file.
+
+`--json` then prints one object: `image_count` (the file's images),
+`selected_image_count` (the images the votes ran on, all of them without
+`-r`), and `cameras`, one entry per camera with `camera`, its label, and
+`estimate`, the payload `--json` prints for a single estimate, of that
+camera's images (its own `selected_image_count` is the camera's selected
+images). A caller that reads the single-estimate keys can tell the two forms
+apart by the `cameras` key.
+
+`--write-camrig` writes one camera, so with images of several cameras it
+refuses before any vote, with a message listing each camera, its image
+count and an example image, and saying to select one camera's images with
+`-r`. A named image list whose pattern is a camera's folder, such as
+`{ "pattern": "fisheye_left/*.jpg" }`, selects one lens of a rig.
+
+A `rig_config.json` at the root of the file's workspace stops the command
+before any vote, whatever `-r` selects, with the error that names the
+`sfm camrig cp` command converting it, as it stops `sfm solve`
+([workspace/rig-config.md § A `rig_config.json` in a workspace](../../workspace/rig-config.md#a-rig_configjson-in-a-workspace)).
+So do `.camrig` files `sfm solve` would refuse, such as two that match one
+image.
 
 ### Selecting images
 
@@ -90,12 +162,15 @@ image list 'video1') @ 1080x1920`). A selection whose clusters all drop, such
 as a single image, is not an error: the report prints with no clusters and no
 consensus, and the command exits 0.
 
-This is what lets one `.matches` file serve a capture of several cameras.
-`sfm match --cluster` over every image of the capture finds the matches the
-joint solve needs, across the cameras as well as within each, and
-`estimate-intrinsics -r` then estimates each camera from its own images in
-that file. Without `-r` the vote pools the pairs of every camera into one
-focal, which is neither camera's focal when their lenses differ.
+This is what lets one `.matches` file serve a capture of several cameras
+that the workspace does not yet tell apart, such as two videos in one
+folder before either has a `.camrig`. `sfm match --cluster` over every image
+of the capture finds the matches the joint solve needs, across the cameras
+as well as within each, and `estimate-intrinsics -r` then estimates each
+camera from its own images in that file. Without `-r` the vote pools such
+images into one focal, which is neither camera's focal when their lenses
+differ; images the workspace gives different cameras are never pooled
+([Images of several cameras](#images-of-several-cameras)).
 
 `-r` has no form that names a folder. A named image list does: an entry
 whose pattern is a folder's glob, such as `{ "pattern": "video1/*.jpg" }`,
@@ -268,7 +343,9 @@ The command prints a summary of the written file after the report: the path,
 the camera, the focal and the stored pattern. With `--json` the summary goes
 to stderr, so stdout holds the JSON alone.
 
-The write refuses -- with the report still printed -- when:
+The write refuses before any vote when the selected images are of several
+cameras ([Images of several cameras](#images-of-several-cameras)), and --
+with the report still printed -- when:
 
 - there is no focal consensus;
 - the verdict is an UNCONFIRMED Fisheye (the message says to re-run with
@@ -444,6 +521,13 @@ The report blocks then go to stderr, so stdout holds the JSON alone.
   float32 and widened by the kernel because the vote solves in float64. Member
   exclusion is the default selection's job, by status — the same rule the
   refined path has always used.
+- The cameras of the selected images come from `find_rigs` in
+  [`_pick_images.py`](../../../src/sfmtool/_pick_images.py), which finds the
+  `.camrig` files as `sfm solve` does and assigns each rig image its sensor,
+  and from `CameraConfigResolver` for the images no `.camrig` covers -- the
+  partition `_single_sensor_cameras` in
+  [`db_builders.py`](../../../src/sfmtool/colmap/db_builders.py) gives a solve's
+  single images.
 - `-r` is resolved by `matches_image_filter` in
   [`_range_options.py`](../../../src/sfmtool/_commands/_range_options.py),
   the function `sfm solve` filters a `.matches` file's images with, and the

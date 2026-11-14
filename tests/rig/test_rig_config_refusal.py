@@ -91,8 +91,9 @@ def test_commands_on_images_are_refused_before_extraction(workspace: Path, args)
         ["solve", "-i", "{pairs}"],
         ["match", "--derive-pairs", "{clusters}"],
         ["to-colmap-db", "{clusters}", "{out}"],
+        ["estimate-intrinsics", "-i", "{clusters}"],
     ],
-    ids=["solve", "match-derive-pairs", "to-colmap-db"],
+    ids=["solve", "match-derive-pairs", "to-colmap-db", "estimate-intrinsics"],
 )
 def test_commands_on_a_matches_file_are_refused(workspace: Path, args):
     matches = workspace / "matches"

@@ -497,7 +497,7 @@ backlog and keep them honest as findings get addressed:
   invocation, `--camera-model` refits that camera to the model it names rather
   than replacing it.
 - A workspace's rigs are described only by `.camrig` files. `solve`, `match`,
-  `to-colmap-db`, `pick-images` and `estimate-intrinsics
-  --write-camrig-per-sequence` stop on a `rig_config.json` at the workspace
-  root, naming the `sfm camrig cp` command that converts it; that converter is
-  the file's only reader (`specs/workspace/rig-config.md`).
+  `to-colmap-db`, `pick-images` and `estimate-intrinsics` stop on a
+  `rig_config.json` at the workspace root, naming the `sfm camrig cp` command
+  that converts it; that converter is the file's only reader
+  (`specs/workspace/rig-config.md`).

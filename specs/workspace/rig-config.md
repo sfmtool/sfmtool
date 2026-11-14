@@ -194,11 +194,10 @@ positional.
 A workspace's rigs are described only by `.camrig` files. Every command that
 sets up the cameras and rig frames of a workspace's images — `sfm solve`,
 `sfm match` (every mode but `--merge`), `sfm to-colmap-db` from a `.matches`
-file, `sfm pick-images` and `sfm estimate-intrinsics
---write-camrig-per-sequence` — stops before it reads any image when the
-workspace root holds a `rig_config.json`, rather than solving its rigs' images
-as single images. The rule looks only at the workspace root and does not
-look at `.camrig` files: a workspace whose rig a `.camrig` already describes
+file, `sfm pick-images` and `sfm estimate-intrinsics` — stops before it
+reads any image when the workspace root holds a `rig_config.json`, rather
+than solving its rigs' images as single images. The rule looks only at the
+workspace root and does not look at `.camrig` files: a workspace whose rig a `.camrig` already describes
 is refused too, until the `rig_config.json` is deleted. The check is
 `_refuse_rig_config` in [`rig/config.py`](../../src/sfmtool/rig/config.py).
 
