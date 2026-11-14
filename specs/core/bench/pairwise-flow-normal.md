@@ -330,8 +330,8 @@ override type (`FlowParamOverrides` in
 [flow/optical.rs](../../../crates/sfmtool-py/src/flow/optical.rs)). The flow
 runs on the CPU, so `gpu_min_pixels` is not a keyword. `fit` is set by
 `resolution` and `fit`'s four keywords, as for the other normal steps.
-`sfmtool.bench.refine_normals` with `method="pairwise_flow"` takes the same keywords, through the keyword set the
-two share (`PairwiseFlowKeywords`)
+`sfmtool.bench.refine_normals` with `method="pairwise_flow"` takes the same
+keywords, through the keyword set the two share (`PairwiseFlowKeywords`)
 ([refine-normals.md](refine-normals.md) § "Python binding"). A
 keyword left out, or `None`, takes `PairwiseFlowNormalOptions::default()`'s
 value, and a setting `PairwiseFlowNormalOptions::check` refuses raises

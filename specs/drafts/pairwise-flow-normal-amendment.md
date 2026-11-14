@@ -2,8 +2,7 @@
 
 **Status:** Draft. The step is built, and Python, Track View, the wire and
 `refine_normals` run it; what remains is three tests and the questions about
-its settings and rules. Nothing here changes the step until it is built or
-settled.
+its settings and rules. Nothing here changes the step until it is settled.
 
 Amends: [core/bench/pairwise-flow-normal.md](../core/bench/pairwise-flow-normal.md).
 The measurements cited are in

@@ -3260,8 +3260,9 @@ deliberately expensive. It has a Python binding
 Normal* and the wire's `fit_bench_track_normal` with `method` `pairwise_flow`,
 both at its default options; and `bench::refine_normals` runs it on every
 finite point when its options choose it as the step
-([refine-normals.md](refine-normals.md) § "Choosing the step")
-([pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md)).
+([refine-normals.md](refine-normals.md) § "Choosing the step"). The tests it
+does not have yet and the questions still open about it are in
+[pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md).
 
 The finite difference depends only on where each piece is placed along its
 rays, and so on depth, but a piece small enough to hold little texture fits
