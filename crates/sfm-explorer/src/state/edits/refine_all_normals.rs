@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Refine All Normals: every finite point of a node turned to its grown-plane
-//! normal, as Track View's *Grown Plane Normal* and *Commit* do for one track
-//! with every observation kept, as one version.
+//! or its pairwise-flow normal, as Track View's *Grown Plane Normal* or
+//! *Pairwise Flow Normal* and *Commit* do for one track with every observation
+//! kept, as one version.
 //!
 //! See `specs/gui/edits/refine-all-normals.md`. The mechanism is
 //! [`refine_normals`](sfmtool_core::bench::refine_normals()); what the viewer
@@ -14,9 +15,10 @@
 //! entry's gate order, its choice of photographs and its counting words
 //! ([`super::refit_all_points`]).
 
+use sfmtool_core::bench::normal::{GrownPlaneNormalOptions, PairwiseFlowNormalOptions};
 use sfmtool_core::bench::{
     refine_normals, NormalError, RefineNormalsError, RefineNormalsOptions, RefineNormalsOutcome,
-    RefineNormalsReport,
+    RefineNormalsReport, RefineNormalsStep,
 };
 use sfmtool_core::SfmrReconstruction;
 
@@ -29,6 +31,40 @@ use crate::state::{AppState, NOT_LOADED};
 
 #[cfg(test)]
 mod tests;
+
+/// Which normal step Refine All Normals runs on every point: the entries of
+/// its submenu, and the wire's `method`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefineAllNormalsStep {
+    /// *Grown Plane*: the grown-plane normal at the options Track View's
+    /// *Grown Plane Normal* runs. The wire's default.
+    GrownPlane,
+    /// *Pairwise Flow*: the pairwise-flow normal at the options Track View's
+    /// *Pairwise Flow Normal* runs, seconds per point.
+    PairwiseFlow,
+}
+
+impl RefineAllNormalsStep {
+    /// The core step, at its default options.
+    fn core_step(self) -> RefineNormalsStep {
+        match self {
+            RefineAllNormalsStep::GrownPlane => {
+                RefineNormalsStep::GrownPlane(GrownPlaneNormalOptions::default())
+            }
+            RefineAllNormalsStep::PairwiseFlow => {
+                RefineNormalsStep::PairwiseFlow(PairwiseFlowNormalOptions::default())
+            }
+        }
+    }
+
+    /// The step's name in the version label: the glossary's noun for it.
+    fn noun(self) -> &'static str {
+        match self {
+            RefineAllNormalsStep::GrownPlane => "grown-plane normal",
+            RefineAllNormalsStep::PairwiseFlow => "pairwise-flow normal",
+        }
+    }
+}
 
 /// Why the normals of every point of `node` cannot be refined, or `None`
 /// when they can.
@@ -50,7 +86,7 @@ pub(crate) fn refine_refusal(node: &crate::scene::SceneNode, busy: Option<&str>)
          keypoints, and refining a normal writes each point's record, keypoints included, \
          as a commit does. \
          Convert to Embedded Patches first.",
-        "This reconstruction's points carry no patch frame for the grown-plane normal to \
+        "This reconstruction's points carry no patch frame for a normal step to \
          turn.",
     )
 }
@@ -75,8 +111,9 @@ fn left_as_they_were(error: Option<&NormalError>) -> (usize, &'static str) {
         // of a value comes onto its track at the track stage.
         Some(NormalError::AtInfinity) => (5, "at infinity"),
         Some(NormalError::ClusterStage) => (6, "at the cluster stage"),
-        // The run checks its options once, up front, and runs no other
-        // normal step; a cancel ends the run.
+        // The run checks the step's options once, up front, and runs no
+        // piece step; the pairwise-flow normal's optical flow can still
+        // refuse its settings for one point's crops. A cancel ends the run.
         Some(
             NormalError::BadGrownPlaneOption(_)
             | NormalError::BadGridPlaneOption(_)
@@ -110,22 +147,26 @@ fn refine_summary(report: &RefineNormalsReport) -> String {
     if low > 0 {
         text.push_str(&format!(", {low} of them with low confidence"));
     }
-    let (none_joined, weak_turn) = (report.none_joined(), report.weak_turn());
-    if none_joined + weak_turn > 0 {
-        let mut why = Vec::new();
-        if none_joined > 0 {
-            why.push(format!("{none_joined} with no view joined"));
-        }
-        if weak_turn > 0 {
-            why.push(format!("{weak_turn} with a large turn on weak evidence"));
-        }
+    let single_pair = report.single_pair();
+    if single_pair > 0 {
+        text.push_str(&format!(", {single_pair} of them from a single pair"));
+    }
+    let left = [
+        (report.none_joined(), "with no view joined"),
+        (report.weak_turn(), "with a large turn on weak evidence"),
+        (report.undetermined(), "undetermined"),
+        (report.unstable(), "unstable"),
+    ];
+    let unchanged_normals: usize = left.iter().map(|(n, _)| n).sum();
+    if unchanged_normals > 0 {
+        let why: Vec<String> = left
+            .iter()
+            .filter(|(n, _)| *n > 0)
+            .map(|(n, w)| format!("{n} {w}"))
+            .collect();
         text.push_str(&format!(
             ", {} normal unchanged ({})",
-            counted(
-                none_joined + weak_turn,
-                "point left its",
-                "points left their"
-            ),
+            counted(unchanged_normals, "point left its", "points left their"),
             why.join(", ")
         ));
     }
@@ -186,7 +227,7 @@ impl AppState {
     }
 
     /// Start a refinement of the normal of every finite point of `id` on a
-    /// worker thread.
+    /// worker thread, by `step`.
     ///
     /// A bulk edit: each turned point's patch frame, its patch bitmap and its
     /// readings are written, and no keypoint moves, so the next
@@ -199,8 +240,12 @@ impl AppState {
     /// [`AppState::poll_background_tasks`] on the frame the answer lands. An
     /// `Err` is a refusal to *begin*, logged the way the synchronous edits log
     /// theirs.
-    pub(crate) fn start_refine_all_normals(&mut self, id: ReconId) -> Result<Option<u64>, String> {
-        let outcome = match self.refine_all_normals_job(id) {
+    pub(crate) fn start_refine_all_normals(
+        &mut self,
+        id: ReconId,
+        step: RefineAllNormalsStep,
+    ) -> Result<Option<u64>, String> {
+        let outcome = match self.refine_all_normals_job(id, step) {
             Ok(job) => self
                 .start_background_task(Operation::REFINE_ALL_NORMALS, id, job)
                 .map(Some),
@@ -220,8 +265,12 @@ impl AppState {
     /// observes, as for Refit All Points. The worker reads the photographs
     /// (`decode images`; one that cannot be read fails the run), folds the
     /// overlay in where it is not empty (`materialise`), and runs the core
-    /// refinement, whose stages nest under the operation's.
-    pub(crate) fn refine_all_normals_job(&self, id: ReconId) -> Result<Job, String> {
+    /// refinement with `step`, whose stages nest under the operation's.
+    pub(crate) fn refine_all_normals_job(
+        &self,
+        id: ReconId,
+        step: RefineAllNormalsStep,
+    ) -> Result<Job, String> {
         let label = self
             .node(id)
             .map(|node| node.label.clone())
@@ -270,19 +319,22 @@ impl AppState {
             };
 
             let views = decoded.views();
-            let (next, report) =
-                match refine_normals(source, &views, &RefineNormalsOptions::default(), &p_refine) {
-                    Ok(refined) => refined,
-                    Err(RefineNormalsError::Cancelled) => return Finished::Cancelled,
-                    Err(e) => return Finished::Failed(refuse(e.to_string())),
-                };
+            let options = RefineNormalsOptions {
+                step: step.core_step(),
+                ..Default::default()
+            };
+            let (next, report) = match refine_normals(source, &views, &options, &p_refine) {
+                Ok(refined) => refined,
+                Err(RefineNormalsError::Cancelled) => return Finished::Cancelled,
+                Err(e) => return Finished::Failed(refuse(e.to_string())),
+            };
 
             // The refinement moves no index: the identity, stated, after the
             // fold.
             let mut steps = Vec::new();
             steps.extend(mat_map);
             steps.push(PointMap::Removed(Vec::new()));
-            let version_label = format!("Refined the normals of {label}");
+            let version_label = format!("Refined the normals of {label} with the {}", step.noun());
             let text = format!("{version_label}: {}", refine_summary(&report));
             Finished::Produced {
                 value: next,

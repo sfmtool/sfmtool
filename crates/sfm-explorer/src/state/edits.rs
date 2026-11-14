@@ -838,7 +838,7 @@ mod refine_all_normals;
 mod refit_all_points;
 mod switch_camera_model;
 
-pub(crate) use refine_all_normals::refine_refusal;
+pub(crate) use refine_all_normals::{refine_refusal, RefineAllNormalsStep};
 pub(crate) use refit_all_points::refit_refusal;
 
 #[cfg(feature = "mcp")]

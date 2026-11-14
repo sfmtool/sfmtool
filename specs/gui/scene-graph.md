@@ -307,7 +307,8 @@ fixed-height for virtualization.
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Bake Transform`, `Tint ▸` (Original / palette of distinguishable colors),
   `Bundle Adjust...`, `Retriangulate All Points`, `Refit All Points`,
-  `Refine All Normals`, `Prune Covered Observations`, `Build SIFT Files`,
+  `Refine All Normals ▸` (Grown Plane / Pairwise Flow), `Prune Covered
+  Observations`, `Build SIFT Files`,
   `Build Index Files`,
   `Convert to Embedded Patches`, `Close`.
   While a camera model proposal is open on the node
@@ -368,10 +369,12 @@ fixed-height for virtualization.
   Whether every photograph can be read and whether the noise level can be
   measured are not asked by the gate, which runs every frame the menu is open;
   the operation refuses both on the worker.
-- **`Refine All Normals`** turns the patch of every finite point of the node
-  to its grown-plane normal, as Track View's *Grown Plane Normal* does for one
-  track with every observation kept, and commits it, as the node's next
-  version and on a worker thread ([background-tasks.md](background-tasks.md),
+- **`Refine All Normals ▸`** turns the patch of every finite point of the node
+  to its grown-plane normal (the `Grown Plane` entry) or its pairwise-flow
+  normal (`Pairwise Flow`), as Track View's *Grown Plane Normal* or *Pairwise
+  Flow Normal* does for one track with every observation kept, and commits it,
+  as the node's next version and on a worker thread
+  ([background-tasks.md](background-tasks.md),
   [edits/refine-all-normals.md](edits/refine-all-normals.md)). It renders each
   patch bitmap again, moves no camera, no lens, no point's centre and no
   keypoint, skips points at infinity,
@@ -379,8 +382,9 @@ fixed-height for virtualization.
   observe. It sits directly under `Refit All Points`, which moves each point
   and keeps the way it faces where this turns each patch and keeps its centre.
   It is greyed for the refit's reasons in the refit's order, in sentences that
-  name its own work; the gate is `state::edits::refine_refusal`, which the
-  wire's `refine_all_normals` and the operation itself also ask. Whether every
+  name its own work, as a plain entry rather than a submenu, as `Align to` is;
+  the gate is `state::edits::refine_refusal`, which the wire's
+  `refine_all_normals` and the operation itself also ask. Whether every
   photograph can be read is not asked by the gate; the operation refuses it on
   the worker.
 - **`Prune Covered Observations`** retires every observation of the node a
@@ -1494,10 +1498,12 @@ bundle from `retain_nodes` on the next frame.
   reporting the node the menu was opened on while another
   node is selected; drawn and dead, with the gate's sentence, on a `sift_files`
   node, on a node with no patch frames and on a busy one.
-- **The reconstruction row's `Refine All Normals`**, through the same whole
-  frames: live on an embedded_patches node with patch frames, drawn directly
-  **under** `Refit All Points` and **above** `Prune Covered Observations`, and
-  reporting the node the menu was opened on while another node is selected;
+- **The reconstruction row's `Refine All Normals ▸`**, through the same whole
+  frames: a live submenu on an embedded_patches node with patch frames, drawn
+  directly **under** `Refit All Points` and **above** `Prune Covered
+  Observations`, holding `Grown Plane` above `Pairwise Flow`, each entry
+  reporting the node the menu was opened on while another node is selected,
+  with its own step;
   drawn and dead, with the gate's sentence, on a `sift_files` node, on a node
   with no patch frames and on a busy one.
 - **The reconstruction row's hover** names the node's file, and says the node

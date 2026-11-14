@@ -494,6 +494,7 @@ pub(crate) fn parse(
         },
         "refine_all_normals" => Command::RefineAllNormals {
             reconstruction_label: args.required_string("reconstruction_label")?,
+            step: args.refine_all_normals_step()?,
         },
         "prune_covered_observations" => {
             let defaults = PruneCoveredOptions::default();
@@ -2097,6 +2098,23 @@ impl Args<'_> {
                 "does not know the stage {other:?} — the stages are cluster and track."
             ))),
             None => Err(self.error(format!("needs {key} — cluster or track."))),
+        }
+    }
+
+    /// The step `refine_all_normals`' `method` names: `grown_plane`, the
+    /// default, or `pairwise_flow`, in `fit_bench_track_normal`'s words for
+    /// them.
+    fn refine_all_normals_step(
+        &self,
+    ) -> Result<crate::state::edits::RefineAllNormalsStep, ToolError> {
+        use crate::state::edits::RefineAllNormalsStep;
+        match self.optional_string("method")?.as_deref() {
+            None | Some("grown_plane") => Ok(RefineAllNormalsStep::GrownPlane),
+            Some("pairwise_flow") => Ok(RefineAllNormalsStep::PairwiseFlow),
+            Some(other) => Err(self.error(format!(
+                "does not know the method {other:?} — the methods are grown_plane and \
+                 pairwise_flow."
+            ))),
         }
     }
 

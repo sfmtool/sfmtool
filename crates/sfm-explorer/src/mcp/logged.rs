@@ -163,6 +163,7 @@ impl Command {
             }
             | Command::RefineAllNormals {
                 reconstruction_label,
+                ..
             }
             | Command::DeleteCameraImage {
                 reconstruction_label,

@@ -3579,12 +3579,14 @@ fn the_refit_entry_is_greyed_while_the_node_is_busy() {
     state.finish_background_tasks();
 }
 
-/// `Refine All Normals` is live on an embedded_patches node with a patch frame
-/// per point, is drawn directly under `Refit All Points` and above `Prune
-/// Covered Observations`, and reports the node it was opened on rather than
-/// the selection.
+/// `Refine All Normals ▸` is live on an embedded_patches node with a patch
+/// frame per point, is drawn directly under `Refit All Points` and above
+/// `Prune Covered Observations`, opens on `Grown Plane` and `Pairwise Flow`
+/// in that order, and each entry reports the node the menu was opened on
+/// rather than the selection, with its own step.
 #[test]
-fn the_refine_entry_is_live_on_an_embedded_patches_node() {
+fn the_refine_submenu_is_live_on_an_embedded_patches_node() {
+    use crate::state::edits::RefineAllNormalsStep;
     let mut state = AppState::new();
     state.append_node(prunable_node("/runs/run_a.sfmr"));
     state.append_node(prunable_node("/runs/run_b.sfmr"));
@@ -3616,17 +3618,62 @@ fn the_refine_entry_is_live_on_an_embedded_patches_node() {
         below.top() >= entry.bottom() - 1.0 && below.top() - entry.bottom() < entry.height(),
         "the refine entry is not directly above the prune"
     );
+    // Opening the submenu runs nothing.
     let response = click(
         &mut panel,
         &ctx,
         &mut state,
         row_id(id, "refine_all_normals"),
     );
-    assert_eq!(
-        response.refine_all_normals,
-        Some(id),
-        "the entry reported the selection rather than the row it was opened on"
+    assert_eq!(response.refine_all_normals, None, "the submenu ran a step");
+    run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    let grown = panel
+        .hit_rect(row_id(id, "refine_all_normals_grown_plane"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the submenu offered no {}",
+                super::menus::REFINE_BY_GROWN_PLANE
+            )
+        });
+    let pairwise = panel
+        .hit_rect(row_id(id, "refine_all_normals_pairwise_flow"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the submenu offered no {}",
+                super::menus::REFINE_BY_PAIRWISE_FLOW
+            )
+        });
+    assert!(
+        pairwise.top() >= grown.bottom() - 1.0,
+        "Pairwise Flow is not under Grown Plane"
     );
+
+    for (name, step) in [
+        (
+            "refine_all_normals_grown_plane",
+            RefineAllNormalsStep::GrownPlane,
+        ),
+        (
+            "refine_all_normals_pairwise_flow",
+            RefineAllNormalsStep::PairwiseFlow,
+        ),
+    ] {
+        let (mut panel, ctx) = settled(&mut state);
+        open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+        click(
+            &mut panel,
+            &ctx,
+            &mut state,
+            row_id(id, "refine_all_normals"),
+        );
+        run_frame(&mut panel, &ctx, &mut state, Vec::new());
+        let response = click(&mut panel, &ctx, &mut state, row_id(id, name));
+        assert_eq!(
+            response.refine_all_normals,
+            Some((id, step)),
+            "{name} reported the selection or another step"
+        );
+    }
 }
 
 /// The refine entry's dead state and its hover sentence on a node it cannot

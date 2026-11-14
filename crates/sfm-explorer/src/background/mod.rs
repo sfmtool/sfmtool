@@ -413,13 +413,15 @@ impl Operation {
         quiet: false,
     };
 
-    /// Every finite point of one node turned to its grown-plane normal, as
-    /// Track View's *Grown Plane Normal* and *Commit* do for one track
+    /// Every finite point of one node turned to its grown-plane or its
+    /// pairwise-flow normal, as Track View's *Grown Plane Normal* or
+    /// *Pairwise Flow Normal* and *Commit* do for one track
     /// (`specs/gui/edits/refine-all-normals.md`).
     ///
     /// Cancellable because the photographs are decoded with the flag polled
     /// between them, and `sfmtool_core::bench::refine_normals` polls it in
-    /// front of each stage and of each point's step and hands back
+    /// front of each stage and of each point's step and inside the step,
+    /// which for the pairwise-flow normal takes seconds, and hands back
     /// `RefineNormalsError::Cancelled` rather than a value some of whose
     /// points were turned.
     pub(crate) const REFINE_ALL_NORMALS: Operation = Operation {

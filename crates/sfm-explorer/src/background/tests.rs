@@ -994,7 +994,7 @@ fn real_task(operation: Operation) -> RealTask {
         "Refine all normals" => {
             let (state, id) = crate::bench::tests::state();
             let job = state
-                .refine_all_normals_job(id)
+                .refine_all_normals_job(id, crate::state::edits::RefineAllNormalsStep::GrownPlane)
                 .expect("the fixture carries keypoints, frames and poses");
             RealTask {
                 state,

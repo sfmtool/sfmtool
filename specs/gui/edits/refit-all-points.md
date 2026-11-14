@@ -39,7 +39,7 @@ point. This entry does that fit for every point at once.
 
 Right-click a reconstruction's row in the Scene Graph and choose `Refit All
 Points`. The whole-reconstruction entries read `Bundle Adjust...`,
-`Retriangulate All Points`, `Refit All Points`, `Refine All Normals`, `Prune
+`Retriangulate All Points`, `Refit All Points`, `Refine All Normals ▸`, `Prune
 Covered Observations`. It acts on the node the menu was opened on, not on the selection, so the panel
 reports it as `SceneGraphResponse::refit_all_points` and `dock.rs` answers with
 `AppState::start_refit_all_points`. Its hover text:

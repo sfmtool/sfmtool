@@ -217,39 +217,77 @@ fn show_refit_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     }
 }
 
-/// What the entry that refines the normal of every point of a node is called,
-/// in the menu and in the tests that aim at it.
+/// What the submenu that refines the normal of every point of a node is
+/// called, in the menu and in the tests that aim at it.
 pub(crate) const REFINE_ALL_NORMALS: &str = "Refine All Normals";
 
-/// `Refine All Normals`: every finite point of the node turned to its
-/// grown-plane normal, as Track View's *Grown Plane Normal* does with every
-/// observation kept, and committed.
+/// What the submenu's entry for the grown-plane normal is called.
+pub(crate) const REFINE_BY_GROWN_PLANE: &str = "Grown Plane";
+
+/// What the submenu's entry for the pairwise-flow normal is called.
+pub(crate) const REFINE_BY_PAIRWISE_FLOW: &str = "Pairwise Flow";
+
+/// What the hover text of both entries says after the step they run.
+const REFINE_HOVER_TAIL: &str = "with every observation kept, and render each patch bitmap \
+     again, as one version. Moves no camera, no point's centre and no keypoint, and skips \
+     points at infinity. Reads every photograph the points observe. Runs on a worker thread \
+     and can be cancelled; Undo (Ctrl+Z) puts the points back.";
+
+/// `Refine All Normals ▸`: every finite point of the node turned to its
+/// grown-plane or its pairwise-flow normal, as Track View's *Grown Plane
+/// Normal* or *Pairwise Flow Normal* does with every observation kept, and
+/// committed.
 ///
 /// Directly under [`show_refit_entry`], since it is the same kind of run over
 /// the bench's steps: that one moves each point and keeps the way it faces,
-/// this one turns each patch and keeps its centre. Greyed rather than hidden
-/// when it cannot run, on the gate the job and the wire ask
-/// (`state::edits::refine_refusal`).
+/// this one turns each patch and keeps its centre. A submenu of the two steps,
+/// named as the step is in Track View without its *Normal*. Greyed rather
+/// than hidden when it cannot run, on the gate the job and the wire ask
+/// (`state::edits::refine_refusal`), as a plain button as `Align to` is, since
+/// a greyed submenu would not show why.
 fn show_refine_normals_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
-    let refusal = crate::state::edits::refine_refusal(node, out.edit_refusal(node.id));
-    let entry = ui
-        .add_enabled(refusal.is_none(), egui::Button::new(REFINE_ALL_NORMALS))
-        .on_disabled_hover_text(refusal.unwrap_or_default())
-        .on_hover_text(
-            "Turn every finite point's patch to its grown-plane normal, as Track View's Grown \
-             Plane Normal does with every observation kept, and render each patch bitmap \
-             again, as one version. Moves no camera, no point's centre and no keypoint, and \
-             skips points at infinity. Reads every photograph the \
-             points observe. Runs on a worker thread and can be cancelled; Undo (Ctrl+Z) puts \
-             the points back.",
-        );
-    if out
-        .hit(row_id(node.id, "refine_all_normals"), entry)
-        .clicked()
-    {
-        out.response.refine_all_normals = Some(node.id);
-        ui.close();
+    use crate::state::edits::RefineAllNormalsStep;
+    let id = node.id;
+    if let Some(refusal) = crate::state::edits::refine_refusal(node, out.edit_refusal(id)) {
+        let entry = ui
+            .add_enabled(false, egui::Button::new(REFINE_ALL_NORMALS))
+            .on_disabled_hover_text(refusal);
+        out.hit(row_id(id, "refine_all_normals"), entry);
+        return;
     }
+    let menu = ui.menu_button(REFINE_ALL_NORMALS, |ui| {
+        let entries = [
+            (
+                RefineAllNormalsStep::GrownPlane,
+                REFINE_BY_GROWN_PLANE,
+                "refine_all_normals_grown_plane",
+                format!(
+                    "Turn every finite point's patch to its grown-plane normal, as Track View's \
+                     Grown Plane Normal does {REFINE_HOVER_TAIL}"
+                ),
+            ),
+            (
+                RefineAllNormalsStep::PairwiseFlow,
+                REFINE_BY_PAIRWISE_FLOW,
+                "refine_all_normals_pairwise_flow",
+                format!(
+                    "Turn every finite point's patch to its pairwise-flow normal, as Track \
+                     View's Pairwise Flow Normal does {REFINE_HOVER_TAIL} It reads the optical \
+                     flow between pairs of each point's views, so it takes far longer than \
+                     Grown Plane."
+                ),
+            ),
+        ];
+        for (step, label, name, hover) in entries {
+            let entry = ui.button(label).on_hover_text(hover);
+            if out.hit(row_id(id, name), entry).clicked() {
+                out.response.refine_all_normals = Some((id, step));
+                // Both levels, as `Align to`'s targets close them.
+                egui::Popup::close_all(ui.ctx());
+            }
+        }
+    });
+    out.hit(row_id(id, "refine_all_normals"), menu.response);
 }
 
 /// What the entry that retires a node's covered observations is called, in the

@@ -180,7 +180,7 @@ Quit does (§ "`quit`").
 | `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lenses the reconstruction holds |
 | `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
 | `refit_all_points` | write | Fit every 3D point to the render of its reference observation and commit it, as Track View's Fit and Commit do for one track, on a worker thread |
-| `refine_all_normals` | write | Turn every finite 3D point's patch to its grown-plane normal and commit it, as Track View's Grown Plane Normal and Commit do for one track, on a worker thread |
+| `refine_all_normals` | write | Turn every finite 3D point's patch to its grown-plane or its pairwise-flow normal (`method`) and commit it, as Track View's Grown Plane Normal or Pairwise Flow Normal and Commit do for one track, on a worker thread |
 | `prune_covered_observations` | write | Retire every observation a finer tracked one covers, and drop the points left with fewer than two, on a worker thread |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
@@ -4977,17 +4977,32 @@ on the worker, as a failed entry.
 
 ### `refine_all_normals`
 
-Track View's *Grown Plane Normal* followed by *Commit*, for every finite point
-at once: one plane is fitted to the photographs each point is seen in, the
-patch is turned to it whenever a view joined unless the turn is large on weak
-evidence, the stored bitmap is rendered again and each observation's readings
-are taken again. No point's centre, no keypoint, no camera and no lens moves,
-and points at infinity are skipped
+Track View's *Grown Plane Normal* or *Pairwise Flow Normal* followed by
+*Commit*, for every finite point at once, as the Scene tree's `Refine All
+Normals ▸` submenu runs them: the patch is turned to the normal the step finds,
+the stored bitmap is rendered again and each observation's readings are taken
+again. No point's centre, no keypoint, no camera and no lens moves, and points
+at infinity are skipped
 ([edits/refine-all-normals.md](edits/refine-all-normals.md)).
 
 ```jsonc
 // refine_all_normals { "reconstruction_label": "seoul_bull" }
+// refine_all_normals { "reconstruction_label": "seoul_bull", "method": "pairwise_flow" }
 ```
+
+`method` names the step in `fit_bench_track_normal`'s words for it, each at
+the options Track View's entry runs:
+
+- `grown_plane`, the default, the submenu's *Grown Plane*: one plane is fitted
+  to the photographs each point is seen in, and the patch is turned to it
+  whenever a view joined unless the turn is large on weak evidence.
+- `pairwise_flow`, the submenu's *Pairwise Flow*: the plane is fitted to the
+  optical flow between pairs of the point's views, and the patch is turned to
+  it unless the pairs are undetermined or unstable. It costs far more per
+  point ([../core/bench/refine-normals.md](../core/bench/refine-normals.md) §
+  "Choosing the step").
+
+Any other `method` is refused at the parse, naming the two.
 
 It is a **bulk edit** that runs on a worker thread and answers the two ways
 `bundle_adjust` does, with `"operation": "Refine all normals"`. It deletes no
@@ -5005,13 +5020,14 @@ them on the turned patches.
 
 Its `report` is the Action Log sentence, which counts the per-point statuses:
 the points turned out of the finite points, how many of them agree with what
-was stored and how many were turned to a plane found with low confidence, the
-points whose normal the step kept with why (no view
-joined, or a large turn on weak evidence), the points left as they were with
+was stored, how many were turned to a plane found with low confidence and how
+many were read from a single pair, the points whose normal the step kept with
+why (no view joined, a large turn on weak evidence, undetermined or
+unstable), the points left as they were with
 the reason for each, the points at infinity skipped, and the median turn.
 
 It refuses in `AppState`'s own words, which are the words the greyed `Refine
-All Normals` entry in the Scene tree carries, for the reasons `refit_all_points`
+All Normals` entry in the Scene tree carries for either step, for the reasons `refit_all_points`
 refuses for and in its order: a reconstruction whose observations are `.sift`
 feature indexes with no inline keypoint (the sentence names `Convert to
 Embedded Patches`), one whose points carry no patch frame, and one with no
