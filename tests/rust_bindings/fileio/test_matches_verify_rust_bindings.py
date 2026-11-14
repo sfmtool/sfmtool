@@ -188,7 +188,7 @@ def test_verify_reports_match_counts_overrunning_match_count(tmp_path):
     entry = "image_pairs/match_counts.2.uint32.zst"
     _assert_reports(
         _graft(tmp_path / "damaged.matches", base, donor, entry, entry),
-        "Sum of match_counts (6) != match_count (5)",
+        "sum of match_counts (6) != match_count (5)",
     )
 
 

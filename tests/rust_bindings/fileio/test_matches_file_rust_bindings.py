@@ -4,11 +4,19 @@
 """Tests for the `MatchesFile` handle binding: single-parse array access,
 file-level cluster selection (`select_clusters`), and `save` round-trips."""
 
+import zipfile
+
 import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool.fileio import MatchesFile, verify_matches, write_matches
+from sfmtool.fileio import (
+    MatchesFile,
+    read_matches,
+    verify_matches,
+    write_clusters_matches,
+    write_matches,
+)
 
 UNREFINABLE = np.iinfo(np.uint32).max
 
@@ -550,3 +558,85 @@ def test_member_cells_rejected_on_a_member_not_kept(tmp_path):
     data.update(_member_cells(8, kept=[1, 3]))
     with pytest.raises(ValueError, match="member 3 is not_evaluated, not kept"):
         write_matches(tmp_path / "bad.matches", data)
+
+
+def _clusters_file(path, image_count: int, cluster_starts, member_images):
+    """Write a clusters file over `image_count` images with the given backbone.
+
+    Each member is feature 0 of its image, so only the backbone itself can
+    break a rule.
+    """
+    member_count = len(member_images)
+    write_clusters_matches(
+        path,
+        matching_method="cluster",
+        matching_tool="sfmtool",
+        matching_tool_version="0.3",
+        matching_options={},
+        workspace=_pairwise_dict()["metadata"]["workspace"],
+        timestamp="2026-11-13T10:00:00Z",
+        image_names=[f"frames/frame_{j:03d}.jpg" for j in range(image_count)],
+        feature_tool_hashes=[b"\x00" * 16] * image_count,
+        sift_content_hashes=[b"\x01" * 16] * image_count,
+        feature_counts=np.full(image_count, 100, dtype=np.uint32),
+        image_dims=np.full((image_count, 2), [640, 480], dtype=np.uint32),
+        cluster_starts=np.array(cluster_starts, dtype=np.uint32),
+        member_images=np.array(member_images, dtype=np.uint32),
+        member_features=np.zeros(member_count, dtype=np.uint32),
+        member_positions=np.ones((member_count, 2), dtype=np.float32),
+        member_affine_shapes=np.tile(np.eye(2, dtype=np.float32), (member_count, 1, 1)),
+        matcher_options={},
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    ("donor_images", "donor_starts", "donor_members", "entry", "message"),
+    [
+        # Cluster 1 runs from member 3 to 9 of 5.
+        (
+            3,
+            [0, 3, 9],
+            [0, 1, 2, 0, 1, 2, 0, 1, 2],
+            "clusters/cluster_starts.3.uint32.zst",
+            "cluster_starts final value 9 != member count 5",
+        ),
+        # Member 4 is on image 7 of 3.
+        (
+            8,
+            [0, 3, 5],
+            [0, 1, 2, 0, 7],
+            "clusters/member_images.5.uint32.zst",
+            r"member_images\[4\] = 7 >= image_count 3",
+        ),
+    ],
+)
+def test_a_corrupt_cluster_backbone_is_refused_on_open(
+    tmp_path, donor_images, donor_starts, donor_members, entry, message
+):
+    """Bytes `write_matches` would refuse are refused when the file is read.
+
+    The damaged entry comes from a valid file whose entry of the same name
+    holds the other values (the archive stores each entry's compressed bytes
+    as they are, so `zipfile` moves them verbatim). Before the reader checked
+    these rules the file opened, and `select_clusters` then raised
+    `PanicException` indexing past the members or the image list.
+    """
+    base = _clusters_file(tmp_path / "base.matches", 3, [0, 3, 5], [0, 1, 2, 0, 2])
+    donor = _clusters_file(
+        tmp_path / "donor.matches", donor_images, donor_starts, donor_members
+    )
+    damaged = tmp_path / "damaged.matches"
+    with zipfile.ZipFile(donor) as zf:
+        payload = zf.read(entry)
+    with zipfile.ZipFile(base) as src, zipfile.ZipFile(damaged, "w") as out:
+        for info in src.infolist():
+            out.writestr(
+                info, payload if info.filename == entry else src.read(info.filename)
+            )
+
+    MatchesFile(base).select_clusters(restrict_images=["frames/frame_000.jpg"])
+    with pytest.raises(OSError, match=message):
+        MatchesFile(damaged)
+    with pytest.raises(OSError, match=message):
+        read_matches(damaged)

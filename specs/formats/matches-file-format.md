@@ -1035,7 +1035,7 @@ Example:
   each row is `(feat_idx_i, feat_idx_j)`, with the first `inlier_counts[0]` rows belonging
   to pair 0, etc.
 - Inlier matches MUST be a subset of the candidate matches for each pair.
-  Implementations SHOULD validate this constraint when writing.
+  Implementations SHOULD validate this constraint when writing and reading.
 
 #### `two_view_geometries/f_matrices.{P}.3.3.float64.zst`
 
@@ -1135,7 +1135,8 @@ the backbone — a file never carries both sets.
    with `idx_i < idx_j`
 2. **Match counts aligned**: `match_counts[k]` = number of entries in the match arrays
    belonging to pair `k`. `sum(match_counts) == match_count`
-3. **Inlier counts aligned**: Same relationship for the TVG inlier arrays
+3. **Inlier counts aligned**: Same relationship for the TVG inlier arrays, and every
+   inlier of pair `k` is one of pair `k`'s candidate matches
 4. **Feature index bounds**: All feature indexes must be less than the corresponding
    `feature_counts` entry (pairwise match arrays and cluster `member_features` alike)
 5. **Image dims positive**: Every `image_dims` value is ≥ 1
@@ -1377,7 +1378,8 @@ cluster_patches, two_view_geometries.
 4. Compare with stored values in `content_hash.json.zst`
 5. Check every raw array a structural check indexes against the byte length its
    declared count calls for
-6. Validate structural constraints (feature index bounds, count sums, pair ordering;
+6. Validate structural constraints (feature index bounds, count sums, pair ordering,
+   inliers among their pair's candidate matches, config indexes within `config_types`;
    cluster CSR, member bounds, patch statuses and reference invariants; the
    per-cell entries paired with their legend, their codes within it and no
    reading on a member that is not `kept`; see
@@ -1390,9 +1392,10 @@ cluster_patches, two_view_geometries.
 Step 6 walks the raw arrays by index, so a section's structural checks are skipped
 once one of its arrays fails step 5 — and the pairwise feature-bounds walk is
 skipped as well when the per-pair `match_counts` do not sum to `match_count`,
-since those are the run lengths it advances through. The length or sum error is
-what reports the file as invalid, and what says why the rest of the section's
-findings are absent. Verification never trusts a declared count far enough to
+since those are the run lengths it advances through, and the inlier subset walk
+when either the match or the inlier counts do not sum to their totals. The
+length or sum error is what reports the file as invalid, and what says why the
+rest of the section's findings are absent. Verification never trusts a declared count far enough to
 index past the end of an array: a truncated, over-long or hand-edited file is
 reported, not a crash.
 
@@ -1480,6 +1483,13 @@ clusters into pairs is `clusters_to_pair_matches` in
 [`cluster_match`](../../crates/sfmtool-core/src/features/cluster_match/mod.rs).
 
 `verify_matches` returns `(is_valid, error_messages)`.
+
+`write_matches` refuses data that breaks a rule under
+[Data Ordering and Constraints](#data-ordering-and-constraints), and
+`read_matches` refuses a file that does, each with the first broken rule as its
+error; `verify_matches` reports every one. The three share one set of checks, in
+[`validate.rs`](../../crates/sfmtool-matches-format/src/validate.rs), whose cost
+is linear in the number of matches, inliers and members.
 
 `write_matches` takes the zstandard level as its `zstd_level` argument, which
 the Python binding defaults to 3. A full read consumes every entry the file

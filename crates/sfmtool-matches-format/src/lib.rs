@@ -23,6 +23,7 @@ mod entries;
 mod read;
 mod select;
 mod types;
+mod validate;
 mod verify;
 mod write;
 
