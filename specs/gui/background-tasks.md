@@ -262,12 +262,13 @@ asked for waits behind them, and nothing reports them as the viewer being busy:
 
 - **It gives way to a task someone asks for.** When a task that is not quiet
   is queued in the queue a quiet task is running in, or a locking task is
-  queued on the node a quiet task runs on, in either queue, the quiet task's
-  cancel flag is set (`AppState::give_way_to`). The table job and the
-  reference picks are the exception to the second case: each keeps its answer
-  keyed by the serial it read, so a locking task on its node in the other
-  queue leaves it running (see "It is checked again when it would start",
-  below). It is not taken off its
+  queued, in either queue, on the node of a quiet task whose work waits for its
+  node (`QuietSource::waits_for_its_node`, under "It is checked again when it
+  would start", below), the quiet task's cancel flag is set
+  (`AppState::give_way_to`). The table job and the reference picks do not wait
+  for their node: each keeps its answer keyed by the serial it read, so a
+  locking task on its node in the other queue leaves it running. It is not
+  taken off its
   queue: the task that displaced it starts once the quiet task's worker
   reports that it has stopped, because a queue still runs one task at a time.
   How soon that is depends on how often its kernels poll the flag: an

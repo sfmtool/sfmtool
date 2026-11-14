@@ -32,15 +32,16 @@
 //!   [`FINISHED_KEPT`]. All three are found by id ([`AppState::task`]).
 //! - A **quiet task** ([`Operation::quiet`]) is work the viewer starts by
 //!   itself to keep a panel current: the bench's live evaluation, a camera
-//!   model proposal's job, or the Track Table's table job. It is
-//!   queued by its source with [`AppState::start_quiet_task`] as a [`QuietJob`]
-//!   that answers on the source's own channel. It gives way to every task
-//!   someone asks for: a task queued in its queue, or a locking task queued on
-//!   its node, asks it to stop and starts once it has; it waits behind every
-//!   such task; a source has at most one waiting entry; and it is dropped
-//!   rather than started on a locked node. A source whose work does not wait
-//!   for its node ([`QuietSource::waits_for_its_node`]) is the exception to the
-//!   two rules about its node. It writes no row, leaves no record
+//!   model proposal's job, or the Track Table's table job and reference picks.
+//!   It is queued by its source with [`AppState::start_quiet_task`] as a
+//!   [`QuietJob`] that answers on the source's own channel. Each source says
+//!   whether its work waits for its node ([`QuietSource::waits_for_its_node`]).
+//!   It gives way to every task someone asks for that it would get in the way
+//!   of: a task queued in its queue asks it to stop and starts once it has, and
+//!   so does a locking task queued on its node when its work waits for its
+//!   node; it waits behind every such task; a source has at most one waiting
+//!   entry; and work that waits for its node is dropped rather than started on
+//!   a locked node. It writes no row, leaves no record
 //!   and is left out of [`AppState::running_tasks`], [`AppState::waiting_tasks`],
 //!   [`AppState::task`] and the [`BusyNotice`].
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
