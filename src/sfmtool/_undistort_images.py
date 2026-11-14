@@ -271,6 +271,7 @@ def undistort_reconstruction_images(
     from .fileio import SiftFile, write_sift
     from .sift import image_readings_from_rgb
     from .workspace import recorded_image_to_gray
+    from ._workspace import require_version_2_workspace
 
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
@@ -290,6 +291,8 @@ def undistort_reconstruction_images(
         f"Undistorting {image_count} images (fit={fit}, filter={resampling_filter})..."
     )
 
+    # The source .sift files are read from a version 2 workspace.
+    require_version_2_workspace(workspace_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Feature tool config for the undistorted .sift files. The top-level

@@ -12,6 +12,7 @@ import numpy as np
 from .correspondences import find_point_correspondences
 from .pose_refinement import refine_camera_poses
 from .._sfmtool.reconstruction import SfmrReconstruction
+from .._workspace import require_version_2_workspace
 
 
 def merge_reconstructions(
@@ -45,6 +46,9 @@ def merge_reconstructions(
             "features. Solve them from the same features to merge them."
         )
     feature_prefix_dir = feature_folders[0]
+    # The poses are refined from the .sift files in the first input's
+    # workspace, which must be version 2.
+    require_version_2_workspace(reconstructions[0].workspace_dir)
 
     click.echo(f"\nMerging {len(reconstructions)} reconstructions...")
     click.echo("=" * 70)

@@ -3,12 +3,11 @@
 
 """Filters that remove 3D points based on per-point criteria."""
 
-from pathlib import Path
-
 import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.fileio import read_sift_partial
+from ..sift.file import get_sift_path_from_recon
 
 
 class RemoveShortTracksFilter:
@@ -207,20 +206,12 @@ class RemoveLargeFeaturesFilter:
         image_feature_sizes: dict[int, np.ndarray] = {}
         unique_images = np.unique(track_image_indexes)
 
-        metadata = recon.metadata()
-        feature_prefix_dir = metadata["workspace"]["contents"]["feature_prefix_dir"]
-        workspace_dir = Path(recon.workspace_dir)
         image_names = recon.image_names
 
         for img_idx in unique_images:
             img_idx = int(img_idx)
             image_name = image_names[img_idx]
-            image_rel = Path(image_name)
-            image_parent = image_rel.parent
-            sift_filename = f"{image_rel.name}.sift"
-            sift_path = (
-                workspace_dir / image_parent / feature_prefix_dir / sift_filename
-            )
+            sift_path = get_sift_path_from_recon(recon, image_name)
 
             if not sift_path.exists():
                 raise FileNotFoundError(

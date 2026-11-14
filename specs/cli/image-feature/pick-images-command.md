@@ -145,8 +145,8 @@ text in [`_pick_images_report.py`](../../../src/sfmtool/_pick_images_report.py).
 In order, it:
 
 1. Resolves the input files and finds the workspace.
-2. Loads the workspace file and refuses version 1 settings
-   ([The version 1 refusals](#the-version-1-refusals)).
+2. Loads the workspace file, which refuses a version 1 workspace
+   ([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)).
 3. With `--write-list` and no `--force`, refuses a name the lists file already
    defines.
 4. Finds the rigs and cameras, from the `.camrig` files covering the input
@@ -341,22 +341,11 @@ Every reading comes from a version 2 `.sift` file. `pick_images` refuses
 version 1 files in a folder the capture's `.sift` files go in before anything
 is extracted, and a version 1 file it reads
 ([core/analysis/pick-images.md § Version 1 files](../../core/analysis/pick-images.md#version-1-files)).
-That covers a version 2 workspace whose folder holds version 1 files.
-
-The command adds the check of a **version 1 workspace**, made before it reads
-any frame, since [versions never mix](../../workspace/workspace.md#versions-never-mix).
-It is the settings check of `image_files_to_sift_files` (`_check_versions_never_mix`
-with no folder to list), so its refusals and their messages are
-`sfm sift --extract`'s ([sift-command.md § Version refusals](sift-command.md#version-refusals)):
-version 1 settings, whose message names the workspace file and says to run
-[`sfm ws upgrade`](../workspace/ws-upgrade-command.md), which moves the
-workspace to version 2 and a new features folder; a `colmap` or `opencv`
-conversion other than the tool's; and the `sfmtool-undistort` tool. The check
-is made up front because `image_files_to_sift_files` refuses version 1
-settings only when it has a file to write, and a version 1 workspace whose
-files are all present would otherwise reach the walk's reader, whose
-`Version1Sift` advice to remove the file is the wrong fix for a version 1
-workspace.
+That covers a version 2 workspace whose folder holds version 1 files. A
+version 1 workspace is refused before that, when the workspace file is loaded,
+with the message every command gives
+([workspace.md § A command that uses a workspace requires version 2](../../workspace/workspace.md#a-command-that-uses-a-workspace-requires-version-2)),
+which says to run [`sfm ws upgrade`](../workspace/ws-upgrade-command.md).
 
 ## From videos: `--new-workspace`
 

@@ -266,7 +266,14 @@ def get_sift_path_from_recon(
 
     ``image_name`` is the workspace-relative path as stored in
     ``recon.image_names`` (e.g. ``images/foo.jpg``).
+
+    Every command that reads a reconstruction's ``.sift`` files finds them
+    here, so this is where a version 1 workspace is refused for them
+    (``require_version_2_workspace``).
     """
+    from sfmtool._workspace import require_version_2_workspace
+
+    require_version_2_workspace(recon.workspace_dir)
     prefix = recon.metadata()["workspace"]["contents"]["feature_prefix_dir"]
     image_rel = Path(image_name)
     return (

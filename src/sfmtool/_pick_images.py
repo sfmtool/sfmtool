@@ -453,7 +453,7 @@ def _mtime(path: Path) -> int | None:
         return None
 
 
-def extract_every_frame(capture, config: dict, settings_source: str) -> list[set[int]]:
+def extract_every_frame(capture, config: dict) -> list[set[int]]:
     """Extract the `.sift` files of every frame of `capture` with
     `image_files_to_sift_files` and the workspace's settings, as
     `sfm sift --extract` does in a workspace, before a walk that reads them.
@@ -474,7 +474,6 @@ def extract_every_frame(capture, config: dict, settings_source: str) -> list[set
         feature_tool=config["feature_tool"],
         feature_options=config["feature_options"],
         feature_prefix_dir=config["feature_prefix_dir"],
-        settings_source=settings_source,
     )
     written: list[set[int]] = []
     at = 0

@@ -122,7 +122,6 @@ def _setup_for_sfm(
         feature_tool=feature_tool,
         feature_options=feature_options,
         feature_prefix_dir=feature_prefix_dir,
-        settings_source=f"The workspace file {Path(workspace_dir) / '.sfm-workspace.json'}",
     )
 
     colmap_dir = Path(colmap_dir)
@@ -366,6 +365,8 @@ def _setup_for_sfm_from_matches(
         )
     workspace_dir = Path(matches_data["workspace_dir"])
     _refuse_rig_config(workspace_dir)
+    # Read before anything is built, so a version 1 workspace is refused first.
+    current_prefix_dir = load_workspace_config(workspace_dir).get("feature_prefix_dir")
 
     if image_filter is not None:
         kept_old_indices = image_filter.keep(workspace_dir, list(all_image_names))
@@ -411,7 +412,6 @@ def _setup_for_sfm_from_matches(
         matches_file, matches_data, kept_old_indices
     )
     feature_prefix_dir = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
-    current_prefix_dir = load_workspace_config(workspace_dir).get("feature_prefix_dir")
     if current_prefix_dir and current_prefix_dir != feature_prefix_dir:
         print(
             f"Features: {feature_prefix_dir}, which the .matches file was "

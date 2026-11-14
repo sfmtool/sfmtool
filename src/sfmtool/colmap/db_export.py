@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..camera.cameras import colmap_camera_from_intrinsics, get_intrinsic_matrix
 from .._filenames import normalize_workspace_path
+from .._workspace import require_version_2_workspace
 from .._image_pair_graph import build_covisibility_pairs
 from ..fileio import SiftFile
 from ..sift.extract import image_files_to_sift_files
@@ -170,6 +171,9 @@ def create_colmap_db_from_reconstruction(
         Path to the created database file
     """
     workspace_dir = Path(recon.workspace_dir)
+    # The export reads and extracts .sift files in the reconstruction's
+    # workspace, which must be version 2.
+    require_version_2_workspace(workspace_dir)
     output_db_path = Path(output_db_path)
 
     print("Creating COLMAP database from reconstruction...")
@@ -226,14 +230,11 @@ def create_colmap_db_from_reconstruction(
     # missing or stale with the reconstruction's own settings.
     print("Loading keypoints and descriptors...")
     tool, options, prefix = _extraction_settings(recon, image_paths, sfmr_path)
-    named = f"The reconstruction {sfmr_path}" if sfmr_path else "The reconstruction"
     sift_paths = image_files_to_sift_files(
         image_paths,
         feature_tool=tool,
         feature_options=options,
         feature_prefix_dir=prefix,
-        settings_source=f"{named}'s workspace record",
-        settings_from_sfmr=True,
     )
 
     keypoints_per_image = []
