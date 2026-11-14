@@ -11,13 +11,14 @@
 //! resolution of a wire handle to a node, and a reply that says which version
 //! was pushed.
 //!
-//! Two shapes account for all of it:
+//! Three shapes account for all of it:
 //!
-//! - [`edited`] wraps every edit. It reads the Action Log's revision before the
-//!   call and the node's cursor after it, so the reply carries the version's
-//!   serial and label and the **sentence the edit recorded** -- which is where
-//!   each family's own numbers already are (the commit's counts, the
-//!   adjustment's residuals), in the words the human is reading off the panel.
+//! - [`edited`] wraps every edit that finishes inside the call. It reads the
+//!   Action Log's revision before the call and the node's cursor after it, so
+//!   the reply carries the version's serial and label and the **sentence the
+//!   edit recorded** -- which is where each family's own numbers already are
+//!   (the commit's counts, the adjustment's residuals), in the words the human
+//!   is reading off the panel.
 //!   One text, not a second rendering of the same report. It also carries
 //!   `changed`, which is whether the cursor moved: a step that had no effect
 //!   pushes no version and answers with the one the node still stands at, and
@@ -25,14 +26,12 @@
 //!   across calls (`specs/gui/bench.md` section "The wire").
 //! - [`moved`] wraps the three cursor moves, whose answer is the version now
 //!   current rather than one that was made.
-//!
-//! [`bundle_adjust`], [`convert_to_embedded_patches`],
-//! [`retriangulate_all_points`], [`refit_all_points`] and [`refine_all_normals`]
-//! are the exceptions to the first sentence, and it
-//! is the operations' doing rather than the surface's: each runs on a worker, so
-//! the call starts it and the frame answers it, with the version it pushed or
-//! with a handle to an operation that is still going
-//! ([`background_reply`]).
+//! - [`background_reply`] answers the edits whose operation runs on a worker,
+//!   such as [`bundle_adjust`] and [`retriangulate_all_points`], each of which
+//!   hands the task it started to [`started_or`]. Each is still one `AppState`
+//!   call, the one that starts the operation, and its version still lands in
+//!   the history; the call starts it and a later frame answers it, with the
+//!   version it pushed or with a handle to an operation that is still going.
 
 use std::path::Path;
 

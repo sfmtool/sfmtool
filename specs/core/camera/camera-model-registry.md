@@ -11,9 +11,11 @@ and its parameters in a closed Rust enum with one variant per camera model,
 which the projection and distortion code computes with. This spec says why the
 two are kept separate, and how the conversion between them is generated from a
 single table of models that the compiler checks against the enum, so that a
-model or parameter added on one side and not the other fails to build. Two
-models with variable-length parameter lists are the exception: their conversion
-is written by hand.
+model or parameter added on one side and not the other fails to build. The
+table has two kinds of entry: a fixed-arity model, whose conversion is generated
+from its field names, and a `custom` model, whose variable-length parameter list
+has no field names to generate from, so its conversion is written by hand
+(§ "The `custom` block").
 
 ## The two types
 

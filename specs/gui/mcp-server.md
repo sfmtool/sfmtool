@@ -511,14 +511,16 @@ The rules above take their vocabulary from the Scene Graph panel, because those
 entities are ones the human is looking at while the agent works. Plenty of what
 the surface reports has no panel label at all — the viewport camera is internal
 state, not a named thing in the UI — and there the default is the **field name
-in the code**, not a term of art imported from elsewhere.
+in the code**, not a term of art imported from elsewhere. The default covers
+what no rule above names: a quantity the rules above give a word to takes that
+word wherever the wire carries it.
 
 So the view block reports `position`, `target_distance`, `world_up` and
 `near` — every one of them a `Camera` or `ViewportCamera` field, so every one
-of them greppable from the wire. Its attitude is the exception: `Camera::orientation`
-goes on the wire as `quaternion_wxyz`, because the format has a word for a
-camera's world-to-camera quaternion and the view's is the same quantity (the
-section above). The same default gives a camera
+of them greppable from the wire. Its attitude is a camera rotation, which the
+section above names, so `Camera::orientation` goes on the wire as
+`quaternion_wxyz`: the format has that word for a camera's world-to-camera
+quaternion and the view's is the same quantity. The same default gives a camera
 image's `center` (`SfmrImage::camera_center`) and a point's `position`
 (`Point3D::position`): two words for two positions, because the code uses two,
 and each is unambiguous inside the object that carries it.
@@ -3879,9 +3881,9 @@ inventing plausible numbers, and `state` is the field that explains them.
 
 **The block a tool returns is a snapshot, `AppState::window`** (§ "Threading"),
 which is why `get_scene` can carry it without a window handle and why the
-minimized check in `screenshot` is headless. `monitors` is the exception: it is
-read from the window at the moment the tool runs, which is why `get_scene` does
-not carry it.
+minimized check in `screenshot` is headless. `monitors` is not part of that
+snapshot: the four layout tools add it to the block, read from the window at the
+moment the tool runs, which is why `get_scene` does not carry it.
 
 **The block is the window's *current* geometry.** What a layout document's
 `window` section carries is the rectangle the window restores to, which is a
@@ -5061,8 +5063,9 @@ Thirty-eight tools that read and work the **bench** beside a node
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call a Track View gesture or the Image
 Detail menu entry makes -- so an agent's verdict, split or commit is a version
-in the history the human is looking at, undoable by either of them.
-`select_bench_observations` is the exception: it sets Track View's selected
+in the history the human is looking at, undoable by either of them. A tool that
+only reads pushes no version, and neither does `select_bench_observations`,
+which is a selection rather than an edit: it sets Track View's selected
 rows, which are bench state but not a version, so it pushes none, and
 `get_bench_track` reads them back as `selected_observations`
 ([bench.md](bench.md) § "The selected observations").
