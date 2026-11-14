@@ -19,6 +19,7 @@ pub use by_coordinate::{
 };
 
 /// Result of finding point correspondences between two reconstructions.
+#[derive(Debug)]
 pub struct PointCorrespondenceResult {
     /// Source point IDs for each correspondence.
     pub source_ids: Vec<u32>,
@@ -132,7 +133,8 @@ pub fn find_point_correspondences(
     })
 }
 
-/// Why [`find_point_correspondences`] refused its input.
+/// Why [`find_point_correspondences`] or
+/// [`find_point_correspondences_by_coordinate`] refused its input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PointCorrespondenceError {
     /// One side's track columns differ in length. `side` is `"source"` or
@@ -141,6 +143,15 @@ pub enum PointCorrespondenceError {
         side: &'static str,
         image_indexes: usize,
         feature_indexes: usize,
+        point_indexes: usize,
+    },
+    /// One side's track columns differ in length in
+    /// [`find_point_correspondences_by_coordinate`]. `side` is `"source"` or
+    /// `"target"`.
+    KeypointColumnLength {
+        side: &'static str,
+        image_indexes: usize,
+        keypoints: usize,
         point_indexes: usize,
     },
     /// `shared_images_source` and `shared_images_target` differ in length.
@@ -159,6 +170,16 @@ impl std::fmt::Display for PointCorrespondenceError {
                 f,
                 "the {side} track columns differ in length: {image_indexes} image indexes, \
                  {feature_indexes} feature indexes and {point_indexes} point indexes"
+            ),
+            Self::KeypointColumnLength {
+                side,
+                image_indexes,
+                keypoints,
+                point_indexes,
+            } => write!(
+                f,
+                "the {side} track columns differ in length: {image_indexes} image indexes, \
+                 {keypoints} keypoints and {point_indexes} point indexes"
             ),
             Self::SharedImagesLength { source, target } => write!(
                 f,

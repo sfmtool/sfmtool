@@ -47,7 +47,8 @@ fn run(
         &shared_source,
         &shared_target,
         &options,
-    );
+    )
+    .expect("parallel columns");
     result
         .source_ids
         .into_iter()
@@ -305,4 +306,40 @@ fn the_indexed_search_agrees_with_comparing_every_pair() {
         assert!(expected.len() > 50, "the fixture matches too little");
         assert_eq!(run(&source, &target, &shared, opts), expected, "{opts:?}");
     }
+}
+
+#[test]
+fn columns_of_different_lengths_are_refused() {
+    let side = Obs::default().add(0, [1.0, 1.0], 0).add(1, [2.0, 2.0], 0);
+    let short_xy = Obs {
+        xy: vec![[1.0, 1.0]],
+        ..Obs::default().add(0, [1.0, 1.0], 0).add(1, [2.0, 2.0], 0)
+    };
+    let call = |source: &Obs, target: &Obs, shared_target: &[u32]| {
+        find_point_correspondences_by_coordinate(
+            &source.images,
+            &source.xy,
+            &source.points,
+            &target.images,
+            &target.xy,
+            &target.points,
+            &[0, 1],
+            shared_target,
+            &options(2.0, 1),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    assert_eq!(
+        call(&short_xy, &side, &[0, 1]),
+        "the source track columns differ in length: 2 image indexes, 1 keypoints and 2 point indexes"
+    );
+    assert_eq!(
+        call(&side, &short_xy, &[0, 1]),
+        "the target track columns differ in length: 2 image indexes, 1 keypoints and 2 point indexes"
+    );
+    assert_eq!(
+        call(&side, &side, &[0]),
+        "shared_images_source has 2 entries but shared_images_target has 1"
+    );
 }

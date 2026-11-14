@@ -38,7 +38,7 @@ pub fn build(
     keypoints_xy: &[[f64; 2]],         // per observation
     radii_px: &[f32],                  // per observation footprint radius
     cell_px: u32,                      // default 4
-) -> ObservationCoverage
+) -> Result<ObservationCoverage, ObservationCoverageError>
 ```
 
 For each observation, every cell of its image whose center lies within
@@ -49,9 +49,19 @@ outside are clipped to the grid. Counts are order-independent, so the
 per-image rasterization parallelizes over images (observations grouped by
 image first) with deterministic results.
 
+`build` refuses, with an `ObservationCoverageError`, a zero `cell_px`,
+per-observation slices of different lengths, an observation of an image past
+`image_sizes`, and an image whose grid would have more than `MAX_GRID_CELLS`
+(2³⁰) cells. Every grid is allocated, fallibly, before any is filled, so a
+capture too large to hold is an error rather than an aborted process.
+
 ## Queries
 
-All queries are batch (parallel arrays in, array out) and read-only.
+All queries are batch (parallel arrays in, array out) and read-only. The
+three batch queries return a `Result`: slices of different lengths and an
+image index past the coverage's images are an `ObservationCoverageError`, as
+is an `n_sectors` outside `1..=MAX_SECTORS` (32) for `uncovered_sectors`. The
+binding raises each error as `ValueError`.
 
 - `counts_at(image_indexes, xy) -> u8 per query` — the count of the cell
   containing the pixel coordinate; 0 for out-of-grid coordinates.
@@ -98,7 +108,8 @@ rasterization by the cell-center rule (with radii chosen off cell-center
 distance boundaries so a 1-ULP difference cannot flip a cell); count
 accumulation from overlapping footprints and saturation at 255; clipping
 of partially-out-of-image disks and no-op fully-outside observations;
-non-positive and non-finite radii contributing nothing; `counts_at`
+non-positive and non-finite radii contributing nothing; each refusal of
+`build` and of the queries; `counts_at`
 in-grid and out-of-grid; `covered_fraction` on empty, partial, and full
 neighbourhoods; `uncovered_sectors` on an empty image (every in-grid
 sector set), a fully covered disk (no bit set), a half-covered

@@ -1321,3 +1321,71 @@ fn input_validation_rejects_malformed_arrays() {
         }
     ));
 }
+
+#[test]
+fn input_validation_rejects_thresholds_the_census_cannot_read() {
+    let cam = test_cam();
+    let q = vec![[1.0, 0.0, 0.0, 0.0]];
+    let t = vec![[0.0, 0.0, 0.0]];
+    let run = |params: CensusParams| {
+        cluster_census(
+            &[0, 0],
+            &[0, 0],
+            &[[0.0, 0.0], [1.0, 1.0]],
+            &[0.1],
+            &cam,
+            &q,
+            &t,
+            &[0],
+            &params,
+        )
+    };
+    assert!(run(CensusParams::default()).is_ok());
+    let base = CensusParams::default();
+    for (params, message) in [
+        (
+            CensusParams {
+                sat_px: f64::NAN,
+                ..base
+            },
+            "sat_px must be finite and positive",
+        ),
+        (
+            CensusParams {
+                sat_px: 0.0,
+                ..base
+            },
+            "sat_px must be finite and positive",
+        ),
+        (
+            CensusParams {
+                hi_parallax_deg: f64::NAN,
+                ..base
+            },
+            "hi_parallax_deg must be finite and non-negative",
+        ),
+        (
+            CensusParams {
+                wilson_z: -1.0,
+                ..base
+            },
+            "wilson_z must be finite and non-negative",
+        ),
+        (
+            CensusParams {
+                warp_percentile: f64::NAN,
+                ..base
+            },
+            "warp_percentile must lie in [0, 100]",
+        ),
+        (
+            CensusParams {
+                warp_percentile: 100.5,
+                ..base
+            },
+            "warp_percentile must lie in [0, 100]",
+        ),
+    ] {
+        assert_eq!(run(params).unwrap_err().to_string(), message);
+    }
+}

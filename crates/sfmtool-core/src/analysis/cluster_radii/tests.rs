@@ -41,7 +41,7 @@ fn a_cluster_takes_its_widest_members_radius() {
         shape(1.0, 0.0, 0.0, 1.0),
     ]);
     assert_eq!(
-        cluster_radii(&starts, &shapes, 6.0),
+        cluster_radii(&starts, &shapes, 6.0).unwrap(),
         vec![6.0 * 0.75, 6.0 * 1.0]
     );
 }
@@ -50,7 +50,10 @@ fn a_cluster_takes_its_widest_members_radius() {
 fn a_cluster_with_no_members_reads_zero() {
     let starts = [0u32, 1, 1, 2];
     let shapes = flat(&[shape(1.0, 0.0, 0.0, 1.0), shape(2.0, 0.0, 0.0, 2.0)]);
-    assert_eq!(cluster_radii(&starts, &shapes, 4.0), vec![4.0, 0.0, 8.0]);
+    assert_eq!(
+        cluster_radii(&starts, &shapes, 4.0).unwrap(),
+        vec![4.0, 0.0, 8.0]
+    );
 }
 
 #[test]
@@ -65,17 +68,22 @@ fn the_coarsest_cut_is_radius_descending_with_ties_by_ascending_id() {
         shape(1.0, 0.0, 0.0, 1.0),
     ]);
     // Ascending return, so the tie shows in WHICH ids are taken, not in order.
-    assert_eq!(coarsest_cluster_ids(&starts, &shapes, 5.0, 2), vec![0, 1]);
     assert_eq!(
-        coarsest_cluster_ids(&starts, &shapes, 5.0, 3),
+        coarsest_cluster_ids(&starts, &shapes, 5.0, 2).unwrap(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        coarsest_cluster_ids(&starts, &shapes, 5.0, 3).unwrap(),
         vec![0, 1, 2]
     );
     // Asking for more than exist yields all of them.
     assert_eq!(
-        coarsest_cluster_ids(&starts, &shapes, 5.0, 99),
+        coarsest_cluster_ids(&starts, &shapes, 5.0, 99).unwrap(),
         vec![0, 1, 2, 3]
     );
-    assert!(coarsest_cluster_ids(&starts, &shapes, 5.0, 0).is_empty());
+    assert!(coarsest_cluster_ids(&starts, &shapes, 5.0, 0)
+        .unwrap()
+        .is_empty());
 }
 
 /// A minimal cluster-backbone file with the `cluster_patches/` section the
@@ -160,11 +168,11 @@ fn the_file_form_answers_what_the_arrays_form_answers() {
     let data = file(&starts, &shapes, 12.0, true);
     assert_eq!(
         cluster_radii_from_matches(&data).expect("readable"),
-        cluster_radii(&starts, &shapes, 6.0)
+        cluster_radii(&starts, &shapes, 6.0).unwrap()
     );
     assert_eq!(
         coarsest_cluster_ids_from_matches(&data, 1).expect("readable"),
-        coarsest_cluster_ids(&starts, &shapes, 6.0, 1)
+        coarsest_cluster_ids(&starts, &shapes, 6.0, 1).unwrap()
     );
 }
 
@@ -211,5 +219,53 @@ fn a_nan_shape_never_displaces_a_cluster_that_has_an_extent() {
     let starts = [0u32, 1, 2];
     let shapes = flat(&[shape(f32::NAN, 0.0, 0.0, 1.0), shape(1.0, 0.0, 0.0, 1.0)]);
     // Cluster 0's only member has no extent, so the finite cluster is taken.
-    assert_eq!(coarsest_cluster_ids(&starts, &shapes, 6.0, 1), vec![1]);
+    assert_eq!(
+        coarsest_cluster_ids(&starts, &shapes, 6.0, 1).unwrap(),
+        vec![1]
+    );
+}
+
+#[test]
+fn an_index_that_does_not_fit_the_shapes_is_refused() {
+    let shapes = flat(&[shape(1.0, 0.0, 0.0, 1.0), shape(2.0, 0.0, 0.0, 2.0)]);
+    for (starts, shapes, err) in [
+        (&[][..], &shapes[..], ClusterRadiiError::NoBoundary),
+        (
+            &[0, 2, 1, 2][..],
+            &shapes[..],
+            ClusterRadiiError::StartsDecreasing { index: 2 },
+        ),
+        (
+            &[0, 1][..],
+            &shapes[..],
+            ClusterRadiiError::StartsDoNotClose {
+                last: 1,
+                n_members: 2,
+            },
+        ),
+        (
+            &[0, 3][..],
+            &shapes[..],
+            ClusterRadiiError::StartsDoNotClose {
+                last: 3,
+                n_members: 2,
+            },
+        ),
+        (
+            &[0, 2][..],
+            &shapes[..7],
+            ClusterRadiiError::ShapesNotFourPerMember { len: 7 },
+        ),
+    ] {
+        assert_eq!(cluster_radii(starts, shapes, 4.0), Err(err.clone()));
+        assert_eq!(coarsest_cluster_ids(starts, shapes, 4.0, 1), Err(err));
+    }
+    assert_eq!(
+        ClusterRadiiError::StartsDoNotClose {
+            last: 1,
+            n_members: 2
+        }
+        .to_string(),
+        "cluster_starts must close at the member count (2), not 1"
+    );
 }

@@ -13,6 +13,8 @@ use sfmtool_core::analysis::observation_adjacency::{
     build_observation_adjacency as core_build_observation_adjacency, ObservationAdjacencyParams,
 };
 
+use crate::helpers::value_err;
+
 /// Build the point-level adjacency graph implied by how close the points'
 /// observations sit in the images that see both.
 ///
@@ -80,8 +82,6 @@ pub fn build_observation_adjacency(
     majority: f64,
     range_tol: f64,
 ) -> PyResult<Py<PyAny>> {
-    let n_obs = keypoints_xy.shape()[0];
-    let n_points = radii_px.shape()[0];
     let n_images = quaternions_wxyz.shape()[0];
 
     if keypoints_xy.shape()[1] != 2 {
@@ -100,31 +100,6 @@ pub fn build_observation_adjacency(
             "translations must have shape (I, 3) matching quaternions_wxyz",
         ));
     }
-    for (name, len) in [
-        ("track_point_indexes", track_point_indexes.shape()[0]),
-        ("track_image_indexes", track_image_indexes.shape()[0]),
-    ] {
-        if len != n_obs {
-            return Err(PyValueError::new_err(format!(
-                "{name} has {len} entries but keypoints_xy has {n_obs}"
-            )));
-        }
-    }
-    for (name, len) in [
-        ("point_is_at_infinity", point_is_at_infinity.shape()[0]),
-        ("positions", positions.shape()[0]),
-    ] {
-        if len != n_points {
-            return Err(PyValueError::new_err(format!(
-                "{name} has {len} entries but radii_px has {n_points}"
-            )));
-        }
-    }
-    if a_lo.is_nan() || b_max.is_nan() || a_lo < 0.0 || b_max < a_lo {
-        return Err(PyValueError::new_err(format!(
-            "expected 0 <= a_lo <= b_max, got a_lo={a_lo}, b_max={b_max}"
-        )));
-    }
 
     let keypoints_data = to_contiguous!(keypoints_xy);
     let point_idx_data = to_contiguous!(track_point_indexes);
@@ -134,17 +109,6 @@ pub fn build_observation_adjacency(
     let positions_data = to_contiguous!(positions);
     let quat_data = to_contiguous!(quaternions_wxyz);
     let trans_data = to_contiguous!(translations);
-
-    for (name, idx, bound) in [
-        ("track_point_indexes", &point_idx_data, n_points),
-        ("track_image_indexes", &image_idx_data, n_images),
-    ] {
-        if let Some(&bad) = idx.iter().find(|&&i| i as usize >= bound) {
-            return Err(PyValueError::new_err(format!(
-                "{name} contains {bad}, out of range for {bound} entries"
-            )));
-        }
-    }
 
     let keypoints: Vec<[f64; 2]> = keypoints_data
         .as_chunks::<2>()
@@ -185,18 +149,20 @@ pub fn build_observation_adjacency(
         range_tol,
     };
 
-    let adjacency = py.detach(|| {
-        core_build_observation_adjacency(
-            &keypoints,
-            &point_idx_data,
-            &image_idx_data,
-            &radii_data,
-            &infinity_data,
-            &point_positions,
-            &camera_centers,
-            &params,
-        )
-    });
+    let adjacency = py
+        .detach(|| {
+            core_build_observation_adjacency(
+                &keypoints,
+                &point_idx_data,
+                &image_idx_data,
+                &radii_data,
+                &infinity_data,
+                &point_positions,
+                &camera_centers,
+                &params,
+            )
+        })
+        .map_err(value_err)?;
 
     let dict = PyDict::new(py);
     dict.set_item("offsets", PyArray1::from_vec(py, adjacency.offsets))?;

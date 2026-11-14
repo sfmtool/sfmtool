@@ -612,7 +612,7 @@ def test_input_validation(scene):
             t,
             np.array([0], np.uint32),
         )
-    with pytest.raises(ValueError, match="n_posed"):
+    with pytest.raises(ValueError, match="translations has length 2, expected 1"):
         cluster_census(
             np.array([0, 0], np.uint32),
             np.array([0, 0], np.uint32),
@@ -622,6 +622,19 @@ def test_input_validation(scene):
             q,
             np.zeros((2, 3)),
             np.array([0], np.uint32),
+        )
+    # A NaN threshold would let no cluster qualify and report a clean 0.0.
+    with pytest.raises(ValueError, match="sat_px must be finite and positive"):
+        cluster_census(
+            np.array([0, 0], np.uint32),
+            np.array([0, 0], np.uint32),
+            np.zeros((2, 2)),
+            np.array([0.1]),
+            cam,
+            q,
+            t,
+            np.array([0], np.uint32),
+            sat_px=float("nan"),
         )
 
 

@@ -350,6 +350,12 @@ def test_out_of_range_build_image_index_raises():
         _coverage([[40, 40]], [(3, 10.0, 10.0, 5.0)])
 
 
+def test_an_image_too_large_to_hold_raises():
+    # This size once aborted the interpreter in the grid's allocation.
+    with pytest.raises(ValueError, match="needs more than 1073741824 cells"):
+        _coverage([[4_000_000_000, 4_000_000_000]], [])
+
+
 def test_bad_shapes_raise():
     with pytest.raises(ValueError, match="image_sizes must have shape"):
         ObservationCoverage(

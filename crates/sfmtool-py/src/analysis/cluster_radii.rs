@@ -16,9 +16,7 @@ use sfmtool_core::analysis::cluster_radii::{
 };
 use sfmtool_matches_format::MatchesData;
 
-use crate::csr_args::{
-    check_starts_close, check_starts_nondecreasing, float_array_f32, resolve_csr_source, CsrSource,
-};
+use crate::csr_args::{float_array_f32, resolve_csr_source, CsrSource};
 use crate::helpers::value_err;
 
 /// What a radius-shaped binding was called with: a parsed `.matches` handle,
@@ -43,7 +41,7 @@ enum RadiiSource<'a> {
 ///
 /// `source` is either a `MatchesFile` -- and then nothing else may be given --
 /// or the `cluster_starts` array, and then both remaining arguments are
-/// required.
+/// required. The core checks that the index and the shapes fit together.
 fn radii_source<'a, 'py>(
     source: &'a Bound<'py, PyAny>,
     member_affine_shapes: Option<Bound<'py, PyAny>>,
@@ -63,12 +61,6 @@ fn radii_source<'a, 'py>(
             "the array form takes cluster_starts, member_affine_shapes and refine_radius",
         ));
     };
-    if starts.is_empty() {
-        return Err(PyValueError::new_err(
-            "cluster_starts must carry at least one boundary",
-        ));
-    }
-    check_starts_nondecreasing(&starts)?;
     let shapes = float_array_f32::<Ix3>(
         &shapes,
         "member_affine_shapes must be a (n_member, 2, 2) float32 or float64 array",
@@ -78,7 +70,6 @@ fn radii_source<'a, 'py>(
             "member_affine_shapes must have shape (n_member, 2, 2)",
         ));
     }
-    check_starts_close(&starts, shapes.data.len() / 4)?;
     Ok(RadiiSource::Arrays {
         cluster_starts: starts,
         member_affine_shapes: shapes.data,
@@ -139,11 +130,7 @@ pub fn cluster_radii<'py>(
                 cluster_starts,
                 member_affine_shapes,
                 refine_radius,
-            } => Ok(core_cluster_radii(
-                &cluster_starts,
-                &member_affine_shapes,
-                refine_radius,
-            )),
+            } => core_cluster_radii(&cluster_starts, &member_affine_shapes, refine_radius),
         })
         .map_err(value_err)?;
     Ok(PyArray1::from_vec(py, out))
@@ -196,12 +183,9 @@ pub fn coarsest_cluster_ids<'py>(
                 cluster_starts,
                 member_affine_shapes,
                 refine_radius,
-            } => Ok(core_coarsest_cluster_ids(
-                &cluster_starts,
-                &member_affine_shapes,
-                refine_radius,
-                n,
-            )),
+            } => {
+                core_coarsest_cluster_ids(&cluster_starts, &member_affine_shapes, refine_radius, n)
+            }
         })
         .map_err(value_err)?;
     Ok(PyArray1::from_vec(py, out))

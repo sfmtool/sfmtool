@@ -17,6 +17,8 @@ use sfmtool_core::analysis::source_clusters::{
     SourceSelection,
 };
 
+use crate::helpers::value_err;
+
 /// Every cluster of a selection the member's placed frames see that its
 /// admission never held, with each one's radius and radius band.
 ///
@@ -82,30 +84,16 @@ pub fn source_clusters<'py>(
     frames: PyReadonlyArray1<'py, u32>,
     band_edges: PyReadonlyArray1<'py, f64>,
 ) -> PyResult<Py<PyAny>> {
-    let n_member = member_images.shape()[0];
-    if member_features.shape()[0] != n_member {
-        return Err(PyValueError::new_err(
-            "member_images and member_features must share the same length",
-        ));
-    }
-    if member_positions.shape() != [n_member, 2] {
+    // The column shapes are the binding's to check, since the core takes the
+    // rows flat; the core checks the row counts and the CSR index.
+    if member_positions.shape()[1] != 2 {
         return Err(PyValueError::new_err(
             "member_positions must have shape (n_member, 2)",
         ));
     }
-    if member_affine_shapes.shape() != [n_member, 2, 2] {
+    if member_affine_shapes.shape()[1..] != [2, 2] {
         return Err(PyValueError::new_err(
             "member_affine_shapes must have shape (n_member, 2, 2)",
-        ));
-    }
-    if obs_image.shape()[0] != obs_feature.shape()[0] {
-        return Err(PyValueError::new_err(
-            "obs_image and obs_feature must share the same length",
-        ));
-    }
-    if cluster_starts.shape()[0] == 0 {
-        return Err(PyValueError::new_err(
-            "cluster_starts must carry at least one boundary",
         ));
     }
 
@@ -119,40 +107,27 @@ pub fn source_clusters<'py>(
     let fr = to_contiguous!(frames);
     let edges = to_contiguous!(band_edges);
 
-    let mut prev = 0u32;
-    for (k, &s) in starts.iter().enumerate() {
-        if s < prev {
-            return Err(PyValueError::new_err(format!(
-                "cluster_starts must be non-decreasing, got {s} after {prev} at index {k}"
-            )));
-        }
-        prev = s;
-    }
-    if prev as usize > n_member {
-        return Err(PyValueError::new_err(format!(
-            "cluster_starts[-1] = {prev} exceeds the {n_member} selection rows"
-        )));
-    }
-
-    let out = py.detach(|| {
-        core_source_clusters(
-            SourceSelection {
-                cluster_starts: &starts,
-                member_images: &mimg,
-                member_features: &mfeat,
-                member_positions: &mpos,
-                member_affine_shapes: &mshp,
-                refine_radius,
-                n_images,
-            },
-            MemberIdentity {
-                obs_image: &oimg,
-                obs_feature: &ofeat,
-            },
-            &fr,
-            &edges,
-        )
-    });
+    let out = py
+        .detach(|| {
+            core_source_clusters(
+                SourceSelection {
+                    cluster_starts: &starts,
+                    member_images: &mimg,
+                    member_features: &mfeat,
+                    member_positions: &mpos,
+                    member_affine_shapes: &mshp,
+                    refine_radius,
+                    n_images,
+                },
+                MemberIdentity {
+                    obs_image: &oimg,
+                    obs_feature: &ofeat,
+                },
+                &fr,
+                &edges,
+            )
+        })
+        .map_err(value_err)?;
 
     let n_sel = out.obs_cluster.len();
     let dict = PyDict::new(py);

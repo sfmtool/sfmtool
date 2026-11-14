@@ -21,6 +21,138 @@ pub const DEFAULT_CELL_PX: u32 = 4;
 /// by the width of the bitmask it returns.
 pub const MAX_SECTORS: u32 = 32;
 
+/// The most cells one image's grid may have: 2³⁰, one GiB of counts, which an
+/// image 131,072 pixels square reaches at the default 4-pixel cell.
+/// [`ObservationCoverage::build`] refuses a larger grid rather than ask for
+/// the memory.
+pub const MAX_GRID_CELLS: u64 = 1 << 30;
+
+/// What [`ObservationCoverage`] refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObservationCoverageError {
+    /// `cell_px` is zero.
+    ZeroCellPx,
+    /// A slice does not have one entry per row of the slice it runs parallel
+    /// to.
+    Length {
+        /// The slice with the wrong length.
+        name: &'static str,
+        /// Its length.
+        len: usize,
+        /// The slice it runs parallel to.
+        against: &'static str,
+        /// That slice's length.
+        expected: usize,
+    },
+    /// An image index names no image.
+    ImageIndexOutOfRange {
+        /// The slice holding the index.
+        name: &'static str,
+        /// The index.
+        index: u32,
+        /// How many images the coverage spans.
+        n_images: usize,
+    },
+    /// An image's grid would have more than [`MAX_GRID_CELLS`] cells.
+    GridTooLarge {
+        /// The image.
+        image: usize,
+        /// Its `[width, height]` in pixels.
+        size: [u32; 2],
+        /// The cell size in pixels.
+        cell_px: u32,
+    },
+    /// An image's grid could not be allocated.
+    OutOfMemory {
+        /// The image.
+        image: usize,
+        /// The cells its grid needed.
+        cells: u64,
+    },
+    /// `n_sectors` is outside `1..=`[`MAX_SECTORS`].
+    SectorCount {
+        /// The sector count asked for.
+        n_sectors: u32,
+    },
+}
+
+impl std::fmt::Display for ObservationCoverageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroCellPx => write!(f, "cell_px must be positive"),
+            Self::Length {
+                name,
+                len,
+                against,
+                expected,
+            } => write!(f, "{name} has {len} entries but {against} has {expected}"),
+            Self::ImageIndexOutOfRange {
+                name,
+                index,
+                n_images,
+            } => write!(
+                f,
+                "{name} contains {index}, out of range for {n_images} images"
+            ),
+            Self::GridTooLarge {
+                image,
+                size,
+                cell_px,
+            } => write!(
+                f,
+                "image {image} of {} x {} pixels needs more than {MAX_GRID_CELLS} cells of \
+                 {cell_px} pixels",
+                size[0], size[1]
+            ),
+            Self::OutOfMemory { image, cells } => write!(
+                f,
+                "could not allocate the {cells} cells of the grid of image {image}"
+            ),
+            Self::SectorCount { n_sectors } => write!(
+                f,
+                "n_sectors must be between 1 and {MAX_SECTORS}, got {n_sectors}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObservationCoverageError {}
+
+/// Refuse a slice whose length is not `expected`.
+fn require_len(
+    name: &'static str,
+    len: usize,
+    against: &'static str,
+    expected: usize,
+) -> Result<(), ObservationCoverageError> {
+    if len == expected {
+        Ok(())
+    } else {
+        Err(ObservationCoverageError::Length {
+            name,
+            len,
+            against,
+            expected,
+        })
+    }
+}
+
+/// Refuse an image index that names no image.
+fn require_images(
+    name: &'static str,
+    image_indexes: &[u32],
+    n_images: usize,
+) -> Result<(), ObservationCoverageError> {
+    match image_indexes.iter().find(|&&i| i as usize >= n_images) {
+        Some(&index) => Err(ObservationCoverageError::ImageIndexOutOfRange {
+            name,
+            index,
+            n_images,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Per-image occupancy grids over the observations' image-space footprints.
 ///
 /// Per image, a grid of saturating `u8` counts at `1/cell_px` resolution: cell
@@ -45,7 +177,6 @@ impl ObservationCoverage {
     /// # Arguments
     /// * `image_sizes` — per image, `[width, height]` in pixels.
     /// * `track_image_indexes` — per observation, the image it was seen in.
-    ///   Observations of an image that does not exist are ignored.
     /// * `keypoints_xy` — per observation, the footprint center in that image.
     /// * `radii_px` — per observation, the footprint radius. A non-positive or
     ///   non-finite radius contributes nothing, as does a non-finite keypoint.
@@ -59,54 +190,78 @@ impl ObservationCoverage {
     /// rasterization parallelizes over images with results that do not depend on
     /// thread scheduling.
     ///
-    /// # Panics
-    /// If `cell_px` is zero, or the per-observation slices disagree on length.
+    /// # Errors
+    /// [`ObservationCoverageError::ZeroCellPx`] when `cell_px` is zero,
+    /// [`ObservationCoverageError::Length`] when the per-observation slices
+    /// disagree on length, [`ObservationCoverageError::ImageIndexOutOfRange`]
+    /// when an observation names an image past `image_sizes`,
+    /// [`ObservationCoverageError::GridTooLarge`] when an image's grid would
+    /// have more than [`MAX_GRID_CELLS`] cells, and
+    /// [`ObservationCoverageError::OutOfMemory`] when a grid cannot be
+    /// allocated.
     pub fn build(
         image_sizes: &[[u32; 2]],
         track_image_indexes: &[u32],
         keypoints_xy: &[[f64; 2]],
         radii_px: &[f32],
         cell_px: u32,
-    ) -> Self {
-        assert!(cell_px > 0, "cell_px must be positive");
+    ) -> Result<Self, ObservationCoverageError> {
+        if cell_px == 0 {
+            return Err(ObservationCoverageError::ZeroCellPx);
+        }
         let n_obs = keypoints_xy.len();
-        assert_eq!(
+        require_len(
+            "track_image_indexes",
             track_image_indexes.len(),
+            "keypoints_xy",
             n_obs,
-            "track_image_indexes must have one entry per observation"
-        );
-        assert_eq!(
-            radii_px.len(),
-            n_obs,
-            "radii_px must have one entry per observation"
-        );
-
+        )?;
+        require_len("radii_px", radii_px.len(), "keypoints_xy", n_obs)?;
         let n_images = image_sizes.len();
+        require_images("track_image_indexes", track_image_indexes, n_images)?;
+
         let dims: Vec<[u32; 2]> = image_sizes
             .iter()
             .map(|&[w, h]| [w.div_ceil(cell_px), h.div_ceil(cell_px)])
             .collect();
+        // Every grid is sized and allocated before any is filled, so a capture
+        // too large to hold is refused before the rasterization starts.
+        let mut grids: Vec<Vec<u8>> = Vec::with_capacity(n_images);
+        for (image, &[w, h]) in dims.iter().enumerate() {
+            let cells = u64::from(w) * u64::from(h);
+            if cells > MAX_GRID_CELLS {
+                return Err(ObservationCoverageError::GridTooLarge {
+                    image,
+                    size: image_sizes[image],
+                    cell_px,
+                });
+            }
+            let mut grid = Vec::new();
+            grid.try_reserve_exact(cells as usize)
+                .map_err(|_| ObservationCoverageError::OutOfMemory { image, cells })?;
+            grid.resize(cells as usize, 0u8);
+            grids.push(grid);
+        }
 
         // Group first, then rasterize one image per task: no two tasks ever
         // touch the same grid, so no synchronization and no nested parallelism.
         let mut by_image: Vec<Vec<u32>> = vec![Vec::new(); n_images];
         for (o, &image) in track_image_indexes.iter().enumerate() {
-            if (image as usize) < n_images {
-                by_image[image as usize].push(o as u32);
-            }
+            by_image[image as usize].push(o as u32);
         }
 
-        let grids: Vec<Vec<u8>> = by_image
-            .par_iter()
-            .zip(dims.par_iter())
-            .map(|(obs, &dim)| rasterize(obs, dim, keypoints_xy, radii_px, cell_px))
-            .collect();
+        grids
+            .par_iter_mut()
+            .zip(by_image.par_iter().zip(dims.par_iter()))
+            .for_each(|(grid, (obs, &dim))| {
+                rasterize(grid, obs, dim, keypoints_xy, radii_px, cell_px)
+            });
 
-        Self {
+        Ok(Self {
             cell_px,
             dims,
             grids,
-        }
+        })
     }
 
     /// Number of images the coverage spans.
@@ -129,48 +284,57 @@ impl ObservationCoverage {
     }
 
     /// The count of the cell containing each pixel coordinate; 0 for a
-    /// coordinate outside the grid and for an image that does not exist.
+    /// coordinate outside the grid.
     ///
-    /// # Panics
-    /// If the two slices disagree on length.
-    pub fn counts_at(&self, image_indexes: &[u32], xy: &[[f64; 2]]) -> Vec<u8> {
-        assert_eq!(
-            image_indexes.len(),
-            xy.len(),
-            "image_indexes must have one entry per query"
-        );
-        image_indexes
+    /// # Errors
+    /// [`ObservationCoverageError::Length`] when the two slices disagree on
+    /// length, and [`ObservationCoverageError::ImageIndexOutOfRange`] when an
+    /// image index names no image.
+    pub fn counts_at(
+        &self,
+        image_indexes: &[u32],
+        xy: &[[f64; 2]],
+    ) -> Result<Vec<u8>, ObservationCoverageError> {
+        self.check_batch(image_indexes, xy, None)?;
+        Ok(image_indexes
             .par_iter()
             .zip(xy.par_iter())
             .map(|(&image, &[x, y])| {
                 self.cell_index(image as usize, x, y)
                     .map_or(0, |c| self.grids[image as usize][c])
             })
-            .collect()
+            .collect())
+    }
+
+    /// Refuse a batch query whose slices disagree on length or whose image
+    /// indexes name no image.
+    fn check_batch(
+        &self,
+        image_indexes: &[u32],
+        xy: &[[f64; 2]],
+        radius_px: Option<&[f32]>,
+    ) -> Result<(), ObservationCoverageError> {
+        require_len("image_indexes", image_indexes.len(), "xy", xy.len())?;
+        if let Some(radius_px) = radius_px {
+            require_len("radius_px", radius_px.len(), "xy", xy.len())?;
+        }
+        require_images("image_indexes", image_indexes, self.image_count())
     }
 
     /// Of the cells whose centers lie within `radius` of the query point, the
     /// fraction with count ≥ 1; 0 when no cell center falls in the disk.
     ///
-    /// # Panics
-    /// If the three slices disagree on length.
+    /// # Errors
+    /// As for [`Self::counts_at`], and [`ObservationCoverageError::Length`]
+    /// when `radius_px` disagrees with `xy` on length.
     pub fn covered_fraction(
         &self,
         image_indexes: &[u32],
         xy: &[[f64; 2]],
         radius_px: &[f32],
-    ) -> Vec<f32> {
-        assert_eq!(
-            image_indexes.len(),
-            xy.len(),
-            "image_indexes must have one entry per query"
-        );
-        assert_eq!(
-            radius_px.len(),
-            xy.len(),
-            "radius_px must have one entry per query"
-        );
-        (0..xy.len())
+    ) -> Result<Vec<f32>, ObservationCoverageError> {
+        self.check_batch(image_indexes, xy, Some(radius_px))?;
+        Ok((0..xy.len())
             .into_par_iter()
             .map(|q| {
                 let (mut total, mut covered) = (0u64, 0u64);
@@ -189,7 +353,7 @@ impl ObservationCoverage {
                     covered as f32 / total as f32
                 }
             })
-            .collect()
+            .collect())
     }
 
     /// Bitmask of the angular sectors around each query point that hold at least
@@ -204,32 +368,22 @@ impl ObservationCoverage {
     /// uncovered — and a cell at exactly the query point has no direction and is
     /// skipped.
     ///
-    /// `n_sectors` outside `1..=`[`MAX_SECTORS`] yields all-zero masks, since the
-    /// bitmask cannot represent those sectors.
-    ///
-    /// # Panics
-    /// If the three slices disagree on length.
+    /// # Errors
+    /// As for [`Self::covered_fraction`], and
+    /// [`ObservationCoverageError::SectorCount`] when `n_sectors` is outside
+    /// `1..=`[`MAX_SECTORS`], which the bitmask cannot represent.
     pub fn uncovered_sectors(
         &self,
         image_indexes: &[u32],
         xy: &[[f64; 2]],
         radius_px: &[f32],
         n_sectors: u32,
-    ) -> Vec<u32> {
-        assert_eq!(
-            image_indexes.len(),
-            xy.len(),
-            "image_indexes must have one entry per query"
-        );
-        assert_eq!(
-            radius_px.len(),
-            xy.len(),
-            "radius_px must have one entry per query"
-        );
+    ) -> Result<Vec<u32>, ObservationCoverageError> {
         if n_sectors == 0 || n_sectors > MAX_SECTORS {
-            return vec![0; xy.len()];
+            return Err(ObservationCoverageError::SectorCount { n_sectors });
         }
-        (0..xy.len())
+        self.check_batch(image_indexes, xy, Some(radius_px))?;
+        Ok((0..xy.len())
             .into_par_iter()
             .map(|q| {
                 let mut mask = 0u32;
@@ -246,7 +400,7 @@ impl ObservationCoverage {
                 );
                 mask
             })
-            .collect()
+            .collect())
     }
 
     /// Fraction of one image's cells with count ≥ 1, an overall claim summary.
@@ -317,18 +471,19 @@ impl ObservationCoverage {
     }
 }
 
-/// Rasterize one image's observations into its grid.
+/// Rasterize one image's observations into its zeroed grid of
+/// `dim[0] · dim[1]` cells.
 fn rasterize(
+    grid: &mut [u8],
     obs: &[u32],
     dim: [u32; 2],
     keypoints_xy: &[[f64; 2]],
     radii_px: &[f32],
     cell_px: u32,
-) -> Vec<u8> {
+) {
     let (w, h) = (dim[0], dim[1]);
-    let mut grid = vec![0u8; w as usize * h as usize];
     if w == 0 || h == 0 {
-        return grid;
+        return;
     }
     let cell = cell_px as f64;
     for &o in obs {
@@ -357,7 +512,6 @@ fn rasterize(
             }
         }
     }
-    grid
 }
 
 /// Inclusive cell-index range along one axis whose centers can lie within

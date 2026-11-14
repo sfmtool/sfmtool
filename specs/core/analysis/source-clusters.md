@@ -139,6 +139,13 @@ The counts `n_file_clusters`, `n_admitted`, `n_rows_matched` and `n_selected`
 come back beside the arrays, along with `admission_radius` and
 `admission_floor_px`.
 
+The core `source_clusters` returns a `SourceClustersError` for arrays that do
+not fit together: per-row selection arrays of different lengths, member
+`obs_image` and `obs_feature` of different lengths, or a `cluster_starts` that
+is empty, decreases, or ends past the selection's rows. The binding raises each
+as `ValueError`. `n_images` sizes nothing: the frame table is as long as the
+largest frame the call names.
+
 The band grid itself is not built here. It is a property of the population a
 caller is banding, and the caller passes the edges it decided on.
 
@@ -170,4 +177,7 @@ keep = coarsest_cluster_ids(
 
 The file forms need the cluster backbone, its member affine shapes, and the
 `cluster_patches/` section the refine radius is recorded in; a file missing any
-of those is refused by name rather than answered from a default.
+of those is refused by name rather than answered from a default. Both forms,
+in the core and in the binding, refuse an index that is empty, decreases, or
+does not close at the member count, and shapes that are not four values per
+member, with a `ClusterRadiiError`.

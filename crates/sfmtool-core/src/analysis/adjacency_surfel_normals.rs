@@ -157,6 +157,121 @@ impl AdjacencySurfelNormals {
     }
 }
 
+/// What [`estimate_adjacency_surfel_normals`] refuses: per-point arrays, an
+/// adjacency CSR or extra neighbours that do not fit the cloud.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdjacencySurfelNormalsError {
+    /// A per-point slice does not have one entry per point.
+    PerPointLength {
+        /// The slice.
+        name: &'static str,
+        /// Its length.
+        len: usize,
+        /// The point count, `positions_xyzw.len()`.
+        n_points: usize,
+    },
+    /// `offsets` does not have `n_points + 1` entries.
+    OffsetsLength {
+        /// `offsets.len()`.
+        len: usize,
+        /// The point count.
+        n_points: usize,
+    },
+    /// `offsets` decreases.
+    OffsetsDecreasing,
+    /// The last offset is not the neighbour count.
+    OffsetsEnd {
+        /// The last offset.
+        last: u32,
+        /// `neighbours.len()`.
+        neighbours: usize,
+    },
+    /// A neighbour index names no point.
+    NeighbourOutOfRange {
+        /// The index.
+        neighbour: u32,
+        /// The point count.
+        n_points: usize,
+    },
+    /// `extras.offsets` is neither empty nor a CSR index over the points that
+    /// ends at the number of extra positions.
+    ExtrasOffsets {
+        /// `extras.offsets.len()`.
+        len: usize,
+        /// The point count.
+        n_points: usize,
+        /// `extras.positions.len()`.
+        positions: usize,
+    },
+}
+
+impl std::fmt::Display for AdjacencySurfelNormalsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PerPointLength {
+                name,
+                len,
+                n_points,
+            } => write!(
+                f,
+                "{name} has {len} entries but positions_xyzw has {n_points}"
+            ),
+            Self::OffsetsLength { len, n_points } => write!(
+                f,
+                "offsets has {len} entries but positions_xyzw has {n_points}; expected {}",
+                n_points + 1
+            ),
+            Self::OffsetsDecreasing => write!(f, "offsets must be non-decreasing"),
+            Self::OffsetsEnd { last, neighbours } => write!(
+                f,
+                "offsets ends at {last} but neighbours has {neighbours} entries"
+            ),
+            Self::NeighbourOutOfRange {
+                neighbour,
+                n_points,
+            } => write!(
+                f,
+                "neighbours contains {neighbour}, out of range for {n_points} points"
+            ),
+            Self::ExtrasOffsets {
+                len,
+                n_points,
+                positions,
+            } => write!(
+                f,
+                "extras.offsets has {len} entries; it must be empty, or {} non-decreasing \
+                 entries ending at the {positions} extra positions",
+                n_points + 1
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AdjacencySurfelNormalsError {}
+
+/// Check that `offsets` is a CSR index over `rows` rows: `rows + 1`
+/// non-decreasing offsets ending at `entries`.
+fn check_csr(offsets: &[u32], rows: usize, entries: usize) -> Result<(), CsrFault> {
+    if offsets.len() != rows + 1 {
+        return Err(CsrFault::Length);
+    }
+    if offsets.windows(2).any(|w| w[0] > w[1]) {
+        return Err(CsrFault::Decreasing);
+    }
+    let last = offsets[rows];
+    if last as usize != entries {
+        return Err(CsrFault::End(last));
+    }
+    Ok(())
+}
+
+/// How a CSR index fails [`check_csr`].
+enum CsrFault {
+    Length,
+    Decreasing,
+    End(u32),
+}
+
 /// One point's fit, before it is scattered into the dense output.
 struct PointFit {
     normal: Vector3<f64>,
@@ -191,9 +306,13 @@ struct PointFit {
 /// involves no randomness and a fixed pass count, so the result is a function of
 /// the inputs alone and never of the thread count.
 ///
-/// # Panics
-/// If the per-point slices disagree on length, if `offsets` is not
-/// `n_points + 1` long, or if a neighbour index is out of range.
+/// # Errors
+/// An [`AdjacencySurfelNormalsError`] when `view_dirs` or `selected` does not
+/// have one entry per point, when `offsets` and `neighbours` are not a CSR
+/// adjacency over the points (`n_points + 1` non-decreasing offsets ending at
+/// the neighbour count, every neighbour a point), or when `extras` is neither
+/// empty nor such an index over its positions. An empty cloud checks only the
+/// per-point slices.
 pub fn estimate_adjacency_surfel_normals(
     positions_xyzw: &[[f64; 4]],
     offsets: &[u32],
@@ -202,34 +321,46 @@ pub fn estimate_adjacency_surfel_normals(
     selected: &[bool],
     extras: &ExtraNeighbours,
     params: &AdjacencySurfelParams,
-) -> AdjacencySurfelNormals {
+) -> Result<AdjacencySurfelNormals, AdjacencySurfelNormalsError> {
     let n_points = positions_xyzw.len();
-    assert_eq!(
-        view_dirs.len(),
-        n_points,
-        "view_dirs must have one entry per point"
-    );
-    assert_eq!(
-        selected.len(),
-        n_points,
-        "selected must have one entry per point"
-    );
-    if n_points == 0 {
-        return AdjacencySurfelNormals::empty(0);
+    for (name, len) in [("view_dirs", view_dirs.len()), ("selected", selected.len())] {
+        if len != n_points {
+            return Err(AdjacencySurfelNormalsError::PerPointLength {
+                name,
+                len,
+                n_points,
+            });
+        }
     }
-    assert_eq!(
-        offsets.len(),
-        n_points + 1,
-        "offsets must have n_points + 1 entries"
-    );
-    assert!(
-        neighbours.iter().all(|&q| (q as usize) < n_points),
-        "neighbour index out of range"
-    );
-    assert!(
-        extras.offsets.is_empty() || extras.offsets.len() == n_points + 1,
-        "extras.offsets must be empty or have n_points + 1 entries"
-    );
+    if n_points == 0 {
+        return Ok(AdjacencySurfelNormals::empty(0));
+    }
+    check_csr(offsets, n_points, neighbours.len()).map_err(|fault| match fault {
+        CsrFault::Length => AdjacencySurfelNormalsError::OffsetsLength {
+            len: offsets.len(),
+            n_points,
+        },
+        CsrFault::Decreasing => AdjacencySurfelNormalsError::OffsetsDecreasing,
+        CsrFault::End(last) => AdjacencySurfelNormalsError::OffsetsEnd {
+            last,
+            neighbours: neighbours.len(),
+        },
+    })?;
+    if let Some(&neighbour) = neighbours.iter().find(|&&q| q as usize >= n_points) {
+        return Err(AdjacencySurfelNormalsError::NeighbourOutOfRange {
+            neighbour,
+            n_points,
+        });
+    }
+    if !extras.offsets.is_empty()
+        && check_csr(&extras.offsets, n_points, extras.positions.len()).is_err()
+    {
+        return Err(AdjacencySurfelNormalsError::ExtrasOffsets {
+            len: extras.offsets.len(),
+            n_points,
+            positions: extras.positions.len(),
+        });
+    }
 
     let mut out = AdjacencySurfelNormals::empty(n_points);
     let (at_infinity, ids): (Vec<usize>, Vec<usize>) = (0..n_points)
@@ -237,7 +368,7 @@ pub fn estimate_adjacency_surfel_normals(
         .partition(|&p| positions_xyzw[p][3] == 0.0);
     out.selected_at_infinity = at_infinity.len();
     if ids.is_empty() {
-        return out;
+        return Ok(out);
     }
 
     let fits: Vec<Option<PointFit>> = ids
@@ -266,7 +397,7 @@ pub fn estimate_adjacency_surfel_normals(
         out.n_support[p] = fit.n_support;
         out.determined[p] = fit.determined;
     }
-    out
+    Ok(out)
 }
 
 /// Fit one finite point. `None` when fewer than two neighbour directions
@@ -485,17 +616,22 @@ fn occupied_sectors(
     let max_w = weights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let live_floor = LIVE_WEIGHT_FRACTION * max_w.max(EPS_DENOM);
 
-    let mut occupied = vec![false; n_sectors as usize];
-    for (d, &w) in dirs.iter().zip(weights) {
-        if w < live_floor {
-            continue;
-        }
-        let angle = d.dot(&e2).atan2(d.dot(&e1));
-        let raw = (angle / std::f64::consts::TAU + 1.0) * n_sectors as f64;
-        let bin = (raw as i64).rem_euclid(n_sectors as i64) as usize;
-        occupied[bin] = true;
-    }
-    occupied.iter().filter(|&&o| o).count() as u32
+    // The occupied bins are collected rather than marked in an `n_sectors`
+    // table, so the count costs what the neighbours do whatever sector count
+    // the caller asks for.
+    let mut occupied: Vec<i64> = dirs
+        .iter()
+        .zip(weights)
+        .filter(|&(_, &w)| w >= live_floor)
+        .map(|(d, _)| {
+            let angle = d.dot(&e2).atan2(d.dot(&e1));
+            let raw = (angle / std::f64::consts::TAU + 1.0) * n_sectors as f64;
+            (raw as i64).rem_euclid(n_sectors as i64)
+        })
+        .collect();
+    occupied.sort_unstable();
+    occupied.dedup();
+    occupied.len() as u32
 }
 
 /// A sine reported as the angle it stands for, in degrees; `NaN` stays `NaN`.

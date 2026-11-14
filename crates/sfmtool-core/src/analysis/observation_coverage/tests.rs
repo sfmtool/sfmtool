@@ -39,6 +39,7 @@ impl Scene {
             &self.radii,
             cell_px,
         )
+        .expect("a valid scene")
     }
 }
 
@@ -142,15 +143,6 @@ fn degenerate_radii_and_keypoints_contribute_nothing() {
 }
 
 #[test]
-fn observations_of_a_missing_image_are_ignored() {
-    let mut scene = Scene::new(&[[40, 40]]);
-    scene.obs(7, 10.0, 10.0, 5.1);
-    let coverage = scene.build(4);
-    assert_eq!(coverage.image_count(), 1);
-    assert!(covered_cells(&coverage, 0).is_empty());
-}
-
-#[test]
 fn images_are_independent() {
     let mut scene = Scene::new(&[[40, 40], [40, 40], [0, 0]]);
     scene.obs(0, 10.0, 10.0, 1.0);
@@ -173,15 +165,64 @@ fn build_keeps_the_cell_size() {
 }
 
 #[test]
-#[should_panic(expected = "cell_px must be positive")]
-fn zero_cell_size_panics() {
-    Scene::new(&[[40, 40]]).build(0);
+fn build_refuses_a_zero_cell_size() {
+    let scene = Scene::new(&[[40, 40]]);
+    let err = ObservationCoverage::build(&scene.sizes, &[], &[], &[], 0).unwrap_err();
+    assert_eq!(err, ObservationCoverageError::ZeroCellPx);
+    assert_eq!(err.to_string(), "cell_px must be positive");
 }
 
 #[test]
-#[should_panic(expected = "radii_px must have one entry per observation")]
-fn mismatched_observation_lengths_panic() {
-    ObservationCoverage::build(&[[40, 40]], &[0], &[[1.0, 1.0]], &[], DEFAULT_CELL_PX);
+fn build_refuses_mismatched_observation_lengths() {
+    let err = ObservationCoverage::build(&[[40, 40]], &[0], &[[1.0, 1.0]], &[], DEFAULT_CELL_PX)
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "radii_px has 0 entries but keypoints_xy has 1"
+    );
+    let err = ObservationCoverage::build(&[[40, 40]], &[], &[[1.0, 1.0]], &[1.0], DEFAULT_CELL_PX)
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "track_image_indexes has 0 entries but keypoints_xy has 1"
+    );
+}
+
+#[test]
+fn build_refuses_an_observation_of_a_missing_image() {
+    let mut scene = Scene::new(&[[40, 40]]);
+    scene.obs(7, 10.0, 10.0, 5.1);
+    let err = ObservationCoverage::build(
+        &scene.sizes,
+        &scene.image_idx,
+        &scene.keypoints,
+        &scene.radii,
+        4,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "track_image_indexes contains 7, out of range for 1 images"
+    );
+}
+
+#[test]
+fn build_refuses_a_grid_past_the_cell_limit() {
+    // A grid one row past the limit is refused before anything is allocated,
+    // as a (4e9, 4e9) image is.
+    let side = 1u32 << 15;
+    assert_eq!(u64::from(side) * u64::from(side), MAX_GRID_CELLS);
+    for size in [[side, side + 1], [4_000_000_000, 4_000_000_000]] {
+        let err = ObservationCoverage::build(&[[40, 40], size], &[], &[], &[], 1).unwrap_err();
+        assert_eq!(
+            err,
+            ObservationCoverageError::GridTooLarge {
+                image: 1,
+                size,
+                cell_px: 1
+            }
+        );
+    }
 }
 
 // ── counts_at ─────────────────────────────────────────────────────────────
@@ -194,10 +235,12 @@ fn counts_at_reads_the_containing_cell() {
     let coverage = scene.build(4);
 
     // Cell (2, 2) spans pixels [8, 12) on both axes.
-    let counts = coverage.counts_at(
-        &[0, 0, 0, 0],
-        &[[8.0, 8.0], [11.9, 11.9], [7.9, 10.0], [10.0, 12.1]],
-    );
+    let counts = coverage
+        .counts_at(
+            &[0, 0, 0, 0],
+            &[[8.0, 8.0], [11.9, 11.9], [7.9, 10.0], [10.0, 12.1]],
+        )
+        .unwrap();
     assert_eq!(counts, vec![2, 2, 0, 0]);
 }
 
@@ -207,18 +250,19 @@ fn counts_at_returns_zero_outside_the_grid() {
     scene.obs(0, 10.0, 10.0, 1.0);
     let coverage = scene.build(4);
 
-    let counts = coverage.counts_at(
-        &[0, 0, 0, 0, 0, 3],
-        &[
-            [-0.5, 10.0],
-            [10.0, -0.5],
-            [40.5, 10.0],
-            [10.0, 40.5],
-            [f64::NAN, 10.0],
-            [10.0, 10.0],
-        ],
-    );
-    assert_eq!(counts, vec![0; 6]);
+    let counts = coverage
+        .counts_at(
+            &[0, 0, 0, 0, 0],
+            &[
+                [-0.5, 10.0],
+                [10.0, -0.5],
+                [40.5, 10.0],
+                [10.0, 40.5],
+                [f64::NAN, 10.0],
+            ],
+        )
+        .unwrap();
+    assert_eq!(counts, vec![0; 5]);
 }
 
 // ── covered_fraction ──────────────────────────────────────────────────────
@@ -232,20 +276,26 @@ const PLUS_RADIUS: f32 = 1.1;
 fn covered_fraction_counts_the_neighbourhood() {
     let mut scene = Scene::new(&[[5, 5]]);
     let coverage = scene.build(1);
-    let empty = coverage.covered_fraction(&[0], &[[2.5, 2.5]], &[PLUS_RADIUS]);
+    let empty = coverage
+        .covered_fraction(&[0], &[[2.5, 2.5]], &[PLUS_RADIUS])
+        .unwrap();
     assert_eq!(empty, vec![0.0], "nothing claimed yet");
 
     stamp(&mut scene, 0, 2, 2);
     stamp(&mut scene, 0, 1, 2);
     let coverage = scene.build(1);
-    let partial = coverage.covered_fraction(&[0], &[[2.5, 2.5]], &[PLUS_RADIUS]);
+    let partial = coverage
+        .covered_fraction(&[0], &[[2.5, 2.5]], &[PLUS_RADIUS])
+        .unwrap();
     assert!((partial[0] - 0.4).abs() < 1e-6, "2 of 5 cells: {partial:?}");
 
     for (cx, cy) in [(3, 2), (2, 1), (2, 3)] {
         stamp(&mut scene, 0, cx, cy);
     }
     let coverage = scene.build(1);
-    let full = coverage.covered_fraction(&[0], &[[2.5, 2.5]], &[PLUS_RADIUS]);
+    let full = coverage
+        .covered_fraction(&[0], &[[2.5, 2.5]], &[PLUS_RADIUS])
+        .unwrap();
     assert_eq!(full, vec![1.0], "all 5 cells claimed");
 }
 
@@ -257,19 +307,15 @@ fn covered_fraction_is_zero_when_the_disk_holds_no_cell_center() {
 
     // Radii and points that catch no center: a degenerate radius, a radius
     // smaller than the 0.707 from a cell corner to the nearest center, a
-    // query outside the grid, a non-finite radius, and a missing image.
-    let fractions = coverage.covered_fraction(
-        &[0, 0, 0, 0, 9],
-        &[
-            [2.5, 2.5],
-            [2.0, 2.0],
-            [-20.0, -20.0],
-            [2.5, 2.5],
-            [2.5, 2.5],
-        ],
-        &[0.0, 0.4, 2.0, f32::NAN, 2.0],
-    );
-    assert_eq!(fractions, vec![0.0; 5]);
+    // query outside the grid, and a non-finite radius.
+    let fractions = coverage
+        .covered_fraction(
+            &[0, 0, 0, 0],
+            &[[2.5, 2.5], [2.0, 2.0], [-20.0, -20.0], [2.5, 2.5]],
+            &[0.0, 0.4, 2.0, f32::NAN],
+        )
+        .unwrap();
+    assert_eq!(fractions, vec![0.0; 4]);
 }
 
 // ── uncovered_sectors ─────────────────────────────────────────────────────
@@ -290,10 +336,14 @@ const SPAN_HI: u32 = 13;
 #[test]
 fn uncovered_sectors_reports_every_direction_of_an_empty_image() {
     let coverage = Scene::new(&[[21, 21]]).build(1);
-    let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4)
+        .unwrap();
     assert_eq!(masks, vec![0b1111]);
 
-    let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 8);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 8)
+        .unwrap();
     assert_eq!(masks, vec![0b1111_1111]);
 }
 
@@ -304,7 +354,9 @@ fn uncovered_sectors_reports_nothing_when_the_disk_is_covered() {
     // on a center distance: those squares carry at most two decimals.
     scene.obs(0, SECTOR_QUERY[0], SECTOR_QUERY[1], 5.15);
     let coverage = scene.build(1);
-    let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4)
+        .unwrap();
     assert_eq!(masks, vec![0]);
 }
 
@@ -319,7 +371,9 @@ fn uncovered_sectors_reports_exactly_the_uncovered_half() {
         }
     }
     let coverage = scene.build(1);
-    let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4)
+        .unwrap();
     assert_eq!(masks, vec![0b1100], "only the -y sectors are still open");
 }
 
@@ -328,7 +382,9 @@ fn uncovered_sectors_ignores_directions_outside_the_grid() {
     // A 3x3-cell image queried near the top-left corner: every in-grid center
     // lies in sector 0 (dx > 0, dy > 0), so no other bit can be set.
     let coverage = Scene::new(&[[3, 3]]).build(1);
-    let masks = coverage.uncovered_sectors(&[0], &[[0.3, 0.4]], &[1.5], 4);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[[0.3, 0.4]], &[1.5], 4)
+        .unwrap();
     assert_eq!(masks, vec![0b0001]);
 }
 
@@ -337,7 +393,9 @@ fn uncovered_sectors_skips_the_cell_at_the_query_point() {
     // A radius that reaches only the cell the query sits on top of: that cell
     // has no direction, so nothing is reported even though it is uncovered.
     let coverage = Scene::new(&[[21, 21]]).build(1);
-    let masks = coverage.uncovered_sectors(&[0], &[[10.5, 10.5]], &[0.9], 4);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[[10.5, 10.5]], &[0.9], 4)
+        .unwrap();
     assert_eq!(masks, vec![0]);
 }
 
@@ -364,7 +422,9 @@ fn uncovered_sectors_bins_the_four_quadrants() {
             }
         }
         let coverage = scene.build(1);
-        let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4);
+        let masks = coverage
+            .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], 4)
+            .unwrap();
         assert_eq!(masks, vec![expected], "hole at {hole:?}");
     }
 }
@@ -373,11 +433,18 @@ fn uncovered_sectors_bins_the_four_quadrants() {
 fn uncovered_sectors_rejects_unrepresentable_sector_counts() {
     let coverage = Scene::new(&[[21, 21]]).build(1);
     for n in [0, MAX_SECTORS + 1] {
-        let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], n);
-        assert_eq!(masks, vec![0], "n_sectors = {n}");
+        let err = coverage
+            .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], n)
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("n_sectors must be between 1 and 32, got {n}")
+        );
     }
     // The widest representable fan still works.
-    let masks = coverage.uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], MAX_SECTORS);
+    let masks = coverage
+        .uncovered_sectors(&[0], &[SECTOR_QUERY], &[SECTOR_RADIUS], MAX_SECTORS)
+        .unwrap();
     assert!(masks[0] != 0);
 }
 
@@ -417,25 +484,50 @@ fn image_covered_fraction_counts_the_whole_grid() {
 
 #[test]
 fn empty_inputs_are_well_defined() {
-    let coverage = ObservationCoverage::build(&[], &[], &[], &[], DEFAULT_CELL_PX);
+    let coverage = ObservationCoverage::build(&[], &[], &[], &[], DEFAULT_CELL_PX).unwrap();
     assert_eq!(coverage.image_count(), 0);
     assert!(coverage.grid(0).is_none());
-    assert_eq!(coverage.counts_at(&[], &[]), Vec::<u8>::new());
-    assert_eq!(coverage.covered_fraction(&[], &[], &[]), Vec::<f32>::new());
+    assert_eq!(coverage.counts_at(&[], &[]).unwrap(), Vec::<u8>::new());
     assert_eq!(
-        coverage.uncovered_sectors(&[], &[], &[], 4),
+        coverage.covered_fraction(&[], &[], &[]).unwrap(),
+        Vec::<f32>::new()
+    );
+    assert_eq!(
+        coverage.uncovered_sectors(&[], &[], &[], 4).unwrap(),
         Vec::<u32>::new()
     );
 
     // Images but no observations.
     let coverage = Scene::new(&[[40, 40]]).build(4);
-    assert_eq!(coverage.counts_at(&[0], &[[10.0, 10.0]]), vec![0]);
+    assert_eq!(coverage.counts_at(&[0], &[[10.0, 10.0]]).unwrap(), vec![0]);
     assert_eq!(coverage.image_covered_fraction(0), 0.0);
 }
 
 #[test]
-#[should_panic(expected = "image_indexes must have one entry per query")]
-fn mismatched_query_lengths_panic() {
+fn queries_refuse_mismatched_lengths_and_missing_images() {
     let coverage = Scene::new(&[[40, 40]]).build(4);
-    coverage.counts_at(&[0, 0], &[[1.0, 1.0]]);
+    let err = coverage.counts_at(&[0, 0], &[[1.0, 1.0]]).unwrap_err();
+    assert_eq!(err.to_string(), "image_indexes has 2 entries but xy has 1");
+    let err = coverage
+        .covered_fraction(&[0], &[[1.0, 1.0]], &[1.0, 2.0])
+        .unwrap_err();
+    assert_eq!(err.to_string(), "radius_px has 2 entries but xy has 1");
+    let err = coverage
+        .uncovered_sectors(&[0], &[[1.0, 1.0]], &[], 4)
+        .unwrap_err();
+    assert_eq!(err.to_string(), "radius_px has 0 entries but xy has 1");
+    for err in [
+        coverage.counts_at(&[1], &[[1.0, 1.0]]).unwrap_err(),
+        coverage
+            .covered_fraction(&[1], &[[1.0, 1.0]], &[1.0])
+            .unwrap_err(),
+        coverage
+            .uncovered_sectors(&[1], &[[1.0, 1.0]], &[1.0], 4)
+            .unwrap_err(),
+    ] {
+        assert_eq!(
+            err.to_string(),
+            "image_indexes contains 1, out of range for 1 images"
+        );
+    }
 }

@@ -109,8 +109,13 @@ pub fn build_observation_adjacency(
     positions: &[[f64; 3]],          // per point (range vet)
     camera_centers: &[[f64; 3]],     // per image (range vet)
     params: &ObservationAdjacencyParams,
-) -> ObservationAdjacency
+) -> Result<ObservationAdjacency, ObservationAdjacencyError>
 ```
+
+`ObservationAdjacencyError` refuses per-observation or per-point slices that
+disagree on length, an observation whose point or image index names nothing,
+and an annulus that is not `0 <= a_lo <= b_max`; the binding raises each as
+`ValueError`.
 
 The Python binding takes the same arrays as numpy inputs (accepting what
 `SfmrReconstruction` accessors return directly), the parameters as

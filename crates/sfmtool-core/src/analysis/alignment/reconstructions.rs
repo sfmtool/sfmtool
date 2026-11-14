@@ -366,7 +366,8 @@ fn point_correspondences(
                         &shared_source,
                         &shared_target,
                         &CoordinateCorrespondenceOptions::default(),
-                    ),
+                    )
+                    .map_err(|e| e.to_string())?,
                     PointMatching::KeypointPosition,
                 )
             }

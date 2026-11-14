@@ -115,6 +115,70 @@ impl ObservationAdjacency {
     }
 }
 
+/// What [`build_observation_adjacency`] refuses.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ObservationAdjacencyError {
+    /// A per-observation slice does not have one entry per keypoint.
+    ObservationLength {
+        /// The slice.
+        name: &'static str,
+        /// Its length.
+        len: usize,
+        /// `keypoints_xy.len()`.
+        n_obs: usize,
+    },
+    /// A per-point slice does not have one entry per radius.
+    PointLength {
+        /// The slice.
+        name: &'static str,
+        /// Its length.
+        len: usize,
+        /// `radii_px.len()`.
+        n_points: usize,
+    },
+    /// An observation names a point or an image that does not exist.
+    IndexOutOfRange {
+        /// `track_point_indexes` or `track_image_indexes`.
+        name: &'static str,
+        /// The index.
+        index: u32,
+        /// How many points or images there are.
+        bound: usize,
+    },
+    /// The annulus is not `0 <= a_lo <= b_max`.
+    Annulus {
+        /// [`ObservationAdjacencyParams::a_lo`].
+        a_lo: f64,
+        /// [`ObservationAdjacencyParams::b_max`].
+        b_max: f64,
+    },
+}
+
+impl std::fmt::Display for ObservationAdjacencyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ObservationLength { name, len, n_obs } => {
+                write!(f, "{name} has {len} entries but keypoints_xy has {n_obs}")
+            }
+            Self::PointLength {
+                name,
+                len,
+                n_points,
+            } => write!(f, "{name} has {len} entries but radii_px has {n_points}"),
+            Self::IndexOutOfRange { name, index, bound } => write!(
+                f,
+                "{name} contains {index}, out of range for {bound} entries"
+            ),
+            Self::Annulus { a_lo, b_max } => write!(
+                f,
+                "expected 0 <= a_lo <= b_max, got a_lo={a_lo}, b_max={b_max}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObservationAdjacencyError {}
+
 /// A vetted pair and the statistics the vet accumulated for it.
 #[derive(Clone, Copy, Debug)]
 struct VettedPair {
@@ -166,13 +230,14 @@ impl DirectedEdge {
 /// * `camera_centers` — per image (`-Rᵀ·t`), for the range vet.
 /// * `params` — the adjacency criterion.
 ///
-/// Observations whose point or image index is out of range are ignored, as are
-/// observations of excluded points. The result is a fixed function of the
-/// inputs: parallel work is merged in image (then candidate) order, so it never
-/// depends on thread scheduling.
+/// Observations of excluded points are ignored. The result is a fixed function
+/// of the inputs: parallel work is merged in image (then candidate) order, so
+/// it never depends on thread scheduling.
 ///
-/// # Panics
-/// If the per-observation or per-point slices disagree on length.
+/// # Errors
+/// An [`ObservationAdjacencyError`] when the per-observation or per-point
+/// slices disagree on length, when an observation names a point or an image
+/// that does not exist, or when the annulus is not `0 <= a_lo <= b_max`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_observation_adjacency(
     keypoints_xy: &[[f64; 2]],
@@ -183,45 +248,53 @@ pub fn build_observation_adjacency(
     positions: &[[f64; 3]],
     camera_centers: &[[f64; 3]],
     params: &ObservationAdjacencyParams,
-) -> ObservationAdjacency {
+) -> Result<ObservationAdjacency, ObservationAdjacencyError> {
     let n_obs = keypoints_xy.len();
-    assert_eq!(
-        track_point_indexes.len(),
-        n_obs,
-        "track_point_indexes must have one entry per observation"
-    );
-    assert_eq!(
-        track_image_indexes.len(),
-        n_obs,
-        "track_image_indexes must have one entry per observation"
-    );
+    for (name, len) in [
+        ("track_point_indexes", track_point_indexes.len()),
+        ("track_image_indexes", track_image_indexes.len()),
+    ] {
+        if len != n_obs {
+            return Err(ObservationAdjacencyError::ObservationLength { name, len, n_obs });
+        }
+    }
     let n_points = radii_px.len();
-    assert_eq!(
-        point_is_at_infinity.len(),
-        n_points,
-        "point_is_at_infinity must have one entry per point"
-    );
-    assert_eq!(
-        positions.len(),
-        n_points,
-        "positions must have one entry per point"
-    );
+    for (name, len) in [
+        ("point_is_at_infinity", point_is_at_infinity.len()),
+        ("positions", positions.len()),
+    ] {
+        if len != n_points {
+            return Err(ObservationAdjacencyError::PointLength {
+                name,
+                len,
+                n_points,
+            });
+        }
+    }
     let n_images = camera_centers.len();
+    for (name, indexes, bound) in [
+        ("track_point_indexes", track_point_indexes, n_points),
+        ("track_image_indexes", track_image_indexes, n_images),
+    ] {
+        if let Some(&index) = indexes.iter().find(|&&i| i as usize >= bound) {
+            return Err(ObservationAdjacencyError::IndexOutOfRange { name, index, bound });
+        }
+    }
+    let (a_lo, b_max) = (params.a_lo, params.b_max);
+    if a_lo.is_nan() || b_max.is_nan() || a_lo < 0.0 || b_max < a_lo {
+        return Err(ObservationAdjacencyError::Annulus { a_lo, b_max });
+    }
 
     if n_points == 0 || n_obs == 0 || n_images == 0 {
-        return ObservationAdjacency::empty(n_points);
+        return Ok(ObservationAdjacency::empty(n_points));
     }
 
     // ── Observation bookkeeping ───────────────────────────────────────────
-    // A live observation is one of a point that can take part in edges, in an
-    // image that exists.
+    // A live observation is one of a point that can take part in edges.
     let live: Vec<bool> = (0..n_obs)
         .map(|o| {
             let p = track_point_indexes[o] as usize;
-            let i = track_image_indexes[o] as usize;
-            p < n_points
-                && i < n_images
-                && !point_is_at_infinity[p]
+            !point_is_at_infinity[p]
                 && radii_px[p] > 0.0
                 && keypoints_xy[o][0].is_finite()
                 && keypoints_xy[o][1].is_finite()
@@ -269,7 +342,7 @@ pub fn build_observation_adjacency(
     candidates.sort_unstable();
     candidates.dedup();
     if candidates.is_empty() {
-        return ObservationAdjacency::empty(n_points);
+        return Ok(ObservationAdjacency::empty(n_points));
     }
 
     // ── Pass 2: vet ───────────────────────────────────────────────────────
@@ -290,7 +363,7 @@ pub fn build_observation_adjacency(
         })
         .collect();
 
-    to_csr(&vetted, n_points)
+    Ok(to_csr(&vetted, n_points))
 }
 
 /// Candidate pairs from one image: an annulus hit here makes a pair a

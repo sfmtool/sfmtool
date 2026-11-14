@@ -13,6 +13,8 @@ use sfmtool_core::analysis::adjacency_surfel_normals::{
     AdjacencySurfelParams, ExtraNeighbours,
 };
 
+use crate::helpers::value_err;
+
 /// Turn the caller-supplied `{point: (k, 3) array}` mapping into CSR over the
 /// cloud.
 fn extras_to_csr(extras: &Bound<'_, PyDict>, n_points: usize) -> PyResult<ExtraNeighbours> {
@@ -134,23 +136,8 @@ pub fn estimate_adjacency_surfel_normals(
             "positions_xyzw must have shape (P, 4)",
         ));
     }
-    if view_dirs.shape() != [n_points, 3] {
-        return Err(PyValueError::new_err(
-            "view_dirs must have shape (P, 3) matching positions_xyzw",
-        ));
-    }
-    if selected.shape()[0] != n_points {
-        return Err(PyValueError::new_err(format!(
-            "selected has {} entries but positions_xyzw has {n_points}",
-            selected.shape()[0]
-        )));
-    }
-    if n_points > 0 && offsets.shape()[0] != n_points + 1 {
-        return Err(PyValueError::new_err(format!(
-            "offsets has {} entries but positions_xyzw has {n_points}; expected {}",
-            offsets.shape()[0],
-            n_points + 1
-        )));
+    if view_dirs.shape()[1] != 3 {
+        return Err(PyValueError::new_err("view_dirs must have shape (P, 3)"));
     }
 
     let positions_data = to_contiguous!(positions_xyzw);
@@ -158,24 +145,6 @@ pub fn estimate_adjacency_surfel_normals(
     let neighbours_data = to_contiguous!(neighbours);
     let view_data = to_contiguous!(view_dirs);
     let selected_data = to_contiguous!(selected);
-
-    if n_points > 0 {
-        if offsets_data.windows(2).any(|w| w[0] > w[1]) {
-            return Err(PyValueError::new_err("offsets must be non-decreasing"));
-        }
-        let last = *offsets_data.last().expect("offsets is non-empty") as usize;
-        if last != neighbours_data.len() {
-            return Err(PyValueError::new_err(format!(
-                "offsets ends at {last} but neighbours has {} entries",
-                neighbours_data.len()
-            )));
-        }
-        if let Some(&bad) = neighbours_data.iter().find(|&&q| q as usize >= n_points) {
-            return Err(PyValueError::new_err(format!(
-                "neighbours contains {bad}, out of range for {n_points} points"
-            )));
-        }
-    }
 
     let point_positions: Vec<[f64; 4]> = positions_data.as_chunks::<4>().0.to_vec();
     let point_view_dirs: Vec<[f64; 3]> = view_data
@@ -200,17 +169,19 @@ pub fn estimate_adjacency_surfel_normals(
         det_aniso,
     };
 
-    let fit = py.detach(|| {
-        core_estimate_adjacency_surfel_normals(
-            &point_positions,
-            &offsets_data,
-            &neighbours_data,
-            &point_view_dirs,
-            &selected_data,
-            &extra_neighbours,
-            &params,
-        )
-    });
+    let fit = py
+        .detach(|| {
+            core_estimate_adjacency_surfel_normals(
+                &point_positions,
+                &offsets_data,
+                &neighbours_data,
+                &point_view_dirs,
+                &selected_data,
+                &extra_neighbours,
+                &params,
+            )
+        })
+        .map_err(value_err)?;
 
     // Built flat and reshaped so an empty cloud still comes back as `(0, 3)`.
     let normals_flat: Vec<f64> = fit.normals.iter().flatten().copied().collect();

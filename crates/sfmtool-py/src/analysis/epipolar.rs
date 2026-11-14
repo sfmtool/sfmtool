@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use sfmtool_core::camera::epipolar::{plot_epipolar_curves_batch, EpipolarCurveOptions};
 use sfmtool_core::RigidTransform;
 
+use crate::helpers::value_err;
 use crate::PyCameraIntrinsics;
 
 /// Plot epipolar curves in image 2 for a batch of pixels in image 1.
@@ -51,14 +52,6 @@ pub fn epipolar_curves_py(
             "points1 must have shape (N, 2)",
         ));
     }
-    let n = points1.shape()[0];
-    if anchor_depths.shape()[0] != n {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "anchor_depths length {} does not match points1 length {}",
-            anchor_depths.shape()[0],
-            n
-        )));
-    }
     let pts: Vec<[f64; 2]> = points1
         .as_array()
         .rows()
@@ -82,7 +75,8 @@ pub fn epipolar_curves_py(
         &cam2.inner,
         &pose2,
         &opts,
-    );
+    )
+    .map_err(value_err)?;
 
     Ok(curves
         .into_iter()

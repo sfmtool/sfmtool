@@ -181,6 +181,15 @@ pub enum CensusError {
         /// Number of clusters (`cluster_warp_consistency.len()`).
         num_clusters: usize,
     },
+    /// A [`CensusParams`] threshold the census cannot read. A `NaN` threshold
+    /// would fail every comparison, so no cluster would qualify and the score
+    /// would read a clean 0.0 that is not a measurement.
+    InvalidParam {
+        /// The field.
+        name: &'static str,
+        /// What it must be, completing "`name` must ...".
+        requirement: &'static str,
+    },
     /// The covisibility graph could not be built.
     Covisibility(CovisibilityError),
 }
@@ -204,6 +213,7 @@ impl std::fmt::Display for CensusError {
                 f,
                 "cluster index {index} is out of range for {num_clusters} clusters"
             ),
+            Self::InvalidParam { name, requirement } => write!(f, "{name} must {requirement}"),
             Self::Covisibility(e) => write!(f, "covisibility construction failed: {e}"),
         }
     }
@@ -352,6 +362,36 @@ fn require_len(name: &'static str, len: usize, expected: usize) -> Result<(), Ce
     }
 }
 
+/// Refuse a threshold of [`CensusParams`] the census cannot read.
+fn check_params(params: &CensusParams) -> Result<(), CensusError> {
+    let checks = [
+        (
+            "warp_percentile",
+            (0.0..=100.0).contains(&params.warp_percentile),
+            "lie in [0, 100]",
+        ),
+        (
+            "sat_px",
+            params.sat_px.is_finite() && params.sat_px > 0.0,
+            "be finite and positive",
+        ),
+        (
+            "hi_parallax_deg",
+            params.hi_parallax_deg.is_finite() && params.hi_parallax_deg >= 0.0,
+            "be finite and non-negative",
+        ),
+        (
+            "wilson_z",
+            params.wilson_z.is_finite() && params.wilson_z >= 0.0,
+            "be finite and non-negative",
+        ),
+    ];
+    match checks.into_iter().find(|&(_, ok, _)| !ok) {
+        Some((name, _, requirement)) => Err(CensusError::InvalidParam { name, requirement }),
+        None => Ok(()),
+    }
+}
+
 /// Score a candidate solve against the raw correspondence evidence it did not
 /// consume. See the module docs and `specs/core/analysis/cluster-census.md`.
 ///
@@ -368,6 +408,16 @@ fn require_len(name: &'static str, len: usize, expected: usize) -> Result<(), Ce
 /// and residuals are deliberately not inputs.
 ///
 /// Deterministic: identical inputs give identical output.
+///
+/// # Errors
+/// [`CensusError::InvalidParam`] when `params.warp_percentile` is outside
+/// `[0, 100]`, `params.sat_px` is not finite and positive, or
+/// `params.hi_parallax_deg` or `params.wilson_z` is not finite and
+/// non-negative; [`CensusError::NotParallel`],
+/// [`CensusError::ClusterIndexesNotSorted`] and
+/// [`CensusError::ClusterIndexOutOfRange`] for observation arrays that do not
+/// fit together; and [`CensusError::Covisibility`] when the images named are
+/// too many for the dense covisibility graph.
 #[allow(clippy::too_many_arguments)]
 pub fn cluster_census(
     cluster_indexes: &[u32],
@@ -380,6 +430,7 @@ pub fn cluster_census(
     posed_indexes: &[u32],
     params: &CensusParams,
 ) -> Result<CensusReport, CensusError> {
+    check_params(params)?;
     let n_obs = cluster_indexes.len();
     require_len("image_indexes", image_indexes.len(), n_obs)?;
     require_len("positions_xy", positions_xy.len(), n_obs)?;

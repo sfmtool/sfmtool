@@ -82,7 +82,7 @@ pub fn plot_epipolar_curves_batch(
     cam2: &CameraIntrinsics,
     pose2: &RigidTransform,
     opts: &EpipolarCurveOptions,
-) -> Vec<Vec<[f64; 2]>>;
+) -> Result<Vec<Vec<[f64; 2]>>, EpipolarCurvesError>;
 ```
 
 `plot_epipolar_curve` returns vertices inside `[0, cam2.width) × [0,
@@ -91,8 +91,9 @@ finds no in-image sample. It can return one vertex when the bracket collapses
 within `BRACKET_LOG_TOL` or its second endpoint cannot be projected; callers
 must therefore treat fewer than two vertices as non-drawable. Otherwise the
 vertices form the sampled curve in order. The batch form runs the same operation
-in parallel and preserves input order; `anchor_depths.len()` must equal
-`points1.len()`.
+in parallel and preserves input order; it returns
+`EpipolarCurvesError::AnchorDepthsLength` when `anchor_depths` and `points1`
+differ in length, which the binding raises as `ValueError`.
 
 `anchor_depth` is only a search seed, so an order-of-magnitude estimate is
 enough. Rust normalizes it as `max(abs(anchor_depth), MIN_ANCHOR)` before taking

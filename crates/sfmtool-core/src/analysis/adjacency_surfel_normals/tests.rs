@@ -75,6 +75,7 @@ impl Hub {
             &extras,
             params,
         )
+        .unwrap()
     }
 
     fn fit_default(&self) -> AdjacencySurfelNormals {
@@ -439,7 +440,8 @@ fn an_empty_cloud_returns_empty_arrays() {
         &[],
         &ExtraNeighbours::none(),
         &AdjacencySurfelParams::default(),
-    );
+    )
+    .unwrap();
     assert!(out.normals.is_empty());
     assert!(out.determined.is_empty());
 }
@@ -480,7 +482,8 @@ fn every_point_can_be_fitted_at_once() {
         &selected,
         &ExtraNeighbours::none(),
         &AdjacencySurfelParams::default(),
-    );
+    )
+    .unwrap();
 
     assert!(angle_deg(out.normals[0], [0.0, 0.0, 1.0]) < 1e-9);
     assert!(angle_deg(out.normals[1], [0.0, 1.0, 0.0]) < 1e-9);
@@ -488,4 +491,101 @@ fn every_point_can_be_fitted_at_once() {
     for p in 2..n {
         assert_unfitted(&out, p);
     }
+}
+
+#[test]
+fn inputs_that_do_not_fit_the_cloud_are_refused() {
+    let positions = [[0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]];
+    let view_dirs = [[0.0, 0.0, 1.0]; 2];
+    let selected = [true; 2];
+    let run = |offsets: &[u32],
+               neighbours: &[u32],
+               view_dirs: &[[f64; 3]],
+               selected: &[bool],
+               extras: &ExtraNeighbours| {
+        estimate_adjacency_surfel_normals(
+            &positions,
+            offsets,
+            neighbours,
+            view_dirs,
+            selected,
+            extras,
+            &AdjacencySurfelParams::default(),
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    };
+    let none = ExtraNeighbours::none();
+    assert_eq!(run(&[0, 1, 1], &[1], &view_dirs, &selected, &none), Ok(()));
+    for (offsets, neighbours, view_dirs, selected, message) in [
+        (
+            &[0, 1, 1][..],
+            &[1][..],
+            &view_dirs[..1],
+            &selected[..],
+            "view_dirs has 1 entries but positions_xyzw has 2",
+        ),
+        (
+            &[0, 1, 1],
+            &[1],
+            &view_dirs[..],
+            &selected[..1],
+            "selected has 1 entries but positions_xyzw has 2",
+        ),
+        (
+            &[0, 1],
+            &[1],
+            &view_dirs[..],
+            &selected[..],
+            "offsets has 2 entries but positions_xyzw has 2; expected 3",
+        ),
+        (
+            &[0, 2, 1],
+            &[1],
+            &view_dirs[..],
+            &selected[..],
+            "offsets must be non-decreasing",
+        ),
+        (
+            &[0, 1, 3],
+            &[1],
+            &view_dirs[..],
+            &selected[..],
+            "offsets ends at 3 but neighbours has 1 entries",
+        ),
+        (
+            &[0, 1, 1],
+            &[7],
+            &view_dirs[..],
+            &selected[..],
+            "neighbours contains 7, out of range for 2 points",
+        ),
+    ] {
+        assert_eq!(
+            run(offsets, neighbours, view_dirs, selected, &none),
+            Err(message.to_string())
+        );
+    }
+    let short_extras = ExtraNeighbours {
+        offsets: vec![0, 1, 2],
+        positions: vec![[0.0, 1.0, 0.0]],
+    };
+    assert_eq!(
+        run(&[0, 1, 1], &[1], &view_dirs, &selected, &short_extras),
+        Err("extras.offsets has 3 entries; it must be empty, or 3 non-decreasing entries ending at the 1 extra positions"
+            .to_string())
+    );
+}
+
+#[test]
+fn a_huge_sector_count_costs_no_more_than_a_small_one() {
+    // The occupied sectors are counted from the neighbours, not from a table
+    // the size of the sector count.
+    let hub = Hub::new(&full_ring());
+    let params = AdjacencySurfelParams {
+        n_sectors: u32::MAX,
+        ..AdjacencySurfelParams::default()
+    };
+    let out = hub.fit(&params);
+    assert_eq!(out.sectors[0], 8.0);
 }

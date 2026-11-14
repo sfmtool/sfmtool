@@ -47,6 +47,7 @@ impl Scene {
             &self.centers,
             params,
         )
+        .unwrap()
     }
 }
 
@@ -316,7 +317,7 @@ fn empty_inputs_produce_an_empty_graph() {
     let params = ObservationAdjacencyParams::default();
 
     // No points at all.
-    let adj = build_observation_adjacency(&[], &[], &[], &[], &[], &[], &[], &params);
+    let adj = build_observation_adjacency(&[], &[], &[], &[], &[], &[], &[], &params).unwrap();
     assert_eq!(adj.offsets, vec![0]);
     assert_eq!(adj.point_count(), 0);
     assert_eq!(adj.directed_edge_count(), 0);
@@ -339,16 +340,6 @@ fn empty_inputs_produce_an_empty_graph() {
 }
 
 #[test]
-fn out_of_range_indexes_are_ignored() {
-    let mut scene = pair_at(2.0);
-    // An observation naming a point and an image that do not exist.
-    scene.obs(9, 0, 1.0, 1.0).obs(0, 9, 1.0, 1.0);
-    let adj = scene.build(&ObservationAdjacencyParams::default());
-    assert_eq!(adj.point_count(), 2);
-    assert_eq!(neighbours_of(&adj, 0), vec![1]);
-}
-
-#[test]
 fn repeated_observation_in_one_image_counts_once() {
     let mut scene = Scene::new(2, 2);
     for image in 0..2 {
@@ -359,4 +350,64 @@ fn repeated_observation_in_one_image_counts_once() {
     let adj = scene.build(&ObservationAdjacencyParams::default());
     assert_eq!(adj.directed_edge_count(), 2);
     assert_eq!(adj.shared_images[0], 2);
+}
+
+#[test]
+fn inputs_that_do_not_fit_together_are_refused() {
+    let params = ObservationAdjacencyParams::default();
+    let error = |scene: &Scene, params: &ObservationAdjacencyParams| {
+        build_observation_adjacency(
+            &scene.keypoints,
+            &scene.point_idx,
+            &scene.image_idx,
+            &scene.radii,
+            &scene.infinity,
+            &scene.positions,
+            &scene.centers,
+            params,
+        )
+        .unwrap_err()
+        .to_string()
+    };
+
+    let mut scene = pair_at(3.0);
+    scene.point_idx.pop();
+    assert_eq!(
+        error(&scene, &params),
+        "track_point_indexes has 3 entries but keypoints_xy has 4"
+    );
+
+    let mut scene = pair_at(3.0);
+    scene.positions.pop();
+    assert_eq!(
+        error(&scene, &params),
+        "positions has 1 entries but radii_px has 2"
+    );
+
+    let mut scene = pair_at(3.0);
+    scene.obs(5, 0, 0.0, 0.0);
+    assert_eq!(
+        error(&scene, &params),
+        "track_point_indexes contains 5, out of range for 2 entries"
+    );
+
+    let mut scene = pair_at(3.0);
+    scene.obs(0, 9, 0.0, 0.0);
+    assert_eq!(
+        error(&scene, &params),
+        "track_image_indexes contains 9, out of range for 2 entries"
+    );
+
+    let scene = pair_at(3.0);
+    for (a_lo, b_max) in [(-1.0, 10.0), (2.0, 1.0), (f64::NAN, 10.0), (1.0, f64::NAN)] {
+        let params = ObservationAdjacencyParams {
+            a_lo,
+            b_max,
+            ..params
+        };
+        assert_eq!(
+            error(&scene, &params),
+            format!("expected 0 <= a_lo <= b_max, got a_lo={a_lo}, b_max={b_max}")
+        );
+    }
 }
