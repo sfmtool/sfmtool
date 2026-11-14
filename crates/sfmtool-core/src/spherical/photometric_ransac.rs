@@ -817,24 +817,17 @@ fn compute_tile_lum_mad(
     out
 }
 
+/// Median absolute deviation of `values` from their median; `NaN` when empty.
+///
+/// Both medians are [`median_in_place`] over an `f64` scratch. The deviations
+/// are taken in `f32`, as the values are.
 fn mad(values: &[f32]) -> f32 {
-    if values.is_empty() {
-        return f32::NAN;
+    let mut scratch: Vec<f64> = values.iter().map(|&v| f64::from(v)).collect();
+    let median = median_in_place(&mut scratch) as f32;
+    for (s, &v) in scratch.iter_mut().zip(values) {
+        *s = f64::from((v - median).abs());
     }
-    let mut sorted: Vec<f32> = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = if sorted.len() % 2 == 1 {
-        sorted[sorted.len() / 2]
-    } else {
-        0.5 * (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2])
-    };
-    let mut deviations: Vec<f32> = sorted.iter().map(|&v| (v - median).abs()).collect();
-    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    if deviations.len() % 2 == 1 {
-        deviations[deviations.len() / 2]
-    } else {
-        0.5 * (deviations[deviations.len() / 2 - 1] + deviations[deviations.len() / 2])
-    }
+    median_in_place(&mut scratch) as f32
 }
 
 #[cfg(test)]

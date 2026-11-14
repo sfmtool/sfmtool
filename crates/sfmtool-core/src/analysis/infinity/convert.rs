@@ -24,6 +24,7 @@ use crate::analysis::point_or_bearing::{
     fit_usable_point, is_usable_point, track_rays, PointOrBearingError,
 };
 use crate::analysis::reprojection_noise::ReprojectionNoise;
+use crate::numeric::median_in_place;
 use crate::reconstruction::data::{count_points_at_infinity, observation_reprojection_error};
 use crate::reconstruction::triangulation::{
     bearing_score_batch, is_finite, DEFAULT_DEPTH_LIKELIHOOD_RATIO_THRESHOLD,
@@ -527,9 +528,7 @@ impl SfmrReconstruction {
         if distances.is_empty() {
             return camera_extents(centers);
         }
-        let mid = distances.len() / 2;
-        let (_, &mut median, _) = distances.select_nth_unstable_by(mid, f64::total_cmp);
-        median
+        median_in_place(&mut distances)
     }
 
     /// The root-mean-square reprojection error of point `p`'s observations against

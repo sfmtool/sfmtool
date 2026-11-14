@@ -37,6 +37,7 @@ use crate::camera::intrinsics::{
 };
 use crate::camera::CameraModel;
 use crate::geometry::pose_refine::project_with_jac;
+use crate::numeric::median_in_place;
 use crate::progress::Progress;
 use crate::progress_info;
 use crate::reconstruction::triangulation::points::{
@@ -1708,9 +1709,8 @@ fn kept_residuals(
 ///
 /// The floor is a length, as the measure is, and it is a fraction of a length
 /// the scene states, so scaling the world scales the floor with it and the
-/// trim keeps exactly the observations it kept before. The median is a
-/// selection, not a sum, so it is the same value whatever order the
-/// observations come in.
+/// trim keeps exactly the observations it kept before. The median depends
+/// only on the values, not on the order the observations come in.
 fn in_front_floor(depths: &[f64], is_dir: &[bool], obs_pt: &[u32]) -> f64 {
     let mut front: Vec<f64> = depths
         .iter()
@@ -1721,9 +1721,7 @@ fn in_front_floor(depths: &[f64], is_dir: &[bool], obs_pt: &[u32]) -> f64 {
     if front.is_empty() {
         return 0.0;
     }
-    let mid = front.len() / 2;
-    let (_, median, _) = front.select_nth_unstable_by(mid, f64::total_cmp);
-    IN_FRONT_FLOOR_FRACTION * *median
+    IN_FRONT_FLOOR_FRACTION * median_in_place(&mut front)
 }
 
 /// Re-estimation (rounds after the first): rebuild every point at the round's

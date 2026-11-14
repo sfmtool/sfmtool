@@ -45,6 +45,7 @@
 use std::collections::HashMap;
 
 use crate::analysis::alignment::{estimate_alignment, ransac_alignment, AlignmentParams};
+use crate::numeric::quantile_in_place;
 use crate::reconstruction::point_correspondence::{
     find_point_correspondences, find_point_correspondences_by_coordinate,
     CoordinateCorrespondenceOptions, PointCorrespondenceResult,
@@ -516,8 +517,7 @@ fn fit_by_points(
     let preliminary = estimate_alignment(&c.source, &c.target, n, AlignmentParams::default())
         .map_err(|e| e.to_string())?;
     let mut prelim_resid = residuals(&c, &preliminary);
-    prelim_resid.sort_by(f64::total_cmp);
-    let threshold = prelim_resid[((n as f64 * RANSAC_PERCENTILE) as usize).min(n - 1)];
+    let threshold = quantile_in_place(&mut prelim_resid, RANSAC_PERCENTILE);
     // An exactly-corresponding pair — a synthetic fixture, or a reconstruction
     // aligned to a copy of itself — puts every residual at f64 rounding noise,
     // and `ransac_alignment` compares strictly less-than. Floor the threshold

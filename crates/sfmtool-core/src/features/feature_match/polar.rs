@@ -25,6 +25,7 @@ use std::f64::consts::PI;
 use nalgebra::Matrix3;
 
 use crate::camera::epipolar;
+use crate::numeric::median_in_place;
 
 use super::gather::gather_rows;
 use super::geometric_filter::{GeometricFilterConfig, StereoPairGeometry};
@@ -130,13 +131,12 @@ pub fn compute_angle_offset(f_matrix: &[f64; 9], _e1: [f64; 2], _e2: [f64; 2]) -
         diffs.push(final_diff.sin().atan2(final_diff.cos()));
     }
 
-    // Upper median via O(n) selection rather than a sort. `total_cmp` is a real
-    // total order, so the selection is defined even if a degenerate `F` puts a
-    // NaN in the samples; `partial_cmp().unwrap_or(Equal)` is not, and left the
-    // result unspecified in exactly that case.
-    let mid = diffs.len() / 2;
-    diffs.select_nth_unstable_by(mid, f64::total_cmp);
-    diffs[mid]
+    // Every offset is within ±π/2 once the ambiguity is resolved, so the
+    // samples never straddle the ±π seam and the even-count median, the mean
+    // of the two middle offsets, is an angle between them. The ordering is
+    // `total_cmp`, so a degenerate `F` that puts a NaN in the samples leaves
+    // the result defined.
+    median_in_place(&mut diffs)
 }
 
 /// How many entries at each end of an angle-sorted array get ghost copies, so a

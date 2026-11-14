@@ -61,7 +61,9 @@
 //! There is one median in this workspace and it is here. `numeric/tests.rs`
 //! enforces that mechanically: it scans the crates for `fn …median…`
 //! definitions and fails on any that is not in its allowlist of the few that
-//! are genuinely a different operation. Add a caller, not a copy.
+//! are genuinely a different operation, and it scans their lines for the
+//! inline shapes of one (a `select_nth_unstable` call, an index at `n / 2`).
+//! Add a caller, not a copy.
 //!
 //! ## The quantile
 //!

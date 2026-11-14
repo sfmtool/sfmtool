@@ -510,6 +510,181 @@ fn the_workspace_has_one_quantile() {
     );
 }
 
+/// Every line of the workspace's non-test sources that has an
+/// [`order_statistic_shape`] and is not a median or quantile of a population,
+/// as `(path, fragment of the line, why)`.
+///
+/// Paths are relative to `crates/`. `numeric.rs` itself is exempt.
+const ORDER_STATISTIC_ALLOWLIST: &[(&str, &str, &str)] = &[
+    (
+        "sfmtool-core/src/analysis/cluster_radii.rs",
+        "order.select_nth_unstable_by(n - 1, cmp)",
+        "a top-k cut: the ids of the `n` largest radii, sorted by id afterwards",
+    ),
+    (
+        "sfmtool-core/src/features/kdforest/build.rs",
+        "idx.select_nth_unstable_by(pool - 1, cmp)",
+        "a top-k cut: the `pool` dimensions of largest variance",
+    ),
+    (
+        "sfmtool-core/src/features/kdforest/build.rs",
+        "vals.select_nth_unstable_by(mid,",
+        "`median_value`, on MEDIAN_ALLOWLIST: a split pivot that must be an \
+         actual coordinate",
+    ),
+    (
+        "sfmtool-core/src/features/sift/mod.rs",
+        "keypoints.select_nth_unstable_by(cap - 1,",
+        "a top-k cut: the scale of the `cap`-th largest keypoint, the bound \
+         the feature cap keeps keypoints above",
+    ),
+    (
+        "sfmtool-core/src/features/sift/mod.rs",
+        "pool.select_nth_unstable_by(cap, candidate_order)",
+        "a top-k cut: the `cap` best candidate keypoints",
+    ),
+    (
+        "sfmtool-core/src/features/sift/mod.rs",
+        "new.select_nth_unstable_by(room, candidate_order)",
+        "a top-k cut: the best candidates that fit the room left under the cap",
+    ),
+    (
+        "sfmtool-core/src/geometry/focal_vote.rs",
+        "let rep = sorted[(sorted.len() - 1) / 2].0;",
+        "`median_draw`, on MEDIAN_ALLOWLIST: which draw sits at the lower \
+         middle, an index the shared median does not return; the value is \
+         `log_median`'s",
+    ),
+    (
+        "sfmtool-core/src/analysis/scene_scale.rs",
+        "sorted[len / 2]",
+        "`iteratively_trimmed_median`, on MEDIAN_ALLOWLIST: each pass must \
+         keep an actual sample",
+    ),
+    (
+        "sfmtool-sfmr-format/src/depth_stats.rs",
+        "sorted[n / 2",
+        "`median_sorted`, on MEDIAN_ALLOWLIST: a crate `sfmtool-core` depends \
+         on, so it cannot reach `numeric`",
+    ),
+];
+
+/// Whether `line` selects an order statistic by hand: a `select_nth_unstable`
+/// call, an index at half a length (`[n / 2]`, `[n / 2 - 1]`), or an index at
+/// an integer fraction of one (`[n * 9 / 10]`, `[(n * 95) / 100]`).
+///
+/// Like [`fn_name`], it reads text, not Rust: the shapes are matched with the
+/// whitespace removed, and a comment line is skipped.
+fn order_statistic_shape(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//") {
+        return false;
+    }
+    if trimmed.contains("select_nth_unstable") {
+        return true;
+    }
+    let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.contains("/2]") || compact.contains("/2-1]") {
+        return true;
+    }
+    // `*<int>/<int>` or `*<int>)/<int>` followed by `]` or `)`, inside an index.
+    let bytes = compact.as_bytes();
+    let digits_from = |mut i: usize| {
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        (i > start).then_some(i)
+    };
+    compact.contains('[')
+        && (0..bytes.len()).any(|i| {
+            if bytes[i] != b'*' {
+                return false;
+            }
+            let Some(mut j) = digits_from(i + 1) else {
+                return false;
+            };
+            if bytes.get(j) == Some(&b')') {
+                j += 1;
+            }
+            if bytes.get(j) != Some(&b'/') {
+                return false;
+            }
+            digits_from(j + 1).is_some_and(|k| matches!(bytes.get(k), Some(b']' | b')' | b'.')))
+        })
+}
+
+/// The second half of "one median and one quantile": the hand-written ones
+/// had no `fn` of their own for the name scans to see. Twelve were inline
+/// order statistics — an upper-middle median by `select_nth_unstable`, a
+/// percentile by `[n * 4 / 5]` — four of which gave a different median from
+/// [`median_in_place`] on an even count. Any line with one of those shapes
+/// outside [`ORDER_STATISTIC_ALLOWLIST`] fails; a top-k cut, which is not an
+/// order statistic of a population, goes on the list with its reason.
+#[test]
+fn the_workspace_selects_no_order_statistic_by_hand() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ is the parent of this crate");
+    let mut sources = Vec::new();
+    rs_sources(crates, &mut sources);
+
+    let mut unlisted = Vec::new();
+    for path in &sources {
+        let rel = path
+            .strip_prefix(crates)
+            .expect("scanned under crates/")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel == "sfmtool-core/src/numeric.rs" {
+            continue;
+        }
+        let text = std::fs::read_to_string(path).expect("readable source");
+        for (number, line) in text.lines().enumerate() {
+            if !order_statistic_shape(line) {
+                continue;
+            }
+            let listed = ORDER_STATISTIC_ALLOWLIST
+                .iter()
+                .any(|(p, fragment, _)| *p == rel && line.contains(fragment));
+            if !listed {
+                unlisted.push(format!("{rel}:{}: {}", number + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "order statistics selected by hand outside `crate::numeric`:\n  {}\n\
+         Call `sfmtool_core::numeric::median_in_place` or `quantile_in_place` \
+         instead. If this is not a median or quantile of a population (a \
+         top-k cut, say), add it to ORDER_STATISTIC_ALLOWLIST in \
+         numeric/tests.rs with the reason.",
+        unlisted.join("\n  ")
+    );
+}
+
+#[test]
+fn the_order_statistic_scan_sees_each_shape() {
+    for line in [
+        "let (_, m, _) = v.select_nth_unstable_by(mid, f64::total_cmp);",
+        "let m = d[d.len() / 2];",
+        "0.5 * (buf[n / 2 - 1] + buf[n / 2])",
+        "Some(nn[nn.len() * 9 / 10])",
+        "\"p95\": errors[((n * 95) / 100).min(n - 1)] as f64,",
+        "(center, dists[n * 4 / 5].max(0.1))",
+    ] {
+        assert!(order_statistic_shape(line), "missed: {line}");
+    }
+    for line in [
+        "// let m = d[d.len() / 2];",
+        "let half = n / 2;",
+        "let x = a * 3 / 4;",
+        "let p = pixels[i * 3 + c];",
+    ] {
+        assert!(!order_statistic_shape(line), "false positive: {line}");
+    }
+}
+
 /// The name defined by a `fn` item on `line`, or `None` if it defines none.
 ///
 /// Deliberately crude — it reads declarations, not Rust — but it sees every

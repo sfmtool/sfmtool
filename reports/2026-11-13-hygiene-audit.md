@@ -358,6 +358,8 @@ Each finding here comes from a kept hit of a mechanical check, confirmed by read
 - Effort: low.
 - Risk: low — values at the even-count sites move by half a step; check any pinned test values.
 
+> _Status (2026-11-13): **Done** — all twelve sites call `median_in_place`, `quantile_in_place` or `quantile_of_sorted`, as do two more 90th percentiles by index the list missed (`compute_camera_nn_scale` in `analysis/scene_scale.rs`, `framing_view` in `web_export.rs`); the even-count medians now average the two middle values, the percentiles interpolate as numpy does, and `compute_scene_bounds` leaves out a position with a non-finite coordinate rather than panicking on it. A new `the_workspace_selects_no_order_statistic_by_hand` in `numeric/tests.rs` fails on `select_nth_unstable`, `[n / 2]` and `[n * 9 / 10]` shapes outside an `ORDER_STATISTIC_ALLOWLIST` of top-k cuts and lines inside the allowlisted medians, and `specs/STANDARDS.md` describes it, branch `hyg-fix-1113-05-numeric-medians`._
+
 **Make the tests that cannot fail able to fail**
 - Location (check 20): `tests/rig/test_rig_config_validation.py:54,62,71,77`; `tests/test_heatmap.py:328`; `tests/test_undistort.py:239`; `crates/sfmtool-core/src/machine/tests.rs` `wait_for_stops_when_cancelled` (106-118); `crates/sfmtool-core/src/analysis/pick_images/source/tests.rs` `a_cancelled_wait_stops_the_workers_promptly` (298-322).
 - Problem:

@@ -2343,3 +2343,22 @@ fn bake_reconstruction_transform_is_one_edit_and_undo_puts_the_framing_back() {
     assert_eq!(transform_block(&mut state, &mut viewer), framed);
     assert!(!state.scene[0].is_dirty());
 }
+
+// ── Reprojection error summary ──────────────────────────────────────────
+
+/// The summary drops non-finite errors and takes the shared median and
+/// percentile of the rest: an even count averages the two middle errors and
+/// the 95th percentile interpolates between ranks, as numpy does.
+#[test]
+fn error_stats_take_the_shared_median_and_percentile_of_the_finite_errors() {
+    let errors = [4.0, f32::NAN, 1.0, 3.0, f32::INFINITY, 2.0];
+    let stats = crate::mcp::render::error_stats(&errors);
+    assert_eq!(stats["mean"], 2.5);
+    assert_eq!(stats["median"], 2.5);
+    // Position 0.95 · 3 = 2.85 between 3 and 4.
+    let p95 = stats["p95"].as_f64().expect("p95 is a number");
+    assert!((p95 - 3.85).abs() < 1e-12, "p95 = {p95}");
+
+    assert_eq!(crate::mcp::render::error_stats(&[f32::NAN]), Value::Null);
+    assert_eq!(crate::mcp::render::error_stats(&[]), Value::Null);
+}

@@ -44,6 +44,7 @@ use crate::analysis::scene_scale::{
 };
 use crate::camera::frustum::compute_distorted_frustum_grid;
 use crate::camera::PhotographCache;
+use crate::numeric::quantile_in_place;
 use crate::patch::display_bitmaps::{render_display_patch_bitmaps, DISPLAY_PYRAMID_LEVELS};
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::thumbnail::{display_thumbnail_row, resize_area, ThumbnailSource};
@@ -740,8 +741,7 @@ fn framing_view(recon: &SfmrReconstruction, centre: &Point3<f64>, radius: f64) -
     let mut side = Vector3::zeros();
     if !offsets.is_empty() {
         let mut distances: Vec<f64> = offsets.iter().map(|o| o.norm()).collect();
-        distances.sort_by(f64::total_cmp);
-        reach = reach.max(distances[distances.len() * 9 / 10]);
+        reach = reach.max(quantile_in_place(&mut distances, 0.9));
         side = offsets.iter().sum::<Vector3<f64>>() / offsets.len() as f64;
     }
     side.z = 0.0;

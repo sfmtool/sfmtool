@@ -50,6 +50,7 @@ use crate::camera::remap::remap_bilinear;
 use crate::camera::CameraIntrinsics;
 use crate::camera::WarpMap;
 use crate::geometry::RotQuaternion;
+use crate::numeric::median_in_place;
 use crate::spherical::tile_rig::SphericalTileRig;
 
 /// Pixel-element storage trait for [`PerSphericalTileSourceStack`].
@@ -695,27 +696,23 @@ fn consensus_patch_for_tile<T: PatchPixel>(
         return out;
     }
 
-    // Per-pixel per-channel median of valid samples.
-    let mut buf: Vec<f32> = Vec::with_capacity(primary_rows.len());
+    // Per-pixel per-channel median of valid samples, over an `f64` scratch
+    // reused across pixels, as `photometric_ransac`'s per-pixel median does.
+    let mut buf: Vec<f64> = Vec::with_capacity(primary_rows.len());
     for px in 0..pixel_count {
         for ch in 0..channels {
             buf.clear();
             for &r in &primary_rows {
                 if valid[r * pixel_count + px] != 0 {
-                    buf.push(patches[(r * pixel_count + px) * channels + ch].as_f32());
+                    buf.push(f64::from(
+                        patches[(r * pixel_count + px) * channels + ch].as_f32(),
+                    ));
                 }
             }
             if buf.is_empty() {
                 continue; // out[..] stays NaN
             }
-            buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let n = buf.len();
-            let m = if n % 2 == 1 {
-                buf[n / 2]
-            } else {
-                0.5 * (buf[n / 2 - 1] + buf[n / 2])
-            };
-            out[px * channels + ch] = m;
+            out[px * channels + ch] = median_in_place(&mut buf) as f32;
         }
     }
     out

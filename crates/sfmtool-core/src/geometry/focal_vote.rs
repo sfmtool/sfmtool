@@ -40,7 +40,7 @@ use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
 };
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
-use crate::numeric::{median, median_in_place};
+use crate::numeric::{median, median_in_place, quantile_of_sorted};
 
 pub mod column_scan;
 pub(crate) mod prof;
@@ -410,13 +410,7 @@ fn log_iqr(vals: &[f64]) -> f64 {
     }
     let mut v: Vec<f64> = vals.iter().map(|x| x.ln()).collect();
     v.sort_by(f64::total_cmp);
-    let q = |p: f64| -> f64 {
-        let t = p * (v.len() - 1) as f64;
-        let lo = t.floor() as usize;
-        let hi = t.ceil() as usize;
-        v[lo] + (v[hi] - v[lo]) * (t - lo as f64)
-    };
-    q(0.75) - q(0.25)
+    quantile_of_sorted(&v, 0.75) - quantile_of_sorted(&v, 0.25)
 }
 
 /// Median of a focal population in log space: odd length takes the middle
