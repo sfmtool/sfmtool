@@ -133,9 +133,11 @@ string, when one of these changes:
 
 - the git `HEAD` file, the ref of the branch it names, `packed-refs` and the
   `refs/tags` directory, so a commit, a checkout or a new tag is seen;
-- each crate's `Cargo.toml`, `build.rs` and `src/` directory, and the
-  workspace's `Cargo.toml` and `Cargo.lock`, so `-dirty` follows an edit to
-  any source the extension is compiled from, staged or not.
+- each crate's `Cargo.toml`, `build.rs`, `src/` directory and `assets/`
+  directory (the files a crate embeds from outside `src/`, such as the
+  viewer's icon), and the workspace's `Cargo.toml` and `Cargo.lock`, so
+  `-dirty` follows an edit to any source the extension is compiled from,
+  staged or not.
 
 The git index is not watched: `git add`, and a plain `git status` whenever
 file times are out of date, rewrite it without changing the describe, and each

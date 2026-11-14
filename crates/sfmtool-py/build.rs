@@ -19,8 +19,9 @@
 //! The script asks Cargo to run it again when the commit or the tag it
 //! describes changes (the `HEAD` file, the branch's ref, `packed-refs`, the tag
 //! refs), and when a file the extension is compiled from changes (each crate's
-//! `Cargo.toml`, `build.rs` and `src/`, and the workspace's `Cargo.toml` and
-//! `Cargo.lock`), so that `-dirty` follows edits to the Rust sources. The git
+//! `Cargo.toml`, `build.rs`, `src/` and `assets/`, and the workspace's
+//! `Cargo.toml` and `Cargo.lock`), so that `-dirty` follows edits to the Rust
+//! sources and the files they embed. The git
 //! index is not watched: `git add`, and a plain `git status` whenever file
 //! times are out of date, rewrite it without changing the describe, and each
 //! run of this script recompiles the crate. An edit elsewhere in the tree,
@@ -78,7 +79,7 @@ fn watch_sources(root: &Path) {
     if let Ok(entries) = std::fs::read_dir(root.join("crates")) {
         for entry in entries.flatten() {
             let crate_dir = entry.path();
-            for name in ["Cargo.toml", "build.rs", "src"] {
+            for name in ["Cargo.toml", "build.rs", "src", "assets"] {
                 paths.push(crate_dir.join(name));
             }
         }
