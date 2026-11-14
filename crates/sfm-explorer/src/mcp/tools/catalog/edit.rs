@@ -220,11 +220,17 @@ pub(super) fn specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "refine_all_normals",
             description: "Turn the patch of every finite 3D point of one reconstruction to its \
-                          grown-plane normal, as Track View's Grown Plane Normal followed by Commit does for \
-                          one track with every observation kept: one plane is fitted to the \
-                          photographs, the patch is turned to it whenever a view joined unless \
-                          the turn is large on weak evidence, and the stored bitmap is rendered \
-                          again and each observation's readings taken again. The step trusts \
+                          grown-plane normal (method grown_plane, the default) or its \
+                          pairwise-flow normal (method pairwise_flow), as Track View's Grown \
+                          Plane Normal or Pairwise Flow Normal followed by Commit does for one \
+                          track with every observation kept, at the options those entries run. \
+                          The grown-plane normal fits one plane to the photographs and turns the \
+                          patch to it whenever a view joined unless the turn is large on weak \
+                          evidence. The pairwise-flow normal fits the plane to the optical flow \
+                          between pairs of the views and turns the patch unless the pairs are \
+                          undetermined or unstable; it costs far more per point. The stored \
+                          bitmap is rendered again and each observation's readings taken again. \
+                          The step trusts \
                           the keypoints it is given, so refit_all_points first where they may \
                           be off, and moves none of them, so a second run starts from the same \
                           keypoints; refit_all_points afterwards relocalizes them against the \
@@ -238,7 +244,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           and creates none, so every index still means what it meant unless a \
                           point edit is pending, in which case the deleted slots close up \
                           first, as delete_point describes. The report counts the points \
-                          turned, unchanged, with low confidence, the \
+                          turned, unchanged, with low confidence, from a single pair, the \
                           points whose normal was left unchanged and why, the points left as \
                           they were and why, the points at infinity skipped, and the median \
                           turn. One version, and it runs on a worker thread, so a refinement \
@@ -247,7 +253,19 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           it. Needs inline keypoints, a patch frame per point and at least one \
                           posed image.",
             kind: Write,
-            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+            schema: object(
+                &[(
+                    "method",
+                    json!({
+                        "type": "string",
+                        "enum": ["grown_plane", "pairwise_flow"],
+                        "description": "The normal step each point gets, in \
+                                        fit_bench_track_normal's words for it. Default \
+                                        grown_plane.",
+                    }),
+                )],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
         },
         ToolSpec {
             name: "prune_covered_observations",

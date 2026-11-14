@@ -3219,7 +3219,7 @@ defaults. It is Track View's *Grown Plane Normal* and the wire's
 options, and it has a Python binding (`sfmtool.bench.grown_plane_normal`).
 `bench::refine_normals` runs it, followed by the commit's record, on every
 finite point of a reconstruction ([refine-normals.md](refine-normals.md)), the
-viewer's *Refine All Normals*.
+viewer's *Refine All Normals ▸ Grown Plane*.
 It takes the reference and the working grid by
 `grid_plane_normal`'s rules, picks a few of the other `in` views by their
 geometry, and for each view picked fits the plane's tilt and the view's image

@@ -1,16 +1,17 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Refine All Normals in the viewer: one version per run, Undo back out of
-//! it, the overlay folded in with the selection following it, the failed
-//! entries of a cancel and of an unreadable photograph, the refusal in the
-//! menu's words, and the Action Log's sentence.
+//! Refine All Normals in the viewer: one version per run of either step, Undo
+//! back out of it, the overlay folded in with the selection following it, the
+//! failed entries of a cancel and of an unreadable photograph, the refusal in
+//! the menu's words, and the Action Log's sentence.
 //!
 //! The step on each point is core's, and is tested there
 //! (`crates/sfmtool-core/src/bench/tests/refine_normals.rs`). The fixture is
 //! Refit All Points', whose photographs are a pattern in screen space rather
-//! than views of one surface, so what the step makes of each point is not
-//! asserted here.
+//! than views of one surface, so which outcome each point gets is not
+//! asserted here, only that a pairwise-flow run reports outcomes that only
+//! that step has.
 
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ use sfmtool_core::SfmrReconstruction;
 use crate::action_log::Entry;
 use crate::scene::{PointRef, SceneNode};
 use crate::state::edits::refit_all_points::tests::refit_state;
+use crate::state::edits::RefineAllNormalsStep;
 use crate::state::AppState;
 
 /// The newest Action Log entry.
@@ -42,7 +44,7 @@ fn a_refinement_pushes_one_version_with_a_new_base_and_undo_restores_the_old_one
     state.selected_point = Some(PointRef::new(id, 5));
 
     state
-        .start_refine_all_normals(id)
+        .start_refine_all_normals(id, RefineAllNormalsStep::GrownPlane)
         .expect("the fixture carries keypoints, frames and poses");
     state.finish_background_tasks();
 
@@ -56,13 +58,15 @@ fn a_refinement_pushes_one_version_with_a_new_base_and_undo_restores_the_old_one
     assert_eq!(node.point_count(), count, "no point was deleted or created");
     assert_eq!(
         node.history.current_version().label,
-        "Refined the normals of demo"
+        "Refined the normals of demo with the grown-plane normal"
     );
     assert_eq!(state.selected_point, Some(PointRef::new(id, 5)));
     let entry = newest(&state);
     assert!(!entry.failed, "{}", entry.text);
     assert!(
-        entry.text.starts_with("Refined the normals of demo: "),
+        entry
+            .text
+            .starts_with("Refined the normals of demo with the grown-plane normal: "),
         "{}",
         entry.text
     );
@@ -86,6 +90,49 @@ fn a_refinement_pushes_one_version_with_a_new_base_and_undo_restores_the_old_one
     );
 }
 
+/// The submenu's *Pairwise Flow* runs the pairwise-flow normal on every
+/// point: one version, labelled with that step, whose entry counts the points.
+#[test]
+fn a_pairwise_flow_refinement_pushes_one_version_named_for_its_step() {
+    let (mut state, id) = refit_state(None);
+    let before = Arc::clone(&state.scene[0].edited().base);
+    state
+        .start_refine_all_normals(id, RefineAllNormalsStep::PairwiseFlow)
+        .expect("the fixture carries keypoints, frames and poses");
+    state.finish_background_tasks();
+
+    assert_eq!(versions(&state), 2);
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Refined the normals of demo with the pairwise-flow normal"
+    );
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    assert!(
+        entry
+            .text
+            .starts_with("Refined the normals of demo with the pairwise-flow normal: "),
+        "{}",
+        entry.text
+    );
+    assert!(
+        entry.text.contains("with too few observations"),
+        "{}",
+        entry.text
+    );
+    // Words only the pairwise-flow normal's outcomes bring, so the run was
+    // that step's and not the grown plane's under another label.
+    assert!(
+        ["from a single pair", "undetermined", "unstable"]
+            .iter()
+            .any(|words| entry.text.contains(words)),
+        "{}",
+        entry.text
+    );
+    state.undo(id).expect("one version to take back");
+    assert!(Arc::ptr_eq(&before, &state.scene[0].edited().base));
+}
+
 #[test]
 fn a_pending_point_edit_is_folded_in_and_the_selection_follows_it() {
     let (mut state, id) = refit_state(None);
@@ -96,7 +143,7 @@ fn a_pending_point_edit_is_folded_in_and_the_selection_follows_it() {
     state.selected_point = Some(PointRef::new(id, 5));
 
     state
-        .start_refine_all_normals(id)
+        .start_refine_all_normals(id, RefineAllNormalsStep::GrownPlane)
         .expect("the fixture carries keypoints, frames and poses");
     state.finish_background_tasks();
 
@@ -111,25 +158,31 @@ fn a_pending_point_edit_is_folded_in_and_the_selection_follows_it() {
     assert!(!newest(&state).failed, "{}", newest(&state).text);
 }
 
+/// Of either step.
 #[test]
 fn a_cancelled_refinement_pushes_no_version_and_writes_a_failed_entry() {
-    let (mut state, id) = refit_state(None);
-    let before = Arc::clone(&state.scene[0].edited().base);
-    state
-        .start_refine_all_normals(id)
-        .expect("the fixture carries keypoints, frames and poses");
-    state.cancel_background_tasks();
-    state.finish_background_tasks();
+    for step in [
+        RefineAllNormalsStep::GrownPlane,
+        RefineAllNormalsStep::PairwiseFlow,
+    ] {
+        let (mut state, id) = refit_state(None);
+        let before = Arc::clone(&state.scene[0].edited().base);
+        state
+            .start_refine_all_normals(id, step)
+            .expect("the fixture carries keypoints, frames and poses");
+        state.cancel_background_tasks();
+        state.finish_background_tasks();
 
-    assert_eq!(versions(&state), 1);
-    assert!(Arc::ptr_eq(&before, &state.scene[0].edited().base));
-    let entry = newest(&state);
-    assert!(entry.failed, "{}", entry.text);
-    assert!(
-        entry.text.contains("Refine all normals of demo cancelled"),
-        "{}",
-        entry.text
-    );
+        assert_eq!(versions(&state), 1, "{step:?}");
+        assert!(Arc::ptr_eq(&before, &state.scene[0].edited().base));
+        let entry = newest(&state);
+        assert!(entry.failed, "{}", entry.text);
+        assert!(
+            entry.text.contains("Refine all normals of demo cancelled"),
+            "{}",
+            entry.text
+        );
+    }
 }
 
 #[test]
@@ -137,7 +190,7 @@ fn a_photograph_that_cannot_be_read_fails_the_run_and_names_the_image() {
     let (mut state, id) = refit_state(Some(1));
     let name = state.scene[0].recon().image_set.images[1].name.clone();
     state
-        .start_refine_all_normals(id)
+        .start_refine_all_normals(id, RefineAllNormalsStep::GrownPlane)
         .expect("the gate reads no photograph");
     state.finish_background_tasks();
 
@@ -162,7 +215,7 @@ fn a_reconstruction_with_no_keypoints_is_refused_in_the_menu_s_own_words() {
     assert!(why.contains("Convert to Embedded Patches"), "{why}");
     assert!(why.contains("refining a normal"), "{why}");
     let refused = state
-        .start_refine_all_normals(id)
+        .start_refine_all_normals(id, RefineAllNormalsStep::GrownPlane)
         .expect_err("with no keypoints there is nothing to refine");
     assert!(
         refused.starts_with("Refine all normals of demo refused: "),
@@ -240,5 +293,43 @@ fn a_run_that_turned_nothing_says_so() {
         super::refine_summary(&report),
         "0 of 1 finite points turned, 1 point left its normal unchanged (1 with no view \
          joined), 1 point at infinity skipped"
+    );
+}
+
+/// A pairwise-flow run's sentence names the points read from a single pair
+/// among the turned ones, and its undetermined and unstable points among
+/// those whose normal was left unchanged.
+#[test]
+fn the_entry_names_the_pairwise_flow_outcomes() {
+    let turned = |single_pair| RefineNormalsOutcome::Turned {
+        turn_deg: 6.0,
+        unchanged: false,
+        by: NormalTurned::PairwiseFlow {
+            single_pair,
+            chosen_radius: 1.0,
+            sigma_deg: 2.0,
+        },
+    };
+    let outcomes = [
+        turned(false),
+        turned(true),
+        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::Undetermined),
+        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::Undetermined),
+        RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::Unstable),
+    ];
+    let report = RefineNormalsReport {
+        points: outcomes
+            .into_iter()
+            .enumerate()
+            .map(|(k, outcome)| RefinedNormal {
+                index: k as u32,
+                outcome,
+            })
+            .collect(),
+    };
+    assert_eq!(
+        super::refine_summary(&report),
+        "2 of 5 finite points turned, 1 of them from a single pair, 3 points left their \
+         normal unchanged (2 undetermined, 1 unstable), median turn 6.0\u{b0}"
     );
 }

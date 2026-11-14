@@ -193,9 +193,11 @@ more per point, a dense optical flow per pair of views per round: a median
 of 1.3 s of one thread per point on kerry_park and 4.4 s on dino_dog_toy
 ([`pairwise-flow-normal.md`](pairwise-flow-normal.md) § "Implementation
 notes"), against 6 to 8 ms per observation for the grown plane (§ "Run
-time"). The viewer's *Refine All Normals* and `sfm xform
---refine-normals` run the grown plane; only the Rust option and the Python
-binding's `method` choose the other step.
+time"). The viewer's *Refine All Normals* submenu offers both steps at their
+default options, as its *Grown Plane* and *Pairwise Flow* entries and the
+wire's `method`
+([`../../gui/edits/refine-all-normals.md`](../../gui/edits/refine-all-normals.md));
+`sfm xform --refine-normals` runs the grown plane.
 
 ### The report
 

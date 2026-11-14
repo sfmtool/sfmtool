@@ -256,22 +256,26 @@ pub(super) fn refit_all_points(state: &mut AppState, label: &str) -> super::Outc
     }
 }
 
-/// `refine_all_normals`: start the refinement of every finite point's normal,
-/// and answer with its version or with a handle, whichever the clock reaches
-/// first.
+/// `refine_all_normals`: start the refinement of every finite point's normal
+/// by `step`, and answer with its version or with a handle, whichever the
+/// clock reaches first.
 ///
 /// It replies the way [`refit_all_points`] does: every point is a bench
 /// normal step, so any node of real size outlives [`REPLY_DIRECTLY_WITHIN`]
 /// and answers with a [`BackgroundReply`] the frame resolves. A refusal to
 /// begin is immediate and in `AppState`'s own words, which are the greyed menu
 /// entry's.
-pub(super) fn refine_all_normals(state: &mut AppState, label: &str) -> super::Outcome {
+pub(super) fn refine_all_normals(
+    state: &mut AppState,
+    label: &str,
+    step: crate::state::edits::RefineAllNormalsStep,
+) -> super::Outcome {
     let id = match resolve_reconstruction(state, Some(label)) {
         Ok(id) => id,
         Err(error) => return super::Outcome::Done(Err(error)),
     };
     let since = state.action_log.revision();
-    match state.start_refine_all_normals(id) {
+    match state.start_refine_all_normals(id, step) {
         Err(message) => super::Outcome::Done(Err(ToolError::new(message))),
         Ok(started) => started_or(state, started, super::Answer::Version(id), |state| {
             unchanged_reply(state, id, since)

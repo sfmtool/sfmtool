@@ -188,12 +188,13 @@ pub(crate) struct SceneGraphResponse {
     /// points observe, so `AppState::start_refit_all_points` sends it to a
     /// worker after the frame.
     pub(crate) refit_all_points: Option<ReconId>,
-    /// `Refine All Normals` chosen from a reconstruction's context menu: turn
-    /// every finite point's patch to its grown-plane normal and commit it, as
-    /// the node's next version. A bulk edit that reads every photograph the
-    /// points observe, so `AppState::start_refine_all_normals` sends it to a
-    /// worker after the frame.
-    pub(crate) refine_all_normals: Option<ReconId>,
+    /// An entry of `Refine All Normals ▸` chosen from a reconstruction's
+    /// context menu: turn every finite point's patch to the normal the entry
+    /// names and commit it, as the node's next version. A bulk edit that reads
+    /// every photograph the points observe, so
+    /// `AppState::start_refine_all_normals` sends it to a worker after the
+    /// frame.
+    pub(crate) refine_all_normals: Option<(ReconId, crate::state::edits::RefineAllNormalsStep)>,
     /// `Prune Covered Observations` chosen from a reconstruction's context
     /// menu: retire every observation a finer tracked one covers, as the node's
     /// next version. A bulk edit, and a long one, so

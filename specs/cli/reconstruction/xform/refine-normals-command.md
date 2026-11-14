@@ -3,7 +3,7 @@
 `sfm xform --refine-normals` turns the patch of each finite point of an
 embedded-patches reconstruction to its grown-plane normal: one plane fitted,
 view by view, to the photographs the point is seen in. It is the viewer's
-*Refine All Normals* run from the command line, through
+*Refine All Normals ▸ Grown Plane* run from the command line, through
 `sfmtool.bench.refine_normals` ([refine-normals.md](../../../core/bench/refine-normals.md)),
 with that function's default settings. It moves no point, no camera and no
 keypoint, removes no point and no observation, and reads the workspace's source

@@ -339,11 +339,55 @@ fn refine_all_normals_defers_and_comes_back_with_a_version() {
     assert_eq!(version_count(&state), 2);
     assert_eq!(
         reply["label"],
-        json!("Refined the normals of demo"),
+        json!("Refined the normals of demo with the grown-plane normal"),
         "{reply}"
     );
     let report = reply["report"].as_str().expect("a report");
     assert!(report.contains("finite points turned"), "{report}");
+}
+
+/// `method` chooses the step: none or `grown_plane` is the grown-plane
+/// normal, `pairwise_flow` the pairwise-flow normal, and a method the run does
+/// not take is refused at the parse, naming the two it does. What each step's
+/// run writes is the edit's tests'
+/// (`state/edits/refine_all_normals/tests.rs`).
+#[test]
+fn refine_all_normals_parses_the_step_its_method_names() {
+    use crate::state::edits::RefineAllNormalsStep;
+    let parse = |args: serde_json::Value| {
+        tools::parse(
+            "refine_all_normals",
+            Some(&args.as_object().cloned().expect("an object")),
+        )
+    };
+    for (args, want) in [
+        (
+            json!({ "reconstruction_label": "demo" }),
+            RefineAllNormalsStep::GrownPlane,
+        ),
+        (
+            json!({ "reconstruction_label": "demo", "method": "grown_plane" }),
+            RefineAllNormalsStep::GrownPlane,
+        ),
+        (
+            json!({ "reconstruction_label": "demo", "method": "pairwise_flow" }),
+            RefineAllNormalsStep::PairwiseFlow,
+        ),
+    ] {
+        let command = parse(args.clone()).expect("a well-formed call");
+        assert!(
+            matches!(command, Command::RefineAllNormals { step, .. } if step == want),
+            "{args} parsed as {command:?}"
+        );
+    }
+    let refused = parse(json!({ "reconstruction_label": "demo", "method": "grid_plane" }))
+        .expect_err("grid_plane is not a step the run takes");
+    assert!(
+        refused
+            .to_string()
+            .contains("the methods are grown_plane and pairwise_flow"),
+        "{refused}"
+    );
 }
 
 /// A node whose points carry no patch frame is refused at once, in the greyed
