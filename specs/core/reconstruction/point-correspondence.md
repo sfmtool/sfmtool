@@ -80,12 +80,15 @@ pub fn find_point_correspondences_by_coordinate(
     shared_images_source: &[u32],
     shared_images_target: &[u32],
     options: &CoordinateCorrespondenceOptions, // pixel_threshold 2.0, min_votes 2
-) -> PointCorrespondenceResult
+) -> Result<PointCorrespondenceResult, PointCorrespondenceError>
 ```
 
 It takes the same layout as the feature-index finder, with one keypoint
 position per observation in place of the feature index, so a caller holding
-track columns passes them unchanged.
+track columns passes them unchanged. It returns
+`PointCorrespondenceError::KeypointColumnLength` when one side's three columns
+differ in length and `SharedImagesLength` when the two shared-image arrays do;
+the binding raises each as `ValueError`.
 
 1. For every shared image pair, the two sides' observations of that image are
    matched by **mutual nearest keypoint**: each is the other's nearest

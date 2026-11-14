@@ -301,6 +301,15 @@ the operation applies to any model the projection supports.
 | § 6 robust scale | 3.0 px | soft-L1 transition of the group-consistency cost; above `sat_px`, so a satisfied bridge sits in the quadratic regime and a false match cannot drag the solve |
 | § 6 fit-set cap | 1200 bridges | 7 dof per group are over-determined by a few hundred bridges, so beyond the cap the fit strides down to it; the fit set bounds the whole descent — Jacobian, normal equations, trial steps — and a finite difference within it touches only the fit bridges its parameter block moves, while the corrections are still *scored* on the complete bridge population |
 
+`cluster_census` refuses a threshold it cannot read with
+`CensusError::InvalidParam`: `sat_px` not finite and positive,
+`hi_parallax_deg` or `wilson_z` not finite and non-negative, or
+`warp_percentile` outside `[0, 100]`. A `NaN` threshold would fail every
+comparison, so no cluster would qualify and the score would read a clean 0.0
+that measures nothing. Observation arrays that do not fit together are
+refused too (`NotParallel`, `ClusterIndexesNotSorted`,
+`ClusterIndexOutOfRange`); the binding raises each as `ValueError`.
+
 ## Blind spots (by design; callers must know)
 
 1. **Phantom-built seams are invisible.** A seam glued by predominantly false

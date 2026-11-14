@@ -278,12 +278,20 @@ fn epipolar_curves_batch_matches_scalar() {
     let pts = [[400.0, 300.0], [200.0, 150.0], [500.0, 400.0]];
     let anchors = [5.0, 3.0, 8.0];
     let opts = EpipolarCurveOptions::default();
-    let batch = plot_epipolar_curves_batch(&pts, &anchors, &cam, &pose1, &cam, &pose2, &opts);
+    let batch =
+        plot_epipolar_curves_batch(&pts, &anchors, &cam, &pose1, &cam, &pose2, &opts).unwrap();
     assert_eq!(batch.len(), pts.len());
     for (i, (&p1, &anchor)) in pts.iter().zip(anchors.iter()).enumerate() {
         let scalar = plot_epipolar_curve(p1, &cam, &pose1, &cam, &pose2, anchor, &opts);
         assert_eq!(batch[i], scalar);
     }
+
+    let err = plot_epipolar_curves_batch(&pts, &anchors[..2], &cam, &pose1, &cam, &pose2, &opts)
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "anchor_depths length 2 does not match points1 length 3"
+    );
 }
 
 #[test]

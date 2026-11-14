@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::PointCorrespondenceResult;
+use super::{PointCorrespondenceError, PointCorrespondenceResult};
 
 /// How [`find_point_correspondences_by_coordinate`] decides that two
 /// observations of a shared image are the same keypoint, and how much
@@ -66,9 +66,12 @@ impl Default for CoordinateCorrespondenceOptions {
 /// The three source slices are parallel, one entry per source observation, as
 /// are the three target slices and the two shared-image slices.
 ///
-/// # Panics
+/// # Errors
 ///
-/// If parallel slices differ in length.
+/// [`PointCorrespondenceError::KeypointColumnLength`] when one side's three
+/// columns differ in length, and
+/// [`PointCorrespondenceError::SharedImagesLength`] when the two shared-image
+/// slices do.
 ///
 /// # Example
 ///
@@ -89,9 +92,10 @@ impl Default for CoordinateCorrespondenceOptions {
 ///     &[0, 1],
 ///     &[0, 1],
 ///     &CoordinateCorrespondenceOptions::default(),
-/// );
+/// )?;
 /// assert_eq!(result.source_ids, vec![7]);
 /// assert_eq!(result.target_ids, vec![3]);
+/// # Ok::<(), sfmtool_core::reconstruction::point_correspondence::PointCorrespondenceError>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
 pub fn find_point_correspondences_by_coordinate(
@@ -104,18 +108,36 @@ pub fn find_point_correspondences_by_coordinate(
     shared_images_source: &[u32],
     shared_images_target: &[u32],
     options: &CoordinateCorrespondenceOptions,
-) -> PointCorrespondenceResult {
-    assert_eq!(source_track_image_indexes.len(), source_keypoints_xy.len());
-    assert_eq!(
-        source_track_image_indexes.len(),
-        source_track_point_indexes.len()
-    );
-    assert_eq!(target_track_image_indexes.len(), target_keypoints_xy.len());
-    assert_eq!(
-        target_track_image_indexes.len(),
-        target_track_point_indexes.len()
-    );
-    assert_eq!(shared_images_source.len(), shared_images_target.len());
+) -> Result<PointCorrespondenceResult, PointCorrespondenceError> {
+    for (side, image, keypoints, point) in [
+        (
+            "source",
+            source_track_image_indexes,
+            source_keypoints_xy.len(),
+            source_track_point_indexes,
+        ),
+        (
+            "target",
+            target_track_image_indexes,
+            target_keypoints_xy.len(),
+            target_track_point_indexes,
+        ),
+    ] {
+        if keypoints != image.len() || point.len() != image.len() {
+            return Err(PointCorrespondenceError::KeypointColumnLength {
+                side,
+                image_indexes: image.len(),
+                keypoints,
+                point_indexes: point.len(),
+            });
+        }
+    }
+    if shared_images_source.len() != shared_images_target.len() {
+        return Err(PointCorrespondenceError::SharedImagesLength {
+            source: shared_images_source.len(),
+            target: shared_images_target.len(),
+        });
+    }
 
     let source_rows = finite_rows_by_image(source_track_image_indexes, source_keypoints_xy);
     let target_rows = finite_rows_by_image(target_track_image_indexes, target_keypoints_xy);
@@ -166,10 +188,10 @@ pub fn find_point_correspondences_by_coordinate(
         source_ids.push(src);
         target_ids.push(tgt);
     }
-    PointCorrespondenceResult {
+    Ok(PointCorrespondenceResult {
         source_ids,
         target_ids,
-    }
+    })
 }
 
 /// `image -> rows`, in row order, of the observations with a finite position.

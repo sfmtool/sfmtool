@@ -6,7 +6,7 @@
 //! ``specs/core/analysis/cluster-census.md``).
 
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
-use pyo3::exceptions::PyValueError;
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
@@ -16,6 +16,7 @@ use sfmtool_core::analysis::cluster_census::{
 
 use crate::geometry::reconstruction_growth::{read_observations, read_rows};
 use crate::geometry::PyCameraIntrinsics;
+use crate::helpers::value_err;
 
 /// Score a candidate solve against the raw correspondence evidence it did not
 /// consume (see ``specs/core/analysis/cluster-census.md``).
@@ -121,32 +122,6 @@ pub fn cluster_census<'py>(
     let quats = read_rows::<4>(&quaternions_wxyz, "quaternions_wxyz")?;
     let trans = read_rows::<3>(&translations, "translations")?;
     let posed_idx = to_contiguous!(posed_indexes).into_owned();
-    if quats.len() != posed_idx.len() || trans.len() != posed_idx.len() {
-        return Err(PyValueError::new_err(
-            "quaternions_wxyz, translations, and posed_indexes must share n_posed",
-        ));
-    }
-    if !(0.0..=100.0).contains(&warp_percentile) {
-        return Err(PyValueError::new_err(
-            "warp_percentile must lie in [0, 100]",
-        ));
-    }
-    // A NaN threshold would leak through every comparison below as "no
-    // cluster qualifies" and report a clean 0.0 — the one silent failure the
-    // census must never produce.
-    if !(sat_px.is_finite() && sat_px > 0.0) {
-        return Err(PyValueError::new_err("sat_px must be finite and positive"));
-    }
-    if !(hi_parallax_deg.is_finite() && hi_parallax_deg >= 0.0) {
-        return Err(PyValueError::new_err(
-            "hi_parallax_deg must be finite and non-negative",
-        ));
-    }
-    if !(wilson_z.is_finite() && wilson_z >= 0.0) {
-        return Err(PyValueError::new_err(
-            "wilson_z must be finite and non-negative",
-        ));
-    }
 
     let cam = camera.inner.clone();
     let params = CensusParams {
@@ -162,7 +137,7 @@ pub fn cluster_census<'py>(
                 &clusters, &images, &positions, &warp, &cam, &quats, &trans, &posed_idx, &params,
             )
         })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        .map_err(value_err)?;
 
     let pairs = PyList::empty(py);
     for pair in &report.pairs {

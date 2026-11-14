@@ -399,13 +399,44 @@ fn eval_gap(
     }
 }
 
+/// What [`plot_epipolar_curves_batch`] refuses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EpipolarCurvesError {
+    /// `anchor_depths` does not have one entry per pixel of `points1`.
+    AnchorDepthsLength {
+        /// `anchor_depths.len()`.
+        anchor_depths: usize,
+        /// `points1.len()`.
+        points1: usize,
+    },
+}
+
+impl std::fmt::Display for EpipolarCurvesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AnchorDepthsLength {
+                anchor_depths,
+                points1,
+            } => write!(
+                f,
+                "anchor_depths length {anchor_depths} does not match points1 length {points1}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for EpipolarCurvesError {}
+
 /// Batch form of [`plot_epipolar_curve`]: one polyline per input pixel,
 /// parallelized over points.
 ///
-/// `anchor_depths` must have the same length as `points1` — one seed per
-/// curve. Use the reconstructed depth of the observed track when available,
-/// falling back to baseline length `‖C2 − C1‖` for un-triangulated features.
-/// Output order matches `points1`.
+/// `anchor_depths` has one seed per curve. Use the reconstructed depth of the
+/// observed track when available, falling back to baseline length
+/// `‖C2 − C1‖` for un-triangulated features. Output order matches `points1`.
+///
+/// # Errors
+/// [`EpipolarCurvesError::AnchorDepthsLength`] when `anchor_depths` and
+/// `points1` differ in length.
 pub fn plot_epipolar_curves_batch(
     points1: &[[f64; 2]],
     anchor_depths: &[f64],
@@ -414,17 +445,18 @@ pub fn plot_epipolar_curves_batch(
     cam2: &CameraIntrinsics,
     pose2: &RigidTransform,
     opts: &EpipolarCurveOptions,
-) -> Vec<Vec<[f64; 2]>> {
-    assert_eq!(
-        points1.len(),
-        anchor_depths.len(),
-        "points1 and anchor_depths must have the same length"
-    );
-    points1
+) -> Result<Vec<Vec<[f64; 2]>>, EpipolarCurvesError> {
+    if anchor_depths.len() != points1.len() {
+        return Err(EpipolarCurvesError::AnchorDepthsLength {
+            anchor_depths: anchor_depths.len(),
+            points1: points1.len(),
+        });
+    }
+    Ok(points1
         .par_iter()
         .zip(anchor_depths.par_iter())
         .map(|(&p1, &anchor)| plot_epipolar_curve(p1, cam1, pose1, cam2, pose2, anchor, opts))
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]

@@ -66,7 +66,8 @@ fn a_cluster_the_member_holds_is_not_a_candidate() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert_eq!(out.n_file_clusters, 3);
     assert_eq!(out.n_rows_matched, 2);
     assert_eq!(out.admission_radius, vec![6.0]);
@@ -96,7 +97,8 @@ fn a_cluster_only_one_placed_frame_sees_is_not_a_candidate() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert!(out.candidates.is_empty());
     assert!(out.obs_cluster.is_empty());
 }
@@ -119,7 +121,8 @@ fn the_selected_rows_are_the_candidates_own_rows_on_placed_frames() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert_eq!(out.candidates, vec![1]);
     // Row 4 sits on image 2, which is not placed, so it is not selected.
     assert_eq!(out.obs_cluster, vec![1, 1]);
@@ -142,7 +145,8 @@ fn a_clusters_radius_is_its_widest_members() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert_eq!(out.candidate_radius, vec![6.0 * 0.75]);
 }
 
@@ -170,7 +174,8 @@ fn a_member_row_takes_the_first_selection_row_carrying_its_key() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert_eq!(out.n_rows_matched, 1);
     assert_eq!(out.admission_radius, vec![6.0]);
     assert_eq!(out.candidates, vec![1]);
@@ -188,7 +193,8 @@ fn a_member_row_the_selection_does_not_carry_matches_nothing() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert_eq!(out.n_rows_matched, 1);
 }
 
@@ -204,7 +210,8 @@ fn an_empty_admission_has_no_floor() {
         },
         &[0, 1],
         &EDGES,
-    );
+    )
+    .unwrap();
     assert!(out.admission_radius.is_empty());
     assert!(out.admission_floor_px.is_nan());
     assert_eq!(out.candidates, vec![0]);
@@ -230,7 +237,84 @@ fn the_join_repeats_itself() {
         obs_feature: &[10, 11],
     };
     assert_eq!(
-        source_clusters(sel, m, &[0, 1], &EDGES),
-        source_clusters(sel, m, &[0, 1], &EDGES)
+        source_clusters(sel, m, &[0, 1], &EDGES).unwrap(),
+        source_clusters(sel, m, &[0, 1], &EDGES).unwrap()
     );
+}
+
+#[test]
+fn arrays_that_do_not_fit_together_are_refused() {
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0)]);
+    let starts = [0u32, 2];
+    let member = MemberIdentity {
+        obs_image: &[0],
+        obs_feature: &[10],
+    };
+    let run = |sel: SourceSelection<'_>, member: MemberIdentity<'_>| {
+        source_clusters(sel, member, &[0, 1], &EDGES)
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        run(selection(&starts, &img, &feat[..1], &pos, &shp, 2), member),
+        "member_images and member_features must share the same length, got 2 and 1"
+    );
+    assert_eq!(
+        run(selection(&starts, &img, &feat, &pos[..3], &shp, 2), member),
+        "member_positions holds 3 values, not 2 for each of the 2 selection rows"
+    );
+    assert_eq!(
+        run(selection(&starts, &img, &feat, &pos, &shp[..4], 2), member),
+        "member_affine_shapes holds 4 values, not 4 for each of the 2 selection rows"
+    );
+    assert_eq!(
+        run(
+            selection(&starts, &img, &feat, &pos, &shp, 2),
+            MemberIdentity {
+                obs_image: &[0, 1],
+                obs_feature: &[10],
+            }
+        ),
+        "obs_image and obs_feature must share the same length, got 2 and 1"
+    );
+    assert_eq!(
+        run(selection(&[], &img, &feat, &pos, &shp, 2), member),
+        "cluster_starts must carry at least one boundary"
+    );
+    assert_eq!(
+        run(selection(&[0, 2, 1], &img, &feat, &pos, &shp, 2), member),
+        "cluster_starts must be non-decreasing, got 1 after 2 at index 2"
+    );
+    assert_eq!(
+        run(selection(&[0, 3], &img, &feat, &pos, &shp, 2), member),
+        "cluster_starts[-1] = 3 exceeds the 2 selection rows"
+    );
+}
+
+#[test]
+fn a_huge_image_count_allocates_nothing_for_itself() {
+    // `n_images` is the caller's count; the join sizes its frame table by the
+    // frames it is given, so an absurd count answers as a fitting one does.
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 20, 1.0), (1, 21, 1.0)]);
+    let starts = [0u32, 2, 4];
+    let member = MemberIdentity {
+        obs_image: &[0, 1],
+        obs_feature: &[10, 11],
+    };
+    let fitting = source_clusters(
+        selection(&starts, &img, &feat, &pos, &shp, 2),
+        member,
+        &[0, 1],
+        &EDGES,
+    )
+    .unwrap();
+    let huge = source_clusters(
+        selection(&starts, &img, &feat, &pos, &shp, usize::MAX),
+        member,
+        &[0, 1],
+        &EDGES,
+    )
+    .unwrap();
+    assert_eq!(fitting.candidates, vec![1]);
+    assert_eq!(huge, fitting);
 }

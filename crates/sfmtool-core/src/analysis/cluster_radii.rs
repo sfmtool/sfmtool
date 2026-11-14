@@ -31,10 +31,32 @@ use sfmtool_matches_format::MatchesData;
 
 use crate::geometry::focal_vote::contiguous;
 
-/// What [`cluster_radii_from_matches`] and [`coarsest_cluster_ids_from_matches`]
-/// refuse: a property of the `.matches` file, never of the radius reading.
+/// What the radius readings refuse: a CSR index or a shape array that do not
+/// fit together, or, for [`cluster_radii_from_matches`] and
+/// [`coarsest_cluster_ids_from_matches`], a `.matches` file that lacks what the
+/// reading needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterRadiiError {
+    /// `cluster_starts` is empty, so it does not even close the empty
+    /// backbone.
+    NoBoundary,
+    /// `cluster_starts` decreases.
+    StartsDecreasing {
+        /// The position of the first offset below its predecessor.
+        index: usize,
+    },
+    /// The last offset of `cluster_starts` is not the member count.
+    StartsDoNotClose {
+        /// The last offset.
+        last: u32,
+        /// The member count, a quarter of the shape values.
+        n_members: usize,
+    },
+    /// The shapes are not four values per member.
+    ShapesNotFourPerMember {
+        /// How many values there are.
+        len: usize,
+    },
     /// The file stores the pairwise backbone, so it holds no clusters to
     /// measure.
     NoClusters,
@@ -52,6 +74,19 @@ pub enum ClusterRadiiError {
 impl std::fmt::Display for ClusterRadiiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NoBoundary => write!(f, "cluster_starts must carry at least one boundary"),
+            Self::StartsDecreasing { index } => write!(
+                f,
+                "cluster_starts must be nondecreasing; it decreases at index {index}"
+            ),
+            Self::StartsDoNotClose { last, n_members } => write!(
+                f,
+                "cluster_starts must close at the member count ({n_members}), not {last}"
+            ),
+            Self::ShapesNotFourPerMember { len } => write!(
+                f,
+                "member_affine_shapes holds {len} values, not four per member"
+            ),
             Self::NoClusters => write!(
                 f,
                 "this .matches file carries no clusters/ section: a cluster radius needs \
@@ -104,11 +139,16 @@ pub fn member_radii(member_affine_shapes: &[f32], refine_radius: f32) -> Vec<f32
 /// "radius" means what it meant when the cluster's admission was drawn.
 ///
 /// `cluster_starts` is the CSR index over the members (`n_clusters + 1`
-/// offsets); cluster `c` owns members `cluster_starts[c]..cluster_starts[c+1]`.
-/// A cluster with no members reads `0.0`. Offsets are clamped to the member
-/// count, and members no cluster's range covers contribute to nothing, so a
-/// caller reading a well-formed backbone gets every member counted exactly
-/// once.
+/// offsets, nondecreasing, the last the member count); cluster `c` owns
+/// members `cluster_starts[c]..cluster_starts[c+1]`. A cluster with no members
+/// reads `0.0`.
+///
+/// # Errors
+/// [`ClusterRadiiError::ShapesNotFourPerMember`] when the shapes are not four
+/// values per member, and [`ClusterRadiiError::NoBoundary`],
+/// [`ClusterRadiiError::StartsDecreasing`] or
+/// [`ClusterRadiiError::StartsDoNotClose`] when `cluster_starts` is not such
+/// an index.
 ///
 /// ```
 /// use sfmtool_core::analysis::cluster_radii::cluster_radii;
@@ -120,32 +160,53 @@ pub fn member_radii(member_affine_shapes: &[f32], refine_radius: f32) -> Vec<f32
 ///     0.5, 0.0, 0.0, 0.5, // member 1: radius 6 * 0.5
 ///     2.0, 0.0, 0.0, 2.0, // member 2: radius 6 * 2.0
 /// ];
-/// assert_eq!(cluster_radii(&starts, &shapes, 6.0), vec![6.0, 12.0]);
+/// assert_eq!(cluster_radii(&starts, &shapes, 6.0)?, vec![6.0, 12.0]);
+/// # Ok::<(), sfmtool_core::analysis::cluster_radii::ClusterRadiiError>(())
 /// ```
 pub fn cluster_radii(
     cluster_starts: &[u32],
     member_affine_shapes: &[f32],
     refine_radius: f32,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, ClusterRadiiError> {
+    check_index(cluster_starts, member_affine_shapes)?;
     let row_radius = member_radii(member_affine_shapes, refine_radius);
-    let n_member = row_radius.len();
-    let n_cl = cluster_starts.len().saturating_sub(1);
-    (0..n_cl)
-        .into_par_iter()
-        .map(|c| {
-            let hi = (cluster_starts[c + 1] as usize).min(n_member);
-            // `min(hi)` rather than an assert: a non-monotonic offset pair is an
-            // empty cluster here, the same reading the CSR walk elsewhere gives.
-            let lo = (cluster_starts[c] as usize).min(hi);
+    Ok(cluster_starts
+        .par_windows(2)
+        .map(|w| {
             let mut widest = 0.0f32;
-            for &r in &row_radius[lo..hi] {
+            for &r in &row_radius[w[0] as usize..w[1] as usize] {
                 if r > widest {
                     widest = r;
                 }
             }
             widest
         })
-        .collect()
+        .collect())
+}
+
+/// Refuse a CSR index and shape array that do not fit together: the shapes
+/// four values per member, and the index nonempty, nondecreasing and closing
+/// at the member count.
+fn check_index(
+    cluster_starts: &[u32],
+    member_affine_shapes: &[f32],
+) -> Result<(), ClusterRadiiError> {
+    if !member_affine_shapes.len().is_multiple_of(4) {
+        return Err(ClusterRadiiError::ShapesNotFourPerMember {
+            len: member_affine_shapes.len(),
+        });
+    }
+    let Some(&last) = cluster_starts.last() else {
+        return Err(ClusterRadiiError::NoBoundary);
+    };
+    if let Some(at) = cluster_starts.windows(2).position(|w| w[1] < w[0]) {
+        return Err(ClusterRadiiError::StartsDecreasing { index: at + 1 });
+    }
+    let n_members = member_affine_shapes.len() / 4;
+    if last as usize != n_members {
+        return Err(ClusterRadiiError::StartsDoNotClose { last, n_members });
+    }
+    Ok(())
 }
 
 /// Ids of the `n` coarsest clusters: radius descending, id ascending on ties,
@@ -154,6 +215,9 @@ pub fn cluster_radii(
 /// The ascending return is what composes as a restriction, while the descending
 /// ordering behind it decides membership. Fewer than `n` clusters returns all
 /// of them.
+///
+/// # Errors
+/// As for [`cluster_radii`].
 ///
 /// ```
 /// use sfmtool_core::analysis::cluster_radii::coarsest_cluster_ids;
@@ -165,18 +229,19 @@ pub fn cluster_radii(
 ///     1.0, 0.0, 0.0, 1.0, //
 ///     2.0, 0.0, 0.0, 2.0, //
 /// ];
-/// assert_eq!(coarsest_cluster_ids(&starts, &shapes, 6.0, 2), vec![0, 2]);
+/// assert_eq!(coarsest_cluster_ids(&starts, &shapes, 6.0, 2)?, vec![0, 2]);
+/// # Ok::<(), sfmtool_core::analysis::cluster_radii::ClusterRadiiError>(())
 /// ```
 pub fn coarsest_cluster_ids(
     cluster_starts: &[u32],
     member_affine_shapes: &[f32],
     refine_radius: f32,
     n: usize,
-) -> Vec<u32> {
-    coarsest_by_radius(
-        &cluster_radii(cluster_starts, member_affine_shapes, refine_radius),
+) -> Result<Vec<u32>, ClusterRadiiError> {
+    Ok(coarsest_by_radius(
+        &cluster_radii(cluster_starts, member_affine_shapes, refine_radius)?,
         n,
-    )
+    ))
 }
 
 /// The coarsest-N cut over radii already in hand; see [`coarsest_cluster_ids`].
@@ -232,11 +297,11 @@ fn coarsest_by_radius(radius: &[f32], n: usize) -> Vec<u32> {
 /// ```
 pub fn cluster_radii_from_matches(matches: &MatchesData) -> Result<Vec<f32>, ClusterRadiiError> {
     let input = RadiiInput::read(matches)?;
-    Ok(cluster_radii(
+    cluster_radii(
         &input.cluster_starts,
         &input.member_affine_shapes,
         input.refine_radius,
-    ))
+    )
 }
 
 /// The coarsest-N cut over a parsed `.matches` file; see

@@ -244,26 +244,18 @@ pub fn find_point_correspondences_by_coordinate_py(
     let tgt_pts = to_contiguous!(target_track_point_indexes);
     let shared_src = to_contiguous!(shared_images_source);
     let shared_tgt = to_contiguous!(shared_images_target);
-    let rows = |name: &str, xy: &PyReadonlyArray2<f64>, n: usize| -> PyResult<Vec<[f64; 2]>> {
+    let rows = |name: &str, xy: &PyReadonlyArray2<f64>| -> PyResult<Vec<[f64; 2]>> {
         let a = xy.as_array();
-        if a.ncols() != 2 || a.nrows() != n {
+        if a.ncols() != 2 {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "{name} must have shape ({n}, 2), one row per observation; got {:?}",
+                "{name} must have shape (N, 2); got {:?}",
                 a.shape()
             )));
         }
         Ok(a.rows().into_iter().map(|r| [r[0], r[1]]).collect())
     };
-    let src_xy = rows("source_keypoints_xy", &source_keypoints_xy, src_img.len())?;
-    let tgt_xy = rows("target_keypoints_xy", &target_keypoints_xy, tgt_img.len())?;
-    if src_pts.len() != src_img.len()
-        || tgt_pts.len() != tgt_img.len()
-        || shared_src.len() != shared_tgt.len()
-    {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "the track columns of each side, and the two shared-image arrays, must have equal lengths",
-        ));
-    }
+    let src_xy = rows("source_keypoints_xy", &source_keypoints_xy)?;
+    let tgt_xy = rows("target_keypoints_xy", &target_keypoints_xy)?;
 
     let result = find_point_correspondences_by_coordinate(
         &src_img,
@@ -278,7 +270,8 @@ pub fn find_point_correspondences_by_coordinate_py(
             pixel_threshold,
             min_votes,
         },
-    );
+    )
+    .map_err(value_err)?;
 
     Ok((
         numpy::PyArray1::from_vec(py, result.source_ids)

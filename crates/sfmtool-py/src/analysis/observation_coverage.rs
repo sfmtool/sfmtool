@@ -7,9 +7,9 @@ use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUnty
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use sfmtool_core::analysis::observation_coverage::{
-    ObservationCoverage, DEFAULT_CELL_PX, MAX_SECTORS,
-};
+use sfmtool_core::analysis::observation_coverage::{ObservationCoverage, DEFAULT_CELL_PX};
+
+use crate::helpers::value_err;
 
 /// Per-image occupancy grids over the image-space footprints of a
 /// reconstruction's observations.
@@ -47,38 +47,17 @@ impl PyObservationCoverage {
         radii_px: PyReadonlyArray1<f32>,
         cell_px: u32,
     ) -> PyResult<Self> {
-        if cell_px == 0 {
-            return Err(PyValueError::new_err("cell_px must be positive"));
-        }
         if image_sizes.shape()[1] != 2 {
             return Err(PyValueError::new_err("image_sizes must have shape (I, 2)"));
         }
         if keypoints_xy.shape()[1] != 2 {
             return Err(PyValueError::new_err("keypoints_xy must have shape (N, 2)"));
         }
-        let n_obs = keypoints_xy.shape()[0];
-        for (name, len) in [
-            ("track_image_indexes", track_image_indexes.shape()[0]),
-            ("radii_px", radii_px.shape()[0]),
-        ] {
-            if len != n_obs {
-                return Err(PyValueError::new_err(format!(
-                    "{name} has {len} entries but keypoints_xy has {n_obs}"
-                )));
-            }
-        }
 
         let sizes_data = to_contiguous!(image_sizes);
         let image_idx_data = to_contiguous!(track_image_indexes);
         let keypoints_data = to_contiguous!(keypoints_xy);
         let radii_data = to_contiguous!(radii_px);
-
-        let n_images = image_sizes.shape()[0];
-        if let Some(&bad) = image_idx_data.iter().find(|&&i| i as usize >= n_images) {
-            return Err(PyValueError::new_err(format!(
-                "track_image_indexes contains {bad}, out of range for {n_images} images"
-            )));
-        }
 
         let sizes: Vec<[u32; 2]> = sizes_data
             .as_chunks::<2>()
@@ -93,9 +72,17 @@ impl PyObservationCoverage {
             .map(|c| [c[0], c[1]])
             .collect();
 
-        let inner = py.detach(|| {
-            ObservationCoverage::build(&sizes, &image_idx_data, &keypoints, &radii_data, cell_px)
-        });
+        let inner = py
+            .detach(|| {
+                ObservationCoverage::build(
+                    &sizes,
+                    &image_idx_data,
+                    &keypoints,
+                    &radii_data,
+                    cell_px,
+                )
+            })
+            .map_err(value_err)?;
         Ok(Self { inner })
     }
 
@@ -137,8 +124,10 @@ impl PyObservationCoverage {
         image_indexes: PyReadonlyArray1<u32>,
         xy: PyReadonlyArray2<f64>,
     ) -> PyResult<Py<PyAny>> {
-        let (images, points) = self.check_batch(&image_indexes, &xy)?;
-        let counts = py.detach(|| self.inner.counts_at(&images, &points));
+        let (images, points) = batch(&image_indexes, &xy)?;
+        let counts = py
+            .detach(|| self.inner.counts_at(&images, &points))
+            .map_err(value_err)?;
         Ok(PyArray1::from_vec(py, counts).into_any().unbind())
     }
 
@@ -159,9 +148,11 @@ impl PyObservationCoverage {
         xy: PyReadonlyArray2<f64>,
         radius_px: PyReadonlyArray1<f32>,
     ) -> PyResult<Py<PyAny>> {
-        let (images, points) = self.check_batch(&image_indexes, &xy)?;
-        let radii = check_radii(&radius_px, points.len())?;
-        let fractions = py.detach(|| self.inner.covered_fraction(&images, &points, &radii));
+        let (images, points) = batch(&image_indexes, &xy)?;
+        let radii = to_contiguous!(radius_px);
+        let fractions = py
+            .detach(|| self.inner.covered_fraction(&images, &points, &radii))
+            .map_err(value_err)?;
         Ok(PyArray1::from_vec(py, fractions).into_any().unbind())
     }
 
@@ -190,17 +181,14 @@ impl PyObservationCoverage {
         radius_px: PyReadonlyArray1<f32>,
         n_sectors: u32,
     ) -> PyResult<Py<PyAny>> {
-        if n_sectors == 0 || n_sectors > MAX_SECTORS {
-            return Err(PyValueError::new_err(format!(
-                "n_sectors must be between 1 and {MAX_SECTORS}, got {n_sectors}"
-            )));
-        }
-        let (images, points) = self.check_batch(&image_indexes, &xy)?;
-        let radii = check_radii(&radius_px, points.len())?;
-        let masks = py.detach(|| {
-            self.inner
-                .uncovered_sectors(&images, &points, &radii, n_sectors)
-        });
+        let (images, points) = batch(&image_indexes, &xy)?;
+        let radii = to_contiguous!(radius_px);
+        let masks = py
+            .detach(|| {
+                self.inner
+                    .uncovered_sectors(&images, &points, &radii, n_sectors)
+            })
+            .map_err(value_err)?;
         Ok(PyArray1::from_vec(py, masks).into_any().unbind())
     }
 
@@ -224,47 +212,20 @@ impl PyObservationCoverage {
     }
 }
 
-impl PyObservationCoverage {
-    /// Validate the two arrays every batch query shares and unpack them.
-    fn check_batch(
-        &self,
-        image_indexes: &PyReadonlyArray1<u32>,
-        xy: &PyReadonlyArray2<f64>,
-    ) -> PyResult<(Vec<u32>, Vec<[f64; 2]>)> {
-        if xy.shape()[1] != 2 {
-            return Err(PyValueError::new_err("xy must have shape (M, 2)"));
-        }
-        let n = xy.shape()[0];
-        if image_indexes.shape()[0] != n {
-            return Err(PyValueError::new_err(format!(
-                "image_indexes has {} entries but xy has {n}",
-                image_indexes.shape()[0]
-            )));
-        }
-        let images: Vec<u32> = to_contiguous!(image_indexes).into_owned();
-        let n_images = self.inner.image_count();
-        if let Some(&bad) = images.iter().find(|&&i| i as usize >= n_images) {
-            return Err(PyValueError::new_err(format!(
-                "image_indexes contains {bad}, out of range for {n_images} images"
-            )));
-        }
-        let points: Vec<[f64; 2]> = to_contiguous!(xy)
-            .chunks_exact(2)
-            .map(|c| [c[0], c[1]])
-            .collect();
-        Ok((images, points))
+/// Unpack the two arrays every batch query shares; the core checks them.
+fn batch(
+    image_indexes: &PyReadonlyArray1<u32>,
+    xy: &PyReadonlyArray2<f64>,
+) -> PyResult<(Vec<u32>, Vec<[f64; 2]>)> {
+    if xy.shape()[1] != 2 {
+        return Err(PyValueError::new_err("xy must have shape (M, 2)"));
     }
-}
-
-/// Validate a per-query radius array against the query count.
-fn check_radii(radius_px: &PyReadonlyArray1<f32>, n: usize) -> PyResult<Vec<f32>> {
-    if radius_px.shape()[0] != n {
-        return Err(PyValueError::new_err(format!(
-            "radius_px has {} entries but xy has {n}",
-            radius_px.shape()[0]
-        )));
-    }
-    Ok(to_contiguous!(radius_px).into_owned())
+    let images: Vec<u32> = to_contiguous!(image_indexes).into_owned();
+    let points: Vec<[f64; 2]> = to_contiguous!(xy)
+        .chunks_exact(2)
+        .map(|c| [c[0], c[1]])
+        .collect();
+    Ok((images, points))
 }
 
 // ── Registration ──────────────────────────────────────────────────────────

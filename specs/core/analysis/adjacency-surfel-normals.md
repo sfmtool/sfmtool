@@ -146,8 +146,16 @@ pub fn estimate_adjacency_surfel_normals(
     selected: &[bool],               // which points to fit
     extras: &ExtraNeighbours,        // CSR of extra positions, may be empty
     params: &AdjacencySurfelParams,
-) -> AdjacencySurfelNormals
+) -> Result<AdjacencySurfelNormals, AdjacencySurfelNormalsError>
 ```
+
+`AdjacencySurfelNormalsError` refuses inputs that do not fit the cloud:
+`view_dirs` or `selected` without one entry per point, an `offsets` /
+`neighbours` pair that is not a CSR adjacency over the points (`n + 1`
+non-decreasing offsets ending at the neighbour count, every neighbour a
+point), and `extras` whose offsets are neither empty nor such an index over
+its positions. An empty cloud checks only the per-point slices. The binding
+raises each as `ValueError`.
 
 The per-point work is independent; the implementation parallelizes over
 selected points with per-point 3×3 symmetric eigendecompositions (choosing

@@ -346,8 +346,7 @@ fn test_merge_group_averages_only_its_finite_points() {
 #[test]
 fn test_correspondence_column_lengths_are_errors() {
     let err = find_point_correspondences(&[0, 0], &[0], &[0, 1], &[0], &[0], &[0], &[0], &[0])
-        .err()
-        .expect("unequal source columns are an error");
+        .expect_err("unequal source columns are an error");
     assert_eq!(
         err,
         PointCorrespondenceError::TrackColumnLength {

@@ -59,6 +59,105 @@ pub struct MemberIdentity<'a> {
     pub obs_feature: &'a [u32],
 }
 
+/// What [`source_clusters`] refuses: selection or member arrays that do not fit
+/// together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceClustersError {
+    /// `member_images` and `member_features` differ in length.
+    MemberFeaturesLength {
+        /// `member_images.len()`.
+        member_images: usize,
+        /// `member_features.len()`.
+        member_features: usize,
+    },
+    /// A per-row geometry array does not hold `per_row` values for each of the
+    /// `n_member` selection rows.
+    MemberGeometryLength {
+        /// The array.
+        name: &'static str,
+        /// How many values it holds.
+        len: usize,
+        /// The values each row takes.
+        per_row: usize,
+        /// The selection rows.
+        n_member: usize,
+    },
+    /// `obs_image` and `obs_feature` differ in length.
+    ObservationLength {
+        /// `obs_image.len()`.
+        obs_image: usize,
+        /// `obs_feature.len()`.
+        obs_feature: usize,
+    },
+    /// `cluster_starts` is empty.
+    NoBoundary,
+    /// `cluster_starts` decreases.
+    StartsDecreasing {
+        /// The position of the first offset below its predecessor.
+        index: usize,
+        /// That offset.
+        value: u32,
+        /// The offset before it.
+        previous: u32,
+    },
+    /// The last offset of `cluster_starts` is past the selection rows.
+    StartsPastRows {
+        /// The last offset.
+        last: u32,
+        /// The selection rows.
+        n_member: usize,
+    },
+}
+
+impl std::fmt::Display for SourceClustersError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MemberFeaturesLength {
+                member_images,
+                member_features,
+            } => write!(
+                f,
+                "member_images and member_features must share the same length, got \
+                 {member_images} and {member_features}"
+            ),
+            Self::MemberGeometryLength {
+                name,
+                len,
+                per_row,
+                n_member,
+            } => write!(
+                f,
+                "{name} holds {len} values, not {per_row} for each of the {n_member} \
+                 selection rows"
+            ),
+            Self::ObservationLength {
+                obs_image,
+                obs_feature,
+            } => write!(
+                f,
+                "obs_image and obs_feature must share the same length, got {obs_image} and \
+                 {obs_feature}"
+            ),
+            Self::NoBoundary => write!(f, "cluster_starts must carry at least one boundary"),
+            Self::StartsDecreasing {
+                index,
+                value,
+                previous,
+            } => write!(
+                f,
+                "cluster_starts must be non-decreasing, got {value} after {previous} at \
+                 index {index}"
+            ),
+            Self::StartsPastRows { last, n_member } => write!(
+                f,
+                "cluster_starts[-1] = {last} exceeds the {n_member} selection rows"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SourceClustersError {}
+
 /// What the join found.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceClusters {
@@ -98,34 +197,22 @@ pub struct SourceClusters {
 /// and `band_edges[k + 1]` its lower one, half open, so band `k` holds the radii
 /// in `[floor * band_edges[k + 1], floor * band_edges[k])`. A radius under the
 /// last edge falls in no band and reads `-1`.
+///
+/// `cluster_starts` must be nonempty and nondecreasing and end at most at the
+/// selection's row count. A frame or a row's image at or past `n_images` is on
+/// no placed frame.
+///
+/// # Errors
+/// A [`SourceClustersError`] when the selection's per-row arrays, the member's
+/// two identity arrays, or `cluster_starts` do not fit together.
 pub fn source_clusters(
     sel: SourceSelection<'_>,
     member: MemberIdentity<'_>,
     frames: &[u32],
     band_edges: &[f64],
-) -> SourceClusters {
-    let n_member = sel.member_images.len();
-    assert_eq!(
-        sel.member_features.len(),
-        n_member,
-        "member_images/member_features mismatch"
-    );
-    assert_eq!(
-        sel.member_positions.len(),
-        n_member * 2,
-        "member_positions must be n_member * 2"
-    );
-    assert_eq!(
-        sel.member_affine_shapes.len(),
-        n_member * 4,
-        "member_affine_shapes must be n_member * 4"
-    );
-    assert_eq!(
-        member.obs_image.len(),
-        member.obs_feature.len(),
-        "obs_image/obs_feature mismatch"
-    );
-    let n_cl = sel.cluster_starts.len().saturating_sub(1);
+) -> Result<SourceClusters, SourceClustersError> {
+    let n_member = check_input(sel, member)?;
+    let n_cl = sel.cluster_starts.len() - 1;
 
     let row_cluster = cluster_of_row(sel.cluster_starts, n_member);
     // Cluster radius: the widest of its own members', so "radius" means here
@@ -144,24 +231,41 @@ pub fn source_clusters(
         .par_iter()
         .map(|&v| v as f32)
         .collect();
-    let cluster_radius: Vec<f64> =
-        cluster_radii(sel.cluster_starts, &shapes, sel.refine_radius as f32)
-            .into_iter()
-            .map(f64::from)
-            .collect();
+    //
+    // The radius reading takes an index that closes at its member count, so it
+    // is given the rows up to the index's end; a row past it is in no
+    // cluster's range and widens no cluster.
+    let covered = *sel.cluster_starts.last().expect("checked nonempty") as usize;
+    let cluster_radius: Vec<f64> = cluster_radii(
+        sel.cluster_starts,
+        &shapes[..covered * 4],
+        sel.refine_radius as f32,
+    )
+    .expect("an index checked against the selection rows")
+    .into_iter()
+    .map(f64::from)
+    .collect();
 
     let (admitted, n_rows_matched) = admission_mask(sel, member, &row_cluster, n_cl);
 
-    let mut on_frame = vec![false; sel.n_images];
+    // Sized by the frames rather than by `n_images`, which is the caller's
+    // count and is never allocated for.
+    let n_on_frame = frames
+        .iter()
+        .map(|&f| f as usize + 1)
+        .max()
+        .unwrap_or(0)
+        .min(sel.n_images);
+    let mut on_frame = vec![false; n_on_frame];
     for &f in frames {
-        if (f as usize) < sel.n_images {
-            on_frame[f as usize] = true;
+        if let Some(slot) = on_frame.get_mut(f as usize) {
+            *slot = true;
         }
     }
     let keep_row: Vec<bool> = sel
         .member_images
         .par_iter()
-        .map(|&i| (i as usize) < sel.n_images && on_frame[i as usize])
+        .map(|&i| on_frame.get(i as usize).copied().unwrap_or(false))
         .collect();
 
     let mut seen = vec![0u32; n_cl];
@@ -219,7 +323,7 @@ pub fn source_clusters(
         obs_shape.extend_from_slice(&sel.member_affine_shapes[r * 4..r * 4 + 4]);
     }
 
-    SourceClusters {
+    Ok(SourceClusters {
         n_file_clusters: n_cl,
         n_rows_matched,
         admission_radius,
@@ -232,7 +336,55 @@ pub fn source_clusters(
         obs_feature,
         obs_uv,
         obs_shape,
+    })
+}
+
+/// Refuse selection and member arrays that do not fit together, returning the
+/// selection's row count.
+fn check_input(
+    sel: SourceSelection<'_>,
+    member: MemberIdentity<'_>,
+) -> Result<usize, SourceClustersError> {
+    let n_member = sel.member_images.len();
+    if sel.member_features.len() != n_member {
+        return Err(SourceClustersError::MemberFeaturesLength {
+            member_images: n_member,
+            member_features: sel.member_features.len(),
+        });
     }
+    for (name, len, per_row) in [
+        ("member_positions", sel.member_positions.len(), 2),
+        ("member_affine_shapes", sel.member_affine_shapes.len(), 4),
+    ] {
+        if len != n_member * per_row {
+            return Err(SourceClustersError::MemberGeometryLength {
+                name,
+                len,
+                per_row,
+                n_member,
+            });
+        }
+    }
+    if member.obs_image.len() != member.obs_feature.len() {
+        return Err(SourceClustersError::ObservationLength {
+            obs_image: member.obs_image.len(),
+            obs_feature: member.obs_feature.len(),
+        });
+    }
+    let Some(&last) = sel.cluster_starts.last() else {
+        return Err(SourceClustersError::NoBoundary);
+    };
+    if let Some(k) = sel.cluster_starts.windows(2).position(|w| w[1] < w[0]) {
+        return Err(SourceClustersError::StartsDecreasing {
+            index: k + 1,
+            value: sel.cluster_starts[k + 1],
+            previous: sel.cluster_starts[k],
+        });
+    }
+    if last as usize > n_member {
+        return Err(SourceClustersError::StartsPastRows { last, n_member });
+    }
+    Ok(n_member)
 }
 
 /// The band index of every radius, or `-1` past the last edge.
