@@ -96,7 +96,11 @@ def test_solve_incremental(isolated_seoul_bull_17_images: list[Path]):
 
 
 def test_solve_global(isolated_seoul_bull_17_images: list[Path]):
-    """Test global SfM (GLOMAP) on a small set of images."""
+    """Test global SfM on a small set of images.
+
+    The global mapper is COLMAP's, run through pycolmap, so the file records
+    COLMAP at pycolmap's version, and `algorithm: global` in its tool options.
+    """
     workspace_dir = isolated_seoul_bull_17_images[0].parent
 
     # Initialize workspace
@@ -123,6 +127,15 @@ def test_solve_global(isolated_seoul_bull_17_images: list[Path]):
     assert "Running global SfM" in result.output
     assert "Found reconstruction" in result.output
     assert output_path.exists()
+
+    import pycolmap
+
+    from sfmtool.fileio import read_sfmr_metadata
+
+    meta = read_sfmr_metadata(str(output_path))
+    assert meta["tool"] == "colmap"
+    assert meta["tool_version"] == pycolmap.__version__
+    assert meta["tool_options"]["algorithm"] == "global"
 
 
 def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):

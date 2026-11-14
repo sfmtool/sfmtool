@@ -390,6 +390,27 @@ def test_single_image_dimension_is_accepted():
     assert ei._resolve_dimensions(dims, ["a.jpg", "b.jpg"]) == (640, 480)
 
 
+# ── The timing line ──────────────────────────────────────────────────────────
+
+_COMPLETED_LINE = re.compile(r"Completed in (\d+m )?\d+\.\d\ds")
+
+
+def test_timing_line_ends_stdout_or_stderr_under_json(stub_estimate):
+    """The report ends with the "Completed in" line on stdout; under --json it
+    goes to stderr, and stdout holds the JSON alone."""
+    result = _estimate(camera_model="Pinhole", focal_px=300.0)
+
+    out = stub_estimate(result)
+    assert out.exit_code == 0, out.output
+    assert _COMPLETED_LINE.fullmatch(out.stdout.splitlines()[-1])
+    assert out.stderr == ""
+
+    out = stub_estimate(result, "--json")
+    assert out.exit_code == 0, out.output
+    assert json.loads(out.stdout)["focal_px"] == pytest.approx(300.0)
+    assert _COMPLETED_LINE.fullmatch(out.stderr.strip())
+
+
 # ── --json ───────────────────────────────────────────────────────────────────
 
 
@@ -406,7 +427,7 @@ def test_json_is_serializable_and_carries_the_derived_fields(stub_estimate):
     )
     out = stub_estimate(result, "--json")
     assert out.exit_code == 0, out.output
-    payload = json.loads(out.output)
+    payload = json.loads(out.stdout)
     # The binding's dict, verbatim.
     assert payload["camera_model"] == "EquidistantFisheye"
     assert payload["focal_px"] == pytest.approx(131.0)
@@ -443,7 +464,7 @@ def test_json_carries_the_screening_vote_of_an_escalated_run(stub_estimate):
     )
     out = stub_estimate(result, "--json")
     assert out.exit_code == 0, out.output
-    payload = json.loads(out.output)
+    payload = json.loads(out.stdout)
     # The top level is the escalated run; the pinhole-only numbers the
     # escalation was decided on are under `screening_vote`.
     assert payload["focal_px"] == pytest.approx(131.0)
@@ -982,7 +1003,7 @@ def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
         main, ["estimate-intrinsics", "-i", str(cluster_matches_file), "--json"]
     )
     assert out.exit_code == 0, out.output
-    payload = json.loads(out.output)
+    payload = json.loads(out.stdout)
     assert payload["camera_model"] == "Pinhole"
     assert payload["focal_px"] == pytest.approx(focal, abs=0.01)
     assert payload["fisheye_confirmed"] is None
@@ -1050,7 +1071,7 @@ def test_estimate_intrinsics_draws_on_a_real_capture(cluster_matches_file: Path)
             ["estimate-intrinsics", "-i", str(cluster_matches_file), "--json", *args],
         )
         assert out.exit_code == 0, out.output
-        return json.loads(out.output)
+        return json.loads(out.stdout)
 
     several = run("--draws", "5")
     default = run()

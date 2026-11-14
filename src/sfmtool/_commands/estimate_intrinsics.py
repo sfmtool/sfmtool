@@ -13,9 +13,10 @@ corroborated, which votes are the evidence behind it -- belong to the
 `estimate_intrinsics` kernel, not to this module; the command reads them off
 its result and spends its own code on I/O, the report and the `.camrig`.
 
-Unlike its siblings the command is not wrapped in `timed_command` -- `--json`
-puts the vote result on stdout, and a trailing timing line would stop that
-output being parseable.
+Like most commands it is wrapped in `timed_command`, which prints its
+"Completed in" line on stdout, or on stderr under `--json`, since `--json` puts
+the vote result on stdout and a trailing timing line would stop that output
+being parseable.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from pathlib import Path
 
 import click
 
+from .._cli_utils import timed_command
 from ._range_options import matches_image_filter, parse_image_selection, range_option
 
 # The extensions a named image list's members must carry to be selected, the
@@ -1026,6 +1028,7 @@ def _write_camrig_per_sequence(
 
 
 @click.command("estimate-intrinsics")
+@timed_command(stderr_when="as_json")
 @click.help_option("--help", "-h")
 @click.option(
     "-i",

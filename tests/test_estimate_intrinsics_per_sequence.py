@@ -545,7 +545,7 @@ def test_a_rig_config_json_is_refused(stub_run):
         out = stub_run(names, kept=kept)
         assert out.exit_code == 1
         # The refusal itself, not a failure to group the images.
-        assert out.output.startswith(
+        assert out.stderr.startswith(
             f"Error: {rig_config}: sfm takes a workspace's rigs only from .camrig"
         ), out.output
         assert (

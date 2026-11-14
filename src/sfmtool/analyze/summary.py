@@ -688,8 +688,8 @@ def print_reconstruction_summary(
     click.echo(f"  Observations: {recon.observation_count}")
 
     if recon.point_count > 0:
-        avg_obs = recon.observation_count / recon.point_count
-        click.echo(f"  Avg observations per point: {avg_obs:.2f}")
+        mean_obs = recon.observation_count / recon.point_count
+        click.echo(f"  Mean observations per point: {mean_obs:.2f}")
 
     # Camera information
     from ..camera.cameras import _CAMERA_PARAM_NAMES
@@ -793,8 +793,9 @@ def print_reconstruction_summary(
         click.echo("\nObservation statistics:")
         click.echo(f"  Min observations per point: {observation_counts.min()}")
         click.echo(f"  Max observations per point: {observation_counts.max()}")
+        click.echo(f"  Mean observations per point: {observation_counts.mean():.2f}")
         click.echo(
-            f"  Median observations per point: {int(np.median(observation_counts))}"
+            f"  Median observations per point: {np.median(observation_counts):g}"
         )
         print_histogram(
             observation_counts, "Track length distribution", show_stats=False

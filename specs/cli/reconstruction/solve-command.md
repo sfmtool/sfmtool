@@ -4,7 +4,7 @@
 
 Runs Structure from Motion to produce a 3D reconstruction (`.sfmr` file) from images or
 pre-computed matches. Uses pycolmap to run either COLMAP's incremental mapper
-or GLOMAP's global mapper.
+or its global mapper.
 
 The command is implemented in
 [`_commands/solve.py`](../../../src/sfmtool/_commands/solve.py), a Click wrapper
@@ -20,6 +20,12 @@ features if needed, set up cameras and rigs, and run matching or load the
 `.matches` file. Both write their output through `_save_reconstructions` in
 `_incremental_sfm.py`, which applies the rules in
 [Outputs and Multiple Models](#outputs-and-multiple-models).
+
+Both record `tool` `colmap` and `tool_version` the pycolmap version in the
+`.sfmr` metadata: the global mapper, once the separate GLOMAP project, is part
+of COLMAP and runs through pycolmap. A global solve also records `algorithm`
+`global` in `tool_options`. A file written before sfmtool recorded it this way
+holds `tool` `glomap` and `tool_version` `unknown` for a global solve.
 
 ## Coordinate Convention
 

@@ -292,6 +292,11 @@ describing the pinhole closed-form kernel). The vote's keys stay at the top
 level rather than nesting under `vote` as the binding does: they are already
 the payload, and nesting them as well would duplicate every one.
 
+Like most commands, the command ends with a `Completed in <time>` line
+(`Completed in 3.21s`, or `Completed in 1m 4.50s` from a minute on), printed
+whether the run succeeds or fails once Click has parsed its options. It goes
+to stdout, or to stderr under `--json`, so stdout holds the JSON alone.
+
 ### `--write-camrig`
 
 Writes a one-sensor `.camrig` whose camera is the verdict model

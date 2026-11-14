@@ -233,10 +233,14 @@ The default output is a compact label/value block. The fields per type:
   configuration, 3D point statistics with histograms, reprojection
   error, per-point depth-reliability diagnostics (inverse-depth z-score and
   condition number) followed by the point-or-bearing counts described below,
-  observation statistics, nearest-neighbor distances. The
-  3D point count carries the same `(N at infinity)` annotation as the default
-  summary when any points at infinity are present, and the `Thumbnails` and
-  `Patch bitmaps` lines appear under the reconstruction summary. After the rig
+  observation statistics (the least, greatest, mean and median observations
+  per point, then a histogram of track lengths), nearest-neighbor distances.
+  The 3D point count carries the same `(N at infinity)` annotation as the
+  default summary when any points at infinity are present, and the
+  `Thumbnails` and `Patch bitmaps` lines appear under the reconstruction
+  summary, which also gives the mean observations per point. The median of
+  an even count of points is the mean of the middle two, so it can end in
+  `.5`. After the rig
   configuration an `Image readings:` block gives the conversion, the
   sharpness's smallest, median and largest value, a 32-bucket histogram of the
   sharpness and the five least sharp images by name, least sharp first; a file

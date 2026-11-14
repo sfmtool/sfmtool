@@ -156,6 +156,35 @@ def test_inspect_sfmr_below_version_15_has_no_readings(seoul_bull_ground_truth_s
     assert "Sharpness distribution" not in verbose.output
 
 
+def test_inspect_sfmr_verbose_says_mean_or_median_per_point(
+    seoul_bull_ground_truth_sfmr,
+):
+    """Each observations-per-point line names its statistic, mean or median,
+    and the median of an even count is the mean of the middle two."""
+    recon = SfmrReconstruction.load(str(seoul_bull_ground_truth_sfmr))
+    counts = np.asarray(recon.observation_counts)
+    # Two points seen in 3 and 4 images: mean 3.50, median 3.5.
+    keep = np.zeros(len(counts), dtype=bool)
+    keep[np.flatnonzero(counts == 3)[0]] = True
+    keep[np.flatnonzero(counts == 4)[0]] = True
+    path = seoul_bull_ground_truth_sfmr.with_name("two_points.sfmr")
+    recon.filter_points_by_mask(keep).save(str(path))
+
+    result = CliRunner().invoke(main, ["inspect", "-v", str(path)])
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    observations = lines.index("  Observations: 7")
+    assert lines[observations + 1] == "  Mean observations per point: 3.50"
+    statistics = lines.index("Observation statistics:")
+    assert lines[statistics + 1 : statistics + 5] == [
+        "  Min observations per point: 3",
+        "  Max observations per point: 4",
+        "  Mean observations per point: 3.50",
+        "  Median observations per point: 3.5",
+    ]
+    assert "Avg" not in result.output
+
+
 # ── .sift feature files ──────────────────────────────────────────────────────
 
 

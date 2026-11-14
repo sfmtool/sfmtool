@@ -85,7 +85,10 @@ def run_global_sfm(
         image_dir=image_dir,
         workspace_dir=workspace_dir,
         features=features,
-        tool_name="glomap",
+        # The global mapper, once the separate GLOMAP project, is part of
+        # COLMAP and runs here through pycolmap, so the solve is COLMAP's at
+        # pycolmap's version; `tool_options["algorithm"]` says it was global.
+        tool_name="colmap",
         tool_options=tool_options,
         input_image_count=len(image_paths),
         explicit_output=explicit_output,
