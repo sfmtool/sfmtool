@@ -462,6 +462,16 @@ holding an `EditedReconstruction` folds it first with its `materialize`. A
 setting the step does not take is refused before the photographs are
 decoded. It runs with the GIL released and raises `ValueError` with the
 refusal's sentence.
+
+The run goes on a thread of its own while the calling thread waits for it,
+taking the GIL every 50 ms to run Python's signal handlers, as
+`sfmtool.analysis.pick_images` does from its waits: the points are refined on
+the rayon pool, whose workers cannot run them. A handler that raises
+(`KeyboardInterrupt` for Ctrl-C) sets the run's cancel flag, and the binding
+raises that exception once the run has stopped (§ "Cancellation"); a run
+cancelled otherwise raises `InterruptedError`. So Ctrl-C stops
+`sfm xform --refine-normals`, the rounds of `sfm embed-patches` and the
+refinement of `inspect --strips` and `compare --strips`.
 `progress`, an `sfmtool.ProgressCounter`, is set from the `refine normals`
 stage's count, so it climbs to that stage's `n` (§ "Stages and progress"):
 the points listed, each counted once, or every point, those at infinity
@@ -554,7 +564,9 @@ unchanged; the report's statuses and counts; each turned point's agreement is
 finite and `mean_agreement` is their mean; a list of points gets the statuses a
 run over every point gives them, and the other points keep their normals and
 are `"not_asked"`; the refusals; a refused point's `error` and `reason`; the
-progress counter; and `method="pairwise_flow"` on seoul_bull v02, where
+progress counter; that a SIGINT raised from another thread 0.3 s into a
+pairwise-flow run over every point stops it within seconds, before every
+point is counted, and raises what the test's own handler raised; and `method="pairwise_flow"` on seoul_bull v02, where
 point 2 is turned with the step's numbers and, with the bar on the mean
 viewing direction lowered to 20 degrees, about half its normal's angle from
 that direction, is `"unstable"` and keeps its normal, a flow keyword

@@ -6,15 +6,18 @@
 //! or the pairwise-flow normal, and *Commit* of each point, written back as
 //! one new value.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex};
+use std::time::Duration;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::bench::{
     refine_normals as core_refine_normals, NormalError, NormalLeftUnchanged, NormalTurned,
-    RefineNormalsOptions, RefineNormalsOutcome, RefineNormalsReport, RefineNormalsStep,
+    RefineNormalsError, RefineNormalsOptions, RefineNormalsOutcome, RefineNormalsReport,
+    RefineNormalsStep,
 };
 use sfmtool_core::progress::{Event, Progress};
 
@@ -59,7 +62,9 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 /// :class:`~sfmtool.ProgressCounter`, climbs while the run goes toward the
 /// number of points asked for: those listed, each counted once, or every
 /// point, those at infinity included. The points are refined in parallel with
-/// the GIL released.
+/// the GIL released, while the calling thread takes the GIL every 50 ms to
+/// run Python's signal handlers; one that raises (``KeyboardInterrupt`` for
+/// Ctrl+C) stops the run, and its exception is raised.
 ///
 /// Returns ``(SfmrReconstruction, report)``. The report carries the counts
 /// ``read`` (every point but those at infinity and those not asked for),
@@ -93,7 +98,8 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 /// ``sift_files`` reconstruction, one with no patch frames or no posed image,
 /// an unknown ``method``, a keyword the chosen step does not take, a setting
 /// the step does not take, or an index in ``point_indexes`` past the last
-/// point.
+/// point. Raises the exception a signal handler raised while the run went,
+/// or ``InterruptedError`` where the run was cancelled otherwise.
 #[pyfunction]
 #[pyo3(signature = (
     recon,
@@ -352,9 +358,53 @@ fn refine_normals(
             counter.fetch_max(done as usize, Ordering::Relaxed);
         }
     };
-    let (next, report) = py
-        .detach(|| core_refine_normals(recon.inner(), &views, &options, &Progress::to(&sink)))
-        .map_err(refused)?;
+    // The points are refined on the rayon pool, whose workers cannot run
+    // Python's signal handlers, so the run goes on a thread of its own while
+    // the calling thread waits for it, taking the GIL every `PATIENCE` to run
+    // them, as `pick_images` does from its own waits. One that raises stops
+    // the run, and its exception is raised in place of the cancellation.
+    const PATIENCE: Duration = Duration::from_millis(50);
+    let cancel = AtomicBool::new(false);
+    let signal: Mutex<Option<PyErr>> = Mutex::new(None);
+    let recon = recon.inner();
+    let result = py.detach(|| {
+        std::thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            let (sink, cancel, views, options) = (&sink, &cancel, &views, &options);
+            let run = scope.spawn(move || {
+                let progress = Progress::to(sink).cancelled_by(cancel);
+                let result = core_refine_normals(recon, views, options, &progress);
+                // The calling thread receives until this arrives, so the send succeeds.
+                let _ = sender.send(result);
+            });
+            loop {
+                match receiver.recv_timeout(PATIENCE) {
+                    Ok(result) => return result,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if cancel.load(Ordering::Relaxed) {
+                            continue;
+                        }
+                        if let Err(e) = Python::attach(|py| py.check_signals()) {
+                            *signal.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    // The run's thread ended without sending: it panicked.
+                    Err(mpsc::RecvTimeoutError::Disconnected) => match run.join() {
+                        Err(panic) => std::panic::resume_unwind(panic),
+                        Ok(()) => unreachable!("the run sends its result before it ends"),
+                    },
+                }
+            }
+        })
+    });
+    let (next, report) = result.map_err(|e| match e {
+        RefineNormalsError::Cancelled => signal
+            .into_inner()
+            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(|| PyInterruptedError::new_err(e.to_string())),
+        other => refused(other),
+    })?;
     let d = report_dict(py, &report)?;
     Ok((PySfmrReconstruction::new(next), d.unbind()))
 }

@@ -13,6 +13,7 @@ removes no point and moves no centre and no keypoint. See
 
 import math
 
+from .._progress import _poll_progress
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
 
@@ -56,8 +57,14 @@ class RefineNormalsTransform:
             f"  Refining the normals of {recon.point_count} points "
             f"across {recon.image_count} images..."
         )
+        # The run echoes its count every few seconds, and Ctrl-C stops it: the
+        # binding runs Python's signal handlers while it waits, and raises
+        # their KeyboardInterrupt.
         try:
-            out, report = refine_normals(recon, images, method=self.method)
+            with _poll_progress(print, recon.point_count) as counter:
+                out, report = refine_normals(
+                    recon, images, method=self.method, progress=counter
+                )
         except ValueError as e:
             raise ValueError(f"--refine-normals: {e}") from e
         print(_summary(report, self.method))

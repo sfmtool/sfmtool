@@ -11,6 +11,9 @@ where the reconstruction stores them. See
 specs/cli/reconstruction/xform/refine-normals-command.md.
 """
 
+import signal
+import threading
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import click
@@ -22,6 +25,7 @@ from sfmtool.cli import main
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import AddPatchBitmapsTransform, RefineNormalsTransform
 from sfmtool.xform._arg_parser import parse_refine_normals_params
+from sfmtool.xform import _refine_normals
 from sfmtool.xform._refine_normals import _summary
 
 from ..conftest import SEOUL_BULL_GROUND_TRUTH, SEOUL_BULL_POINT_STEP, every_nth_point
@@ -416,6 +420,81 @@ def test_cli_refine_normals_bare_before_other_option(seoul_bull_workspace):
     np.testing.assert_allclose(
         np.asarray(refined.positions), np.asarray(original.positions) * 2.0, rtol=1e-5
     )
+
+
+def test_the_run_counts_every_point_on_its_progress_counter():
+    """The transform hands the binding the counter its poller echoes, which
+    climbs to every point, the one at infinity included."""
+    recon = every_nth_point(
+        SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH)), 70, keep=[86]
+    )
+    counters = []
+    poll = _refine_normals._poll_progress
+
+    @contextmanager
+    def _recording(log, total, **kwargs):
+        assert total == recon.point_count
+        with poll(log, total, **kwargs) as counter:
+            counters.append(counter)
+            yield counter
+
+    with patch.object(_refine_normals, "_poll_progress", _recording):
+        RefineNormalsTransform().apply(recon)
+    assert len(counters) == 1
+    assert counters[0].value == recon.point_count
+
+
+def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
+    """Ctrl-C part way through ``--refine-normals method=pairwise_flow`` over
+    every point of the ground truth, about a minute of work, stops the run:
+    SIGINT is raised once the run has counted its first point, so it lands
+    inside the binding, and the command aborts without writing. The ground
+    truth is read in place; the output would go to a temporary folder."""
+    output_sfmr = tmp_path / "interrupted.sfmr"
+    poll = _refine_normals._poll_progress
+
+    def _interrupt_once_counting(counter):
+        # Give up after a minute rather than wait forever on a run that
+        # failed before counting; the assertions then fail.
+        for _ in range(6000):
+            if counter.value:
+                signal.raise_signal(signal.SIGINT)
+                return
+            threading.Event().wait(0.01)
+
+    threads = []
+
+    @contextmanager
+    def _interrupting(log, total, **kwargs):
+        with poll(log, total, **kwargs) as counter:
+            thread = threading.Thread(target=_interrupt_once_counting, args=(counter,))
+            threads.append(thread)
+            thread.start()
+            yield counter
+
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with patch.object(_refine_normals, "_poll_progress", _interrupting):
+            result = CliRunner().invoke(
+                main,
+                [
+                    "xform",
+                    str(SEOUL_BULL_GROUND_TRUTH),
+                    str(output_sfmr),
+                    "--refine-normals",
+                    "method=pairwise_flow",
+                ],
+            )
+        for thread in threads:
+            thread.join()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert len(threads) == 1
+    assert result.exit_code == 1, result.output
+    assert "Aborted!" in result.output
+    assert "Turned " not in result.output
+    assert not output_sfmr.exists()
 
 
 def test_cli_refine_normals_method_reaches_the_transform(seoul_bull_workspace):

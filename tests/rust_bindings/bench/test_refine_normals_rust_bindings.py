@@ -9,6 +9,10 @@ They run on the seoul_bull ground truths and their photographs. The ground
 truths are read in place and never written, so one load serves the module.
 """
 
+import signal
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -213,6 +217,43 @@ def test_the_progress_counter_reaches_the_points_refined(ground_truth, images):
     )
     # Each listed point is counted once.
     assert counter.value == report["read"] == 20
+
+
+class _Interrupted(Exception):
+    """What the test's SIGINT handler raises in place of KeyboardInterrupt."""
+
+
+def test_a_signal_stops_the_run_and_its_handlers_exception_is_raised(
+    ground_truth, images
+):
+    """A SIGINT raised from another thread a moment into a pairwise-flow run
+    over every point, which takes about a minute, stops it: the binding runs
+    Python's signal handlers while it waits, and raises what the handler
+    raised. The handler is the test's own, so a late signal cannot stop the
+    test session."""
+
+    def handler(signum, frame):
+        raise _Interrupted
+
+    previous = signal.signal(signal.SIGINT, handler)
+    timer = threading.Timer(0.3, signal.raise_signal, args=(signal.SIGINT,))
+    counter = ProgressCounter()
+    started = time.perf_counter()
+    try:
+        timer.start()
+        with pytest.raises(_Interrupted):
+            refine_normals(
+                ground_truth, images, method="pairwise_flow", progress=counter
+            )
+        elapsed = time.perf_counter() - started
+    finally:
+        timer.cancel()
+        timer.join()
+        signal.signal(signal.SIGINT, previous)
+    # Stopped within a part of one point's step per worker, long before the
+    # whole run's minute, and before every point was refined.
+    assert elapsed < 10.0
+    assert counter.value < ground_truth.point_count
 
 
 def test_method_pairwise_flow_runs_that_step_and_reports_its_outcomes():

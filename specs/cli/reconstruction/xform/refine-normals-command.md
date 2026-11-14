@@ -149,11 +149,31 @@ and the low-confidence count, or, for the pairwise-flow normal, how many of the
 turned points it read from a single pair. The refused count follows the
 step's reasons for leaving a normal unchanged, and the at-infinity count is
 printed only when it is not zero. The figures above are the seoul_bull ground
-truth's. The run reports no progress while it runs. With the grown plane it
-takes about 0.4 s on that file and 2 s on the kerry_park ground truth on a
-32-thread machine ([refine-normals.md](../../../core/bench/refine-normals.md)
-§ "Run time"); with the pairwise-flow normal it takes about 57 s on that
-file on the same machine.
+truth's. With the grown plane the run takes about 0.4 s on that file and 2 s
+on the kerry_park ground truth on a 32-thread machine
+([refine-normals.md](../../../core/bench/refine-normals.md) § "Run time");
+with the pairwise-flow normal it takes about 57 s on that file on the same
+machine.
+
+## Progress and Ctrl-C
+
+While the run goes, `_poll_progress` (in
+[_progress.py](../../../../src/sfmtool/_progress.py), the poller
+`sfm embed-patches` uses) reads the `ProgressCounter` the transform hands the
+binding every 5 s and prints how many of the points it has counted, those at
+infinity included, in that helper's words:
+
+```
+    50/280 patches (17%)
+```
+
+A run shorter than 5 s prints no such line. Ctrl-C stops the run: the binding
+runs Python's signal handlers every 50 ms while it waits for the points
+([refine-normals.md](../../../core/bench/refine-normals.md) § "Python
+binding"), the `KeyboardInterrupt` cancels the run within a part of one
+point's step per worker, and `sfm xform` prints `Aborted!`, exits with status
+1 and writes nothing. On the seoul_bull ground truth with the pairwise-flow
+normal, a SIGINT raised 12 s into the run ended the process 0.2 s later.
 
 ## Ordering and interactions
 
@@ -186,7 +206,10 @@ on the command line before the reconstruction is loaded; the summary lines of
 both steps; on five points of the seoul_bull ground truth, one of them at
 infinity, that the pairwise-flow normal turns finite normals to normals other
 than the grown plane's, moves no point, skips the point at infinity and prints
-its own summary; on the seoul_bull ground truth, that the
+its own summary; that the transform's progress counter reaches every point;
+that a SIGINT raised once a pairwise-flow run over the ground truth has
+counted a point aborts the command with nothing written; on the seoul_bull
+ground truth, that the
 finite points' normals turn while no position, keypoint or track moves, and
 that the points at infinity keep their normals and colours; on an
 embedded-patches conversion of the seoul_bull workspace, that a reconstruction
