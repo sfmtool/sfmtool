@@ -106,7 +106,7 @@ def _cloud(center=(0.0, 0.0, PLANE_Z)):
     return PatchCloud.from_halfvec_arrays(
         np.ascontiguousarray((U_AXIS * HALF_EXTENT)[None, :], dtype=np.float32),
         np.ascontiguousarray((V_AXIS * HALF_EXTENT)[None, :], dtype=np.float32),
-        np.ascontiguousarray(np.asarray(center, dtype=np.float64)[None, :]),
+        np.asarray([[*center, 1.0]], dtype=np.float64),
     )
 
 

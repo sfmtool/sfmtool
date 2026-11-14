@@ -29,7 +29,7 @@ mod batch_cancel_tests;
 #[cfg(test)]
 mod sampler_rule_tests;
 
-pub use cloud::{PatchCloud, PatchCloudError};
+pub use cloud::{HalfvecArraysError, PatchCloud, PatchCloudError};
 pub use track_views::{track_keypoints_from_reconstruction, track_views_from_reconstruction};
 
 use std::sync::atomic::{AtomicUsize, Ordering};

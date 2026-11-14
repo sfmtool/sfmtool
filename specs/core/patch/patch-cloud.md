@@ -622,17 +622,24 @@ its nature — a `w = 0` patch is first-class throughout:
 A `PatchCloud` round-trips to the per-point patch frame in the `.sfmr`
 `points3d/` section (format version 3+) via
 `PatchCloud::to_halfvec_arrays(point_count)` /
-`PatchCloud::from_halfvec_arrays(half_u_xyz, half_v_xyz, centers)`.
+`PatchCloud::from_halfvec_arrays(half_u_xyz, half_v_xyz, centers_xyzw)`.
 `to_halfvec_arrays` scatters the cloud's patches into per-point rows by
 `point_indexes`, folding each unit axis and half-extent into one vector and leaving
-zero rows elsewhere; `from_halfvec_arrays` takes the points' positions as
-`centers`, keeps the present rows (non-zero `u`), and recovers their point
-indices. The half-vector arrays don't encode the homogeneous weight (it lives in
-the points' `w`), so `from_halfvec_arrays` builds every patch finite (`w = 1`).
+zero rows elsewhere; `from_halfvec_arrays` takes the points' homogeneous
+positions (`positions_xyzw`, `(N, 4)`) as `centers_xyzw`, keeps the present rows
+(non-zero `u`), and recovers their point indices. The half-vector arrays don't
+encode the homogeneous weight, so each patch takes its centre and `w` from its
+`centers_xyzw` row, normalized as `clone_with_changes(positions=...)` normalizes
+an `(N, 4)` array: a row with `w ≠ 0` gives a finite patch (`w = 1`) at
+`(x/w, y/w, z/w)`, and a row with `w = 0` a patch at infinity (`w = 0`) centred
+on the unit direction. It returns an error (a `ValueError` from the binding)
+for arrays that are not `(N, 3)`, `(N, 3)` and `(N, 4)` with one `N`, for a
+NaN or infinite `centers_xyzw` value, and for a `w = 0` row with a zero
+direction.
 `PatchCloud::from_stored_patch_frames(recon)` is the cloud a reconstruction stores:
-`from_halfvec_arrays` over its frame columns and point positions, with the rows
-of points at infinity marked `w = 0` afterward, and `None` when the
-reconstruction carries no frame. The `recon.patches` getter returns it, and the
+the same rows built over its frame columns and its points, so the patches of
+points at infinity have `w = 0`, and `None` when the reconstruction carries no
+frame. The `recon.patches` getter returns it, and the
 viewer's open renders the display patch bitmaps over it.
 
 The two arrays (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) and the optional

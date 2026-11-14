@@ -93,7 +93,7 @@ def _embedded_patches_sfmr(recon: SfmrReconstruction, path):
     u[:, 0] = half
     v[:, 1] = half
     cloud = PatchCloud.from_halfvec_arrays(
-        u, v, np.asarray(recon.positions, dtype=np.float64)
+        u, v, np.asarray(recon.positions_xyzw, dtype=np.float64)
     )
 
     resolution = 4

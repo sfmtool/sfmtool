@@ -67,21 +67,77 @@ def pipeline(seoul_bull_workspace_once: Path):
 
 
 def test_from_halfvec_arrays_round_trips_a_cloud():
-    """The new PatchCloud.from_halfvec_arrays binding rebuilds a cloud, keeping
-    present (non-zero u) rows and recording their indices as point_ids."""
-    u = np.array([[2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 3.0, 0.0]], dtype=np.float32)
-    v = np.array([[0.0, 2.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 4.0]], dtype=np.float32)
-    centers = np.array(
-        [[1.0, 1.0, 1.0], [9.0, 9.0, 9.0], [2.0, 0.0, 5.0]], dtype=np.float64
+    """PatchCloud.from_halfvec_arrays rebuilds a cloud, keeping present
+    (non-zero u) rows and recording their indices as point_ids, with each
+    patch's centre and w from its homogeneous centers_xyzw row."""
+    u = np.array(
+        [[2.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
     )
-    cloud = PatchCloud.from_halfvec_arrays(u, v, centers)
-    # Row 1 has a zero u -> dropped; rows 0 and 2 survive with their indices.
-    assert list(cloud.point_indexes) == [0, 2]
-    assert len(cloud) == 2
+    v = np.array(
+        [[0.0, 2.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 4.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    centers_xyzw = np.array(
+        [
+            [1.0, 1.0, 1.0, 1.0],
+            [9.0, 9.0, 9.0, 1.0],
+            [4.0, 0.0, 10.0, 2.0],
+            # A point at infinity along +x, its direction not unit length.
+            [3.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    cloud = PatchCloud.from_halfvec_arrays(u, v, centers_xyzw)
+    # Row 1 has a zero u -> dropped; rows 0, 2 and 3 survive with their indices.
+    assert list(cloud.point_indexes) == [0, 2, 3]
+    assert len(cloud) == 3
     p0 = cloud[0]
     assert np.allclose(p0.center, [1.0, 1.0, 1.0])
+    assert p0.w == 1.0
     assert np.allclose(p0.half_extent, [2.0, 2.0])
     assert np.allclose(np.asarray(p0.u_axis) * p0.half_extent[0], [2.0, 0.0, 0.0])
+    # A finite row with w != 1 is divided through.
+    assert np.allclose(cloud[1].center, [2.0, 0.0, 5.0])
+    assert cloud[1].w == 1.0
+    # The w = 0 row stays at infinity, centred on its unit direction.
+    assert cloud[2].w == 0.0
+    assert np.allclose(cloud[2].center, [1.0, 0.0, 0.0])
+
+
+@pytest.mark.parametrize(
+    ("u_shape", "v_shape", "c_shape"),
+    [
+        ((2, 3), (2, 3), (2, 3)),  # centers without w
+        ((2, 3), (2, 4), (2, 4)),
+        ((2, 3), (2, 3), (3, 4)),  # row counts differ
+        ((2, 3), (1, 3), (2, 4)),
+    ],
+)
+def test_from_halfvec_arrays_rejects_wrong_shapes(u_shape, v_shape, c_shape):
+    """A shape other than (N, 3), (N, 3), (N, 4) raises ValueError naming the
+    shapes rather than panicking or reading past an array."""
+    u = np.ones(u_shape, dtype=np.float32)
+    v = np.ones(v_shape, dtype=np.float32)
+    c = np.ones(c_shape, dtype=np.float64)
+    with pytest.raises(ValueError, match="centers_xyzw"):
+        PatchCloud.from_halfvec_arrays(u, v, c)
+
+
+@pytest.mark.parametrize(
+    ("row", "match"),
+    [
+        ([0.0, 0.0, 0.0, 0.0], "all-zero homogeneous coordinate"),
+        ([np.nan, 0.0, 0.0, 1.0], "NaN or infinite"),
+        ([0.0, 0.0, 0.0, np.inf], "NaN or infinite"),
+    ],
+)
+def test_from_halfvec_arrays_rejects_invalid_centers(row, match):
+    """A centers_xyzw row that is no point, or not finite, raises ValueError."""
+    u = np.ones((1, 3), dtype=np.float32)
+    v = np.ones((1, 3), dtype=np.float32)
+    with pytest.raises(ValueError, match=match):
+        PatchCloud.from_halfvec_arrays(u, v, np.array([row], dtype=np.float64))
 
 
 def test_reference_observations_from_images_names_the_first_observation_in_the_image():
@@ -516,6 +572,12 @@ def test_compact_preserves_points_at_infinity(seoul_bull_workspace: Path):
     out_bitmaps = np.asarray(out.patch_bitmaps)
     inf_row = out_bitmaps[int(np.flatnonzero(is_inf)[0])]
     assert inf_row[..., 3].any(), "the surviving infinity point keeps its bitmap"
+    # Its patch is at infinity too, centred on the point's direction.
+    out_cloud = out.patches
+    inf_pid = int(np.flatnonzero(is_inf)[0])
+    inf_patch = out_cloud[list(out_cloud.point_indexes).index(inf_pid)]
+    assert inf_patch.w == 0.0
+    assert np.allclose(inf_patch.center, np.asarray(out.positions)[inf_pid])
     valid_file, errors = verify_sfmr_to_temp(out)
     assert valid_file, f"integrity check failed: {errors}"
 
@@ -610,11 +672,12 @@ def test_drop_grazing_observations_skips_points_at_infinity():
     from sfmtool.patches import PatchCloud
 
     # Two dense points, both with normal u x v = +z (f32 half-vectors, f64
-    # centers — the dtypes from_halfvec_arrays expects, as in compaction).
+    # homogeneous centers — the dtypes from_halfvec_arrays expects, as in
+    # compaction). Point 1 is at infinity, along +z.
     u = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float32)
     v = np.array([[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
-    centers_pts = np.zeros((2, 3), dtype=np.float64)
-    cloud = PatchCloud.from_halfvec_arrays(u, v, centers_pts)
+    centers_xyzw = np.array([[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0]])
+    cloud = PatchCloud.from_halfvec_arrays(u, v, centers_xyzw)
 
     # One camera off to the side: its view direction is ~+x, ~90 deg off the +z
     # normal — grazing, so it would be dropped for a finite point.
