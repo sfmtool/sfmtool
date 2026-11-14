@@ -215,6 +215,29 @@ every reconstruction made from this one without replacing them shares
 ([edited-reconstruction.md](core/reconstruction/edited-reconstruction.md)), so
 a writeable view would let a Python write reach every sharer at once.
 
+## Signal handlers during a run
+
+Two bindings run Python's signal handlers while a long run goes with the GIL
+released, so that Ctrl+C stops it: `sfmtool.analysis.pick_images`
+([pick-images.md](core/analysis/pick-images.md)) and `sfmtool.bench.refine_normals`
+([refine-normals.md](core/bench/refine-normals.md)). Both do it through a
+`SignalWatch` ([signals.rs](../crates/sfmtool-py/src/signals.rs)). The run's
+`Progress` is cancelled by the watch's flag, and the binding calls the watch's
+`check` wherever it can take the GIL: `pick_images` from each progress event,
+and `refine_normals` every 50 ms from the calling thread, while the run goes
+on a thread of its own, since its points are refined on the rayon pool, whose
+workers cannot run the handlers. `check` takes the GIL and runs the handlers,
+unless one has raised already. A handler that raises (`KeyboardInterrupt` for
+Ctrl+C) sets the flag, and its exception is kept.
+
+The binding passes the run's result through the watch's `finish`, which
+raises the kept exception whatever the result was. A handler can raise after
+the run's last check of the flag, so the run ends without being cancelled, or
+fails for another reason; the signal would be lost if its exception were
+raised only in place of a cancellation. A run cancelled without a handler
+raising raises `InterruptedError`. No other binding runs the handlers, so a
+Ctrl+C during one of them reaches Python once it returns.
+
 ## Format errors
 
 The readers, writers and verifiers of the `.sfmr`, `.sift`, `.matches`,
