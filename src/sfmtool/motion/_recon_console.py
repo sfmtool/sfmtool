@@ -335,9 +335,9 @@ def print_summary(all_sequence_results: list[dict]) -> None:
             "A discontinuity is an edge where at least one signal found the",
             "camera motion irregular; the two counts above say how many signals",
             "agree on that, not whether it is a break. A break is a",
-            "discontinuity that passes the break rule, a place where the solve",
-            "put the camera path on either side in inconsistent places; the",
-            "number of signals is not part of that rule.",
+            "discontinuity that passes the break rule, a place where the solve put",
+            "the parts of the camera path on either side in inconsistent places;",
+            "the number of signals is not part of that rule.",
             "Legend: P=pose residual, S=step-size ratio, C=coviz drop, "
             "O=obs-count outlier.",
             "< > marks a value past its signal's threshold. Dist and Rot are "

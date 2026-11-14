@@ -418,7 +418,7 @@ def test_recon_every_sequence_skipped_gives_no_verdict(
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "only 3 image(s) (need at least 4)" in result.output
+    assert "only 3 images (need at least 4)" in result.output
     assert "No sequence has the 4 images the analysis needs." in result.output
     assert "Summary" not in result.output
     assert "Verdict" not in result.output

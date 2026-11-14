@@ -386,8 +386,8 @@ several of them found by two or more signals. Whether a listed discontinuity is 
 error in the solve is decided by the break verdict of Step 4 alone, and the number of
 signals is not part of its rule. The console says so under the counts, so that a
 discontinuity found by several signals beside `Verdict: no breaks` does not read as a
-contradiction. The `--json` report keeps the field name `confidence` (`"high"` for two
-or more signals) for this count.
+contradiction. The `--json` report names this count `confidence` (`"high"` for two
+or more signals).
 
 ### Step 3: Reprojection Error Context
 

@@ -767,6 +767,7 @@ def analyze_reconstruction(
     # Imported lazily to avoid a module-level import cycle: _recon_console
     # imports the pure helper `_flag_frame` from here.
     from ._recon_console import (
+        _count,
         print_frame_table,
         print_sequence_discontinuities,
         print_summary,
@@ -799,7 +800,7 @@ def analyze_reconstruction(
         f"Reconstruction: {num_images} images, {recon.point_count:,} points, "
         f"{recon.observation_count:,} observations"
     )
-    click.echo(f"Found {len(numbered_sequences)} sequence(s)")
+    click.echo(f"Found {_count(len(numbered_sequences), 'sequence', 'sequences')}")
 
     # Per-image point sets drive the overlap-drop and obs-outlier signals.
     # Built once up front; reused across sequences.
@@ -844,7 +845,7 @@ def analyze_reconstruction(
         if len(seq_image_names) < 4:
             click.echo(
                 f"\nSkipping sequence {seq_path}: "
-                f"only {len(seq_image_names)} image(s) (need at least 4)"
+                f"only {_count(len(seq_image_names), 'image', 'images')} (need at least 4)"
             )
             continue
 
