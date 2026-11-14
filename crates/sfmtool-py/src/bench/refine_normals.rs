@@ -398,11 +398,14 @@ fn refine_normals(
             }
         })
     });
+    // A handler can raise after the run's last check of its cancel flag, so
+    // the run ends without being cancelled; its exception is raised all the
+    // same, or the signal would be lost.
+    if let Some(e) = signal.into_inner().unwrap_or_else(|p| p.into_inner()) {
+        return Err(e);
+    }
     let (next, report) = result.map_err(|e| match e {
-        RefineNormalsError::Cancelled => signal
-            .into_inner()
-            .unwrap_or_else(|p| p.into_inner())
-            .unwrap_or_else(|| PyInterruptedError::new_err(e.to_string())),
+        RefineNormalsError::Cancelled => PyInterruptedError::new_err(e.to_string()),
         other => refused(other),
     })?;
     let d = report_dict(py, &report)?;

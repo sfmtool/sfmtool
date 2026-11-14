@@ -446,9 +446,10 @@ def test_the_run_counts_every_point_on_its_progress_counter():
 
 def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
     """Ctrl-C part way through ``--refine-normals method=pairwise_flow`` over
-    every point of the ground truth, about a minute of work, stops the run:
-    SIGINT is raised once the run has counted its first point, so it lands
-    inside the binding, and the command aborts without writing. The ground
+    every point of the ground truth, about a minute of work, stops the run
+    before it has counted every point: SIGINT is raised once the run has
+    counted its first point, so it lands inside the binding, and the command
+    aborts without writing. The ground
     truth is read in place; the output would go to a temporary folder."""
     output_sfmr = tmp_path / "interrupted.sfmr"
     poll = _refine_normals._poll_progress
@@ -463,10 +464,12 @@ def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
             threading.Event().wait(0.01)
 
     threads = []
+    counters = []
 
     @contextmanager
     def _interrupting(log, total, **kwargs):
         with poll(log, total, **kwargs) as counter:
+            counters.append((counter, total))
             thread = threading.Thread(target=_interrupt_once_counting, args=(counter,))
             threads.append(thread)
             thread.start()
@@ -491,6 +494,10 @@ def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
         signal.signal(signal.SIGINT, previous)
 
     assert len(threads) == 1
+    # Stopped inside the binding, not after a whole run: a KeyboardInterrupt
+    # raised only once the binding returned would abort the command too.
+    [(counter, total)] = counters
+    assert counter.value < total
     assert result.exit_code == 1, result.output
     assert "Aborted!" in result.output
     assert "Turned " not in result.output
