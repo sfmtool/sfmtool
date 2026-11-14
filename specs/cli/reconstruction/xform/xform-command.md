@@ -675,21 +675,24 @@ patch frames carried through unchanged — note that the patch `(u, v)` frames a
 *not* re-fit to the adjusted geometry, so re-run `sfm embed-patches` (or
 `--refine-normals`) afterward if the poses/points moved materially.
 
-#### `--refine-normals`
+#### `--refine-normals [method=grown_plane|pairwise_flow]`
 
 Turns each finite point's patch to its grown-plane normal, one plane fitted to
 the photographs the point is seen in, as the viewer's *Refine All Normals ▸
 Grown Plane* does, leaving the point count, positions, keypoints, poses and cameras
-unchanged. It reads the workspace source images, so those must still be
-present where the reconstruction was created. A turned point gets a new normal,
+unchanged. `method=pairwise_flow` turns it to its pairwise-flow normal instead,
+fitted to the optical flow between pairs of the point's views, as *Refine All
+Normals ▸ Pairwise Flow* does; it costs seconds of one thread per point against
+tens of milliseconds for the grown plane. It reads the workspace source images,
+so those must still be present where the reconstruction was created. A turned point gets a new normal,
 patch frame, colour and observation readings, and a new bitmap where the
 reconstruction stores bitmaps; it adds no bitmap column. Every other point
-keeps every column it had. The option takes no keys, and a value given to it is
-a usage error.
+keeps every column it had. The option's one key is `method`, and any other key
+is a usage error.
 
 The operation requires an `embedded_patches` reconstruction and rejects
 `sift_files`, so the usual chain is `--to-embedded-patches --refine-normals`:
-convert first, then refine, so the grown plane reads the stored
+convert first, then refine, so the step reads the stored
 per-observation keypoints and patch frames.
 
 See [refine-normals-command.md](refine-normals-command.md) for what it writes
@@ -699,6 +702,7 @@ and prints.
 --refine-normals
 --to-embedded-patches --refine-normals
 --to-embedded-patches --add-patch-bitmaps --refine-normals
+--refine-normals method=pairwise_flow
 ```
 
 #### `--refine-keypoints [<params>]`

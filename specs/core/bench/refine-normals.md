@@ -197,7 +197,10 @@ time"). The viewer's *Refine All Normals* submenu offers both steps at their
 default options, as its *Grown Plane* and *Pairwise Flow* entries and the
 wire's `method`
 ([`../../gui/edits/refine-all-normals.md`](../../gui/edits/refine-all-normals.md));
-`sfm xform --refine-normals` runs the grown plane.
+`sfm xform --refine-normals` runs the grown plane, and
+`--refine-normals method=pairwise_flow` the pairwise-flow normal at its
+default options
+([`../../cli/reconstruction/xform/refine-normals-command.md`](../../cli/reconstruction/xform/refine-normals-command.md)).
 
 ### The report
 

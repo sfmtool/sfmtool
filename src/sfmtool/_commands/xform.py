@@ -69,7 +69,11 @@ from ..xform._arg_parser import (
     multiple=True,
     help=(
         "Turn each finite point's patch to its grown-plane normal: one plane "
-        "fitted to the photographs the point is seen in. Takes no keys. A "
+        "fitted to the photographs the point is seen in. 'method=pairwise_flow' "
+        "turns it to its pairwise-flow normal instead, fitted to the optical "
+        "flow between pairs of its views, at its default settings; it costs "
+        "seconds of one thread per point against tens of milliseconds for the "
+        "grown plane. 'method=grown_plane' is the default. A "
         "turned point's bitmap is rendered again where the reconstruction "
         "stores bitmaps (--add-patch-bitmaps adds them), and its observations "
         "are read again. Moves no point and no keypoint. Requires an "
@@ -384,7 +388,7 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
     Optimization:
       --bundle-adjust [PARAMS]            Apply bundle adjustment (cameras=, cross=, principal_point=, image_*=, scanlines=)
-      --refine-normals                    Turn each patch to its grown-plane normal (reads source images)
+      --refine-normals [method=NAME]      Turn each patch to its grown-plane or pairwise-flow normal (reads source images)
       --refine-keypoints [PARAMS]         Refine per-observation keypoints to sub-pixel (reads source images)
       --localize-keypoints [PARAMS]       Cross-view keypoint search; drops non-registering views (reads source images)
 
@@ -460,6 +464,10 @@ def xform(ctx, input_path, output_path, **kwargs):
     \b
         # Refine keypoints to sub-pixel and refine normals in one pass
         sfm xform in.sfmr out.sfmr --refine-keypoints --refine-normals
+
+    \b
+        # Refine normals with the pairwise-flow normal (seconds of one thread per point)
+        sfm xform in.sfmr out.sfmr --refine-normals method=pairwise_flow
 
     \b
         # Search keypoints into the photometric basin (drops non-registering

@@ -162,24 +162,46 @@ def _take_arg(args: list[str], i: int, option: str) -> tuple[str, int]:
     return args[i], i
 
 
-def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
-    """Parse a ``--refine-normals`` value, which must be empty.
+# The one --refine-normals key, the binding's ``method``.
+_REFINE_NORMALS_KEYS: dict[str, Callable[[str], object]] = {
+    "method": str,
+}
 
-    The option takes no keys: it turns each patch to its grown-plane normal,
-    which takes no settings here, and the photometric search's keys are gone.
-    Blank comma segments are tolerated, as the ``key=value`` options tolerate
-    them; any other token raises ``click.UsageError``.
+
+def parse_refine_normals_params(param: str) -> RefineNormalsTransform:
+    """Parse a ``--refine-normals`` value: empty, or ``method=NAME``.
+
+    An empty value turns each patch to its grown-plane normal;
+    ``method=pairwise_flow`` turns it to its pairwise-flow normal instead. The
+    steps take no other settings here, and the photometric search's keys are
+    gone. Blank comma segments are tolerated, as the ``key=value`` options
+    tolerate them; any other key, a malformed token and a method that is not
+    ``grown_plane`` or ``pairwise_flow`` raise ``click.UsageError``.
     """
-    given = [token.strip() for token in param.split(",") if token.strip()]
-    if given:
+    option = "--refine-normals"
+    other = [
+        token.strip()
+        for token in param.split(",")
+        if token.strip() and token.partition("=")[0].strip() != "method"
+    ]
+    if other:
         raise click.UsageError(
-            f"--refine-normals takes no keys, and was given '{','.join(given)}'. "
-            "It turns each patch to its grown-plane normal, which takes no "
-            "settings here; the keys of the photometric search it ran before "
-            "were removed. A turned point's bitmap is rendered again where the "
-            "reconstruction stores bitmaps, and --add-patch-bitmaps adds them."
+            f"{option} takes only the key method, and was given "
+            f"'{','.join(other)}'. It turns each patch to its grown-plane "
+            "normal, or with method=pairwise_flow to its pairwise-flow normal, "
+            "which take no other settings here; the keys of the photometric "
+            "search it ran before were removed. A turned point's bitmap is "
+            "rendered again where the reconstruction stores bitmaps, and "
+            "--add-patch-bitmaps adds them."
         )
-    return RefineNormalsTransform()
+    kwargs = _parse_kv_params(param, option, _REFINE_NORMALS_KEYS)
+    try:
+        return RefineNormalsTransform(**kwargs)
+    except ValueError:
+        raise click.UsageError(
+            f"Invalid value for {option} key 'method': '{kwargs['method']}' "
+            "is not grown_plane or pairwise_flow"
+        )
 
 
 # Each --refine-keypoints key maps to a caster for its value; the
