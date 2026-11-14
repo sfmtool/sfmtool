@@ -174,7 +174,7 @@ residuals redescend to zero weight; `n_support < 2` yielding `NaN` and
 gate and a half-plane-only neighbourhood failing the sector gate while a
 well-spread one passes; a selected point at infinity left unfitted and
 counted, a neighbour at infinity filling sectors along its own direction,
-and a finite row divided by its `w`; extras entering the fit (an under-determined point
-becoming determined when extras fill its empty sectors) and extras for
-unselected points being ignored; and unselected points staying `NaN`
-end-to-end.
+and a finite row divided by its `w`; extras entering the fit (an
+under-determined point becoming determined when extras fill its empty
+sectors) and extras for unselected points being ignored; and unselected
+points staying `NaN` end-to-end.

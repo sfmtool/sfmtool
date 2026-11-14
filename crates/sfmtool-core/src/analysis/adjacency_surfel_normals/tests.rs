@@ -359,10 +359,13 @@ fn unselected_points_stay_nan_end_to_end() {
 #[test]
 fn a_selected_point_at_infinity_is_counted_and_not_fitted() {
     // Point 3 is selected but at infinity: it has no position for a plane to
-    // pass through, so it stays NaN and is counted. The finite hub still fits.
+    // pass through, so it stays NaN and is counted. It is given a full ring of
+    // extras, so a fit attempted from its stored direction would have support
+    // to report. The finite hub still fits.
     let out = Hub::new(&full_ring())
-        .at_infinity(3, [0.0, 0.0, 1.0])
+        .at_infinity(3, [0.48, 0.6, 0.64])
         .select(3, true)
+        .extras(3, &full_ring())
         .fit_default();
     assert_eq!(out.selected_at_infinity, 1);
     assert_unfitted(&out, 3);
