@@ -799,3 +799,58 @@ fn test_verify_reports_version_2_without_image_to_gray() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `array`'s shape and values in column-major (Fortran) order.
+fn fortran_order<A: Clone, D: ndarray::Dimension>(
+    array: &ndarray::Array<A, D>,
+) -> ndarray::Array<A, D> {
+    use ndarray::ShapeBuilder;
+    let values: Vec<A> = array.t().iter().cloned().collect();
+    let out = ndarray::Array::from_shape_vec(array.raw_dim().f(), values).unwrap();
+    assert!(!out.is_standard_layout());
+    out
+}
+
+/// `array`'s shape and values as every other row of a buffer twice as long.
+fn strided<A: Clone, D: ndarray::Dimension>(array: &ndarray::Array<A, D>) -> ndarray::Array<A, D> {
+    let mut dim = array.raw_dim();
+    dim[0] *= 2;
+    let mut out = ndarray::Array::from_elem(dim, array.first().unwrap().clone());
+    out.slice_axis_inplace(ndarray::Axis(0), ndarray::Slice::new(0, None, 2));
+    out.assign(array);
+    assert!(!out.is_standard_layout());
+    out
+}
+
+#[test]
+fn test_write_arrays_out_of_standard_layout() {
+    // A caller's arrays in Fortran order or strided are written in row-major
+    // order, the same bytes a standard-layout copy gives, rather than
+    // panicking.
+    let standard = make_test_data();
+    let mut altered = make_test_data();
+    altered.positions_xy = fortran_order(&altered.positions_xy);
+    altered.affine_shapes = fortran_order(&altered.affine_shapes);
+    altered.descriptors = strided(&altered.descriptors);
+    altered.thumbnail_y_x_rgb = fortran_order(&altered.thumbnail_y_x_rgb);
+
+    let dir = std::env::temp_dir().join("sift_test_non_standard_layout");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (path_a, path_b) = (dir.join("standard.sift"), dir.join("altered.sift"));
+    write_sift(&path_a, &standard, 3).unwrap();
+    write_sift(&path_b, &altered, 3).unwrap();
+
+    let loaded_a = read_sift(&path_a).unwrap();
+    let loaded_b = read_sift(&path_b).unwrap();
+    assert_eq!(
+        loaded_b.content_hash.content_xxh128,
+        loaded_a.content_hash.content_xxh128
+    );
+    assert_eq!(loaded_b.positions_xy, standard.positions_xy);
+    assert_eq!(loaded_b.affine_shapes, standard.affine_shapes);
+    assert_eq!(loaded_b.descriptors, standard.descriptors);
+    assert_eq!(loaded_b.thumbnail_y_x_rgb, standard.thumbnail_y_x_rgb);
+    let (valid, errors) = verify_sift(&path_b).unwrap();
+    assert!(valid, "Verification failed: {errors:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -94,6 +94,13 @@ pub fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]>;
 pub fn raw_to_f32(raw: &[u8]) -> Cow<'_, [f32]>;
 pub fn raw_to_f64(raw: &[u8]) -> Cow<'_, [f64]>;
 
+// A caller's array in row-major order, whatever its layout: borrowed when it is
+// in standard layout, copied otherwise
+pub fn row_major_elements<A: Clone, S: Data<Elem = A>, D: Dimension>(
+    array: &ArrayBase<S, D>) -> Cow<'_, [A]>;
+pub fn row_major_bytes<A: bytemuck::NoUninit, S: Data<Elem = A>, D: Dimension>(
+    array: &ArrayBase<S, D>) -> Cow<'_, [u8]>;           // what a binary entry stores
+
 // Writing
 pub fn zstd_compress(data: &[u8], level: i32) -> Result<Vec<u8>, ArchiveIoError>;
 pub fn json_entry_bytes(value: &impl Serialize) -> Result<Vec<u8>, ArchiveIoError>;
@@ -230,6 +237,18 @@ Three consequences of the entry-at-a-time choice are visible in the signatures:
   hands them back for hashing; a binary entry's bytes are the caller's own buffer
   — a whole column of positions, thumbnails or patch bitmaps — so returning a
   copy would double the peak memory of a large write for nothing.
+
+**A writer reads a caller's array in row-major order, whatever its layout.**
+The format crates' data structs hold public `ndarray` arrays, and a Rust caller
+can hand one in any layout: column-major from `reversed_axes()`, with a
+negative stride, or every other row of a larger buffer. `as_slice()` is `None`
+for each of those, so a writer that unwrapped it would panic on valid input.
+`row_major_bytes` gives the bytes a binary entry stores and a section hash
+covers, and `row_major_elements` the typed values a writer checks before it
+writes. Both borrow an array in standard layout, which is every array a reader
+builds and nearly every one a caller does, and copy only the others, so a
+standard-layout write costs nothing extra. They are here because the `.sift`,
+`.sfmr`, `.matches` and `.camrig` writers all need them.
 
 ### Reading a whole archive
 
@@ -394,8 +413,13 @@ buffers by hand in write order *and* leave both entries readable in the archive,
 and the alignment fallbacks must return the same values as the borrowing path for
 a slice deliberately placed at an address congruent to 1 modulo the element
 alignment (derived from the real base address, not by prepending a byte and
-hoping). Whole-file round trips through real data live in each format crate's own
-tests.
+hoping). `row_major_elements` and `row_major_bytes` must borrow a standard-layout
+array and return a column-major one, one with a negative stride and a strided
+view as owned copies holding the standard array's values in row-major order.
+Whole-file round trips through real data live in each format crate's own
+tests, including, for the `.sift`, `.sfmr` and `.matches` writers, a value whose
+arrays are all out of standard layout, which must write the same section hashes
+as its standard-layout twin.
 
 ## Non-goals
 

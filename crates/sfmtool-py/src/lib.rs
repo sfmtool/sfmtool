@@ -72,8 +72,8 @@ use pyo3::types::PyDict;
 /// * ndarray treats a **negative** stride as contiguous
 ///   (`Dimension::is_contiguous`: `dim[0] <= 1 || strides[0] == -1`, and the
 ///   N-D branch compares `unsigned_abs()`). So `a[::-1]` — 1-D, no Fortran
-///   order anywhere — survives `to_owned()` with its `-1` stride intact and
-///   then panics in a format writer.
+///   order anywhere — survives `to_owned()` with its `-1` stride intact, and
+///   `as_slice()` on the result is then `None`.
 ///
 /// The rule is about how the buffer is *read*, never about the array's rank.
 ///
@@ -83,9 +83,9 @@ use pyo3::types::PyDict;
 /// carries a non-standard layout through: ndarray's `to_owned` preserves
 /// strides whenever the source is contiguous in memory order — which covers
 /// both F-contiguous and negative-stride input. The resulting `ArrayN` is not
-/// standard-layout, and the format writers call `.as_slice().unwrap()` on it,
-/// so the failure surfaces as a `PanicException` from inside `sfmtool-sfmr-format`, far
-/// from the binding that let it through. Always write
+/// standard-layout, so a core function that calls `.as_slice().unwrap()` on it
+/// raises a `PanicException` far from the binding that let it through. Always
+/// write
 /// `.as_array().as_standard_layout().into_owned()` instead; it costs nothing
 /// extra when the input is already C-ordered. Note this spelling can be split
 /// across statements (`let v = arr.as_array();` … `v.to_owned()`), so grepping

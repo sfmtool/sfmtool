@@ -14,6 +14,8 @@ bytemuck = "1.25"
 # A recorded workspace resolved to its real location, without the `\\?\` prefix
 # `std::fs::canonicalize` gives on Windows.
 dunce = "1"
+# Only the array types, for reading a caller's array in row-major order.
+ndarray = "0.17"
 rayon = "1.12"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 zstd = "0.14"

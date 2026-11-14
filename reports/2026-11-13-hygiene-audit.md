@@ -174,6 +174,8 @@ All seven files (`write.rs`, `read.rs`, `types.rs`, `select.rs`, `cells.rs`, `en
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-13): **Done** — `sfmtool-archive-io` gains `row_major_bytes` and `row_major_elements`, which borrow a standard-layout array and copy any other in row-major order; the `.matches`, `.sfmr`, `.sift` and `.camrig` writers and the `.matches` cluster selection (`select_clusters`, `cluster_worst_consistency`) read every caller array through them, and tests write Fortran-order and strided values to the same section hashes as their standard-layout twins. One shared helper rather than a `write_array_hashed` per crate, because the `.sfmr` writer writes through its `EntrySink` and the `.sift` writer through `SectionDigests`, so only the array-to-bytes step is common; the `write_binary_entry_hashed(...)` call boilerplate is left as it is. This also covers the writer item of "Panics reachable from Python in the sweep bindings and from Rust callers of the solvers and writers", branch `hyg-fix-1113-10-writer-standard-layout`._
+
 **Give each `entries.rs` dimension function one parameter type**
 - Location: `entries.rs:17-28, 196` (the same rule in sfmr-format `entries.rs`).
 - Problem: the module says dimension parameters are `impl Display`, then "The one exception is [`clusters_cluster_starts`], which takes a concrete `usize`"; the other 34 take `impl Display`. Breaks [A convention has no documented exceptions](../specs/STANDARDS.md#a-convention-has-no-documented-exceptions).
@@ -440,6 +442,8 @@ Each finding here comes from a kept hit of a mechanical check, confirmed by read
 >   - _`adjusted_fixture:18`._
 >
 > _Not counted: the `sfm-explorer` items that are not public API (`bg_image_mesh`, `display.rs` `range` and `refit_points.rs:730`)._
+
+> _Status (2026-11-13): **Partially done** — the writer item: `write_sift`, `write_sfmr` and `write_matches` read every caller array through `sfmtool-archive-io`'s `row_major_bytes` / `row_major_elements` and no longer panic on a Fortran-order or strided array (see "Write caller arrays through `as_standard_layout` in the format writers"), branch `hyg-fix-1113-10-writer-standard-layout`. The sweep bindings, `bundle_adjust`, `grow_reconstruction`, `compute_depth_statistics` and the specs remain._
 
 **Have the image-pair-graph bindings take the reconstruction, and stop repeating bindings in Python**
 - Location (check 13): `src/sfmtool/_image_pair_graph.py:45,56`; `src/sfmtool/align/core.py:205`; `src/sfmtool/sift/file.py:40,61`; `src/sfmtool/_patch_compaction.py:50`; `src/sfmtool/camrig/create.py:56`, `camrig/cp.py:77`.

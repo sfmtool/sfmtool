@@ -4925,6 +4925,7 @@ version = "0.3.0"
 dependencies = [
  "bytemuck",
  "dunce",
+ "ndarray",
  "rayon",
  "serde",
  "serde_json",

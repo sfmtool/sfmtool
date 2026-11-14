@@ -8,7 +8,7 @@ use std::path::Path;
 use zip::ZipWriter;
 
 use crate::types::*;
-use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry};
+use sfmtool_archive_io::{format_hash, row_major_bytes, write_binary_entry, write_json_entry};
 
 /// Write columnar camera-rig data to a `.camrig` file.
 ///
@@ -86,29 +86,27 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
     )?;
     digests.push_bytes(cam_idx_bytes);
 
-    // sensors/quaternions_wxyz — `as_standard_layout` makes a contiguous copy
-    // only if the caller handed us a non-contiguous array; the common case
-    // (a freshly built array) borrows without copying.
-    let quaternions = data.quaternions_wxyz.as_standard_layout();
-    let quat_bytes: &[u8] = bytemuck::cast_slice(quaternions.as_slice().unwrap());
+    // sensors/quaternions_wxyz — `row_major_bytes` copies only if the caller
+    // handed us an array not in standard layout; the common case (a freshly
+    // built array) borrows without copying.
+    let quat_bytes = row_major_bytes(&data.quaternions_wxyz);
     write_binary_entry(
         &mut zip,
         &format!("sensors/quaternions_wxyz.{s}.4.float64.zst"),
-        quat_bytes,
+        &quat_bytes,
         zstd_level,
     )?;
-    digests.push_bytes(quat_bytes);
+    digests.push_bytes(&quat_bytes);
 
     // sensors/translations_xyz
-    let translations = data.translations_xyz.as_standard_layout();
-    let trans_bytes: &[u8] = bytemuck::cast_slice(translations.as_slice().unwrap());
+    let trans_bytes = row_major_bytes(&data.translations_xyz);
     write_binary_entry(
         &mut zip,
         &format!("sensors/translations_xyz.{s}.3.float64.zst"),
-        trans_bytes,
+        &trans_bytes,
         zstd_level,
     )?;
-    digests.push_bytes(trans_bytes);
+    digests.push_bytes(&trans_bytes);
 
     // content_hash.json
     let content_xxh128 = digests.finish();

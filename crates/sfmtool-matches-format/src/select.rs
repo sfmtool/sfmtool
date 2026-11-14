@@ -16,6 +16,7 @@
 use ndarray::{Array1, Array2, Array3};
 
 use crate::types::*;
+use sfmtool_archive_io::row_major_elements;
 
 /// Selection predicate for [`MatchesData::select_clusters`].
 ///
@@ -186,9 +187,9 @@ impl MatchesData {
             mask
         });
 
-        let starts = clusters.cluster_starts.as_slice().expect("contiguous");
-        let member_images = clusters.member_images.as_slice().expect("contiguous");
-        let member_features = clusters.member_features.as_slice().expect("contiguous");
+        let starts = row_major_elements(&clusters.cluster_starts);
+        let member_images = row_major_elements(&clusters.member_images);
+        let member_features = row_major_elements(&clusters.member_features);
         let n_clusters = starts.len() - 1;
 
         // Cluster-id restriction: a per-source-cluster keep mask. Requests are
@@ -459,7 +460,7 @@ impl MatchesData {
     pub fn cluster_worst_consistency(&self) -> Option<Array1<f64>> {
         let clusters = self.clusters.as_ref()?;
         let cp = self.cluster_patches.as_ref()?;
-        let starts = clusters.cluster_starts.as_slice().expect("contiguous");
+        let starts = row_major_elements(&clusters.cluster_starts);
         let mut out = Vec::with_capacity(starts.len() - 1);
         for c in 0..starts.len() - 1 {
             let mut worst = f64::INFINITY;
