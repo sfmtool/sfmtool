@@ -16,6 +16,7 @@ from .._point_correspondence import (
 )
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import RotQuaternion
+from .._workspace import require_version_2_workspace
 from ._fragments import decompose_fragments, print_fragment_decomposition
 
 
@@ -99,6 +100,28 @@ def compare_reconstructions(
         if "/" in recon2_name or "\\" in recon2_name:
             recon2_name = Path(recon2_name).name
 
+    # Resolve the point-correspondence method up front: when every shared
+    # image uses a different SIFT file, feature-index correspondence is
+    # meaningless, so default to matching by 2D keypoint coordinate.
+    matches = _find_matching_images(recon1, recon2)
+    if by_coordinate is None:
+        hashes1 = recon1.sift_content_hashes
+        hashes2 = recon2.sift_content_hashes
+        resolved_by_coordinate = bool(matches) and (
+            hashes1 is None
+            or hashes2 is None
+            or all(hashes1[i1] != hashes2[i2] for i1, i2 in matches)
+        )
+    else:
+        resolved_by_coordinate = by_coordinate
+
+    # Coordinate matching and the strips read a sift_files input's .sift
+    # files, which must be in a version 2 workspace; checked before any work.
+    if resolved_by_coordinate or strips_out is not None:
+        for recon in (recon1, recon2):
+            if recon.feature_source == "sift_files":
+                require_version_2_workspace(recon.workspace_dir)
+
     print("\nComparing reconstructions:")
     print(f"  Reference: {recon1_name}")
     print(f"  Target:    {recon2_name}")
@@ -115,7 +138,6 @@ def compare_reconstructions(
 
     # Find matching images
     print("\n[3/7] Finding matching images...")
-    matches = _find_matching_images(recon1, recon2)
     print(f"  Matching images: {len(matches)}")
     print(f"  Only in reference: {recon1.image_count - len(matches)}")
     print(f"  Only in target: {recon2.image_count - len(matches)}")
@@ -209,20 +231,7 @@ def compare_reconstructions(
     print("\n[6/7] Comparing feature usage...")
     _compare_feature_usage(recon1, recon2, matches)
 
-    # Compare 3D points. Resolve the correspondence method: when every shared
-    # image uses a different SIFT file, feature-index correspondence is
-    # meaningless, so default to matching by 2D keypoint coordinate.
-    if by_coordinate is None:
-        hashes1 = recon1.sift_content_hashes
-        hashes2 = recon2.sift_content_hashes
-        resolved_by_coordinate = bool(matches) and (
-            hashes1 is None
-            or hashes2 is None
-            or all(hashes1[i1] != hashes2[i2] for i1, i2 in matches)
-        )
-    else:
-        resolved_by_coordinate = by_coordinate
-
+    # Compare 3D points.
     print("\n[7/7] Comparing 3D points...")
     _compare_3d_points(
         recon1,

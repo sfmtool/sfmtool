@@ -273,9 +273,13 @@ def undistort_reconstruction_images(
     from .workspace import recorded_image_to_gray
     from ._workspace import require_version_2_workspace
 
+    # The source .sift files are read from a version 2 workspace; checked
+    # before any work.
+    workspace_dir = Path(recon.workspace_dir)
+    require_version_2_workspace(workspace_dir)
+
     recon = materialize_infinity_for_export(recon, "Undistortion")
 
-    workspace_dir = Path(recon.workspace_dir)
     image_names = recon.image_names
     cameras_meta = recon.cameras
     camera_indexes = recon.camera_indexes
@@ -291,8 +295,6 @@ def undistort_reconstruction_images(
         f"Undistorting {image_count} images (fit={fit}, filter={resampling_filter})..."
     )
 
-    # The source .sift files are read from a version 2 workspace.
-    require_version_2_workspace(workspace_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Feature tool config for the undistorted .sift files. The top-level

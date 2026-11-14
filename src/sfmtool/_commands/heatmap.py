@@ -196,6 +196,10 @@ def heatmap(
         click.echo(f"  Images: {recon.image_count}")
         click.echo(f"  3D points: {recon.point_count}")
         click.echo(f"  Observations: {recon.observation_count}")
+        # The feature positions are read from the .sift files of a version 2
+        # workspace; checked before any work.
+        if recon.feature_source == "sift_files":
+            require_version_2_workspace(recon.workspace_dir)
 
         # Pre-compute triangulation angles if needed
         if "angle" in metrics:
@@ -226,8 +230,7 @@ def heatmap(
         rms_reprojection_errors = recon.rms_reprojection_errors
         observation_counts = recon.observation_counts
 
-        # Process each image, from the .sift files of a version 2 workspace.
-        require_version_2_workspace(recon.workspace_dir)
+        # Process each image.
         output_dir.mkdir(parents=True, exist_ok=True)
         total_images = len(image_features)
         processed = 0

@@ -33,8 +33,9 @@ def _invoke(*args):
 @pytest.fixture(scope="module")
 def version_2_workspace(tmp_path_factory) -> Path:
     """Three seoul_bull images in a version 2 workspace, with their `.sift`
-    files, a pairwise `.matches`, a clusters `.matches` and a `sift_files`
-    reconstruction at the ground truth's poses. Tests copy it."""
+    files, a pairwise `.matches`, a clusters `.matches`, a `sift_files`
+    reconstruction at the ground truth's poses and its `embedded_patches`
+    conversion. Tests copy it."""
     workspace = tmp_path_factory.mktemp("v1ws") / "ws"
     images = workspace / "images"
     images.mkdir(parents=True)
@@ -55,6 +56,13 @@ def version_2_workspace(tmp_path_factory) -> Path:
     assert result.exit_code == 0, result.output
     result = _invoke(
         "match", "--cluster", "--output", workspace / "clusters.matches", images
+    )
+    assert result.exit_code == 0, result.output
+    result = _invoke(
+        "xform",
+        workspace / "recon.sfmr",
+        workspace / "embedded.sfmr",
+        "--to-embedded-patches",
     )
     assert result.exit_code == 0, result.output
     return workspace
@@ -115,6 +123,10 @@ def _version_1_message(workspace: Path) -> str:
         ["xform", "recon.sfmr", "out.sfmr", "--rotate", "0,0,1,10deg"],
         ["inspect", "--strips", "recon.sfmr", "0", "-o", "strips.png"],
         ["compare", "recon.sfmr", "recon.sfmr", "--strips", "strips.png"],
+        ["compare", "recon.sfmr", "recon.sfmr", "--by-coordinate"],
+        # An embedded_patches input has no .sift files, so compare chooses
+        # coordinate matching, which reads the other input's.
+        ["compare", "embedded.sfmr", "recon.sfmr"],
         ["embed-patches", "recon.sfmr", "embedded.sfmr"],
         ["heatmap", "recon.sfmr", "-o", "heatmaps"],
         ["undistort", "recon.sfmr", "-o", "undistorted"],
@@ -132,8 +144,8 @@ def test_a_command_that_uses_the_workspace_refuses_version_1_before_any_work(
     result = CliRunner().invoke(main, command)
     assert result.exit_code != 0
     assert _version_1_message(workspace) in result.output + str(result.exception)
-    assert "[1/" not in result.output
-    assert "Rendering" not in result.output
+    for step in ("[1/", "Rendering", "Undistorting", "Computing", "Building"):
+        assert step not in result.output
     assert sorted(workspace.rglob("*")) == before
 
 
@@ -143,6 +155,9 @@ def test_a_command_that_uses_the_workspace_refuses_version_1_before_any_work(
         ["inspect", "recon.sfmr"],
         ["inspect", "pairs.matches"],
         ["analyze", "--images", "recon.sfmr"],
+        # Both inputs share their .sift files, so points match by feature
+        # index and none is read.
+        ["compare", "recon.sfmr", "recon.sfmr"],
         ["inspect", "images/seoul_bull_sculpture_01.jpg"],
         [
             "inspect",

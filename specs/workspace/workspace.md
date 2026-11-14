@@ -329,10 +329,10 @@ The check is made in two places, both in
   `sfm xform` for a `sift_files` input, whatever its steps, since several
   steps and the save read its `.sift` files; `sfm inspect --strips` for a
   `sift_files` reconstruction; and `sfm compare` for a `sift_files` input
-  with `--strips` or `--by-coordinate`. Without those options `sfm compare`
-  matches points by feature index when both inputs share their `.sift` files
-  and reads none of them; when it chooses coordinate matching itself, it is
-  refused when it reaches them, having written nothing.
+  when it draws `--strips` or matches points by coordinate, which it does with
+  `--by-coordinate` and by default when the inputs share no `.sift` file. It
+  makes that choice before any work; matching by feature index, its default
+  when the inputs share their `.sift` files, reads none of them.
 
 Commands that only read the files they are given work in a version 1
 workspace: `sfm inspect` of a `.sfmr`, `.matches` or `.sift` file,
