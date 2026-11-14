@@ -26,7 +26,7 @@ use sfmtool_core::bench::{
     GridPlaneRender, GridPlaneTile, GridPlaneView, GrownPlaneAttempt, GrownPlaneGridRound,
     GrownPlaneNormalOptions, GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlaneRefusal,
     GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTryOutcome, GrownPlaneView, NormalEstimate,
-    NormalReport, PairwiseFlowOutcome, PairwiseFlowRounds, PieceLayout,
+    NormalReport, PieceLayout,
 };
 use sfmtool_core::patch::cell_plane_normals::{CellPlaneStatus, NormalDeterminacy};
 use sfmtool_core::patch::cluster_refine::{CellStatus, LoopStop};
@@ -486,7 +486,7 @@ fn try_outcome_name(outcome: GrownPlaneTryOutcome) -> &'static str {
 }
 
 /// A fixed-length vector as a float64 array, `None` staying `None`.
-fn maybe_vector<'py, const N: usize>(
+pub(super) fn maybe_vector<'py, const N: usize>(
     py: Python<'py>,
     value: Option<[f64; N]>,
 ) -> Option<Bound<'py, PyArray1<f64>>> {
@@ -676,28 +676,6 @@ fn sequence_dict<'py>(
     Ok(d)
 }
 
-/// The dict form of how the pairwise-flow normal ended: its outcome, how many
-/// rounds it ran, and the radius, normal, σ and turn of the answer it turned
-/// the patch to. The rounds themselves are not carried: no binding runs the
-/// step yet.
-fn rounds_dict<'py>(py: Python<'py>, rounds: &PairwiseFlowRounds) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("kind", "pairwise_flow")?;
-    let outcome = match rounds.outcome {
-        PairwiseFlowOutcome::Turned => "turned",
-        PairwiseFlowOutcome::SinglePair => "single_pair",
-        PairwiseFlowOutcome::Undetermined => "undetermined",
-        PairwiseFlowOutcome::Unstable => "unstable",
-    };
-    d.set_item("outcome", outcome)?;
-    d.set_item("rounds", rounds.rounds.len())?;
-    d.set_item("chosen_radius", rounds.chosen_radius)?;
-    d.set_item("normal", maybe_vector(py, rounds.normal))?;
-    d.set_item("sigma_deg", rounds.sigma_deg)?;
-    d.set_item("turn_deg", rounds.turn_deg)?;
-    Ok(d)
-}
-
 /// The dict form of where a normal came from, `kind` naming which estimate.
 fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bound<'py, PyDict>> {
     let d = match estimate {
@@ -731,13 +709,18 @@ fn estimate_dict<'py>(py: Python<'py>, estimate: &NormalEstimate) -> PyResult<Bo
         }
         NormalEstimate::GridPlaneCells(cells) => cells_dict(py, cells)?,
         NormalEstimate::GrownPlane(sequence) => sequence_dict(py, sequence)?,
-        NormalEstimate::PairwiseFlow(rounds) => rounds_dict(py, rounds)?,
+        NormalEstimate::PairwiseFlow(rounds) => {
+            super::pairwise_flow_normal::rounds_dict(py, rounds)?
+        }
     };
     Ok(d)
 }
 
 /// The dict form of one normal step's report.
-fn normal_report_dict<'py>(py: Python<'py>, report: &NormalReport) -> PyResult<Bound<'py, PyDict>> {
+pub(super) fn normal_report_dict<'py>(
+    py: Python<'py>,
+    report: &NormalReport,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     let n = report.tilt.normal;
     d.set_item("normal", PyArray1::from_vec(py, vec![n.x, n.y, n.z]))?;

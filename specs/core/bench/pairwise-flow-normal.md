@@ -21,9 +21,9 @@ the track back turned, with a report of every round. It is deliberately
 expensive, one dense flow per pair of photographs per round, and stands beside
 the cheap per-point step, the grown-plane normal
 ([grown-plane-normal.md](grown-plane-normal.md)), which it does not replace.
-Track View, the wire and `refine_normals` do not run it, and its Python
-binding carries only how it ended; the steps that would reach it from those
-are proposed in
+Python runs it through `sfmtool.bench.pairwise_flow_normal`; Track View, the
+wire and `refine_normals` do not run it, and the steps that would reach it from
+those are proposed in
 [pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md),
 with the questions about its settings and rules that are still open. The
 measurements behind its design and defaults are in
@@ -313,12 +313,42 @@ if let NormalEstimate::PairwiseFlow(rounds) = &report.estimate {
 
 ### Python binding
 
-No Python function runs the step. A `NormalReport` that carries its estimate
-becomes, in the dict form every normal step's report has, an `estimate` of
-`kind` `"pairwise_flow"` with `outcome` (`"turned"`, `"single_pair"`,
-`"undetermined"` or `"unstable"`), `rounds` (how many ran), `chosen_radius`,
-`normal`, `sigma_deg` and `turn_deg`, the rounds themselves left out
-([sfmtool-py/src/bench/normal.rs](../../../crates/sfmtool-py/src/bench/normal.rs)).
+`sfmtool.bench.pairwise_flow_normal(track, edited, images, *, ...)`
+([sfmtool-py/src/bench/pairwise_flow_normal.rs](../../../crates/sfmtool-py/src/bench/pairwise_flow_normal.rs))
+runs the step as `grown_plane_normal` runs its own
+([editable-track.md](editable-track.md) § "Python bindings"). It takes every
+`PairwiseFlowNormalOptions` field but `flow` and `fit` as a keyword of the same
+name, `radii` as a list of numbers, and each field of `flow` as a keyword with
+a `flow_` prefix (`flow_patch_size`, `flow_finest_scale`, ...), as
+`sfmtool.flow.compute_optical_flow` takes them unprefixed, through the same
+override type (`FlowParamOverrides` in
+[flow/optical.rs](../../../crates/sfmtool-py/src/flow/optical.rs)). The flow
+runs on the CPU, so `gpu_min_pixels` is not a keyword. `fit` is set by
+`resolution` and `fit`'s four keywords, as for the other normal steps. A
+keyword left out, or `None`, takes `PairwiseFlowNormalOptions::default()`'s
+value, and a setting `PairwiseFlowNormalOptions::check` refuses raises
+`ValueError` before a photograph is decoded; a flow setting is refused in the
+flow's words, which name the field without the prefix. The step runs with the
+GIL released, with `Progress::none()`, or with
+`record_phases=True` with a detailed `Progress` whose phases come back in the
+report's `phases`, as `grown_plane_normal`'s do.
+
+It returns `(EditableTrack, report)`, the report in the dict form every normal
+step's has, with an `estimate` of `kind` `"pairwise_flow"`: `outcome`
+(`"turned"`, `"single_pair"`, `"undetermined"` or `"unstable"`),
+`chosen_radius`, `normal`, `sigma_deg` and `turn_deg` (each `None` where the
+patch was not turned), and `rounds`, one dict per `PairwiseFlowRound` in the
+order run, with its fields under their Rust names: `plane_normal`,
+`sample_spacing`, `samples_per_patch`, `crop_half_width`, `crops`, `pairs`,
+`radii`, `outcome`, `chosen_radius`, `normal`, `sigma_deg`,
+`from_mean_view_deg` and `next_plane`. A crop is a dict whose `kind` names the
+`PairwiseFlowCrop`: `"rendered"` with `image`, `angle_deg`,
+`samples_per_pixel` and `coverage`, `"too_oblique"` with `image` and
+`angle_deg`, or `"not_attempted"`. A pair has `observations`, `images`,
+`angle_deg`, `level`, `half_width` and `fits`, one per radius, `None` or a
+dict of the `PairwiseFlowFit`'s fields; a radius row has the
+`PairwiseFlowRadius`'s fields. Vectors are float64 arrays, and a field the
+Rust report leaves `None` is `None`.
 
 ## Theory
 
@@ -911,6 +941,17 @@ on synthetic surfaces photographed by pinholes around the point, with noise of
 Each scene is a few cameras of 160 × 160 px and crops of about 100 samples a
 side, so each run of the step takes well under a second; the weak-texture
 test, five runs, takes about 3 s, and each of the others under 1 s.
+
+The binding is tested in
+[test_bench_normal_rust_bindings.py](../../../tests/rust_bindings/bench/test_bench_normal_rust_bindings.py)
+on point 2 of seoul_bull v02, seen in 7 photographs, which the step turns in
+three rounds of 10 pairs in well under a second: the report holds every round,
+each round renders on the plane the round before passed on, and each radius
+row's counts agree with its pairs' fits; the keywords at the Rust defaults, and
+`record_phases`, change nothing; `rounds`, `radii`, `max_pairs` and the
+samples per patch reach the step; a `flow_patch_size` wider than every crop
+leaves every pair with no fit and the normal undetermined; and settings the
+step does not take, a flow setting among them, are refused, as is a cluster.
 
 ## Non-goals
 

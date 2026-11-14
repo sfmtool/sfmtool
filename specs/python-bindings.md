@@ -48,7 +48,8 @@ does, so a phase comes before the phases inside it, `start_s` is the time of
 the `Enter` and `duration_s` the `Leave`'s duration, and a message goes to the
 phase open one depth above it. One slot per depth holds for a call that
 reports from one thread at a time. `grown_plane_normal(...,
-record_phases=True)` is the one binding that offers it
+record_phases=True)` and `pairwise_flow_normal(..., record_phases=True)` are
+the bindings that offer it
 ([editable-track.md](core/bench/editable-track.md) § "Python bindings").
 
 ## Where Python code reads a binding
@@ -348,6 +349,7 @@ Paths in the *Source* column are relative to
 |--------|---------|------|
 | [bench.rs](../crates/sfmtool-py/src/bench.rs) | `Bench`, `EditableTrack`, and the track steps `create_track`, `create_cluster`, `add_observation`, `sight_observation`, `shape_observation`, the verdict steps (`set_verdict`, `pin_verdict`, `unpin_verdict`, `apply_thresholds`), `set_reference`, the patch steps (`translate_patch`, `translate_patch_to_pixel`, `tilt_patch`, `spin_patch`, `resize_patch`, `resize_patch_to_pixel`), `search_descriptors`, `search_geometry`, `evaluate`, `fit`, `set_stage`, `split`, `duplicate`, `commit` | [bench.md](core/bench/bench.md), [editable-track.md](core/bench/editable-track.md) |
 | [bench/normal.rs](../crates/sfmtool-py/src/bench/normal.rs) | the normal steps `finite_difference_normal`, `grid_plane_normal`, `grown_plane_normal` | [editable-track.md](core/bench/editable-track.md) § "Estimating the normal" |
+| [bench/pairwise_flow_normal.rs](../crates/sfmtool-py/src/bench/pairwise_flow_normal.rs) | the normal step `pairwise_flow_normal` | [pairwise-flow-normal.md](core/bench/pairwise-flow-normal.md) § "Python binding" |
 | [bench/track_at_pixel.rs](../crates/sfmtool-py/src/bench/track_at_pixel.rs) | `build_track_at_pixel`, `TrackAtPixelSources`, `TrackAtPixelError` | [track-at-pixel.md](core/bench/track-at-pixel.md) |
 | [bench/nearby.rs](../crates/sfmtool-py/src/bench/nearby.rs) | `NearbyTrackSources`, `nearby_points`, `nearby_cluster_tracks`, `guided_matches`, `constellation_seeds` | [nearby-sources.md](core/bench/nearby-sources.md) |
 | [bench/nearby_tracks.rs](../crates/sfmtool-py/src/bench/nearby_tracks.rs) | `find_nearby_tracks` | [nearby-tracks.md](core/bench/nearby-tracks.md) |

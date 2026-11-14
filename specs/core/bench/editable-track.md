@@ -3244,8 +3244,9 @@ agree within their σ; with too little evidence or pairs that disagree at
 every disc it reads the track back at the normal it was given, as
 `grid_plane_normal` does, and reports `NormalEstimate::PairwiseFlow` as
 undetermined or unstable. It reads no reference view and no keypoint. It is
-deliberately expensive, and only Rust calls it: Track View, the wire,
-`refine_normals` and Python do not run it
+deliberately expensive. It has a Python binding
+(`sfmtool.bench.pairwise_flow_normal`); Track View, the wire and
+`refine_normals` do not run it
 ([pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md)).
 
 The finite difference depends only on where each piece is placed along its
@@ -3994,6 +3995,13 @@ entered, a phase before the phases inside it, with
 `name`, `depth`, `note`, `start_s`, `duration_s` and `messages`; without it
 the step runs with `Progress::none()` and the report has no `phases`. The
 result is the same either way.
+
+`pairwise_flow_normal` takes every `PairwiseFlowNormalOptions` setting as a
+keyword in the same way, the fields of its `flow` as keywords with a `flow_`
+prefix, and `record_phases` as `grown_plane_normal` does. Its `estimate` has
+`kind` `"pairwise_flow"` and carries every round;
+[pairwise-flow-normal.md](pairwise-flow-normal.md) § "Python binding" lists
+its keywords and fields.
 
 `spin_patch` and `shape_observation` take their numbers directly;
 `sight_observation`, `resize_patch`, `translate_patch_to_pixel` and

@@ -1,9 +1,9 @@
 # Pairwise Flow Normal: Later Steps and Open Questions
 
-**Status:** Draft. The step itself is built; what remains is to reach it from
-Python, Track View, the wire and `refine_normals`, three tests, and the
-questions about its settings and rules. Nothing here changes the step until it
-is built or settled.
+**Status:** Draft. The step itself and its Python binding are built; what
+remains is to reach it from Track View, the wire and `refine_normals`, three
+tests, and the questions about its settings and rules. Nothing here changes
+the step until it is built or settled.
 
 Amends: [core/bench/pairwise-flow-normal.md](../core/bench/pairwise-flow-normal.md).
 The measurements cited are in
@@ -14,8 +14,8 @@ The measurements cited are in
 `pairwise_flow_normal` estimates a patch's normal from the optical flow between
 pairs of the point's views rendered on a common plane, choosing the largest
 support on which the pairs agree, and says when the normal is undetermined or
-unstable. Only Rust calls it: no binding, no viewer entry and no
-reconstruction-wide pass runs it, and several of its settings were set on a
+unstable. Rust code and Python, through its binding, call it, but no viewer
+entry and no reconstruction-wide pass runs it, and several of its settings were set on a
 handful of points or not measured at all. This draft proposes the steps that
 would reach it from the rest of the tool, the tests the step does not have yet,
 and keeps the questions still open about it in one place, so that a later
@@ -26,17 +26,13 @@ settled, is deleted here and folded into the spec.
 
 Each a separate change:
 
-1. **The Python binding**, `sfmtool.bench.pairwise_flow_normal`, taking every
-   option as a keyword, as `sfmtool.bench.grown_plane_normal` does, with the
-   report's rounds in its dict form (the estimate dict carries only how the
-   step ended today).
-2. **Track View's *Pairwise Flow Normal*** entry and the wire's
+1. **Track View's *Pairwise Flow Normal*** entry and the wire's
    `fit_bench_track_normal` `method` `pairwise_flow`.
-3. **An option of `refine_normals`** choosing this step as the per-point step,
+2. **An option of `refine_normals`** choosing this step as the per-point step,
    with the per-point outcomes it reports extended by `Undetermined` and
    `Unstable`. `refine_normals` already skips points at infinity before
    building their tracks and counts them, so the option would inherit that.
-4. **The glossary entry** for the step's name, and the **turned** /
+3. **The glossary entry** for the step's name, and the **turned** /
    **undetermined** / **unstable** entry widened from `grid_plane_normal`'s
    outcomes to this step's as well.
 

@@ -59,6 +59,7 @@ mod layers;
 mod nearby;
 mod nearby_tracks;
 mod normal;
+mod pairwise_flow_normal;
 mod patch_read;
 mod range;
 mod refine_normals;
@@ -2481,6 +2482,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     nearby::register(m)?;
     nearby_tracks::register(m)?;
     normal::register(m)?;
+    pairwise_flow_normal::register(m)?;
     patch_read::register(m)?;
     range::register(m)?;
     refine_normals::register(m)?;

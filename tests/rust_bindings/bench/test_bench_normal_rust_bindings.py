@@ -3,8 +3,8 @@
 
 """Tests for the bindings of the bench's normal steps.
 
-``finite_difference_normal``, ``grid_plane_normal`` and
-``grown_plane_normal`` are proved in Rust on synthetic planes; what is checked
+``finite_difference_normal``, ``grid_plane_normal``, ``grown_plane_normal``
+and ``pairwise_flow_normal`` are proved in Rust on synthetic planes; what is checked
 here is that each binding hands back a new track and a report that carries the
 step's numbers in the documented words, and that the settings reach the step. One
 test runs the grown plane normal on a ground-truth point whose repeated
@@ -22,6 +22,7 @@ from sfmtool.bench import (
     fit,
     grid_plane_normal,
     grown_plane_normal,
+    pairwise_flow_normal,
 )
 from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
@@ -735,6 +736,270 @@ class TestFiniteDifferenceNormal:
             finite_difference_normal(fitted, edited, images, pieces=1)
         with pytest.raises(ValueError, match="overlap"):
             finite_difference_normal(fitted, edited, images, overlap=0.95)
+
+
+# Every keyword of ``pairwise_flow_normal`` but the fit's, at the Rust default.
+PAIRWISE_DEFAULTS = {
+    "rounds": 3,
+    "max_view_angle_deg": 80.0,
+    "max_normal_from_mean_view_deg": 80.0,
+    "fallback_radius": 1.0,
+    "min_samples_per_patch": 24,
+    "max_samples_per_patch": 128,
+    "crop_half_extents": 3.0,
+    "min_crop_half_width_px": 48.0,
+    "max_crop_samples": 512,
+    "radii": [0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0],
+    "max_pairs": 10,
+    "max_grid_tilt_deg": 85.0,
+    "grid_tilt_step_deg": 10.0,
+    "grid_azimuth_step_deg": 30.0,
+    "tukey_c": 4.685,
+    "correlation_length_px": 8.0,
+    "noise_false_alarm": 0.001,
+    "flow_floor_px": 0.03,
+    "max_sigma_deg": 10.0,
+    "agreement_sigmas": 3.0,
+    "agreement_margin_deg": 5.0,
+    "max_mean_chi2": 2.0,
+    "single_pair_radius": 1.0,
+    # The ``high_quality`` preset with ``finest_scale`` 0 and stride 1.
+    "flow_patch_size": 12,
+    "flow_patch_stride": 1,
+    "flow_grad_descent_iterations": 16,
+    "flow_finest_scale": 0,
+    "flow_variational_refinement": True,
+    "flow_variational_jacobi_iterations": 7,
+    "flow_variational_outer_iterations_base": 1,
+    "flow_variational_alpha": 10.0,
+    "flow_variational_gamma": 10.0,
+    "flow_variational_delta": 5.0,
+    "flow_normalize_patches": True,
+}
+
+PAIRWISE_OUTCOMES = {"turned", "single_pair", "undetermined", "unstable"}
+PAIRWISE_CROP_KEYS = {
+    "rendered": {"kind", "image", "angle_deg", "samples_per_pixel", "coverage"},
+    "too_oblique": {"kind", "image", "angle_deg"},
+    "not_attempted": {"kind"},
+}
+PAIRWISE_FIT_KEYS = {
+    "normal",
+    "sigma_deg",
+    "sigma_texture_deg",
+    "sigma_residual_deg",
+    "offset",
+    "rms_residual",
+    "residual_variance",
+    "determined",
+    "combined",
+}
+
+
+# A point of seoul_bull v02 seen in 7 images, which the step turns in three
+# rounds of 10 pairs (2.5 degrees, at 3 half-extents), in well under a second.
+PAIRWISE_POINT = 2
+
+
+@pytest.fixture(scope="module")
+def ground_truth():
+    """seoul_bull v02 as an ``EditedReconstruction``, with its photographs."""
+    path = SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr"
+    recon = SfmrReconstruction.load(str(path))
+    images = [read_image_rgb(SEOUL_BULL_DIR / name) for name in recon.image_names]
+    return EditedReconstruction(recon), images
+
+
+@pytest.fixture(scope="module")
+def flow_track(ground_truth):
+    """The track of ``PAIRWISE_POINT``, as put on the bench."""
+    edited, _ = ground_truth
+    _, track = create_track(Bench(), edited, PAIRWISE_POINT)
+    return track
+
+
+@pytest.fixture(scope="module")
+def pairwise(flow_track, ground_truth):
+    """``pairwise_flow_normal`` at its defaults from ``flow_track``."""
+    edited, images = ground_truth
+    return pairwise_flow_normal(flow_track, edited, images)
+
+
+def _check_round(round_, track, radii, max_sigma_deg):
+    """One round's dict holds the step's numbers in the documented shape, and
+    its per-radius counts agree with its pairs' fits."""
+    assert np.linalg.norm(round_["plane_normal"]) == pytest.approx(1.0)
+    crops = round_["crops"]
+    assert len(crops) == track.observation_count
+    for crop in crops:
+        assert set(crop) == PAIRWISE_CROP_KEYS[crop["kind"]]
+    rendered = {k for k, c in enumerate(crops) if c["kind"] == "rendered"}
+    assert len(rendered) >= 2
+    assert round_["crop_half_width"] > 0
+    assert round_["sample_spacing"] > 0.0
+    assert [row["radius"] for row in round_["radii"]] == radii
+    assert round_["pairs"]
+    for pair in round_["pairs"]:
+        a, b = pair["observations"]
+        assert a < b and {a, b} <= rendered
+        assert pair["images"] == [crops[a]["image"], crops[b]["image"]]
+        assert pair["half_width"] > 0
+        assert len(pair["fits"]) == len(radii)
+        for fit_ in pair["fits"]:
+            if fit_ is None:
+                continue
+            assert set(fit_) == PAIRWISE_FIT_KEYS
+            assert fit_["normal"].shape == (3,) and fit_["offset"].shape == (2,)
+            assert fit_["sigma_deg"] == max(
+                fit_["sigma_texture_deg"], fit_["sigma_residual_deg"]
+            )
+            assert fit_["determined"] == (fit_["sigma_deg"] <= max_sigma_deg)
+            assert fit_["determined"] or not fit_["combined"]
+    for k, row in enumerate(round_["radii"]):
+        fits = [p["fits"][k] for p in round_["pairs"] if p["fits"][k] is not None]
+        assert row["pairs_fitted"] == len(fits)
+        assert row["pairs_determined"] == sum(f["determined"] for f in fits)
+        assert row["pairs_combined"] == sum(f["combined"] for f in fits)
+        assert (row["normal"] is None) == (row["pairs_determined"] == 0)
+    assert round_["outcome"] in PAIRWISE_OUTCOMES
+    if round_["normal"] is not None:
+        assert round_["chosen_radius"] in radii
+        assert np.linalg.norm(round_["normal"]) == pytest.approx(1.0)
+
+
+class TestPairwiseFlowNormal:
+    def test_the_report_carries_every_round(self, flow_track, pairwise):
+        turned, report = pairwise
+        _check_common(report, flow_track, turned)
+        assert _keypoints(turned) == _keypoints(flow_track)
+        est = report["estimate"]
+        assert set(est) == {
+            "kind",
+            "outcome",
+            "chosen_radius",
+            "normal",
+            "sigma_deg",
+            "turn_deg",
+            "rounds",
+        }
+        assert est["kind"] == "pairwise_flow"
+        rounds = est["rounds"]
+        assert len(rounds) == PAIRWISE_DEFAULTS["rounds"]
+        for round_ in rounds:
+            _check_round(
+                round_,
+                flow_track,
+                PAIRWISE_DEFAULTS["radii"],
+                PAIRWISE_DEFAULTS["max_sigma_deg"],
+            )
+            assert len(round_["pairs"]) == PAIRWISE_DEFAULTS["max_pairs"]
+            assert round_["samples_per_patch"] >= 24
+        # Each round renders on the plane the round before handed on, and the
+        # last hands on none.
+        for before, after in zip(rounds, rounds[1:]):
+            np.testing.assert_array_equal(before["next_plane"], after["plane_normal"])
+        assert rounds[-1]["next_plane"] is None
+        assert est["outcome"] == rounds[-1]["outcome"] == "turned"
+        # The patch is turned to the last round's answer, facing as it did.
+        np.testing.assert_allclose(report["normal"], est["normal"], atol=1e-9)
+        assert np.dot(est["normal"], _normal(flow_track)) > 0.0
+        assert est["chosen_radius"] == rounds[-1]["chosen_radius"]
+        assert est["sigma_deg"] == rounds[-1]["sigma_deg"]
+        assert est["turn_deg"] == pytest.approx(report["tilt"]["degrees"])
+
+    def test_the_defaults_are_the_rust_steps_and_phases_change_nothing(
+        self, flow_track, ground_truth
+    ):
+        edited, images = ground_truth
+        # One round each, so the comparison costs a third of a default run.
+        plain_track, plain = pairwise_flow_normal(flow_track, edited, images, rounds=1)
+        assert "phases" not in plain
+        turned, report = pairwise_flow_normal(
+            flow_track,
+            edited,
+            images,
+            **{**PAIRWISE_DEFAULTS, "rounds": 1},
+            record_phases=True,
+        )
+        phases = report.pop("phases")
+        _assert_same(report, plain)
+        np.testing.assert_array_equal(_normal(turned), _normal(plain_track))
+        names = [phase["name"] for phase in phases]
+        assert names[0] == "pairwise flow normal"
+        assert phases[0]["depth"] == 0
+        assert names.count("round") == 1
+        assert names.count("crops") == 1
+
+    def test_the_settings_reach_the_step(self, flow_track, ground_truth):
+        edited, images = ground_truth
+        turned, report = pairwise_flow_normal(
+            flow_track,
+            edited,
+            images,
+            rounds=1,
+            radii=[1.0, 2.0],
+            max_pairs=2,
+            min_samples_per_patch=8,
+            max_samples_per_patch=8,
+        )
+        _check_common(report, flow_track, turned)
+        rounds = report["estimate"]["rounds"]
+        assert len(rounds) == 1
+        _check_round(
+            rounds[0], flow_track, [1.0, 2.0], PAIRWISE_DEFAULTS["max_sigma_deg"]
+        )
+        assert len(rounds[0]["pairs"]) == 2
+        # The grid is held at 8 samples along the patch, where the defaults
+        # give this point at least 24.
+        assert rounds[0]["samples_per_patch"] <= 8
+
+    def test_the_flow_settings_reach_the_step(self, flow_track, ground_truth):
+        edited, images = ground_truth
+        # A flow patch wider than every crop leaves every pair with no flow,
+        # so no fit, and the normal undetermined.
+        turned, report = pairwise_flow_normal(
+            flow_track, edited, images, rounds=1, flow_patch_size=4096
+        )
+        est = report["estimate"]
+        pairs = est["rounds"][0]["pairs"]
+        assert pairs
+        assert all(f is None for p in pairs for f in p["fits"])
+        assert est["outcome"] == "undetermined"
+        for key in ("chosen_radius", "normal", "sigma_deg", "turn_deg"):
+            assert est[key] is None, key
+        np.testing.assert_allclose(_normal(turned), _normal(flow_track), atol=1e-9)
+
+    def test_bad_settings_are_refused(self, flow_track, ground_truth):
+        edited, images = ground_truth
+        for name, value, match in [
+            ("rounds", 0, "rounds"),
+            ("max_view_angle_deg", 0.0, "max_view_angle_deg"),
+            ("radii", [2.0, 1.0], "radii"),
+            ("fallback_radius", 5.0, "fallback_radius"),
+            ("max_pairs", 1, "max_pairs"),
+            ("min_samples_per_patch", 1, "min_samples_per_patch"),
+            ("max_crop_samples", 5000, "max_crop_samples"),
+            ("noise_false_alarm", 1.0, "noise_false_alarm"),
+            ("correlation_length_px", 17.0, "correlation_length_px"),
+            ("max_mean_chi2", 0.0, "max_mean_chi2"),
+            ("resolution", 1, "resolution"),
+            ("flow_patch_size", 0, "patch_size"),
+            ("flow_variational_alpha", -1.0, "variational_alpha"),
+        ]:
+            with pytest.raises(ValueError, match=match):
+                pairwise_flow_normal(flow_track, edited, images, **{name: value})
+
+    def test_gpu_min_pixels_is_not_taken(self, flow_track, ground_truth):
+        edited, images = ground_truth
+        # The step's flow runs on the CPU.
+        with pytest.raises(TypeError, match="gpu_min_pixels"):
+            pairwise_flow_normal(flow_track, edited, images, flow_gpu_min_pixels=0)
+
+    def test_a_cluster_is_refused(self, ground_truth):
+        edited, images = ground_truth
+        _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
+        with pytest.raises(ValueError, match="cluster"):
+            pairwise_flow_normal(track, edited, images)
 
 
 def test_repeated_grown_plane_passes_settle_on_a_ground_truth_point():

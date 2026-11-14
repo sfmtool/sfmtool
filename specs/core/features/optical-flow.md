@@ -275,7 +275,9 @@ a caller starts from a preset and changes the fields it needs
 of different sizes, an initial flow of another size, or a `DisFlowParams` field out of
 its range (a zero patch size, stride or iteration count, a patch larger than the image,
 a negative or non-finite weight, a scale with no pixels, a finest scale above an
-explicit coarsest scale). It names the field, which is also the Python keyword.
+explicit coarsest scale). It names the field, which is also the Python keyword of
+the flow functions, and of `sfmtool.bench.pairwise_flow_normal` with a `flow_`
+prefix.
 
 **`ImagePyramid`** builds a Gaussian pyramid via fused 6-tap blur + 2x downsample at
 each level (sigma = 1.0, separable, even tap count for between-pixel centering).
@@ -348,6 +350,10 @@ flow_u, flow_v = compute_optical_flow(
 
 A value out of the range in [Parameters](#parameters) raises `ValueError` with the
 core's message, and a negative integer raises `OverflowError` before reaching it.
+`sfmtool.bench.pairwise_flow_normal` takes the same overrides except
+`gpu_min_pixels`, each with a `flow_` prefix, applied to that step's own flow
+settings ([pairwise-flow-normal.md](../bench/pairwise-flow-normal.md) § "Python
+binding").
 
 ## Initial Flow Support
 
