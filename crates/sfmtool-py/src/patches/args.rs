@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared parameter-string parsers for the patch-kernel bindings.
+//! Shared argument readers for the patch-kernel bindings: parameter strings
+//! and interleaved tiles.
 //!
 //! Numeric helpers do not belong here: the bindings take them from
 //! `sfmtool_core::numeric`, so a binding and the kernel it wraps compute
@@ -13,6 +14,7 @@ use pyo3::prelude::*;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler, SamplerChoice};
 use sfmtool_core::patch::pair_sharpness::PairMatching;
+use sfmtool_core::patch::self_similarity::{InterleavedTile, InterleavedTileError};
 
 /// The [`PairMatching`] a `matching` string names, `ratio` the factor of
 /// `"blur_matched_above_ratio"`.
@@ -163,4 +165,41 @@ pub(super) fn reference_positions(
             })
             .collect(),
     ))
+}
+
+/// Check an interleaved `(R, R, C)` tile's shape: square, at least 3 on a
+/// side, and a channel count [`InterleavedTile`]'s rule reads. `what` names
+/// the argument in the message.
+pub(super) fn check_square_tile(
+    what: &str,
+    height: usize,
+    width: usize,
+    channels: usize,
+) -> PyResult<()> {
+    if height != width || width < 3 {
+        return Err(PyValueError::new_err(format!(
+            "{what} must be square and at least 3 x 3, got {height} x {width}"
+        )));
+    }
+    InterleavedTile::channel_rule(channels).map_err(|e| tile_error(what, e))?;
+    Ok(())
+}
+
+/// An interleaved `(R, R, C)` tile in grey levels as colour planes and data
+/// flags, by [`InterleavedTile`]'s rule, its shape checked as
+/// [`check_square_tile`] does. `valid`, one flag per sample, row-major, takes
+/// samples out beside alpha.
+pub(super) fn square_tile(
+    what: &str,
+    samples: &[f32],
+    [height, width, channels]: [usize; 3],
+    valid: Option<&[bool]>,
+) -> PyResult<InterleavedTile> {
+    check_square_tile(what, height, width, channels)?;
+    InterleavedTile::new(samples, width, height, channels, valid).map_err(|e| tile_error(what, e))
+}
+
+/// An [`InterleavedTileError`] as a `ValueError` naming the argument.
+fn tile_error(what: &str, e: InterleavedTileError) -> PyErr {
+    PyValueError::new_err(format!("{what}: {e}"))
 }

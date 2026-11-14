@@ -19,8 +19,8 @@ The sums run over `k` in `O_d`, `t_c(k) = I_c(k)` is the template and `u_c(k) = 
 
 A template with `r` px of tile around it, every sample carrying data, has `O_d = Ω` at every shift: the template stays whole and the moved window reads the tile around it. A bitmap's middle square (a margin of `R/4 ≥ r` at `R ≥ 12`) and its centre cell (`R/3 ≥ r`) are such templates.
 
-- **Data.** A sample carries data when its alpha (the fourth channel) is above 0; a tile with no fourth channel has data at every sample, as a rendered tile does. A stored bitmap that is the reference view's tile has alpha 0 on the samples that fall off the photograph, and those drop out. A fused mean an older file stores has alpha 0 where no view covered the sample, where only one view did, and where the views disagree so much that the confidence rounds to 0, and its colour there is zero or one view's reading, so all of those drop out, as a sample past the edge does. A row for a point with no bitmap is zero throughout, alpha included. Measured on fused means, samples with alpha 0 were rare: 0% on seoul_bull and 0.16% on kerry_park.
-- **Channels.** The colour channels are read, up to three; alpha is read only as the data flag. Colour is what matching sees, so a red-and-green edge of equal brightness, which is flat in luminance, is scored as the edge it is. The channels judged are those whose spread `s_c` over the template's samples with data (`O_0`) is at or above the flat floor. At each other shift a channel whose template spread over `O_d` falls under the floor is left out of that shift's average as well, and a moved window with no variance in a channel (a centred sum of squares under `1e-6`, the matching ZNCC's flat constant, or under the summed-area tables' rounding where the [dense route](#implementation-notes) takes it from them) scores 0 in it, since a flat window is plainly different from a textured template. A shift whose overlap leaves no channel, or has no sample at all, scores 0: nothing there matches the template.
+- **Data.** A tile of one channel is grey, two grey and alpha, three RGB, and four RGB and alpha. A sample carries data when its alpha is above 0; a tile with no alpha has data at every sample, as a rendered tile does. A stored bitmap that is the reference view's tile has alpha 0 on the samples that fall off the photograph, and those drop out. A fused mean an older file stores has alpha 0 where no view covered the sample, where only one view did, and where the views disagree so much that the confidence rounds to 0, and its colour there is zero or one view's reading, so all of those drop out, as a sample past the edge does. A row for a point with no bitmap is zero throughout, alpha included. Measured on fused means, samples with alpha 0 were rare: 0% on seoul_bull and 0.16% on kerry_park.
+- **Channels.** The colour channels are read, one or three; alpha is read only as the data flag, never as a colour. Colour is what matching sees, so a red-and-green edge of equal brightness, which is flat in luminance, is scored as the edge it is. The channels judged are those whose spread `s_c` over the template's samples with data (`O_0`) is at or above the flat floor. At each other shift a channel whose template spread over `O_d` falls under the floor is left out of that shift's average as well, and a moved window with no variance in a channel (a centred sum of squares under `1e-6`, the matching ZNCC's flat constant, or under the summed-area tables' rounding where the [dense route](#implementation-notes) takes it from them) scores 0 in it, since a flat window is plainly different from a textured template. A shift whose overlap leaves no channel, or has no sample at all, scores 0: nothing there matches the template.
 - **The parts.** The whole bitmap is read as one template, its middle square and the nine cells of the ZNCC grid's split as others, each taking its moved windows from the rest of the bitmap where it reaches: at each shift a part's sample counts when its moved sample lies inside the bitmap and both carry data. The whole bitmap and an edge or corner cell lose the rows and columns their moved window would read past the bitmap. The whole bitmap's overlaps keep at least `(R − r)/R` of it on each axis; an edge or corner cell of side `c` (about `R/3`) keeps at least `(c − r)/c` of itself on each axis it loses rows or columns on, 5/8 at `R = 24`, `r = 3`.
 - **No data.** A template with no sample carrying data has **no reading**: its radius, ellipse, tolerance and surface are all `NaN`, and its lower-bound flags are false.
 
@@ -139,26 +139,42 @@ pub struct PatchTile<'a> {
     pub height: usize,
 }
 
-impl<'a> PatchTile<'a> {
-    /// The planar colour channels of an interleaved `height × width × C`
-    /// patch, the layout a rendered bitmap arrives in, dropping a fourth
-    /// channel (alpha): returns the planes and the colour channel count.
-    pub fn planes_from_interleaved(
-        patch: &[f32],
-        width: usize,
-        height: usize,
-        channels: usize,
-    ) -> (Vec<f32>, usize);
+/// An interleaved `height × width × C` tile, the layout a rendered or
+/// stored bitmap arrives in, as colour planes and the samples that carry
+/// data: one channel is grey, two grey and alpha, three RGB, four RGB and
+/// alpha.
+pub struct InterleavedTile {
+    pub planes: Vec<f32>,
+    /// The colour channel count, 1 or 3.
+    pub channels: usize,
+    pub width: usize,
+    pub height: usize,
+    /// `None` where every sample carries data.
+    pub data: Option<Vec<bool>>,
+}
 
-    /// Which samples of an interleaved `height × width × C` patch carry
-    /// data: with a fourth channel, those whose alpha is above 0; without
-    /// one, every sample (`None`).
-    pub fn data_from_interleaved(
-        patch: &[f32],
+impl InterleavedTile {
+    /// The colour channel count of `channels` interleaved channels and the
+    /// index of the alpha channel, if any; an error for 0 or more than 4.
+    pub fn channel_rule(channels: usize) -> Result<(usize, Option<usize>), InterleavedTileError>;
+
+    /// A sample carries data where its alpha, if any, is above 0 and its
+    /// `valid` flag, if given, is true. An error for a channel count the rule
+    /// refuses, samples that do not cover the tile, or `valid` flags that do
+    /// not number one per sample.
+    pub fn new(
+        samples: &[f32],
         width: usize,
         height: usize,
         channels: usize,
-    ) -> Option<Vec<bool>>;
+        valid: Option<&[bool]>,
+    ) -> Result<Self, InterleavedTileError>;
+
+    /// The colour planes as a `PatchTile`.
+    pub fn tile(&self) -> PatchTile<'_>;
+
+    /// The data flags, `None` where every sample carries data.
+    pub fn data(&self) -> Option<&[bool]>;
 }
 
 /// One template inside `tile`, read the overlap way: at each shift, only
@@ -182,37 +198,34 @@ pub fn zncc_self_similarity_parts(
 ) -> SelfSimilarityParts;
 ```
 
-The functions panic, with a message naming the sizes, on a malformed tile (no channels, more than three, or a value count that does not match), on `data` with the wrong number of flags, on an empty template or one that does not fit in the tile, and, for the parts, on a bitmap that is not square or is under `3 × 3`. These are caller errors: the bench, the gates and the bindings size the tile from the same parameters they pass.
+`InterleavedTile` is where a caller's interleaved tile arrives, so it returns an error rather than panicking. The bindings, the bench, the reference-view rule and cluster refinement's member gate all split their tiles through it, so they read channels by one rule, the rule blur matching's `stored_bitmap_planes` reads a stored bitmap by ([blur-matched-zncc.md](blur-matched-zncc.md)). The reading functions panic, with a message naming the sizes, on a malformed tile (no channels, more than three, or a value count that does not match), on `data` with the wrong number of flags, on an empty template or one that does not fit in the tile, and, for the parts, on a bitmap that is not square or is under `3 × 3`. These are caller errors: the bench, the gates and the bindings size the tile from the same parameters they pass.
 
 **Why this shape.** The input is the bitmap being judged and nothing around it, so a radius depends on that bitmap alone and every caller computes the same number from it. The template is still a rectangle inside the tile, so a part of a bitmap can be read with the rest of it as its shifted windows, as the middle square and the cells are. The parts function exists because its eleven templates share one bitmap and one set of moments, and computing them together is several times cheaper than eleven calls (see [Implementation notes](#implementation-notes)). The result carries `tolerance` so a display or a test can say why a shift counted, and `surface` because the reading computes every `z(d)` anyway and a display can draw the surface the radius was read from. The surface is a `Vec` because its size follows `max_radius`. The parameters are a struct and not constants because a caller may need other values than the defaults, and the defaults of `ε` and `n` are not yet calibrated on real pairs of views (see [Open questions](#open-questions)).
 
 ```rust
 use sfmtool_core::patch::self_similarity::{
-    zncc_self_similarity_parts, PatchTile, SelfSimilarityParams,
+    zncc_self_similarity_parts, InterleavedTile, SelfSimilarityParams,
 };
 
 // `rendered` is a 24 × 24 × 3 tile rendered for one view: every sample is data.
-let (planes, channels) = PatchTile::planes_from_interleaved(&rendered, 24, 24, 3);
-let tile = PatchTile { values: &planes, channels, width: 24, height: 24 };
-let parts = zncc_self_similarity_parts(&tile, None, &SelfSimilarityParams::default());
+let tile = InterleavedTile::new(&rendered, 24, 24, 3, None)?;
+let parts = zncc_self_similarity_parts(&tile.tile(), None, &SelfSimilarityParams::default());
 if parts.whole.radius < 1.5 {
     // Matching locks onto this patch within one pixel, diagonals included.
 }
 ```
 
-The functions take the data flags as a separate slice rather than reading a fourth channel of the tile, because `PatchTile` holds colour planes only; `data_from_interleaved` derives the flags from an RGBA bitmap in the same layout `planes_from_interleaved` reads.
+The functions take the data flags as a separate slice rather than reading an alpha channel of the tile, because `PatchTile` holds colour planes only; `InterleavedTile` derives the flags from the alpha of the bitmap it splits.
 
 ```rust
 use sfmtool_core::patch::self_similarity::{
-    zncc_self_similarity_parts, PatchTile, SelfSimilarityParams,
+    zncc_self_similarity_parts, InterleavedTile, SelfSimilarityParams,
 };
 
 // `bitmap` is a stored 24 × 24 × 4 bitmap row, alpha 0 where the render
 // had no data.
-let (planes, channels) = PatchTile::planes_from_interleaved(&bitmap, 24, 24, 4);
-let data = PatchTile::data_from_interleaved(&bitmap, 24, 24, 4);
-let tile = PatchTile { values: &planes, channels, width: 24, height: 24 };
-let parts = zncc_self_similarity_parts(&tile, data.as_deref(), &SelfSimilarityParams::default());
+let tile = InterleavedTile::new(&bitmap, 24, 24, 4, None)?;
+let parts = zncc_self_similarity_parts(&tile.tile(), tile.data(), &SelfSimilarityParams::default());
 let passes = parts.whole.radius <= 2.5; // NaN (no data) is judged by the caller
 ```
 
@@ -441,7 +454,7 @@ The three parameters' defaults are defined on `SelfSimilarityParams::default()`,
 
 ## Python bindings
 
-`sfmtool.patches.zncc_self_similarity_parts(bitmap, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` reads one `(R, R)` single-channel bitmap or `(R, R, C)` patch, uint8 or float32, by the [overlap reading](#the-overlap-reading), a fourth channel read as the data flags (alpha above 0), and returns a dict of `radius` (float), `radius_middle` (float), `radius_grid` (`(3, 3)` float64), `radius_is_at_least` (bool, the whole bitmap's), the whole bitmap's ellipse as `ellipse_axes` (`(2,)` float64), `ellipse_axes_is_at_least` (`(2,)` bool), `ellipse_major_angle` (float) and `ellipse_matrix` (`(2, 2)` float64), the middle square's as `ellipse_axes_middle`, `ellipse_axes_is_at_least_middle` and `ellipse_major_angle_middle`, each cell's as `ellipse_axes_grid` (`(3, 3, 2)`), `ellipse_axes_is_at_least_grid` (`(3, 3, 2)` bool) and `ellipse_major_angle_grid` (`(3, 3)`), and the whole bitmap's `tolerance` (float) and `surface` (`(2r + 1, 2r + 1)` float64); a bitmap with no sample carrying data has no reading, its values `NaN` and its flags false. It returns the ellipse in grid px only, since a bitmap alone has no camera and no patch frame to measure it in; only the bench's observation dicts carry the other units. A bitmap of another dtype or rank, not square or under `3 × 3`, or with more than four channels, raises `ValueError`. The bench fields arrive through the existing observation dicts.
+`sfmtool.patches.zncc_self_similarity_parts(bitmap, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` reads one `(R, R)` single-channel bitmap or `(R, R, C)` patch, uint8 or float32, by the [overlap reading](#the-overlap-reading), its channels read by `InterleavedTile`'s rule (two grey and alpha, four RGB and alpha, alpha above 0 the data flags), and returns a dict of `radius` (float), `radius_middle` (float), `radius_grid` (`(3, 3)` float64), `radius_is_at_least` (bool, the whole bitmap's), the whole bitmap's ellipse as `ellipse_axes` (`(2,)` float64), `ellipse_axes_is_at_least` (`(2,)` bool), `ellipse_major_angle` (float) and `ellipse_matrix` (`(2, 2)` float64), the middle square's as `ellipse_axes_middle`, `ellipse_axes_is_at_least_middle` and `ellipse_major_angle_middle`, each cell's as `ellipse_axes_grid` (`(3, 3, 2)`), `ellipse_axes_is_at_least_grid` (`(3, 3, 2)` bool) and `ellipse_major_angle_grid` (`(3, 3)`), and the whole bitmap's `tolerance` (float) and `surface` (`(2r + 1, 2r + 1)` float64); a bitmap with no sample carrying data has no reading, its values `NaN` and its flags false. It returns the ellipse in grid px only, since a bitmap alone has no camera and no patch frame to measure it in; only the bench's observation dicts carry the other units. A bitmap of another dtype or rank, not square or under `3 × 3`, or with more than four channels, raises `ValueError`. The bench fields arrive through the existing observation dicts.
 
 ```python
 from sfmtool.patches import zncc_self_similarity_parts
@@ -450,7 +463,7 @@ out = zncc_self_similarity_parts(bitmap_24x24x3_uint8)
 out["radius"], out["radius_grid"], out["surface"][3, 3]  # 1.0 at the centre
 ```
 
-`sfmtool.patches.zncc_self_similarity_parts_stack(bitmaps, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` reads each bitmap of an `(N, R, R, C)` uint8 or float32 stack the same way, in parallel over the bitmaps, a fourth channel read as the data flags (alpha above 0), and returns a dict of per-bitmap arrays: `radius` (`(N,)` float64), `radius_middle` (`(N,)`), `radius_grid` (`(N, 3, 3)`), `radius_is_at_least` (`(N,)` bool), `ellipse_axes` (`(N, 2)`), `ellipse_axes_is_at_least` (`(N, 2)` bool), `ellipse_major_angle` (`(N,)`), `tolerance` (`(N,)`), the whole bitmap's where not said otherwise, and `covered` (`(N,)` bool), false for a bitmap with no sample carrying data, whose values are `NaN`. A stack of another dtype or rank, of bitmaps that are not square or under `3 × 3`, or with more than four channels, raises `ValueError`. It is a module function rather than a `PatchCloud` method because it reads the bitmaps alone: no geometry, no views. `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS` (`2.5`) is exported beside it.
+`sfmtool.patches.zncc_self_similarity_parts_stack(bitmaps, *, max_radius=3, relative_tolerance=0.05, noise=2.0)` reads each bitmap of an `(N, R, R, C)` uint8 or float32 stack the same way, in parallel over the bitmaps, and returns a dict of per-bitmap arrays: `radius` (`(N,)` float64), `radius_middle` (`(N,)`), `radius_grid` (`(N, 3, 3)`), `radius_is_at_least` (`(N,)` bool), `ellipse_axes` (`(N, 2)`), `ellipse_axes_is_at_least` (`(N, 2)` bool), `ellipse_major_angle` (`(N,)`), `tolerance` (`(N,)`), the whole bitmap's where not said otherwise, and `covered` (`(N,)` bool), false for a bitmap with no sample carrying data, whose values are `NaN`. A stack of another dtype or rank, of bitmaps that are not square or under `3 × 3`, or with more than four channels, raises `ValueError`. It is a module function rather than a `PatchCloud` method because it reads the bitmaps alone: no geometry, no views. `DEFAULT_MAX_MEMBER_ZNCC_SELF_SIMILARITY_RADIUS` (`2.5`) is exported beside it.
 
 ```python
 from sfmtool.patches import zncc_self_similarity_parts_stack
@@ -469,7 +482,7 @@ In [self_similarity/tests.rs](../../../crates/sfmtool-core/src/patch/self_simila
 - The surface is 1 at its centre and finite over the whole square.
 - The parts function agrees with separate calls on each part's template.
 - A template that does not fit in the tile, and a parts bitmap that is not square, are refused with a panic message naming the sizes.
-- The overlap reading: a corner locks (under 1); a straight edge at 0°, 30°, 45° and 90° reads 3 with its major axis along the edge; a flat bitmap and an 8-bit ramp read 3; samples without data drop out, so what they hold does not change the reading, which equals that of the covered columns cut out on their own, and a cell with no data, or a bitmap with none, has no reading; on a bitmap cut from a larger textured tile, the middle and the centre cell read as the same templates read inside the larger tile, over the whole square of shifts, and the whole bitmap within 0.25 of it, with the same tolerance; the parts agree with separate calls; the wrong number of data flags is refused; and `data_from_interleaved` reads alpha.
+- The overlap reading: a corner locks (under 1); a straight edge at 0°, 30°, 45° and 90° reads 3 with its major axis along the edge; a flat bitmap and an 8-bit ramp read 3; samples without data drop out, so what they hold does not change the reading, which equals that of the covered columns cut out on their own, and a cell with no data, or a bitmap with none, has no reading; on a bitmap cut from a larger textured tile, the middle and the centre cell read as the same templates read inside the larger tile, over the whole square of shifts, and the whole bitmap within 0.25 of it, with the same tolerance; the parts agree with separate calls; the wrong number of data flags is refused; `InterleavedTile` reads the second of two channels and the fourth of four as alpha, takes a sample out where alpha is 0 or `valid` is false, and refuses 0 or more than 4 channels, samples that do not cover the tile and `valid` of the wrong length; and a grey-and-alpha tile reads the same radius as the RGB-and-alpha tile with its grey in every colour channel.
 - The ellipse: a disc of radius 12 reads a circle of semi-axis 12 to within 0.05 (the bilinear surface makes the region a little smaller than the disc), with `E = a²·I`; an elliptical region with semi-axes 10 and 4, along `x` and turned by 30° and 120°, reads those axes to 1% and the angle to `2e-3`, its matrix 1 at the ends of both semi-axes; two equal lobes 4 apart read a semi-major axis of `√2·4` along the line joining them; the region's area and moments match a dense midpoint sum of the bilinear surface on a real sighting's surface and on a random one, the quadrature across a cell matches one with spans an eighth as long to `1e-10`, and a strip `|dx| ≤ 0.5` integrates exactly; on every fixture, templates with tile around them and whole bitmaps, the radius is the semi-major axis to the bit and its flag the major axis's, no axis passes `r`, and an axis at `r` is a lower bound.
 - The lower bounds: three lobes along the diagonal whose semi-major axis passes `r` read it capped at `r` and flagged, with the matrix rebuilt from the capped axes at the same angle; a ridge along `x` running off the square with an even width reads `r`, its major axis a lower bound and its minor axis exact, as does a tile of uniform stripes read by the kernels, whose crossings differ from line to line by `f32` rounding, and the same ridge along `y` reads the same turned to `π/2`; a ridge that widens towards the border, a slanted ridge and a lone border shift at the level are lower bounds along both axes, and the lone shift reads under `r` with its major axis towards it; a gap with no reading well inside a large disc leaves both axes exact, one further out flags the major axis, one beside a small region flags both, one no shift at the level touches flags nothing, one only diagonal to the one shift at the level flags both, and one that reaches the border flags both; a flat template reads `[r, r]`, both lower bounds, no angle and `E = r²·I`; and a reading with no data is `NaN` with no flags and maps to nothing.
 - The other units: through `diag(2, 1)` an ellipse long along `x` doubles its major axis, through `diag(1, 3)` its minor axis becomes the major one turned to 90°, and through a rotation its angle turns with it; a singular or non-finite map gives none; a ridge running off along `x`, exact across, stays exact across under a map that keeps `x` its major direction and is a lower bound across under a shear; along the patch it scales by each half-extent with `v` running up the rows, and on a patch at infinity reads `atan` of each length in degrees; and `SelfSimilarityEllipseUnits::read` fills what it is given.

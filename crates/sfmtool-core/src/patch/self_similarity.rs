@@ -132,75 +132,157 @@ pub struct PatchTile<'a> {
     pub height: usize,
 }
 
-impl<'a> PatchTile<'a> {
-    /// The planar colour channels of an interleaved `height × width × C`
-    /// patch, the layout a rendered bitmap arrives in, dropping a fourth
-    /// channel (alpha): returns the planes and the colour channel count.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `patch.len() != width * height * channels` or `channels` is 0.
-    pub fn planes_from_interleaved(
-        patch: &[f32],
+/// Errors from [`InterleavedTile::new`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterleavedTileError {
+    /// The tile has `channels` channels; one to four are read.
+    Channels { channels: usize },
+    /// The samples do not cover a `width × height × channels` tile: there are
+    /// `len` of them.
+    Samples {
         width: usize,
         height: usize,
         channels: usize,
-    ) -> (Vec<f32>, usize) {
-        assert!(channels > 0, "planes_from_interleaved: no channels");
-        assert_eq!(
-            patch.len(),
-            width * height * channels,
-            "planes_from_interleaved: a {width}×{height}×{channels} patch has {} values, not {}",
-            width * height * channels,
-            patch.len()
-        );
-        let colour = channels.min(3);
+        len: usize,
+    },
+    /// `valid` holds `len` flags, not one per sample of the `samples`-sample
+    /// tile.
+    Valid { samples: usize, len: usize },
+}
+
+impl std::fmt::Display for InterleavedTileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Channels { channels } => {
+                write!(f, "a tile must have 1 to 4 channels, got {channels}")
+            }
+            Self::Samples {
+                width,
+                height,
+                channels,
+                len,
+            } => write!(
+                f,
+                "a {width} x {height} x {channels} tile has {} values, got {len}",
+                width * height * channels
+            ),
+            Self::Valid { samples, len } => write!(
+                f,
+                "a tile of {samples} samples needs {samples} valid flags, got {len}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InterleavedTileError {}
+
+/// An interleaved `height × width × C` tile, the layout a rendered or stored
+/// bitmap arrives in, read as planar colour channels and the samples that
+/// carry data, under one channel rule: one channel is grey, two grey and
+/// alpha, three RGB, four RGB and alpha. Alpha is not a colour channel; a
+/// sample whose alpha is 0 carries no data.
+///
+/// A stored bitmap that is a view's tile has alpha 0 where the tile fell off
+/// the photograph. A fused mean an older file stores has alpha 0 where no view
+/// covered the sample, where only one view did, and where the views disagree
+/// so much that the confidence rounds to 0; its colour there is zero or one
+/// view's reading, so none of those samples is treated as data.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InterleavedTile {
+    /// The colour planes, channel `c`'s row-major `width × height` plane at
+    /// `planes[c * width * height ..]`.
+    pub planes: Vec<f32>,
+    /// The colour channel count, 1 or 3.
+    pub channels: usize,
+    pub width: usize,
+    pub height: usize,
+    /// Per sample, row-major: whether it carries data. `None` where every
+    /// sample does: no alpha and no `valid` flags were given.
+    pub data: Option<Vec<bool>>,
+}
+
+impl InterleavedTile {
+    /// The colour channel count of a tile of `channels` interleaved
+    /// channels, and the index of its alpha channel if it has one.
+    pub fn channel_rule(channels: usize) -> Result<(usize, Option<usize>), InterleavedTileError> {
+        match channels {
+            1 => Ok((1, None)),
+            2 => Ok((1, Some(1))),
+            3 => Ok((3, None)),
+            4 => Ok((3, Some(3))),
+            _ => Err(InterleavedTileError::Channels { channels }),
+        }
+    }
+
+    /// Read the interleaved `samples` of a `height × width × channels` tile.
+    /// A sample carries data where its alpha, if the tile has one, is above
+    /// 0 and its `valid` flag, if given (one per sample, row-major), is true.
+    pub fn new(
+        samples: &[f32],
+        width: usize,
+        height: usize,
+        channels: usize,
+        valid: Option<&[bool]>,
+    ) -> Result<Self, InterleavedTileError> {
+        let (colour, alpha) = Self::channel_rule(channels)?;
         let n = width * height;
+        if samples.len() != n * channels {
+            return Err(InterleavedTileError::Samples {
+                width,
+                height,
+                channels,
+                len: samples.len(),
+            });
+        }
+        if let Some(valid) = valid {
+            if valid.len() != n {
+                return Err(InterleavedTileError::Valid {
+                    samples: n,
+                    len: valid.len(),
+                });
+            }
+        }
         let mut planes = vec![0.0f32; colour * n];
-        for (p, pixel) in patch.chunks_exact(channels).enumerate() {
+        for (p, pixel) in samples.chunks_exact(channels).enumerate() {
             for c in 0..colour {
                 planes[c * n + p] = pixel[c];
             }
         }
-        (planes, colour)
-    }
-
-    /// Which samples of an interleaved `height × width × C` patch carry data,
-    /// for the overlap reading: with a fourth channel (alpha), the samples
-    /// whose alpha is above 0; without one, every sample, returned as `None`.
-    ///
-    /// A stored bitmap that is a view's tile has alpha 0 where the tile fell
-    /// off the photograph. A fused mean an older file stores has alpha 0 where
-    /// no view covered the sample, where only one view did, and where the
-    /// views disagree so much that the confidence rounds to 0; its colour there
-    /// is zero or one view's reading, so none of those samples is treated as
-    /// data.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `patch.len() != width * height * channels` or `channels` is 0.
-    pub fn data_from_interleaved(
-        patch: &[f32],
-        width: usize,
-        height: usize,
-        channels: usize,
-    ) -> Option<Vec<bool>> {
-        assert!(channels > 0, "data_from_interleaved: no channels");
-        assert_eq!(
-            patch.len(),
-            width * height * channels,
-            "data_from_interleaved: a {width}×{height}×{channels} patch has {} values, not {}",
-            width * height * channels,
-            patch.len()
-        );
-        (channels >= 4).then(|| {
-            patch
+        let data = (alpha.is_some() || valid.is_some()).then(|| {
+            samples
                 .chunks_exact(channels)
-                .map(|pixel| pixel[3] > 0.0)
+                .enumerate()
+                .map(|(p, pixel)| {
+                    valid.is_none_or(|v| v[p]) && alpha.is_none_or(|a| pixel[a] > 0.0)
+                })
                 .collect()
+        });
+        Ok(Self {
+            planes,
+            channels: colour,
+            width,
+            height,
+            data,
         })
     }
 
+    /// The colour planes as a [`PatchTile`].
+    pub fn tile(&self) -> PatchTile<'_> {
+        PatchTile {
+            values: &self.planes,
+            channels: self.channels,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
+    /// The data flags, `None` where every sample carries data.
+    pub fn data(&self) -> Option<&[bool]> {
+        self.data.as_deref()
+    }
+}
+
+impl PatchTile<'_> {
     /// Check the tile's own shape: one to three channels and a value for
     /// every pixel of every channel.
     fn validate(&self) {

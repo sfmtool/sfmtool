@@ -51,7 +51,7 @@ use crate::patch::reference_view::{
     ReferenceViewOptions, TileSemiAxes, ViewTile,
 };
 use crate::patch::self_similarity::{
-    zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
+    zncc_self_similarity_parts, InterleavedTile, SelfSimilarityEllipse, SelfSimilarityEllipseUnits,
     SelfSimilarityParams,
 };
 use crate::patch::stored_bitmap::{bitmap_from_tile, stored_bitmap_planes, BitmapScorer};
@@ -1321,8 +1321,11 @@ struct TileGeometry<'a> {
 ///
 /// The tile is read with no pixels from outside it: at each shift only the
 /// samples both windows hold, and that carry data, are correlated, as the
-/// culls read a stored bitmap. `data` flags the samples that carry data, one
-/// per sample, row-major; `None` means every sample does.
+/// culls read a stored bitmap. The channels are read by
+/// [`InterleavedTile`]'s rule, a second or fourth channel as alpha. `data`
+/// flags the samples that carry data, one per sample, row-major, alpha 0
+/// taking a sample out as well; `None` means every sample does. A tile of a
+/// shape that rule refuses has no reading.
 fn score_self_similarity(
     samples: &[f32],
     channels: usize,
@@ -1330,18 +1333,14 @@ fn score_self_similarity(
     data: Option<&[bool]>,
     geometry: &TileGeometry<'_>,
 ) -> TileSelfSimilarity {
-    if channels == 0 || resolution < 3 || samples.len() != resolution * resolution * channels {
+    if resolution < 3 {
         return TileSelfSimilarity::default();
     }
-    let (planes, colour) =
-        PatchTile::planes_from_interleaved(samples, resolution, resolution, channels);
-    let tile = PatchTile {
-        values: &planes,
-        channels: colour,
-        width: resolution,
-        height: resolution,
+    let Ok(tile) = InterleavedTile::new(samples, resolution, resolution, channels, data) else {
+        return TileSelfSimilarity::default();
     };
-    let parts = zncc_self_similarity_parts(&tile, data, &SelfSimilarityParams::default());
+    let parts =
+        zncc_self_similarity_parts(&tile.tile(), tile.data(), &SelfSimilarityParams::default());
     let units = |reading| {
         SelfSimilarityEllipseUnits::read(
             reading,

@@ -21,8 +21,11 @@ use crate::progress::Progress;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewTile {
     /// The `(R, R, C)` samples, `C` the photograph's channel count. A sample
-    /// the warp cannot place on the photograph is black, and a fourth channel
-    /// is opaque everywhere, as a stored bitmap has it.
+    /// the warp cannot place on the photograph is black. The second of two
+    /// channels and the fourth of four are alpha, opaque everywhere, as a
+    /// stored bitmap has it
+    /// ([`InterleavedTile`](crate::patch::self_similarity::InterleavedTile)'s
+    /// channel rule).
     pub samples: Array3<u8>,
     /// Per sample, row-major: whether the warp places it on the photograph,
     /// so that it carries image data.
@@ -129,11 +132,13 @@ pub fn render_view_tile(
         render_tile(view.pyramid, &mut map, sampler)
     };
     let src_channels = tile.channels();
+    // The second of two channels is alpha, as the fourth of four is.
+    let alpha = (channels == 2).then_some(1);
     let mut samples = Array3::<u8>::zeros((resolution, resolution, channels));
     for row in 0..resolution {
         for col in 0..resolution {
             for c in 0..channels {
-                samples[[row, col, c]] = if c >= 3 {
+                samples[[row, col, c]] = if c >= 3 || Some(c) == alpha {
                     u8::MAX
                 } else if src_channels >= 3 {
                     tile.get_pixel(col as u32, row as u32, c as u32)
