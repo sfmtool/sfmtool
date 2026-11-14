@@ -766,7 +766,11 @@ def analyze_reconstruction(
 
     # Imported lazily to avoid a module-level import cycle: _recon_console
     # imports the pure helper `_flag_frame` from here.
-    from ._recon_console import print_frame_table, print_summary
+    from ._recon_console import (
+        print_frame_table,
+        print_sequence_discontinuities,
+        print_summary,
+    )
 
     image_names = recon.image_names
     num_images = recon.image_count
@@ -810,6 +814,11 @@ def analyze_reconstruction(
 
     for seq in numbered_sequences:
         sorted_indexes = sorted(seq.index_set)
+        # summarize_paths_by_sequence writes the pattern with the platform's
+        # separator, while image names always use forward slashes. Normalize
+        # it once, so the pattern and name printed and reported are the same
+        # on every platform.
+        seq_path = seq.path.replace("\\", "/")
 
         # Build ordered lists of poses for this sequence
         seq_image_names = []
@@ -819,9 +828,7 @@ def analyze_reconstruction(
         seq_quats = []
 
         for idx in sorted_indexes:
-            # Normalize separators — summarize_paths_by_sequence may produce
-            # backslashes on Windows while image names use forward slashes.
-            fname = (seq.path % idx).replace("\\", "/")
+            fname = seq_path % idx
             if fname not in name_to_idx:
                 continue
             img_idx = name_to_idx[fname]
@@ -836,13 +843,13 @@ def analyze_reconstruction(
 
         if len(seq_image_names) < 4:
             click.echo(
-                f"\nSkipping sequence {seq.path}: "
+                f"\nSkipping sequence {seq_path}: "
                 f"only {len(seq_image_names)} image(s) (need at least 4)"
             )
             continue
 
-        seq_base = seq.path.rsplit(".", 1)[0].split("%")[0].rstrip("_")
-        click.echo(f"\nAnalyzing sequence: {seq.path} ({len(seq_image_names)} frames)")
+        seq_base = seq_path.rsplit(".", 1)[0].split("%")[0].rstrip("_")
+        click.echo(f"\nAnalyzing sequence: {seq_path} ({len(seq_image_names)} frames)")
 
         # Step 1: Pose extrapolation errors
         extrap_results = _compute_extrapolation_errors(
@@ -968,7 +975,7 @@ def analyze_reconstruction(
         )
 
         seq_result = {
-            "sequence": seq.path,
+            "sequence": seq_path,
             "sequence_name": seq_base,
             "frame_count": len(seq_image_names),
             "extrap_results": extrap_results,
@@ -994,10 +1001,18 @@ def analyze_reconstruction(
         }
         all_sequence_results.append(seq_result)
 
-        # Render this sequence's per-frame table.
+        # Render this sequence's section, its per-frame table and then its
+        # break rule and discontinuities, before the next sequence's header.
         print_frame_table(seq_result)
+        print_sequence_discontinuities(seq_result)
 
-    # Summary section: all sequences grouped at the end.
+    if not all_sequence_results:
+        # Every sequence was skipped: nothing was analyzed, so there are no
+        # totals and no verdict.
+        click.echo("\nNo sequence has the 4 images the analysis needs.")
+        return []
+
+    # The totals over every sequence, then the verdict.
     print_summary(all_sequence_results)
 
     return all_sequence_results
