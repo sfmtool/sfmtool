@@ -345,13 +345,14 @@ The commands that open the files they are given and write them out or report
 on them work in a version 1 workspace: `sfm inspect` of a `.sfmr`, `.matches`
 or `.sift` file, `sfm analyze`, `sfm explorer`, `sfm web-export`,
 `sfm to-colmap-bin` and `sfm to-nerfstudio` (which write a `sift_files`
-reconstruction's keypoints from the `.sift` files it records),
+reconstruction's keypoints from the `.sift` files it records, `sfm to-nerfstudio`
+only with `--include-colmap`),
 `sfm estimate-intrinsics` (which reads a `.matches` file's image sizes) and
 `sfm cluster-patches` (which reads a `.matches` file and the photographs).
 `sfm panorama`, `sfm render-patches` and `sfm motion` use neither the
-workspace's settings nor its `.sift` files: they read a `.sfmr`, an
-`embedded_patches` one for `sfm render-patches`, and the photographs, so they
-work too. `sfm inspect` of an image reports
+workspace's settings nor its `.sift` files: they read the photographs and
+a `.sfmr`, an `embedded_patches` one for `sfm render-patches` and only when
+given one for `sfm motion`, so they work too. `sfm inspect` of an image reports
 its readings as unavailable, with the refusal, since they are taken through the
 workspace's conversion. `sfm ws upgrade` and `sfm ws init --force` are what
 move a version 1 workspace to version 2.
