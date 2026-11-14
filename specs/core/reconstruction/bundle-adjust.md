@@ -639,9 +639,10 @@ a run; no pair holds while the two rounds kept different counts of
 observations, nor once the trailing solve has finished its last round and has
 no iteration left to save. These are the definitions
 [`scripts/scanlines_race_early_stop.py`](../../../scripts/scanlines_race_early_stop.py)
-replays, and the race's tests reproduce the measurement's stops on its
-synthetic scenes. The leading solve then runs to the end alone; if the rule
-never fires, the final costs decide as above.
+replays, and the race's tests reproduce the replay's stops on the
+measurement's synthetic scenes at the tests' size. The leading solve then
+runs to the end alone; if the rule never fires, the final costs decide as
+above.
 
 The rule is a function of the reported values alone, read pair by pair in
 order, so where it fires never depends on the threads' timing. A solve that
@@ -1013,7 +1014,7 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   marking no camera.
 - The per-image corrections
   ([corrections.rs](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust/tests/corrections.rs)),
-  on a scene of 30 `SFMTOOL_PINHOLE` images from a general motion, each image's
+  on a scene of 12 `SFMTOOL_PINHOLE` images from a general motion, each image's
   keypoints made through its own planted radial correction and rates with
   0.1 px of noise: with the rates planted on rows and on columns and no stored
   setting, the fallback to `Unknown` racing both and choosing the planted
@@ -1037,21 +1038,22 @@ fixture needs no pixels, because the adjustment reads none. What it pins:
   race, and with the early stop off ending the call before the second solve
   opens.
 - The early stop (`tests/corrections.rs`): on the planted scenes the rule
-  stops the solve on the other scanlines where the measurement's replay did
-  (columns at round 2, iteration 4 with rows planted, rows at round 2,
-  iteration 2 with columns planted), the costs at the stop differing by the
-  gap and the stopped phase's note saying where; the stopped race's answer
-  equal to the bit to two full solves' and to one solve on the winner's
-  setting, the reports differing in the race alone; a race the rule never
-  stops (an infinite threshold) equal to two full solves to the bit, report
-  included, with the columns solve's phase reported after the rows solve's;
-  repeated runs giving the same answer and stop to the bit; two `Unknown`
-  cameras equal to the bit to two full solves per race. In `race.rs`, the rule
-  on scripted trajectories: the count, the threshold, the budget term with its
-  later rounds, a change of trailing solve restarting the count, a round's
-  start skipped, no stop under different kept counts, a finished solve keeping
-  its last cost, the gap's units, the rate's window, and the same stop
-  whichever solve reports first.
+  stops the solve on the other scanlines where the measurement's replay of
+  these scenes did (columns at round 2, iteration 6 with rows planted, rows
+  at round 2, iteration 3 with columns planted), the costs at the stop
+  differing by the gap and the stopped phase's note saying where; the
+  stopped race's answer equal to the bit to two full solves' and to one solve
+  on the winner's setting, the reports differing in the race alone; a race
+  the rule never stops (an infinite threshold) on a scene it stops by
+  default, equal to two full solves to the bit, report included, with the
+  columns solve's phase reported after the rows solve's; repeated runs of a
+  stopped race giving the same answer and stop to the bit; two `Unknown`
+  cameras, each race stopped early, equal to the bit to two full solves per
+  race. In `race.rs`, the rule on scripted trajectories: the count, the
+  threshold, the budget term with its later rounds, a change of trailing
+  solve restarting the count, a round's start skipped, no stop under
+  different kept counts, a finished solve keeping its last cost, the gap's
+  units, the rate's window, and the same stop whichever solve reports first.
 - A camera no posed image uses (one nothing references, one only an unposed
   image uses) coming back untouched, left out of the report, and its entry in
   the release list ignored even where its model could not take it.

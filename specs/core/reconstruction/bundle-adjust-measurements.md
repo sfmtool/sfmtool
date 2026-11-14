@@ -101,7 +101,7 @@ which runs the race with every camera `UNKNOWN` and the early stop off (its
 which replays the rule on them. The synthetic scenes are written by the
 ignored test `write_scanlines_race_scenes` in
 [tests/corrections.rs](../../../crates/sfmtool-core/src/reconstruction/bundle_adjust/tests/corrections.rs),
-from the scene the race's own tests use.
+from the scene the race's own tests use, at 30 images.
 
 ### The inputs
 
@@ -120,7 +120,7 @@ default `max_iters` of 60, with the crossing on unless stated.
 - **Seoul bull**: `seoul_bull_sculpture_ground_truth_v01.sfmr` switched to
   `SFMTOOL_PINHOLE`, the same releases, the default schedule (17 images, 1277
   observations).
-- **Synthetic**: the race tests' scene of 30 images and about 2400
+- **Synthetic**: the race tests' scene at 30 images, about 2400
   observations with 0.1 px of noise and perturbed poses, each image's radial
   correction drawn with spread `3·10⁻³` and its rates with spread `τ_w`, planted
   on rows or on columns, releasing both corrections, the default schedule.
@@ -264,10 +264,16 @@ Adopted and built as recommended, with `T = 100` and `K = 3` the defaults of
 `ScanlinesEarlyStopOptions`
 ([bundle-adjust.md § Stopping the trailing solve
 early](bundle-adjust.md#stopping-the-trailing-solve-early)). The built rule
-reproduces this replay's stops on the synthetic scenes at `τ_w = 4·10⁻³` in the
-race's tests, and on the dino candidate under the default schedule it stopped
-columns at round 1, iteration 12, as the table above has it, in 25.5 s against
-38.7 s for two full solves; the seoul bull ran both to the end. The built rule
+reproduces this replay's stops on the synthetic scenes at `τ_w = 4·10⁻³`, and
+on the dino candidate under the default schedule it stopped columns at round 1,
+iteration 12, as the table above has it, in 25.5 s against 38.7 s for two full
+solves; the seoul bull ran both to the end. The race's tests run the synthetic
+scene at 12 images rather than 30, since a solve's time grows faster than the
+image count, and `write_scanlines_race_scenes` writes it at that size too, at
+`τ_w = 4·10⁻³`. Recorded and replayed as above, the rule at `T = 100` and
+`K = 3` stops columns there at round 2, iteration 6 with rows planted, and rows
+at round 2, iteration 3 with columns planted; the built rule stops at the same
+places, and the tests assert those stops. The built rule
 adds one condition the replay above did not have, and the replay script now
 applies it too: a pair does not hold once the trailing solve has finished its
 last round, since stopping it there saves nothing. Rerun on all twelve inputs,
