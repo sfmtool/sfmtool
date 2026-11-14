@@ -443,6 +443,8 @@ Each finding here comes from a kept hit of a mechanical check, confirmed by read
 >
 > _Not counted: the `sfm-explorer` items that are not public API (`bg_image_mesh`, `display.rs` `range` and `refit_points.rs:730`)._
 
+> _Status (2026-11-13): **Partially done** — the writer item: `write_sift`, `write_sfmr` and `write_matches` read every caller array through `sfmtool-archive-io`'s `row_major_bytes` / `row_major_elements` and no longer panic on a Fortran-order or strided array (see "Write caller arrays through `as_standard_layout` in the format writers"), branch `hyg-fix-1113-10-writer-standard-layout`. The sweep bindings, `bundle_adjust`, `grow_reconstruction`, `compute_depth_statistics` and the specs remain._
+
 **Have the image-pair-graph bindings take the reconstruction, and stop repeating bindings in Python**
 - Location (check 13): `src/sfmtool/_image_pair_graph.py:45,56`; `src/sfmtool/align/core.py:205`; `src/sfmtool/sift/file.py:40,61`; `src/sfmtool/_patch_compaction.py:50`; `src/sfmtool/camrig/create.py:56`, `camrig/cp.py:77`.
 - Problem: of 324 top-level Python functions and classes that use a binding name, these repeat what Rust does:
