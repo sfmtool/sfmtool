@@ -255,6 +255,56 @@ fn a_tile_inside_the_photograph_is_fully_covered_and_one_over_its_edge_is_not() 
     assert_eq!(tile.samples[[off / 16, off % 16, 0]], 0);
 }
 
+#[test]
+fn a_grey_and_alpha_photograph_renders_grey_and_opaque_alpha() {
+    // The same grey as a one-channel photograph and as a grey-and-alpha one
+    // whose alpha is 7: the tile's grey is the same, and its second channel
+    // is alpha, 255 everywhere, as a fourth channel is.
+    let camera = pinhole(64, 64);
+    let pose = RigidTransform::from_wxyz_translation([0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let value = |x: u32, y: u32| ((x * 7 + y * 3) % 200 + 20) as u8;
+    let one = grey(64, 64, value);
+    let data = (0..64u32)
+        .flat_map(|y| (0..64u32).flat_map(move |x| [value(x, y), 7]))
+        .collect();
+    let two = ImageU8Pyramid::build(&ImageU8::new(64, 64, 2, data), 1);
+    let mut patch = OrientedPatch::from_center_normal(
+        Point3::new(0.0, 0.0, 4.0),
+        -Vector3::z(),
+        Vector3::y(),
+        [0.2, 0.2],
+    );
+    // Over the right edge, so some samples are off the photograph.
+    patch.center = Point3::new(1.28, 0.0, 4.0);
+    let render = |pyramid: &ImageU8Pyramid| {
+        let view = ProjectedImage {
+            camera: &camera,
+            cam_from_world: &pose,
+            pyramid,
+        };
+        render_view_tile(
+            &patch,
+            &view,
+            None,
+            16,
+            SamplerChoice::per_view(),
+            &Progress::none(),
+        )
+    };
+    let (grey_tile, tile) = (render(&one), render(&two));
+    assert_eq!(tile.samples.shape(), &[16, 16, 2]);
+    assert!(tile.valid.iter().any(|&v| !v));
+    assert_eq!(
+        tile.samples.index_axis(ndarray::Axis(2), 0),
+        grey_tile.samples.index_axis(ndarray::Axis(2), 0)
+    );
+    assert!(tile
+        .samples
+        .index_axis(ndarray::Axis(2), 1)
+        .iter()
+        .all(|&a| a == u8::MAX));
+}
+
 /// The polygon through the photograph positions of the centres of `patch`'s
 /// border samples at resolution `r`, in the order the tile's outline takes
 /// them, each projected on its own through the camera rather than read off a
