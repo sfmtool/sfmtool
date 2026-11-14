@@ -257,6 +257,29 @@ fn equal_near_ends_keep_the_order_given() {
     assert_eq!(members, vec![vec![2], vec![0, 1]]);
 }
 
+/// A caller of the binding can hand in a `NaN` range with a usable class. The
+/// candidates with numbers for near ends are still taken nearest first, with
+/// the `NaN` one after them, in a layer of its own.
+#[test]
+fn a_nan_near_end_does_not_disorder_the_others() {
+    let scene = Scene::from_centers(&CENTERS, PLANE);
+    let owned = [
+        with_range(&[0, 1], [2.0, 2.5], BOUNDED),
+        with_range(&[0, 2], [f64::NAN, f64::NAN], BOUNDED),
+        with_range(&[0, 3], [1.0, 1.5], BOUNDED),
+    ];
+    let found = run(
+        &scene,
+        &owned,
+        &DepthLayerOptions {
+            evidence: false,
+            ..DepthLayerOptions::default()
+        },
+    );
+    let members: Vec<Vec<usize>> = found.layers.iter().map(|l| l.members.clone()).collect();
+    assert_eq!(members, vec![vec![2], vec![0], vec![1]]);
+}
+
 #[test]
 fn a_far_layer_is_read_from_infinity_in() {
     let d = layer_distances([10.0, f64::INFINITY], 5);
@@ -331,6 +354,26 @@ fn a_clear_winner_is_more_confident_than_a_close_one() {
     let lone = rank_layers(vec![evidence(0.8, 0, 0.0, 0.0)], LayerRankBy::Key);
     let z = CONF_BIAS + CONF_MARGIN;
     assert!((lone[0].confidence - 1.0 / (1.0 + (-z).exp())).abs() < 1e-15);
+}
+
+/// A `NaN` `distance_px` from a caller of the binding gives its layer a `NaN`
+/// key; the layers with numbers for keys still rank highest first.
+#[test]
+fn a_nan_key_does_not_disorder_the_others() {
+    let ranked = rank_layers(
+        vec![
+            evidence(0.5, 0, 1.0, 0.0),
+            evidence(0.9, 0, 1.0, f64::NAN),
+            evidence(0.8, 0, 1.0, 0.0),
+        ],
+        LayerRankBy::Key,
+    );
+    assert!(ranked[1].key.is_nan());
+    assert!(
+        ranked[2].rank < ranked[0].rank,
+        "{:?}",
+        [ranked[0].rank, ranked[2].rank]
+    );
 }
 
 #[test]

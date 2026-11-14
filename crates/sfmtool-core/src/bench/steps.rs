@@ -3089,9 +3089,7 @@ fn paint(track: &EditableTrack, unpinned: &[usize]) -> Vec<Option<Verdict>> {
         .collect();
     let mut order: Vec<usize> = (0..track.observations.len()).collect();
     order.sort_by(|&a, &b| {
-        score(&track.observations[b], stage)
-            .partial_cmp(&score(&track.observations[a], stage))
-            .unwrap_or(std::cmp::Ordering::Equal)
+        score(&track.observations[b], stage).total_cmp(&score(&track.observations[a], stage))
     });
     let mut painted = vec![None; track.observations.len()];
     for i in order {

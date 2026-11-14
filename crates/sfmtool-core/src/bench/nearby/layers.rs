@@ -400,11 +400,7 @@ fn group_layers(candidates: &[LayerCandidate<'_>]) -> Vec<DepthLayer> {
         .filter(|&k| candidates[k].class.usable())
         .collect();
     // A stable sort, so candidates with the same near end keep their order.
-    usable.sort_by(|&a, &b| {
-        candidates[a].range[0]
-            .partial_cmp(&candidates[b].range[0])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    usable.sort_by(|&a, &b| candidates[a].range[0].total_cmp(&candidates[b].range[0]));
     let mut layers: Vec<DepthLayer> = Vec::new();
     for k in usable {
         let c = &candidates[k];
@@ -520,7 +516,7 @@ fn layer_reads(
 
 /// The mean of the three largest of `values`, `-1` when there are none.
 fn best3(mut values: Vec<f64>) -> f64 {
-    values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    values.sort_by(|a, b| b.total_cmp(a));
     values.truncate(3);
     if values.is_empty() {
         -1.0
@@ -633,11 +629,7 @@ pub(super) fn rank_layers(evidence: Vec<LayerEvidence>, by: LayerRankBy) -> Vec<
     let values: Vec<f64> = out.iter().map(value).collect();
     let mut order: Vec<usize> = (0..out.len()).collect();
     // A stable sort, highest first, so ties keep the layers' order.
-    order.sort_by(|&a, &b| {
-        values[b]
-            .partial_cmp(&values[a])
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    order.sort_by(|&a, &b| values[b].total_cmp(&values[a]));
     for (rank, &n) in order.iter().enumerate() {
         out[n].rank = rank + 1;
     }
