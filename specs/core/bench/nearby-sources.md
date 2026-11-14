@@ -296,11 +296,13 @@ and with the default stopping rule, the two give identical summaries and rank-1
 lines, and every source returns the same candidates with the same sightings,
 with two exceptions of order, not logic:
 
-- The points source differs in 6 of 21 726 Kerry Park candidates (2 queries):
-  two points share a keypoint, so they are the same distance from the pixel,
-  and the nearest-first order of the tie follows the spatial index, which the
-  harness builds over every point and core over the version's live ones;
-  where the cap of eight falls between the two, each keeps a different one.
+- The points source differs in 10 of 22 661 Kerry Park candidates (6
+  queries): two points share a keypoint, so they are the same distance from
+  the pixel, and the nearest-first order of the tie follows the spatial index,
+  which the harness builds over every point and core over the version's live
+  ones; where the cap of eight falls between the two (2 of the 6 queries),
+  each keeps a different one. Its points at infinity, 1370 of the candidates,
+  and seoul_bull's 32 are the same in both.
 - Guided matching's keypoints near the pixel can share a position, as SIFT's
   do when it finds two orientations at one place. Both implementations keep
   such ties in row order. The reference used to sort them with NumPy's default
