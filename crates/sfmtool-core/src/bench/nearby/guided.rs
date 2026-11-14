@@ -28,26 +28,45 @@ pub struct ImageDescriptors {
     data: Vec<u8>,
 }
 
+/// Descriptors that are not a whole number of [`DESCRIPTOR_DIM`]-byte rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescriptorRowsError {
+    /// How many bytes were given.
+    pub bytes: usize,
+}
+
+impl std::fmt::Display for DescriptorRowsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} bytes of descriptors are not a whole number of {DESCRIPTOR_DIM}-byte rows",
+            self.bytes
+        )
+    }
+}
+
+impl std::error::Error for DescriptorRowsError {}
+
 impl ImageDescriptors {
     /// Descriptors from their rows laid end to end,
     /// [`DESCRIPTOR_DIM`] bytes to the row.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `data` is not a whole number of rows.
-    pub fn new(data: Vec<u8>) -> Self {
-        assert_eq!(
-            data.len() % DESCRIPTOR_DIM,
-            0,
-            "descriptors come in rows of {DESCRIPTOR_DIM}"
-        );
-        Self { data }
+    /// [`DescriptorRowsError`] when `data` is not a whole number of rows.
+    pub fn new(data: Vec<u8>) -> Result<Self, DescriptorRowsError> {
+        if !data.len().is_multiple_of(DESCRIPTOR_DIM) {
+            return Err(DescriptorRowsError { bytes: data.len() });
+        }
+        Ok(Self { data })
     }
 
     /// Every descriptor of a `.sift` file.
     pub fn read(sift_path: &Path) -> Result<Self, SiftError> {
-        let (_, descriptors) = read_sift_positions_descriptors(sift_path)?;
-        Ok(Self::new(descriptors))
+        // The reader checks the descriptor block holds `DESCRIPTOR_DIM` bytes
+        // for each feature, so the rows are whole.
+        let (_, data) = read_sift_positions_descriptors(sift_path)?;
+        Ok(Self { data })
     }
 
     /// How many descriptors there are.

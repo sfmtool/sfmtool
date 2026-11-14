@@ -783,8 +783,11 @@ fn a_flat_wall_joins_no_view_and_changes_nothing() {
     assert!(!report.to_string().contains("weak evidence"), "{report}");
 }
 
+/// A track at infinity is refused, as by every normal step; an observation
+/// naming an image with no view is refused, not indexed; a setting the check
+/// refuses is named; a set cancel flag stops the step.
 #[test]
-fn the_grown_plane_normal_refuses_a_bearing_bad_options_and_stops_when_cancelled() {
+fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops_when_cancelled() {
     let centres = wide_centres();
     let scene = Scene::looking_at(&centres, WORLD, camera(), textured_plane);
     let edited = edited_of(&scene);
@@ -803,6 +806,13 @@ fn the_grown_plane_normal_refuses_a_bearing_bad_options_and_stops_when_cancelled
         )
         .err(),
         Some(NormalError::AtInfinity)
+    );
+
+    let mut stray = track.clone();
+    stray.observations[1].image = 99;
+    assert_eq!(
+        grown_plane_normal(&stray, &edited, &scene.views(), &options, &Progress::none()).err(),
+        Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
     );
 
     let bad = GrownPlaneNormalOptions {

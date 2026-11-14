@@ -35,6 +35,42 @@ pub struct RayPatch {
     pub radius_px: f64,
 }
 
+/// Why a patch could not be read along its ray.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatchReadError {
+    /// The queried image, or an image to read in, is not one of `views`.
+    NoSuchImage {
+        /// The image asked for.
+        image: u32,
+        /// How many images `views` holds.
+        image_count: usize,
+    },
+    /// The grey cache is not for one image per view.
+    GreyMismatch {
+        /// How many images the grey cache is for.
+        grey: usize,
+        /// How many views there are.
+        image_count: usize,
+    },
+}
+
+impl std::fmt::Display for PatchReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSuchImage { image, image_count } => write!(
+                f,
+                "image {image} is not one of the reconstruction's {image_count} images"
+            ),
+            Self::GreyMismatch { grey, image_count } => write!(
+                f,
+                "the grey cache is for {grey} images, but there are {image_count} views"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PatchReadError {}
+
 /// What reading a patch along its ray measured.
 ///
 /// Every table is indexed `[distance, image]`, in the order the distances and
@@ -140,11 +176,46 @@ pub(super) fn middle_mask() -> Vec<bool> {
 /// with nothing to correlate. `keep_samples` keeps the samples in
 /// [`PatchRead::samples`].
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if `patch.image` or an entry of `images` is not an index into
-/// `views` and `grey`.
+/// [`PatchReadError::GreyMismatch`] when `grey` is not for one image per
+/// view, and [`PatchReadError::NoSuchImage`] when `patch.image` or an entry
+/// of `images` is not one of `views`.
 pub fn read_patch_along_ray(
+    views: &[ProjectedImage<'_>],
+    grey: &GreyImages,
+    patch: &RayPatch,
+    distances: &[f64],
+    images: &[u32],
+    keep_samples: bool,
+) -> Result<Option<PatchRead>, PatchReadError> {
+    let image_count = views.len();
+    if grey.len() != image_count {
+        return Err(PatchReadError::GreyMismatch {
+            grey: grey.len(),
+            image_count,
+        });
+    }
+    if let Some(&image) = std::iter::once(&patch.image)
+        .chain(images)
+        .find(|&&i| i as usize >= image_count)
+    {
+        return Err(PatchReadError::NoSuchImage { image, image_count });
+    }
+    Ok(read_checked(
+        views,
+        grey,
+        patch,
+        distances,
+        images,
+        keep_samples,
+    ))
+}
+
+/// [`read_patch_along_ray`] for inputs the caller has already checked:
+/// `grey` is for one image per view, and `patch.image` and every entry of
+/// `images` are indexes into `views`.
+pub(super) fn read_checked(
     views: &[ProjectedImage<'_>],
     grey: &GreyImages,
     patch: &RayPatch,
@@ -170,7 +241,7 @@ pub fn read_patch_along_ray(
         })
         .collect();
 
-    let query_grey = grey.get(views, q);
+    let query_grey = grey.checked(views, q);
     let template: Vec<f32> = grid
         .iter()
         .map(|p| sample_grey(query_grey, p[0], p[1]))
@@ -225,7 +296,7 @@ pub fn read_patch_along_ray(
             if !oc.in_frame(c, r * 0.5) {
                 continue;
             }
-            let other_grey = grey.get(views, images[vi] as usize);
+            let other_grey = grey.checked(views, images[vi] as usize);
             let all = pixels.iter().zip(sampled.iter_mut()).all(|(p, s)| {
                 match p.and_then(|p| sample_grey(other_grey, p[0], p[1])) {
                     Some(v) => {

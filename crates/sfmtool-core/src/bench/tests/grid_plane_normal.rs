@@ -422,8 +422,11 @@ fn flat_texture_throughout_fixes_no_axis_and_turns_nothing() {
     );
 }
 
+/// A track at infinity is refused, as by every normal step; an observation
+/// naming an image with no view is refused, not indexed; a set cancel flag
+/// stops the step.
 #[test]
-fn the_grid_plane_normal_refuses_a_bearing_and_stops_when_cancelled() {
+fn the_grid_plane_normal_refuses_a_bearing_and_a_missing_view_and_stops_when_cancelled() {
     let scene = Scene::new();
     let edited = three_view_edited(&scene);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -441,6 +444,13 @@ fn the_grid_plane_normal_refuses_a_bearing_and_stops_when_cancelled() {
         )
         .err(),
         Some(NormalError::AtInfinity)
+    );
+
+    let mut stray = track.clone();
+    stray.observations[1].image = 99;
+    assert_eq!(
+        grid_plane_normal(&stray, &edited, &scene.views(), &options, &Progress::none()).err(),
+        Some(NormalError::Evaluate(EvaluateError::NoView { image: 99 }))
     );
 
     let cancel = AtomicBool::new(true);

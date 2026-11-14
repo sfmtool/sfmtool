@@ -51,7 +51,9 @@ use crate::progress::Progress;
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::super::evaluate::{check_views, seed_of, stored_patch_resolution, track_reference};
+use super::super::evaluate::{
+    check_observation_views, check_views, seed_of, stored_patch_resolution, track_reference,
+};
 use super::super::fit::FitOptions;
 use super::super::steps::tilt_patch;
 use super::super::track::EditableTrack;
@@ -394,6 +396,11 @@ impl std::fmt::Display for GridPlaneCells {
 /// to the converged patch frame's normal, or to its own, with [`tilt_patch`] and
 /// read back, its bitmap rendered. The centre does not move.
 ///
+/// A track at infinity is refused, as by every normal step, and so is one
+/// with an observation naming an image `images` holds no view for, as
+/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView), before any
+/// view is read.
+///
 /// # Example
 ///
 /// ```no_run
@@ -425,6 +432,7 @@ pub fn grid_plane_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     check_views(edited, images)?;
     normal_preconditions(track)?;
+    check_observation_views(track, images)?;
     let base = stored_patch_resolution(&edited.base)
         .unwrap_or(options.fit.refine.resolution)
         .max(MIN_WORKING_RESOLUTION);

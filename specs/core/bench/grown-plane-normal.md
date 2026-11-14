@@ -320,7 +320,9 @@ needs a precise normal reads σ and chooses its own bar.
 The step refuses a track at the cluster stage, one with no patch, a track at
 infinity and one with fewer than two `in` observations through
 `normal_preconditions`, as every normal step does: a track at infinity faces
-along its own bearing and has no plane to fit. It takes a `Progress`, reports a
+along its own bearing and has no plane to fit. It refuses an observation naming
+an image `images` holds no view for as `EvaluateError::NoView` (through
+`NormalError::Evaluate`) before it reads any view. It takes a `Progress`, reports a
 phase for the whole step and one per try of a view, with finer detail phases
 when `progress` is detailed (§ [Implementation notes](#implementation-notes)),
 and is cancelled between stages, since it can run longer than a second.
@@ -1543,7 +1545,8 @@ the scenes with up to six views that need every view picked set a target σ of
 - **The agreement** is the mean score of the joined and shift-only views, the
   reference, the views left out and a `NaN` score not counted, and `NaN` with
   no score.
-- **Refusals:** a bearing is refused as `AtInfinity`, a ZNCC tolerance of 0 as
+- **Refusals:** a bearing is refused as `AtInfinity`, an observation naming an
+  image with no view as `NoView`, a ZNCC tolerance of 0 as
   `BadGrownPlaneOption`, and a cancelled `Progress` as `Cancelled`; `check`
   refuses a `weak_turn_deg` that is NaN or negative, a `min_turn_sigma_ratio`
   that is NaN, infinite or negative, a first rung whose bounds are not finite,

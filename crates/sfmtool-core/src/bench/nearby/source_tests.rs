@@ -89,9 +89,18 @@ fn the_points_observed_near_the_pixel_are_found_nearest_first() {
     assert!((first.depth - PLANE_Z).abs() < 1e-9);
     assert!(first.max_ray_angle_deg > 5.0);
     // Its range holds its own distance.
-    let t = first.ray_distance(&views);
+    let t = first.ray_distance(&views).expect("image 0 is a view");
     let [near, far] = first.range(&views, 1.0).expect("image 0 is a view");
     assert!(near < t && t < far);
+    // A queried image that is not a view is refused, not indexed.
+    let mut stray = first.clone();
+    stray.sightings[0].0 = 9;
+    let refused = Err(DistanceRangeError::NoSuchImage {
+        image: 9,
+        image_count: 3,
+    });
+    assert_eq!(stray.ray_distance(&views), refused);
+    assert_eq!(stray.range(&views, 1.0), refused.map(|_: f64| [0.0; 2]));
 
     // A smaller radius or cap keeps fewer.
     let options = PointsOptions {
@@ -436,7 +445,7 @@ fn guided_images(scene: &Scene, f: &Features, options: &GuidedOptions) -> Vec<u3
     let descriptors: Vec<ImageDescriptors> = f
         .descriptors
         .iter()
-        .map(|d| ImageDescriptors::new(d.clone()))
+        .map(|d| ImageDescriptors::new(d.clone()).expect("whole rows"))
         .collect();
     let rays = KeypointRays::new(views.len());
     let source = GuidedSource {
@@ -508,9 +517,14 @@ fn guided_matching_refuses_descriptors_that_do_not_match_the_keypoints() {
     let mut descriptors: Vec<ImageDescriptors> = f
         .descriptors
         .iter()
-        .map(|d| ImageDescriptors::new(d.clone()))
+        .map(|d| ImageDescriptors::new(d.clone()).expect("whole rows"))
         .collect();
-    descriptors[2] = ImageDescriptors::new(vec![0; 128]);
+    descriptors[2] = ImageDescriptors::new(vec![0; 128]).expect("one whole row");
+    // Bytes that are not whole rows are refused.
+    assert_eq!(
+        ImageDescriptors::new(vec![0; 200]),
+        Err(DescriptorRowsError { bytes: 200 })
+    );
     let rays = KeypointRays::new(views.len());
     let source = GuidedSource {
         keypoints: &f.keypoints,

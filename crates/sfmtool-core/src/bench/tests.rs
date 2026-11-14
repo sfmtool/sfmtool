@@ -4064,6 +4064,8 @@ fn the_preconditions_are_the_steps_own_refusals() {
     );
 }
 
+/// The evaluation and the in-place render both refuse an observation naming
+/// an image the views do not hold, rather than index past their end.
 #[test]
 fn an_observation_naming_an_image_with_no_view_is_refused() {
     let scene = Scene::new();
@@ -4077,6 +4079,19 @@ fn an_observation_naming_an_image_with_no_view_is_refused() {
     assert_eq!(
         evaluate_over(&scene, &edited, &track).expect_err("there is no image 9"),
         EvaluateError::NoView { image: 9 }
+    );
+    // The render reads only the `in` rows that carry a keypoint, so point one
+    // of those at the missing image; an added observation carries none.
+    let mut stray = track_of(&bench, &label);
+    stray.observations[1].image = 9;
+    assert_eq!(stray.observations[1].verdict, Verdict::In);
+    assert!(stray.observations[1]
+        .track
+        .as_ref()
+        .is_some_and(|m| m.keypoint.is_some()));
+    assert_eq!(
+        render_bitmap_in_place(&stray, &edited, &scene.views(), &test_fit_options()).err(),
+        Some(EvaluateError::NoView { image: 9 })
     );
 }
 

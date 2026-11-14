@@ -55,14 +55,19 @@ pub use find::{
     NearbyTrackSources, NearbyTracks, NearbyTracksError, NearbyTracksReport, SourceReport,
     StopRule,
 };
-pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImages, GREY_BLUR_SIGMA};
-pub use guided::{guided_matches, GuidedOptions, GuidedSource, ImageDescriptors, KeypointRays};
+pub use grey::{blurred_grey, sample_grey, GreyImage, GreyImageError, GreyImages, GREY_BLUR_SIGMA};
+pub use guided::{
+    guided_matches, DescriptorRowsError, GuidedOptions, GuidedSource, ImageDescriptors,
+    KeypointRays,
+};
 pub use layers::{
     depth_layers, DepthLayer, DepthLayerError, DepthLayerOptions, DepthLayers, LayerCandidate,
     LayerEvidence, LayerRankBy, LayerRanking, CONF_BIAS, CONF_MARGIN, CONF_NEAREST, CONF_SUPPORT,
     CONF_VOTES, KEY_NEAREST,
 };
-pub use patch_read::{read_patch_along_ray, PatchRead, PatchSamples, RayPatch, PATCH_GRID};
+pub use patch_read::{
+    read_patch_along_ray, PatchRead, PatchReadError, PatchSamples, RayPatch, PATCH_GRID,
+};
 pub use points::{nearby_points, PointsOptions};
 pub use range::{
     camera_spread, classify_range, distance_range, DistanceRangeError, RangeClass, RangeOptions,

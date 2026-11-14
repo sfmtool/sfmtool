@@ -83,7 +83,11 @@ pub fn read_patch_along_ray(
     distances: &[f64],       // f64::INFINITY allowed
     images: &[u32],
     keep_samples: bool,
-) -> Option<PatchRead>;      // None: the queried patch is flat or off its photograph
+) -> Result<Option<PatchRead>, PatchReadError>;
+// Ok(None): the queried patch is flat or off its photograph.
+// Err: NoSuchImage { image, image_count } for `patch.image` or an entry of
+// `images` that is not one of `views`, GreyMismatch { grey, image_count } for a
+// grey cache not made for one image per view.
 
 pub struct PatchRead {
     pub images: Vec<u32>,
@@ -102,6 +106,10 @@ more than a query reads of it. `GreyImages` is a cache of one lazily built grey
 image per view, filled through a shared reference, which the caller builds once
 per set of views and passes to every query, the same way the decoded views are
 the caller's. The Python binding keeps one inside each `ImagePyramidSet`.
+`GreyImages::get(views, image)` refuses an image that is not an index into both
+the cache and `views` (`GreyImageError::NoSuchImage`), and `GreyImage::new`
+refuses values that do not fill its width and height
+(`GreyImageError::DataSize`).
 
 **Why the result keeps the dropped peaks.** The harness returns only the kept
 readings, and so does the binding. A dropped peak still says something a
@@ -300,8 +308,9 @@ read = bench.read_patch_along_ray(edited, images, image, (x, y), 8.0,
 ```
 
 `read_patch_along_ray` reads in every image but the queried one when
-`read_images` is left out, and returns `None` for a flat or off-photograph
-patch, or a dict with `images`, `distances`, `whole` and `middle`
+`read_images` is left out, raises `ValueError` from the core's `PatchReadError`
+for an image that is not one of the reconstruction's, and returns `None` for a
+flat or off-photograph patch, or a dict with `images`, `distances`, `whole` and `middle`
 (`(distances, images)` arrays, `-1` where unread), `centres`, `middle_std`
 and, with `samples`, `template`, `values` and `middle_mask`.
 
@@ -313,7 +322,9 @@ that it reads at disparity 0, as a bearing, with every image in one group; a
 plane at the distance of disparity 6 reading there and nowhere at infinity; a
 plane too near for the sweep giving no far reading; the patch reading best at
 the plane's distance and landing where the scene projects; a flat or
-off-photograph patch not read; the grey conversion against the matchers'
+off-photograph patch not read; an image with no view, as the queried image or
+one to read in, and a grey cache for another number of images refused, as is
+an image past the grey cache's end and values that do not fill a grey image; the grey conversion against the matchers'
 8-bit BT.601 grey and the blur against OpenCV's numbers; best-three, prominence and average linkage on small cases; and a
 reading whose sightings are within a pixel of a kept one's, in the same images,
 dropped as repeating it, where one a pixel and a half off or seen by one

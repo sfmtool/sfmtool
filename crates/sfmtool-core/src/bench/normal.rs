@@ -22,7 +22,9 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::evaluate::{check_views, evaluate_rendering_bitmap, EvaluateError, EvaluateReport};
+use super::evaluate::{
+    check_observation_views, check_views, evaluate_rendering_bitmap, EvaluateError, EvaluateReport,
+};
 use super::fit::{fit, FitError, FitOptions};
 use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackEditError};
 use super::track::{EditableTrack, Stage, StageKind};
@@ -157,7 +159,10 @@ pub enum NormalError {
     BadGrownPlaneOption(&'static str),
     /// The turn to the estimated normal was refused.
     Tilt(TrackEditError),
-    /// The reading the step ends with failed.
+    /// The views were refused before the step read any
+    /// ([`EvaluateError::ViewsMissing`], or [`EvaluateError::NoView`] for an
+    /// observation naming an image the views do not hold), or the reading the
+    /// step ends with failed.
     Evaluate(EvaluateError),
     /// The caller asked the step to stop.
     Cancelled,
@@ -384,6 +389,9 @@ pub fn normal_preconditions(track: &EditableTrack) -> Result<(), NormalError> {
 /// where the photographs place each piece, rather than from how well one plane
 /// matches them all.
 ///
+/// A track with an observation naming an image `images` holds no view for is
+/// refused as [`EvaluateError::NoView`] before any piece is fitted.
+///
 /// # Example
 ///
 /// ```no_run
@@ -411,6 +419,7 @@ pub fn finite_difference_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     check_views(edited, images)?;
     normal_preconditions(track)?;
+    check_observation_views(track, images)?;
     options.check()?;
     let patch_frame = patch_frame_of(track);
     let was = patch_frame.normal();

@@ -101,7 +101,15 @@ fn the_grey_conversion_is_the_matchers_8_bit_bt601_level() {
 #[test]
 fn a_sample_needs_all_four_pixels() {
     let data: Vec<f32> = (0..20).map(|v| v as f32).collect();
-    let image = GreyImage::new(5, 4, data);
+    let image = GreyImage::new(5, 4, data).expect("20 values fill 5 x 4");
+    assert_eq!(
+        GreyImage::new(5, 4, vec![0.0; 19]),
+        Err(GreyImageError::DataSize {
+            width: 5,
+            height: 4,
+            got: 19
+        })
+    );
     // At a pixel centre the sample is that pixel.
     assert_eq!(sample_grey(&image, 2.5, 1.5), Some(7.0));
     // Halfway between two pixels, their mean.
@@ -150,6 +158,7 @@ fn the_patch_reads_best_at_the_planes_distance() {
     };
     let distances = [t * 0.8, t, t * 1.25, f64::INFINITY];
     let read = read_patch_along_ray(&views, &grey, &patch, &distances, &[1, 2, 3], true)
+        .expect("every image is a view")
         .expect("the patch is textured and inside the photograph");
     let point = camera.center + ray * t;
     for v in 0..3 {
@@ -179,7 +188,10 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         pixel: [3.0, 64.0],
         radius_px: 8.0,
     };
-    assert!(read_patch_along_ray(&views, &grey, &off, &[f64::INFINITY], &[1], false).is_none());
+    assert_eq!(
+        read_patch_along_ray(&views, &grey, &off, &[f64::INFINITY], &[1], false),
+        Ok(None)
+    );
 
     let camera = CameraIntrinsics {
         model: CameraModel::Pinhole {
@@ -208,7 +220,57 @@ fn a_patch_off_the_photograph_or_flat_is_not_read() {
         radius_px: 8.0,
     };
     let grey = GreyImages::new(2);
-    assert!(read_patch_along_ray(&flat, &grey, &patch, &[f64::INFINITY], &[1], false).is_none());
+    assert_eq!(
+        read_patch_along_ray(&flat, &grey, &patch, &[f64::INFINITY], &[1], false),
+        Ok(None)
+    );
+}
+
+/// An image that is not a view, as the queried image or one to read in, and a
+/// grey cache for another number of images are refused, not indexed.
+#[test]
+fn a_patch_read_refuses_an_image_with_no_view_and_a_mismatched_grey_cache() {
+    let scene = Scene::from_centers(&CENTERS, 4.0);
+    let views = scene.views();
+    let grey = GreyImages::new(views.len());
+    let read = |image, images: &[u32], grey: &GreyImages| {
+        let patch = RayPatch {
+            image,
+            pixel: PIXEL,
+            radius_px: 8.0,
+        };
+        read_patch_along_ray(&views, grey, &patch, &[f64::INFINITY], images, false)
+    };
+    let no_view = Err(PatchReadError::NoSuchImage {
+        image: 9,
+        image_count: views.len(),
+    });
+    assert_eq!(read(9, &[1], &grey), no_view);
+    assert_eq!(read(0, &[1, 9], &grey), no_view);
+    assert_eq!(
+        read(0, &[1], &GreyImages::new(2)),
+        Err(PatchReadError::GreyMismatch {
+            grey: 2,
+            image_count: views.len()
+        })
+    );
+    // The grey cache refuses an image past its own end or past the views'.
+    let no_grey = |image| {
+        Err(GreyImageError::NoSuchImage {
+            image,
+            cache_len: 2,
+            view_count: views.len(),
+        })
+    };
+    assert_eq!(GreyImages::new(2).get(&views, 2), no_grey(2));
+    assert_eq!(GreyImages::new(2).get(&views, 9), no_grey(9));
+    assert_eq!(
+        no_grey(9).unwrap_err().to_string(),
+        format!(
+            "image 9 is not one of the grey cache's 2 images and the {} views",
+            views.len()
+        )
+    );
 }
 
 // ---- The far-field sweep -----------------------------------------------------

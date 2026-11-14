@@ -58,7 +58,9 @@ use crate::progress::Progress;
 use crate::progress_note;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::super::evaluate::{check_views, seed_of, stored_patch_resolution, track_reference};
+use super::super::evaluate::{
+    check_observation_views, check_views, seed_of, stored_patch_resolution, track_reference,
+};
 use super::super::fit::FitOptions;
 use super::super::steps::tilt_degrees;
 use super::super::track::EditableTrack;
@@ -830,7 +832,10 @@ impl std::fmt::Display for GrownPlaneSequence {
 /// keypoints relocalized against the turned patch runs a fit afterwards.
 ///
 /// A track at infinity is refused, as by every normal step: its patch faces
-/// along its own bearing and has no plane to fit.
+/// along its own bearing and has no plane to fit. A track with an observation
+/// naming an image `images` holds no view for is refused as
+/// [`EvaluateError::NoView`](crate::bench::EvaluateError::NoView) before any
+/// view is read.
 ///
 /// The step opens the phase `grown plane normal` on `progress`, and under it
 /// `grown plane view` for each try. A detailed `progress` adds `setup`,
@@ -873,6 +878,7 @@ pub fn grown_plane_normal(
 ) -> Result<(EditableTrack, NormalReport), NormalError> {
     check_views(edited, images)?;
     normal_preconditions(track)?;
+    check_observation_views(track, images)?;
     options.check()?;
     let step = progress.phase("grown plane normal");
     let progress: &Progress<'_> = &step;

@@ -608,7 +608,8 @@ fn the_returned_track_carries_a_bitmap_on_the_reconstructions_grid() {
         &edited,
         &views,
         &crate::bench::FitOptions::default(),
-    );
+    )
+    .unwrap();
     let after = again.track().expect("the track stage");
     assert_eq!(after.position, payload.position);
     assert_eq!(after.patch_frame, payload.patch_frame);

@@ -13,7 +13,7 @@ use crate::patch::normal_refine::ProjectedImage;
 use super::candidate::NearbyCandidate;
 use super::far_field::FarFieldReading;
 use super::grey::GreyImages;
-use super::patch_read::{read_patch_along_ray, RayPatch};
+use super::patch_read::{read_checked, RayPatch};
 use super::range::RangeClass;
 use super::NearbySource;
 
@@ -324,7 +324,7 @@ fn is_subset(a: &[u32], b: &[u32]) -> bool {
 /// photographs.
 ///
 /// With [`DepthLayerOptions::evidence`], the pixel's patch of
-/// [`DepthLayerOptions::radius_px`] is read ([`read_patch_along_ray`]) in every
+/// [`DepthLayerOptions::radius_px`] is read ([`read_patch_along_ray`](super::patch_read::read_patch_along_ray)) in every
 /// other image at [`DepthLayerOptions::samples`] distances across each layer's
 /// range, evenly spaced in inverse distance, from infinity in for a layer with
 /// no far end. Each image's reading at a layer is its best over those
@@ -502,7 +502,9 @@ fn layer_reads(
         pixel,
         radius_px: options.radius_px,
     };
-    if let Some(read) = read_patch_along_ray(views, grey, &patch, &distances, &others, false) {
+    // `depth_layers` checked the queried image and the grey cache against the
+    // views, and `others` are the views' own indexes.
+    if let Some(read) = read_checked(views, grey, &patch, &distances, &others, false) {
         for (k, &n) in owner.iter().enumerate() {
             for v in 0..others.len() {
                 let w = read.whole[[k, v]];

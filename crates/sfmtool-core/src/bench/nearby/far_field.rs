@@ -22,7 +22,7 @@ use crate::reconstruction::edited::EditedReconstruction;
 
 use super::candidate::{ray_angle, same_sightings};
 use super::grey::GreyImages;
-use super::patch_read::{read_patch_along_ray, PatchRead, RayPatch};
+use super::patch_read::{read_checked, PatchRead, RayPatch};
 use super::range::camera_spread;
 
 /// Which images the width of an image is judged against.
@@ -357,7 +357,7 @@ impl std::error::Error for FarFieldError {}
 /// change of inverse distance, among those it lands in at infinity: a
 /// disparity `d` is the distance `R / d` along the pixel's ray, with `R` that
 /// image's pixels per unit of inverse distance, and `d = 0` is infinity. The
-/// patch is read ([`read_patch_along_ray`]) at every one of
+/// patch is read ([`read_patch_along_ray`](super::patch_read::read_patch_along_ray)) at every one of
 /// [`FarFieldOptions::disparities`], and each peak of the reading over the
 /// wide images is a reading. With [`FarFieldOptions::refit`], each reading's
 /// images are grouped by the ZNCC of their middles with one another, and a
@@ -412,8 +412,9 @@ pub fn far_field_sweep(
         radius_px: options.radius_px,
     };
     let others: Vec<u32> = (0..image_count as u32).filter(|&i| i != image).collect();
-    let Some(at_infinity) =
-        read_patch_along_ray(views, grey, &patch, &[f64::INFINITY], &others, false)
+    // The views and the grey cache hold every image, `image` among them, as
+    // checked above, so the reads need no check of their own.
+    let Some(at_infinity) = read_checked(views, grey, &patch, &[f64::INFINITY], &others, false)
     else {
         return Ok(FarFieldSweep::default());
     };
@@ -452,7 +453,7 @@ pub fn far_field_sweep(
     let images: Vec<u32> = rates.iter().map(|&(j, _)| j).collect();
     let rate: Vec<f64> = rates.iter().map(|&(_, r)| r).collect();
     progress.check_cancel().map_err(cancelled)?;
-    let Some(read) = read_patch_along_ray(views, grey, &patch, &distances, &images, true) else {
+    let Some(read) = read_checked(views, grey, &patch, &distances, &images, true) else {
         return Ok(FarFieldSweep::default());
     };
 

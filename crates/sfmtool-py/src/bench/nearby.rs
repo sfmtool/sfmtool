@@ -140,7 +140,8 @@ impl PyNearbyTrackSources {
             descriptors = Some(
                 read.into_iter()
                     .map(|f| ImageDescriptors::new(f.descriptors))
-                    .collect(),
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
             );
         }
         Ok(Self {

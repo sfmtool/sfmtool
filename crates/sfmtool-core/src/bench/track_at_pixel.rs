@@ -868,12 +868,15 @@ pub fn build_track_at_pixel(
                 {
                     track
                 } else {
+                    // The member read every view already, so no observation
+                    // names an image with no view.
                     let rendered = super::fit::render_bitmap_in_place(
                         &track,
                         edited,
                         views,
                         &super::fit::FitOptions::default(),
-                    );
+                    )
+                    .unwrap_or(track);
                     match super::evaluate::score_bitmap(
                         &rendered,
                         edited,

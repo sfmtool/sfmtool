@@ -337,7 +337,8 @@ fn every_row_is_scored_against_the_stored_bitmap() {
     let (read, edited) = truth.evaluated_track();
     // The minimal ground truth stores no bitmaps; render one and forget which
     // row it came from.
-    let mut rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
+    let mut rendered =
+        render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
     if let crate::bench::Stage::Track(payload) = &mut rendered.stage {
         payload.reference = None;
     }
@@ -424,7 +425,7 @@ fn the_rendered_bitmap_is_the_picked_row_s_tile_and_the_commit_records_it() {
                 .is_some_and(|s| s.is_reference())
         })
         .expect("the rule picks one");
-    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
+    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
     let payload = rendered.track().unwrap();
     assert_eq!(payload.reference, Some(picked));
     let resolution = EvaluateOptions::default().patch_resolution(&edited.base) as usize;
@@ -743,7 +744,7 @@ fn rendering_then_scoring_matches_an_evaluation_of_the_rendered_track() {
     let track = bench.track(&report.label).expect("just put on");
     let options = EvaluateOptions::default();
     let (read, _) = evaluate(track, &edited, &views, &options, &Progress::none()).unwrap();
-    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default());
+    let rendered = render_bitmap_in_place(&read, &edited, &views, &FitOptions::default()).unwrap();
     let payload = rendered.track().unwrap();
     assert!(payload.bitmap.is_some());
     assert_eq!(
@@ -797,7 +798,7 @@ fn rendering_from_the_evaluation_matches_the_three_calls() {
         evaluate_rendering_bitmap(&tilted, &edited, &views, &options, &fit, &Progress::none())
             .unwrap();
     let (measured, _) = evaluate(&tilted, &edited, &views, &options, &Progress::none()).unwrap();
-    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit);
+    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit).unwrap();
     let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
     assert!(scored.track().unwrap().reference.is_some(), "a picked row");
     assert_same_bitmap_and_scores(&combined, &scored);
@@ -1109,7 +1110,7 @@ fn a_defined_reference_is_rendered_from_through_the_bench_s_steps() {
     let after_tilt = render(&tilted);
     assert_rendered_from(&after_tilt, &views, &edited, other, "tilted");
     let (measured, _) = evaluate(&tilted, &edited, &views, &options, &Progress::none()).unwrap();
-    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit_options);
+    let rendered = render_bitmap_in_place(&measured, &edited, &views, &fit_options).unwrap();
     let scored = score_bitmap(&rendered, &edited, &views, &options, &Progress::none()).unwrap();
     assert_same_bitmap_and_scores(&after_tilt, &scored);
 

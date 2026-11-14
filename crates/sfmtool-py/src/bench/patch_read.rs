@@ -69,22 +69,17 @@ pub(super) fn read_patch_along_ray(
     let views = views_of(&posed, &pyramids);
     let count = views.len() as u32;
     let read_images = read_images.unwrap_or_else(|| (0..count).filter(|&i| i != image).collect());
-    if let Some(&bad) = std::iter::once(&image)
-        .chain(&read_images)
-        .find(|&&i| i >= count)
-    {
-        return Err(PyValueError::new_err(format!(
-            "image {bad} is not one of the reconstruction's {count} images"
-        )));
-    }
     let patch = RayPatch {
         image,
         pixel,
         radius_px,
     };
-    let Some(read) = py.detach(|| {
-        core_read_patch_along_ray(&views, &grey, &patch, &distances, &read_images, samples)
-    }) else {
+    let Some(read) = py
+        .detach(|| {
+            core_read_patch_along_ray(&views, &grey, &patch, &distances, &read_images, samples)
+        })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?
+    else {
         return Ok(None);
     };
     let d = PyDict::new(py);
