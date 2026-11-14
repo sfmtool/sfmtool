@@ -868,12 +868,7 @@ pub fn find_nearby_tracks(
         .iter()
         .map(|layer| {
             let mut members = layer.members.clone();
-            members.sort_by(|&a, &b| {
-                tracks[a]
-                    .distance_px()
-                    .partial_cmp(&tracks[b].distance_px())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            members.sort_by(|&a, &b| tracks[a].distance_px().total_cmp(&tracks[b].distance_px()));
             members
         })
         .collect();
