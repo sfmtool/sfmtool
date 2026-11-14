@@ -17,7 +17,7 @@ use sfmtool_core::progress::Progress;
 
 use super::args::parse_sampler;
 use super::cloud::PyPatchCloud;
-use super::views::{resolve_patch_scene, resolve_pyramids};
+use super::views::{resolve_patch_reconstruction, resolve_pyramids};
 use crate::ProgressCounter;
 
 /// The bitmap column and the reference observation of each point.
@@ -98,11 +98,9 @@ impl PyPatchCloud {
                 "resolution must be >= 2, got {resolution}"
             )));
         }
-        let (posed, recon_guard, _) =
-            resolve_patch_scene(recon, &self.inner, false, "patch_views", "per-patch views")?;
-        let recon = recon_guard.as_ref().map(|r| r.inner()).ok_or_else(|| {
-            PyValueError::new_err("render_bitmaps needs a reconstruction, not a CameraViews")
-        })?;
+        let (posed, recon_guard) =
+            resolve_patch_reconstruction(recon, &self.inner, "render_bitmaps")?;
+        let recon = recon_guard.inner();
         if recon.keypoints_xy().is_none() {
             return Err(PyValueError::new_err(
                 "render_bitmaps needs the per-observation keypoints an embedded_patches \
@@ -196,11 +194,9 @@ impl PyPatchCloud {
                 "resolution must be >= 3, got {resolution}"
             )));
         }
-        let (posed, recon_guard, _) =
-            resolve_patch_scene(recon, &self.inner, false, "patch_views", "per-patch views")?;
-        let recon = recon_guard.as_ref().map(|r| r.inner()).ok_or_else(|| {
-            PyValueError::new_err("read_observations needs a reconstruction, not a CameraViews")
-        })?;
+        let (posed, recon_guard) =
+            resolve_patch_reconstruction(recon, &self.inner, "read_observations")?;
+        let recon = recon_guard.inner();
         if recon.keypoints_xy().is_none() {
             return Err(PyValueError::new_err(
                 "read_observations needs the per-observation keypoints an embedded_patches \

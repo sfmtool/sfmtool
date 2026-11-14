@@ -265,6 +265,8 @@ All 16 files (4,369 lines) were read in full, with Python probes against the reb
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-13): **Done** — `views.rs` has a new `resolve_patch_reconstruction`, which raises "<method> needs a reconstruction, not a CameraViews" for a `CameraViews` and otherwise runs the same point-index checks as `resolve_patch_scene` (both now through a shared `check_cloud_points`); `render_bitmaps` and `read_observations` call it instead of `resolve_patch_scene` with the `patch_views` guard, and `tests/rust_bindings/patches/test_camera_views_rust_bindings.py` asserts each method's own message, branch `hyg-fix-1113-09-camera-views-error`._
+
 **Take `centers_xyzw` in `PatchCloud.from_halfvec_arrays`**
 - Location: `cloud.rs:304-337`.
 - Problem: `centers` is `(N,3)` and core builds every patch with `w = 1` (its doc says the caller sets `w` afterwards; Python has no setter). `_patch_compaction.py:275` passes `recon.positions`, which holds directions for `w = 0` rows. [Points at infinity are supported](../specs/STANDARDS.md#points-at-infinity-are-supported).
