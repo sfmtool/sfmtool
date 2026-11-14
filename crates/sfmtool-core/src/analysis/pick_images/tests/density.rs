@@ -415,7 +415,7 @@ fn the_gain_a_walk_settles_at_does_not_depend_on_where_it_starts() {
     // the walk starts in the stretch whose long steps read no near
     // foreground. Measuring a pair of the reference step's length, both
     // walks find the near foreground there and shorten their steps.
-    let synth = near_fading(130, 30);
+    let synth = near_fading(100, 30);
     let gains_past = |offset: usize, frame: usize| -> Vec<f64> {
         let mut part = synth.clone();
         part.shots.drain(..offset);
