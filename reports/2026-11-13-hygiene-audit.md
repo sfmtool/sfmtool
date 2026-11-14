@@ -189,6 +189,8 @@ All seven files (`write.rs`, `read.rs`, `types.rs`, `select.rs`, `cells.rs`, `en
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-14): **Done** — `clusters_cluster_starts` takes `offset_count: impl Display`, the array's length; `write` passes `cluster_starts.len()`, `read` and `verify` pass `cluster_count + 1`, and the exception paragraph is gone. sfmr-format's `entries.rs` states the same rule with no exception and every function there already follows it, so it needed no change; `.sift`, `.camrig` and `.kdf` have no `entries.rs`. Branch `hyg-fix2-1113-11-entries-dimension-type`._
+
 **State the entry-naming rationale once, not in each format crate's `entries.rs`**
 - Location: matches `entries.rs:4-45` and sfmr-format `entries.rs:4-50`.
 - Problem: 33 identical lines (the "single source of truth" argument, the `impl Display` rationale, "How the tests use this module").

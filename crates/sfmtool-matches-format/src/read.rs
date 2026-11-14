@@ -402,9 +402,10 @@ fn read_clusters_section(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
+    let offset_count = cluster_count + 1;
     let cluster_starts_vec: Vec<u32> = decoded.binary_array(
-        &entries::clusters_cluster_starts(cluster_count),
-        cluster_count + 1,
+        &entries::clusters_cluster_starts(offset_count),
+        offset_count,
     )?;
     let cluster_starts = Array1::from_vec(cluster_starts_vec);
 

@@ -3016,9 +3016,9 @@ fn entry_names_are_pinned() {
     );
 
     // Cluster backbone.  cluster_count = 23, member_count = 29. `cluster_starts`
-    // is sized `cluster_count + 1`, so 23 clusters must yield 24 CSR offsets.
+    // holds `cluster_count + 1` CSR offsets, so 24.
     assert_eq!(
-        e::clusters_cluster_starts(23),
+        e::clusters_cluster_starts(24),
         "clusters/cluster_starts.24.uint32.zst"
     );
     assert_eq!(

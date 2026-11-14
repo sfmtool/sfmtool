@@ -604,7 +604,10 @@ fn verify_clusters_section<R: std::io::Read + Seek>(
     let mut clusters_hasher = Xxh3::new();
 
     // clusters/cluster_starts
-    let starts_raw = read_zst_entry(archive, &entries::clusters_cluster_starts(cluster_count))?;
+    let starts_raw = read_zst_entry(
+        archive,
+        &entries::clusters_cluster_starts(cluster_count + 1),
+    )?;
     clusters_hasher.update(&starts_raw);
 
     // clusters/member_affine_shapes (version 6+ only; structure_errors
