@@ -826,3 +826,22 @@ fn an_image_camera_out_of_range_is_refused() {
         }
     );
 }
+
+#[test]
+fn each_determinacy_is_named_at_its_code() {
+    let verdicts = [
+        (NormalDeterminacy::None, "none"),
+        (
+            NormalDeterminacy::OneAxis {
+                free_axis: [1.0, 0.0, 0.0],
+            },
+            "one_axis",
+        ),
+        (NormalDeterminacy::BothAxes, "both_axes"),
+    ];
+    for (code, (verdict, name)) in verdicts.into_iter().enumerate() {
+        assert_eq!(verdict.code() as usize, code);
+        assert_eq!(verdict.name(), name);
+        assert_eq!(NormalDeterminacy::NAMES[code], name);
+    }
+}

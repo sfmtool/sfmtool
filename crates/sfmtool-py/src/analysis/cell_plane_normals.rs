@@ -23,9 +23,6 @@ use sfmtool_matches_format::{ClusterCellStatus, ClusterMemberStatus};
 use crate::helpers::value_err;
 use crate::PyCameraIntrinsics;
 
-/// The names of the `determinacy` codes, in code order.
-const DETERMINACY_NAMES: [&str; 3] = ["none", "one_axis", "both_axes"];
-
 /// Estimate each cluster's patch normal from its stored cell displacements.
 ///
 /// Reads the piecewise refinement's per-cell entries of a cluster-patches
@@ -305,7 +302,7 @@ pub fn cell_plane_normals<'py>(
     let d = PyDict::new(py);
     d.set_item("normal", PyArray1::from_vec(py, normal).reshape([c, 3])?)?;
     d.set_item("determinacy", PyArray1::from_vec(py, determinacy))?;
-    d.set_item("determinacy_names", DETERMINACY_NAMES.to_vec())?;
+    d.set_item("determinacy_names", NormalDeterminacy::NAMES.to_vec())?;
     d.set_item(
         "free_axis",
         PyArray1::from_vec(py, free_axis).reshape([c, 3])?,

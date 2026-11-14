@@ -73,15 +73,6 @@ fn word_grid<'py>(py: Python<'py>, words: [&'static str; 9]) -> PyResult<Bound<'
     PyList::new(py, rows)
 }
 
-/// The word for which axes of a normal the cells fixed.
-fn determinacy_name(determinacy: NormalDeterminacy) -> &'static str {
-    match determinacy {
-        NormalDeterminacy::BothAxes => "both_axes",
-        NormalDeterminacy::OneAxis { .. } => "one_axis",
-        NormalDeterminacy::None => "none",
-    }
-}
-
 /// The dict form of one render of the loop.
 fn iteration_dict<'py>(
     py: Python<'py>,
@@ -89,7 +80,7 @@ fn iteration_dict<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("score", entry.score)?;
-    d.set_item("determinacy", determinacy_name(entry.determinacy))?;
+    d.set_item("determinacy", entry.determinacy.name())?;
     d.set_item("in_plane", entry.in_plane)?;
     d.set_item("normal_precision_deg", entry.normal_precision_deg)?;
     d.set_item("gated", entry.gated)?;
@@ -344,7 +335,7 @@ fn render_detail_dict<'py>(
         PyArray1::from_vec(py, plane.fitted_normal.to_vec()),
     )?;
     p.set_item("normal", PyArray1::from_vec(py, plane.normal.to_vec()))?;
-    p.set_item("determinacy", determinacy_name(plane.determinacy))?;
+    p.set_item("determinacy", plane.determinacy.name())?;
     p.set_item(
         "free_axis",
         free_axis_of(plane.determinacy).map(|a| PyArray1::from_vec(py, a.to_vec())),
@@ -393,7 +384,7 @@ fn cells_dict<'py>(py: Python<'py>, cells: &GridPlaneCells) -> PyResult<Bound<'p
     d.set_item("outcome", outcome_name(cells.outcome))?;
     d.set_item("stop", loop_stop_name(cells.stop))?;
     let free_axis = free_axis_of(cells.determinacy);
-    d.set_item("determinacy", determinacy_name(cells.determinacy))?;
+    d.set_item("determinacy", cells.determinacy.name())?;
     d.set_item(
         "free_axis",
         free_axis.map(|a| PyArray1::from_vec(py, a.to_vec())),

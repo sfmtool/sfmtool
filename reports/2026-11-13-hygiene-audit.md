@@ -133,6 +133,8 @@ All 17 files (4,380 lines) were read in full and checked against the core functi
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-14): **Done** — `NormalDeterminacy::NAMES` and `name()` sit beside `code()` in core, with a test that each verdict's name is `NAMES[code()]`; `analysis.cell_plane_normals` returns `NAMES` as `determinacy_names` and the bench normal bindings call `name()`, so neither binding spells the names; the spec lists both, branch `hyg-fix2-1113-10-normal-determinacy-names`._
+
 **Rule on the keyword names for one concept across `sfmtool.analysis`**
 - Location: the sibling bindings of `crates/sfmtool-py/src/analysis/`.
 - Problem: public keywords in one module: per-observation image `track_image_indexes` (4 files), `image_indexes` (2), `image_of_row` (2), `member_images` / `obs_image` (2); pixel positions `keypoints_xy`, `positions_xy`, `xy_px`, `xy`, `pixels`, `points1`, `member_positions`; rotations `quaternions_wxyz` / `cam_from_world_wxyz`; translations `translations` / `translations_xyz`. (`reach_px` and `radius_px` in `covered_by_finer` carry different meanings, so they are not drift.) The glossary has no ruling.
