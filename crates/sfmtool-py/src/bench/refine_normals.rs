@@ -6,15 +6,18 @@
 //! or the pairwise-flow normal, and *Commit* of each point, written back as
 //! one new value.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex};
+use std::time::Duration;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyInterruptedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 use sfmtool_core::bench::{
     refine_normals as core_refine_normals, NormalError, NormalLeftUnchanged, NormalTurned,
-    RefineNormalsOptions, RefineNormalsOutcome, RefineNormalsReport, RefineNormalsStep,
+    RefineNormalsError, RefineNormalsOptions, RefineNormalsOutcome, RefineNormalsReport,
+    RefineNormalsStep,
 };
 use sfmtool_core::progress::{Event, Progress};
 
@@ -23,6 +26,15 @@ use super::pairwise_flow_normal::PairwiseFlowKeywords;
 use super::{refused, views_of};
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::{ProgressCounter, PySfmrReconstruction};
+
+/// The `method` that runs the grown-plane normal, the default.
+const GROWN_PLANE: &str = "grown_plane";
+/// The `method` that runs the pairwise-flow normal.
+const PAIRWISE_FLOW: &str = "pairwise_flow";
+/// Every `method` [`refine_normals`] takes, the default first, exported as
+/// ``REFINE_NORMALS_METHODS`` so a caller can refuse another before it
+/// loads anything.
+const METHODS: [&str; 2] = [GROWN_PLANE, PAIRWISE_FLOW];
 
 /// Turn the patch of every finite point of `recon`, or of every finite point
 /// of ``point_indexes``, to its grown-plane normal, or to its pairwise-flow
@@ -50,7 +62,8 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 ///
 /// ``images`` is one decoded image per image of `recon`, or a prebuilt
 /// :class:`ImagePyramidSet`, as :func:`fit` takes them. ``method`` names the
-/// step: ``"grown_plane"`` (the default) or ``"pairwise_flow"``. The other
+/// step: ``"grown_plane"`` (the default) or ``"pairwise_flow"``, the names
+/// ``REFINE_NORMALS_METHODS`` lists. The other
 /// keywords are :func:`grown_plane_normal`'s and :func:`pairwise_flow_normal`'s,
 /// with their defaults; ``max_pairs``, ``resolution`` and :func:`fit`'s four
 /// are shared and set the chosen step's, and a keyword only the other step
@@ -59,7 +72,9 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 /// :class:`~sfmtool.ProgressCounter`, climbs while the run goes toward the
 /// number of points asked for: those listed, each counted once, or every
 /// point, those at infinity included. The points are refined in parallel with
-/// the GIL released.
+/// the GIL released, while the calling thread takes the GIL every 50 ms to
+/// run Python's signal handlers; one that raises (``KeyboardInterrupt`` for
+/// Ctrl+C) stops the run, and its exception is raised.
 ///
 /// Returns ``(SfmrReconstruction, report)``. The report carries the counts
 /// ``read`` (every point but those at infinity and those not asked for),
@@ -93,7 +108,8 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 /// ``sift_files`` reconstruction, one with no patch frames or no posed image,
 /// an unknown ``method``, a keyword the chosen step does not take, a setting
 /// the step does not take, or an index in ``point_indexes`` past the last
-/// point.
+/// point. Raises the exception a signal handler raised while the run went,
+/// or ``InterruptedError`` where the run was cancelled otherwise.
 #[pyfunction]
 #[pyo3(signature = (
     recon,
@@ -316,22 +332,23 @@ fn refine_normals(
             "{name} is a keyword of the {step} normal, and method is {method:?}"
         ))
     };
-    let step = match method.unwrap_or("grown_plane") {
-        "grown_plane" => {
+    let step = match method.unwrap_or(GROWN_PLANE) {
+        GROWN_PLANE => {
             if let Some(name) = pairwise_flow.first_own_given() {
-                return Err(other(name, "pairwise flow", "grown_plane"));
+                return Err(other(name, "pairwise flow", GROWN_PLANE));
             }
             RefineNormalsStep::GrownPlane(grown_plane.options())
         }
-        "pairwise_flow" => {
+        PAIRWISE_FLOW => {
             if let Some(name) = grown_plane.first_own_given() {
-                return Err(other(name, "grown plane", "pairwise_flow"));
+                return Err(other(name, "grown plane", PAIRWISE_FLOW));
             }
             RefineNormalsStep::PairwiseFlow(pairwise_flow.options())
         }
         other => {
             return Err(PyValueError::new_err(format!(
-                "unknown method: {other:?} (expected grown_plane|pairwise_flow)"
+                "unknown method: {other:?} (expected {})",
+                METHODS.join("|")
             )))
         }
     };
@@ -352,9 +369,56 @@ fn refine_normals(
             counter.fetch_max(done as usize, Ordering::Relaxed);
         }
     };
-    let (next, report) = py
-        .detach(|| core_refine_normals(recon.inner(), &views, &options, &Progress::to(&sink)))
-        .map_err(refused)?;
+    // The points are refined on the rayon pool, whose workers cannot run
+    // Python's signal handlers, so the run goes on a thread of its own while
+    // the calling thread waits for it, taking the GIL every `PATIENCE` to run
+    // them, as `pick_images` does from its own waits. One that raises stops
+    // the run, and its exception is raised in place of the cancellation.
+    const PATIENCE: Duration = Duration::from_millis(50);
+    let cancel = AtomicBool::new(false);
+    let signal: Mutex<Option<PyErr>> = Mutex::new(None);
+    let recon = recon.inner();
+    let result = py.detach(|| {
+        std::thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            let (sink, cancel, views, options) = (&sink, &cancel, &views, &options);
+            let run = scope.spawn(move || {
+                let progress = Progress::to(sink).cancelled_by(cancel);
+                let result = core_refine_normals(recon, views, options, &progress);
+                // The calling thread receives until this arrives, so the send succeeds.
+                let _ = sender.send(result);
+            });
+            loop {
+                match receiver.recv_timeout(PATIENCE) {
+                    Ok(result) => return result,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if cancel.load(Ordering::Relaxed) {
+                            continue;
+                        }
+                        if let Err(e) = Python::attach(|py| py.check_signals()) {
+                            *signal.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    // The run's thread ended without sending: it panicked.
+                    Err(mpsc::RecvTimeoutError::Disconnected) => match run.join() {
+                        Err(panic) => std::panic::resume_unwind(panic),
+                        Ok(()) => unreachable!("the run sends its result before it ends"),
+                    },
+                }
+            }
+        })
+    });
+    // A handler can raise after the run's last check of its cancel flag, so
+    // the run ends without being cancelled; its exception is raised all the
+    // same, or the signal would be lost.
+    if let Some(e) = signal.into_inner().unwrap_or_else(|p| p.into_inner()) {
+        return Err(e);
+    }
+    let (next, report) = result.map_err(|e| match e {
+        RefineNormalsError::Cancelled => PyInterruptedError::new_err(e.to_string()),
+        other => refused(other),
+    })?;
     let d = report_dict(py, &report)?;
     Ok((PySfmrReconstruction::new(next), d.unbind()))
 }
@@ -466,5 +530,6 @@ fn normal_error_name(e: &NormalError) -> &'static str {
 
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(refine_normals, m)?)?;
+    m.add("REFINE_NORMALS_METHODS", PyTuple::new(m.py(), METHODS)?)?;
     Ok(())
 }
