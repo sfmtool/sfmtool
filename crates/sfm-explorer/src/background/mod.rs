@@ -39,10 +39,10 @@
 //!   It gives way to every task someone asks for that it would get in the way
 //!   of: a task queued in its queue asks it to stop and starts once it has, and
 //!   so does a locking task queued on its node when its work waits for its
-//!   node; it waits behind every such task; a source has at most one waiting
-//!   entry; and work that waits for its node is dropped rather than started on
-//!   a locked node. It writes no row, leaves no record
-//!   and is left out of [`AppState::running_tasks`], [`AppState::waiting_tasks`],
+//!   node; it waits behind every task someone asks for; a source has at most
+//!   one waiting entry; and work that waits for its node is dropped rather than
+//!   started on a locked node. It writes no row, leaves no record and is left
+//!   out of [`AppState::running_tasks`], [`AppState::waiting_tasks`],
 //!   [`AppState::task`] and the [`BusyNotice`].
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
 //!   messages and counts are in the collector both threads hold.

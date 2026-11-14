@@ -13,11 +13,12 @@
 //!
 //! Three shapes account for all of it:
 //!
-//! - [`edited`] wraps every edit that finishes inside the call. It reads the Action Log's revision before the
-//!   call and the node's cursor after it, so the reply carries the version's
-//!   serial and label and the **sentence the edit recorded** -- which is where
-//!   each family's own numbers already are (the commit's counts, the
-//!   adjustment's residuals), in the words the human is reading off the panel.
+//! - [`edited`] wraps every edit that finishes inside the call. It reads the
+//!   Action Log's revision before the call and the node's cursor after it, so
+//!   the reply carries the version's serial and label and the **sentence the
+//!   edit recorded** -- which is where each family's own numbers already are
+//!   (the commit's counts, the adjustment's residuals), in the words the human
+//!   is reading off the panel.
 //!   One text, not a second rendering of the same report. It also carries
 //!   `changed`, which is whether the cursor moved: a step that had no effect
 //!   pushes no version and answers with the one the node still stands at, and
