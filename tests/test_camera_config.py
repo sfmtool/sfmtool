@@ -597,7 +597,7 @@ class TestIntrinsicsForImageCameraModel:
         assert prior is True
 
         out = capsys.readouterr().out
-        assert f"The camera of {config_path}: SIMPLE_RADIAL -> OPENCV" in out
+        assert "The camera of camera_config.json: SIMPLE_RADIAL -> OPENCV" in out
         assert "rms 0.000 px" in out
 
     def test_without_camera_model_the_file_is_used_as_is(
@@ -638,6 +638,6 @@ class TestIntrinsicsForImageCameraModel:
         with pytest.raises(ValueError) as excinfo:
             intrinsics_for_image(isolated_test_image, resolver, "PINHOLE")
         message = str(excinfo.value)
-        assert f"cannot switch the camera of {config_path}" in message
+        assert "cannot switch the camera of camera_config.json from" in message
         assert "SIMPLE_RADIAL_FISHEYE to PINHOLE" in message
         assert "90" in message

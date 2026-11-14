@@ -236,11 +236,21 @@ have been. Every such camera the solve uses is refit: each camera of a multi-sen
 `camera_config.json`. The files are not changed. The fit keeps the principal point and image size, so a `SIMPLE_PINHOLE` camera
 refit to `SIMPLE_RADIAL` keeps its focal and gains `radial_distortion_k1 = 0`, a term the
 solve's bundle adjustment then refines. One line per refit camera names it, the two models, and the fit's rms and max in pixels, followed
-by a line for each term the target model cannot represent:
+by a line for each term the target model cannot represent. The line names the camera by
+the file it comes from, by its path in the workspace, after the line that says the file is used:
 
 ```
-Camera 0 of /ws/cam.camrig: SIMPLE_PINHOLE -> SIMPLE_RADIAL, fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px
+Camera intrinsics: using shopA/frame.camrig
+The camera of shopA/frame.camrig: SIMPLE_PINHOLE -> SIMPLE_RADIAL, fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px
 ```
+
+A single-sensor `.camrig` and a `camera_config.json` each hold one camera, so the file
+alone names it. A multi-sensor `.camrig` keeps its cameras in a pool that its sensors
+reference, so its camera is named by the sensors present in the solve that use it, as in
+`The camera of sensors 0 and 1 of kerry_park.camrig` for a pool camera both sensors share,
+or `The camera of sensor 1 of rig.camrig` for one only sensor 1 uses. No line gives a
+camera index: the index a camera takes in the solved `.sfmr` is not known until the solve
+ends, since it depends on the order of the images and on which cameras the models keep.
 
 A fit that is refused, such as a perspective model for a fisheye camera whose image
 reaches past 90°, stops the command with an error naming the camera and the reason. For

@@ -145,14 +145,15 @@ def _check_image_resolution(
         )
 
 
-def _camera_config_note(camrig_file, image_paths, camera_config_resolver) -> None:
-    """Print a note when a `.camrig` overrides a `camera_config.json`."""
+def _camera_config_note(shown_path, image_paths, camera_config_resolver) -> None:
+    """Print a note when the `.camrig` at `shown_path` (its path as the report
+    lines name it) overrides a `camera_config.json`."""
     if camera_config_resolver is None:
         return
     for image_path in image_paths:
         if camera_config_resolver.resolve_for_image(Path(image_path)) is not None:
             print(
-                f"Note: {camrig_file} takes precedence over "
+                f"Note: {shown_path} takes precedence over "
                 "camera_config.json for these images."
             )
             break
@@ -196,18 +197,23 @@ def _build_rig_assignments(
     return assignments
 
 
-def _refit_camera(
-    camera: dict, camera_model: str, camera_index: int, camrig_file: Path
-) -> dict:
-    """The `.camrig` camera dict `camera` refit to `camera_model`, as a dict."""
+def _sensor_list(sensors: list[int]) -> str:
+    """`sensor 1`, `sensors 0 and 1` or `sensors 0, 1 and 2`."""
+    if len(sensors) == 1:
+        return f"sensor {sensors[0]}"
+    head = ", ".join(str(s) for s in sensors[:-1])
+    return f"sensors {head} and {sensors[-1]}"
+
+
+def _refit_camera(camera: dict, camera_model: str, camera_name: str) -> dict:
+    """The `.camrig` camera dict `camera` refit to `camera_model`, as a dict;
+    `camera_name` names it in the report line and in a refusal."""
     from .._sfmtool.geometry import CameraIntrinsics
     from ..camera.setup import IntrinsicsRefitError, refit_intrinsics_to_model
 
     try:
         refit = refit_intrinsics_to_model(
-            CameraIntrinsics.from_dict(camera),
-            camera_model,
-            f"camera {camera_index} of {camrig_file}",
+            CameraIntrinsics.from_dict(camera), camera_model, camera_name
         )
     except IntrinsicsRefitError as e:
         raise CamrigSolveError(str(e)) from None
@@ -216,24 +222,27 @@ def _refit_camera(
 
 def _resolve_single_sensor(
     camrig_file: Path,
+    shown_path: Path,
     data: dict,
     covered: set[Path],
     camera_model,
     camera_config_resolver,
 ) -> CamrigCamera:
-    """Validate and resolve a single-sensor `.camrig` covering `covered`."""
-    camera_index = data["camera_indexes"][0]
-    camera = data["cameras"][camera_index]
+    """Validate and resolve a single-sensor `.camrig` covering `covered`;
+    `shown_path` is its path as the report lines name it."""
+    camera = data["cameras"][data["camera_indexes"][0]]
     _check_image_resolution(sorted(covered), camera, camrig_file)
-    _camera_config_note(camrig_file, sorted(covered), camera_config_resolver)
-    print(f"Camera intrinsics: using {camrig_file}")
+    _camera_config_note(shown_path, sorted(covered), camera_config_resolver)
+    print(f"Camera intrinsics: using {shown_path}")
     if camera_model is not None:
-        camera = _refit_camera(camera, camera_model, camera_index, camrig_file)
+        # The file holds one camera, so the file names it.
+        camera = _refit_camera(camera, camera_model, f"the camera of {shown_path}")
     return CamrigCamera(camrig_file=camrig_file, camera=camera, images=covered)
 
 
 def _resolve_multi_sensor(
     camrig_file: Path,
+    shown_path: Path,
     data: dict,
     solve_set: set[Path],
     camera_model,
@@ -241,7 +250,8 @@ def _resolve_multi_sensor(
     images: str,
 ) -> CamrigRig:
     """Validate and resolve a multi-sensor `.camrig` covering `solve_set`,
-    the `images` its report line names."""
+    the `images` its report line names; `shown_path` is its path as the
+    report lines name it."""
     assignments = _build_rig_assignments(camrig_file, data)
 
     # Per-sensor resolution check: each sensor's solve images must suit that
@@ -256,20 +266,27 @@ def _resolve_multi_sensor(
             paths, camera, camrig_file, label=f" (sensor {sensor_idx})"
         )
 
-    _camera_config_note(camrig_file, solve_set, camera_config_resolver)
+    _camera_config_note(shown_path, solve_set, camera_config_resolver)
     sensor_count = data["metadata"]["sensor_count"]
     print(
-        f"Camera rig: using {camrig_file} "
+        f"Camera rig: using {shown_path} "
         f"({sensor_count} sensors, {len(by_sensor)} present in the {images})"
     )
     if camera_model is not None:
         # Refit each pool camera a present sensor uses, once, and hand the
-        # solve a copy of the rig data holding the refit cameras.
+        # solve a copy of the rig data holding the refit cameras. A pool
+        # camera is named by the present sensors that use it, since its
+        # index in the pool is neither a sensor's nor the solve's camera's.
         cameras = list(data["cameras"])
-        used = sorted({data["camera_indexes"][s] for s in by_sensor})
-        for camera_index in used:
+        sensors_of: dict[int, list[int]] = {}
+        for sensor_idx in sorted(by_sensor):
+            camera_index = data["camera_indexes"][sensor_idx]
+            sensors_of.setdefault(camera_index, []).append(sensor_idx)
+        for camera_index, sensors in sorted(sensors_of.items()):
             cameras[camera_index] = _refit_camera(
-                cameras[camera_index], camera_model, camera_index, camrig_file
+                cameras[camera_index],
+                camera_model,
+                f"the camera of {_sensor_list(sensors)} of {shown_path}",
             )
         data = {**data, "cameras": cameras}
     return CamrigRig(camrig_file=camrig_file, data=data, assignments=solve_assignments)
@@ -446,12 +463,16 @@ def resolve_camrig_for_solve(
     hits = find_covering_camrigs(image_paths, workspace_dir, images)
     if not hits:
         return None
+    workspace_dir = Path(workspace_dir).resolve()
     result = CamrigSolveResult()
     for camrig_file, data, covered in hits:
+        # The report lines name each file by its path in the workspace.
+        shown_path = camrig_file.relative_to(workspace_dir)
         if data["metadata"]["sensor_count"] > 1:
             result.rigs.append(
                 _resolve_multi_sensor(
                     camrig_file,
+                    shown_path,
                     data,
                     covered,
                     camera_model,
@@ -462,7 +483,12 @@ def resolve_camrig_for_solve(
         else:
             result.cameras.append(
                 _resolve_single_sensor(
-                    camrig_file, data, covered, camera_model, camera_config_resolver
+                    camrig_file,
+                    shown_path,
+                    data,
+                    covered,
+                    camera_model,
+                    camera_config_resolver,
                 )
             )
     given = {Path(p).resolve() for p in image_paths}

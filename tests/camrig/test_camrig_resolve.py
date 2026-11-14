@@ -270,9 +270,14 @@ def test_resolve_camrig_refits_each_file_camera(tmp_path: Path, capsys):
         747.0,
         1141.0,
     ]
+    # Each file holds one camera, so each line names its camera by the file,
+    # by its path in the workspace, and gives no index that could be read as
+    # the solve's.
     out = capsys.readouterr().out
-    assert f"Camera 0 of {shop_a.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL" in out
-    assert f"Camera 0 of {shop_b.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL" in out
+    for name in ("camera-shopA.camrig", "camera-shopB.camrig"):
+        assert f"Camera intrinsics: using {name}\n" in out
+        assert f"The camera of {name}: SIMPLE_PINHOLE -> SIMPLE_RADIAL" in out
+    assert "Camera 0" not in out
 
 
 def test_resolve_camrig_one_file_covering_some_images(tmp_path: Path, capsys):
@@ -335,7 +340,7 @@ def test_resolve_camrig_refits_camera_to_camera_model(tmp_path: Path, capsys):
     assert camrig_file.read_bytes() == before
     out = capsys.readouterr().out
     assert (
-        f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL, "
+        "The camera of rig.camrig: SIMPLE_PINHOLE -> SIMPLE_RADIAL, "
         "fit over θ ≤ 42.5° (image_corner): rms 0.000 px, max 0.000 px"
     ) in out
 
@@ -368,8 +373,7 @@ def test_resolve_camrig_refused_refit_names_the_camera(tmp_path: Path):
         resolve_camrig_for_solve(imgs, tmp_path, "PINHOLE")
     message = str(excinfo.value)
     assert (
-        f"cannot switch camera 0 of {camrig_file.resolve()} from "
-        "EQUIDISTANT_FISHEYE to PINHOLE"
+        "cannot switch the camera of rig.camrig from EQUIDISTANT_FISHEYE to PINHOLE"
     ) in message
     assert "90" in message
 
@@ -455,9 +459,47 @@ def test_resolve_camrig_multi_sensor_refits_each_camera(tmp_path: Path, capsys):
         assert camera["parameters"]["radial_distortion_k1"] == 0.0
         assert camera["parameters"]["radial_distortion_k2"] == 0.0
     assert camrig_file.read_bytes() == before
+    # A rig's pool camera is named by the sensors that use it, not by its
+    # index in the pool.
     out = capsys.readouterr().out
-    assert f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> RADIAL" in out
-    assert f"Camera 1 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> RADIAL" in out
+    assert "The camera of sensor 0 of rig.camrig: SIMPLE_PINHOLE -> RADIAL" in out
+    assert "The camera of sensor 1 of rig.camrig: SIMPLE_PINHOLE -> RADIAL" in out
+    assert "Camera 0" not in out
+
+
+def test_resolve_camrig_names_a_shared_rig_camera_by_its_sensors(
+    tmp_path: Path, capsys
+):
+    # Two sensors sharing pool camera 0 refit it once, in a line naming both
+    # present sensors; with only sensor 1 present the line names sensor 1.
+    rig_dir = tmp_path / "rig"
+    _copy_images(rig_dir / "left", "seoul_bull_sculpture", 1)
+    _copy_images(rig_dir / "right", "seoul_bull_sculpture", 1)
+    _make_camrig(
+        rig_dir / "pair.camrig",
+        [
+            "left/seoul_bull_sculpture_%02d.jpg",
+            "right/seoul_bull_sculpture_%02d.jpg",
+        ],
+        sensor_count=2,
+        camera=_simple_pinhole_camera(),
+    )
+    left = sorted((rig_dir / "left").glob("*.jpg"))
+    right = sorted((rig_dir / "right").glob("*.jpg"))
+    shown = Path("rig") / "pair.camrig"
+
+    resolve_camrig_for_solve(left + right, tmp_path, "simple_radial")
+    resolve_camrig_for_solve(right, tmp_path, "simple_radial")
+
+    lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "SIMPLE_PINHOLE -> SIMPLE_RADIAL" in line
+    ]
+    assert [line.split(":")[0] for line in lines] == [
+        f"The camera of sensors 0 and 1 of {shown}",
+        f"The camera of sensor 1 of {shown}",
+    ]
 
 
 def test_resolve_camrig_rejects_same_sensor_frame_collision(tmp_path: Path):
