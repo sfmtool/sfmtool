@@ -154,26 +154,43 @@ def _density_term_line(walk: dict, sequence: PickSequence) -> str:
 
 def _density_rows(walk: dict, numbers: list[int]) -> list[str]:
     """The table of each step's target, the gain and median measure it came
-    from, and the step's parallax P50 and P90/P50 and measure."""
+    from, and the pair its measure was read from: its frames, the focal factor
+    its split was measured at, its parallax P50 and P90/P50, the P50 gate it
+    was held to, and the measure."""
     rows = [
         "  Local density by step (target, gain, median measure of the last three "
-        "steps; the step's parallax P50, P90/P50 and measure):",
+        "steps; the pair measured, `step` or a reference pair's frames, or `none` "
+        "where the step's own P50 rules a reference pair out; its focal factor, "
+        "parallax P50, P90/P50 and P50 gate, and the measure):",
         f"    {'frames':>15}  {'target':>7}  {'gain':>5}  {'median':>6}  "
-        f"{'P50 deg':>8}  {'P90/P50':>7}  {'measure':>7}",
+        f"{'measured':>15}  {'focal':>5}  {'P50 deg':>8}  {'P90/P50':>7}  "
+        f"{'gate':>4}  {'measure':>7}",
     ]
     for step in walk["steps"]:
         density = step["density"]
         frames = f"{numbers[step['from']]}-{numbers[step['to']]}"
-        split = density["essential_split"]
+        pair = density["measured_pair"]
+        split, focal = density["essential_split"], density["focal_factor"]
+        if pair["pair"] == "reference":
+            measured = f"{numbers[step['from']]}-{numbers[pair['to']]}"
+            split, focal = pair["essential_split"], pair["focal_factor"]
+        elif pair["pair"] == "step":
+            measured = "step"
+        else:
+            measured = "none"
         if split["status"] == "measured":
             p50, p90 = split["parallax_p50_deg"], split["parallax_p90_deg"]
             ratio = f"{p90 / p50:7.2f}" if p50 else f"{'-':>7}"
-            parallax = f"{p50:8.3f}  {ratio}  {density['measure']:7.2f}"
+            parallax = (
+                f"{p50:8.3f}  {ratio}  {pair['p50_gate_deg']:4.2f}  "
+                f"{density['measure']:7.2f}"
+            )
         else:
             parallax = f"not measured ({split['reason']})"
         rows.append(
             f"    {frames:>15}  {density['target_percent']:6.2f}%  "
-            f"{density['gain']:5.2f}  {density['median_measure']:6.2f}  {parallax}"
+            f"{density['gain']:5.2f}  {density['median_measure']:6.2f}  "
+            f"{measured:>15}  {focal:5.2f}  {parallax}"
         )
     return rows
 

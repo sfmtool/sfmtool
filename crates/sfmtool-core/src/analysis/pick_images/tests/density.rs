@@ -8,7 +8,7 @@
 
 use super::capture::{FOCAL, HEIGHT, WIDTH};
 use super::*;
-use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::camera::{CameraIntrinsics, CameraModel, IntrinsicAdjustment};
 
 /// The synthetic captures' camera, at `scale` times their size.
 pub(super) fn camera(scale: f64) -> CameraIntrinsics {
@@ -64,10 +64,11 @@ pub(super) fn choices(run: &Run) -> serde_json::Value {
     value
 }
 
-/// Every step's split, of a run with `options`, is the one a second match
-/// of its pair, with the split's options for `camera` set, measures: the walk
-/// measures it from its own match of the pair, which finds the same positions
-/// in the same order.
+/// Every step's split, and every reference pair's, of a run with `options`
+/// is the one a second match of its pair measures with the split's options
+/// for `camera` set, at the focal the focal search kept: the walk measures
+/// it from its own match of the pair, which finds the same positions in the
+/// same order.
 pub(super) fn assert_splits_are_those_of_a_second_match(
     run: &Run,
     options: &PickImagesOptions,
@@ -80,27 +81,60 @@ pub(super) fn assert_splits_are_those_of_a_second_match(
         options.max_density_gain,
     )
     .expect("the term is on");
-    let pair_options = FramePairOptions {
-        essential_split: Some(split),
-        ..options.pair.clone()
-    };
     let features = |frame: usize| {
         let path = &run.sequences[0].frames[frame].images[0].sift_path;
         let (_, metadata, _) = sfmtool_sift_format::read_sift_metadata(path).expect("metadata");
         let sift = sfmtool_sift_format::read_sift_positions_descriptors(path).expect("features");
         FrameFeatures::from_sift(sift, &metadata, options.forest).expect("a forest")
     };
+    // The split of `a` with `b` a second match measures at `factor` times
+    // the camera's focal, the factor `1 + 0.03 i` the search measures at.
+    let second = |a: usize, b: usize, factor: f64| {
+        let i = ((factor - 1.0) / 0.03).round();
+        let adjustment = IntrinsicAdjustment {
+            focal: 0.03 * i,
+            ..IntrinsicAdjustment::default()
+        };
+        let camera = if i == 0.0 {
+            split.camera.clone()
+        } else {
+            split.camera.with_adjustment(&adjustment, None)
+        };
+        let pair_options = FramePairOptions {
+            essential_split: Some(EssentialSplitOptions {
+                camera,
+                ..split.clone()
+            }),
+            ..options.pair.clone()
+        };
+        let stats = match_frame_pair(&features(a), &features(b), &pair_options).expect("a match");
+        stats.essential_split.expect("measured")
+    };
     let steps = &run.walk(0).steps;
     assert!(!steps.is_empty());
     for step in steps {
-        let stats = match_frame_pair(&features(step.from), &features(step.to), &pair_options)
-            .expect("a match");
-        assert!(stats.essential_split.is_some());
+        let density = &step.density;
         assert_eq!(
-            step.density.essential_split, stats.essential_split,
+            density.essential_split,
+            Some(second(step.from, step.to, density.focal_factor)),
             "{} -> {}",
-            step.from, step.to
+            step.from,
+            step.to
         );
+        if let Some(DensityPair::Reference {
+            to,
+            essential_split,
+            focal_factor,
+            ..
+        }) = &density.measured_pair
+        {
+            assert_eq!(
+                *essential_split,
+                second(step.from, *to, *focal_factor),
+                "{} -> {to}",
+                step.from
+            );
+        }
     }
 }
 
@@ -115,6 +149,8 @@ fn assert_base_target_only(walk: &SequenceReport) {
                 gain: 1.0,
                 median_measure: 1.0,
                 essential_split: None,
+                focal_factor: 1.0,
+                measured_pair: None,
                 measure: 1.0,
             },
             "{} -> {}",
@@ -182,23 +218,72 @@ fn a_near_foreground_shortens_the_steps_by_the_gain_of_the_last_three() {
             // Shorter than the base band allows.
             assert!(step.stats.step_percent < high, "step {k}");
         }
+        // The measure is the one of the pair the step reports, at the gate
+        // it reports: the step itself, at the step gate, up to 1.3 times the
+        // reference step, and otherwise a reference pair, or none, at the
+        // reference gate.
+        let reference = base / 3.0;
+        let mut matched_for_measure = None;
+        match density.measured_pair.as_ref().expect("a pair") {
+            DensityPair::Step { p50_gate_deg } => {
+                let gate = if step.stats.step_percent <= 1.3 * reference {
+                    0.5
+                } else {
+                    0.2
+                };
+                assert_eq!(*p50_gate_deg, gate, "step {k}");
+                assert_eq!(
+                    density.measure,
+                    crate::analysis::pick_images::density::pair_measure(split, *p50_gate_deg),
+                    "step {k}"
+                );
+            }
+            DensityPair::Reference {
+                to,
+                matched_for_measure: matched,
+                essential_split,
+                p50_gate_deg,
+                ..
+            } => {
+                assert!(step.stats.step_percent > 1.3 * reference, "step {k}");
+                assert!((step.from + 1..=step.to).contains(to), "step {k}");
+                assert_eq!(*p50_gate_deg, 0.2, "step {k}");
+                assert_eq!(
+                    density.measure,
+                    crate::analysis::pick_images::density::pair_measure(essential_split, 0.2),
+                    "step {k}"
+                );
+                if *matched {
+                    matched_for_measure = Some(*to);
+                }
+            }
+            DensityPair::WideParallax { .. } => assert_eq!(density.measure, 1.0, "step {k}"),
+        }
         // The prediction aims at the step's own target from rates measured
         // at another, so after the first step each step in the band is
-        // reached by its first try.
+        // reached by its first try; a reference pair matched for the measure
+        // is matched after it.
         if k > 0 && step.kind == StepKind::InBand {
-            assert_eq!(tries(&on, step.from), vec![step.to], "step {k}");
+            let expected: Vec<usize> = std::iter::once(step.to)
+                .chain(matched_for_measure)
+                .collect();
+            assert_eq!(tries(&on, step.from), expected, "step {k}");
         }
     }
     // The near foreground reads as one: past the first steps the gain is at
     // its maximum, and the walk takes far more frames than without the term.
+    // Near the end of the capture a step of three frames has a parallax P90
+    // just under the 0.2° its measure needs, so the last step may be walked
+    // with two such measures of the last three, and a gain of 1.
     assert_eq!(walk.steps[0].density.gain, 1.0);
     assert!(
         walk.steps[0].density.measure > 7.5,
         "{:?}",
         walk.steps[0].density
     );
+    let middle = &walk.steps[1..walk.steps.len() - 1];
     assert!(
-        gained + 1 >= walk.steps.len(),
+        middle.iter().all(|s| s.density.gain > 1.0),
         "{gained} of {}",
         walk.steps.len()
     );
@@ -309,4 +394,42 @@ fn a_camera_the_split_refuses_turns_the_term_off_saying_why() {
         DensityTerm::On { focal_px: FOCAL }
     );
     assert!(run.walk(0).steps.is_empty());
+}
+
+/// A panning capture whose near ring holds two fifths of the points, which
+/// keep their appearance over the first `steady` frames and after that
+/// change it every 8 frames: a step of 3 frames matches most of them again,
+/// and one of 8 frames or more, about the base target's length, none, so
+/// that a step reads the near foreground only when it is short.
+fn near_fading(frames: usize, steady: usize) -> Synth {
+    let mut synth = Synth::panning_with_near(44, frames, 0.4);
+    for shot in &mut synth.shots[steady..] {
+        shot.content = Content::NearRenewed { lifetime: 8 };
+    }
+    synth
+}
+
+#[test]
+fn the_gain_a_walk_settles_at_does_not_depend_on_where_it_starts() {
+    // From the first frame the steady stretch raises the gain; from frame 40
+    // the walk starts in the stretch whose long steps read no near
+    // foreground. Measuring a pair of the reference step's length, both
+    // walks find the near foreground there and shorten their steps.
+    let synth = near_fading(100, 30);
+    let gains_past = |offset: usize, frame: usize| -> Vec<f64> {
+        let mut part = synth.clone();
+        part.shots.drain(..offset);
+        let run = run_camera(&part, Some(camera(1.0)), &options());
+        run.walk(0)
+            .steps
+            .iter()
+            .filter(|s| s.from + offset >= frame)
+            .map(|s| s.density.gain)
+            .collect()
+    };
+    for offset in [0, 40] {
+        let gains = gains_past(offset, 60);
+        assert!(gains.iter().all(|&g| g > 2.0), "from {offset}: {gains:?}");
+        assert!(gains.len() >= 10, "from {offset}: {gains:?}");
+    }
 }

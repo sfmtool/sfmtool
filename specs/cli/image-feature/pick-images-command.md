@@ -561,7 +561,7 @@ Walk: target step 10% (band 7-13%), match floor 600
     ...
   Steps stopped at the match floor: 31 of 511, 6 of them at the next frame
   Frames blurred against their neighbours swapped (29): 377->376, 1066->1068, ... and 21 more
-  Local density by step (target, gain, median measure of the last three steps; the step's parallax P50, P90/P50 and measure):
+  Local density by step (target, gain, median measure of the last three steps; the pair measured, `step` or a reference pair's frames, or `none` where the step's own P50 rules a reference pair out; its focal factor, parallax P50, P90/P50 and P50 gate, and the measure):
     ...
 
 Extracted and never read: 40 frames
@@ -633,8 +633,32 @@ rest.
 
   The table of steps, printed only with the term on, gives per step its
   frames, the target it was walked with, the gain and median measure that
-  target came from, and the step's own parallax P50 in degrees, P90/P50 and
-  measure, or `not measured` with the split's reason.
+  target came from, and the pair its measure was read from: `step` for the
+  step itself, a reference pair's first and last frame numbers, or `none`
+  where the step's own parallax P50, scaled to the reference pair's span,
+  already reaches the reference gate and no pair was matched. Then come that
+  pair's focal factor (the focal its split was kept at over the camera's,
+  1.00 where the focal search did not run), its parallax P50 in degrees and
+  P90/P50, the P50 gate it was held to, 0.50 for the step itself and 0.20
+  for a reference pair or for a long step of one or two frames, measured as
+  its own reference pair, and the measure, or `not measured` with the split's
+  reason.
+  A `none` row shows the step's own split, at the reference gate, and a
+  measure of 1:
+
+  ```text
+    Local density by step (target, gain, median measure of the last three steps; …):
+               frames   target   gain  median         measured  focal   P50 deg  P90/P50  gate  measure
+                 1-96   10.00%   1.00    1.00             1-27   1.00     0.078     1.66  0.20     1.00
+               96-174   10.00%   1.00    1.00           96-128   1.03     0.049    18.28  0.20    18.28
+              174-274    3.33%   3.00    9.64             step   1.00     0.038     9.09  0.50     9.09
+  ```
+
+  and, on a scene near throughout:
+
+  ```text
+                 1-49   10.00%   1.00    1.00             none   1.00    14.799     1.12  0.20     1.00
+  ```
 - **Extracted and never read.** The last line of the report: how many frames
   had a `.sift` file written in the run that the walk never read, the
   report's `frames_extracted_unread`. With the `sfmtool` tool these are
@@ -758,7 +782,16 @@ The file is written after the report and the list.
 Each pair's and each step's `stats` hold an `essential_split` key, which is
 `null`: the walk measures no split of the pairs it decides from. Each step's
 `density` holds the target it was walked with, its gain and median measure,
-its essential split, `null` with the term off, and its measure, and each
+its essential split and the `focal_factor` it was kept at, `null` and 1 with
+the term off, the `measured_pair` its measure was read from, `null` with the
+term off, and its measure. The `measured_pair` is `{"pair": "step",
+"p50_gate_deg": …}`, `{"pair": "reference", "to": …, "step_percent": …,
+"matched_for_measure": …, "essential_split": {…}, "focal_factor": …,
+"p50_gate_deg": …}`, `to` the reference frame's position in the sequence and
+`matched_for_measure` whether the pair was matched for the measure rather
+than by the walk before, or `{"pair": "wide_parallax", "to": …,
+"p50_gate_deg": …}`
+([core/analysis/pick-images.md § The local density term](../../core/analysis/pick-images.md#the-local-density-term)). Each
 sequence's `density_term` whether the term was on, with the camera's focal,
 or why not, and its `pilot_vote`, `null` when none ran, with the frames
 voted on, the frames read, the features and clusters, the vote's

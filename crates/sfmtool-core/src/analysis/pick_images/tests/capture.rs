@@ -53,7 +53,17 @@ pub(super) enum Content {
     Window { period: usize, lifetime: usize },
     /// Only every `every`-th point.
     Subset { every: usize },
+    /// Every point, each one nearer than [`NEAR_RADIUS`] to the vertical axis
+    /// through the origin with a descriptor drawn afresh every `lifetime`
+    /// frames, at `(frame + point) / lifetime`: two frames `k` apart match
+    /// `1 − k / lifetime` of the near points, and none at `lifetime` or more,
+    /// as a near foreground changes in appearance, and all of the far ones.
+    NearRenewed { lifetime: usize },
 }
+
+/// How far from the vertical axis through the origin a point of
+/// [`Content::NearRenewed`] is near within.
+const NEAR_RADIUS: f64 = 50.0;
 
 /// One frame of the synthetic capture.
 #[derive(Clone, Debug)]
@@ -105,6 +115,36 @@ impl Synth {
         Self::with_points(&mut rng, points)
     }
 
+    /// [`Synth::wall`] in front of far points: `far_density` per unit of x
+    /// at depths 140 to 160, spread along x over the wall's range widened by
+    /// 100 on either side and as high as the view at their depth. The far
+    /// points move across the image about a fifteenth as far as the wall for
+    /// the same motion along x, and frames 18 or more apart along x share
+    /// none of the wall's points and most of the far ones, so the step
+    /// between them is the far points' alone: well short of the wall's.
+    pub(super) fn wall_before_far_points(
+        seed: u64,
+        x_min: f64,
+        x_max: f64,
+        density: f64,
+        far_density: f64,
+    ) -> Self {
+        let mut synth = Self::wall(seed, x_min, x_max, density);
+        let mut rng = StdRng::seed_from_u64(seed.wrapping_add(1));
+        let n = ((x_max - x_min + 200.0) * far_density) as usize;
+        for _ in 0..n {
+            synth.points.push([
+                rng.random_range(x_min - 100.0..x_max + 100.0),
+                rng.random_range(-70.0..70.0),
+                rng.random_range(140.0..160.0),
+            ]);
+            synth
+                .descriptors
+                .push(std::array::from_fn(|_| rng.random::<u8>()));
+        }
+        synth
+    }
+
     fn with_points(rng: &mut StdRng, points: Vec<[f64; 3]>) -> Self {
         let descriptors = points
             .iter()
@@ -139,13 +179,19 @@ impl Synth {
     /// turn, and a quarter of them 5 away, a near foreground whose parallax
     /// is many times the distant points'.
     pub(super) fn panning(seed: u64, frames: usize) -> Self {
+        Self::panning_with_near(seed, frames, 0.25)
+    }
+
+    /// [`Synth::panning`] with a share `near` of the points in the near
+    /// ring.
+    pub(super) fn panning_with_near(seed: u64, frames: usize, near: f64) -> Self {
         let mut rng = StdRng::seed_from_u64(seed);
         let turn = 0.01 * f64::from(WIDTH) / FOCAL;
         let span = (-0.8, turn * frames as f64 + 0.8);
         let n = ((span.1 - span.0) * 520.0) as usize;
         let points = (0..n)
             .map(|_| {
-                let (radius, height) = if rng.random_range(0.0..1.0) < 0.25 {
+                let (radius, height) = if rng.random_range(0.0..1.0) < near {
                     (5.0, 1.8)
                 } else {
                     (300.0, 110.0)
@@ -252,7 +298,14 @@ impl Synth {
             let v = FOCAL * y / z + f64::from(HEIGHT) / 2.0 + noise(&mut rng);
             if u > 1.0 && u < f64::from(WIDTH) - 1.0 && v > 1.0 && v < f64::from(HEIGHT) - 1.0 {
                 positions.push([u as f32, v as f32]);
-                descriptors.extend_from_slice(&self.descriptors[p]);
+                match content {
+                    Content::NearRenewed { lifetime } if point[0].hypot(point[2]) < NEAR_RADIUS => {
+                        let epoch = ((t + p) / lifetime) as u64;
+                        let mut renewed = StdRng::seed_from_u64(p as u64 * 1_000_003 + epoch);
+                        descriptors.extend((0..DESCRIPTOR_DIM).map(|_| renewed.random::<u8>()));
+                    }
+                    _ => descriptors.extend_from_slice(&self.descriptors[p]),
+                }
             }
         }
         (positions, descriptors, WIDTH, HEIGHT)

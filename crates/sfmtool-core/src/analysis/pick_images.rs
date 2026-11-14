@@ -61,8 +61,8 @@ pub use frame_pair::{
 pub use pick::pick_images;
 pub use pilot::{PilotOutcome, PilotVote};
 pub use report::{
-    FrameReading, MeasuredPair, PickImagesReport, PickImagesTimes, SensorReading, SequenceReport,
-    StepDensity, StepKind, Swap, WalkStep,
+    DensityPair, FrameReading, MeasuredPair, PickImagesReport, PickImagesTimes, SensorReading,
+    SequenceReport, StepDensity, StepKind, Swap, WalkStep,
 };
 pub use source::{
     ExtractingSource, FrameSource, FrameSourceError, ReadOnlySource, SourceTimes, SourceWork,
