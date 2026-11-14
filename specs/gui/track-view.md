@@ -107,7 +107,7 @@ pub struct TrackBodyResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub fit: bool,
-    pub(crate) normal: Option<NormalStep>,    // one of the three normal buttons, with its settings
+    pub(crate) normal: Option<NormalStep>,    // one of the four normal buttons, with its settings
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>, // Edited: a threshold box released
     pub accept_walk: Option<usize>,           // a kept-at-seed row's Accept walk
@@ -727,13 +727,14 @@ upload is kept against the track's `Arc` and dropped with the tiles.
 
 In Edited mode, two rows. The first opens with where the focused item's evaluation stands, and
 then acts on the track: *Fit*, *Finite Diff Normal*, *Grid Plane Normal* with
-their *per axis* and *overlap* boxes, *Grown Plane Normal*, the *Stage* toggle (which
+their *per axis* and *overlap* boxes, *Grown Plane Normal*, *Pairwise Flow
+Normal*, the *Stage* toggle (which
 names the stage it would move to), *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The
 second is the *Lock* box, the *Surface Tiling Mode* box (§ "Surface Tiling
 Mode") and *Rename*, which opens a field in place and commits on Enter. Each entry is enabled, or greyed with a hover text naming what is
 missing, and the refusal is the core step's own sentence asked of the very
 track the button would act on, so the button and the step cannot disagree.
-*Commit* asks the core commit; *Fit*, the three normal entries and the *Stage*
+*Commit* asks the core commit; *Fit*, the four normal entries and the *Stage*
 toggle ask `fit_preconditions`, `normal_preconditions` and
 `set_stage_preconditions`, the halves of those steps' validation that read no
 photograph. A track with no patch therefore greys both
@@ -798,9 +799,10 @@ what the person placed. *Fit* greys with `fit_preconditions`' sentence for a
 track stage with fewer than two `in` observations, while the evaluation still
 runs for it, because one sighting is something to report.
 
-**The three normal entries turn the patch and leave its centre.** *Fit* moves
+**The four normal entries turn the patch and leave its centre.** *Fit* moves
 the patch along the sightings' rays and keeps the way it faces; *Finite Diff
-Normal*, *Grid Plane Normal* and *Grown Plane Normal* do the opposite, each
+Normal*, *Grid Plane Normal*, *Grown Plane Normal* and *Pairwise Flow Normal*
+do the opposite, each
 estimating a normal and turning
 the patch to it by the same least rotation the 3D viewer's arrowhead drag makes,
 then reading the track back, rendering its stored bitmap and scoring every row
@@ -841,7 +843,25 @@ reading, as in `Grown-plane normal of bull-nose: 2 of 3 views joined, 1 left
 out, 7 shift only; σ 4.20° weakest, 1.10° strongest, low confidence, turned
 8.4°, …`.
 
-All three entries run on a worker like *Fit*, push one version, and grey
+*Pairwise Flow Normal* runs `pairwise_flow_normal`
+([`../core/bench/pairwise-flow-normal.md`](../core/bench/pairwise-flow-normal.md))
+at its default options, and the boxes do not apply to it either. In a few
+rounds it renders every `in` view on one plane through the point, computes the
+optical flow between pairs of the renders, fits the plane to each pair's flow
+over discs of several radii, and turns the patch to the combined plane of the
+largest disc on which the pairs agree. It reads no keypoint and, like the
+others, turns the patch about its centre and moves no sighting. It costs a
+dense optical flow per pair per round, so it is slower than *Grown Plane
+Normal*. Its version is `Pairwise-flow normal of <label>`, and its Action Log
+row adds the step's own report: how many rounds ran; when it turned the patch,
+how many pairs agree at which radius, in patch half-extents, with their mean
+χ², or that one pair was read, and the normal's σ; and otherwise *normal left
+unchanged: undetermined* when the photographs do not determine the normal or
+*normal left unchanged: unstable* when the pairs do not agree; then the turn
+and the reading, as in `Pairwise-flow normal of bull-nose: 3 rounds; 10 of 10
+pairs agree at 1.5 half-extents (χ² 1.4), σ 1.83°, turned 12.3°, …`.
+
+All four entries run on a worker like *Fit*, push one version, and grey
 with `normal_preconditions`' sentence at the cluster stage, at infinity, and
 with fewer than two `in` observations; the boxes grey with them. The boxes are
 tool settings, as *Lock* is: changing one is no step, and they keep their values

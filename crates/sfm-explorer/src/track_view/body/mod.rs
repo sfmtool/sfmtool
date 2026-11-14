@@ -153,8 +153,8 @@ pub(crate) struct TrackBodyResponse {
     pub(crate) rename: Option<(String, String)>,
     /// *Fit*.
     pub(crate) fit: bool,
-    /// *Finite Diff Normal*, *Grid Plane Normal* or *Grown Plane Normal*,
-    /// carrying which, and for the first two the *per axis* and *overlap*
+    /// *Finite Diff Normal*, *Grid Plane Normal*, *Grown Plane Normal* or
+    /// *Pairwise Flow Normal*, carrying which, and for the first two the *per axis* and *overlap*
     /// settings it was pressed at.
     pub(crate) normal: Option<NormalStep>,
     /// The *Stage* toggle, carrying the stage it asks for.
@@ -786,6 +786,14 @@ impl TrackBody {
                  relocalize them on the turned patch",
             ) {
                 response.normal = Some(NormalStep::GrownPlane);
+            }
+            if entry(
+                ui,
+                PAIRWISE_FLOW_NORMAL_LABEL,
+                refusals.normal.clone(),
+                "Render the photographs on one plane through the point, fit a plane                  to the optical flow between pairs of them over discs of growing                  size, and turn the patch to the plane of the largest disc on which                  the pairs agree, keeping its centre and every keypoint. It leaves                  the normal as it was when the photographs do not determine it or                  the pairs do not agree. It costs a dense flow per pair per round,                  so it is slower than Grown Plane Normal",
+            ) {
+                response.normal = Some(NormalStep::PairwiseFlow);
             }
             if entry(
                 ui,
@@ -2125,6 +2133,10 @@ const GRID_PLANE_NORMAL_LABEL: &str = "Grid Plane Normal";
 /// The toolbar entry that turns the patch to the one plane its views agree
 /// on, fitted to the photographs view by view.
 const GROWN_PLANE_NORMAL_LABEL: &str = "Grown Plane Normal";
+
+/// The toolbar entry that turns the patch to the plane fitted to the optical
+/// flow between pairs of its views.
+const PAIRWISE_FLOW_NORMAL_LABEL: &str = "Pairwise Flow Normal";
 
 /// The Edited-mode checkbox that says whether Image Detail's dot drag moves the
 /// patch or one sighting, in one constant so the tests aim at the label drawn.

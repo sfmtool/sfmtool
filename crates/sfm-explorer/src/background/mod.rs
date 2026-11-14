@@ -529,6 +529,22 @@ impl Operation {
         quiet: false,
     };
 
+    /// One bench track's patch turned to the plane fitted to the optical flow
+    /// between pairs of its views (`sfmtool_core::bench::pairwise_flow_normal`).
+    ///
+    /// Cancellable on either side of the decode and inside the step, which
+    /// polls the flag between pairs and between the radii of a pair. A pair's
+    /// flow, once started, runs to its end. A cancel leaves the track as it
+    /// was.
+    pub(crate) const BENCH_PAIRWISE_FLOW_NORMAL: Operation = Operation {
+        name: "Pairwise flow normal",
+        cancellable: true,
+        kind: Kind::Bench,
+        queue: Queue::Fast,
+        locks: true,
+        quiet: false,
+    };
+
     /// One bench track's patch turned to the plane its pieces fit on
     /// (`sfmtool_core::bench::finite_difference_normal`).
     ///
@@ -801,7 +817,7 @@ impl Operation {
     /// declaration nothing checks is a declaration that rots.
     // Read by those tests alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 25] = [
+    pub(crate) const ALL: [Operation; 26] = [
         Operation::OPEN,
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
@@ -814,6 +830,7 @@ impl Operation {
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
         Operation::BENCH_GROWN_PLANE_NORMAL,
+        Operation::BENCH_PAIRWISE_FLOW_NORMAL,
         Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
         Operation::BENCH_GRID_PLANE_NORMAL,
         Operation::BENCH_SEARCH,

@@ -39,8 +39,8 @@ use std::sync::Arc;
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
     FiniteDifferenceOptions, FitOptions, GeometrySearchOptions, GrownPlaneNormalOptions,
-    ImageDeletion, ItemId, NormalError, Observation, ObservationSeed, PieceLayout, Provenance,
-    SearchOptions, Stage, StageKind, Thresholds, Verdict,
+    ImageDeletion, ItemId, NormalError, Observation, ObservationSeed, PairwiseFlowNormalOptions,
+    PieceLayout, Provenance, SearchOptions, Stage, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::readable::Readable;
@@ -2647,7 +2647,7 @@ impl AppState {
     }
 }
 
-/// Which of the three normal steps [`AppState::start_bench_normal`] runs.
+/// Which of the four normal steps [`AppState::start_bench_normal`] runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum NormalStep {
     /// *Finite Diff Normal*: a row of pieces along each axis, cut as the
@@ -2661,6 +2661,11 @@ pub(crate) enum NormalStep {
     /// Like the other two it turns the patch about its centre and moves no
     /// keypoint.
     GrownPlane,
+    /// *Pairwise Flow Normal*: the plane fitted to the optical flow between
+    /// pairs of the views rendered on a common plane, over the largest disc
+    /// on which the pairs agree (`sfmtool_core::bench::pairwise_flow_normal`).
+    /// It too turns the patch about its centre and moves no keypoint.
+    PairwiseFlow,
 }
 
 impl NormalStep {
@@ -2670,6 +2675,7 @@ impl NormalStep {
             NormalStep::FiniteDifference(_) => Operation::BENCH_FINITE_DIFFERENCE_NORMAL,
             NormalStep::GridPlane(_) => Operation::BENCH_GRID_PLANE_NORMAL,
             NormalStep::GrownPlane => Operation::BENCH_GROWN_PLANE_NORMAL,
+            NormalStep::PairwiseFlow => Operation::BENCH_PAIRWISE_FLOW_NORMAL,
         }
     }
 
@@ -2679,6 +2685,7 @@ impl NormalStep {
             NormalStep::FiniteDifference(_) => "take the finite-difference normal of",
             NormalStep::GridPlane(_) => "take the grid-plane normal of",
             NormalStep::GrownPlane => "take the grown-plane normal of",
+            NormalStep::PairwiseFlow => "take the pairwise-flow normal of",
         }
     }
 
@@ -2694,6 +2701,7 @@ impl NormalStep {
                 split.pieces, split.pieces, split.overlap_percent
             ),
             NormalStep::GrownPlane => format!("Grown-plane normal of {label}"),
+            NormalStep::PairwiseFlow => format!("Pairwise-flow normal of {label}"),
         }
     }
 
@@ -2701,7 +2709,7 @@ impl NormalStep {
     fn check(&self) -> Result<(), bench::NormalError> {
         match self {
             NormalStep::FiniteDifference(split) | NormalStep::GridPlane(split) => split.check(),
-            NormalStep::GrownPlane => Ok(()),
+            NormalStep::GrownPlane | NormalStep::PairwiseFlow => Ok(()),
         }
     }
 }
@@ -3002,6 +3010,13 @@ impl AppState {
                     &edited,
                     &views,
                     &GrownPlaneNormalOptions::default(),
+                    &p_work,
+                ),
+                NormalStep::PairwiseFlow => bench::pairwise_flow_normal(
+                    &track,
+                    &edited,
+                    &views,
+                    &PairwiseFlowNormalOptions::default(),
                     &p_work,
                 ),
             };

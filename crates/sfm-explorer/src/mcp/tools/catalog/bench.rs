@@ -908,7 +908,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "fit_bench_track_normal",
             description: "Estimate which way a track-stage bench track's patch faces and turn \
                           it there, keeping its centre; Track View's Finite Diff Normal, Grid \
-                          Plane Normal and Grown Plane Normal. method \"finite_difference\" \
+                          Plane Normal, Grown Plane Normal and Pairwise Flow Normal. method \
+                          \"finite_difference\" \
                           fits a row of pieces square pieces through the centre along each of \
                           the patch's two axes and turns the patch to the plane through the \
                           two lines their fitted centres lie on; method \"grid_plane\" fits a \
@@ -925,7 +926,18 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                           evidence, and moves no keypoint (fit the track afterwards to \
                           relocalize them against the turned patch), and its report gives \
                           the plane's sigma along its weakest and strongest directions and \
-                          says when that precision is low. Every method's turn stops \
+                          says when that precision is low. method \"pairwise_flow\" renders \
+                          the photographs on one plane through the point, fits a plane to the \
+                          optical flow between pairs of them over discs of several radii, and \
+                          turns the patch to the plane of the largest disc on which the pairs \
+                          agree, over a few rounds each rendering on the plane the last found. \
+                          It takes no pieces or overlap_percent, moves no keypoint, and costs \
+                          a dense optical flow per pair per round. Its report gives the rounds \
+                          run and, where it turned the patch, the radius chosen and the \
+                          normal's sigma, and says \"normal \
+                          left unchanged: undetermined\" when the photographs do not determine \
+                          the normal and \"normal left unchanged: unstable\" when the pairs \
+                          do not agree. Every method's turn stops \
                           where any observation's camera would see the patch past the tilt \
                           cap, and the step ends by rendering its bitmap again and reading \
                           the track back. Refused at the cluster stage, at infinity, and with fewer \
@@ -963,7 +975,8 @@ pub(super) fn specs() -> Vec<ToolSpec> {
                         "method",
                         json!({
                             "type": "string",
-                            "enum": ["finite_difference", "grid_plane", "grown_plane"],
+                            "enum": ["finite_difference", "grid_plane", "grown_plane",
+                                     "pairwise_flow"],
                             "description": "How the normal is estimated.",
                         }),
                     ),

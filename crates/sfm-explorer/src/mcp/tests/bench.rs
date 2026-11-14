@@ -2762,7 +2762,7 @@ fn fit_bench_track_normal_runs_the_grown_plane_and_refuses_what_it_does_not_take
         ),
         (
             json!({ "reconstruction_label": "run_a", "method": "photometric" }),
-            "the methods are finite_difference, grid_plane and grown_plane",
+            "the methods are finite_difference, grid_plane, grown_plane and pairwise_flow",
         ),
     ] {
         let map = arguments.as_object().cloned().expect("an object");
@@ -2770,6 +2770,50 @@ fn fit_bench_track_normal_runs_the_grown_plane_and_refuses_what_it_does_not_take
             .err()
             .unwrap_or_else(|| panic!("{arguments} was accepted"));
         assert!(refused.to_string().contains(says), "{refused}");
+    }
+}
+
+/// `fit_bench_track_normal` with `method` `pairwise_flow` is Track View's
+/// *Pairwise Flow Normal*: it runs on a worker under the operation name the
+/// panel shows, and its report names the step and says how many rounds ran.
+/// Like `grown_plane` it takes no `pieces` or `overlap_percent`.
+#[test]
+fn fit_bench_track_normal_runs_the_pairwise_flow_and_refuses_pieces() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let turned = worked(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track_normal",
+        json!({ "reconstruction_label": "run_a", "method": "pairwise_flow" }),
+    );
+    let report = turned["report"].as_str().expect("a report");
+    assert!(
+        report.starts_with(&format!("Pairwise-flow normal of {item}: ")),
+        "{turned}"
+    );
+    assert!(report.contains(" round"), "{turned}");
+    let task = call(&mut state, &mut viewer, "get_background_tasks", json!({}))["fast"]
+        ["last_finished"]
+        .clone();
+    assert_eq!(task["operation"], json!("Pairwise flow normal"), "{task}");
+
+    for arguments in [
+        json!({ "reconstruction_label": "run_a", "method": "pairwise_flow", "pieces": 3 }),
+        json!({ "reconstruction_label": "run_a", "method": "pairwise_flow",
+                "overlap_percent": 25 }),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        let refused = tools::parse("fit_bench_track_normal", Some(&map))
+            .err()
+            .unwrap_or_else(|| panic!("{arguments} was accepted"));
+        assert!(
+            refused.to_string().contains(
+                "takes pieces and overlap_percent only with method finite_difference or grid_plane"
+            ),
+            "{refused}"
+        );
     }
 }
 

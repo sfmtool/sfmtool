@@ -1385,10 +1385,11 @@ fn the_toolbar_offers_the_fit_and_says_where_the_evaluation_stands() {
     assert!(!texts.iter().any(|t| t == super::EVALUATING_LABEL));
 }
 
-/// The toolbar's normal entries are *Finite Diff Normal*, *Grid Plane Normal*
-/// and *Grown Plane Normal*; the photometric *Fit Normal* is not offered. A
-/// click on *Grown Plane Normal* asks the dock for that step, which takes no
-/// *per axis* or *overlap* setting, and pushes no version itself.
+/// The toolbar's normal entries are *Finite Diff Normal*, *Grid Plane Normal*,
+/// *Grown Plane Normal* and *Pairwise Flow Normal*; the photometric *Fit
+/// Normal* is not offered. A click on *Grown Plane Normal* or *Pairwise Flow
+/// Normal* asks the dock for that step, which takes no *per axis* or *overlap*
+/// setting, and pushes no version itself.
 #[test]
 fn grown_plane_normal_is_offered_in_place_of_fit_normal_and_asks_for_its_step() {
     use crate::bench::NormalStep;
@@ -1398,6 +1399,7 @@ fn grown_plane_normal_is_offered_in_place_of_fit_normal_and_asks_for_its_step() 
         super::FINITE_DIFF_NORMAL_LABEL,
         super::GRID_PLANE_NORMAL_LABEL,
         super::GROWN_PLANE_NORMAL_LABEL,
+        super::PAIRWISE_FLOW_NORMAL_LABEL,
     ] {
         assert!(
             texts.iter().any(|t| t == label),
@@ -1410,18 +1412,19 @@ fn grown_plane_normal_is_offered_in_place_of_fit_normal_and_asks_for_its_step() 
     );
 
     let versions = state.node(id).expect("loaded").history.versions().len();
-    let at = menu_entry_pos(&mut panel, &ctx, &state, super::GROWN_PLANE_NORMAL_LABEL);
-    let response = at_pointer(&mut panel, &ctx, &state, at, true);
-    assert_eq!(
-        response.normal,
-        Some(NormalStep::GrownPlane),
-        "{response:?}"
-    );
-    assert_eq!(
-        state.node(id).expect("loaded").history.versions().len(),
-        versions,
-        "the click itself pushed a version"
-    );
+    for (label, step) in [
+        (super::GROWN_PLANE_NORMAL_LABEL, NormalStep::GrownPlane),
+        (super::PAIRWISE_FLOW_NORMAL_LABEL, NormalStep::PairwiseFlow),
+    ] {
+        let at = menu_entry_pos(&mut panel, &ctx, &state, label);
+        let response = at_pointer(&mut panel, &ctx, &state, at, true);
+        assert_eq!(response.normal, Some(step), "{label}: {response:?}");
+        assert_eq!(
+            state.node(id).expect("loaded").history.versions().len(),
+            versions,
+            "the click on {label} itself pushed a version"
+        );
+    }
 }
 
 /// While an evaluation of the track's current inputs is on its way the rows do

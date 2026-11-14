@@ -21,9 +21,12 @@ the track back turned, with a report of every round. It is deliberately
 expensive, one dense flow per pair of photographs per round, and stands beside
 the cheap per-point step, the grown-plane normal
 ([grown-plane-normal.md](grown-plane-normal.md)), which it does not replace.
-Python runs it through `sfmtool.bench.pairwise_flow_normal`; Track View, the
-wire and `refine_normals` do not run it, and the steps that would reach it from
-those are proposed in
+Python runs it through `sfmtool.bench.pairwise_flow_normal`, and Track View's
+*Pairwise Flow Normal* and the wire's `fit_bench_track_normal` with `method`
+`pairwise_flow` run it at its default options
+([../../gui/track-view.md](../../gui/track-view.md) § "The toolbar",
+[../../gui/mcp-server.md](../../gui/mcp-server.md)). `refine_normals` does not
+run it, and the step that would reach it from there is proposed in
 [pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md),
 with the questions about its settings and rules that are still open. The
 measurements behind its design and defaults are in
