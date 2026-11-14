@@ -434,11 +434,7 @@ fn upgrade_reference(
     }
     ins.iter()
         .filter_map(|&i| usable(i))
-        .max_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.0.cmp(&a.0))
-        })
+        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
         .map(|(i, _)| i)
 }
 
@@ -591,11 +587,7 @@ fn downgrade(
             .flatten()
             .copied()
             .filter(|&(_, _, is_in)| is_in || !only_in)
-            .max_by(|a, b| {
-                a.1.partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(b.0.cmp(&a.0))
-            })
+            .max_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
             .map(|(i, _, _)| i)
     };
     let reference = largest(true)

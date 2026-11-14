@@ -52,7 +52,8 @@ pub fn find_nearby_tracks(
     progress: &Progress<'_>,
 ) -> Result<NearbyTracks, NearbyTracksError>;
 // Label (checked first) | NoSuchImage | PixelOffImage | InputMismatch
-// | RowMismatch | NotAMatchingSource | Cancelled
+// | RowMismatch | NotAMatchingSource | Layers (a candidate the depth layers
+// refuse, which no finder gives) | Cancelled
 
 pub struct NearbyTrackSources<'a> {
     pub clusters: Option<&'a MatchesClusters>,      // the clusters source

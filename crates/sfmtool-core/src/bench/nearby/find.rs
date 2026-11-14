@@ -473,6 +473,9 @@ pub enum NearbyTracksError {
     /// [`NearbyTrackOptions::label`] is not one
     /// [`check_label`] accepts.
     Label(BenchError),
+    /// The depth layers refused a candidate the finders gave
+    /// ([`DepthLayerError::BadDistance`] or [`DepthLayerError::NanRange`]).
+    Layers(DepthLayerError),
     /// The progress handle was cancelled.
     Cancelled,
 }
@@ -514,6 +517,7 @@ impl std::fmt::Display for NearbyTracksError {
                 "{source} is not a matching source; the far-field sweep runs after them"
             ),
             Self::Label(e) => e.fmt(f),
+            Self::Layers(e) => e.fmt(f),
             Self::Cancelled => write!(f, "finding the nearby tracks was cancelled"),
         }
     }
@@ -598,6 +602,9 @@ impl From<DepthLayerError> for NearbyTracksError {
                 got: grey,
                 image_count,
             },
+            DepthLayerError::BadDistance { .. } | DepthLayerError::NanRange { .. } => {
+                Self::Layers(e)
+            }
         }
     }
 }

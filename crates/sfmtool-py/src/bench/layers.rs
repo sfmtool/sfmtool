@@ -145,8 +145,10 @@ impl Anchor {
 ///
 /// Raises:
 ///     ValueError: the image is not one of the reconstruction's, an anchor
-///         lacks a field or names an unknown source, or ``images`` does not
-///         match the reconstruction.
+///         lacks a field or names an unknown source, an anchor's
+///         ``distance_px`` is not finite and at least 0, a usable anchor's
+///         ``range`` has a NaN end, or ``images`` does not match the
+///         reconstruction.
 #[pyfunction]
 #[pyo3(signature = (edited, images, image, pixel, anchors, *, options = None))]
 pub(super) fn depth_layers(

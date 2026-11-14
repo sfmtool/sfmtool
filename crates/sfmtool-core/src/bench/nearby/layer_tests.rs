@@ -257,6 +257,51 @@ fn equal_near_ends_keep_the_order_given() {
     assert_eq!(members, vec![vec![2], vec![0, 1]]);
 }
 
+/// A candidate no finder gives, which a caller of the binding could hand in,
+/// is refused: a `distance_px` that is not finite and at least zero, or a
+/// usable class with a `NaN` range end. An unusable candidate's range is not
+/// read, so a `NaN` there is accepted.
+#[test]
+fn the_layers_refuse_a_candidate_no_finder_gives() {
+    let scene = Scene::from_centers(&CENTERS, PLANE);
+    let views = scene.views();
+    let grey = GreyImages::new(views.len());
+    let options = DepthLayerOptions {
+        evidence: false,
+        ..DepthLayerOptions::default()
+    };
+    let layers = |owned: &[Owned]| {
+        let candidates: Vec<LayerCandidate<'_>> = owned.iter().map(Owned::candidate).collect();
+        depth_layers(&views, &grey, 0, PIXEL, &candidates, &options)
+    };
+    let good = with_range(&[0, 1], [1.0, 1.5], BOUNDED);
+    for distance_px in [f64::NAN, f64::INFINITY, -2.0] {
+        let bad = Owned {
+            distance_px,
+            ..with_range(&[0, 2], [2.0, 2.5], BOUNDED)
+        };
+        let got = layers(&[with_range(&[0, 1], [1.0, 1.5], BOUNDED), bad]);
+        assert!(
+            matches!(got, Err(DepthLayerError::BadDistance { candidate: 1, .. })),
+            "{distance_px}: {got:?}"
+        );
+    }
+    for range in [[f64::NAN, 2.5], [2.0, f64::NAN]] {
+        let got = layers(&[
+            with_range(&[0, 1], [1.0, 1.5], BOUNDED),
+            with_range(&[0, 2], range, BOUNDED),
+        ]);
+        assert!(
+            matches!(got, Err(DepthLayerError::NanRange { candidate: 1, .. })),
+            "{range:?}: {got:?}"
+        );
+    }
+    let unusable = with_range(&[0, 2], [f64::NAN, f64::NAN], RangeClass::default());
+    let found = layers(&[good, unusable]).expect("an unusable range is not read");
+    let members: Vec<Vec<usize>> = found.layers.iter().map(|l| l.members.clone()).collect();
+    assert_eq!(members, vec![vec![0]]);
+}
+
 #[test]
 fn a_far_layer_is_read_from_infinity_in() {
     let d = layer_distances([10.0, f64::INFINITY], 5);
