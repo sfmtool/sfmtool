@@ -329,11 +329,13 @@ The check is made in two places, both in
 - **`require_version_2_workspace`** refuses a version 1 workspace for a command
   that does such work from a `.sfmr`'s `.sift` files, which it finds through
   the `.sfmr`'s own record rather than the workspace's settings. Each calls it
-  before any work: `sfm epipolar`, `sfm densify`, `sfm merge`,
-  `sfm to-colmap-db` from a `.sfmr`, `sfm undistort` and `sfm embed-patches`;
-  `sfm heatmap`, `sfm inspect --strips` and `sfm xform` for a `sift_files`
-  input, `sfm xform` whatever its steps, since several steps and the save read
-  its `.sift` files; and `sfm compare` for a `sift_files` input when it draws
+  before any work: `sfm epipolar`, in both its modes, `sfm densify`,
+  `sfm merge`, `sfm to-colmap-db` from a `.sfmr`, `sfm undistort` and
+  `sfm embed-patches`; `sfm heatmap`, `sfm inspect --strips`, `sfm xform` and
+  `sfm align` for a `sift_files` input, `sfm xform` whatever its steps, since
+  several steps and the save read its `.sift` files, and `sfm align` with
+  either method, since it transforms and saves the reconstructions as
+  `sfm xform` does; and `sfm compare` for a `sift_files` input when it draws
   `--strips` or matches points by coordinate, which it does with
   `--by-coordinate` and by default when the inputs share no `.sift` file. It
   makes that choice before any work; matching by feature index, its default
@@ -342,10 +344,14 @@ The check is made in two places, both in
 The commands that open the files they are given and write them out or report
 on them work in a version 1 workspace: `sfm inspect` of a `.sfmr`, `.matches`
 or `.sift` file, `sfm analyze`, `sfm explorer`, `sfm web-export`,
-`sfm to-colmap-bin` (which writes a `sift_files` reconstruction's keypoints
-from the `.sift` files it records), `sfm align`, `sfm estimate-intrinsics`
-(which reads a `.matches` file's image sizes) and `sfm cluster-patches` (which
-reads a `.matches` file and the photographs). `sfm inspect` of an image reports
+`sfm to-colmap-bin` and `sfm to-nerfstudio` (which write a `sift_files`
+reconstruction's keypoints from the `.sift` files it records),
+`sfm estimate-intrinsics` (which reads a `.matches` file's image sizes) and
+`sfm cluster-patches` (which reads a `.matches` file and the photographs).
+`sfm panorama`, `sfm render-patches` and `sfm motion` use neither the
+workspace's settings nor its `.sift` files: they read a `.sfmr`, an
+`embedded_patches` one for `sfm render-patches`, and the photographs, so they
+work too. `sfm inspect` of an image reports
 its readings as unavailable, with the refusal, since they are taken through the
 workspace's conversion. `sfm ws upgrade` and `sfm ws init --force` are what
 move a version 1 workspace to version 2.

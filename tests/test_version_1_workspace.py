@@ -50,6 +50,8 @@ def version_2_workspace(tmp_path_factory) -> Path:
         min_views=2,
     )
     assert recon == workspace / "recon.sfmr"
+    # A second name for it, for the commands that take two reconstructions.
+    shutil.copy(recon, workspace / "other.sfmr")
     result = _invoke(
         "match", "--exhaustive", "--output", workspace / "pairs.matches", images
     )
@@ -105,6 +107,9 @@ def _version_1_message(workspace: Path) -> str:
         ["to-colmap-db", "recon.sfmr", "out.db"],
         ["pick-images", "images"],
         ["epipolar", "recon.sfmr", "1", "2", "--draw", "epipolar.png"],
+        ["epipolar", "recon.sfmr", "--pairs-dir", "pairs"],
+        ["align", "recon.sfmr", "other.sfmr", "-o", "aligned"],
+        ["align", "recon.sfmr", "other.sfmr", "-o", "aligned", "--method", "cameras"],
         ["densify", "recon.sfmr", "densified.sfmr"],
         ["merge", "recon.sfmr", "recon.sfmr", "-o", "merged.sfmr"],
         ["xform", "recon.sfmr", "filtered.sfmr", "--remove-large-features", "50"],
@@ -144,7 +149,15 @@ def test_a_command_that_uses_the_workspace_refuses_version_1_before_any_work(
     result = CliRunner().invoke(main, command)
     assert result.exit_code != 0
     assert _version_1_message(workspace) in result.output + str(result.exception)
-    for step in ("[1/", "Rendering", "Undistorting", "Computing", "Building"):
+    for step in (
+        "[1/",
+        "Rendering",
+        "Undistorting",
+        "Computing",
+        "Building",
+        "Processing",
+        "Analyzing",
+    ):
         assert step not in result.output
     assert sorted(workspace.rglob("*")) == before
 
