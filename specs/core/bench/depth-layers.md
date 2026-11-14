@@ -39,7 +39,9 @@ pub fn depth_layers(
     pixel: [f64; 2],                 // the queried pixel
     candidates: &[LayerCandidate<'_>],
     options: &DepthLayerOptions,
-) -> Result<DepthLayers, DepthLayerError>; // NoSuchImage | GreyMismatch
+) -> Result<DepthLayers, DepthLayerError>;
+// NoSuchImage | GreyMismatch | BadDistance (a distance_px that is not finite
+// and at least 0) | NanRange (a usable candidate with a NaN range end)
 
 pub struct LayerCandidate<'a> {
     pub source: NearbySource,               // Points | Clusters | Guided | Constellation | FarField

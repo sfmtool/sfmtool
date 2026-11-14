@@ -228,6 +228,23 @@ def test_the_options_and_a_far_field_anchor(pyramids, query):
         bench.depth_layers(
             edited, pyramids, image, pixel, [dict(anchors[0], n_views=99)]
         )
+    for distance_px in (math.nan, math.inf, -2.0):
+        with pytest.raises(ValueError, match="candidate 0's distance_px"):
+            bench.depth_layers(
+                edited,
+                pyramids,
+                image,
+                pixel,
+                [dict(anchors[0], distance_px=distance_px)],
+            )
+    with pytest.raises(ValueError, match="candidate 0 is usable but its range"):
+        bench.depth_layers(
+            edited,
+            pyramids,
+            image,
+            pixel,
+            [dict(anchors[0], range=[math.nan, 2.0], bounded=True)],
+        )
     with pytest.raises(ValueError):
         bench.depth_layers(edited, pyramids, 99, pixel, anchors)
     assert bench.depth_layers(edited, pyramids, image, pixel, []) == {
