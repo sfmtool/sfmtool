@@ -27,8 +27,10 @@ use crate::patch::reference_view::{render_view_tile, ViewTile};
 use crate::patch::self_similarity::{
     zncc_self_similarity_radius, PatchTile, SelfSimilarityEllipse, SelfSimilarityParams,
 };
-use crate::patch::stored_bitmap::{stored_bitmap_planes, BitmapScorer};
-use crate::progress::{Cancelled, Progress};
+use crate::patch::stored_bitmap::{
+    check_cloud_render, stored_bitmap_planes, BitmapScorer, CloudRenderError,
+};
+use crate::progress::Progress;
 use crate::reconstruction::{
     observation_reading_options, ObservationReading, ObservationReadings, SfmrReconstruction,
 };
@@ -185,12 +187,11 @@ pub fn read_view_tile(
 ///
 /// # Errors
 ///
-/// [`Cancelled`] when `progress` was cancelled before every patch was read.
-///
-/// # Panics
-///
-/// Panics if `recon` carries no inline keypoints, or a track's image index is
-/// out of range for `views`.
+/// [`CloudRenderError::Cancelled`] when `progress` was cancelled before every
+/// patch was read. Before reading anything, the other [`CloudRenderError`]s
+/// when `recon` carries no inline keypoints, a patch of `cloud` has no point
+/// index or one out of range for `recon`, or `views` does not hold one entry
+/// per image of `recon`.
 pub fn read_cloud_observations(
     cloud: &PatchCloud,
     recon: &SfmrReconstruction,
@@ -199,10 +200,8 @@ pub fn read_cloud_observations(
     sampler: SamplerChoice,
     patches_done: Option<&AtomicUsize>,
     progress: &Progress<'_>,
-) -> Result<ObservationReadings, Cancelled> {
-    let keypoints = recon
-        .keypoints_xy()
-        .expect("read_cloud_observations needs a reconstruction with inline keypoints");
+) -> Result<ObservationReadings, CloudRenderError> {
+    let keypoints = check_cloud_render(cloud, recon, views.len())?;
     let set = &recon.point_set;
     let offsets = &set.observation_offsets;
     let bitmaps = set.patch_bitmaps_y_x_rgba.as_deref();

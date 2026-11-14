@@ -138,6 +138,19 @@ fn params() -> SpawnParams {
     }
 }
 
+/// [`spawn_candidate_tracks`] on requests the test knows are valid.
+fn spawn_valid(
+    views: &[ProjectedImage<'_>],
+    cloud: &PatchCloud,
+    parents: &[u32],
+    offsets_uv: &[[f64; 2]],
+    patch_views: &[Vec<u32>],
+    params: &SpawnParams,
+) -> SpawnedTracks {
+    spawn_candidate_tracks(views, cloud, parents, offsets_uv, patch_views, params)
+        .expect("the requests are valid")
+}
+
 /// `n` copies of the patch views `[0, 1, 2, 3]`.
 fn all_views(n: usize) -> Vec<Vec<u32>> {
     vec![vec![0, 1, 2, 3]; n]
@@ -160,7 +173,7 @@ fn candidate_on_the_textured_plane_spawns() {
     // the plane, and pass every gate.
     let scene = scene();
     let cloud = parent_cloud();
-    let out = spawn_candidate_tracks(
+    let out = spawn_valid(
         &scene.views(),
         &cloud,
         &[0],
@@ -198,7 +211,7 @@ fn candidate_pushed_off_every_image_is_too_few_views() {
     // the localizer keeps nothing.
     let scene = scene();
     let cloud = parent_cloud();
-    let out = spawn_candidate_tracks(
+    let out = spawn_valid(
         &scene.views(),
         &cloud,
         &[0],
@@ -226,7 +239,7 @@ fn candidate_pushed_off_every_image_is_too_few_views() {
 fn empty_patch_views_are_too_few_views() {
     let scene = scene();
     let cloud = parent_cloud();
-    let out = spawn_candidate_tracks(
+    let out = spawn_valid(
         &scene.views(),
         &cloud,
         &[0],
@@ -249,7 +262,7 @@ fn min_views_floor_above_the_survivors_kills_the_candidate() {
         min_views: 5,
         ..params()
     };
-    let out = spawn_candidate_tracks(
+    let out = spawn_valid(
         &scene.views(),
         &cloud,
         &[0],
@@ -270,7 +283,7 @@ fn unreachable_reprojection_gate_reports_high_reproj() {
     let scene = scene();
     let views = scene.views();
     let cloud = parent_cloud();
-    let baseline = spawn_candidate_tracks(
+    let baseline = spawn_valid(
         &views,
         &cloud,
         &[0],
@@ -288,7 +301,7 @@ fn unreachable_reprojection_gate_reports_high_reproj() {
         max_reproj_rms_px: achieved / 10.0,
         ..params()
     };
-    let out = spawn_candidate_tracks(&views, &cloud, &[0], &[[2.0, 0.0]], &all_views(1), &strict);
+    let out = spawn_valid(&views, &cloud, &[0], &[[2.0, 0.0]], &all_views(1), &strict);
 
     assert_eq!(out.status[0], SpawnStatus::HighReproj as u8);
     assert!(out.positions[0].iter().all(|c| c.is_nan()));
@@ -308,7 +321,7 @@ fn discrete_only_still_spawns() {
         refine_subpixel: false,
         ..params()
     };
-    let out = spawn_candidate_tracks(
+    let out = spawn_valid(
         &scene.views(),
         &cloud,
         &[0],
@@ -332,11 +345,10 @@ fn batched_candidates_match_the_same_candidates_spawned_alone() {
     let offsets = [[2.0, 0.0], [-2.0, 0.5], [0.0, 2.0], [1.5, -1.5]];
     let parents = [0u32; 4];
 
-    let batched =
-        spawn_candidate_tracks(&views, &cloud, &parents, &offsets, &all_views(4), &params());
+    let batched = spawn_valid(&views, &cloud, &parents, &offsets, &all_views(4), &params());
 
     for (i, off) in offsets.iter().enumerate() {
-        let alone = spawn_candidate_tracks(
+        let alone = spawn_valid(
             &views,
             &cloud,
             &[0],
@@ -373,7 +385,7 @@ fn csr_bookkeeping_is_consistent() {
     let scene = scene();
     let cloud = parent_cloud();
     let offsets = [[2.0, 0.0], [400.0, 400.0], [0.0, -2.0]];
-    let out = spawn_candidate_tracks(
+    let out = spawn_valid(
         &scene.views(),
         &cloud,
         &[0, 0, 0],
@@ -413,9 +425,64 @@ fn csr_bookkeeping_is_consistent() {
 fn empty_batch_returns_an_empty_csr() {
     let scene = scene();
     let cloud = parent_cloud();
-    let out = spawn_candidate_tracks(&scene.views(), &cloud, &[], &[], &[], &params());
+    let out = spawn_valid(&scene.views(), &cloud, &[], &[], &[], &params());
 
     assert!(out.is_empty());
     assert_eq!(out.obs_offsets, vec![0]);
     assert!(out.obs_view_indexes.is_empty());
+}
+
+/// Each malformed batch is refused with the error naming what is wrong,
+/// rather than panicking or spawning anything.
+#[test]
+fn malformed_requests_are_refused() {
+    let scene = scene();
+    let views = scene.views();
+    let mut cloud = parent_cloud();
+    let mut infinity = cloud.patch(0).clone();
+    infinity.w = 0.0;
+    cloud.patches.push(infinity);
+    cloud.point_indexes.push(1);
+    let refuse = |parents: &[u32], offsets: &[[f64; 2]], patch_views: &[Vec<u32>]| {
+        spawn_candidate_tracks(&views, &cloud, parents, offsets, patch_views, &params())
+            .expect_err("the batch is malformed")
+    };
+    assert_eq!(
+        refuse(&[0], &[[1.0, 0.0], [2.0, 0.0]], &all_views(1)),
+        SpawnError::OffsetsLength {
+            offsets: 2,
+            parents: 1
+        }
+    );
+    assert_eq!(
+        refuse(&[0], &[[1.0, 0.0]], &all_views(2)),
+        SpawnError::PatchViewsLength {
+            patch_views: 2,
+            parents: 1
+        }
+    );
+    assert_eq!(
+        refuse(&[0, 7], &[[1.0, 0.0]; 2], &all_views(2)),
+        SpawnError::ParentOutOfRange {
+            parent: 7,
+            patches: 2
+        }
+    );
+    assert_eq!(
+        refuse(&[1], &[[1.0, 0.0]], &all_views(1)),
+        SpawnError::ParentAtInfinity { parent: 1 }
+    );
+    let n_views = views.len();
+    assert_eq!(
+        refuse(
+            &[0, 0],
+            &[[1.0, 0.0]; 2],
+            &[vec![0], vec![1, n_views as u32]]
+        ),
+        SpawnError::ViewOutOfRange {
+            candidate: 1,
+            view: n_views as u32,
+            views: n_views
+        }
+    );
 }

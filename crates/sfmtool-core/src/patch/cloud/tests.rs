@@ -1213,6 +1213,162 @@ fn from_tracks_builds_infinity_tangent_frames() {
     assert_eq!(finite_only.point_indexes, vec![0]);
 }
 
+/// Each array that disagrees with the others is refused with the error that
+/// names it, rather than indexed past its end.
+#[test]
+fn from_tracks_refuses_arrays_that_disagree() {
+    let positions = vec![Point3::new(0.0, 0.0, -3.0), Point3::new(0.5, 0.0, -3.0)];
+    let weights = vec![1.0, 1.0];
+    let normals = vec![Vector3::z(); 2];
+    let obs_offsets = vec![0usize, 1, 2];
+    let obs_images = vec![0u32, 0];
+    let scales = vec![2.0; 2];
+    let quats = vec![UnitQuaternion::identity()];
+    let trans = vec![Vector3::zeros()];
+    let cams = vec![pinhole(500.0, 320.0, 240.0, 640, 480)];
+    struct Input<'a> {
+        weights: &'a [f64],
+        normals: &'a [Vector3<f64>],
+        obs_offsets: &'a [usize],
+        obs_images: &'a [u32],
+        scales: &'a [f64],
+        trans: &'a [Vector3<f64>],
+        cams: &'a [CameraIntrinsics],
+    }
+    let valid = Input {
+        weights: &weights,
+        normals: &normals,
+        obs_offsets: &obs_offsets,
+        obs_images: &obs_images,
+        scales: &scales,
+        trans: &trans,
+        cams: &cams,
+    };
+    let build = |input: Input<'_>| {
+        PatchCloud::from_tracks(
+            &positions,
+            input.weights,
+            Some(input.normals),
+            input.obs_offsets,
+            input.obs_images,
+            Some(input.scales),
+            &quats,
+            input.trans,
+            input.cams,
+            PatchNormal::Stored,
+            PatchExtent::FeatureSize {
+                factor: 1.0,
+                across: ViewReduce::Median,
+            },
+            false,
+            &Progress::none(),
+        )
+    };
+    let length = |input: Input<'_>| match build(input) {
+        Err(PatchCloudError::InputLength {
+            what,
+            expected,
+            got,
+        }) => (what, expected, got),
+        other => panic!("expected an InputLength error, got {other:?}"),
+    };
+    let offsets = |input: Input<'_>| match build(input) {
+        Err(PatchCloudError::ObservationOffsets { point_index, .. }) => point_index,
+        other => panic!("expected an ObservationOffsets error, got {other:?}"),
+    };
+
+    assert_eq!(
+        build(Input { ..valid })
+            .expect("the valid arrays build")
+            .len(),
+        2
+    );
+    let one_weight = [1.0];
+    assert_eq!(
+        length(Input {
+            weights: &one_weight,
+            ..valid
+        }),
+        ("per-point weights", 2, 1)
+    );
+    let three_normals = [Vector3::z(); 3];
+    assert_eq!(
+        length(Input {
+            normals: &three_normals,
+            ..valid
+        }),
+        ("per-point stored normals", 2, 3)
+    );
+    let short_offsets = [0usize, 2];
+    assert_eq!(
+        length(Input {
+            obs_offsets: &short_offsets,
+            ..valid
+        }),
+        ("observation offsets", 3, 2)
+    );
+    let one_scale = [2.0];
+    assert_eq!(
+        length(Input {
+            scales: &one_scale,
+            ..valid
+        }),
+        ("per-observation keypoint scales", 2, 1)
+    );
+    let two_trans = [Vector3::zeros(); 2];
+    assert_eq!(
+        length(Input {
+            trans: &two_trans,
+            ..valid
+        }),
+        ("per-image camera translations", 1, 2)
+    );
+    let no_cams: [CameraIntrinsics; 0] = [];
+    assert_eq!(
+        length(Input {
+            cams: &no_cams,
+            ..valid
+        }),
+        ("per-image cameras", 1, 0)
+    );
+    let late_start = [1usize, 1, 2];
+    assert_eq!(
+        offsets(Input {
+            obs_offsets: &late_start,
+            ..valid
+        }),
+        0
+    );
+    let falling = [0usize, 2, 1];
+    assert_eq!(
+        offsets(Input {
+            obs_offsets: &falling,
+            ..valid
+        }),
+        1
+    );
+    let short_end = [0usize, 1, 1];
+    assert_eq!(
+        offsets(Input {
+            obs_offsets: &short_end,
+            ..valid
+        }),
+        1
+    );
+    let past_the_views = [0u32, 1];
+    match build(Input {
+        obs_images: &past_the_views,
+        ..valid
+    }) {
+        Err(PatchCloudError::ImageIndexOutOfRange {
+            observation,
+            image_index,
+            images,
+        }) => assert_eq!((observation, image_index, images), (1, 1, 1)),
+        other => panic!("expected an ImageIndexOutOfRange error, got {other:?}"),
+    }
+}
+
 #[test]
 fn from_tracks_pixel_radius_reads_the_view_camera_model() {
     // `PixelRadius` sizes a finite patch so it subtends `radius_px` at the

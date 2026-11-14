@@ -12,12 +12,15 @@ use pyo3::prelude::*;
 use sfmtool_core::patch::keypoint_subpixel::KeypointSubpixelParams;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::patch::observation_reading::read_cloud_observations;
-use sfmtool_core::patch::stored_bitmap::{render_patch_cloud_bitmaps, UnreferencedPoints};
+use sfmtool_core::patch::stored_bitmap::{
+    check_cloud_render, render_patch_cloud_bitmaps, UnreferencedPoints,
+};
 use sfmtool_core::progress::Progress;
 
 use super::args::parse_sampler;
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_patch_reconstruction, resolve_pyramids};
+use crate::helpers::value_err;
 use crate::ProgressCounter;
 
 /// The bitmap column and the reference observation of each point.
@@ -101,17 +104,14 @@ impl PyPatchCloud {
         let (posed, recon_guard) =
             resolve_patch_reconstruction(recon, &self.inner, "render_bitmaps")?;
         let recon = recon_guard.inner();
-        if recon.keypoints_xy().is_none() {
-            return Err(PyValueError::new_err(
-                "render_bitmaps needs the per-observation keypoints an embedded_patches \
-                 reconstruction stores (run `sfm xform --to-embedded-patches` first)",
-            ));
-        }
         let params = KeypointSubpixelParams {
             resolution,
             sampler: parse_sampler(sampler)?,
             ..Default::default()
         };
+        // Refuse a reconstruction without inline keypoints before building the
+        // pyramids; core checks it again.
+        check_cloud_render(&self.inner, recon, posed.len()).map_err(value_err)?;
         let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
         let views: Vec<Option<ProjectedImage<'_>>> = (0..posed.len())
@@ -140,7 +140,7 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .expect("nothing cancels a render given no cancel flag");
+            .map_err(value_err)?;
         Ok((
             column.bitmaps.into_pyarray(py),
             PyArray1::from_vec(py, column.reference_observations),
@@ -197,13 +197,10 @@ impl PyPatchCloud {
         let (posed, recon_guard) =
             resolve_patch_reconstruction(recon, &self.inner, "read_observations")?;
         let recon = recon_guard.inner();
-        if recon.keypoints_xy().is_none() {
-            return Err(PyValueError::new_err(
-                "read_observations needs the per-observation keypoints an embedded_patches \
-                 reconstruction stores",
-            ));
-        }
         let sampler = parse_sampler(sampler)?;
+        // Refuse a reconstruction without inline keypoints before building the
+        // pyramids; core checks it again.
+        check_cloud_render(&self.inner, recon, posed.len()).map_err(value_err)?;
         let pyramid_set = resolve_pyramids(&posed, images)?;
         let pyramids = pyramid_set.as_slice();
         let views: Vec<Option<ProjectedImage<'_>>> = (0..posed.len())
@@ -228,7 +225,7 @@ impl PyPatchCloud {
                     &Progress::none(),
                 )
             })
-            .expect("nothing cancels a reading given no cancel flag");
+            .map_err(value_err)?;
         crate::readings::readings_to_py(py, &readings)
     }
 }

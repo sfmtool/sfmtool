@@ -106,7 +106,7 @@ pub fn spawn_candidate_tracks(
     offsets_uv: &[[f64; 2]],          // per candidate (du, dv)
     patch_views: &[Vec<u32>],         // per candidate
     params: &SpawnParams,
-) -> SpawnedTracks
+) -> Result<SpawnedTracks, SpawnError>
 ```
 
 `SpawnedTracks`, parallel over candidates with CSR observations:
@@ -125,14 +125,21 @@ pub fn spawn_candidate_tracks(
   (`(n_obs, 2)` f64) — the surviving observations of every candidate that
   reached triangulation, in view-index order.
 
+Before spawning anything, the call checks the batch and returns a `SpawnError`
+for an `offsets_uv` or `patch_views` whose length differs from `parents`
+(`OffsetsLength`, `PatchViewsLength`), a parent index out of range for the
+cloud (`ParentOutOfRange`), a parent at infinity (`ParentAtInfinity`), and a
+patch view out of range for `views` (`ViewOutOfRange`). `check_spawn_requests`
+runs the same checks alone, so the binding refuses a malformed batch before it
+builds the image pyramids.
+
 The Python binding (`views, images, cloud, parents, offsets_uv, patch_views`)
 takes the existing `CameraViews` / `ImagePyramidSet` / `PatchCloud` objects —
 or, like its sibling patch kernels, a reconstruction and a list of images —
 plus numpy arrays (`patch_views` as a list of sequences), keyword params with the
 defaults above, and returns the result arrays as a dict keyed as above. It
-raises `ValueError` for a parent index out of range, a parent at infinity, an
-`offsets_uv` / `patch_views` length or shape mismatch, and a view index out of
-range for the scene.
+raises `ValueError` for an `offsets_uv` that is not `(n, 2)` and for each
+`SpawnError`, with the error's message.
 
 ### Seeding localization with `patch_keypoints`
 
