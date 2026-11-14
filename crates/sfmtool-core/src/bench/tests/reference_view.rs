@@ -31,7 +31,7 @@ use crate::patch::reference_view::{
     finite_middle, render_view_tile, ReferenceExclusion, ReferenceViewOptions, ViewTile,
 };
 use crate::patch::self_similarity::{
-    zncc_self_similarity_parts, PatchTile, SelfSimilarityEllipseUnits, SelfSimilarityParams,
+    zncc_self_similarity_parts, InterleavedTile, SelfSimilarityEllipseUnits, SelfSimilarityParams,
 };
 use crate::patch::stored_bitmap::{bitmap_from_tile, bitmap_planes, BitmapScorer};
 use crate::patch::stored_bitmap::{render_patch_bitmap, render_reference};
@@ -220,7 +220,7 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             .collect();
         let channels = view.pyramid.level(0).channels() as usize;
         let samples = Array3::from_shape_fn((resolution, resolution, channels), |(r, c, k)| {
-            if k >= 3 {
+            if k >= 3 || (channels == 2 && k == 1) {
                 u8::MAX
             } else if rendered.channels() >= 3 {
                 rendered.get_pixel(c as u32, r as u32, k as u32)
@@ -229,16 +229,10 @@ fn the_shared_tile_leaves_the_self_similarity_readings_as_a_direct_render_gives_
             }
         });
         let values: Vec<f32> = samples.iter().map(|&v| f32::from(v)).collect();
-        let (planes, colour) =
-            PatchTile::planes_from_interleaved(&values, resolution, resolution, channels);
-        let tile = PatchTile {
-            values: &planes,
-            channels: colour,
-            width: resolution,
-            height: resolution,
-        };
+        let tile =
+            InterleavedTile::new(&values, resolution, resolution, channels, Some(&valid)).unwrap();
         let parts =
-            zncc_self_similarity_parts(&tile, Some(&valid), &SelfSimilarityParams::default());
+            zncc_self_similarity_parts(&tile.tile(), tile.data(), &SelfSimilarityParams::default());
         let ellipse = SelfSimilarityEllipseUnits::read(
             &parts.whole,
             jacobian,

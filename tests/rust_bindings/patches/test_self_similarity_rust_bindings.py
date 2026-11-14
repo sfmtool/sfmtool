@@ -121,6 +121,25 @@ def test_samples_with_alpha_zero_carry_no_data():
     assert not none["ellipse_axes_is_at_least"].any()
 
 
+def test_grey_and_alpha_reads_as_rgb_and_alpha():
+    # The second of two channels is alpha, as the fourth of four is: a grey
+    # tile with alpha 0 on 7 of its 15 columns reads the same either way.
+    rng = np.random.default_rng(5)
+    grey = rng.integers(0, 256, size=(15, 15, 1), dtype=np.uint8)
+    alpha = np.full((15, 15, 1), 255, np.uint8)
+    alpha[:, :7] = 0
+    two = np.concatenate([grey, alpha], axis=2)
+    four = np.concatenate([grey, grey, grey, alpha], axis=2)
+    a = zncc_self_similarity_parts(two)
+    b = zncc_self_similarity_parts(four)
+    assert np.isfinite(a["radius"])
+    # Averaging three equal channels can round in the last bits.
+    assert a["radius"] == pytest.approx(b["radius"], rel=1e-12)
+    np.testing.assert_allclose(a["radius_grid"], b["radius_grid"], rtol=1e-12)
+    stacked = zncc_self_similarity_parts_stack(two[None])
+    assert stacked["radius"][0] == a["radius"]
+
+
 def test_one_bitmap_reads_as_it_does_in_a_stack():
     rng = np.random.default_rng(4)
     stack = rng.integers(0, 256, size=(3, R, R, 4), dtype=np.uint8)

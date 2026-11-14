@@ -246,6 +246,8 @@ All 16 files (4,369 lines) were read in full, with Python probes against the reb
 - Effort: low.
 - Risk: medium — the radii of 2-channel inputs change.
 
+> _Status (2026-11-13): **Done** — core `InterleavedTile::new` splits an interleaved tile into colour planes and data flags by one rule (two channels grey and alpha, four RGB and alpha, `valid` flags combined with alpha) and returns `InterleavedTileError` for a bad shape; `planes_from_interleaved` and `data_from_interleaved`, with their `# Panics`, are gone. Both bindings read tiles through it via shared `check_square_tile` / `square_tile` helpers in `patches/args.rs`, and the u8/f32 extraction is one `grey_levels` helper. The bench, the reference-view rule and cluster refinement's member gate use it too, and `render_view_tile` makes the second of two channels opaque alpha to match. A 2-channel tile now reads the same radius as the 4-channel tile with its grey in each colour channel (core and binding tests), branch `hyg-fix2-1113-02-tile-alpha-rule`._
+
 **Move the spherical-tile bindings to `sfmtool.spherical`**
 - Location: `consensus_atlas.rs`, `photometric_ransac.rs` (322 lines), registered at `patches/mod.rs:43-51`.
 - Problem: both bind `sfmtool_core::spherical::*`, take `PySphericalTileRig` / `PyPerSphericalTileSourceStack` from `crate::spherical`, and are specified under `specs/core/spherical/`, yet are exported as `sfmtool.patches.*` (callers: `src/sfmtool/rig/panorama.py:24` and two tests in `tests/patch/`). `bool_array` (`photometric_ransac.rs:87-96`) goes through a u8 view as there is "no direct bool ctor", while `blur_matched.rs:444` returns `Array1<bool>` directly.

@@ -57,7 +57,7 @@ use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, PartZncc, Support, FLAT_NORM_SQ_EPS,
 };
 use crate::patch::self_similarity::{
-    zncc_self_similarity_parts, zncc_self_similarity_radius, PatchTile, SelfSimilarityParams,
+    zncc_self_similarity_parts, zncc_self_similarity_radius, InterleavedTile, SelfSimilarityParams,
     SelfSimilarityParts,
 };
 use crate::patch::view_selection::AffineCoreMap;
@@ -374,8 +374,9 @@ pub fn sample_member_grid(
 /// shift only the samples both windows hold are correlated, so the reading
 /// depends on no pixel outside the grid. This is the number
 /// [`ClusterRefineParams::max_member_zncc_self_similarity_radius`] judges.
-/// Only the leading three channels are read, as a patch tile's colour. `None`
-/// where the grid cannot be sampled.
+/// The channels are read by [`InterleavedTile`]'s rule: a second or fourth
+/// channel is the image's alpha, and a sample where it is 0 carries no data.
+/// `None` where the grid cannot be sampled.
 pub fn member_zncc_self_similarity_radius(
     pyramid: &ImageU8Pyramid,
     position: [f64; 2],
@@ -397,7 +398,8 @@ pub fn member_zncc_self_similarity_radius(
 /// `whole` is the template [`member_zncc_self_similarity_radius`] reads, read
 /// with the parts' shared sums, so the two can differ in the last bits; the
 /// gates judge the whole grid by [`member_zncc_self_similarity_radius`]'s
-/// reading. `None` where the grid cannot be sampled, or has no channels.
+/// reading. `None` where the grid cannot be sampled, or has a channel count
+/// [`InterleavedTile`] refuses.
 pub fn member_zncc_self_similarity_parts(
     pyramid: &ImageU8Pyramid,
     position: [f64; 2],
@@ -408,48 +410,36 @@ pub fn member_zncc_self_similarity_parts(
     grid_self_similarity_parts(&samples, params.resolution.max(2) as usize)
 }
 
+/// An interleaved `R×R×C` grid from [`sample_member_grid`] read by
+/// [`InterleavedTile`]'s channel rule; `None` for a grid of a channel count
+/// that rule refuses.
+fn grid_tile(samples: &[f32], resolution: usize) -> Option<InterleavedTile> {
+    let channels = samples.len() / (resolution * resolution);
+    InterleavedTile::new(samples, resolution, resolution, channels, None).ok()
+}
+
 /// The overlap reading of an interleaved `R×R×C` grid from
 /// [`sample_member_grid`] as a whole, its middle and its nine cells; `None`
-/// for a grid with no channels.
+/// for a grid of a channel count [`InterleavedTile`] refuses.
 fn grid_self_similarity_parts(samples: &[f32], resolution: usize) -> Option<SelfSimilarityParts> {
-    let channels = samples.len() / (resolution * resolution);
-    if channels == 0 {
-        return None;
-    }
-    let (planes, colour) =
-        PatchTile::planes_from_interleaved(samples, resolution, resolution, channels);
-    let tile = PatchTile {
-        values: &planes,
-        channels: colour,
-        width: resolution,
-        height: resolution,
-    };
+    let tile = grid_tile(samples, resolution)?;
     Some(zncc_self_similarity_parts(
-        &tile,
-        None,
+        &tile.tile(),
+        tile.data(),
         &SelfSimilarityParams::default(),
     ))
 }
 
 /// The overlap reading's ZNCC self-similarity radius of an interleaved
-/// `R×R×C` grid from [`sample_member_grid`]; `NaN` for a grid with no
-/// channels.
+/// `R×R×C` grid from [`sample_member_grid`]; `NaN` for a grid of a channel
+/// count [`InterleavedTile`] refuses.
 fn grid_self_similarity_radius(samples: &[f32], resolution: usize) -> f64 {
-    let channels = samples.len() / (resolution * resolution);
-    if channels == 0 {
+    let Some(tile) = grid_tile(samples, resolution) else {
         return f64::NAN;
-    }
-    let (planes, colour) =
-        PatchTile::planes_from_interleaved(samples, resolution, resolution, channels);
-    let tile = PatchTile {
-        values: &planes,
-        channels: colour,
-        width: resolution,
-        height: resolution,
     };
     zncc_self_similarity_radius(
-        &tile,
-        None,
+        &tile.tile(),
+        tile.data(),
         [0, 0, resolution, resolution],
         &SelfSimilarityParams::default(),
     )

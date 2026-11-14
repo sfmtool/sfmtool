@@ -509,16 +509,14 @@ fn the_member_gate_reads_the_zncc_self_similarity_radius() {
     let pyr = pyramid(&make_image(128, 128, texture));
     let grid = sample_member_grid(&pyr, [64.0, 64.0], a, &params).unwrap();
     let r = params.resolution as usize;
-    let (planes, colour) = PatchTile::planes_from_interleaved(&grid, r, r, grid.len() / (r * r));
-    let tile = PatchTile {
-        values: &planes,
-        channels: colour,
-        width: r,
-        height: r,
-    };
-    let want =
-        zncc_self_similarity_radius(&tile, None, [0, 0, r, r], &SelfSimilarityParams::default())
-            .radius;
+    let tile = InterleavedTile::new(&grid, r, r, grid.len() / (r * r), None).unwrap();
+    let want = zncc_self_similarity_radius(
+        &tile.tile(),
+        None,
+        [0, 0, r, r],
+        &SelfSimilarityParams::default(),
+    )
+    .radius;
     assert_eq!(textured.to_bits(), want.to_bits());
 }
 
@@ -563,16 +561,9 @@ fn the_member_gate_reads_no_pixel_outside_the_member_grid() {
     };
     let grid = sample_member_grid(&pyramid(&surrounded), [64.0, 64.0], a, &wide_params)
         .expect("the wider grid can be sampled");
-    let (planes, colour) =
-        PatchTile::planes_from_interleaved(&grid, wide, wide, grid.len() / (wide * wide));
-    let tile = PatchTile {
-        values: &planes,
-        channels: colour,
-        width: wide,
-        height: wide,
-    };
+    let tile = InterleavedTile::new(&grid, wide, wide, grid.len() / (wide * wide), None).unwrap();
     let ringed = zncc_self_similarity_radius(
-        &tile,
+        &tile.tile(),
         None,
         [r, r, resolution, resolution],
         &SelfSimilarityParams::default(),

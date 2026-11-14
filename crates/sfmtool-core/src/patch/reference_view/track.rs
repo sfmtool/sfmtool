@@ -11,7 +11,9 @@ use crate::camera::sampler::SamplerChoice;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::member_coherence::{member_zncc_matrix_reporting, MemberCoherenceParams};
 use crate::patch::normal_refine::ProjectedImage;
-use crate::patch::self_similarity::{zncc_self_similarity_parts, PatchTile, SelfSimilarityParams};
+use crate::patch::self_similarity::{
+    zncc_self_similarity_parts, InterleavedTile, SelfSimilarityParams,
+};
 use crate::progress::Progress;
 
 /// What the reference-view rule read across one track's views, and what it
@@ -80,24 +82,26 @@ pub fn tile_max_radius() -> f64 {
 /// over its samples on the photograph with the default parameters in one
 /// call ([`zncc_self_similarity_parts`]): the readings the bench takes of each
 /// view's tile, whose whole one the rule reads as its radius and whose cells
-/// the cell check reads for texture. `None` for a tile under 3 a side.
+/// the cell check reads for texture. The channels are read by
+/// [`InterleavedTile`]'s rule. `None` for a tile under 3 a side or of a
+/// channel count that rule refuses.
 pub fn tile_semi_axes(tile: &ViewTile) -> Option<TileSemiAxes> {
     let resolution = tile.resolution();
-    let channels = tile.channels();
-    if channels == 0 || resolution < 3 {
+    if resolution < 3 {
         return None;
     }
     let samples: Vec<f32> = tile.samples.iter().map(|&v| f32::from(v)).collect();
-    let (planes, colour) =
-        PatchTile::planes_from_interleaved(&samples, resolution, resolution, channels);
-    let parts = zncc_self_similarity_parts(
-        &PatchTile {
-            values: &planes,
-            channels: colour,
-            width: resolution,
-            height: resolution,
-        },
+    let planes = InterleavedTile::new(
+        &samples,
+        resolution,
+        resolution,
+        tile.channels(),
         Some(&tile.valid),
+    )
+    .ok()?;
+    let parts = zncc_self_similarity_parts(
+        &planes.tile(),
+        planes.data(),
         &SelfSimilarityParams::default(),
     );
     Some(TileSemiAxes {

@@ -14,8 +14,26 @@ use pyo3::types::PyDict;
 use rayon::prelude::*;
 
 use sfmtool_core::patch::self_similarity::{
-    zncc_self_similarity_parts as core_parts, PatchTile, SelfSimilarityParams, SelfSimilarityParts,
+    zncc_self_similarity_parts as core_parts, SelfSimilarityParams, SelfSimilarityParts,
 };
+
+use super::args::{check_square_tile, square_tile};
+
+/// A uint8 or float32 array's values, in grey levels, as `f32`, row-major,
+/// and its shape. `what` names the argument in the message.
+fn grey_levels(array: &Bound<'_, PyAny>, what: &str) -> PyResult<(Vec<f32>, Vec<usize>)> {
+    if let Ok(array) = array.extract::<PyReadonlyArrayDyn<'_, u8>>() {
+        let values = array.as_array().iter().map(|&v| f32::from(v)).collect();
+        Ok((values, array.shape().to_vec()))
+    } else if let Ok(array) = array.extract::<PyReadonlyArrayDyn<'_, f32>>() {
+        let values = array.as_array().iter().copied().collect();
+        Ok((values, array.shape().to_vec()))
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{what} must be a uint8 or float32 numpy array"
+        )))
+    }
+}
 
 /// The ZNCC self-similarity radius of one ``R x R`` bitmap: how far, in
 /// bitmap pixels, it can slide over itself by whole pixels and still match
@@ -35,9 +53,9 @@ use sfmtool_core::patch::self_similarity::{
 ///
 /// Args:
 ///     bitmap: An ``(R, R)`` single-channel bitmap or an ``(R, R, C)`` patch,
-///         uint8 or float32, in grey levels. A fourth channel is read as
-///         alpha: a sample whose alpha is 0 carries no data. Without one, every
-///         sample carries data.
+///         uint8 or float32, in grey levels. One channel is grey, two grey
+///         and alpha, three RGB and four RGB and alpha. A sample whose alpha
+///         is 0 carries no data; without alpha, every sample carries data.
 ///     max_radius: ``r``, the length of the largest shift searched, in bitmap
 ///         pixels.
 ///     relative_tolerance: The ZNCC deficit two views of the same surface
@@ -77,19 +95,7 @@ pub fn zncc_self_similarity_parts<'py>(
     relative_tolerance: f64,
     noise: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let (values, shape) = if let Ok(array) = bitmap.extract::<PyReadonlyArrayDyn<'py, u8>>() {
-        let shape = array.shape().to_vec();
-        let values: Vec<f32> = array.as_array().iter().map(|&v| f32::from(v)).collect();
-        (values, shape)
-    } else if let Ok(array) = bitmap.extract::<PyReadonlyArrayDyn<'py, f32>>() {
-        let shape = array.shape().to_vec();
-        let values: Vec<f32> = array.as_array().iter().copied().collect();
-        (values, shape)
-    } else {
-        return Err(PyValueError::new_err(
-            "bitmap must be a uint8 or float32 numpy array",
-        ));
-    };
+    let (values, shape) = grey_levels(bitmap, "bitmap")?;
     let (height, width, channels) = match shape.as_slice() {
         [h, w] => (*h, *w, 1),
         [h, w, c] => (*h, *w, *c),
@@ -99,32 +105,13 @@ pub fn zncc_self_similarity_parts<'py>(
             )))
         }
     };
-    if !(1..=4).contains(&channels) {
-        return Err(PyValueError::new_err(format!(
-            "bitmap must have 1 to 4 channels, got {channels}"
-        )));
-    }
-    if height != width || width < 3 {
-        return Err(PyValueError::new_err(format!(
-            "bitmap must be square and at least 3 x 3, got {height} x {width}"
-        )));
-    }
+    let tile = square_tile("bitmap", &values, [height, width, channels], None)?;
     let params = SelfSimilarityParams {
         max_radius,
         relative_tolerance,
         noise,
     };
-    let parts = py.detach(|| {
-        let (planes, colour) = PatchTile::planes_from_interleaved(&values, width, height, channels);
-        let data = PatchTile::data_from_interleaved(&values, width, height, channels);
-        let tile = PatchTile {
-            values: &planes,
-            channels: colour,
-            width,
-            height,
-        };
-        core_parts(&tile, data.as_deref(), &params)
-    });
+    let parts = py.detach(|| core_parts(&tile.tile(), tile.data(), &params));
     let grid = |f: &dyn Fn(usize, usize) -> f64| Array2::from_shape_fn((3, 3), |(r, c)| f(r, c));
     let out = PyDict::new(py);
     out.set_item("radius", parts.whole.radius)?;
@@ -188,9 +175,9 @@ pub fn zncc_self_similarity_parts<'py>(
 ///
 /// Args:
 ///     bitmaps: An ``(N, R, R, C)`` uint8 or float32 stack, in grey levels,
-///         such as ``recon.patch_bitmaps``. A fourth channel is read as alpha:
-///         a sample whose alpha is 0 carries no data. Without one, every sample
-///         carries data.
+///         such as ``recon.patch_bitmaps``. Channels are read as for
+///         ``zncc_self_similarity_parts``: two are grey and alpha, four RGB
+///         and alpha, and a sample whose alpha is 0 carries no data.
 ///     max_radius: ``r``, the length of the largest shift searched, in bitmap
 ///         pixels.
 ///     relative_tolerance: The ZNCC deficit two views of the same surface
@@ -222,59 +209,30 @@ pub fn zncc_self_similarity_parts_stack<'py>(
     relative_tolerance: f64,
     noise: f64,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let (values, shape) = if let Ok(array) = bitmaps.extract::<PyReadonlyArrayDyn<'py, u8>>() {
-        let shape = array.shape().to_vec();
-        let values: Vec<f32> = array.as_array().iter().map(|&v| f32::from(v)).collect();
-        (values, shape)
-    } else if let Ok(array) = bitmaps.extract::<PyReadonlyArrayDyn<'py, f32>>() {
-        let shape = array.shape().to_vec();
-        let values: Vec<f32> = array.as_array().iter().copied().collect();
-        (values, shape)
-    } else {
-        return Err(PyValueError::new_err(
-            "bitmaps must be a uint8 or float32 numpy array",
-        ));
-    };
+    let (values, shape) = grey_levels(bitmaps, "bitmaps")?;
     let [n, height, width, channels] = shape.as_slice() else {
         return Err(PyValueError::new_err(format!(
             "bitmaps must be (N, R, R, C), got shape {shape:?}"
         )));
     };
     let (n, height, width, channels) = (*n, *height, *width, *channels);
-    if height != width || width < 3 {
-        return Err(PyValueError::new_err(format!(
-            "bitmaps must be square and at least 3 x 3, got {height} x {width}"
-        )));
-    }
-    if !(1..=4).contains(&channels) {
-        return Err(PyValueError::new_err(format!(
-            "bitmaps must have 1 to 4 channels, got {channels}"
-        )));
-    }
+    check_square_tile("bitmaps", height, width, channels)?;
     let params = SelfSimilarityParams {
         max_radius,
         relative_tolerance,
         noise,
     };
     let per = width * height * channels;
-    let parts: Vec<SelfSimilarityParts> = py.detach(|| {
+    let parts = py.detach(|| {
         values
-            .par_chunks(per.max(1))
+            .par_chunks(per)
             .take(n)
             .map(|bitmap| {
-                let (planes, colour) =
-                    PatchTile::planes_from_interleaved(bitmap, width, height, channels);
-                let data = PatchTile::data_from_interleaved(bitmap, width, height, channels);
-                let tile = PatchTile {
-                    values: &planes,
-                    channels: colour,
-                    width,
-                    height,
-                };
-                core_parts(&tile, data.as_deref(), &params)
+                let tile = square_tile("bitmaps", bitmap, [height, width, channels], None)?;
+                Ok(core_parts(&tile.tile(), tile.data(), &params))
             })
-            .collect()
-    });
+            .collect::<PyResult<Vec<SelfSimilarityParts>>>()
+    })?;
 
     let out = PyDict::new(py);
     let radius: Vec<f64> = parts.iter().map(|p| p.whole.radius).collect();

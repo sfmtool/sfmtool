@@ -92,6 +92,8 @@ def test_bad_tile_arguments_are_refused():
     tile = _texture()
     with pytest.raises(ValueError, match="square"):
         assess_blur(np.zeros((24, 20, 4), np.uint8))
+    with pytest.raises(ValueError, match="1 to 4 channels"):
+        assess_blur(np.zeros((24, 24, 5), np.uint8))
     with pytest.raises(ValueError, match="valid"):
         assess_blur(tile, valid=np.ones((24, 23), bool))
     with pytest.raises(ValueError, match="ellipse"):

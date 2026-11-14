@@ -472,14 +472,16 @@ fn parts_refuse_a_bitmap_that_is_not_square() {
 }
 
 #[test]
-fn planes_from_interleaved_drops_alpha() {
+fn interleaved_tile_reads_four_channels_as_rgb_and_alpha() {
     let patch: Vec<f32> = (0..2 * 2 * 4).map(|v| v as f32).collect();
-    let (planes, channels) = PatchTile::planes_from_interleaved(&patch, 2, 2, 4);
-    assert_eq!(channels, 3);
+    let tile = InterleavedTile::new(&patch, 2, 2, 4, None).unwrap();
+    assert_eq!(tile.channels, 3);
     assert_eq!(
-        planes,
+        tile.planes,
         vec![0.0, 4.0, 8.0, 12.0, 1.0, 5.0, 9.0, 13.0, 2.0, 6.0, 10.0, 14.0]
     );
+    // Alpha is 3, 7, 11, 15: every sample carries data.
+    assert_eq!(tile.data(), Some(&[true; 4][..]));
 }
 
 // ---- The overlap reading -------------------------------------------------
@@ -898,13 +900,73 @@ fn overlap_refuses_the_wrong_number_of_data_flags() {
 }
 
 #[test]
-fn data_from_interleaved_reads_alpha() {
-    let patch = [1.0f32, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0, 9.0];
+fn interleaved_tile_reads_alpha_as_the_data_flags() {
+    let rgba = [1.0f32, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0, 9.0];
+    let tile = InterleavedTile::new(&rgba, 2, 1, 4, None).unwrap();
+    assert_eq!(tile.data(), Some(&[false, true][..]));
+    let grey_alpha = [1.0f32, 0.0, 4.0, 9.0];
+    let tile = InterleavedTile::new(&grey_alpha, 2, 1, 2, None).unwrap();
+    assert_eq!(tile.channels, 1);
+    assert_eq!(tile.planes, vec![1.0, 4.0]);
+    assert_eq!(tile.data(), Some(&[false, true][..]));
+    let rgb = &rgba[..6];
     assert_eq!(
-        PatchTile::data_from_interleaved(&patch, 2, 1, 4),
-        Some(vec![false, true])
+        InterleavedTile::new(rgb, 2, 1, 3, None).unwrap().data(),
+        None
     );
-    assert_eq!(PatchTile::data_from_interleaved(&patch[..6], 2, 1, 3), None);
+    // `valid` and alpha both have to say a sample carries data.
+    let tile = InterleavedTile::new(&[1.0, 9.0, 4.0, 9.0], 2, 1, 2, Some(&[true, false])).unwrap();
+    assert_eq!(tile.data(), Some(&[true, false][..]));
+    let tile = InterleavedTile::new(&[1.0, 4.0], 2, 1, 1, Some(&[false, true])).unwrap();
+    assert_eq!(tile.data(), Some(&[false, true][..]));
+}
+
+#[test]
+fn interleaved_tile_refuses_a_bad_shape() {
+    for channels in [0, 5] {
+        assert_eq!(
+            InterleavedTile::new(&[], 0, 0, channels, None),
+            Err(InterleavedTileError::Channels { channels })
+        );
+    }
+    assert_eq!(
+        InterleavedTile::new(&[0.0; 5], 2, 1, 3, None),
+        Err(InterleavedTileError::Samples {
+            width: 2,
+            height: 1,
+            channels: 3,
+            len: 5
+        })
+    );
+    assert_eq!(
+        InterleavedTile::new(&[0.0; 2], 2, 1, 1, Some(&[true])),
+        Err(InterleavedTileError::Valid { samples: 2, len: 1 })
+    );
+}
+
+/// A grey-and-alpha tile reads as the RGB-and-alpha tile with its grey in
+/// every colour channel: alpha is never read as a colour.
+#[test]
+fn grey_and_alpha_reads_as_rgb_and_alpha() {
+    let side = 15;
+    let mut rng = Lcg(7);
+    let grey: Vec<f32> = (0..side * side).map(|_| 255.0 * rng.next_f32()).collect();
+    // Alpha 0 on the left 7 of the 15 columns.
+    let alpha = |p: usize| if p % side < 7 { 0.0 } else { 255.0 };
+    let two: Vec<f32> = (0..side * side).flat_map(|p| [grey[p], alpha(p)]).collect();
+    let four: Vec<f32> = (0..side * side)
+        .flat_map(|p| [grey[p], grey[p], grey[p], alpha(p)])
+        .collect();
+    let read = |samples: &[f32], channels| {
+        let tile = InterleavedTile::new(samples, side, side, channels, None).unwrap();
+        zncc_self_similarity_parts(&tile.tile(), tile.data(), &params(3))
+            .whole
+            .radius
+    };
+    let (r2, r4) = (read(&two, 2), read(&four, 4));
+    assert!(r2.is_finite(), "{r2}");
+    // Averaging three equal channels can round in the last bits.
+    assert!((r2 - r4).abs() <= 1e-12 * r4, "{r2} vs {r4}");
 }
 
 // ---- The ellipse -------------------------------------------------------------

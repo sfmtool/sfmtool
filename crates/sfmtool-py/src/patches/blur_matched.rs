@@ -19,39 +19,30 @@ use sfmtool_core::patch::blur_matched::{
 };
 use sfmtool_core::patch::stored_bitmap::{BitmapScore, BitmapScorer};
 
-use super::args::parse_patch_window;
+use super::args::{check_square_tile, parse_patch_window, square_tile};
 
-/// Check a tile's shape: square, at least 3 on a side, 1 to 4 channels.
-fn check_tile(height: usize, width: usize, stride: usize) -> PyResult<()> {
-    if height != width || width < 3 {
-        return Err(PyValueError::new_err(format!(
-            "tiles must be square and at least 3 x 3, got {height} x {width}"
-        )));
-    }
-    if !(1..=4).contains(&stride) {
-        return Err(PyValueError::new_err(format!(
-            "tiles must have 1 to 4 channels, got {stride}"
-        )));
-    }
-    Ok(())
-}
-
-/// One interleaved `(R, R, C)` tile as colour planes: a sample carries data
-/// where `valid` (if given) is true and its alpha (if any) is above 0. Two
-/// channels are grey and alpha, four RGB and alpha.
-fn tile_planes(tile: ArrayView3<'_, u8>, valid: Option<ArrayView2<'_, bool>>) -> TilePlanes {
-    let &[side, _, stride] = tile.shape() else {
+/// One interleaved `(R, R, C)` tile as colour planes, by
+/// [`InterleavedTile`](sfmtool_core::patch::self_similarity::InterleavedTile)'s
+/// channel rule: a sample carries data where `valid` (if given, `(R, R)`) is
+/// true and its alpha (if any) is above 0. `what` names the argument in the
+/// message for a tile of the wrong shape.
+fn tile_planes(
+    what: &str,
+    tile: ArrayView3<'_, u8>,
+    valid: Option<ArrayView2<'_, bool>>,
+) -> PyResult<TilePlanes> {
+    let &[height, width, channels] = tile.shape() else {
         unreachable!("a 3-D array has three dimensions");
     };
-    let alpha = (stride == 2 || stride == 4).then_some(stride - 1);
-    let samples: Vec<u8> = tile.iter().copied().collect();
-    let data: Vec<bool> = (0..side * side)
-        .map(|i| {
-            let on = valid.as_ref().is_none_or(|v| v[[i / side, i % side]]);
-            on && alpha.is_none_or(|a| samples[i * stride + a] > 0)
-        })
-        .collect();
-    TilePlanes::from_interleaved(&samples, side, stride, &data)
+    let samples: Vec<f32> = tile.iter().map(|&v| f32::from(v)).collect();
+    let valid: Option<Vec<bool>> = valid.map(|v| v.iter().copied().collect());
+    let tile = square_tile(what, &samples, [height, width, channels], valid.as_deref())?;
+    Ok(TilePlanes {
+        values: tile.planes,
+        data: tile.data.unwrap_or_else(|| vec![true; width * height]),
+        side: width,
+        channels: tile.channels,
+    })
 }
 
 /// One `(R, R, C)` tile and its optional `(R, R)` `valid` flags as colour
@@ -61,10 +52,10 @@ fn one_tile(
     valid: Option<&PyReadonlyArray2<'_, bool>>,
 ) -> PyResult<TilePlanes> {
     let tile = samples.as_array();
-    let &[height, width, stride] = tile.shape() else {
+    let &[height, width, channels] = tile.shape() else {
         unreachable!("a 3-D array has three dimensions");
     };
-    check_tile(height, width, stride)?;
+    check_square_tile("tiles", height, width, channels)?;
     let valid = valid.map(|v| v.as_array());
     if let Some(v) = &valid {
         if v.shape() != [width, width] {
@@ -74,7 +65,7 @@ fn one_tile(
             )));
         }
     }
-    Ok(tile_planes(tile, valid))
+    tile_planes("tiles", tile, valid)
 }
 
 /// A `(2, 2)` ellipse matrix, `None` where an entry is not finite.
@@ -346,22 +337,22 @@ pub fn score_against_bitmap<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let window = parse_patch_window(window, window_sigma)?;
     let bitmap_view = bitmap.as_array();
-    let &[height, width, stride] = bitmap_view.shape() else {
+    let &[height, width, channels] = bitmap_view.shape() else {
         unreachable!("a 3-D array has three dimensions");
     };
-    check_tile(height, width, stride)?;
-    if stride != 4 {
+    check_square_tile("bitmap", height, width, channels)?;
+    if channels != 4 {
         return Err(PyValueError::new_err(format!(
-            "bitmap must be (R, R, 4) RGBA, got {stride} channels"
+            "bitmap must be (R, R, 4) RGBA, got {channels} channels"
         )));
     }
     let side = width;
-    let bitmap_planes = tile_planes(bitmap_view, None);
+    let bitmap_planes = tile_planes("bitmap", bitmap_view, None)?;
     let tiles = tiles.as_array();
     let &[k, th, tw, ts] = tiles.shape() else {
         unreachable!("a 4-D array has four dimensions");
     };
-    check_tile(th, tw, ts)?;
+    check_square_tile("tiles", th, tw, ts)?;
     if tw != side {
         return Err(PyValueError::new_err(format!(
             "tiles must be {side} x {side} like the bitmap, got {th} x {tw}"
@@ -386,11 +377,12 @@ pub fn score_against_bitmap<'py>(
     let planes: Vec<TilePlanes> = (0..k)
         .map(|v| {
             tile_planes(
+                "tiles",
                 tiles.index_axis(axis, v),
                 valid.as_ref().map(|valid| valid.index_axis(axis, v)),
             )
         })
-        .collect();
+        .collect::<PyResult<_>>()?;
     // One scorer for the scores and the bitmap's own semi-axes, so its
     // ellipse is read once.
     let (scores, bitmap_axes) = py.detach(|| {

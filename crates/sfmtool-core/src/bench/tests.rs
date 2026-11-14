@@ -39,7 +39,7 @@ use crate::patch::keypoint_localize::{
 };
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
 use crate::patch::self_similarity::{
-    zncc_self_similarity_parts, PatchEllipse, PatchTile, SelfSimilarityEllipse,
+    zncc_self_similarity_parts, InterleavedTile, PatchEllipse, PatchTile, SelfSimilarityEllipse,
     SelfSimilarityEllipseUnits, SelfSimilarityParams,
 };
 use crate::progress::Progress;
@@ -3869,18 +3869,9 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         )
         .expect("the member's grid");
         let channels = samples.len() / (resolution * resolution);
-        let (planes, colour) =
-            PatchTile::planes_from_interleaved(&samples, resolution, resolution, channels);
-        let parts = zncc_self_similarity_parts(
-            &PatchTile {
-                values: &planes,
-                channels: colour,
-                width: resolution,
-                height: resolution,
-            },
-            None,
-            &SelfSimilarityParams::default(),
-        );
+        let tile = InterleavedTile::new(&samples, resolution, resolution, channels, None).unwrap();
+        let parts =
+            zncc_self_similarity_parts(&tile.tile(), tile.data(), &SelfSimilarityParams::default());
         assert_eq!(
             Some(units),
             SelfSimilarityEllipseUnits::read(&parts.whole, Some(jacobian), None, resolution)
