@@ -325,8 +325,8 @@ class TestRenderHeatmapOverlay:
 
         assert output_path.exists()
         result = read_image_rgb(output_path)
-        assert result is not None
-        # Wider than input due to colorbar
+        # As tall as the input, and wider than it due to the colorbar
+        assert result.shape[0] == 100
         assert result.shape[1] > 200
 
     def test_no_colorbar(self, tmp_path):

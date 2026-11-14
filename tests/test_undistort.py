@@ -18,6 +18,7 @@ from sfmtool.fileio import (
     read_image_rgb,
     read_image_rgba,
     read_sfmr,
+    write_image_rgb,
     write_sfmr,
 )
 from sfmtool.reconstruction import SfmrReconstruction
@@ -230,14 +231,17 @@ class TestUndistortReconstructionImages:
         cam_idxs = np.asarray(undist_recon.camera_indexes)
         assert np.all(cam_idxs < undist_recon.camera_count)
 
-        # Verify image files were created and are valid
-        for image_name in recon.image_names:
+        # Verify each image file was written at the size of its camera in the
+        # output .sfmr
+        undist_cameras = undist_recon.cameras
+        assert undist_recon.image_names == recon.image_names
+        for image_name, cam_idx in zip(undist_recon.image_names, cam_idxs):
             undistorted_path = output_dir_path / image_name
             assert undistorted_path.exists(), f"Missing undistorted image: {image_name}"
 
             img = read_image_rgb(undistorted_path)
-            assert img is not None, f"Failed to load undistorted image: {image_name}"
-            assert img.shape[0] > 0 and img.shape[1] > 0
+            cam = undist_cameras[cam_idx]
+            assert img.shape[:2] == (cam.height, cam.width), image_name
 
     def test_fit_outside(self, undistorted_outside):
         """Test undistortion with fit=outside produces valid output."""
@@ -320,7 +324,7 @@ class TestUndistortReconstructionImages:
                 assert cam.width == orig_width
                 assert cam.height == orig_height
 
-    def test_actually_modifies_images(self, undistorted_inside):
+    def test_actually_modifies_images(self, undistorted_inside, tmp_path):
         """Test that undistortion actually modifies pixel values for distorted cameras."""
         recon = undistorted_inside.recon
 
@@ -344,7 +348,21 @@ class TestUndistortReconstructionImages:
         pixel_diff = np.mean(
             np.abs(orig_array.astype(float) - undist_array.astype(float))
         )
-        assert pixel_diff > 0.1, "Expected pixel differences after undistortion"
+        # Writing the source image again without undistorting it changes its
+        # pixels too, by the JPEG re-encoding alone; undistortion changes them
+        # several times as much (about 10 against 1.4 on seoul_bull).
+        reencoded_path = tmp_path / image_name
+        reencoded_path.parent.mkdir(parents=True, exist_ok=True)
+        write_image_rgb(reencoded_path, orig_array)
+        reencode_diff = np.mean(
+            np.abs(
+                orig_array.astype(float) - read_image_rgb(reencoded_path).astype(float)
+            )
+        )
+        assert pixel_diff > 3 * reencode_diff, (
+            f"undistortion changed the pixels by {pixel_diff:.2f} on average, "
+            f"not three times what re-encoding the source does ({reencode_diff:.2f})"
+        )
 
     def test_inside_and_outside_produce_different_focals(
         self, undistorted_inside, undistorted_outside
