@@ -28,7 +28,7 @@ _SUMMARY_DISPATCH = {
 }
 
 # A 3D point ID: pt3d_<8 hex chars of the .sfmr content hash>_<point index>.
-_POINT_ID_RE = re.compile(r"^pt3d_([0-9a-fA-F]{8})_(\d+)$")
+_POINT_ID_PATTERN = r"^pt3d_([0-9a-fA-F]{8})_(\d+)$"
 
 
 @click.command("inspect")
@@ -147,7 +147,7 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
             "or a pt3d_<hash>_<index> id with an optional workspace directory"
         )
 
-    match = _POINT_ID_RE.match(target)
+    match = re.match(_POINT_ID_PATTERN, target)
     if match is not None:
         _inspect_point(
             target, match.group(1).lower(), int(match.group(2)), location, verbose

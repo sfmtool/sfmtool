@@ -252,3 +252,39 @@ def test_unknown_command_suggests_from_every_command():
     )
     assert result.returncode == 2
     assert "Error: No such command 'solv'. Did you mean 'solve'?" in result.stderr
+
+
+def _calls_run_at_import(tree: ast.Module) -> list[ast.Call]:
+    """The calls in `tree` that run when the module is imported: everything
+    outside function bodies, lambda bodies and decorators."""
+    calls = []
+    pending = list(tree.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            pending.extend(d for d in node.args.defaults + node.args.kw_defaults if d)
+            continue
+        if isinstance(node, ast.Lambda):
+            pending.extend(d for d in node.args.defaults + node.args.kw_defaults if d)
+            continue
+        if isinstance(node, ast.ClassDef):
+            pending.extend(node.bases + node.keywords + node.body)
+            continue
+        if isinstance(node, ast.Call):
+            calls.append(node)
+        pending.extend(ast.iter_child_nodes(node))
+    return calls
+
+
+def test_command_modules_call_nothing_at_import():
+    """A `sfmtool._commands` module calls nothing at import beyond the
+    decorators that define its commands, so looking up a command does no work
+    before the command runs."""
+    found = []
+    for path in sorted(Path(sfmtool._commands.__path__[0]).glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found += [
+            f"{path.name}:{call.lineno}: {ast.unparse(call)}"
+            for call in _calls_run_at_import(tree)
+        ]
+    assert found == []

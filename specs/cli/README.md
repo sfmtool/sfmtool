@@ -30,7 +30,8 @@ row in `COMMANDS`, with the first sentence of its docstring as the one-line
 help; [test_lazy_loading.py](../../tests/test_lazy_loading.py) checks that each
 row names a command defined where the row says, under that name, with that
 help and category, that every command defined in a `sfmtool._commands`
-module has a row, and that `import sfmtool` and `sfm --help` import none of
+module has a row, that a `sfmtool._commands` module calls nothing at import
+outside the decorators that define its commands, and that `import sfmtool` and `sfm --help` import none of
 numpy, OpenCV, pycolmap and the command modules.
 
 A helper that several commands share is a `_`-named module in

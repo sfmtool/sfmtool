@@ -26,7 +26,6 @@ from ..workspace import find_workspace_for_path
 # Left eye (sensor 0): identity rotation, zero translation.
 # Right eye: 180 deg around Y, translated [0, 0, +0.0307] m in rig frame.
 _X5_BASELINE_M = 0.0307
-_X5_RIGHT_ROTATION = RotQuaternion.from_axis_angle([0.0, 1.0, 0.0], math.radians(180))
 _X5_RIGHT_TRANSLATION = [0.0, 0.0, _X5_BASELINE_M]
 
 # Calibrated OPENCV_FISHEYE intrinsics for the Insta360 X5 at 3840x3840.
@@ -95,7 +94,9 @@ def insv2rig(input_file, output_dir):
         # verbatim as the .camrig sensor_from_rig transforms.
         quaternions_wxyz = [
             RotQuaternion.identity().to_wxyz_array(),
-            _X5_RIGHT_ROTATION.to_wxyz_array(),
+            RotQuaternion.from_axis_angle(
+                [0.0, 1.0, 0.0], math.radians(180)
+            ).to_wxyz_array(),
         ]
         translations_xyz = [[0.0, 0.0, 0.0], _X5_RIGHT_TRANSLATION]
 

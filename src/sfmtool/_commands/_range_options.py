@@ -65,15 +65,13 @@ _RANGE_HELP = (
 
 # A span with its step written with a word or a '/' in place of ':', such as
 # '1-100x10' or '1-100 step 10'. Only this exact shape gets a suggestion.
-_MISTYPED_STEP = re.compile(
-    r"\s*(\d+)\s*-\s*(\d+)\s*(?:x|by|step|every|/)\s*(\d+)\s*", re.IGNORECASE
-)
+_MISTYPED_STEP_PATTERN = r"\s*(\d+)\s*-\s*(\d+)\s*(?:x|by|step|every|/)\s*(\d+)\s*"
 
 
 def _step_suggestion(value: str) -> str | None:
     """`value` with its step written START-END:STEP, when `value` is a span
     with a mistyped step; otherwise None."""
-    m = _MISTYPED_STEP.fullmatch(value)
+    m = re.fullmatch(_MISTYPED_STEP_PATTERN, value, re.IGNORECASE)
     if m is None:
         return None
     start, end, step = m.groups()
