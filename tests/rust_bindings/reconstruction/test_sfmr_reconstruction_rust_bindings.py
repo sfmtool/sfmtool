@@ -513,7 +513,7 @@ class TestEmbeddedPatches:
         u = np.tile([0.1, 0.0, 0.0], (n_pts, 1)).astype(np.float32)
         v = np.tile([0.0, 0.1, 0.0], (n_pts, 1)).astype(np.float32)
         cloud = PatchCloud.from_halfvec_arrays(
-            u, v, np.asarray(recon.positions, dtype=np.float64)
+            u, v, np.asarray(recon.positions_xyzw, dtype=np.float64)
         )
 
         embedded = recon.clone_with_changes(

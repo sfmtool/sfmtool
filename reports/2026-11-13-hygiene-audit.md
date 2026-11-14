@@ -264,6 +264,8 @@ All 16 files (4,369 lines) were read in full, with Python probes against the reb
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-13): **Done** — core `PatchCloud::from_halfvec_arrays` and the binding take `centers_xyzw` `(N, 4)`, give each `w = 0` row a patch at infinity on its unit direction, and return an error (`ValueError`) for wrong shapes, non-finite values and a zero direction; `_patch_compaction.py` and the test callers pass `positions_xyzw`, branch `hyg-fix-1113-08-halfvec-centers-xyzw`._
+
 **Bring the sibling patch bindings' names and docs into line**
 - Location: as listed.
 - Problem: docstrings still say "view set" (`localize_keypoints.rs:111`, `refine_keypoints.rs:101`), which the glossary's "Per-patch view lists" entry retired, and the locals `sets` (localize 222-310, refine 210-284, `args.rs:130`) and the comment at `refine_keypoints.rs:246` use it; `select_views.rs:81` documents `admitted` as int32 where it is uint32; `progress` is missing from the Args of `member_coherence` and `select_views`; `localize_keypoints.rs:93` says "exactly today's behaviour"; "image indices" at `member_coherence.rs:143`, `select_views.rs:82`; `cloud.rs:33` says "per finite 3D point" though infinity patches are built by default; `localize` accepts `None` seeds while `refine` raises `TypeError` for them though its core takes `Option`; five inline `PyValueError::new_err(e.to_string())` closures (`cloud.rs:93,287`, `member_coherence.rs:366,370,379`) beside `helpers::value_err`, the three in member_coherence mapping an internal shape invariant to `ValueError`.

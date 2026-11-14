@@ -300,39 +300,28 @@ impl PyPatchCloud {
     /// Args:
     ///     half_u_xyz: ``(N, 3)`` float32 in-plane half-extent vectors ``u``.
     ///     half_v_xyz: ``(N, 3)`` float32 in-plane half-extent vectors ``v``.
-    ///     centers: ``(N, 3)`` float64 patch centers (each point's position).
+    ///     centers_xyzw: ``(N, 4)`` float64 homogeneous patch centers (each
+    ///         point's ``positions_xyzw`` row). A row with ``w != 0`` gives a
+    ///         finite patch at ``(x/w, y/w, z/w)``; a row with ``w = 0`` gives a
+    ///         patch at infinity along the normalized direction ``(x, y, z)``.
+    ///
+    /// Raises:
+    ///     ValueError: if the shapes are not ``(N, 3)``, ``(N, 3)`` and
+    ///         ``(N, 4)`` with one ``N``, a ``centers_xyzw`` value is NaN or
+    ///         infinite, or a ``w = 0`` row has a zero direction.
     #[staticmethod]
-    #[pyo3(signature = (half_u_xyz, half_v_xyz, centers))]
+    #[pyo3(signature = (half_u_xyz, half_v_xyz, centers_xyzw))]
     fn from_halfvec_arrays(
         half_u_xyz: PyReadonlyArray2<'_, f32>,
         half_v_xyz: PyReadonlyArray2<'_, f32>,
-        centers: PyReadonlyArray2<'_, f64>,
+        centers_xyzw: PyReadonlyArray2<'_, f64>,
     ) -> PyResult<Self> {
-        let u = half_u_xyz.as_array();
-        let v = half_v_xyz.as_array();
-        let c = centers.as_array();
-        let n = u.shape()[0];
-        if u.shape()[1] != 3 || v.shape()[1] != 3 || c.shape()[1] != 3 {
-            return Err(PyValueError::new_err(
-                "from_halfvec_arrays: half_u_xyz, half_v_xyz, centers must each have shape (N, 3)",
-            ));
-        }
-        if v.shape()[0] != n || c.shape()[0] != n {
-            return Err(PyValueError::new_err(format!(
-                "from_halfvec_arrays: row counts must match (u={}, v={}, centers={})",
-                n,
-                v.shape()[0],
-                c.shape()[0]
-            )));
-        }
-        let centers_vec: Vec<Point3<f64>> = (0..n)
-            .map(|i| Point3::new(c[[i, 0]], c[[i, 1]], c[[i, 2]]))
-            .collect();
         let inner = PatchCloud::from_halfvec_arrays(
-            &u.as_standard_layout().into_owned(),
-            &v.as_standard_layout().into_owned(),
-            &centers_vec,
-        );
+            half_u_xyz.as_array(),
+            half_v_xyz.as_array(),
+            centers_xyzw.as_array(),
+        )
+        .map_err(|e| PyValueError::new_err(format!("from_halfvec_arrays: {e}")))?;
         Ok(Self { inner })
     }
 

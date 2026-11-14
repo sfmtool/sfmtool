@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView2};
 
 use crate::camera::CameraIntrinsics;
 use crate::geometry::RigidTransform;
@@ -141,6 +141,51 @@ impl From<Cancelled> for PatchCloudError {
         PatchCloudError::Cancelled
     }
 }
+
+/// Errors from [`PatchCloud::from_halfvec_arrays`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum HalfvecArraysError {
+    /// `half_u_xyz` and `half_v_xyz` must be `(N, 3)` and `centers_xyzw`
+    /// `(N, 4)`, all with the same `N`; these are the shapes passed.
+    Shape {
+        half_u_xyz: [usize; 2],
+        half_v_xyz: [usize; 2],
+        centers_xyzw: [usize; 2],
+    },
+    /// `centers_xyzw` row `row` holds a NaN or infinite value.
+    NonFinite { row: usize },
+    /// `centers_xyzw` row `row` has `w = 0` and a zero direction, the
+    /// homogeneous `(0, 0, 0, 0)` that denotes no point.
+    ZeroDirection { row: usize },
+}
+
+impl std::fmt::Display for HalfvecArraysError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HalfvecArraysError::Shape {
+                half_u_xyz,
+                half_v_xyz,
+                centers_xyzw,
+            } => write!(
+                f,
+                "half_u_xyz and half_v_xyz must have shape (N, 3) and centers_xyzw shape \
+                 (N, 4), with the same N; got half_u_xyz {half_u_xyz:?}, half_v_xyz \
+                 {half_v_xyz:?}, centers_xyzw {centers_xyzw:?}"
+            ),
+            HalfvecArraysError::NonFinite { row } => {
+                write!(f, "centers_xyzw row {row} contains a NaN or infinite value")
+            }
+            HalfvecArraysError::ZeroDirection { row } => write!(
+                f,
+                "centers_xyzw row {row} is the all-zero homogeneous coordinate \
+                 (0, 0, 0, 0), which denotes no point; a point at infinity (w = 0) needs a \
+                 non-zero direction"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HalfvecArraysError {}
 
 /// An oriented planar patch (surfel) in world space.
 ///
@@ -1137,37 +1182,110 @@ impl PatchCloud {
 
     /// Reconstruct a patch cloud from the per-point half-extent vector arrays,
     /// keeping only the present rows (non-zero `u`) and recording each one's
-    /// point index in `point_indexes`. `centers[i]` supplies the patch center for
-    /// point `i` (its position). The half-extent vectors are split back into a
-    /// unit axis and a half-size.
+    /// point index in `point_indexes`. `centers_xyzw[i]` is point `i`'s
+    /// homogeneous position, which supplies its patch's centre and `w`: a row
+    /// with `w != 0` is the finite point `(x/w, y/w, z/w)` and gives a finite
+    /// patch (`w = 1`); a row with `w = 0` is a point at infinity whose
+    /// direction `(x, y, z)` is normalized to the unit centre of a patch with
+    /// `w = 0`. The half-extent vectors are split back into a unit axis and a
+    /// half-size.
     ///
-    /// Every patch is built **finite** (`w = 1`): the half-vector arrays don't
-    /// encode the homogeneous weight, which lives in the points' `w`. A caller
-    /// that knows which points are at infinity (e.g. the `recon.patches` getter)
-    /// sets `patch.w = 0` on those rows afterward.
+    /// Errors when an array is not three (`half_u_xyz`, `half_v_xyz`) or four
+    /// (`centers_xyzw`) columns wide, when the row counts differ, when a
+    /// `centers_xyzw` row holds a NaN or infinite value, or when a `w = 0` row
+    /// has a zero direction.
+    ///
+    /// ```
+    /// use ndarray::array;
+    /// use sfmtool_core::patch::PatchCloud;
+    ///
+    /// let u = array![[0.5f32, 0.0, 0.0], [0.0, 0.1, 0.0]];
+    /// let v = array![[0.0f32, 0.5, 0.0], [0.0, 0.0, 0.1]];
+    /// // Point 0 is finite at (2, 4, 6); point 1 is at infinity along +x.
+    /// let centers_xyzw = array![[4.0, 8.0, 12.0, 2.0], [3.0, 0.0, 0.0, 0.0]];
+    /// let cloud =
+    ///     PatchCloud::from_halfvec_arrays(u.view(), v.view(), centers_xyzw.view()).unwrap();
+    /// assert_eq!(cloud.patches[0].w, 1.0);
+    /// assert_eq!(cloud.patches[0].center.coords.as_slice(), &[2.0, 4.0, 6.0]);
+    /// assert_eq!(cloud.patches[1].w, 0.0);
+    /// assert_eq!(cloud.patches[1].center.coords.as_slice(), &[1.0, 0.0, 0.0]);
+    /// ```
     pub fn from_halfvec_arrays(
-        half_u_xyz: &Array2<f32>,
-        half_v_xyz: &Array2<f32>,
+        half_u_xyz: ArrayView2<'_, f32>,
+        half_v_xyz: ArrayView2<'_, f32>,
+        centers_xyzw: ArrayView2<'_, f64>,
+    ) -> Result<Self, HalfvecArraysError> {
+        let shape = |a: &[usize]| [a[0], a[1]];
+        let (u_shape, v_shape, c_shape) = (
+            shape(half_u_xyz.shape()),
+            shape(half_v_xyz.shape()),
+            shape(centers_xyzw.shape()),
+        );
+        if u_shape[1] != 3
+            || v_shape[1] != 3
+            || c_shape[1] != 4
+            || v_shape[0] != u_shape[0]
+            || c_shape[0] != u_shape[0]
+        {
+            return Err(HalfvecArraysError::Shape {
+                half_u_xyz: u_shape,
+                half_v_xyz: v_shape,
+                centers_xyzw: c_shape,
+            });
+        }
+        let mut centers = Vec::with_capacity(c_shape[0]);
+        let mut weights = Vec::with_capacity(c_shape[0]);
+        for (row, c) in centers_xyzw.outer_iter().enumerate() {
+            let (x, y, z, w) = (c[0], c[1], c[2], c[3]);
+            if !(x.is_finite() && y.is_finite() && z.is_finite() && w.is_finite()) {
+                return Err(HalfvecArraysError::NonFinite { row });
+            }
+            if w != 0.0 {
+                centers.push(Point3::new(x / w, y / w, z / w));
+                weights.push(1.0);
+            } else {
+                let dir = Vector3::new(x, y, z);
+                let norm = dir.norm();
+                if norm == 0.0 {
+                    return Err(HalfvecArraysError::ZeroDirection { row });
+                }
+                centers.push(Point3::from(dir / norm));
+                weights.push(0.0);
+            }
+        }
+        Ok(Self::from_halfvec_rows(
+            half_u_xyz, half_v_xyz, &centers, &weights,
+        ))
+    }
+
+    /// [`Self::from_halfvec_arrays`] over arrays already known to agree: `u`
+    /// and `v` with one row per point, and each point's centre (Euclidean
+    /// position, or unit direction) and weight (`1` finite, `0` at infinity).
+    fn from_halfvec_rows(
+        half_u_xyz: ArrayView2<'_, f32>,
+        half_v_xyz: ArrayView2<'_, f32>,
         centers: &[Point3<f64>],
+        weights: &[f64],
     ) -> Self {
         let mut patches = Vec::new();
         let mut point_indexes = Vec::new();
         for i in 0..half_u_xyz.shape()[0] {
-            let row = |a: &Array2<f32>| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
-            // A zero `u` marks a point with no patch (e.g. a point at infinity).
-            let (u_axis, hu) = split_halfvec(row(half_u_xyz));
+            let row = |a: &ArrayView2<'_, f32>| [a[[i, 0]], a[[i, 1]], a[[i, 2]]];
+            // A zero `u` marks a point with no patch.
+            let (u_axis, hu) = split_halfvec(row(&half_u_xyz));
             if hu <= 1e-12 {
                 continue;
             }
-            let v = row(half_v_xyz);
+            let v = row(&half_v_xyz);
             let (v_unit, hv) = split_halfvec(v);
             let v_axis = if hv > 1e-12 {
                 v_unit
             } else {
                 Vector3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]))
             };
-            let center = centers.get(i).copied().unwrap_or_else(Point3::origin);
-            patches.push(OrientedPatch::new(center, u_axis, v_axis, [hu, hv]));
+            let mut patch = OrientedPatch::new(centers[i], u_axis, v_axis, [hu, hv]);
+            patch.w = weights[i];
+            patches.push(patch);
             point_indexes.push(i as u32);
         }
         PatchCloud {
@@ -1177,22 +1295,26 @@ impl PatchCloud {
     }
 
     /// The patch cloud a reconstruction stores: one patch per point whose
-    /// stored frame is present ([`Self::from_halfvec_arrays`] over its
-    /// `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` and its point positions),
-    /// with `w = 0` on the patches of points at infinity. `None` when the
-    /// reconstruction carries no patch frame. Geometry only: bitmaps are not
-    /// loaded into the cloud.
+    /// stored frame is present, built as [`Self::from_halfvec_arrays`] builds
+    /// it from the `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` columns and
+    /// the point positions, so the patches of points at infinity have `w = 0`.
+    /// `None` when the reconstruction carries no patch frame. Geometry only:
+    /// bitmaps are not loaded into the cloud.
     pub fn from_stored_patch_frames(recon: &crate::SfmrReconstruction) -> Option<Self> {
         let u = recon.point_set.patch_u_halfvec_xyz.as_ref()?;
         let v = recon.point_set.patch_v_halfvec_xyz.as_ref()?;
-        let centers: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();
-        let mut cloud = Self::from_halfvec_arrays(u, v, &centers);
-        for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_indexes.iter()) {
-            if recon.point_set.points[pid as usize].is_at_infinity() {
-                patch.w = 0.0;
-            }
-        }
-        Some(cloud)
+        let points = &recon.point_set.points;
+        let centers: Vec<Point3<f64>> = points.iter().map(|p| p.position).collect();
+        let weights: Vec<f64> = points
+            .iter()
+            .map(|p| if p.is_at_infinity() { 0.0 } else { 1.0 })
+            .collect();
+        Some(Self::from_halfvec_rows(
+            u.view(),
+            v.view(),
+            &centers,
+            &weights,
+        ))
     }
 }
 

@@ -268,11 +268,9 @@ def compact_to_embedded_patches(
 
     # Per-point arrays, sliced to survivors in the new dense order. `positions_xyzw`
     # (homogeneous) carries each point's `w`, so a point at infinity (`w == 0`)
-    # stays at infinity through the rebuild; `centers` (the Euclidean position, or
-    # the unit direction for an infinity point) is only the patch-frame anchor for
-    # `from_halfvec_arrays`.
+    # stays at infinity through the rebuild, both as a point and as the centre
+    # of its patch in `from_halfvec_arrays`.
     positions_xyzw = np.asarray(recon.positions_xyzw, dtype=np.float64)[survivors]
-    centers = np.asarray(recon.positions, dtype=np.float64)[survivors]
     colors = np.asarray(recon.colors, dtype=np.uint8)[survivors]
     normals = (
         np.asarray(recon.normals, dtype=np.float32)[survivors]
@@ -290,7 +288,7 @@ def compact_to_embedded_patches(
         he = patch.half_extent
         u_xyz[new_id] = np.asarray(patch.u_axis, dtype=np.float64) * he[0]
         v_xyz[new_id] = np.asarray(patch.v_axis, dtype=np.float64) * he[1]
-    culled_cloud = PatchCloud.from_halfvec_arrays(u_xyz, v_xyz, centers)
+    culled_cloud = PatchCloud.from_halfvec_arrays(u_xyz, v_xyz, positions_xyzw)
     # from_halfvec_arrays drops zero-`u` rows; every survivor must keep a frame, or
     # the cloud's point_indexes would no longer be the dense 0..P_new-1 the scatter
     # below relies on (and the survivor would be left frameless).
