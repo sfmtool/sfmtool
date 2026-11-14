@@ -11,7 +11,7 @@ from sfmtool._commands.heatmap import (
     _insert_metric_before_number,
     _observations_by_image,
     _output_stem,
-    _triangulation_angles,
+    _max_ray_angles_deg,
 )
 from sfmtool.cli import main
 from sfmtool.reconstruction import SfmrReconstruction
@@ -201,7 +201,7 @@ class TestOutputStem:
 # =============================================================================
 
 
-def _max_ray_angles_deg(recon) -> dict[int, float]:
+def _expected_max_ray_angles_deg(recon) -> dict[int, float]:
     """Each finite point's widest angle between two of its viewing rays, in
     degrees, computed here from the camera centres and stored positions."""
     from sfmtool.geometry import RotQuaternion
@@ -229,11 +229,11 @@ def _max_ray_angles_deg(recon) -> dict[int, float]:
     return out
 
 
-class TestTriangulationAngles:
+class TestMaxRayAngles:
     def test_finite_points_match_their_viewing_rays(self, seoul_bull_sfmr_only):
         recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
-        angles = _triangulation_angles(recon)
-        expected = _max_ray_angles_deg(recon)
+        angles = _max_ray_angles_deg(recon)
+        expected = _expected_max_ray_angles_deg(recon)
         assert angles.shape == (recon.point_count,)
         assert len(expected) > 0
         idx = np.array(list(expected))
@@ -253,7 +253,7 @@ class TestTriangulationAngles:
         recon = recon.clone_with_changes(positions=xyzw)
         assert recon.point_is_at_infinity[point]
 
-        angles = _triangulation_angles(recon)
+        angles = _max_ray_angles_deg(recon)
         assert angles[point] == 0.0
 
 

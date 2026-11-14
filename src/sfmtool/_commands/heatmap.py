@@ -61,8 +61,8 @@ def _insert_metric_before_number(stem: str, metric: str) -> str:
         return f"{stem}_{metric}"
 
 
-def _triangulation_angles(recon) -> np.ndarray:
-    """Each point's triangulation angle in degrees, indexed by point.
+def _max_ray_angles_deg(recon) -> np.ndarray:
+    """Each point's ``max_ray_angle_deg`` in degrees, indexed by point.
 
     This is the track table's ``max_ray_angle_deg`` column: the widest angle
     between two of the point's viewing rays, ``0`` for a point at infinity
@@ -199,7 +199,7 @@ def heatmap(
         # Pre-compute triangulation angles if needed
         if "angle" in metrics:
             click.echo("Computing triangulation angles...")
-            tri_angles = _triangulation_angles(recon)
+            tri_angles = _max_ray_angles_deg(recon)
         else:
             tri_angles = None
 
