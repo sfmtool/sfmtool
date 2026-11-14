@@ -14,7 +14,6 @@ from ._sfmr_path import check_sfmr_path
 from ..sift.file import get_sift_path_for_image
 from ..fileio import SiftFile
 from ..visualization import render_heatmap_overlay
-from ..visualization._heatmap_renderer import compute_triangulation_angles
 
 
 def _observations_by_image(
@@ -60,6 +59,22 @@ def _insert_metric_before_number(stem: str, metric: str) -> str:
     else:
         # No trailing number, just append
         return f"{stem}_{metric}"
+
+
+def _triangulation_angles(recon) -> np.ndarray:
+    """Each point's triangulation angle in degrees, indexed by point.
+
+    This is the track table's ``max_ray_angle_deg`` column: the widest angle
+    between two of the point's viewing rays, ``0`` for a point at infinity
+    (every sighting of a direction casts the same ray) and for a track with
+    fewer than two rays.
+    """
+    from .._sfmtool.analysis import track_table
+
+    table = track_table(recon, ["max_ray_angle_deg"])
+    angles = np.full(recon.point_count, np.nan, dtype=np.float64)
+    angles[table["point_index"]] = table["max_ray_angle_deg"]
+    return angles
 
 
 def _output_stem(image_name: str, metric: str) -> str:
@@ -184,13 +199,7 @@ def heatmap(
         # Pre-compute triangulation angles if needed
         if "angle" in metrics:
             click.echo("Computing triangulation angles...")
-            tri_angles = compute_triangulation_angles(
-                recon.positions,
-                recon.quaternions_wxyz,
-                recon.translations,
-                recon.track_image_indexes,
-                recon.track_point_indexes,
-            )
+            tri_angles = _triangulation_angles(recon)
         else:
             tri_angles = None
 

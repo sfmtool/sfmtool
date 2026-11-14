@@ -415,3 +415,28 @@ class TestToNerfstudioE2E:
         assert (sparse / "cameras.bin").exists()
         assert (sparse / "images.bin").exists()
         assert (sparse / "points3D.bin").exists()
+
+    def test_point_at_infinity_is_written_at_a_finite_depth(
+        self, pinhole_sfmr_17_images, tmp_path, capsys
+    ):
+        """A ``w = 0`` point's PLY vertex is the materialised finite point, as
+        the COLMAP export writes it, not its unit direction."""
+        from sfmtool._to_nerfstudio import export_to_nerfstudio
+
+        recon = SfmrReconstruction.load(pinhole_sfmr_17_images)
+        xyzw = recon.positions_xyzw.copy()
+        direction = np.array([0.0, 0.0, -1.0])
+        xyzw[0] = [*direction, 0.0]
+        recon = recon.clone_with_changes(positions=xyzw)
+        expected = np.asarray(recon.materialize_points_at_infinity().positions)
+
+        out = tmp_path / "ns_dataset"
+        export_to_nerfstudio(recon, out, num_downscales=0)
+
+        lines = (out / "sparse_pc.ply").read_text(encoding="ascii").splitlines()
+        body = lines[lines.index("end_header") + 1 :]
+        assert len(body) == recon.point_count
+        written = np.array([float(v) for v in body[0].split()[:3]])
+        np.testing.assert_allclose(written, expected[0], rtol=1e-6, atol=1e-5)
+        assert np.linalg.norm(written) > 10.0
+        assert "Nerfstudio export: materializing 1 point(s)" in capsys.readouterr().out

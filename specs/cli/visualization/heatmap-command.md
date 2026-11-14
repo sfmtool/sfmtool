@@ -31,7 +31,7 @@ sfm heatmap <RECONSTRUCTION.sfmr> --output <DIR> [OPTIONS...]
 |--------|-------------|-----------------|
 | `reproj` | Reprojection error in pixels | `error` |
 | `tracks` | Track length (number of observations) | `tracks` |
-| `angle` | Triangulation angle in degrees | `viridis` |
+| `angle` | Triangulation angle in degrees: the widest angle between two of the point's viewing rays, the track table's `max_ray_angle_deg` column ([track-table.md](../../core/analysis/track-table.md)); `0` for a point at infinity, which every camera sees along the same ray | `viridis` |
 | `all` | Generate all three metrics | per-metric defaults |
 
 Each output image includes a colorbar legend showing the value range.

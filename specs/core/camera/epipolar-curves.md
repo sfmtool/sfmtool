@@ -264,10 +264,11 @@ image.
 `_epipolar_display.py` picks `anchor_depth` per feature as follows:
 
 1. **Triangulated track**: if the feature observation in image 1 is linked to a
-   3D point in the reconstruction, use its positive depth in canonical camera-1
-   coordinates, `-(R1 · X + t1).z`. This is used only when the point is in
-   front of camera 1.
-2. **Otherwise**: use the baseline length `‖C2 − C1‖`. For typical photogrammetry
+   finite 3D point in the reconstruction, use its positive depth in canonical
+   camera-1 coordinates, `-(R1 · X + t1).z`. This is used only when the point
+   is in front of camera 1.
+2. **Otherwise**, including a point at infinity (`w = 0`), which is a direction
+   with no depth: use the baseline length `‖C2 − C1‖`. For typical photogrammetry
    pairs, features sit at 10–100× the baseline, so this is within ~3–7 octaves
    of the truth — well inside Phase-1's ±24-octave seed-search range. One
    subtraction and one `norm`, computed once per image pair.
