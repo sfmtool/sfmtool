@@ -15,12 +15,12 @@
 use std::collections::VecDeque;
 
 use super::capture::{FrameId, PickImagesError, PickImagesOptions};
-use super::density::{self, DensityTerm, MeasurePlan};
+use super::density::{self, DensityTerm, ReferenceSplit};
 use super::essential_split::{EssentialSplitOptions, EssentialSplitOutcome};
 use super::frame_pair::{FrameFeatures, FramePairStats};
 use super::frames::Frames;
 use super::pilot::PilotVote;
-use super::report::{DensityPair, StepDensity, StepKind, Swap, WalkStep};
+use super::report::{StepDensity, StepKind, Swap, WalkStep};
 use crate::camera::CameraIntrinsics;
 use crate::numeric::median;
 use crate::progress::Progress;
@@ -643,42 +643,23 @@ impl Walker<'_, '_> {
             &essential_split,
             &self.frames.kept_pairs_from(self.id(f)),
         );
-        let (measure, measured_pair) = match plan {
-            MeasurePlan::Step { p50_gate_deg } => (
-                density::pair_measure(&essential_split, p50_gate_deg),
-                DensityPair::Step { p50_gate_deg },
-            ),
-            MeasurePlan::WideParallax { to } => (
-                1.0,
-                DensityPair::WideParallax {
-                    to,
-                    p50_gate_deg: density::MAX_REFERENCE_PARALLAX_P50_DEG,
-                },
-            ),
-            MeasurePlan::Reference { to, matched } => {
+        let (measure, measured_pair) =
+            density::read_measure(plan, &essential_split, |to, matched| {
                 if !matched {
                     self.match_for_measure(to)?;
                 }
-                let (split_n, factor_n) = self.searched_split(f, to, &split)?;
-                let p50_gate_deg = density::MAX_REFERENCE_PARALLAX_P50_DEG;
+                let (essential_split, focal_factor) = self.searched_split(f, to, &split)?;
                 let step_percent = self
                     .frames
                     .pair(self.id(f), self.id(to))
                     .expect("the reference pair is matched")
                     .step_percent;
-                (
-                    density::pair_measure(&split_n, p50_gate_deg),
-                    DensityPair::Reference {
-                        to,
-                        step_percent,
-                        matched_for_measure: !matched,
-                        essential_split: split_n,
-                        focal_factor: factor_n,
-                        p50_gate_deg,
-                    },
-                )
-            }
-        };
+                Ok::<_, PickImagesError>(ReferenceSplit {
+                    essential_split,
+                    focal_factor,
+                    step_percent,
+                })
+            })?;
         self.measures.push_back(measure);
         if self.measures.len() > density::WINDOW {
             self.measures.pop_front();

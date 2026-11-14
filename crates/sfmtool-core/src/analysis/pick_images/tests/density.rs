@@ -396,18 +396,15 @@ fn a_camera_the_split_refuses_turns_the_term_off_saying_why() {
     assert!(run.walk(0).steps.is_empty());
 }
 
-/// A panning capture whose near ring holds two fifths of the points, all in
-/// view over the first `steady` frames and after that each in view for 7
-/// frames of every 8: a step of 3 frames keeps half of them, and one of 7
-/// frames or more, the base target's length, none, so that the step reads
-/// the near foreground only when it is short.
+/// A panning capture whose near ring holds two fifths of the points, which
+/// keep their appearance over the first `steady` frames and after that
+/// change it every 8 frames: a step of 3 frames matches most of them again,
+/// and one of 8 frames or more, about the base target's length, none, so
+/// that a step reads the near foreground only when it is short.
 fn near_fading(frames: usize, steady: usize) -> Synth {
     let mut synth = Synth::panning_with_near(44, frames, 0.4);
     for shot in &mut synth.shots[steady..] {
-        shot.content = Content::NearWindow {
-            period: 8,
-            lifetime: 7,
-        };
+        shot.content = Content::NearRenewed { lifetime: 8 };
     }
     synth
 }
@@ -432,7 +429,7 @@ fn the_gain_a_walk_settles_at_does_not_depend_on_where_it_starts() {
     };
     for offset in [0, 40] {
         let gains = gains_past(offset, 60);
-        assert!(gains.len() >= 10, "from {offset}: {gains:?}");
         assert!(gains.iter().all(|&g| g > 2.0), "from {offset}: {gains:?}");
+        assert!(gains.len() >= 10, "from {offset}: {gains:?}");
     }
 }

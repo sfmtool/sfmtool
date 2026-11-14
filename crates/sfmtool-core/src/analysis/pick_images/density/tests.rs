@@ -75,8 +75,10 @@ fn a_step_near_the_reference_step_is_measured_itself() {
     for s in [0.5, R, 1.3 * R] {
         assert_eq!(measure_plan(100, 110, s, R, &narrow, &matched), step, "{s}");
     }
-    // A step that is not a number is measured itself too.
-    assert_eq!(measure_plan(100, 110, f64::NAN, R, &narrow, &matched), step);
+    // A step that is not finite is measured itself too.
+    for s in [f64::NAN, f64::INFINITY] {
+        assert_eq!(measure_plan(100, 110, s, R, &narrow, &matched), step);
+    }
     // Just past it, a reference pair is.
     assert_ne!(
         measure_plan(100, 110, 1.3 * R * 1.001, R, &narrow, &matched),
@@ -195,6 +197,82 @@ fn a_long_step_whose_own_parallax_rules_out_the_reference_gate_measures_no_pair(
         reason: SplitNotMeasured::NoConsensus,
     };
     assert_eq!(measure_plan(100, 130, 10.0, R, &lost, &matched), reference);
+}
+
+#[test]
+fn the_measure_is_read_from_the_pair_planned_at_its_gate() {
+    // A split the step gate passes and the reference gate does not.
+    let between = split(400, 0.3, 3.0);
+    let reference = |to: usize, matched: bool| {
+        assert_eq!((to, matched), (110, false));
+        Ok::<_, ()>(ReferenceSplit {
+            essential_split: between.clone(),
+            focal_factor: 1.06,
+            step_percent: 3.5,
+        })
+    };
+    let unused = |_: usize, _: bool| -> Result<ReferenceSplit, ()> { panic!("no reference pair") };
+    // The step itself, at the gate its plan names.
+    for (gate, measure) in [(0.5, 10.0), (0.2, 1.0)] {
+        assert_eq!(
+            read_measure(MeasurePlan::Step { p50_gate_deg: gate }, &between, unused),
+            Ok((measure, DensityPair::Step { p50_gate_deg: gate }))
+        );
+    }
+    // A reference pair, at the reference gate, with what it was measured at.
+    let plan = MeasurePlan::Reference {
+        to: 110,
+        matched: false,
+    };
+    let reported = DensityPair::Reference {
+        to: 110,
+        step_percent: 3.5,
+        matched_for_measure: true,
+        essential_split: between.clone(),
+        focal_factor: 1.06,
+        p50_gate_deg: 0.2,
+    };
+    assert_eq!(
+        read_measure(plan, &split(400, 0.1, 3.0), reference),
+        Ok((1.0, reported))
+    );
+    let narrow = split(400, 0.125, 1.5);
+    let matched = |to: usize, matched: bool| {
+        assert_eq!((to, matched), (112, true));
+        Ok::<_, ()>(ReferenceSplit {
+            essential_split: narrow.clone(),
+            focal_factor: 1.0,
+            step_percent: 3.0,
+        })
+    };
+    let plan = MeasurePlan::Reference {
+        to: 112,
+        matched: true,
+    };
+    let (measure, reported) = read_measure(plan, &between, matched).expect("read");
+    assert_eq!(measure, 12.0);
+    assert!(matches!(
+        reported,
+        DensityPair::Reference {
+            to: 112,
+            matched_for_measure: false,
+            ..
+        }
+    ));
+    // No pair: a measure of 1 at the reference gate.
+    assert_eq!(
+        read_measure(MeasurePlan::WideParallax { to: 110 }, &narrow, unused),
+        Ok((
+            1.0,
+            DensityPair::WideParallax {
+                to: 110,
+                p50_gate_deg: 0.2
+            }
+        ))
+    );
+    // An error measuring the reference pair is the reading's.
+    let failed = |_: usize, _: bool| -> Result<ReferenceSplit, &str> { Err("cancelled") };
+    assert_eq!(read_measure(plan, &narrow, failed), Err("cancelled"));
 }
 
 fn turned(inliers: usize, rotation_deg: f64, p50: f64) -> EssentialSplitOutcome {

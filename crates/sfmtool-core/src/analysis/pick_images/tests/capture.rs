@@ -53,15 +53,16 @@ pub(super) enum Content {
     Window { period: usize, lifetime: usize },
     /// Only every `every`-th point.
     Subset { every: usize },
-    /// Every point at least [`NEAR_RADIUS`] from the vertical axis through
-    /// the origin, and the nearer ones for which
-    /// `(frame + point) % period < lifetime`: frames `lifetime` or more apart
-    /// share none of the near points, and all of the far ones.
-    NearWindow { period: usize, lifetime: usize },
+    /// Every point, each one nearer than [`NEAR_RADIUS`] to the vertical axis
+    /// through the origin with a descriptor drawn afresh every `lifetime`
+    /// frames, at `(frame + point) / lifetime`: two frames `k` apart match
+    /// `1 − k / lifetime` of the near points, and none at `lifetime` or more,
+    /// as a near foreground changes in appearance, and all of the far ones.
+    NearRenewed { lifetime: usize },
 }
 
 /// How far from the vertical axis through the origin a point of
-/// [`Content::NearWindow`] is near within.
+/// [`Content::NearRenewed`] is near within.
 const NEAR_RADIUS: f64 = 50.0;
 
 /// One frame of the synthetic capture.
@@ -277,9 +278,6 @@ impl Synth {
             let shown = match content {
                 Content::Window { period, lifetime } => (t + p) % period < lifetime,
                 Content::Subset { every } => p % every == 0,
-                Content::NearWindow { period, lifetime } => {
-                    point[0].hypot(point[2]) >= NEAR_RADIUS || (t + p) % period < lifetime
-                }
                 _ => true,
             };
             if !shown {
@@ -300,7 +298,14 @@ impl Synth {
             let v = FOCAL * y / z + f64::from(HEIGHT) / 2.0 + noise(&mut rng);
             if u > 1.0 && u < f64::from(WIDTH) - 1.0 && v > 1.0 && v < f64::from(HEIGHT) - 1.0 {
                 positions.push([u as f32, v as f32]);
-                descriptors.extend_from_slice(&self.descriptors[p]);
+                match content {
+                    Content::NearRenewed { lifetime } if point[0].hypot(point[2]) < NEAR_RADIUS => {
+                        let epoch = ((t + p) / lifetime) as u64;
+                        let mut renewed = StdRng::seed_from_u64(p as u64 * 1_000_003 + epoch);
+                        descriptors.extend((0..DESCRIPTOR_DIM).map(|_| renewed.random::<u8>()));
+                    }
+                    _ => descriptors.extend_from_slice(&self.descriptors[p]),
+                }
             }
         }
         (positions, descriptors, WIDTH, HEIGHT)

@@ -1169,11 +1169,17 @@ what the walk with no camera does, and both report why the term is off; a wall s
 moving sideways, whose measures never count, chooses with the term on what
 it chooses with it off; a camera at twice the frames' size gives the report
 of one at their size; a camera of another aspect, and one with a focal of 0,
-turn the term off saying why; and a lone frame reports the term. A capture
-whose near points stay in view over its first 30 frames and after that leave
-it within 7 frames, so that only a short pair reads them, settles at a gain
-above 2 past frame 60 both when walked from its first frame and when walked
-from frame 40, where its first steps are long.
+turn the term off saying why; and a lone frame reports the term. Each step
+reports the pair its measure was read from, the step itself at the step gate
+up to 1.3 times the reference step and otherwise a reference pair within the
+step, or none, at the reference gate, and its measure is that pair's; a
+reference pair matched for the measure is matched after the step's own
+tries, and every reference pair's split, like the step's, is the one a
+second match measures at the focal the search kept. A capture whose near
+points keep their appearance over its first 30 frames and after that change
+it every 8 frames, so that only a short pair matches them, is walked at a
+gain above 2 past frame 60 both from its first frame and from frame 40,
+where a walk measuring its own steps stays at a gain of 1.
 [density/tests.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density/tests.rs)
 checks the rule: each condition of the measure at its edge and past it,
 under both gates; the pair measured, the step itself up to 1.3 times the

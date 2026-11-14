@@ -10,6 +10,7 @@
 use serde::Serialize;
 
 use super::essential_split::{EssentialSplitOptions, EssentialSplitOutcome};
+use super::report::DensityPair;
 use crate::camera::{CameraIntrinsics, IntrinsicAdjustment};
 use crate::numeric::median;
 
@@ -187,6 +188,56 @@ pub(super) fn measure_plan(
             matched: false,
         },
     }
+}
+
+/// A reference pair measured: its split at the focal the focal search kept,
+/// that focal as a factor of the camera's, and the pair's step.
+pub(super) struct ReferenceSplit {
+    pub(super) essential_split: EssentialSplitOutcome,
+    pub(super) focal_factor: f64,
+    pub(super) step_percent: f64,
+}
+
+/// The measure of a step read as `plan` says, and the pair it was read from
+/// as the report gives it. `step_split` is the step's own split;
+/// `measure_reference` measures the reference pair to a frame, given whether
+/// the walk has matched it already, and is called only for
+/// [`MeasurePlan::Reference`]. The step itself is held to the gate its plan
+/// names, a reference pair to [`MAX_REFERENCE_PARALLAX_P50_DEG`], and no pair
+/// measures 1.
+pub(super) fn read_measure<E>(
+    plan: MeasurePlan,
+    step_split: &EssentialSplitOutcome,
+    measure_reference: impl FnOnce(usize, bool) -> Result<ReferenceSplit, E>,
+) -> Result<(f64, DensityPair), E> {
+    Ok(match plan {
+        MeasurePlan::Step { p50_gate_deg } => (
+            pair_measure(step_split, p50_gate_deg),
+            DensityPair::Step { p50_gate_deg },
+        ),
+        MeasurePlan::WideParallax { to } => (
+            1.0,
+            DensityPair::WideParallax {
+                to,
+                p50_gate_deg: MAX_REFERENCE_PARALLAX_P50_DEG,
+            },
+        ),
+        MeasurePlan::Reference { to, matched } => {
+            let reference = measure_reference(to, matched)?;
+            let p50_gate_deg = MAX_REFERENCE_PARALLAX_P50_DEG;
+            (
+                pair_measure(&reference.essential_split, p50_gate_deg),
+                DensityPair::Reference {
+                    to,
+                    step_percent: reference.step_percent,
+                    matched_for_measure: !matched,
+                    essential_split: reference.essential_split,
+                    focal_factor: reference.focal_factor,
+                    p50_gate_deg,
+                },
+            )
+        }
+    })
 }
 
 /// Whether the focal search runs on a pair whose split at the camera's

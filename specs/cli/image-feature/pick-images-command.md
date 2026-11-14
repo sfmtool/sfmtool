@@ -639,16 +639,25 @@ rest.
   already reaches the reference gate and no pair was matched. Then come that
   pair's focal factor (the focal its split was kept at over the camera's,
   1.00 where the focal search did not run), its parallax P50 in degrees and
-  P90/P50, the P50 gate it was held to, 0.50 for a step and 0.20 for a
-  reference pair, and the measure, or `not measured` with the split's reason.
+  P90/P50, the P50 gate it was held to, 0.50 for the step itself and 0.20
+  for a reference pair or for a long step of one or two frames, measured as
+  its own reference pair, and the measure, or `not measured` with the split's
+  reason.
   A `none` row shows the step's own split, at the reference gate, and a
   measure of 1:
 
   ```text
     Local density by step (target, gain, median measure of the last three steps; …):
                frames   target   gain  median         measured  focal   P50 deg  P90/P50  gate  measure
-                  1-96   10.00%   1.00    1.00             1-31   1.03     0.071    11.94  0.20    11.94
-                96-126    6.42%   1.53    3.83             step   1.00     0.064    15.61  0.50    15.61
+                 1-96   10.00%   1.00    1.00             1-27   1.00     0.078     1.66  0.20     1.00
+               96-174   10.00%   1.00    1.00           96-128   1.03     0.049    18.28  0.20    18.28
+              174-274    3.33%   3.00    9.64             step   1.00     0.038     9.09  0.50     9.09
+  ```
+
+  and, on a scene near throughout:
+
+  ```text
+                 1-49   10.00%   1.00    1.00             none   1.00    14.799     1.12  0.20     1.00
   ```
 - **Extracted and never read.** The last line of the report: how many frames
   had a `.sift` file written in the run that the walk never read, the
