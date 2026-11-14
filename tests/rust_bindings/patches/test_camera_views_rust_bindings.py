@@ -277,6 +277,21 @@ class TestViewsModeRequiredArguments:
         with pytest.raises(ValueError, match="patch_views is required"):
             cloud.refine_keypoints(views, images)
 
+    def test_render_bitmaps_requires_reconstruction(self, scene):
+        views, cloud, images = scene
+        with pytest.raises(
+            ValueError, match="render_bitmaps needs a reconstruction, not a CameraViews"
+        ):
+            cloud.render_bitmaps(views, images)
+
+    def test_read_observations_requires_reconstruction(self, scene):
+        views, cloud, images = scene
+        with pytest.raises(
+            ValueError,
+            match="read_observations needs a reconstruction, not a CameraViews",
+        ):
+            cloud.read_observations(views, images)
+
     def test_localize_runs_with_patch_views(self, scene):
         views, cloud, images = scene
         patch_views = {0: [0, 1], 1: [0, 1], 2: [0, 1]}

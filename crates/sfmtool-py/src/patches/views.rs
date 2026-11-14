@@ -186,12 +186,46 @@ pub(super) fn resolve_patch_scene<'py>(
     derived_views_name: &str,
 ) -> PyResult<(PosedViews, Option<PyRef<'py, PySfmrReconstruction>>, u32)> {
     let (posed, recon_guard) = resolve_scene(scene)?;
+    check_cloud_points(cloud, recon_guard.as_deref())?;
+    if recon_guard.is_none() && !explicit_views_present {
+        return Err(PyValueError::new_err(format!(
+            "{view_arg_name} is required when the first argument is a CameraViews \
+             (there are no tracks to derive {derived_views_name} from)"
+        )));
+    }
+    let n_images = posed.len() as u32;
+    Ok((posed, recon_guard, n_images))
+}
+
+/// Resolve and validate the scene of a patch-cloud kernel binding that reads
+/// a reconstruction's stored per-observation data and so takes no
+/// [`PyCameraViews`]: a `CameraViews` is a `ValueError` saying that `method`
+/// needs a reconstruction. The checks otherwise match [`resolve_patch_scene`]'s,
+/// and run before callers decode any imagery.
+pub(super) fn resolve_patch_reconstruction<'py>(
+    scene: &Bound<'py, PyAny>,
+    cloud: &PatchCloud,
+    method: &str,
+) -> PyResult<(PosedViews, PyRef<'py, PySfmrReconstruction>)> {
+    let (posed, recon_guard) = resolve_scene(scene)?;
+    let Some(recon) = recon_guard else {
+        return Err(PyValueError::new_err(format!(
+            "{method} needs a reconstruction, not a CameraViews"
+        )));
+    };
+    check_cloud_points(cloud, Some(&recon))?;
+    Ok((posed, recon))
+}
+
+/// Check that `cloud` carries its per-patch point indexes and, given a
+/// reconstruction, that each one is a point of it.
+fn check_cloud_points(cloud: &PatchCloud, recon: Option<&PySfmrReconstruction>) -> PyResult<()> {
     if cloud.point_indexes.len() != cloud.len() {
         return Err(PyValueError::new_err(
             "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
         ));
     }
-    if let Some(recon) = recon_guard.as_ref() {
+    if let Some(recon) = recon {
         if cloud
             .point_indexes
             .iter()
@@ -203,14 +237,7 @@ pub(super) fn resolve_patch_scene<'py>(
             ));
         }
     }
-    if recon_guard.is_none() && !explicit_views_present {
-        return Err(PyValueError::new_err(format!(
-            "{view_arg_name} is required when the first argument is a CameraViews \
-             (there are no tracks to derive {derived_views_name} from)"
-        )));
-    }
-    let n_images = posed.len() as u32;
-    Ok((posed, recon_guard, n_images))
+    Ok(())
 }
 
 /// Resolve the `images` argument of a PatchCloud kernel method — either a
