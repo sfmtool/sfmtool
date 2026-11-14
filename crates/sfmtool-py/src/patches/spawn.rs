@@ -9,7 +9,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::patch::normal_refine::ProjectedImage;
-use sfmtool_core::patch::spawn::{spawn_candidate_tracks as core_spawn, SpawnParams};
+use sfmtool_core::patch::spawn::{
+    check_spawn_requests, spawn_candidate_tracks as core_spawn, SpawnParams,
+};
 
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
@@ -101,7 +103,6 @@ pub fn spawn_candidate_tracks(
         return Err(PyValueError::new_err("offsets_uv must have shape (n, 2)"));
     }
 
-    // Core checks the batch: the lengths, the parents and the patch views.
     let parent_data = to_contiguous!(parents);
     let (posed, _recon) = resolve_scene(views)?;
 
@@ -118,6 +119,16 @@ pub fn spawn_candidate_tracks(
         max_reproj_rms_px,
     };
 
+    // Refuse a malformed batch before building the pyramids; core checks it
+    // again.
+    check_spawn_requests(
+        posed.len(),
+        &cloud.inner,
+        &parent_data,
+        &offsets,
+        &patch_views,
+    )
+    .map_err(value_err)?;
     let pyramid_set = resolve_pyramids(&posed, images)?;
     let pyramids = pyramid_set.as_slice();
     let projected: Vec<ProjectedImage<'_>> = (0..posed.len())

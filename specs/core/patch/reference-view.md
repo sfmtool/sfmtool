@@ -159,6 +159,9 @@ pub fn render_patch_cloud_bitmaps(cloud: &PatchCloud, recon: &SfmrReconstruction
 // no point index or one out of range, or not one view per image
 pub enum CloudRenderError { Cancelled, NoInlineKeypoints, PointIndexes { .. },
     PointOutOfRange { .. }, ViewCount { .. } }
+// the same checks, run alone, before building the pyramids the views need
+pub fn check_cloud_render<'r>(cloud: &PatchCloud, recon: &'r SfmrReconstruction,
+    views: usize) -> Result<&'r Array2<f32>, CloudRenderError>;
 
 // patch::normal_refine
 pub struct ViewingAngle { pub angle_deg: f64, pub tilt_direction_deg: Option<f64> }

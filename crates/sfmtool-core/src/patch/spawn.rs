@@ -205,8 +205,16 @@ impl std::fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
-/// Check a [`spawn_candidate_tracks`] batch before any of it runs.
-fn check_spawn_requests(
+/// Check a [`spawn_candidate_tracks`] batch of `views` images before any of
+/// it runs, returning the error that call would. [`spawn_candidate_tracks`]
+/// runs this itself; a caller with costly work to do before that call, such as
+/// building the image pyramids, can run it first to refuse a malformed batch
+/// before that work.
+///
+/// # Errors
+///
+/// The [`SpawnError`] that [`spawn_candidate_tracks`] would return.
+pub fn check_spawn_requests(
     views: usize,
     cloud: &PatchCloud,
     parents: &[u32],

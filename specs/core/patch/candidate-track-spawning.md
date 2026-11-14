@@ -129,7 +129,9 @@ Before spawning anything, the call checks the batch and returns a `SpawnError`
 for an `offsets_uv` or `patch_views` whose length differs from `parents`
 (`OffsetsLength`, `PatchViewsLength`), a parent index out of range for the
 cloud (`ParentOutOfRange`), a parent at infinity (`ParentAtInfinity`), and a
-patch view out of range for `views` (`ViewOutOfRange`).
+patch view out of range for `views` (`ViewOutOfRange`). `check_spawn_requests`
+runs the same checks alone, so the binding refuses a malformed batch before it
+builds the image pyramids.
 
 The Python binding (`views, images, cloud, parents, offsets_uv, patch_views`)
 takes the existing `CameraViews` / `ImagePyramidSet` / `PatchCloud` objects —

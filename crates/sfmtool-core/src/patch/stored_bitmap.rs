@@ -276,7 +276,7 @@ impl std::fmt::Display for CloudRenderError {
             CloudRenderError::NoInlineKeypoints => f.write_str(
                 "the reconstruction has no inline keypoints to render at: its observations \
                  are .sift feature indexes (an embedded_patches reconstruction stores the \
-                 keypoints)",
+                 keypoints; `sfm xform --to-embedded-patches` makes one)",
             ),
             CloudRenderError::PointIndexes {
                 patches,
@@ -311,9 +311,18 @@ impl From<Cancelled> for CloudRenderError {
     }
 }
 
-/// Check the inputs of a whole-cloud render against `recon`, and return its
-/// inline keypoints.
-pub(crate) fn check_cloud_render<'r>(
+/// Check the inputs of a whole-cloud render of `views` images against
+/// `recon`, and return its inline keypoints. [`render_patch_cloud_bitmaps`]
+/// and
+/// [`read_cloud_observations`](crate::patch::observation_reading::read_cloud_observations)
+/// run this themselves; a caller with costly work to do before either, such
+/// as building the image pyramids, can run it first.
+///
+/// # Errors
+///
+/// Every [`CloudRenderError`] but [`CloudRenderError::Cancelled`], as those
+/// two renders return them.
+pub fn check_cloud_render<'r>(
     cloud: &PatchCloud,
     recon: &'r crate::SfmrReconstruction,
     views: usize,
