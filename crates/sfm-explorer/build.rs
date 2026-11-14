@@ -1,9 +1,16 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+/// The application icon `sfm-explorer.exe` carries, rendered from
+/// `assets/icon/sfm-explorer-icon.svg` by `scripts/render_explorer_icon.py`.
+const ICON_PATH: &str = "assets/icon/sfm-explorer.ico";
+
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={ICON_PATH}");
     if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "windows" {
         let mut res = winres::WindowsResource::new();
+        res.set_icon(ICON_PATH);
         res.set_manifest(r#"
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
     <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">

@@ -103,11 +103,14 @@ sfmtool/
 │   │       └── ...               # Feature matching, alignment, spatial indexing
 │   │
 │   ├── sfm-explorer/              # GUI application
+│   │   ├── assets/icon/          # The application icon: SVG source, PNG sizes, .ico
+│   │   ├── build.rs              # Windows manifest and .exe icon resource
 │   │   ├── examples/             # DirectManipulation reference examples (feature-gated)
 │   │   └── src/
 │   │       ├── main.rs           # Thin entry-point shim (calls into lib.rs)
 │   │       ├── lib.rs            # Winit event loop, wgpu setup, window/DPI plumbing
 │   │       ├── app.rs            # Per-frame pipeline: uploads, render passes, egui pass
+│   │       ├── app_icon.rs       # The embedded window icons
 │   │       ├── dock.rs           # egui_dock Tab enum and TabViewer impl (10 panels)
 │   │       ├── viewer_3d/        # ViewportCamera, interaction, fly navigation
 │   │       │   ├── mod.rs        # Viewer3D state and per-frame `show`
@@ -174,7 +177,7 @@ sfmtool/
 │   │       ├── metrics.rs            # Reprojection error, ray angles, triangulation diagnostics
 │   │       ├── platform/
 │   │       │   ├── mod.rs
-│   │       │   ├── macos.rs      # The application menu's Quit made a close request
+│   │       │   ├── macos.rs      # The application menu's Quit made a close request; the Dock icon
 │   │       │   └── windows.rs    # DirectManipulation touchpad integration
 │   │       └── shaders/
 │   │           ├── common.wgsl         # Prelude prepended to six scene shaders: ReconUniforms, PICK_TAG_*, INF_DEPTH, MASK_*
@@ -209,6 +212,7 @@ is prepended the same way rather than declaring those values again. See
 |--------|---------------|
 | `main.rs` | Thin entry-point shim (~6 lines) that calls into `lib::run`. |
 | `lib.rs` | Window creation, wgpu device/surface, DirectManipulation init, `winit` event loop, Windows DPI awareness, `egui_dock` `DockState` initialization from `Layout::default()` ([panel-layout.md](panel-layout.md)). |
+| `app_icon.rs` | The application icon's PNG sizes, embedded per platform and decoded into the window icons `lib.rs` creates the window with ([application-icon.md](application-icon.md)). |
 | `app.rs` | The per-frame pipeline (`App::run_ui_and_paint`): per-frame uploads (points, frustums, frustum colors, thumbnails, track rays, bg image, clip planes), camera-uniform updates, scene encoder + render passes, egui pass with the dock UI, AccessKit propagation, surface acquire/present, pick-result dispatch. |
 | `app/menu.rs`, `app/modals.rs`, `app/save.rs` | The menu bar and keyboard shortcuts, modal answers and deferred closes, and File-menu save handling, respectively. The egui pass calls them in that order before drawing the dock. |
 | `dock.rs` | `Tab` enum (10 variants) and `egui_dock::TabViewer` implementation: routes each tab to its panel's `show()` and threads the cross-panel `*Response` shape into `AppState`. |
