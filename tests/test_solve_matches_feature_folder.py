@@ -43,9 +43,12 @@ def moved_features_workspace(tmp_path_factory) -> tuple[Path, Path, str, str]:
     """
     workspace = tmp_path_factory.mktemp("moved_features") / "ws"
     workspace.mkdir()
-    # Eight of the 17 images: enough for a solve, and half the extraction
-    # and matching of all of them.
-    for image in sorted(SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg"))[:8]:
+    # All 17 images. With only the first eight, exhaustive matching verifies
+    # about 20 pairs, and on Linux GLOMAP's rotation averaging rejected 6 of
+    # the 17 edges it kept and the global solve triangulated no points; the
+    # 17 give about 48 verified pairs, and are the images `test_solve_global`
+    # solves globally on every platform.
+    for image in sorted(SEOUL_BULL_DIR.glob("seoul_bull_sculpture_*.jpg")):
         shutil.copy(image, workspace / image.name)
     shutil.copy(SEOUL_BULL_DIR / "camera_config.json", workspace)
 
@@ -126,7 +129,7 @@ def test_solve_reads_the_feature_folder_the_matches_file_was_matched_on(
     assert differs_from_new == recon.image_count
 
     # A sound solve: finite points that reproject to within a pixel or so.
-    assert recon.image_count == 8
+    assert recon.image_count == 17
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
     assert at_infinity.mean() < 0.05
     errors = np.asarray(recon.rms_reprojection_errors)
@@ -168,7 +171,7 @@ def test_solve_refuses_before_solving_when_the_feature_folder_is_gone(
     assert result.exit_code != 0
     assert f"Cannot use {matches_path}" in result.output
     assert f"in the feature folder {old_folder}" in result.output
-    assert "8 of the 8 .sift files it needs are missing" in result.output
+    assert "17 of the 17 .sift files it needs are missing" in result.output
     assert "Run 'sfm match' on its images again" in result.output
     # Stopped before the database was written or anything solved.
     assert "Wrote" not in result.output
@@ -184,7 +187,7 @@ def test_solve_refuses_when_a_sift_file_differs_from_its_recorded_hash(
     output = workspace / "solved.sfmr"
     result = _invoke("solve", "-i", "--output", output, matches_path)
     assert result.exit_code != 0
-    assert "1 of the 8 .sift files it needs has changed" in result.output
+    assert "1 of the 17 .sift files it needs has changed" in result.output
     assert str(workspace / old_folder / name) in result.output
     assert "Wrote" not in result.output
     assert not output.exists()
