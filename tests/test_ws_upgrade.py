@@ -60,6 +60,13 @@ def test_upgrade_keeps_hand_edited_options_and_converts_a_custom_gray_formula(
     assert new["feature_prefix_dir"] != config["feature_prefix_dir"]
     assert f"old features folder: {config['feature_prefix_dir']}" in result.output
     assert f"new features folder: {new['feature_prefix_dir']}" in result.output
+    # It says that existing matches and reconstructions keep the old folder,
+    # and that new matches take `sfm match` again.
+    assert (
+        "Existing .matches and .sfmr files refer to the old folder and keep "
+        "using it" in result.output
+    )
+    assert "run 'sfm match' again" in result.output
     # The old folder, its files and the lists file stay.
     assert (old_folder / "a.jpg.sift").read_bytes() == b"kept"
     assert lists.read_text() == "{}"

@@ -15,7 +15,6 @@ from .colmap.io import (
     pycolmap_to_rust_sfmr,
 )
 from ._sfmr_naming import get_next_sfm_filename as _get_next_sfm_filename
-from ._workspace import load_workspace_config
 
 
 def run_incremental_sfm(
@@ -41,17 +40,19 @@ def run_incremental_sfm(
         print(f"Random seed: {random_seed}")
         pycolmap.set_random_seed(random_seed)
 
-    db_path, image_dir, image_paths, has_rig, workspace_dir = prepare_solve_inputs(
-        image_paths,
-        workspace_dir,
-        colmap_dir,
-        max_feature_count=max_feature_count,
-        camera_model=camera_model,
-        matching_mode=matching_mode,
-        flow_preset=flow_preset,
-        flow_wide_baseline_skip=flow_wide_baseline_skip,
-        matches_file=matches_file,
-        image_filter=image_filter,
+    db_path, image_dir, image_paths, has_rig, workspace_dir, features = (
+        prepare_solve_inputs(
+            image_paths,
+            workspace_dir,
+            colmap_dir,
+            max_feature_count=max_feature_count,
+            camera_model=camera_model,
+            matching_mode=matching_mode,
+            flow_preset=flow_preset,
+            flow_wide_baseline_skip=flow_wide_baseline_skip,
+            matches_file=matches_file,
+            image_filter=image_filter,
+        )
     )
 
     reconstruction_path = Path(colmap_dir) / "reconstruction"
@@ -79,7 +80,6 @@ def run_incremental_sfm(
         tool_options["rig_aware"] = True
         tool_options["refine_rig"] = refine_rig
 
-    workspace_config = load_workspace_config(workspace_dir)
     explicit_output = Path(output_sfm_file).absolute() if output_sfm_file else None
 
     return _save_reconstructions(
@@ -88,7 +88,7 @@ def run_incremental_sfm(
         reconstruction_path=reconstruction_path,
         image_dir=image_dir,
         workspace_dir=workspace_dir,
-        workspace_config=workspace_config,
+        features=features,
         tool_name="colmap",
         tool_options=tool_options,
         input_image_count=len(image_paths),
@@ -105,7 +105,7 @@ def _save_reconstructions(
     reconstruction_path: Path,
     image_dir: str | Path,
     workspace_dir: Path,
-    workspace_config: dict,
+    features: dict,
     tool_name: str,
     tool_options: dict,
     input_image_count: int,
@@ -121,6 +121,10 @@ def _save_reconstructions(
     registered image count, then observations), so the real reconstruction —
     not a junk 2-image fragment that happened to land at a lower model index —
     claims the explicit `--output` slot and is returned as the primary.
+
+    `features` is the feature definition the solve's `.sift` files come from
+    (`SolveInputs.features`); each reconstruction records it and reads its
+    keypoints, hashes and thumbnails from its folder.
     """
     image_dir_rel = str(Path(image_dir).relative_to(workspace_dir))
 
@@ -191,7 +195,7 @@ def _save_reconstructions(
         metadata = build_metadata(
             workspace_dir=workspace_dir,
             output_path=output_path,
-            workspace_config=workspace_config,
+            workspace_config=features,
             operation="sfm_solve",
             tool_name=tool_name,
             tool_options=tool_options,

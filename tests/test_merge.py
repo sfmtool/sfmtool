@@ -53,6 +53,25 @@ class TestMergeValidation:
         with pytest.raises(ValueError, match="Need at least 2 reconstructions"):
             merge_reconstructions(reconstructions=[recon])
 
+    def test_merge_refuses_reconstructions_from_different_feature_folders(self):
+        class RecordsFolder:
+            """Stands in for a reconstruction: the check reads only this."""
+
+            def __init__(self, folder):
+                self.source_metadata = {
+                    "workspace": {"contents": {"feature_prefix_dir": folder}}
+                }
+
+        old, new = "features/sift-old", "features/sift-new"
+        with pytest.raises(ValueError) as excinfo:
+            merge_reconstructions(
+                reconstructions=[RecordsFolder(old), RecordsFolder(new)]
+            )
+        message = str(excinfo.value)
+        assert "made from different feature folders" in message
+        assert f"input 1: {old}" in message
+        assert f"input 2: {new}" in message
+
 
 # ---------------------------------------------------------------------------
 # Merge core tests

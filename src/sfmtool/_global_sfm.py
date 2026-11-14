@@ -10,7 +10,6 @@ import pycolmap
 from ._incremental_sfm import _save_reconstructions
 from ._solve_setup import prepare_solve_inputs
 from .colmap.db_setup import MatchesImageFilter
-from ._workspace import load_workspace_config
 
 
 def run_global_sfm(
@@ -36,17 +35,19 @@ def run_global_sfm(
         print(f"Random seed: {random_seed}")
 
     colmap_dir = Path(colmap_dir)
-    db_path, image_dir, image_paths, has_rig, workspace_dir = prepare_solve_inputs(
-        image_paths,
-        workspace_dir,
-        colmap_dir,
-        max_feature_count=max_feature_count,
-        camera_model=camera_model,
-        matching_mode=matching_mode,
-        flow_preset=flow_preset,
-        flow_wide_baseline_skip=flow_wide_baseline_skip,
-        matches_file=matches_file,
-        image_filter=image_filter,
+    db_path, image_dir, image_paths, has_rig, workspace_dir, features = (
+        prepare_solve_inputs(
+            image_paths,
+            workspace_dir,
+            colmap_dir,
+            max_feature_count=max_feature_count,
+            camera_model=camera_model,
+            matching_mode=matching_mode,
+            flow_preset=flow_preset,
+            flow_wide_baseline_skip=flow_wide_baseline_skip,
+            matches_file=matches_file,
+            image_filter=image_filter,
+        )
     )
 
     reconstruction_path = colmap_dir / "reconstruction"
@@ -75,7 +76,6 @@ def run_global_sfm(
         tool_options["rig_aware"] = True
         tool_options["refine_rig"] = refine_rig
 
-    workspace_config = load_workspace_config(workspace_dir)
     explicit_output = Path(output_sfm_file).absolute() if output_sfm_file else None
 
     return _save_reconstructions(
@@ -84,7 +84,7 @@ def run_global_sfm(
         reconstruction_path=Path(reconstruction_path),
         image_dir=image_dir,
         workspace_dir=workspace_dir,
-        workspace_config=workspace_config,
+        features=features,
         tool_name="glomap",
         tool_options=tool_options,
         input_image_count=len(image_paths),

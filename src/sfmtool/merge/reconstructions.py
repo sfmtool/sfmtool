@@ -30,6 +30,22 @@ def merge_reconstructions(
     if len(reconstructions) < 2:
         raise ValueError("Need at least 2 reconstructions to merge")
 
+    # Observations are matched and combined by feature index, and the merged
+    # reconstruction records one feature folder, so every input must record
+    # the same one. A folder records the features as they were extracted, not
+    # the workspace's current folder, which `sfm ws upgrade` moves.
+    feature_folders = [_feature_prefix_dir(r) for r in reconstructions]
+    if len(set(feature_folders)) > 1:
+        listed = ", ".join(
+            f"input {i + 1}: {folder}" for i, folder in enumerate(feature_folders)
+        )
+        raise ValueError(
+            "The reconstructions were made from different feature folders "
+            f"({listed}), so their feature indexes do not refer to the same "
+            "features. Solve them from the same features to merge them."
+        )
+    feature_prefix_dir = feature_folders[0]
+
     click.echo(f"\nMerging {len(reconstructions)} reconstructions...")
     click.echo("=" * 70)
 
@@ -105,11 +121,6 @@ def merge_reconstructions(
     # [6/7] Refine camera poses
     click.echo("\n[6/7] Refining camera poses...")
     step_start = time.perf_counter()
-    workspace_meta = reconstructions[0].source_metadata.get("workspace", {})
-    workspace_contents = workspace_meta.get("contents", {})
-    feature_tool = workspace_contents.get("feature_tool", "colmap")
-    feature_options = workspace_contents.get("feature_options", {})
-
     merged_images = refine_camera_poses(
         merged_images=merged_images,
         merged_cameras=merged_cameras,
@@ -117,8 +128,7 @@ def merge_reconstructions(
         merged_points=merged_points,
         merged_tracks=merged_tracks,
         workspace_dir=workspace_dir,
-        feature_tool=feature_tool,
-        feature_options=feature_options,
+        feature_prefix_dir=feature_prefix_dir,
     )
     click.echo(f"  Completed in {time.perf_counter() - step_start:.2f}s")
 
@@ -463,6 +473,11 @@ def _merge_images(
         merged_images["rig_indexes"] = np.array(merged_rig_indexes, dtype=np.uint32)
 
     return merged_images, image_mapping
+
+
+def _feature_prefix_dir(recon: SfmrReconstruction) -> str:
+    """The feature folder a reconstruction records."""
+    return recon.source_metadata["workspace"]["contents"]["feature_prefix_dir"]
 
 
 def _create_merged_reconstruction(

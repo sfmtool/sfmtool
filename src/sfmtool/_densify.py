@@ -24,7 +24,7 @@ from ._image_pair_graph import (
     build_covisibility_pairs,
     build_frustum_intersection_pairs,
 )
-from .sift.file import get_sift_path_for_image
+from .sift.file import get_sift_path_from_recon
 from .fileio import SiftFile
 from ._sfmtool.reconstruction import SfmrReconstruction
 from ._sfmtool.geometry import RotQuaternion
@@ -91,8 +91,7 @@ def prune_image_pairs(
 def _match_single_pair(
     img_i: int,
     img_j: int,
-    workspace_dir: Path,
-    image_names: list[str],
+    sift_paths: list[Path],
     quaternions: np.ndarray,
     translations: np.ndarray,
     image_cameras: list[pycolmap.Camera],
@@ -102,12 +101,9 @@ def _match_single_pair(
     geometric_config: GeometricFilterConfig | None = None,
 ) -> tuple[tuple[int, int], list[tuple[int, int]]]:
     """Match a single image pair, each image through its own camera in
-    ``image_cameras``."""
-    image_path_i = workspace_dir / image_names[img_i]
-    image_path_j = workspace_dir / image_names[img_j]
-
-    sift_path_i = get_sift_path_for_image(image_path_i)
-    sift_path_j = get_sift_path_for_image(image_path_j)
+    ``image_cameras`` and its own ``.sift`` file in ``sift_paths``."""
+    sift_path_i = sift_paths[img_i]
+    sift_path_j = sift_paths[img_j]
 
     with SiftFile(sift_path_i) as reader_i:
         pos_i = reader_i.read_positions(count=max_features)
@@ -161,8 +157,7 @@ def _match_single_pair(
 
 
 def match_image_pairs(
-    workspace_dir: Path,
-    image_names: list[str],
+    sift_paths: list[Path],
     pairs: list[tuple[int, int]],
     quaternions: np.ndarray,
     translations: np.ndarray,
@@ -173,7 +168,7 @@ def match_image_pairs(
     geometric_config: GeometricFilterConfig | None = None,
 ) -> dict[tuple[int, int], list[tuple[int, int]]]:
     """Run sweep matching on image pairs, with one camera per image in
-    ``image_cameras``."""
+    ``image_cameras`` and one ``.sift`` file per image in ``sift_paths``."""
     all_matches = {}
 
     for idx, (img_i, img_j) in enumerate(pairs):
@@ -183,8 +178,7 @@ def match_image_pairs(
         pair_key, match_tuples = _match_single_pair(
             img_i,
             img_j,
-            workspace_dir,
-            image_names,
+            sift_paths,
             quaternions,
             translations,
             image_cameras,
@@ -252,8 +246,7 @@ def triangulate_new_tracks(
         for img_id, img in reconstruction.images.items():
             db.write_image(img, use_image_id=True)
 
-            image_path = workspace_dir / img.name
-            sift_path = get_sift_path_for_image(image_path)
+            sift_path = get_sift_path_from_recon(recon, img.name)
 
             with SiftFile(sift_path) as reader:
                 keypoints = reader.read_positions(count=max_features)
@@ -616,6 +609,9 @@ def densify_reconstruction(
     quaternions = recon.quaternions_wxyz
     translations = recon.translations
     workspace_dir = Path(recon.workspace_dir)
+    # The .sift files the reconstruction's feature indexes refer to, in the
+    # feature folder it records.
+    sift_paths = [get_sift_path_from_recon(recon, name) for name in image_names]
 
     image_cameras = [
         colmap_camera_from_intrinsics(recon.image_intrinsics(i))
@@ -647,8 +643,7 @@ def densify_reconstruction(
         f" at max-features={max_features}..."
     )
     all_matches = match_image_pairs(
-        workspace_dir,
-        image_names,
+        sift_paths,
         covis_pairs_to_match,
         quaternions,
         translations,
@@ -697,8 +692,7 @@ def densify_reconstruction(
                 f"\nSweep-matching {len(frustum_pairs_to_match)} frustum-only pairs..."
             )
             frustum_matches = match_image_pairs(
-                workspace_dir,
-                image_names,
+                sift_paths,
                 frustum_pairs_to_match,
                 quaternions,
                 translations,

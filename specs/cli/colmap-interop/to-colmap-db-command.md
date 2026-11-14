@@ -97,6 +97,13 @@ the camera and the correction, before the database is created, as
 Populates the database with cameras, keypoints, descriptors, and pre-computed matches and
 two-view geometries (if included) from the matches file.
 
+The keypoints and descriptors come from the `.sift` files the `.matches` file
+was matched on, in the feature folder it records, not the workspace's current
+one; a missing `.sift` file, or one whose content hash differs from what the
+`.matches` file recorded, stops the command before it writes the database, as
+it stops `sfm solve`
+([solve-command.md § From a `.matches` file](../reconstruction/solve-command.md#from-a-matches-file)).
+
 A clusters-bearing `.matches` file works directly: its pairs are derived at
 read time through `sfmtool.feature_match.pairs_from_matches`, and the database
 gets matches with no two-view geometry table. That is enough for anything that

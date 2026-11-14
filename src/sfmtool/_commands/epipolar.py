@@ -13,7 +13,6 @@ from ..visualization._epipolar_display import draw_epipolar_visualization
 from .._filenames import number_from_filename
 from .._sfmr_naming import get_image_hint_message
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._workspace import load_workspace_config
 
 
 def resolve_image_name(image_input: str, recon) -> str:
@@ -235,16 +234,6 @@ def epipolar(
         if output_path is None:
             raise click.UsageError("Must specify --draw to enable visualization mode.")
 
-    from ..cli import deduce_workspace
-
-    workspace_dir = deduce_workspace({reconstruction_path})
-    try:
-        workspace_config = load_workspace_config(workspace_dir)
-    except RuntimeError as e:
-        raise click.ClickException(str(e))
-    tool = workspace_config["feature_tool"]
-    feature_options = workspace_config["feature_options"]
-
     if pairs_mode:
         pairs_dir = Path(pairs_dir)
         pairs_dir.mkdir(parents=True, exist_ok=True)
@@ -298,8 +287,6 @@ def epipolar(
                     draw_lines=draw_lines,
                     side_by_side=side_by_side,
                     save_which="first" if not side_by_side else "both",
-                    feature_tool=tool,
-                    feature_options=feature_options,
                     sweep_max_features=sweep_max_features,
                     sweep_window_size=sweep_window_size,
                 )
@@ -324,8 +311,6 @@ def epipolar(
                 draw_lines=draw_lines,
                 side_by_side=side_by_side,
                 save_which="first" if not side_by_side else "both",
-                feature_tool=tool,
-                feature_options=feature_options,
                 sweep_max_features=sweep_max_features,
                 sweep_window_size=sweep_window_size,
             )
@@ -354,8 +339,6 @@ def epipolar(
                 undistort=undistort,
                 draw_lines=draw_lines,
                 side_by_side=side_by_side,
-                feature_tool=tool,
-                feature_options=feature_options,
                 sweep_max_features=sweep_max_features,
                 sweep_window_size=sweep_window_size,
             )

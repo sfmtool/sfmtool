@@ -8,9 +8,8 @@ from pathlib import Path
 import numpy as np
 
 from ..camera.cameras import pycolmap_camera_to_intrinsics
-from ..sift.file import get_sift_path_for_image
+from ..sift.file import get_sift_path_from_recon
 from ..fileio import SiftFile
-from .._workspace import load_workspace_config
 from ..workspace import find_workspace_for_path
 
 
@@ -28,20 +27,26 @@ def _get_feature_prefix_dir(workspace_config: dict) -> str:
 def _resolve_workspace_and_sift(
     image_names: list[str],
     image_dir: Path,
-) -> tuple[
-    Path, dict, list[str], list[bytes], list[bytes], list[np.ndarray], dict | None
-]:
+    feature_contents: dict,
+) -> tuple[Path, list[str], list[bytes], list[bytes], list[np.ndarray], dict | None]:
     """Resolve workspace and read .sift metadata for a list of image names.
 
+    ``feature_contents`` is the ``workspace.contents`` the reconstruction's
+    metadata records (``build_metadata`` makes it). The ``.sift`` files read
+    are those in its ``feature_prefix_dir``, so the folder a ``.sfmr`` names
+    is always the one its hashes, thumbnails and keypoints came from, even
+    when it is not the workspace's current folder, as for a solve from a
+    ``.matches`` file made before ``sfm ws upgrade``.
+
     Returns:
-        (workspace_dir, workspace_contents, resolved_names,
-         feature_tool_hashes, sift_content_hashes, thumbnails, image_readings)
+        (workspace_dir, resolved_names, feature_tool_hashes,
+         sift_content_hashes, thumbnails, image_readings)
 
     ``image_readings`` is the ``image_to_gray``, ``sharpness`` and
     ``gradient_structure_tensors_xx_yy_xy`` entries of the data dict, copied
     from the ``.sift`` files beside their thumbnails when every one is a
-    version 2 file recording the workspace's ``image_to_gray`` (or, in a
-    workspace that records none, the first file's). Otherwise it is ``None``,
+    version 2 file recording the ``image_to_gray`` of ``feature_contents``
+    (or, where it records none, the first file's). Otherwise it is ``None``,
     and the reconstruction's save gathers the readings, computing the rows no
     ``.sift`` file holds from the photographs.
     """
@@ -52,17 +57,8 @@ def _resolve_workspace_and_sift(
             "Initialize a workspace with 'sfm ws init <workspace_dir>'"
         )
 
-    workspace_config = load_workspace_config(workspace_dir)
-    feature_tool = workspace_config.get("feature_tool", "colmap")
-    feature_options = workspace_config.get("feature_options", {})
-    feature_prefix_dir = _get_feature_prefix_dir(workspace_config)
-
-    workspace_contents = {
-        "feature_tool": feature_tool,
-        "feature_type": "sift",
-        "feature_options": feature_options,
-        "feature_prefix_dir": feature_prefix_dir,
-    }
+    feature_options = feature_contents.get("feature_options") or {}
+    feature_prefix_dir = _get_feature_prefix_dir(feature_contents)
 
     resolved_names = []
     feature_tool_hashes = []
@@ -99,7 +95,9 @@ def _resolve_workspace_and_sift(
 
         resolved_names.append(posix_path)
 
-        sift_path = get_sift_path_for_image(img_abs_path)
+        sift_path = (
+            img_abs_path.parent / feature_prefix_dir / f"{img_abs_path.name}.sift"
+        )
         with SiftFile(sift_path) as reader:
             ft_hash = reader.content_hash["feature_tool_xxh128"]
             sc_hash = reader.content_hash["content_xxh128"]
@@ -137,7 +135,6 @@ def _resolve_workspace_and_sift(
 
     return (
         workspace_dir,
-        workspace_contents,
         resolved_names,
         feature_tool_hashes,
         sift_content_hashes,
@@ -551,13 +548,14 @@ def colmap_binary_to_rust_sfmr(
 
     (
         workspace_dir,
-        _workspace_contents,
         resolved_names,
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
         image_readings,
-    ) = _resolve_workspace_and_sift(data["image_names"], image_dir)
+    ) = _resolve_workspace_and_sift(
+        data["image_names"], image_dir, metadata["workspace"]["contents"]
+    )
 
     rig_frame_data = _conjugate_rig_sensor_poses(data.get("rig_frame_data"))
 
@@ -665,13 +663,14 @@ def pycolmap_to_rust_sfmr(
 
     (
         workspace_dir,
-        _workspace_contents,
         resolved_names,
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
         image_readings,
-    ) = _resolve_workspace_and_sift(raw_image_names, image_dir)
+    ) = _resolve_workspace_and_sift(
+        raw_image_names, image_dir, metadata["workspace"]["contents"]
+    )
 
     # Prepare 3D points
     sorted_point_ids = sorted(points3d.keys())
@@ -960,7 +959,6 @@ def save_colmap_binary(
     )
 
     output_dir = Path(output_dir)
-    workspace_dir = recon.workspace_dir
 
     # Get track arrays
     track_image_indexes = recon.track_image_indexes
@@ -981,8 +979,7 @@ def save_colmap_binary(
         # Read keypoints from .sift files for each image
         keypoints_per_image = []
         for img_name in recon.image_names:
-            image_path = Path(workspace_dir) / img_name
-            sift_path = get_sift_path_for_image(image_path)
+            sift_path = get_sift_path_from_recon(recon, img_name)
             with SiftFile(sift_path) as reader:
                 positions = reader.read_positions(count=max_features)
             keypoints_per_image.append(np.asarray(positions, dtype=np.float64))

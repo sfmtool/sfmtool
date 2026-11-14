@@ -57,8 +57,7 @@ def _refine_single_camera_pose(
     feature_indexes,
     points3d,
     workspace_dir,
-    feature_tool,
-    feature_options,
+    feature_prefix_dir,
     original_quat,
     original_trans,
     max_num_trials=10000,
@@ -76,7 +75,6 @@ def _refine_single_camera_pose(
     """
     import pycolmap
 
-    from ..sift.file import get_sift_path_for_image
     from ..fileio import SiftFile
 
     if len(feature_indexes) < 4:
@@ -84,11 +82,12 @@ def _refine_single_camera_pose(
 
     try:
         io_start = time.perf_counter()
-        img_path = Path(workspace_dir) / img_name
-        sift_path = get_sift_path_for_image(
-            img_path,
-            feature_tool=feature_tool,
-            feature_options=feature_options,
+        image_rel = Path(img_name)
+        sift_path = (
+            Path(workspace_dir)
+            / image_rel.parent
+            / feature_prefix_dir
+            / f"{image_rel.name}.sift"
         )
         sift_reader = SiftFile(sift_path)
         positions_2d = sift_reader.read_positions()
@@ -184,8 +183,7 @@ def refine_camera_poses(
     merged_points,
     merged_tracks,
     workspace_dir,
-    feature_tool,
-    feature_options,
+    feature_prefix_dir,
     max_num_trials=5000,
 ):
     """Refine camera poses using merged 3D points and pycolmap's absolute pose estimation.
@@ -277,8 +275,7 @@ def refine_camera_poses(
                 feature_indexes,
                 points3d,
                 workspace_dir,
-                feature_tool,
-                feature_options,
+                feature_prefix_dir,
                 merged_images["quaternions_wxyz"][img_idx],
                 merged_images["translations"][img_idx],
                 max_num_trials,

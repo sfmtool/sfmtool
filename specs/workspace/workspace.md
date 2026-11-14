@@ -328,8 +328,9 @@ No command rewrites the workspace file unless the user runs one of these:
 `feature_type`, `feature_options` and `feature_prefix_dir`, so a `.sfmr` written
 from a version 2 workspace holds the object in
 `workspace.contents.feature_options`, and one written from a version 1 workspace
-holds what that file held. `.sfmr` files that name an old folder still find
-their `.sift` files there through their own record after an upgrade.
+holds what that file held. `.sfmr` and `.matches` files that name an old
+folder still find their `.sift` files there through their own record after an
+upgrade, and a solve from such a `.matches` file reads that folder.
 
 A `.sfmr` of version 15 carries each image's sharpness and gradient structure
 tensor under one `image_to_gray`. A writer takes the conversion from the value

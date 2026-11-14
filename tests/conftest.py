@@ -658,7 +658,6 @@ def build_reconstruction_at_poses(
     """
     from sfmtool.fileio import read_matches
     from sfmtool.reconstruction import SfmrReconstruction
-    from sfmtool._workspace import load_workspace_config
     from sfmtool.colmap.io import (
         _build_sfmr_data_dict,
         _resolve_workspace_and_sift,
@@ -697,6 +696,8 @@ def build_reconstruction_at_poses(
 
     # The reference's image order, spelled as the workspace-relative names the
     # matches file records.
+    # The features the clusters were matched on, which the file records.
+    features = clusters["metadata"]["workspace"]["contents"]
     by_reference_image = {
         _reference_image_for(n, reference.image_names): n
         for n in clusters["image_names"]
@@ -704,13 +705,12 @@ def build_reconstruction_at_poses(
     workspace_names = [by_reference_image[i] for i in range(reference.image_count)]
     (
         workspace_dir,
-        _contents,
         resolved_names,
         feature_tool_hashes,
         sift_content_hashes,
         thumbnails,
         image_readings,
-    ) = _resolve_workspace_and_sift(workspace_names, workspace_dir)
+    ) = _resolve_workspace_and_sift(workspace_names, workspace_dir, features)
 
     colors = _mean_colors_at(
         [workspace_dir / n for n in resolved_names],
@@ -723,7 +723,7 @@ def build_reconstruction_at_poses(
     metadata = build_metadata(
         workspace_dir=workspace_dir,
         output_path=output_sfm_file,
-        workspace_config=load_workspace_config(workspace_dir),
+        workspace_config=features,
         operation="triangulate_at_reference_poses",
         tool_name="sfmtool",
         tool_options={
