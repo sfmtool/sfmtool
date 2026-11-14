@@ -14,9 +14,9 @@ The measurements cited are in
 `pairwise_flow_normal` estimates a patch's normal from the optical flow between
 pairs of the point's views rendered on a common plane, choosing the largest
 support on which the pairs agree, and says when the normal is undetermined or
-unstable. Rust code and Python, through its binding, call it, but no viewer
-entry and no reconstruction-wide pass runs it, and several of its settings were set on a
-handful of points or not measured at all. This draft proposes the steps that
+unstable. Rust code calls it, and Python through its binding, but no viewer
+entry and no reconstruction-wide pass runs it, and several of its settings
+were set on a handful of points or not measured at all. This draft proposes the steps that
 would reach it from the rest of the tool, the tests the step does not have yet,
 and keeps the questions still open about it in one place, so that a later
 measurement can settle them. A step that is built, or a question that is

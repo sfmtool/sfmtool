@@ -216,8 +216,10 @@ pub(super) fn rounds_dict<'py>(
 /// Only the outcomes ``"turned"`` and ``"single_pair"`` turn the patch; under
 /// ``"undetermined"`` and ``"unstable"`` the track is read back at the normal
 /// it was given. The centre does not move and no keypoint is written.
-/// ``images``, ``resolution`` and the four keywords after it are
-/// :func:`fit`'s, and set the reading the step ends with.
+/// ``images`` and the four keywords after ``resolution`` are :func:`fit`'s,
+/// and ``resolution`` (at least 2) is the patch resolution of the reading the
+/// step ends with where the reconstruction stores no patch bitmaps; together
+/// they set that reading.
 ///
 /// Returns ``(EditableTrack, report)``, the report described under
 /// :func:`grid_plane_normal`. Here ``estimate`` has ``kind``
