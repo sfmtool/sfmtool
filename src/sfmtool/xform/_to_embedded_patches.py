@@ -23,7 +23,6 @@ See ``specs/cli/reconstruction/xform/xform-command.md`` and ``specs/core/patch/s
 """
 
 from .._sfmtool.reconstruction import SfmrReconstruction
-from .._workspace import require_version_2_workspace
 
 _NORMALS = ("mean_viewing", "stored", "geometric")
 # CLI extent policy names mirror the library's ``PatchExtent`` policies, except
@@ -86,8 +85,6 @@ class ToEmbeddedPatchesTransform:
         self.pixel_reduce = pixel_reduce
 
     def apply(self, recon: SfmrReconstruction) -> SfmrReconstruction:
-        # The conversion reads the .sift files of a version 2 workspace.
-        require_version_2_workspace(recon.workspace_dir)
         out = recon.to_embedded_patches(
             normal=self.normal,
             k_neighbors=self.k_neighbors,

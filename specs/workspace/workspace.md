@@ -321,13 +321,18 @@ The check is made in two places, both in
   that reads a `.sfmr`'s `.sift` files through the `.sfmr`'s own record rather
   than the workspace's settings. `get_sift_path_from_recon` in
   [`sift/file.py`](../../src/sfmtool/sift/file.py), where the Python code finds
-  those files, calls it, which refuses `sfm epipolar`, `sfm densify` and
-  `sfm xform --remove-large-features` before they write anything, and any
-  other reader of those files when it reaches them. A command that would
-  write something first, or whose `.sift` files are read in Rust, calls it
-  before that: `sfm merge`, `sfm to-colmap-db`
-  from a `.sfmr`, `sfm heatmap`, `sfm undistort`, `sfm embed-patches` and
-  `sfm xform --to-embedded-patches`.
+  those files, calls it, which refuses `sfm epipolar` and `sfm densify`
+  before they write anything, and any other reader of those files when it
+  reaches them. A command that would do work first, or whose `.sift` files are
+  read in Rust, calls it up front: `sfm merge`, `sfm to-colmap-db` from a
+  `.sfmr`, `sfm heatmap`, `sfm undistort` and `sfm embed-patches`;
+  `sfm xform` for a `sift_files` input, whatever its steps, since several
+  steps and the save read its `.sift` files; `sfm inspect --strips` for a
+  `sift_files` reconstruction; and `sfm compare` for a `sift_files` input
+  with `--strips` or `--by-coordinate`. Without those options `sfm compare`
+  matches points by feature index when both inputs share their `.sift` files
+  and reads none of them; when it chooses coordinate matching itself, it is
+  refused when it reaches them, having written nothing.
 
 Commands that only read the files they are given work in a version 1
 workspace: `sfm inspect` of a `.sfmr`, `.matches` or `.sift` file,

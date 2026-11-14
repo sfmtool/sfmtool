@@ -185,6 +185,7 @@ def _inspect_strips_cmd(target, specs, output, strips_views, context):
     """Render the listed points of a .sfmr as a patch-strip montage."""
     from ..strips import parse_point_specs, render_inspect_strips
     from .._sfmtool.reconstruction import SfmrReconstruction
+    from .._workspace import require_version_2_workspace
 
     path = Path(target)
     if path.suffix.lower() != ".sfmr" or not path.exists() or path.is_dir():
@@ -199,6 +200,10 @@ def _inspect_strips_cmd(target, specs, output, strips_views, context):
 
     try:
         recon = SfmrReconstruction.load(path)
+        # The strips of a sift_files reconstruction are made from its .sift
+        # files, which must be in a version 2 workspace.
+        if recon.feature_source == "sift_files":
+            require_version_2_workspace(recon.workspace_dir)
     except Exception as e:
         raise click.ClickException(str(e))
 

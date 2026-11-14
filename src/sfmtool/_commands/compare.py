@@ -9,6 +9,7 @@ from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
 from ..compare import compare_reconstructions
 from .._sfmtool.reconstruction import SfmrReconstruction
+from .._workspace import require_version_2_workspace
 
 
 def _parse_labels(text: str) -> tuple[str, str]:
@@ -200,6 +201,12 @@ def compare(
     try:
         recon1 = SfmrReconstruction.load(recon1_path)
         recon2 = SfmrReconstruction.load(recon2_path)
+        # --strips and --by-coordinate read a sift_files input's .sift files,
+        # which must be in a version 2 workspace; checked before any step.
+        if strips_out is not None or by_coordinate:
+            for recon in (recon1, recon2):
+                if recon.feature_source == "sift_files":
+                    require_version_2_workspace(recon.workspace_dir)
 
         compare_reconstructions(
             recon1,

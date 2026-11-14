@@ -101,23 +101,39 @@ def _version_1_message(workspace: Path) -> str:
         ["merge", "recon.sfmr", "recon.sfmr", "-o", "merged.sfmr"],
         ["xform", "recon.sfmr", "filtered.sfmr", "--remove-large-features", "50"],
         ["xform", "recon.sfmr", "embedded.sfmr", "--to-embedded-patches"],
+        ["xform", "recon.sfmr", "out.sfmr", "--find-points-at-infinity", "0.5"],
+        ["xform", "recon.sfmr", "out.sfmr", "--camera-model", "PINHOLE"],
+        ["xform", "recon.sfmr", "out.sfmr", "--add-thumbnails"],
+        [
+            "xform",
+            "recon.sfmr",
+            "out.sfmr",
+            "--rotate",
+            "0,0,1,10deg",
+            "--bundle-adjust",
+        ],
+        ["xform", "recon.sfmr", "out.sfmr", "--rotate", "0,0,1,10deg"],
+        ["inspect", "--strips", "recon.sfmr", "0", "-o", "strips.png"],
+        ["compare", "recon.sfmr", "recon.sfmr", "--strips", "strips.png"],
         ["embed-patches", "recon.sfmr", "embedded.sfmr"],
         ["heatmap", "recon.sfmr", "-o", "heatmaps"],
         ["undistort", "recon.sfmr", "-o", "undistorted"],
     ],
-    ids=lambda command: " ".join(command[:2] + command[3:4]),
+    ids=lambda command: " ".join(command[:2] + command[3:]),
 )
 def test_a_command_that_uses_the_workspace_refuses_version_1_before_any_work(
     version_1_workspace, monkeypatch, command
 ):
     """Every `.sift` file is there, so the refusal is of the workspace, not of
-    a missing file; nothing is written."""
+    a missing file; it comes before the first step, and nothing is written."""
     workspace = version_1_workspace
     monkeypatch.chdir(workspace)
     before = sorted(workspace.rglob("*"))
     result = CliRunner().invoke(main, command)
     assert result.exit_code != 0
     assert _version_1_message(workspace) in result.output + str(result.exception)
+    assert "[1/" not in result.output
+    assert "Rendering" not in result.output
     assert sorted(workspace.rglob("*")) == before
 
 
