@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Platform-specific gesture handling, and on macOS the application menu's
-//! Quit item.
+//! Quit item and the Dock icon.
 //!
 //! Provides cross-platform abstractions for precision touchpad gestures.
 

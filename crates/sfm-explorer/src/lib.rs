@@ -23,6 +23,7 @@ mod action_log;
 mod add_image_to_tracks;
 mod align;
 mod app;
+mod app_icon;
 mod background;
 mod bench;
 mod bundle_adjust_prompt;
@@ -778,25 +779,38 @@ impl App {
     /// [`RunError`]: no window, no GPU adapter for its surface (on Linux, often
     /// a missing Vulkan driver), or no device.
     fn open_window(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
-        // Step 1: Create window (raw winit, matching working test)
+        // Step 1: Create window (raw winit, matching working test). It is
+        // shown after AccessKit registers its UIAutomation provider.
+        let attributes = WindowAttributes::default()
+            .with_title(crate::state::WINDOW_TITLE_BASE)
+            .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
+            .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
+            .with_visible(false);
+        // The application icon (`app_icon`). macOS ignores a window icon and
+        // takes the Dock icon below instead.
+        #[cfg(not(target_os = "macos"))]
+        let attributes = attributes.with_window_icon(app_icon::window_icon());
+        #[cfg(target_os = "windows")]
+        let attributes = {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attributes.with_taskbar_icon(app_icon::taskbar_icon())
+        };
         let window = Arc::new(
             event_loop
-                .create_window(
-                    WindowAttributes::default()
-                        .with_title(crate::state::WINDOW_TITLE_BASE)
-                        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
-                        .with_min_inner_size(winit::dpi::LogicalSize::new(800, 600))
-                        .with_visible(false), // shown after AccessKit registers its UIAutomation provider
-                )
+                .create_window(attributes)
                 .map_err(|e| format!("Could not create the viewer's window: {e}"))?,
         );
 
         self.window = Some(window.clone());
 
         // On macOS, make the application menu's Quit (Cmd+Q) a close request,
-        // so it asks `AppState::request_quit` as the close button does.
+        // so it asks `AppState::request_quit` as the close button does, and
+        // give the application its Dock icon.
         #[cfg(target_os = "macos")]
-        platform::macos::route_quit_to_window(&window);
+        {
+            platform::macos::route_quit_to_window(&window);
+            platform::macos::set_dock_icon(app_icon::DOCK_ICON_PNG);
+        }
 
         // Step 2: Raw wgpu setup. Pick the backend per platform: DX12 on
         // Windows (pairs with the DirectManipulation integration), Metal on

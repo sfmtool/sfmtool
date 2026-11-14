@@ -1,7 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The application menu's Quit item (Cmd+Q), made to ask before quitting.
+//! The application menu's Quit item (Cmd+Q), made to ask before quitting,
+//! and the application's Dock icon.
 //!
 //! winit installs a default application menu whose Quit item sends
 //! `terminate:` to the application. That ends the process through
@@ -12,11 +13,14 @@
 //! `windowShouldClose:`, winit reports it as `WindowEvent::CloseRequested`
 //! and refuses the close, and the viewer then asks `AppState::request_quit`
 //! as it does for the close button.
+//!
+//! winit ignores a window icon on macOS, so [`set_dock_icon`] gives the
+//! application its icon instead.
 
 use objc2::runtime::AnyObject;
-use objc2::sel;
-use objc2_app_kit::{NSApplication, NSMenu, NSView, NSWindow};
-use objc2_foundation::MainThreadMarker;
+use objc2::{sel, ClassType};
+use objc2_app_kit::{NSApplication, NSImage, NSMenu, NSView, NSWindow};
+use objc2_foundation::{MainThreadMarker, NSData};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
@@ -67,4 +71,23 @@ fn retarget_terminate(menu: &NSMenu, window: &NSWindow) {
             }
         }
     }
+}
+
+/// Make `png` the application's icon, which the Dock and the app switcher
+/// show. Without it a process with no app bundle, such as `sfm-explorer` or
+/// the Python process `sfm explorer` runs in, shows a generic icon. Logs a
+/// warning and leaves the icon as it was if AppKit cannot read `png`. Does
+/// nothing off the main thread.
+pub(crate) fn set_dock_icon(png: &[u8]) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let data = NSData::with_bytes(png);
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        log::warn!("The viewer's Dock icon could not be read.");
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    // SAFETY: a plain property write on the main thread (checked above).
+    unsafe { app.setApplicationIconImage(Some(&image)) };
 }
