@@ -201,6 +201,7 @@ pub fn constellation_seeds(
             NearbySource::Constellation,
             id,
             met.position,
+            false,
             kept,
             met.errors_px,
             pixel,

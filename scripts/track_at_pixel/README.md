@@ -506,8 +506,9 @@ within 20 px of the pixel. `--opt stop=never` runs every source, so each is
 measured.
 
 1. **Tracks** (`tracks`): the reconstruction's points observed within 40 px of
-   the pixel in the queried image, finite, in two or more images, every
-   observation within 2 px of the point's projection.
+   the pixel in the queried image, in two or more images, every observation
+   within 2 px of the point's projection. A point at infinity is kept as a
+   bearing, with `w` 0 and its direction as its `position`.
 2. **Clusters** (`clusters`): the cluster-patches clusters with a member within
    48 px (up to 16), vetted with the posed cameras. By default
    (`cluster_members=any`) every member in a reconstruction image is used,

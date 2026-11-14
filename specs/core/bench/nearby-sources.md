@@ -88,14 +88,15 @@ pub fn triangulate_sightings(views: &[ProjectedImage<'_>], sightings: &[(u32, [f
 pub struct NearbyCandidate {
     pub source: NearbySource,            // Points | Clusters | Guided | Constellation
     pub id: Option<u32>,                 // the point, the cluster, the keypoint row
-    pub position: Vector3<f64>,          // world coordinates
+    pub position: Vector3<f64>,          // world coordinates; a unit direction for a bearing
+    pub at_infinity: bool,               // a point at infinity, from Points only
     pub sightings: Vec<(u32, [f64; 2])>, // (image, pixel), the queried image's first
     pub errors_px: Vec<f64>,             // each sighting's reprojection error
     pub query_pixel: [f64; 2],           // its sighting in the queried image
     pub distance_px: f64,                // from the pixel asked about
     pub max_reproj_px: f64,
-    pub max_ray_angle_deg: f64,          // widest angle between two sightings' rays
-    pub depth: f64,                      // along the queried camera's axis
+    pub max_ray_angle_deg: f64,          // widest angle between two sightings' rays; 0 for a bearing
+    pub depth: f64,                      // along the queried camera's axis; infinite for a bearing
     pub point: Option<u32>,              // the reconstruction's point, for Points
 }
 
@@ -103,7 +104,7 @@ impl NearbyCandidate {
     pub fn n_views(&self) -> usize;
     pub fn image(&self) -> u32;                                  // the queried image
     pub fn ray_distance(&self, views: &[ProjectedImage<'_>])
-        -> Result<f64, DistanceRangeError>;                     // NoSuchImage off `views`
+        -> Result<f64, DistanceRangeError>;                     // infinite for a bearing; NoSuchImage off `views`
     pub fn range(&self, views: &[ProjectedImage<'_>], tolerance_px: f64)
         -> Result<[f64; 2], DistanceRangeError>;
 }
@@ -188,11 +189,17 @@ for c in &found {
 
 The points observed within `radius_px` (40) of the pixel in the queried
 image, nearest first, are the strongest candidates: a solver already agreed on
-them. A point is kept when it is finite, has `min_views` (2) or more
-observations, and every observation lies within `max_reproj_px` (2) of where
-the point projects in its image; at most `max_points` (8) are kept, the
-nearest. The candidate's sightings are the point's observations, its first in
-the queried image leading, and it sits at that observation's keypoint. The
+them. A point is kept when it has `min_views` (2) or more observations and
+every observation lies within `max_reproj_px` (2) of where the point projects
+in its image; at most `max_points` (8) are kept, the nearest. A point at
+infinity is kept too, as a bearing: `at_infinity` set, `position` its unit
+direction, its distance along the ray and its depth infinite and its ray angle
+zero, as a far-field reading at infinity has them. Leaving it out would let a
+track the far-field sweep rebuilds on its observations go on the bench as a new
+point, since only the points source's tracks are compared with the
+reconstruction's points ([nearby-tracks.md](nearby-tracks.md)). The
+candidate's sightings are the point's observations, its first in the queried
+image leading, and it sits at that observation's keypoint. The
 points are read through the `EditedReconstruction` the caller holds, so a
 point the version has deleted, the harness's held-out one, is never found.
 
@@ -289,11 +296,13 @@ and with the default stopping rule, the two give identical summaries and rank-1
 lines, and every source returns the same candidates with the same sightings,
 with two exceptions of order, not logic:
 
-- The points source differs in 6 of 21 726 Kerry Park candidates (2 queries):
-  two points share a keypoint, so they are the same distance from the pixel,
-  and the nearest-first order of the tie follows the spatial index, which the
-  harness builds over every point and core over the version's live ones;
-  where the cap of eight falls between the two, each keeps a different one.
+- The points source differs in 10 of 22 661 Kerry Park candidates (6
+  queries): two points share a keypoint, so they are the same distance from
+  the pixel, and the nearest-first order of the tie follows the spatial index,
+  which the harness builds over every point and core over the version's live
+  ones; where the cap of eight falls between the two (2 of the 6 queries),
+  each keeps a different one. Its points at infinity, 1370 of the candidates,
+  and seoul_bull's 32 are the same in both.
 - Guided matching's keypoints near the pixel can share a position, as SIFT's
   do when it finds two orientations at one place. Both implementations keep
   such ties in row order. The reference used to sort them with NumPy's default
@@ -389,8 +398,8 @@ step takes them. `options` overrides fields by their Rust names; an unknown key
 is a `ValueError`, as is an image or pixel that names no place. Each candidate
 comes back as the harness's anchor dict: `source` (the harness's names,
 `"tracks"` for the points, `"clusters"`, `"guided"` and `"constellation"`),
-`id`, `position`, `views` (`[image, x, y]` rows, the
-queried image first), `query_pixel`, `distance_px`, `n_views`,
+`id`, `position` and `w` (`0` for a bearing), `views` (`[image, x, y]` rows,
+the queried image first), `query_pixel`, `distance_px`, `n_views`,
 `max_reproj_px`, `max_ray_angle_deg` and `depth`.
 
 ## Testing

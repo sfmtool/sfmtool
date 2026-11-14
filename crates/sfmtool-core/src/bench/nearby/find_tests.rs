@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::bench::commit::commit;
 use crate::bench::tests::scene::{edited as scene_edited, fixture_points, Scene, PLANE_Z};
@@ -18,6 +18,7 @@ use crate::bench::track_at_pixel::tests::matches_file;
 use crate::bench::track_at_pixel::{MatchesClusters, STATUS_KEPT, STATUS_REFERENCE};
 use crate::bench::BenchError;
 use crate::progress::Progress;
+use crate::reconstruction::data::ObservationSource;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::*;
@@ -423,6 +424,73 @@ fn a_far_pixel_gets_a_far_field_reading_when_the_sources_leave_it_open() {
     assert!(found.report.far_field.is_none());
     assert!(found.tracks.is_empty());
     assert!(found.layers.is_empty());
+}
+
+#[test]
+fn a_far_field_reading_on_an_existing_point_at_infinity_repeats_the_point() {
+    let scene = Scene::from_centers(&FOUR, 1e7);
+    // The reconstruction holds a bearing every image sees, and the query is at
+    // its observation in image 0. A finite point well away from the pixel is
+    // there for the reprojection noise a built track is classified with.
+    let direction = Point3::from(Vector3::new(0.01, -0.02, 1.0).normalize());
+    let finite = Point3::new(2.5e6, 2.5e6, 1e7);
+    let mut recon = fixture_points(&scene, &[direction, finite]);
+    recon.point_set.points[0].w = 0.0;
+    recon.point_set.points[0].normal = Vector3::zeros();
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
+    else {
+        panic!("the fixture is embedded_patches");
+    };
+    for image in 0..scene.len() {
+        let p = scene.project_homogeneous(image, direction, 0.0);
+        keypoints_xy[[image, 0]] = p[0] as f32;
+        keypoints_xy[[image, 1]] = p[1] as f32;
+    }
+    recon.rebuild_derived_fields();
+    let edited = EditedReconstruction::new(Arc::new(recon));
+    let pixel = scene.project_homogeneous(0, direction, 0.0);
+    let options = NearbyTrackOptions {
+        far_field_when: FarFieldWhen::Always,
+        label: Some("here".into()),
+        ..NearbyTrackOptions::default()
+    };
+    let found = find(
+        &edited,
+        &scene,
+        &NearbyTrackSources::default(),
+        pixel,
+        &options,
+    );
+
+    // The points source finds the bearing, at an infinite distance.
+    let point = found
+        .tracks
+        .iter()
+        .position(|t| t.source() == NearbySource::Points)
+        .expect("the point at infinity is found");
+    let t = &found.tracks[point];
+    assert_eq!(t.point, Some(0));
+    assert_eq!(t.distance, f64::INFINITY);
+    let NearbyFinding::Candidate(c) = &t.finding else {
+        panic!("a candidate");
+    };
+    assert!(c.at_infinity);
+    assert_eq!(c.depth, f64::INFINITY);
+    assert_eq!(c.max_ray_angle_deg, 0.0);
+    assert!(c.max_reproj_px < 1e-3);
+
+    // The sweep rebuilds the same bearing, which repeats the point and stays
+    // off the bench, so a commit does not write it a second time.
+    let reading = found
+        .tracks
+        .iter()
+        .position(|t| t.source() == NearbySource::FarField)
+        .expect("the sweep reads the pixel");
+    assert!(matches!(found.tracks[reading].track, Some(Ok(_))));
+    assert_eq!(found.tracks[reading].duplicate_of, Some(point));
+    assert_eq!(found.tracks[point].label.as_deref(), Some("here 1a pt 0"));
+    assert_eq!(found.bench_order(), vec![point]);
+    assert_eq!(found.report.duplicates, 1);
 }
 
 #[test]

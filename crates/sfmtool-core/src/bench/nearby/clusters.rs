@@ -187,6 +187,7 @@ pub fn nearby_cluster_tracks(
             NearbySource::Clusters,
             Some(near.cluster),
             met.position,
+            false,
             sightings,
             errors,
             pixel,

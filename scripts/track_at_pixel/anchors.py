@@ -354,33 +354,39 @@ def from_tracks(ctx, image, pixel, opts):
     for o in ctx.observations_near(image, pixel, opts["track_radius_px"]):
         if len(out) >= opts["track_max"]:
             break
-        if o["position"] is None or o["track_length"] < opts["track_min_views"]:
+        if o["track_length"] < opts["track_min_views"]:
             continue
         rec = ctx.edited.point(int(o["point"]))
         sightings = [
             (int(i), np.asarray(p, float))
             for i, p in zip(rec["image_indexes"], rec["keypoints_xy"])
         ]
-        X = np.asarray(o["position"], float)
+        # A place at w = 1, a unit direction at w = 0.
+        X = np.asarray(rec["position"], float)
+        w = float(rec["w"])
         errs = []
         for i, p in sightings:
-            q = ctx.camera(i).project(X)
+            q = ctx.camera(i).project(X, w)
             errs.append(float("inf") if q is None else float(np.linalg.norm(q - p)))
         if max(errs) > opts["max_reproj_px"]:
             continue
-        out.append(
-            _anchor(
-                ctx,
-                "tracks",
-                int(o["point"]),
-                X,
-                sightings,
-                errs,
-                image,
-                o["keypoint"],
-                pixel,
-            )
+        a = _anchor(
+            ctx,
+            "tracks",
+            int(o["point"]),
+            X,
+            sightings,
+            errs,
+            image,
+            o["keypoint"],
+            pixel,
         )
+        a["w"] = w
+        if w == 0:
+            # Every ray to a bearing is parallel and it has no depth.
+            a["max_ray_angle_deg"] = 0.0
+            a["depth"] = float("inf")
+        out.append(a)
     return out
 
 

@@ -345,6 +345,7 @@ pub(super) fn candidate_dict<'py>(
     d.set_item("source", harness_name(c.source))?;
     d.set_item("id", c.id)?;
     d.set_item("position", [c.position.x, c.position.y, c.position.z])?;
+    d.set_item("w", if c.at_infinity { 0.0 } else { 1.0 })?;
     // Each row a list `[image, x, y]`, as the harness writes them.
     let views = PyList::empty(py);
     for &(image, px) in &c.sightings {
@@ -392,7 +393,8 @@ fn candidate_list(py: Python<'_>, found: &[NearbyCandidate]) -> PyResult<Py<PyLi
 ///
 /// Returns:
 ///     A list of dicts with the harness's anchor keys: ``source``
-///     (``"tracks"``), ``id`` (the point), ``position``, ``views``
+///     (``"tracks"``), ``id`` (the point), ``position`` and ``w`` (``0`` for a
+///     point at infinity, whose ``position`` is its direction), ``views``
 ///     (``[image, x, y]`` rows, the queried image first), ``query_pixel``,
 ///     ``distance_px``, ``n_views``, ``max_reproj_px``, ``max_ray_angle_deg``
 ///     and ``depth``.
