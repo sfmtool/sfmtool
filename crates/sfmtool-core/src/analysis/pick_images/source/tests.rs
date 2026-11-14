@@ -301,16 +301,22 @@ fn a_cancelled_wait_stops_the_workers_promptly() {
     // A gate that never opens: every job runs until it is stopped.
     let (mut pool, ran) = gated_pool(3, Arc::new(AtomicBool::new(false)));
     pool.prefetch(&requests(&frames, &[1, 2, 3, 4]));
-    let flag = AtomicBool::new(false);
-    let progress = Progress::none().cancelled_by(&flag);
+    let flag = Arc::new(AtomicBool::new(false));
     let start = Instant::now();
-    let result = std::thread::scope(|scope| {
-        scope.spawn(|| {
-            std::thread::sleep(Duration::from_millis(100));
-            flag.store(true, Ordering::Relaxed);
-        });
-        pool.wait(&requests(&frames, &[0]), &progress)
+    // The wait runs on a thread of its own, so that a wait that ignores the
+    // cancellation fails this test at the timeout instead of hanging it.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let wait_flag = Arc::clone(&flag);
+    std::thread::spawn(move || {
+        let progress = Progress::none().cancelled_by(&wait_flag);
+        let result = pool.wait(&requests(&frames, &[0]), &progress);
+        let _ = sender.send((result, pool));
     });
+    std::thread::sleep(Duration::from_millis(100));
+    flag.store(true, Ordering::Relaxed);
+    let (result, mut pool) = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the cancelled wait did not return within 5 s");
     assert_eq!(result, Err(FrameSourceError::Cancelled));
     assert!(
         start.elapsed() < Duration::from_secs(5),

@@ -9,6 +9,8 @@ refuses anything outside that schema instead of ignoring it. See
 ``specs/workspace/rig-config.md``.
 """
 
+import copy
+
 import pytest
 
 from sfmtool.rig.config import RigConfigError, validate_rig_config
@@ -56,7 +58,8 @@ def test_model_only_sensor_is_valid() -> None:
     data = _valid_rig()
     for cam in data[0]["cameras"]:
         del cam["camera_params"]
-    assert validate_rig_config(data, SOURCE) is not None
+    expected = copy.deepcopy(data)
+    assert validate_rig_config(data, SOURCE) == expected
 
 
 def test_sensor_without_intrinsics_is_valid() -> None:
@@ -65,19 +68,35 @@ def test_sensor_without_intrinsics_is_valid() -> None:
     for cam in data[0]["cameras"]:
         del cam["camera_params"]
         del cam["camera_model_name"]
-    assert validate_rig_config(data, SOURCE) is not None
+    expected = copy.deepcopy(data)
+    assert validate_rig_config(data, SOURCE) == expected
 
 
 def test_omitted_ref_sensor_flag_defaults_to_false() -> None:
+    """A sensor with no ``ref_sensor`` flag is a non-reference sensor. The
+    validator applies that default when it counts the reference sensors and
+    checks their poses, and returns the document without writing the flag in.
+    ``sfm camrig cp`` applies the same default when it orders and poses the
+    sensors, which ``test_each_rig_of_the_file_becomes_a_camrig`` in
+    ``tests/camrig/test_camrig_cp_rig_config.py`` checks."""
     data = _valid_rig()
     del data[0]["cameras"][1]["ref_sensor"]
-    assert validate_rig_config(data, SOURCE) is not None
+    expected = copy.deepcopy(data)
+    assert validate_rig_config(data, SOURCE) == expected
+
+    # Without its pose, the unflagged sensor is refused as a non-reference
+    # sensor; with a default of true it would be a second reference sensor.
+    del data[0]["cameras"][1]["cam_from_rig_rotation"]
+    del data[0]["cameras"][1]["cam_from_rig_translation"]
+    with pytest.raises(RigConfigError, match="need 'cam_from_rig_rotation'"):
+        validate_rig_config(data, SOURCE)
 
 
 def test_omitted_translation_is_valid() -> None:
     data = _valid_rig()
     del data[0]["cameras"][1]["cam_from_rig_translation"]
-    assert validate_rig_config(data, SOURCE) is not None
+    expected = copy.deepcopy(data)
+    assert validate_rig_config(data, SOURCE) == expected
 
 
 # --------------------------------------------------------------------------- #

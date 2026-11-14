@@ -107,6 +107,7 @@ fn wait_for_gives_up_at_the_timeout() {
 fn wait_for_stops_when_cancelled() {
     let cancel = AtomicBool::new(true);
     let progress = Progress::none().cancelled_by(&cancel);
+    let start = Instant::now();
     let result = wait_for(
         || {
             std::thread::sleep(Duration::from_secs(5));
@@ -116,6 +117,12 @@ fn wait_for_stops_when_cancelled() {
         &progress,
     );
     assert_eq!(result, Err(Cancelled));
+    // It returns without waiting out the probe.
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        start.elapsed()
+    );
 }
 
 #[test]
