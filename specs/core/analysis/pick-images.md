@@ -640,7 +640,7 @@ the defaults), the step the walk takes at the maximum gain.
 After accepting the step from `f` to `c`, of step `s` over `L = c − f`
 frames:
 
-1. A step of at most `1.3 R`, or one whose step is not a number, is measured
+1. A step of at most `1.3 R`, or one whose step is not finite, is measured
    itself, with the **step gate** of 0.5°. A walk near the maximum gain takes
    steps this short, so there it measures nothing more. The factor 1.3, and
    the 0.7 below, are the ends of the default band around `R`.
@@ -669,9 +669,13 @@ of the reference step has a P50 of about 0.2° to 0.45°, and a P90 over P50
 that can pass 2.5; a distant view behind a near foreground keeps its P50 well
 under 0.2° at that length. With the step gate a reference pair would raise
 the gain over such a scene and add frames that bring a solve nothing, and
-with the reference gate it does not. The step itself keeps the step gate: a
-step of at most `1.3 R` is walked at a gain near the maximum, which a near
-foreground in front of a distant view put there.
+with the reference gate it does not. The step itself keeps the step gate, so
+a walk that a near foreground put near the maximum gain keeps reading it
+while its P50 at that length stays under 0.5°. The gate a pair of about the
+reference length is held to thus depends on whether the walk took it as its
+step: over a stretch whose P50 at the reference step lies between the two
+gates, a walk at the maximum gain reads the foreground and keeps its gain,
+and a walk at a gain of 1 does not raise it.
 
 **The focal search.** A focal error leaves parallax on the rotation: the
 rotation fitted with the wrong focal misplaces each ray by about the
@@ -987,8 +991,9 @@ in its folder after the check, is `Version1Sift`, with the same advice.
   accepted steps and the next step's target, gain and median measure, and
   records in each step the three it was walked with. The rule itself, the
   measure and its gates, the choice of the pair measured (`measure_plan`),
-  the focal search (`focal_searched_split`), the gain and the camera's
-  scaling, is in
+  the reading of the measure from it and what the report says of it
+  (`read_measure`), the focal search (`focal_searched_split`), the gain and
+  the camera's scaling, is in
   [density.rs](../../../crates/sfmtool-core/src/analysis/pick_images/density.rs);
   the walk reads and matches a reference pair's frame and offers the rule the
   pairs it has matched from the step's first frame
