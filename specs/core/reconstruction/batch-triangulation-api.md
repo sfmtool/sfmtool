@@ -71,9 +71,11 @@ diagnostics agree with the angle on finite points and additionally get that
 regime right, so they sit **alongside** the angle rather than replacing it.
 `max_viewing_angle` also still backs `xform --remove-narrow-tracks` through
 `compute_narrow_track_mask`, as a fast pre-filter; what it stopped being is the
-*classification* signal. That function returns a `NarrowTrackMaskError`, raised
+*classification* signal. It takes `positions_xyzw` and keeps every point at
+infinity (`w = 0`), whose rays are parallel by definition, so the viewing angle
+says nothing about it. It returns a `NarrowTrackMaskError`, raised
 as `ValueError` by its binding, when the quaternions, translations or positions
-do not hold four, three and three values per image or point (`ArrayLength`),
+do not hold four, three and four values per image or point (`ArrayLength`),
 the two track columns differ in length (`TrackColumnLength`), or an observation
 names an image past the end (`ImageIndexOutOfRange`).
 

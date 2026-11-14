@@ -60,11 +60,16 @@ fn extras_to_csr(extras: &Bound<'_, PyDict>, n_points: usize) -> PyResult<ExtraN
 /// its angular deviation once rather than in proportion to its distance. A
 /// Tukey-redescending IRLS loop discards neighbours that belong to another
 /// surface. Nothing is ever substituted for a normal that cannot be fitted:
-/// unselected points, and selected points with fewer than two usable
-/// neighbours, come back ``NaN`` with ``determined = False``.
+/// unselected points, selected points at infinity, and selected points with
+/// fewer than two usable neighbours, come back ``NaN`` with
+/// ``determined = False``.
 ///
 /// Args:
-///     positions: Per point, shape ``(P, 3)`` float64.
+///     positions_xyzw: Per point, shape ``(P, 4)`` float64, homogeneous, as
+///         ``SfmrReconstruction.positions_xyzw`` gives them. A selected point
+///         at infinity (``w = 0``) has no position for a plane to pass through
+///         and is not fitted; a neighbour at infinity contributes its own
+///         direction.
 ///     offsets: Adjacency CSR row boundaries, shape ``(P + 1,)`` uint32.
 ///     neighbours: Adjacency CSR neighbour indices, shape ``(E,)`` uint32.
 ///     view_dirs: Per point, shape ``(P, 3)`` float64 — the reference direction
@@ -72,7 +77,7 @@ fn extras_to_csr(extras: &Bound<'_, PyDict>, n_points: usize) -> PyResult<ExtraN
 ///         mean unit direction toward the observing cameras.
 ///     selected: Per point, shape ``(P,)`` bool.
 ///     extras: Optional ``{point index: (k, 3) float64 array}`` of synthesized
-///         neighbour positions. They enter the fit exactly like graph
+///         finite neighbour positions. They enter the fit exactly like graph
 ///         neighbours; entries for unselected points are ignored.
 ///     irls_iters: IRLS passes before the final solve.
 ///     tukey_c: Tukey biweight tuning constant.
@@ -85,11 +90,12 @@ fn extras_to_csr(extras: &Bound<'_, PyDict>, n_points: usize) -> PyResult<ExtraN
 /// Returns:
 ///     A dict of dense per-point arrays: ``normals`` ``(P, 3)`` float64, the
 ///     float64 diagnostics ``n_eff``, ``anisotropy``, ``sectors``,
-///     ``sigma_deg``, ``resid_deg`` and ``n_support``, and the bool verdict
-///     ``determined``.
+///     ``sigma_deg``, ``resid_deg`` and ``n_support``, the bool verdict
+///     ``determined``, and the int ``selected_at_infinity``, the number of
+///     selected points at infinity, which were not fitted.
 #[pyfunction]
 #[pyo3(signature = (
-    positions,
+    positions_xyzw,
     offsets,
     neighbours,
     view_dirs,
@@ -107,7 +113,7 @@ fn extras_to_csr(extras: &Bound<'_, PyDict>, n_points: usize) -> PyResult<ExtraN
 #[allow(clippy::too_many_arguments)]
 pub fn estimate_adjacency_surfel_normals(
     py: Python<'_>,
-    positions: PyReadonlyArray2<f64>,
+    positions_xyzw: PyReadonlyArray2<f64>,
     offsets: PyReadonlyArray1<u32>,
     neighbours: PyReadonlyArray1<u32>,
     view_dirs: PyReadonlyArray2<f64>,
@@ -121,31 +127,33 @@ pub fn estimate_adjacency_surfel_normals(
     det_sectors: u32,
     det_aniso: f64,
 ) -> PyResult<Py<PyAny>> {
-    let n_points = positions.shape()[0];
+    let n_points = positions_xyzw.shape()[0];
 
-    if positions.shape()[1] != 3 {
-        return Err(PyValueError::new_err("positions must have shape (P, 3)"));
+    if positions_xyzw.shape()[1] != 4 {
+        return Err(PyValueError::new_err(
+            "positions_xyzw must have shape (P, 4)",
+        ));
     }
     if view_dirs.shape() != [n_points, 3] {
         return Err(PyValueError::new_err(
-            "view_dirs must have shape (P, 3) matching positions",
+            "view_dirs must have shape (P, 3) matching positions_xyzw",
         ));
     }
     if selected.shape()[0] != n_points {
         return Err(PyValueError::new_err(format!(
-            "selected has {} entries but positions has {n_points}",
+            "selected has {} entries but positions_xyzw has {n_points}",
             selected.shape()[0]
         )));
     }
     if n_points > 0 && offsets.shape()[0] != n_points + 1 {
         return Err(PyValueError::new_err(format!(
-            "offsets has {} entries but positions has {n_points}; expected {}",
+            "offsets has {} entries but positions_xyzw has {n_points}; expected {}",
             offsets.shape()[0],
             n_points + 1
         )));
     }
 
-    let positions_data = to_contiguous!(positions);
+    let positions_data = to_contiguous!(positions_xyzw);
     let offsets_data = to_contiguous!(offsets);
     let neighbours_data = to_contiguous!(neighbours);
     let view_data = to_contiguous!(view_dirs);
@@ -169,12 +177,7 @@ pub fn estimate_adjacency_surfel_normals(
         }
     }
 
-    let point_positions: Vec<[f64; 3]> = positions_data
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
+    let point_positions: Vec<[f64; 4]> = positions_data.as_chunks::<4>().0.to_vec();
     let point_view_dirs: Vec<[f64; 3]> = view_data
         .as_chunks::<3>()
         .0
@@ -222,6 +225,7 @@ pub fn estimate_adjacency_surfel_normals(
     dict.set_item("resid_deg", PyArray1::from_vec(py, fit.resid_deg))?;
     dict.set_item("n_support", PyArray1::from_vec(py, fit.n_support))?;
     dict.set_item("determined", PyArray1::from_vec(py, fit.determined))?;
+    dict.set_item("selected_at_infinity", fit.selected_at_infinity)?;
     Ok(dict.into_any().unbind())
 }
 

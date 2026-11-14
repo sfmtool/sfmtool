@@ -7,7 +7,7 @@ use super::*;
 /// its neighbours. Only the hub carries a CSR row and only the hub is selected,
 /// so anything that shows up on another point's output came from a bug.
 struct Hub {
-    positions: Vec<[f64; 3]>,
+    positions_xyzw: Vec<[f64; 4]>,
     offsets: Vec<u32>,
     neighbours: Vec<u32>,
     view_dirs: Vec<[f64; 3]>,
@@ -18,15 +18,15 @@ struct Hub {
 impl Hub {
     fn new(neighbours: &[[f64; 3]]) -> Self {
         let k = neighbours.len();
-        let mut positions = vec![[0.0, 0.0, 0.0]];
-        positions.extend_from_slice(neighbours);
-        let n = positions.len();
+        let mut positions_xyzw = vec![[0.0, 0.0, 0.0, 1.0]];
+        positions_xyzw.extend(neighbours.iter().map(|&q| finite(q)));
+        let n = positions_xyzw.len();
         let mut offsets = vec![k as u32; n + 1];
         offsets[0] = 0;
         let mut selected = vec![false; n];
         selected[0] = true;
         Self {
-            positions,
+            positions_xyzw,
             offsets,
             neighbours: (1..=k as u32).collect(),
             view_dirs: vec![[0.0, 0.0, 1.0]; n],
@@ -38,6 +38,12 @@ impl Hub {
     /// The hub's reference viewing direction.
     fn view(mut self, view: [f64; 3]) -> Self {
         self.view_dirs[0] = view;
+        self
+    }
+
+    /// Store point `p` as the point at infinity in direction `dir`.
+    fn at_infinity(mut self, p: usize, dir: [f64; 3]) -> Self {
+        self.positions_xyzw[p] = [dir[0], dir[1], dir[2], 0.0];
         self
     }
 
@@ -61,7 +67,7 @@ impl Hub {
             }
         }
         estimate_adjacency_surfel_normals(
-            &self.positions,
+            &self.positions_xyzw,
             &self.offsets,
             &self.neighbours,
             &self.view_dirs,
@@ -74,6 +80,11 @@ impl Hub {
     fn fit_default(&self) -> AdjacencySurfelNormals {
         self.fit(&AdjacencySurfelParams::default())
     }
+}
+
+/// The finite point at `xyz`, with `w = 1`.
+fn finite(xyz: [f64; 3]) -> [f64; 4] {
+    [xyz[0], xyz[1], xyz[2], 1.0]
 }
 
 /// Unit-radius positions at the given in-plane angles, on `z = 0`.
@@ -343,6 +354,81 @@ fn unselected_points_stay_nan_end_to_end() {
     }
 }
 
+// ── Points at infinity ────────────────────────────────────────────────────
+
+#[test]
+fn a_selected_point_at_infinity_is_counted_and_not_fitted() {
+    // Point 3 is selected but at infinity: it has no position for a plane to
+    // pass through, so it stays NaN and is counted. It is given a full ring of
+    // extras, so a fit attempted from its stored direction would have support
+    // to report. The finite hub still fits.
+    let out = Hub::new(&full_ring())
+        .at_infinity(3, [0.48, 0.6, 0.64])
+        .select(3, true)
+        .extras(3, &full_ring())
+        .fit_default();
+    assert_eq!(out.selected_at_infinity, 1);
+    assert_unfitted(&out, 3);
+    assert!(out.determined[0]);
+
+    // An unselected point at infinity is not counted.
+    let out = Hub::new(&full_ring())
+        .at_infinity(3, [0.0, 0.0, 1.0])
+        .fit_default();
+    assert_eq!(out.selected_at_infinity, 0);
+
+    // Nor is any point in an all-finite cloud.
+    assert_eq!(Hub::new(&full_ring()).fit_default().selected_at_infinity, 0);
+}
+
+#[test]
+fn a_neighbour_at_infinity_contributes_its_direction() {
+    // The hub sits at (5, 0, 0) with five finite neighbours in one wedge
+    // around it, occupying two sectors. Three more neighbours, stored at
+    // infinity in the plane's empty directions, fill three more sectors. Read
+    // as finite positions, their unit vectors would sit near the origin, all
+    // behind the hub in two sectors.
+    let hub_at = [5.0, 0.0, 0.0];
+    let mut hub = Hub::new(&wedge());
+    for q in &mut hub.positions_xyzw {
+        q[0] += hub_at[0];
+    }
+    for dir in ring(&[140.0, 230.0, 320.0]) {
+        let p = hub.positions_xyzw.len();
+        hub.positions_xyzw.push([dir[0], dir[1], dir[2], 0.0]);
+        hub.neighbours.push(p as u32);
+        hub.view_dirs.push([0.0, 0.0, 1.0]);
+        hub.selected.push(false);
+        hub.extra_rows.push(Vec::new());
+    }
+    let n = hub.positions_xyzw.len();
+    hub.offsets = vec![hub.neighbours.len() as u32; n + 1];
+    hub.offsets[0] = 0;
+    let out = hub.fit_default();
+
+    assert_eq!(out.n_support[0], 8.0);
+    assert_eq!(out.sectors[0], 5.0);
+    assert!(angle_deg(out.normals[0], [0.0, 0.0, 1.0]) < 1e-9);
+    assert!(out.determined[0]);
+}
+
+#[test]
+fn a_finite_point_is_divided_by_w() {
+    // The hub at (0, 0, 1) and the full ring on the plane z = 1, with every
+    // neighbour stored at w = 2. Read without the division, the neighbours
+    // would sit at z = 2 and lean 26.6° off the plane through the hub.
+    let mut hub = Hub::new(&full_ring());
+    hub.positions_xyzw[0] = [0.0, 0.0, 1.0, 1.0];
+    for q in &mut hub.positions_xyzw[1..] {
+        *q = [2.0 * q[0], 2.0 * q[1], 2.0, 2.0];
+    }
+    let out = hub.fit_default();
+
+    assert!(angle_deg(out.normals[0], [0.0, 0.0, 1.0]) < 1e-9);
+    assert!(out.resid_deg[0].abs() < 1e-9, "resid {}", out.resid_deg[0]);
+    assert!(out.determined[0]);
+}
+
 #[test]
 fn an_empty_cloud_returns_empty_arrays() {
     let out = estimate_adjacency_surfel_normals(
@@ -362,18 +448,18 @@ fn an_empty_cloud_returns_empty_arrays() {
 fn every_point_can_be_fitted_at_once() {
     // Two independent hubs in one call: the parallel scatter must land each
     // point's fit on its own row.
-    let mut positions = vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]];
+    let mut positions: Vec<[f64; 4]> = vec![finite([0.0, 0.0, 0.0]), finite([10.0, 0.0, 0.0])];
     let mut neighbours: Vec<u32> = Vec::new();
     let mut offsets = vec![0u32, 0, 0];
     for (hub, plane_z) in [(0usize, true), (1usize, false)] {
         for d in full_ring() {
             let base = positions[hub];
-            positions.push(if plane_z {
+            positions.push(finite(if plane_z {
                 [base[0] + d[0], base[1] + d[1], base[2]]
             } else {
                 // The second hub's neighbours span the y = 0 plane instead.
                 [base[0] + d[0], base[1], base[2] + d[1]]
-            });
+            }));
             neighbours.push((positions.len() - 1) as u32);
         }
         offsets[hub + 1] = neighbours.len() as u32;

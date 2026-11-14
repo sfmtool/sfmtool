@@ -29,8 +29,12 @@ def _u32(values):
 @pytest.mark.parametrize(
     ("translations", "positions", "match"),
     [
-        (np.zeros((1, 3)), np.zeros((1, 3)), "translations has 3 values but 2 rows"),
-        (np.zeros((2, 3)), np.zeros((1, 2)), "positions has 2 values but 1 rows"),
+        (np.zeros((1, 3)), np.zeros((1, 4)), "translations has 3 values but 2 rows"),
+        (
+            np.zeros((2, 3)),
+            np.zeros((1, 3)),
+            "positions_xyzw has 3 values but 1 rows of 4",
+        ),
     ],
 )
 def test_compute_narrow_track_mask_shapes(translations, positions, match):

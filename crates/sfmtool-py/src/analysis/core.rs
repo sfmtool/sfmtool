@@ -16,23 +16,29 @@ use crate::PySfmrReconstruction;
 
 /// Compute which points to keep based on minimum viewing angle threshold.
 ///
+/// ``positions_xyzw`` is ``(N, 4)``, homogeneous, as
+/// ``SfmrReconstruction.positions_xyzw`` gives it. A finite point is kept when
+/// the widest angle between two of its observation rays is at least
+/// ``min_angle_rad``; a point at infinity (``w = 0``) is always kept, since its
+/// rays are parallel by definition.
+///
 /// Returns a 1D boolean numpy array of length num_points.
 #[pyfunction]
 pub fn compute_narrow_track_mask(
     py: Python<'_>,
     quaternions_wxyz: PyReadonlyArray2<f64>,
     translations: PyReadonlyArray2<f64>,
-    positions: PyReadonlyArray2<f64>,
+    positions_xyzw: PyReadonlyArray2<f64>,
     track_point_indexes: PyReadonlyArray1<u32>,
     track_image_indexes: PyReadonlyArray1<u32>,
     min_angle_rad: f64,
 ) -> PyResult<Py<PyAny>> {
     let num_images = quaternions_wxyz.shape()[0];
-    let num_points = positions.shape()[0];
+    let num_points = positions_xyzw.shape()[0];
 
     let q_data = to_contiguous!(quaternions_wxyz);
     let t_data = to_contiguous!(translations);
-    let pos_data = to_contiguous!(positions);
+    let pos_data = to_contiguous!(positions_xyzw);
     let point_ids_data = to_contiguous!(track_point_indexes);
     let img_idx_data = to_contiguous!(track_image_indexes);
 
