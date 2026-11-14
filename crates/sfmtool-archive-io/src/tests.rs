@@ -947,3 +947,47 @@ fn a_frame_needing_a_larger_window_than_the_stream_accepts_gives_the_stream_path
         assert_eq!(err.to_string(), expected);
     }
 }
+
+#[test]
+fn row_major_elements_borrow_a_standard_array_and_copy_any_other() {
+    use ndarray::{s, Array2, ShapeBuilder};
+    let standard = Array2::from_shape_fn((3, 4), |(i, j)| (i * 4 + j) as u32);
+    let expected: Vec<u32> = (0..12).collect();
+    assert!(matches!(row_major_elements(&standard), Cow::Borrowed(_)));
+    assert_eq!(&*row_major_elements(&standard), &expected[..]);
+
+    // Column-major storage of the same values.
+    let fortran =
+        Array2::from_shape_vec((3, 4).f(), standard.t().iter().copied().collect()).unwrap();
+    // A negative stride, and every other row of a larger buffer.
+    let mut inverted = Array2::from_shape_fn((3, 4), |(i, j)| ((2 - i) * 4 + j) as u32);
+    inverted.invert_axis(ndarray::Axis(0));
+    assert!(!inverted.is_standard_layout());
+    let mut doubled = Array2::zeros((6, 4));
+    doubled.slice_mut(s![..;2, ..]).assign(&standard);
+    let strided = doubled.slice(s![..;2, ..]);
+    for (label, elements) in [
+        ("fortran", row_major_elements(&fortran)),
+        ("inverted", row_major_elements(&inverted)),
+        ("strided", row_major_elements(&strided)),
+    ] {
+        assert!(matches!(elements, Cow::Owned(_)), "{label}");
+        assert_eq!(&*elements, &expected[..], "{label}");
+    }
+}
+
+#[test]
+fn row_major_bytes_are_the_row_major_elements_cast_to_bytes() {
+    use ndarray::{Array3, ShapeBuilder};
+    let standard = Array3::from_shape_fn((2, 3, 2), |(i, j, k)| (i * 6 + j * 2 + k) as f64 - 0.5);
+    let expected: Vec<u8> = bytemuck::cast_slice(standard.as_slice().unwrap()).to_vec();
+    assert!(matches!(row_major_bytes(&standard), Cow::Borrowed(_)));
+    assert_eq!(&*row_major_bytes(&standard), &expected[..]);
+
+    let fortran =
+        Array3::from_shape_vec((2, 3, 2).f(), standard.t().iter().copied().collect()).unwrap();
+    assert!(!fortran.is_standard_layout());
+    let bytes = row_major_bytes(&fortran);
+    assert!(matches!(bytes, Cow::Owned(_)));
+    assert_eq!(&*bytes, &expected[..]);
+}

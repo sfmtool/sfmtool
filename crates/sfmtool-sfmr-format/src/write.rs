@@ -10,7 +10,10 @@ use std::path::Path;
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipWriter;
 
-use sfmtool_archive_io::{format_hash, json_entry_bytes, write_binary_entry, write_json_entry};
+use sfmtool_archive_io::{
+    format_hash, json_entry_bytes, row_major_bytes, row_major_elements, write_binary_entry,
+    write_json_entry,
+};
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries::{self, ReadingColumn};
@@ -483,8 +486,8 @@ fn write_sfmr_into<S: EntrySink>(
     if let Some(keypoints_xy) = &data.keypoints_xy {
         validate_keypoints(
             keypoints_xy,
-            data.image_indexes.as_standard_layout().as_slice().unwrap(),
-            data.camera_indexes.as_standard_layout().as_slice().unwrap(),
+            &row_major_elements(&data.image_indexes),
+            &row_major_elements(&data.camera_indexes),
             &data.cameras,
         )
         .map_err(SfmrError::InvalidFormat)?;
@@ -493,7 +496,7 @@ fn write_sfmr_into<S: EntrySink>(
     // them: the reader and verifier refuse what this refuses.
     validate_per_image_adjustments(
         &data.cameras,
-        data.camera_indexes.as_slice().unwrap(),
+        &row_major_elements(&data.camera_indexes),
         data.focal_adjustments.as_ref(),
         data.principal_point_adjustments_xy.as_ref(),
         data.radial_bspline_adjustments.as_ref(),
@@ -593,7 +596,7 @@ fn write_rigs<S: EntrySink>(sink: &mut S, rf: &RigFrameData) -> Result<u128, Sfm
     binary_hashed(
         sink,
         &entries::rigs_sensor_camera_indexes(sensor_count),
-        bytemuck::cast_slice(rf.sensor_camera_indexes.as_slice().unwrap()),
+        &row_major_bytes(&rf.sensor_camera_indexes),
         &mut rigs_hasher,
     )?;
 
@@ -601,7 +604,7 @@ fn write_rigs<S: EntrySink>(sink: &mut S, rf: &RigFrameData) -> Result<u128, Sfm
     binary_hashed(
         sink,
         &entries::rigs_sensor_quaternions_wxyz(sensor_count),
-        bytemuck::cast_slice(rf.sensor_quaternions_wxyz.as_slice().unwrap()),
+        &row_major_bytes(&rf.sensor_quaternions_wxyz),
         &mut rigs_hasher,
     )?;
 
@@ -609,7 +612,7 @@ fn write_rigs<S: EntrySink>(sink: &mut S, rf: &RigFrameData) -> Result<u128, Sfm
     binary_hashed(
         sink,
         &entries::rigs_sensor_translations_xyz(sensor_count),
-        bytemuck::cast_slice(rf.sensor_translations_xyz.as_slice().unwrap()),
+        &row_major_bytes(&rf.sensor_translations_xyz),
         &mut rigs_hasher,
     )?;
 
@@ -630,7 +633,7 @@ fn write_frames<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::frames_image_frame_indexes(image_count),
-        bytemuck::cast_slice(rf.image_frame_indexes.as_slice().unwrap()),
+        &row_major_bytes(&rf.image_frame_indexes),
         &mut frames_hasher,
     )?;
 
@@ -638,7 +641,7 @@ fn write_frames<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::frames_image_sensor_indexes(image_count),
-        bytemuck::cast_slice(rf.image_sensor_indexes.as_slice().unwrap()),
+        &row_major_bytes(&rf.image_sensor_indexes),
         &mut frames_hasher,
     )?;
 
@@ -650,7 +653,7 @@ fn write_frames<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::frames_rig_indexes(frame_count),
-        bytemuck::cast_slice(rf.rig_indexes.as_slice().unwrap()),
+        &row_major_bytes(&rf.rig_indexes),
         &mut frames_hasher,
     )?;
 
@@ -685,7 +688,7 @@ fn write_derived<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::observed_depth_histogram_counts(false, image_count, num_buckets),
-        bytemuck::cast_slice(observed_depth_histogram_counts.as_slice().unwrap()),
+        &row_major_bytes(observed_depth_histogram_counts),
         &mut derived_hasher,
     )?;
 
@@ -705,7 +708,7 @@ fn write_images<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::images_camera_indexes(image_count),
-        bytemuck::cast_slice(data.camera_indexes.as_slice().unwrap()),
+        &row_major_bytes(&data.camera_indexes),
         &mut images_hasher,
     )?;
 
@@ -813,7 +816,7 @@ fn write_images<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::images_quaternions_wxyz(image_count),
-        bytemuck::cast_slice(data.quaternions_wxyz.as_slice().unwrap()),
+        &row_major_bytes(&data.quaternions_wxyz),
         &mut images_hasher,
     )?;
 
@@ -875,7 +878,7 @@ fn write_images<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::images_thumbnails_y_x_rgb(image_count),
-            thumbnails.as_slice().unwrap(),
+            &row_major_bytes(thumbnails),
             &mut images_hasher,
         )?;
     }
@@ -884,7 +887,7 @@ fn write_images<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::images_translations_xyz(image_count),
-        bytemuck::cast_slice(data.translations_xyz.as_slice().unwrap()),
+        &row_major_bytes(&data.translations_xyz),
         &mut images_hasher,
     )?;
 
@@ -981,24 +984,24 @@ fn write_points3d<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::points3d_colors_rgb(point_count),
-        data.colors_rgb.as_slice().unwrap(),
+        &row_major_bytes(&data.colors_rgb),
         &mut points3d_hasher,
     )?;
 
     // points3d/constraint_distances and points3d/constraint_reference_images
     // (optional, version 7+; lexicographically after colors_rgb, before
     // metadata.json). Two of the constraint triple; the third sorts much later.
-    if let Some((_, constraint_distances, constraint_reference_images)) = constraints {
+    if let Some((_, constraint_distances, constraint_reference_images)) = &constraints {
         binary_hashed(
             sink,
             &entries::points3d_constraint_distances(point_count),
-            bytemuck::cast_slice(constraint_distances),
+            bytemuck::cast_slice(constraint_distances.as_ref()),
             &mut points3d_hasher,
         )?;
         binary_hashed(
             sink,
             &entries::points3d_constraint_reference_images(point_count),
-            bytemuck::cast_slice(constraint_reference_images),
+            bytemuck::cast_slice(constraint_reference_images.as_ref()),
             &mut points3d_hasher,
         )?;
     }
@@ -1034,7 +1037,7 @@ fn write_points3d<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::points3d_normal_confidence(point_count),
-            normal_confidence.as_slice().unwrap(),
+            &row_major_bytes(normal_confidence),
             &mut points3d_hasher,
         )?;
     }
@@ -1052,21 +1055,21 @@ fn write_points3d<S: EntrySink>(
                         .into(),
                 )
             })?;
-            let normals = normals_xyz.as_standard_layout();
+            let normals = row_major_elements(normals_xyz);
             Some(
                 PatchFrameRows {
                     w: &w,
                     u: &u,
                     v: &v,
                 }
-                .underived_rows(normals.as_slice().unwrap()),
+                .underived_rows(&normals),
             )
         }
         (Some(normals_xyz), None) => {
             binary_hashed(
                 sink,
                 &entries::points3d_normals(false, point_count),
-                bytemuck::cast_slice(normals_xyz.as_standard_layout().as_slice().unwrap()),
+                &row_major_bytes(normals_xyz),
                 &mut points3d_hasher,
             )?;
             None
@@ -1080,7 +1083,7 @@ fn write_points3d<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::points3d_patch_bitmaps_y_x_rgba(point_count, r),
-            bitmaps.as_slice().unwrap(),
+            &row_major_bytes(bitmaps),
             &mut points3d_hasher,
         )?;
     }
@@ -1088,7 +1091,7 @@ fn write_points3d<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::points3d_patch_u_halfvec_xyz(point_count),
-            bytemuck::cast_slice(u.as_slice().unwrap()),
+            &row_major_bytes(u),
             &mut points3d_hasher,
         )?;
     }
@@ -1096,7 +1099,7 @@ fn write_points3d<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::points3d_patch_v_halfvec_xyz(point_count),
-            bytemuck::cast_slice(v.as_slice().unwrap()),
+            &row_major_bytes(v),
             &mut points3d_hasher,
         )?;
     }
@@ -1104,7 +1107,7 @@ fn write_points3d<S: EntrySink>(
     // points3d/point_constraints (optional, version 7+; lexicographically after
     // the patch frame, before positions_xyzw). The third of the constraint
     // triple.
-    if let Some((point_constraints, _, _)) = constraints {
+    if let Some((point_constraints, _, _)) = &constraints {
         binary_hashed(
             sink,
             &entries::points3d_point_constraints(point_count),
@@ -1117,7 +1120,7 @@ fn write_points3d<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::points3d_positions(false, point_count),
-        bytemuck::cast_slice(data.positions_xyzw.as_slice().unwrap()),
+        &row_major_bytes(&data.positions_xyzw),
         &mut points3d_hasher,
     )?;
 
@@ -1125,7 +1128,7 @@ fn write_points3d<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::points3d_reprojection_errors(point_count),
-        bytemuck::cast_slice(data.reprojection_errors.as_slice().unwrap()),
+        &row_major_bytes(&data.reprojection_errors),
         &mut points3d_hasher,
     )?;
 
@@ -1183,7 +1186,7 @@ fn write_tracks<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::tracks_feature_indexes(observation_count),
-            bytemuck::cast_slice(data.feature_indexes.as_ref().unwrap().as_slice().unwrap()),
+            &row_major_bytes(data.feature_indexes.as_ref().unwrap()),
             &mut tracks_hasher,
         )?;
     }
@@ -1192,7 +1195,7 @@ fn write_tracks<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::tracks_image_indexes(observation_count),
-        bytemuck::cast_slice(data.image_indexes.as_slice().unwrap()),
+        &row_major_bytes(&data.image_indexes),
         &mut tracks_hasher,
     )?;
 
@@ -1203,7 +1206,7 @@ fn write_tracks<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::tracks_keypoints_xy(observation_count),
-            bytemuck::cast_slice(keypoints_xy.as_slice().unwrap()),
+            &row_major_bytes(keypoints_xy),
             &mut tracks_hasher,
         )?;
     }
@@ -1236,7 +1239,7 @@ fn write_tracks<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::tracks_observation_confidence(observation_count),
-            observation_confidence.as_slice().unwrap(),
+            &row_major_bytes(observation_confidence),
             &mut tracks_hasher,
         )?;
     }
@@ -1245,7 +1248,7 @@ fn write_tracks<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::tracks_observation_counts(point_count),
-        bytemuck::cast_slice(data.observation_counts.as_slice().unwrap()),
+        &row_major_bytes(&data.observation_counts),
         &mut tracks_hasher,
     )?;
 
@@ -1257,7 +1260,7 @@ fn write_tracks<S: EntrySink>(
     binary_hashed(
         sink,
         &entries::tracks_point_indexes(false, observation_count),
-        bytemuck::cast_slice(data.point_indexes.as_slice().unwrap()),
+        &row_major_bytes(&data.point_indexes),
         &mut tracks_hasher,
     )?;
 
@@ -1267,7 +1270,7 @@ fn write_tracks<S: EntrySink>(
         binary_hashed(
             sink,
             &entries::tracks_reference_observations(point_count),
-            bytemuck::cast_slice(reference_observations.as_slice().unwrap()),
+            &row_major_bytes(reference_observations),
             &mut tracks_hasher,
         )?;
     }
@@ -1278,9 +1281,9 @@ fn write_tracks<S: EntrySink>(
     Ok(tracks_hasher.digest128())
 }
 
-/// The three constraint columns as borrowed slices: the constraint per point,
+/// The three constraint columns in row-major order: the constraint per point,
 /// the distance it is held at, and the image that distance is measured from.
-type PointConstraintSlices<'a> = (&'a [u8], &'a [f64], &'a [u32]);
+type PointConstraintSlices<'a> = (Cow<'a, [u8]>, Cow<'a, [f64]>, Cow<'a, [u32]>);
 
 /// The per-point constraint triple to write, or `None` when the file carries
 /// none.
@@ -1293,33 +1296,28 @@ type PointConstraintSlices<'a> = (&'a [u8], &'a [f64], &'a [u32]);
 ///
 /// The triple is then dropped when every point is free, which is the same
 /// statement as its absence: a caller that never constrained a point writes the
-/// archive a pre-version-7 writer would have. The slices borrow `data`, so the
-/// caller writes them directly.
+/// archive a pre-version-7 writer would have. The slices borrow `data` when its
+/// arrays are in standard layout, so the caller writes them directly.
 fn point_constraints_to_write(
     data: &SfmrData,
     point_count: usize,
     image_count: usize,
 ) -> Result<Option<PointConstraintSlices<'_>>, SfmrError> {
-    let point_constraints = data
-        .point_constraints
-        .as_ref()
-        .map(|a| a.as_slice().unwrap());
+    let point_constraints = data.point_constraints.as_ref().map(row_major_elements);
     let resolved = point_constraints
+        .as_ref()
         .map(|c| resolve_point_constraints(c, &PointConstraint::ALL))
         .transpose()
         .map_err(SfmrError::InvalidFormat)?;
-    let constraint_distances = data
-        .constraint_distances
-        .as_ref()
-        .map(|a| a.as_slice().unwrap());
+    let constraint_distances = data.constraint_distances.as_ref().map(row_major_elements);
     let constraint_reference_images = data
         .constraint_reference_images
         .as_ref()
-        .map(|a| a.as_slice().unwrap());
+        .map(row_major_elements);
     validate_point_constraints(
         resolved.as_deref(),
-        constraint_distances,
-        constraint_reference_images,
+        constraint_distances.as_deref(),
+        constraint_reference_images.as_deref(),
         &data.positions_xyzw,
         point_count,
         image_count,
@@ -1389,8 +1387,8 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
         return;
     }
 
-    let p3d = data.point_indexes.as_slice().unwrap();
-    let img = data.image_indexes.as_slice().unwrap();
+    let p3d = row_major_elements(&data.point_indexes);
+    let img = row_major_elements(&data.image_indexes);
 
     // Check if already sorted
     let sorted = p3d
@@ -1408,7 +1406,7 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
 
     // Apply permutation to every present per-observation array.
     let reorder = |arr: &mut ndarray::Array1<u32>, perm: &[usize]| {
-        let old: Vec<u32> = arr.as_slice().unwrap().to_vec();
+        let old: Vec<u32> = arr.to_vec();
         for (i, &pi) in perm.iter().enumerate() {
             arr[i] = old[pi];
         }
@@ -1426,7 +1424,7 @@ fn ensure_tracks_sorted(data: &mut SfmrData) {
         }
     }
     if let Some(oc) = data.observation_confidence.as_mut() {
-        let old: Vec<u8> = oc.as_slice().unwrap().to_vec();
+        let old: Vec<u8> = oc.to_vec();
         for (i, &pi) in perm.iter().enumerate() {
             oc[i] = old[pi];
         }
@@ -1730,8 +1728,8 @@ fn validate_dimensions_with(
     );
     if let Some(reference_observations) = &data.reference_observations {
         if let Err(e) = validate_reference_observations(
-            reference_observations.as_slice().unwrap(),
-            data.observation_counts.as_slice().unwrap(),
+            &row_major_elements(reference_observations),
+            &row_major_elements(&data.observation_counts),
         ) {
             check!(false, e);
         }

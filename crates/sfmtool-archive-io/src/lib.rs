@@ -25,6 +25,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 
+use ndarray::{ArrayBase, Data, Dimension};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::Xxh3;
@@ -593,6 +594,49 @@ pub fn raw_to_f64(raw: &[u8]) -> Cow<'_, [f64]> {
             let mut out = vec![0f64; n];
             bytemuck::cast_slice_mut::<f64, u8>(&mut out).copy_from_slice(trimmed);
             Cow::Owned(out)
+        }
+    }
+}
+
+// ── Arrays in row-major order ───────────────────────────────────────────
+
+/// The elements of `array` in row-major (C) order, the order a binary entry
+/// stores them in.
+///
+/// Borrowed when `array` is in standard layout, and copied only when it is
+/// not: a Fortran-order array (for example from `reversed_axes()`), one with a
+/// negative stride, or a strided view. A writer reads a caller's array through
+/// this rather than `as_slice().unwrap()`, which panics on those layouts.
+pub fn row_major_elements<A, S, D>(array: &ArrayBase<S, D>) -> Cow<'_, [A]>
+where
+    A: Clone,
+    S: Data<Elem = A>,
+    D: Dimension,
+{
+    match array.as_slice() {
+        Some(elements) => Cow::Borrowed(elements),
+        None => Cow::Owned(array.iter().cloned().collect()),
+    }
+}
+
+/// The bytes of `array`'s elements in row-major (C) order: what a binary
+/// entry of it stores, and what a section hash is taken over.
+///
+/// [`row_major_elements`] as bytes, borrowed and copied on the same terms.
+pub fn row_major_bytes<A, S, D>(array: &ArrayBase<S, D>) -> Cow<'_, [u8]>
+where
+    A: bytemuck::NoUninit,
+    S: Data<Elem = A>,
+    D: Dimension,
+{
+    match array.as_slice() {
+        Some(elements) => Cow::Borrowed(bytemuck::cast_slice(elements)),
+        None => {
+            let mut bytes = Vec::with_capacity(std::mem::size_of::<A>() * array.len());
+            for element in array.iter() {
+                bytes.extend_from_slice(bytemuck::bytes_of(element));
+            }
+            Cow::Owned(bytes)
         }
     }
 }

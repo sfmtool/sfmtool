@@ -7,7 +7,7 @@ use std::path::Path;
 
 use zip::ZipWriter;
 
-use sfmtool_archive_io::{format_hash, write_binary_entry, write_json_entry};
+use sfmtool_archive_io::{format_hash, row_major_bytes, write_binary_entry, write_json_entry};
 
 use crate::types::*;
 
@@ -190,39 +190,39 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
     content_hash_digests.push_bytes(&metadata_bytes);
 
     // Position data
-    let pos_bytes: &[u8] = bytemuck::cast_slice(data.positions_xy.as_slice().unwrap());
+    let pos_bytes = row_major_bytes(&data.positions_xy);
     write_binary_entry(
         &mut zip,
         &positions_entry_name(feature_count),
-        pos_bytes,
+        &pos_bytes,
         zstd_level,
     )?;
-    content_hash_digests.push_bytes(pos_bytes);
+    content_hash_digests.push_bytes(&pos_bytes);
 
     // Affine shape data
-    let shape_bytes: &[u8] = bytemuck::cast_slice(data.affine_shapes.as_slice().unwrap());
+    let shape_bytes = row_major_bytes(&data.affine_shapes);
     write_binary_entry(
         &mut zip,
         &affine_shapes_entry_name(feature_count),
-        shape_bytes,
+        &shape_bytes,
         zstd_level,
     )?;
-    content_hash_digests.push_bytes(shape_bytes);
+    content_hash_digests.push_bytes(&shape_bytes);
 
     // Descriptor data
-    let desc_bytes: &[u8] = data.descriptors.as_slice().unwrap();
+    let desc_bytes = row_major_bytes(&data.descriptors);
     write_binary_entry(
         &mut zip,
         &descriptors_entry_name(feature_count),
-        desc_bytes,
+        &desc_bytes,
         zstd_level,
     )?;
-    content_hash_digests.push_bytes(desc_bytes);
+    content_hash_digests.push_bytes(&desc_bytes);
 
     // Thumbnail data
-    let thumb_bytes: &[u8] = data.thumbnail_y_x_rgb.as_slice().unwrap();
-    write_binary_entry(&mut zip, &thumbnail_entry_name(), thumb_bytes, zstd_level)?;
-    content_hash_digests.push_bytes(thumb_bytes);
+    let thumb_bytes = row_major_bytes(&data.thumbnail_y_x_rgb);
+    write_binary_entry(&mut zip, &thumbnail_entry_name(), &thumb_bytes, zstd_level)?;
+    content_hash_digests.push_bytes(&thumb_bytes);
 
     // Compute and write content hash
     let content_xxh128 = content_hash_digests.finish();

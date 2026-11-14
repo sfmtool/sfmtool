@@ -174,6 +174,8 @@ All seven files (`write.rs`, `read.rs`, `types.rs`, `select.rs`, `cells.rs`, `en
 - Effort: low.
 - Risk: low.
 
+> _Status (2026-11-13): **Done** — `sfmtool-archive-io` gains `row_major_bytes` and `row_major_elements`, which borrow a standard-layout array and copy any other in row-major order; the `.matches`, `.sfmr`, `.sift` and `.camrig` writers and the `.matches` cluster selection (`select_clusters`, `cluster_worst_consistency`) read every caller array through them, and tests write Fortran-order and strided values to the same section hashes as their standard-layout twins. One shared helper rather than a `write_array_hashed` per crate, because the `.sfmr` writer writes through its `EntrySink` and the `.sift` writer through `SectionDigests`, so only the array-to-bytes step is common; the `write_binary_entry_hashed(...)` call boilerplate is left as it is. This also covers the writer item of "Panics reachable from Python in the sweep bindings and from Rust callers of the solvers and writers", branch `hyg-fix-1113-10-writer-standard-layout`._
+
 **Give each `entries.rs` dimension function one parameter type**
 - Location: `entries.rs:17-28, 196` (the same rule in sfmr-format `entries.rs`).
 - Problem: the module says dimension parameters are `impl Display`, then "The one exception is [`clusters_cluster_starts`], which takes a concrete `usize`"; the other 34 take `impl Display`. Breaks [A convention has no documented exceptions](../specs/STANDARDS.md#a-convention-has-no-documented-exceptions).

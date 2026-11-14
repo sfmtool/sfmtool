@@ -25,11 +25,8 @@
 //! and the array shapes, and so serve the writer alone; the reader and the
 //! verifier check the same things against the archive's entries.
 
-use std::borrow::Cow;
-
-use ndarray::{ArrayBase, Data, Dimension};
-
 use crate::types::*;
+use sfmtool_archive_io::row_major_elements;
 
 /// Return violations of the backbone-specific metadata count rule.
 ///
@@ -451,20 +448,6 @@ pub(crate) fn cluster_patch_errors(
     }
 }
 
-/// The contiguous row-major elements of `array`, borrowed when it is already
-/// in standard layout.
-fn elements<A, S, D>(array: &ArrayBase<S, D>) -> Cow<'_, [A]>
-where
-    A: Clone,
-    S: Data<Elem = A>,
-    D: Dimension,
-{
-    match array.as_slice() {
-        Some(slice) => Cow::Borrowed(slice),
-        None => Cow::Owned(array.iter().cloned().collect()),
-    }
-}
-
 /// The findings of every content check above on `data`, in the order the
 /// checks run: image dimensions, then the pair table and the two-view
 /// geometries over it, or the cluster backbone, its patches and their per-cell
@@ -476,17 +459,17 @@ where
 pub(crate) fn content_errors(data: &MatchesData) -> Vec<String> {
     let mut errors = Vec::new();
     let image_count = data.metadata.image_count as usize;
-    let feature_counts = elements(&data.feature_counts);
+    let feature_counts = row_major_elements(&data.feature_counts);
 
     if let Some(image_dims) = &data.image_dims {
-        image_dims_errors(&elements(image_dims), &mut errors);
+        image_dims_errors(&row_major_elements(image_dims), &mut errors);
     }
 
     if let Some(pairs) = &data.image_pairs {
-        let match_counts = elements(&pairs.match_counts);
-        let match_feature_indexes = elements(&pairs.match_feature_indexes);
+        let match_counts = row_major_elements(&pairs.match_counts);
+        let match_feature_indexes = row_major_elements(&pairs.match_feature_indexes);
         pair_errors(
-            &elements(&pairs.image_index_pairs),
+            &row_major_elements(&pairs.image_index_pairs),
             &match_counts,
             &match_feature_indexes,
             &feature_counts,
@@ -495,13 +478,13 @@ pub(crate) fn content_errors(data: &MatchesData) -> Vec<String> {
         );
         if let Some(tvg) = &data.two_view_geometries {
             inlier_errors(
-                &elements(&tvg.inlier_counts),
-                &elements(&tvg.inlier_feature_indexes),
+                &row_major_elements(&tvg.inlier_counts),
+                &row_major_elements(&tvg.inlier_feature_indexes),
                 Some((&match_counts, &match_feature_indexes)),
                 &mut errors,
             );
             config_index_errors(
-                &elements(&tvg.config_indexes),
+                &row_major_elements(&tvg.config_indexes),
                 tvg.config_types.len(),
                 &mut errors,
             );
@@ -509,11 +492,14 @@ pub(crate) fn content_errors(data: &MatchesData) -> Vec<String> {
     }
 
     if let Some(clusters) = &data.clusters {
-        let cluster_starts = elements(&clusters.cluster_starts);
-        let member_images = elements(&clusters.member_images);
-        let member_features = elements(&clusters.member_features);
-        let member_positions = clusters.member_positions.as_ref().map(elements);
-        let member_affine_shapes = clusters.member_affine_shapes.as_ref().map(elements);
+        let cluster_starts = row_major_elements(&clusters.cluster_starts);
+        let member_images = row_major_elements(&clusters.member_images);
+        let member_features = row_major_elements(&clusters.member_features);
+        let member_positions = clusters.member_positions.as_ref().map(row_major_elements);
+        let member_affine_shapes = clusters
+            .member_affine_shapes
+            .as_ref()
+            .map(row_major_elements);
         let backbone = ClusterSlices {
             cluster_starts: &cluster_starts,
             member_images: &member_images,
@@ -523,10 +509,10 @@ pub(crate) fn content_errors(data: &MatchesData) -> Vec<String> {
         };
         let consistent = cluster_errors(&backbone, &feature_counts, image_count, &mut errors);
         if let (true, Some(cp)) = (consistent, &data.cluster_patches) {
-            let member_status = elements(&cp.member_status);
+            let member_status = row_major_elements(&cp.member_status);
             cluster_patch_errors(
                 &backbone,
-                &elements(&cp.reference_members),
+                &row_major_elements(&cp.reference_members),
                 &member_status,
                 &mut errors,
             );

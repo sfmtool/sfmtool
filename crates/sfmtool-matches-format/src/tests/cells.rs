@@ -27,7 +27,7 @@ fn relabel_below_refined_shape_gates(entries: &mut [(String, Vec<u8>)], version:
 /// `make_cluster_patch_test_data` with per-cell columns: member 1, the one
 /// `kept` member, carries readings with every cell status; the others carry
 /// none.
-fn make_cell_test_data() -> MatchesData {
+pub(super) fn make_cell_test_data() -> MatchesData {
     let mut data = make_cluster_patch_test_data();
     let mut cells = MemberCellData::not_attempted(K);
     let statuses = [

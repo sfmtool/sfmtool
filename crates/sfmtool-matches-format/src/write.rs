@@ -12,7 +12,9 @@ use crate::cells::{ClusterCellStatus, MEMBER_CELL_STATUS_NAMES_KEY};
 use crate::entries;
 use crate::types::*;
 use crate::validate::{content_errors, validate_dimensions, validate_structure};
-use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entry};
+use sfmtool_archive_io::{
+    format_hash, row_major_bytes, write_binary_entry_hashed, write_json_entry,
+};
 
 /// Write match data to a `.matches` file.
 ///
@@ -208,7 +210,7 @@ fn write_images<W: std::io::Write + std::io::Seek>(
     write_binary_entry_hashed(
         zip,
         &entries::images_feature_counts(image_count),
-        bytemuck::cast_slice(data.feature_counts.as_slice().unwrap()),
+        &row_major_bytes(&data.feature_counts),
         zstd_level,
         &mut images_hasher,
     )?;
@@ -233,7 +235,7 @@ fn write_images<W: std::io::Write + std::io::Seek>(
     write_binary_entry_hashed(
         zip,
         &entries::images_image_dims(image_count),
-        bytemuck::cast_slice(image_dims.as_slice().unwrap()),
+        &row_major_bytes(image_dims),
         zstd_level,
         &mut images_hasher,
     )?;
@@ -279,7 +281,7 @@ fn write_image_pairs<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::image_pairs_image_index_pairs(pair_count),
-            bytemuck::cast_slice(pairs.image_index_pairs.as_slice().unwrap()),
+            &row_major_bytes(&pairs.image_index_pairs),
             zstd_level,
             &mut pairs_hasher,
         )?;
@@ -288,7 +290,7 @@ fn write_image_pairs<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::image_pairs_match_counts(pair_count),
-            bytemuck::cast_slice(pairs.match_counts.as_slice().unwrap()),
+            &row_major_bytes(&pairs.match_counts),
             zstd_level,
             &mut pairs_hasher,
         )?;
@@ -297,7 +299,7 @@ fn write_image_pairs<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::image_pairs_match_descriptor_distances(match_count),
-            bytemuck::cast_slice(pairs.match_descriptor_distances.as_slice().unwrap()),
+            &row_major_bytes(&pairs.match_descriptor_distances),
             zstd_level,
             &mut pairs_hasher,
         )?;
@@ -306,7 +308,7 @@ fn write_image_pairs<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::image_pairs_match_feature_indexes(match_count),
-            bytemuck::cast_slice(pairs.match_feature_indexes.as_slice().unwrap()),
+            &row_major_bytes(&pairs.match_feature_indexes),
             zstd_level,
             &mut pairs_hasher,
         )?;
@@ -345,7 +347,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::clusters_cluster_starts(cluster_count),
-            bytemuck::cast_slice(clusters.cluster_starts.as_slice().unwrap()),
+            &row_major_bytes(&clusters.cluster_starts),
             zstd_level,
             &mut clusters_hasher,
         )?;
@@ -359,7 +361,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::clusters_member_affine_shapes(member_count),
-            bytemuck::cast_slice(member_affine_shapes.as_slice().unwrap()),
+            &row_major_bytes(member_affine_shapes),
             zstd_level,
             &mut clusters_hasher,
         )?;
@@ -368,7 +370,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::clusters_member_features(member_count),
-            bytemuck::cast_slice(clusters.member_features.as_slice().unwrap()),
+            &row_major_bytes(&clusters.member_features),
             zstd_level,
             &mut clusters_hasher,
         )?;
@@ -377,7 +379,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::clusters_member_images(member_count),
-            bytemuck::cast_slice(clusters.member_images.as_slice().unwrap()),
+            &row_major_bytes(&clusters.member_images),
             zstd_level,
             &mut clusters_hasher,
         )?;
@@ -387,7 +389,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::clusters_member_positions(member_count),
-            bytemuck::cast_slice(member_positions.as_slice().unwrap()),
+            &row_major_bytes(member_positions),
             zstd_level,
             &mut clusters_hasher,
         )?;
@@ -428,35 +430,31 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         // cluster_patches/member_cell_* (optional, version 8): they sort
         // before member_consistency_residual, so they are hashed first.
         if let Some(cells) = &cp.member_cells {
-            let iterations = cells.iterations.as_standard_layout();
             write_binary_entry_hashed(
                 zip,
                 &entries::cluster_patches_member_cell_iterations(member_count),
-                iterations.as_slice().unwrap(),
+                &row_major_bytes(&cells.iterations),
                 zstd_level,
                 &mut cp_hasher,
             )?;
-            let shift = cells.shift_px.as_standard_layout();
             write_binary_entry_hashed(
                 zip,
                 &entries::cluster_patches_member_cell_shift_px(member_count),
-                bytemuck::cast_slice(shift.as_slice().unwrap()),
+                &row_major_bytes(&cells.shift_px),
                 zstd_level,
                 &mut cp_hasher,
             )?;
-            let status = cells.status.as_standard_layout();
             write_binary_entry_hashed(
                 zip,
                 &entries::cluster_patches_member_cell_status(member_count),
-                status.as_slice().unwrap(),
+                &row_major_bytes(&cells.status),
                 zstd_level,
                 &mut cp_hasher,
             )?;
-            let zncc = cells.zncc.as_standard_layout();
             write_binary_entry_hashed(
                 zip,
                 &entries::cluster_patches_member_cell_zncc(member_count),
-                bytemuck::cast_slice(zncc.as_slice().unwrap()),
+                &row_major_bytes(&cells.zncc),
                 zstd_level,
                 &mut cp_hasher,
             )?;
@@ -466,7 +464,7 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::cluster_patches_member_consistency_residual(member_count),
-            bytemuck::cast_slice(cp.member_consistency_residual.as_slice().unwrap()),
+            &row_major_bytes(&cp.member_consistency_residual),
             zstd_level,
             &mut cp_hasher,
         )?;
@@ -475,7 +473,7 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::cluster_patches_member_shift_px(member_count),
-            bytemuck::cast_slice(cp.member_shift_px.as_slice().unwrap()),
+            &row_major_bytes(&cp.member_shift_px),
             zstd_level,
             &mut cp_hasher,
         )?;
@@ -484,7 +482,7 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::cluster_patches_member_status(member_count),
-            cp.member_status.as_slice().unwrap(),
+            &row_major_bytes(&cp.member_status),
             zstd_level,
             &mut cp_hasher,
         )?;
@@ -493,7 +491,7 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::cluster_patches_member_zncc(member_count),
-            bytemuck::cast_slice(cp.member_zncc.as_slice().unwrap()),
+            &row_major_bytes(&cp.member_zncc),
             zstd_level,
             &mut cp_hasher,
         )?;
@@ -522,7 +520,7 @@ fn write_cluster_patches<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::cluster_patches_reference_members(cluster_count),
-            bytemuck::cast_slice(cp.reference_members.as_slice().unwrap()),
+            &row_major_bytes(&cp.reference_members),
             zstd_level,
             &mut cp_hasher,
         )?;
@@ -550,7 +548,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_config_indexes(pair_count),
-            tvg.config_indexes.as_slice().unwrap(),
+            &row_major_bytes(&tvg.config_indexes),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -569,7 +567,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_e_matrices(pair_count),
-            bytemuck::cast_slice(tvg.e_matrices.as_slice().unwrap()),
+            &row_major_bytes(&tvg.e_matrices),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -578,7 +576,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_f_matrices(pair_count),
-            bytemuck::cast_slice(tvg.f_matrices.as_slice().unwrap()),
+            &row_major_bytes(&tvg.f_matrices),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -587,7 +585,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_h_matrices(pair_count),
-            bytemuck::cast_slice(tvg.h_matrices.as_slice().unwrap()),
+            &row_major_bytes(&tvg.h_matrices),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -596,7 +594,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_inlier_counts(pair_count),
-            bytemuck::cast_slice(tvg.inlier_counts.as_slice().unwrap()),
+            &row_major_bytes(&tvg.inlier_counts),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -605,7 +603,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
-            bytemuck::cast_slice(tvg.inlier_feature_indexes.as_slice().unwrap()),
+            &row_major_bytes(&tvg.inlier_feature_indexes),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -623,7 +621,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_quaternions_wxyz(pair_count),
-            bytemuck::cast_slice(tvg.quaternions_wxyz.as_slice().unwrap()),
+            &row_major_bytes(&tvg.quaternions_wxyz),
             zstd_level,
             &mut tvg_hasher,
         )?;
@@ -632,7 +630,7 @@ fn write_two_view_geometries<W: std::io::Write + std::io::Seek>(
         write_binary_entry_hashed(
             zip,
             &entries::two_view_geometries_translations_xyz(pair_count),
-            bytemuck::cast_slice(tvg.translations_xyz.as_slice().unwrap()),
+            &row_major_bytes(&tvg.translations_xyz),
             zstd_level,
             &mut tvg_hasher,
         )?;
