@@ -550,11 +550,12 @@ finite and `mean_agreement` is their mean; a list of points gets the statuses a
 run over every point gives them, and the other points keep their normals and
 are `"not_asked"`; the refusals; a refused point's `error` and `reason`; the
 progress counter; and `method="pairwise_flow"` on seoul_bull v02, where
-point 2 is turned with the step's numbers and point 255 is `"unstable"`, a
-flow keyword reaching the step (a flow patch wider than every crop makes
-point 2 `"undetermined"`), every keyword of the step taken, and an unknown
-method, a keyword of the other step and the step's own refusals raised as
-`ValueError`.
+point 2 is turned with the step's numbers and, with the bar on the mean
+viewing direction lowered to 20 degrees, about half its normal's angle from
+that direction, is `"unstable"` and keeps its normal, a flow keyword
+reaching the step (a flow patch wider than every crop makes point 2
+`"undetermined"`), every keyword of the step taken, and an unknown method, a
+keyword of the other step and the step's own refusals raised as `ValueError`.
 
 ## Non-goals
 

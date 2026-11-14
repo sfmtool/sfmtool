@@ -216,15 +216,16 @@ def test_the_progress_counter_reaches_the_points_refined(ground_truth, images):
 
 
 def test_method_pairwise_flow_runs_that_step_and_reports_its_outcomes():
-    """On seoul_bull v02 the pairwise-flow normal turns point 2 and leaves
-    point 255, which straddles a canopy edge, unstable after three rounds."""
+    """On seoul_bull v02 the pairwise-flow normal turns point 2, whose normal
+    every round reads about 41 degrees from its mean viewing direction, and
+    with the bar on that direction lowered to 20 degrees leaves it unstable."""
     recon = SfmrReconstruction.load(
         str(SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr")
     )
     images = [read_image_rgb(SEOUL_BULL_DIR / name) for name in recon.image_names]
 
     out, report = refine_normals(
-        recon, images, method="pairwise_flow", point_indexes=[2, 255]
+        recon, images, method="pairwise_flow", point_indexes=[2]
     )
     turned = report["points"][2]
     assert set(turned) == {
@@ -241,9 +242,8 @@ def test_method_pairwise_flow_runs_that_step_and_reports_its_outcomes():
     assert turned["chosen_radius"] in PAIRWISE_DEFAULTS["radii"]
     assert 0.0 < turned["sigma_deg"] <= PAIRWISE_DEFAULTS["max_sigma_deg"]
     assert turned["turn_deg"] > 0.0
-    assert report["points"][255] == {"index": 255, "outcome": "unstable"}
-    assert report["read"] == 2
-    assert report["turned"] == 1 and report["unstable"] == 1
+    assert report["read"] == 1
+    assert report["turned"] == 1 and report["unstable"] == 0
     assert report["undetermined"] == report["single_pair"] == 0
     assert report["none_joined"] == report["weak_turn"] == 0
     assert report["low_confidence"] == 0
@@ -254,6 +254,21 @@ def test_method_pairwise_flow_runs_that_step_and_reports_its_outcomes():
     unturned = np.ones(recon.point_count, dtype=bool)
     unturned[2] = False
     np.testing.assert_array_equal(after[unturned], before[unturned])
+
+    # The same point with the bar on the mean viewing direction at 20 degrees,
+    # half its normal's angle from that direction, is unstable and keeps its
+    # normal.
+    out, report = refine_normals(
+        recon,
+        images,
+        method="pairwise_flow",
+        point_indexes=[2],
+        max_normal_from_mean_view_deg=20.0,
+    )
+    assert report["points"][2] == {"index": 2, "outcome": "unstable"}
+    assert report["read"] == 1
+    assert report["unstable"] == 1 and report["turned"] == 0
+    np.testing.assert_array_equal(np.asarray(out.normals), before)
 
     # A flow keyword reaches the step: a flow patch wider than every crop
     # leaves every pair with no flow, so the normal is undetermined.
