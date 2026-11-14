@@ -896,8 +896,9 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
             "{rung_ratio}"
         );
     }
-    // The fit's patch resolution: at least 2.
-    for resolution in [0, 1] {
+    // The fit's patch resolution: from 2 to 1024, so one whose sizes would
+    // overflow is refused rather than allocated.
+    for resolution in [0, 1, 1025, 1 << 31, u32::MAX] {
         let bad = GrownPlaneNormalOptions {
             fit: FitOptions::default().at_resolution(resolution),
             ..Default::default()
@@ -913,6 +914,11 @@ fn the_grown_plane_normal_refuses_a_bearing_a_missing_view_bad_options_and_stops
         ..Default::default()
     };
     assert_eq!(two.check(), Ok(()));
+    let largest = GrownPlaneNormalOptions {
+        fit: FitOptions::default().at_resolution(1024),
+        ..Default::default()
+    };
+    assert_eq!(largest.check(), Ok(()));
 
     let cancel = AtomicBool::new(true);
     let cancelled = Progress::none().cancelled_by(&cancel);

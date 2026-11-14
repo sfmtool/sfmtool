@@ -213,7 +213,7 @@ alone pass that, as `grid_azimuth_step_deg` otherwise); a `correlation_length_px
 above 0 and at most 16; `noise_false_alarm` strictly between 0 and 1; finite
 floors and agreement settings of at least 0; `max_sigma_deg` and
 `max_mean_chi2` above 0, infinite allowed; and a read-back fit at a patch
-resolution of at least 2. The flow's own settings are checked as
+resolution from 2 to 1024, as the grown-plane normal's. The flow's own settings are checked as
 `compute_optical_flow` checks them, except against an image's size, and refused
 as `NormalError::Flow`; a flow refusal for a particular crop size, which the
 check cannot foresee, is `NormalError::Flow` from the step. Cancellation through

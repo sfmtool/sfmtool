@@ -144,7 +144,7 @@ pub struct GrownPlaneNormalOptions {
 impl GrownPlaneNormalOptions {
     /// Refuses a setting the step cannot run with, naming the first that
     /// fails: NormalError::BadGrownPlaneOption("zncc_tolerance"), or
-    /// ("resolution") for a fit.refine.resolution under 2. The turned
+    /// ("resolution") for a fit.refine.resolution under 2 or over 1024. The turned
     /// support's three settings are checked with it off too.
     pub fn check(&self) -> Result<(), NormalError>;
 }
@@ -1441,7 +1441,7 @@ The defaults are `GrownPlaneNormalOptions::default()` in
 | `stage_turn_cap_deg` | `12.0` | The most a window stage, and the first whole-grid round, may turn the plane from where it began, degrees; above 0 and under 90, or infinite for no cap |
 | `min_stage_turn_cap_deg` | `0.5` | The whole-grid rounds stop once their cap would fall under this, and after a round that turned less than half of it, degrees; finite, above 0, at most `stage_turn_cap_deg` |
 | `max_grid_rounds` | `16` | The most whole-grid rounds a growth or a pair runs; at least 1 |
-| `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler; where the reconstruction stores no patch bitmaps, `refine.resolution` is the patch resolution `R` (`FitOptions::at_resolution` sets every kernel's), at least 2 |
+| `fit` | `FitOptions::default()` | The reading the step ends with, and the reference-view rule's grazing gate and sampler; where the reconstruction stores no patch bitmaps, `refine.resolution` is the patch resolution `R` (`FitOptions::at_resolution` sets every kernel's), from 2 to 1024, a bound on the memory each view's renders take (`MAX_FIT_RESOLUTION` in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs)) |
 
 Five numbers are constants of the step rather than settings: the early stop's
 margin of 0.25 under `min_held_zncc` (`EARLY_REFUSAL_MARGIN`) and its first

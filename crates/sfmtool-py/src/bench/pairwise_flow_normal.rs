@@ -217,7 +217,7 @@ pub(super) fn rounds_dict<'py>(
 /// ``"undetermined"`` and ``"unstable"`` the track is read back at the normal
 /// it was given. The centre does not move and no keypoint is written.
 /// ``images`` and the four keywords after ``resolution`` are :func:`fit`'s,
-/// and ``resolution`` (at least 2) is the patch resolution of the reading the
+/// and ``resolution`` (2 to 1024) is the patch resolution of the reading the
 /// step ends with where the reconstruction stores no patch bitmaps; together
 /// they set that reading.
 ///

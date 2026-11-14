@@ -603,6 +603,10 @@ class TestGrownPlaneNormal:
             ("min_stage_turn_cap_deg", 0.0),
             ("max_grid_rounds", 0),
             ("resolution", 1),
+            # Past 1024, up to a size that would overflow, refused rather
+            # than allocated.
+            ("resolution", 1025),
+            ("resolution", 2**31),
         ]:
             with pytest.raises(ValueError, match=name):
                 grown_plane_normal(fitted, edited, images, **{name: value})
@@ -997,6 +1001,8 @@ class TestPairwiseFlowNormal:
             ("agreement_margin_deg", -1.0, "agreement_margin_deg"),
             ("max_mean_chi2", 0.0, "max_mean_chi2"),
             ("resolution", 1, "resolution"),
+            ("resolution", 1025, "resolution"),
+            ("resolution", 2**31, "resolution"),
             ("flow_patch_size", 0, "patch_size"),
             ("flow_patch_stride", 0, "patch_stride"),
             ("flow_grad_descent_iterations", 0, "grad_descent_iterations"),
@@ -1010,6 +1016,16 @@ class TestPairwiseFlowNormal:
         ]:
             with pytest.raises(ValueError, match=match):
                 pairwise_flow_normal(flow_track, edited, images, **{name: value})
+        # Twice a grid of 2^31 samples does not fit in 32 bits; the crop cap is
+        # still held to it.
+        with pytest.raises(ValueError, match="max_crop_samples"):
+            pairwise_flow_normal(
+                flow_track,
+                edited,
+                images,
+                min_samples_per_patch=2**31,
+                max_samples_per_patch=2**31,
+            )
 
     def test_gpu_min_pixels_is_not_taken(self, flow_track, ground_truth):
         edited, images = ground_truth

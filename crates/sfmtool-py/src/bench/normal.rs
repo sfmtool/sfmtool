@@ -1058,7 +1058,7 @@ fn grid_plane_normal(
 /// (default 3.0) times the weakest-direction ``σ`` (every kept estimate's
 /// information summed; a ``σ`` that is not finite counts as no evidence) is
 /// a large turn on weak evidence, and is not made. ``working_resolution`` is
-/// :func:`grid_plane_normal`'s. ``resolution`` (default 24, at least 2) is
+/// :func:`grid_plane_normal`'s. ``resolution`` (default 24, 2 to 1024) is
 /// the patch resolution ``R`` the step works at where the reconstruction
 /// stores no patch bitmaps: the ``R`` that a ``working_resolution`` of
 /// ``None`` clamps the working grid's side to ``R ..= 2R`` by, the

@@ -116,6 +116,27 @@ fn the_check_names_the_first_setting_that_fails() {
         bad("single_pair_radius")
     );
     assert_eq!(refused(&|o| o.fit.refine.resolution = 1), bad("resolution"));
+    // A resolution past 1024, up to one whose sizes would overflow, is
+    // refused rather than allocated.
+    for resolution in [1025, 1 << 31, u32::MAX] {
+        assert_eq!(
+            refused(&|o| o.fit = o.fit.at_resolution(resolution)),
+            bad("resolution"),
+            "{resolution}"
+        );
+    }
+    let mut largest = PairwiseFlowNormalOptions::default();
+    largest.fit = largest.fit.at_resolution(1024);
+    assert_eq!(largest.check(), Ok(()));
+    // Twice a `min_samples_per_patch` of 2^31 wraps to 0 in `u32`; the check
+    // still refuses a crop smaller than twice the grid.
+    assert_eq!(
+        refused(&|o| {
+            o.min_samples_per_patch = 1 << 31;
+            o.max_samples_per_patch = 1 << 31;
+        }),
+        bad("max_crop_samples")
+    );
     assert_eq!(
         refused(&|o| o.flow.patch_size = 0),
         NormalError::Flow(OpticalFlowError::PatchSizeZero)

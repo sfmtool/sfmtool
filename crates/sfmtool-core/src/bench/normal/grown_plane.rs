@@ -244,7 +244,7 @@ impl GrownPlaneNormalOptions {
     /// a finite damping of at least zero, a stage turn cap above 0 and under
     /// 90 or infinite, a finite floor on it above 0 and at most the cap, at
     /// least one whole-grid round, and a fit whose sub-pixel kernel runs at a
-    /// patch resolution of at least 2. The three settings of the turned
+    /// patch resolution from 2 to 1024. The three settings of the turned
     /// support are checked with it off too. The error names the first setting
     /// that fails.
     pub fn check(&self) -> Result<(), NormalError> {
@@ -299,7 +299,7 @@ impl GrownPlaneNormalOptions {
         if self.max_grid_rounds == 0 {
             return bad("max_grid_rounds");
         }
-        if self.fit.refine.resolution < 2 {
+        if !self.fit.resolution_is_taken() {
             return bad("resolution");
         }
         Ok(())
