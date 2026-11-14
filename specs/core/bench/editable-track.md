@@ -3256,9 +3256,11 @@ every disc it reads the track back at the normal it was given, as
 `grid_plane_normal` does, and reports `NormalEstimate::PairwiseFlow` as
 undetermined or unstable. It reads no reference view and no keypoint. It is
 deliberately expensive. It has a Python binding
-(`sfmtool.bench.pairwise_flow_normal`), and it is Track View's *Pairwise Flow
+(`sfmtool.bench.pairwise_flow_normal`); it is Track View's *Pairwise Flow
 Normal* and the wire's `fit_bench_track_normal` with `method` `pairwise_flow`,
-both at its default options; `refine_normals` does not run it
+both at its default options; and `bench::refine_normals` runs it on every
+finite point when its options choose it as the step
+([refine-normals.md](refine-normals.md) § "Choosing the step")
 ([pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md)).
 
 The finite difference depends only on where each piece is placed along its

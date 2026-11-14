@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for ``sfmtool.bench.refine_normals``: every finite point of a
-reconstruction, or the points of a list, turned to its grown-plane normal and
-written back as one new value.
+reconstruction, or the points of a list, turned to its grown-plane normal, or
+its pairwise-flow normal, and written back as one new value.
 
-They run on the seoul_bull ground truth and its photographs. The ground truth
-is read in place and never written, so one load serves the module.
+They run on the seoul_bull ground truths and their photographs. The ground
+truths are read in place and never written, so one load serves the module.
 """
 
 import numpy as np
@@ -17,6 +17,9 @@ from sfmtool.bench import refine_normals
 from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import SfmrReconstruction
 from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
+from tests.rust_bindings.bench.test_bench_normal_rust_bindings import (
+    PAIRWISE_DEFAULTS,
+)
 
 OUTCOMES = {
     "turned",
@@ -210,3 +213,84 @@ def test_the_progress_counter_reaches_the_points_refined(ground_truth, images):
     )
     # Each listed point is counted once.
     assert counter.value == report["read"] == 20
+
+
+def test_method_pairwise_flow_runs_that_step_and_reports_its_outcomes():
+    """On seoul_bull v02 the pairwise-flow normal turns point 2 and leaves
+    point 255, which straddles a canopy edge, unstable after three rounds."""
+    recon = SfmrReconstruction.load(
+        str(SEOUL_BULL_DIR / "seoul_bull_sculpture_ground_truth_v02.sfmr")
+    )
+    images = [read_image_rgb(SEOUL_BULL_DIR / name) for name in recon.image_names]
+
+    out, report = refine_normals(
+        recon, images, method="pairwise_flow", point_indexes=[2, 255]
+    )
+    turned = report["points"][2]
+    assert set(turned) == {
+        "index",
+        "outcome",
+        "turn_deg",
+        "unchanged",
+        "single_pair",
+        "chosen_radius",
+        "sigma_deg",
+    }
+    assert turned["outcome"] == "turned"
+    assert not turned["single_pair"] and not turned["unchanged"]
+    assert turned["chosen_radius"] in PAIRWISE_DEFAULTS["radii"]
+    assert 0.0 < turned["sigma_deg"] <= PAIRWISE_DEFAULTS["max_sigma_deg"]
+    assert turned["turn_deg"] > 0.0
+    assert report["points"][255] == {"index": 255, "outcome": "unstable"}
+    assert report["read"] == 2
+    assert report["turned"] == 1 and report["unstable"] == 1
+    assert report["undetermined"] == report["single_pair"] == 0
+    assert report["none_joined"] == report["weak_turn"] == 0
+    assert report["low_confidence"] == 0
+    assert np.isnan(report["mean_agreement"])
+    before = np.asarray(recon.normals)
+    after = np.asarray(out.normals)
+    assert not np.allclose(after[2], before[2])
+    unturned = np.ones(recon.point_count, dtype=bool)
+    unturned[2] = False
+    np.testing.assert_array_equal(after[unturned], before[unturned])
+
+    # A flow keyword reaches the step: a flow patch wider than every crop
+    # leaves every pair with no flow, so the normal is undetermined.
+    _, report = refine_normals(
+        recon,
+        images,
+        method="pairwise_flow",
+        point_indexes=[2],
+        rounds=1,
+        flow_patch_size=4096,
+    )
+    assert report["points"][2] == {"index": 2, "outcome": "undetermined"}
+    assert report["undetermined"] == 1
+
+    # Every keyword of the step is taken; an empty list refines nothing.
+    _, report = refine_normals(
+        recon, images, method="pairwise_flow", point_indexes=[], **PAIRWISE_DEFAULTS
+    )
+    assert report["not_asked"] == recon.point_count
+
+
+def test_a_method_and_its_keywords_are_checked(ground_truth, images):
+    with pytest.raises(ValueError, match="unknown method"):
+        refine_normals(ground_truth, images, method="grid_plane")
+    # A keyword of the other step is refused rather than ignored.
+    with pytest.raises(ValueError, match="spot_window is a keyword of the grown"):
+        refine_normals(ground_truth, images, method="pairwise_flow", spot_window=3)
+    with pytest.raises(ValueError, match="rounds is a keyword of the pairwise"):
+        refine_normals(ground_truth, images, rounds=1)
+    with pytest.raises(ValueError, match="flow_patch_size is a keyword"):
+        refine_normals(ground_truth, images, method="grown_plane", flow_patch_size=8)
+    # The pairwise-flow normal's own check, and the flow's.
+    with pytest.raises(ValueError, match="rounds"):
+        refine_normals(ground_truth, images, method="pairwise_flow", rounds=0)
+    with pytest.raises(ValueError, match="max_pairs"):
+        refine_normals(ground_truth, images, method="pairwise_flow", max_pairs=1)
+    with pytest.raises(ValueError, match="patch_size"):
+        refine_normals(ground_truth, images, method="pairwise_flow", flow_patch_size=0)
+    with pytest.raises(ValueError, match="resolution"):
+        refine_normals(ground_truth, images, method="pairwise_flow", resolution=1)

@@ -19,9 +19,9 @@ the bench's other normal steps do ([editable-track.md](editable-track.md)
 § "Estimating the normal"), and gives the track back turned with a report. It is
 Track View's *Grown Plane Normal* ([../../gui/track-view.md](../../gui/track-view.md)
 § "The toolbar") and the wire's `fit_bench_track_normal` with `method`
-`grown_plane`, both at the default options, and it is the per-point step of
-`bench::refine_normals` ([refine-normals.md](refine-normals.md)), which turns
-every finite point of a reconstruction and which the viewer's *Refine All
+`grown_plane`, both at the default options, and it is the default per-point
+step of `bench::refine_normals` ([refine-normals.md](refine-normals.md)),
+which turns every finite point of a reconstruction and which the viewer's *Refine All
 Normals*, `sfm xform --refine-normals`, `inspect --strips`, `compare --strips`
 and `sfm embed-patches` run. The measurements behind its design and its
 defaults are in

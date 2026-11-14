@@ -2,39 +2,44 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python binding for refining the normal of every finite point of a
-//! reconstruction, or of a list of points: the bench's *Grown Plane Normal*
-//! and *Commit* of each point, written back as one new value.
+//! reconstruction, or of a list of points: the bench's *Grown Plane Normal*,
+//! or the pairwise-flow normal, and *Commit* of each point, written back as
+//! one new value.
 
 use std::sync::atomic::Ordering;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::bench::{
-    refine_normals as core_refine_normals, NormalError, NormalLeftUnchanged, RefineNormalsOptions,
-    RefineNormalsOutcome, RefineNormalsReport,
+    refine_normals as core_refine_normals, NormalError, NormalLeftUnchanged, NormalTurned,
+    RefineNormalsOptions, RefineNormalsOutcome, RefineNormalsReport, RefineNormalsStep,
 };
 use sfmtool_core::progress::{Event, Progress};
 
 use super::normal::GrownPlaneKeywords;
+use super::pairwise_flow_normal::PairwiseFlowKeywords;
 use super::{refused, views_of};
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::{ProgressCounter, PySfmrReconstruction};
 
 /// Turn the patch of every finite point of `recon`, or of every finite point
-/// of ``point_indexes``, to its grown-plane normal, and give back a new
-/// reconstruction that holds the answers.
+/// of ``point_indexes``, to its grown-plane normal, or to its pairwise-flow
+/// normal with ``method="pairwise_flow"``, and give back a new reconstruction
+/// that holds the answers.
 ///
-/// For each point this does what :func:`grown_plane_normal` and :func:`commit`
-/// do to a track put on the bench from that point with every observation
-/// ``in`` and pinned: one plane is fitted to the photographs the point is seen
-/// in, the patch is turned about its centre to face along that plane's normal,
-/// its bitmap is rendered again and each observation's readings are taken
-/// again. The point's centre does not move and no keypoint moves. No index
-/// moves: the value returned has the input's points at the input's indexes,
-/// and each track keeps its images. `recon` itself is not changed. A caller
-/// holding an :class:`~sfmtool.reconstruction.EditedReconstruction` folds it
-/// first with its ``materialize``.
+/// For each point this does what :func:`grown_plane_normal` (or
+/// :func:`pairwise_flow_normal`) and :func:`commit` do to a track put on the
+/// bench from that point with every observation ``in`` and pinned: the
+/// step finds a normal from the photographs the point is seen in, the patch
+/// is turned about its centre to face along it, its bitmap is rendered again
+/// and each observation's readings are taken again. The point's centre does
+/// not move and no keypoint moves. No index moves: the value returned has the
+/// input's points at the input's indexes, and each track keeps its images.
+/// `recon` itself is not changed. A caller holding an
+/// :class:`~sfmtool.reconstruction.EditedReconstruction` folds it first with
+/// its ``materialize``.
 ///
 /// A point at infinity is skipped. Held and ranged points are refined and keep
 /// their constraint. A point the step leaves unchanged or refuses, or renders
@@ -44,8 +49,13 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 /// and a point listed twice is refined once.
 ///
 /// ``images`` is one decoded image per image of `recon`, or a prebuilt
-/// :class:`ImagePyramidSet`, as :func:`fit` takes them. The other keywords are
-/// :func:`grown_plane_normal`'s, with its defaults. ``progress``, a
+/// :class:`ImagePyramidSet`, as :func:`fit` takes them. ``method`` names the
+/// step: ``"grown_plane"`` (the default) or ``"pairwise_flow"``. The other
+/// keywords are :func:`grown_plane_normal`'s and :func:`pairwise_flow_normal`'s,
+/// with their defaults; ``max_pairs``, ``resolution`` and :func:`fit`'s four
+/// are shared and set the chosen step's, and a keyword only the other step
+/// takes is refused. The pairwise-flow normal costs seconds of one thread per
+/// point, against tens of milliseconds for the grown plane. ``progress``, a
 /// :class:`~sfmtool.ProgressCounter`, climbs while the run goes toward the
 /// number of points asked for: those listed, each counted once, or every
 /// point, those at infinity included. The points are refined in parallel with
@@ -54,35 +64,43 @@ use crate::{ProgressCounter, PySfmrReconstruction};
 /// Returns ``(SfmrReconstruction, report)``. The report carries the counts
 /// ``read`` (every point but those at infinity and those not asked for),
 /// ``turned``, ``unchanged`` (turned points whose record agreed with the
-/// stored one, so they were not rewritten), ``low_confidence`` (turned points
-/// whose plane was found with low confidence), ``none_joined`` and
-/// ``weak_turn`` (points whose normal the step left unchanged, because no view
-/// joined or because the turn was a large one on weak evidence), ``kept``
-/// (points the step refused or rendered no bitmap for), ``at_infinity`` and
-/// ``not_asked``; ``median_turn_deg`` (over the turned points; ``nan`` where
-/// none was turned); ``mean_agreement`` (over the turned points with an
-/// agreement; ``nan`` where there are none); and ``points``, a list with one
-/// dict per point in index order. Each has ``index`` and ``outcome``:
-/// ``"turned"``, ``"none_joined"``, ``"weak_turn"``, ``"not_refined"``,
-/// ``"no_bitmap"``, ``"at_infinity"`` or ``"not_asked"``. A turned point adds
-/// ``turn_deg``, ``joined`` (the views that joined the plane),
-/// ``low_confidence``, ``unchanged`` and ``agreement`` (the mean ``grid_zncc``
-/// at the plane of the views that joined it or had their shift fitted at it,
-/// ``nan`` when none has a score). A ``"weak_turn"`` point adds ``turn_deg``
-/// and ``agreement``, the turn not made and the agreement at the plane not
-/// turned to. A point the step refused adds ``error``, the refusal's name
-/// (``"too_few_observations"``, ...), and ``reason``, its sentence.
+/// stored one, so they were not rewritten), ``low_confidence`` (points the
+/// grown plane turned whose plane was found with low confidence),
+/// ``single_pair`` (points the pairwise-flow normal turned on its one pair),
+/// ``none_joined`` and ``weak_turn`` (points whose normal the grown plane left
+/// unchanged, because no view joined or because the turn was a large one on
+/// weak evidence), ``undetermined`` and ``unstable`` (points whose normal the
+/// pairwise-flow normal left unchanged), ``kept`` (points the step refused or
+/// rendered no bitmap for), ``at_infinity`` and ``not_asked``;
+/// ``median_turn_deg`` (over the turned points; ``nan`` where none was
+/// turned); ``mean_agreement`` (over the points the grown plane turned with
+/// an agreement; ``nan`` where there are none); and ``points``, a list with
+/// one dict per point in index order. Each has ``index`` and ``outcome``:
+/// ``"turned"``, ``"none_joined"``, ``"weak_turn"``, ``"undetermined"``,
+/// ``"unstable"``, ``"not_refined"``, ``"no_bitmap"``, ``"at_infinity"`` or
+/// ``"not_asked"``. A turned point adds ``turn_deg`` and ``unchanged``, and
+/// from the grown plane ``joined`` (the views that joined the plane),
+/// ``low_confidence`` and ``agreement`` (the mean ``grid_zncc`` at the plane
+/// of the views that joined it or had their shift fitted at it, ``nan`` when
+/// none has a score), or from the pairwise-flow normal ``single_pair``,
+/// ``chosen_radius`` (patch half-extents) and ``sigma_deg``. A
+/// ``"weak_turn"`` point adds ``turn_deg`` and ``agreement``, the turn not
+/// made and the agreement at the plane not turned to. A point the step
+/// refused adds ``error``, the refusal's name (``"too_few_observations"``,
+/// ...), and ``reason``, its sentence.
 ///
 /// Raises ``ValueError`` with the reason when the run as a whole is refused: a
 /// ``sift_files`` reconstruction, one with no patch frames or no posed image,
-/// a setting the step does not take, or an index in ``point_indexes`` past the
-/// last point.
+/// an unknown ``method``, a keyword the chosen step does not take, a setting
+/// the step does not take, or an index in ``point_indexes`` past the last
+/// point.
 #[pyfunction]
 #[pyo3(signature = (
     recon,
     images,
     *,
     point_indexes = None,
+    method = None,
     resolution = None,
     working_resolution = None,
     spot_window = None,
@@ -108,6 +126,40 @@ use crate::{ProgressCounter, PySfmrReconstruction};
     stage_turn_cap_deg = None,
     min_stage_turn_cap_deg = None,
     max_grid_rounds = None,
+    rounds = None,
+    max_view_angle_deg = None,
+    max_normal_from_mean_view_deg = None,
+    fallback_radius = None,
+    min_samples_per_patch = None,
+    max_samples_per_patch = None,
+    crop_half_extents = None,
+    min_crop_half_width_px = None,
+    max_crop_samples = None,
+    radii = None,
+    max_grid_tilt_deg = None,
+    grid_tilt_step_deg = None,
+    grid_azimuth_step_deg = None,
+    tukey_c = None,
+    correlation_length_px = None,
+    noise_false_alarm = None,
+    flow_floor_px = None,
+    max_sigma_deg = None,
+    agreement_sigmas = None,
+    agreement_margin_deg = None,
+    max_mean_chi2 = None,
+    single_pair_radius = None,
+    flow_patch_size = None,
+    flow_patch_stride = None,
+    flow_grad_descent_iterations = None,
+    flow_finest_scale = None,
+    flow_coarsest_scale = None,
+    flow_variational_refinement = None,
+    flow_variational_jacobi_iterations = None,
+    flow_variational_outer_iterations_base = None,
+    flow_variational_alpha = None,
+    flow_variational_gamma = None,
+    flow_variational_delta = None,
+    flow_normalize_patches = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
     sigma_px = None,
@@ -120,6 +172,7 @@ fn refine_normals(
     recon: &PySfmrReconstruction,
     images: &Bound<'_, PyAny>,
     point_indexes: Option<Vec<u32>>,
+    method: Option<&str>,
     resolution: Option<u32>,
     working_resolution: Option<u32>,
     spot_window: Option<u32>,
@@ -145,13 +198,47 @@ fn refine_normals(
     stage_turn_cap_deg: Option<f64>,
     min_stage_turn_cap_deg: Option<f64>,
     max_grid_rounds: Option<u32>,
+    rounds: Option<u32>,
+    max_view_angle_deg: Option<f64>,
+    max_normal_from_mean_view_deg: Option<f64>,
+    fallback_radius: Option<f64>,
+    min_samples_per_patch: Option<u32>,
+    max_samples_per_patch: Option<u32>,
+    crop_half_extents: Option<f64>,
+    min_crop_half_width_px: Option<f64>,
+    max_crop_samples: Option<u32>,
+    radii: Option<Vec<f64>>,
+    max_grid_tilt_deg: Option<f64>,
+    grid_tilt_step_deg: Option<f64>,
+    grid_azimuth_step_deg: Option<f64>,
+    tukey_c: Option<f64>,
+    correlation_length_px: Option<f64>,
+    noise_false_alarm: Option<f64>,
+    flow_floor_px: Option<f64>,
+    max_sigma_deg: Option<f64>,
+    agreement_sigmas: Option<f64>,
+    agreement_margin_deg: Option<f64>,
+    max_mean_chi2: Option<f64>,
+    single_pair_radius: Option<f64>,
+    flow_patch_size: Option<u32>,
+    flow_patch_stride: Option<u32>,
+    flow_grad_descent_iterations: Option<u32>,
+    flow_finest_scale: Option<u32>,
+    flow_coarsest_scale: Option<u32>,
+    flow_variational_refinement: Option<bool>,
+    flow_variational_jacobi_iterations: Option<u32>,
+    flow_variational_outer_iterations_base: Option<u32>,
+    flow_variational_alpha: Option<f32>,
+    flow_variational_gamma: Option<f32>,
+    flow_variational_delta: Option<f32>,
+    flow_normalize_patches: Option<bool>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
     sigma_px: Option<f64>,
     depth_likelihood_ratio_threshold: Option<f64>,
     progress: Option<ProgressCounter>,
 ) -> PyResult<(PySfmrReconstruction, Py<PyDict>)> {
-    let normal = GrownPlaneKeywords {
+    let grown_plane = GrownPlaneKeywords {
         resolution,
         working_resolution,
         spot_window,
@@ -181,12 +268,77 @@ fn refine_normals(
         max_cache_bytes,
         sigma_px,
         depth_likelihood_ratio_threshold,
-    }
-    .options();
+    };
+    let pairwise_flow = PairwiseFlowKeywords {
+        rounds,
+        max_view_angle_deg,
+        max_normal_from_mean_view_deg,
+        fallback_radius,
+        min_samples_per_patch,
+        max_samples_per_patch,
+        crop_half_extents,
+        min_crop_half_width_px,
+        max_crop_samples,
+        radii,
+        max_grid_tilt_deg,
+        grid_tilt_step_deg,
+        grid_azimuth_step_deg,
+        tukey_c,
+        correlation_length_px,
+        noise_false_alarm,
+        flow_floor_px,
+        max_sigma_deg,
+        agreement_sigmas,
+        agreement_margin_deg,
+        max_mean_chi2,
+        single_pair_radius,
+        flow_patch_size,
+        flow_patch_stride,
+        flow_grad_descent_iterations,
+        flow_finest_scale,
+        flow_coarsest_scale,
+        flow_variational_refinement,
+        flow_variational_jacobi_iterations,
+        flow_variational_outer_iterations_base,
+        flow_variational_alpha,
+        flow_variational_gamma,
+        flow_variational_delta,
+        flow_normalize_patches,
+        max_pairs,
+        resolution,
+        max_seed_offset_px,
+        max_cache_bytes,
+        sigma_px,
+        depth_likelihood_ratio_threshold,
+    };
+    let other = |name: &str, step: &str, method: &str| {
+        PyValueError::new_err(format!(
+            "{name} is a keyword of the {step} normal, and method is {method:?}"
+        ))
+    };
+    let step = match method.unwrap_or("grown_plane") {
+        "grown_plane" => {
+            if let Some(name) = pairwise_flow.first_own_given() {
+                return Err(other(name, "pairwise flow", "grown_plane"));
+            }
+            RefineNormalsStep::GrownPlane(grown_plane.options())
+        }
+        "pairwise_flow" => {
+            if let Some(name) = grown_plane.first_own_given() {
+                return Err(other(name, "grown plane", "pairwise_flow"));
+            }
+            RefineNormalsStep::PairwiseFlow(pairwise_flow.options())
+        }
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown method: {other:?} (expected grown_plane|pairwise_flow)"
+            )))
+        }
+    };
     // Refuse the settings before the photographs are decoded.
-    normal.check().map_err(refused)?;
+    step.check().map_err(refused)?;
     let options = RefineNormalsOptions {
-        normal,
+        step,
         point_indexes,
     };
     let posed = PosedViews::from_reconstruction(recon.inner());
@@ -214,8 +366,11 @@ fn report_dict<'py>(py: Python<'py>, report: &RefineNormalsReport) -> PyResult<B
     d.set_item("turned", report.turned())?;
     d.set_item("unchanged", report.unchanged())?;
     d.set_item("low_confidence", report.low_confidence())?;
+    d.set_item("single_pair", report.single_pair())?;
     d.set_item("none_joined", report.none_joined())?;
     d.set_item("weak_turn", report.weak_turn())?;
+    d.set_item("undetermined", report.undetermined())?;
+    d.set_item("unstable", report.unstable())?;
     d.set_item("kept", report.kept())?;
     d.set_item("at_infinity", report.at_infinity())?;
     d.set_item("not_asked", report.not_asked())?;
@@ -228,17 +383,32 @@ fn report_dict<'py>(py: Python<'py>, report: &RefineNormalsReport) -> PyResult<B
         match &point.outcome {
             RefineNormalsOutcome::Turned {
                 turn_deg,
-                joined,
-                low_confidence,
                 unchanged,
-                agreement,
+                by,
             } => {
                 p.set_item("outcome", "turned")?;
                 p.set_item("turn_deg", turn_deg)?;
-                p.set_item("joined", joined)?;
-                p.set_item("low_confidence", low_confidence)?;
                 p.set_item("unchanged", unchanged)?;
-                p.set_item("agreement", agreement)?;
+                match by {
+                    NormalTurned::GrownPlane {
+                        joined,
+                        low_confidence,
+                        agreement,
+                    } => {
+                        p.set_item("joined", joined)?;
+                        p.set_item("low_confidence", low_confidence)?;
+                        p.set_item("agreement", agreement)?;
+                    }
+                    NormalTurned::PairwiseFlow {
+                        single_pair,
+                        chosen_radius,
+                        sigma_deg,
+                    } => {
+                        p.set_item("single_pair", single_pair)?;
+                        p.set_item("chosen_radius", chosen_radius)?;
+                        p.set_item("sigma_deg", sigma_deg)?;
+                    }
+                }
             }
             RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::NoneJoined) => {
                 p.set_item("outcome", "none_joined")?
@@ -250,6 +420,12 @@ fn report_dict<'py>(py: Python<'py>, report: &RefineNormalsReport) -> PyResult<B
                 p.set_item("outcome", "weak_turn")?;
                 p.set_item("turn_deg", turn_deg)?;
                 p.set_item("agreement", agreement)?;
+            }
+            RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::Undetermined) => {
+                p.set_item("outcome", "undetermined")?
+            }
+            RefineNormalsOutcome::LeftUnchanged(NormalLeftUnchanged::Unstable) => {
+                p.set_item("outcome", "unstable")?
             }
             RefineNormalsOutcome::NotRefined(e) => {
                 p.set_item("outcome", "not_refined")?;
