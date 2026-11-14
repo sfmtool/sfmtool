@@ -23,10 +23,6 @@
 //! intent — it would also accept a float or a signed value — so it documents
 //! less than a concrete type would.
 //!
-//! The one exception is [`clusters_cluster_starts`], which takes a concrete
-//! `usize` because it does arithmetic on the count rather than only
-//! interpolating it.
-//!
 //! Unlike `.sfmr`, no `.matches` entry has been renamed across format versions,
 //! so every function here has a single spelling.
 //!
@@ -190,11 +186,10 @@ pub(crate) fn clusters_metadata() -> &'static str {
 
 /// `clusters/cluster_starts` — CSR offsets into the member arrays.
 ///
-/// Takes `cluster_count` and sizes the entry `cluster_count + 1`: the array
-/// holds one offset per cluster plus the terminating total, so the `+ 1` is a
-/// property of the entry rather than something each caller should re-derive.
-pub(crate) fn clusters_cluster_starts(cluster_count: usize) -> String {
-    format!("clusters/cluster_starts.{}.uint32.zst", cluster_count + 1)
+/// Takes `offset_count`, the array's length: one offset per cluster plus the
+/// terminating total, so `cluster_count + 1`.
+pub(crate) fn clusters_cluster_starts(offset_count: impl std::fmt::Display) -> String {
+    format!("clusters/cluster_starts.{offset_count}.uint32.zst")
 }
 
 /// `clusters/member_images` — image index per cluster member.

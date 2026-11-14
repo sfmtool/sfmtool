@@ -346,7 +346,7 @@ fn write_clusters<W: std::io::Write + std::io::Seek>(
         // clusters/cluster_starts
         write_binary_entry_hashed(
             zip,
-            &entries::clusters_cluster_starts(cluster_count),
+            &entries::clusters_cluster_starts(clusters.cluster_starts.len()),
             &row_major_bytes(&clusters.cluster_starts),
             zstd_level,
             &mut clusters_hasher,
