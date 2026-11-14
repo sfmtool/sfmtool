@@ -79,6 +79,8 @@ fn left_as_they_were(error: Option<&NormalError>) -> (usize, &'static str) {
         // normal step; a cancel ends the run.
         Some(
             NormalError::BadGrownPlaneOption(_)
+            | NormalError::BadPairwiseFlowOption(_)
+            | NormalError::Flow(_)
             | NormalError::BadPieces(_)
             | NormalError::BadOverlap(_)
             | NormalError::TooFewPieces { .. }

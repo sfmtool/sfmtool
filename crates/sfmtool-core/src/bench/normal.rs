@@ -1,11 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The three steps that estimate which way a track's patch faces and tilt it
+//! The four steps that estimate which way a track's patch faces and tilt it
 //! there: [`finite_difference_normal`], from where smaller pieces of the patch fit,
 //! [`grid_plane_normal`], from the plane through the patch's nine cells,
-//! each registered in every view, and [`grown_plane_normal`], from one plane
-//! fitted directly to the photographs, view by view.
+//! each registered in every view, [`grown_plane_normal`], from one plane
+//! fitted directly to the photographs, view by view, and
+//! [`pairwise_flow_normal`], from the dense optical flow between pairs of the
+//! views rendered on a common plane.
 //!
 //! `specs/core/bench/editable-track.md` § "Estimating the normal" is the
 //! design. A [`fit`] moves the patch's centre and leaves its
@@ -29,8 +31,11 @@ use super::fit::{fit, FitError, FitOptions};
 use super::steps::{resize_patch, tilt_patch, translate_patch, TiltReport, TrackEditError};
 use super::track::{EditableTrack, Stage, StageKind};
 
+use crate::features::optical_flow::OpticalFlowError;
+
 mod grid_plane;
 mod grown_plane;
+mod pairwise_flow;
 
 pub use grid_plane::{
     grid_plane_normal, GridPlaneAcceptance, GridPlaneCell, GridPlaneCells, GridPlaneDetail,
@@ -42,6 +47,11 @@ pub use grown_plane::{
     grown_plane_normal, GrownPlaneAttempt, GrownPlaneGridRound, GrownPlaneNormalOptions,
     GrownPlaneOutcome, GrownPlanePair, GrownPlanePick, GrownPlanePrecision, GrownPlaneRefusal,
     GrownPlaneSequence, GrownPlaneTiltStart, GrownPlaneTry, GrownPlaneTryOutcome, GrownPlaneView,
+};
+pub use pairwise_flow::{
+    pairwise_flow_normal, PairwiseFlowCrop, PairwiseFlowFit, PairwiseFlowNormalOptions,
+    PairwiseFlowOutcome, PairwiseFlowPair, PairwiseFlowRadius, PairwiseFlowRound,
+    PairwiseFlowRounds,
 };
 
 /// The smallest number of pieces [`FiniteDifferenceOptions::pieces`] takes: two
@@ -157,6 +167,13 @@ pub enum NormalError {
     /// A [`GrownPlaneNormalOptions`] setting, named, is outside what the step
     /// takes ([`GrownPlaneNormalOptions::check`]).
     BadGrownPlaneOption(&'static str),
+    /// A [`PairwiseFlowNormalOptions`] setting, named, is outside what the
+    /// pairwise-flow normal takes ([`PairwiseFlowNormalOptions::check`]).
+    BadPairwiseFlowOption(&'static str),
+    /// The optical flow refused its settings: those of
+    /// [`PairwiseFlowNormalOptions::flow`], which no pair of crops could be
+    /// read with.
+    Flow(OpticalFlowError),
     /// The turn to the estimated normal was refused.
     Tilt(TrackEditError),
     /// The views were refused before the step read any
@@ -210,6 +227,13 @@ impl std::fmt::Display for NormalError {
                     "the grown plane normal's {name} is outside what it takes"
                 )
             }
+            NormalError::BadPairwiseFlowOption(name) => {
+                write!(
+                    f,
+                    "the pairwise flow normal's {name} is outside what it takes"
+                )
+            }
+            NormalError::Flow(e) => write!(f, "the optical flow refused its settings: {e}"),
             NormalError::Tilt(e) => write!(f, "{e}"),
             NormalError::Evaluate(e) => write!(f, "{e}"),
             NormalError::Cancelled => write!(f, "the step was cancelled"),
@@ -278,6 +302,8 @@ pub enum NormalEstimate {
     GridPlaneCells(Box<GridPlaneCells>),
     /// [`grown_plane_normal`]'s sequence of views.
     GrownPlane(Box<GrownPlaneSequence>),
+    /// [`pairwise_flow_normal`]'s rounds.
+    PairwiseFlow(Box<PairwiseFlowRounds>),
 }
 
 /// What one normal step did.
@@ -328,6 +354,7 @@ impl std::fmt::Display for NormalReport {
             }
             NormalEstimate::GridPlaneCells(cells) => write!(f, "{cells}")?,
             NormalEstimate::GrownPlane(sequence) => write!(f, "{sequence}")?,
+            NormalEstimate::PairwiseFlow(rounds) => write!(f, "{rounds}")?,
         }
         write!(f, ", turned {:.1}\u{b0}", self.tilt.degrees)?;
         if let Some(stop) = self.tilt.stopped {

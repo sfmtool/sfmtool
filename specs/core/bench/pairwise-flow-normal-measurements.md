@@ -1,13 +1,19 @@
 # Pairwise Flow Normal Measurements
 
-**Status:** Draft. Measurements of a Python prototype, made outside the
-repository, behind [pairwise-flow-normal.md](pairwise-flow-normal.md). No code in
-the repository produced these numbers, and the prototype's scripts are not
-checked in.
+This file records the measurements behind
+[pairwise-flow-normal.md](pairwise-flow-normal.md), which specifies
+`pairwise_flow_normal`: the bench step that estimates which way a point's patch
+faces by rendering every view of the point on one plane through it, reading the
+optical flow between pairs of those renders, fitting the plane to each pair's
+flow over discs of several radii, and choosing the largest disc on which the
+pairs agree. Most of the measurements were made with Python prototypes outside
+the repository, whose scripts are not checked in; § "The Rust step on real
+points" measures the step itself, with the example program
+[pairwise_flow_measure.rs](../../../crates/sfmtool-core/examples/pairwise_flow_measure.rs).
 
-The measurements bear on six choices the draft makes: the flow settings, the
-crop's size, the rule that chooses the support, the σ and outcome rules, the
-common plane and its rounds, and what the step costs. Each section states the
+The measurements bear on the step's choices: the flow settings, the crop's
+size, the rule that chooses the support, the σ and outcome rules, the common
+plane and its rounds, and what the step costs. Each section states the
 question, the setup and the result.
 
 ## Reference sets
@@ -21,7 +27,7 @@ dataset, and a third set with none.
   `kerry_park_ground_truth_v02.sfmr` and 10 of
   `seoul_bull_sculpture_ground_truth_v02.sfmr`, all `ok` points: points whose
   grown-plane answer returns to within 3° from every start
-  ([grown-plane-normal-measurements.md](../core/bench/grown-plane-normal-measurements.md#σ-in-the-planes-own-frame-2026-11-11)
+  ([grown-plane-normal-measurements.md](grown-plane-normal-measurements.md#σ-in-the-planes-own-frame-2026-11-11)
   labels the ground truths' points `ok`, `A1` and `A2`). Their reference is the
   stored normal.
 - 7 points the maintainer judged good by eye, with their stored normals.
@@ -59,7 +65,7 @@ photographs, in pixels, which bounds what a support of one patch can see:
 ## The prototype's crops
 
 The first prototype's runs on real photographs used two crop designs, neither
-of them the one the draft proposes; the later runs of the revised design are
+of them the one the step uses; the later runs of the revised design are
 described in § "Real points with the revised design". (The runs on synthetic
 scenes, § "Synthetic scenes", rendered their crops by casting rays onto the
 true surface and test the σ and outcome rules, not the crops.)
@@ -74,7 +80,7 @@ true surface and test the σ and outcome rules, not the crops.)
   were downsampled onto the grid without a pyramid and so aliased; views
   farther than the median were upsampled.
 
-The draft proposes a different design: every view rendered on one common plane,
+The step uses a different design: every view rendered on one common plane,
 iterated over rounds from the given normal, a grid of one sample per pixel of
 the finest view within 24 to 128 samples per patch side, views finer than the
 grid prefiltered through their photographs' pyramids, a crop floor in pixels
@@ -143,10 +149,10 @@ every size is closer than the grown plane. On dino the flow fit is closer from
 `patch_stride=1`), crops of 48 px half-width at the point's median scale on
 one grid per point, sampled bilinearly with no prefilter (§ "The prototype's
 crops"), the radii 4, 6, 8, 11, 16, 22, 32
-and 45 px, and the fits and combination of the draft, but with a σ that has no
+and 45 px, and the fits and combination of the step, but with a σ that has no
 texture term: the geometric Hessian's inverse times the flow residual variance,
-with the correlation correction (the draft adds the texture term; § "Fitting
-each pair at each radius" there). Each rule picks one radius per point.
+with the correlation correction (the step adds the texture term; [pairwise-flow-normal.md](pairwise-flow-normal.md)
+§ "Fitting each pair at each radius"). Each rule picks one radius per point.
 
 **Result.** Median angle from the reference: the mean over the five sets, then
 each set.
@@ -209,7 +215,7 @@ prototype's pixel-based crops and 1.3° at native resolution.
 close to the reference (on seoul_bull point 157, 1.6° to 8° at every radius),
 but the mean χ² was 44 to 2,500, and 600 to 50,000 on the points whose grid had
 90 or more samples per patch side. σ the larger of the texture σ and the
-residual σ (the draft's step 6) is the draft's answer to this, and the runs
+residual σ (step 6 of the step's fit) is the step's answer to this, and the runs
 below use it.
 
 **The native grid and σ the larger of the two, a fronto plane per view** (σ ≤
@@ -335,7 +341,7 @@ and narrow-baseline points, not on the `ok` points.
 in front and trees behind, ends 112° from the reference while within 80° of the
 mean viewing direction. Point 160, with two views and so one pair, drifted 14°
 → 40° → 55° → 68° from the reference over the rounds; with no second pair
-nothing tests a round's answer, which is why the draft runs one round for a
+nothing tests a round's answer, which is why the step runs one round for a
 point with one pair.
 
 **Cost.** About 4 to 8 minutes for the 189 points with 12 processes per
@@ -347,10 +353,10 @@ configuration, more with the native grid and 3 rounds.
 and weak texture, an honest σ on strong texture, and what do they give on a
 crease through the point? How large should the flow floor be?
 
-**Setup.** A Python prototype of the draft's revised σ and outcome rules: σ
+**Setup.** A Python prototype of the step's σ and outcome rules: σ
 weighted by the structure tensor with the 99.9% noise threshold, the floor on
 the flow's precision where stated, two determined pairs needed at a radius, and
-a mean χ² of at most 2. It is a prototype of those rules, not of the draft's
+a mean χ² of at most 2. It is a prototype of those rules, not of the step's
 crop sizing: each crop was rendered by casting each sample's ray onto the true
 surface, at one sample per photograph pixel.
 
@@ -382,7 +388,7 @@ because χ² was inflated. With each correlated square's covariance modelled as
 | 0.02 px | 1 to 2 | 0 |
 | 0.05 px | under 1, slightly cautious | 0 |
 
-The draft's default, 0.03, lies between the two floors measured.
+The step's default, 0.03, lies between the two floors measured.
 
 **A crease through the point**, at contrast 30:
 
@@ -422,8 +428,66 @@ start, but to a biased one: on baselines of about 2°, a flow slope of 0.2 to
 0.3 px across the patch turns the plane 20° to 30°. The grown plane's
 photometric score preferred the stored normals to the planes it reached.
 
-## Cost
+## The Rust step on real points (2026-11-13)
 
-The prototype, in Python, took about 59 s for 153 points with 12 processes,
-about 4.6 CPU-seconds per point. Most of it was the fits; the flows were one
-full-resolution flow on a 96×96 crop per pair.
+**Question.** Does `pairwise_flow_normal` reach the prototype's accuracy on the
+points the prototype was measured on, and what does a point cost?
+
+**Setup.** The example program
+[pairwise_flow_measure.rs](../../../crates/sfmtool-core/examples/pairwise_flow_measure.rs),
+in a release build on a 32-thread Windows machine with other work running. It
+puts each point on the bench, turns its patch to the mean viewing direction of
+its `in` observations, runs the step from there with every option at its
+default or with `max_mean_chi2` 1, and compares the normal the patch was turned
+to with the file's stored normal. The points run one after another, so a
+point's time is the step's own, with its rounds' pairs in parallel on the
+global rayon pool or on a pool of one thread.
+
+- **Curated:** the points of reference set (a) the prototype read from
+  `dino_dog_toy_ground_truth_v01.sfmr` (26: the `ok` points and one judged
+  good) and `kerry_park_ground_truth_v02.sfmr` (15 `ok` points), from the
+  prototype's own results file, so the lists are the same.
+- **Spread:** 40 finite points with three or more observations, evenly spaced
+  through each file's point order, with no curation.
+
+**Result.** The median angle is over the points turned, `SinglePair`
+included. The prototype's row is the run after the two changes of § "The crop
+floor and the bar on the mean viewing direction", whose share turned counts the
+same way.
+
+| Set | χ² bar | Turned | Single pair | Undetermined | Unstable | Median angle | Prototype |
+|---|---:|---:|---:|---:|---:|---:|---|
+| gt dino, 26 | 2 | 25 | 0 | 1 | 0 | 1.10° | 1.3°, 92% |
+| gt dino, 26 | 1 | 24 | 0 | 1 | 1 | 1.20° | 0.9°, 88% |
+| gt kerry, 15 | 2 | 11 | 1 | 3 | 0 | 3.66° | 3.5°, 80% |
+| gt kerry, 15 | 1 | 10 | 1 | 3 | 1 | 2.96° | 3.2°, 80% |
+| spread dino, 40 | 2 | 38 | 0 | 2 | 0 | 1.73° | |
+| spread kerry, 40 | 2 | 22 | 0 | 18 | 0 | 7.19° | |
+
+On the curated points the step turns as many points as the prototype or more
+(96% and 80% at χ² ≤ 2) at about the same angle from the stored normals. On the
+spread kerry_park points it leaves 18 of 40 undetermined, and some of those it
+turns are far from the stored normal (point 47 ends 76.7° from it, point 56
+70.5°, point 253 42.9°), within the 80° bar on the mean viewing direction. The
+stored normals were themselves made by the grown-plane step, so a large angle
+on an uncurated point is not by itself an error of this step.
+
+Time per point, at `max_mean_chi2` 2:
+
+| Set | One thread, median (mean) | Global pool, median |
+|---|---:|---:|
+| gt dino | 4.37 s (5.53 s) | 0.89 s to 1.50 s over three runs |
+| gt kerry | 1.26 s (1.39 s) | 0.28 s to 0.47 s over three runs |
+| spread dino | | 0.75 s |
+| spread kerry | | 0.33 s |
+
+The answers on one thread and on the global pool were the same, point by
+point. The parallel speedup is about 4: a round reads at most 10 pairs. With
+the crops rendered one view after another the curated dino median was 1.05 s
+to 1.56 s over three runs; rendered in parallel over views, 0.89 s to 1.50 s.
+
+The Python prototypes took about 4.6 CPU-seconds per point for the first
+design (59 s for 153 points with 12 processes, most of it in the fits, one
+full-resolution flow on a 96×96 crop per pair) and 4 to 8 minutes for 189
+points with 12 processes, 15 to 30 CPU-seconds a point, for the revised design
+with 3 rounds.

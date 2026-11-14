@@ -279,6 +279,8 @@ fn normal_error_name(e: &NormalError) -> &'static str {
         NormalError::TooFewPieces { .. } => "too_few_pieces",
         NormalError::TooFewGridPieces { .. } => "too_few_grid_pieces",
         NormalError::BadGrownPlaneOption(_) => "bad_grown_plane_option",
+        NormalError::BadPairwiseFlowOption(_) => "bad_pairwise_flow_option",
+        NormalError::Flow(_) => "flow",
         NormalError::Tilt(_) => "tilt",
         NormalError::Evaluate(_) => "evaluate",
         NormalError::Cancelled => "cancelled",
