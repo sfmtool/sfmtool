@@ -355,60 +355,49 @@ fn pairwise_flow_normal(
     depth_likelihood_ratio_threshold: Option<f64>,
     record_phases: bool,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
-    let defaults = PairwiseFlowNormalOptions::default();
-    let flow = FlowParamOverrides {
-        patch_size: flow_patch_size,
-        patch_stride: flow_patch_stride,
-        grad_descent_iterations: flow_grad_descent_iterations,
-        finest_scale: flow_finest_scale,
-        coarsest_scale: flow_coarsest_scale,
-        variational_refinement: flow_variational_refinement,
-        variational_jacobi_iterations: flow_variational_jacobi_iterations,
-        variational_outer_iterations_base: flow_variational_outer_iterations_base,
-        variational_alpha: flow_variational_alpha,
-        variational_gamma: flow_variational_gamma,
-        variational_delta: flow_variational_delta,
-        normalize_patches: flow_normalize_patches,
-        gpu_min_pixels: None,
-    }
-    .apply(defaults.flow.clone());
-    let fit = fit_options(
+    let options = PairwiseFlowKeywords {
+        rounds,
+        max_view_angle_deg,
+        max_normal_from_mean_view_deg,
+        fallback_radius,
+        min_samples_per_patch,
+        max_samples_per_patch,
+        crop_half_extents,
+        min_crop_half_width_px,
+        max_crop_samples,
+        radii,
+        max_pairs,
+        max_grid_tilt_deg,
+        grid_tilt_step_deg,
+        grid_azimuth_step_deg,
+        tukey_c,
+        correlation_length_px,
+        noise_false_alarm,
+        flow_floor_px,
+        max_sigma_deg,
+        agreement_sigmas,
+        agreement_margin_deg,
+        max_mean_chi2,
+        single_pair_radius,
+        flow_patch_size,
+        flow_patch_stride,
+        flow_grad_descent_iterations,
+        flow_finest_scale,
+        flow_coarsest_scale,
+        flow_variational_refinement,
+        flow_variational_jacobi_iterations,
+        flow_variational_outer_iterations_base,
+        flow_variational_alpha,
+        flow_variational_gamma,
+        flow_variational_delta,
+        flow_normalize_patches,
+        resolution,
         max_seed_offset_px,
         max_cache_bytes,
         sigma_px,
         depth_likelihood_ratio_threshold,
-    );
-    let options = PairwiseFlowNormalOptions {
-        rounds: rounds.unwrap_or(defaults.rounds),
-        max_view_angle_deg: max_view_angle_deg.unwrap_or(defaults.max_view_angle_deg),
-        max_normal_from_mean_view_deg: max_normal_from_mean_view_deg
-            .unwrap_or(defaults.max_normal_from_mean_view_deg),
-        fallback_radius: fallback_radius.unwrap_or(defaults.fallback_radius),
-        min_samples_per_patch: min_samples_per_patch.unwrap_or(defaults.min_samples_per_patch),
-        max_samples_per_patch: max_samples_per_patch.unwrap_or(defaults.max_samples_per_patch),
-        crop_half_extents: crop_half_extents.unwrap_or(defaults.crop_half_extents),
-        min_crop_half_width_px: min_crop_half_width_px.unwrap_or(defaults.min_crop_half_width_px),
-        max_crop_samples: max_crop_samples.unwrap_or(defaults.max_crop_samples),
-        radii: radii.unwrap_or_else(|| defaults.radii.clone()),
-        max_pairs: max_pairs.unwrap_or(defaults.max_pairs),
-        flow,
-        max_grid_tilt_deg: max_grid_tilt_deg.unwrap_or(defaults.max_grid_tilt_deg),
-        grid_tilt_step_deg: grid_tilt_step_deg.unwrap_or(defaults.grid_tilt_step_deg),
-        grid_azimuth_step_deg: grid_azimuth_step_deg.unwrap_or(defaults.grid_azimuth_step_deg),
-        tukey_c: tukey_c.unwrap_or(defaults.tukey_c),
-        correlation_length_px: correlation_length_px.unwrap_or(defaults.correlation_length_px),
-        noise_false_alarm: noise_false_alarm.unwrap_or(defaults.noise_false_alarm),
-        flow_floor_px: flow_floor_px.unwrap_or(defaults.flow_floor_px),
-        max_sigma_deg: max_sigma_deg.unwrap_or(defaults.max_sigma_deg),
-        agreement_sigmas: agreement_sigmas.unwrap_or(defaults.agreement_sigmas),
-        agreement_margin_deg: agreement_margin_deg.unwrap_or(defaults.agreement_margin_deg),
-        max_mean_chi2: max_mean_chi2.unwrap_or(defaults.max_mean_chi2),
-        single_pair_radius: single_pair_radius.unwrap_or(defaults.single_pair_radius),
-        fit: match resolution {
-            Some(resolution) => fit.at_resolution(resolution),
-            None => fit,
-        },
-    };
+    }
+    .options();
     // Refuse the settings before the photographs are decoded.
     options.check().map_err(refused)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
@@ -438,6 +427,216 @@ fn pairwise_flow_normal(
     ))
 }
 
+/// The pairwise-flow normal's keyword arguments, each `None` where the caller
+/// left it out. [`pairwise_flow_normal`] and the run over every point,
+/// `refine_normals`, take the same ones.
+pub(super) struct PairwiseFlowKeywords {
+    pub(super) rounds: Option<u32>,
+    pub(super) max_view_angle_deg: Option<f64>,
+    pub(super) max_normal_from_mean_view_deg: Option<f64>,
+    pub(super) fallback_radius: Option<f64>,
+    pub(super) min_samples_per_patch: Option<u32>,
+    pub(super) max_samples_per_patch: Option<u32>,
+    pub(super) crop_half_extents: Option<f64>,
+    pub(super) min_crop_half_width_px: Option<f64>,
+    pub(super) max_crop_samples: Option<u32>,
+    pub(super) radii: Option<Vec<f64>>,
+    pub(super) max_pairs: Option<usize>,
+    pub(super) max_grid_tilt_deg: Option<f64>,
+    pub(super) grid_tilt_step_deg: Option<f64>,
+    pub(super) grid_azimuth_step_deg: Option<f64>,
+    pub(super) tukey_c: Option<f64>,
+    pub(super) correlation_length_px: Option<f64>,
+    pub(super) noise_false_alarm: Option<f64>,
+    pub(super) flow_floor_px: Option<f64>,
+    pub(super) max_sigma_deg: Option<f64>,
+    pub(super) agreement_sigmas: Option<f64>,
+    pub(super) agreement_margin_deg: Option<f64>,
+    pub(super) max_mean_chi2: Option<f64>,
+    pub(super) single_pair_radius: Option<f64>,
+    pub(super) flow_patch_size: Option<u32>,
+    pub(super) flow_patch_stride: Option<u32>,
+    pub(super) flow_grad_descent_iterations: Option<u32>,
+    pub(super) flow_finest_scale: Option<u32>,
+    pub(super) flow_coarsest_scale: Option<u32>,
+    pub(super) flow_variational_refinement: Option<bool>,
+    pub(super) flow_variational_jacobi_iterations: Option<u32>,
+    pub(super) flow_variational_outer_iterations_base: Option<u32>,
+    pub(super) flow_variational_alpha: Option<f32>,
+    pub(super) flow_variational_gamma: Option<f32>,
+    pub(super) flow_variational_delta: Option<f32>,
+    pub(super) flow_normalize_patches: Option<bool>,
+    pub(super) resolution: Option<u32>,
+    pub(super) max_seed_offset_px: Option<f64>,
+    pub(super) max_cache_bytes: Option<usize>,
+    pub(super) sigma_px: Option<f64>,
+    pub(super) depth_likelihood_ratio_threshold: Option<f64>,
+}
+
+impl PairwiseFlowKeywords {
+    /// The step's options: each keyword given, and the Rust default for each
+    /// one left out.
+    pub(super) fn options(self) -> PairwiseFlowNormalOptions {
+        let defaults = PairwiseFlowNormalOptions::default();
+        let flow = FlowParamOverrides {
+            patch_size: self.flow_patch_size,
+            patch_stride: self.flow_patch_stride,
+            grad_descent_iterations: self.flow_grad_descent_iterations,
+            finest_scale: self.flow_finest_scale,
+            coarsest_scale: self.flow_coarsest_scale,
+            variational_refinement: self.flow_variational_refinement,
+            variational_jacobi_iterations: self.flow_variational_jacobi_iterations,
+            variational_outer_iterations_base: self.flow_variational_outer_iterations_base,
+            variational_alpha: self.flow_variational_alpha,
+            variational_gamma: self.flow_variational_gamma,
+            variational_delta: self.flow_variational_delta,
+            normalize_patches: self.flow_normalize_patches,
+            gpu_min_pixels: None,
+        }
+        .apply(defaults.flow.clone());
+        let fit = fit_options(
+            self.max_seed_offset_px,
+            self.max_cache_bytes,
+            self.sigma_px,
+            self.depth_likelihood_ratio_threshold,
+        );
+        PairwiseFlowNormalOptions {
+            rounds: self.rounds.unwrap_or(defaults.rounds),
+            max_view_angle_deg: self
+                .max_view_angle_deg
+                .unwrap_or(defaults.max_view_angle_deg),
+            max_normal_from_mean_view_deg: self
+                .max_normal_from_mean_view_deg
+                .unwrap_or(defaults.max_normal_from_mean_view_deg),
+            fallback_radius: self.fallback_radius.unwrap_or(defaults.fallback_radius),
+            min_samples_per_patch: self
+                .min_samples_per_patch
+                .unwrap_or(defaults.min_samples_per_patch),
+            max_samples_per_patch: self
+                .max_samples_per_patch
+                .unwrap_or(defaults.max_samples_per_patch),
+            crop_half_extents: self.crop_half_extents.unwrap_or(defaults.crop_half_extents),
+            min_crop_half_width_px: self
+                .min_crop_half_width_px
+                .unwrap_or(defaults.min_crop_half_width_px),
+            max_crop_samples: self.max_crop_samples.unwrap_or(defaults.max_crop_samples),
+            radii: self.radii.unwrap_or_else(|| defaults.radii.clone()),
+            max_pairs: self.max_pairs.unwrap_or(defaults.max_pairs),
+            max_grid_tilt_deg: self.max_grid_tilt_deg.unwrap_or(defaults.max_grid_tilt_deg),
+            grid_tilt_step_deg: self
+                .grid_tilt_step_deg
+                .unwrap_or(defaults.grid_tilt_step_deg),
+            grid_azimuth_step_deg: self
+                .grid_azimuth_step_deg
+                .unwrap_or(defaults.grid_azimuth_step_deg),
+            tukey_c: self.tukey_c.unwrap_or(defaults.tukey_c),
+            correlation_length_px: self
+                .correlation_length_px
+                .unwrap_or(defaults.correlation_length_px),
+            noise_false_alarm: self.noise_false_alarm.unwrap_or(defaults.noise_false_alarm),
+            flow_floor_px: self.flow_floor_px.unwrap_or(defaults.flow_floor_px),
+            max_sigma_deg: self.max_sigma_deg.unwrap_or(defaults.max_sigma_deg),
+            agreement_sigmas: self.agreement_sigmas.unwrap_or(defaults.agreement_sigmas),
+            agreement_margin_deg: self
+                .agreement_margin_deg
+                .unwrap_or(defaults.agreement_margin_deg),
+            max_mean_chi2: self.max_mean_chi2.unwrap_or(defaults.max_mean_chi2),
+            single_pair_radius: self
+                .single_pair_radius
+                .unwrap_or(defaults.single_pair_radius),
+            flow,
+            fit: match self.resolution {
+                Some(resolution) => fit.at_resolution(resolution),
+                None => fit,
+            },
+        }
+    }
+
+    /// The first keyword given that only the pairwise-flow normal takes, of
+    /// those the grown plane normal does not share, by name.
+    pub(super) fn first_own_given(&self) -> Option<&'static str> {
+        [
+            ("rounds", self.rounds.is_some()),
+            ("max_view_angle_deg", self.max_view_angle_deg.is_some()),
+            (
+                "max_normal_from_mean_view_deg",
+                self.max_normal_from_mean_view_deg.is_some(),
+            ),
+            ("fallback_radius", self.fallback_radius.is_some()),
+            (
+                "min_samples_per_patch",
+                self.min_samples_per_patch.is_some(),
+            ),
+            (
+                "max_samples_per_patch",
+                self.max_samples_per_patch.is_some(),
+            ),
+            ("crop_half_extents", self.crop_half_extents.is_some()),
+            (
+                "min_crop_half_width_px",
+                self.min_crop_half_width_px.is_some(),
+            ),
+            ("max_crop_samples", self.max_crop_samples.is_some()),
+            ("radii", self.radii.is_some()),
+            ("max_grid_tilt_deg", self.max_grid_tilt_deg.is_some()),
+            ("grid_tilt_step_deg", self.grid_tilt_step_deg.is_some()),
+            (
+                "grid_azimuth_step_deg",
+                self.grid_azimuth_step_deg.is_some(),
+            ),
+            ("tukey_c", self.tukey_c.is_some()),
+            (
+                "correlation_length_px",
+                self.correlation_length_px.is_some(),
+            ),
+            ("noise_false_alarm", self.noise_false_alarm.is_some()),
+            ("flow_floor_px", self.flow_floor_px.is_some()),
+            ("max_sigma_deg", self.max_sigma_deg.is_some()),
+            ("agreement_sigmas", self.agreement_sigmas.is_some()),
+            ("agreement_margin_deg", self.agreement_margin_deg.is_some()),
+            ("max_mean_chi2", self.max_mean_chi2.is_some()),
+            ("single_pair_radius", self.single_pair_radius.is_some()),
+            ("flow_patch_size", self.flow_patch_size.is_some()),
+            ("flow_patch_stride", self.flow_patch_stride.is_some()),
+            (
+                "flow_grad_descent_iterations",
+                self.flow_grad_descent_iterations.is_some(),
+            ),
+            ("flow_finest_scale", self.flow_finest_scale.is_some()),
+            ("flow_coarsest_scale", self.flow_coarsest_scale.is_some()),
+            (
+                "flow_variational_refinement",
+                self.flow_variational_refinement.is_some(),
+            ),
+            (
+                "flow_variational_jacobi_iterations",
+                self.flow_variational_jacobi_iterations.is_some(),
+            ),
+            (
+                "flow_variational_outer_iterations_base",
+                self.flow_variational_outer_iterations_base.is_some(),
+            ),
+            (
+                "flow_variational_alpha",
+                self.flow_variational_alpha.is_some(),
+            ),
+            (
+                "flow_variational_gamma",
+                self.flow_variational_gamma.is_some(),
+            ),
+            (
+                "flow_variational_delta",
+                self.flow_variational_delta.is_some(),
+            ),
+            (
+                "flow_normalize_patches",
+                self.flow_normalize_patches.is_some(),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(name, given)| given.then_some(name))
+    }
+}
 /// Register the pairwise-flow normal on the `sfmtool.bench` submodule.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pairwise_flow_normal, m)?)?;

@@ -109,8 +109,8 @@ pub use normal::{
     PairwiseFlowRounds, PieceLayout, BENCH_MIN_CELL_ZNCC,
 };
 pub use refine_normals::{
-    refine_normals, NormalLeftUnchanged, RefineNormalsError, RefineNormalsOptions,
-    RefineNormalsOutcome, RefineNormalsReport, RefinedNormal,
+    refine_normals, NormalLeftUnchanged, NormalTurned, RefineNormalsError, RefineNormalsOptions,
+    RefineNormalsOutcome, RefineNormalsReport, RefineNormalsStep, RefinedNormal,
 };
 pub use refit_points::{
     refit_points, RefitOutcome, RefitPoint, RefitPointsError, RefitPointsOptions,

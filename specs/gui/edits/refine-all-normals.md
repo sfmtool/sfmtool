@@ -114,7 +114,8 @@ was a fold) chained with the identity, since the refinement moves no index.
 
 The cancel flag is read in front of the decode, between the photographs, after
 the decode, and by the core function in front of each stage and of each point's
-step. A cancelled run pushes no version.
+step and inside the step ([refine-normals.md](../../core/bench/refine-normals.md)
+§ "Cancellation"). A cancelled run pushes no version.
 
 Readings are written as a commit writes them: a reconstruction with no
 readings column gains one where a written point brings a measured reading, and

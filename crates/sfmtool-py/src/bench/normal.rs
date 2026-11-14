@@ -1400,6 +1400,47 @@ impl GrownPlaneKeywords {
             },
         }
     }
+
+    /// The first keyword given that only the grown plane normal takes, of
+    /// those the pairwise-flow normal does not share, by name.
+    pub(super) fn first_own_given(&self) -> Option<&'static str> {
+        [
+            ("working_resolution", self.working_resolution.is_some()),
+            ("spot_window", self.spot_window.is_some()),
+            ("window_fractions", self.window_fractions.is_some()),
+            ("zncc_tolerance", self.zncc_tolerance.is_some()),
+            (
+                "max_agreement_distance",
+                self.max_agreement_distance.is_some(),
+            ),
+            ("min_held_zncc", self.min_held_zncc.is_some()),
+            (
+                "low_confidence_sigma_deg",
+                self.low_confidence_sigma_deg.is_some(),
+            ),
+            ("weak_turn_deg", self.weak_turn_deg.is_some()),
+            ("min_turn_sigma_ratio", self.min_turn_sigma_ratio.is_some()),
+            ("target_sigma_deg", self.target_sigma_deg.is_some()),
+            ("max_selected_views", self.max_selected_views.is_some()),
+            ("first_rung_deg", self.first_rung_deg.is_some()),
+            ("first_rung_min_deg", self.first_rung_min_deg.is_some()),
+            ("first_rung_max_deg", self.first_rung_max_deg.is_some()),
+            ("rung_ratio", self.rung_ratio.is_some()),
+            ("min_coverage", self.min_coverage.is_some()),
+            ("max_iterations", self.max_iterations.is_some()),
+            ("initial_damping", self.initial_damping.is_some()),
+            ("min_improvement", self.min_improvement.is_some()),
+            ("turned_support", self.turned_support.is_some()),
+            ("stage_turn_cap_deg", self.stage_turn_cap_deg.is_some()),
+            (
+                "min_stage_turn_cap_deg",
+                self.min_stage_turn_cap_deg.is_some(),
+            ),
+            ("max_grid_rounds", self.max_grid_rounds.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(name, given)| given.then_some(name))
+    }
 }
 
 /// Register the normal steps on the `sfmtool.bench` submodule.

@@ -15,7 +15,8 @@
 use std::sync::Arc;
 
 use sfmtool_core::bench::{
-    NormalError, NormalLeftUnchanged, RefineNormalsOutcome, RefineNormalsReport, RefinedNormal,
+    NormalError, NormalLeftUnchanged, NormalTurned, RefineNormalsOutcome, RefineNormalsReport,
+    RefinedNormal,
 };
 use sfmtool_core::SfmrReconstruction;
 
@@ -176,10 +177,12 @@ fn a_reconstruction_with_no_keypoints_is_refused_in_the_menu_s_own_words() {
 fn the_entry_counts_what_happened_to_each_point() {
     let turned = |turn_deg, low_confidence, unchanged| RefineNormalsOutcome::Turned {
         turn_deg,
-        joined: 3,
-        low_confidence,
         unchanged,
-        agreement: 0.8,
+        by: NormalTurned::GrownPlane {
+            joined: 3,
+            low_confidence,
+            agreement: 0.8,
+        },
     };
     let outcomes = [
         turned(4.0, false, false),

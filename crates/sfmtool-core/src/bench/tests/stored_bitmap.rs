@@ -167,10 +167,10 @@ fn refine_normals_stores_the_render_of_the_frame_it_stores() {
     // working grid reads each view at under two samples per pixel; the stored
     // bitmaps stay `BITMAP_R` on a side.
     let options = RefineNormalsOptions {
-        normal: GrownPlaneNormalOptions {
+        step: RefineNormalsStep::GrownPlane(GrownPlaneNormalOptions {
             working_resolution: Some(16),
             ..GrownPlaneNormalOptions::default()
-        },
+        }),
         ..RefineNormalsOptions::default()
     };
     // Three starting tilts, so that over all of them some sample of a render

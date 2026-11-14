@@ -971,7 +971,7 @@ fraction) and `write back`
 ([edits/refine-all-normals.md](edits/refine-all-normals.md)). It polls the
 flag in the same places, the core polling inside
 `sfmtool_core::bench::refine_normals` in front of each stage and of each
-point's step, and turns `RefineNormalsError::Cancelled` into
+point's step and inside the step, and turns `RefineNormalsError::Cancelled` into
 `Finished::Cancelled`. A photograph that cannot be read fails it in its
 `decode images` phase.
 

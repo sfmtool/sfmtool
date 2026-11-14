@@ -21,12 +21,14 @@ the track back turned, with a report of every round. It is deliberately
 expensive, one dense flow per pair of photographs per round, and stands beside
 the cheap per-point step, the grown-plane normal
 ([grown-plane-normal.md](grown-plane-normal.md)), which it does not replace.
-Python runs it through `sfmtool.bench.pairwise_flow_normal`, and Track View's
+Python runs it through `sfmtool.bench.pairwise_flow_normal`; Track View's
 *Pairwise Flow Normal* and the wire's `fit_bench_track_normal` with `method`
 `pairwise_flow` run it at its default options
 ([../../gui/track-view.md](../../gui/track-view.md) § "The toolbar",
-[../../gui/mcp-server.md](../../gui/mcp-server.md)). `refine_normals` does not
-run it, and the step that would reach it from there is proposed in
+[../../gui/mcp-server.md](../../gui/mcp-server.md)); and
+`bench::refine_normals` runs it on every finite point of a reconstruction when
+its options choose it as the step ([refine-normals.md](refine-normals.md)
+§ "Choosing the step"). The tests it does not have yet are listed in
 [pairwise-flow-normal-amendment.md](../../drafts/pairwise-flow-normal-amendment.md),
 with the questions about its settings and rules that are still open. The
 measurements behind its design and defaults are in
@@ -327,7 +329,10 @@ a `flow_` prefix (`flow_patch_size`, `flow_finest_scale`, ...), as
 override type (`FlowParamOverrides` in
 [flow/optical.rs](../../../crates/sfmtool-py/src/flow/optical.rs)). The flow
 runs on the CPU, so `gpu_min_pixels` is not a keyword. `fit` is set by
-`resolution` and `fit`'s four keywords, as for the other normal steps. A
+`resolution` and `fit`'s four keywords, as for the other normal steps.
+`sfmtool.bench.refine_normals` with `method="pairwise_flow"` takes the same
+keywords, through the keyword set the two share (`PairwiseFlowKeywords`)
+([refine-normals.md](refine-normals.md) § "Python binding"). A
 keyword left out, or `None`, takes `PairwiseFlowNormalOptions::default()`'s
 value, and a setting `PairwiseFlowNormalOptions::check` refuses raises
 `ValueError` before a photograph is decoded; a flow setting is refused in the
@@ -960,8 +965,8 @@ step does not take, a flow setting among them, are refused, as is a cluster.
 
 - **Moving the centre or the keypoints.** Like the grown-plane step, it turns
   the patch about its centre and moves neither the centre nor any keypoint.
-- **Replacing the grown-plane step.** That step stays the per-point step of
-  `refine_normals` and Surface Tiling Mode; this one is the expensive check and
-  refinement beside it.
+- **Replacing the grown-plane step.** That step stays the default per-point
+  step of `refine_normals` and the per-point step of Surface Tiling Mode; this
+  one is the expensive check and refinement beside it.
 - **A curved surface model.** The step fits a plane and chooses the support on
   which a plane fits; it does not fit curvature.

@@ -1,9 +1,8 @@
-# Pairwise Flow Normal: Later Steps and Open Questions
+# Pairwise Flow Normal: Tests Not Yet Written and Open Questions
 
-**Status:** Draft. The step itself is built, Python runs it through its
-binding, and Track View and the wire run it; what remains is to reach it from
-`refine_normals`, three tests, and the questions about its settings and rules.
-Nothing here changes the step until it is built or settled.
+**Status:** Draft. The step is built, and Python, Track View, the wire and
+`refine_normals` run it; what remains is three tests and the questions about
+its settings and rules. Nothing here changes the step until it is settled.
 
 Amends: [core/bench/pairwise-flow-normal.md](../core/bench/pairwise-flow-normal.md).
 The measurements cited are in
@@ -14,23 +13,14 @@ The measurements cited are in
 `pairwise_flow_normal` estimates a patch's normal from the optical flow between
 pairs of the point's views rendered on a common plane, choosing the largest
 support on which the pairs agree, and says when the normal is undetermined or
-unstable. Rust code calls it, Python through its binding, and Track View's
-*Pairwise Flow Normal* and the wire's `fit_bench_track_normal` run it on one
-track, but no reconstruction-wide pass runs it, and several of its settings
-were set on a handful of points or not measured at all. This draft proposes the step that
-would reach it from the rest of the tool, the tests the step does not have yet,
-and keeps the questions still open about it in one place, so that a later
-measurement can settle them. A step that is built, or a question that is
-settled, is deleted here and folded into the spec.
-
-## Later steps
-
-One change:
-
-1. **An option of `refine_normals`** choosing this step as the per-point step,
-   with the per-point outcomes it reports extended by `Undetermined` and
-   `Unstable`. `refine_normals` already skips points at infinity before
-   building their tracks and counts them, so the option would inherit that.
+unstable. Rust code calls it, Python through its binding, Track View's
+*Pairwise Flow Normal* and the wire's `fit_bench_track_normal` on one track,
+and `refine_normals` on every point when asked, but several of its settings
+were set on a handful of points or not measured at all. This draft lists the
+tests the step does not have yet, and keeps the questions still open about it
+in one place, so that a later measurement can settle them. A test that is
+written, or a question that is settled, is deleted here and folded into the
+spec.
 
 ## Tests not yet written
 

@@ -498,14 +498,15 @@ fn the_run_refuses_a_value_it_cannot_refine() {
     );
 
     let bad = RefineNormalsOptions {
-        normal: GrownPlaneNormalOptions {
+        step: RefineNormalsStep::GrownPlane(GrownPlaneNormalOptions {
             spot_window: 0,
             ..GrownPlaneNormalOptions::default()
-        },
+        }),
         ..RefineNormalsOptions::default()
     };
     assert!(
-        run(&recon, &views, &bad) == RefineNormalsError::BadOption("spot_window"),
+        run(&recon, &views, &bad)
+            == RefineNormalsError::BadOption(NormalError::BadGrownPlaneOption("spot_window")),
         "a first window of no samples is refused"
     );
 
@@ -618,7 +619,11 @@ fn a_turned_point_reports_how_well_its_views_agree_at_the_plane() {
     let (_, report) = refine_over(&scene, &recon);
     let mut agreements = Vec::new();
     for p in 0..3u32 {
-        let RefineNormalsOutcome::Turned { agreement, .. } = *outcome_of(&report, p) else {
+        let RefineNormalsOutcome::Turned {
+            by: NormalTurned::GrownPlane { agreement, .. },
+            ..
+        } = *outcome_of(&report, p)
+        else {
             panic!("point {p} turned: {report:?}");
         };
         // The textured plane seen at its own plane: the views agree well.
@@ -636,6 +641,154 @@ fn a_turned_point_reports_how_well_its_views_agree_at_the_plane() {
     let (_, report) = refine_over(&wall, &tilted_value(&wall, &three_points(), 15.0));
     assert_eq!(report.none_joined(), 3, "{report:?}");
     assert!(report.mean_agreement().is_nan());
+}
+
+// ---- The pairwise-flow normal as the step ------------------------------------
+
+/// The run with the pairwise-flow normal at `options` as the step, over the
+/// points of `list`.
+fn refine_by_flow(
+    scene: &Scene,
+    recon: &SfmrReconstruction,
+    options: &PairwiseFlowNormalOptions,
+    list: &[u32],
+) -> (SfmrReconstruction, RefineNormalsReport) {
+    let options = RefineNormalsOptions {
+        step: RefineNormalsStep::PairwiseFlow(options.clone()),
+        point_indexes: Some(list.to_vec()),
+    };
+    refine_normals(recon, &scene.views(), &options, &Progress::none()).expect("the run refines")
+}
+
+/// With the pairwise-flow normal as the step, a point whose patch starts 25
+/// degrees off the textured plane is turned onto it, its record the one the
+/// bench's Pairwise Flow Normal and Commit write for the point alone, and
+/// the report carries the step's radius and `σ` and none of the grown plane's
+/// numbers. A setting the step does not take refuses the run.
+#[test]
+fn the_pairwise_flow_normal_as_the_step_turns_a_point_as_the_bench_does() {
+    let scene = plane_scene();
+    let recon = tilted_value(&scene, &three_points(), 25.0);
+    let step = PairwiseFlowNormalOptions::default();
+    let (out, report) = refine_by_flow(&scene, &recon, &step, &[0]);
+    assert_eq!(report.read(), 1, "{report:?}");
+    assert_eq!(report.turned(), 1, "{report:?}");
+    assert_eq!(report.single_pair(), 0, "{report:?}");
+    assert_eq!(report.low_confidence(), 0, "{report:?}");
+    assert!(report.mean_agreement().is_nan(), "{report:?}");
+    assert!(report.median_turn_deg() > 20.0, "{report:?}");
+    assert_eq!(out.point_set.keypoints_xy(), recon.point_set.keypoints_xy());
+    let edited = EditedReconstruction::new(Arc::new(recon.clone()));
+    let p = 0;
+    let RefineNormalsOutcome::Turned {
+        by:
+            NormalTurned::PairwiseFlow {
+                single_pair,
+                chosen_radius,
+                sigma_deg,
+            },
+        unchanged,
+        ..
+    } = *outcome_of(&report, p)
+    else {
+        panic!("point {p} turned by the pairwise-flow normal: {report:?}");
+    };
+    assert!(!single_pair && !unchanged, "point {p}");
+    assert!(step.radii.contains(&chosen_radius), "point {p}");
+    assert!(
+        sigma_deg > 0.0 && sigma_deg <= step.max_sigma_deg,
+        "point {p}"
+    );
+    let after = degrees(frame_normal(&out, p), truth());
+    assert!(after < 2.0, "point {p}: {after}° off");
+    assert_eq!(
+        out.point_set.points[p as usize].position,
+        recon.point_set.points[p as usize].position
+    );
+
+    let (bench, created) = create_track(&Bench::new(), &edited, p, &CreateTrackOptions::default())
+        .expect("a live point");
+    let track = bench.track(&created.label).expect("just put on");
+    let (turned, _) =
+        pairwise_flow_normal(track, &edited, &scene.views(), &step, &Progress::none())
+            .expect("the step runs");
+    let (committed, written) = commit(&edited, &turned).expect("the track commits");
+    let bench_record = committed
+        .point(written.point)
+        .expect("the committed point")
+        .to_record();
+    assert!(
+        record_of(&out, p).agrees_with(&bench_record),
+        "point {p}: the run's record is not the bench's"
+    );
+    // Points 1 and 2 were not asked for.
+    assert_eq!(report.not_asked(), 2, "{report:?}");
+
+    let bad = PairwiseFlowNormalOptions {
+        rounds: 0,
+        ..PairwiseFlowNormalOptions::default()
+    };
+    let options = RefineNormalsOptions {
+        step: RefineNormalsStep::PairwiseFlow(bad),
+        point_indexes: None,
+    };
+    assert_eq!(
+        refine_normals(&recon, &scene.views(), &options, &Progress::none()).err(),
+        Some(RefineNormalsError::BadOption(
+            NormalError::BadPairwiseFlowOption("rounds")
+        ))
+    );
+}
+
+/// The pairwise-flow normal's two outcomes that leave a normal as it was are
+/// reported as such and write nothing: on a flat wall each point is
+/// undetermined, and on the textured plane, with the bar on the mean viewing
+/// direction lowered under the plane's angle from it, unstable.
+#[test]
+fn an_undetermined_or_unstable_point_is_reported_and_keeps_its_columns() {
+    let one_round = PairwiseFlowNormalOptions {
+        rounds: 1,
+        ..PairwiseFlowNormalOptions::default()
+    };
+    let wall = Scene::looking_at(&wide_centres(), WORLD, camera(), |_, _| 127.5);
+    let flat = tilted_value(&wall, &three_points(), 15.0);
+    let (out, report) = refine_by_flow(&wall, &flat, &one_round, &[0, 1]);
+    assert_eq!(report.undetermined(), 2, "{report:?}");
+    assert_eq!(report.turned(), 0, "{report:?}");
+
+    let scene = plane_scene();
+    let textured = tilted_value(&scene, &three_points(), 25.0);
+    let far = PairwiseFlowNormalOptions {
+        max_normal_from_mean_view_deg: 1.0,
+        ..one_round
+    };
+    let (out_far, report_far) = refine_by_flow(&scene, &textured, &far, &[0, 1]);
+    assert_eq!(report_far.unstable(), 2, "{report_far:?}");
+    assert_eq!(report_far.turned(), 0, "{report_far:?}");
+
+    for (before, after, report, why) in [
+        (&flat, &out, &report, NormalLeftUnchanged::Undetermined),
+        (
+            &textured,
+            &out_far,
+            &report_far,
+            NormalLeftUnchanged::Unstable,
+        ),
+    ] {
+        for p in 0..2u32 {
+            assert_eq!(
+                outcome_of(report, p),
+                &RefineNormalsOutcome::LeftUnchanged(why),
+                "point {p}"
+            );
+            assert!(
+                record_of(before, p).agrees_with(&record_of(after, p)),
+                "point {p}"
+            );
+        }
+        // Nothing was written, so no readings column was added.
+        assert!(after.point_set.observation_readings.is_none());
+    }
 }
 
 // ---- The bitmap is the render of the stored frame -----------------------------
