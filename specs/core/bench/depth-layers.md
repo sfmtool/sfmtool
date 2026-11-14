@@ -287,8 +287,9 @@ takes the harness's anchor dicts, reading `source` (`"tracks"`,
 `range`, `bounded` and `far`, and writes nothing to them. `images` is a list of
 photographs or an `ImagePyramidSet`, which also keeps the grey images between
 calls. `options` overrides `evidence`, `rank_by` (`"evidence"` or `"score"`),
-`radius_px` and `samples`; an unknown key, an unknown source or an anchor
-whose `n_views` is not its number of views is a `ValueError`.
+`radius_px` and `samples`; an unknown key, an unknown source, an anchor
+whose `n_views` is not its number of views, and an anchor that core
+`depth_layers` refuses (`BadDistance`, `NanRange`) are a `ValueError`.
 
 It returns `{"support": [...], "layers": [...]}` with each layer a dict of the
 harness's keys: `range`, `anchors`, `nearest_px`, `views` (the most views of a
