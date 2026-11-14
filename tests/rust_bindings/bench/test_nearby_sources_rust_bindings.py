@@ -31,6 +31,7 @@ ANCHOR_KEYS = {
     "source",
     "id",
     "position",
+    "w",
     "views",
     "query_pixel",
     "distance_px",
@@ -77,9 +78,10 @@ def test_the_points_near_the_pixel_are_found_without_the_held_out_one(
         assert a["max_reproj_px"] <= 2.0
         assert a["distance_px"] <= 40.0
         assert a["depth"] > 0
-        # The point is the reconstruction's own.
+        # The point is the reconstruction's own, a place or a bearing.
         record = edited.point(a["id"])
         assert np.allclose(a["position"], record["position"])
+        assert a["w"] == record["w"]
     distances = [a["distance_px"] for a in found]
     assert distances == sorted(distances)
 

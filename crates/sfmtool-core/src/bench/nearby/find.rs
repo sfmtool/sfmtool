@@ -22,7 +22,9 @@ use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::candidate::{same_sightings, NearbyCandidate, NearbySource, NearbySourceError};
+use super::candidate::{
+    ray_distance, same_sightings, NearbyCandidate, NearbySource, NearbySourceError,
+};
 use super::clusters::{nearby_cluster_tracks, ClusterTracksOptions};
 use super::constellation::{constellation_seeds, ConstellationSeedOptions};
 use super::far_field::{far_field_sweep, FarFieldError, FarFieldOptions, FarFieldReading};
@@ -810,12 +812,7 @@ pub fn find_nearby_tracks(
         let ranged = Instant::now();
         let n = sweep.readings.len();
         for r in sweep.readings {
-            let distance = if r.at_infinity {
-                f64::INFINITY
-            } else {
-                let ray = cq.ray(r.query_pixel);
-                (r.position - cq.center).dot(&(ray / ray.norm()))
-            };
+            let distance = ray_distance(&cq, r.query_pixel, &r.position, r.at_infinity);
             let range = match r.range {
                 Some(range) => range,
                 None => distance_range(

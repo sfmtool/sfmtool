@@ -410,6 +410,7 @@ pub fn guided_matches(
             NearbySource::Guided,
             Some(k as u32),
             met.position,
+            false,
             kept,
             met.errors_px,
             pixel,

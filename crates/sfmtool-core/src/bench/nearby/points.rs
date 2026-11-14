@@ -40,10 +40,12 @@ impl Default for PointsOptions {
 /// The reconstruction's points observed within [`PointsOptions::radius_px`]
 /// of `pixel` in `image`, nearest first, as candidate tracks.
 ///
-/// A point is kept when it is finite, has at least
-/// [`PointsOptions::min_views`] observations, and every observation lies
-/// within [`PointsOptions::max_reproj_px`] of where the point projects in its
-/// image; at most [`PointsOptions::max_points`] are kept. Each candidate's
+/// A point is kept when it has at least [`PointsOptions::min_views`]
+/// observations and every observation lies within
+/// [`PointsOptions::max_reproj_px`] of where the point projects in its image;
+/// at most [`PointsOptions::max_points`] are kept. A point at infinity is kept
+/// as a bearing ([`NearbyCandidate::at_infinity`]), so a track built on its
+/// observations is seen to repeat it. Each candidate's
 /// sightings are the point's observations, its observation in `image` first
 /// and the rest in track order, and it names the point in
 /// [`NearbyCandidate::point`] and [`NearbyCandidate::id`].
@@ -75,19 +77,18 @@ pub fn nearby_points(
         let Some(view) = edited.point(o.point) else {
             continue;
         };
-        if o.at_infinity || view.observations().len() < options.min_views {
+        if view.observations().len() < options.min_views {
             continue;
         }
-        let Some(position) = index.position(o.point) else {
-            continue;
-        };
-        let x = position.coords;
+        // A place at `w = 1`, a unit direction at `w = 0`.
+        let point = view.point();
+        let (x, w) = (point.position.coords, point.w);
         let mut sightings = index.point_observations(o.point);
         let mut errors: Vec<f64> = sightings
             .iter()
             .map(|&(i, p)| {
                 cameras[i as usize]
-                    .project_homogeneous(&x, 1.0)
+                    .project_homogeneous(&x, w)
                     .map_or(f64::INFINITY, |q| {
                         let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
                         (dx * dx + dy * dy).sqrt()
@@ -109,6 +110,7 @@ pub fn nearby_points(
             NearbySource::Points,
             Some(o.point),
             x,
+            w == 0.0,
             sightings,
             errors,
             pixel,

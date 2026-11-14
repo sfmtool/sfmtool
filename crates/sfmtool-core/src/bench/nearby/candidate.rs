@@ -70,8 +70,12 @@ pub struct NearbyCandidate {
     /// row for [`NearbySource::Guided`] and for a [`NearbySource::Constellation`]
     /// query made from a keypoint; `None` for one made from the pixel.
     pub id: Option<u32>,
-    /// The point, in world coordinates.
+    /// The point, in world coordinates: a place, or a unit direction when
+    /// [`Self::at_infinity`].
     pub position: Vector3<f64>,
+    /// Whether the candidate is a bearing: a point at infinity of the
+    /// reconstruction, which only [`NearbySource::Points`] returns.
+    pub at_infinity: bool,
     /// The sightings, `(image, pixel)`, the queried image's first.
     pub sightings: Vec<(u32, [f64; 2])>,
     /// Each sighting's reprojection error at [`Self::position`], in px, in the
@@ -83,9 +87,11 @@ pub struct NearbyCandidate {
     pub distance_px: f64,
     /// The largest of [`Self::errors_px`].
     pub max_reproj_px: f64,
-    /// The widest angle between two sightings' rays to the point, in degrees.
+    /// The widest angle between two sightings' rays to the point, in degrees;
+    /// zero for a bearing.
     pub max_ray_angle_deg: f64,
-    /// The point's depth along the queried camera's axis.
+    /// The point's depth along the queried camera's axis; infinite for a
+    /// bearing.
     pub depth: f64,
     /// The reconstruction's point the candidate is, for
     /// [`NearbySource::Points`].
@@ -104,7 +110,8 @@ impl NearbyCandidate {
     }
 
     /// The point's distance along [`Self::query_pixel`]'s unit ray from the
-    /// queried camera's centre, the distance [`distance_range`] takes.
+    /// queried camera's centre, the distance [`distance_range`] takes;
+    /// infinite for a bearing.
     ///
     /// # Errors
     ///
@@ -131,9 +138,12 @@ impl NearbyCandidate {
 
     /// [`Self::ray_distance`] in the queried image's own view.
     fn distance_along_ray(&self, view: &ProjectedImage<'_>) -> f64 {
-        let cq = ViewCamera::new(view);
-        let ray = cq.ray(self.query_pixel);
-        (self.position - cq.center).dot(&(ray / ray.norm()))
+        ray_distance(
+            &ViewCamera::new(view),
+            self.query_pixel,
+            &self.position,
+            self.at_infinity,
+        )
     }
 
     /// The candidate's [`distance_range`] along [`Self::query_pixel`]'s ray.
@@ -291,29 +301,56 @@ pub(super) fn ray_angle(
     compute_max_pairwise_angle(&rays)
 }
 
+/// The distance along `pixel`'s unit ray from `camera`'s centre to
+/// `position`, a place, or infinite when `at_infinity`, for a bearing.
+pub(super) fn ray_distance(
+    camera: &ViewCamera<'_>,
+    pixel: [f64; 2],
+    position: &Vector3<f64>,
+    at_infinity: bool,
+) -> f64 {
+    if at_infinity {
+        return f64::INFINITY;
+    }
+    let ray = camera.ray(pixel);
+    (position - camera.center).dot(&(ray / ray.norm()))
+}
+
 /// A candidate from its sightings, the queried image's first, and their
-/// errors at `position`.
+/// errors at `position`: a place, or a unit direction when `at_infinity`.
+// The arguments are the candidate's own fields.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn candidate(
     cameras: &[ViewCamera<'_>],
     source: NearbySource,
     id: Option<u32>,
     position: Vector3<f64>,
+    at_infinity: bool,
     sightings: Vec<(u32, [f64; 2])>,
     errors_px: Vec<f64>,
     pixel: [f64; 2],
 ) -> NearbyCandidate {
     let (image, query_pixel) = sightings[0];
     let max_reproj_px = errors_px.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let max_ray_angle_deg = ray_angle(cameras, &position, sightings.iter().map(|s| s.0));
+    // Every ray to a bearing is parallel and it has no depth.
+    let (max_ray_angle_deg, depth) = if at_infinity {
+        (0.0, f64::INFINITY)
+    } else {
+        (
+            ray_angle(cameras, &position, sightings.iter().map(|s| s.0)),
+            cameras[image as usize].depth(&position),
+        )
+    };
     NearbyCandidate {
         source,
         id,
         position,
+        at_infinity,
         query_pixel,
         distance_px: pixel_distance(query_pixel, pixel),
         max_reproj_px,
         max_ray_angle_deg,
-        depth: cameras[image as usize].depth(&position),
+        depth,
         point: None,
         sightings,
         errors_px,

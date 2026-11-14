@@ -351,7 +351,8 @@ becomes a fitted track-stage track with the caller's label that commits as a
 new point, and is labelled but not built with building off; two identical
 clusters are both built and the second is a duplicate of the first, with no
 label and off the bench order, and a cluster on an existing point's
-observations is a duplicate of the point; a plane far past
+observations is a duplicate of the point, as is a far-field reading on an
+existing point at infinity's; a plane far past
 the cameras' spread, with no sources, gets one far-field reading that keeps
 the sweep's range, a far layer and a built track, and nothing when the sweep
 is told never to run; the refusals; and the labels' letters and forms.
