@@ -34,15 +34,19 @@ pub use sweep::{
 /// `index1`.
 pub type PairMatches = Vec<(usize, usize, f64)>;
 
-/// Why [`match_image_pair`] or [`match_image_pairs_batch`] refused its input.
+/// Why [`match_image_pair`], [`match_image_pairs_batch`] or one of the sweeps
+/// ([`mutual_best_match_sweep`], [`polar_mutual_best_match`],
+/// [`match_one_way_sweep`] and their `_geometric` variants) refused its input.
 ///
-/// Both functions check every length and index they read before matching, so
-/// a caller's mistake is this error rather than a panic.
+/// Each checks every length and index it reads before matching, so a caller's
+/// mistake is this error rather than a panic. The sweeps return only
+/// [`Self::FeatureArrayLength`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchImagePairError {
     /// A per-feature array does not hold `rows × width` elements. `array` is
     /// the parameter name, and `image` the index into the batch's per-image
-    /// lists (`None` from [`match_image_pair`], whose names say the image).
+    /// lists (`None` from the functions that take one image pair, whose names
+    /// say the image).
     FeatureArrayLength {
         array: &'static str,
         image: Option<usize>,
@@ -292,25 +296,27 @@ fn match_checked_image_pair(
 
         let polar_result = if use_geometric {
             let geom = StereoPairGeometry::new(k1, k2, r1, r2, t1, t2);
-            polar_mutual_best_match_geometric(
+            polar::polar_mutual_best_match_inner(
                 positions1,
                 descriptors1,
                 n1,
                 positions2,
                 descriptors2,
                 n2,
-                affines1.unwrap(),
-                affines2.unwrap(),
                 desc_len,
                 &f_arr,
                 window_size,
                 threshold,
                 min_radius,
-                &geom,
-                geometric_config.unwrap(),
+                Some((
+                    affines1.unwrap(),
+                    affines2.unwrap(),
+                    &geom,
+                    geometric_config.unwrap(),
+                )),
             )
         } else {
-            polar_mutual_best_match(
+            polar::polar_mutual_best_match_inner(
                 positions1,
                 descriptors1,
                 n1,
@@ -322,6 +328,7 @@ fn match_checked_image_pair(
                 window_size,
                 threshold,
                 min_radius,
+                None,
             )
         };
 
@@ -373,7 +380,7 @@ fn match_checked_image_pair(
             }),
         )
     } else {
-        mutual_best_match_sweep(
+        sweep::mutual_best_match_sweep_inner(
             &rectified1,
             descriptors1,
             n1,
@@ -383,6 +390,7 @@ fn match_checked_image_pair(
             desc_len,
             window_size,
             threshold,
+            None,
         )
     }
 }

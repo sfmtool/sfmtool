@@ -16,6 +16,7 @@ use sfmtool_core::geometry::reconstruction_growth::{
 };
 
 use crate::geometry::PyCameraIntrinsics;
+use crate::helpers::value_err;
 
 /// Validate an `(n, w)` float64 array and return its rows as fixed arrays.
 pub(crate) fn read_rows<const W: usize>(
@@ -146,11 +147,6 @@ pub fn grow_reconstruction<'py>(
     let quats = read_rows::<4>(&quaternions_wxyz, "quaternions_wxyz")?;
     let trans = read_rows::<3>(&translations, "translations")?;
     let posed_idx = to_contiguous!(posed_indexes).into_owned();
-    if quats.len() != posed_idx.len() || trans.len() != posed_idx.len() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "quaternions_wxyz, translations, and posed_indexes must share n_seed",
-        ));
-    }
 
     let cam = camera.inner.clone();
     let options = GrowOptions {
@@ -164,11 +160,13 @@ pub fn grow_reconstruction<'py>(
             cross: free_points_cross,
         },
     };
-    let out = py.detach(move || {
-        core_grow(
-            &clusters, &images, &positions, &cam, &quats, &trans, &posed_idx, &options,
-        )
-    });
+    let out = py
+        .detach(move || {
+            core_grow(
+                &clusters, &images, &positions, &cam, &quats, &trans, &posed_idx, &options,
+            )
+        })
+        .map_err(value_err)?;
 
     let q_rows: Vec<Vec<f64>> = out.quaternions_wxyz.iter().map(|q| q.to_vec()).collect();
     let t_rows: Vec<Vec<f64>> = out.translations.iter().map(|t| t.to_vec()).collect();

@@ -712,6 +712,7 @@ pub fn bundle_adjust<'py>(
         );
         (out, quats, trans, pts)
     });
+    let out = out.map_err(value_err)?;
 
     let q_rows: Vec<Vec<f64>> = quats
         .iter()

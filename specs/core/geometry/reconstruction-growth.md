@@ -59,6 +59,12 @@ index list), and options:
   inverse depth and the storage decision"). `FreePointPolicy::NO_CROSS` keeps every
   triangulated point a position.
 
+`grow_reconstruction` returns a `GrowInputError` before it computes anything
+when `image_indexes` or `positions_xy` is not as long as `cluster_indexes`,
+`quaternions_wxyz` or `translations` is not as long as `posed_indexes`,
+`cluster_indexes` decreases, or the camera carries a rolling shutter the
+projection cannot apply. The binding raises each as `ValueError`.
+
 ## Mechanism
 
 ### 1. Batch registration (`resect_images_batch`)

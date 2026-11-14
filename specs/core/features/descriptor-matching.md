@@ -121,6 +121,14 @@ checks run after these, and the binding raises any error they return as
 `ValueError` with the core's message. The implementation is
 [`matching/image.rs`](../../../crates/sfmtool-py/src/matching/image.rs).
 
+The six sweep bindings check their arguments the same way, under their own
+argument names: `k1`, `k2`, `r1`, `r2` and `f_matrix` have shape (3, 3), `t1`
+and `t2` shape (3,), each keypoint or positions array shape (N, 2), each
+descriptor array N rows and as many columns as the first, and each
+affine-shape array shape (N, 4). The width of the first descriptor array is the
+`desc_len` they pass to the core. The implementation is
+[`matching/sweep.rs`](../../../crates/sfmtool-py/src/matching/sweep.rs).
+
 The poses are `cam_from_world` in the COLMAP/OpenCV camera convention (+Z
 forward, Y down), because everything here is pixel-space algebra on `K`, `R`
 and `t`. A caller holding `.sfmr` poses flips them first; see
@@ -136,20 +144,23 @@ arrive in, so they cross the boundary without copying.
 ```rust
 pub fn mutual_best_match_sweep(keypoints1, descriptors1, n1,
     keypoints2, descriptors2, n2, desc_len, window_size, threshold)
-    -> Vec<(usize, usize, f64)>;
+    -> Result<Vec<(usize, usize, f64)>, MatchImagePairError>;
 pub fn mutual_best_match_sweep_geometric(/* same, plus */ affines1, affines2,
     geom: &StereoPairGeometry, config: &GeometricFilterConfig)
-    -> Vec<(usize, usize, f64)>;
+    -> Result<Vec<(usize, usize, f64)>, MatchImagePairError>;
 
 pub fn polar_mutual_best_match(positions1, descriptors1, n1,
     positions2, descriptors2, n2, desc_len, f_matrix: &[f64; 9],
-    window_size, threshold, min_radius) -> Option<Vec<(usize, usize, f64)>>;
+    window_size, threshold, min_radius)
+    -> Result<Option<Vec<(usize, usize, f64)>>, MatchImagePairError>;
 pub fn polar_mutual_best_match_geometric(/* same, plus */ affines1, affines2,
-    geom, config) -> Option<Vec<(usize, usize, f64)>>;
+    geom, config) -> Result<Option<Vec<(usize, usize, f64)>>, MatchImagePairError>;
 
 pub fn match_one_way_sweep(sorted_kpts1, sorted_descs1, n1,
-    sorted_kpts2, sorted_descs2, n2, window_size, threshold) -> SweepMatches;
-pub fn match_one_way_sweep_geometric(/* … */) -> SweepMatches;
+    sorted_kpts2, sorted_descs2, n2, desc_len, window_size, threshold)
+    -> Result<SweepMatches, MatchImagePairError>;
+pub fn match_one_way_sweep_geometric(/* … */)
+    -> Result<SweepMatches, MatchImagePairError>;
 ```
 
 The `mutual_best_match_sweep` pair takes keypoints that are already rectified
@@ -172,6 +183,13 @@ Each `_geometric` variant runs the same sweep as its plain counterpart; the
 only difference is that it narrows each window with the geometric filter before
 comparing descriptors. Internally both share one body, with the filter inputs
 passed as an `Option`.
+
+Like `match_image_pair`, each of the six checks its feature arrays before it
+reads a row and returns `MatchImagePairError::FeatureArrayLength`, naming the
+array by its parameter name, when a keypoint or position array does not hold
+`2 × n` values, a descriptor array `desc_len × n` bytes, or an affine-shape
+array `4 × n` values. `match_image_pair` checks its arrays once and calls the
+shared bodies directly.
 
 ### Descriptor distance and best match
 
@@ -367,9 +385,11 @@ sizes and for the errors both entry points return on bad input,
 [`tests.rs`](../../../crates/sfmtool-core/src/features/feature_match/tests.rs).
 The Python side is
 [`tests/matching/test_sweep_matching.py`](../../../tests/matching/test_sweep_matching.py),
-[`tests/rust_bindings/matching/test_descriptor_rust_bindings.py`](../../../tests/rust_bindings/matching/test_descriptor_rust_bindings.py)
-and, for the exceptions the two bindings raise,
-[`tests/rust_bindings/matching/test_image_pairs_batch_rust_bindings.py`](../../../tests/rust_bindings/matching/test_image_pairs_batch_rust_bindings.py).
+[`tests/rust_bindings/matching/test_descriptor_rust_bindings.py`](../../../tests/rust_bindings/matching/test_descriptor_rust_bindings.py),
+for the exceptions the two image-pair bindings raise,
+[`tests/rust_bindings/matching/test_image_pairs_batch_rust_bindings.py`](../../../tests/rust_bindings/matching/test_image_pairs_batch_rust_bindings.py),
+and for those the sweep bindings raise,
+[`tests/rust_bindings/matching/test_sweep_rust_bindings.py`](../../../tests/rust_bindings/matching/test_sweep_rust_bindings.py).
 
 ## Non-goals
 

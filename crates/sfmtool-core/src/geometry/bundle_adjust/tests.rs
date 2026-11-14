@@ -152,6 +152,7 @@ fn run(s: &mut Scene, opt_f: bool, schedule: &[BaSchedule]) -> BundleAdjustment 
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// [`run`] with a `point_at_infinity` mask and an explicit `min_obs`.
@@ -212,6 +213,7 @@ fn run_masked_with(
         min_obs,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// [`run`] with a `protected` observation mask (default widening).
@@ -249,6 +251,7 @@ fn run_protected(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 #[test]
@@ -1112,7 +1115,8 @@ fn directions_lock_rotations_for_focal_release() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert!(
         (ba_focal(&out_plain) - 500.0).abs() > 25.0,
         "precondition failed: finite-only opt_f recovered f = {} (true 500)",
@@ -1151,7 +1155,8 @@ fn directions_lock_rotations_for_focal_release() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert!(
         (ba_focal(&out) - 500.0).abs() < 5.0,
         "focal {} with directions (want ~500; finite-only gave {})",
@@ -1193,7 +1198,8 @@ fn directions_lock_rotations_for_focal_release() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert!(
         (ba_focal(&out_crossed) - 500.0).abs() < 12.0,
         "focal {} with far tracks crossing (want ~500; finite-only gave {})",
@@ -1301,7 +1307,8 @@ fn protected_all_false_with_infinity_mask_matches_bit_for_bit() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert_bitwise_equal(&plain, &out_plain, &prot, &out_prot);
 }
 
@@ -1576,7 +1583,8 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert!(
         angle_between(s.points[victim], d_true) > 1e-6,
         "protected corrupted direction obs left no trace"
@@ -1782,6 +1790,7 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
             12,
             &Progress::none(),
         )
+        .unwrap()
     };
     let drift = || make_drifted_scene(0.8, 0.5);
 
@@ -2490,6 +2499,7 @@ fn run_k1(s: &mut Scene, opt_f: bool, opt_k1: bool, schedule: &[BaSchedule]) -> 
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// [`run_k1`] with a `point_at_infinity` mask.
@@ -2528,6 +2538,7 @@ fn run_k1_masked(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// `∂(u, v)/∂k1` as the kernel computes it, against a central difference of
@@ -2951,6 +2962,7 @@ fn run_bspline(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// [`run_bspline`] with a `point_at_infinity` mask.
@@ -2989,6 +3001,7 @@ fn run_bspline_masked(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// Largest composite-map discrepancy `f·|δ_a(θ) − δ_b(θ)|` in pixels over
@@ -4274,6 +4287,7 @@ fn run_constrained(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// One far track at `distance` along −Z from the world origin, observed by
@@ -4759,7 +4773,8 @@ fn the_storage_decision_measures_its_noise_and_decides_on_the_test() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
 
     // The level by hand: residual components per camera, each camera's gated
     // at 30 robust spreads, and the RMS of what passes.
@@ -5075,7 +5090,8 @@ fn a_rough_start_settles_and_reports_whether_it_converged() {
             2,
             12,
             &Progress::none(),
-        );
+        )
+        .unwrap();
         let decision = out.free_point_decision.expect("a storage decision");
         assert!(decision.decided);
         assert_eq!(
@@ -5790,6 +5806,31 @@ fn run_cameras(
     opt_bspline: bool,
     schedule: &[BaSchedule],
 ) -> BundleAdjustment {
+    try_run_cameras(
+        s,
+        cams,
+        image_camera,
+        mask,
+        opt_f,
+        opt_k1,
+        opt_bspline,
+        schedule,
+    )
+    .unwrap()
+}
+
+/// [`run_cameras`], returning what the solve returns.
+#[allow(clippy::too_many_arguments)]
+fn try_run_cameras(
+    s: &mut Scene,
+    cams: &[CameraIntrinsics],
+    image_camera: &[u32],
+    mask: Option<&[bool]>,
+    opt_f: bool,
+    opt_k1: bool,
+    opt_bspline: bool,
+    schedule: &[BaSchedule],
+) -> Result<BundleAdjustment, BaInputError> {
     bundle_adjust(
         &BaCameras {
             cameras: cams,
@@ -6235,13 +6276,14 @@ fn directions_past_ninety_degrees_survive_the_trim_on_a_wide_fisheye() {
 }
 
 /// The shape checks on a camera list: an index past the list, a column of the
-/// wrong length, and an empty list are caller errors.
+/// wrong length, and an empty list are caller errors, refused before the
+/// state moves.
 #[test]
-#[should_panic(expected = "image_camera names camera 1, past the 1 cameras")]
-fn an_image_camera_index_past_the_list_panics() {
+fn an_image_camera_index_past_the_list_is_refused() {
     let mut s = make_scene(4, 20);
     let cams = [s.cam.clone()];
-    run_cameras(
+    let start = (s.quats.clone(), s.trans.clone(), s.points.clone());
+    let out = try_run_cameras(
         &mut s,
         &cams,
         &[0, 1, 0, 0],
@@ -6251,14 +6293,22 @@ fn an_image_camera_index_past_the_list_panics() {
         false,
         &DEFAULT_SCHEDULE,
     );
+    assert_eq!(
+        out.unwrap_err(),
+        BaInputError::CameraIndexOutOfRange {
+            image: 1,
+            camera: 1,
+            num_cameras: 1,
+        }
+    );
+    assert_eq!((s.quats, s.trans, s.points), start);
 }
 
 #[test]
-#[should_panic(expected = "image_camera and quats length mismatch")]
-fn an_image_camera_column_of_the_wrong_length_panics() {
+fn an_image_camera_column_of_the_wrong_length_is_refused() {
     let mut s = make_scene(4, 20);
     let cams = [s.cam.clone()];
-    run_cameras(
+    let out = try_run_cameras(
         &mut s,
         &cams,
         &[0, 0, 0],
@@ -6268,13 +6318,21 @@ fn an_image_camera_column_of_the_wrong_length_panics() {
         false,
         &DEFAULT_SCHEDULE,
     );
+    assert_eq!(
+        out.unwrap_err(),
+        BaInputError::Length {
+            array: "image_camera",
+            len: 3,
+            reference: "quats",
+            expected: 4,
+        }
+    );
 }
 
 #[test]
-#[should_panic(expected = "BaCameras holds no camera")]
-fn an_empty_camera_list_panics() {
+fn an_empty_camera_list_is_refused() {
     let mut s = make_scene(4, 20);
-    run_cameras(
+    let out = try_run_cameras(
         &mut s,
         &[],
         &[0, 0, 0, 0],
@@ -6284,6 +6342,163 @@ fn an_empty_camera_list_panics() {
         false,
         &DEFAULT_SCHEDULE,
     );
+    assert_eq!(out.unwrap_err(), BaInputError::NoCamera);
+}
+
+/// The observation and per-point arrays: a length that differs from what it
+/// is parallel to, an index past the images or the points, and a constraint
+/// the solve cannot honour are refused before the state moves.
+#[test]
+fn observation_and_point_arrays_out_of_shape_are_refused() {
+    let base = make_scene(4, 20);
+    let cams = [base.cam.clone()];
+    let n_pt = base.points.len();
+    let solve = |s: &mut Scene,
+                 mask: Option<&[bool]>,
+                 constraints: Option<&PointConstraints>,
+                 protected: Option<&[bool]>| {
+        bundle_adjust(
+            &BaCameras::shared(&cams[0], s.quats.len()),
+            &mut s.quats,
+            &mut s.trans,
+            &mut s.points,
+            &s.uv,
+            &s.obs_img,
+            &s.obs_pt,
+            mask,
+            constraints,
+            FreePointPolicy::default(),
+            protected,
+            DEFAULT_PROTECTED_LOSS_SCALE,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &DEFAULT_SCHEDULE,
+            60,
+            2,
+            12,
+            &Progress::none(),
+        )
+    };
+
+    let mut s = base.clone();
+    s.trans.pop();
+    assert_eq!(
+        solve(&mut s, None, None, None).unwrap_err(),
+        BaInputError::Length {
+            array: "trans",
+            len: 3,
+            reference: "quats",
+            expected: 4,
+        }
+    );
+
+    let mut s = base.clone();
+    s.uv.pop();
+    let n_obs = s.obs_img.len();
+    assert_eq!(
+        solve(&mut s, None, None, None).unwrap_err(),
+        BaInputError::Length {
+            array: "uv",
+            len: n_obs - 1,
+            reference: "obs_img",
+            expected: n_obs,
+        }
+    );
+
+    let mut s = base.clone();
+    s.obs_pt.pop();
+    assert!(matches!(
+        solve(&mut s, None, None, None).unwrap_err(),
+        BaInputError::Length {
+            array: "obs_pt",
+            ..
+        }
+    ));
+
+    let mut s = base.clone();
+    assert!(matches!(
+        solve(&mut s, None, None, Some(&[true])).unwrap_err(),
+        BaInputError::Length {
+            array: "protected",
+            ..
+        }
+    ));
+    assert!(matches!(
+        solve(&mut s, Some(&[false]), None, None).unwrap_err(),
+        BaInputError::Length {
+            array: "point_at_infinity",
+            ..
+        }
+    ));
+
+    let mut s = base.clone();
+    s.obs_img[3] = 4;
+    assert_eq!(
+        solve(&mut s, None, None, None).unwrap_err(),
+        BaInputError::ObservationImageOutOfRange {
+            observation: 3,
+            image: 4,
+            num_images: 4,
+        }
+    );
+
+    let mut s = base.clone();
+    s.obs_pt[5] = n_pt as u32;
+    assert_eq!(
+        solve(&mut s, None, None, None).unwrap_err(),
+        BaInputError::ObservationPointOutOfRange {
+            observation: 5,
+            point: n_pt as u32,
+            num_points: n_pt,
+        }
+    );
+
+    let mut s = base.clone();
+    let start = (s.quats.clone(), s.trans.clone(), s.points.clone());
+    let mut constraints = PointConstraints::all_free(n_pt);
+    constraints.constrain_distance(2, -1.0, Some(DistanceReference::Image(0)));
+    assert_eq!(
+        solve(&mut s, None, Some(&constraints), None).unwrap_err(),
+        BaInputError::PointConstraint(PointConstraintsError::NotADistance {
+            point: 2,
+            distance: -1.0,
+        })
+    );
+    constraints.constrain_distance(2, 5.0, None);
+    assert!(matches!(
+        solve(&mut s, None, Some(&constraints), None).unwrap_err(),
+        BaInputError::PointConstraint(PointConstraintsError::NoReference { point: 2, .. })
+    ));
+    constraints.constrain_distance(2, 5.0, Some(DistanceReference::ImageMean(Vec::new())));
+    assert_eq!(
+        solve(&mut s, None, Some(&constraints), None).unwrap_err(),
+        BaInputError::PointConstraint(PointConstraintsError::EmptyReference { point: 2 })
+    );
+    constraints.constrain_distance(2, 5.0, Some(DistanceReference::Image(4)));
+    assert_eq!(
+        solve(&mut s, None, Some(&constraints), None).unwrap_err(),
+        BaInputError::PointConstraint(PointConstraintsError::ReferenceOutOfRange {
+            point: 2,
+            image: 4,
+            image_count: 4,
+        })
+    );
+    constraints.constraint.pop();
+    assert!(matches!(
+        solve(&mut s, None, Some(&constraints), None).unwrap_err(),
+        BaInputError::Length {
+            array: "constraints.constraint",
+            ..
+        }
+    ));
+    assert_eq!((s.quats, s.trans, s.points), start);
 }
 
 /// One track at `distance` along a direction off the axis, observed exactly by
@@ -6380,7 +6595,8 @@ fn an_unconverged_round_keeps_points_with_depth() {
             2,
             12,
             &Progress::none(),
-        );
+        )
+        .unwrap();
         (out, mid)
     };
     for max_iters in [3, 60] {
@@ -7073,7 +7289,8 @@ fn the_progress_line_counts_the_unscored_points() {
             2,
             12,
             &Progress::to(&sink),
-        );
+        )
+        .unwrap();
         said.into_inner().unwrap()
     };
     let mut clean = make_scene(4, 30);
@@ -7239,7 +7456,8 @@ fn run_at_the_guard(
         2,
         12,
         &Progress::to(&sink),
-    );
+    )
+    .unwrap();
     (out, said.into_inner().unwrap())
 }
 
@@ -7514,7 +7732,8 @@ fn a_coefficient_that_gains_support_within_a_round_stays_bounded() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     let end = outermost_rho(&s);
     assert!(
         end > TAIL_LAST_SPAN,
@@ -7634,6 +7853,7 @@ fn run_pp(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// A `SIMPLE_PINHOLE` of 640×480 whose horizontal field is `field_deg`, with
@@ -7931,7 +8151,8 @@ fn releasing_the_principal_point_needs_no_focal_and_narrows_per_camera() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     assert_eq!(out.cameras[0], start, "camera 0 is held");
     let (cx, _) = out.cameras[1].principal_point();
     assert!(
@@ -7985,6 +8206,7 @@ fn run_released(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// Scale a scene's points and translations by `k`, which leaves every
@@ -8481,6 +8703,7 @@ fn held_image_adjustments_are_read_by_every_observation() {
             12,
             &Progress::none(),
         )
+        .unwrap()
     };
     let out = run(s.clone(), Some(&adjustments));
     let (cx, cy) = out.cameras[0].principal_point();
@@ -8582,7 +8805,8 @@ fn a_spline_is_recovered_under_held_image_adjustments() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     for (i, (c, t)) in ba_bspline(&out)
         .iter()
         .zip(&PLANTED_PINHOLE_BSPLINE)
@@ -8668,6 +8892,7 @@ fn solve_under_held_lens_corrections(
             12,
             &Progress::none(),
         )
+        .unwrap()
     };
     let out = run(s.clone(), &adjustments);
     // The same images with their focal scale and principal-point offset alone.
@@ -8805,7 +9030,8 @@ fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
         2,
         12,
         &Progress::none(),
-    );
+    )
+    .unwrap();
     for (j, (got, want)) in out.cameras.iter().zip(&truth).enumerate() {
         let (f, f_want) = (got.focal_lengths().0, want.focal_lengths().0);
         assert!(
@@ -8840,9 +9066,6 @@ fn two_cameras_recover_their_own_lenses_under_interleaved_held_adjustments() {
 mod per_image;
 
 #[test]
-#[should_panic(
-    expected = "image 0: rolling-shutter rates need the camera's rolling_shutter_scanlines"
-)]
 fn rates_without_a_scanlines_setting_are_refused_before_the_solve() {
     let truth = sfmtool_pinhole(250.0, &PLANTED_PINHOLE_BSPLINE);
     let (mut s, _) = make_pinhole_scene_for(truth.clone(), 4, 50);
@@ -8854,7 +9077,7 @@ fn rates_without_a_scanlines_setting_are_refused_before_the_solve() {
         };
         n_img
     ];
-    bundle_adjust(
+    let out = bundle_adjust(
         &BaCameras {
             cameras: std::slice::from_ref(&truth),
             image_camera: Cow::Owned(vec![0; n_img]),
@@ -8887,5 +9110,26 @@ fn rates_without_a_scanlines_setting_are_refused_before_the_solve() {
         2,
         12,
         &Progress::none(),
+    );
+    match out {
+        Err(BaInputError::ImageAdjustment { image: 0, reason }) => assert!(
+            reason.contains("rolling_shutter_scanlines"),
+            "the reason names the missing setting: {reason}"
+        ),
+        other => panic!("expected image 0's adjustment refused, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_reference_of_no_image_is_refused_by_from_arrays() {
+    assert_eq!(
+        PointConstraints::from_arrays(
+            None,
+            Some(&[5.0]),
+            &[Some(DistanceReference::ImageMean(Vec::new()))],
+            1,
+            2,
+        ),
+        Err(PointConstraintsError::EmptyReference { point: 0 })
     );
 }

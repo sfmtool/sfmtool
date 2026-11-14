@@ -810,7 +810,10 @@ pub fn rotation_init(
         BA_MIN_TRACK,
         BA_MIN_OBS,
         &Progress::none(),
-    );
+    )
+    // One `SimplePinhole` built above, and observations gathered from the
+    // posed images over `points`, so the kernel has nothing to refuse.
+    .expect("the gathered kernel input is consistent");
 
     // The scale gauge is flat under the adjustment (it can wander); pin it
     // back to the contract: the seed pair's baseline is unit. Directions stay

@@ -59,7 +59,7 @@ callers refill).
 The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
 (`bundle_adjust`, `BaCameras`, `BaSchedule`, `BundleAdjustment`,
-`CameraRelease`, `ImagePriorOptions`, `ImagePriorWidths`, `ImagePrior`,
+`BaInputError`, `CameraRelease`, `ImagePriorOptions`, `ImagePriorWidths`, `ImagePrior`,
 `PointConstraint`, `PointConstraints`, `DistanceReference`, `FreePointPolicy`,
 `FreePointDecision`), bound as `sfmtool.geometry.bundle_adjust`.
 
@@ -140,7 +140,7 @@ pub fn bundle_adjust(
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
     progress: &Progress<'_>,             // phases, counts, values and the cancel flag
-) -> BundleAdjustment;
+) -> Result<BundleAdjustment, BaInputError>;
 
 pub struct BundleAdjustment {
     pub cameras: Vec<CameraIntrinsics>,  // n_cam, the cameras after the solve
@@ -171,14 +171,28 @@ let out = bundle_adjust(
     None, None, FreePointPolicy::default(), None, DEFAULT_PROTECTED_LOSS_SCALE,
     true, false, false, false, false, false, false, false, None, &DEFAULT_SCHEDULE, 60, 2, 12,
     &Progress::none(),
-);
+)?;
 let solved_focal = out.cameras[0].focal_lengths().0;
 ```
+
+**Why a `Result`.** Every argument comes from the caller, so the kernel checks
+each length, index and camera before it moves anything and returns a
+`BaInputError` naming what is wrong, leaving the state it was handed as it
+was: an array not as long as what it is parallel to (`trans`, `image_camera`
+and `image_adjustments` to `quats`; `obs_pt`, `uv` and `protected` to
+`obs_img`; `point_at_infinity` and each array of `constraints` to `points`;
+`releases` and `rolling_shutter_scanlines` to `cameras`), an `image_camera`,
+`obs_img` or `obs_pt` entry out of range, an empty camera list, a camera or
+image adjustment the projection cannot apply, a camera releasing its rates
+with no scanlines setting, and a constraint the solve cannot honour (the
+`PointConstraintsError` variants, carried in `BaInputError::PointConstraint`).
+A stopped solve is not an error: it returns the state it reached, and the
+caller asks the `Progress` whether it was cancelled.
 
 **Why `BaCameras` rather than two more arguments.** The camera list and the
 image-to-camera column only mean something together, and the checks on them
 belong in one place: an empty camera list, an `image_camera` whose length is not
-`n_img`, or an index past the list is a caller error and panics like the
+`n_img`, or an index past the list is a caller error, refused like the
 kernel's other shape checks. `image_camera` is a `Cow` so that
 `BaCameras::shared` can own the all-zero column it builds, while a caller with a
 column of its own lends it (`image_camera: column.as_slice().into()`).
@@ -195,8 +209,8 @@ under `opt_pp && releases[j].principal_point`, and its images' focal scales and
 principal-point offsets under `opt_image_f && releases[j].image_focal` and
 `opt_image_pp && releases[j].image_principal_point`, each still only where its
 model admits it. With `releases: None` every camera takes the flags as they are
-(`CameraRelease::ALL`). A list whose length is not `n_cam` is a caller error
-and panics with the other shape checks.
+(`CameraRelease::ALL`). A list whose length is not `n_cam` is a caller error,
+refused with the other shape checks.
 
 **Why the result returns cameras.** A caller wants each solved camera back to
 write into its own image set. The result carries the whole `CameraIntrinsics` per
@@ -867,8 +881,8 @@ camera's, and the robust cost the damping ladder compares reads the same
 entries. Those entries are built per image per evaluation, never per
 observation. `image_adjustments` of `None`, or of all-zero adjustments, adds no
 entry and reads every camera as it is, so the solve is the one without
-adjustments bit for bit. A length other than `n_img` is a caller error and
-panics with the other shape checks.
+adjustments bit for bit. A length other than `n_img` is a caller error,
+refused with the other shape checks.
 
 ### The per-image release
 
@@ -1106,7 +1120,8 @@ holds them whatever the flags say, and the binding refuses the request.
 
 The solve reads each camera's rates on one fixed scanlines setting, its entry
 of `BaCameras::rolling_shutter_scanlines`, `Rows` or `Columns`. A camera that
-releases its rates without one is a caller error, and the solve panics on it.
+releases its rates without one is a caller error, which the solve refuses
+before it starts.
 Choosing between rows and columns compares two solves, so it is the
 reconstruction-level adjustment's, which releases both corrections from Rust
 and from the Python `EditedReconstruction.bundle_adjust`
@@ -1416,8 +1431,8 @@ has to reach the same verdicts; the binding maps its refusals onto `ValueError`
 and adds none of its own. `None` comes back where every point is free, which is
 the off position the parity requirement is stated against.
 The refusals are a point that is both held and ranged, a distance that is
-not strictly positive, a finite distance with no origin, and an origin past the
-image set.
+not strictly positive, a finite distance with no origin, an origin that is an
+empty sequence, and an origin past the image set.
 `distance_from` is ignored on a `NaN` or `+inf` row, which is measured from
 nothing.
 
@@ -1668,7 +1683,7 @@ Python's point of view).
     distance is zero without rates and linear in them;
   - the correction flags on with nothing released per image give the solve with
     them off bit for bit, a `SIMPLE_PINHOLE` holds both corrections whatever its
-    release, and releasing rates with no scanlines setting panics;
+    release, and releasing rates with no scanlines setting is refused;
   - the binding returns held corrections bit for bit, recovers released ones
     about their mean on rows and on columns, reports the four widths and
     refuses each malformed argument
@@ -1707,8 +1722,13 @@ Python's point of view).
     give, and decides each track as `bearing_score` does on rays weighted
     through the camera of each sighting's image.
   - *Shape checks.* An index past the camera list, an `image_camera` of the
-    wrong length and an empty list panic; the binding raises `ValueError` for
-    each, and names the camera a refused release does not admit.
+    wrong length and an empty list are refused with the `BaInputError` that
+    names each, before the state moves; so are a `trans`, `uv`, `obs_pt`,
+    `protected` or `point_at_infinity` of the wrong length, an observation
+    naming an image or point past the end, and a constraint that is not a
+    distance, names no reference, names an empty one or one past the images.
+    The binding raises `ValueError` for each, and names the camera a refused
+    release does not admit.
 
 ## Points at infinity
 
@@ -1852,7 +1872,7 @@ bundle_adjust(&BaCameras::shared(&cam, quats.len()),
               FreePointPolicy { cross: true },
               None, DEFAULT_PROTECTED_LOSS_SCALE,
               true, false, false, false, false, false, None,
-              &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none());
+              &DEFAULT_SCHEDULE, 60, 2, 12, &Progress::none())?;
 ```
 
 An absent `constraints` is every point free, and with `FreePointPolicy::NO_CROSS`

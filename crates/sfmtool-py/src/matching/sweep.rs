@@ -9,10 +9,90 @@ use pyo3::prelude::*;
 
 use sfmtool_core::features::feature_match;
 
+use super::image::check_shape;
+use crate::helpers::value_err;
+
+/// Checks the keypoint and descriptor arrays of one sweep call against each
+/// other, with the binding's argument names, and returns `(n1, n2,
+/// desc_len)`: the row counts of the two keypoint arrays and the width of the
+/// first descriptor array.
+fn feature_counts(
+    names: [&str; 4],
+    kpts1: &PyReadonlyArray2<f64>,
+    descs1: &PyReadonlyArray2<u8>,
+    kpts2: &PyReadonlyArray2<f64>,
+    descs2: &PyReadonlyArray2<u8>,
+) -> PyResult<(usize, usize, usize)> {
+    let n1 = kpts1.shape()[0];
+    let n2 = kpts2.shape()[0];
+    let desc_len = descs1.shape()[1];
+    check_shape(names[0], kpts1.shape(), &[n1, 2])?;
+    check_shape(names[1], descs1.shape(), &[n1, desc_len])?;
+    check_shape(names[2], kpts2.shape(), &[n2, 2])?;
+    check_shape(names[3], descs2.shape(), &[n2, desc_len])?;
+    Ok((n1, n2, desc_len))
+}
+
+/// Checks the two affine-shape arrays of a geometric sweep, which must be
+/// `(n1, 4)` and `(n2, 4)`.
+fn check_affines(
+    names: [&str; 2],
+    affines1: &PyReadonlyArray2<f64>,
+    affines2: &PyReadonlyArray2<f64>,
+    n1: usize,
+    n2: usize,
+) -> PyResult<()> {
+    check_shape(names[0], affines1.shape(), &[n1, 4])?;
+    check_shape(names[1], affines2.shape(), &[n2, 4])
+}
+
+/// The camera geometry of a geometric sweep, from `k1`, `k2`, `r1` and `r2`,
+/// which must be of shape (3, 3), and `t1` and `t2`, which must be of
+/// shape (3,).
+fn stereo_geometry(
+    k1: &PyReadonlyArray2<f64>,
+    k2: &PyReadonlyArray2<f64>,
+    r1: &PyReadonlyArray2<f64>,
+    r2: &PyReadonlyArray2<f64>,
+    t1: &PyReadonlyArray1<f64>,
+    t2: &PyReadonlyArray1<f64>,
+) -> PyResult<feature_match::StereoPairGeometry> {
+    for (name, m) in [("k1", k1), ("k2", k2), ("r1", r1), ("r2", r2)] {
+        check_shape(name, m.shape(), &[3, 3])?;
+    }
+    check_shape("t1", t1.shape(), &[3])?;
+    check_shape("t2", t2.shape(), &[3])?;
+    let matrix = |m: &PyReadonlyArray2<f64>| Matrix3::from_row_slice(&to_contiguous!(m));
+    let vector = |v: &PyReadonlyArray1<f64>| Vector3::from_row_slice(&to_contiguous!(v));
+    Ok(feature_match::StereoPairGeometry::new(
+        &matrix(k1),
+        &matrix(k2),
+        &matrix(r1),
+        &matrix(r2),
+        &vector(t1),
+        &vector(t2),
+    ))
+}
+
+/// The fundamental matrix of a polar sweep, which must be of shape (3, 3), as
+/// its nine entries in row-major order.
+fn fundamental_matrix(f_matrix: &PyReadonlyArray2<f64>) -> PyResult<[f64; 9]> {
+    check_shape("f_matrix", f_matrix.shape(), &[3, 3])?;
+    let f_data = to_contiguous!(f_matrix);
+    let mut f_arr = [0.0; 9];
+    f_arr.copy_from_slice(&f_data);
+    Ok(f_arr)
+}
+
 /// One-way sweep match from sorted keypoints 1 to sorted keypoints 2.
 ///
 /// Both keypoint arrays must already be sorted by Y coordinate.
 /// Returns list of (sorted_idx1, sorted_idx2, distance) tuples.
+///
+/// Raises:
+///     ValueError: A keypoint array is not of shape (N, 2), or a descriptor
+///         array does not have one row per keypoint or is not as wide as
+///         ``sorted_descs1``.
 #[pyfunction]
 #[pyo3(name = "match_one_way_sweep")]
 #[pyo3(signature = (sorted_kpts1, sorted_descs1, sorted_kpts2, sorted_descs2, window_size, threshold=None))]
@@ -24,12 +104,22 @@ pub fn match_one_way_sweep_py(
     window_size: usize,
     threshold: Option<f64>,
 ) -> PyResult<Vec<(usize, usize, f64)>> {
+    let (n1, n2, desc_len) = feature_counts(
+        [
+            "sorted_kpts1",
+            "sorted_descs1",
+            "sorted_kpts2",
+            "sorted_descs2",
+        ],
+        &sorted_kpts1,
+        &sorted_descs1,
+        &sorted_kpts2,
+        &sorted_descs2,
+    )?;
     let k1_data = to_contiguous!(sorted_kpts1);
     let d1_data = to_contiguous!(sorted_descs1);
     let k2_data = to_contiguous!(sorted_kpts2);
     let d2_data = to_contiguous!(sorted_descs2);
-    let n1 = sorted_kpts1.shape()[0];
-    let n2 = sorted_kpts2.shape()[0];
 
     let matches = feature_match::match_one_way_sweep(
         &k1_data,
@@ -38,9 +128,11 @@ pub fn match_one_way_sweep_py(
         &k2_data,
         &d2_data,
         n2,
+        desc_len,
         window_size,
         threshold,
-    );
+    )
+    .map_err(value_err)?;
 
     Ok(matches
         .into_iter()
@@ -52,6 +144,13 @@ pub fn match_one_way_sweep_py(
 ///
 /// Both keypoint arrays must already be sorted by Y coordinate.
 /// Returns list of (sorted_idx1, sorted_idx2, distance) tuples.
+///
+/// Raises:
+///     ValueError: ``k1``, ``k2``, ``r1`` or ``r2`` is not of shape (3, 3),
+///         ``t1`` or ``t2`` is not of shape (3,), a keypoint array is not of
+///         shape (N, 2), a descriptor array does not have one row per keypoint
+///         or is not as wide as ``sorted_descs1``, or an affine-shape array is
+///         not of shape (N, 4) for its image's N.
 #[pyfunction]
 #[pyo3(name = "match_one_way_sweep_geometric")]
 #[pyo3(signature = (sorted_kpts1, sorted_descs1, sorted_kpts2, sorted_descs2,
@@ -79,23 +178,26 @@ pub fn match_one_way_sweep_geometric_py(
     size_ratio_min: f64,
     size_ratio_max: f64,
 ) -> PyResult<Vec<(usize, usize, f64)>> {
-    let k1_data = to_contiguous!(k1);
-    let k2_data = to_contiguous!(k2);
-    let r1_data = to_contiguous!(r1);
-    let r2_data = to_contiguous!(r2);
-    let t1_data = to_contiguous!(t1);
-    let t2_data = to_contiguous!(t2);
-
-    let k1_mat = Matrix3::from_row_slice(&k1_data);
-    let k2_mat = Matrix3::from_row_slice(&k2_data);
-    let r1_mat = Matrix3::from_row_slice(&r1_data);
-    let r2_mat = Matrix3::from_row_slice(&r2_data);
-    let t1_vec = Vector3::from_row_slice(&t1_data);
-    let t2_vec = Vector3::from_row_slice(&t2_data);
-
-    let geom = feature_match::StereoPairGeometry::new(
-        &k1_mat, &k2_mat, &r1_mat, &r2_mat, &t1_vec, &t2_vec,
-    );
+    let geom = stereo_geometry(&k1, &k2, &r1, &r2, &t1, &t2)?;
+    let (n1, n2, desc_len) = feature_counts(
+        [
+            "sorted_kpts1",
+            "sorted_descs1",
+            "sorted_kpts2",
+            "sorted_descs2",
+        ],
+        &sorted_kpts1,
+        &sorted_descs1,
+        &sorted_kpts2,
+        &sorted_descs2,
+    )?;
+    check_affines(
+        ["sorted_affines1", "sorted_affines2"],
+        &sorted_affines1,
+        &sorted_affines2,
+        n1,
+        n2,
+    )?;
     let config = feature_match::GeometricFilterConfig {
         max_angle_difference: max_angle_diff,
         min_triangulation_angle: min_tri_angle,
@@ -110,9 +212,6 @@ pub fn match_one_way_sweep_geometric_py(
     let a1_data = to_contiguous!(sorted_affines1);
     let a2_data = to_contiguous!(sorted_affines2);
 
-    let n1 = sorted_kpts1.shape()[0];
-    let n2 = sorted_kpts2.shape()[0];
-
     let matches = feature_match::match_one_way_sweep_geometric(
         &kp1_data,
         &d1_data,
@@ -122,11 +221,13 @@ pub fn match_one_way_sweep_geometric_py(
         n2,
         &a1_data,
         &a2_data,
+        desc_len,
         window_size,
         threshold,
         &geom,
         &config,
-    );
+    )
+    .map_err(value_err)?;
 
     Ok(matches
         .into_iter()
@@ -138,6 +239,11 @@ pub fn match_one_way_sweep_geometric_py(
 ///
 /// Takes unsorted keypoints, sorts internally, and returns mutual matches.
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples.
+///
+/// Raises:
+///     ValueError: A keypoint array is not of shape (N, 2), or a descriptor
+///         array does not have one row per keypoint or is not as wide as
+///         ``descriptors1``.
 #[pyfunction]
 #[pyo3(name = "mutual_best_match_sweep")]
 #[pyo3(signature = (keypoints1, descriptors1, keypoints2, descriptors2, window_size, threshold=None))]
@@ -149,15 +255,19 @@ pub fn mutual_best_match_sweep_py(
     window_size: usize,
     threshold: Option<f64>,
 ) -> PyResult<Vec<(usize, usize, f64)>> {
+    let (n1, n2, desc_len) = feature_counts(
+        ["keypoints1", "descriptors1", "keypoints2", "descriptors2"],
+        &keypoints1,
+        &descriptors1,
+        &keypoints2,
+        &descriptors2,
+    )?;
     let k1_data = to_contiguous!(keypoints1);
     let d1_data = to_contiguous!(descriptors1);
     let k2_data = to_contiguous!(keypoints2);
     let d2_data = to_contiguous!(descriptors2);
-    let n1 = keypoints1.shape()[0];
-    let n2 = keypoints2.shape()[0];
-    let desc_len = descriptors1.shape()[1];
 
-    Ok(feature_match::mutual_best_match_sweep(
+    feature_match::mutual_best_match_sweep(
         &k1_data,
         &d1_data,
         n1,
@@ -167,13 +277,19 @@ pub fn mutual_best_match_sweep_py(
         desc_len,
         window_size,
         threshold,
-    ))
+    )
+    .map_err(value_err)
 }
 
 /// Bidirectional polar sweep matching for in-frame epipole cases.
 ///
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples, or None if
 /// epipoles are at infinity.
+///
+/// Raises:
+///     ValueError: ``f_matrix`` is not of shape (3, 3), a positions array is
+///         not of shape (N, 2), or a descriptor array does not have one row
+///         per position or is not as wide as ``descriptors1``.
 #[pyfunction]
 #[pyo3(name = "polar_mutual_best_match")]
 #[pyo3(signature = (positions1, descriptors1, positions2, descriptors2, f_matrix, window_size, threshold=None, min_radius=10.0))]
@@ -188,22 +304,20 @@ pub fn polar_mutual_best_match_py(
     threshold: Option<f64>,
     min_radius: f64,
 ) -> PyResult<Option<Vec<(usize, usize, f64)>>> {
+    let f_arr = fundamental_matrix(&f_matrix)?;
+    let (n1, n2, desc_len) = feature_counts(
+        ["positions1", "descriptors1", "positions2", "descriptors2"],
+        &positions1,
+        &descriptors1,
+        &positions2,
+        &descriptors2,
+    )?;
     let p1_data = to_contiguous!(positions1);
     let d1_data = to_contiguous!(descriptors1);
     let p2_data = to_contiguous!(positions2);
     let d2_data = to_contiguous!(descriptors2);
-    let f_data = to_contiguous!(f_matrix);
 
-    let n1 = positions1.shape()[0];
-    let n2 = positions2.shape()[0];
-    let desc_len = descriptors1.shape()[1];
-
-    let f_arr: [f64; 9] = f_data
-        .as_ref()
-        .try_into()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("f_matrix must be 3x3"))?;
-
-    Ok(feature_match::polar_mutual_best_match(
+    feature_match::polar_mutual_best_match(
         &p1_data,
         &d1_data,
         n1,
@@ -215,7 +329,8 @@ pub fn polar_mutual_best_match_py(
         window_size,
         threshold,
         min_radius,
-    ))
+    )
+    .map_err(value_err)
 }
 
 /// Bidirectional sort-and-sweep matching with geometric filtering.
@@ -223,6 +338,13 @@ pub fn polar_mutual_best_match_py(
 /// Takes unsorted keypoints with affine shapes and camera geometry,
 /// applies two-stage geometric filtering during matching.
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples.
+///
+/// Raises:
+///     ValueError: ``k1``, ``k2``, ``r1`` or ``r2`` is not of shape (3, 3),
+///         ``t1`` or ``t2`` is not of shape (3,), a keypoint array is not of
+///         shape (N, 2), a descriptor array does not have one row per keypoint
+///         or is not as wide as ``descriptors1``, or an affine-shape array is
+///         not of shape (N, 4) for its image's N.
 #[pyfunction]
 #[pyo3(name = "mutual_best_match_sweep_geometric")]
 #[pyo3(signature = (keypoints1, descriptors1, keypoints2, descriptors2, affines1, affines2,
@@ -249,23 +371,15 @@ pub fn mutual_best_match_sweep_geometric_py(
     size_ratio_min: f64,
     size_ratio_max: f64,
 ) -> PyResult<Vec<(usize, usize, f64)>> {
-    let k1_data = to_contiguous!(k1);
-    let k2_data = to_contiguous!(k2);
-    let r1_data = to_contiguous!(r1);
-    let r2_data = to_contiguous!(r2);
-    let t1_data = to_contiguous!(t1);
-    let t2_data = to_contiguous!(t2);
-
-    let k1_mat = Matrix3::from_row_slice(&k1_data);
-    let k2_mat = Matrix3::from_row_slice(&k2_data);
-    let r1_mat = Matrix3::from_row_slice(&r1_data);
-    let r2_mat = Matrix3::from_row_slice(&r2_data);
-    let t1_vec = Vector3::from_row_slice(&t1_data);
-    let t2_vec = Vector3::from_row_slice(&t2_data);
-
-    let geom = feature_match::StereoPairGeometry::new(
-        &k1_mat, &k2_mat, &r1_mat, &r2_mat, &t1_vec, &t2_vec,
-    );
+    let geom = stereo_geometry(&k1, &k2, &r1, &r2, &t1, &t2)?;
+    let (n1, n2, desc_len) = feature_counts(
+        ["keypoints1", "descriptors1", "keypoints2", "descriptors2"],
+        &keypoints1,
+        &descriptors1,
+        &keypoints2,
+        &descriptors2,
+    )?;
+    check_affines(["affines1", "affines2"], &affines1, &affines2, n1, n2)?;
     let config = feature_match::GeometricFilterConfig {
         max_angle_difference: max_angle_diff,
         min_triangulation_angle: min_tri_angle,
@@ -280,11 +394,7 @@ pub fn mutual_best_match_sweep_geometric_py(
     let a1_data = to_contiguous!(affines1);
     let a2_data = to_contiguous!(affines2);
 
-    let n1 = keypoints1.shape()[0];
-    let n2 = keypoints2.shape()[0];
-    let desc_len = descriptors1.shape()[1];
-
-    Ok(feature_match::mutual_best_match_sweep_geometric(
+    feature_match::mutual_best_match_sweep_geometric(
         &kp1_data,
         &d1_data,
         n1,
@@ -298,13 +408,21 @@ pub fn mutual_best_match_sweep_geometric_py(
         threshold,
         &geom,
         &config,
-    ))
+    )
+    .map_err(value_err)
 }
 
 /// Bidirectional polar sweep matching with geometric filtering.
 ///
 /// Returns list of (orig_idx1, orig_idx2, distance) tuples, or None if
 /// epipoles are at infinity.
+///
+/// Raises:
+///     ValueError: ``f_matrix``, ``k1``, ``k2``, ``r1`` or ``r2`` is not of
+///         shape (3, 3), ``t1`` or ``t2`` is not of shape (3,), a positions
+///         array is not of shape (N, 2), a descriptor array does not have one
+///         row per position or is not as wide as ``descriptors1``, or an
+///         affine-shape array is not of shape (N, 4) for its image's N.
 #[pyfunction]
 #[pyo3(name = "polar_mutual_best_match_geometric")]
 #[pyo3(signature = (positions1, descriptors1, positions2, descriptors2, affines1, affines2,
@@ -333,29 +451,16 @@ pub fn polar_mutual_best_match_geometric_py(
     size_ratio_min: f64,
     size_ratio_max: f64,
 ) -> PyResult<Option<Vec<(usize, usize, f64)>>> {
-    let k1_data = to_contiguous!(k1);
-    let k2_data = to_contiguous!(k2);
-    let r1_data = to_contiguous!(r1);
-    let r2_data = to_contiguous!(r2);
-    let t1_data = to_contiguous!(t1);
-    let t2_data = to_contiguous!(t2);
-    let f_data = to_contiguous!(f_matrix);
-
-    let k1_mat = Matrix3::from_row_slice(&k1_data);
-    let k2_mat = Matrix3::from_row_slice(&k2_data);
-    let r1_mat = Matrix3::from_row_slice(&r1_data);
-    let r2_mat = Matrix3::from_row_slice(&r2_data);
-    let t1_vec = Vector3::from_row_slice(&t1_data);
-    let t2_vec = Vector3::from_row_slice(&t2_data);
-
-    let f_arr: [f64; 9] = f_data
-        .as_ref()
-        .try_into()
-        .map_err(|_| pyo3::exceptions::PyValueError::new_err("f_matrix must be 3x3"))?;
-
-    let geom = feature_match::StereoPairGeometry::new(
-        &k1_mat, &k2_mat, &r1_mat, &r2_mat, &t1_vec, &t2_vec,
-    );
+    let f_arr = fundamental_matrix(&f_matrix)?;
+    let geom = stereo_geometry(&k1, &k2, &r1, &r2, &t1, &t2)?;
+    let (n1, n2, desc_len) = feature_counts(
+        ["positions1", "descriptors1", "positions2", "descriptors2"],
+        &positions1,
+        &descriptors1,
+        &positions2,
+        &descriptors2,
+    )?;
+    check_affines(["affines1", "affines2"], &affines1, &affines2, n1, n2)?;
     let config = feature_match::GeometricFilterConfig {
         max_angle_difference: max_angle_diff,
         min_triangulation_angle: min_tri_angle,
@@ -370,11 +475,7 @@ pub fn polar_mutual_best_match_geometric_py(
     let a1_data = to_contiguous!(affines1);
     let a2_data = to_contiguous!(affines2);
 
-    let n1 = positions1.shape()[0];
-    let n2 = positions2.shape()[0];
-    let desc_len = descriptors1.shape()[1];
-
-    Ok(feature_match::polar_mutual_best_match_geometric(
+    feature_match::polar_mutual_best_match_geometric(
         &p1_data,
         &d1_data,
         n1,
@@ -390,7 +491,8 @@ pub fn polar_mutual_best_match_geometric_py(
         min_radius,
         &geom,
         &config,
-    ))
+    )
+    .map_err(value_err)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

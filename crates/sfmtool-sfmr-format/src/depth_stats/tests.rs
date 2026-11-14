@@ -151,3 +151,42 @@ fn test_normals_point_between_cameras() {
     // The result is a unit vector (or near-zero normalized)
     assert!(norm <= 1.0 + 1e-5);
 }
+
+/// Observations that name an image or point past its array, or index arrays of
+/// different lengths, are refused rather than indexed.
+#[test]
+fn test_observations_out_of_range_are_refused() {
+    let mut q = Array2::<f64>::zeros((1, 4));
+    q[[0, 0]] = 1.0;
+    let t = Array2::<f64>::zeros((1, 3));
+    let mut p = Array2::<f64>::zeros((1, 4));
+    p[[0, 2]] = -5.0;
+    p[[0, 3]] = 1.0;
+    let one = Array1::from_vec(vec![0u32]);
+
+    let err = compute_depth_statistics(&q, &t, &p, &Array1::from_vec(vec![1u32]), &one)
+        .err()
+        .expect("an image past the poses is refused");
+    assert_eq!(
+        err.to_string(),
+        "Invalid format: image_indexes[0] = 1 is past the 1 images"
+    );
+    let err = compute_depth_statistics(&q, &t, &p, &one, &Array1::from_vec(vec![3u32]))
+        .err()
+        .expect("a point past the positions is refused");
+    assert_eq!(
+        err.to_string(),
+        "Invalid format: point_indexes[0] = 3 is past the 1 points"
+    );
+    let err = compute_depth_statistics(&q, &t, &p, &one, &Array1::from_vec(vec![0u32, 0]))
+        .err()
+        .expect("index arrays of different lengths are refused");
+    assert_eq!(
+        err.to_string(),
+        "Shape mismatch: point_indexes has 2 entries but image_indexes has 1"
+    );
+    // An observation of an image when there are no points is refused too,
+    // rather than passing as an empty reconstruction.
+    let no_points = Array2::<f64>::zeros((0, 4));
+    assert!(compute_depth_statistics(&q, &t, &no_points, &one, &one).is_err());
+}

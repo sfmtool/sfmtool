@@ -276,6 +276,7 @@ fn grow(
         &idx,
         opts,
     )
+    .unwrap()
 }
 
 fn assert_growth_bits_eq(a: &ReconstructionGrowth, b: &ReconstructionGrowth) {
@@ -956,7 +957,8 @@ fn no_seed_poses_returns_input_state() {
         &[],
         &[],
         &GrowOptions::default(),
-    );
+    )
+    .unwrap();
     assert!(out.posed.iter().all(|&p| !p));
     assert!(out.points.iter().all(|p| p[0].is_nan()));
     assert!(out.residual_norms.iter().all(|r| r.is_infinite()));
@@ -983,7 +985,8 @@ fn all_images_below_min_obs_returns_input_state() {
             min_obs: 100_000,
             ..Default::default()
         },
-    );
+    )
+    .unwrap();
     // Seed poses pass through (quaternions modulo the input unit
     // re-normalization); nothing else registers.
     assert_eq!(out.posed.iter().filter(|&&p| p).count(), 3);
@@ -1014,7 +1017,8 @@ fn no_triangulable_clusters_returns_input_state() {
         &t,
         &idx,
         &GrowOptions::default(),
-    );
+    )
+    .unwrap();
     assert_eq!(out.posed.iter().filter(|&&p| p).count(), 1);
     for (a, b) in out.quaternions_wxyz[0].iter().zip(&q[0]) {
         assert!((a - b).abs() < 1e-14);
@@ -1035,7 +1039,8 @@ fn empty_inputs_return_empty_growth() {
         &[],
         &[],
         &GrowOptions::default(),
-    );
+    )
+    .unwrap();
     assert!(out.posed.is_empty());
     assert!(out.points.is_empty());
     assert!(out.residual_norms.is_empty());
@@ -1204,4 +1209,72 @@ fn batch_resection_gates_junk_and_min_obs() {
         &ResectOptions::default(),
     );
     assert!(!none.accepted[0]);
+}
+
+/// Parallel arrays of different lengths, decreasing cluster indexes and a
+/// camera whose rolling shutter cannot be applied are refused before anything
+/// is computed.
+#[test]
+fn inputs_out_of_shape_are_refused() {
+    let cam = test_cam(F0);
+    let opts = GrowOptions::default();
+    let length = |array, len, reference, expected| GrowInputError::Length {
+        array,
+        len,
+        reference,
+        expected,
+    };
+    let pos = [[1.0, 2.0]; 3];
+    assert_eq!(
+        grow_reconstruction(&[0, 0, 1], &[0, 1], &pos, &cam, &[], &[], &[], &opts).unwrap_err(),
+        length("image_indexes", 2, "cluster_indexes", 3)
+    );
+    assert_eq!(
+        grow_reconstruction(
+            &[0, 0, 1],
+            &[0, 1, 0],
+            &pos[..1],
+            &cam,
+            &[],
+            &[],
+            &[],
+            &opts
+        )
+        .unwrap_err(),
+        length("positions_xy", 1, "cluster_indexes", 3)
+    );
+    assert_eq!(
+        grow_reconstruction(
+            &[0, 0, 1],
+            &[0, 1, 0],
+            &pos,
+            &cam,
+            &[[1.0, 0.0, 0.0, 0.0]],
+            &[],
+            &[0],
+            &opts
+        )
+        .unwrap_err(),
+        length("translations", 0, "posed_indexes", 1)
+    );
+    assert_eq!(
+        grow_reconstruction(&[0, 0, 1], &[0, 1, 0], &pos, &cam, &[], &[], &[0], &opts).unwrap_err(),
+        length("quaternions_wxyz", 0, "posed_indexes", 1)
+    );
+    assert_eq!(
+        grow_reconstruction(&[0, 1, 0], &[0, 1, 0], &pos, &cam, &[], &[], &[], &opts).unwrap_err(),
+        GrowInputError::ClusterIndexesDecrease { index: 2 }
+    );
+    let shutter = CameraIntrinsics {
+        rolling_shutter: Some(crate::camera::RollingShutter {
+            scanlines: crate::camera::RollingShutterScanlines::Rows,
+            rates: [1e-3, 0.0, 0.0],
+        }),
+        ..cam
+    };
+    assert!(matches!(
+        grow_reconstruction(&[0, 0, 1], &[0, 1, 0], &pos, &shutter, &[], &[], &[], &opts)
+            .unwrap_err(),
+        GrowInputError::Camera(_)
+    ));
 }

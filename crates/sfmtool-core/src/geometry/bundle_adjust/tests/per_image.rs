@@ -193,6 +193,7 @@ fn run_image(
         12,
         &Progress::none(),
     )
+    .unwrap()
 }
 
 /// Which of an image's adjustment parameters a camera releasing its focal

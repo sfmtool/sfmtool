@@ -204,6 +204,13 @@ pub struct DepthStatsResult {
 ///   track observations. Each observation `i` means "image `image_indexes[i]`
 ///   sees point `point_indexes[i]`", where image indices index into the
 ///   camera pose arrays and point indices index into `positions_xyzw`.
+///
+/// # Errors
+///
+/// [`SfmrError::InvalidFormat`] when an array is not of the shape above or an
+/// observation names an image or point past the end of its array, and
+/// [`SfmrError::ShapeMismatch`] when `image_indexes` and `point_indexes`
+/// differ in length.
 pub fn compute_depth_statistics(
     quaternions_wxyz: &Array2<f64>,
     translations_xyz: &Array2<f64>,
@@ -235,6 +242,31 @@ pub fn compute_depth_statistics(
             "positions_xyzw shape {:?} doesn't match expected ({}, 4)",
             positions_xyzw.shape(),
             num_points
+        )));
+    }
+    if point_indexes.len() != image_indexes.len() {
+        return Err(SfmrError::ShapeMismatch(format!(
+            "point_indexes has {} entries but image_indexes has {}",
+            point_indexes.len(),
+            image_indexes.len()
+        )));
+    }
+    if let Some((obs, &img)) = image_indexes
+        .iter()
+        .enumerate()
+        .find(|(_, &i)| i as usize >= num_images)
+    {
+        return Err(SfmrError::InvalidFormat(format!(
+            "image_indexes[{obs}] = {img} is past the {num_images} images"
+        )));
+    }
+    if let Some((obs, &pt)) = point_indexes
+        .iter()
+        .enumerate()
+        .find(|(_, &p)| p as usize >= num_points)
+    {
+        return Err(SfmrError::InvalidFormat(format!(
+            "point_indexes[{obs}] = {pt} is past the {num_points} points"
         )));
     }
 

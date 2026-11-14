@@ -322,7 +322,7 @@ pub fn match_image_pairs_batch_py(
 }
 
 /// `Err(ValueError)` naming `name` unless `shape` is `expected`.
-fn check_shape(name: &str, shape: &[usize], expected: &[usize]) -> PyResult<()> {
+pub(super) fn check_shape(name: &str, shape: &[usize], expected: &[usize]) -> PyResult<()> {
     if shape == expected {
         return Ok(());
     }

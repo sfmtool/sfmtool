@@ -31,7 +31,8 @@ fn test_one_way_sweep_basic() {
     descs1[258] = 3;
     descs2[258] = 3;
 
-    let matches = match_one_way_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 3, None);
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 128, 3, None).unwrap();
 
     assert_eq!(matches.len(), 3);
     assert_eq!(matches[&0].0, 0);
@@ -54,7 +55,8 @@ fn test_mutual_match_basic() {
     descs1[258] = 30;
     descs2[258] = 30;
 
-    let mutual = mutual_best_match_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 128, 3, None);
+    let mutual =
+        mutual_best_match_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 128, 3, None).unwrap();
 
     assert_eq!(mutual.len(), 3);
     // All should be identity matches
@@ -66,10 +68,12 @@ fn test_mutual_match_basic() {
 
 #[test]
 fn test_empty_inputs() {
-    let matches = match_one_way_sweep(&[], &[], 0, &[0.0, 1.0], &[0u8; 128], 1, 30, None);
+    let matches =
+        match_one_way_sweep(&[], &[], 0, &[0.0, 1.0], &[0u8; 128], 1, 128, 30, None).unwrap();
     assert!(matches.is_empty());
 
-    let matches = match_one_way_sweep(&[0.0, 1.0], &[0u8; 128], 1, &[], &[], 0, 30, None);
+    let matches =
+        match_one_way_sweep(&[0.0, 1.0], &[0u8; 128], 1, &[], &[], 0, 128, 30, None).unwrap();
     assert!(matches.is_empty());
 }
 
@@ -115,7 +119,8 @@ fn test_mutual_match_geometric_basic() {
 
     let mutual = mutual_best_match_sweep_geometric(
         &kpts1, &descs1, 3, &kpts2, &descs2, 3, &affines1, &affines2, 128, 3, None, &geom, &config,
-    );
+    )
+    .unwrap();
 
     assert_eq!(mutual.len(), 3);
     // All should be identity matches
@@ -136,14 +141,16 @@ fn test_one_way_sweep_with_threshold_rejects() {
     // Distance = sqrt(100^2 * 128) ≈ 1131.4
 
     // Tight threshold: should reject
-    let matches = match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 1, Some(10.0));
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 128, 1, Some(10.0)).unwrap();
     assert!(
         matches.is_empty(),
         "Tight threshold should reject distant descriptors"
     );
 
     // Generous threshold: should accept
-    let matches = match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 1, Some(2000.0));
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 128, 1, Some(2000.0)).unwrap();
     assert_eq!(matches.len(), 1);
 }
 
@@ -162,7 +169,8 @@ fn test_one_way_sweep_with_threshold_accepts() {
     descs1[258] = 3;
     descs2[258] = 3;
 
-    let matches = match_one_way_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 3, Some(2000.0));
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 128, 3, Some(2000.0)).unwrap();
     assert_eq!(matches.len(), 3);
 }
 
@@ -178,15 +186,18 @@ fn test_one_way_sweep_multiple_thresholds() {
     // Distance = sqrt(9 + 16) = 5.0
 
     // Threshold below distance: no match
-    let matches = match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 1, Some(4.0));
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 128, 1, Some(4.0)).unwrap();
     assert!(matches.is_empty());
 
     // Threshold at distance: accepted (<=)
-    let matches = match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 1, Some(5.0));
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 128, 1, Some(5.0)).unwrap();
     assert_eq!(matches.len(), 1);
 
     // Threshold above distance: accepted
-    let matches = match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 1, Some(100.0));
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 1, 128, 1, Some(100.0)).unwrap();
     assert_eq!(matches.len(), 1);
 }
 
@@ -214,7 +225,8 @@ fn test_asymmetric_feature_counts() {
         descs2[i * 128] = (i * 10) as u8;
     }
 
-    let matches = match_one_way_sweep(&kpts1, &descs1, n1, &kpts2, &descs2, n2, 5, None);
+    let matches =
+        match_one_way_sweep(&kpts1, &descs1, n1, &kpts2, &descs2, n2, 128, 5, None).unwrap();
     // First 3 features in img1 should match perfectly to img2 features
     assert!(matches.len() >= 3);
     for i in 0..3 {
@@ -250,7 +262,8 @@ fn test_mutual_match_asymmetric() {
         descs2[i * 128 + 1] = (i * 30) as u8;
     }
 
-    let mutual = mutual_best_match_sweep(&kpts1, &descs1, n1, &kpts2, &descs2, n2, 128, 10, None);
+    let mutual =
+        mutual_best_match_sweep(&kpts1, &descs1, n1, &kpts2, &descs2, n2, 128, 10, None).unwrap();
 
     assert_eq!(mutual.len(), n1);
     for (idx1, idx2, dist) in &mutual {
@@ -277,7 +290,8 @@ fn test_mutual_match_with_threshold() {
 
     // Threshold that accepts feature 0 and 1, rejects feature 2
     let mutual =
-        mutual_best_match_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 128, 3, Some(10.0));
+        mutual_best_match_sweep(&kpts1, &descs1, 3, &kpts2, &descs2, 3, 128, 3, Some(10.0))
+            .unwrap();
     assert_eq!(mutual.len(), 2);
 }
 
@@ -295,7 +309,8 @@ fn test_larger_window_sizes() {
     }
 
     for window in [5, 10, 20] {
-        let mutual = mutual_best_match_sweep(&kpts, &descs, n, &kpts, &descs, n, 128, window, None);
+        let mutual =
+            mutual_best_match_sweep(&kpts, &descs, n, &kpts, &descs, n, 128, window, None).unwrap();
         // All features should match themselves regardless of window size
         assert_eq!(
             mutual.len(),
@@ -347,8 +362,9 @@ fn test_match_one_way_sweep_geometric_rejects_bad_orientation() {
     let config = GeometricFilterConfig::default();
 
     let matches = match_one_way_sweep_geometric(
-        &kpts1, &descs1, 3, &kpts2, &descs2, 3, &affines1, &affines2, 3, None, &geom, &config,
-    );
+        &kpts1, &descs1, 3, &kpts2, &descs2, 3, &affines1, &affines2, 128, 3, None, &geom, &config,
+    )
+    .unwrap();
 
     // All candidates should be rejected due to bad orientation
     assert!(
@@ -405,7 +421,7 @@ fn geometric_path_matches_plain_when_the_filter_admits_everything() {
         geometric_size_ratio_max: f64::INFINITY,
     };
 
-    let plain = match_one_way_sweep(&kpts, &descs1, n, &kpts, &descs2, n, 5, None);
+    let plain = match_one_way_sweep(&kpts, &descs1, n, &kpts, &descs2, n, 128, 5, None).unwrap();
     let filtered = match_one_way_sweep_geometric(
         &kpts,
         &descs1,
@@ -415,11 +431,13 @@ fn geometric_path_matches_plain_when_the_filter_admits_everything() {
         n,
         &affines,
         &affines,
+        128,
         5,
         None,
         &geom,
         &permissive,
-    );
+    )
+    .unwrap();
 
     assert!(!plain.is_empty(), "the plain sweep should find matches");
     assert_eq!(plain, filtered);
@@ -473,11 +491,13 @@ fn filtered_windows_report_sorted_indices_not_offsets_within_the_survivors() {
         4,
         &query_affine,
         &affines2,
+        128,
         4,
         None,
         &geom,
         &config,
-    );
+    )
+    .unwrap();
 
     let (target, _) = matches[&0];
     // 3, the survivor's index in the candidate array. Reporting its offset
@@ -487,7 +507,8 @@ fn filtered_windows_report_sorted_indices_not_offsets_within_the_survivors() {
 
     // The unfiltered sweep does pick candidate 0, so the assertion above is
     // discriminating rather than vacuous.
-    let unfiltered = match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 4, 4, None);
+    let unfiltered =
+        match_one_way_sweep(&kpts1, &descs1, 1, &kpts2, &descs2, 4, 128, 4, None).unwrap();
     assert_eq!(unfiltered[&0].0, 0);
 }
 
@@ -601,13 +622,15 @@ fn bidirectional_geometric_sweep_reverses_geometry_and_affines_for_the_backward_
     let mutual = mutual_best_match_sweep_geometric(
         &kpts1, &descs1, n1, &kpts2, &descs2, n2, &affines1, &affines2, desc_len, window, None,
         &geom, &config,
-    );
+    )
+    .unwrap();
 
     // Forward: image 1 queries image 2, with image 1's shapes as the query side.
     let forward = match_one_way_sweep_geometric(
-        &kpts1, &descs1, n1, &kpts2, &descs2, n2, &affines1, &affines2, window, None, &geom,
-        &config,
-    );
+        &kpts1, &descs1, n1, &kpts2, &descs2, n2, &affines1, &affines2, desc_len, window, None,
+        &geom, &config,
+    )
+    .unwrap();
     // Backward: the roles reverse, so both the geometry and the affine arrays do.
     let backward = match_one_way_sweep_geometric(
         &kpts2,
@@ -618,11 +641,13 @@ fn bidirectional_geometric_sweep_reverses_geometry_and_affines_for_the_backward_
         n1,
         &affines2,
         &affines1,
+        desc_len,
         window,
         None,
         &geom.swapped(),
         &config,
-    );
+    )
+    .unwrap();
 
     let mut expected: Vec<(usize, usize, f64)> = forward
         .iter()
@@ -639,4 +664,105 @@ fn bidirectional_geometric_sweep_reverses_geometry_and_affines_for_the_backward_
         "the fixture must produce mutual matches, or the comparison below is vacuous"
     );
     assert_eq!(got, expected);
+}
+
+/// Every public sweep refuses a feature array that does not hold its rows,
+/// naming the array, rather than reading past its end.
+#[test]
+fn test_sweeps_refuse_feature_arrays_of_the_wrong_length() {
+    let kpts = [0.0, 1.0, 0.0, 2.0, 0.0, 3.0];
+    let descs = vec![0u8; 3 * 128];
+    let affines = [1.0, 0.0, 0.0, 1.0].repeat(3);
+    let geom = StereoPairGeometry::new(
+        &nalgebra::Matrix3::identity(),
+        &nalgebra::Matrix3::identity(),
+        &nalgebra::Matrix3::identity(),
+        &nalgebra::Matrix3::identity(),
+        &nalgebra::Vector3::zeros(),
+        &nalgebra::Vector3::new(1.0, 0.0, 0.0),
+    );
+    let config = GeometricFilterConfig::default();
+    let err = |array: &'static str, rows: usize, width: usize, len: usize| {
+        MatchImagePairError::FeatureArrayLength {
+            array,
+            image: None,
+            rows,
+            width,
+            len,
+        }
+    };
+
+    // Keypoints with one column.
+    assert_eq!(
+        match_one_way_sweep(&kpts[..3], &descs, 3, &kpts, &descs, 3, 128, 3, None),
+        Err(err("sorted_kpts1", 3, 2, 3))
+    );
+    // Fewer descriptor rows than keypoints.
+    assert_eq!(
+        match_one_way_sweep(&kpts, &descs, 3, &kpts, &descs[..256], 3, 128, 3, None),
+        Err(err("sorted_descs2", 3, 128, 256))
+    );
+    assert_eq!(
+        match_one_way_sweep_geometric(
+            &kpts,
+            &descs,
+            3,
+            &kpts,
+            &descs,
+            3,
+            &affines[..8],
+            &affines,
+            128,
+            3,
+            None,
+            &geom,
+            &config,
+        ),
+        Err(err("affines1", 3, 4, 8))
+    );
+    assert_eq!(
+        mutual_best_match_sweep(&kpts, &descs[..256], 3, &kpts, &descs, 3, 128, 3, None),
+        Err(err("descriptors1", 3, 128, 256))
+    );
+    // Descriptors narrower than `desc_len`.
+    assert_eq!(
+        mutual_best_match_sweep(&kpts, &descs, 3, &kpts, &descs[..192], 3, 64, 3, None),
+        Err(err("descriptors1", 3, 64, 384))
+    );
+    assert_eq!(
+        mutual_best_match_sweep_geometric(
+            &kpts,
+            &descs,
+            3,
+            &kpts[..4],
+            &descs,
+            3,
+            &affines,
+            &affines,
+            128,
+            3,
+            None,
+            &geom,
+            &config,
+        ),
+        Err(err("keypoints2", 3, 2, 4))
+    );
+    assert_eq!(
+        mutual_best_match_sweep_geometric(
+            &kpts,
+            &descs,
+            3,
+            &kpts,
+            &descs,
+            3,
+            &affines,
+            &affines[..4],
+            128,
+            3,
+            None,
+            &geom,
+            &config,
+        ),
+        Err(err("affines2", 3, 4, 4))
+    );
 }

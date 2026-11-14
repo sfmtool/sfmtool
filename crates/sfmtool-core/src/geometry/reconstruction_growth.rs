@@ -659,6 +659,14 @@ fn build_result(
 /// releases the focal for SIMPLE_PINHOLE.
 ///
 /// Deterministic: same inputs and options give identical output.
+///
+/// # Errors
+///
+/// A [`GrowInputError`], before anything is computed, when `image_indexes` or
+/// `positions_xy` is not as long as `cluster_indexes`, `quaternions_wxyz` or
+/// `translations` is not as long as `posed_indexes`, `cluster_indexes`
+/// decreases, or `camera` carries a rolling shutter the projection cannot
+/// apply.
 #[allow(clippy::too_many_arguments)]
 pub fn grow_reconstruction(
     cluster_indexes: &[u32],
@@ -669,33 +677,40 @@ pub fn grow_reconstruction(
     translations: &[[f64; 3]],
     posed_indexes: &[u32],
     options: &GrowOptions,
-) -> ReconstructionGrowth {
+) -> Result<ReconstructionGrowth, GrowInputError> {
     let n_obs = cluster_indexes.len();
-    assert_eq!(
-        image_indexes.len(),
-        n_obs,
-        "cluster_indexes and image_indexes length mismatch"
-    );
-    assert_eq!(
-        positions_xy.len(),
-        n_obs,
-        "cluster_indexes and positions_xy length mismatch"
-    );
     let n_seed = posed_indexes.len();
-    assert_eq!(
-        quaternions_wxyz.len(),
-        n_seed,
-        "quaternions_wxyz and posed_indexes length mismatch"
-    );
-    assert_eq!(
-        translations.len(),
-        n_seed,
-        "translations and posed_indexes length mismatch"
-    );
-    assert!(
-        cluster_indexes.windows(2).all(|w| w[0] <= w[1]),
-        "cluster_indexes must be nondecreasing"
-    );
+    for (array, len, reference, expected) in [
+        (
+            "image_indexes",
+            image_indexes.len(),
+            "cluster_indexes",
+            n_obs,
+        ),
+        ("positions_xy", positions_xy.len(), "cluster_indexes", n_obs),
+        (
+            "quaternions_wxyz",
+            quaternions_wxyz.len(),
+            "posed_indexes",
+            n_seed,
+        ),
+        ("translations", translations.len(), "posed_indexes", n_seed),
+    ] {
+        if len != expected {
+            return Err(GrowInputError::Length {
+                array,
+                len,
+                reference,
+                expected,
+            });
+        }
+    }
+    if let Some(index) = cluster_indexes.windows(2).position(|w| w[0] > w[1]) {
+        return Err(GrowInputError::ClusterIndexesDecrease { index: index + 1 });
+    }
+    camera
+        .check_rolling_shutter()
+        .map_err(GrowInputError::Camera)?;
 
     let n_img = image_indexes
         .iter()
@@ -781,7 +796,7 @@ pub fn grow_reconstruction(
     // ── Finishing: release the focal on a covisibility-spread subset ────
     if st.grown == 0 {
         // Degenerate inputs / empty growth: the input state passes through.
-        return build_result(
+        return Ok(build_result(
             camera,
             cluster_indexes,
             image_indexes,
@@ -792,11 +807,61 @@ pub fn grow_reconstruction(
             st.points,
             st.is_dir,
             f0,
-        );
+        ));
     }
 
-    finish(&inp, st)
+    Ok(finish(&inp, st))
 }
+
+/// Why [`grow_reconstruction`] refused its input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GrowInputError {
+    /// An array's length differs from that of `reference`, the array it is
+    /// parallel to.
+    Length {
+        /// The array whose length is wrong.
+        array: &'static str,
+        /// Its length.
+        len: usize,
+        /// The array it is parallel to.
+        reference: &'static str,
+        /// That array's length.
+        expected: usize,
+    },
+    /// `cluster_indexes[index]` is less than the entry before it, so the
+    /// clusters are not contiguous runs.
+    ClusterIndexesDecrease {
+        /// The first entry that decreases.
+        index: usize,
+    },
+    /// The camera carries a rolling shutter the projection cannot apply
+    /// (`CameraIntrinsics::check_rolling_shutter`), with the reason.
+    Camera(String),
+}
+
+impl std::fmt::Display for GrowInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Length {
+                array,
+                len,
+                reference,
+                expected,
+            } => write!(
+                f,
+                "{array} has {len} entries but {reference} has {expected}"
+            ),
+            Self::ClusterIndexesDecrease { index } => write!(
+                f,
+                "cluster_indexes must be nondecreasing, and cluster_indexes[{index}] is less \
+                 than the entry before it"
+            ),
+            Self::Camera(reason) => write!(f, "camera: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for GrowInputError {}
 
 /// The inputs every growth stage reads, with what is derived from them once.
 struct GrowInputs<'a> {
@@ -1167,6 +1232,12 @@ fn register_candidate(inp: &GrowInputs, st: &mut GrowState, i: usize, ba_every: 
     }
 }
 
+/// Why the growth's adjustments never see input the kernel refuses: one
+/// camera, whose rolling shutter [`grow_reconstruction`] checked, a pose per
+/// image and a point per cluster sized from the indexes, and observations
+/// gathered from those indexes.
+const CONSISTENT_BA_INPUT: &str = "the gathered kernel input is consistent";
+
 /// One bounded growth adjustment + the full-set refill.
 #[allow(clippy::too_many_arguments)]
 fn run_grow_ba(
@@ -1233,7 +1304,8 @@ fn run_grow_ba(
         BA_MIN_TRACK,
         BA_MIN_OBS,
         &Progress::none(),
-    );
+    )
+    .expect(CONSISTENT_BA_INPUT);
     take_representation(is_dir, &ba.point_at_infinity, points);
     // The adjustment re-triangulates only the observations it was given,
     // wiping every other cluster's point — refill from the full
@@ -1356,7 +1428,8 @@ fn finish(inp: &GrowInputs, mut st: GrowState) -> ReconstructionGrowth {
         BA_MIN_TRACK,
         BA_MIN_OBS,
         &Progress::none(),
-    );
+    )
+    .expect(CONSISTENT_BA_INPUT);
     take_representation(&mut st.is_dir, &ba.point_at_infinity, &st.points);
     let cam_final = ba.cameras[0].clone();
     let focal = cam_final.focal_lengths().0;

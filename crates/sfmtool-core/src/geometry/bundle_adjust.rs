@@ -241,7 +241,7 @@ impl PointConstraints {
     /// already has, and the checks below are the ones neither of them should be
     /// writing twice: the two constraints are exclusive on one point, a distance
     /// is strictly positive or `+inf`, a finite one names a reference, and a
-    /// reference names an image that exists.
+    /// reference names at least one image, each of which exists.
     ///
     /// The messages name the arrays -- `distance[p]`, `distance_from[p]` -- so a
     /// caller that took them from a keyword argument can hand the sentence
@@ -283,6 +283,9 @@ impl PointConstraints {
                         distance: r,
                     },
                 )?;
+                if origin.images().is_empty() {
+                    return Err(PointConstraintsError::EmptyReference { point: p });
+                }
                 for &k in origin.images() {
                     if k as usize >= n_img {
                         return Err(PointConstraintsError::ReferenceOutOfRange {
@@ -329,6 +332,12 @@ pub enum PointConstraintsError {
         /// The distance stated for it.
         distance: f64,
     },
+    /// A ranged point's reference is an [`DistanceReference::ImageMean`] of no
+    /// image, so there is no camera centre to measure from.
+    EmptyReference {
+        /// The point.
+        point: usize,
+    },
     /// A reference names an image past the solve's `n_img` images.
     ReferenceOutOfRange {
         /// The point.
@@ -358,6 +367,11 @@ impl std::fmt::Display for PointConstraintsError {
                 "distance[{point}] = {distance} is finite and needs a distance_from: a \
                  distance is measured from a camera centre, not from the world frame"
             ),
+            PointConstraintsError::EmptyReference { point } => write!(
+                f,
+                "distance_from[{point}] names no image; a distance is measured from the \
+                 mean of at least one camera centre"
+            ),
             PointConstraintsError::ReferenceOutOfRange {
                 point,
                 image,
@@ -371,6 +385,158 @@ impl std::fmt::Display for PointConstraintsError {
 }
 
 impl std::error::Error for PointConstraintsError {}
+
+/// Why [`bundle_adjust`] refused its input.
+///
+/// The solve checks every length, index and camera it reads before it moves
+/// anything, so a caller's mistake is this error and the state it was handed
+/// is left as it was.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BaInputError {
+    /// [`BaCameras::cameras`] is empty.
+    NoCamera,
+    /// An array's length differs from that of `reference`, the array or count
+    /// it must match. Both are named as the parameter or field they are:
+    /// `quats`, `points`, `obs_img`, `cameras`, and so on.
+    Length {
+        /// The array whose length is wrong.
+        array: &'static str,
+        /// Its length.
+        len: usize,
+        /// What it must match.
+        reference: &'static str,
+        /// The length it must have.
+        expected: usize,
+    },
+    /// An image's entry of [`BaCameras::image_camera`] is past the cameras.
+    CameraIndexOutOfRange {
+        /// The image.
+        image: usize,
+        /// The camera index it names.
+        camera: u32,
+        /// How many cameras there are.
+        num_cameras: usize,
+    },
+    /// An observation names an image past the poses.
+    ObservationImageOutOfRange {
+        /// The observation's index.
+        observation: usize,
+        /// The image it names.
+        image: u32,
+        /// How many images there are.
+        num_images: usize,
+    },
+    /// An observation names a point past the points.
+    ObservationPointOutOfRange {
+        /// The observation's index.
+        observation: usize,
+        /// The point it names.
+        point: u32,
+        /// How many points there are.
+        num_points: usize,
+    },
+    /// A camera whose own rolling shutter the projection cannot apply
+    /// (`CameraIntrinsics::check_rolling_shutter`), with the reason.
+    Camera {
+        /// The camera's index.
+        camera: usize,
+        /// Why it was refused.
+        reason: String,
+    },
+    /// An image adjustment its camera cannot take
+    /// (`CameraIntrinsics::check_adjustment`), with the reason.
+    ImageAdjustment {
+        /// The image.
+        image: usize,
+        /// Why it was refused.
+        reason: String,
+    },
+    /// A camera releases its images' rolling-shutter rates with no entry in
+    /// [`BaCameras::rolling_shutter_scanlines`] to read them on.
+    RollingShutterWithoutScanlines {
+        /// The camera's index.
+        camera: usize,
+    },
+    /// A point constraint the solve cannot honour; the variants are those
+    /// [`PointConstraints::from_arrays`] returns.
+    PointConstraint(PointConstraintsError),
+}
+
+impl std::fmt::Display for BaInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoCamera => write!(f, "the cameras list holds no camera"),
+            Self::Length {
+                array,
+                len,
+                reference,
+                expected,
+            } => write!(
+                f,
+                "{array} has {len} entries but {reference} has {expected}"
+            ),
+            Self::CameraIndexOutOfRange {
+                image,
+                camera,
+                num_cameras,
+            } => write!(
+                f,
+                "image_camera[{image}] names camera {camera}, past the {num_cameras} cameras"
+            ),
+            Self::ObservationImageOutOfRange {
+                observation,
+                image,
+                num_images,
+            } => write!(
+                f,
+                "obs_img[{observation}] names image {image}, past the {num_images} images"
+            ),
+            Self::ObservationPointOutOfRange {
+                observation,
+                point,
+                num_points,
+            } => write!(
+                f,
+                "obs_pt[{observation}] names point {point}, past the {num_points} points"
+            ),
+            Self::Camera { camera, reason } => write!(f, "camera {camera}: {reason}"),
+            Self::ImageAdjustment { image, reason } => write!(f, "image {image}: {reason}"),
+            Self::RollingShutterWithoutScanlines { camera } => write!(
+                f,
+                "camera {camera} releases its images' rolling-shutter rates without a \
+                 rolling_shutter_scanlines setting to read them on"
+            ),
+            Self::PointConstraint(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for BaInputError {}
+
+impl From<PointConstraintsError> for BaInputError {
+    fn from(e: PointConstraintsError) -> Self {
+        Self::PointConstraint(e)
+    }
+}
+
+/// `Err` unless `len` is `expected`.
+fn check_length(
+    array: &'static str,
+    len: usize,
+    reference: &'static str,
+    expected: usize,
+) -> Result<(), BaInputError> {
+    if len == expected {
+        Ok(())
+    } else {
+        Err(BaInputError::Length {
+            array,
+            len,
+            reference,
+            expected,
+        })
+    }
+}
 
 /// How a free point's representation is decided.
 ///
@@ -455,8 +621,8 @@ pub struct FreePointDecision {
 /// The camera list and the image-to-camera column only mean something
 /// together, so they travel as one argument and are checked in one place: an
 /// empty camera list, an `image_camera` whose length is not the image count,
-/// or an index past the list is a caller error, and [`bundle_adjust`] panics
-/// on it like on its other shape checks.
+/// or an index past the list is a caller error, which [`bundle_adjust`]
+/// returns as a [`BaInputError`] like its other shape checks.
 ///
 /// `image_camera` is a [`Cow`] so that [`BaCameras::shared`] can own the
 /// all-zero column it builds, while a caller with a column of its own lends it
@@ -687,62 +853,71 @@ impl<'a> BaCameras<'a> {
         }
     }
 
-    /// Panic on a camera list or column that does not describe `n_img` images,
-    /// on a camera whose rolling shutter the projection cannot apply, and on
-    /// an image adjustment its camera cannot take.
-    fn check(&self, n_img: usize) {
-        assert!(!self.cameras.is_empty(), "BaCameras holds no camera");
-        assert_eq!(
-            self.image_camera.len(),
-            n_img,
-            "image_camera and quats length mismatch"
-        );
-        if let Some(&bad) = self
+    /// `Err` on a camera list or column that does not describe `n_img` images,
+    /// on a camera whose rolling shutter the projection cannot apply, on an
+    /// image adjustment its camera cannot take, and on a camera that releases
+    /// its images' rolling-shutter rates under `opt_image_rolling_shutter`
+    /// with no scanlines setting to read them on.
+    fn check(&self, n_img: usize, opt_image_rolling_shutter: bool) -> Result<(), BaInputError> {
+        if self.cameras.is_empty() {
+            return Err(BaInputError::NoCamera);
+        }
+        let n_cam = self.cameras.len();
+        check_length("image_camera", self.image_camera.len(), "quats", n_img)?;
+        if let Some((image, &camera)) = self
             .image_camera
             .iter()
-            .find(|&&j| j as usize >= self.cameras.len())
+            .enumerate()
+            .find(|(_, &j)| j as usize >= n_cam)
         {
-            panic!(
-                "image_camera names camera {bad}, past the {} cameras",
-                self.cameras.len()
-            );
+            return Err(BaInputError::CameraIndexOutOfRange {
+                image,
+                camera,
+                num_cameras: n_cam,
+            });
         }
         if let Some(releases) = self.releases {
-            assert_eq!(
-                releases.len(),
-                self.cameras.len(),
-                "releases and cameras length mismatch"
-            );
+            check_length("releases", releases.len(), "cameras", n_cam)?;
         }
         if let Some(adjustments) = &self.image_adjustments {
-            assert_eq!(
-                adjustments.len(),
-                n_img,
-                "image_adjustments and quats length mismatch"
-            );
+            check_length("image_adjustments", adjustments.len(), "quats", n_img)?;
         }
         if let Some(scanlines) = self.rolling_shutter_scanlines {
-            assert_eq!(
+            check_length(
+                "rolling_shutter_scanlines",
                 scanlines.len(),
-                self.cameras.len(),
-                "rolling_shutter_scanlines and cameras length mismatch"
-            );
+                "cameras",
+                n_cam,
+            )?;
         }
         // An adjustment its camera cannot take is a caller error too, caught
         // here with the reason rather than deep in a round's projection.
         for (c, camera) in self.cameras.iter().enumerate() {
-            if let Err(e) = camera.check_rolling_shutter() {
-                panic!("camera {c}: {e}");
-            }
+            camera
+                .check_rolling_shutter()
+                .map_err(|reason| BaInputError::Camera { camera: c, reason })?;
         }
         if let Some(adjustments) = &self.image_adjustments {
             for (i, (a, &j)) in adjustments.iter().zip(self.image_camera.iter()).enumerate() {
                 let scanlines = self.rolling_shutter_scanlines.and_then(|s| s[j as usize]);
-                if let Err(e) = self.cameras[j as usize].check_adjustment(a, scanlines) {
-                    panic!("image {i}: {e}");
-                }
+                self.cameras[j as usize]
+                    .check_adjustment(a, scanlines)
+                    .map_err(|reason| BaInputError::ImageAdjustment { image: i, reason })?;
             }
         }
+        // The release `Lens::new` makes of the rates, decided the same way.
+        for (j, camera) in self.cameras.iter().enumerate() {
+            let release = self.releases.map_or(CameraRelease::ALL, |r| r[j]);
+            let scanlines = self.rolling_shutter_scanlines.and_then(|s| s[j]);
+            if opt_image_rolling_shutter
+                && release.image_rolling_shutter
+                && image_rolling_shutter_is_releasable(&camera.model)
+                && scanlines.is_none()
+            {
+                return Err(BaInputError::RollingShutterWithoutScanlines { camera: j });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1340,7 +1515,7 @@ fn image_spline(c: &[f64], e: [f64; 2]) -> Vec<f64> {
 /// [`CameraRelease::image_radial_bspline`] and
 /// [`CameraRelease::image_rolling_shutter`]. A camera that releases its rates
 /// needs its entry of [`BaCameras::rolling_shutter_scanlines`], which the solve
-/// reads them on, and the solve panics on one without. Each image's correction
+/// reads them on, and the solve refuses one without. Each image's correction
 /// and rates are held toward their camera's mean by the same prior, with their
 /// own widths, and that mean is held, per component, at its value at the start
 /// of each round by a stiff prior: the camera's spline and the mean radial
@@ -1360,11 +1535,25 @@ fn image_spline(c: &[f64], e: [f64; 2]) -> Vec<f64> {
 /// ladder compares before its first iteration and after each ([`COST_VALUE`]),
 /// for a caller comparing two solves as they run. It is also how this call is
 /// asked to stop, which it is between rounds and between iterations; a stopped
-/// solve returns the state it had reached rather than an error, since it has no
-/// `Result` to put one in, and the caller asks `Progress::is_cancelled` again
-/// to find out. Pass `&Progress::none()` to report nothing and never stop:
-/// every method on it is a branch on a null sink, so the solve runs exactly as
-/// it did before this parameter existed.
+/// solve returns the state it had reached rather than an error, and the caller
+/// asks `Progress::is_cancelled` again to find out. Pass `&Progress::none()` to
+/// report nothing and never stop: every method on it is a branch on a null
+/// sink, so the solve runs exactly as it did before this parameter existed.
+///
+/// # Errors
+///
+/// A [`BaInputError`], before anything is moved, when an array's length does
+/// not match what it is parallel to (`trans`, [`BaCameras::image_camera`] and
+/// [`BaCameras::image_adjustments`] to `quats`; `obs_pt`, `uv` and `protected`
+/// to `obs_img`; `point_at_infinity` and each array of `constraints` to
+/// `points`; [`BaCameras::releases`] and
+/// [`BaCameras::rolling_shutter_scanlines`] to [`BaCameras::cameras`]), when
+/// an index is out of range (an `image_camera` entry, an `obs_img` or `obs_pt`
+/// entry, an image a constraint's reference names), when the camera list is
+/// empty, a camera or image adjustment is one the projection cannot apply, a
+/// camera releases its rates with no scanlines setting, or a ranged point's
+/// distance is not strictly positive or its finite distance names no image to
+/// measure from.
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust(
     cameras: &BaCameras<'_>,
@@ -1393,37 +1582,54 @@ pub fn bundle_adjust(
     min_track: usize,
     min_obs: usize,
     progress: &Progress<'_>,
-) -> BundleAdjustment {
-    cameras.check(quats.len());
+) -> Result<BundleAdjustment, BaInputError> {
+    let n_img = quats.len();
+    let n_pt = points.len();
+    let n_obs = obs_img.len();
+    cameras.check(n_img, opt_image_rolling_shutter)?;
+    check_length("trans", trans.len(), "quats", n_img)?;
+    check_length("obs_pt", obs_pt.len(), "obs_img", n_obs)?;
+    check_length("uv", uv.len(), "obs_img", n_obs)?;
     if let Some(mask) = protected {
-        assert_eq!(
-            mask.len(),
-            obs_img.len(),
-            "protected and observation length mismatch"
-        );
+        check_length("protected", mask.len(), "obs_img", n_obs)?;
     }
+    if let Some(mask) = point_at_infinity {
+        check_length("point_at_infinity", mask.len(), "points", n_pt)?;
+    }
+    if let Some((observation, &image)) = obs_img
+        .iter()
+        .enumerate()
+        .find(|(_, &i)| i as usize >= n_img)
+    {
+        return Err(BaInputError::ObservationImageOutOfRange {
+            observation,
+            image,
+            num_images: n_img,
+        });
+    }
+    if let Some((observation, &point)) =
+        obs_pt.iter().enumerate().find(|(_, &p)| p as usize >= n_pt)
+    {
+        return Err(BaInputError::ObservationPointOutOfRange {
+            observation,
+            point,
+            num_points: n_pt,
+        });
+    }
+    let cons = Constraints::resolve(constraints, n_pt, n_img)?;
     // An all-`false` protection mask is exactly no mask.
     let protected = protected.filter(|m| m.iter().any(|&b| b));
     // No mask is an all-`false` mask. The staged loop reduces exactly to a
     // finite-only solve when nothing is marked: every direction-specific
     // branch in it is guarded by the per-point flag.
-    let n_pt = points.len();
     let no_directions: Vec<bool>;
     let is_dir: &[bool] = match point_at_infinity {
-        Some(mask) => {
-            assert_eq!(
-                mask.len(),
-                n_pt,
-                "point_at_infinity and points length mismatch"
-            );
-            mask
-        }
+        Some(mask) => mask,
         None => {
             no_directions = vec![false; n_pt];
             &no_directions
         }
     };
-    let cons = Constraints::resolve(constraints, n_pt, quats.len());
     // A ranged point's representation is its distance's: finite where the
     // distance is, a direction at `r = ∞`, whatever the caller's mask says.
     let mut is_dir_state: Vec<bool> = is_dir.to_vec();
@@ -1432,7 +1638,7 @@ pub fn bundle_adjust(
             *dir = !cons.distance[p].is_finite();
         }
     }
-    bundle_adjust_staged(
+    Ok(bundle_adjust_staged(
         cameras.cameras,
         &cameras.image_camera,
         cameras.image_adjustments.as_deref(),
@@ -1463,7 +1669,7 @@ pub fn bundle_adjust(
         min_track,
         min_obs,
         progress,
-    )
+    ))
 }
 
 // ── Points at infinity ──────────────────────────────────────────────────────
@@ -1507,15 +1713,15 @@ impl Constraints {
     /// Validate the caller's constraints against the state arrays and flatten
     /// them. A ranged point needs a strictly positive distance, and a finite
     /// one needs a reference naming images the adjustment holds.
-    fn resolve(constraints: Option<&PointConstraints>, n_pt: usize, n_img: usize) -> Self {
+    fn resolve(
+        constraints: Option<&PointConstraints>,
+        n_pt: usize,
+        n_img: usize,
+    ) -> Result<Self, BaInputError> {
         let Some(c) = constraints else {
-            return Self::all_free(n_pt);
+            return Ok(Self::all_free(n_pt));
         };
-        assert_eq!(
-            c.constraint.len(),
-            n_pt,
-            "point constraints and points mismatch"
-        );
+        check_length("constraints.constraint", c.constraint.len(), "points", n_pt)?;
         let mut out = Self::all_free(n_pt);
         for p in 0..n_pt {
             out.constraint[p] = c.constraint[p];
@@ -1524,39 +1730,49 @@ impl Constraints {
                 PointConstraint::Held => out.any_held = true,
                 PointConstraint::Ranged => {
                     out.any_ranged = true;
-                    assert_eq!(
-                        c.distance.len(),
-                        n_pt,
-                        "constraint distances and points mismatch"
-                    );
+                    check_length("constraints.distance", c.distance.len(), "points", n_pt)?;
                     let r = c.distance[p];
-                    assert!(r > 0.0, "point {p} is ranged at a non-positive distance");
+                    if r.is_nan() || r <= 0.0 {
+                        return Err(PointConstraintsError::NotADistance {
+                            point: p,
+                            distance: r,
+                        }
+                        .into());
+                    }
                     out.distance[p] = r;
                     if !r.is_finite() {
                         continue;
                     }
-                    assert_eq!(
-                        c.reference.len(),
-                        n_pt,
-                        "constraint references and points mismatch"
-                    );
-                    let reference = c.reference[p]
-                        .as_ref()
-                        .unwrap_or_else(|| panic!("point {p} is ranged at {r} with no reference"));
+                    check_length("constraints.reference", c.reference.len(), "points", n_pt)?;
+                    let reference =
+                        c.reference[p]
+                            .as_ref()
+                            .ok_or(PointConstraintsError::NoReference {
+                                point: p,
+                                distance: r,
+                            })?;
                     let mut images: Vec<usize> = Vec::new();
                     for &k in reference.images() {
-                        let k = k as usize;
-                        assert!(k < n_img, "point {p} references image {k} of {n_img}");
-                        if !images.contains(&k) {
-                            images.push(k);
+                        if k as usize >= n_img {
+                            return Err(PointConstraintsError::ReferenceOutOfRange {
+                                point: p,
+                                image: k,
+                                image_count: n_img,
+                            }
+                            .into());
+                        }
+                        if !images.contains(&(k as usize)) {
+                            images.push(k as usize);
                         }
                     }
-                    assert!(!images.is_empty(), "point {p} references no image");
+                    if images.is_empty() {
+                        return Err(PointConstraintsError::EmptyReference { point: p }.into());
+                    }
                     out.refs[p] = images;
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Whether point `p` is held, so that it owns no parameters.
@@ -4742,8 +4958,6 @@ fn bundle_adjust_staged(
     progress: &Progress<'_>,
 ) -> BundleAdjustment {
     let n_obs = obs_img.len();
-    assert_eq!(obs_pt.len(), n_obs, "obs_img and obs_pt length mismatch");
-    assert_eq!(uv.len(), n_obs, "uv and obs_img length mismatch");
     let is_prot = |k: usize| protected.is_some_and(|m| m[k]);
 
     // Direction rows are world-frame directions: normalized on input (and
@@ -4775,13 +4989,11 @@ fn bundle_adjust_staged(
             )
         })
         .collect();
-    for (j, lens) in lenses.iter().enumerate() {
-        assert!(
-            !lens.opt_image_rolling_shutter || lens.scanlines.is_some(),
-            "camera {j} releases its images' rolling-shutter rates without a \
-             rolling_shutter_scanlines setting to read them on"
-        );
-    }
+    // `BaCameras::check` refused a camera that releases its rates with no
+    // scanlines setting, so every lens that releases them has one.
+    debug_assert!(lenses
+        .iter()
+        .all(|lens| !lens.opt_image_rolling_shutter || lens.scanlines.is_some()));
     let spline_cols = lenses.iter().any(|l| l.opt_bspline);
     let pp_cols = lenses.iter().any(|l| l.opt_pp);
     let image_cols = lenses.iter().any(Lens::releases_image);
