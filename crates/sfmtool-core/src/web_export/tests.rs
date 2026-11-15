@@ -331,6 +331,45 @@ fn point_arrays_sit_at_their_offsets_and_positions_shift_back_to_the_file() {
 }
 
 #[test]
+fn a_point_at_infinity_keeps_its_stored_patch_and_one_without_is_a_splat() {
+    // Point 2 is a direction with a patch; point 9, the last, a direction
+    // without one (far_demo gives the last point no frame or bitmap).
+    let mut recon = far_demo(10);
+    for p in [2, 9] {
+        let point = &mut recon.point_set.points[p];
+        point.position = nalgebra::Point3::new(0.6, 0.0, 0.8);
+        point.w = 0.0;
+    }
+    let export = build_web_export(&recon, &WebExportOptions::default(), &Progress::none()).unwrap();
+    let scene = scene_of(&export);
+    let block = decode(&scene, "points_b64");
+    assert_eq!(scene["points"]["at_infinity"], 2);
+    assert_eq!(scene["points"]["with_patch"], 9);
+
+    let (bytes, _) = array_bytes(&scene, &block, "points.arrays", "patch_cell");
+    let cells: Vec<u32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
+        .collect();
+    assert_eq!(cells[2], 2, "the direction's patch has its own cell");
+    assert_eq!(cells[9], u32::MAX);
+    let (bytes, _) = array_bytes(&scene, &block, "points.arrays", "patch_u");
+    let u = f32s(bytes);
+    assert_eq!(u[2 * 3..3 * 3], [0.01, 0.0, 0.0], "its frame as stored");
+    assert_eq!(u[9 * 3..10 * 3], [0.0; 3]);
+    let (bytes, _) = array_bytes(&scene, &block, "points.arrays", "position");
+    assert_eq!(
+        f32s(bytes)[2 * 3..3 * 3],
+        [0.6, 0.0, 0.8],
+        "a direction as it is"
+    );
+    let (bytes, _) = array_bytes(&scene, &block, "points.arrays", "color_w");
+    assert_eq!(bytes[2 * 4 + 3], 0, "marked as a direction");
+}
+
+#[test]
 fn max_points_keeps_the_most_observed_and_records_where_they_came_from() {
     let mut recon = far_demo(40);
     let counts = &recon.point_set.observation_counts;

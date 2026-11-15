@@ -65,15 +65,21 @@ function view(buffer, arrays, name) {
   }
 }
 
+// A patch's corners are centre ± u ± v. For a point at infinity (iW = 0) the
+// centre is a unit direction and the corners are directions too: projected with
+// w = 0, so the patch keeps its direction and angular size as the camera moves,
+// and drawn just in front of the far plane like the infinity splats. A patch at
+// infinity faces every observer, so it is never culled.
 const PATCH_VS = `
-attribute vec3 iCenter; attribute vec3 iU; attribute vec3 iV; attribute float iCell;
+attribute vec3 iCenter; attribute float iW; attribute vec3 iU; attribute vec3 iV; attribute float iCell;
 uniform vec2 atlasSize; uniform float cols; uniform float tile; uniform float border; uniform float size;
 varying vec2 vUv;
 void main(){
   vec3 n = cross(iU, iV);
-  if (dot(n, cameraPosition - iCenter) <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (iW > 0.5 && dot(n, cameraPosition - iCenter) <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec3 w = iCenter + position.x * iU + position.y * iV;
-  gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
+  gl_Position = projectionMatrix * viewMatrix * vec4(w, iW > 0.5 ? 1.0 : 0.0);
+  if (iW < 0.5) gl_Position.z = gl_Position.w * 0.99999;
   float c = mod(iCell, cols); float r = floor(iCell / cols);
   vec2 st = vec2(position.x * 0.5 + 0.5, 1.0 - (position.y * 0.5 + 0.5));
   vUv = (vec2(c, r) * tile + border + st * size) / atlasSize;
@@ -88,7 +94,7 @@ uniform float worldSize; uniform float projScale; uniform float infPx; uniform f
 varying vec3 vColor;
 void main(){
   vColor = aColor;
-  if (aW > 0.5 && aHasPatch > 0.5 && showAll < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (aHasPatch > 0.5 && showAll < 0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec4 p = viewMatrix * vec4(position, aW > 0.5 ? 1.0 : 0.0);
   gl_Position = projectionMatrix * p;
   if (aW < 0.5) { gl_Position.z = gl_Position.w * 0.99999; gl_PointSize = infPx * pr; }
@@ -256,7 +262,7 @@ export async function mount(el, source, opts = {}) {
       const byPage = pa.pages.map(() => []);
       for (let i = 0; i < P; i++) {
         const cell = patchCell[i];
-        if (cell !== 0xffffffff && colorW[i * 4 + 3] > 0) { byPage[cell >>> 24].push(i); hasPatch[i] = 1; }
+        if (cell !== 0xffffffff) { byPage[cell >>> 24].push(i); hasPatch[i] = 1; }
       }
       const quad = [-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0];
       for (let page = 0; page < pa.pages.length; page++) {
@@ -272,12 +278,14 @@ export async function mount(el, source, opts = {}) {
         const g = new THREE.InstancedBufferGeometry();
         g.setAttribute("position", new THREE.Float32BufferAttribute(quad, 3));
         g.setIndex([0, 1, 2, 0, 2, 3]);
-        const c = new Float32Array(idx.length * 3), u = new Float32Array(idx.length * 3), w = new Float32Array(idx.length * 3), k = new Float32Array(idx.length);
+        const c = new Float32Array(idx.length * 3), u = new Float32Array(idx.length * 3), w = new Float32Array(idx.length * 3), k = new Float32Array(idx.length), cw = new Float32Array(idx.length);
         idx.forEach((p, j) => {
           for (let a = 0; a < 3; a++) { c[j * 3 + a] = position[p * 3 + a]; u[j * 3 + a] = patchU[p * 3 + a]; w[j * 3 + a] = patchV[p * 3 + a]; }
           k[j] = patchCell[p] & 0xffffff;
+          cw[j] = colorW[p * 4 + 3] > 0 ? 1 : 0;
         });
         g.setAttribute("iCenter", new THREE.InstancedBufferAttribute(c, 3));
+        g.setAttribute("iW", new THREE.InstancedBufferAttribute(cw, 1));
         g.setAttribute("iU", new THREE.InstancedBufferAttribute(u, 3));
         g.setAttribute("iV", new THREE.InstancedBufferAttribute(w, 3));
         g.setAttribute("iCell", new THREE.InstancedBufferAttribute(k, 1));
@@ -296,8 +304,7 @@ export async function mount(el, source, opts = {}) {
   s3.add(patchGroup);
   const havePatches = patchGroup.children.length > 0;
 
-  // Splats: points without a patch, points at infinity, and every point when
-  // patches are off.
+  // Splats: points without a patch, and every point when patches are off.
   const sg = new THREE.BufferGeometry();
   const sc = new Float32Array(P * 3), sw = new Float32Array(P);
   for (let i = 0; i < P; i++) {
