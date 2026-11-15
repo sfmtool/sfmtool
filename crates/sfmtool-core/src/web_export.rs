@@ -225,7 +225,8 @@ impl From<Cancelled> for WebExportError {
 /// Patch bitmaps come from the file when it has them, and a file with patch
 /// frames and inline keypoints but no bitmaps has them rendered from the
 /// photographs by [`render_display_patch_bitmaps`]. A point with no frame, no
-/// bitmap, an all-zero bitmap or a place at infinity is drawn as a splat.
+/// bitmap or an all-zero bitmap is drawn as a splat; a point at infinity with
+/// a patch keeps it, as SfM Explorer draws it.
 ///
 /// # Errors
 ///
@@ -577,14 +578,14 @@ fn kept_points(observation_counts: &[u32], max_points: Option<usize>) -> Vec<usi
     }
 }
 
-/// Whether point `p` is drawn as a textured patch: a finite point with a
-/// nonzero frame and a bitmap row that is not all zero.
+/// Whether point `p` is drawn as a textured patch: a point, finite or at
+/// infinity, with a nonzero frame and a bitmap row that is not all zero.
 fn has_patch(recon: &SfmrReconstruction, bitmaps: &ndarray::Array4<u8>, p: usize) -> bool {
     let set = &recon.point_set;
     let (Some(u), Some(v)) = (&set.patch_u_halfvec_xyz, &set.patch_v_halfvec_xyz) else {
         return false;
     };
-    if p >= bitmaps.shape()[0] || set.points[p].is_at_infinity() {
+    if p >= bitmaps.shape()[0] {
         return false;
     }
     let nonzero = |column: &ndarray::Array2<f32>| column.row(p).iter().any(|&x| x != 0.0);

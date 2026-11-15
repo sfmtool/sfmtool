@@ -54,8 +54,9 @@ it, or for a point at `-1` the reference view's tile, as
 [reference-view.md](../../core/patch/reference-view.md) § "The stored
 bitmap" describes);
 when no photograph can be read, the points are drawn as splats. A point with no
-frame, an all-zero bitmap row or a place at infinity is drawn as a splat either
-way.
+frame or an all-zero bitmap row is drawn as a splat either way. A point at
+infinity follows the same rule: with a patch it is drawn as its patch, and
+without one as a splat.
 
 The command prints the points written, the patches and where their bitmaps came
 from, where the thumbnails came from, the GPU memory the atlases take once
@@ -222,16 +223,19 @@ through a blob URL.
 
 What it draws, each matching SfM Explorer's rule for a reconstruction in the
 Patches point style, with its Patches button off matching the Dots style
-([gui/scene-graph.md](../../gui/scene-graph.md#point-style)), except that a
-point at infinity is always a splat here, where SfM Explorer draws one that has
-a patch as its patch:
+([gui/scene-graph.md](../../gui/scene-graph.md#point-style)):
 
 - **Patches**: one instanced mesh per atlas page, corners `centre ± u ± v`,
   textured from the atlas, a patch seen from behind not drawn.
+- **Patches at infinity**: the same quad around the point's unit direction,
+  its corners directions projected with `w = 0`, so it keeps its direction
+  and angular size as the camera moves and is drawn behind everything finite.
+  It faces every observer, so it is never culled
+  ([gui/patch-rendering.md](../../gui/patch-rendering.md#points-at-infinity)).
 - **Points without a patch, and every point when patches are off**: round
-  camera-facing splats `2 × point_size` across.
-- **Points at infinity**: 4-pixel splats projected with `w = 0`, so they keep
-  their direction as the camera moves, drawn behind everything finite.
+  camera-facing splats `2 × point_size` across, or for a point at infinity a
+  4-pixel splat projected with `w = 0`, so it keeps its direction as the
+  camera moves, drawn behind everything finite.
 - **Cameras**: frustum wireframes from the grid, and each image's thumbnail on
   the grid surface. The `start_image` camera's own frustum is hidden while the
   eye is within two frustum lengths of it, since the view opens inside it.
@@ -341,8 +345,9 @@ a tenth of the download (0.2 MB compressed against 1.6 MB).
 - Rust, in `web_export/tests.rs`: tile placement and edge-copied borders, page
   overflow onto several pages, JPEG page size, a pinhole grid on the flat far
   plane, a fisheye grid on the frustum sphere, byte-block offsets and the
-  origin shift back to `f64`, `--max-points` selection, patch resampling, the
-  start view and an unknown start image.
+  origin shift back to `f64`, a point at infinity exported with its patch and
+  one without a patch as a splat, `--max-points` selection, patch resampling,
+  the start view and an unknown start image.
 - Python, in [`tests/test_web_export.py`](../../../tests/test_web_export.py),
   on the Seoul bull ground truth into a temporary directory: `scene.json`
   against the files written and the `.sfmr`, page sizes, the non-empty
