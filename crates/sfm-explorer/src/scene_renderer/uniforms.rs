@@ -125,7 +125,7 @@ pub(super) fn recon_uniforms(
 impl SceneRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn update_uniforms(
-        &self,
+        &mut self,
         queue: &wgpu::Queue,
         camera: &ViewportCamera,
         size_log2: f32,
@@ -143,6 +143,9 @@ impl SceneRenderer {
         patch_opacity: f32,
         patch_alpha_cutoff: f32,
     ) {
+        // Whether this frame records the hidden-outline pass, read from the same
+        // selection and hover the patch uniforms below carry.
+        self.outlined_surfel = self.has_outlined_surfel(selected_point, hovered_point);
         let (w, h) = self.current_size;
         if w == 0 || h == 0 {
             return;

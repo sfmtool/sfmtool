@@ -123,7 +123,9 @@ translation, exactly like its point splat.
 
 The same vertex shader also applies the front-face cull (see
 [Blending and face culling](#blending-and-face-culling)): a back-facing patch
-returns a clipped vertex before corner expansion, so its quad drops out.
+returns a clipped vertex before corner expansion, so its quad drops out, unless
+it is highlighted, when it passes `back_facing = 1` flat to the fragment stage
+instead.
 
 ### Fragment shader
 
@@ -142,6 +144,8 @@ returns a clipped vertex before corner expansion, so its quad drops out.
    nothing, render every texel opaque — which reads better in practice than a
    carved edge; raise the slider to trim ragged borders. A fragment in the
    outline band is never discarded, so the outline traces the whole square.
+   Every fragment outside the band of a back-facing surfel is discarded, so a
+   highlighted surfel seen from behind shows its outline and no texels.
 5. Colour: the texel, tinted, then the brush's red or pale red for mask word
    `3` or `4`, else the highlight colour in the outline band. Output
    premultiplied RGBA to the color target, at the global `patch_opacity` times
@@ -188,11 +192,14 @@ wiring for free — no `PICK_TAG_PATCH`, no new pick decode branch.
   computes `outward = cross(u_halfvec, v_halfvec)` (a positive multiple of the
   normal — no normalize needed) and collapses its quad to a clipped vertex when
   `dot(outward, camera_pos − center) ≤ 0`. A point at infinity is never culled
-  (its normal faces every observer), and neither is the surfel of a selected,
-  hovered or called-out point, so its outline and texture show from behind as
-  well (see [Picking, hover, selection](#picking-hover-selection)). The camera
-  world position is supplied in `PatchUniforms.camera_pos`. Dimming/tinting back faces instead of hiding them
-  is a possible later refinement.
+  and never back-facing (its normal faces every observer). The surfel of a
+  selected, hovered or called-out point is not culled either: the test marks it
+  back-facing, a flat `back_facing` output rather than `(front_facing)`,
+  which would depend on a winding the pipeline has no convention for, and the
+  fragment stage draws its outline alone (see
+  [Picking, hover, selection](#picking-hover-selection)). The camera world
+  position is supplied in `PatchUniforms.camera_pos`. Dimming/tinting back faces
+  instead of hiding them is a possible later refinement.
 
 ---
 
@@ -414,15 +421,63 @@ and the call-out from the mask word.
   outline traces the whole square at any edge cutoff, while the texels inside
   it are carved as usual.
 - **Back faces.** A highlighted surfel is exempt from the front-face cull, so
-  a point selected from behind its patch still shows where it is.
+  a point selected from behind its patch still shows where it is. Seen from
+  behind it draws the band alone: the vertex stage marks it back-facing by the
+  cull's own sign test, and the fragment stage discards every texel inside the
+  band, so the outline reads as the patch's back rather than as its picture.
 - **Opacity.** The band is drawn opaque, whatever `patch_opacity` and the
   Track Table filter's dim alpha, and the texels inside it keep both. At
   opacity 0 the node draws dots, and the dot takes the highlight colour.
 - **Depth and picking.** The band writes depth and the point's pick id like the
-  rest of the surfel, so an occluded highlighted surfel shows no outline and a
-  click on the outline picks the point.
-- A point at infinity is outlined the same way: its surfel is never culled, and
-  the derivatives measure the band on its quad as on any other.
+  rest of the surfel, so a click on the outline picks the point, and where
+  other geometry is in front of it the depth test hides it there.
+- **Hidden outline.** Where the scene hides a highlighted surfel's band, the
+  band is drawn again over it, at `BEHIND_OPACITY` (0.45, `common.wgsl`), so a
+  highlighted point behind other geometry can still be found; see
+  [The hidden outline](#the-hidden-outline).
+- A point at infinity is outlined the same way: its surfel is never culled or
+  back-facing, and the derivatives measure the band on its quad as on any
+  other.
+
+### The hidden outline
+
+A second pass draws the part of each highlighted surfel's band that the scene
+hides, after the EDL pass and onto its output, as the target indicator, the
+track rays and the bench figure are drawn
+([point-cloud-rendering.md](point-cloud-rendering.md#render-pipeline-summary)).
+It runs before those three, so they stay on top of it. It is recorded only in a
+frame where a drawn surfel is highlighted
+(`SceneRenderer::has_outlined_surfel`, read when the frame writes its uniforms).
+
+- **Geometry.** The pass draws the same instance buffers with the same bind
+  group and the same two draws as the patch pass, through a second pair of
+  entry points in `patch.wgsl`: `vs_hidden_outline` (and
+  `vs_hidden_outline_preview` on the node a camera model proposal's preview is
+  on) collapses every surfel that is not outlined and places the rest with the
+  surfel's own placement, and `fs_hidden_outline` keeps the band and discards
+  the rest. So an outline is drawn here exactly where its surfel is: moved by
+  the preview, under the node's visibility, solo and Points eye, the point
+  style, the deleted mask, the Track Table filter's hide, the points at
+  infinity toggle, and at opacity 0 not at all, since the node then draws dots.
+- **Only where hidden.** The pass attaches the scene's hardware depth
+  read-only, and the pipelines test it `Less`
+  (`HIDDEN_OUTLINE_DEPTH_STATE`), the strict reverse of the patch pass's
+  `Greater` under reversed-Z: a fragment passes only where something nearer
+  was drawn. Where the band is the nearest thing it lands on the depth its own
+  surfel wrote and fails, so the part the patch pass already drew opaque is not
+  drawn twice. The position output is ``, so both pipelines compute
+  the same depth for a fragment. A highlighted surfel at infinity sits behind
+  every finite thing, so its band is drawn wherever finite geometry covers it.
+- **Colour and opacity.** The band's colours and precedence (`outline_color`),
+  at `BEHIND_OPACITY` in straight alpha, the opacity and blend the bench figure
+  is drawn through the scene with. The bench figure fades further with depth
+  behind the scene, over four of its half-lengths, down to a floor of 0.15;
+  the outline does not. A surfel's half-length is about the spacing of the
+  points, so nearly every hidden outline would sit at that floor, and the
+  outline is there to say where a highlighted point is however deep it lies.
+- **Nothing else changes.** The pass writes only the EDL output: no linear
+  depth, so the EDL shading is the same, no pick id, so a click on the faded
+  outline picks what is in front of it, and no depth.
 
 ---
 

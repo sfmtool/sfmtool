@@ -234,7 +234,9 @@ the Track Table filter's dimmed draw dims it, and the eraser brush's reds tint
 it. Selection, hover and the viewport's call-out (the points a camera being
 moved observes) show as an outline the surfel draws along its edge in the
 highlight colour, the selection's yellow or the hover's cyan, and the point has
-no dot in any of those states either
+no dot in any of those states either. Seen from behind, a highlighted surfel
+draws the outline alone, and where other geometry hides the outline it is drawn
+over that geometry at reduced opacity
 ([patch-rendering.md](patch-rendering.md#picking-hover-selection)).
 
 The two passes agree through two values. `NodeDisplay::points_as_patches` is

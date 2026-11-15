@@ -564,6 +564,12 @@ Pass 2:  EDL post-process
   → applies: edge darkening + supernova glow
   → writes: final display color
 
+Pass 2b: The hidden part of each highlighted surfel's outline
+  → only while a drawn surfel is highlighted; the surfels of Pass 1d and 1e
+  → reads: hw depth, attached read-only and compared Less
+  → writes: EDL output color at BEHIND_OPACITY, straight alpha
+  → no linear depth, pick ID or depth (see patch-rendering.md)
+
 Pass 3:  Target indicator
   → reads: linear depth (for occlusion testing)
   → writes: EDL output color (additive blending, no depth write)

@@ -3597,6 +3597,103 @@ fn the_points_with_a_surfel_are_marked_for_the_point_pass_to_leave_out() {
     );
 }
 
+/// The hidden-outline pass is recorded only in a frame with an outlined surfel
+/// to draw: the selected or hovered point's, or a called-out point's, on a node
+/// that draws its surfels. A highlighted point without a surfel is a dot, and a
+/// node in the Dots style, with its Points eye off or hidden draws no surfel
+/// to outline.
+#[test]
+fn the_hidden_outline_pass_waits_for_a_drawn_surfel_to_be_highlighted() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let present = [true, false, true];
+    let base = Arc::new(with_patches(demo(present.len()), 8, &present, None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut r, &device, &queue, RECON, &loaded);
+
+    assert!(!r.has_outlined_surfel(None, None), "nothing is highlighted");
+    assert!(
+        r.has_outlined_surfel(Some(point(0)), None),
+        "the selected surfel"
+    );
+    assert!(
+        r.has_outlined_surfel(None, Some(point(2))),
+        "the hovered surfel"
+    );
+    assert!(
+        !r.has_outlined_surfel(Some(point(1)), Some(point(1))),
+        "a point without a surfel"
+    );
+
+    let called_out = |r: &mut SceneRenderer, points: &[u32]| {
+        let highlighted: std::collections::HashSet<u32> = points.iter().copied().collect();
+        let marks = super::PointMarks {
+            highlighted: &highlighted,
+            ..super::PointMarks::none()
+        };
+        r.update_point_mask(&queue, RECON, &loaded.deleted_points, marks);
+    };
+    called_out(&mut r, &[1]);
+    assert!(!r.has_outlined_surfel(None, None), "a called-out dot");
+    called_out(&mut r, &[1, 2]);
+    assert!(r.has_outlined_surfel(None, None), "a called-out surfel");
+
+    for (what, display) in [
+        (
+            "the Dots style",
+            NodeDisplay {
+                points_as_patches: false,
+                ..NodeDisplay::default()
+            },
+        ),
+        (
+            "the Points eye off",
+            NodeDisplay {
+                show_points: false,
+                ..NodeDisplay::default()
+            },
+        ),
+        (
+            "the node hidden",
+            NodeDisplay {
+                visible: false,
+                ..NodeDisplay::default()
+            },
+        ),
+    ] {
+        r.set_node_display(RECON, display);
+        assert!(
+            !r.has_outlined_surfel(Some(point(0)), Some(point(2))),
+            "{what}"
+        );
+    }
+
+    // The frame's uniform write records the answer for the pass.
+    r.set_node_display(RECON, NodeDisplay::default());
+    called_out(&mut r, &[]);
+    for (selected, recorded) in [(Some(point(0)), true), (None, false)] {
+        r.update_uniforms(
+            &queue,
+            &crate::viewer_3d::ViewportCamera::default(),
+            0.0,
+            2.0,
+            true,
+            1.0,
+            [0.0; 3],
+            0.0,
+            1.0,
+            0.0,
+            selected,
+            None,
+            None,
+            0.0,
+            1.0,
+            0.0,
+        );
+        assert_eq!(r.outlined_surfel, recorded, "selected {selected:?}");
+    }
+}
+
 /// A node with nothing for the patch pass to draw marks no point, so the
 /// Patches style draws every point as a dot: no patch data at all, frames with
 /// no bitmaps, and patch data an edit has since removed.

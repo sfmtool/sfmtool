@@ -476,6 +476,18 @@ pub(super) const GBUFFER_DEPTH_STATE: wgpu::DepthStencilState = wgpu::DepthStenc
     },
 };
 
+/// The depth state of the hidden-outline pass, which draws the part of a
+/// highlighted surfel's outline the scene hides: the scene's depth, read and
+/// never written, compared `Less`, the strict reverse of
+/// [`GBUFFER_DEPTH_STATE`]'s `Greater`. Under reversed-Z a fragment passes only
+/// where something nearer than it was drawn, and fails where it lands on the
+/// depth its own surfel wrote.
+pub(super) const HIDDEN_OUTLINE_DEPTH_STATE: wgpu::DepthStencilState = wgpu::DepthStencilState {
+    depth_write_enabled: Some(false),
+    depth_compare: Some(wgpu::CompareFunction::Less),
+    ..GBUFFER_DEPTH_STATE
+};
+
 /// The three colour targets of the G-buffer, in attachment order.
 ///
 /// How the colour attachment blends is the one thing the pass-1 pipelines

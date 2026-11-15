@@ -7,7 +7,14 @@
 // (correct occlusion) but 0.0 linear depth (EDL passthrough), and write
 // PICK_TAG_POINT | point_index so clicking a patch selects its point. A
 // selected, hovered or called-out point's surfel draws an outline along its
-// quad's edge in the highlight colour, in place of the splat a dot would show.
+// quad's edge in the highlight colour, in place of the splat a dot would show,
+// and from behind draws that outline alone.
+//
+// A second pair of entry points, vs_hidden_outline and fs_hidden_outline, draws
+// the same outline again after the EDL pass, onto the EDL output, only where the
+// scene hides it, at BEHIND_OPACITY: so a highlighted surfel behind other
+// geometry still shows where it is. That pipeline tests against the scene's
+// depth without writing it and writes no linear depth and no pick id.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -53,7 +60,11 @@ struct VertexInput {
 }
 
 struct VertexOutput {
-    @builtin(position) clip_pos: vec4<f32>,
+    // Invariant, so the hidden-outline pipeline places a surfel's fragments at
+    // exactly the depth the surfel pipeline wrote for them: its strict depth
+    // test then fails wherever the outline is the nearest thing, and passes
+    // only where something nearer hides it.
+    @builtin(position) @invariant clip_pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) atlas_layer: u32,
     @location(2) @interpolate(flat) point_index: u32,
@@ -67,6 +78,30 @@ struct VertexOutput {
     @location(4) @interpolate(flat) failure: f32,
     // 1, or DIM_ALPHA for a surfel whose point the Track Table's filter dims.
     @location(5) @interpolate(flat) alpha: f32,
+    // 1 for a surfel seen from behind, which only a highlighted one is drawn
+    // as: it draws its outline and none of its texels.
+    @location(6) @interpolate(flat) back_facing: u32,
+}
+
+// Whether the instance's point is selected or hovered, which the Track Table's
+// filter never dims or hides.
+fn is_selected_or_hovered(in: VertexInput) -> bool {
+    let global = recon.point_pick_base + in.point_index;
+    return global == uniforms.selected_point_index || global == uniforms.hovered_point_index;
+}
+
+// Whether the instance's surfel is outlined: its point is selected, hovered or
+// called out (MASK_HIGHLIGHTED).
+fn is_outlined(in: VertexInput) -> bool {
+    return is_selected_or_hovered(in) || (in.alive & MASK_WORD) == MASK_HIGHLIGHTED;
+}
+
+// A vertex outside the clip volume: all four corners of a quad placed here
+// collapse to it, so the quad drops out.
+fn clipped() -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+    return out;
 }
 
 fn place(in: VertexInput) -> VertexOutput {
@@ -75,13 +110,12 @@ fn place(in: VertexInput) -> VertexOutput {
     out.mark = word;
     out.failure = 0.0;
     out.alpha = 1.0;
+    out.back_facing = 0u;
     // A deleted point's surfel collapses to a clipped vertex, the same way a
     // back-facing one does below. So does one that is not this draw's, by the
     // splats' rule (points.wgsl): a surfel the Track Table's filter rejects is
     // drawn only by the dimmed draw, unless its point is selected or hovered.
-    let global = recon.point_pick_base + in.point_index;
-    let highlighted = global == uniforms.selected_point_index
-        || global == uniforms.hovered_point_index;
+    let highlighted = is_selected_or_hovered(in);
     if word == MASK_DELETED
         || !in_this_draw(in.alive, in.dimmed_draw != 0u, highlighted, recon.filter_mode) {
         out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
@@ -111,15 +145,19 @@ fn place(in: VertexInput) -> VertexOutput {
     // the outward normal, so its sign is all we need — no normalize. (The frame
     // is right-handed: outward normal u × v; the raster reverses v, not the
     // normal — see OrientedPatch.) A point at infinity (w == 0) has a normal
-    // that faces every observer, so it is never culled. Nor is the surfel of a
-    // selected, hovered or called-out point, so its outline shows from behind
-    // too. Collapse all 4 corners to a clipped vertex so the quad drops out.
-    let outlined = highlighted || word == MASK_HIGHLIGHTED;
-    if in.w != 0.0 && !outlined {
+    // that faces every observer, so it is never culled and never back-facing.
+    // Collapse all 4 corners to a clipped vertex so the quad drops out, except
+    // for the surfel of a selected, hovered or called-out point: that one is
+    // marked back-facing instead, and the fragment stage draws its outline
+    // alone, so the point still shows where it is from behind.
+    if in.w != 0.0 {
         let outward = cross(u_halfvec, v_halfvec);
         if dot(outward, uniforms.camera_pos - centre) <= 0.0 {
-            out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
-            return out;
+            if !is_outlined(in) {
+                out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+                return out;
+            }
+            out.back_facing = 1u;
         }
     }
 
@@ -159,12 +197,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 // `mix(1, size_factor, s)`, so it keeps its angular size and ends at the size
 // Apply writes. A surfel whose point loses its position stands where it is and
 // takes the failure colour with it.
-@vertex
-fn vs_preview(
-    in: VertexInput,
-    @location(8) preview: vec4<f32>,
-    @location(9) size_factor: f32,
-) -> VertexOutput {
+fn place_preview(in: VertexInput, preview: vec4<f32>, size_factor: f32) -> VertexOutput {
     var moved = in;
     if preview.w == PREVIEW_MOVES {
         // At s = 1 exactly the target, as in points.wgsl.
@@ -197,25 +230,71 @@ fn vs_preview(
     return out;
 }
 
+@vertex
+fn vs_preview(
+    in: VertexInput,
+    @location(8) preview: vec4<f32>,
+    @location(9) size_factor: f32,
+) -> VertexOutput {
+    return place_preview(in, preview, size_factor);
+}
+
+// The hidden-outline pipeline's vertex stages: the surfel pipeline's own
+// placement, for the outlined surfels alone, so each is drawn where and as
+// the surfel pipeline drew it (moved by the preview, culled, filtered or
+// deleted alike). Every other surfel collapses to a clipped vertex.
+@vertex
+fn vs_hidden_outline(in: VertexInput) -> VertexOutput {
+    if !is_outlined(in) {
+        return clipped();
+    }
+    return place(in);
+}
+
+@vertex
+fn vs_hidden_outline_preview(
+    in: VertexInput,
+    @location(8) preview: vec4<f32>,
+    @location(9) size_factor: f32,
+) -> VertexOutput {
+    if !is_outlined(in) {
+        return clipped();
+    }
+    return place_preview(in, preview, size_factor);
+}
+
 struct FragOutput {
     @location(0) color: vec4<f32>,
     @location(1) linear_depth: f32,
     @location(2) pick_id: u32,
 }
 
+// How far a fragment is from the quad's nearest edge, in screen pixels: each
+// patch coordinate over the length of its screen-space gradient, so the
+// outline keeps its width in pixels at any distance and also where the quad is
+// foreshortened. Derivatives are defined only in uniform control flow, so both
+// fragment stages call this first, before any discard or branch.
+fn edge_distance_px(uv: vec2<f32>) -> f32 {
+    let du = length(vec2<f32>(dpdx(uv.x), dpdy(uv.x)));
+    let dv = length(vec2<f32>(dpdx(uv.y), dpdy(uv.y)));
+    return min(min(uv.x, 1.0 - uv.x) / du, min(uv.y, 1.0 - uv.y) / dv);
+}
+
+// The colour of a highlighted surfel's outline: the splat's precedence, the
+// eraser brush's reds first, then the selection's yellow over the hover's cyan,
+// which a call-out takes too.
+fn outline_color(mark: u32, selected: bool) -> vec3<f32> {
+    if mark == MASK_PAINTED {
+        return BRUSH_PAINTED_COLOR;
+    } else if mark == MASK_UNDER_BRUSH {
+        return BRUSH_UNDER_COLOR;
+    }
+    return select(HOVERED_COLOR, SELECTED_COLOR, selected);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
-    // How far this fragment is from the quad's nearest edge, in screen pixels:
-    // each patch coordinate over the length of its screen-space gradient, so
-    // the outline keeps its width in pixels at any distance and also where the
-    // quad is foreshortened. Derivatives are defined only in uniform control
-    // flow, so they come first, before any discard or branch.
-    let du = length(vec2<f32>(dpdx(in.uv.x), dpdy(in.uv.x)));
-    let dv = length(vec2<f32>(dpdx(in.uv.y), dpdy(in.uv.y)));
-    let edge_px = min(
-        min(in.uv.x, 1.0 - in.uv.x) / du,
-        min(in.uv.y, 1.0 - in.uv.y) / dv,
-    );
+    let edge_px = edge_distance_px(in.uv);
 
     // Compute atlas UV and layer from grid position
     let page = in.atlas_layer / uniforms.patches_per_page;
@@ -227,8 +306,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     let texel = textureSample(patch_texture, patch_sampler, atlas_uv, page);
 
     // A selected, hovered or called-out surfel draws a band along its quad's
-    // edge in the highlight colour: the splat's precedence, the selection's
-    // yellow over the hover's cyan, which a call-out takes too.
+    // edge in the highlight colour.
     let selected = in.point_index == uniforms.selected_point_index;
     let hovered = in.point_index == uniforms.hovered_point_index || in.mark == MASK_HIGHLIGHTED;
     let outline = (selected || hovered) && edge_px < OUTLINE_WIDTH_PX;
@@ -236,8 +314,10 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // The bitmap alpha is per-pixel cross-view confidence, not opacity — treat
     // it as coverage so ragged edges and unfilled corners drop out and the quad
     // reads as a fitted surfel, not a hard rectangle. The outline is exempt, so
-    // it traces the whole square whatever the edge cutoff carves from it.
-    if !outline && texel.a < uniforms.alpha_cutoff {
+    // it traces the whole square whatever the edge cutoff carves from it. A
+    // surfel seen from behind, which only a highlighted one is drawn as, keeps
+    // its outline and none of its texels.
+    if !outline && (texel.a < uniforms.alpha_cutoff || in.back_facing != 0u) {
         discard;
     }
 
@@ -249,12 +329,12 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     rgb = mix(rgb, FAILURE_COLOR, in.failure);
     // The eraser brush's reds replace the texel outright, as on a splat, and
     // come before the highlight there too, outline included.
-    if in.mark == MASK_PAINTED {
+    if outline {
+        rgb = outline_color(in.mark, selected);
+    } else if in.mark == MASK_PAINTED {
         rgb = BRUSH_PAINTED_COLOR;
     } else if in.mark == MASK_UNDER_BRUSH {
         rgb = BRUSH_UNDER_COLOR;
-    } else if outline {
-        rgb = select(HOVERED_COLOR, SELECTED_COLOR, selected);
     }
     // Premultiplied alpha: hard coverage from the discard above; the global
     // patch_opacity uniform is the translucency source, and the filter's dim
@@ -267,4 +347,21 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // through to whatever it occludes.
     out.pick_id = select(PICK_TAG_POINT | in.point_index, PICK_TAG_NONE, recon.pickable == 0u);
     return out;
+}
+
+// The hidden part of a highlighted surfel's outline, drawn after the EDL pass
+// onto its output. The pipeline's depth test, `Less` against the scene's
+// reversed-Z depth with no write, passes only where something nearer than the
+// outline was drawn, so the part fs_main drew in full is not drawn again. The
+// band is the one fs_main draws, in its colours, at BEHIND_OPACITY in place of
+// opaque, and straight alpha, as the bench figure draws through the scene. It
+// writes the colour alone: no linear depth, which would change the EDL pass's
+// shading, and no pick id, which would change what a click picks.
+@fragment
+fn fs_hidden_outline(in: VertexOutput) -> @location(0) vec4<f32> {
+    if edge_distance_px(in.uv) >= OUTLINE_WIDTH_PX {
+        discard;
+    }
+    let selected = in.point_index == uniforms.selected_point_index;
+    return vec4<f32>(outline_color(in.mark, selected), BEHIND_OPACITY);
 }

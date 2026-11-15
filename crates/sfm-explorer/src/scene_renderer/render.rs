@@ -79,18 +79,19 @@ impl SceneRenderer {
     }
 
     /// Draw every drawn node's patch surfels as the draw of `vertices`, by
-    /// the rule of [`Self::draw_points`].
+    /// the rule of [`Self::draw_points`], through `pipelines`: the surfel
+    /// pipeline and its preview variant, or the hidden-outline pair, which
+    /// read the same buffers and bind group.
     fn draw_patches<'p>(
         &self,
         pass: &mut wgpu::RenderPass<'p>,
+        pipelines: (&Option<wgpu::RenderPipeline>, &Option<wgpu::RenderPipeline>),
         vertices: Range<u32>,
         dimmed_only: bool,
     ) {
-        if let (Some(pipeline), Some(preview_pipeline), Some(corners)) = (
-            &self.patch_pipeline,
-            &self.patch_preview_pipeline,
-            &self.splat_corner_buffer,
-        ) {
+        if let ((Some(pipeline), Some(preview_pipeline)), Some(corners)) =
+            (pipelines, &self.splat_corner_buffer)
+        {
             pass.set_vertex_buffer(0, corners.slice(..));
             // A node draws surfels under its points' group eye, when its
             // style asks for them; the point pass leaves out the splats they
@@ -238,6 +239,7 @@ impl SceneRenderer {
     /// Pass 0:  Background image (camera view only) → edl_output
     /// Pass 1:  Point splats + frustums → color + linear depth textures
     /// Pass 2:  EDL post-process → edl_output (Load or Clear depending on Pass 0)
+    /// Pass 2b: The hidden part of each highlighted surfel's outline → edl_output
     pub(crate) fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -451,7 +453,12 @@ impl SceneRenderer {
             // point. The global Points toggle governs it as it governs the
             // splats: surfels are a way of drawing points.
             if show_points {
-                self.draw_patches(&mut pass, FIRST_DRAW, false);
+                self.draw_patches(
+                    &mut pass,
+                    (&self.patch_pipeline, &self.patch_preview_pipeline),
+                    FIRST_DRAW,
+                    false,
+                );
             }
 
             // ── Pass 1e: The Track Table filter's dimmed draw ──
@@ -463,7 +470,12 @@ impl SceneRenderer {
             // so a dimmed point is still picked where it is in front.
             if show_points {
                 self.draw_points(&mut pass, DIMMED_DRAW, true);
-                self.draw_patches(&mut pass, DIMMED_DRAW, true);
+                self.draw_patches(
+                    &mut pass,
+                    (&self.patch_pipeline, &self.patch_preview_pipeline),
+                    DIMMED_DRAW,
+                    true,
+                );
             }
         }
 
@@ -498,5 +510,62 @@ impl SceneRenderer {
                 pass.draw(0..3, 0..1); // fullscreen triangle
             }
         }
+
+        // ── Pass 2b: The hidden part of each highlighted surfel's outline ──
+        // After the EDL pass, so it is drawn over the shaded scene rather than
+        // shaded with it, and only in a frame with an outlined surfel to draw.
+        if show_points && self.outlined_surfel {
+            self.render_hidden_outlines(encoder, edl_output_view);
+        }
+    }
+
+    /// Draw the part of each highlighted surfel's outline the scene hides, at
+    /// the reduced opacity a mark drawn through the scene takes, onto the EDL
+    /// output (`specs/gui/patch-rendering.md` § "Picking, hover, selection").
+    ///
+    /// The surfels are drawn again through the hidden-outline pipelines, which
+    /// keep the outlined ones alone, with the patch pass's two draws and its
+    /// per-node rule, so an outline is drawn here exactly where its surfel was
+    /// drawn. The pass attaches the scene's hardware depth read-only and the
+    /// pipelines test it `Less`: under reversed-Z that passes only where
+    /// something nearer than the outline was drawn, and fails where the outline
+    /// itself was the nearest thing, which the patch pass drew at full opacity
+    /// already. It attaches neither the linear depth nor the pick buffer, so it
+    /// changes neither the EDL shading nor what a click picks.
+    fn render_hidden_outlines(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        edl_output_view: &wgpu::TextureView,
+    ) {
+        let Some(hw_depth_view) = &self.hw_depth_view else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hidden outline pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: edl_output_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load, // preserve the EDL output
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            // No depth ops: the scene's depth is read, never written.
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: hw_depth_view,
+                depth_ops: None,
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        let pipelines = (
+            &self.patch_hidden_outline_pipeline,
+            &self.patch_hidden_outline_preview_pipeline,
+        );
+        // Both draws: a called-out point the Track Table's filter dims is
+        // drawn by the dimmed draw alone, as its surfel is.
+        self.draw_patches(&mut pass, pipelines, FIRST_DRAW, false);
+        self.draw_patches(&mut pass, pipelines, DIMMED_DRAW, true);
     }
 }

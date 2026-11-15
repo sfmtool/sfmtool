@@ -415,15 +415,17 @@ fn a_highlighted_point_with_a_surfel_shows_as_its_outline_and_not_its_dot() {
         points.lines().any(|l| l.trim() == line),
         "points.wgsl does not declare `{line}`"
     );
-    // The outlined surfel is exempt from the back-face cull, so the outline
-    // shows from behind, and its band is exempt from the edge cutoff's
-    // discard, so it traces the whole square.
+    // The outlined surfel is not culled as a back face but marked as one, and
+    // from behind it keeps its outline band and discards the texels inside it.
+    // The band is exempt from the edge cutoff's discard, so it traces the
+    // whole square. Only a finite patch is ever back-facing.
     let patch = include_str!("../../shaders/patch.wgsl");
     for line in [
-        "let outlined = highlighted || word == MASK_HIGHLIGHTED;",
-        "if in.w != 0.0 && !outlined {",
+        "if in.w != 0.0 {",
+        "if !is_outlined(in) {",
+        "out.back_facing = 1u;",
         "let outline = (selected || hovered) && edge_px < OUTLINE_WIDTH_PX;",
-        "if !outline && texel.a < uniforms.alpha_cutoff {",
+        "if !outline && (texel.a < uniforms.alpha_cutoff || in.back_facing != 0u) {",
         "let opacity = select(uniforms.patch_opacity * in.alpha, 1.0, outline);",
     ] {
         assert!(
@@ -431,6 +433,117 @@ fn a_highlighted_point_with_a_surfel_shows_as_its_outline_and_not_its_dot() {
             "patch.wgsl does not declare `{line}`"
         );
     }
+}
+
+#[test]
+fn the_hidden_outline_is_the_surfels_band_at_the_bench_figures_behind_opacity() {
+    let patch = include_str!("../../shaders/patch.wgsl");
+    for line in [
+        // The surfel pipeline's own placement, for the outlined surfels alone,
+        // through the same invariant position, so a fragment lands on the
+        // depth its surfel wrote and the strict depth test drops it there.
+        "@builtin(position) @invariant clip_pos: vec4<f32>,",
+        "return place(in);",
+        "return place_preview(in, preview, size_factor);",
+        // The same band, in the same colours, at the opacity the bench figure
+        // is drawn through the scene at.
+        "if edge_distance_px(in.uv) >= OUTLINE_WIDTH_PX {",
+        "return vec4<f32>(outline_color(in.mark, selected), BEHIND_OPACITY);",
+        "rgb = outline_color(in.mark, selected);",
+    ] {
+        assert!(
+            patch.lines().any(|l| l.trim() == line),
+            "patch.wgsl does not declare `{line}`"
+        );
+    }
+    // The opacity is written once, in common.wgsl, for both of its readers.
+    let common = include_str!("../../shaders/common.wgsl");
+    let line = "const BEHIND_OPACITY: f32 = 0.45;";
+    assert!(
+        common.lines().any(|l| l.trim() == line),
+        "common.wgsl does not declare `{line}`"
+    );
+    let bench = include_str!("../../shaders/bench_track.wgsl");
+    assert!(
+        bench.contains("BEHIND_OPACITY *") && !bench.contains("const BEHIND_OPACITY"),
+        "bench_track.wgsl does not read the shared BEHIND_OPACITY"
+    );
+}
+
+#[test]
+fn the_hidden_outline_pipelines_draw_onto_the_edl_output_over_the_scenes_depth_read_only() {
+    use super::super::gpu_types::{
+        EDL_OUTPUT_FORMAT, GBUFFER_DEPTH_STATE, HIDDEN_OUTLINE_DEPTH_STATE,
+    };
+    // Under reversed-Z the scene keeps the greater depth, so the strict
+    // reverse passes only where something nearer was drawn, and the pass
+    // writes no depth of its own.
+    assert_eq!(
+        GBUFFER_DEPTH_STATE.depth_compare,
+        Some(wgpu::CompareFunction::Greater)
+    );
+    assert_eq!(
+        HIDDEN_OUTLINE_DEPTH_STATE.depth_compare,
+        Some(wgpu::CompareFunction::Less)
+    );
+    assert_eq!(HIDDEN_OUTLINE_DEPTH_STATE.depth_write_enabled, Some(false));
+
+    // Both pipelines set inside a pass assembled as `render_hidden_outlines`
+    // assembles it: the EDL output as the one colour target, and the scene's
+    // depth attached read-only. A pipeline that writes the G-buffer's other
+    // targets, or depth, is a validation error here.
+    let (device, queue) = device();
+    let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let attachment = |label, format| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    };
+    let edl_output = attachment("edl output", EDL_OUTPUT_FORMAT);
+    let hw_depth = attachment("hw depth", HW_DEPTH_FORMAT);
+    let patch = super::patch::create(&device);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hidden outline contract"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &edl_output,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &hw_depth,
+                depth_ops: None,
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&patch.hidden_outline_pipeline);
+        pass.set_pipeline(&patch.hidden_outline_preview_pipeline);
+    }
+    queue.submit([encoder.finish()]);
+    let error = pollster::block_on(errors.pop());
+    assert!(
+        error.is_none(),
+        "a hidden-outline pipeline disagrees with the pass it is drawn in: {error:?}"
+    );
 }
 
 #[test]
