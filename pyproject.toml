@@ -80,9 +80,14 @@ select = ["E4", "E7", "E9", "F"]
 testpaths = ["tests"]
 # tee-sys avoids fd-level dup that breaks Click CliRunner on Windows + Python 3.14
 # (pytest's default FDCapture corrupts Click's preserved fileno; see pytest #2465 / #13720).
-# --durations surfaces the slowest tests/fixtures (setup/call/teardown) at the
-# end of every run, including in CI, to keep an eye on suite hot spots.
-addopts = "--capture=tee-sys --durations=15"
+# --durations=0 --durations-min=10 lists every setup, call and teardown phase
+# that took 10 s or more at the end of every run, including in CI. A fixed
+# slowest 15 cut off at 18-21 s on the Linux coverage job, reached down to
+# 7-12 s phases on macOS and Windows, and on a slow runner listed only phases
+# of 59 s or more. With a threshold, the list's length shows how slow a run
+# was, and 10 s catches a test well before it becomes a problem
+# (specs/STANDARDS.md § "Tests cost what their assertions need"). Pass --durations-min=0 to see every phase's time.
+addopts = "--capture=tee-sys --durations=0 --durations-min=10"
 
 [tool.coverage.run]
 # parallel + multiprocessing tracks code that runs inside ProcessPoolExecutor

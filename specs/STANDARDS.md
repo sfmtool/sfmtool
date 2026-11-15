@@ -730,17 +730,19 @@ a time limit too, so a hang stops it rather than leaving it idle.
 A pull request that adds a test or changes code that a test runs reports, in
 its Testing section, the time of each test it added and the before and after
 times of each existing test whose time it changed by more than a second, read
-from the durations list that `pixi run test` prints. Whole-suite times can
-differ by up to a factor of two between runs on one machine, so compare
-per-test times, and repeat a comparison before reporting it.
+from the durations list that `pixi run test -- --durations-min=0` prints.
+Whole-suite times can differ by up to a factor of two between runs on one
+machine, so compare per-test times, and repeat a comparison before reporting
+it.
 
-How to check: `pyproject.toml` sets `--durations=15`, so pytest prints the 15
-slowest setup, call and teardown phases at the end of every run
-(`pixi run test -- --durations=0` prints all of them). A test, or a fixture's
-setup, that takes more than 5 seconds in `pixi run test` on a developer
-machine gets a closer look, and so does a Rust test that `cargo test` reports
-as "has been running for over 60 seconds" in CI's `test-linux-rust` job. Look
-for:
+How to check: `pyproject.toml` sets `--durations=0 --durations-min=10`, so
+pytest prints every setup, call and teardown phase that took 10 seconds or
+more at the end of every run (`pixi run test -- --durations-min=0` prints all
+of them, and `--durations-min=5` those of 5 seconds or more). A test, or a
+fixture's setup, that takes more than 5 seconds in `pixi run test` on a
+developer machine gets a closer look, and so does a Rust test that `cargo
+test` reports as "has been running for over 60 seconds" in CI's
+`test-linux-rust` job. Look for:
 
 - Phases over 5 seconds in the durations list.
 - Several tests that run the same expensive call on the same input.
