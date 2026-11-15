@@ -630,8 +630,12 @@ node with patch data the line `Style [Dots|Patches]`
 - On a node with patch data, the **point style selector** is a line of its own
   under the row, indented as the row's children are: a weak `Style` and two
   selectable buttons, `Dots` and `Patches`, the node's own style lit, a click on
-  the other choosing it (see "Point style"). It is drawn whether or not the
-  group is expanded, after the selection and hover rows when it is. There is no
+  the other choosing it (see "Point style"). It is drawn directly under the
+  row whether or not the group is expanded, so when it is, the selection and
+  hover rows come after it: the selector is a control of the row, not a row of
+  the selection list. The group is built from `CollapsingState`'s toggle button
+  and `show_body_indented` rather than `show_header(..).body(..)`, which leaves
+  no place between the header and the body. There is no
   separate Patches row. Its own line because the word `Points`, the `∞` toggle
   and the two buttons do not fit one line of the panel's default width (227 px
   in a 1280 x 720 window) without eliding the word.
@@ -1536,7 +1540,9 @@ bundle from `retain_nodes` on the next frame.
   Dots/Patches selector is drawn under the Points row on a node with patch data
   and on no other; at the panel's default width (227 px) both of its buttons
   and the `∞` toggle lie inside the panel and the word `Points` is drawn whole,
-  left of the toggle; a click on the other style sets it and
+  left of the toggle; with the group expanded and a point selected, the
+  selector's line lies between the Points row and the `selected:` row; a click
+  on the other style sets it and
   logs `Point style of <label>: Dots`, and a click on the style in force logs
   nothing (`scene_graph/tests.rs`). In the renderer, exactly the points the
   atlas packed a surfel for carry `MASK_HAS_SURFEL` after a fresh upload, after

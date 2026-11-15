@@ -1209,10 +1209,14 @@ fn show_bench_stage_group(
     });
 }
 
-/// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞] [Dots|Patches]`, expanding to
-/// the selection and hover rows. The point style selector is drawn only on a
-/// node that carries patch data, the one kind of node on which the two styles
-/// draw differently.
+/// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, then the line
+/// `Style [Dots|Patches]` directly under it, then, expanded, the selection and
+/// hover rows. The point style selector is drawn only on a node that carries
+/// patch data, the one kind of node on which the two styles draw differently.
+///
+/// Built from `CollapsingState`'s parts rather than `show_header(..).body(..)`
+/// so the selector line sits between the header and the body: it is a control
+/// of the Points row, not one more row of the selection list.
 fn show_points_group(
     ui: &mut egui::Ui,
     node: &mut SceneNode,
@@ -1220,13 +1224,19 @@ fn show_points_group(
     out: &mut TreeOutput,
 ) {
     let at_infinity = node.infinity_point_count();
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         row_id(node.id, "points"),
         false,
     );
     let id = node.id;
-    let header = state.show_header(ui, |ui| {
+    let header = ui.horizontal(|ui| {
+        // As `CollapsingState::show_header` lays its toggle out: the button
+        // takes the full indent width.
+        let spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing.x = 0.0;
+        state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+        ui.spacing_mut().item_spacing = spacing;
         ui.set_height(ROW_HEIGHT);
         let eye = eye_toggle(
             ui,
@@ -1271,7 +1281,26 @@ fn show_points_group(
             });
         });
     });
-    header.body(|ui| {
+    // The point style selector, on its own line directly under the Points
+    // row: the row and two word buttons do not fit one line of the panel's
+    // default width without eliding the word "Points" away.
+    if node.has_patch_data() {
+        ui.indent(row_id(id, "point_style"), |ui| {
+            ui.horizontal(|ui| {
+                ui.set_height(ROW_HEIGHT);
+                ui.add(egui::Label::new(egui::RichText::new("Style").weak()).selectable(false));
+                let before = node.point_style;
+                for (style, response) in point_style_selector(ui, &mut node.point_style) {
+                    out.hit(point_style_row_id(id, style), response);
+                }
+                if node.point_style != before {
+                    out.log
+                        .record(Kind::Scene, point_style_text(&node.label, node.point_style));
+                }
+            });
+        });
+    }
+    state.show_body_indented(&header.response, ui, |ui| {
         let mut any = false;
         // Both rows are conditional, so both are salted: without that the hover
         // row's identity would depend on whether a selection row happened to be
@@ -1313,25 +1342,6 @@ fn show_points_group(
             ui.weak("No point selected");
         }
     });
-    // The point style selector, on its own line under the Points row: the
-    // Points row and two word buttons do not fit one line of the panel's
-    // default width without eliding the word "Points" away.
-    if node.has_patch_data() {
-        ui.indent(row_id(id, "point_style"), |ui| {
-            ui.horizontal(|ui| {
-                ui.set_height(ROW_HEIGHT);
-                ui.add(egui::Label::new(egui::RichText::new("Style").weak()).selectable(false));
-                let before = node.point_style;
-                for (style, response) in point_style_selector(ui, &mut node.point_style) {
-                    out.hit(point_style_row_id(id, style), response);
-                }
-                if node.point_style != before {
-                    out.log
-                        .record(Kind::Scene, point_style_text(&node.label, node.point_style));
-                }
-            });
-        });
-    }
 }
 
 /// `Points (1,204,551 · 12 at ∞)`, cut to the width left of the row: the

@@ -562,8 +562,12 @@ fn the_point_style_selector_stays_inside_a_narrow_panel() {
         .hit_rect(row_id(id, "points_infinity"))
         .expect("the ∞ toggle");
     assert!(
-        label.right() <= infinity.left() && infinity.right() <= width,
+        label.right() <= infinity.left(),
         "the Points label at {label:?} runs under the ∞ toggle at {infinity:?}"
+    );
+    assert!(
+        infinity.right() <= width,
+        "the ∞ toggle at {infinity:?} ends past the {width} px panel"
     );
     // The word is drawn whole: the painted text starts with it, and the label
     // is at least as wide as the word laid out in the row's font.
@@ -582,6 +586,42 @@ fn the_point_style_selector_stays_inside_a_narrow_panel() {
         label.width() >= word,
         "the Points label {text:?} is {} px wide, narrower than the word ({word} px)",
         label.width()
+    );
+}
+
+/// The selector's line is a control of the Points row, so it sits directly
+/// under the row even with the group expanded: between the Points row and the
+/// `selected:` row, not after the selection list.
+#[test]
+fn the_point_style_line_sits_between_the_points_row_and_the_selection_rows() {
+    let mut recon = recon_named(32, 8, "IMG");
+    give_patches(&mut recon, true);
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/patched.sfmr"),
+        recon,
+    ));
+    let id = state.scene[0].id;
+    state.select_point(PointRef::new(id, 5));
+    let ctx = egui::Context::default();
+    set_open(&ctx, row_id(id, "points"), true);
+    let mut panel = SceneGraphPanel::new();
+    for _ in 0..2 {
+        run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    }
+    let header = panel
+        .hit_rect(row_id(id, "points_label"))
+        .expect("the Points row");
+    let style = panel
+        .hit_rect(point_style_row_id(id, PointStyle::Dots))
+        .expect("the Dots button");
+    let selected = panel
+        .hit_rect(row_id(id, "point_selected"))
+        .expect("the selected: row");
+    assert!(
+        header.bottom() <= style.top() && style.bottom() <= selected.top(),
+        "the Style line at {style:?} is not between the Points row at {header:?} \
+         and the selected: row at {selected:?}"
     );
 }
 
