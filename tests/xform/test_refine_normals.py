@@ -4,7 +4,7 @@
 """Tests for the ``--refine-normals`` xform operation.
 
 Covers the option's value (empty, or ``method=``), the summary lines of both
-steps, and runs over the seoul_bull ground truth and an ``embedded_patches`` conversion of the
+steps, and runs over points of the seoul_bull ground truth and an ``embedded_patches`` conversion of the
 seoul_bull workspace: finite points' normals turn, no position or keypoint
 moves, points at infinity are untouched, and bitmaps are rendered again only
 where the reconstruction stores them. See
@@ -12,9 +12,10 @@ specs/cli/reconstruction/xform/refine-normals-command.md.
 """
 
 import faulthandler
+import io
 import signal
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from unittest.mock import patch
 
 import click
@@ -231,14 +232,23 @@ def test_pairwise_flow_summary_with_nothing_turned_has_no_median():
 
 @pytest.fixture(scope="module")
 def ground_truth_refined():
-    """The seoul_bull ground truth (embedded patches, 14 points at infinity),
-    read in place and never written, and the transform's output."""
-    recon = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
-    return recon, RefineNormalsTransform().apply(recon)
+    """Every eighth point of the seoul_bull ground truth
+    (``SEOUL_BULL_POINT_STEP``; embedded patches, 35 points, 3 of them at
+    infinity), read in place and never written, the transform's output and
+    what the run printed. The transform refines each point on its own, so
+    the sample's points get the answers a run over all 280 gives them, at
+    about an eighth of the cost."""
+    recon = every_nth_point(
+        SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH)), SEOUL_BULL_POINT_STEP
+    )
+    printed = io.StringIO()
+    with redirect_stdout(printed):
+        out = RefineNormalsTransform().apply(recon)
+    return recon, out, printed.getvalue()
 
 
 def test_refine_normals_turns_finite_normals_and_moves_nothing(ground_truth_refined):
-    recon, out = ground_truth_refined
+    recon, out, _ = ground_truth_refined
     assert out.point_count == recon.point_count
     assert out.observation_count == recon.observation_count
     np.testing.assert_array_equal(
@@ -255,14 +265,15 @@ def test_refine_normals_turns_finite_normals_and_moves_nothing(ground_truth_refi
     before = np.asarray(recon.normals)[finite]
     after = np.asarray(out.normals)[finite]
     turned = (after != before).any(axis=1)
-    # Most finite points are turned (258 of 266 on this file).
+    # Most finite points are turned (31 of the sample's 32, 263 of the ground
+    # truth's 266).
     assert turned.mean() > 0.8
     cos_turn = np.clip((after[turned] * before[turned]).sum(axis=1), -1.0, 1.0)
     assert np.degrees(np.arccos(cos_turn)).max() > 5.0
 
 
 def test_refine_normals_leaves_points_at_infinity_untouched(ground_truth_refined):
-    recon, out = ground_truth_refined
+    recon, out, _ = ground_truth_refined
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
     assert at_infinity.any()
     np.testing.assert_array_equal(
@@ -273,27 +284,36 @@ def test_refine_normals_leaves_points_at_infinity_untouched(ground_truth_refined
     )
 
 
-def test_refine_normals_prints_its_summary(capsys):
-    recon = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
-    RefineNormalsTransform().apply(recon)
-    out = capsys.readouterr().out
-    assert "Refining the normals of 280 points across 17 images" in out
+def test_refine_normals_prints_its_summary(ground_truth_refined):
+    _, _, out = ground_truth_refined
+    assert "Refining the normals of 35 points across 17 images" in out
     assert "  Turned " in out
     assert "median turn" in out
     assert "mean agreement" in out
-    assert "14 at infinity skipped" in out
+    assert "3 at infinity skipped" in out
+
+
+# Point 24 of the ground truth, which the pairwise-flow normal turns in about
+# a second of one thread, and point 86, which is at infinity. Point 24 is far
+# from the step's bars: its sigma is 1.0 degree against a bar of 10, and it
+# stays turned when any one bar is tightened: sigma to 3 degrees, mean
+# chi-squared to 0.7 (from 2), agreement to 1 sigma and 1.5 degrees (from 3
+# and 5), or the angle from the mean viewing direction to 55 degrees (from
+# 80).
+_PAIRWISE_FLOW_POINTS = [24, 86]
 
 
 def test_pairwise_flow_turns_finite_normals_and_skips_infinity(capsys):
-    """``method="pairwise_flow"`` reaches the binding: on every seventieth point
-    of the ground truth, and point 86, which is at infinity, the run writes
-    normals other than the grown plane's, moves no point, leaves the point at
+    """``method="pairwise_flow"`` reaches the binding: on point 24 of the
+    ground truth, and point 86, which is at infinity, the run writes a normal
+    other than the grown plane's, moves no point, leaves the point at
     infinity alone and prints the pairwise-flow summary. The pairwise-flow
-    normal costs seconds of one thread per point, so the run reads 5 of the
-    280 points."""
-    recon = every_nth_point(
-        SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH)), 70, keep=[86]
-    )
+    normal costs seconds of one thread per point, so the run reads one finite
+    point, which it turns."""
+    ground_truth = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
+    mask = np.zeros(ground_truth.point_count, dtype=bool)
+    mask[_PAIRWISE_FLOW_POINTS] = True
+    recon = ground_truth.filter_points_by_mask(mask)
     at_infinity = np.asarray(recon.point_is_at_infinity, dtype=bool)
     assert at_infinity.sum() == 1
 
@@ -301,7 +321,8 @@ def test_pairwise_flow_turns_finite_normals_and_skips_infinity(capsys):
     printed = capsys.readouterr().out
     grown = RefineNormalsTransform().apply(recon)
 
-    assert "Refining the normals of 5 points across 17 images" in printed
+    assert "Refining the normals of 2 points across 17 images" in printed
+    assert "  Turned 1 of 1 normals" in printed
     assert "  Turned " in printed
     assert "from a single pair" in printed
     assert " undetermined, " in printed

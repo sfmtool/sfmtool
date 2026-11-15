@@ -30,7 +30,7 @@ from sfmtool.xform import (
 )
 from sfmtool.xform._images import load_workspace_images
 
-from ..conftest import SEOUL_BULL_POINT_STEP, every_nth_point
+from ..conftest import SEOUL_BULL_GROUND_TRUTH, SEOUL_BULL_POINT_STEP, every_nth_point
 
 RESOLUTION = 16
 
@@ -201,18 +201,50 @@ def test_refine_keypoints_keeps_stored_references(embedded):
     np.testing.assert_array_equal(bare_refs[stored < 0], refs[stored < 0])
 
 
-def test_refine_normals_keeps_stored_references(embedded):
-    stored = _other_references(embedded)
-    recon = embedded.clone_with_changes(reference_observations=stored)
+# The point of the seoul_bull ground truth that no view joins in the
+# grown-plane normal with 16x16 bitmaps, with its own reference observation
+# or the next one, so the run declines it and keeps its columns. It is the
+# only finite point the run declines once every reference has moved. The
+# ground truth is a checked-in file, so unlike the workspace's SIFT tracks
+# this does not differ between platforms.
+_DECLINED_GROUND_TRUTH_POINT = 40
+
+
+def test_refine_normals_keeps_stored_references():
+    """On every eighth point of the seoul_bull ground truth
+    (``SEOUL_BULL_POINT_STEP``), point 40 among them, with 16x16 bitmaps and
+    the references of :func:`_other_references`, point 40's moved too. So
+    the run both rewrites and declines a finite point whose reference
+    moved."""
+    ground_truth = SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
+    sample = every_nth_point(ground_truth, SEOUL_BULL_POINT_STEP)
+    with_bitmaps = AddPatchBitmapsTransform(resolution=RESOLUTION).apply(sample)
+    picked = np.asarray(with_bitmaps.reference_observations)
+    counts = np.asarray(with_bitmaps.observation_counts).astype(np.int64)
+    stored = _other_references(with_bitmaps)
+    declined = _DECLINED_GROUND_TRUTH_POINT // SEOUL_BULL_POINT_STEP
+    np.testing.assert_array_equal(
+        np.asarray(sample.positions_xyzw)[declined],
+        np.asarray(ground_truth.positions_xyzw)[_DECLINED_GROUND_TRUTH_POINT],
+    )
+    assert picked[declined] >= 0 and counts[declined] > 1
+    stored[declined] = (picked[declined] + 1) % counts[declined]
+    moved = (stored >= 0) & (stored != picked)
+    recon = with_bitmaps.clone_with_changes(reference_observations=stored)
+
     out = RefineNormalsTransform().apply(recon)
     refs = np.asarray(out.reference_observations)
     np.testing.assert_array_equal(refs[stored >= 0], stored[stored >= 0])
     # A point the run did not rewrite keeps its normal and every other column
     # bit for bit, its bitmap included, and that bitmap was rendered from the
-    # reference the fixture replaced; each rewritten point's bitmap is rendered
-    # from its own reference.
+    # reference the test replaced; each rewritten point's bitmap is rendered
+    # from its own reference. Each kind holds a finite point whose reference
+    # moved: point 40 is the declined one.
     rewritten = (np.asarray(out.normals) != np.asarray(recon.normals)).any(axis=1)
-    assert rewritten.any()
+    finite = ~np.asarray(recon.point_is_at_infinity)
+    assert (rewritten & moved).any()
+    assert not rewritten[declined]
+    assert (~rewritten & moved & finite).any()
     np.testing.assert_array_equal(
         np.asarray(out.patch_bitmaps)[~rewritten],
         np.asarray(recon.patch_bitmaps)[~rewritten],

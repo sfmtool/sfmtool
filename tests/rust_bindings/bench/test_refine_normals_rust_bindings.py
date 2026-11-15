@@ -7,6 +7,9 @@ its pairwise-flow normal, and written back as one new value.
 
 They run on the seoul_bull ground truths and their photographs. The ground
 truths are read in place and never written, so one load serves the module.
+The run over every point that several tests read is over a sample of the
+ground truth's points (:func:`_sample`): no point's step reads another
+point's answer, so each point gets the answer a run over all 280 gives it.
 """
 
 import signal
@@ -20,7 +23,12 @@ from sfmtool import ProgressCounter
 from sfmtool.bench import REFINE_NORMALS_METHODS, refine_normals
 from sfmtool.fileio import read_image_rgb
 from sfmtool.reconstruction import SfmrReconstruction
-from tests.conftest import SEOUL_BULL_DIR, SEOUL_BULL_GROUND_TRUTH
+from tests.conftest import (
+    SEOUL_BULL_DIR,
+    SEOUL_BULL_GROUND_TRUTH,
+    SEOUL_BULL_POINT_STEP,
+    every_nth_point,
+)
 from tests.rust_bindings.bench.test_bench_normal_rust_bindings import (
     PAIRWISE_DEFAULTS,
 )
@@ -40,9 +48,26 @@ def _load():
     return SfmrReconstruction.load(str(SEOUL_BULL_GROUND_TRUTH))
 
 
+def _sample():
+    """Every eighth point of the ground truth (``SEOUL_BULL_POINT_STEP``): 35
+    points, 88, 96 and 192 of them at infinity. A run over every one of them
+    costs about an eighth of one over all 280, and meets the outcomes turned,
+    low-confidence, no view joined (point 40, whose views' whole-grid scores
+    are at most 0.27 against the floor of 0.5) and at infinity. A weak turn
+    is decided too close to its bars to read off the default run on every
+    platform, so :func:`test_a_large_turn_on_weak_evidence_keeps_its_normal`
+    makes one."""
+    return every_nth_point(_load(), SEOUL_BULL_POINT_STEP)
+
+
 @pytest.fixture(scope="module")
 def ground_truth():
     return _load()
+
+
+@pytest.fixture(scope="module")
+def sample():
+    return _sample()
 
 
 @pytest.fixture(scope="module")
@@ -52,29 +77,27 @@ def images(ground_truth):
 
 
 @pytest.fixture(scope="module")
-def refined(ground_truth, images):
-    return refine_normals(ground_truth, images)
+def refined(sample, images):
+    return refine_normals(sample, images)
 
 
-def test_a_refinement_turns_normals_and_moves_no_point_or_keypoint(
-    ground_truth, refined
-):
+def test_a_refinement_turns_normals_and_moves_no_point_or_keypoint(sample, refined):
     out, report = refined
     assert isinstance(out, SfmrReconstruction)
-    assert out.point_count == ground_truth.point_count
+    assert out.point_count == sample.point_count
     for column in ("track_image_indexes", "track_point_indexes"):
         np.testing.assert_array_equal(
-            np.asarray(getattr(out, column)), np.asarray(getattr(ground_truth, column))
+            np.asarray(getattr(out, column)), np.asarray(getattr(sample, column))
         )
     np.testing.assert_array_equal(
-        np.asarray(out.positions_xyzw), np.asarray(ground_truth.positions_xyzw)
+        np.asarray(out.positions_xyzw), np.asarray(sample.positions_xyzw)
     )
     np.testing.assert_array_equal(
-        np.asarray(out.keypoints_xy), np.asarray(ground_truth.keypoints_xy)
+        np.asarray(out.keypoints_xy), np.asarray(sample.keypoints_xy)
     )
     # A point turned and rewritten has a new normal; every other point keeps
     # the one it had.
-    before = np.asarray(ground_truth.normals)
+    before = np.asarray(sample.normals)
     after = np.asarray(out.normals)
     rewritten = [
         p["index"]
@@ -83,25 +106,29 @@ def test_a_refinement_turns_normals_and_moves_no_point_or_keypoint(
     ]
     assert rewritten
     assert not np.allclose(after[rewritten], before[rewritten])
-    kept = np.ones(ground_truth.point_count, dtype=bool)
+    kept = np.ones(sample.point_count, dtype=bool)
     kept[rewritten] = False
     np.testing.assert_array_equal(after[kept], before[kept])
     # The value the run was handed is as it was loaded.
-    np.testing.assert_array_equal(before, np.asarray(_load().normals))
+    np.testing.assert_array_equal(before, np.asarray(_sample().normals))
 
 
-def test_the_report_holds_one_status_per_point_and_counts_them(ground_truth, refined):
+def test_the_report_holds_one_status_per_point_and_counts_them(sample, refined):
     _, report = refined
     points = report["points"]
-    assert [p["index"] for p in points] == list(range(ground_truth.point_count))
+    assert [p["index"] for p in points] == list(range(sample.point_count))
     outcomes = [p["outcome"] for p in points]
     assert set(outcomes) <= OUTCOMES
     for word in ("turned", "none_joined", "weak_turn", "at_infinity", "not_asked"):
         assert report[word] == outcomes.count(word), word
+    # The sample meets each of these outcomes, so the checks below read a
+    # status of each.
+    for word in ("none_joined", "at_infinity", "low_confidence"):
+        assert report[word] >= 1, word
     assert report["kept"] == outcomes.count("not_refined") + outcomes.count("no_bitmap")
     assert report["not_asked"] == 0
-    assert report["at_infinity"] == ground_truth.infinity_point_count
-    assert report["read"] == ground_truth.point_count - report["at_infinity"]
+    assert report["at_infinity"] == sample.infinity_point_count
+    assert report["read"] == sample.point_count - report["at_infinity"]
     assert report["read"] == (
         report["turned"] + report["none_joined"] + report["weak_turn"] + report["kept"]
     )
@@ -129,17 +156,38 @@ def test_a_turned_points_agreement_is_a_finite_score(refined):
     assert report["mean_agreement"] == pytest.approx(np.mean(agreements))
 
 
-def test_a_list_of_points_refines_those_and_leaves_the_rest(
-    ground_truth, images, refined
-):
+# Row 8 of the sample, point 64 of the ground truth, whose grown-plane normal
+# turns about 56 degrees. With a weak-turn bar of 10 degrees and a ratio to
+# sigma that no sigma reaches, the weak-turn rule judges that turn alone, 46
+# degrees over the bar, so the outcome does not hang on the last bits of the
+# turn or the sigma.
+_WEAK_TURN_ROW = 8
+_WEAK_TURN_OPTIONS = {"weak_turn_deg": 10.0, "min_turn_sigma_ratio": 1e9}
+
+
+def test_a_large_turn_on_weak_evidence_keeps_its_normal(sample, images):
+    out, report = refine_normals(
+        sample, images, point_indexes=[_WEAK_TURN_ROW], **_WEAK_TURN_OPTIONS
+    )
+    status = report["points"][_WEAK_TURN_ROW]
+    assert set(status) == {"index", "outcome", "turn_deg", "agreement"}
+    assert status["outcome"] == "weak_turn"
+    assert status["turn_deg"] >= _WEAK_TURN_OPTIONS["weak_turn_deg"]
+    assert report["read"] == report["weak_turn"] == 1
+    assert report["turned"] == report["none_joined"] == report["kept"] == 0
+    # The point is left as it was, and so is every point not asked for.
+    np.testing.assert_array_equal(np.asarray(out.normals), np.asarray(sample.normals))
+
+
+def test_a_list_of_points_refines_those_and_leaves_the_rest(sample, images, refined):
     _, full = refined
-    finite = np.flatnonzero(~np.asarray(ground_truth.point_is_at_infinity))
-    at_infinity = int(np.flatnonzero(np.asarray(ground_truth.point_is_at_infinity))[0])
+    finite = np.flatnonzero(~np.asarray(sample.point_is_at_infinity))
+    at_infinity = int(np.flatnonzero(np.asarray(sample.point_is_at_infinity))[0])
     listed = [int(finite[3]), int(finite[10]), at_infinity, int(finite[3])]
 
-    out, report = refine_normals(ground_truth, images, point_indexes=listed)
+    out, report = refine_normals(sample, images, point_indexes=listed)
     asked = set(listed)
-    assert report["not_asked"] == ground_truth.point_count - len(asked)
+    assert report["not_asked"] == sample.point_count - len(asked)
     assert report["at_infinity"] == 1
     assert report["read"] == 2
     for p in report["points"]:
@@ -148,19 +196,19 @@ def test_a_list_of_points_refines_those_and_leaves_the_rest(
             assert p == full["points"][p["index"]]
         else:
             assert p["outcome"] == "not_asked"
-    before = np.asarray(ground_truth.normals)
+    before = np.asarray(sample.normals)
     after = np.asarray(out.normals)
-    unlisted = np.ones(ground_truth.point_count, dtype=bool)
+    unlisted = np.ones(sample.point_count, dtype=bool)
     unlisted[list(asked)] = False
     np.testing.assert_array_equal(after[unlisted], before[unlisted])
     np.testing.assert_array_equal(
-        np.asarray(out.positions_xyzw), np.asarray(ground_truth.positions_xyzw)
+        np.asarray(out.positions_xyzw), np.asarray(sample.positions_xyzw)
     )
 
     # An empty list refines nothing.
-    _, none = refine_normals(ground_truth, images, point_indexes=[])
+    _, none = refine_normals(sample, images, point_indexes=[])
     assert none["read"] == 0
-    assert none["not_asked"] == ground_truth.point_count
+    assert none["not_asked"] == sample.point_count
 
 
 def test_a_run_it_cannot_do_is_refused(ground_truth, images):
