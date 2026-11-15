@@ -14,9 +14,16 @@ from sfmtool.align.multi import (
     align_reconstructions,
 )
 from sfmtool.reconstruction import SfmrReconstruction
-from sfmtool.geometry import Se3Transform
+from sfmtool.geometry import RotQuaternion, Se3Transform
 from sfmtool.cli import main
-from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transforms
+from sfmtool.xform import (
+    AlignToTransform,
+    IncludeRangeFilter,
+    SimilarityTransform,
+    apply_transforms,
+)
+
+from .conftest import SEOUL_BULL_GROUND_TRUTH
 
 
 def _apply_transforms_to_file(input_path, output_path, transforms):
@@ -218,6 +225,75 @@ class TestAlignPointsAtInfinity:
         )
         assert result.aligned[0] is not None
         assert result.total_shared_images == 17
+
+
+def _moved(recon):
+    """``recon`` put through a known similarity."""
+    rotation = RotQuaternion.from_axis_angle([1.0, 2.0, 3.0], np.radians(40.0))
+    transform = Se3Transform(rotation=rotation, translation=[3, -2, 1], scale=1.7)
+    return apply_transforms(recon, [SimilarityTransform(transform)])
+
+
+def _camera_centers(recon):
+    return np.array(
+        [
+            RotQuaternion.from_wxyz_array(q).camera_center(t)
+            for q, t in zip(recon.quaternions_wxyz, recon.translations)
+        ]
+    )
+
+
+class TestAlignPointsEmbeddedPatches:
+    """Point alignment of ``embedded_patches`` reconstructions, which have no
+    feature indexes, matches observations by keypoint position."""
+
+    def test_embedded_pair_recovers_known_transform(self):
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        assert truth.track_feature_indexes is None
+
+        result = align_reconstructions(
+            reference=truth, to_align=[_moved(truth)], method="points"
+        )
+
+        aligned = result.aligned[0]
+        assert aligned is not None
+        finite = ~np.asarray(truth.point_is_at_infinity)
+        np.testing.assert_allclose(
+            aligned.positions[finite], truth.positions[finite], atol=1e-6
+        )
+        np.testing.assert_allclose(
+            _camera_centers(aligned), _camera_centers(truth), atol=1e-6
+        )
+
+    def test_embedded_onto_sift_files_recovers_known_transform(
+        self, seoul_bull_workspace_once
+    ):
+        # The embedded_patches copy carries the .sift keypoints inline, and the
+        # sift_files reference's keypoint positions are read from its .sift
+        # files, so every observation finds its counterpart.
+        reference = SfmrReconstruction.load(seoul_bull_workspace_once)
+        embedded = reference.to_embedded_patches()
+
+        result = align_reconstructions(
+            reference=reference, to_align=[_moved(embedded)], method="points"
+        )
+
+        aligned = result.aligned[0]
+        assert aligned is not None
+        finite = ~np.asarray(reference.point_is_at_infinity)
+        np.testing.assert_allclose(
+            aligned.positions[finite], reference.positions[finite], atol=1e-6
+        )
+
+    def test_align_to_embedded_reference(self):
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+
+        aligned = AlignToTransform(SEOUL_BULL_GROUND_TRUTH).apply(_moved(truth))
+
+        finite = ~np.asarray(truth.point_is_at_infinity)
+        np.testing.assert_allclose(
+            aligned.positions[finite], truth.positions[finite], atol=1e-6
+        )
 
 
 class TestAlignReconstructionsCameras:

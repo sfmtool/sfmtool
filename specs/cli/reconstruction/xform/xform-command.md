@@ -1087,6 +1087,10 @@ reconstructions, and diagnostics output.
 
 Aligns the current reconstruction to match another using a similarity transformation
 (rotation, translation, scale) computed from shared images and 3D point correspondences.
+The points are matched as `sfm align --method points` matches them: by feature index when
+both reconstructions are `sift_files`, by keypoint position otherwise. A `sift_files`
+reference must be in a version 2 workspace, checked before any step, since matching by
+keypoint position reads its `.sift` files.
 
 ```bash
 --align-to ground_truth.sfmr

@@ -6,6 +6,7 @@
 from pathlib import Path
 
 from .._sfmtool.reconstruction import SfmrReconstruction
+from .._workspace import require_version_2_workspace
 from ._align_points_base import AlignToPointsTransform
 
 
@@ -21,6 +22,11 @@ class AlignToTransform(AlignToPointsTransform):
                 f"Reference must be a .sfmr file, got: {self.reference_path}"
             )
         self._reference_recon = SfmrReconstruction.load(self.reference_path)
+        # Matching points by keypoint position, as alignment does when either
+        # side is embedded_patches, reads a sift_files reference's .sift files,
+        # so its workspace must be version 2. Checked here, before any step.
+        if self._reference_recon.feature_source == "sift_files":
+            require_version_2_workspace(self._reference_recon.workspace_dir)
 
     def _target_recon(self) -> SfmrReconstruction:
         return self._reference_recon

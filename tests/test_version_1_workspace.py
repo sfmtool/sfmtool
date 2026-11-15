@@ -126,6 +126,9 @@ def _version_1_message(workspace: Path) -> str:
             "--bundle-adjust",
         ],
         ["xform", "recon.sfmr", "out.sfmr", "--rotate", "0,0,1,10deg"],
+        # The input is embedded_patches, so alignment matches points by
+        # keypoint position, which reads the sift_files reference's .sift files.
+        ["xform", "embedded.sfmr", "out.sfmr", "--align-to", "recon.sfmr"],
         ["inspect", "--strips", "recon.sfmr", "0", "-o", "strips.png"],
         ["compare", "recon.sfmr", "recon.sfmr", "--strips", "strips.png"],
         ["compare", "recon.sfmr", "recon.sfmr", "--by-coordinate"],

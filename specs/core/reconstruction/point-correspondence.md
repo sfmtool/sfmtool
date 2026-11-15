@@ -196,10 +196,10 @@ Euclidean positions only.
 
 | Consumer | Path |
 |----------|------|
-| `sfm align --method points` | `align/by_points.py` → pairwise finder → least-squares/RANSAC ([reconstruction-alignment.md](../analysis/reconstruction-alignment.md)) |
+| `sfm align --method points` | `align/by_points.py` → feature-index finder when both sides have feature indexes, keypoint-position finder otherwise → least-squares/RANSAC ([reconstruction-alignment.md](../analysis/reconstruction-alignment.md)) |
 | `sfm merge` | `merge/reconstructions.py` → grouping + the `merge_points_and_tracks` binding → PnP pose refinement |
-| `sfm xform --align-to` | `xform/_align_to.py` → pairwise finder → similarity fit |
-| `sfm compare` | `compare/_core.py` → pairwise finder (feature-index or coordinate-based) |
+| `sfm xform --align-to` | `xform/_align_to.py` → `align/by_points.py`, the same finder choice as `sfm align` → similarity fit |
+| `sfm compare` | `compare/_core.py` → pairwise finder (feature-index or coordinate-based; `--by-feature-index` refuses an `embedded_patches` input) |
 | SfM Explorer `Align to ▸` (Points) | `align_reconstructions` in [reconstructions.rs](../../../crates/sfmtool-core/src/analysis/alignment/reconstructions.rs) → feature-index finder when both sides have feature indexes, keypoint-position finder otherwise ([reconstruction-alignment.md](../analysis/reconstruction-alignment.md)) |
 
 See [`specs/cli/reconstruction/align-command.md`](../../cli/reconstruction/align-command.md) and

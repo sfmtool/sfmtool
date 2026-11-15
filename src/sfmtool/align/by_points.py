@@ -6,8 +6,29 @@
 import numpy as np
 
 from .core import AlignmentResult, estimate_alignment
-from .._point_correspondence import find_point_correspondences
+from .._point_correspondence import (
+    find_point_correspondences,
+    find_point_correspondences_by_coordinate,
+)
 from .._sfmtool.reconstruction import SfmrReconstruction
+
+
+def _matches_by_feature_index(
+    source_recon: SfmrReconstruction, target_recon: SfmrReconstruction
+) -> bool:
+    """Whether point alignment matches the two reconstructions' observations by
+    feature index.
+
+    Only when both have feature indexes (``sift_files``). Otherwise, when either
+    is ``embedded_patches``, observations are matched by keypoint position: the
+    inline keypoints of an ``embedded_patches`` side, the ``.sift`` positions of
+    a ``sift_files`` one. This is the rule ``align_reconstructions`` in
+    ``sfmtool-core`` applies for the SfM Explorer.
+    """
+    return (
+        source_recon.track_feature_indexes is not None
+        and target_recon.track_feature_indexes is not None
+    )
 
 
 def estimate_alignment_from_points(
@@ -21,9 +42,11 @@ def estimate_alignment_from_points(
 ) -> AlignmentResult:
     """Estimate SE3 transform by aligning corresponding 3D points.
 
-    Finds 3D points that appear in both reconstructions (via shared feature
-    observations), then computes the optimal similarity transform using
-    a least-squares similarity fit with optional RANSAC outlier rejection.
+    Finds 3D points that appear in both reconstructions through their
+    observations in shared images, matched by feature index or by keypoint
+    position (see :func:`_matches_by_feature_index`), then computes the optimal
+    similarity transform using a least-squares similarity fit with optional
+    RANSAC outlier rejection.
 
     Args:
         source_recon: Source SfmrReconstruction object
@@ -38,7 +61,11 @@ def estimate_alignment_from_points(
     Returns:
         AlignmentResult with transform from source to target
     """
-    correspondences, source_positions, target_positions = find_point_correspondences(
+    if _matches_by_feature_index(source_recon, target_recon):
+        find = find_point_correspondences
+    else:
+        find = find_point_correspondences_by_coordinate
+    correspondences, source_positions, target_positions = find(
         source_recon, target_recon, shared_images
     )
 
@@ -129,7 +156,12 @@ def estimate_alignment_from_points_with_logging(
     import click
 
     if verbose:
-        click.echo("  Finding 3D point correspondences...")
+        how = (
+            "feature index"
+            if _matches_by_feature_index(source_recon, target_recon)
+            else "keypoint position"
+        )
+        click.echo(f"  Finding 3D point correspondences (by {how})...")
 
     result = estimate_alignment_from_points(
         source_recon=source_recon,

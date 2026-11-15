@@ -157,10 +157,9 @@ def _observation_xy_by_image(
         if not sift_path.exists():
             raise FileNotFoundError(
                 f"Missing SIFT file for '{image_rel}' at {sift_path}. "
-                "Coordinate-based comparison reads keypoint positions from each "
-                "reconstruction's workspace .sift files; run feature extraction in "
-                "that workspace, or use --by-feature-index if the inputs share "
-                "identical .sift files."
+                "Matching points by keypoint position reads a sift_files "
+                "reconstruction's keypoint positions from its workspace .sift "
+                "files; run feature extraction in that workspace."
             )
 
         sift_data = read_sift_partial(str(sift_path), int(feat_idxs.max()) + 1)
@@ -170,8 +169,7 @@ def _observation_xy_by_image(
                 f"Reconstruction references feature index {int(feat_idxs.max())} "
                 f"for '{image_rel}' but its .sift file at {sift_path} has only "
                 f"{len(positions)} feature(s). The reconstruction and its .sift "
-                "files have drifted; re-extract features in that workspace, or "
-                "compare with --by-feature-index."
+                "files have drifted; re-extract features in that workspace."
             )
         out[img_idx] = (positions[feat_idxs], point_ids)
     return out
