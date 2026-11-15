@@ -18,6 +18,7 @@ import pytest
 from click.testing import CliRunner
 
 from sfmtool._embed_patches import embed_patches
+from sfmtool.geometry import RotQuaternion
 from sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 from sfmtool.xform import (
@@ -58,7 +59,8 @@ def embedded(seoul_bull_workspace) -> SfmrReconstruction:
 @pytest.fixture
 def embedded_subset(embedded) -> SfmrReconstruction:
     """Every eighth point of :func:`embedded` (``SEOUL_BULL_POINT_STEP``), with
-    its references and bitmaps, for the tests that run ``embed_patches``."""
+    its references and bitmaps, for the tests that run ``embed_patches`` or
+    the normal refinement."""
     return every_nth_point(embedded, SEOUL_BULL_POINT_STEP)
 
 
@@ -201,18 +203,45 @@ def test_refine_keypoints_keeps_stored_references(embedded):
     np.testing.assert_array_equal(bare_refs[stored < 0], refs[stored < 0])
 
 
-def test_refine_normals_keeps_stored_references(embedded):
-    stored = _other_references(embedded)
-    recon = embedded.clone_with_changes(reference_observations=stored)
+def test_refine_normals_keeps_stored_references(embedded_subset):
+    """On :func:`embedded_subset`, with two of the points whose stored
+    reference the test moves made points at infinity. The run skips points
+    at infinity, so on every platform it leaves those two unrewritten with a
+    moved reference; which finite points it leaves depends on the fixture's
+    SIFT tracks."""
+    stored = _other_references(embedded_subset)
+    moved = (stored >= 0) & (
+        stored != np.asarray(embedded_subset.reference_observations)
+    )
+    skipped = np.flatnonzero(moved)[:2]
+    assert len(skipped) == 2
+    centers = np.array(
+        [
+            -RotQuaternion.from_wxyz_array(q).to_rotation_matrix().T @ t
+            for q, t in zip(
+                embedded_subset.quaternions_wxyz, embedded_subset.translations
+            )
+        ]
+    )
+    positions = np.array(embedded_subset.positions_xyzw, dtype=np.float64)
+    directions = positions[skipped, :3] - centers.mean(axis=0)
+    positions[skipped, :3] = directions / np.linalg.norm(
+        directions, axis=1, keepdims=True
+    )
+    positions[skipped, 3] = 0.0
+    recon = embedded_subset.clone_with_changes(
+        positions=positions, reference_observations=stored
+    )
     out = RefineNormalsTransform().apply(recon)
     refs = np.asarray(out.reference_observations)
     np.testing.assert_array_equal(refs[stored >= 0], stored[stored >= 0])
     # A point the run did not rewrite keeps its normal and every other column
     # bit for bit, its bitmap included, and that bitmap was rendered from the
     # reference the fixture replaced; each rewritten point's bitmap is rendered
-    # from its own reference.
+    # from its own reference. Each kind holds a point whose reference moved.
     rewritten = (np.asarray(out.normals) != np.asarray(recon.normals)).any(axis=1)
-    assert rewritten.any()
+    assert (rewritten & moved).any()
+    assert not rewritten[skipped].any()
     np.testing.assert_array_equal(
         np.asarray(out.patch_bitmaps)[~rewritten],
         np.asarray(recon.patch_bitmaps)[~rewritten],

@@ -859,8 +859,9 @@ def seoul_bull_sfmr_only(seoul_bull_workspace_once: Path, tmp_path_factory) -> P
 
 
 # The step of :func:`every_nth_point`'s subset for the tests that run a whole
-# ``embed_patches`` or normal refinement on the seoul_bull workspace: its 792
-# points become 99, and a run costs about an eighth as much. Those passes treat
+# ``embed_patches`` or normal refinement on the seoul_bull workspace or ground
+# truth: the workspace's 792 points become 99 and the ground truth's 280 become
+# 35, and a run costs about an eighth as much. Those passes treat
 # each point on its own, so each test checks on the subset that the events it
 # covers still happen.
 SEOUL_BULL_POINT_STEP = 8

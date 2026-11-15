@@ -207,16 +207,15 @@ checks the option's value: bare is the grown plane, `method=` chooses either
 step, written separated or joined on the command line, and any other key, an
 unknown or hyphenated method and a malformed `method` are usage errors, refused
 on the command line before the reconstruction is loaded; the summary lines of
-both steps; on five points of the seoul_bull ground truth, one of them at
-infinity, that the pairwise-flow normal turns finite normals to normals other
+both steps; on two points of the seoul_bull ground truth, one of them at
+infinity, that the pairwise-flow normal turns the finite normal to a normal other
 than the grown plane's, moves no point, skips the point at infinity and prints
 its own summary; that the transform's progress counter reaches every point;
 that a SIGINT raised once a pairwise-flow run over the ground truth has
-counted a point aborts the command with nothing written; on the seoul_bull
-ground truth, that the
-finite points' normals turn while no position, keypoint or track moves, and
-that the points at infinity keep their normals and colours; on an
-embedded-patches conversion of the seoul_bull workspace, that a reconstruction
+counted a point aborts the command with nothing written; on every eighth point
+of the seoul_bull ground truth, that the finite points' normals turn while no
+position, keypoint or track moves, that the points at infinity keep their
+normals and colours, and that the run prints its summary; on an embedded-patches conversion of the seoul_bull workspace, that a reconstruction
 without bitmaps gets none and one with bitmaps has the rewritten points'
 bitmaps rendered again and the others kept; a missing image; the
 `--to-embedded-patches --refine-normals` chain; a bare option before another;
@@ -224,8 +223,9 @@ and the refusals of a `sift_files` input and of the wrong chain order.
 [`tests/xform/test_observation_readings_writers.py`](../../../../tests/xform/test_observation_readings_writers.py)
 checks that only the rewritten points' observations are measured, and
 [`tests/xform/test_stored_references.py`](../../../../tests/xform/test_stored_references.py)
-that a stored reference observation is kept and that dropping and adding the
-bitmaps gives the rewritten points the same bitmaps.
+that a stored reference observation is kept, that a point the run does not
+rewrite keeps its bitmap, and that dropping and adding the bitmaps gives the
+rewritten points the same bitmaps.
 
 ## Non-goals
 
