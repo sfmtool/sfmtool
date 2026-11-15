@@ -44,7 +44,9 @@ env:
 # sfm-explorer's test binary; it is now sfmtool-core's own test binary (435s).
 # The cost is at run time, and small: `cargo test -p sfm-explorer --lib` took
 # 39.1s at level 0 against 26.7s at level 1. The ui-test-* jobs compile the
-# same library, and their `ui_basic` suite with it.
+# same library, and their `ui_basic` suite with it: on the same machine, with
+# dependencies built, that compile took 22s at level 0 against 69s at level 1,
+# and the suite ran in 29.6s against 21.4s.
 #
 # CI only, because Cargo.toml's level 1 is the setting chosen for development,
 # where the same dev build of the viewer is also run by hand. A CI job compiles
