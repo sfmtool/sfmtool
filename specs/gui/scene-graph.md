@@ -635,10 +635,10 @@ node with patch data the line `Style [Dots|Patches]`
   hover rows come after it: the selector is a control of the row, not a row of
   the selection list. The group is built from `CollapsingState`'s toggle button
   and `show_body_indented` rather than `show_header(..).body(..)`, which leaves
-  no place between the header and the body. There is no
-  separate Patches row. Its own line because the word `Points`, the `∞` toggle
-  and the two buttons do not fit one line of the panel's default width (227 px
-  in a 1280 x 720 window) without eliding the word.
+  no place between the header and the body. The selector has its own line
+  because the word `Points`, the `∞` toggle and the two buttons do not fit one
+  line of the panel's default width (227 px in a 1280 x 720 window) without
+  eliding the word. There is no separate Patches row.
 - The `∞` mini-toggle sits at the row's visible right edge (the clip rect, since
   a wider row elsewhere in the tree widens the layout past the panel), and the
   label takes the width left between it and the eye. The label drops counts
