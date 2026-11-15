@@ -287,23 +287,31 @@ def _align_with_points(
                     f"  Connected to {len(aligned_neighbors)} aligned reconstruction(s)"
                 )
 
-            all_shared_pairs: list[tuple[int, int]] = []
+            # Each aligned neighbour's pairs index that neighbour's images, so
+            # its points are found in it; once aligned, every neighbour is in
+            # the reference frame, and all their points are fitted together.
+            targets = []
             shared_count = 0
-
             for nb_idx in aligned_neighbors:
                 shared_pairs = graph[idx][nb_idx]["pairs"]
                 shared_count += len(shared_pairs)
-                all_shared_pairs.extend((int(s), int(t)) for s, t in shared_pairs)
+                targets.append(
+                    (
+                        current_recons[nb_idx],
+                        [(int(s), int(t)) for s, t in shared_pairs],
+                    )
+                )
 
             total_shared_images += shared_count
-
-            first_neighbor = aligned_neighbors[0]
 
             try:
                 result = estimate_alignment_from_points_with_logging(
                     source_recon=current_recons[idx],
-                    target_recon=current_recons[first_neighbor],
-                    shared_images=all_shared_pairs,
+                    targets=targets,
+                    target_labels=[
+                        "the reference" if nb == 0 else f"reconstruction {nb}"
+                        for nb in aligned_neighbors
+                    ],
                     min_points=10,
                     use_ransac=use_ransac,
                     ransac_iterations=ransac_iterations,

@@ -33,25 +33,31 @@ def _matches_by_feature_index(
 
 def estimate_alignment_from_points(
     source_recon: SfmrReconstruction,
-    target_recon: SfmrReconstruction,
-    shared_images: list[tuple[int, int]],
+    targets: list[tuple[SfmrReconstruction, list[tuple[int, int]]]],
     min_points: int = 10,
     use_ransac: bool = True,
     ransac_iterations: int = 1000,
     ransac_percentile: float = 95.0,
 ) -> AlignmentResult:
-    """Estimate SE3 transform by aligning corresponding 3D points.
+    """Estimate the similarity transform onto ``targets`` from corresponding 3D points.
 
-    Finds 3D points that appear in both reconstructions through their
-    observations in shared images, matched by feature index or by keypoint
-    position (see :func:`_matches_by_feature_index`), then computes the optimal
-    similarity transform using a least-squares similarity fit with optional
-    RANSAC outlier rejection.
+    ``targets`` holds ``(target_recon, shared_images)`` rows, every target in
+    the same coordinate frame, with ``shared_images`` the
+    ``(source image index, target image index)`` pairs of the source's images
+    with that target's. For each target, the 3D points that appear in both
+    reconstructions are found through their observations in the shared images,
+    matched by feature index or by keypoint position (see
+    :func:`_matches_by_feature_index`). The correspondences of all targets are
+    fitted together, by a least-squares similarity fit with optional RANSAC
+    outlier rejection over all of them.
+
+    A target that yields no correspondence (its finder raises ``ValueError``)
+    adds none; when no target yields one, the targets' errors are raised
+    together as one ``ValueError``.
 
     Args:
         source_recon: Source SfmrReconstruction object
-        target_recon: Target SfmrReconstruction object
-        shared_images: List of (source_img_idx, target_img_idx) pairs
+        targets: ``(target_recon, shared_images)`` rows, in one frame
         min_points: Minimum number of point correspondences required
         use_ransac: Apply RANSAC for outlier rejection
         ransac_iterations: Number of RANSAC iterations
@@ -59,15 +65,33 @@ def estimate_alignment_from_points(
             threshold (default: 95.0).
 
     Returns:
-        AlignmentResult with transform from source to target
+        AlignmentResult with transform from source to the targets' frame. Its
+        ``n_point_correspondences_per_target`` holds each target's count.
     """
-    if _matches_by_feature_index(source_recon, target_recon):
-        find = find_point_correspondences
-    else:
-        find = find_point_correspondences_by_coordinate
-    correspondences, source_positions, target_positions = find(
-        source_recon, target_recon, shared_images
-    )
+    source_parts = []
+    target_parts = []
+    per_target = []
+    errors = []
+    for target_recon, shared_images in targets:
+        if _matches_by_feature_index(source_recon, target_recon):
+            find = find_point_correspondences
+        else:
+            find = find_point_correspondences_by_coordinate
+        try:
+            _, source_found, target_found = find(
+                source_recon, target_recon, shared_images
+            )
+        except ValueError as e:
+            errors.append(str(e))
+            per_target.append(0)
+            continue
+        source_parts.append(source_found)
+        target_parts.append(target_found)
+        per_target.append(len(source_found))
+    if not source_parts:
+        raise ValueError("; ".join(errors))
+    source_positions = np.concatenate(source_parts)
+    target_positions = np.concatenate(target_parts)
 
     n_points = len(source_positions)
     if n_points < min_points:
@@ -129,6 +153,7 @@ def estimate_alignment_from_points(
     result.total_rms_error = float(rms_error)
     result.confidence = max(0.0, 1.0 - rms_error / 0.1)
     result.n_point_correspondences = n_points
+    result.n_point_correspondences_per_target = per_target
     result.n_inliers = n_inliers
     result.point_rms_error = float(rms_error)
     result.computed_threshold = computed_threshold
@@ -140,8 +165,8 @@ def estimate_alignment_from_points(
 
 def estimate_alignment_from_points_with_logging(
     source_recon: SfmrReconstruction,
-    target_recon: SfmrReconstruction,
-    shared_images: list[tuple[int, int]],
+    targets: list[tuple[SfmrReconstruction, list[tuple[int, int]]]],
+    target_labels: list[str],
     min_points: int = 10,
     use_ransac: bool = True,
     ransac_iterations: int = 1000,
@@ -151,22 +176,17 @@ def estimate_alignment_from_points_with_logging(
     """Estimate alignment with progress logging.
 
     Wrapper around estimate_alignment_from_points that provides
-    detailed logging for CLI usage.
+    detailed logging for CLI usage. ``target_labels`` names each of
+    ``targets`` in that log.
     """
     import click
 
     if verbose:
-        how = (
-            "feature index"
-            if _matches_by_feature_index(source_recon, target_recon)
-            else "keypoint position"
-        )
-        click.echo(f"  Finding 3D point correspondences (by {how})...")
+        click.echo("  Finding 3D point correspondences...")
 
     result = estimate_alignment_from_points(
         source_recon=source_recon,
-        target_recon=target_recon,
-        shared_images=shared_images,
+        targets=targets,
         min_points=min_points,
         use_ransac=use_ransac,
         ransac_iterations=ransac_iterations,
@@ -174,6 +194,15 @@ def estimate_alignment_from_points_with_logging(
     )
 
     if verbose:
+        for (target_recon, _), label, count in zip(
+            targets, target_labels, result.n_point_correspondences_per_target
+        ):
+            how = (
+                "feature index"
+                if _matches_by_feature_index(source_recon, target_recon)
+                else "keypoint position"
+            )
+            click.echo(f"    With {label} (by {how}): {count}")
         click.echo(f"    Found {result.n_point_correspondences} point correspondences")
 
         if use_ransac and result.distances_for_stats is not None:

@@ -289,6 +289,16 @@ Binding defaults (`analysis/core.rs`): `max_iterations=1000`,
   when both sides have feature indexes, `find_point_correspondences_by_coordinate`
   (by keypoint position, 2 px, 2 votes) when either is `embedded_patches`.
   The `sfm xform` `--align-to` operations share this function.
+- **Several targets in one frame:** the function takes a list of
+  `(target reconstruction, image pairs)` rows, all targets in the same
+  coordinate frame. Correspondences are found with each target separately,
+  since each target's pairs index its own images, then concatenated, and
+  the threshold, RANSAC and final fit below run over the union. `sfm align`
+  passes every aligned neighbour of the input being aligned; `--align-to`
+  passes its one target. A target whose finder raises `ValueError` (no
+  correspondence found, or a `.sift` file that does not match its
+  reconstruction) adds none; when every target's finder raises, their
+  messages are raised together as one `ValueError`.
 - **Threshold is data-derived, not fixed:** a preliminary least-squares fit
   over *all* correspondences is computed, and the threshold is the
   `--ransac-percentile` (default 95.0) percentile of its residual
