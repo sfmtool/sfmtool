@@ -487,8 +487,7 @@ def _rotated(names):
 
 
 class TestAlignPairsImagesByFileHash:
-    """`sfm align` pairs images by the hash of the image file, and by name only
-    where a hash is not known."""
+    """`sfm align` pairs images by the hash of the image file, then by name."""
 
     @pytest.mark.parametrize("method", ["points", "cameras"])
     def test_names_moved_to_other_files_still_pair_by_file(
@@ -520,10 +519,9 @@ class TestAlignPairsImagesByFileHash:
         )
 
         assert result.exit_code == 0, result.output
-        assert (
-            "images paired: 17 by file hash, 0 by name; "
-            "17 names shared by different files"
-        ) in result.output
+        # Every image pairs by its file, which leaves no name pair to report.
+        assert "images paired: 17 by file hash, 0 by name\n" in result.output
+        assert "Paired by name, different files" not in result.output
         assert "Successfully aligned: 1/1" in result.output
         aligned = SfmrReconstruction.load(output_dir / target_path.name)
         # Image i of the copy is image i of the reference under another name.
@@ -531,12 +529,12 @@ class TestAlignPairsImagesByFileHash:
             _camera_centers(aligned), _camera_centers(reference), atol=1e-6
         )
 
-    def test_same_names_on_other_files_are_not_paired(
+    def test_same_names_on_other_files_pair_by_name(
         self, seoul_bull_workspace_once, tmp_path
     ):
-        # The copy keeps every name, but records files the reference does not
-        # have, so no image pairs, and the CLI names what pairing by name would
-        # have paired.
+        # The copy keeps every name but records files the reference does not
+        # have, as the same photographs at another resolution would. Every
+        # image pairs by name, and the CLI says the files differ.
         reference = SfmrReconstruction.load(seoul_bull_workspace_once)
         other_files = [bytes([i + 1]) * 16 for i in range(reference.image_count)]
         _, target_path = _embedded_copy(
@@ -545,6 +543,7 @@ class TestAlignPairsImagesByFileHash:
             "other_files.sfmr",
             image_file_hashes=other_files,
         )
+        output_dir = tmp_path / "aligned"
 
         result = CliRunner().invoke(
             main,
@@ -553,14 +552,20 @@ class TestAlignPairsImagesByFileHash:
                 str(seoul_bull_workspace_once),
                 str(target_path),
                 "-o",
-                str(tmp_path / "aligned"),
+                str(output_dir),
             ],
         )
 
         assert result.exit_code == 0, result.output
         assert (
-            "images paired: 0 by file hash, 0 by name; "
-            "17 names shared by different files"
+            "images paired: 0 by file hash, 17 by name, 17 of them different files"
         ) in result.output
-        assert "Not paired, same name but different file: " in result.output
-        assert "Successfully aligned: 0/1" in result.output
+        first_three = ", ".join(reference.image_names[:3])
+        assert (
+            f"    Paired by name, different files: {first_three} and 14 more\n"
+        ) in result.output
+        assert "Successfully aligned: 1/1" in result.output
+        aligned = SfmrReconstruction.load(output_dir / target_path.name)
+        np.testing.assert_allclose(
+            _camera_centers(aligned), _camera_centers(reference), atol=1e-6
+        )

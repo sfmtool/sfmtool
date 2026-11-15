@@ -498,8 +498,8 @@ def _compare_cameras(recon1: SfmrReconstruction, recon2: SfmrReconstruction) -> 
 def _find_matching_images(
     recon1: SfmrReconstruction, recon2: SfmrReconstruction
 ) -> dict:
-    """Pair the images of two reconstructions by the hash of the image file, and
-    by name where a hash is not known: ``pair_images`` over each one's
+    """Pair the images of two reconstructions by the hash of the image file,
+    then by name: ``pair_images`` over each one's
     ``find_image_file_hashes()``."""
     return pair_images(
         recon1.image_names,

@@ -12,8 +12,8 @@
 //! `SfmrReconstruction`s should reach for.
 //!
 //! Both modes start from the same image pairs: [`pair_reconstruction_images`]
-//! pairs the two reconstructions' images by the hash of the image file, and by
-//! name only where a hash is not known (see [`super::image_pairing`]).
+//! pairs the two reconstructions' images by the hash of the image file first,
+//! and then by name (see [`super::image_pairing`]).
 //! [`AlignFit::images`] carries that pairing.
 //!
 //! ## The two modes
@@ -202,9 +202,7 @@ pub fn align_reconstructions(
     }
 }
 
-/// The reason given when no image pairs: what the pairing found, including the
-/// names shared by different files, which a reader expecting a pairing by name
-/// needs to see.
+/// The reason given when no image pairs, ending with the pairing's summary.
 fn no_shared_images(images: &ImagePairing) -> String {
     format!(
         "the two reconstructions share no images ({})",

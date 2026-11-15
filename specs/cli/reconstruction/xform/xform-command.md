@@ -1087,8 +1087,8 @@ reconstructions, and diagnostics output.
 
 Aligns the current reconstruction to match another using a similarity transformation
 (rotation, translation, scale) computed from shared images and 3D point correspondences.
-The images are paired as `sfm align` pairs them, by the hash of the image file and by name
-only where a hash is not known
+The images are paired as `sfm align` pairs them, by the hash of the image file first and
+then by name
 ([reconstruction-alignment.md](../../../core/analysis/reconstruction-alignment.md#pairing-the-images)),
 and the progress line ends with the pairing's summary. Fewer than 2 paired images is an
 error. The points are matched as `sfm align --method points` matches them: by feature index when

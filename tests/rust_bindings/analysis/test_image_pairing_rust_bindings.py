@@ -29,19 +29,20 @@ def test_pair_images_pairs_by_file_then_by_name():
         [_hash(1), _hash(9), None],
     )
     assert pairing["pairs"].dtype == np.uint32
-    assert pairing["pairs"].tolist() == [[0, 0], [2, 2]]
+    assert pairing["pairs"].tolist() == [[0, 0], [1, 1], [2, 2]]
     assert pairing["by_file_hash"] == 1
-    assert pairing["by_name"] == 1
-    assert pairing["same_name_different_file"].tolist() == [[1, 1]]
+    assert pairing["by_name"] == 2
+    assert pairing["by_name_different_files"].dtype == np.uint32
+    assert pairing["by_name_different_files"].tolist() == [[1, 1]]
     assert pairing["summary"] == (
-        "images paired: 1 by file hash, 1 by name; 1 name shared by different files"
+        "images paired: 1 by file hash, 2 by name, 1 of them different files"
     )
 
 
 def test_pair_images_with_nothing_shared_returns_empty_arrays():
     pairing = pair_images(["a.jpg"], [None], ["b.jpg"], [None])
     assert pairing["pairs"].shape == (0, 2)
-    assert pairing["same_name_different_file"].shape == (0, 2)
+    assert pairing["by_name_different_files"].shape == (0, 2)
 
 
 def test_pair_images_refuses_a_hash_per_image_mismatch():

@@ -75,7 +75,7 @@ def align_reconstructions(
     reconstructions that don't directly share images with the reference
     can still be aligned if they connect through other reconstructions.
 
-    Images are paired by file hash, and by name where a hash is not known
+    Images are paired by file hash, then by name
     (``sfmtool.analysis.pair_images``). ``file_hashes`` holds the
     ``find_image_file_hashes()`` of ``reference`` and then of each of
     ``to_align``, read here when not given.
@@ -445,7 +445,7 @@ def _echo_image_pairing(
     file_hashes: list[list[bytes | None]],
 ) -> None:
     """Print how each two inputs' images were paired: by file hash, by name,
-    and the names that different files share, which are not paired."""
+    and the first names paired across different files."""
     for i in range(len(recons)):
         for j in range(i + 1, len(recons)):
             pairing = pair_images(
@@ -454,14 +454,12 @@ def _echo_image_pairing(
                 recons[j].image_names,
                 file_hashes[j],
             )
-            mismatched = pairing["same_name_different_file"]
-            if not len(pairing["pairs"]) and not len(mismatched):
+            if not len(pairing["pairs"]):
                 continue
             click.echo(f"  {paths[i].name} and {paths[j].name}: {pairing['summary']}")
-            if len(mismatched):
+            different = pairing["by_name_different_files"]
+            if len(different):
                 names = recons[i].image_names
-                listed = ", ".join(names[int(s)] for s, _ in mismatched[:3])
-                more = f" and {len(mismatched) - 3} more" if len(mismatched) > 3 else ""
-                click.echo(
-                    f"    Not paired, same name but different file: {listed}{more}"
-                )
+                listed = ", ".join(names[int(s)] for s, _ in different[:3])
+                more = f" and {len(different) - 3} more" if len(different) > 3 else ""
+                click.echo(f"    Paired by name, different files: {listed}{more}")

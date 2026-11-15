@@ -23,11 +23,12 @@ are transformed to align with it.
 | `cameras` | Aligns via the camera poses of the paired images |
 
 Both methods start by pairing the images of each two reconstructions by the
-hash of the image file, and by name only where a hash is not known: an
-`embedded_patches` reconstruction stores each image's hash, and a `sift_files`
-one's are read from its `.sift` files' metadata. Images renamed or moved to
-another folder still pair, and two different photographs that share a name do
-not. The rule, including a file held by several images, is in
+hash of the image file first, and then by name: an `embedded_patches`
+reconstruction stores each image's hash, and a `sift_files` one's are read from
+its `.sift` files' metadata. Images renamed or moved to another folder still
+pair, and images of the same name pair whether or not their files are the same,
+so the same photographs at another resolution pair too. The rule, including a
+file held by several images, is in
 [reconstruction-alignment.md](../../core/analysis/reconstruction-alignment.md#pairing-the-images).
 
 `points` matches observations by feature index when both reconstructions are `sift_files`.
@@ -61,11 +62,13 @@ moment, not through a shortest path.
 
 Under "Analyzing connectivity", after each input's line of neighbours and the
 number of images it shares with each, one line per two inputs that pair an
-image or share a name says how their images were paired, for example
-`reference.sfmr and part_a.sfmr: images paired: 15 by file hash, 2 by name;
-3 names shared by different files`. When names are shared by different files,
-a second line lists the first three of them (`Not paired, same name but
-different file: frame_000001.jpg, …`), which pairing by name would have paired.
+image says how their images were paired, for example `reference.sfmr and
+part_a.sfmr: images paired: 15 by file hash, 2 by name, 2 of them different
+files`. When some images paired by name are known to be different files, a
+second line lists the first three of their names and how many more there are
+(`Paired by name, different files: frame_000001.jpg, frame_000002.jpg,
+frame_000003.jpg and 14 more`). This is information only: those images are
+paired.
 
 The reference and every aligned reconstruction are written into `--output-dir` under their
 **input basename** (the reference is copied verbatim; each aligned result is saved alongside it).

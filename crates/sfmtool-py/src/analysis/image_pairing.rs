@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Binding for pairing the images of two reconstructions by file hash, and by
-//! name where a hash is not known (``sfmtool.analysis.pair_images``; see
+//! Binding for pairing the images of two reconstructions by file hash, then by
+//! name (``sfmtool.analysis.pair_images``; see
 //! ``specs/core/analysis/reconstruction-alignment.md``, "Pairing the images").
 
 use numpy::PyArray2;
@@ -59,18 +59,16 @@ fn pairs_array<'py>(py: Python<'py>, pairs: &[(u32, u32)]) -> Bound<'py, PyArray
 
 /// Pair the images of a source reconstruction with those of a target one.
 ///
-/// Images are paired by the hash of the image file, and by name only where a
-/// hash is not known:
+/// Images are paired by the hash of the image file first, then by name:
 ///
-/// 1. Two images whose file hashes are both known pair only when the hashes
-///    are equal, whatever their names. A hash held by exactly one image on
-///    each side pairs those two; a hash held by several images on a side (the
-///    same file under several names) pairs only images of the same name among
-///    them.
-/// 2. Each image still unpaired pairs with the still-unpaired image of the same
-///    name on the other side, as long as at least one of the two has no known
-///    hash.
-/// 3. A repeated name pairs once, its first image on each side.
+/// 1. Images whose file hashes are known and equal pair, whatever their
+///    names. A hash held by exactly one image on each side pairs those two; a
+///    hash held by several images on a side (the same file under several
+///    names) pairs only images of the same name among them.
+/// 2. Each image still unpaired pairs with the still-unpaired image of the
+///    same name on the other side, whether or not their hashes are known or
+///    equal, so the same photographs at another resolution still pair. A
+///    repeated name pairs once, its first unpaired image on each side.
 ///
 /// ``SfmrReconstruction.find_image_file_hashes`` gives a reconstruction's
 /// hashes. This is the pairing SfM Explorer's alignment uses.
@@ -85,11 +83,11 @@ fn pairs_array<'py>(py: Python<'py>, pairs: &[(u32, u32)]) -> Bound<'py, PyArray
 ///     A dict: ``pairs``, a ``(k, 2)`` ``uint32`` array of
 ///     ``(source index, target index)`` ascending by source index;
 ///     ``by_file_hash`` and ``by_name``, how many pairs each step made;
-///     ``same_name_different_file``, a ``(m, 2)`` ``uint32`` array of the
-///     same-named images whose hashes are both known and differ, which a
-///     pairing by name alone would have paired; and ``summary``, the line
-///     ``images paired: 15 by file hash, 2 by name`` (followed by
-///     ``; 3 names shared by different files`` when there are any).
+///     ``by_name_different_files``, a ``(m, 2)`` ``uint32`` array of the
+///     pairs made by name whose hashes are both known and differ, a subset
+///     of ``pairs``; and ``summary``, the line ``images paired: 15 by file
+///     hash, 2 by name`` (followed by ``, 2 of them different files`` when
+///     there are any).
 ///
 /// Raises:
 ///     ValueError: where a side's names and hashes differ in length, or a hash
@@ -110,8 +108,8 @@ fn pair_images<'py>(
     out.set_item("by_file_hash", pairing.by_file_hash)?;
     out.set_item("by_name", pairing.by_name)?;
     out.set_item(
-        "same_name_different_file",
-        pairs_array(py, &pairing.same_name_different_file),
+        "by_name_different_files",
+        pairs_array(py, &pairing.by_name_different_files),
     )?;
     out.set_item("summary", pairing.summary())?;
     Ok(out)

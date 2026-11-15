@@ -1127,7 +1127,7 @@ same answer. See
 fit does:
 
 - **Image pairs**: both modes start from the two nodes' images paired by
-  the hash of the image file, and by name only where a hash is not known, as
+  the hash of the image file first, and then by name, as
   `sfm align` pairs them
   ([reconstruction-alignment.md](../core/analysis/reconstruction-alignment.md#pairing-the-images)).
   A `sift_files` node's hashes are read from its `.sift` files' metadata, one
@@ -1198,9 +1198,9 @@ images were paired:
 file hash, 0 by name`. A point fit matched by
 keypoint position says so after the noun:
 `Aligned v02 → v01: 215/223 points by keypoint position, RMS 0.234; images
-paired: 17 by file hash, 0 by name`. Names shared by different files, which
-are not paired, are counted at the end (`; 3 names shared by different
-files`), as `sfm align` prints them. On
+paired: 17 by file hash, 0 by name`. Images paired by name whose files are
+known to differ are counted at the end (`, 3 of them different files`), as
+`sfm align` prints them. On
 failure (no shared images, too few correspondences, keypoint positions that
 cannot be read, degenerate geometry) the
 transform is left untouched and the reason recorded as a **failed** entry:

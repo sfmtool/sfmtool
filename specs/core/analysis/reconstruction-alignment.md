@@ -30,14 +30,15 @@ shared Rust one is open work.
 ## Pairing the images (`image_pairing.rs`)
 
 Every alignment of two reconstructions starts by deciding which image of one
-is which image of the other. A name, the image's path relative to its
-workspace, does not decide it: a folder copied into another workspace layout,
-or frames renamed after extraction, give a photograph another name, and the
-frames of two videos in two workspaces give different photographs the same
-name (`frame_000001.jpg`). The hash of the image file decides it, so images are
-paired by that hash, and by name only where a hash is not known. `sfm align`,
-`sfm compare`, `sfm xform --align-to` and the SfM Explorer's `Align to` all
-pair images this way.
+is which image of the other. The name, the image's path relative to its
+workspace, decides most of it, but a folder copied into another workspace
+layout, or frames renamed after extraction, give a photograph another name.
+The hash of the image file pairs those, so images are paired by that hash
+first and then by name. A name pairs whatever the hashes say: two
+reconstructions of the same photographs at another resolution, or
+re-encoded, have different files under the same names, and they pair by name.
+`sfm align`, `sfm compare`, `sfm xform --align-to` and the SfM Explorer's
+`Align to` all pair images this way.
 
 The pairing is in
 [image_pairing.rs](../../../crates/sfmtool-core/src/analysis/alignment/image_pairing.rs):
@@ -49,7 +50,7 @@ pub struct ImagePairing {
     pub pairs: Vec<(u32, u32)>,                    // (source, target), by source index
     pub by_file_hash: usize,
     pub by_name: usize,
-    pub same_name_different_file: Vec<(u32, u32)>,
+    pub by_name_different_files: Vec<(u32, u32)>, // a subset of pairs
 }
 
 pub fn pair_images(source: &[ImageIdentity], target: &[ImageIdentity]) -> ImagePairing;
@@ -76,29 +77,31 @@ println!("{}", pairing.summary()); // images paired: 15 by file hash, 2 by name
 
 **The rule**, in order:
 
-1. **By file hash.** Two images whose file hashes are both known pair only when
-   the hashes are equal, whatever their names, and never by name. A hash held
-   by exactly one image on each side pairs those two. A hash held by more than
-   one image on a side is the same file under several names; among the images
-   holding it, only images of the same name pair, and an image of that group
-   with no same-named partner in the other side's group is not paired by hash.
-   These pairs are counted in `by_file_hash`.
+1. **By file hash.** Images whose file hashes are known and equal pair,
+   whatever their names. A hash held by exactly one image on each side pairs
+   those two. A hash held by more than one image on a side is the same file
+   under several names; among the images holding it, only images of the same
+   name pair, the first image of a name on each side, and an image of that
+   group with no same-named partner in the other side's group is left to
+   step 2. These pairs are counted in `by_file_hash`.
 2. **By name.** Each image still unpaired pairs with the still-unpaired image
-   of the same name on the other side, as long as at least one of the two has
-   no known hash. These pairs are counted in `by_name`. An image whose hash is
-   known therefore still pairs with a same-named image whose hash is not, which
-   keeps a reconstruction whose `.sift` files are gone pairing as it did before.
-3. **A repeated name** pairs once: in step 2, and among the images of one hash
-   in step 1, the first image of a name on each side is the one that pairs.
+   of the same name on the other side, whether or not their hashes are known
+   or equal. A repeated name pairs once, its first unpaired image on each
+   side. These pairs are counted in `by_name`.
 
-Beside the pairs, `same_name_different_file` lists each name whose first image
-on each side has a known hash and the two hashes differ: two photographs that a
-pairing by name alone would have paired. They are not paired with each other,
-though either may be paired with another image by its hash. The report says
-how many there are, since a reader who expected a pairing by name needs to see
-why it did not happen: `ImagePairing::summary` reads `images paired: 15 by file
-hash, 2 by name`, followed by `; 3 names shared by different files` when there
-are any. The CLI and the viewer print this line as it is.
+Every pair that pairing by name alone (the first image of a name on each side)
+makes is therefore still made, unless one of its two images was paired in
+step 1 with another image of the same file. A name pair is only ever given up
+for a pair by file hash.
+
+Beside the counts, `by_name_different_files` lists the pairs made by name
+whose two file hashes are both known and differ: the same photograph at
+another resolution or re-encoded, or the frames of two videos, which share a
+name and are different photographs. Pairing cannot tell these apart, so the
+list is information for a reader and changes no pair.
+`ImagePairing::summary` reads `images paired: 15 by file hash, 2 by name`,
+followed by `, 2 of them different files` when the list is not empty. The CLI
+and the viewer print this line as it is.
 
 **Where the hashes come from.**
 `SfmrReconstruction::find_image_file_hashes(progress)` returns one
@@ -192,8 +195,7 @@ failure the modes name — no shared images, too few correspondences, a
 degenerate configuration — comes back as an `Err` string a caller can show
 verbatim, leaving the source where it was. The two that are about the images
 end with the pairing's summary in parentheses: `the two reconstructions share
-no images (images paired: 0 by file hash, 0 by name; 17 names shared by
-different files)`.
+no images (images paired: 0 by file hash, 0 by name)`.
 
 ## Least-squares fit (`least_squares.rs`)
 

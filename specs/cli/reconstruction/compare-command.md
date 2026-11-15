@@ -22,8 +22,8 @@ The `--strips*` family renders side-by-side patch-strip montages; see
 
 ## Comparison Steps
 
-The two reconstructions' images are paired by the hash of the image file, and
-by name only where a hash is not known, as `sfm align` pairs them
+The two reconstructions' images are paired by the hash of the image file
+first, and then by name, as `sfm align` pairs them
 ([reconstruction-alignment.md](../../core/analysis/reconstruction-alignment.md#pairing-the-images)).
 "Images present in both" below means the paired images. The "Finding matching
 images" step prints the pairing's summary under the count of matching images

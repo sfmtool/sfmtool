@@ -34,7 +34,7 @@ class AlignToPointsTransform:
 
         print(f"  Aligning to {self._target_label()} using 3D points...")
 
-        # Images are paired by file hash, and by name where a hash is not known.
+        # Images are paired by file hash, then by name.
         pairing = pair_images(
             recon.image_names,
             recon.find_image_file_hashes(),
