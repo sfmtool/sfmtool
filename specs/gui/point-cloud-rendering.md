@@ -105,8 +105,9 @@ A live point that has a surfel in its node's patch atlas carries
 `MASK_HAS_SURFEL` (`0x200`) as well, in the point buffer only. While the
 node's point style draws patches (`ReconUniforms::points_as_patches`), the
 vertex shader emits a clipped vertex for such a point, so it is drawn as its
-surfel and not also as a splat, unless it is selected, hovered or takes
-`MASK_HIGHLIGHTED`, whose colours only the splat shows. The bit, the uniform
+surfel and not also as a splat, also while it is selected, hovered or takes
+`MASK_HIGHLIGHTED`, which its surfel shows as an outline in the same colours
+([patch-rendering.md](patch-rendering.md#picking-hover-selection)). The bit, the uniform
 and the reason for each are [scene-graph.md](scene-graph.md#point-style)
 § "Point style".
 

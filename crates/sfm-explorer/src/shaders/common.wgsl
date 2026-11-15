@@ -99,6 +99,13 @@ fn in_this_draw(word: u32, dimmed_draw: bool, highlighted: bool, filter_mode: u3
     return dimmed_draw && filter_mode == FILTER_DIM;
 }
 
+// The selection's yellow and the hover's cyan, which a called-out point
+// (MASK_HIGHLIGHTED) takes too. points.wgsl draws a highlighted splat in one,
+// and patch.wgsl a highlighted surfel's outline. Each channel is 0 or 1, the
+// same in sRGB and in linear light, so the screen shows them as written.
+const SELECTED_COLOR: vec3<f32> = vec3<f32>(1.0, 1.0, 0.0);
+const HOVERED_COLOR: vec3<f32> = vec3<f32>(0.0, 1.0, 1.0);
+
 // The eraser brush's colours, which replace a point's own outright as the
 // selection's yellow and the hover's cyan do. A saturated red for a point the
 // stroke being held has painted, and a pale red for one under the circle

@@ -401,3 +401,70 @@ fn the_wgsl_preview_flags_and_failure_colour_match_the_rust_ones() {
         );
     }
 }
+
+#[test]
+fn a_highlighted_point_with_a_surfel_shows_as_its_outline_and_not_its_dot() {
+    // Under the Patches style a point with a surfel is drawn once, as the
+    // surfel, whether or not it is selected, hovered or called out: the point
+    // shader leaves its splat out with no exception for those states, and the
+    // surfel draws them as an outline instead.
+    let points = include_str!("../../shaders/points.wgsl");
+    let line =
+        "let as_surfel = recon.points_as_patches != 0u && (in.alive & MASK_HAS_SURFEL) != 0u;";
+    assert!(
+        points.lines().any(|l| l.trim() == line),
+        "points.wgsl does not declare `{line}`"
+    );
+    // The outlined surfel is exempt from the back-face cull, so the outline
+    // shows from behind, and its band is exempt from the edge cutoff's
+    // discard, so it traces the whole square.
+    let patch = include_str!("../../shaders/patch.wgsl");
+    for line in [
+        "let outlined = highlighted || word == MASK_HIGHLIGHTED;",
+        "if in.w != 0.0 && !outlined {",
+        "let outline = (selected || hovered) && edge_px < OUTLINE_WIDTH_PX;",
+        "if !outline && texel.a < uniforms.alpha_cutoff {",
+        "let opacity = select(uniforms.patch_opacity * in.alpha, 1.0, outline);",
+    ] {
+        assert!(
+            patch.lines().any(|l| l.trim() == line),
+            "patch.wgsl does not declare `{line}`"
+        );
+    }
+}
+
+#[test]
+fn the_splat_and_the_outline_share_the_highlight_colours_and_the_bench_stroke() {
+    // The selection's yellow and the hover's cyan are written once, in
+    // common.wgsl, and both shaders draw them by name.
+    let common = include_str!("../../shaders/common.wgsl");
+    for line in [
+        "const SELECTED_COLOR: vec3<f32> = vec3<f32>(1.0, 1.0, 0.0);",
+        "const HOVERED_COLOR: vec3<f32> = vec3<f32>(0.0, 1.0, 1.0);",
+    ] {
+        assert!(
+            common.lines().any(|l| l.trim() == line),
+            "common.wgsl does not declare `{line}`"
+        );
+    }
+    for (name, source) in [
+        ("points.wgsl", include_str!("../../shaders/points.wgsl")),
+        ("patch.wgsl", include_str!("../../shaders/patch.wgsl")),
+    ] {
+        for colour in ["SELECTED_COLOR", "HOVERED_COLOR"] {
+            assert!(source.contains(colour), "{name} does not draw {colour}");
+        }
+    }
+    // The outline is as wide as the stroke the bench draws the patch being
+    // edited with, so the two read as the same kind of mark.
+    let line = format!(
+        "const OUTLINE_WIDTH_PX: f32 = {};",
+        2.0 * super::super::gpu_types::BENCH_LINE_HALF_WIDTH
+    );
+    assert!(
+        include_str!("../../shaders/patch.wgsl")
+            .lines()
+            .any(|l| l.trim() == line),
+        "patch.wgsl does not declare `{line}`"
+    );
+}

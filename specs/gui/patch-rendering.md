@@ -127,18 +127,27 @@ returns a clipped vertex before corner expansion, so its quad drops out.
 
 ### Fragment shader
 
-1. Sample the atlas layer at `uv` → `texel` (RGBA).
-2. **Coverage from bitmap alpha.** `texel.a` is per-pixel cross-view confidence,
+1. Measure the fragment's distance to the quad's nearest edge in screen pixels,
+   `edge_px`: each patch coordinate's distance to its nearer edge over the
+   length of its screen-space gradient (`dpdx`, `dpdy`). It comes first because
+   WGSL allows derivatives only in uniform control flow, before any `discard`.
+2. Sample the atlas layer at `uv` → `texel` (RGBA).
+3. **Outline.** A fragment of a highlighted surfel (its point selected, hovered
+   or called out) with `edge_px < 2.5` is in the outline band; see
+   [Picking, hover, selection](#picking-hover-selection).
+4. **Coverage from bitmap alpha.** `texel.a` is per-pixel cross-view confidence,
    not opacity. Treat it as coverage: `discard` when `texel.a < alpha_cutoff`
    so ragged patch edges and unfilled corners can drop out and the quad reads as
    a fitted surfel, not a hard rectangle. **The default is `0.0`** — discard
    nothing, render every texel opaque — which reads better in practice than a
-   carved edge; raise the slider to trim ragged borders. Optionally modulate
-   final alpha by `texel.a` for a soft edge.
-3. Output premultiplied RGBA to the color target (apply the global
-   `patch_opacity` uniform).
-4. Depth targets — see below.
-5. Pick target: `PICK_TAG_POINT | point_index`.
+   carved edge; raise the slider to trim ragged borders. A fragment in the
+   outline band is never discarded, so the outline traces the whole square.
+5. Colour: the texel, tinted, then the brush's red or pale red for mask word
+   `3` or `4`, else the highlight colour in the outline band. Output
+   premultiplied RGBA to the color target, at the global `patch_opacity` times
+   the filter's dim alpha, or opaque in the outline band.
+6. Depth targets — see below.
+7. Pick target: `PICK_TAG_POINT | point_index`, in the outline band too.
 
 ### Render targets — reuse the image-quad convention
 
@@ -179,7 +188,9 @@ wiring for free — no `PICK_TAG_PATCH`, no new pick decode branch.
   computes `outward = cross(u_halfvec, v_halfvec)` (a positive multiple of the
   normal — no normalize needed) and collapses its quad to a clipped vertex when
   `dot(outward, camera_pos − center) ≤ 0`. A point at infinity is never culled
-  (its normal faces every observer). The camera world position is supplied in
+  (its normal faces every observer), and neither is the surfel of a selected,
+  hovered or called-out point, so its outline and texture show from behind as
+  well (see [Picking, hover, selection](#picking-hover-selection)). The camera world position is supplied in
   `PatchUniforms.camera_pos`. Dimming/tinting back faces instead of hiding them
   is a possible later refinement.
 
@@ -229,7 +240,8 @@ Each instance also has an entry in a liveness buffer, its point's mask word
 is how an edit's deleted set reaches this pass. A deleted point's surfel is a
 clipped vertex, and the surfel of a point the eraser brush has painted, or has
 under its circle, is drawn in the brush's red or pale red in place of its texels,
-as the point's splat is. The highlight (`2`) is drawn on splats only. Because the
+as the point's splat is. A surfel whose point takes the highlight (`2`) is
+outlined in the hover's cyan. Because the
 instances are compacted, a point's slot is not its point index, so the bundle
 keeps the point-index-to-slot map the mask write needs.
 
@@ -379,9 +391,38 @@ unaffected.
 
 Because patches write `PICK_TAG_POINT | point_index`, the existing pick pipeline
 (`app.rs::process_pick_readback`) resolves a patch click to its 3D point with **no
-new code** — selection highlight, cross-panel hover, and Track View all work through the point they already key on. Hover highlight of the
-patch itself (e.g. a rim) can reuse the point-splat `selection/hover index`
-uniforms if desired, but is not required for v1.
+new code** — selection highlight, cross-panel hover, and Track View all work through the point they already key on.
+
+The surfel shows its point's highlight itself, as an **outline**: a band
+2.5 screen pixels wide just inside the quad's edge, in the selection's yellow
+for the selected point, else the hover's cyan for the hovered point or a point
+the viewport calls out (mask word `2`). That is the precedence and the colours
+the point's splat takes (`SELECTED_COLOR`, `HOVERED_COLOR` in `common.wgsl`),
+and the eraser brush's reds come before it as they do there. The point has no
+dot while it is highlighted, so it is still drawn once
+([scene-graph.md](scene-graph.md#point-style)). The shader reads the two
+indexes from `PatchUniforms::selected_point_index` and `hovered_point_index`
+and the call-out from the mask word.
+
+- **Width.** 2.5 px is the stroke the bench draws the patch being edited with
+  (twice `BENCH_LINE_HALF_WIDTH`), so the two read as the same kind of mark.
+  It is constant on screen because it is measured with screen-space
+  derivatives, and the band lies inside the quad, so the vertex stage does not
+  grow it. A surfel under about 5 px across is all band, a solid square in the
+  highlight colour, so a far-away highlighted point still reads.
+- **Edge cutoff.** The band is exempt from the coverage discard, so the
+  outline traces the whole square at any edge cutoff, while the texels inside
+  it are carved as usual.
+- **Back faces.** A highlighted surfel is exempt from the front-face cull, so
+  a point selected from behind its patch still shows where it is.
+- **Opacity.** The band is drawn opaque, whatever `patch_opacity` and the
+  Track Table filter's dim alpha, and the texels inside it keep both. At
+  opacity 0 the node draws dots, and the dot takes the highlight colour.
+- **Depth and picking.** The band writes depth and the point's pick id like the
+  rest of the surfel, so an occluded highlighted surfel shows no outline and a
+  click on the outline picks the point.
+- A point at infinity is outlined the same way: its surfel is never culled, and
+  the derivatives measure the band on its quad as on any other.
 
 ---
 

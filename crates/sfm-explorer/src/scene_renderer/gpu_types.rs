@@ -231,7 +231,8 @@ pub(super) struct PatchUniforms {
     /// Coverage discard threshold on the bitmap alpha (per-pixel confidence).
     pub(crate) alpha_cutoff: f32,
     /// The selected and hovered points' global pick indexes, as in
-    /// `PointUniforms`: a surfel of either is drawn whatever the Track Table's
+    /// `PointUniforms`: a surfel of either is outlined in the highlight colour,
+    /// is not culled as a back face, and is drawn whatever the Track Table's
     /// filter says of its point.
     pub(crate) selected_point_index: u32,
     pub(crate) hovered_point_index: u32,
