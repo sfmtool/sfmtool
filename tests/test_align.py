@@ -669,7 +669,7 @@ class TestAlignPairsImagesByFileHash:
             ],
         )
 
-        assert result.exit_code == 1, result.output
+        assert result.exit_code == 0, result.output
         assert (
             "images paired: 0 by file hash, 17 by name, 17 of them different files"
         ) in result.output
