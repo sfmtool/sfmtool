@@ -470,17 +470,23 @@ fn renamed_images_of_the_same_files_are_paired_by_their_hashes() {
 }
 
 #[test]
-fn same_named_images_of_different_files_are_not_paired() {
+fn same_named_images_of_different_files_pair_by_name() {
+    // Every file differs, as for the same photographs at another resolution,
+    // and every name matches: the images pair by name and the fit goes ahead.
     let a = with_file_hashes(&embedded(&SfmrReconstruction::demo(64)), 1);
     let b = with_file_hashes(&transformed(&a, &known_similarity()), 101);
     let n = a.image_set.images.len();
+    let pairs: Vec<(u32, u32)> = (0..n as u32).map(|i| (i, i)).collect();
 
     for source in [AlignSource::Cameras, AlignSource::Points] {
-        let err = align(&b, &a, options(source, true)).expect_err("nothing pairs");
-        assert!(err.contains("share no images"), "{source:?}: {err}");
+        let fit = align(&b, &a, options(source, true)).expect("a fit");
+        assert_eq!(fit.images.by_file_hash, 0, "{source:?}");
+        assert_eq!(fit.images.by_name, n, "{source:?}");
+        assert_eq!(fit.images.pairs, pairs, "{source:?}");
+        assert_eq!(fit.images.by_name_different_files, pairs, "{source:?}");
         assert!(
-            err.contains(&format!("{n} names shared by different files")),
-            "{source:?}: {err}"
+            worst_point_error(&b, &a, &fit.transform) < 1e-6,
+            "{source:?} did not recover the similarity"
         );
     }
 }

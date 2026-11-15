@@ -18,7 +18,7 @@ fn by_hash(n: u32) -> ImagePairing {
         pairs: (0..n).map(|i| (i, i)).collect(),
         by_file_hash: n as usize,
         by_name: 0,
-        same_name_different_file: Vec::new(),
+        by_name_different_files: Vec::new(),
     }
 }
 
@@ -82,7 +82,7 @@ fn the_failure_message_names_both_nodes_and_the_reason() {
 }
 
 #[test]
-fn the_success_message_names_the_names_shared_by_different_files() {
+fn the_success_message_counts_the_name_pairs_of_different_files() {
     let fit = AlignFit {
         transform: Se3Transform::identity(),
         correspondences: 12,
@@ -94,11 +94,11 @@ fn the_success_message_names_the_names_shared_by_different_files() {
             pairs: (0..12).map(|i| (i, i)).collect(),
             by_file_hash: 9,
             by_name: 3,
-            same_name_different_file: vec![(12, 12), (13, 13)],
+            by_name_different_files: vec![(10, 10), (11, 11)],
         },
     };
     assert_eq!(
         success_message("b", "a", &fit),
-        "Aligned b → a: 10/12 cameras, RMS 0.020; images paired: 9 by file hash, 3 by name; 2 names shared by different files"
+        "Aligned b → a: 10/12 cameras, RMS 0.020; images paired: 9 by file hash, 3 by name, 2 of them different files"
     );
 }
