@@ -64,8 +64,10 @@ fn run_sequence(state: &mut AppState) -> Vec<TilingStep> {
 /// Mode, as a person does, which starts the sequence: a resize about its
 /// centre.
 ///
-/// No step of the sequence changes the patch's size, so the commit that ends
-/// it has a changed track to write whether or not the normal steps turn the
+/// No step of the sequence undoes the resize: a Fit that moves the point
+/// scales the patch to keep the size it looks in its images, and the other
+/// steps keep its half-extents. So the commit that ends the sequence has a
+/// changed track to write whether or not the normal steps turn the
 /// patch. Whether they do depends on the platform's floating point where a
 /// single pair barely determines the normal.
 fn move_by_resizing(state: &mut AppState, id: ReconId, label: &str) {
