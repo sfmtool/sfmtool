@@ -44,7 +44,8 @@ struct VertexInput {
     // painted it, 4 = it is in the reconstruction and under the eraser brush's
     // circle. Its own buffer, written where an edit or a mark moved and
     // nowhere else, so neither rewrites the instance buffer. A live point the
-    // Track Table's filter rejects carries MASK_REJECTED over its word.
+    // Track Table's filter rejects carries MASK_REJECTED over its word, and a
+    // live point with a surfel in the node's patch atlas MASK_HAS_SURFEL.
     @location(3) alive: u32,
     // 1 for a corner of the Track Table filter's dimmed draw, 0 for the first
     // draw's (common.wgsl).
@@ -79,10 +80,20 @@ fn place(in: VertexInput) -> VertexOutput {
     // the Track Table's filter rejects is drawn only by the dimmed draw, and
     // by neither while it hides them, unless it is the selected or hovered
     // point. That covers a point at infinity too, which takes the same word.
+    //
+    // A point the patch pass draws as its surfel (the node's style is Patches
+    // and the point has one) has no splat either, so each point is drawn once,
+    // unless it is selected, hovered or called out: the surfel shader has no
+    // colour for those, and the splat in the highlight colour is how they show.
     let global = recon.point_pick_base + in.instance_index;
     let highlighted = global == uniforms.selected_point_index
         || global == uniforms.hovered_point_index;
+    let as_surfel = recon.points_as_patches != 0u
+        && (in.alive & MASK_HAS_SURFEL) != 0u
+        && !highlighted
+        && word != MASK_HIGHLIGHTED;
     if word == MASK_DELETED
+        || as_surfel
         || !in_this_draw(in.alive, in.dimmed_draw != 0u, highlighted, recon.filter_mode) {
         out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
         out.view_depth = 0.0;

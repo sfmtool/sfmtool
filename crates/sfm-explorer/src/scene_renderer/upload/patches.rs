@@ -30,6 +30,10 @@ impl SceneRenderer {
     /// rewritten, which is the expensive half kept and what the frame's phase
     /// note says as `reused`; otherwise the tiles it packed.
     ///
+    /// Either way it ends by marking, in the base's point buffer, the points
+    /// the atlas holds a surfel for (`MASK_HAS_SURFEL`), which the point upload
+    /// before it could not know.
+    ///
     /// `progress` is the frame's `patch atlas` phase, and the stages under it
     /// are [`Progress::detail_phase`]s. This is the upload that costs the most
     /// on a node carrying embedded patches, and the one row cannot say whether
@@ -57,6 +61,7 @@ impl SceneRenderer {
         {
             let _phase = progress.detail_phase("repack");
             if self.repack_patches(device, id, &recon.point_set) {
+                self.mark_points_with_surfels(queue, id);
                 return Uploaded::Reused;
             }
         }
@@ -78,6 +83,7 @@ impl SceneRenderer {
         );
         let packed = patch.as_ref().map_or(0, |patch| patch.count as usize);
         self.recons.get_mut(&id).expect("just ensured").patch = patch;
+        self.mark_points_with_surfels(queue, id);
         Uploaded::Built(packed)
     }
 

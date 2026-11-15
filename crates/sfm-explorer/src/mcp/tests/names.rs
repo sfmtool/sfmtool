@@ -267,8 +267,8 @@ fn the_image_detail_toolbar_and_its_gear_popup_name_their_controls() {
 fn the_scene_trees_glyph_buttons_are_named_by_glyph_and_purpose() {
     use crate::scene_graph::SceneGraphPanel;
 
-    // Patches, and one point at infinity, so the Patches eye and the
-    // Points row's infinity toggle are drawn too.
+    // Patches, and one point at infinity, so the Points row's infinity toggle
+    // and its point style selector are drawn too.
     let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
     let point = &mut recon.point_set.points[0];
     point.position = nalgebra::Point3::from(point.position.coords.normalize());
@@ -296,7 +296,6 @@ fn the_scene_trees_glyph_buttons_are_named_by_glyph_and_purpose() {
         "\u{1f441} Show camera images",
         "\u{1f441} Show points",
         "\u{221e} Show points at infinity",
-        "\u{1f441} Show patches",
     ] {
         the_role(&tree, "button", name);
     }

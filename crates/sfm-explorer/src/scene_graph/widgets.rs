@@ -5,14 +5,14 @@
 //! built from, and the three functions that turn counts into row text.
 //!
 //! They are the panel's vocabulary rather than any one row's business — the
-//! node row, the three group rows and the patches row all draw the same eye,
-//! and a count is spelled the same way wherever it appears. Keeping them
+//! node row and the three group rows all draw the same eye, and a count is
+//! spelled the same way wherever it appears. Keeping them
 //! together is what makes "did the group eye and the node eye drift apart?" a
 //! question with no way to be true.
 
 use eframe::egui;
 
-use crate::scene::SceneNode;
+use crate::scene::{PointStyle, SceneNode};
 
 use super::{EYE_GLYPH, ROW_HEIGHT, TOGGLE_WIDTH};
 use crate::widget_name::set_widget_name;
@@ -73,6 +73,36 @@ pub(super) fn glyph_toggle(
         *on = !*on;
     }
     response
+}
+
+/// The Points row's point style selector: one selectable button per
+/// [`PointStyle`], the node's own style lit, a click on the other setting it.
+///
+/// Each button's response, in `Dots`, `Patches` order, for the caller to
+/// record where it landed. Each sits under an explicit id for the reason
+/// [`glyph_toggle`] gives, and is named by its label.
+pub(super) fn point_style_selector(
+    ui: &mut egui::Ui,
+    style: &mut PointStyle,
+) -> [(PointStyle, egui::Response); 2] {
+    [PointStyle::Dots, PointStyle::Patches].map(|option| {
+        let tooltip = match option {
+            PointStyle::Dots => "Draw every point of this node as a dot",
+            PointStyle::Patches => {
+                "Draw each point of this node that has a patch as its patch, and the rest as dots"
+            }
+        };
+        let response = ui
+            .push_id(("point_style", option.label()), |ui| {
+                ui.selectable_label(*style == option, option.label())
+            })
+            .inner
+            .on_hover_text(tooltip);
+        if response.clicked() {
+            *style = option;
+        }
+        (option, response)
+    })
 }
 
 /// `1.2M pts · 243 imgs · 2 cams`, elided to what is left of the row.

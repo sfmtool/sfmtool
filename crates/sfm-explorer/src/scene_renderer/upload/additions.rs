@@ -114,15 +114,6 @@ impl SceneRenderer {
             kept: kept.as_ref(),
             filter_hides,
         };
-        let alive: Vec<u32> = (0..instances.len() as u32)
-            .map(|k| super::overlay::mask_word(base_count + k, &edited.deleted_points, marks))
-            .collect();
-        let point_alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("addition point liveness"),
-            contents: bytemuck::cast_slice(&alive),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
         // The additions' surfels index the base's point set nowhere, so their
         // atlas is their own; `index_offset` makes each instance carry its
         // *edited* index, which is what the pick id and the mask are keyed on.
@@ -141,6 +132,23 @@ impl SceneRenderer {
             marks,
             &sfmtool_core::progress::Progress::none(),
         );
+
+        // After the surfels, so each addition's word can say whether one was
+        // packed for it (`MASK_HAS_SURFEL`).
+        let alive: Vec<u32> = (0..instances.len() as u32)
+            .map(|k| {
+                let index = base_count + k;
+                let has_surfel = patch
+                    .as_ref()
+                    .is_some_and(|patch| patch.slot_of_point.contains_key(&index));
+                super::overlay::point_word(index, &edited.deleted_points, marks, has_surfel)
+            })
+            .collect();
+        let point_alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("addition point liveness"),
+            contents: bytemuck::cast_slice(&alive),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
 
         // The additions' own `ReconUniforms`, which differ from the node's in
         // one field: the pick base is shifted past the base's instances, so an
@@ -178,6 +186,8 @@ impl SceneRenderer {
             bind_group,
             point_instance_buffer,
             point_alive_buffer,
+            #[cfg(test)]
+            written_point_words: alive,
             point_count: instances.len() as u32,
             patch,
         });

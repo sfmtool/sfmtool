@@ -231,6 +231,69 @@ pub(crate) const SIBLING_HIGHLIGHT_RGB: [u8; 3] = [170, 130, 255];
 /// looking at.
 pub(crate) const TINT_STRENGTH: f32 = 0.7;
 
+/// How a node draws its points: the Scene panel's Dots/Patches selector on the
+/// Points row, and `point_style` on the wire.
+///
+/// Two values and no third: a point is drawn either as its dot or as its
+/// patch, never both. Under [`PointStyle::Patches`] a point that has no patch
+/// is still drawn as a dot. See `specs/gui/scene-graph.md` § "Point style".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointStyle {
+    /// Every point as a round splat.
+    Dots,
+    /// Each point that has a patch as its surfel, and every other point as a
+    /// dot.
+    Patches,
+}
+
+impl PointStyle {
+    /// The style a node made from `recon` starts with: Patches when it
+    /// carries what the patch pass draws, Dots otherwise.
+    pub(crate) fn for_reconstruction(recon: &SfmrReconstruction) -> Self {
+        if carries_patch_data(recon) {
+            PointStyle::Patches
+        } else {
+            PointStyle::Dots
+        }
+    }
+
+    /// The name on the wire: `"dots"` or `"patches"`.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn wire_name(self) -> &'static str {
+        match self {
+            PointStyle::Dots => "dots",
+            PointStyle::Patches => "patches",
+        }
+    }
+
+    /// The style a wire name asks for, or `None` for any other string.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "dots" => Some(PointStyle::Dots),
+            "patches" => Some(PointStyle::Patches),
+            _ => None,
+        }
+    }
+
+    /// The selector's label, which the Action Log entry also uses.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            PointStyle::Dots => "Dots",
+            PointStyle::Patches => "Patches",
+        }
+    }
+}
+
+/// Whether `recon` carries everything the patch surfel pass needs: patch
+/// frames *and* the bitmaps to texture them with.
+fn carries_patch_data(recon: &SfmrReconstruction) -> bool {
+    let points = &recon.point_set;
+    points.patch_u_halfvec_xyz.is_some()
+        && points.patch_v_halfvec_xyz.is_some()
+        && points.patch_bitmaps_y_x_rgba.is_some()
+}
+
 /// A node's comparison tint: its own colors, or one palette entry mixed into
 /// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -294,16 +357,20 @@ pub(crate) struct SceneNode {
     /// Alt+click depth targeting still works on it, and it can still be
     /// selected from the Scene panel — it just stops capturing picks.
     pub(crate) interactive: bool,
-    /// Group eye: the node's 3D points.
+    /// Group eye: the node's 3D points, in whichever [`PointStyle`] they are
+    /// drawn.
     pub(crate) show_points: bool,
+    /// How the node's points are drawn. Set from the file when the node is
+    /// made ([`PointStyle::for_reconstruction`]) and by the Scene panel's
+    /// selector and the wire afterwards. An edit that removes the patch data
+    /// leaves it alone, and Patches then draws every point as a dot.
+    pub(crate) point_style: PointStyle,
     /// Group eye: the node's camera frustums and image quads.
     ///
     /// Named for what it draws: a `.sfmr` *image* is the posed view a frustum
     /// and its quad stand for, while a *camera* is the intrinsics record any
     /// number of images can share.
     pub(crate) show_camera_images: bool,
-    /// Group eye: the node's patch surfels (inert without patch data).
-    pub(crate) show_patches: bool,
     /// Sub-toggle of [`SceneNode::show_points`]: the `w = 0` directions.
     pub(crate) show_points_at_infinity: bool,
     /// Comparison tint: a color mixed into everything this node draws, so two
@@ -328,6 +395,7 @@ impl SceneNode {
     /// A node for `recon`, labeled `label` and sourced from `path`.
     fn new(label: String, path: Option<PathBuf>, recon: SfmrReconstruction) -> Self {
         let display_thumbnails = DisplayThumbnails::embedded(&recon);
+        let point_style = PointStyle::for_reconstruction(&recon);
         let history = History::new(recon, format!("Opened {label}"));
         Self {
             id: ReconId::next(),
@@ -337,8 +405,8 @@ impl SceneNode {
             visible: true,
             interactive: true,
             show_points: true,
+            point_style,
             show_camera_images: true,
-            show_patches: true,
             show_points_at_infinity: true,
             tint: NodeTint::Original,
             display_thumbnails,
@@ -445,10 +513,14 @@ impl SceneNode {
     /// Whether this node carries everything the patch surfel pass needs: patch
     /// frames *and* the bitmaps to texture them with.
     pub(crate) fn has_patch_data(&self) -> bool {
-        let r = self.recon();
-        r.point_set.patch_u_halfvec_xyz.is_some()
-            && r.point_set.patch_v_halfvec_xyz.is_some()
-            && r.point_set.patch_bitmaps_y_x_rgba.is_some()
+        carries_patch_data(self.recon())
+    }
+
+    /// Whether this node draws patches: its style is [`PointStyle::Patches`]
+    /// and it carries the data the patch pass needs. What the HUD's Patches
+    /// section is shown for.
+    pub(crate) fn draws_patches(&self) -> bool {
+        self.point_style == PointStyle::Patches && self.has_patch_data()
     }
 
     /// The node's **display transform**: the similarity (uniform scale ·

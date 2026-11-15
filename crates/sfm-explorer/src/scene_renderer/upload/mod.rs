@@ -19,7 +19,8 @@ pub(crate) use overlay::PointMarks;
 /// The mask words, for the test that checks them against `common.wgsl`.
 #[cfg(test)]
 pub(super) use overlay::{
-    MASK_ALIVE, MASK_DELETED, MASK_HIGHLIGHTED, MASK_PAINTED, MASK_REJECTED, MASK_UNDER_BRUSH,
+    MASK_ALIVE, MASK_DELETED, MASK_HAS_SURFEL, MASK_HIGHLIGHTED, MASK_PAINTED, MASK_REJECTED,
+    MASK_UNDER_BRUSH,
 };
 mod patches;
 mod points;

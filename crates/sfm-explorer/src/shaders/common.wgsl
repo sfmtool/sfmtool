@@ -30,6 +30,10 @@ struct ReconUniforms {
     // How a point whose mask word carries MASK_REJECTED is drawn: FILTER_DIM
     // or FILTER_HIDE. Read only where a word carries the bit.
     filter_mode: u32,
+    // 1 when the patch pass draws this node's surfels (its point style is
+    // Patches and the patch opacity is above 0): points.wgsl then leaves out
+    // the splat of each point whose mask word carries MASK_HAS_SURFEL.
+    points_as_patches: u32,
 }
 
 // Pick ID tags (bits 31..30), matching `PICK_TAG_*` in
@@ -62,6 +66,13 @@ const MASK_UNDER_BRUSH: u32 = 0x00000004u;
 // itself.
 const MASK_REJECTED: u32 = 0x00000100u;
 const MASK_WORD: u32 = 0x000000FFu;
+
+// The bit a live point's word carries in the *point* buffer when the point has
+// a surfel in the node's patch atlas (`MASK_HAS_SURFEL` in
+// `scene_renderer/upload/overlay.rs`). The point shader reads it with
+// `ReconUniforms::points_as_patches` to leave out the splat the surfel
+// replaces.
+const MASK_HAS_SURFEL: u32 = 0x00000200u;
 
 // `ReconUniforms::filter_mode`, matching `FILTER_*` in
 // `scene_renderer/gpu_types.rs`: a rejected point is dimmed (drawn at

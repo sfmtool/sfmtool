@@ -58,10 +58,12 @@
 use eframe::egui;
 use sfmtool_core::bench::{BenchEntry, StageKind};
 
-use crate::action_log::{interactive_text, visibility_text, ActionLog, Kind, Layer};
+use crate::action_log::{
+    interactive_text, point_style_text, visibility_text, ActionLog, Kind, Layer,
+};
 use crate::align::AlignOptions;
 use crate::index_files::IndexFileState;
-use crate::scene::{point_id, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
+use crate::scene::{point_id, CameraRef, ImageRef, PointRef, PointStyle, ReconId, SceneNode};
 use crate::state::AppState;
 
 mod cameras;
@@ -71,7 +73,7 @@ mod widgets;
 use cameras::{show_camera_images_group, show_camera_intrinsics_group};
 pub(crate) use menus::SWITCH_CAMERA_MODEL;
 use menus::{cluster_patches_menu, index_files_menu, node_context_menu, sift_index_menu};
-use widgets::{counts_text, eye_toggle, glyph_toggle, with_thousands};
+use widgets::{counts_text, eye_toggle, glyph_toggle, point_style_selector, with_thousands};
 
 /// Height of one tree row. Fixed so the image list can be virtualized, and so
 /// the eye/cursor toggles line up down the tree regardless of label height.
@@ -124,6 +126,17 @@ const SELECTED_BAR_WIDTH: f32 = 3.0;
 /// twice is two nodes with expansion state of their own.
 pub(crate) fn row_id(recon: ReconId, key: &str) -> egui::Id {
     egui::Id::new(("scene_graph_row", recon, key))
+}
+
+/// The [`row_id`] of one button of a node's point style selector.
+fn point_style_row_id(recon: ReconId, style: PointStyle) -> egui::Id {
+    row_id(
+        recon,
+        match style {
+            PointStyle::Dots => "point_style_dots",
+            PointStyle::Patches => "point_style_patches",
+        },
+    )
 }
 
 /// What the Scene panel reports back to `dock.rs`.
@@ -594,24 +607,6 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
         show_bench_groups(ui, node, out);
-        if node.has_patch_data() {
-            ui.horizontal(|ui| {
-                ui.set_height(ROW_HEIGHT);
-                let eye = eye_toggle(
-                    ui,
-                    row_id(node.id, "patches_eye"),
-                    &mut node.show_patches,
-                    None,
-                    "Show patches",
-                    "Show this node's patches",
-                );
-                let shown = node.show_patches;
-                out.logged(row_id(node.id, "patches_eye"), eye, || {
-                    visibility_text(&node.label, Layer::Patches, shown)
-                });
-                ui.label("Patches");
-            });
-        }
         show_index_files_group(ui, node, out);
     });
 }
@@ -1214,8 +1209,10 @@ fn show_bench_stage_group(
     });
 }
 
-/// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞]`, expanding to the selection and
-/// hover rows.
+/// `[▸] [👁] Points (1,204,551 · 12 at ∞) [∞] [Dots|Patches]`, expanding to
+/// the selection and hover rows. The point style selector is drawn only on a
+/// node that carries patch data, the one kind of node on which the two styles
+/// draw differently.
 fn show_points_group(
     ui: &mut egui::Ui,
     node: &mut SceneNode,
@@ -1264,6 +1261,16 @@ fn show_points_group(
             out.logged(row_id(id, "points_infinity"), infinity, || {
                 visibility_text(&node.label, Layer::PointsAtInfinity, shown)
             });
+        }
+        if node.has_patch_data() {
+            let before = node.point_style;
+            for (style, response) in point_style_selector(ui, &mut node.point_style) {
+                out.hit(point_style_row_id(id, style), response);
+            }
+            if node.point_style != before {
+                out.log
+                    .record(Kind::Scene, point_style_text(&node.label, node.point_style));
+            }
         }
     });
     header.body(|ui| {

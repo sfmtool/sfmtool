@@ -75,15 +75,16 @@ pub(crate) fn section_id(key: &str) -> egui::Id {
     egui::Id::new(("viewport_hud_section", key))
 }
 
-/// Whether *any* loaded reconstruction carries everything the patch surfel pass
-/// needs: patch frames *and* the bitmaps to texture them with.
+/// Whether *any* loaded reconstruction draws patches: its point style is
+/// Patches and it carries the frames and bitmaps the surfel pass needs
+/// ([`crate::scene::SceneNode::draws_patches`]).
 ///
-/// Any rather than the selected one: this HUD toggle is a master switch across
-/// every node (the per-node eyes live in the Scene panel), so greying it out
-/// because the *selected* node happens to have no patches would disable a
-/// control that still governs something on screen.
-pub(crate) fn has_patch_data(state: &AppState) -> bool {
-    state.scene.iter().any(|node| node.has_patch_data())
+/// Any rather than the selected one: the Patches section's sliders act on
+/// every node that draws patches, so hiding them because the *selected* node
+/// happens to draw dots would hide controls that still govern something on
+/// screen.
+pub(crate) fn draws_patches(state: &AppState) -> bool {
+    state.scene.iter().any(|node| node.draws_patches())
 }
 
 /// Draw one collapsible section, remembering its open/closed state for the
@@ -236,7 +237,7 @@ impl Viewer3D {
         diagnostics: Option<(u32, u32, u32, u32)>,
         handler_ok: bool,
     ) {
-        let has_patches = has_patch_data(state);
+        let has_patches = draws_patches(state);
 
         section(ui, "layers", "Layers", true, |ui| {
             let log = &mut state.action_log;
@@ -248,16 +249,6 @@ impl Viewer3D {
                 Field::ShowCameraImages,
             );
             checkbox(ui, log, &mut state.show_grid, Field::ShowGrid);
-            // Greyed rather than hidden: unlike the Patches *section*, the
-            // toggle stays visible so the capability remains discoverable on a
-            // reconstruction that happens not to carry patches.
-            let patches = ui
-                .add_enabled(
-                    has_patches,
-                    egui::Checkbox::new(&mut state.show_patches, Field::ShowPatches.label()),
-                )
-                .on_disabled_hover_text("This reconstruction carries no patch bitmaps");
-            Field::ShowPatches.record_widget(log, &patches, FieldValue::Flag(state.show_patches));
             checkbox(
                 ui,
                 log,
@@ -308,8 +299,9 @@ impl Viewer3D {
             );
         });
 
-        // Hidden, not greyed: the four patch sliders are dead weight on the
-        // common reconstruction that carries no patch bitmaps.
+        // Hidden, not greyed: the patch sliders are dead weight while no node
+        // draws patches, which is every scene of reconstructions that carry no
+        // patch bitmaps.
         if has_patches {
             section(ui, "patches", "Patches", false, |ui| {
                 let log = &mut state.action_log;

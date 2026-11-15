@@ -690,15 +690,7 @@ impl App {
             for node in &self.state.scene {
                 renderer.set_node_display(
                     node.id,
-                    NodeDisplay {
-                        visible: crate::scene::is_visible(node, solo),
-                        show_points: node.show_points,
-                        show_camera_images: node.show_camera_images,
-                        show_patches: node.show_patches,
-                        show_points_at_infinity: node.show_points_at_infinity,
-                        interactive: node.interactive,
-                        tint: node.tint,
-                    },
+                    NodeDisplay::of(node, solo, self.state.patch_opacity),
                 );
                 // Setting or resetting a transform is a world-space change, so
                 // it re-derives `length_scale` and re-sizes frustum geometry
@@ -933,9 +925,6 @@ impl App {
             encoder,
             self.state.show_points,
             self.state.show_camera_images,
-            // At zero opacity patches are invisible; skip the draw so they don't
-            // still write depth/pick and swallow track rays and point clicks.
-            self.state.show_patches && self.state.patch_opacity > 0.0,
             in_camera_view,
         );
 

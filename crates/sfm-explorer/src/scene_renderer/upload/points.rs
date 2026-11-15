@@ -67,7 +67,8 @@ impl SceneRenderer {
         });
 
         // The deleted mask starts all-alive: a fresh base is what it is, and
-        // the overlay's set is applied on top by `update_point_mask`. At
+        // the overlay's set is applied on top by `update_point_mask`, after
+        // `upload_patches` has marked the points it packed a surfel for. At
         // least one entry so a point-free node still has a bindable buffer.
         let alive = vec![1u32; instances.len().max(1)];
         let alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -107,6 +108,10 @@ impl SceneRenderer {
         bundle.bounds = Some(bounds);
         bundle.point_instance_buffer = Some(buffer);
         bundle.point_alive_buffer = Some(alive_buffer);
+        #[cfg(test)]
+        {
+            bundle.written_point_words = alive;
+        }
         bundle.masked_deleted.clear();
         bundle.masked_highlighted.clear();
         bundle.masked_painted.clear();

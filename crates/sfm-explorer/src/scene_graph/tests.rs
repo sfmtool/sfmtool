@@ -23,10 +23,10 @@ use nalgebra::Vector3;
 use sfmtool_core::reconstruction::ObservationSource;
 use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
-use super::{row_id, SceneGraphPanel};
+use super::{point_style_row_id, row_id, SceneGraphPanel};
 use crate::align::{AlignOptions, AlignSource};
 use crate::image_menu::ImageMenuAction;
-use crate::scene::{CameraRef, ImageRef, NodeTint, PointRef, SceneNode, TINT_PALETTE};
+use crate::scene::{CameraRef, ImageRef, NodeTint, PointRef, PointStyle, SceneNode, TINT_PALETTE};
 use crate::state::{AppState, CachedSiftFeatures};
 use crate::viewer_3d::Viewer3D;
 
@@ -467,31 +467,111 @@ fn the_image_list_lays_out_only_the_visible_rows() {
     );
 }
 
-#[test]
-fn the_patches_row_appears_only_for_a_node_that_carries_patch_data() {
+/// Give every point of `recon` a patch frame and, with `bitmaps`, the bitmap
+/// the surfel pass textures it with.
+fn give_patches(recon: &mut SfmrReconstruction, bitmaps: bool) {
     use ndarray::{Array2, Array4};
 
+    let n = recon.point_set.points.len();
+    recon.point_set.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+    recon.point_set.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+    recon.point_set.patch_bitmaps_y_x_rgba =
+        bitmaps.then(|| Arc::new(Array4::<u8>::from_elem((n, 8, 8, 4), 200)));
+}
+
+/// A node made from a file starts in the style its data draws best: patches
+/// when the file carries patch frames and bitmaps, dots when it carries
+/// neither or frames alone.
+#[test]
+fn a_node_starts_in_the_patches_style_only_when_its_file_carries_patch_data() {
+    let opened = |frames: bool, bitmaps: bool| {
+        let mut recon = recon_named(32, 8, "IMG");
+        if frames {
+            give_patches(&mut recon, bitmaps);
+        }
+        SceneNode::from_path(std::path::Path::new("/runs/run.sfmr"), recon).point_style
+    };
+    assert_eq!(opened(true, true), PointStyle::Patches, "a patch file");
+    assert_eq!(opened(false, false), PointStyle::Dots, "a sift file");
+    assert_eq!(
+        opened(true, false),
+        PointStyle::Dots,
+        "frames with no bitmaps"
+    );
+}
+
+/// The Points row carries the Dots/Patches selector on a node with patch data
+/// and on no other, and there is no separate Patches row.
+#[test]
+fn the_point_style_selector_appears_only_for_a_node_that_carries_patch_data() {
     let mut state = shared_shoot(2);
     let plain = state.scene[0].id;
     let patched = state.scene[1].id;
-    {
-        let recon = state.scene[1].recon_mut();
-        let n = recon.point_set.points.len();
-        recon.point_set.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
-        recon.point_set.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
-        recon.point_set.patch_bitmaps_y_x_rgba =
-            Some(Arc::new(Array4::<u8>::from_elem((n, 8, 8, 4), 200)));
-    }
+    // Added after the node was made, so it is still in the Dots style: the
+    // selector follows the data, not the style.
+    give_patches(state.scene[1].recon_mut(), true);
     let (panel, _ctx) = settled(&mut state);
 
+    for style in [PointStyle::Dots, PointStyle::Patches] {
+        assert!(
+            panel.hit_rect(point_style_row_id(patched, style)).is_some(),
+            "a node with patch bitmaps got no {style:?} button"
+        );
+        assert!(
+            panel.hit_rect(point_style_row_id(plain, style)).is_none(),
+            "a node without patch bitmaps got a {style:?} button anyway"
+        );
+    }
     assert!(
-        panel.hit_rect(row_id(patched, "patches_eye")).is_some(),
-        "a node with patch bitmaps got no Patches row"
+        panel.hit_rect(row_id(patched, "patches_eye")).is_none(),
+        "the Patches row is still drawn"
     );
-    assert!(
-        panel.hit_rect(row_id(plain, "patches_eye")).is_none(),
-        "a node without patch bitmaps got a Patches row anyway"
+}
+
+/// A click on the other style switches the node to it and logs the switch in
+/// the Scene panel's words; a click on the style already in force logs
+/// nothing.
+#[test]
+fn clicking_a_point_style_sets_it_and_logs_it() {
+    let mut state = AppState::new();
+    let mut recon = recon_named(32, 8, "IMG");
+    give_patches(&mut recon, true);
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/patched.sfmr"),
+        recon,
+    ));
+    let id = state.scene[0].id;
+    assert_eq!(state.scene[0].point_style, PointStyle::Patches);
+    let (mut panel, ctx) = settled(&mut state);
+
+    let rows = state.action_log.entries().count();
+    click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        point_style_row_id(id, PointStyle::Patches),
     );
+    assert_eq!(state.scene[0].point_style, PointStyle::Patches);
+    assert_eq!(
+        state.action_log.entries().count(),
+        rows,
+        "choosing the style in force logged a change"
+    );
+
+    click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        point_style_row_id(id, PointStyle::Dots),
+    );
+    assert_eq!(state.scene[0].point_style, PointStyle::Dots);
+    let logged: Vec<String> = state
+        .action_log
+        .entries()
+        .skip(rows)
+        .map(|entry| entry.text.clone())
+        .collect();
+    assert_eq!(logged, ["Point style of patched: Dots"]);
 }
 
 /// Store the first `n` points of `recon` as points at infinity, along the
