@@ -339,3 +339,87 @@ def test_recon_cli_with_range(runner, seoul_bull_workspace):
     # (need 4+ frames, which we have), but should not mention frame 17
     assert "Reconstruction:" in result.output
     assert "seoul_bull_sculpture_17" not in result.output
+
+
+def test_recon_two_sequences_report_each_section_in_full(
+    runner, kerry_park_ground_truth_sfmr
+):
+    """With two sequences, the kerry rig's two sensors, each sequence's
+    discontinuity table follows its own frame table before the next sequence
+    begins, the table's header sits over its values, and the summary says that
+    the signal counts are not a break count."""
+    result = runner.invoke(main, ["motion", str(kerry_park_ground_truth_sfmr)])
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+
+    # Each line is looked up whole, so the pattern written with backslashes
+    # (as summarize_paths_by_sequence gives it on Windows) is not found.
+    def at(line):
+        assert line in lines, f"{line!r} not in output"
+        return lines.index(line)
+
+    order = [
+        at("Analyzing sequence: fisheye_left/frame_%02d.jpg (24 frames)"),
+        at("  fisheye_left/frame: 2 discontinuities, 0 breaks"),
+        at("Analyzing sequence: fisheye_right/frame_%02d.jpg (24 frames)"),
+        at("  fisheye_right/frame: 2 discontinuities, 0 breaks"),
+        at("Summary"),
+    ]
+    assert order == sorted(order)
+    for discontinuities in order[1:4:2]:
+        assert lines[discontinuities + 1].startswith(
+            "    Break rule: RotR > 4 and SharedPts < "
+        )
+    assert "    Obs-count outlier (w=24):  z-score < -2.5" in lines
+
+    # The header of each discontinuity table ends `SharedPts` where its rows'
+    # shared counts end, and leaves `Dist` and `Rot`, which no signal has a
+    # threshold on, unbracketed; 17->18 had both bracketed before.
+    headers = [i for i, line in enumerate(lines) if line.lstrip().startswith("Edge ")]
+    assert len(headers) == 2
+    rows = []
+    for h in headers:
+        header = lines[h]
+        shared_end = header.index("SharedPts") + len("SharedPts")
+        rot_end = header.index(" Rot ") + len(" Rot")
+        for row in lines[h + 2 : h + 4]:
+            assert row[shared_end - 9 : shared_end].strip().isdigit(), row
+            assert row[shared_end] == " ", row
+            assert "<" not in row[:rot_end], row
+            rows.append(row.split()[0])
+    assert rows == ["5->6", "17->18", "5->6", "18->19"]
+
+    summary = lines[order[-1] :]
+    assert "Total: 4 discontinuities in 2 sequences, 0 breaks." in summary
+    assert "  Found by one signal:          0" in summary
+    assert "  Found by two or more signals: 4" in summary
+    assert "Single-signal (low confidence)" not in result.output
+    assert "high confidence" not in result.output
+    text = " ".join(line.strip() for line in summary)
+    assert "not whether it is a break" in text
+    assert "the number of signals is not part of that rule" in text
+
+
+def test_recon_every_sequence_skipped_gives_no_verdict(
+    runner, seoul_bull_ground_truth_sfmr, tmp_path
+):
+    """With fewer than four images in its only sequence, nothing is analyzed,
+    so the command prints no summary, no verdict and no JSON report."""
+    json_out = tmp_path / "report.json"
+    result = runner.invoke(
+        main,
+        [
+            "motion",
+            str(seoul_bull_ground_truth_sfmr),
+            "-r",
+            "1-3",
+            "--json",
+            str(json_out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "only 3 images (need at least 4)" in result.output
+    assert "No sequence has the 4 images the analysis needs." in result.output
+    assert "Summary" not in result.output
+    assert "Verdict" not in result.output
+    assert not json_out.exists()

@@ -287,6 +287,12 @@ relative and then absolute, and then searches upward from the file for a
 when none of these finds one. As with image sequence analysis,
 `summarize_paths_by_sequence` is used to detect numbered sequences among the
 reconstruction's image names. Each detected sequence is analyzed independently.
+The pattern is written with forward slashes, as image names are, whatever the
+platform's path separator: the kerry rig's sequences are `fisheye_left/frame_%02d.jpg`
+and `fisheye_right/frame_%02d.jpg`, named `fisheye_left/frame` and
+`fisheye_right/frame`. A sequence with fewer than four registered images is skipped
+with a message, and when every sequence is skipped the command prints
+`No sequence has the 4 images the analysis needs.` and no summary or verdict.
 
 ### Step 1: Pose Discontinuity Detection
 
@@ -363,21 +369,25 @@ the other signals.
 **Combined rule.** An edge is reported as a discontinuity when any of the following
 fires: pose extrapolation (`L.t`, `L.r`, `R.t`, `R.r`), step-size ratio (`Step`), or
 covisibility drop (`Cov`). Clustering deduplicates adjacent edges in the same break.
-The output partitions discontinuities into:
+The output counts the discontinuities by how many signals found them:
 
-- **Single-signal (low confidence):** only one of {P, S, C} fired. Usually pose-only
+- **Found by one signal:** only one of {P, S, C} fired. Usually pose-only
   hits on edges where a polynomial extrapolator mildly overshot.
-- **Multi-signal (high confidence):** two or more of {P, S, C} fired, or at least one
+- **Found by two or more signals:** two or more of {P, S, C} fired, or at least one
   plus Obs context at an endpoint.
 
 A scale-shift discontinuity that the pose test misses changes both the step length
 and the set of tracks seen across the edge, so it usually fires Step and Cov together
-and is reported as a high-confidence hit.
+and is found by two signals.
 
-The confidence partition says how many signals agree, not whether the solve is wrong:
-a sound solve of a video lists many discontinuities, several of them on two or more
-signals. Whether a listed discontinuity is an error in the solve is decided by the
-break verdict of Step 4.
+The count says how many signals agree that the motion is irregular at the edge, not
+whether the solve is wrong: a sound solve of a video lists many discontinuities,
+several of them found by two or more signals. Whether a listed discontinuity is an
+error in the solve is decided by the break verdict of Step 4 alone, and the number of
+signals is not part of its rule. The console says so under the counts, so that a
+discontinuity found by several signals beside `Verdict: no breaks` does not read as a
+contradiction. The `--json` report names this count `confidence` (`"high"` for two
+or more signals).
 
 ### Step 3: Reprojection Error Context
 
@@ -513,30 +523,53 @@ once, in a broken Daegu stride-7 solve whose run from 2507 to 2591 holds breaks 
 
 ### Output
 
-- Header: threshold values for all four signals.
-- Per-sequence line: sequence pattern, frame count.
+Each sequence has its own section, printed in full before the next sequence's
+begins, so that with several sequences, such as the two sensors of a rig or two
+videos, every result sits under its own sequence's header. A section holds, in order:
+
+- Header line: `Analyzing sequence: <pattern> (<N> frames)`.
+- The median step and the threshold values for all four signals. The Obs threshold
+  reads `z-score < -2.5`, since only the low tail fires.
 - Per-frame table with columns: frame number, image name, left/right pose
   extrapolation residuals (`L.trans`, `L.rot`, `R.trans`, `R.rot`), step-size ratio
   (`StepR`) and coviz drop (`CovR`) for the landing edge, obs-count z-score (`ObsZ`),
   and a `Flag` column listing fired codes (`L.t`, `L.r`, `R.t`, `R.r`, `Step`, `Cov`,
   `Obs`). StepR and CovR attach to the landing frame of each edge so row i shows the
   metrics for edge (i−1, i).
-- Summary, per sequence: a line with the frame, discontinuity and break counts, a
-  `Break rule:` line giving the sequence's references (rotation per frame number,
-  median gap, and the two shared-points thresholds), and a table with one row per
-  detected discontinuity: edge, raw edge translation and rotation, StepR, CovR,
+- The sequence's discontinuities: `<name>: no discontinuities`, or a line
+  `<name>: N discontinuities, M breaks`, a `Break rule:` line giving the three
+  conditions joined by `and`, `RotR > 4 and SharedPts < s and NearPts < c`, with the
+  sequence's thresholds and the expected rotation they use (rotation per frame number
+  and median gap), and a table with one row per discontinuity: edge, `Dist` and
+  `Rot` (the translation and rotation between the edge's two images), StepR, CovR,
   endpoint obs z-scores, shared 3D point count, per-endpoint mean reprojection errors,
-  a `Signals` column listing fired codes (e.g. `P S C O`), `NearPts` (the nearby shared
-  count of Step 4), `RotR` (its rotation ratio) and `Break` (`BREAK` or `-`). Values
-  that exceeded their signal's threshold are wrapped in `< >` brackets.
-- Footer: total count, plus a partition into single-signal (low-confidence) vs
-  multi-signal (high-confidence) hits, and a legend for the signal codes and the
-  break columns.
+  a `Signals` column listing fired codes in the order `P S C O`, `NearPts` (the nearby
+  shared count of Step 4), `RotR` (its rotation ratio) and `Break` (`BREAK` or `-`).
+  A StepR, CovR or ObsZ value that exceeded its signal's threshold is wrapped in
+  `< >`. `Dist` and `Rot` never are: no signal has a threshold on them, since the
+  pose signal's thresholds are on the extrapolation residuals of the frame table, so
+  a bracket there would mark a value that is past no threshold. The header's columns
+  have the rows' widths, so each label sits over its values.
+
+After the last section comes the summary:
+
+- With more than one sequence, one line per sequence with its frame, discontinuity
+  and break counts.
+- `Total: N discontinuities in K sequences, M breaks.`, or
+  `No discontinuities in any sequence.`, with each noun in the singular for a count
+  of 1.
+- `Found by one signal:` and `Found by two or more signals:` counts (Step 2's
+  "Combined rule"), then a sentence saying that these count how many signals agree
+  that the motion is irregular, not whether the edge is a break, and that the break
+  rule alone decides breaks, then a legend for the signal codes, the `< >` marks,
+  `Dist` and `Rot`, and the break columns.
 - Verdict, the last line before the timing: `Verdict: no breaks`, or
   `Verdict: N breaks: A->B, ...` naming each break by its frame numbers (`1 break`
   for one), with the sequence name before each edge when the reconstruction has more
   than one sequence. For example `Verdict: 1 break: 2225->2229`. A reconstruction with
-  no numbered sequence prints the no-sequences message and no verdict.
+  no numbered sequence prints the no-sequences message and no verdict, and one whose
+  every sequence was skipped prints `No sequence has the 4 images the analysis
+  needs.` and no summary or verdict.
 
 The command exits 0 whatever the verdict, as it does for every finding; a script reads
 the verdict from `break_count` in the `--json` report.
@@ -600,8 +633,8 @@ Each entry in `sequences`:
 
 | Field | Description |
 |-------|-------------|
-| `pattern` | Sequence pattern from `summarize_paths_by_sequence` (e.g. `frame_%04d.jpg`). |
-| `name` | Base name derived from the pattern (e.g. `frame`). |
+| `pattern` | Sequence pattern from `summarize_paths_by_sequence`, with forward slashes (e.g. `frame_%04d.jpg`, `fisheye_left/frame_%02d.jpg`). |
+| `name` | Base name derived from the pattern (e.g. `frame`, `fisheye_left/frame`). |
 | `frame_count` | Number of frames analyzed for this sequence. |
 | `median_trans` | Median translation between successive frames in this sequence. |
 | `median_rot_deg` | Median rotation (degrees) between successive frames. |
@@ -651,7 +684,7 @@ Each entry in `discontinuities` (one per `core_edge` after clustering):
 | `shared_points` | Number of 3D points observed in both endpoint images. The counts come from `build_covisibility_pairs` in [`_image_pair_graph.py`](../../../src/sfmtool/_image_pair_graph.py), which drops pairs whose viewing directions differ by more than 90°, so `0` means either no shared points or a pair removed by that angle filter. |
 | `reproj_error_a`, `reproj_error_b` | Mean reprojection error (pixels) for each endpoint image, or `null` if not available. |
 | `signals` | Array of fired primary codes (subset of `["P", "S", "C", "O"]`, sorted). `P` aggregates the four pose-residual flags. |
-| `confidence` | `"high"` if `len(signals) >= 2`, else `"low"`. Matches the footer partition rule. |
+| `confidence` | `"high"` if `len(signals) >= 2`, else `"low"`: the console's "found by two or more signals" and "found by one signal". It says how many signals agree that the motion is irregular, not whether the edge is a break, which `is_break` says. |
 | `frame_gap` | `frame_b - frame_a`. |
 | `expected_rotation_deg` | `rotation_per_frame_deg × max(frame_gap, median_frame_gap)`. |
 | `rotation_ratio` | `rotation_deg / expected_rotation_deg`, or `null` when the expected rotation is 0 and the edge turns (an infinite ratio). |
@@ -796,7 +829,8 @@ Reconstruction mode, one discontinuity, classified as a break:
   reconstruction mode echoes the no-sequences message and returns).
 - When a sequence is skipped (e.g. fewer than four frames in reconstruction
   mode), it is omitted from `sequences`. The remaining sequences are still
-  emitted.
+  emitted. When every sequence is skipped, no JSON file is written, as when no
+  sequence is detected.
 
 ### Tests
 
@@ -835,7 +869,15 @@ of the 17 `seoul_bull_sculpture` images built at the ground-truth poses:
   non-zero with "Failed to write JSON report".
 
 The console output and option handling of both modes are tested in
-[`tests/test_motion.py`](../../../tests/test_motion.py).
+[`tests/test_motion.py`](../../../tests/test_motion.py). For a reconstruction it
+checks, on the kerry ground truth's two sequences, that each sequence's discontinuity
+line and `Break rule:` line come after its own `Analyzing sequence:` header and
+before the next sequence's, with the patterns written with forward slashes; that the
+discontinuity table's header ends `SharedPts` where the rows' counts end and that no
+`Dist` or `Rot` value is bracketed; and that the summary gives the total with its
+break count, the one-signal and two-or-more-signal counts and the sentence saying they
+are not a break count. On the Seoul bull ground truth with `-r 1-3`, whose only
+sequence is skipped, it prints no summary, no verdict and no JSON report.
 
 [`tests/test_motion_breaks.py`](../../../tests/test_motion_breaks.py) covers the break
 verdict:
