@@ -468,7 +468,7 @@ pub(super) fn specs() -> Vec<ToolSpec> {
             name: "set_viewer_3d_display",
             description: "Change the 3D viewport's display controls, the checkboxes and sliders \
                           of its Display HUD: which layers are drawn (points, camera images, grid, \
-                          patches, points at infinity, the orbit target's indicator), point and \
+                          points at infinity, the orbit target's indicator), point and \
                           patch sizes, the scene scale, Maintain Z-up, the Advanced sliders, \
                           the Debug overlays (the controls help, the frame rate and whether the \
                           status line shows an agent's actions, show_mcp_status_line), and the \

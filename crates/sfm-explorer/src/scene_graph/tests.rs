@@ -501,7 +501,7 @@ fn a_node_starts_in_the_patches_style_only_when_its_file_carries_patch_data() {
 }
 
 /// The Points row carries the Dots/Patches selector on a node with patch data
-/// and on no other, and there is no separate Patches row.
+/// and on no other.
 #[test]
 fn the_point_style_selector_appears_only_for_a_node_that_carries_patch_data() {
     let mut state = shared_shoot(2);
@@ -522,10 +522,6 @@ fn the_point_style_selector_appears_only_for_a_node_that_carries_patch_data() {
             "a node without patch bitmaps got a {style:?} button anyway"
         );
     }
-    assert!(
-        panel.hit_rect(row_id(patched, "patches_eye")).is_none(),
-        "the Patches row is still drawn"
-    );
 }
 
 /// A click on the other style switches the node to it and logs the switch in

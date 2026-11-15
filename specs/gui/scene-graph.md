@@ -1520,7 +1520,7 @@ bundle from `retain_nodes` on the next frame.
 - **The point style**: a node made from a file with patch frames and bitmaps
   starts in Patches, and one with neither or with frames alone in Dots; the
   Points row carries the Dots/Patches selector on a node with patch data and on
-  no other, and no Patches row is drawn; a click on the other style sets it and
+  no other; a click on the other style sets it and
   logs `Point style of <label>: Dots`, and a click on the style in force logs
   nothing (`scene_graph/tests.rs`). In the renderer, exactly the points the
   atlas packed a surfel for carry `MASK_HAS_SURFEL` after a fresh upload, after
