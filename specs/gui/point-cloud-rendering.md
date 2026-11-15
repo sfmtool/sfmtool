@@ -105,10 +105,11 @@ A live point that has a surfel in its node's patch atlas carries
 `MASK_HAS_SURFEL` (`0x200`) as well, in the point buffer only. While the
 node's point style draws patches (`ReconUniforms::points_as_patches`), the
 vertex shader emits a clipped vertex for such a point, so it is drawn as its
-surfel and not also as a splat, unless it is selected, hovered or takes
-`MASK_HIGHLIGHTED`, whose colours only the splat shows. The bit, the uniform
-and the reason for each are [scene-graph.md](scene-graph.md#point-style)
-§ "Point style".
+surfel and not also as a splat, also while it is selected, hovered or takes
+`MASK_HIGHLIGHTED`, which its surfel shows as an outline in the same colours
+([patch-rendering.md](patch-rendering.md#picking-hover-selection)). The bit,
+the uniform and the reason for each are
+[scene-graph.md](scene-graph.md#point-style) § "Point style".
 
 `SceneRenderer::update_point_mask` writes the words; see
 [document-model.md](document-model.md) § "Change detection by identity".
@@ -562,6 +563,12 @@ Pass 2:  EDL post-process
   → reads: color + linear depth
   → applies: edge darkening + supernova glow
   → writes: final display color
+
+Pass 2b: The hidden part of each highlighted surfel's outline
+  → only while a drawn surfel is highlighted; the surfels of Pass 1d and 1e
+  → reads: hw depth, attached read-only and compared Less
+  → writes: EDL output color at BEHIND_OPACITY, straight alpha
+  → no linear depth, pick ID or depth (see patch-rendering.md)
 
 Pass 3:  Target indicator
   → reads: linear depth (for occlusion testing)

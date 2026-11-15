@@ -286,6 +286,10 @@ Pass 2:  EDL post-process
   Input:  Color + linear depth textures
   Output: Final display color (edge darkening + supernova glow)
 
+Pass 2b: Hidden outlines (while a drawn surfel is highlighted)
+  Input:  Patch instances + hw depth (read-only, compared Less)
+  Output: EDL output color where the scene hides a highlighted surfel's outline
+
 Pass 3:  Target indicator
   Input:  Compass edge instances + star mesh + scene depth texture
   Output: EDL output color (additive blending, reads depth for occlusion)

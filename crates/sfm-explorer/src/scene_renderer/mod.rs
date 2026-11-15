@@ -153,6 +153,15 @@ pub(crate) struct SceneRenderer {
     /// The patch pipeline's variant for the node a camera model proposal's
     /// preview is on.
     patch_preview_pipeline: Option<wgpu::RenderPipeline>,
+    /// The hidden part of each highlighted surfel's outline, after the EDL
+    /// pass, and its variant for the node a proposal's preview is on.
+    patch_hidden_outline_pipeline: Option<wgpu::RenderPipeline>,
+    patch_hidden_outline_preview_pipeline: Option<wgpu::RenderPipeline>,
+    /// Whether a surfel the patch pass draws is outlined this frame, its point
+    /// selected, hovered or called out: set by the frame's uniform write from
+    /// [`SceneRenderer::has_outlined_surfel`], and what the hidden-outline pass
+    /// is recorded on.
+    outlined_surfel: bool,
     patch_bind_group_layout: Option<wgpu::BindGroupLayout>,
     patch_sampler: Option<wgpu::Sampler>,
 
@@ -269,6 +278,9 @@ impl SceneRenderer {
             image_quad_sampler: None,
             patch_pipeline: None,
             patch_preview_pipeline: None,
+            patch_hidden_outline_pipeline: None,
+            patch_hidden_outline_preview_pipeline: None,
+            outlined_surfel: false,
             patch_bind_group_layout: None,
             patch_sampler: None,
             bg_image_distorted_pipeline: None,
@@ -417,6 +429,40 @@ impl SceneRenderer {
         // contiguous, so the arithmetic is the same for both.
         let span = bundle.point_count.saturating_add(bundle.addition_count());
         (local < span).then(|| bundle.point_pick_base + local)
+    }
+
+    /// Whether a surfel the patch pass draws is outlined: the surfel of the
+    /// selected or the hovered point, or of a point the viewport calls out, on
+    /// a node that draws its surfels (`ReconResources::draws_surfels`, visible
+    /// and not soloed out). The hidden-outline pass draws nothing otherwise, so
+    /// it is left out of the frame rather than run over every surfel to
+    /// collapse them all.
+    ///
+    /// It errs toward drawing: a surfel the shader then drops, a deleted
+    /// point's or one the Track Table's filter hides, costs one pass that draws
+    /// nothing.
+    pub(super) fn has_outlined_surfel(
+        &self,
+        selected: Option<PointRef>,
+        hovered: Option<PointRef>,
+    ) -> bool {
+        let carries_surfel = |bundle: &ReconResources, point: u32| {
+            bundle
+                .patch_atlases()
+                .any(|patch| patch.slot_of_point.contains_key(&point))
+        };
+        let highlighted = [selected, hovered].into_iter().flatten().any(|p| {
+            self.recons
+                .get(&p.recon)
+                .filter(|b| b.display.visible && b.draws_surfels())
+                .is_some_and(|b| carries_surfel(b, p.point))
+        });
+        highlighted
+            || self.drawn(ReconResources::draws_surfels).any(|b| {
+                b.masked_highlighted
+                    .iter()
+                    .any(|&point| carries_surfel(b, point))
+            })
     }
 
     /// [`Self::global_point_index`], for the upload tests, which assert on the
@@ -589,6 +635,8 @@ impl SceneRenderer {
         let pa = pipelines::patch::create(device);
         self.patch_pipeline = Some(pa.pipeline);
         self.patch_preview_pipeline = Some(pa.preview_pipeline);
+        self.patch_hidden_outline_pipeline = Some(pa.hidden_outline_pipeline);
+        self.patch_hidden_outline_preview_pipeline = Some(pa.hidden_outline_preview_pipeline);
         self.patch_bind_group_layout = Some(pa.bind_group_layout);
 
         // Atlas samplers are shared: every node's thumbnail / patch atlas is

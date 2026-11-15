@@ -32,8 +32,8 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var depth_tex: texture_depth_2d;
 
-// Opacity the moment the figure passes behind scene geometry, before the fog.
-const BEHIND_OPACITY: f32 = 0.45;
+// The figure's opacity the moment it passes behind scene geometry, before the
+// fog, is BEHIND_OPACITY in common.wgsl.
 
 // The floor it fades to and never below: a handle that cannot be seen cannot
 // be grabbed.

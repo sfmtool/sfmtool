@@ -82,16 +82,13 @@ fn place(in: VertexInput) -> VertexOutput {
     // point. That covers a point at infinity too, which takes the same word.
     //
     // A point the patch pass draws as its surfel (the node's style is Patches
-    // and the point has one) has no splat either, so each point is drawn once,
-    // unless it is selected, hovered or called out: the surfel shader has no
-    // colour for those, and the splat in the highlight colour is how they show.
+    // and the point has one) has no splat either, so each point is drawn once.
+    // That holds while it is selected, hovered or called out as well: its
+    // surfel shows those with an outline in the highlight colour (patch.wgsl).
     let global = recon.point_pick_base + in.instance_index;
     let highlighted = global == uniforms.selected_point_index
         || global == uniforms.hovered_point_index;
-    let as_surfel = recon.points_as_patches != 0u
-        && (in.alive & MASK_HAS_SURFEL) != 0u
-        && !highlighted
-        && word != MASK_HIGHLIGHTED;
+    let as_surfel = recon.points_as_patches != 0u && (in.alive & MASK_HAS_SURFEL) != 0u;
     if word == MASK_DELETED
         || as_surfel
         || !in_this_draw(in.alive, in.dimmed_draw != 0u, highlighted, recon.filter_mode) {
@@ -236,9 +233,9 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     } else if in.mark == MASK_UNDER_BRUSH {
         color = BRUSH_UNDER_COLOR;
     } else if in.point3d_index == uniforms.selected_point_index {
-        color = vec3<f32>(1.0, 1.0, 0.0);
+        color = SELECTED_COLOR;
     } else if in.point3d_index == uniforms.hovered_point_index || in.mark == MASK_HIGHLIGHTED {
-        color = vec3<f32>(0.0, 1.0, 1.0);
+        color = HOVERED_COLOR;
     }
     // Premultiplied, like the pipeline's blend: a dimmed point lets
     // 1 - DIM_ALPHA of what is behind it through.

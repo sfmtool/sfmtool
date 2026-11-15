@@ -232,8 +232,12 @@ style that draws both: a point is drawn once.
 A point drawn as its surfel is still the point: a click on the surfel picks it,
 the Track Table filter's dimmed draw dims it, and the eraser brush's reds tint
 it. Selection, hover and the viewport's call-out (the points a camera being
-moved observes) have no colour in the surfel shader, so a point in any of those
-states keeps its dot, in the highlight colour, at the centre of its surfel.
+moved observes) show as an outline the surfel draws along its edge in the
+highlight colour, the selection's yellow or the hover's cyan, and the point has
+no dot in any of those states either. Seen from behind, a highlighted surfel
+draws the outline alone, and where other geometry hides the outline it is drawn
+over that geometry at reduced opacity
+([patch-rendering.md](patch-rendering.md#picking-hover-selection)).
 
 The two passes agree through two values. `NodeDisplay::points_as_patches` is
 the style composed with the opacity in one place (`NodeDisplay::of`): the patch
