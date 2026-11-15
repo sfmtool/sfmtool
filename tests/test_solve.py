@@ -27,6 +27,15 @@ def test_solve_both_modes(isolated_seoul_bull_image: Path):
     assert "Cannot specify both" in result.output
 
 
+def test_solve_help_names_global_mapper():
+    """`-g`'s help says the global solve is COLMAP's global mapper."""
+    result = CliRunner().invoke(main, ["solve", "--help"])
+    assert result.exit_code == 0, result.output
+    help_text = " ".join(result.output.split())
+    assert "Run global structure from motion with COLMAP's global mapper." in help_text
+    assert "GLOMAP" not in help_text
+
+
 def test_solve_no_paths():
     """Test that solve without paths raises an error."""
     result = CliRunner().invoke(main, ["solve", "-i"])
@@ -124,7 +133,7 @@ def test_solve_global(isolated_seoul_bull_17_images: list[Path]):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "Running global SfM" in result.output
+    assert "Running global SfM with COLMAP's global mapper..." in result.output
     assert "Found reconstruction" in result.output
     assert output_path.exists()
 

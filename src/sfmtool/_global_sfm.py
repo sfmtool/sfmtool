@@ -1,7 +1,7 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Global Structure from Motion using GLOMAP."""
+"""Global Structure from Motion using COLMAP's global mapper."""
 
 from pathlib import Path
 
@@ -29,8 +29,8 @@ def run_global_sfm(
     image_filter: MatchesImageFilter | None = None,
     detect_infinity: bool = True,
 ):
-    """Run global Structure from Motion on a list of images using GLOMAP."""
-    print("Running global SfM with GLOMAP...")
+    """Run global Structure from Motion on images with COLMAP's global mapper."""
+    print("Running global SfM with COLMAP's global mapper...")
     if random_seed is not None:
         print(f"Random seed: {random_seed}")
 

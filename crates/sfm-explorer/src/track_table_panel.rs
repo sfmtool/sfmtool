@@ -109,8 +109,9 @@ fn defect_count_text(column: TrackTableColumn, count: usize) -> (String, &'stati
         _ => (
             format!("\u{b7} {} with repeat observations", grouped(count)),
             "Live points whose track holds more than one observation in one image, \
-             whatever the bounds. That is a defect in the reconstruction, which a \
-             GLOMAP solve can produce. Click the Repeat obs. heading to put them first.",
+             whatever the bounds. That is a defect in the reconstruction, which \
+             COLMAP's global mapper can produce. Click the Repeat obs. heading to put them \
+             first.",
         ),
     }
 }
@@ -208,8 +209,8 @@ fn column_description(column: TrackTableColumn) -> &'static str {
         TrackTableColumn::RepeatObservations => {
             "The track's observations beyond one per image: Track less the number of distinct \
              images that see the point. Anything but 0 is a defect, one image holding several \
-             observations of the point, which a GLOMAP solve can produce. The column is shown \
-             while the reconstruction has such a point, unless it was unticked here."
+             observations of the point, which COLMAP's global mapper can produce. The column \
+             is shown while the reconstruction has such a point, unless it was unticked here."
         }
         TrackTableColumn::BackFacingObservations => {
             "The number of the track's observations that see the point's patch at a viewing \

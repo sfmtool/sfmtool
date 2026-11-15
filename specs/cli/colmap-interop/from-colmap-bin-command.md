@@ -65,16 +65,17 @@ Each point stores the RMS of its observations' reprojection errors, measured
 from the `.sift` keypoints, the imported cameras and the converted poses
 ([sfmr-file-format.md](../../formats/sfmr-file-format.md#points3dreprojection_errorsnfloat32zst)).
 The error column of `points3D.bin` is not read into it: COLMAP's per-point error
-is the mean of the observation errors, and GLOMAP's is in normalised image
-coordinates. `colmap_binary_to_rust_sfmr` passes zeros and
+is the mean of the observation errors, and the standalone GLOMAP binary's is
+in normalised image coordinates. `colmap_binary_to_rust_sfmr` passes zeros and
 `SfmrReconstruction.from_data` scores every point. `sfm solve` writes its
 models through the same path, and through `pycolmap_to_rust_sfmr` for a rig
 solve, so a solve's output stores the RMS too.
 
 ## Repeat observations
 
-A GLOMAP model can hold a point whose track has several observations in one
-image. The import keeps, in each such image, the observation with the lowest
+A model from COLMAP's global mapper, or from the earlier standalone GLOMAP, can
+hold a point whose track has several observations in one image.
+The import keeps, in each such image, the observation with the lowest
 reprojection error against the point and drops the others, then scores the
 point's RMS again over what it keeps; this runs before `--detect-infinity`.
 When it drops anything it prints `Dropped N repeat observation(s) from M

@@ -68,8 +68,8 @@ def test_kerry_park_solve_registers_all_frames(
 ) -> None:
     """The global solve should register every image of the 8-frame prefix
     subset (16 images) and produce a substantive point cloud. Bounds are
-    forgiving: GLOMAP output drifts slightly across pycolmap versions and isn't
-    seed-deterministic.
+    forgiving: the global mapper's output drifts slightly across pycolmap
+    versions and isn't seed-deterministic.
     """
     recon = SfmrReconstruction.load(kerry_park_solve_once)
     assert recon.image_count == 16

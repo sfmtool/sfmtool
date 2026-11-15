@@ -1547,7 +1547,7 @@ modifying an existing file.
    COLMAP Database (populated from either .matches variant)
         │
         ▼
-   SfM Solver (COLMAP / GLOMAP)
+   SfM Solver (COLMAP incremental or global mapper)
         │
         ▼
    COLMAP Binary (sparse reconstruction)
