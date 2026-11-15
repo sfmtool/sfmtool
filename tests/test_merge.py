@@ -57,6 +57,8 @@ class TestMergeValidation:
         class RecordsFolder:
             """Stands in for a reconstruction: the check reads only this."""
 
+            feature_source = "sift_files"
+
             def __init__(self, folder):
                 self.source_metadata = {
                     "workspace": {"contents": {"feature_prefix_dir": folder}}
@@ -705,3 +707,166 @@ class TestMergePointsAtInfinity:
             assert np.allclose(
                 merged.positions[merged_id], original.positions[orig_id], atol=1e-6
             )
+
+
+# ---------------------------------------------------------------------------
+# Inputs the merge refuses, before any step
+# ---------------------------------------------------------------------------
+
+
+def _embedded_copy(sift_path):
+    """Save an ``embedded_patches`` conversion of ``sift_path`` beside it."""
+    from sfmtool.xform import ToEmbeddedPatchesTransform
+
+    embedded = ToEmbeddedPatchesTransform().apply(SfmrReconstruction.load(sift_path))
+    path = sift_path.parent / "embedded.sfmr"
+    embedded.save(path, operation="test")
+    return path
+
+
+def _with_rig(recon, sensor_names=("sensor0", "sensor1")):
+    """``recon`` with a two-sensor rig, its images alternating sensors."""
+    n_images = recon.image_count
+    n_frames = (n_images + 1) // 2
+    return recon.clone_with_changes(
+        rig_frame_data={
+            "rigs_metadata": {
+                "rig_count": 1,
+                "sensor_count": 2,
+                "rigs": [
+                    {
+                        "name": "rig0",
+                        "sensor_count": 2,
+                        "sensor_offset": 0,
+                        "ref_sensor_name": sensor_names[0],
+                        "sensor_names": list(sensor_names),
+                    }
+                ],
+            },
+            "sensor_camera_indexes": np.array([0, 0], dtype=np.uint32),
+            "sensor_quaternions_wxyz": np.array(
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+            ),
+            "sensor_translations_xyz": np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]]),
+            "frames_metadata": {"frame_count": n_frames},
+            "rig_indexes": np.zeros(n_frames, dtype=np.uint32),
+            "image_sensor_indexes": np.array(
+                [i % 2 for i in range(n_images)], dtype=np.uint32
+            ),
+            "image_frame_indexes": np.array(
+                [i // 2 for i in range(n_images)], dtype=np.uint32
+            ),
+        }
+    )
+
+
+def _assert_refused_before_any_step(result, output_path):
+    assert result.exit_code == 1, result.output
+    assert "Merging" not in result.output
+    assert "[1/7]" not in result.output
+    assert not output_path.exists()
+
+
+class TestMergeRefusesInputs:
+    def test_cli_refuses_embedded_patches_inputs(self, seoul_bull_workspace, tmp_path):
+        embedded = _embedded_copy(seoul_bull_workspace)
+        other = embedded.with_name("embedded_b.sfmr")
+        other.write_bytes(embedded.read_bytes())
+        output_path = tmp_path / "merged.sfmr"
+
+        result = CliRunner().invoke(
+            main, ["merge", str(embedded), str(other), "-o", str(output_path)]
+        )
+
+        _assert_refused_before_any_step(result, output_path)
+        assert (
+            "Input 1 (embedded.sfmr) and input 2 (embedded_b.sfmr) are "
+            "embedded_patches reconstructions" in result.output
+        )
+        assert "every input must be a sift_files reconstruction" in result.output
+        assert "sfm xform --to-embedded-patches" in result.output
+
+    def test_cli_refuses_an_embedded_patches_input_beside_sift_files(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        embedded = _embedded_copy(seoul_bull_workspace)
+        output_path = tmp_path / "merged.sfmr"
+
+        result = CliRunner().invoke(
+            main,
+            ["merge", str(seoul_bull_workspace), str(embedded), "-o", str(output_path)],
+        )
+
+        _assert_refused_before_any_step(result, output_path)
+        assert (
+            "Input 2 (embedded.sfmr) is an embedded_patches reconstruction"
+            in result.output
+        )
+        assert seoul_bull_workspace.name not in result.output.split("Error:")[1]
+
+    def test_library_refuses_embedded_patches_with_the_cli_message(
+        self, seoul_bull_workspace, capsys
+    ):
+        embedded = SfmrReconstruction.load(_embedded_copy(seoul_bull_workspace))
+        sift = SfmrReconstruction.load(seoul_bull_workspace)
+        capsys.readouterr()
+
+        with pytest.raises(ValueError) as excinfo:
+            merge_reconstructions([sift, embedded], input_names=["a.sfmr", "b.sfmr"])
+
+        assert str(excinfo.value).startswith(
+            "Input 2 (b.sfmr) is an embedded_patches reconstruction."
+        )
+        assert capsys.readouterr().out == ""
+
+    def test_cli_refuses_rig_frames_in_some_inputs_only(
+        self, seoul_bull_workspace, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        rig_path = seoul_bull_workspace.parent / "with_rig.sfmr"
+        _with_rig(recon).save(rig_path, operation="add_rig")
+        subset_path = seoul_bull_workspace.parent / "rig_subset.sfmr"
+        _apply_transforms_to_file(
+            rig_path, subset_path, [IncludeRangeFilter(RangeExpr("1-10"))]
+        )
+        output_path = tmp_path / "merged.sfmr"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "merge",
+                str(subset_path),
+                str(seoul_bull_workspace),
+                "-o",
+                str(output_path),
+            ],
+        )
+
+        _assert_refused_before_any_step(result, output_path)
+        assert (
+            f"Input 1 (rig_subset.sfmr) has rig frames and input 2 "
+            f"({seoul_bull_workspace.name}) has none" in result.output
+        )
+
+    def test_refuses_inputs_that_define_different_rigs(
+        self, seoul_bull_workspace, capsys
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        left_right = _with_rig(recon, ("left", "right"))
+
+        with pytest.raises(ValueError, match="input 1 and input 2 define different"):
+            merge_reconstructions([_with_rig(recon), left_right])
+        assert capsys.readouterr().out == ""
+
+    def test_refuses_cameras_that_vary_different_parameters_before_any_step(
+        self, seoul_bull_workspace, capsys
+    ):
+        plain = SfmrReconstruction.load(seoul_bull_workspace)
+        flagged = plain.clone_with_changes(per_image_adjustments=[["focal"]])
+
+        with pytest.raises(ValueError) as excinfo:
+            merge_reconstructions([plain, flagged])
+
+        assert "camera 0 of input 1, which varies nothing" in str(excinfo.value)
+        assert "camera 0 of input 2, which varies focal" in str(excinfo.value)
+        assert capsys.readouterr().out == ""

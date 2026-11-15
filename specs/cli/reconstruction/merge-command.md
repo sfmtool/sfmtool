@@ -11,12 +11,44 @@ reconstructions should be pre-aligned to a common coordinate frame (e.g., via `s
 sfm merge <RECONSTRUCTION1.sfmr> <RECONSTRUCTION2.sfmr> [MORE...] --output <OUTPUT.sfmr> [OPTIONS...]
 ```
 
-At least two reconstructions are required. They must record the same feature
-folder (`feature_prefix_dir` in their workspace metadata), since observations
-are matched and combined by feature index and the merged reconstruction
-records the first input's folder; inputs made from different feature folders,
-such as one solved before `sfm ws upgrade` and one after, stop the merge with
-an error naming each input's folder.
+## Inputs
+
+The merge matches and combines observations by feature index and refines the
+poses from the `.sift` files, so it takes only reconstructions that carry
+feature indexes into one set of `.sift` files. It checks every input once
+they are loaded and before it prints or runs any step of the merge, and stops
+with an error naming the inputs, writing nothing, when:
+
+- there are fewer than two inputs;
+- an input is an `embedded_patches` reconstruction, which stores each
+  observation's keypoint in the file and has no feature indexes. Every input
+  must be `sift_files`. No command turns an `embedded_patches` reconstruction
+  back into a `sift_files` one, so the error says to merge the `sift_files`
+  reconstructions it was made from, if there are any, and convert the result
+  with `sfm xform --to-embedded-patches`;
+- the inputs record different feature folders (`feature_prefix_dir` in their
+  workspace metadata), such as one solved before `sfm ws upgrade` and one
+  after; the error names each input's folder. The merged reconstruction
+  records the first input's folder;
+- some inputs have rig frames and others do not, or two inputs define
+  different rigs (a different `rigs/metadata.json.zst`). The merged reconstruction
+  keeps the first input's rigs, and each image keeps its sensor index into
+  them;
+- two cameras that took the same image vary different parameters per image
+  (their `per_image_adjustments`, see
+  [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
+  or have different `rolling_shutter_scanlines` settings, since step 1 below
+  makes them one camera; the error names the image and both cameras;
+- the first input's workspace is version 1 (the `sfm ws upgrade` error),
+  since the poses are refined from the `.sift` files there.
+
+Points at infinity are accepted (step 5 says how they merge). The checks live
+in `_check_inputs` in
+[merge/reconstructions.py](../../../src/sfmtool/merge/reconstructions.py),
+which `merge_reconstructions` runs first; called from Python, it raises
+`ValueError` (`Version1WorkspaceError` for the workspace) with the same
+message, naming each input by number and, when `input_names` is given, by
+name.
 
 ## Options
 
@@ -29,13 +61,11 @@ an error naming each input's folder.
 
 1. **Deduplicate cameras** — Merge camera intrinsics across reconstructions:
    two cameras that took the same image become one, which keeps the first
-   input's intrinsics. They become one only when they vary the same parameters
-   per image (their `per_image_adjustments`, see
-   [sfmr-file-format.md](../../formats/sfmr-file-format.md#per-image-intrinsic-adjustments-optional-version-13))
-   and have the same `rolling_shutter_scanlines` setting, since the merged
-   camera's rolling-shutter rates are read on it; otherwise the merge stops
-   with an error naming the image and both cameras. The merged camera varies
-   what they vary and has their setting.
+   input's intrinsics. The input checks above have made sure such cameras
+   vary the same parameters per image and have the same
+   `rolling_shutter_scanlines` setting, since the merged camera's
+   rolling-shutter rates are read on it. The merged camera varies what they
+   vary and has their setting.
 2. **Merge images** — Combine image sets, handling duplicates. An image in
    several inputs takes its pose and its intrinsic adjustment from the first:
    its focal scale, its principal-point offset, its radial correction and its

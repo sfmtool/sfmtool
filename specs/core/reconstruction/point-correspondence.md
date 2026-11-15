@@ -185,7 +185,10 @@ binding. `ReconstructionIndexOutOfRange`, `ImageIndexOutOfRange` and
 does not exist. Because the merge keys observations on `(image, feature_index)`
 identity, `embedded_patches` inputs are **rejected** with `EmbeddedPatches` —
 they have no feature indexes, and substituting a placeholder would collapse
-distinct observations within an image.
+distinct observations within an image. `sfm merge` refuses such an input
+before it starts
+([merge-command.md](../../cli/reconstruction/merge-command.md#inputs)), so
+the binding's rejection guards other callers.
 
 `merge/reconstructions.py` stores the rows as homogeneous positions, and
 its pose refinement ([merge/pose_refinement.py](../../../src/sfmtool/merge/pose_refinement.py))

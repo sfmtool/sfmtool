@@ -18,37 +18,25 @@ from .._workspace import require_version_2_workspace
 def merge_reconstructions(
     reconstructions: list[SfmrReconstruction],
     merge_percentile: float = 95.0,
+    input_names: list[str] | None = None,
 ) -> SfmrReconstruction:
     """Merge multiple aligned reconstructions into one.
+
+    The inputs are checked before any step runs or prints (``_check_inputs``
+    lists the checks), and an input the merge cannot take raises
+    ``ValueError``, or ``Version1WorkspaceError`` for a version 1 workspace,
+    naming it.
 
     Args:
         reconstructions: List of SfmrReconstruction objects to merge (must be aligned)
         merge_percentile: Percentile of correspondence distances to use as threshold
+        input_names: A name for each input, such as its file name, that the
+            errors use beside its number; ``None`` names the inputs by number.
 
     Returns:
         Merged SfmrReconstruction object
     """
-    if len(reconstructions) < 2:
-        raise ValueError("Need at least 2 reconstructions to merge")
-
-    # Observations are matched and combined by feature index, and the merged
-    # reconstruction records one feature folder, so every input must record
-    # the same one. A folder records the features as they were extracted, not
-    # the workspace's current folder, which `sfm ws upgrade` moves.
-    feature_folders = [_feature_prefix_dir(r) for r in reconstructions]
-    if len(set(feature_folders)) > 1:
-        listed = ", ".join(
-            f"input {i + 1}: {folder}" for i, folder in enumerate(feature_folders)
-        )
-        raise ValueError(
-            "The reconstructions were made from different feature folders "
-            f"({listed}), so their feature indexes do not refer to the same "
-            "features. Solve them from the same features to merge them."
-        )
-    feature_prefix_dir = feature_folders[0]
-    # The poses are refined from the .sift files in the first input's
-    # workspace, which must be version 2.
-    require_version_2_workspace(reconstructions[0].workspace_dir)
+    feature_prefix_dir = _check_inputs(reconstructions, input_names)
 
     click.echo(f"\nMerging {len(reconstructions)} reconstructions...")
     click.echo("=" * 70)
@@ -161,18 +149,174 @@ def merge_reconstructions(
     return result
 
 
+def _check_inputs(
+    reconstructions: list[SfmrReconstruction],
+    input_names: list[str] | None,
+) -> str:
+    """Refuse inputs the merge cannot take, before any step runs.
+
+    Raises ``ValueError`` naming the inputs when there are fewer than two,
+    or when ``input_names`` does not name each of them;
+    when an input is not a ``sift_files`` reconstruction; when the inputs
+    record different feature folders; when some inputs have rig frames and
+    others do not, or two define different rigs; or when two cameras that
+    took the same image vary different parameters per image or have different
+    ``rolling_shutter_scanlines`` settings. Raises ``Version1WorkspaceError``
+    when the first input's workspace is version 1. Returns the feature folder
+    the inputs record.
+    """
+    if len(reconstructions) < 2:
+        raise ValueError("Need at least 2 reconstructions to merge")
+    if input_names is not None and len(input_names) != len(reconstructions):
+        raise ValueError(
+            f"Got {len(input_names)} input names for {len(reconstructions)} "
+            "reconstructions"
+        )
+    if input_names is None:
+        labels = [f"input {i + 1}" for i in range(len(reconstructions))]
+    else:
+        labels = [f"input {i + 1} ({name})" for i, name in enumerate(input_names)]
+
+    # Observations are matched and combined by feature index, and the poses
+    # are refined from the keypoints in the .sift files, so every input must
+    # be a sift_files reconstruction. An embedded_patches one stores each
+    # observation's keypoint inline and has no feature indexes.
+    embedded = [
+        label
+        for label, r in zip(labels, reconstructions)
+        if r.feature_source != "sift_files"
+    ]
+    if embedded:
+        one = len(embedded) == 1
+        kind = (
+            "is an embedded_patches reconstruction"
+            if one
+            else "are embedded_patches reconstructions"
+        )
+        raise ValueError(
+            f"{_capitalized(_join(embedded))} {kind}. An embedded_patches "
+            "reconstruction stores each observation's keypoint in the file and "
+            "has no feature indexes, and sfm merge matches and combines "
+            "observations by feature index and refines the poses from the "
+            ".sift files, so every input must be a sift_files reconstruction. "
+            "No command turns an embedded_patches reconstruction back into a "
+            "sift_files one: merge the sift_files reconstructions "
+            f"{'it was' if one else 'they were'} made from, if you have them, "
+            "and convert the result with 'sfm xform --to-embedded-patches'."
+        )
+
+    # The merged reconstruction records one feature folder, so every input
+    # must record the same one. A folder records the features as they were
+    # extracted, not the workspace's current folder, which `sfm ws upgrade`
+    # moves.
+    feature_folders = [_feature_prefix_dir(r) for r in reconstructions]
+    if len(set(feature_folders)) > 1:
+        listed = ", ".join(
+            f"{label}: {folder}" for label, folder in zip(labels, feature_folders)
+        )
+        raise ValueError(
+            "The reconstructions were made from different feature folders "
+            f"({listed}), so their feature indexes do not refer to the same "
+            "features. Solve them from the same features to merge them."
+        )
+
+    # The merged reconstruction keeps the rig definitions of the first input
+    # that has them, and each image keeps its sensor index into them.
+    rig_frame_data = [r.rig_frame_data for r in reconstructions]
+    with_rigs = [i for i, rfd in enumerate(rig_frame_data) if rfd is not None]
+    if with_rigs and len(with_rigs) < len(reconstructions):
+        without = [i for i, rfd in enumerate(rig_frame_data) if rfd is None]
+        raise ValueError(
+            f"{_capitalized(_join([labels[i] for i in with_rigs]))} "
+            f"{'has' if len(with_rigs) == 1 else 'have'} rig frames and "
+            f"{_join([labels[i] for i in without])} "
+            f"{'has' if len(without) == 1 else 'have'} none. sfm merge needs "
+            "rig frames in every input or in none."
+        )
+    for i in with_rigs[1:]:
+        first = with_rigs[0]
+        if rig_frame_data[i]["rigs_metadata"] != rig_frame_data[first]["rigs_metadata"]:
+            raise ValueError(
+                f"{labels[first]} and {labels[i]} define different rigs. The "
+                "merged reconstruction keeps the first input's rigs and each "
+                "image's sensor index into them, so every input must define "
+                "the same rigs."
+            )
+
+    # Two cameras that took the same image become one, so they must vary the
+    # same parameters per image and have the same scanlines setting.
+    flags = [r.per_image_adjustments for r in reconstructions]
+    scanlines = [r.rolling_shutter_scanlines for r in reconstructions]
+    for img_name, camera_ids in _image_to_cameras(reconstructions).items():
+        first_recon, first_cam = camera_ids[0]
+        for recon_idx, cam_idx in camera_ids[1:]:
+            if flags[recon_idx][cam_idx] != flags[first_recon][first_cam]:
+                raise ValueError(
+                    _flags_differ_message(
+                        img_name,
+                        (labels[first_recon], first_cam, flags[first_recon][first_cam]),
+                        (labels[recon_idx], cam_idx, flags[recon_idx][cam_idx]),
+                    )
+                )
+            if scanlines[recon_idx][cam_idx] != scanlines[first_recon][first_cam]:
+                raise ValueError(
+                    _scanlines_differ_message(
+                        img_name,
+                        (
+                            labels[first_recon],
+                            first_cam,
+                            scanlines[first_recon][first_cam],
+                        ),
+                        (labels[recon_idx], cam_idx, scanlines[recon_idx][cam_idx]),
+                    )
+                )
+
+    # The poses are refined from the .sift files in the first input's
+    # workspace, which must be version 2.
+    require_version_2_workspace(reconstructions[0].workspace_dir)
+    return feature_folders[0]
+
+
+def _join(labels: list[str]) -> str:
+    """``a``, ``a and b`` or ``a, b and c``."""
+    if len(labels) == 1:
+        return labels[0]
+    return f"{', '.join(labels[:-1])} and {labels[-1]}"
+
+
+def _capitalized(text: str) -> str:
+    """``text`` with its first letter in upper case, to open a sentence."""
+    return text[:1].upper() + text[1:]
+
+
+def _image_to_cameras(
+    reconstructions: list[SfmrReconstruction],
+) -> dict[str, list[tuple[int, int]]]:
+    """Each image name, as a POSIX path, mapped to the ``(reconstruction,
+    camera)`` of each input that holds it, in input order."""
+    image_to_cameras = {}
+    for recon_idx, recon in enumerate(reconstructions):
+        camera_indexes = recon.camera_indexes
+        for img_idx, img_name in enumerate(recon.image_names):
+            img_key = Path(img_name).as_posix()
+            image_to_cameras.setdefault(img_key, []).append(
+                (recon_idx, camera_indexes[img_idx])
+            )
+    return image_to_cameras
+
+
 def _merge_cameras(
     reconstructions: list[SfmrReconstruction],
     image_name_to_camera: dict,
 ) -> tuple[list, list[list[str]], list[str | None], list[dict[int, int]]]:
     """Merge cameras from all reconstructions using union-find.
 
-    Two cameras that took the same image become one. They must vary the same
-    parameters per image (their `per_image_adjustments`) and have the same
-    `rolling_shutter_scanlines` setting, since the merged camera's images keep
-    their intrinsic adjustments and its rolling-shutter rates are read on that
-    setting; cameras that differ in either raise ``ValueError``, naming both.
-    Returns the merged cameras, their `per_image_adjustments`, their
+    Two cameras that took the same image become one. ``_check_inputs`` has
+    refused cameras that would become one but vary different parameters per
+    image (their `per_image_adjustments`) or have different
+    `rolling_shutter_scanlines` settings, since the merged camera's images
+    keep their intrinsic adjustments and its rolling-shutter rates are read on
+    that setting. Returns the merged cameras, their `per_image_adjustments`, their
     `rolling_shutter_scanlines`, and each reconstruction's camera mapping.
     """
     flags = [recon.per_image_adjustments for recon in reconstructions]
@@ -196,42 +340,10 @@ def _merge_cameras(
             else:
                 union_find_data[root1] = root2
 
-    # Build image -> [(recon_idx, cam_idx)] mapping
-    image_to_cameras = {}
-    for recon_idx, recon in enumerate(reconstructions):
-        camera_indexes = recon.camera_indexes
-        for img_idx, img_name in enumerate(recon.image_names):
-            img_key = Path(img_name).as_posix()
-            cam_idx = camera_indexes[img_idx]
-
-            if img_key not in image_to_cameras:
-                image_to_cameras[img_key] = []
-            image_to_cameras[img_key].append((recon_idx, cam_idx))
-
     # Union cameras that share images
-    for img_name, camera_ids in image_to_cameras.items():
-        if len(camera_ids) > 1:
-            first_recon, first_cam = camera_ids[0]
-            for i in range(1, len(camera_ids)):
-                recon_idx, cam_idx = camera_ids[i]
-                if flags[recon_idx][cam_idx] != flags[first_recon][first_cam]:
-                    raise ValueError(
-                        _flags_differ_message(
-                            img_name,
-                            (first_recon, first_cam, flags[first_recon][first_cam]),
-                            (recon_idx, cam_idx, flags[recon_idx][cam_idx]),
-                        )
-                    )
-                first_scanlines = scanlines[first_recon][first_cam]
-                if scanlines[recon_idx][cam_idx] != first_scanlines:
-                    raise ValueError(
-                        _scanlines_differ_message(
-                            img_name,
-                            (first_recon, first_cam, first_scanlines),
-                            (recon_idx, cam_idx, scanlines[recon_idx][cam_idx]),
-                        )
-                    )
-                union(camera_ids[0], camera_ids[i])
+    for camera_ids in _image_to_cameras(reconstructions).values():
+        for camera_id in camera_ids[1:]:
+            union(camera_ids[0], camera_id)
 
     # Build merged camera list
     root_to_merged_idx = {}
@@ -267,15 +379,15 @@ def _merge_cameras(
 
 def _flags_differ_message(img_name: str, first: tuple, other: tuple) -> str:
     """Why two cameras that took image `img_name` cannot become one: each of
-    `first` and `other` is `(reconstruction, camera, per_image_adjustments)`."""
+    `first` and `other` is `(input label, camera, per_image_adjustments)`."""
 
     def varies(names):
         return " and ".join(names) if names else "nothing"
 
     (r1, c1, f1), (r2, c2, f2) = first, other
     return (
-        f"Image {img_name} was taken through camera {c1} of reconstruction {r1}, "
-        f"which varies {varies(f1)} per image, and camera {c2} of reconstruction "
+        f"Image {img_name} was taken through camera {c1} of {r1}, "
+        f"which varies {varies(f1)} per image, and camera {c2} of "
         f"{r2}, which varies {varies(f2)} per image. The merge makes two cameras "
         "one only when they vary the same parameters per image."
     )
@@ -283,16 +395,16 @@ def _flags_differ_message(img_name: str, first: tuple, other: tuple) -> str:
 
 def _scanlines_differ_message(img_name: str, first: tuple, other: tuple) -> str:
     """Why two cameras that took image `img_name` cannot become one: each of
-    `first` and `other` is `(reconstruction, camera, rolling_shutter_scanlines)`."""
+    `first` and `other` is `(input label, camera, rolling_shutter_scanlines)`."""
 
     def setting(value):
         return "no" if value is None else value
 
     (r1, c1, s1), (r2, c2, s2) = first, other
     return (
-        f"Image {img_name} was taken through camera {c1} of reconstruction {r1}, "
+        f"Image {img_name} was taken through camera {c1} of {r1}, "
         f"which has {setting(s1)} rolling_shutter_scanlines setting, and camera "
-        f"{c2} of reconstruction {r2}, which has {setting(s2)} setting. The merge "
+        f"{c2} of {r2}, which has {setting(s2)} setting. The merge "
         "makes two cameras one only when they have the same scanlines setting."
     )
 
@@ -573,17 +685,15 @@ def _merged_readings(source_reconstructions, image_names, tracks):
     source's that has them, is not measured. The two scores are cleared to NaN
     in every row: they were read against a source point's stored bitmap, and
     the merged reconstruction stores no bitmap of the source points (the merge
-    renumbers the points and writes no patch frame). A source with no feature
-    indexes (``embedded_patches``) has no observation to match, so it gives no
-    rows. ``None`` when no source carries readings.
+    renumbers the points and writes no patch frame). ``None`` when no source
+    carries readings.
     """
     # `observation_readings` builds its dict again on every read, so read it once.
     carrying = []
     for r in source_reconstructions:
         readings = r.observation_readings
-        feature_indexes = r.track_feature_indexes
-        if readings is not None and feature_indexes is not None:
-            carrying.append((r, readings, feature_indexes))
+        if readings is not None:
+            carrying.append((r, readings, r.track_feature_indexes))
     if not carrying:
         return None
     first = carrying[0][1]

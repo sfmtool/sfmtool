@@ -67,18 +67,17 @@ def test_rows_follow_image_and_feature_and_scores_are_cleared():
     assert out["options"] == OPTIONS
 
 
-def test_rows_under_other_options_or_without_features_are_not_measured():
+def test_rows_under_other_options_are_not_measured():
     a = _source(["x.jpg"], [0], [5], [1.0])
     b = _source(["y.jpg"], [0], [6], [2.0], dict(OPTIONS, resolution=12))
-    embedded = _source(["z.jpg"], [0], None, [3.0])
     tracks = {
-        "image_indexes": np.array([0, 1, 2]),
-        "feature_indexes": np.array([5, 6, 0]),
+        "image_indexes": np.array([0, 1]),
+        "feature_indexes": np.array([5, 6]),
     }
-    out = _merged_readings([a, b, embedded], ["x.jpg", "y.jpg", "z.jpg"], tracks)
+    out = _merged_readings([a, b], ["x.jpg", "y.jpg"], tracks)
     axes = out["zncc_self_similarity_ellipse_axes"][:, 0]
     assert axes[0] == 1.0
-    assert np.isnan(axes[1:]).all()
+    assert np.isnan(axes[1])
 
 
 def test_no_readings_gives_none():
