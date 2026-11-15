@@ -238,7 +238,10 @@ The default output is a compact label/value block. The fields per type:
   The 3D point count carries the same `(N at infinity)` annotation as the
   default summary when any points at infinity are present, and the
   `Thumbnails` and `Patch bitmaps` lines appear under the reconstruction
-  summary, which also gives the mean observations per point. The median of
+  summary, which also gives the mean observations per point. Its
+  `Image paths:` block groups the image names into numbered sequences, such
+  as `images/dino_dog_toy_%02d.jpg (85 files, sequence 1-85)`, written with
+  `/` on every platform, as the image names are. The median of
   an even count of points is the mean of the middle two, so it can end in
   `.5`. After the rig
   configuration an `Image readings:` block gives the conversion, the

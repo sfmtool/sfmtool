@@ -11,6 +11,7 @@ import click
 import numpy as np
 import pytest
 from click.testing import CliRunner
+from deadline.job_attachments.models import PathFormat
 
 from sfmtool.reconstruction import RangeExpr
 from sfmtool._commands.compare import _parse_labels
@@ -316,6 +317,30 @@ class TestCompareCLI:
         assert "Comparing 3D points" in result.output
         assert "Comparison complete!" in result.output
         assert "Completed in" in result.output
+
+    def test_image_paths_use_forward_slashes(self, seoul_bull_workspace, monkeypatch):
+        """Each reconstruction's `Image paths` patterns use "/" as the image
+        names do, even on a host whose separator is a backslash. The host is
+        made to look like Windows, so the test checks that on every platform."""
+        monkeypatch.setattr(
+            PathFormat, "get_host_path_format", classmethod(lambda cls: cls.WINDOWS)
+        )
+        sfmr = str(seoul_bull_workspace)
+        result = CliRunner().invoke(main, ["compare", sfmr, sfmr])
+        assert result.exit_code == 0, result.output
+
+        lines = result.output.splitlines()
+        pattern_lines = [
+            lines[i + 1] for i, line in enumerate(lines) if line == "    Image paths:"
+        ]
+        assert (
+            pattern_lines
+            == [
+                "      test_17_image/seoul_bull_sculpture_%02d.jpg "
+                "(17 files, sequence 1-17)"
+            ]
+            * 2
+        )
 
     def test_non_sfmr_first_arg(self, tmp_path):
         p = tmp_path / "input.txt"

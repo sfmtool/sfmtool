@@ -9,7 +9,11 @@ from datetime import datetime
 from pathlib import Path
 
 from ._filenames import group_by_directory
-from ._path_summary import summarize_path_list, summarize_paths_by_sequence
+from ._path_summary import (
+    PathFormat,
+    summarize_path_list,
+    summarize_paths_by_sequence,
+)
 from ._sfmtool.reconstruction import RangeExpr
 
 
@@ -226,6 +230,8 @@ def get_image_hint_message(
     if error_msg:
         error_msg += "\n"
     error_msg += "Image in reconstruction:\n"
-    error_msg += textwrap.indent(summarize_path_list(image_names), "  ")
+    # Image names use "/" on every platform, so the patterns do too.
+    summary = summarize_path_list(image_names, path_format=PathFormat.POSIX)
+    error_msg += textwrap.indent(summary, "  ")
 
     return error_msg
