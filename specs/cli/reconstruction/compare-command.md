@@ -102,7 +102,8 @@ The 3D-point comparison (step 6) can correspond points two ways:
 - **By feature index** (`--by-feature-index`) — keys observations on their feature index,
   which requires both reconstructions to reference the **same** `.sift` files (e.g. two solves
   over one workspace). Fast and exact, but yields no correspondences across different feature
-  backends.
+  backends. An `embedded_patches` reconstruction has no feature indexes, so this option refuses
+  one, naming `--by-coordinate`.
 - **By keypoint coordinate** (`--by-coordinate`) — matches observations in shared images by
   *mutual nearest 2D keypoint* within `--pixel-threshold` pixels (default 2.0) and votes
   point-to-point. This works **across different SIFT backends** (e.g. COLMAP SIFT vs the

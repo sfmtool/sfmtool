@@ -26,6 +26,8 @@ from sfmtool.cli import main
 from sfmtool.sift.file import get_sift_path_from_recon
 from sfmtool.xform import IncludeRangeFilter, SimilarityTransform, apply_transforms
 
+from .conftest import SEOUL_BULL_GROUND_TRUTH
+
 
 def _rot_quat_from_euler_angles(angles_rad):
     """Create a RotQuaternion from Euler angles (roll, pitch, yaw) in radians."""
@@ -552,6 +554,12 @@ class TestCompareCoordinateAndStrips:
         result = CliRunner().invoke(main, ["compare", p, p, "--by-coordinate"])
         assert result.exit_code == 0, result.output
         assert "by keypoint coordinate" in result.output
+
+    def test_by_feature_index_refuses_embedded_patches(self):
+        # An embedded_patches reconstruction has no feature indexes.
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        with pytest.raises(ValueError, match=r"--by-coordinate"):
+            compare_reconstructions(truth, truth, by_coordinate=False)
 
     def test_cli_strips_writes_montage(self, seoul_bull_workspace, tmp_path):
         # Full vs a filtered subset: the full reconstruction keeps points unique

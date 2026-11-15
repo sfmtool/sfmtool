@@ -179,6 +179,11 @@ Binding defaults (`analysis/core.rs`): `max_iterations=1000`,
 `sfm align --method points`
 (`align/by_points.py::estimate_alignment_from_points`) wires it up as:
 
+- **Correspondences** come from the same finder choice as
+  `align_reconstructions`: `find_point_correspondences` (by feature index)
+  when both sides have feature indexes, `find_point_correspondences_by_coordinate`
+  (by keypoint position, 2 px, 2 votes) when either is `embedded_patches`.
+  The `sfm xform` `--align-to` operations share this function.
 - **Threshold is data-derived, not fixed:** a preliminary least-squares fit
   over *all* correspondences is computed, and the threshold is the
   `--ransac-percentile` (default 95.0) percentile of its residual

@@ -114,6 +114,16 @@ def compare_reconstructions(
         )
     else:
         resolved_by_coordinate = by_coordinate
+    # An embedded_patches reconstruction has no feature indexes to match by.
+    if by_coordinate is False:
+        for name, recon in ((recon1_name, recon1), (recon2_name, recon2)):
+            if recon.track_feature_indexes is None:
+                raise ValueError(
+                    "Matching points by feature index (--by-feature-index) needs "
+                    f"feature indexes, and {name} is an {recon.feature_source} "
+                    "reconstruction, which has none. Match them by keypoint "
+                    "coordinate (--by-coordinate) instead."
+                )
 
     # Coordinate matching and the strips read a sift_files input's .sift
     # files, which must be in a version 2 workspace; checked before any work.

@@ -19,8 +19,15 @@ are transformed to align with it.
 
 | Method | Description |
 |--------|-------------|
-| `points` (default) | Aligns via shared 3D feature observations with RANSAC outlier rejection |
+| `points` (default) | Aligns via 3D points matched through their observations in shared images, with RANSAC outlier rejection |
 | `cameras` | Aligns via matched camera poses for images with the same name |
+
+`points` matches observations by feature index when both reconstructions are `sift_files`.
+When either is `embedded_patches`, which has no feature indexes, it matches them by keypoint
+position (2 px, at least 2 shared images per point pair): the inline keypoints of an
+`embedded_patches` side, the `.sift` positions of a `sift_files` one. The progress line names
+the matching used. See
+[point-correspondence.md](../../core/reconstruction/point-correspondence.md).
 
 ## Options
 
