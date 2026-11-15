@@ -419,13 +419,19 @@ def test_photographs_extracted_by_the_walk_are_every_one_kept(
     """Real images extracted by the walk with the workspace's settings: the
     17 photographs of a walk around a sculpture match their neighbours with
     fewer matches than the floor, so every one is kept; each file is the one
-    ``build_sift_files`` writes, and a second run extracts nothing."""
+    ``build_sift_files`` writes, and a second run extracts nothing.
+
+    The workspace keeps 512 features an image, where the default of 8192
+    keeps 1954 to 2349 of these photographs, so both extractions cut every
+    image's features to the cap, and extracting and matching cost about half
+    what they do at the default. Neighbouring photographs then keep at most
+    144 matches, a quarter of the floor."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     images = []
     for path in isolated_seoul_bull_17_images:
         images.append(Path(shutil.copy(path, workspace / path.name)))
-    init_workspace(workspace)
+    init_workspace(workspace, max_num_features=512)
     config = load_workspace_config(workspace)
     features = workspace / config["feature_prefix_dir"]
     sequence = CaptureSequence(
@@ -465,6 +471,7 @@ def test_photographs_extracted_by_the_walk_are_every_one_kept(
     for image, built in zip(images, sift_paths):
         walked = read_sift(features / f"{image.name}.sift")
         expected = read_sift(built)
+        assert walked["metadata"]["feature_count"] == 512
         assert walked["metadata"] == expected["metadata"]
         assert np.array_equal(walked["descriptors"], expected["descriptors"])
 

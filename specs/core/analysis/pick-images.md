@@ -1247,7 +1247,8 @@ a sequence's camera and the term's fields in the report,
 a `KeyboardInterrupt` delivered while the walk runs, a handler that raises
 after the walk's last check for cancellation, the exceptions of each
 error, the capture classes, and the seoul_bull photographs extracted by the
-walk with the workspace's settings, every one of which is kept, whose files
+walk with the settings of a workspace that keeps 512 features an image, every
+one of which is kept, whose files
 equal `build_sift_files`', and which a second run reads without extracting.
 
 ## Non-goals
