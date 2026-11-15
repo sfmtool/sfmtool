@@ -119,8 +119,7 @@ def test_to_colmap_db_refits_camera_config_camera(
     assert (cx, cy) == (135.0, 240.0)
     assert k1 == pytest.approx(0.035, rel=1e-4)
     assert camera.has_prior_focal_length
-    config_path = workspace_dir / "camera_config.json"
-    assert f"The camera of {config_path}: SIMPLE_RADIAL -> OPENCV" in result.output
+    assert "The camera of camera_config.json: SIMPLE_RADIAL -> OPENCV" in result.output
 
 
 def test_to_colmap_db_refits_camrig_camera(seoul_bull_workspace: Path, tmp_path: Path):
@@ -177,8 +176,8 @@ def test_to_colmap_db_refits_camrig_camera(seoul_bull_workspace: Path, tmp_path:
     assert camera.has_prior_focal_length
     assert camrig_file.read_bytes() == before
     assert (
-        f"Camera 0 of {camrig_file.resolve()}: SIMPLE_PINHOLE -> SIMPLE_RADIAL"
-        in result.output
+        f"The camera of {camrig_file.relative_to(workspace_dir).as_posix()}: "
+        "SIMPLE_PINHOLE -> SIMPLE_RADIAL" in result.output
     )
 
 
@@ -330,7 +329,7 @@ def test_solve_refused_refit_is_a_clean_error(isolated_seoul_bull_17_images):
     assert result.exit_code == 1
     assert result.exception is None or isinstance(result.exception, SystemExit)
     assert (
-        f"cannot switch camera 0 of {camrig_file.resolve()} from "
+        f"cannot switch the camera of {camrig_file.relative_to(workspace_dir).as_posix()} from "
         "EQUIDISTANT_FISHEYE to PINHOLE"
     ) in result.output
     assert "Traceback" not in result.output

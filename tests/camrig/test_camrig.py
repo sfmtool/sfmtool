@@ -501,8 +501,9 @@ def test_solve_uses_one_camera_per_camrig(isolated_seoul_bull_17_images: list[Pa
     )
     assert result.exit_code == 0, result.output
     for prefix in ("shopA", "shopB"):
-        assert f"Camera 0 of {workspace_dir.resolve() / f'camera-{prefix}.camrig'}" in (
-            result.output
+        assert (
+            f"The camera of camera-{prefix}.camrig: SIMPLE_PINHOLE -> SIMPLE_RADIAL"
+            in result.output
         )
 
     from sfmtool.reconstruction import SfmrReconstruction

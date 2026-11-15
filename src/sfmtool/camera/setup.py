@@ -244,7 +244,7 @@ def refit_intrinsics_to_model(intrinsics, camera_model: str, camera_name: str):
     or a `camera_config.json` supplies: the lens-only fit
     `CameraIntrinsics.refit`, whose principal point and image size are those of
     `intrinsics`. Prints one line naming `camera_name` (a phrase such as
-    `camera 0 of rig.camrig`), the two models and the fit's rms and max, then
+    `the camera of shopA.camrig`), the two models and the fit's rms and max, then
     one line per term the target model cannot represent. A refused fit raises
     `IntrinsicsRefitError` naming `camera_name` and the reason.
     """
@@ -297,7 +297,12 @@ def intrinsics_for_image(
         camera_config, Path(image_path), None
     )
     if camera_model_override is not None:
+        # The report line names the file by its path in the workspace, as
+        # the `.camrig` lines do; a resolved file is always inside it.
+        shown_path = config_path.relative_to(
+            camera_config_resolver.workspace_dir
+        ).as_posix()
         intrinsics = refit_intrinsics_to_model(
-            intrinsics, camera_model_override, f"the camera of {config_path}"
+            intrinsics, camera_model_override, f"the camera of {shown_path}"
         )
     return intrinsics, prior

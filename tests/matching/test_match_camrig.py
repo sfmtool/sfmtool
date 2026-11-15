@@ -202,9 +202,7 @@ def test_match_exhaustive_uses_the_camrig_and_cluster_reads_none(tmp_path: Path)
         main, ["match", "--exhaustive", *paths, "-o", str(workspace / "e.matches")]
     )
     assert result.exit_code == 0, result.output
-    assert f"Camera rig: using {workspace / 'kerry_park.camrig'} (2 sensors" in (
-        result.output
-    )
+    assert "Camera rig: using kerry_park.camrig (2 sensors" in result.output
 
     # --cluster builds no database and needs no camera.
     result = runner.invoke(
