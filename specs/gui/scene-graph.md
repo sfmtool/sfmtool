@@ -208,7 +208,9 @@ style that draws both: a point is drawn once.
 - **Patches** draws each point that has a patch as its patch surfel
   ([patch-rendering.md](patch-rendering.md)) and every point without one as a
   dot. A point has a patch when the node's patch atlas packed a surfel for it:
-  a nonzero row of `patch_u_halfvec_xyz`, with the bitmaps to texture it. A
+  a nonzero row of `patch_u_halfvec_xyz` and a bitmap row that is not all zero
+  (an all-zero bitmap row is how a point with no stored patch is written; see
+  [patch-rendering.md](patch-rendering.md)). A
   node with no patch data, such as one an edit has removed it from, draws every
   point as a dot under this style, and so does every node while the HUD's
   patch opacity is 0, because a surfel at no opacity would show nothing yet
@@ -627,6 +629,10 @@ posed, how many, and why the cluster-patches file will not do) is
 - On a node with patch data, the **point style selector** follows: two
   selectable buttons, `Dots` and `Patches`, the node's own style lit, a click on
   the other choosing it (see "Point style"). There is no separate Patches row.
+- The `∞` mini-toggle and the selector sit at the row's right edge, laid out
+  right to left, and the label takes the width left between them and the eye,
+  elided when it does not fit, as the reconstruction row's counts are. So a long
+  count never pushes the selector out of a narrow panel.
 - Expands to **selection and hover rows only**, not a full listing:
   - `selected: pt3d_<hash>_<index>` — the same copyable ID Track View
     shows; click re-selects (useful after selecting elsewhere), and the

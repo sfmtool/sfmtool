@@ -590,10 +590,7 @@ fn has_patch(recon: &SfmrReconstruction, bitmaps: &ndarray::Array4<u8>, p: usize
     let nonzero = |column: &ndarray::Array2<f32>| column.row(p).iter().any(|&x| x != 0.0);
     nonzero(u)
         && nonzero(v)
-        && bitmaps
-            .index_axis(ndarray::Axis(0), p)
-            .iter()
-            .any(|&b| b != 0)
+        && crate::reconstruction::patch_bitmap_is_stored(bitmaps.index_axis(ndarray::Axis(0), p))
 }
 
 /// A point's position as the viewer stores it: a place relative to `centre`,

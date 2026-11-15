@@ -164,7 +164,9 @@ fn radial_distorted() -> CameraModel {
 }
 
 /// Attach patch frames + bitmaps. `present[i]` false leaves point `i`'s `u`
-/// row all-zero, which is how the upload detects "no patch here".
+/// row all-zero, which is one way the upload detects "no patch here". Every
+/// bitmap row is filled, since an all-zero bitmap row is the other
+/// (`zero_bitmap_rows` makes some).
 ///
 /// `bitmap_rows` defaults to `present.len()`; passing fewer exercises the
 /// short-array bound in the row scan. `bitmap_cols` defaults to `resolution`;
@@ -189,8 +191,26 @@ fn with_patches(
     let cols = bitmap_cols.unwrap_or(resolution);
     recon.point_set.patch_u_halfvec_xyz = Some(u);
     recon.point_set.patch_v_halfvec_xyz = Some(v);
-    recon.point_set.patch_bitmaps_y_x_rgba =
-        Some(Arc::new(Array4::<u8>::zeros((rows, resolution, cols, 4))));
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(Array4::<u8>::from_elem(
+        (rows, resolution, cols, 4),
+        200,
+    )));
+    recon
+}
+
+/// Zero the bitmap rows of `points`, which is how a point with no stored
+/// patch is written whatever its frame says.
+fn zero_bitmap_rows(mut recon: SfmrReconstruction, points: &[usize]) -> SfmrReconstruction {
+    let column = recon
+        .point_set
+        .patch_bitmaps_y_x_rgba
+        .as_ref()
+        .expect("a bitmap column");
+    let mut bitmaps = (**column).clone();
+    for &p in points {
+        bitmaps.index_axis_mut(ndarray::Axis(0), p).fill(0);
+    }
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmaps));
     recon
 }
 
@@ -3620,4 +3640,22 @@ fn the_patches_style_draws_dots_at_zero_patch_opacity() {
             "{style:?} at opacity {opacity}"
         );
     }
+}
+
+/// A point whose bitmap row is all zero stores no patch even with a frame, so
+/// the atlas packs no surfel for it, which would be a black square, and its
+/// dot stays.
+#[test]
+fn a_point_with_an_all_zero_bitmap_row_keeps_its_dot() {
+    let (device, queue) = device();
+    let mut r = SceneRenderer::new();
+    let recon = zero_bitmap_rows(with_patches(demo(6), 8, &[true; 6], None, None), &[1, 4]);
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::new(recon));
+    sync(&mut r, &device, &queue, RECON, &loaded);
+    assert_eq!(
+        patch_count(&r),
+        4,
+        "a surfel packed for a point with no patch"
+    );
+    assert_eq!(surfel_bits(&r), [true, false, true, true, false, true]);
 }

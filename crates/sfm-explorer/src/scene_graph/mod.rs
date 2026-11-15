@@ -17,9 +17,8 @@
 //!         #0  OPENCV_FISHEYE  480×480  f 240.1  26 images
 //!   ▾ 👁 Camera Images (243)
 //!       IMG_0001.jpg              ← virtualized, `ScrollArea::show_rows`
-//!   ▾ 👁 Points (1,204,551 · 12 at ∞) ∞
+//!   ▾ 👁 Points (1,204,5…  ∞ Dots Patches  ← the selector only with patch data
 //!       selected: pt3d_a1b2c3_88231   ← selection / hover rows only
-//!     👁 Patches                   ← only when the node carries patch data
 //!   ▾   Index Files  1 of 2 current
 //!         SIFT Index       1.2M descriptors   ← current / stale / none
 //!         Cluster Patches  none
@@ -1246,32 +1245,47 @@ fn show_points_group(
         } else {
             format!("Points ({count})")
         };
-        ui.label(label);
-        if at_infinity > 0 {
-            let infinity = glyph_toggle(
-                ui,
-                row_id(id, "points_infinity"),
-                &mut node.show_points_at_infinity,
-                None,
-                INFINITY_GLYPH,
-                "Show points at infinity",
-                "Draw this node's w = 0 points — directions with no parallax",
-            );
-            let shown = node.show_points_at_infinity;
-            out.logged(row_id(id, "points_infinity"), infinity, || {
-                visibility_text(&node.label, Layer::PointsAtInfinity, shown)
+        // The controls after the label sit at the row's right edge, laid out
+        // right to left, and the label takes what is left and elides: a long
+        // count must not push the selector out of a narrow panel, where it
+        // could not be reached. The edge is the visible one: a wider row
+        // elsewhere in the tree widens the layout past the panel, and an edge
+        // taken from the layout alone would put the selector out of sight.
+        let row = ui.available_rect_before_wrap();
+        let right = row.right().min(ui.clip_rect().right()).max(row.left());
+        let row = egui::Rect::from_min_max(row.min, egui::pos2(right, row.bottom()));
+        let layout = egui::Layout::right_to_left(egui::Align::Center);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row).layout(layout), |ui| {
+            if node.has_patch_data() {
+                let before = node.point_style;
+                for (style, response) in point_style_selector(ui, &mut node.point_style) {
+                    out.hit(point_style_row_id(id, style), response);
+                }
+                if node.point_style != before {
+                    out.log
+                        .record(Kind::Scene, point_style_text(&node.label, node.point_style));
+                }
+            }
+            if at_infinity > 0 {
+                let infinity = glyph_toggle(
+                    ui,
+                    row_id(id, "points_infinity"),
+                    &mut node.show_points_at_infinity,
+                    None,
+                    INFINITY_GLYPH,
+                    "Show points at infinity",
+                    "Draw this node's w = 0 points — directions with no parallax",
+                );
+                let shown = node.show_points_at_infinity;
+                out.logged(row_id(id, "points_infinity"), infinity, || {
+                    visibility_text(&node.label, Layer::PointsAtInfinity, shown)
+                });
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let label = ui.add(egui::Label::new(label).truncate());
+                out.mark(row_id(id, "points_label"), label.rect);
             });
-        }
-        if node.has_patch_data() {
-            let before = node.point_style;
-            for (style, response) in point_style_selector(ui, &mut node.point_style) {
-                out.hit(point_style_row_id(id, style), response);
-            }
-            if node.point_style != before {
-                out.log
-                    .record(Kind::Scene, point_style_text(&node.label, node.point_style));
-            }
-        }
+        });
     });
     header.body(|ui| {
         let mut any = false;

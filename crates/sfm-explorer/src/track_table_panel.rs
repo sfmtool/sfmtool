@@ -2244,7 +2244,7 @@ fn rule_found_no_reference(view: &sfmtool_core::PointView<'_>) -> bool {
     view.reference_observation().is_none_or(|r| r < 0)
         && view
             .patch_bitmap()
-            .is_some_and(|bitmap| bitmap.iter().all(|&b| b == 0))
+            .is_some_and(|bitmap| !sfmtool_core::reconstruction::patch_bitmap_is_stored(bitmap))
 }
 
 /// What a *Crop* cell's hover says when the cell has no picture.

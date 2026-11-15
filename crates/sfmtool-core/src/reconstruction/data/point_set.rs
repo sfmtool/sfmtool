@@ -79,6 +79,17 @@ impl ObservationSource {
 /// The derived fields at the bottom are a function of the rest and of the image
 /// count, and [`Self::rebuild_derived_fields`] is what restores them after any
 /// edit to the tracks, the counts or the points' `w` values.
+/// Whether one point's row of `patch_bitmaps_y_x_rgba`, `(R, R, channels)`,
+/// stores a patch. A point with no stored patch is written as an all-zero row,
+/// so any nonzero byte means a patch is there.
+///
+/// The one definition of that rule: what the viewer draws as a surfel, what a
+/// Track Table *Patch* cell and Track View's header show, and which points a
+/// web export draws as patches all read it.
+pub fn patch_bitmap_is_stored(bitmap: ndarray::ArrayView3<'_, u8>) -> bool {
+    bitmap.iter().any(|&b| b != 0)
+}
+
 #[derive(Clone)]
 pub struct PointSet {
     /// 3D points with colors, errors, and normals.

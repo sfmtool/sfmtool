@@ -44,7 +44,7 @@ pub(crate) const NO_STORED_PATCH_HOVER: &str = "The point has no stored patch";
 /// commit writes as it; and what a Track Table *Patch* cell draws.
 pub(crate) fn stored_patch_image(bitmap: ndarray::ArrayView3<'_, u8>) -> Option<egui::ColorImage> {
     let [h, w, channels] = [bitmap.shape()[0], bitmap.shape()[1], bitmap.shape()[2]];
-    if channels == 0 || bitmap.iter().all(|&b| b == 0) {
+    if channels == 0 || !sfmtool_core::reconstruction::patch_bitmap_is_stored(bitmap) {
         return None;
     }
     let mut rgba = Vec::with_capacity(h * w * 4);

@@ -43,8 +43,11 @@ Key facts that shape the design:
   patch). The raster reverses `v` (steps rows along `−v`) to render un-mirrored,
   which is why the vertex shader flips the bitmap's `v` texture coordinate. There
   is no separate patch struct at rest — the frame is the two half-vectors.
-- **A point with no patch is an all-zero row** (present iff `u` is non-zero). The
-  uploader skips zero rows.
+- **A point with no patch is an all-zero row**, of the frame or of the
+  bitmaps. A point has a patch to draw when its `u` row is nonzero and its
+  bitmap row is not all zero (`patch_bitmap_is_stored` in `sfmtool_core`, the
+  rule the Track Table's *Patch* cell and the web export read too). The
+  uploader skips every other point, so no surfel is drawn as a black square.
 - **`u`/`v` are present-or-absent together.** Bitmaps require the frame but are
   independent of it: a reconstruction can carry frames with **no** bitmaps (e.g.
   a `to-embedded-patches` result before `refine_normals(render_bitmaps=True)`).
@@ -198,8 +201,8 @@ frame arrays **and** the bitmaps being `Some`):
 
 1. Return early unless both the `(u, v)` frame arrays and `patch_bitmaps_y_x_rgba`
    are present (a frame-only reconstruction renders nothing in v1 — flat-shaded
-   fallback deferred). Walk `patch_u_halfvec_xyz` rows and skip zero rows
-   (points without a patch).
+   fallback deferred). Walk the points and skip each whose `u` row is zero or
+   whose bitmap row is all zero (points without a patch).
 2. Fill the atlas a row of cells at a time: each present patch's `(R, R, 4)`
    tile is scattered into a band spanning the atlas, and each filled band goes
    up in one `write_texture`. Then push a `PatchInstance` per patch (center =

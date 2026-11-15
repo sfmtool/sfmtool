@@ -524,6 +524,49 @@ fn the_point_style_selector_appears_only_for_a_node_that_carries_patch_data() {
     }
 }
 
+/// The selector stays inside a narrow panel however long the Points label is:
+/// it sits at the panel's visible right edge and the label elides into what
+/// is left. 220 px is about the default Scene panel of a 1280 x 720 window;
+/// with points at infinity the label and the ∞ toggle are both drawn, and the
+/// intrinsics row above is wider than the panel, which widens the tree's
+/// layout past what is visible.
+#[test]
+fn the_point_style_selector_stays_inside_a_narrow_panel() {
+    let mut recon = recon_named(32, 8, "IMG");
+    give_patches(&mut recon, true);
+    store_as_bearings(&mut recon, 12);
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/a_long_reconstruction_name.sfmr"),
+        recon,
+    ));
+    let id = state.scene[0].id;
+    let mut panel = SceneGraphPanel::new();
+    let ctx = egui::Context::default();
+    let width = 220.0;
+    painted_at_width(&mut panel, &ctx, &mut state, width);
+    painted_at_width(&mut panel, &ctx, &mut state, width);
+    for style in [PointStyle::Dots, PointStyle::Patches] {
+        let rect = panel
+            .hit_rect(point_style_row_id(id, style))
+            .unwrap_or_else(|| panic!("no {style:?} button"));
+        assert!(
+            rect.right() <= width && rect.width() >= 20.0,
+            "the {style:?} button is clipped at {rect:?} in a {width} px panel"
+        );
+    }
+    let label = panel
+        .hit_rect(row_id(id, "points_label"))
+        .expect("the Points label");
+    let infinity = panel
+        .hit_rect(row_id(id, "points_infinity"))
+        .expect("the ∞ toggle");
+    assert!(
+        label.right() <= infinity.left(),
+        "the Points label at {label:?} runs under the ∞ toggle at {infinity:?}"
+    );
+}
+
 /// A click on the other style switches the node to it and logs the switch in
 /// the Scene panel's words; a click on the style already in force logs
 /// nothing.
