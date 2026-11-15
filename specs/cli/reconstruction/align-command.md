@@ -78,6 +78,29 @@ passed twice — since they would otherwise silently overwrite each other and yi
 than inputs. Give such inputs distinct file names. Inputs located inside the output directory are
 likewise rejected.
 
+## Failed Alignments and the Exit Code
+
+An input can fail to align because the alignment refuses its data (too few point
+correspondences, RANSAC left too few inliers, no camera match above `--confidence`), because a
+file the alignment reads cannot be read (a missing or damaged `.sift` file), because it shares
+no images with the reference or any other input, or because it shares images only with inputs
+that could not be aligned. After the summary, the command prints one line per such input to
+standard error, naming it and the reason:
+
+```
+Could not align part_b.sfmr: it shares no images with the reference or another input
+```
+
+The reference and every input that was aligned are still written to `--output-dir`; an input
+that failed has no file there. The command then exits with status 1 and the error
+`N of M reconstruction(s) could not be aligned.`, so a script that runs `sfm align` sees that
+the output directory does not hold every input it asked for. It exits with status 0 only when
+every input was aligned.
+
+Only those failures, which come from the inputs, are reported this way. Any other exception
+raised during an alignment is a fault in the code: it is not caught, and the command stops with
+its traceback.
+
 ## Usage Examples
 
 ```bash

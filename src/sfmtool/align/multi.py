@@ -57,6 +57,45 @@ class AlignmentResult:
     total_shared_images: int
     """Total number of shared images used for alignment."""
 
+    failures: list[str | None]
+    """Why each input could not be aligned, in the same order as input. None
+    for an input that was aligned."""
+
+
+# The failures an alignment of one input is expected to have: a ``ValueError``
+# when the alignment refuses the data (too few shared points, RANSAC left too
+# few inliers), and an ``OSError`` when a file it reads cannot be read (a
+# missing or damaged ``.sift`` file). Any other exception is a fault in the
+# code, and is left to raise.
+_ALIGNMENT_ERRORS = (ValueError, OSError)
+
+
+def _failure_reasons(
+    results: list[SfmrReconstruction | None],
+    errors: dict[int, str],
+    graph: dict[int, dict[int, dict]],
+) -> list[str | None]:
+    """Why each input of ``results`` could not be aligned, None where it was.
+
+    ``errors`` holds the last error of each input whose alignment was tried
+    and failed, keyed by its index in the graph (the reference is 0). An input
+    never tried shares no images with the reference, or shares them only
+    with inputs that could not be aligned.
+    """
+    reasons: list[str | None] = []
+    for idx, aligned in enumerate(results, start=1):
+        if aligned is not None:
+            reasons.append(None)
+        elif idx in errors:
+            reasons.append(errors[idx])
+        elif not graph[idx]:
+            reasons.append("it shares no images with the reference or another input")
+        else:
+            reasons.append(
+                "it shares images only with inputs that could not be aligned"
+            )
+    return reasons
+
 
 def align_reconstructions(
     reference: SfmrReconstruction,
@@ -119,6 +158,7 @@ def _align_with_cameras(
     current_recons = list(all_recons)
     results: list[SfmrReconstruction | None] = [None] * len(to_align)
     total_shared_images = 0
+    errors: dict[int, str] = {}
 
     aligned_data: dict[int, dict] = {}
     ref_quats, ref_centers = get_reconstruction_poses(current_recons[0])
@@ -165,11 +205,6 @@ def _align_with_cameras(
                 )
                 all_matches.extend(matches)
 
-            if not all_matches:
-                if verbose:
-                    click.echo("  Warning: No matches found, skipping")
-                continue
-
             total_shared_images += shared_count
 
             try:
@@ -179,36 +214,37 @@ def _align_with_cameras(
                     source_id=f"recon_{idx}",
                     target_id="reference_frame",
                 )
-                if verbose:
-                    click.echo(f"  RMS error = {result.total_rms_error:.4f}")
-            except Exception as e:
+            except _ALIGNMENT_ERRORS as e:
+                errors[idx] = str(e)
                 if verbose:
                     click.echo(f"  Error: {e}")
                 continue
+            errors.pop(idx, None)
+            if verbose:
+                click.echo(f"  RMS error = {result.total_rms_error:.4f}")
 
-            try:
-                aligned_recon = apply_transforms(
-                    recon=current_recons[idx],
-                    transforms=[SimilarityTransform(result.transform)],
-                )
-                current_recons[idx] = aligned_recon
-                results[idx - 1] = aligned_recon
-                aligned_set.add(idx)
+            aligned_recon = apply_transforms(
+                recon=current_recons[idx],
+                transforms=[SimilarityTransform(result.transform)],
+            )
+            current_recons[idx] = aligned_recon
+            results[idx - 1] = aligned_recon
+            aligned_set.add(idx)
 
-                new_quats, new_centers = get_reconstruction_poses(aligned_recon)
-                aligned_data[idx] = {
-                    "quaternions": new_quats,
-                    "camera_centers": new_centers,
-                }
+            new_quats, new_centers = get_reconstruction_poses(aligned_recon)
+            aligned_data[idx] = {
+                "quaternions": new_quats,
+                "camera_centers": new_centers,
+            }
 
-                if verbose:
-                    click.echo("  Successfully aligned")
-            except Exception as e:
-                if verbose:
-                    click.echo(f"  Transform error: {e}")
-                continue
+            if verbose:
+                click.echo("  Successfully aligned")
 
-    return AlignmentResult(aligned=results, total_shared_images=total_shared_images)
+    return AlignmentResult(
+        aligned=results,
+        total_shared_images=total_shared_images,
+        failures=_failure_reasons(results, errors, graph),
+    )
 
 
 def _align_with_points(
@@ -231,6 +267,7 @@ def _align_with_points(
     current_recons = list(all_recons)
     results: list[SfmrReconstruction | None] = [None] * len(to_align)
     total_shared_images = 0
+    errors: dict[int, str] = {}
 
     prev_count = 0
     while len(aligned_set) > prev_count:
@@ -258,11 +295,6 @@ def _align_with_points(
                 shared_count += len(shared_pairs)
                 all_shared_pairs.extend((int(s), int(t)) for s, t in shared_pairs)
 
-            if not all_shared_pairs:
-                if verbose:
-                    click.echo("  Warning: No image pairs found, skipping")
-                continue
-
             total_shared_images += shared_count
 
             first_neighbor = aligned_neighbors[0]
@@ -278,30 +310,31 @@ def _align_with_points(
                     ransac_percentile=ransac_percentile,
                     verbose=verbose,
                 )
-                if verbose:
-                    click.echo(f"  RMS error = {result.total_rms_error:.4f}")
-            except Exception as e:
+            except _ALIGNMENT_ERRORS as e:
+                errors[idx] = str(e)
                 if verbose:
                     click.echo(f"  Error: {e}")
                 continue
+            errors.pop(idx, None)
+            if verbose:
+                click.echo(f"  RMS error = {result.total_rms_error:.4f}")
 
-            try:
-                aligned_recon = apply_transforms(
-                    recon=current_recons[idx],
-                    transforms=[SimilarityTransform(result.transform)],
-                )
-                current_recons[idx] = aligned_recon
-                results[idx - 1] = aligned_recon
-                aligned_set.add(idx)
+            aligned_recon = apply_transforms(
+                recon=current_recons[idx],
+                transforms=[SimilarityTransform(result.transform)],
+            )
+            current_recons[idx] = aligned_recon
+            results[idx - 1] = aligned_recon
+            aligned_set.add(idx)
 
-                if verbose:
-                    click.echo("  Successfully aligned")
-            except Exception as e:
-                if verbose:
-                    click.echo(f"  Transform error: {e}")
-                continue
+            if verbose:
+                click.echo("  Successfully aligned")
 
-    return AlignmentResult(aligned=results, total_shared_images=total_shared_images)
+    return AlignmentResult(
+        aligned=results,
+        total_shared_images=total_shared_images,
+        failures=_failure_reasons(results, errors, graph),
+    )
 
 
 def align_command(
@@ -432,11 +465,24 @@ def align_command(
     click.echo(f"Successfully aligned: {success_count}/{len(align_paths)}")
     click.echo(f"Total matching images: {result.total_shared_images}")
 
-    failed = [align_paths[i].name for i, a in enumerate(result.aligned) if a is None]
-    if failed:
-        click.echo(f"\nFailed to align: {', '.join(failed)}")
-
     click.echo(f"\nResults saved to: {output_dir}")
+
+    # The reference and every input that was aligned are saved above, so a
+    # partial result is kept; the command still fails, since the caller asked
+    # for every input to be aligned.
+    failed = [
+        (align_paths[i].name, reason)
+        for i, reason in enumerate(result.failures)
+        if reason is not None
+    ]
+    if failed:
+        click.echo("")
+        for name, reason in failed:
+            click.echo(f"Could not align {name}: {reason}", err=True)
+        raise click.ClickException(
+            f"{len(failed)} of {len(align_paths)} reconstruction(s) could not "
+            "be aligned."
+        )
 
 
 def _echo_image_pairing(

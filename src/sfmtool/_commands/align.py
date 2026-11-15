@@ -9,6 +9,7 @@ import click
 
 from .._cli_utils import timed_command
 from ._sfmr_path import check_sfmr_path
+from .._workspace import Version1WorkspaceError
 from ..align.multi import align_command
 
 
@@ -83,6 +84,10 @@ def align(
 
     All files must be .sfmr files.
 
+    If any reconstruction cannot be aligned, the command names it with the
+    reason and exits with status 1; the reference and the reconstructions that
+    were aligned are still saved.
+
     Examples:
 
         sfm align reference.sfmr recon1.sfmr -o aligned/
@@ -109,6 +114,9 @@ def align(
 
     output_dir = Path(output_dir)
 
+    # Only the failures the inputs can cause become a one-line error: an input
+    # that cannot be read or holds data the alignment refuses, or a version 1
+    # workspace. Anything else is a fault in the code and keeps its traceback.
     try:
         align_command(
             reference_path=reference_path,
@@ -120,5 +128,5 @@ def align(
             ransac_percentile=ransac_percentile,
             ransac_iterations=ransac_iterations,
         )
-    except Exception as e:
+    except (ValueError, OSError, Version1WorkspaceError) as e:
         raise click.ClickException(str(e))
