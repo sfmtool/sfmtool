@@ -6,11 +6,12 @@
 //! runs it, with the background task and the live evaluation driven to their
 //! ends in between.
 
-use sfmtool_core::bench::Verdict;
+use sfmtool_core::bench::{Stage, Verdict};
 
 use super::{search_row, TilingStep, TILING_STEPS};
 use crate::action_log::Kind;
 use crate::bench::tests::{put_on_bench, state};
+use crate::bench::PatchEdit;
 use crate::scene::ReconId;
 use crate::state::AppState;
 
@@ -57,6 +58,37 @@ fn run_sequence(state: &mut AppState) -> Vec<TilingStep> {
         }
     }
     panic!("the sequence did not end: {:?}", rows(state));
+}
+
+/// Move the patch of the item called `label` by a handle in Surface Tiling
+/// Mode, as a person does, which starts the sequence: a resize about its
+/// centre.
+///
+/// No step of the sequence changes the patch's size, so the commit that ends
+/// it has a changed track to write whether or not the normal steps turn the
+/// patch. Whether they do depends on the platform's floating point where a
+/// single pair barely determines the normal.
+fn move_by_resizing(state: &mut AppState, id: ReconId, label: &str) {
+    let track = state.bench_track(id, label).expect("on the bench");
+    let half_length = match &track.stage {
+        Stage::Track(payload) => payload.patch_frame.as_ref().expect("a patch").half_extent[0],
+        Stage::Cluster(_) => panic!("{label} is at the cluster stage"),
+    };
+    state
+        .edit_bench_patch_by_gesture(
+            id,
+            label,
+            &PatchEdit::Resize {
+                half_length: half_length * 1.25,
+                moved_edge: None,
+            },
+            true,
+        )
+        .expect("a resize in the mode");
+    assert!(
+        state.surface_tiling.is_some(),
+        "the resize started no sequence"
+    );
 }
 
 /// Run frames until a duplicate's drop has ended, settling the copy's
@@ -257,7 +289,6 @@ fn a_tiling_duplicate_whose_bars_turn_every_row_out_keeps_them() {
 /// with a row, and the move's own sequence starts.
 #[test]
 fn a_move_while_the_drop_waits_ends_it() {
-    use crate::bench::PatchEdit;
     let (mut state, id) = state();
     let (label, _) = crate::bench::tests::put_with_rows_the_bars_refuse(
         &mut state,
@@ -340,13 +371,13 @@ fn a_move_runs_fit_normal_fit_search_normal_fit_and_commit_in_order() {
     state.settle_bench_evaluation();
     state.action_log.clear();
 
-    state.start_surface_tiling(id, &label);
+    move_by_resizing(&mut state, id, &label);
     assert_eq!(
         state.surface_tiling_status(id, &label).as_deref(),
         Some("Step 1 of 7: Fit")
     );
     assert_eq!(
-        rows(&state)[0].2,
+        rows(&state)[1].2,
         format!(
             "Surface tiling {label} after the move: Fit, Pairwise Flow Normal, Fit, \
              Find matches by geometry, Pairwise Flow Normal, Fit, Commit"
@@ -520,7 +551,7 @@ fn a_second_move_of_a_duplicate_replaces_the_point_its_first_wrote() {
     assert_eq!(points(&state), before + 1, "{:?}", rows(&state));
 
     state.action_log.clear();
-    state.start_surface_tiling(id, &copy);
+    move_by_resizing(&mut state, id, &copy);
     run_sequence(&mut state);
     let logged = rows(&state);
     assert_eq!(points(&state), before + 1, "{logged:?}");
@@ -536,7 +567,6 @@ fn a_second_move_of_a_duplicate_replaces_the_point_its_first_wrote() {
 /// and only when it changed the patch.
 #[test]
 fn only_a_move_that_changed_the_patch_in_the_mode_starts_the_sequence() {
-    use crate::bench::PatchEdit;
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
 
@@ -673,7 +703,6 @@ fn a_refused_commit_stops_the_sequence_at_its_last_step() {
 #[test]
 fn a_step_waits_until_the_evaluation_has_caught_up() {
     use crate::bench::live::Evaluation;
-    use crate::bench::PatchEdit;
     let (mut state, id) = state();
     let label = put_on_bench(&mut state, id);
     state.settle_bench_evaluation();
