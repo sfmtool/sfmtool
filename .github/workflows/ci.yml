@@ -24,6 +24,42 @@ env:
   # cache below.
   CARGO_INCREMENTAL: "0"
 
+# CI cargo config. Every job that runs cargo first copies
+# .github/ci-cargo-config.toml to ~/.cargo/config.toml, which cargo reads for
+# every command in the job, the ones inside pixi tasks such as `ui-test`
+# included. It builds sfm-explorer at opt-level 0 in the dev profile, and so in
+# the test profile that inherits it. Every other workspace crate stays at the
+# level 1 that Cargo.toml's `[profile.dev]` sets, and dependencies at the 3 of
+# `[profile.dev.package."*"]`. A per-package profile setting cannot be given as
+# a CARGO_PROFILE_* environment variable, which is why this is a file and not
+# an entry in `env` above.
+#
+# test-os-rust spends 9-14 min of its run compiling on Windows and macOS, and
+# sfm-explorer was the end of its longest chain. Measured on a Windows machine
+# (`cargo test --workspace --no-run --timings`, -j 4, CARGO_INCREMENTAL=0,
+# dependencies already built, every workspace crate's lib.rs touched), the
+# build took 575s with sfm-explorer at level 1 and 480s at level 0. Its library
+# compiled in 44s instead of 288s, and its lib test binary in 69s instead of
+# 155s. The longest chain had been sfmtool-core's library and then
+# sfm-explorer's test binary; it is now sfmtool-core's own test binary (435s).
+# The cost is at run time, and small: `cargo test -p sfm-explorer --lib` took
+# 39.1s at level 0 against 26.7s at level 1. The ui-test-* jobs compile the
+# same library, and their `ui_basic` suite with it.
+#
+# CI only, because Cargo.toml's level 1 is the setting chosen for development,
+# where the same dev build of the viewer is also run by hand. A CI job compiles
+# the viewer once and runs its tests once, so there compile time is what
+# counts.
+#
+# Since the file changes what a target dir holds, every target cache key
+# hashes it; see "Rust caches" above prune-caches. A change to it therefore
+# starts a new generation of every target cache, as a manifest change does:
+# main misses its exact key, builds without a cache once and saves the result,
+# and a pull request warms from the previous generation and recompiles what the
+# change touched. Left out of the key, a change here would restore an exact hit
+# built at the old level, which cargo would rebuild on every run while the
+# `cache-hit != 'true'` guard kept main from ever saving the rebuilt entry.
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -48,6 +84,7 @@ jobs:
               - 'pixi.lock'
               - 'codecov.yml'
               - '.github/workflows/ci.yml'
+              - '.github/ci-cargo-config.toml'
 
   lint:
     needs: changes
@@ -59,6 +96,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: lint
@@ -93,13 +134,14 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed on the lockfile *and* the manifests -- see "Rust
-          # caches" above prune-caches for why the manifests belong in it. It
-          # hits outright whenever neither has moved, and the Save step below
-          # then leaves the existing entry alone. The prefix fallback warms a
-          # pull request whose key has moved; main does without it, so each
-          # generation it saves holds only what that key builds.
-          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          # Content-addressed on the lockfile, the manifests and the CI cargo
+          # config -- see "Rust caches" above prune-caches for why the last two
+          # belong in it. It hits outright whenever none has moved, and the
+          # Save step below then leaves the existing entry alone. The prefix
+          # fallback warms a pull request whose key has moved; main does
+          # without it, so each generation it saves holds only what that key
+          # builds.
+          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-lint-target-', runner.os) || '' }}
 
       - name: Ruff format
@@ -206,6 +248,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       # Only the pixi binary is needed; `pixi exec` builds the throwaway MSRV
       # environment. Installing a project environment would just pull the 1.99
       # toolchain this job exists to avoid.
@@ -312,6 +358,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       # `test-ci` is used rather than `test` because the latter's editable
       # sfmtool install would compile the PyO3 extension this job has no use
       # for. Restore the cache first so the instrumented test build is
@@ -337,13 +387,14 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed on the lockfile *and* the manifests -- see "Rust
-          # caches" above prune-caches for why the manifests belong in it. It
-          # hits outright whenever neither has moved, and the Save step below
-          # then leaves the existing entry alone. The prefix fallback warms a
-          # pull request whose key has moved; main does without it, so each
-          # generation it saves holds only what that key builds.
-          key: ${{ runner.os }}-cargo-coverage-rust-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          # Content-addressed on the lockfile, the manifests and the CI cargo
+          # config -- see "Rust caches" above prune-caches for why the last two
+          # belong in it. It hits outright whenever none has moved, and the
+          # Save step below then leaves the existing entry alone. The prefix
+          # fallback warms a pull request whose key has moved; main does
+          # without it, so each generation it saves holds only what that key
+          # builds.
+          key: ${{ runner.os }}-cargo-coverage-rust-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-coverage-rust-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
@@ -421,6 +472,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
       # editable sfmtool); coverage.sh compiles the extension once via
       # `maturin develop --release`. Restore the cache first so that build is
@@ -449,7 +504,7 @@ jobs:
           # A prefix of its own, not test-linux-rust's: that job fills
           # target/debug and this one target/release. See test-linux-rust above
           # and "Rust caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-coverage-python-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-coverage-python-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-coverage-python-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
@@ -561,6 +616,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       # `test-ci` is used rather than `test` because the latter's editable
       # sfmtool install would compile the PyO3 extension this job has no use
       # for. Restore the cache first so the test build is incremental instead
@@ -587,13 +646,14 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed on the lockfile *and* the manifests -- see "Rust
-          # caches" above prune-caches for why the manifests belong in it. It
-          # hits outright whenever neither has moved, and the Save step below
-          # then leaves the existing entry alone. The prefix fallback warms a
-          # pull request whose key has moved; main does without it, so each
-          # generation it saves holds only what that key builds.
-          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          # Content-addressed on the lockfile, the manifests and the CI cargo
+          # config -- see "Rust caches" above prune-caches for why the last two
+          # belong in it. It hits outright whenever none has moved, and the
+          # Save step below then leaves the existing entry alone. The prefix
+          # fallback warms a pull request whose key has moved; main does
+          # without it, so each generation it saves holds only what that key
+          # builds.
+          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-test-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
@@ -708,6 +768,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
       # editable sfmtool); the extension is compiled once by the explicit
       # `maturin develop --release` step below. Restore the cache first so that
@@ -741,7 +805,7 @@ jobs:
           # every run would start cold. Same `<prefix>-<single hash>` shape as
           # the rest, which is what ci_prune_caches.sh parses. See "Rust caches"
           # above prune-caches.
-          key: ${{ runner.os }}-cargo-pyext-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          key: ${{ runner.os }}-cargo-pyext-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-pyext-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
@@ -822,6 +886,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ui
@@ -849,13 +917,14 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed on the lockfile *and* the manifests -- see "Rust
-          # caches" above prune-caches for why the manifests belong in it. It
-          # hits outright whenever neither has moved, and the Save step below
-          # then leaves the existing entry alone. The prefix fallback warms a
-          # pull request whose key has moved; main does without it, so each
-          # generation it saves holds only what that key builds.
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          # Content-addressed on the lockfile, the manifests and the CI cargo
+          # config -- see "Rust caches" above prune-caches for why the last two
+          # belong in it. It hits outright whenever none has moved, and the
+          # Save step below then leaves the existing entry alone. The prefix
+          # fallback warms a pull request whose key has moved; main does
+          # without it, so each generation it saves holds only what that key
+          # builds.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: Report UI environment
@@ -908,6 +977,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ui
@@ -935,13 +1008,14 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed on the lockfile *and* the manifests -- see "Rust
-          # caches" above prune-caches for why the manifests belong in it. It
-          # hits outright whenever neither has moved, and the Save step below
-          # then leaves the existing entry alone. The prefix fallback warms a
-          # pull request whose key has moved; main does without it, so each
-          # generation it saves holds only what that key builds.
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          # Content-addressed on the lockfile, the manifests and the CI cargo
+          # config -- see "Rust caches" above prune-caches for why the last two
+          # belong in it. It hits outright whenever none has moved, and the
+          # Save step below then leaves the existing entry alone. The prefix
+          # fallback warms a pull request whose key has moved; main does
+          # without it, so each generation it saves holds only what that key
+          # builds.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: UI tests
@@ -995,6 +1069,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+      - name: Use the CI cargo config
+        # Before any cargo command. See "CI cargo config" at the top of the file.
+        shell: bash
+        run: mkdir -p ~/.cargo && cp .github/ci-cargo-config.toml ~/.cargo/config.toml
       - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ui
@@ -1022,13 +1100,14 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed on the lockfile *and* the manifests -- see "Rust
-          # caches" above prune-caches for why the manifests belong in it. It
-          # hits outright whenever neither has moved, and the Save step below
-          # then leaves the existing entry alone. The prefix fallback warms a
-          # pull request whose key has moved; main does without it, so each
-          # generation it saves holds only what that key builds.
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
+          # Content-addressed on the lockfile, the manifests and the CI cargo
+          # config -- see "Rust caches" above prune-caches for why the last two
+          # belong in it. It hits outright whenever none has moved, and the
+          # Save step below then leaves the existing entry alone. The prefix
+          # fallback warms a pull request whose key has moved; main does
+          # without it, so each generation it saves holds only what that key
+          # builds.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: Install display and Vulkan driver
@@ -1085,8 +1164,16 @@ jobs:
   #
   # A target dir is not. It holds compiled artifacts, and which artifacts those
   # are depends on *feature resolution* and on which targets exist -- both of
-  # which are declared in the manifests, not the lockfile. So the target keys
-  # are `hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml')`.
+  # which are declared in the manifests, not the lockfile. Their optimization
+  # levels are set in the root manifest's profiles and in the CI cargo config
+  # (see the top of this file). So the target keys are `hashFiles('Cargo.lock',
+  # 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml')`.
+  #
+  # Every target key hashes the CI cargo config, including those of jobs whose
+  # builds it does not change, such as the release-only test-os-python. This
+  # job's sweep keeps one hash for every prefix, so every prefix has to be keyed
+  # on it: a prefix keyed on a different hash would have "no current-generation
+  # entry" at the one kept, and the sweep would never prune it.
   #
   # Keyed on the lockfile alone, a change to features or targets that moves no
   # dependency would restore an *exact* hit on an entry built under the old
@@ -1104,7 +1191,8 @@ jobs:
   # KEEP_HASH matching nothing any job ever wrote -- which reads as "no current
   # generation for this prefix" and silently prunes nothing, for ever. Adding a
   # manifest to the workspace means adding it to prune-caches' sparse-checkout
-  # too; `crates/*/Cargo.toml` already covers every workspace member.
+  # too; `crates/*/Cargo.toml` already covers every workspace member. The same
+  # holds for any other file added to the key, as the CI cargo config was.
   #
   # Everything hashed here is pinned to LF in .gitattributes and must stay that
   # way. Windows runners default to core.autocrlf=true, so without the pin they
@@ -1159,8 +1247,9 @@ jobs:
       actions: write
     steps:
       # `hashFiles` reads the workspace, so everything either generation is
-      # keyed on has to be on disk -- the manifests as well as the lockfile,
-      # or this job's idea of the current generation would not be any job's.
+      # keyed on has to be on disk -- the manifests and the CI cargo config as
+      # well as the lockfile, or this job's idea of the current generation
+      # would not be any job's.
       # The script is the only other thing it reads. A new workspace member
       # needs its manifest added here too.
       - uses: actions/checkout@v7
@@ -1169,6 +1258,7 @@ jobs:
             Cargo.lock
             Cargo.toml
             crates/*/Cargo.toml
+            .github/ci-cargo-config.toml
             scripts/ci_prune_caches.sh
           sparse-checkout-cone-mode: false
       # Two invocations because the target caches and the cargo homes are keyed
@@ -1182,7 +1272,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: bash scripts/ci_prune_caches.sh "${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}"
+        run: bash scripts/ci_prune_caches.sh "${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.github/ci-cargo-config.toml') }}"
       - name: Delete superseded cargo home caches
         env:
           GH_TOKEN: ${{ github.token }}
