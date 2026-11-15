@@ -65,8 +65,8 @@ Each point stores the RMS of its observations' reprojection errors, measured
 from the `.sift` keypoints, the imported cameras and the converted poses
 ([sfmr-file-format.md](../../formats/sfmr-file-format.md#points3dreprojection_errorsnfloat32zst)).
 The error column of `points3D.bin` is not read into it: COLMAP's per-point error
-is the mean of the observation errors, and GLOMAP's is in normalised image
-coordinates. `colmap_binary_to_rust_sfmr` passes zeros and
+is the mean of the observation errors, and the standalone GLOMAP binary's is
+in normalised image coordinates. `colmap_binary_to_rust_sfmr` passes zeros and
 `SfmrReconstruction.from_data` scores every point. `sfm solve` writes its
 models through the same path, and through `pycolmap_to_rust_sfmr` for a rig
 solve, so a solve's output stores the RMS too.

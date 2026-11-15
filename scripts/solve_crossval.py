@@ -15,7 +15,8 @@ of 3D points, mean/median reprojection error (px) and mean track length.
 
 Solver: flat single-camera datasets use incremental SfM; the kerry_park fisheye
 rig uses global SfM (COLMAP's global mapper) by default, because incremental
-initial-pair bootstrap is fragile on that rig for *either* backend (override with --solver).
+initial-pair bootstrap is fragile on that rig for *either* backend (override
+with --solver).
 
 Run inside the project environment, e.g.:
 

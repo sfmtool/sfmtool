@@ -309,8 +309,8 @@ impl SfmrReconstruction {
     /// at infinity are scored like finite ones, through their bearing.
     ///
     /// This replaces any errors read from COLMAP/GLOMAP binary files,
-    /// which may use different coordinate conventions (GLOMAP stores
-    /// errors in normalized image coordinates, not pixels).
+    /// which may use different coordinate conventions (the standalone GLOMAP
+    /// binary stores errors in normalized image coordinates, not pixels).
     ///
     /// A reconstruction carrying inline `keypoints_xy` -- every
     /// `embedded_patches` one, and a `sift_files` one with the optional copy --

@@ -5,9 +5,9 @@ photograph that sees the point. A sound track sees its point at most once in
 each photograph. COLMAP's global mapper, formerly the separate GLOMAP project,
 can hand back a point whose track holds two or more observations in one image,
 each a different feature of that image, and the Track Table counts them in its
-`repeat_observations` column ([track-table.md](../analysis/track-table.md)). This operation keeps, in each
-such image, the one observation that agrees best with the point and drops the
-others, so the point is seen once per image. Every reconstruction read from
+`repeat_observations` column ([track-table.md](../analysis/track-table.md)).
+This operation keeps, in each such image, the one observation that agrees best
+with the point and drops the others, so the point is seen once per image. Every reconstruction read from
 COLMAP into `.sfmr` goes through it.
 
 It is a **subtraction, not a solve**, like
