@@ -46,7 +46,9 @@ def merge(reconstruction_paths, output_path, merge_percentile):
     - Refines camera poses using PnP + RANSAC against the merged point cloud
     - Combines all tracks into a unified reconstruction
 
-    RECONSTRUCTION_PATHS must be .sfmr files that are already aligned.
+    RECONSTRUCTION_PATHS must be sift_files .sfmr files that are already
+    aligned and were made from the same feature folder. The inputs are checked
+    before the merge starts.
 
     Example:
 
@@ -72,6 +74,7 @@ def merge(reconstruction_paths, output_path, merge_percentile):
         result = merge_reconstructions(
             reconstructions=reconstructions,
             merge_percentile=merge_percentile,
+            input_names=[path.name for path in input_paths],
         )
 
         click.echo(f"\nSaving merged reconstruction to {output_path_obj.name}...")
