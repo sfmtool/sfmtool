@@ -11,6 +11,7 @@ where the reconstruction stores them. See
 specs/cli/reconstruction/xform/refine-normals-command.md.
 """
 
+import faulthandler
 import signal
 import threading
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from unittest.mock import patch
 import click
 import numpy as np
 import pytest
+from _pytest.faulthandler import fault_handler_stderr_fd_key
 from click.testing import CliRunner
 
 from sfmtool.cli import main
@@ -444,24 +446,57 @@ def test_the_run_counts_every_point_on_its_progress_counter():
     assert counters[0].value == recon.point_count
 
 
-def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
-    """Ctrl-C part way through ``--refine-normals method=pairwise_flow`` over
-    every point of the ground truth, about a minute of work, stops the run
-    before it has counted every point: SIGINT is raised once the run has
-    counted its first point, so it lands inside the binding, and the command
-    aborts without writing. The ground
-    truth is read in place; the output would go to a temporary folder."""
+# The points the Ctrl-C test refines: point 86 of the ground truth is at
+# infinity, so it is skipped and counted at once, and point 116 is finite,
+# its pairwise-flow step taking 0.8 s on a 32-thread machine and 2.8 s on one
+# thread. Its step gains less from more threads than most points' do, so it
+# is long beside the binding's 50 ms between signal checks on any machine
+# while a run that ignores Ctrl-C still ends in seconds.
+_CTRL_C_POINTS = [86, 116]
+
+# Well above the Ctrl-C test's time, 0.1 s on a 32-thread machine with one
+# thread or all; a run that does not return has the test process ended then.
+_CTRL_C_TIME_LIMIT_S = 120
+
+
+def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(
+    tmp_path, pytestconfig
+):
+    """Ctrl-C part way through ``--refine-normals method=pairwise_flow``
+    stops the run before it has counted every point, and the command aborts
+    without writing.
+
+    The ground truth is read in place, cut to points 86 and 116; the output
+    would go to a temporary folder. SIGINT is raised once the run has counted
+    a point. That is point 86, skipped as a point at infinity, since on one
+    worker the points are taken in order and on more they start together. So
+    the binding's next check for signals, at most 50 ms later, finds SIGINT
+    while point 116's step, 0.8 s even on 32 threads, still runs: the
+    interrupt lands inside the binding with point 116 still to count.
+
+    A run that ignored Ctrl-C would count both points in seconds and fail the
+    count's assertion. One that never returned is ended by faulthandler,
+    which prints every thread's stack, since the binding runs Python's signal
+    handlers only on the main thread, so the command cannot run on a thread
+    the test waits for."""
     output_sfmr = tmp_path / "interrupted.sfmr"
     poll = _refine_normals._poll_progress
+    apply = RefineNormalsTransform.apply
+
+    def _apply_to_the_points(self, recon):
+        mask = np.zeros(recon.point_count, dtype=bool)
+        mask[_CTRL_C_POINTS] = True
+        return apply(self, recon.filter_points_by_mask(mask))
+
+    finished = threading.Event()
 
     def _interrupt_once_counting(counter):
-        # Give up after a minute rather than wait forever on a run that
-        # failed before counting; the assertions then fail.
-        for _ in range(6000):
+        # No time limit: the run counts point 86 as soon as it starts, and
+        # the test process has its own.
+        while not finished.wait(0.001):
             if counter.value:
                 signal.raise_signal(signal.SIGINT)
                 return
-            threading.Event().wait(0.01)
 
     threads = []
     counters = []
@@ -476,8 +511,17 @@ def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
             yield counter
 
     previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    faulthandler.dump_traceback_later(
+        _CTRL_C_TIME_LIMIT_S,
+        exit=True,
+        # The stderr pytest's own faulthandler writes to, not the captured one.
+        file=pytestconfig.stash[fault_handler_stderr_fd_key],
+    )
     try:
-        with patch.object(_refine_normals, "_poll_progress", _interrupting):
+        with (
+            patch.object(RefineNormalsTransform, "apply", _apply_to_the_points),
+            patch.object(_refine_normals, "_poll_progress", _interrupting),
+        ):
             result = CliRunner().invoke(
                 main,
                 [
@@ -488,15 +532,18 @@ def test_cli_ctrl_c_stops_a_pairwise_flow_run_and_writes_nothing(tmp_path):
                     "method=pairwise_flow",
                 ],
             )
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+        finished.set()
         for thread in threads:
             thread.join()
-    finally:
         signal.signal(signal.SIGINT, previous)
 
     assert len(threads) == 1
     # Stopped inside the binding, not after a whole run: a KeyboardInterrupt
     # raised only once the binding returned would abort the command too.
     [(counter, total)] = counters
+    assert total == len(_CTRL_C_POINTS)
     assert counter.value < total
     assert result.exit_code == 1, result.output
     assert "Aborted!" in result.output
