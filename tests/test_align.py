@@ -157,6 +157,9 @@ class TestAlignReconstructionsPoints:
             method="points",
         )
         assert result.aligned[0] is None
+        assert result.failures == [
+            "it shares no images with the reference or another input"
+        ]
 
 
 class TestAlignPointsAtInfinity:
@@ -429,6 +432,116 @@ class TestAlignCLI:
         )
         assert result.exit_code != 0
         assert "overwrite each other" in result.output
+
+    def test_input_sharing_no_images_fails_the_command(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        # Disjoint image sets: the input is never aligned, the command says why
+        # and exits 1, and only the reference is written.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        workspace = seoul_bull_sfmr_only.parent
+        first = workspace / "first.sfmr"
+        last = workspace / "last.sfmr"
+        apply_transforms(recon, [IncludeRangeFilter(RangeExpr("1-5"))]).save(
+            first, operation="align_test"
+        )
+        apply_transforms(recon, [IncludeRangeFilter(RangeExpr("10-17"))]).save(
+            last, operation="align_test"
+        )
+        output_dir = tmp_path / "aligned"
+
+        result = CliRunner().invoke(
+            main, ["align", str(first), str(last), "-o", str(output_dir)]
+        )
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Could not align last.sfmr: it shares no images with the reference "
+            "or another input"
+        ) in result.output
+        assert "1 of 1 reconstruction could not be aligned." in result.output
+        assert sorted(p.name for p in output_dir.iterdir()) == ["first.sfmr"]
+
+    def test_unreadable_sift_fails_one_input_and_keeps_the_others(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        # The reference is sift_files with no .sift files beside it. A moved
+        # copy of it aligns by feature index, which reads no .sift file; an
+        # embedded_patches input aligns by keypoint position, which reads the
+        # reference's .sift files, so it fails with the missing file's error.
+        reference = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        workspace = seoul_bull_sfmr_only.parent
+        moved = workspace / "moved.sfmr"
+        _moved(reference).save(moved, operation="align_test")
+        embedded = tmp_path / "embedded.sfmr"
+        truth = SfmrReconstruction.load(SEOUL_BULL_GROUND_TRUTH)
+        # The ground truth under the reference's image names, so they pair by
+        # name. The save needs each image's readings, which it would otherwise
+        # take from a photograph found by name; stand-in values serve here.
+        n = truth.image_count
+        _moved(truth).clone_with_changes(
+            image_names=reference.image_names,
+            image_to_gray={"formula": "0.2126*R + 0.7152*G + 0.0722*B"},
+            sharpness=np.ones(n, dtype=np.float32),
+            gradient_structure_tensors_xx_yy_xy=np.ones((n, 3), dtype=np.float32),
+        ).save(embedded, operation="align_test")
+        output_dir = tmp_path / "aligned"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "align",
+                str(seoul_bull_sfmr_only),
+                str(moved),
+                str(embedded),
+                "-o",
+                str(output_dir),
+            ],
+        )
+
+        assert result.exit_code == 1, result.output
+        assert "Successfully aligned: 1/2" in result.output
+        assert "Could not align embedded.sfmr: Missing SIFT file" in result.output
+        assert "1 of 2 reconstructions could not be aligned." in result.output
+        assert sorted(p.name for p in output_dir.iterdir()) == sorted(
+            [seoul_bull_sfmr_only.name, "moved.sfmr"]
+        )
+
+    @pytest.mark.parametrize(
+        ("method", "target"),
+        [
+            ("points", "sfmtool.align.by_points.estimate_alignment_from_points"),
+            ("cameras", "sfmtool.align.multi.estimate_pairwise_alignment"),
+        ],
+    )
+    def test_fault_in_the_code_is_not_caught(
+        self, seoul_bull_sfmr_only, tmp_path, monkeypatch, method, target
+    ):
+        # Only the failures the inputs can cause are reported as a failed
+        # alignment; any other exception keeps its type and traceback.
+        def broken(*args, **kwargs):
+            raise TypeError("a fault in the code")
+
+        monkeypatch.setattr(target, broken)
+        reference = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        moved = seoul_bull_sfmr_only.parent / "moved.sfmr"
+        _moved(reference).save(moved, operation="align_test")
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "align",
+                str(seoul_bull_sfmr_only),
+                str(moved),
+                "-o",
+                str(tmp_path / "aligned"),
+                "--method",
+                method,
+            ],
+        )
+
+        assert isinstance(result.exception, TypeError), result.output
+        assert str(result.exception) == "a fault in the code"
 
     def test_aligned_positions_close_to_reference(self, seoul_bull_sfmr_only, tmp_path):
         """After alignment, camera positions should be close to the reference."""
